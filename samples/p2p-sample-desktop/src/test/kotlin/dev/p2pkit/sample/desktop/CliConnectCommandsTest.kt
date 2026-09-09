@@ -20,14 +20,12 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.io.RawSource
 import kotlin.test.Test
@@ -241,21 +239,28 @@ class CliConnectCommandsTest {
 
     private fun scenario(block: suspend CoroutineScope.(Fixture) -> Unit): Unit = runBlocking {
         withTimeout(5_000) {
-            val fixture = Fixture()
+            val diagnostics = KitTestDiagnostics()
+            var primaryFailure: Throwable? = null
             try {
-                block(fixture)
+                block(Fixture(diagnostics))
+            } catch (failure: Throwable) {
+                primaryFailure = failure
+                throw failure
             } finally {
-                withContext(NonCancellable) { fixture.base.stop() }
+                diagnostics.finish(primaryFailure)
             }
         }
     }
 
-    private class Fixture {
-        val base = P2pKit.create {
-            appId = AppId("synthetic.cli-routing")
-            deviceName = "Synthetic CLI fixture"
-            jvmSecureIdentityStore(DevelopmentOnlyInMemorySecureIdentityStore())
-            transports { lan() }
+    private class Fixture(diagnostics: KitTestDiagnostics) {
+        val base = diagnostics.create { recording ->
+            P2pKit.create {
+                logger = recording
+                appId = AppId("synthetic.cli-routing")
+                deviceName = "Synthetic CLI fixture"
+                jvmSecureIdentityStore(DevelopmentOnlyInMemorySecureIdentityStore())
+                transports { lan() }
+            }
         }
         val fingerprint = assertNotNull(base.localFingerprint)
         val qr = assertNotNull(base.localPairingQr)

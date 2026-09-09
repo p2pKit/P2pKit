@@ -4,6 +4,7 @@ import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.NetworkPathStatus
 import dev.p2pkit.core.P2pKit
+import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
@@ -12,7 +13,10 @@ import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.FakeNetworkPathObserver
+import dev.p2pkit.core.testfixtures.RecordingLogger
+import dev.p2pkit.core.testfixtures.StatefulTestFailure
 import dev.p2pkit.core.testfixtures.createTestKit
+import dev.p2pkit.core.testfixtures.withTestKit
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
@@ -52,8 +56,10 @@ class NetworkPathRecoveryTest {
         name: String,
         policy: ReconnectPolicy,
         observer: FakeNetworkPathObserver,
+        recording: P2pLogger,
         outgoingFactory: () -> RawConnection
     ): P2pKit = createTestKit {
+        logger = recording
         appId = AppId("com.example.test")
         deviceName = name
         peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("alice-id"))
@@ -73,8 +79,13 @@ class NetworkPathRecoveryTest {
         }
     }
 
-    private fun incomingKit(name: String, preStaged: List<RawConnection>): P2pKit =
+    private fun incomingKit(
+        name: String,
+        preStaged: List<RawConnection>,
+        recording: P2pLogger
+    ): P2pKit =
         createTestKit {
+            logger = recording
             appId = AppId("com.example.test")
             deviceName = name
             keepAlive {
@@ -93,25 +104,31 @@ class NetworkPathRecoveryTest {
     fun pathUnsatisfiedTransitionsConnectedSessionToReconnecting() = runBlocking<Unit> {
         val pair = FakeConnectionPair()
         val fake = FakeNetworkPathObserver(initial = NetworkPathStatus.Satisfied)
-        val alice = outgoingKit(
-            "Alice",
-            ReconnectPolicy.Enabled(maxAttempts = 5, retryDelayMillis = 5_000),
-            fake
-        ) { pair.a }
-        val bob = incomingKit("Bob", listOf(pair.b))
-        try {
-            val session = withTimeout(5_000) { alice.connect(targetPeer()) }
-            assertEquals(ConnectionState.Connected, session.state.value)
-
-            fake.emit(NetworkPathStatus.Unsatisfied)
-
-            val reconnecting = withTimeout(5_000) {
-                session.state.first { it == ConnectionState.Reconnecting }
+        withTestKit(
+            create = { recorder ->
+                outgoingKit(
+                    "Alice",
+                    ReconnectPolicy.Enabled(maxAttempts = 5, retryDelayMillis = 5_000),
+                    fake,
+                    recording = recorder
+                ) { pair.a }
             }
-            assertEquals(ConnectionState.Reconnecting, reconnecting)
-        } finally {
-            alice.stop()
-            bob.stop()
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", listOf(pair.b), recording = recorder)
+                }
+            ) { bob ->
+                val session = withTimeout(5_000) { alice.connect(targetPeer()) }
+                assertEquals(ConnectionState.Connected, session.state.value)
+
+                fake.emit(NetworkPathStatus.Unsatisfied)
+
+                val reconnecting = withTimeout(5_000) {
+                    session.state.first { it == ConnectionState.Reconnecting }
+                }
+                assertEquals(ConnectionState.Reconnecting, reconnecting)
+            }
         }
     }
 
@@ -119,29 +136,35 @@ class NetworkPathRecoveryTest {
     fun pathUnsatisfiedTransitionsToFailedWhenReconnectDisabled() = runBlocking<Unit> {
         val pair = FakeConnectionPair()
         val fake = FakeNetworkPathObserver(initial = NetworkPathStatus.Satisfied)
-        val alice = outgoingKit(
-            "Alice",
-            ReconnectPolicy.Disabled,
-            fake
-        ) { pair.a }
-        val bob = incomingKit("Bob", listOf(pair.b))
-        try {
-            val session = withTimeout(5_000) { alice.connect(targetPeer()) }
-            assertEquals(ConnectionState.Connected, session.state.value)
-
-            fake.emit(NetworkPathStatus.Unsatisfied)
-
-            val terminal = withTimeout(5_000) {
-                session.state.first { it == ConnectionState.Failed || it == ConnectionState.Closed }
+        withTestKit(
+            create = { recorder ->
+                outgoingKit(
+                    "Alice",
+                    ReconnectPolicy.Disabled,
+                    fake,
+                    recording = recorder
+                ) { pair.a }
             }
-            assertEquals(
-                ConnectionState.Failed, terminal,
-                "Without a reconnect handler, path-lost must take the session to Failed " +
-                    "via the same onConnectionLost gate the PING-failure path uses."
-            )
-        } finally {
-            alice.stop()
-            bob.stop()
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", listOf(pair.b), recording = recorder)
+                }
+            ) { bob ->
+                val session = withTimeout(5_000) { alice.connect(targetPeer()) }
+                assertEquals(ConnectionState.Connected, session.state.value)
+
+                fake.emit(NetworkPathStatus.Unsatisfied)
+
+                val terminal = withTimeout(5_000) {
+                    session.state.first { it == ConnectionState.Failed || it == ConnectionState.Closed }
+                }
+                assertEquals(
+                    ConnectionState.Failed, terminal,
+                    "Without a reconnect handler, path-lost must take the session to Failed " +
+                        "via the same onConnectionLost gate the PING-failure path uses."
+                )
+            }
         }
     }
 
@@ -155,43 +178,49 @@ class NetworkPathRecoveryTest {
                 add(secondPair.a)
             }
             val fake = FakeNetworkPathObserver(initial = NetworkPathStatus.Satisfied)
-            val alice = outgoingKit(
-                "Alice",
-                ReconnectPolicy.Disabled,
-                fake
-            ) { outgoing.removeFirstOrNull() ?: error("unexpected extra dial") }
-            val bob = incomingKit("Bob", listOf(firstPair.b, secondPair.b))
-            try {
-                val first = withTimeout(5_000) { alice.connect(targetPeer()) }
-                assertEquals(ConnectionState.Connected, first.state.value)
-
-                fake.emit(NetworkPathStatus.Unsatisfied)
-                assertEquals(
-                    ConnectionState.Failed,
-                    withTimeout(5_000) { first.state.first { it == ConnectionState.Failed } }
-                )
-                // The local terminal transition closes the raw connection,
-                // but the remote reader observes that close asynchronously.
-                // Establish the next-dial precondition from Bob's public
-                // session state instead of racing its terminal watcher under
-                // a saturated full-suite run.
-                withTimeout(5_000) {
-                    bob.sessions.first { it.isEmpty() }
+            withTestKit(
+                create = { recorder ->
+                    outgoingKit(
+                        "Alice",
+                        ReconnectPolicy.Disabled,
+                        fake,
+                        recording = recorder
+                    ) { outgoing.removeFirstOrNull() ?: error("unexpected extra dial") }
                 }
+            ) { alice ->
+                withTestKit(
+                    create = { recorder ->
+                        incomingKit("Bob", listOf(firstPair.b, secondPair.b), recording = recorder)
+                    }
+                ) { bob ->
+                    val first = withTimeout(5_000) { alice.connect(targetPeer()) }
+                    assertEquals(ConnectionState.Connected, first.state.value)
 
-                // Do not emit path state again. A StateFlow will not re-emit
-                // the same value, so registration must consume the manager's
-                // retained authority rather than relying on the prior event.
-                val second = withTimeout(5_000) { alice.connect(targetPeer()) }
-                assertEquals(
-                    ConnectionState.Failed,
-                    withTimeout(5_000) { second.state.first { it == ConnectionState.Failed } },
-                    "a new session must not become Connected while the retained path is Unsatisfied"
-                )
-                assertTrue(outgoing.isEmpty(), "both queued connections must have been consumed")
-            } finally {
-                alice.stop()
-                bob.stop()
+                    fake.emit(NetworkPathStatus.Unsatisfied)
+                    assertEquals(
+                        ConnectionState.Failed,
+                        withTimeout(5_000) { first.state.first { it == ConnectionState.Failed } }
+                    )
+                    // The local terminal transition closes the raw connection,
+                    // but the remote reader observes that close asynchronously.
+                    // Establish the next-dial precondition from Bob's public
+                    // session state instead of racing its terminal watcher under
+                    // a saturated full-suite run.
+                    withTimeout(5_000) {
+                        bob.sessions.first { it.isEmpty() }
+                    }
+
+                    // Do not emit path state again. A StateFlow will not re-emit
+                    // the same value, so registration must consume the manager's
+                    // retained authority rather than relying on the prior event.
+                    val second = withTimeout(5_000) { alice.connect(targetPeer()) }
+                    assertEquals(
+                        ConnectionState.Failed,
+                        withTimeout(5_000) { second.state.first { it == ConnectionState.Failed } },
+                        "a new session must not become Connected while the retained path is Unsatisfied"
+                    )
+                    assertTrue(outgoing.isEmpty(), "both queued connections must have been consumed")
+                }
             }
         }
 
@@ -210,61 +239,82 @@ class NetworkPathRecoveryTest {
         }
         val attempts = MutableStateFlow(0)
         val fake = FakeNetworkPathObserver(initial = NetworkPathStatus.Satisfied)
-        val alice = outgoingKit(
-            "Alice",
-            ReconnectPolicy.Enabled(maxAttempts = 3, retryDelayMillis = 30_000),
-            fake
-        ) {
-            attempts.update { it + 1 }
-            queue.removeFirstOrNull() ?: throw RuntimeException("no more connections")
-        }
-        val bob = incomingKit("Bob", listOf(pair1.b, pair2.b))
-        try {
-            val session = withTimeout(5_000) { alice.connect(targetPeer()) }
-            assertEquals(ConnectionState.Connected, session.state.value)
-
-            // Drive: drop the wire AND drop the path. Both fire
-            // onConnectionLost; the connection lock short-circuits the
-            // second one. Session is now Reconnecting and the handler is
-            // parked in `withTimeoutOrNull(5_000) { pathSatisfied.first() }`.
-            pair1.a.breakWithException(RuntimeException("simulated wire break"))
-            fake.emit(NetworkPathStatus.Unsatisfied)
-            withTimeout(5_000) {
-                session.state.first { it == ConnectionState.Reconnecting }
+        val wireFailure = StatefulTestFailure("simulated wire break")
+        var expectedWireDiagnostic: RecordingLogger.Entry? = null
+        withTestKit(
+            create = { recorder ->
+                outgoingKit(
+                    "Alice",
+                    ReconnectPolicy.Enabled(maxAttempts = 3, retryDelayMillis = 30_000),
+                    fake,
+                    recording = recorder
+                ) {
+                    attempts.update { it + 1 }
+                    queue.removeFirstOrNull() ?: throw RuntimeException("no more connections")
+                }
+            },
+            verifyDiagnostics = { recorder ->
+                val diagnostics = recorder.entries.filter {
+                    it.level == RecordingLogger.Level.WARN || it.level == RecordingLogger.Level.ERROR
+                }
+                // The simultaneous Unsatisfied path can cancel this reader before its throwing-read catch.
+                // Only that one original session/cause is permitted; all retry/cleanup warnings still fail.
+                assertTrue(diagnostics.isEmpty() || diagnostics == listOfNotNull(expectedWireDiagnostic))
             }
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", listOf(pair1.b, pair2.b), recording = recorder)
+                }
+            ) { bob ->
+                val session = withTimeout(5_000) { alice.connect(targetPeer()) }
+                assertEquals(ConnectionState.Connected, session.state.value)
 
-            // Wake the parked retry by emitting Satisfied. The generation-
-            // counter signal (AUDIT-2026-06 fix in SessionManager) retains the
-            // transition even if it lands before the handler parks, so a single
-            // emit is now race-free.
-            fake.emit(NetworkPathStatus.Satisfied)
+                // Drive: drop the wire AND drop the path. Both fire
+                // onConnectionLost; the connection lock short-circuits the
+                // second one. Session is now Reconnecting and the handler is
+                // parked in `withTimeoutOrNull(5_000) { pathSatisfied.first() }`.
+                expectedWireDiagnostic = RecordingLogger.Entry(
+                    RecordingLogger.Level.WARN,
+                    "Session ${session.id}: routeEvents failed",
+                    wireFailure
+                )
+                pair1.a.breakWithException(wireFailure)
+                fake.emit(NetworkPathStatus.Unsatisfied)
+                withTimeout(5_000) {
+                    session.state.first { it == ConnectionState.Reconnecting }
+                }
 
-            // The second transport dial is the direct evidence that Satisfied
-            // woke the retry waiter. The 10 s safety bound is one third of the
-            // configured delay, so an ordinary timer expiry cannot satisfy the
-            // assertion even on a heavily loaded hosted runner.
-            val wokenAttempt = withTimeout(10_000) {
-                attempts.first { it >= 2 }
+                // Wake the parked retry by emitting Satisfied. The generation-
+                // counter signal (AUDIT-2026-06 fix in SessionManager) retains the
+                // transition even if it lands before the handler parks, so a single
+                // emit is now race-free.
+                fake.emit(NetworkPathStatus.Satisfied)
+
+                // The second transport dial is the direct evidence that Satisfied
+                // woke the retry waiter. The 10 s safety bound is one third of the
+                // configured delay, so an ordinary timer expiry cannot satisfy the
+                // assertion even on a heavily loaded hosted runner.
+                val wokenAttempt = withTimeout(10_000) {
+                    attempts.first { it >= 2 }
+                }
+                assertEquals(
+                    2,
+                    wokenAttempt,
+                    "Satisfied must trigger exactly the first retry before the scheduled delay"
+                )
+
+                // Keep the end-to-end rearm assertion, but do not use handshake
+                // completion itself as the timing probe for the wake-up invariant.
+                val rearmed = withTimeout(10_000) {
+                    session.state.first { it == ConnectionState.Connected }
+                }
+                assertEquals(ConnectionState.Connected, rearmed)
+                assertEquals(
+                    2, attempts.value,
+                    "Expected initial connect + exactly one retry triggered by Satisfied wake-up"
+                )
             }
-            assertEquals(
-                2,
-                wokenAttempt,
-                "Satisfied must trigger exactly the first retry before the scheduled delay"
-            )
-
-            // Keep the end-to-end rearm assertion, but do not use handshake
-            // completion itself as the timing probe for the wake-up invariant.
-            val rearmed = withTimeout(10_000) {
-                session.state.first { it == ConnectionState.Connected }
-            }
-            assertEquals(ConnectionState.Connected, rearmed)
-            assertEquals(
-                2, attempts.value,
-                "Expected initial connect + exactly one retry triggered by Satisfied wake-up"
-            )
-        } finally {
-            alice.stop()
-            bob.stop()
         }
     }
 
@@ -272,29 +322,35 @@ class NetworkPathRecoveryTest {
     fun pathUnknownIsANoOp() = runBlocking<Unit> {
         val pair = FakeConnectionPair()
         val fake = FakeNetworkPathObserver(initial = NetworkPathStatus.Satisfied)
-        val alice = outgoingKit(
-            "Alice",
-            ReconnectPolicy.Disabled,
-            fake
-        ) { pair.a }
-        val bob = incomingKit("Bob", listOf(pair.b))
-        try {
-            val session = withTimeout(5_000) { alice.connect(targetPeer()) }
-            assertEquals(ConnectionState.Connected, session.state.value)
+        withTestKit(
+            create = { recorder ->
+                outgoingKit(
+                    "Alice",
+                    ReconnectPolicy.Disabled,
+                    fake,
+                    recording = recorder
+                ) { pair.a }
+            }
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", listOf(pair.b), recording = recorder)
+                }
+            ) { bob ->
+                val session = withTimeout(5_000) { alice.connect(targetPeer()) }
+                assertEquals(ConnectionState.Connected, session.state.value)
 
-            // Emit Unknown — must NOT touch the session.
-            fake.emit(NetworkPathStatus.Unknown)
-            // Small settle window; we don't have a state transition to wait
-            // on because there shouldn't be one.
-            delay(100)
-            assertEquals(
-                ConnectionState.Connected, session.state.value,
-                "NetworkPathStatus.Unknown must be a no-op — it means 'no information', " +
-                    "not 'no network'."
-            )
-        } finally {
-            alice.stop()
-            bob.stop()
+                // Emit Unknown — must NOT touch the session.
+                fake.emit(NetworkPathStatus.Unknown)
+                // Small settle window; we don't have a state transition to wait
+                // on because there shouldn't be one.
+                delay(100)
+                assertEquals(
+                    ConnectionState.Connected, session.state.value,
+                    "NetworkPathStatus.Unknown must be a no-op — it means 'no information', " +
+                        "not 'no network'."
+                )
+            }
         }
     }
 
@@ -311,35 +367,48 @@ class NetworkPathRecoveryTest {
     fun observerLifecycleIsTiedToKitLifecycle() = runBlocking<Unit> {
         val pair = FakeConnectionPair()
         val fake = FakeNetworkPathObserver()
-        val alice = outgoingKit(
-            "Alice",
-            ReconnectPolicy.Disabled,
-            fake
-        ) { pair.a }
-        val bob = incomingKit("Bob", listOf(pair.b))
-        try {
-            // start() runs lazily on the first lifecycle call.
-            assertEquals(0, fake.startCalled, "Observer must not start before ensureStarted")
-            withTimeout(5_000) { alice.connect(targetPeer()) }
-            assertTrue(
-                fake.startCalled >= 1,
-                "Observer.start must be called by ensureStarted (got ${fake.startCalled})"
-            )
+        withTestKit(
+            create = { recorder ->
+                outgoingKit(
+                    "Alice",
+                    ReconnectPolicy.Disabled,
+                    fake,
+                    recording = recorder
+                ) { pair.a }
+            }
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", listOf(pair.b), recording = recorder)
+                }
+            ) { bob ->
+                // start() runs lazily on the first lifecycle call.
+                assertEquals(0, fake.startCalled, "Observer must not start before ensureStarted")
+                withTimeout(5_000) { alice.connect(targetPeer()) }
+                assertTrue(
+                    fake.startCalled >= 1,
+                    "Observer.start must be called by ensureStarted (got ${fake.startCalled})"
+                )
 
-            // Idempotent — a second lifecycle call must not call start again.
-            val startsBefore = fake.startCalled
-            alice.startAdvertising()
-            assertEquals(
-                startsBefore, fake.startCalled,
-                "Observer.start must be idempotent across kit.ensureStarted calls"
-            )
-        } finally {
-            alice.stop()
-            bob.stop()
-            assertTrue(
-                fake.closeCalled >= 1,
-                "Observer.close must be called by kit.stop() (got ${fake.closeCalled})"
-            )
+                // Idempotent — a second lifecycle call must not call start again.
+                val startsBefore = fake.startCalled
+                alice.startAdvertising()
+                assertEquals(
+                    startsBefore, fake.startCalled,
+                    "Observer.start must be idempotent across kit.ensureStarted calls"
+                )
+
+                // Local connect returns independently of the responder's commit. Join Bob's
+                // single live setup before fixture teardown rather than stopping it at that gate.
+                val incoming = withTimeout(5_000) {
+                    bob.sessions.first { it.isNotEmpty() }.single()
+                }
+                assertEquals(ConnectionState.Connected, incoming.state.value)
+            }
         }
+        assertTrue(
+            fake.closeCalled >= 1,
+            "Observer.close must be called by kit.stop() (got ${fake.closeCalled})"
+        )
     }
 }

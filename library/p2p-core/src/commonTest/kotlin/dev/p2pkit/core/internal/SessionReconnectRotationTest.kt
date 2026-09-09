@@ -10,7 +10,10 @@ import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.FakeDiscoveryTransport
+import dev.p2pkit.core.testfixtures.RecordingLogger
+import dev.p2pkit.core.testfixtures.StatefulTestFailure
 import dev.p2pkit.core.testfixtures.createTestKit
+import dev.p2pkit.core.testfixtures.withTestKit
 import dev.p2pkit.core.transport.DiscoveryTransport
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.PeerEvent
@@ -79,99 +82,121 @@ class SessionReconnectRotationTest {
         val bobV1 = InternalPeer(publicPeer = bobPeer, transportHints = hintsV1)
         val bobV2 = InternalPeer(publicPeer = bobPeer, transportHints = hintsV2)
 
-        val alice = createTestKit {
-            appId = AppId("com.example.test")
-            deviceName = "Alice"
-            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("alice-id"))
-            keepAlive {
-                // Very long PING so the only thing driving state transitions
-                // in this test is the wire-break + reconnect, not keep-alive
-                // timeout.
-                pingIntervalMillis = 60_000
-                timeoutMillis = 120_000
-            }
-            lifecycle {
-                // Small retryDelayMillis keeps the test fast while still
-                // giving PeerRegistry time to process the Updated event
-                // between attempts.
-                reconnectPolicy = ReconnectPolicy.Enabled(
-                    maxAttempts = 3,
-                    retryDelayMillis = 200
+        val wireFailure = StatefulTestFailure("simulated wire break")
+        var expectedWireDiagnostic: RecordingLogger.Entry? = null
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("com.example.test")
+                    deviceName = "Alice"
+                    peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("alice-id"))
+                    keepAlive {
+                        // Very long PING so the only thing driving state transitions
+                        // in this test is the wire-break + reconnect, not keep-alive
+                        // timeout.
+                        pingIntervalMillis = 60_000
+                        timeoutMillis = 120_000
+                    }
+                    lifecycle {
+                        // Small retryDelayMillis keeps the test fast while still
+                        // giving PeerRegistry time to process the Updated event
+                        // between attempts.
+                        reconnectPolicy = ReconnectPolicy.Enabled(
+                            maxAttempts = 3,
+                            retryDelayMillis = 200
+                        )
+                    }
+                    transports {
+                        register(RotationTestFactory(aliceData, aliceDiscovery))
+                    }
+                }
+            },
+            verifyDiagnostics = { recorder ->
+                assertEquals(
+                    listOfNotNull(expectedWireDiagnostic),
+                    recorder.entries.filter {
+                        it.level == RecordingLogger.Level.WARN || it.level == RecordingLogger.Level.ERROR
+                    }
                 )
             }
-            transports {
-                register(RotationTestFactory(aliceData, aliceDiscovery))
-            }
-        }
-        val bob = createTestKit {
-            appId = AppId("com.example.test")
-            deviceName = "Bob"
-            // Match the dialed id ("bob-id") so the outgoing handshake's peerId
-            // verification passes (mirrors production discovery).
-            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
-            keepAlive {
-                pingIntervalMillis = 60_000
-                timeoutMillis = 120_000
-            }
-            transports {
-                register(
-                    RotationTestFactory(
-                        data = FakeDataTransport(
-                            preStagedIncoming = listOf(pair1.b, pair2.b)
-                        ),
-                        discovery = null
-                    )
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    createTestKit {
+                        logger = recorder
+                        appId = AppId("com.example.test")
+                        deviceName = "Bob"
+                        // Match the dialed id ("bob-id") so the outgoing handshake's peerId
+                        // verification passes (mirrors production discovery).
+                        peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
+                        keepAlive {
+                            pingIntervalMillis = 60_000
+                            timeoutMillis = 120_000
+                        }
+                        transports {
+                            register(
+                                RotationTestFactory(
+                                    data = FakeDataTransport(
+                                        preStagedIncoming = listOf(pair1.b, pair2.b)
+                                    ),
+                                    discovery = null
+                                )
+                            )
+                        }
+                    }
+                }
+            ) { bob ->
+                // Seed alice's PeerRegistry with bobV1.
+                withTimeout(peerPropagationTimeoutMs) { aliceDiscovery.awaitSubscriber() }
+                aliceDiscovery.emit(PeerEvent.Found(bobV1))
+                withTimeout(peerPropagationTimeoutMs) {
+                    alice.peers.first { list -> list.any { it.id == bobPeer.id } }
+                }
+
+                // Initial connect — handler captures bobV1 as originalInternalPeer
+                // and dials it.
+                val session = withTimeout(5_000) { alice.connect(bobPeer) }
+                assertEquals(ConnectionState.Connected, session.state.value)
+                assertEquals(1, aliceData.connectCalls.size, "exactly one dial for initial connect")
+                assertEquals(
+                    hintsV1, aliceData.connectCalls[0].transportHints,
+                    "initial dial must use the InternalPeer seeded into PeerRegistry"
+                )
+
+                // Break the wire — session goes Reconnecting and the handler
+                // parks on retryDelayMillis OR pathSatisfiedSignal.
+                expectedWireDiagnostic = RecordingLogger.Entry(
+                    RecordingLogger.Level.WARN,
+                    "Session ${session.id}: routeEvents failed",
+                    wireFailure
+                )
+                pair1.a.breakWithException(wireFailure)
+                withTimeout(5_000) {
+                    session.state.first { it == ConnectionState.Reconnecting }
+                }
+
+                // Rotation: emit a fresh InternalPeer for the SAME peerId but
+                // with different transport hints. PeerRegistry processes this
+                // event asynchronously via its onEach pipeline; the
+                // retryDelayMillis (200ms) is more than enough for the update
+                // to land before the next dial fires.
+                aliceDiscovery.emit(PeerEvent.Updated(bobV2))
+
+                // Wait for the reconnect attempt to succeed against pair2.
+                withTimeout(5_000) {
+                    session.state.first { it == ConnectionState.Connected }
+                }
+
+                // The second dial must have used hintsV2 — the rotated address
+                // from PeerRegistry, NOT the originally captured hintsV1.
+                assertEquals(2, aliceData.connectCalls.size, "exactly two dials: initial + one retry")
+                assertEquals(
+                    hintsV2, aliceData.connectCalls[1].transportHints,
+                    "reconnect attempt must dial the rotated address resolved from PeerRegistry, " +
+                        "not the originalInternalPeer captured at session creation"
                 )
             }
-        }
-        try {
-            // Seed alice's PeerRegistry with bobV1.
-            withTimeout(peerPropagationTimeoutMs) { aliceDiscovery.awaitSubscriber() }
-            aliceDiscovery.emit(PeerEvent.Found(bobV1))
-            withTimeout(peerPropagationTimeoutMs) {
-                alice.peers.first { list -> list.any { it.id == bobPeer.id } }
-            }
-
-            // Initial connect — handler captures bobV1 as originalInternalPeer
-            // and dials it.
-            val session = withTimeout(5_000) { alice.connect(bobPeer) }
-            assertEquals(ConnectionState.Connected, session.state.value)
-            assertEquals(1, aliceData.connectCalls.size, "exactly one dial for initial connect")
-            assertEquals(
-                hintsV1, aliceData.connectCalls[0].transportHints,
-                "initial dial must use the InternalPeer seeded into PeerRegistry"
-            )
-
-            // Break the wire — session goes Reconnecting and the handler
-            // parks on retryDelayMillis OR pathSatisfiedSignal.
-            pair1.a.breakWithException(RuntimeException("simulated wire break"))
-            withTimeout(5_000) {
-                session.state.first { it == ConnectionState.Reconnecting }
-            }
-
-            // Rotation: emit a fresh InternalPeer for the SAME peerId but
-            // with different transport hints. PeerRegistry processes this
-            // event asynchronously via its onEach pipeline; the
-            // retryDelayMillis (200ms) is more than enough for the update
-            // to land before the next dial fires.
-            aliceDiscovery.emit(PeerEvent.Updated(bobV2))
-
-            // Wait for the reconnect attempt to succeed against pair2.
-            withTimeout(5_000) {
-                session.state.first { it == ConnectionState.Connected }
-            }
-
-            // The second dial must have used hintsV2 — the rotated address
-            // from PeerRegistry, NOT the originally captured hintsV1.
-            assertEquals(2, aliceData.connectCalls.size, "exactly two dials: initial + one retry")
-            assertEquals(
-                hintsV2, aliceData.connectCalls[1].transportHints,
-                "reconnect attempt must dial the rotated address resolved from PeerRegistry, " +
-                    "not the originalInternalPeer captured at session creation"
-            )
-        } finally {
-            alice.stop()
-            bob.stop()
         }
     }
 
@@ -188,91 +213,113 @@ class SessionReconnectRotationTest {
         val hintsV1 = listOf(TransportHint(TransportKind.LAN, host = "10.0.0.5", port = 4000))
         val bobV1 = InternalPeer(publicPeer = bobPeer, transportHints = hintsV1)
 
-        val alice = createTestKit {
-            appId = AppId("com.example.test")
-            deviceName = "Alice"
-            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("alice-id"))
-            keepAlive {
-                pingIntervalMillis = 60_000
-                timeoutMillis = 120_000
-            }
-            lifecycle {
-                reconnectPolicy = ReconnectPolicy.Enabled(
-                    maxAttempts = 3,
-                    retryDelayMillis = 200
+        val wireFailure = StatefulTestFailure("simulated wire break")
+        var expectedWireDiagnostic: RecordingLogger.Entry? = null
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("com.example.test")
+                    deviceName = "Alice"
+                    peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("alice-id"))
+                    keepAlive {
+                        pingIntervalMillis = 60_000
+                        timeoutMillis = 120_000
+                    }
+                    lifecycle {
+                        reconnectPolicy = ReconnectPolicy.Enabled(
+                            maxAttempts = 3,
+                            retryDelayMillis = 200
+                        )
+                    }
+                    transports {
+                        register(RotationTestFactory(aliceData, aliceDiscovery))
+                    }
+                }
+            },
+            verifyDiagnostics = { recorder ->
+                assertEquals(
+                    listOfNotNull(expectedWireDiagnostic),
+                    recorder.entries.filter {
+                        it.level == RecordingLogger.Level.WARN || it.level == RecordingLogger.Level.ERROR
+                    }
                 )
             }
-            transports {
-                register(RotationTestFactory(aliceData, aliceDiscovery))
-            }
-        }
-        val bob = createTestKit {
-            appId = AppId("com.example.test")
-            deviceName = "Bob"
-            // Match the dialed id ("bob-id") so the outgoing handshake's peerId
-            // verification passes (mirrors production discovery).
-            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
-            keepAlive {
-                pingIntervalMillis = 60_000
-                timeoutMillis = 120_000
-            }
-            transports {
-                register(
-                    RotationTestFactory(
-                        data = FakeDataTransport(
-                            preStagedIncoming = listOf(pair1.b, pair2.b)
-                        ),
-                        discovery = null
-                    )
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    createTestKit {
+                        logger = recorder
+                        appId = AppId("com.example.test")
+                        deviceName = "Bob"
+                        // Match the dialed id ("bob-id") so the outgoing handshake's peerId
+                        // verification passes (mirrors production discovery).
+                        peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
+                        keepAlive {
+                            pingIntervalMillis = 60_000
+                            timeoutMillis = 120_000
+                        }
+                        transports {
+                            register(
+                                RotationTestFactory(
+                                    data = FakeDataTransport(
+                                        preStagedIncoming = listOf(pair1.b, pair2.b)
+                                    ),
+                                    discovery = null
+                                )
+                            )
+                        }
+                    }
+                }
+            ) { bob ->
+                // Seed initially, then evict by emitting Lost — simulates the
+                // peer disappearing from discovery (e.g., long outage exceeding
+                // staleTimeoutMillis). The reconnect handler should fall back
+                // to its originalInternalPeer capture.
+                withTimeout(peerPropagationTimeoutMs) { aliceDiscovery.awaitSubscriber() }
+                aliceDiscovery.emit(PeerEvent.Found(bobV1))
+                withTimeout(peerPropagationTimeoutMs) {
+                    alice.peers.first { list -> list.any { it.id == bobPeer.id } }
+                }
+                val session = withTimeout(5_000) { alice.connect(bobPeer) }
+                assertEquals(ConnectionState.Connected, session.state.value)
+                assertEquals(hintsV1, aliceData.connectCalls[0].transportHints)
+
+                // Break the wire and immediately evict the peer from the registry.
+                expectedWireDiagnostic = RecordingLogger.Entry(
+                    RecordingLogger.Level.WARN,
+                    "Session ${session.id}: routeEvents failed",
+                    wireFailure
+                )
+                pair1.a.breakWithException(wireFailure)
+                aliceDiscovery.emit(PeerEvent.Lost(bobPeer.id))
+                withTimeout(peerPropagationTimeoutMs) {
+                    alice.peers.first { list -> list.none { it.id == bobPeer.id } }
+                }
+
+                // AUDIT-2026-07 (SES-1): synchronize on the Reconnecting edge
+                // before waiting for Connected, matching the sibling tests. The
+                // pre-fix raw-state observer classified the break within one
+                // dispatch of the synchronous fixture state flip, which let this
+                // test skip the Reconnecting wait; classification now routes
+                // through the protocol-event pipeline (a couple of dispatches),
+                // so a bare `first { Connected }` here could match the PRE-break
+                // Connected value and read connectCalls before the retry dialed.
+                withTimeout(5_000) {
+                    session.state.first { it == ConnectionState.Reconnecting }
+                }
+
+                // Reconnect attempt should now find peerLookup returning null
+                // and fall back to the originally captured InternalPeer (hintsV1).
+                withTimeout(5_000) {
+                    session.state.first { it == ConnectionState.Connected }
+                }
+                assertEquals(2, aliceData.connectCalls.size)
+                assertEquals(
+                    hintsV1, aliceData.connectCalls[1].transportHints,
+                    "with registry empty, reconnect must fall back to originalInternalPeer (hintsV1)"
                 )
             }
-        }
-        try {
-            // Seed initially, then evict by emitting Lost — simulates the
-            // peer disappearing from discovery (e.g., long outage exceeding
-            // staleTimeoutMillis). The reconnect handler should fall back
-            // to its originalInternalPeer capture.
-            withTimeout(peerPropagationTimeoutMs) { aliceDiscovery.awaitSubscriber() }
-            aliceDiscovery.emit(PeerEvent.Found(bobV1))
-            withTimeout(peerPropagationTimeoutMs) {
-                alice.peers.first { list -> list.any { it.id == bobPeer.id } }
-            }
-            val session = withTimeout(5_000) { alice.connect(bobPeer) }
-            assertEquals(ConnectionState.Connected, session.state.value)
-            assertEquals(hintsV1, aliceData.connectCalls[0].transportHints)
-
-            // Break the wire and immediately evict the peer from the registry.
-            pair1.a.breakWithException(RuntimeException("simulated wire break"))
-            aliceDiscovery.emit(PeerEvent.Lost(bobPeer.id))
-            withTimeout(peerPropagationTimeoutMs) {
-                alice.peers.first { list -> list.none { it.id == bobPeer.id } }
-            }
-
-            // AUDIT-2026-07 (SES-1): synchronize on the Reconnecting edge
-            // before waiting for Connected, matching the sibling tests. The
-            // pre-fix raw-state observer classified the break within one
-            // dispatch of the synchronous fixture state flip, which let this
-            // test skip the Reconnecting wait; classification now routes
-            // through the protocol-event pipeline (a couple of dispatches),
-            // so a bare `first { Connected }` here could match the PRE-break
-            // Connected value and read connectCalls before the retry dialed.
-            withTimeout(5_000) {
-                session.state.first { it == ConnectionState.Reconnecting }
-            }
-
-            // Reconnect attempt should now find peerLookup returning null
-            // and fall back to the originally captured InternalPeer (hintsV1).
-            withTimeout(5_000) {
-                session.state.first { it == ConnectionState.Connected }
-            }
-            assertEquals(2, aliceData.connectCalls.size)
-            assertEquals(
-                hintsV1, aliceData.connectCalls[1].transportHints,
-                "with registry empty, reconnect must fall back to originalInternalPeer (hintsV1)"
-            )
-        } finally {
-            alice.stop()
-            bob.stop()
         }
     }
 
@@ -298,79 +345,101 @@ class SessionReconnectRotationTest {
         val hintsV1 = listOf(TransportHint(TransportKind.LAN, host = "10.0.0.5", port = 4000))
         val bobV1 = InternalPeer(publicPeer = bobPeer, transportHints = hintsV1)
 
-        val alice = createTestKit {
-            appId = AppId("com.example.test")
-            deviceName = "Alice"
-            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("alice-id"))
-            keepAlive {
-                pingIntervalMillis = 60_000
-                timeoutMillis = 120_000
-            }
-            lifecycle {
-                reconnectPolicy = ReconnectPolicy.Enabled(
-                    maxAttempts = 3,
-                    retryDelayMillis = 200
+        val wireFailure = StatefulTestFailure("simulated wire break")
+        var expectedWireDiagnostic: RecordingLogger.Entry? = null
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("com.example.test")
+                    deviceName = "Alice"
+                    peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("alice-id"))
+                    keepAlive {
+                        pingIntervalMillis = 60_000
+                        timeoutMillis = 120_000
+                    }
+                    lifecycle {
+                        reconnectPolicy = ReconnectPolicy.Enabled(
+                            maxAttempts = 3,
+                            retryDelayMillis = 200
+                        )
+                    }
+                    transports {
+                        register(RotationTestFactory(aliceData, aliceDiscovery))
+                    }
+                }
+            },
+            verifyDiagnostics = { recorder ->
+                assertEquals(
+                    listOfNotNull(expectedWireDiagnostic),
+                    recorder.entries.filter {
+                        it.level == RecordingLogger.Level.WARN || it.level == RecordingLogger.Level.ERROR
+                    }
                 )
             }
-            transports {
-                register(RotationTestFactory(aliceData, aliceDiscovery))
-            }
-        }
-        val bob = createTestKit {
-            appId = AppId("com.example.test")
-            deviceName = "Bob"
-            // Match the dialed id ("bob-id") so the outgoing handshake's peerId
-            // verification passes (mirrors production discovery).
-            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
-            keepAlive {
-                pingIntervalMillis = 60_000
-                timeoutMillis = 120_000
-            }
-            transports {
-                register(
-                    RotationTestFactory(
-                        data = FakeDataTransport(
-                            preStagedIncoming = listOf(pair1.b, pair2.b)
-                        ),
-                        discovery = null
-                    )
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    createTestKit {
+                        logger = recorder
+                        appId = AppId("com.example.test")
+                        deviceName = "Bob"
+                        // Match the dialed id ("bob-id") so the outgoing handshake's peerId
+                        // verification passes (mirrors production discovery).
+                        peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
+                        keepAlive {
+                            pingIntervalMillis = 60_000
+                            timeoutMillis = 120_000
+                        }
+                        transports {
+                            register(
+                                RotationTestFactory(
+                                    data = FakeDataTransport(
+                                        preStagedIncoming = listOf(pair1.b, pair2.b)
+                                    ),
+                                    discovery = null
+                                )
+                            )
+                        }
+                    }
+                }
+            ) { bob ->
+                withTimeout(peerPropagationTimeoutMs) { aliceDiscovery.awaitSubscriber() }
+                aliceDiscovery.emit(PeerEvent.Found(bobV1))
+                withTimeout(peerPropagationTimeoutMs) {
+                    alice.peers.first { list -> list.any { it.id == bobPeer.id } }
+                }
+
+                val session = withTimeout(5_000) { alice.connect(bobPeer) }
+                assertEquals(ConnectionState.Connected, session.state.value)
+                // refresh() must NOT fire on initial connect — only on reconnect.
+                assertEquals(0, aliceDiscovery.refreshCalls, "no refresh during initial connect")
+
+                // Break the wire — session goes Reconnecting → handler should
+                // invoke refresh() exactly once before the first retry dials.
+                expectedWireDiagnostic = RecordingLogger.Entry(
+                    RecordingLogger.Level.WARN,
+                    "Session ${session.id}: routeEvents failed",
+                    wireFailure
+                )
+                pair1.a.breakWithException(wireFailure)
+                withTimeout(5_000) {
+                    session.state.first { it == ConnectionState.Reconnecting }
+                }
+
+                // Wait for reconnect to land. The exact ordering of refresh()
+                // vs. the first retry attempt is "refresh first, then attempts" —
+                // we assert refreshCalls becomes 1 by the time we observe
+                // Connected, and stays at 1 (single refresh per Reconnecting
+                // episode).
+                withTimeout(5_000) {
+                    session.state.first { it == ConnectionState.Connected }
+                }
+                assertEquals(
+                    1, aliceDiscovery.refreshCalls,
+                    "refresh() must be invoked exactly once per Reconnecting episode"
                 )
             }
-        }
-        try {
-            withTimeout(peerPropagationTimeoutMs) { aliceDiscovery.awaitSubscriber() }
-            aliceDiscovery.emit(PeerEvent.Found(bobV1))
-            withTimeout(peerPropagationTimeoutMs) {
-                alice.peers.first { list -> list.any { it.id == bobPeer.id } }
-            }
-
-            val session = withTimeout(5_000) { alice.connect(bobPeer) }
-            assertEquals(ConnectionState.Connected, session.state.value)
-            // refresh() must NOT fire on initial connect — only on reconnect.
-            assertEquals(0, aliceDiscovery.refreshCalls, "no refresh during initial connect")
-
-            // Break the wire — session goes Reconnecting → handler should
-            // invoke refresh() exactly once before the first retry dials.
-            pair1.a.breakWithException(RuntimeException("simulated wire break"))
-            withTimeout(5_000) {
-                session.state.first { it == ConnectionState.Reconnecting }
-            }
-
-            // Wait for reconnect to land. The exact ordering of refresh()
-            // vs. the first retry attempt is "refresh first, then attempts" —
-            // we assert refreshCalls becomes 1 by the time we observe
-            // Connected, and stays at 1 (single refresh per Reconnecting
-            // episode).
-            withTimeout(5_000) {
-                session.state.first { it == ConnectionState.Connected }
-            }
-            assertEquals(
-                1, aliceDiscovery.refreshCalls,
-                "refresh() must be invoked exactly once per Reconnecting episode"
-            )
-        } finally {
-            alice.stop()
-            bob.stop()
         }
     }
 
@@ -388,57 +457,93 @@ class SessionReconnectRotationTest {
             publicPeer = bobPeer,
             transportHints = listOf(TransportHint(TransportKind.LAN, "10.0.0.5", 4_000))
         )
-        val alice = createTestKit {
-            appId = AppId("bounded-refresh-test")
-            deviceName = "Alice"
-            peerIdStorage = InMemoryPeerIdStorage(PeerId("alice-id"))
-            discoveryRefreshTimeoutMillisForTest = 50
-            lifecycle {
-                reconnectPolicy = ReconnectPolicy.Enabled(maxAttempts = 1, retryDelayMillis = 1)
-            }
-            keepAlive {
-                pingIntervalMillis = 60_000
-                timeoutMillis = 120_000
-            }
-            transports { register(RotationTestFactory(aliceData, aliceDiscovery)) }
-        }
-        val bob = createTestKit {
-            appId = AppId("bounded-refresh-test")
-            deviceName = "Bob"
-            peerIdStorage = InMemoryPeerIdStorage(PeerId("bob-id"))
-            keepAlive {
-                pingIntervalMillis = 60_000
-                timeoutMillis = 120_000
-            }
-            transports {
-                register(
-                    RotationTestFactory(
-                        FakeDataTransport(preStagedIncoming = listOf(pair.b)),
-                        null
+        val wireFailure = StatefulTestFailure("wire lost")
+        var expectedWireDiagnostic: RecordingLogger.Entry? = null
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("bounded-refresh-test")
+                    deviceName = "Alice"
+                    peerIdStorage = InMemoryPeerIdStorage(PeerId("alice-id"))
+                    discoveryRefreshTimeoutMillisForTest = 50
+                    lifecycle {
+                        reconnectPolicy = ReconnectPolicy.Enabled(maxAttempts = 1, retryDelayMillis = 1)
+                    }
+                    keepAlive {
+                        pingIntervalMillis = 60_000
+                        timeoutMillis = 120_000
+                    }
+                    transports { register(RotationTestFactory(aliceData, aliceDiscovery)) }
+                }
+            },
+            verifyDiagnostics = { recorder ->
+                val expected = listOfNotNull(expectedWireDiagnostic) + listOf(
+                    RecordingLogger.Entry(
+                        RecordingLogger.Level.WARN,
+                        "reconnect: refresh timed out phase=initial peer=bob-id name=Bob timeoutMs=50"
+                    ),
+                    RecordingLogger.Entry(
+                        RecordingLogger.Level.WARN,
+                        "reconnect: attempt=1/1 peer=bob-id name=Bob FAILED dialed=LAN:10.0.0.5:4000 " +
+                            "source=REGISTRY reason=IllegalStateException: retry target unavailable"
                     )
                 )
+                assertEquals(
+                    expected,
+                    recorder.entries.filter {
+                        it.level == RecordingLogger.Level.WARN || it.level == RecordingLogger.Level.ERROR
+                    }
+                )
             }
-        }
-        try {
-            withTimeout(peerPropagationTimeoutMs) { aliceDiscovery.awaitSubscriber() }
-            aliceDiscovery.emit(PeerEvent.Found(bobInternal))
-            withTimeout(peerPropagationTimeoutMs) {
-                alice.peers.first { peers -> peers.any { it.id == bobPeer.id } }
-            }
-            val session = withTimeout(5_000) { alice.connect(bobPeer) }
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    createTestKit {
+                        logger = recorder
+                        appId = AppId("bounded-refresh-test")
+                        deviceName = "Bob"
+                        peerIdStorage = InMemoryPeerIdStorage(PeerId("bob-id"))
+                        keepAlive {
+                            pingIntervalMillis = 60_000
+                            timeoutMillis = 120_000
+                        }
+                        transports {
+                            register(
+                                RotationTestFactory(
+                                    FakeDataTransport(preStagedIncoming = listOf(pair.b)),
+                                    null
+                                )
+                            )
+                        }
+                    }
+                }
+            ) { bob ->
+                try {
+                    withTimeout(peerPropagationTimeoutMs) { aliceDiscovery.awaitSubscriber() }
+                    aliceDiscovery.emit(PeerEvent.Found(bobInternal))
+                    withTimeout(peerPropagationTimeoutMs) {
+                        alice.peers.first { peers -> peers.any { it.id == bobPeer.id } }
+                    }
+                    val session = withTimeout(5_000) { alice.connect(bobPeer) }
 
-            pair.a.breakWithException(IllegalStateException("wire lost"))
-            withTimeout(5_000) { aliceDiscovery.refreshEntered.await() }
-            withTimeout(5_000) {
-                session.state.first { it == ConnectionState.Failed }
-            }
+                    expectedWireDiagnostic = RecordingLogger.Entry(
+                        RecordingLogger.Level.WARN,
+                        "Session ${session.id}: routeEvents failed",
+                        wireFailure
+                    )
+                    pair.a.breakWithException(wireFailure)
+                    withTimeout(5_000) { aliceDiscovery.refreshEntered.await() }
+                    withTimeout(5_000) {
+                        session.state.first { it == ConnectionState.Failed }
+                    }
 
-            assertEquals(1, aliceDiscovery.refreshCalls)
-            assertEquals(2, dialCalls, "one initial dial and one post-timeout retry")
-        } finally {
-            aliceDiscovery.releaseRefresh.complete(Unit)
-            alice.stop()
-            bob.stop()
+                    assertEquals(1, aliceDiscovery.refreshCalls)
+                    assertEquals(2, dialCalls, "one initial dial and one post-timeout retry")
+                } finally {
+                    aliceDiscovery.releaseRefresh.complete(Unit)
+                }
+            }
         }
     }
 
@@ -456,54 +561,88 @@ class SessionReconnectRotationTest {
             publicPeer = bobPeer,
             transportHints = listOf(TransportHint(TransportKind.LAN, "10.0.0.5", 4_000))
         )
-        val alice = createTestKit {
-            appId = AppId("callback-cancellation-refresh-test")
-            deviceName = "Alice"
-            peerIdStorage = InMemoryPeerIdStorage(PeerId("alice-id"))
-            lifecycle {
-                reconnectPolicy = ReconnectPolicy.Enabled(maxAttempts = 1, retryDelayMillis = 1)
-            }
-            keepAlive {
-                pingIntervalMillis = 60_000
-                timeoutMillis = 120_000
-            }
-            transports { register(RotationTestFactory(aliceData, aliceDiscovery)) }
-        }
-        val bob = createTestKit {
-            appId = AppId("callback-cancellation-refresh-test")
-            deviceName = "Bob"
-            peerIdStorage = InMemoryPeerIdStorage(PeerId("bob-id"))
-            keepAlive {
-                pingIntervalMillis = 60_000
-                timeoutMillis = 120_000
-            }
-            transports {
-                register(
-                    RotationTestFactory(
-                        FakeDataTransport(preStagedIncoming = listOf(pair.b)),
-                        null
+        val wireFailure = StatefulTestFailure("wire lost")
+        var expectedWireDiagnostic: RecordingLogger.Entry? = null
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("callback-cancellation-refresh-test")
+                    deviceName = "Alice"
+                    peerIdStorage = InMemoryPeerIdStorage(PeerId("alice-id"))
+                    lifecycle {
+                        reconnectPolicy = ReconnectPolicy.Enabled(maxAttempts = 1, retryDelayMillis = 1)
+                    }
+                    keepAlive {
+                        pingIntervalMillis = 60_000
+                        timeoutMillis = 120_000
+                    }
+                    transports { register(RotationTestFactory(aliceData, aliceDiscovery)) }
+                }
+            },
+            verifyDiagnostics = { recorder ->
+                val expected = listOfNotNull(expectedWireDiagnostic) + listOf(
+                    RecordingLogger.Entry(
+                        RecordingLogger.Level.WARN,
+                        "reconnect: refresh failed phase=initial peer=bob-id name=Bob " +
+                            "reason=CancellationException: refresh callback cancelled itself"
+                    ),
+                    RecordingLogger.Entry(
+                        RecordingLogger.Level.WARN,
+                        "reconnect: attempt=1/1 peer=bob-id name=Bob FAILED dialed=LAN:10.0.0.5:4000 " +
+                            "source=REGISTRY reason=IllegalStateException: retry target unavailable"
                     )
                 )
+                assertEquals(
+                    expected,
+                    recorder.entries.filter {
+                        it.level == RecordingLogger.Level.WARN || it.level == RecordingLogger.Level.ERROR
+                    }
+                )
             }
-        }
-        try {
-            withTimeout(peerPropagationTimeoutMs) { aliceDiscovery.awaitSubscriber() }
-            aliceDiscovery.emit(PeerEvent.Found(bobInternal))
-            withTimeout(peerPropagationTimeoutMs) {
-                alice.peers.first { peers -> peers.any { it.id == bobPeer.id } }
-            }
-            val session = withTimeout(5_000) { alice.connect(bobPeer) }
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    createTestKit {
+                        logger = recorder
+                        appId = AppId("callback-cancellation-refresh-test")
+                        deviceName = "Bob"
+                        peerIdStorage = InMemoryPeerIdStorage(PeerId("bob-id"))
+                        keepAlive {
+                            pingIntervalMillis = 60_000
+                            timeoutMillis = 120_000
+                        }
+                        transports {
+                            register(
+                                RotationTestFactory(
+                                    FakeDataTransport(preStagedIncoming = listOf(pair.b)),
+                                    null
+                                )
+                            )
+                        }
+                    }
+                }
+            ) { bob ->
+                withTimeout(peerPropagationTimeoutMs) { aliceDiscovery.awaitSubscriber() }
+                aliceDiscovery.emit(PeerEvent.Found(bobInternal))
+                withTimeout(peerPropagationTimeoutMs) {
+                    alice.peers.first { peers -> peers.any { it.id == bobPeer.id } }
+                }
+                val session = withTimeout(5_000) { alice.connect(bobPeer) }
 
-            pair.a.breakWithException(IllegalStateException("wire lost"))
-            withTimeout(5_000) {
-                session.state.first { it == ConnectionState.Failed }
-            }
+                expectedWireDiagnostic = RecordingLogger.Entry(
+                    RecordingLogger.Level.WARN,
+                    "Session ${session.id}: routeEvents failed",
+                    wireFailure
+                )
+                pair.a.breakWithException(wireFailure)
+                withTimeout(5_000) {
+                    session.state.first { it == ConnectionState.Failed }
+                }
 
-            assertEquals(1, aliceDiscovery.refreshCalls)
-            assertEquals(2, dialCalls, "refresh callback cancellation must not suppress retry")
-        } finally {
-            alice.stop()
-            bob.stop()
+                assertEquals(1, aliceDiscovery.refreshCalls)
+                assertEquals(2, dialCalls, "refresh callback cancellation must not suppress retry")
+            }
         }
     }
 

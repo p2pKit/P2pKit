@@ -1,8 +1,8 @@
 package dev.p2pkit.transport.lan
 
 import dev.p2pkit.core.AppId
+import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pKit
-import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.Peer
@@ -17,9 +17,11 @@ import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportHint
 import dev.p2pkit.core.transport.TransportPair
+import java.net.SocketException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -33,7 +35,6 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.nio.file.Files
-import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -62,25 +63,29 @@ class JvmLanAcceptLoopResilienceTest {
 
     private val unique = "p2pkit-itest-accept-${System.currentTimeMillis()}"
 
-    private val toStop = mutableListOf<P2pKit>()
+    private val diagnostics = KitTestDiagnostics()
     private val tempHomes = mutableListOf<File>()
 
     @AfterTest
     fun teardown() {
         runBlocking {
-            toStop.forEach { runCatching { it.stop() } }
-            toStop.clear()
-            tempHomes.forEach { runCatching { it.deleteRecursively() } }
-            tempHomes.clear()
+            diagnostics.finish {
+                tempHomes.forEach { runCatching { it.deleteRecursively() } }
+                tempHomes.clear()
+            }
         }
     }
 
     @Test
     fun perConnectionSetupFailureKeepsAcceptLoopLiveForSubsequentPeers() {
         runBlocking {
-            val bobLogger = TestRecordingLogger()
+            val bobLogger = KitTestDiagnostics.Recording()
             val bobTransport = newLanTransport("Bob")
-            val bob = newKit("Bob", bobLogger, PairFactory(bobTransport))
+            val bob = newKit("Bob", bobLogger, PairFactory(bobTransport)) { recording ->
+                // Exactly the one deliberately truncated HELLO, after all kits have stopped.
+                assertEquals(1, recording.entries.size)
+                assertTruncatedHello(recording.entries.single())
+            }
             bob.start()
             val bobPort = requireNotNull(bobTransport.tcpPort.value)
 
@@ -92,6 +97,10 @@ class JvmLanAcceptLoopResilienceTest {
                     InetSocketAddress(InetAddress.getLoopbackAddress(), bobPort),
                     CONNECT_TIMEOUT_MS.toInt()
                 )
+                // Observe the local HELLO write before closing without replying. This fixes
+                // the fault at receive-EOF rather than racing an OS-dependent send failure.
+                s.soTimeout = CONNECT_TIMEOUT_MS.toInt()
+                assertTrue(s.getInputStream().read() >= 0, "Bob must send HELLO before the injected EOF")
             }
             awaitTrue("per-connection setup failure surfaced via logger") {
                 bobLogger.warnings().any { it.contains("Incoming session setup failed") }
@@ -102,7 +111,7 @@ class JvmLanAcceptLoopResilienceTest {
             val stub = StubDiscovery()
             val alice = newKit(
                 "Alice",
-                TestRecordingLogger(),
+                KitTestDiagnostics.Recording(),
                 PairFactory(newLanTransport("Alice"), stub)
             )
             val (outgoing, incoming) = establishSession(alice, bob, stub, bobPort)
@@ -126,16 +135,23 @@ class JvmLanAcceptLoopResilienceTest {
     @Test
     fun serverSocketClosedUnderLoopIsSurfacedAndKitSurvives() {
         runBlocking {
-            val bobLogger = TestRecordingLogger()
+            val bobLogger = KitTestDiagnostics.Recording()
             val bobTransport = newLanTransport("Bob")
-            val bob = newKit("Bob", bobLogger, PairFactory(bobTransport))
+            val bob = newKit("Bob", bobLogger, PairFactory(bobTransport)) { recording ->
+                // One real listener close must not become an unbounded retry warning stream.
+                val entry = recording.entries.single()
+                assertEquals(KitTestDiagnostics.Recording.Level.WARN, entry.level)
+                assertEquals("inbound acceptance ended for LAN", entry.message)
+                val cause = assertIs<SocketException>(entry.throwable)
+                assertTrue(cause.suppressedExceptions.isEmpty())
+            }
             bob.start()
             val bobPort = requireNotNull(bobTransport.tcpPort.value)
 
             val stub = StubDiscovery()
             val alice = newKit(
                 "Alice",
-                TestRecordingLogger(),
+                KitTestDiagnostics.Recording(),
                 PairFactory(newLanTransport("Alice"), stub)
             )
             val (outgoing, incoming) = establishSession(alice, bob, stub, bobPort)
@@ -161,7 +177,7 @@ class JvmLanAcceptLoopResilienceTest {
             val charlieStub = StubDiscovery()
             val charlie = newKit(
                 "Charlie",
-                TestRecordingLogger(),
+                KitTestDiagnostics.Recording(),
                 PairFactory(newLanTransport("Charlie"), charlieStub)
             )
             val (charlieOutgoing, charlieIncoming) = establishSession(
@@ -211,28 +227,33 @@ class JvmLanAcceptLoopResilienceTest {
      * Build a kit under a per-call temporary `user.home` so two kits in one
      * JVM get distinct persisted PeerIds (same trick as [JvmLanLoopbackTest]).
      */
-    private fun newKit(name: String, kitLogger: P2pLogger, factory: TransportFactory): P2pKit {
+    private fun newKit(
+        name: String,
+        kitLogger: KitTestDiagnostics.Recording,
+        factory: TransportFactory,
+        verifyDiagnostics: (KitTestDiagnostics.Recording) -> Unit = { it.assertQuiet() }
+    ): P2pKit {
         val tempHome = Files.createTempDirectory("p2pkit-itest-$name-").toFile()
         tempHomes.add(tempHome)
-        val kit = JvmGlobalStateTestGuard.withValues(
-            mapOf("user.home" to tempHome.absolutePath)
-        ) {
-            P2pKit.create {
-                appId = AppId(unique)
-                deviceName = name
-                security { mode = dev.p2pkit.core.SecurityMode.NoneForMvp }
-                logger = kitLogger
-                keepAlive {
-                    pingIntervalMillis = 60_000
-                    timeoutMillis = 120_000
-                }
-                transports {
-                    register(factory)
+        return diagnostics.create(kitLogger, verifyDiagnostics) { recording ->
+            JvmGlobalStateTestGuard.withValues(
+                mapOf("user.home" to tempHome.absolutePath)
+            ) {
+                P2pKit.create {
+                    appId = AppId(unique)
+                    deviceName = name
+                    security { mode = dev.p2pkit.core.SecurityMode.NoneForMvp }
+                    logger = recording
+                    keepAlive {
+                        pingIntervalMillis = 60_000
+                        timeoutMillis = 120_000
+                    }
+                    transports {
+                        register(factory)
+                    }
                 }
             }
         }
-        toStop.add(kit)
-        return kit
     }
 
     /**
@@ -315,30 +336,22 @@ class JvmLanAcceptLoopResilienceTest {
         }
     }
 
+    private fun assertTruncatedHello(entry: KitTestDiagnostics.Recording.Entry) {
+        assertEquals(KitTestDiagnostics.Recording.Level.WARN, entry.level)
+        assertEquals("Incoming session setup failed", entry.message)
+        val failure = assertIs<P2pError.ConnectionFailed>(entry.throwable)
+        val eof = assertIs<ClosedReceiveChannelException>(failure.cause)
+        assertEquals("Plaintext HELLO failed: ${eof.message}", failure.reason)
+        assertTrue(eof.suppressedExceptions.isEmpty())
+        assertTrue(failure.suppressedExceptions.isEmpty())
+    }
+
     private companion object {
         const val CONNECT_TIMEOUT_MS: Long = 10_000
         const val MESSAGE_TIMEOUT_MS: Long = 10_000
         const val AWAIT_TIMEOUT_MS: Long = 10_000
         const val STOP_TIMEOUT_MS: Long = 10_000
     }
-}
-
-/** Thread-safe recording [P2pLogger] (the commonTest fixture isn't published). */
-private class TestRecordingLogger : P2pLogger {
-    private val warnList = CopyOnWriteArrayList<String>()
-    private val errorList = CopyOnWriteArrayList<String>()
-    override fun debug(message: String) {}
-    override fun info(message: String) {}
-    override fun warn(message: String, throwable: Throwable?) {
-        warnList.add(message)
-    }
-
-    override fun error(message: String, throwable: Throwable?) {
-        errorList.add(message)
-    }
-
-    fun warnings(): List<String> = warnList.toList()
-    fun errors(): List<String> = errorList.toList()
 }
 
 /** Emits scripted [PeerEvent]s with the replay-zero delivery used in production. */

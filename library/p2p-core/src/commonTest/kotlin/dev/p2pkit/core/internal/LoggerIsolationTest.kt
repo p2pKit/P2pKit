@@ -10,6 +10,7 @@ import dev.p2pkit.core.provisioning.ProvisioningContext
 import dev.p2pkit.core.provisioning.UnsupportedNetworkProvisioningManager
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.createTestKit
+import dev.p2pkit.core.testfixtures.withTestKit
 import dev.p2pkit.core.transport.PeerEvent
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
@@ -71,16 +72,40 @@ class LoggerIsolationTest {
     @Test
     fun kitLifecycleDoesNotDependOnApplicationLoggerCorrectness() = runBlocking {
         val transport = FakeDataTransport()
-        val kit = createTestKit {
-            appId = AppId("throwing-logger-test")
-            deviceName = "Logger isolation"
-            peerIdStorage = InMemoryPeerIdStorage(PeerId("logger-peer"))
-            logger = ThrowingLogger()
-            transports { register(LoggerIsolationFactory(transport)) }
+        val delegate = ThrowingLogger()
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    appId = AppId("throwing-logger-test")
+                    deviceName = "Logger isolation"
+                    peerIdStorage = InMemoryPeerIdStorage(PeerId("logger-peer"))
+                    // Observe before forwarding every callback to the deliberately throwing application logger.
+                    logger = object : P2pLogger {
+                        override fun debug(message: String) {
+                            recorder.debug(message)
+                            delegate.debug(message)
+                        }
+                        override fun info(message: String) {
+                            recorder.info(message)
+                            delegate.info(message)
+                        }
+                        override fun warn(message: String, throwable: Throwable?) {
+                            recorder.warn(message, throwable)
+                            delegate.warn(message, throwable)
+                        }
+                        override fun error(message: String, throwable: Throwable?) {
+                            recorder.error(message, throwable)
+                            delegate.error(message, throwable)
+                        }
+                    }
+                    transports { register(LoggerIsolationFactory(transport)) }
+                }
+            }
+        ) { kit ->
+            kit.start()
+            kit.stop()
         }
-
-        kit.start()
-        kit.stop()
+        assertTrue(delegate.calls > 0, "the deliberately throwing delegate must still be invoked")
     }
 }
 

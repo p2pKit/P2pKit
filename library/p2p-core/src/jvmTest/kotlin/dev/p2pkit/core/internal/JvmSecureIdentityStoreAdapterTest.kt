@@ -17,6 +17,7 @@ import dev.p2pkit.core.security.SecureIdentityService
 import dev.p2pkit.core.security.platformSecurityCryptography
 import dev.p2pkit.core.security.resetJvmSecureIdentity
 import dev.p2pkit.core.testfixtures.FakeDataTransport
+import dev.p2pkit.core.testfixtures.withTestKit
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
@@ -289,22 +290,23 @@ class JvmSecureIdentityStoreAdapterTest {
     fun builderStoreFeedsSecureKitAndResetRemainsBlockedUntilTerminalStop() = runBlocking {
         val appId = AppId("jvm-builder-secure-kit")
         val store = RecordingJvmStore()
-        val kit = P2pKit.create {
-            this.appId = appId
-            deviceName = "secure-jvm-test"
-            jvmSecureIdentityStore(store)
-            transports { register(JvmIdentityTestFactory(FakeDataTransport())) }
-        }
-
-        try {
+        withTestKit(
+            create = { recorder ->
+                P2pKit.create {
+                    logger = recorder
+                    this.appId = appId
+                    deviceName = "secure-jvm-test"
+                    jvmSecureIdentityStore(store)
+                    transports { register(JvmIdentityTestFactory(FakeDataTransport())) }
+                }
+            }
+        ) { kit ->
             assertTrue(kit.localPeerId.value.startsWith("p2id2-"))
             assertNotNull(kit.localFingerprint)
             val blocked = assertFailsWith<P2pError.LocalIdentityUnavailable> {
                 resetJvmSecureIdentity(appId, store)
             }
             assertEquals(LocalIdentityFailureKind.LIVE_IDENTITY_IN_USE, blocked.kind)
-        } finally {
-            kit.stop()
         }
 
         resetJvmSecureIdentity(appId, store)

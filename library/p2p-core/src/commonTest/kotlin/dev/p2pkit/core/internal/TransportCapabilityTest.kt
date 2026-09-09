@@ -11,6 +11,7 @@ import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.FakeDiscoveryTransport
 import dev.p2pkit.core.testfixtures.assertCannotAdd
 import dev.p2pkit.core.testfixtures.createTestKit
+import dev.p2pkit.core.testfixtures.withTestKit
 import dev.p2pkit.core.transport.DataTransport
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.RawConnection
@@ -66,19 +67,21 @@ class TransportCapabilityTest {
     @Test
     fun dataOnlyProviderReportsUnsupportedBeforeRuntimePermissionQuery() = runBlocking {
         val permissionManager = CountingMissingPermissionManager()
-        val kit = createTestKit {
-            appId = AppId("data-only-capability-test")
-            deviceName = "Data only"
-            this.permissionManager = permissionManager
-            transports {
-                register(
-                    StaticFactory(
-                        TransportDescriptor.dataOnly(TransportKind.LAN)
-                    ) { TransportPair(data = FakeDataTransport()) }
-                )
+        withTestKit(create = { recorder ->
+            createTestKit {
+                logger = recorder
+                appId = AppId("data-only-capability-test")
+                deviceName = "Data only"
+                this.permissionManager = permissionManager
+                transports {
+                    register(
+                        StaticFactory(
+                            TransportDescriptor.dataOnly(TransportKind.LAN)
+                        ) { TransportPair(data = FakeDataTransport()) }
+                    )
+                }
             }
-        }
-        try {
+        }) { kit ->
             kit.startAdvertising()
             assertIs<FeatureState.Unsupported>(kit.advertisingState.value)
             assertEquals(0, permissionManager.missingQueries)
@@ -93,26 +96,26 @@ class TransportCapabilityTest {
             kit.stopDiscovery()
             assertEquals(FeatureState.Idle, kit.advertisingState.value)
             assertEquals(FeatureState.Idle, kit.discoveryState.value)
-        } finally {
-            kit.stop()
         }
     }
 
     @Test
     fun discoveryOnlyProviderBuildsAndRunsBothDiscoveryFeatures() = runBlocking {
         val discovery = FakeDiscoveryTransport()
-        val kit = createTestKit {
-            appId = AppId("discovery-only-capability-test")
-            deviceName = "Discovery only"
-            transports {
-                register(
-                    StaticFactory(
-                        TransportDescriptor.discoveryOnly(TransportKind.LAN)
-                    ) { TransportPair(discovery = discovery) }
-                )
+        withTestKit(create = { recorder ->
+            createTestKit {
+                logger = recorder
+                appId = AppId("discovery-only-capability-test")
+                deviceName = "Discovery only"
+                transports {
+                    register(
+                        StaticFactory(
+                            TransportDescriptor.discoveryOnly(TransportKind.LAN)
+                        ) { TransportPair(discovery = discovery) }
+                    )
+                }
             }
-        }
-        try {
+        }) { kit ->
             kit.startAdvertising()
             kit.startDiscovery()
             assertEquals(1, discovery.startAdvertisingCalls)
@@ -120,8 +123,6 @@ class TransportCapabilityTest {
             assertEquals(FeatureState.Active, kit.advertisingState.value)
             assertEquals(FeatureState.Active, kit.discoveryState.value)
             assertEquals(P2pState.Running, kit.state.value)
-        } finally {
-            kit.stop()
         }
     }
 

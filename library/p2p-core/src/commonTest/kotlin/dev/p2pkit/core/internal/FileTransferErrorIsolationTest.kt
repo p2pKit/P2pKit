@@ -6,6 +6,7 @@ import dev.p2pkit.core.FileTransferFailureKind
 import dev.p2pkit.core.FileTransferPhase
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pKit
+import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
@@ -15,6 +16,7 @@ import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.createTestKit
+import dev.p2pkit.core.testfixtures.withTestKit
 import dev.p2pkit.core.transfer.FileTransferState
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
@@ -49,8 +51,9 @@ import kotlin.test.assertSame
 @Suppress("DEPRECATION")
 class FileTransferErrorIsolationTest {
 
-    private fun outgoingKit(name: String, outgoing: RawConnection): P2pKit =
+    private fun outgoingKit(name: String, outgoing: RawConnection, recording: P2pLogger): P2pKit =
         createTestKit {
+            logger = recording
             appId = AppId("com.example.ft")
             deviceName = name
             peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("alice-id"))
@@ -67,8 +70,9 @@ class FileTransferErrorIsolationTest {
             }
         }
 
-    private fun incomingKit(name: String, incoming: RawConnection): P2pKit =
+    private fun incomingKit(name: String, incoming: RawConnection, recording: P2pLogger): P2pKit =
         createTestKit {
+            logger = recording
             appId = AppId("com.example.ft")
             deviceName = name
             keepAlive {
@@ -116,84 +120,89 @@ class FileTransferErrorIsolationTest {
     @Test
     fun sinkFlushFailureOnFinishFailsOnlyThatTransfer() = runBlocking {
         val pair = FakeConnectionPair()
-        val alice = outgoingKit("Alice", pair.a)
-        val bob = incomingKit("Bob", pair.b)
-        try {
-            val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
-            val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
-            val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
-
-            // Subscribe to messages and offers BEFORE anything is sent —
-            // SharedFlows with replay=0 won't replay earlier emissions.
-            val msgReady = CompletableDeferred<Unit>()
-            val msgDeferred = async {
-                incomingSession.incoming.onSubscription { msgReady.complete(Unit) }.first()
+        withTestKit(
+            create = { recorder ->
+                outgoingKit("Alice", pair.a, recording = recorder)
             }
-            withTimeout(5_000) { msgReady.await() }
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", pair.b, recording = recorder)
+                }
+            ) { bob ->
+                val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
+                val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
+                val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
 
-            val offersDeferred = async {
-                incomingSession.pendingFileOffers.first { it.size == 2 }
+                // Subscribe to messages and offers BEFORE anything is sent —
+                // SharedFlows with replay=0 won't replay earlier emissions.
+                val msgReady = CompletableDeferred<Unit>()
+                val msgDeferred = async {
+                    incomingSession.incoming.onSubscription { msgReady.complete(Unit) }.first()
+                }
+                withTimeout(5_000) { msgReady.await() }
+
+                val offersDeferred = async {
+                    incomingSession.pendingFileOffers.first { it.size == 2 }
+                }
+
+                // Two concurrent transfers: "bad.bin" lands in a sink whose flush
+                // throws during finish(); "good.bin" must be unaffected.
+                val badPayload = ByteArray(256) { 1 }
+                val goodPayload = ByteArray(256) { 2 }
+                outgoing.sendFile(
+                    name = "bad.bin",
+                    sizeBytes = badPayload.size.toLong(),
+                    mimeType = null,
+                    source = Buffer().apply { write(badPayload) }
+                )
+                val goodTransfer = outgoing.sendFile(
+                    name = "good.bin",
+                    sizeBytes = goodPayload.size.toLong(),
+                    mimeType = null,
+                    source = Buffer().apply { write(goodPayload) }
+                )
+
+                val offers = withTimeout(5_000) { offersDeferred.await() }
+                val badOffer = offers.first { it.name == "bad.bin" }
+                val goodOffer = offers.first { it.name == "good.bin" }
+
+                val goodSink = Buffer()
+                val badSink = DiskFullSink()
+                val badIncoming = badOffer.accept(badSink)
+                val goodIncoming = goodOffer.accept(goodSink)
+
+                // The failing receive must land in Failed (flush threw in finish())…
+                val badTerminal = withTimeout(5_000) {
+                    badIncoming.state.first { it is FileTransferState.Failed || it is FileTransferState.Completed }
+                }
+                val failed = assertIs<FileTransferState.Failed>(badTerminal)
+                val error = assertIs<P2pError.FileTransferFailed>(failed.error)
+                assertEquals(FileTransferFailureKind.STORAGE, error.kind)
+                assertEquals(FileTransferPhase.FLUSH, error.phase)
+                assertEquals(Retryability.RETRY_AFTER_USER_ACTION, error.retryability)
+                assertEquals(badIncoming.id, error.transferId)
+                assertSame(badSink.failure, error.cause, "retain the original sink failure, not a message copy")
+
+                // …while the concurrent transfer completes on both sides…
+                val goodReceiverFinal = withTimeout(5_000) {
+                    goodIncoming.state.first { it is FileTransferState.Completed || it is FileTransferState.Failed }
+                }
+                val goodSenderFinal = withTimeout(5_000) {
+                    goodTransfer.state.first { it is FileTransferState.Completed || it is FileTransferState.Failed }
+                }
+                assertIs<FileTransferState.Completed>(goodReceiverFinal)
+                assertIs<FileTransferState.Completed>(goodSenderFinal)
+                assertContentEquals(goodPayload, goodSink.readByteArray())
+
+                // …and the SESSION survives: plain messages still flow end-to-end
+                // and both sides report Connected.
+                outgoing.send(P2pMessage.Text("still alive"))
+                val msg = withTimeout(5_000) { msgDeferred.await() }
+                assertEquals("still alive", assertIs<P2pMessage.Text>(msg).value)
+                assertEquals(ConnectionState.Connected, incomingSession.state.value)
+                assertEquals(ConnectionState.Connected, outgoing.state.value)
             }
-
-            // Two concurrent transfers: "bad.bin" lands in a sink whose flush
-            // throws during finish(); "good.bin" must be unaffected.
-            val badPayload = ByteArray(256) { 1 }
-            val goodPayload = ByteArray(256) { 2 }
-            outgoing.sendFile(
-                name = "bad.bin",
-                sizeBytes = badPayload.size.toLong(),
-                mimeType = null,
-                source = Buffer().apply { write(badPayload) }
-            )
-            val goodTransfer = outgoing.sendFile(
-                name = "good.bin",
-                sizeBytes = goodPayload.size.toLong(),
-                mimeType = null,
-                source = Buffer().apply { write(goodPayload) }
-            )
-
-            val offers = withTimeout(5_000) { offersDeferred.await() }
-            val badOffer = offers.first { it.name == "bad.bin" }
-            val goodOffer = offers.first { it.name == "good.bin" }
-
-            val goodSink = Buffer()
-            val badSink = DiskFullSink()
-            val badIncoming = badOffer.accept(badSink)
-            val goodIncoming = goodOffer.accept(goodSink)
-
-            // The failing receive must land in Failed (flush threw in finish())…
-            val badTerminal = withTimeout(5_000) {
-                badIncoming.state.first { it is FileTransferState.Failed || it is FileTransferState.Completed }
-            }
-            val failed = assertIs<FileTransferState.Failed>(badTerminal)
-            val error = assertIs<P2pError.FileTransferFailed>(failed.error)
-            assertEquals(FileTransferFailureKind.STORAGE, error.kind)
-            assertEquals(FileTransferPhase.FLUSH, error.phase)
-            assertEquals(Retryability.RETRY_AFTER_USER_ACTION, error.retryability)
-            assertEquals(badIncoming.id, error.transferId)
-            assertSame(badSink.failure, error.cause, "retain the original sink failure, not a message copy")
-
-            // …while the concurrent transfer completes on both sides…
-            val goodReceiverFinal = withTimeout(5_000) {
-                goodIncoming.state.first { it is FileTransferState.Completed || it is FileTransferState.Failed }
-            }
-            val goodSenderFinal = withTimeout(5_000) {
-                goodTransfer.state.first { it is FileTransferState.Completed || it is FileTransferState.Failed }
-            }
-            assertIs<FileTransferState.Completed>(goodReceiverFinal)
-            assertIs<FileTransferState.Completed>(goodSenderFinal)
-            assertContentEquals(goodPayload, goodSink.readByteArray())
-
-            // …and the SESSION survives: plain messages still flow end-to-end
-            // and both sides report Connected.
-            outgoing.send(P2pMessage.Text("still alive"))
-            val msg = withTimeout(5_000) { msgDeferred.await() }
-            assertEquals("still alive", assertIs<P2pMessage.Text>(msg).value)
-            assertEquals(ConnectionState.Connected, incomingSession.state.value)
-            assertEquals(ConnectionState.Connected, outgoing.state.value)
-        } finally {
-            alice.stop()
-            bob.stop()
         }
     }
 }

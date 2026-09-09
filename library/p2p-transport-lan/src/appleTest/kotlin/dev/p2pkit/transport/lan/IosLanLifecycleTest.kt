@@ -49,7 +49,7 @@ class IosLanLifecycleTest {
     private lateinit var peerIdKey: String
     private lateinit var peerIdV2Key: String
 
-    private val toStop: MutableList<P2pKit> = mutableListOf()
+    private val diagnostics = KitTestDiagnostics()
     private var defaultsLease: AppleGlobalStateTestGuard.Lease? = null
 
     @BeforeTest
@@ -62,16 +62,19 @@ class IosLanLifecycleTest {
         )
     }
 
-    private fun newKit(name: String): P2pKit = P2pKit.create {
-        appId = AppId(unique)
-        deviceName = name
-        security { mode = dev.p2pkit.core.SecurityMode.NoneForMvp }
-        keepAlive {
-            pingIntervalMillis = 60_000
-            timeoutMillis = 120_000
-        }
-        transports {
-            lan()
+    private fun newKit(name: String): P2pKit = diagnostics.create { recording ->
+        P2pKit.create {
+            logger = recording
+            appId = AppId(unique)
+            deviceName = name
+            security { mode = dev.p2pkit.core.SecurityMode.NoneForMvp }
+            keepAlive {
+                pingIntervalMillis = 60_000
+                timeoutMillis = 120_000
+            }
+            transports {
+                lan()
+            }
         }
     }
 
@@ -85,7 +88,6 @@ class IosLanLifecycleTest {
     private suspend fun startAndAdvertise(name: String): P2pKit {
         removeStoredPeerId()
         val kit = newKit(name)
-        toStop.add(kit)
         kit.startAdvertising()
         kit.startDiscovery()
         return kit
@@ -99,15 +101,15 @@ class IosLanLifecycleTest {
 
     @AfterTest
     fun teardown() {
-        try {
-            runBlocking {
-                toStop.forEach { runCatching { it.stop() } }
-                toStop.clear()
+        runBlocking {
+            diagnostics.finish {
+                try {
+                    removeStoredPeerId()
+                } finally {
+                    defaultsLease?.close()
+                    defaultsLease = null
+                }
             }
-            removeStoredPeerId()
-        } finally {
-            defaultsLease?.close()
-            defaultsLease = null
         }
     }
 
@@ -125,7 +127,6 @@ class IosLanLifecycleTest {
             // peer set. Without the Lost wiring, Alice's flow stays
             // populated forever and the test times out.
             bob.stop()
-            toStop.remove(bob)
 
             withTimeout(PEER_LOST_TIMEOUT_MS) {
                 alice.peers.first { peers -> peers.none { it.id == bob.localPeerId } }
@@ -263,7 +264,6 @@ class IosLanLifecycleTest {
             // Bob exits cleanly and Alice must honor the CLOSE frame without
             // treating it as a reconnectable transport failure.
             bob.stop()
-            toStop.remove(bob)
 
             val terminal = withTimeout(CLEAN_CLOSE_TIMEOUT_MS) {
                 session.state.first { it == ConnectionState.Closed }
@@ -274,26 +274,27 @@ class IosLanLifecycleTest {
 
     private fun newKitWithReconnect(name: String): P2pKit {
         removeStoredPeerId()
-        val kit = P2pKit.create {
-            appId = AppId(unique)
-            deviceName = name
-            security { mode = dev.p2pkit.core.SecurityMode.NoneForMvp }
-            keepAlive {
-                pingIntervalMillis = 60_000
-                timeoutMillis = 120_000
-            }
-            lifecycle {
-                reconnectPolicy = ReconnectPolicy.Enabled(maxAttempts = 3, retryDelayMillis = 500)
-            }
-            transports {
-                lan()
-            }
-            networkProvisioning {
-                iosManualIp()
+        return diagnostics.create { recording ->
+            P2pKit.create {
+                logger = recording
+                appId = AppId(unique)
+                deviceName = name
+                security { mode = dev.p2pkit.core.SecurityMode.NoneForMvp }
+                keepAlive {
+                    pingIntervalMillis = 60_000
+                    timeoutMillis = 120_000
+                }
+                lifecycle {
+                    reconnectPolicy = ReconnectPolicy.Enabled(maxAttempts = 3, retryDelayMillis = 500)
+                }
+                transports {
+                    lan()
+                }
+                networkProvisioning {
+                    iosManualIp()
+                }
             }
         }
-        toStop.add(kit)
-        return kit
     }
 
     @Test

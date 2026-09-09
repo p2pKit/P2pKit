@@ -11,15 +11,18 @@ import dev.p2pkit.core.PeerAuthorizationPolicy
 import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.core.dsl.P2pKitBuilder
+import dev.p2pkit.core.internal.security.noise.NoiseTransportEofException
 import dev.p2pkit.core.security.SecureIdentityService
 import dev.p2pkit.core.security.platformSecurityCryptography
 import dev.p2pkit.core.testfixtures.CopyingRawConnection
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.MemorySecureIdentityStorage
+import dev.p2pkit.core.testfixtures.RecordingLogger
 import dev.p2pkit.core.testfixtures.TrackedTransportKey
 import dev.p2pkit.core.testfixtures.TrackingSecurityCryptography
 import dev.p2pkit.core.testfixtures.createSecureTestKit
+import dev.p2pkit.core.testfixtures.withTestKit
 import dev.p2pkit.core.testfixtures.peerForSecureKit
 import dev.p2pkit.core.testfixtures.runWireBlocking
 import dev.p2pkit.core.transport.DataTransport
@@ -282,7 +285,26 @@ class SecureSessionLifecycleTest {
         })
         withSecurePair(
             "stop-reconnect", aliceData, bobData,
-            aliceConfigure = { lifecycle { reconnectPolicy = ReconnectPolicy.Enabled(3, 0) } }
+            aliceConfigure = { lifecycle { reconnectPolicy = ReconnectPolicy.Enabled(3, 0) } },
+            bobVerifyDiagnostics = { recorder ->
+                val diagnostics = recorder.entries.filter {
+                    it.level == RecordingLogger.Level.WARN || it.level == RecordingLogger.Level.ERROR
+                }
+                // The only retry's first write is parked before delivering its 16-byte preface.
+                // Bob can observe that EOF or be structurally cancelled by stop first; no other
+                // authentication, retry or cleanup diagnostic belongs to this controlled abort.
+                assertTrue(diagnostics.size <= 1, "one aborted retry must not become a warning stream")
+                diagnostics.forEach { entry ->
+                    assertEquals(RecordingLogger.Level.WARN, entry.level)
+                    assertEquals("Incoming session setup failed", entry.message)
+                    val failure = assertIs<P2pError.AuthenticationFailed>(entry.throwable)
+                    assertEquals("Authenticated protocol v2 setup failed", failure.reason)
+                    assertTrue(failure.suppressedExceptions.isEmpty())
+                    val eof = assertIs<NoiseTransportEofException>(failure.cause)
+                    assertEquals("Raw connection ended before 16 bytes were available", eof.message)
+                    assertTrue(eof.suppressedExceptions.isEmpty())
+                }
+            }
         ) { kits ->
             try {
                 val incomingCall = async(start = CoroutineStart.UNDISPATCHED) { kits.bob.incomingSessions.first() }
@@ -319,6 +341,7 @@ class SecureSessionLifecycleTest {
         bobTransport: DataTransport,
         aliceConfigure: P2pKitBuilder.() -> Unit = {},
         bobConfigure: P2pKitBuilder.() -> Unit = {},
+        bobVerifyDiagnostics: (RecordingLogger) -> Unit = { it.assertNoUnexpectedWarnOrError() },
         test: suspend CoroutineScope.(SecureKitPair) -> Unit
     ) = coroutineScope {
         val appId = AppId("secure.lifecycle.$scenario")
@@ -326,39 +349,36 @@ class SecureSessionLifecycleTest {
         val bobStore = MemorySecureIdentityStorage()
         val aliceCrypto = TrackingSecurityCryptography()
         val bobCrypto = TrackingSecurityCryptography()
-        var alice: P2pKit? = null
-        var bob: P2pKit? = null
         try {
             val aliceFingerprint = previewFingerprint(appId, aliceStore)
             val bobFingerprint = previewFingerprint(appId, bobStore)
-            val createdAlice = createSecureTestKit(
-                appId, "Alice", aliceStore, aliceTransport,
-                PeerAuthorizationPolicy.PinnedOnly(setOf(bobFingerprint))
-            ) {
-                securityCryptographyForTest = aliceCrypto
-                aliceConfigure()
-            }
-            alice = createdAlice
-            val createdBob = createSecureTestKit(
-                appId, "Bob", bobStore, bobTransport,
-                PeerAuthorizationPolicy.PinnedOnly(setOf(aliceFingerprint))
-            ) {
-                securityCryptographyForTest = bobCrypto
-                bobConfigure()
-            }
-            bob = createdBob
-            test(SecureKitPair(createdAlice, createdBob, aliceCrypto, bobCrypto))
-        } finally {
-            try {
-                alice?.stop()
-            } finally {
-                try {
-                    bob?.stop()
-                } finally {
-                    aliceStore.clear()
-                    bobStore.clear()
+            withTestKit(create = { recording ->
+                createSecureTestKit(
+                    appId, "Alice", aliceStore, aliceTransport,
+                    PeerAuthorizationPolicy.PinnedOnly(setOf(bobFingerprint))
+                ) {
+                    logger = recording
+                    securityCryptographyForTest = aliceCrypto
+                    aliceConfigure()
+                }
+            }) { alice ->
+                withTestKit(create = { recording ->
+                    createSecureTestKit(
+                        appId, "Bob", bobStore, bobTransport,
+                        PeerAuthorizationPolicy.PinnedOnly(setOf(aliceFingerprint))
+                    ) {
+                        logger = recording
+                        securityCryptographyForTest = bobCrypto
+                        bobConfigure()
+                    }
+                }, verifyDiagnostics = bobVerifyDiagnostics) { bob ->
+                    test(SecureKitPair(alice, bob, aliceCrypto, bobCrypto))
                 }
             }
+        } finally {
+            // Attempt both kit shutdowns before clearing these in-memory stores; no platform I/O here.
+            aliceStore.clear()
+            bobStore.clear()
         }
     }
 

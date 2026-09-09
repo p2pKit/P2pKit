@@ -33,29 +33,29 @@ import kotlin.test.assertNotNull
 @OptIn(ExplicitSecurityRisk::class)
 class ManualIpLoopbackTest {
 
-    private val kits = mutableListOf<P2pKit>()
+    private val diagnostics = KitTestDiagnostics()
 
     @AfterTest
     fun teardown() = runBlocking {
-        for (k in kits) runCatching { k.stop() }
-        kits.clear()
+        diagnostics.finish()
     }
 
     private fun newKit(name: String): P2pKit {
-        val kit = P2pKit.create {
-            appId = AppId("com.example.manual-ip")
-            deviceName = name
-            jvmSecureIdentityStore(InMemoryTestJvmSecureIdentityStore())
-            security {
-                mode = SecurityMode.AuthenticatedV2(
-                    PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
-                )
+        return diagnostics.create { recording ->
+            P2pKit.create {
+                logger = recording
+                appId = AppId("com.example.manual-ip")
+                deviceName = name
+                jvmSecureIdentityStore(InMemoryTestJvmSecureIdentityStore())
+                security {
+                    mode = SecurityMode.AuthenticatedV2(
+                        PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
+                    )
+                }
+                transports { lan() }
+                networkProvisioning { jvm() }
             }
-            transports { lan() }
-            networkProvisioning { jvm() }
         }
-        kits.add(kit)
-        return kit
     }
 
     @OptIn(ExperimentalP2pApi::class)

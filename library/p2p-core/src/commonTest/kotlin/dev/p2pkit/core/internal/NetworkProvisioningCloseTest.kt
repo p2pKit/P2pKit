@@ -21,6 +21,7 @@ import dev.p2pkit.core.provisioning.WifiCredentials
 import dev.p2pkit.core.provisioning.WifiPassword
 import dev.p2pkit.core.provisioning.WifiSecurityType
 import dev.p2pkit.core.testfixtures.createTestKit
+import dev.p2pkit.core.testfixtures.withTestKit
 import dev.p2pkit.core.transport.DataTransport
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.RawConnection
@@ -89,44 +90,46 @@ class NetworkProvisioningCloseTest {
         val events = mutableListOf<String>()
         val manager = RecordingProvisioningManager(events)
         val data = RecordingDataTransport(events)
-        val kit = createTestKit {
-            appId = AppId("provisioning-close-order")
-            deviceName = "close-order"
-            transports { register(RecordingTransportFactory(data)) }
-            networkProvisioning { register(RecordingProvisioningFactory(manager)) }
+        withTestKit(create = { recorder ->
+            createTestKit {
+                logger = recorder
+                appId = AppId("provisioning-close-order")
+                deviceName = "close-order"
+                transports { register(RecordingTransportFactory(data)) }
+                networkProvisioning { register(RecordingProvisioningFactory(manager)) }
+            }
+        }) { kit ->
+            kit.stop()
+
+            assertEquals(listOf("provisioning.close", "transport.close"), events)
+            assertEquals(NetworkProvisioningState.Closed, manager.state.value)
         }
-
-        kit.stop()
-
-        assertEquals(listOf("provisioning.close", "transport.close"), events)
-        assertEquals(NetworkProvisioningState.Closed, manager.state.value)
     }
 
     @Test
     fun repeatedProvisioningBlocksPreserveRegisteredFactory() = runBlocking<Unit> {
         val manager = RecordingProvisioningManager(mutableListOf())
         val data = RecordingDataTransport(mutableListOf())
-        val kit = createTestKit {
-            appId = AppId("provisioning-repeated-block")
-            deviceName = "repeated-block"
-            transports { register(RecordingTransportFactory(data)) }
-            networkProvisioning {
-                register(RecordingProvisioningFactory(manager))
-                enableManualIpFallback = false
+        withTestKit(create = { recorder ->
+            createTestKit {
+                logger = recorder
+                appId = AppId("provisioning-repeated-block")
+                deviceName = "repeated-block"
+                transports { register(RecordingTransportFactory(data)) }
+                networkProvisioning {
+                    register(RecordingProvisioningFactory(manager))
+                    enableManualIpFallback = false
+                }
+                networkProvisioning {
+                    enableWifiJoin = true
+                }
             }
-            networkProvisioning {
-                enableWifiJoin = true
-            }
-        }
-
-        try {
+        }) { kit ->
             assertSame(
                 manager,
                 kit.networkProvisioning,
                 "a later configuration-only block must not erase the registered factory"
             )
-        } finally {
-            kit.stop()
         }
     }
 
@@ -135,18 +138,17 @@ class NetworkProvisioningCloseTest {
         val first = RecordingProvisioningManager(mutableListOf())
         val replacement = RecordingProvisioningManager(mutableListOf())
         val data = RecordingDataTransport(mutableListOf())
-        val kit = createTestKit {
-            appId = AppId("provisioning-explicit-replacement")
-            deviceName = "explicit-replacement"
-            transports { register(RecordingTransportFactory(data)) }
-            networkProvisioning { register(RecordingProvisioningFactory(first)) }
-            networkProvisioning { register(RecordingProvisioningFactory(replacement)) }
-        }
-
-        try {
+        withTestKit(create = { recorder ->
+            createTestKit {
+                logger = recorder
+                appId = AppId("provisioning-explicit-replacement")
+                deviceName = "explicit-replacement"
+                transports { register(RecordingTransportFactory(data)) }
+                networkProvisioning { register(RecordingProvisioningFactory(first)) }
+                networkProvisioning { register(RecordingProvisioningFactory(replacement)) }
+            }
+        }) { kit ->
             assertSame(replacement, kit.networkProvisioning)
-        } finally {
-            kit.stop()
         }
     }
 

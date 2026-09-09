@@ -10,6 +10,7 @@ import dev.p2pkit.core.permission.P2pPermissionManager
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.FakeDiscoveryTransport
 import dev.p2pkit.core.testfixtures.createTestKit
+import dev.p2pkit.core.testfixtures.withTestKit
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
@@ -73,25 +74,28 @@ class PermissionGateTest {
             val discovery = FakeDiscoveryTransport()
             // No permissionManager override: exercises the platform default
             // (NoOp on the JVM/iOS targets this common test runs on).
-            val kit = createTestKit {
-                appId = AppId("permission-gate-test")
-                deviceName = "Default"
-                transports { register(FixedTransportFactory(FakeDataTransport(), discovery)) }
+            withTestKit(create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("permission-gate-test")
+                    deviceName = "Default"
+                    transports { register(FixedTransportFactory(FakeDataTransport(), discovery)) }
+                }
+            }) { kit ->
+                assertTrue(
+                    kit.permissions.missingPermissions().isEmpty(),
+                    "Default permission manager must report no missing runtime permissions"
+                )
+                // The regression made these throw P2pError.PermissionMissing.
+                kit.startAdvertising()
+                kit.startDiscovery()
+                assertEquals(1, discovery.startAdvertisingCalls, "advertising should have reached the transport")
+                assertEquals(1, discovery.startDiscoveryCalls, "discovery should have reached the transport")
+                assertEquals(FeatureState.Active, kit.advertisingState.value)
+                assertEquals(FeatureState.Active, kit.discoveryState.value)
+
+                kit.stop()
             }
-
-            assertTrue(
-                kit.permissions.missingPermissions().isEmpty(),
-                "Default permission manager must report no missing runtime permissions"
-            )
-            // The regression made these throw P2pError.PermissionMissing.
-            kit.startAdvertising()
-            kit.startDiscovery()
-            assertEquals(1, discovery.startAdvertisingCalls, "advertising should have reached the transport")
-            assertEquals(1, discovery.startDiscoveryCalls, "discovery should have reached the transport")
-            assertEquals(FeatureState.Active, kit.advertisingState.value)
-            assertEquals(FeatureState.Active, kit.discoveryState.value)
-
-            kit.stop()
         }
     }
 
@@ -99,35 +103,38 @@ class PermissionGateTest {
     fun missingRuntimePermissionStillGatesBothEntryPoints() {
         runBlocking {
             val discovery = FakeDiscoveryTransport()
-            val kit = createTestKit {
-                appId = AppId("permission-gate-test")
-                deviceName = "Gated"
-                // Mirrors the provisioning sidecar: a real runtime permission
-                // reported as missing must keep gating.
-                permissionManager = FixedPermissionManager(
-                    required = listOf(P2pPermission.NearbyWifiDevices),
-                    missing = listOf(P2pPermission.NearbyWifiDevices)
+            withTestKit(create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("permission-gate-test")
+                    deviceName = "Gated"
+                    // Mirrors the provisioning sidecar: a real runtime permission
+                    // reported as missing must keep gating.
+                    permissionManager = FixedPermissionManager(
+                        required = listOf(P2pPermission.NearbyWifiDevices),
+                        missing = listOf(P2pPermission.NearbyWifiDevices)
+                    )
+                    transports { register(FixedTransportFactory(FakeDataTransport(), discovery)) }
+                }
+            }) { kit ->
+                val advertiseError = assertFailsWith<P2pError.PermissionMissing> { kit.startAdvertising() }
+                assertEquals(listOf(P2pPermission.NearbyWifiDevices), advertiseError.permissions)
+                val discoveryError = assertFailsWith<P2pError.PermissionMissing> { kit.startDiscovery() }
+                assertEquals(listOf(P2pPermission.NearbyWifiDevices), discoveryError.permissions)
+                assertEquals(0, discovery.startAdvertisingCalls, "gated advertising must never reach the transport")
+                assertEquals(0, discovery.startDiscoveryCalls, "gated discovery must never reach the transport")
+                assertEquals(
+                    FeatureState.PermissionRequired(listOf(P2pPermission.NearbyWifiDevices)),
+                    kit.advertisingState.value
                 )
-                transports { register(FixedTransportFactory(FakeDataTransport(), discovery)) }
+                assertEquals(
+                    FeatureState.PermissionRequired(listOf(P2pPermission.NearbyWifiDevices)),
+                    kit.discoveryState.value
+                )
+                assertEquals(P2pState.Idle, kit.state.value)
+
+                kit.stop()
             }
-
-            val advertiseError = assertFailsWith<P2pError.PermissionMissing> { kit.startAdvertising() }
-            assertEquals(listOf(P2pPermission.NearbyWifiDevices), advertiseError.permissions)
-            val discoveryError = assertFailsWith<P2pError.PermissionMissing> { kit.startDiscovery() }
-            assertEquals(listOf(P2pPermission.NearbyWifiDevices), discoveryError.permissions)
-            assertEquals(0, discovery.startAdvertisingCalls, "gated advertising must never reach the transport")
-            assertEquals(0, discovery.startDiscoveryCalls, "gated discovery must never reach the transport")
-            assertEquals(
-                FeatureState.PermissionRequired(listOf(P2pPermission.NearbyWifiDevices)),
-                kit.advertisingState.value
-            )
-            assertEquals(
-                FeatureState.PermissionRequired(listOf(P2pPermission.NearbyWifiDevices)),
-                kit.discoveryState.value
-            )
-            assertEquals(P2pState.Idle, kit.state.value)
-
-            kit.stop()
         }
     }
 
@@ -135,25 +142,28 @@ class PermissionGateTest {
     fun requiredButGrantedPermissionsDoNotGate() {
         runBlocking {
             val discovery = FakeDiscoveryTransport()
-            val kit = createTestKit {
-                appId = AppId("permission-gate-test")
-                deviceName = "Granted"
-                permissionManager = FixedPermissionManager(
-                    required = listOf(P2pPermission.NearbyWifiDevices),
-                    missing = emptyList()
-                )
-                transports { register(FixedTransportFactory(FakeDataTransport(), discovery)) }
+            withTestKit(create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("permission-gate-test")
+                    deviceName = "Granted"
+                    permissionManager = FixedPermissionManager(
+                        required = listOf(P2pPermission.NearbyWifiDevices),
+                        missing = emptyList()
+                    )
+                    transports { register(FixedTransportFactory(FakeDataTransport(), discovery)) }
+                }
+            }) { kit ->
+                // The gate keys on missingPermissions(), not requiredPermissions().
+                kit.startAdvertising()
+                kit.startDiscovery()
+                assertEquals(1, discovery.startAdvertisingCalls)
+                assertEquals(1, discovery.startDiscoveryCalls)
+                assertEquals(FeatureState.Active, kit.advertisingState.value)
+                assertEquals(FeatureState.Active, kit.discoveryState.value)
+
+                kit.stop()
             }
-
-            // The gate keys on missingPermissions(), not requiredPermissions().
-            kit.startAdvertising()
-            kit.startDiscovery()
-            assertEquals(1, discovery.startAdvertisingCalls)
-            assertEquals(1, discovery.startDiscoveryCalls)
-            assertEquals(FeatureState.Active, kit.advertisingState.value)
-            assertEquals(FeatureState.Active, kit.discoveryState.value)
-
-            kit.stop()
         }
     }
 }

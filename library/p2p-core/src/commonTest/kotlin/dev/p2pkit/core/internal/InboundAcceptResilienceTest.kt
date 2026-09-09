@@ -1,6 +1,7 @@
 package dev.p2pkit.core.internal
 
 import dev.p2pkit.core.AppId
+import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.P2pSession
@@ -11,7 +12,9 @@ import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.RecordingLogger
+import dev.p2pkit.core.testfixtures.StatefulTestFailure
 import dev.p2pkit.core.testfixtures.createTestKit
+import dev.p2pkit.core.testfixtures.withTestKit
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.DataTransport
 import dev.p2pkit.core.transport.InternalPeer
@@ -21,6 +24,8 @@ import dev.p2pkit.core.transport.TransportPair
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.channels.ClosedSendChannelException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.Flow
@@ -61,8 +66,13 @@ class InboundAcceptResilienceTest {
     /** Warn logged by [SessionManager.handleIncoming] on per-connection failure. */
     private val setupFailedFragment = "Incoming session setup failed"
 
-    private fun outgoingKit(name: String, outgoing: RawConnection): P2pKit =
+    private fun outgoingKit(
+        name: String,
+        outgoing: RawConnection,
+        recordingLogger: RecordingLogger
+    ): P2pKit =
         createTestKit {
+            logger = recordingLogger
             appId = AppId("com.example.test")
             deviceName = name
             // Multi-peer protocol fixtures must not inherit platform-persistent
@@ -79,7 +89,7 @@ class InboundAcceptResilienceTest {
 
     private fun incomingKit(
         name: String,
-        transport: FakeDataTransport,
+        transport: DataTransport,
         recordingLogger: RecordingLogger
     ): P2pKit = createTestKit {
         appId = AppId("com.example.test")
@@ -106,150 +116,181 @@ class InboundAcceptResilienceTest {
         badPair.hangUp(badPair.b)
 
         val goodPair = FakeConnectionPair()
-        val bobLogger = RecordingLogger()
+        lateinit var bobLogger: RecordingLogger
         val bobTransport = FakeDataTransport(
             preStagedIncoming = listOf(badPair.b, goodPair.b)
         )
-        val bob = incomingKit("Bob", bobTransport, bobLogger)
-        val alice = outgoingKit("Alice", goodPair.a)
-        try {
-            val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
-            // The invariant: despite the earlier failed inbound handling, the
-            // subsequent well-formed inbound connection still yields a session.
-            val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
-            withTimeout(5_000) { outgoingDeferred.await() }
-            assertEquals("Alice", incomingSession.peer.name)
-
-            // The failed inbound handling was surfaced via the injectable
-            // logger (not swallowed, not escalated).
-            awaitLogged(bobLogger) { it.contains(setupFailedFragment) }
-            bobLogger.assertNoUnexpectedWarnOrError { entry ->
-                entry.level == RecordingLogger.Level.WARN &&
-                    entry.message.contains(setupFailedFragment)
+        withTestKit(
+            create = { recorder ->
+                bobLogger = recorder
+                incomingKit("Bob", bobTransport, recorder)
+            },
+            verifyDiagnostics = { recorder ->
+                val diagnostics = recorder.entries.filter {
+                    it.level == RecordingLogger.Level.WARN || it.level == RecordingLogger.Level.ERROR
+                }
+                assertEquals(1, diagnostics.size)
+                val entry = diagnostics.single()
+                assertEquals(RecordingLogger.Level.WARN, entry.level)
+                assertEquals("Incoming session setup failed", entry.message)
+                val failure = assertIs<P2pError.ConnectionFailed>(entry.throwable)
+                // This peer was already hung up before the kit could send its first HELLO.
+                val closed = assertIs<ClosedSendChannelException>(failure.cause)
+                assertEquals("Channel was closed", closed.message)
+                assertEquals("Plaintext HELLO failed: ${closed.message}", failure.reason)
+                assertTrue(failure.suppressedExceptions.isEmpty())
+                assertTrue(closed.suppressedExceptions.isEmpty())
             }
-        } finally {
-            alice.stop()
-            bob.stop()
+        ) { bob ->
+            withTestKit(
+                create = { recorder ->
+                    outgoingKit("Alice", goodPair.a, recordingLogger = recorder)
+                }
+            ) { alice ->
+                val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
+                // The invariant: despite the earlier failed inbound handling, the
+                // subsequent well-formed inbound connection still yields a session.
+                val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
+                withTimeout(5_000) { outgoingDeferred.await() }
+                assertEquals("Alice", incomingSession.peer.name)
+
+                // The failed inbound handling was surfaced via the injectable
+                // logger (not swallowed, not escalated).
+                awaitLogged(bobLogger) { it.contains(setupFailedFragment) }
+            }
         }
     }
 
     @Test
     fun acceptLoopFailureIsSurfacedAndKitSurvives() = runBlocking {
         val pair = FakeConnectionPair()
-        val bobLogger = RecordingLogger()
-        val bobTransport = FakeDataTransport(preStagedIncoming = listOf(pair.b))
-        val bob = incomingKit("Bob", bobTransport, bobLogger)
-        val alice = outgoingKit("Alice", pair.a)
-        try {
-            val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
-            val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
-            val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
+        lateinit var bobLogger: RecordingLogger
+        val acceptFailure = StatefulTestFailure("emulated accept failure")
+        val bobIncoming = FakeDataTransport(preStagedIncoming = listOf(pair.b))
+        val bobTransport = SingleAcceptFailureTransport(bobIncoming)
+        withTestKit(
+            create = { recorder ->
+                bobLogger = recorder
+                incomingKit("Bob", bobTransport, recorder)
+            },
+            verifyDiagnostics = { recorder -> assertAcceptFailureDiagnostics(recorder, acceptFailure) }
+        ) { bob ->
+            withTestKit(
+                create = { recorder ->
+                    outgoingKit("Alice", pair.a, recordingLogger = recorder)
+                }
+            ) { alice ->
+                val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
+                val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
+                val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
 
-            // Terminate the incoming flow with a cause — the exact signature
-            // the shipped accept loops produce when accept() fails while the
-            // transport is not closed (F3 / TST-3).
-            bobTransport.failIncoming(IllegalStateException("emulated accept failure"))
+                // Terminate the incoming flow with a cause — the exact signature
+                // the shipped accept loops produce when accept() fails while the
+                // transport is not closed (F3 / TST-3).
+                bobIncoming.failIncoming(acceptFailure)
 
-            // The accept-loop failure is surfaced through the injectable
-            // logger as a warn diagnostic...
-            awaitLogged(bobLogger) { it.contains(acceptLoopEndedFragment) }
+                // The accept-loop failure is surfaced through the injectable
+                // logger as a warn diagnostic...
+                awaitLogged(bobLogger) { it.contains(acceptLoopEndedFragment) }
 
-            // ...and the kit survives: the established session is unaffected
-            // and still exchanges messages.
-            val msg = exchangeMessage(
-                from = outgoing,
-                to = incomingSession,
-                payload = P2pMessage.Text("still alive after accept-loop failure")
-            )
-            assertEquals(
-                "still alive after accept-loop failure",
-                assertIs<P2pMessage.Text>(msg).value
-            )
+                // ...and the kit survives: the established session is unaffected
+                // and still exchanges messages.
+                val msg = exchangeMessage(
+                    from = outgoing,
+                    to = incomingSession,
+                    payload = P2pMessage.Text("still alive after accept-loop failure")
+                )
+                assertEquals(
+                    "still alive after accept-loop failure",
+                    assertIs<P2pMessage.Text>(msg).value
+                )
 
-            // No kit-scope escalation: the kit-scope CoroutineExceptionHandler
-            // (AUDIT-2026-07 ARCH-4 rider) logs uncaught failures at error
-            // level, so the absence of any error entry — and of any warn other
-            // than the accept-loop diagnostic — proves the failure was handled
-            // in the collector, not escalated.
-            bobLogger.assertNoUnexpectedWarnOrError { entry ->
-                entry.level == RecordingLogger.Level.WARN &&
-                    entry.message.contains(acceptLoopEndedFragment)
+                // Shutdown still terminates promptly after the accept-loop failure.
+                withTimeout(5_000) { alice.stop() }
+                withTimeout(5_000) { bob.stop() }
             }
-
-            // Shutdown still terminates promptly after the accept-loop failure.
-            withTimeout(5_000) { alice.stop() }
-            withTimeout(5_000) { bob.stop() }
-        } finally {
-            runCatching { alice.stop() }
-            runCatching { bob.stop() }
         }
     }
 
     @Test
     fun acceptLoopFailureIsRecollectedAndAcceptsTheNextConnection() = runBlocking {
         val pair = FakeConnectionPair()
-        val logger = RecordingLogger()
-        val transport = RecoveringDataTransport()
-        val bob = createTestKit {
-            appId = AppId("com.example.test")
-            deviceName = "Bob"
-            this.logger = logger
-            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
-            keepAlive {
-                pingIntervalMillis = 60_000
-                timeoutMillis = 120_000
+        lateinit var logger: RecordingLogger
+        val acceptFailure = IllegalStateException("emulated transient accept failure")
+        val transport = RecoveringDataTransport(firstFailure = acceptFailure)
+        withTestKit(
+            create = { recorder ->
+                logger = recorder
+                createTestKit {
+                    appId = AppId("com.example.test")
+                    deviceName = "Bob"
+                    this.logger = recorder
+                    peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
+                    keepAlive {
+                        pingIntervalMillis = 60_000
+                        timeoutMillis = 120_000
+                    }
+                    transports { register(RecoveringTransportFactory(transport)) }
+                }
+            },
+            verifyDiagnostics = { recorder -> assertAcceptFailureDiagnostics(recorder, acceptFailure) }
+        ) { bob ->
+            withTestKit(
+                create = { recorder ->
+                    outgoingKit("Alice", pair.a, recordingLogger = recorder)
+                }
+            ) { alice ->
+                withTimeout(5_000) { transport.recollected.await() }
+                transport.emitIncoming(pair.b)
+
+                val outgoing = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
+                val incoming = withTimeout(5_000) { bob.incomingSessions.first() }
+                withTimeout(5_000) { outgoing.await() }
+
+                assertEquals("Alice", incoming.peer.name)
+                awaitLogged(logger) { it.contains(acceptLoopEndedFragment) }
             }
-            transports { register(RecoveringTransportFactory(transport)) }
-        }
-        val alice = outgoingKit("Alice", pair.a)
-        try {
-            withTimeout(5_000) { transport.recollected.await() }
-            transport.emitIncoming(pair.b)
-
-            val outgoing = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
-            val incoming = withTimeout(5_000) { bob.incomingSessions.first() }
-            withTimeout(5_000) { outgoing.await() }
-
-            assertEquals("Alice", incoming.peer.name)
-            awaitLogged(logger) { it.contains(acceptLoopEndedFragment) }
-        } finally {
-            alice.stop()
-            bob.stop()
         }
     }
 
     @Test
     fun transportThrownCancellationIsRecollectedWhileCollectorRemainsActive() = runBlocking {
         val pair = FakeConnectionPair()
-        val logger = RecordingLogger()
-        val transport = RecoveringDataTransport(
-            firstFailure = CancellationException("transport-owned cancellation")
-        )
-        val bob = createTestKit {
-            appId = AppId("com.example.test")
-            deviceName = "Bob"
-            this.logger = logger
-            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
-            keepAlive {
-                pingIntervalMillis = 60_000
-                timeoutMillis = 120_000
+        lateinit var logger: RecordingLogger
+        val acceptFailure = CancellationException("transport-owned cancellation")
+        val transport = RecoveringDataTransport(firstFailure = acceptFailure)
+        withTestKit(
+            create = { recorder ->
+                logger = recorder
+                createTestKit {
+                    appId = AppId("com.example.test")
+                    deviceName = "Bob"
+                    this.logger = recorder
+                    peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
+                    keepAlive {
+                        pingIntervalMillis = 60_000
+                        timeoutMillis = 120_000
+                    }
+                    transports { register(RecoveringTransportFactory(transport)) }
+                }
+            },
+            verifyDiagnostics = { recorder -> assertAcceptFailureDiagnostics(recorder, acceptFailure) }
+        ) { bob ->
+            withTestKit(
+                create = { recorder ->
+                    outgoingKit("Alice", pair.a, recordingLogger = recorder)
+                }
+            ) { alice ->
+                withTimeout(5_000) { transport.recollected.await() }
+                transport.emitIncoming(pair.b)
+
+                val outgoing = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
+                val incoming = withTimeout(5_000) { bob.incomingSessions.first() }
+                withTimeout(5_000) { outgoing.await() }
+
+                assertEquals("Alice", incoming.peer.name)
+                awaitLogged(logger) { it.contains(acceptLoopEndedFragment) }
             }
-            transports { register(RecoveringTransportFactory(transport)) }
-        }
-        val alice = outgoingKit("Alice", pair.a)
-        try {
-            withTimeout(5_000) { transport.recollected.await() }
-            transport.emitIncoming(pair.b)
-
-            val outgoing = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
-            val incoming = withTimeout(5_000) { bob.incomingSessions.first() }
-            withTimeout(5_000) { outgoing.await() }
-
-            assertEquals("Alice", incoming.peer.name)
-            awaitLogged(logger) { it.contains(acceptLoopEndedFragment) }
-        } finally {
-            alice.stop()
-            bob.stop()
         }
     }
 
@@ -271,6 +312,17 @@ class InboundAcceptResilienceTest {
         } finally {
             runCatching { bob.stop() }
         }
+    }
+
+    /** One controlled source failure, with no escalation or extra shutdown/recollection diagnostics. */
+    private fun assertAcceptFailureDiagnostics(recorder: RecordingLogger, failure: Throwable) {
+        assertEquals(
+            listOf(RecordingLogger.Entry(RecordingLogger.Level.WARN, "inbound acceptance ended for LAN", failure)),
+            recorder.entries.filter {
+                it.level == RecordingLogger.Level.WARN || it.level == RecordingLogger.Level.ERROR
+            }
+        )
+        assertTrue(failure.suppressedExceptions.isEmpty())
     }
 
     /** Poll [logger]'s warn entries until [predicate] matches (bounded). */
@@ -306,12 +358,27 @@ class InboundAcceptResilienceTest {
 }
 
 private class AcceptResilienceFactory(
-    private val transport: FakeDataTransport
+    private val transport: DataTransport
 ) : TransportFactory {
     override val descriptor =
         dev.p2pkit.core.transport.TransportDescriptor.dataOnly(transport.type)
     override fun build(context: TransportContext): TransportPair =
         TransportPair(data = transport, discovery = null)
+}
+
+/** The survival test injects one accept fault; its separate recovery tests exercise fresh acceptance. */
+private class SingleAcceptFailureTransport(
+    private val delegate: FakeDataTransport
+) : DataTransport by delegate {
+    private var collected = false
+
+    override fun incomingConnections(): Flow<RawConnection> = flow {
+        // Recollecting the same failed channel would repeat its original cause forever. Park only
+        // subsequent collections, while retaining the real first failIncoming flow and lifecycle.
+        if (collected) awaitCancellation()
+        collected = true
+        delegate.incomingConnections().collect { emit(it) }
+    }
 }
 
 private class RecoveringTransportFactory(

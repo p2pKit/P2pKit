@@ -37,21 +37,21 @@ class JvmLanDiscoveryHeartbeatTest {
         globalStateLease = JvmGlobalStateTestGuard.acquire("user.home")
     }
 
-    private val toStop = mutableListOf<P2pKit>()
+    private val diagnostics = KitTestDiagnostics()
     private val tempHomes = mutableListOf<File>()
 
     @AfterTest
     fun teardown() {
-        try {
-            runBlocking {
-                toStop.forEach { runCatching { it.stop() } }
-                toStop.clear()
-                tempHomes.forEach { runCatching { it.deleteRecursively() } }
-                tempHomes.clear()
+        runBlocking {
+            diagnostics.finish {
+                try {
+                    tempHomes.forEach { runCatching { it.deleteRecursively() } }
+                    tempHomes.clear()
+                } finally {
+                    globalStateLease?.close()
+                    globalStateLease = null
+                }
             }
-        } finally {
-            globalStateLease?.close()
-            globalStateLease = null
         }
     }
 
@@ -96,12 +96,15 @@ class JvmLanDiscoveryHeartbeatTest {
 
     // ── helpers ──────────────────────────────────────────────────────────
 
-    private fun newKit(name: String): P2pKit = P2pKit.create {
-        appId = AppId(unique)
-        deviceName = name
-        jvmSecureIdentityStore(InMemoryTestJvmSecureIdentityStore())
-        transports {
-            register(JvmDeterministicLanTestFactory(discoveryBackend))
+    private fun newKit(name: String): P2pKit = diagnostics.create { recording ->
+        P2pKit.create {
+            logger = recording
+            appId = AppId(unique)
+            deviceName = name
+            jvmSecureIdentityStore(InMemoryTestJvmSecureIdentityStore())
+            transports {
+                register(JvmDeterministicLanTestFactory(discoveryBackend))
+            }
         }
     }
 
@@ -113,7 +116,6 @@ class JvmLanDiscoveryHeartbeatTest {
         val kit = lease.withValue("user.home", tempHome.absolutePath) {
             newKit(name)
         }
-        toStop.add(kit)
         kit.startAdvertising()
         kit.startDiscovery()
         return kit

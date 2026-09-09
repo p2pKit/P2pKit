@@ -9,9 +9,10 @@ import dev.p2pkit.core.P2pLogger
  * observe them. Handing this logger to the component under test turns those
  * diagnostics into assertable state.
  *
- * Teardown convention for heavyweight suites: call
- * [assertNoUnexpectedWarnOrError] at the end of a test to fail on any
- * warn/error diagnostic the test did not explicitly expect.
+ * Kit-based suites should prefer [withTestKit], installing its supplied recorder in their
+ * existing factory. It stops the kit before checking diagnostics and retains body/cancellation,
+ * teardown and diagnostic failures. Direct-component suites must drain their owned runtime before
+ * calling [assertNoUnexpectedWarnOrError] outside the production logger callback boundary.
  */
 internal class RecordingLogger : P2pLogger {
 
@@ -57,7 +58,10 @@ internal class RecordingLogger : P2pLogger {
         if (unexpected.isNotEmpty()) {
             throw AssertionError(
                 "Unexpected warn/error diagnostics recorded:\n" +
-                    unexpected.joinToString("\n") { "  [${it.level}] ${it.message}" }
+                    unexpected.joinToString("\n") { entry ->
+                        "  [${entry.level}] ${entry.message}" +
+                            entry.throwable?.let { "\n${it.stackTraceToString()}" }.orEmpty()
+                    }
             )
         }
     }

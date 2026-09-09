@@ -49,38 +49,42 @@ class JvmLanLoopbackTest {
     private val unique = "p2pkit-itest-${System.currentTimeMillis()}"
     private val discoveryBackend = JvmDeterministicDiscoveryTestBackend()
 
-    private fun newKit(name: String): P2pKit = P2pKit.create {
-        appId = AppId(unique)
-        deviceName = name
-        jvmSecureIdentityStore(InMemoryTestJvmSecureIdentityStore())
-        security {
-            mode = SecurityMode.AuthenticatedV2(
-                PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
-            )
-        }
-        keepAlive {
-            pingIntervalMillis = 60_000
-            timeoutMillis = 120_000
-        }
-        transports {
-            register(JvmDeterministicLanTestFactory(discoveryBackend))
+    private fun newKit(name: String): P2pKit = diagnostics.create { recording ->
+        P2pKit.create {
+            logger = recording
+            appId = AppId(unique)
+            deviceName = name
+            jvmSecureIdentityStore(InMemoryTestJvmSecureIdentityStore())
+            security {
+                mode = SecurityMode.AuthenticatedV2(
+                    PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
+                )
+            }
+            keepAlive {
+                pingIntervalMillis = 60_000
+                timeoutMillis = 120_000
+            }
+            transports {
+                register(JvmDeterministicLanTestFactory(discoveryBackend))
+            }
         }
     }
 
-    private val toStop = mutableListOf<P2pKit>()
+    private val diagnostics = KitTestDiagnostics()
 
     @AfterTest
     fun teardown() {
         runBlocking {
-            toStop.forEach { runCatching { it.stop() } }
-            toStop.clear()
+            diagnostics.finish {
+                tempFiles.forEach { runCatching { it.delete() } }
+                tempFiles.clear()
+            }
         }
     }
 
     /** Each kit has its own in-memory secure identity store, independent of user.home. */
     private suspend fun startAndAdvertise(name: String): P2pKit {
         val kit = newKit(name)
-        toStop.add(kit)
         kit.startAdvertising()
         kit.startDiscovery()
         return kit
@@ -274,12 +278,6 @@ class JvmLanLoopbackTest {
     }
 
     private val tempFiles: MutableList<File> = mutableListOf()
-
-    @AfterTest
-    fun cleanupTempFiles() {
-        tempFiles.forEach { runCatching { it.delete() } }
-        tempFiles.clear()
-    }
 
     private companion object {
         const val DISCOVERY_TIMEOUT_MS: Long = 30_000

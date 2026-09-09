@@ -63,6 +63,57 @@ tests, Android lint/host tests, Apple simulator tests, ABI, strict Dokka,
 publication artifacts, isolated consumers, SBOM, Swift warnings-as-errors, and
 release-XCFramework provenance.
 
+## Kit diagnostic teardown
+
+Kit/session/lifecycle regressions should observe soft failures as well as their primary result.
+Use the common-test `withTestKit` scope and **install its supplied `RecordingLogger`** in the
+existing legacy or authenticated fixture. Nest scopes for multiple kits. The scope stops each
+kit and checks every WARN/ERROR after stop, including failed construction, body failure and
+cancellation. It preserves the primary failure and attaches teardown/diagnostic failures as
+suppressed evidence. Additional collectors, raw connections and identity stores still need
+explicit, ordered cleanup; a timed-out stop is a failure, not proof that resources drained.
+
+Do not throw from logger callbacks to fail a test: production deliberately isolates callback
+exceptions. Record first, then assert outside that boundary. Do not overwrite a custom logger
+whose behavior is under test; compose recording before delegation or keep an explicit reviewed
+alternate assertion. Authenticated-v2 and strict-invariant fixture guards must stay enabled.
+Expected warnings need an explicit `verifyDiagnostics` assertion of exact entries, levels,
+causes and finite counts. A stopped retry episode can permit an ordered prefix of its
+source-defined attempt budget; never derive that budget from the observed logs. Accepting
+arbitrary repeats or a broad substring hides regressions. INFO/DEBUG are not failures. Keep
+positive typed failure and runtime-termination assertions as well.
+
+Core kit callers use the scope for lifecycle, session/ownership/recovery, secure integration,
+transfer, permissions, identity and JVM storage tests. Existing backlog, mixed-profile and
+terminal-acceptance suites retain their own post-stop nets; this does not add the new scope's
+failure aggregation to those unchanged methods. Direct protocol/store/dispatcher tests still
+own their component-specific diagnostics and runtime cleanup, not an artificial kit scope.
+
+LAN, Desktop provisioning and sample suites use small module-local `KitTestDiagnostics`
+adapters because core's test fixtures are not published. Install the supplied recorder on the
+actual kit, register construction before calling the factory, and always call `finish` from
+the existing teardown owner. It attempts every kit stop and every diagnostic check; deliberate
+logger delegates record before forwarding. Preserve explicit lifecycle stop assertions and
+caller-owned socket, settings, collector, store and file cleanup.
+
+Adoption is not universal. Preserve these explicit exceptions rather than changing the
+behavior under test or claiming a textual creator count as executed coverage:
+
+- `LoggerIsolationTest` keeps its exact NoOp-identity method; the throwing-logger method
+  instead composes recording before its delegate. Do not globally replace fixture defaults.
+- Failed-builder/secure-construction rollback tests may return no kit; their typed cause,
+  release and key-erasure assertions remain authoritative.
+- KMP `PairingDemoTest` exercises public default/pinned factories without a logger seam.
+  `KmpConsumerLoopbackTest` records the same underlying JVM factory through an internal seam,
+  not every public-factory invocation. Do not add public test-only API or substitute builders.
+- `KmpCallsiteSmokeTest` stores uninvoked factory references; `IosLanDiagnosticTest` is an
+  explicitly ignored manual capture, not an automated diagnostic-net pass.
+
+Source adoption/review is not runtime qualification. Share affected suites with the next
+relevant module/platform cycle; investigate unexpected logs rather than broadening allowances.
+Common-test JVM/Native results remain separate from filtered Android-host execution,
+physical-device, hostile-network, independent interoperability and cryptographic validation.
+
 ## Android ABI graph verification
 
 `scripts/check-android-abi-guard.sh` runs a strict Gradle dry-run of the three Android modules' `check` tasks and
@@ -252,7 +303,8 @@ in-memory identity storage, explicit peer authorization, and strict session
 invariants. The older `createTestKit` intentionally defaults to plaintext v1;
 it is not representative of the shipped security default. Copy fake raw writes
 with `CopyingRawConnection` so production buffer wiping cannot mutate queued
-fixture bytes. Stop every kit in `finally` and clear stores owned by the test.
+fixture bytes. Own kits with the diagnostic scope (or an existing equivalent teardown),
+and clear stores owned by the test after terminal stop.
 
 `SecureSessionLifecycleTest` gates all four authenticated simultaneous-open
 setups before registration, verifies the surviving wire and actual losing

@@ -3,6 +3,7 @@ package dev.p2pkit.core.internal
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.P2pKit
+import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.Peer
@@ -11,7 +12,9 @@ import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
+import dev.p2pkit.core.testfixtures.RecordingLogger
 import dev.p2pkit.core.testfixtures.createTestKit
+import dev.p2pkit.core.testfixtures.withTestKit
 import dev.p2pkit.core.testfixtures.runWireBlocking
 import dev.p2pkit.core.protocol.DefaultP2pProtocol
 import dev.p2pkit.core.protocol.Frame
@@ -61,8 +64,13 @@ import kotlin.test.assertTrue
  */
 class SessionFlowTest {
 
-    private fun outgoingKit(name: String, outgoing: RawConnection): P2pKit =
+    private fun outgoingKit(
+        name: String,
+        outgoing: RawConnection,
+        recording: P2pLogger
+    ): P2pKit =
         createTestKit {
+            logger = recording
             appId = AppId("com.example.test")
             deviceName = name
             // Keep the simulated peers hermetic across JVM and iOS runners;
@@ -77,8 +85,13 @@ class SessionFlowTest {
             }
         }
 
-    private fun incomingKit(name: String, incoming: RawConnection): P2pKit =
+    private fun incomingKit(
+        name: String,
+        incoming: RawConnection,
+        recording: P2pLogger
+    ): P2pKit =
         createTestKit {
+            logger = recording
             appId = AppId("com.example.test")
             deviceName = name
             // Seed the incoming peer's id to the value the outgoing side dials
@@ -95,12 +108,21 @@ class SessionFlowTest {
             }
         }
 
+    private suspend fun withSessionKits(
+        pair: FakeConnectionPair,
+        test: suspend (P2pKit, P2pKit) -> Unit
+    ) {
+        withTestKit(create = { outgoingKit("Alice", pair.a, recording = it) }) { alice ->
+            withTestKit(create = { incomingKit("Bob", pair.b, recording = it) }) { bob ->
+                test(alice, bob)
+            }
+        }
+    }
+
     @Test
     fun outgoingSessionExchangesText() = runWireBlocking { delivery ->
         val pair = FakeConnectionPair(delivery)
-        val alice = outgoingKit("Alice", pair.a)
-        val bob = incomingKit("Bob", pair.b)
-        try {
+        withSessionKits(pair) { alice, bob ->
             val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
             val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
             val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
@@ -116,18 +138,13 @@ class SessionFlowTest {
             )
             val text = assertIs<P2pMessage.Text>(msg)
             assertEquals("hello from Alice", text.value)
-        } finally {
-            alice.stop()
-            bob.stop()
         }
     }
 
     @Test
     fun outgoingSessionExchangesBinary() = runWireBlocking { delivery ->
         val pair = FakeConnectionPair(delivery)
-        val alice = outgoingKit("Alice", pair.a)
-        val bob = incomingKit("Bob", pair.b)
-        try {
+        withSessionKits(pair) { alice, bob ->
             val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
             val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
             val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
@@ -141,18 +158,13 @@ class SessionFlowTest {
             )
             val bin = assertIs<P2pMessage.Binary>(msg)
             assertContentEquals(payload, bin.bytes)
-        } finally {
-            alice.stop()
-            bob.stop()
         }
     }
 
     @Test
     fun concurrentConnectCallsForSamePeerReturnTheSameSession() = runBlocking {
         val pair = FakeConnectionPair()
-        val alice = outgoingKit("Alice", pair.a)
-        val bob = incomingKit("Bob", pair.b)
-        try {
+        withSessionKits(pair) { alice, _ ->
             val target = syntheticPeer("bob-id", "Bob")
             // Two coroutines try to connect simultaneously. With the per-peer
             // mutex, the second one must observe the first as in-flight and
@@ -162,36 +174,26 @@ class SessionFlowTest {
             val s1 = withTimeout(5_000) { first.await() }
             val s2 = withTimeout(5_000) { second.await() }
             assertSame(s1, s2, "Concurrent connect() to the same peer must return the same session")
-        } finally {
-            alice.stop()
-            bob.stop()
         }
     }
 
     @Test
     fun connectIsIdempotentForSamePeer() = runBlocking {
         val pair = FakeConnectionPair()
-        val alice = outgoingKit("Alice", pair.a)
-        val bob = incomingKit("Bob", pair.b)
-        try {
+        withSessionKits(pair) { alice, _ ->
             val target = syntheticPeer("bob-id", "Bob")
             val first = withTimeout(5_000) { alice.connect(target) }
             // SessionManager's `active` map is updated synchronously inside
             // connect(), so the second call should short-circuit to `first`.
             val second = withTimeout(5_000) { alice.connect(target) }
             assertSame(first, second, "connect() should return the same active session")
-        } finally {
-            alice.stop()
-            bob.stop()
         }
     }
 
     @Test
     fun concurrentSendsDoNotInterleave() = runWireBlocking { delivery ->
         val pair = FakeConnectionPair(delivery)
-        val alice = outgoingKit("Alice", pair.a)
-        val bob = incomingKit("Bob", pair.b)
-        try {
+        withSessionKits(pair) { alice, bob ->
             val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
             val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
             val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
@@ -225,18 +227,13 @@ class SessionFlowTest {
                 val firstByte = b.bytes[0]
                 assertTrue(b.bytes.all { it == firstByte }, "Frames interleaved within a message")
             }
-        } finally {
-            alice.stop()
-            bob.stop()
         }
     }
 
     @Test
     fun closeTransitionsSessionToClosed() = runWireBlocking { delivery ->
         val pair = FakeConnectionPair(delivery)
-        val alice = outgoingKit("Alice", pair.a)
-        val bob = incomingKit("Bob", pair.b)
-        try {
+        withSessionKits(pair) { alice, bob ->
             val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
             val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
             val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
@@ -262,9 +259,6 @@ class SessionFlowTest {
                 !incomingImpl.runtimeJobIsActiveForTest,
                 "remote CLOSE must terminate the session-wide runtime job"
             )
-        } finally {
-            alice.stop()
-            bob.stop()
         }
     }
 
@@ -276,111 +270,138 @@ class SessionFlowTest {
         // reconnect (the remote redials) and a hangup without CLOSE is not a
         // clean close, so the clean-Closed outcome must never appear.
         val pair = FakeConnectionPair(delivery)
-        val alice = outgoingKit("Alice", pair.a)
-        val bob = incomingKit("Bob", pair.b)
-        try {
-            val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
-            val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
-            withTimeout(5_000) { outgoingDeferred.await() }
-            assertEquals(ConnectionState.Connected, incomingSession.state.value)
-
-            // Subscribe to the FIRST transition out of Connected before
-            // inducing the loss, so the edge cannot be missed (UNDISPATCHED
-            // runs the collector up to its first suspension point right here).
-            val firstTransition = async(start = CoroutineStart.UNDISPATCHED) {
-                incomingSession.state.first { it != ConnectionState.Connected }
+        withTestKit(
+            create = { recorder ->
+                outgoingKit("Alice", pair.a, recording = recorder)
             }
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", pair.b, recording = recorder)
+                }
+            ) { bob ->
+                val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
+                val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
+                withTimeout(5_000) { outgoingDeferred.await() }
+                assertEquals(ConnectionState.Connected, incomingSession.state.value)
 
-            // Production-shaped remote termination (fixture F1): Alice's end
-            // of the wire goes away with no CLOSE frame.
-            pair.hangUp(pair.a)
+                // Subscribe to the FIRST transition out of Connected before
+                // inducing the loss, so the edge cannot be missed (UNDISPATCHED
+                // runs the collector up to its first suspension point right here).
+                val firstTransition = async(start = CoroutineStart.UNDISPATCHED) {
+                    incomingSession.state.first { it != ConnectionState.Connected }
+                }
 
-            assertEquals(
-                ConnectionState.Failed,
-                withTimeout(5_000) { firstTransition.await() },
-                "an incoming session must deterministically reach Failed on abrupt remote " +
-                    "termination — never the clean-Closed outcome, never Reconnecting"
-            )
-            val incomingImpl = assertIs<P2pSessionImpl>(incomingSession)
-            withTimeout(5_000) { incomingImpl.awaitRuntimeTermination() }
-            assertTrue(
-                !incomingImpl.runtimeJobIsActiveForTest,
-                "remote failure must terminate the session-wide runtime job"
-            )
-        } finally {
-            alice.stop()
-            bob.stop()
+                // Production-shaped remote termination (fixture F1): Alice's end
+                // of the wire goes away with no CLOSE frame.
+                pair.hangUp(pair.a)
+
+                assertEquals(
+                    ConnectionState.Failed,
+                    withTimeout(5_000) { firstTransition.await() },
+                    "an incoming session must deterministically reach Failed on abrupt remote " +
+                        "termination — never the clean-Closed outcome, never Reconnecting"
+                )
+                val incomingImpl = assertIs<P2pSessionImpl>(incomingSession)
+                withTimeout(5_000) { incomingImpl.awaitRuntimeTermination() }
+                assertTrue(
+                    !incomingImpl.runtimeJobIsActiveForTest,
+                    "remote failure must terminate the session-wide runtime job"
+                )
+            }
         }
     }
 
     @Test
     fun eofDuringPartialFrameFailsSessionWithoutPublishingAMessage() = runWireBlocking { delivery ->
         val pair = FakeConnectionPair(delivery)
-        val alice = outgoingKit("Alice", pair.a)
-        val bob = incomingKit("Bob", pair.b)
-        try {
-            val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
-            val incoming = withTimeout(5_000) { bob.incomingSessions.first() }
-            withTimeout(5_000) { outgoingDeferred.await() }
-            val subscribed = CompletableDeferred<Unit>()
-            val messages = mutableListOf<P2pMessage>()
-            val collector = launch {
-                incoming.incoming.onSubscription { subscribed.complete(Unit) }.collect { messages += it }
+        withTestKit(
+            create = { recorder ->
+                outgoingKit("Alice", pair.a, recording = recorder)
             }
-            try {
-                subscribed.await()
-                val frame = FrameCodec.encode(
-                    Frame(
-                        type = PacketType.DATA,
-                        flags = FrameFlags.LAST_CHUNK.toByte(),
-                        messageId = MessageId(ByteArray(MessageId.SIZE) { it.toByte() }),
-                        chunkIndex = 0,
-                        totalChunks = 1,
-                        payload = ByteArray(2_048) { it.toByte() }
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", pair.b, recording = recorder)
+                }
+            ) { bob ->
+                val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
+                val incoming = withTimeout(5_000) { bob.incomingSessions.first() }
+                withTimeout(5_000) { outgoingDeferred.await() }
+                val subscribed = CompletableDeferred<Unit>()
+                val messages = mutableListOf<P2pMessage>()
+                val collector = launch {
+                    incoming.incoming.onSubscription { subscribed.complete(Unit) }.collect { messages += it }
+                }
+                try {
+                    subscribed.await()
+                    val frame = FrameCodec.encode(
+                        Frame(
+                            type = PacketType.DATA,
+                            flags = FrameFlags.LAST_CHUNK.toByte(),
+                            messageId = MessageId(ByteArray(MessageId.SIZE) { it.toByte() }),
+                            chunkIndex = 0,
+                            totalChunks = 1,
+                            payload = ByteArray(2_048) { it.toByte() }
+                        )
                     )
-                )
-                pair.a.write(frame.copyOf(frame.size - 17))
-                pair.hangUp(pair.a)
-                val terminal = withTimeout(5_000) { incoming.state.first { it != ConnectionState.Connected } }
-                assertEquals(ConnectionState.Failed, terminal)
-                val implementation = assertIs<P2pSessionImpl>(incoming)
-                withTimeout(5_000) { implementation.awaitRuntimeTermination() }
-                assertTrue(!implementation.runtimeJobIsActiveForTest)
-                assertTrue(messages.isEmpty(), "a partial frame must never be exposed as an application message")
-            } finally {
-                collector.cancelAndJoin()
+                    pair.a.write(frame.copyOf(frame.size - 17))
+                    pair.hangUp(pair.a)
+                    val terminal = withTimeout(5_000) { incoming.state.first { it != ConnectionState.Connected } }
+                    assertEquals(ConnectionState.Failed, terminal)
+                    val implementation = assertIs<P2pSessionImpl>(incoming)
+                    withTimeout(5_000) { implementation.awaitRuntimeTermination() }
+                    assertTrue(!implementation.runtimeJobIsActiveForTest)
+                    assertTrue(messages.isEmpty(), "a partial frame must never be exposed as an application message")
+                } finally {
+                    collector.cancelAndJoin()
+                }
             }
-        } finally {
-            alice.stop()
-            bob.stop()
         }
     }
 
     @Test
     fun failedPongWriteFailsIncomingSessionInsteadOfSilentlyContinuing() = runBlocking {
         val pair = FakeConnectionPair()
-        val alice = outgoingKit("Alice", pair.a)
-        val bob = incomingKit("Bob", pair.b)
-        try {
-            val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
-            val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
-            withTimeout(5_000) { outgoingDeferred.await() }
-
-            pair.b.failNextWrite(IllegalStateException("injected PONG write failure"))
-            DefaultP2pProtocol(clock = { 0L }).sendPing(pair.a)
-
-            assertEquals(
-                ConnectionState.Failed,
-                withTimeout(5_000) {
-                    incomingSession.state.first { it == ConnectionState.Failed }
+        val pongFailure = IllegalStateException("injected PONG write failure")
+        var expectedDiagnostic: RecordingLogger.Entry? = null
+        withTestKit(
+            create = { recorder ->
+                outgoingKit("Alice", pair.a, recording = recorder)
+            }
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", pair.b, recording = recorder)
+                },
+                verifyDiagnostics = { recorder ->
+                    val expected = expectedDiagnostic
+                    recorder.assertNoUnexpectedWarnOrError { it == expected }
+                    if (expected != null) assertEquals(1, recorder.entries.count { it == expected })
                 }
-            )
-            val implementation = assertIs<P2pSessionImpl>(incomingSession)
-            withTimeout(5_000) { implementation.awaitRuntimeTermination() }
-            assertTrue(!implementation.runtimeJobIsActiveForTest)
-        } finally {
-            alice.stop()
-            bob.stop()
+            ) { bob ->
+                val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
+                val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
+                withTimeout(5_000) { outgoingDeferred.await() }
+
+                expectedDiagnostic = RecordingLogger.Entry(
+                    RecordingLogger.Level.WARN,
+                    "Session ${incomingSession.id}: failed to send PONG",
+                    pongFailure
+                )
+                pair.b.failNextWrite(pongFailure)
+                DefaultP2pProtocol(clock = { 0L }).sendPing(pair.a)
+
+                assertEquals(
+                    ConnectionState.Failed,
+                    withTimeout(5_000) {
+                        incomingSession.state.first { it == ConnectionState.Failed }
+                    }
+                )
+                val implementation = assertIs<P2pSessionImpl>(incomingSession)
+                withTimeout(5_000) { implementation.awaitRuntimeTermination() }
+                assertTrue(!implementation.runtimeJobIsActiveForTest)
+            }
         }
     }
 
@@ -397,41 +418,45 @@ class SessionFlowTest {
         val transport = FakeDataTransport(outgoingConnection = {
             outgoing.removeFirstOrNull() ?: error("unexpected extra dial")
         })
-        val alice = createTestKit {
-            this.appId = appId
-            deviceName = "Alice"
-            peerIdStorage = InMemoryPeerIdStorage(PeerId("alice-id"))
-            transports { register(FactoryFor(transport)) }
-        }
-        val bob = incomingKitWithConnections(appId, listOf(retryPair.b))
-        val target = syntheticPeer("bob-id", "Bob")
-        try {
-            alice.start()
-            bob.start()
-            val connector = async { alice.connect(target) }
-            withTimeout(5_000) { blocked.writeEntered.await() }
+        withTestKit(create = { recorder ->
+            createTestKit {
+                logger = recorder
+                this.appId = appId
+                deviceName = "Alice"
+                peerIdStorage = InMemoryPeerIdStorage(PeerId("alice-id"))
+                transports { register(FactoryFor(transport)) }
+            }
+        }) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKitWithConnections(appId, listOf(retryPair.b), recording = recorder)
+                }
+            ) { bob ->
+                val target = syntheticPeer("bob-id", "Bob")
+                alice.start()
+                bob.start()
+                val connector = async { alice.connect(target) }
+                withTimeout(5_000) { blocked.writeEntered.await() }
 
-            // With an already-started kit, UNDISPATCHED reaches the shared
-            // pending deferred before returning to this coroutine.
-            val waiter = async(start = CoroutineStart.UNDISPATCHED) { alice.connect(target) }
-            assertEquals(1, transport.connectCalls.size)
+                // With an already-started kit, UNDISPATCHED reaches the shared
+                // pending deferred before returning to this coroutine.
+                val waiter = async(start = CoroutineStart.UNDISPATCHED) { alice.connect(target) }
+                assertEquals(1, transport.connectCalls.size)
 
-            connector.cancel(CancellationException("cancel connector"))
-            val connectorFailure = assertFailsWith<CancellationException> { connector.await() }
-            val waiterFailure = assertFailsWith<CancellationException> { waiter.await() }
-            assertEquals("cancel connector", connectorFailure.message)
-            assertEquals("cancel connector", waiterFailure.message)
-            assertEquals(1, blocked.closeCalls)
-            assertEquals(ConnectionState.Closed, blocked.state.value)
-            assertTrue(alice.sessions.value.isEmpty())
+                connector.cancel(CancellationException("cancel connector"))
+                val connectorFailure = assertFailsWith<CancellationException> { connector.await() }
+                val waiterFailure = assertFailsWith<CancellationException> { waiter.await() }
+                assertEquals("cancel connector", connectorFailure.message)
+                assertEquals("cancel connector", waiterFailure.message)
+                assertEquals(1, blocked.closeCalls)
+                assertEquals(ConnectionState.Closed, blocked.state.value)
+                assertTrue(alice.sessions.value.isEmpty())
 
-            val retried = withTimeout(5_000) { alice.connect(target) }
-            assertEquals(ConnectionState.Connected, retried.state.value)
-            assertEquals(2, transport.connectCalls.size)
-            assertEquals(listOf(retried), alice.sessions.value)
-        } finally {
-            alice.stop()
-            bob.stop()
+                val retried = withTimeout(5_000) { alice.connect(target) }
+                assertEquals(ConnectionState.Connected, retried.state.value)
+                assertEquals(2, transport.connectCalls.size)
+                assertEquals(listOf(retried), alice.sessions.value)
+            }
         }
     }
 
@@ -447,37 +472,43 @@ class SessionFlowTest {
         val transport = FakeDataTransport(outgoingConnection = {
             outgoing.removeFirstOrNull() ?: error("unexpected extra dial")
         })
-        val alice = createTestKit {
-            this.appId = appId
-            deviceName = "Alice"
-            peerIdStorage = InMemoryPeerIdStorage(PeerId("alice-id"))
-            sessionSetupTimeoutMillis = 100
-            transports { register(FactoryFor(transport)) }
-        }
-        val bob = incomingKitWithConnections(appId, listOf(retryPair.b))
-        val target = syntheticPeer("bob-id", "Bob")
-        try {
-            bob.start()
-            assertFailsWith<dev.p2pkit.core.P2pError.HandshakeRejected> {
-                withTimeout(5_000) { alice.connect(target) }
+        withTestKit(create = { recorder ->
+            createTestKit {
+                logger = recorder
+                this.appId = appId
+                deviceName = "Alice"
+                peerIdStorage = InMemoryPeerIdStorage(PeerId("alice-id"))
+                sessionSetupTimeoutMillis = 100
+                transports { register(FactoryFor(transport)) }
             }
-            assertEquals(ConnectionState.Closed, stalled.state.value)
-            assertEquals(1, stalled.closeCalls)
-            assertTrue(alice.sessions.value.isEmpty())
+        }) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKitWithConnections(appId, listOf(retryPair.b), recording = recorder)
+                }
+            ) { bob ->
+                val target = syntheticPeer("bob-id", "Bob")
+                bob.start()
+                assertFailsWith<dev.p2pkit.core.P2pError.HandshakeRejected> {
+                    withTimeout(5_000) { alice.connect(target) }
+                }
+                assertEquals(ConnectionState.Closed, stalled.state.value)
+                assertEquals(1, stalled.closeCalls)
+                assertTrue(alice.sessions.value.isEmpty())
 
-            val retried = withTimeout(5_000) { alice.connect(target) }
-            assertEquals(ConnectionState.Connected, retried.state.value)
-            assertEquals(2, transport.connectCalls.size)
-        } finally {
-            alice.stop()
-            bob.stop()
+                val retried = withTimeout(5_000) { alice.connect(target) }
+                assertEquals(ConnectionState.Connected, retried.state.value)
+                assertEquals(2, transport.connectCalls.size)
+            }
         }
     }
 
     private fun incomingKitWithConnections(
         appId: AppId,
-        incoming: List<RawConnection>
+        incoming: List<RawConnection>,
+        recording: P2pLogger
     ): P2pKit = createTestKit {
+        logger = recording
         this.appId = appId
         deviceName = "Bob"
         peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))

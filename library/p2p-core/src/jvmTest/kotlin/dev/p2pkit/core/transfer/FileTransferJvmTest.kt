@@ -3,6 +3,7 @@ package dev.p2pkit.core.transfer
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ExplicitSecurityRisk
 import dev.p2pkit.core.P2pKit
+import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
@@ -11,6 +12,7 @@ import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.internal.InMemoryPeerIdStorage
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
+import dev.p2pkit.core.testfixtures.withTestKit
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
@@ -52,7 +54,8 @@ class FileTransferJvmTest {
         tempFiles.clear()
     }
 
-    private fun outgoingKit(name: String, outgoing: RawConnection): P2pKit = P2pKit.create {
+    private fun outgoingKit(name: String, outgoing: RawConnection, recording: P2pLogger): P2pKit = P2pKit.create {
+        logger = recording
         appId = AppId("com.example.jvm-ft")
         deviceName = name
         security { mode = SecurityMode.NoneForMvp }
@@ -66,7 +69,8 @@ class FileTransferJvmTest {
         }
     }
 
-    private fun incomingKit(name: String, incoming: RawConnection): P2pKit = P2pKit.create {
+    private fun incomingKit(name: String, incoming: RawConnection, recording: P2pLogger): P2pKit = P2pKit.create {
+        logger = recording
         appId = AppId("com.example.jvm-ft")
         deviceName = name
         security { mode = SecurityMode.NoneForMvp }
@@ -99,73 +103,88 @@ class FileTransferJvmTest {
     @Test
     fun sendFilePopulatesNameAndSizeFromFile() = runBlocking {
         val pair = FakeConnectionPair()
-        val alice = outgoingKit("Alice", pair.a)
-        val bob = incomingKit("Bob", pair.b)
-        try {
-            val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
-            val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
-            val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
-
-            val payload = ByteArray(2048) { (it and 0xFF).toByte() }
-            val file = tempFile(payload, "data.bin")
-
-            val offerDeferred = async {
-                incomingSession.pendingFileOffers.first { it.isNotEmpty() }.first()
+        withTestKit(
+            create = { recorder ->
+                outgoingKit("Alice", pair.a, recording = recorder)
             }
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", pair.b, recording = recorder)
+                }
+            ) { bob ->
+                val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
+                val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
+                val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
 
-            val transfer = outgoing.sendFile(file)
-            val offer = withTimeout(5_000) { offerDeferred.await() }
-            assertEquals(file.name, offer.name)
-            assertEquals(payload.size.toLong(), offer.sizeBytes)
+                val payload = ByteArray(2048) { (it and 0xFF).toByte() }
+                val file = tempFile(payload, "data.bin")
 
-            val sink = Buffer()
-            val incoming = offer.accept(sink)
-            withTimeout(5_000) {
-                transfer.state.first { it is FileTransferState.Completed || it is FileTransferState.Failed }
+                val offerDeferred = async {
+                    incomingSession.pendingFileOffers.first { it.isNotEmpty() }.first()
+                }
+
+                val transfer = outgoing.sendFile(file)
+                val offer = withTimeout(5_000) { offerDeferred.await() }
+                assertEquals(file.name, offer.name)
+                assertEquals(payload.size.toLong(), offer.sizeBytes)
+
+                val sink = Buffer()
+                val incoming = offer.accept(sink)
+                withTimeout(5_000) {
+                    transfer.state.first { it is FileTransferState.Completed || it is FileTransferState.Failed }
+                }
+                withTimeout(5_000) {
+                    incoming.state.first { it is FileTransferState.Completed || it is FileTransferState.Failed }
+                }
+                assertIs<FileTransferState.Completed>(transfer.state.value)
+                assertContentEquals(payload, sink.readByteArray())
             }
-            withTimeout(5_000) {
-                incoming.state.first { it is FileTransferState.Completed || it is FileTransferState.Failed }
-            }
-            assertIs<FileTransferState.Completed>(transfer.state.value)
-            assertContentEquals(payload, sink.readByteArray())
-        } finally {
-            alice.stop()
-            bob.stop()
         }
     }
 
     @Test
     fun sendFileRejectsMissingFile() = runBlocking<Unit> {
         val pair = FakeConnectionPair()
-        val alice = outgoingKit("Alice", pair.a)
-        val bob = incomingKit("Bob", pair.b)
-        try {
-            val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
-            withTimeout(5_000) { bob.incomingSessions.first() }
-            val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
-            val nonexistent = File(System.getProperty("java.io.tmpdir"), "p2pkit-does-not-exist.bin")
-            assertFailsWith<IllegalArgumentException> { outgoing.sendFile(nonexistent) }
-        } finally {
-            alice.stop()
-            bob.stop()
+        withTestKit(
+            create = { recorder ->
+                outgoingKit("Alice", pair.a, recording = recorder)
+            }
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", pair.b, recording = recorder)
+                }
+            ) { bob ->
+                val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
+                withTimeout(5_000) { bob.incomingSessions.first() }
+                val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
+                val nonexistent = File(System.getProperty("java.io.tmpdir"), "p2pkit-does-not-exist.bin")
+                assertFailsWith<IllegalArgumentException> { outgoing.sendFile(nonexistent) }
+            }
         }
     }
 
     @Test
     fun sendFileRejectsDirectory() = runBlocking<Unit> {
         val pair = FakeConnectionPair()
-        val alice = outgoingKit("Alice", pair.a)
-        val bob = incomingKit("Bob", pair.b)
-        try {
-            val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
-            withTimeout(5_000) { bob.incomingSessions.first() }
-            val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
-            val dir = Files.createTempDirectory("p2pkit-jvmft-dir-").toFile()
-            tempFiles.add(dir)
-            assertFailsWith<IllegalArgumentException> { outgoing.sendFile(dir) }
-        } finally {
-            alice.stop()
-            bob.stop()
+        withTestKit(
+            create = { recorder ->
+                outgoingKit("Alice", pair.a, recording = recorder)
+            }
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", pair.b, recording = recorder)
+                }
+            ) { bob ->
+                val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
+                withTimeout(5_000) { bob.incomingSessions.first() }
+                val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
+                val dir = Files.createTempDirectory("p2pkit-jvmft-dir-").toFile()
+                tempFiles.add(dir)
+                assertFailsWith<IllegalArgumentException> { outgoing.sendFile(dir) }
+            }
         }
     }
 

@@ -9,7 +9,9 @@ import dev.p2pkit.core.P2pState
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.FakeNetworkPathObserver
+import dev.p2pkit.core.testfixtures.RecordingLogger
 import dev.p2pkit.core.testfixtures.createTestKit
+import dev.p2pkit.core.testfixtures.withTestKit
 import dev.p2pkit.core.transport.DiscoveryTransport
 import dev.p2pkit.core.transport.LocalPeerInfo
 import dev.p2pkit.core.transport.PeerEvent
@@ -25,10 +27,11 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
@@ -82,91 +85,115 @@ class FeatureStartSettlementTest {
                 }
             }
         }
-        val kit = createTestKit {
-            appId = AppId("feature-settlement-${if (advertising) "advertising" else "discovery"}")
-            deviceName = "Settlement test"
-            peerIdStorage = InMemoryPeerIdStorage()
-            logger = testLogger
-            networkPathObserver = FakeNetworkPathObserver()
-            transports { register(FailingFeatureFactory(transport)) }
-        }
-        // Read the actual private lock. A synthetic cancellable hook would create
-        // a new failure path rather than exercising the production commit gate.
-        lifecycleMutex = P2pKitImpl::class.java.getDeclaredField("lifecycleMutex").let {
-            it.isAccessible = true
-            it.get(kit) as Mutex
-        }
-        var operation: Job? = null
-        var contender: Job? = null
-        var observedFailure: Throwable? = null
-        try {
-            if (advertising) kit.startDiscovery() else kit.startAdvertising()
-            if (retry) {
-                assertFailsWith<P2pError.ConnectionFailed> { kit.startFeature(advertising) }
-                assertIs<FeatureState.Failed>(kit.featureState(advertising))
-                captureCleanup = true
-            }
-            operation = launch {
-                try {
-                    kit.startFeature(advertising)
-                } catch (failure: Throwable) {
-                    observedFailure = failure
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    appId = AppId("feature-settlement-${if (advertising) "advertising" else "discovery"}")
+                    deviceName = "Settlement test"
+                    peerIdStorage = InMemoryPeerIdStorage()
+                    logger = object : P2pLogger by recorder {
+                        override fun warn(message: String, throwable: Throwable?) {
+                            recorder.warn(message, throwable)
+                            testLogger.warn(message, throwable)
+                        }
+                    }
+                    networkPathObserver = FakeNetworkPathObserver()
+                    transports { register(FailingFeatureFactory(transport)) }
                 }
-            }
-            assertTrue(withTimeout(5_000) { rollbackLogged.await() })
-            assertSame(testThread, logThread, "rollback logging must resume on the test event loop")
-
-            // Logging resumes this test on the same runBlocking event loop.
-            // The start owner continues into its first NonCancellable lifecycle
-            // check before this continuation runs, and queues for the held lock.
-            // A second FIFO waiter then keeps the *next* commit acquisition
-            // contended. Cancellation there used to re-enter the failure handler.
-            // Retry preparation instead reaches settlement on its first lock.
-            if (!retry) {
-                contender = launch(start = CoroutineStart.UNDISPATCHED) {
-                    lifecycleMutex.withLock(contenderOwner) {
-                        contenderEntered.complete(Unit)
-                        releaseContender.await()
+            },
+            verifyDiagnostics = { recorder ->
+                val feature = if (advertising) "advertising" else "discovery"
+                val expected = buildList {
+                    add(settlementWarning("Late lifecycle cleanup failed for LAN $feature", transport.cleanupFailure))
+                    if (retry) {
+                        add(settlementWarning(
+                            "prepare $feature retry failed for LAN discovery transport",
+                            transport.cleanupFailure
+                        ))
                     }
                 }
+                assertSettlementDiagnostics(recorder, expected)
             }
-            operation.cancel(CancellationException("caller canceled during failure settlement"))
-            lifecycleMutex.unlock(firstLockOwner)
-            if (!retry) withTimeout(5_000) { contenderEntered.await() }
-            releaseContender.complete(Unit)
-            withTimeout(5_000) { operation.join() }
+        ) { kit ->
+            // Read the actual private lock. A synthetic cancellable hook would create
+            // a new failure path rather than exercising the production commit gate.
+            lifecycleMutex = P2pKitImpl::class.java.getDeclaredField("lifecycleMutex").let {
+                it.isAccessible = true
+                it.get(kit) as Mutex
+            }
+            var operation: Job? = null
+            var contender: Job? = null
+            var observedFailure: Throwable? = null
+            try {
+                if (advertising) kit.startDiscovery() else kit.startAdvertising()
+                if (retry) {
+                    assertFailsWith<P2pError.ConnectionFailed> { kit.startFeature(advertising) }
+                    assertIs<FeatureState.Failed>(kit.featureState(advertising))
+                    captureCleanup = true
+                }
+                operation = launch {
+                    try {
+                        kit.startFeature(advertising)
+                    } catch (failure: Throwable) {
+                        observedFailure = failure
+                    }
+                }
+                assertTrue(withTimeout(5_000) { rollbackLogged.await() })
+                assertSame(testThread, logThread, "rollback logging must resume on the test event loop")
 
-            val featureState = kit.featureState(advertising)
-            val expectedStops = if (retry) 2 else 1
-            assertEquals(
-                expectedStops,
-                transport.stopCalls.get(),
-                "one failed start must settle one rollback; final state=$featureState"
-            )
-            val failed = assertIs<FeatureState.Failed>(featureState)
-            val aggregate = assertIs<CleanupAggregateException>(failed.error.cause)
-            if (!retry) assertTrue(aggregate.issues.any { it.cause === transport.startFailure })
-            assertTrue(aggregate.issues.any { it.cause === transport.cleanupFailure })
-            val cancelled = assertIs<CancellationException>(observedFailure)
-            assertTrue(cancelled.suppressedExceptions.any { it === failed.error })
-            assertEquals(FeatureState.Active, kit.featureState(!advertising))
-            assertEquals(P2pState.Running, kit.state.value)
+                // Logging resumes this test on the same runBlocking event loop.
+                // The start owner continues into its first NonCancellable lifecycle
+                // check before this continuation runs, and queues for the held lock.
+                // A second FIFO waiter then keeps the *next* commit acquisition
+                // contended. Cancellation there used to re-enter the failure handler.
+                // Retry preparation instead reaches settlement on its first lock.
+                if (!retry) {
+                    contender = launch(start = CoroutineStart.UNDISPATCHED) {
+                        lifecycleMutex.withLock(contenderOwner) {
+                            contenderEntered.complete(Unit)
+                            releaseContender.await()
+                        }
+                    }
+                }
+                operation.cancel(CancellationException("caller canceled during failure settlement"))
+                lifecycleMutex.unlock(firstLockOwner)
+                if (!retry) withTimeout(5_000) { contenderEntered.await() }
+                releaseContender.complete(Unit)
+                withTimeout(5_000) { operation.join() }
 
-            // A retained cleanup marker is observed behaviorally: retry must
-            // clean the previous resource before entering a fresh start.
-            transport.failStart = false
-            kit.startFeature(advertising)
-            assertEquals(expectedStops + 1, transport.stopCalls.get())
-            assertEquals(2, transport.startCalls.get())
-            assertEquals(FeatureState.Active, kit.featureState(advertising))
-            assertEquals(FeatureState.Active, kit.featureState(!advertising))
-        } finally {
-            if (lifecycleMutex.holdsLock(firstLockOwner)) lifecycleMutex.unlock(firstLockOwner)
-            releaseContender.complete(Unit)
-            operation?.cancelAndJoin()
-            contender?.cancelAndJoin()
-            transport.failStart = false
-            kit.stop()
+                val featureState = kit.featureState(advertising)
+                val expectedStops = if (retry) 2 else 1
+                assertEquals(
+                    expectedStops,
+                    transport.stopCalls.get(),
+                    "one failed start must settle one rollback; final state=$featureState"
+                )
+                val failed = assertIs<FeatureState.Failed>(featureState)
+                val aggregate = assertIs<CleanupAggregateException>(failed.error.cause)
+                if (!retry) assertTrue(aggregate.issues.any { it.cause === transport.startFailure })
+                assertTrue(aggregate.issues.any { it.cause === transport.cleanupFailure })
+                val cancelled = assertIs<CancellationException>(observedFailure)
+                assertTrue(cancelled.suppressedExceptions.any { it === failed.error })
+                assertEquals(FeatureState.Active, kit.featureState(!advertising))
+                assertEquals(P2pState.Running, kit.state.value)
+
+                // A retained cleanup marker is observed behaviorally: retry must
+                // clean the previous resource before entering a fresh start.
+                transport.failStart = false
+                kit.startFeature(advertising)
+                assertEquals(expectedStops + 1, transport.stopCalls.get())
+                assertEquals(2, transport.startCalls.get())
+                assertEquals(FeatureState.Active, kit.featureState(advertising))
+                assertEquals(FeatureState.Active, kit.featureState(!advertising))
+            } finally {
+                withContext(NonCancellable) {
+                    if (lifecycleMutex.holdsLock(firstLockOwner)) lifecycleMutex.unlock(firstLockOwner)
+                    releaseContender.complete(Unit)
+                    operation?.cancelAndJoin()
+                    contender?.cancelAndJoin()
+                    transport.failStart = false
+                }
+            }
         }
     }
 
@@ -194,64 +221,82 @@ class FeatureStartSettlementTest {
                 }
             }
         }
-        val kit = createTestKit {
-            appId = AppId("feature-stop-settlement-test")
-            deviceName = "Stop settlement test"
-            peerIdStorage = InMemoryPeerIdStorage()
-            logger = testLogger
-            networkPathObserver = FakeNetworkPathObserver()
-            transports { register(FailingFeatureFactory(transport)) }
-        }
-        lifecycleMutex = P2pKitImpl::class.java.getDeclaredField("lifecycleMutex").let {
-            it.isAccessible = true
-            it.get(kit) as Mutex
-        }
-        var start: Job? = null
-        var stop: Job? = null
-        var observedFailure: Throwable? = null
-        try {
-            if (advertising) kit.startDiscovery() else kit.startAdvertising()
-            start = launch {
-                try {
-                    kit.startFeature(advertising)
-                } catch (failure: Throwable) {
-                    observedFailure = failure
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    appId = AppId("feature-stop-settlement-test")
+                    deviceName = "Stop settlement test"
+                    peerIdStorage = InMemoryPeerIdStorage()
+                    logger = object : P2pLogger by recorder {
+                        override fun warn(message: String, throwable: Throwable?) {
+                            recorder.warn(message, throwable)
+                            testLogger.warn(message, throwable)
+                        }
+                    }
+                    networkPathObserver = FakeNetworkPathObserver()
+                    transports { register(FailingFeatureFactory(transport)) }
+                }
+            },
+            verifyDiagnostics = { recorder ->
+                val feature = if (advertising) "advertising" else "discovery"
+                assertSettlementDiagnostics(recorder, listOf(
+                    settlementWarning("Late lifecycle cleanup failed for LAN $feature", transport.cleanupFailure)
+                ))
+            }
+        ) { kit ->
+            lifecycleMutex = P2pKitImpl::class.java.getDeclaredField("lifecycleMutex").let {
+                it.isAccessible = true
+                it.get(kit) as Mutex
+            }
+            var start: Job? = null
+            var stop: Job? = null
+            var observedFailure: Throwable? = null
+            try {
+                if (advertising) kit.startDiscovery() else kit.startAdvertising()
+                start = launch {
+                    try {
+                        kit.startFeature(advertising)
+                    } catch (failure: Throwable) {
+                        observedFailure = failure
+                    }
+                }
+                withTimeout(5_000) { transport.startEntered.await() }
+                val stopping = async {
+                    if (advertising) kit.stopAdvertising() else kit.stopDiscovery()
+                }
+                stop = stopping
+                withTimeout(5_000) {
+                    (if (advertising) kit.advertisingState else kit.discoveryState)
+                        .first { it == FeatureState.Stopping }
+                }
+                transport.releaseStart.complete(Unit)
+                assertTrue(withTimeout(5_000) { rollbackLogged.await() })
+                start.cancel(CancellationException("cancel after stop-checkpoint rollback"))
+                lifecycleMutex.unlock(lockOwner)
+
+                withTimeout(5_000) { transport.secondStopEntered.await() }
+                assertTrue(start.isCompleted, "the second cleanup must belong to the explicit stop, not the start")
+                val failed = assertIs<FeatureState.Failed>(kit.featureState(advertising))
+                val aggregate = assertIs<CleanupAggregateException>(failed.error.cause)
+                assertTrue(aggregate.issues.any { it.cause === transport.cleanupFailure })
+                val cancelled = assertIs<CancellationException>(observedFailure)
+                assertTrue(cancelled.suppressedExceptions.any { it === failed.error })
+                assertEquals(FeatureState.Active, kit.featureState(!advertising))
+
+                transport.releaseSecondStop.complete(Unit)
+                withTimeout(5_000) { stopping.await() }
+                assertEquals(2, transport.stopCalls.get(), "the explicit stop owns one subsequent cleanup retry")
+                assertEquals(FeatureState.Idle, kit.featureState(advertising))
+                assertEquals(FeatureState.Active, kit.featureState(!advertising))
+            } finally {
+                withContext(NonCancellable) {
+                    if (lifecycleMutex.holdsLock(lockOwner)) lifecycleMutex.unlock(lockOwner)
+                    transport.releaseStart.complete(Unit)
+                    transport.releaseSecondStop.complete(Unit)
+                    start?.cancelAndJoin()
+                    stop?.cancelAndJoin()
                 }
             }
-            withTimeout(5_000) { transport.startEntered.await() }
-            val stopping = async {
-                if (advertising) kit.stopAdvertising() else kit.stopDiscovery()
-            }
-            stop = stopping
-            withTimeout(5_000) {
-                (if (advertising) kit.advertisingState else kit.discoveryState).first { it == FeatureState.Stopping }
-            }
-            transport.releaseStart.complete(Unit)
-            assertTrue(withTimeout(5_000) { rollbackLogged.await() })
-            start.cancel(CancellationException("cancel after stop-checkpoint rollback"))
-            lifecycleMutex.unlock(lockOwner)
-
-            withTimeout(5_000) { transport.secondStopEntered.await() }
-            assertTrue(start.isCompleted, "the second cleanup must belong to the explicit stop, not the start")
-            val failed = assertIs<FeatureState.Failed>(kit.featureState(advertising))
-            val aggregate = assertIs<CleanupAggregateException>(failed.error.cause)
-            assertTrue(aggregate.issues.any { it.cause === transport.cleanupFailure })
-            val cancelled = assertIs<CancellationException>(observedFailure)
-            assertTrue(cancelled.suppressedExceptions.any { it === failed.error })
-            assertEquals(FeatureState.Active, kit.featureState(!advertising))
-
-            transport.releaseSecondStop.complete(Unit)
-            withTimeout(5_000) { stopping.await() }
-            assertEquals(2, transport.stopCalls.get(), "the explicit stop owns one subsequent cleanup retry")
-            assertEquals(FeatureState.Idle, kit.featureState(advertising))
-            assertEquals(FeatureState.Active, kit.featureState(!advertising))
-        } finally {
-            if (lifecycleMutex.holdsLock(lockOwner)) lifecycleMutex.unlock(lockOwner)
-            transport.releaseStart.complete(Unit)
-            transport.releaseSecondStop.complete(Unit)
-            start?.cancelAndJoin()
-            stop?.cancelAndJoin()
-            kit.stop()
         }
     }
 
@@ -280,56 +325,85 @@ class FeatureStartSettlementTest {
             gateStart = true
             nonCancellableStart = true
         }
-        val kit = createTestKit {
-            appId = AppId("feature-terminal-cancellation-test")
-            deviceName = "Terminal cancellation test"
-            peerIdStorage = InMemoryPeerIdStorage()
-            networkPathObserver = FakeNetworkPathObserver()
-            transports { register(FailingFeatureFactory(transport)) }
-        }
-        var operation: Job? = null
-        var observedFailure: Throwable? = null
-        try {
-            if (advertising) kit.startDiscovery() else kit.startAdvertising()
-            operation = launch {
-                try {
-                    kit.startFeature(advertising)
-                } catch (failure: Throwable) {
-                    observedFailure = failure
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("feature-terminal-cancellation-test")
+                    deviceName = "Terminal cancellation test"
+                    peerIdStorage = InMemoryPeerIdStorage()
+                    networkPathObserver = FakeNetworkPathObserver()
+                    transports { register(FailingFeatureFactory(transport)) }
+                }
+            },
+            verifyDiagnostics = { recorder ->
+                val expected = if (failLateCleanup) {
+                    val feature = if (advertising) "advertising" else "discovery"
+                    listOf(settlementWarning(
+                        "Late lifecycle cleanup failed for LAN $feature",
+                        transport.cleanupFailure
+                    ))
+                } else {
+                    emptyList()
+                }
+                assertSettlementDiagnostics(recorder, expected)
+            }
+        ) { kit ->
+            var operation: Job? = null
+            var observedFailure: Throwable? = null
+            try {
+                if (advertising) kit.startDiscovery() else kit.startAdvertising()
+                operation = launch {
+                    try {
+                        kit.startFeature(advertising)
+                    } catch (failure: Throwable) {
+                        observedFailure = failure
+                    }
+                }
+                withTimeout(5_000) { transport.startEntered.await() }
+                kit.stop()
+                assertEquals(P2pState.Stopped, kit.state.value)
+                assertEquals(FeatureState.Idle, kit.featureState(advertising))
+                assertEquals(FeatureState.Idle, kit.featureState(!advertising))
+                assertEquals(1, transport.stopCalls.get(), "terminal stop owns the first cleanup")
+
+                val cancellation = CancellationException("caller canceled after terminal stop")
+                operation.cancel(cancellation)
+                // Return from the non-cancellable provider, so the core's explicit
+                // ensureActive throws this exact caller cancellation object.
+                transport.releaseStart.complete(Unit)
+                withTimeout(5_000) { operation.join() }
+
+                assertSame(cancellation, observedFailure)
+                assertAcyclicFailureGraph(cancellation)
+                assertTrue(cancellation.suppressedExceptions.any { it is IllegalStateException })
+                val cleanupFailures = cancellation.suppressedExceptions
+                    .mapNotNull { it.cause as? CleanupAggregateException }
+                assertEquals(if (failLateCleanup) 1 else 0, cleanupFailures.size)
+                if (failLateCleanup) {
+                    assertSame(transport.cleanupFailure, cleanupFailures.single().issues.single().cause)
+                }
+                assertEquals(2, transport.stopCalls.get(), "the late start owns exactly one compensation")
+                assertEquals(P2pState.Stopped, kit.state.value)
+                assertEquals(FeatureState.Idle, kit.featureState(advertising))
+                assertEquals(FeatureState.Idle, kit.featureState(!advertising))
+            } finally {
+                withContext(NonCancellable) {
+                    transport.releaseStart.complete(Unit)
+                    operation?.cancelAndJoin()
                 }
             }
-            withTimeout(5_000) { transport.startEntered.await() }
-            kit.stop()
-            assertEquals(P2pState.Stopped, kit.state.value)
-            assertEquals(FeatureState.Idle, kit.featureState(advertising))
-            assertEquals(FeatureState.Idle, kit.featureState(!advertising))
-            assertEquals(1, transport.stopCalls.get(), "terminal stop owns the first cleanup")
-
-            val cancellation = CancellationException("caller canceled after terminal stop")
-            operation.cancel(cancellation)
-            // Return from the non-cancellable provider, so the core's explicit
-            // ensureActive throws this exact caller cancellation object.
-            transport.releaseStart.complete(Unit)
-            withTimeout(5_000) { operation.join() }
-
-            assertSame(cancellation, observedFailure)
-            assertAcyclicFailureGraph(cancellation)
-            assertTrue(cancellation.suppressedExceptions.any { it is IllegalStateException })
-            val cleanupFailures = cancellation.suppressedExceptions
-                .mapNotNull { it.cause as? CleanupAggregateException }
-            assertEquals(if (failLateCleanup) 1 else 0, cleanupFailures.size)
-            if (failLateCleanup) {
-                assertSame(transport.cleanupFailure, cleanupFailures.single().issues.single().cause)
-            }
-            assertEquals(2, transport.stopCalls.get(), "the late start owns exactly one compensation")
-            assertEquals(P2pState.Stopped, kit.state.value)
-            assertEquals(FeatureState.Idle, kit.featureState(advertising))
-            assertEquals(FeatureState.Idle, kit.featureState(!advertising))
-        } finally {
-            transport.releaseStart.complete(Unit)
-            operation?.cancelAndJoin()
-            kit.stop()
         }
+    }
+
+    private fun settlementWarning(message: String, cause: Throwable) =
+        RecordingLogger.Entry(RecordingLogger.Level.WARN, message, cause)
+
+    private fun assertSettlementDiagnostics(recorder: RecordingLogger, expected: List<RecordingLogger.Entry>) {
+        val actual = recorder.entries.filter {
+            it.level == RecordingLogger.Level.WARN || it.level == RecordingLogger.Level.ERROR
+        }
+        assertEquals(expected, actual, "only the test's controlled cleanup calls may warn")
     }
 
     private fun assertAcyclicFailureGraph(failure: Throwable, ancestors: List<Throwable> = emptyList()) {
@@ -351,7 +425,8 @@ class FeatureStartSettlementTest {
         private val cleanupFailureCalls: Set<Int> = setOf(1)
     ) : DiscoveryTransport {
         override val type: TransportKind = TransportKind.LAN
-        override val events: Flow<PeerEvent> = emptyFlow()
+        // Inject feature start/cleanup faults, not discovery-stream completion.
+        override val events: Flow<PeerEvent> = flow { awaitCancellation() }
         val startFailure = IllegalStateException("synthetic feature start failure")
         val cleanupFailure = IllegalStateException("synthetic feature rollback failure")
         val startCalls = AtomicInteger()

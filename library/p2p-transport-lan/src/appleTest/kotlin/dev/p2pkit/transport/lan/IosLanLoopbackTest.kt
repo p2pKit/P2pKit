@@ -44,7 +44,7 @@ class IosLanLoopbackTest {
     private lateinit var peerIdKey: String
     private lateinit var peerIdV2Key: String
 
-    private val toStop: MutableList<P2pKit> = mutableListOf()
+    private val diagnostics = KitTestDiagnostics()
     private var defaultsLease: AppleGlobalStateTestGuard.Lease? = null
 
     @BeforeTest
@@ -57,16 +57,19 @@ class IosLanLoopbackTest {
         )
     }
 
-    private fun newKit(name: String): P2pKit = P2pKit.create {
-        appId = AppId(unique)
-        deviceName = name
-        security { mode = dev.p2pkit.core.SecurityMode.NoneForMvp }
-        keepAlive {
-            pingIntervalMillis = 60_000
-            timeoutMillis = 120_000
-        }
-        transports {
-            lan()
+    private fun newKit(name: String): P2pKit = diagnostics.create { recording ->
+        P2pKit.create {
+            logger = recording
+            appId = AppId(unique)
+            deviceName = name
+            security { mode = dev.p2pkit.core.SecurityMode.NoneForMvp }
+            keepAlive {
+                pingIntervalMillis = 60_000
+                timeoutMillis = 120_000
+            }
+            transports {
+                lan()
+            }
         }
     }
 
@@ -80,7 +83,6 @@ class IosLanLoopbackTest {
     private suspend fun startAndAdvertise(name: String): P2pKit {
         removeStoredPeerId()
         val kit = newKit(name)
-        toStop.add(kit)
         kit.startAdvertising()
         kit.startDiscovery()
         return kit
@@ -94,15 +96,15 @@ class IosLanLoopbackTest {
 
     @AfterTest
     fun teardown() {
-        try {
-            runBlocking {
-                toStop.forEach { runCatching { it.stop() } }
-                toStop.clear()
+        runBlocking {
+            diagnostics.finish {
+                try {
+                    removeStoredPeerId()
+                } finally {
+                    defaultsLease?.close()
+                    defaultsLease = null
+                }
             }
-            removeStoredPeerId()
-        } finally {
-            defaultsLease?.close()
-            defaultsLease = null
         }
     }
 

@@ -5,6 +5,7 @@ import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pKit
+import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
@@ -16,7 +17,10 @@ import dev.p2pkit.core.provisioning.ProvisioningContext
 import dev.p2pkit.core.provisioning.UnsupportedNetworkProvisioningManager
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
+import dev.p2pkit.core.testfixtures.assertLegacyPeerMismatchDiagnostics
+import dev.p2pkit.core.testfixtures.assertLegacySelfCollisionDiagnostics
 import dev.p2pkit.core.testfixtures.createTestKit
+import dev.p2pkit.core.testfixtures.withTestKit
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
@@ -70,8 +74,10 @@ class ManualPeerIdentityTest {
     private fun dialerKit(
         localId: String,
         transport: FakeDataTransport,
-        capture: RegistrarCapture? = null
+        capture: RegistrarCapture? = null,
+        recording: P2pLogger
     ): P2pKit = createTestKit {
+        logger = recording
         appId = AppId("com.example.manualtest")
         deviceName = "Alice"
         peerIdStorage = InMemoryPeerIdStorage(seed = PeerId(localId))
@@ -87,8 +93,9 @@ class ManualPeerIdentityTest {
         }
     }
 
-    private fun remoteKit(localId: String, incoming: RawConnection): P2pKit =
+    private fun remoteKit(localId: String, incoming: RawConnection, recording: P2pLogger): P2pKit =
         createTestKit {
+            logger = recording
             appId = AppId("com.example.manualtest")
             deviceName = "Bob"
             // The remote announces THIS id in its HELLO.
@@ -113,29 +120,35 @@ class ManualPeerIdentityTest {
     fun manualConnectKeepsDialedSyntheticIdentityDespiteDifferentHelloId() = runBlocking<Unit> {
         val pair = FakeConnectionPair()
         val capture = RegistrarCapture()
-        val alice = dialerKit(
-            localId = "alice-id",
-            transport = FakeDataTransport(outgoingConnection = { pair.a }),
-            capture = capture
-        )
-        val bob = remoteKit(localId = "bob-real-id", incoming = pair.b)
-        try {
-            bob.start()
-            val manualPeer = capture.registrar.registerManualPeer(host = "192.168.7.42", port = 40404)
-            // Sanity: the minted id is synthetic, not the remote's real id.
-            assertNotEquals("bob-real-id", manualPeer.id.value)
+        withTestKit(
+            create = { recorder ->
+                dialerKit(
+                    localId = "alice-id",
+                    transport = FakeDataTransport(outgoingConnection = { pair.a }),
+                    capture = capture,
+                    recording = recorder
+                )
+            }
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    remoteKit(localId = "bob-real-id", incoming = pair.b, recording = recorder)
+                }
+            ) { bob ->
+                bob.start()
+                val manualPeer = capture.registrar.registerManualPeer(host = "192.168.7.42", port = 40404)
+                // Sanity: the minted id is synthetic, not the remote's real id.
+                assertNotEquals("bob-real-id", manualPeer.id.value)
 
-            val session = withTimeout(5_000) { alice.connect(manualPeer) }
-            assertEquals(ConnectionState.Connected, session.state.value)
-            assertEquals(
-                manualPeer.id, session.peer.id,
-                "manual session must keep the DIALED synthetic identity, " +
-                    "not adopt the remote's HELLO id"
-            )
-            assertNotEquals("bob-real-id", session.peer.id.value)
-        } finally {
-            alice.stop()
-            bob.stop()
+                val session = withTimeout(5_000) { alice.connect(manualPeer) }
+                assertEquals(ConnectionState.Connected, session.state.value)
+                assertEquals(
+                    manualPeer.id, session.peer.id,
+                    "manual session must keep the DIALED synthetic identity, " +
+                        "not adopt the remote's HELLO id"
+                )
+                assertNotEquals("bob-real-id", session.peer.id.value)
+            }
         }
     }
 
@@ -144,27 +157,32 @@ class ManualPeerIdentityTest {
         val pair = FakeConnectionPair()
         val capture = RegistrarCapture()
         val aliceTransport = FakeDataTransport(outgoingConnection = { pair.a })
-        val alice = dialerKit(localId = "alice-id", transport = aliceTransport, capture = capture)
-        val bob = remoteKit(localId = "bob-real-id", incoming = pair.b)
-        try {
-            bob.start()
-            val manualPeer = capture.registrar.registerManualPeer(host = "192.168.7.42", port = 40404)
+        withTestKit(
+            create = { recorder ->
+                dialerKit(localId = "alice-id", transport = aliceTransport, capture = capture, recording = recorder)
+            }
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    remoteKit(localId = "bob-real-id", incoming = pair.b, recording = recorder)
+                }
+            ) { bob ->
+                bob.start()
+                val manualPeer = capture.registrar.registerManualPeer(host = "192.168.7.42", port = 40404)
 
-            val first = withTimeout(5_000) { alice.connect(manualPeer) }
-            val second = withTimeout(5_000) { alice.connect(manualPeer) }
+                val first = withTimeout(5_000) { alice.connect(manualPeer) }
+                val second = withTimeout(5_000) { alice.connect(manualPeer) }
 
-            assertSame(
-                first, second,
-                "repeat connect(manualPeer) must return the existing session instance"
-            )
-            assertEquals(1, aliceTransport.connectCalls.size, "second connect must not dial again")
-            assertEquals(1, alice.sessions.value.size, "store must hold exactly one session")
-            assertSame(first, alice.sessions.value.single())
-            // No Replaced churn: the original session is still the live one.
-            assertEquals(ConnectionState.Connected, first.state.value)
-        } finally {
-            alice.stop()
-            bob.stop()
+                assertSame(
+                    first, second,
+                    "repeat connect(manualPeer) must return the existing session instance"
+                )
+                assertEquals(1, aliceTransport.connectCalls.size, "second connect must not dial again")
+                assertEquals(1, alice.sessions.value.size, "store must hold exactly one session")
+                assertSame(first, alice.sessions.value.single())
+                // No Replaced churn: the original session is still the live one.
+                assertEquals(ConnectionState.Connected, first.state.value)
+            }
         }
     }
 
@@ -175,24 +193,31 @@ class ManualPeerIdentityTest {
         // advertised id happens to start with "manual-". Under the old
         // prefix-sniffing detection this dodged the anti-spoof check; with
         // explicit provenance it must still be rejected on mismatch.
-        val alice = dialerKit(
-            localId = "alice-id",
-            transport = FakeDataTransport(outgoingConnection = { pair.a })
-        )
-        val impostor = remoteKit(localId = "impostor-id", incoming = pair.b)
-        try {
-            impostor.start()
-            val err = assertFailsWith<P2pError.HandshakeRejected> {
-                withTimeout(5_000) { alice.connect(peer("manual-looking-advertised-id")) }
+        withTestKit(
+            create = { recorder ->
+                dialerKit(
+                    localId = "alice-id",
+                    transport = FakeDataTransport(outgoingConnection = { pair.a }),
+                    recording = recorder
+                )
             }
-            assertTrue(
-                err.reason.contains("peerId mismatch"),
-                "expected a peerId-mismatch rejection (provenance, not prefix, drives the " +
-                    "manual exemption), got: ${err.reason}"
-            )
-        } finally {
-            alice.stop()
-            impostor.stop()
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    remoteKit(localId = "impostor-id", incoming = pair.b, recording = recorder)
+                },
+                verifyDiagnostics = { recorder -> assertLegacyPeerMismatchDiagnostics(recorder, alice.localPeerId) }
+            ) { impostor ->
+                impostor.start()
+                val err = assertFailsWith<P2pError.HandshakeRejected> {
+                    withTimeout(5_000) { alice.connect(peer("manual-looking-advertised-id")) }
+                }
+                assertTrue(
+                    err.reason.contains("peerId mismatch"),
+                    "expected a peerId-mismatch rejection (provenance, not prefix, drives the " +
+                        "manual exemption), got: ${err.reason}"
+                )
+            }
         }
     }
 
@@ -200,28 +225,35 @@ class ManualPeerIdentityTest {
     fun manualConnectStillRejectsHelloClaimingOurOwnPeerId() = runBlocking<Unit> {
         val pair = FakeConnectionPair()
         val capture = RegistrarCapture()
-        val alice = dialerKit(
-            localId = "alice-id",
-            transport = FakeDataTransport(outgoingConnection = { pair.a }),
-            capture = capture
-        )
-        // The device answering the manual host:port claims Alice's OWN id. The
-        // manual exemption skips the mismatch check, so the self-collision
-        // guard is the only remaining defense — it must still reject.
-        val evil = remoteKit(localId = "alice-id", incoming = pair.b)
-        try {
-            evil.start()
-            val manualPeer = capture.registrar.registerManualPeer(host = "192.168.7.42", port = 40404)
-            val err = assertFailsWith<P2pError.HandshakeRejected> {
-                withTimeout(5_000) { alice.connect(manualPeer) }
+        withTestKit(
+            create = { recorder ->
+                dialerKit(
+                    localId = "alice-id",
+                    transport = FakeDataTransport(outgoingConnection = { pair.a }),
+                    capture = capture,
+                    recording = recorder
+                )
             }
-            assertTrue(
-                err.reason.contains("our own peerId"),
-                "expected a self-collision rejection, got: ${err.reason}"
-            )
-        } finally {
-            alice.stop()
-            evil.stop()
+        ) { alice ->
+            // The device answering the manual host:port claims Alice's OWN id. The
+            // manual exemption skips the mismatch check, so the self-collision
+            // guard is the only remaining defense — it must still reject.
+            withTestKit(
+                create = { recorder ->
+                    remoteKit(localId = "alice-id", incoming = pair.b, recording = recorder)
+                },
+                verifyDiagnostics = ::assertLegacySelfCollisionDiagnostics
+            ) { evil ->
+                evil.start()
+                val manualPeer = capture.registrar.registerManualPeer(host = "192.168.7.42", port = 40404)
+                val err = assertFailsWith<P2pError.HandshakeRejected> {
+                    withTimeout(5_000) { alice.connect(manualPeer) }
+                }
+                assertTrue(
+                    err.reason.contains("our own peerId"),
+                    "expected a self-collision rejection, got: ${err.reason}"
+                )
+            }
         }
     }
 }

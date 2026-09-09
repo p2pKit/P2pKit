@@ -10,6 +10,7 @@ import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.testfixtures.FakeDiscoveryTransport
 import dev.p2pkit.core.testfixtures.FakeNetworkPathObserver
 import dev.p2pkit.core.testfixtures.MemorySecureIdentityStorage
+import dev.p2pkit.core.testfixtures.withTestKit
 import dev.p2pkit.core.transport.DiscoveryTransport
 import dev.p2pkit.core.transport.LocalPeerInfo
 import dev.p2pkit.core.transport.TransportContext
@@ -49,48 +50,50 @@ class ErrorCausePublicationTest {
         try {
             executor.asCoroutineDispatcher().use { dispatcher ->
                 val store = MemorySecureIdentityStorage()
-                var kit: P2pKit? = null
                 try {
                     val cause = IllegalStateException("synthetic feature start failure")
-                    val activeKit = P2pKit.create {
-                        appId = AppId("error-cause-publication")
-                        deviceName = "Cause publication test"
-                        secureIdentityStorage = store
-                        strictSessionInvariants = true
-                        security { mode = SecurityMode.AuthenticatedV2(PeerAuthorizationPolicy.RejectUnknown) }
-                        networkPathObserver = FakeNetworkPathObserver()
-                        transports { register(FailingFeatureFactory(cause)) }
-                    }
-                    kit = activeKit
-                    coroutineScope {
-                        val states = if (advertising) activeKit.advertisingState else activeKit.discoveryState
-                        val subscribed = CompletableDeferred<Unit>()
-                        val observer = async(dispatcher) {
-                            val state = states.onSubscription { subscribed.complete(Unit) }
-                                .first { it is FeatureState.Failed }
-                            val error = assertIs<P2pError.ConnectionFailed>(assertIs<FeatureState.Failed>(state).error)
-                            assertNotSame(callerThread, Thread.currentThread(), "collector must use another thread")
-                            assertSame(cause, error.cause, "the collector must see the original diagnostic cause")
-                            error
+                    withTestKit(
+                        create = { recorder ->
+                            P2pKit.create {
+                                logger = recorder
+                                appId = AppId("error-cause-publication")
+                                deviceName = "Cause publication test"
+                                secureIdentityStorage = store
+                                strictSessionInvariants = true
+                                security { mode = SecurityMode.AuthenticatedV2(PeerAuthorizationPolicy.RejectUnknown) }
+                                networkPathObserver = FakeNetworkPathObserver()
+                                transports { register(FailingFeatureFactory(cause)) }
+                            }
                         }
-                        // Use the real clock: the owned executor does not run on a virtual test scheduler.
-                        withTimeout(5_000) { subscribed.await() }
-                        val thrown = assertFailsWith<P2pError.ConnectionFailed> {
-                            if (advertising) activeKit.startAdvertising() else activeKit.startDiscovery()
+                    ) { activeKit ->
+                        coroutineScope {
+                            val states = if (advertising) activeKit.advertisingState else activeKit.discoveryState
+                            val subscribed = CompletableDeferred<Unit>()
+                            val observer = async(dispatcher) {
+                                val state = states.onSubscription { subscribed.complete(Unit) }
+                                    .first { it is FeatureState.Failed }
+                                val error = assertIs<P2pError.ConnectionFailed>(
+                                    assertIs<FeatureState.Failed>(state).error
+                                )
+                                assertNotSame(callerThread, Thread.currentThread(), "collector must use another thread")
+                                assertSame(cause, error.cause, "the collector must see the original diagnostic cause")
+                                error
+                            }
+                            // Use the real clock: the owned executor does not run on a virtual test scheduler.
+                            withTimeout(5_000) { subscribed.await() }
+                            val thrown = assertFailsWith<P2pError.ConnectionFailed> {
+                                if (advertising) activeKit.startAdvertising() else activeKit.startDiscovery()
+                            }
+                            assertSame(cause, thrown.cause)
+                            val retained = withTimeout(5_000) { observer.await() }
+                            assertSame(thrown, retained, "the published state must retain the thrown error instance")
+                            activeKit.stop()
+                            assertSame(cause, retained.cause, "shutdown must not clear a retained diagnostic cause")
                         }
-                        assertSame(cause, thrown.cause)
-                        val retained = withTimeout(5_000) { observer.await() }
-                        assertSame(thrown, retained, "the published state must retain the thrown error instance")
-                        activeKit.stop()
-                        assertSame(cause, retained.cause, "shutdown must not clear a retained diagnostic cause")
                     }
                 } finally {
                     withContext(NonCancellable) {
-                        try {
-                            kit?.stop()
-                        } finally {
-                            store.clear()
-                        }
+                        store.clear()
                     }
                 }
             }

@@ -2,14 +2,17 @@ package dev.p2pkit.core.internal
 
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ConnectionState
+import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.protocol.DefaultP2pProtocol
 import dev.p2pkit.core.protocol.HelloPayload
+import dev.p2pkit.core.protocol.ProtocolEvent
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.RecordingLogger
 import dev.p2pkit.core.testfixtures.createTestKit
+import dev.p2pkit.core.testfixtures.withTestKit
 import dev.p2pkit.core.transport.InboundConnectionAdmission
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
@@ -17,6 +20,9 @@ import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,9 +31,11 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /**
@@ -98,10 +106,38 @@ class InboundAdmissionControlTest {
     fun preHandshakeBoundRefusesExcessAndPermitsRecoverOnBothOutcomes() = runBlocking {
         // LAN's separate inbound queue mirrors this policy; review both bounds together.
         assertEquals(16, MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS)
-        val logger = RecordingLogger()
+        lateinit var logger: RecordingLogger
         val transport = FakeDataTransport()
-        val bob = incomingKit(transport, logger)
-        try {
+        withTestKit(
+            create = { recorder ->
+                logger = recorder
+                incomingKit(transport, recorder)
+            },
+            verifyDiagnostics = { recorder ->
+                val diagnostics = recorder.entries.filter {
+                    it.level == RecordingLogger.Level.WARN || it.level == RecordingLogger.Level.ERROR
+                }
+                // Exactly one excess connection and eight controlled pre-HELLO hangups, not a log-derived count.
+                assertEquals(9, diagnostics.size)
+                assertEquals(
+                    RecordingLogger.Entry(
+                        RecordingLogger.Level.WARN,
+                        "Inbound connection from excess refused: pre-handshake setups at capacity (16)"
+                    ),
+                    diagnostics.first()
+                )
+                diagnostics.drop(1).forEach { entry ->
+                    assertEquals(RecordingLogger.Level.WARN, entry.level)
+                    assertEquals("Incoming session setup failed", entry.message)
+                    val failure = assertIs<P2pError.ConnectionFailed>(entry.throwable)
+                    val eof = assertIs<ClosedReceiveChannelException>(failure.cause)
+                    assertEquals("Channel was closed", eof.message)
+                    assertEquals("Plaintext HELLO failed: ${eof.message}", failure.reason)
+                    assertTrue(failure.suppressedExceptions.isEmpty())
+                    assertTrue(eof.suppressedExceptions.isEmpty())
+                }
+            }
+        ) { bob ->
             // Fill the pre-handshake bound with connections that never send
             // HELLO. All of them must be ADMITTED (at-cap conforming load is
             // unaffected): each setup sends the kit's HELLO on its wire.
@@ -110,8 +146,12 @@ class InboundAdmissionControlTest {
                 TrackingAdmissionConnection(pair.b, "stalled-$index")
             }
             stalledAdmissions.forEach { transport.emitIncoming(it) }
-            awaitTrue("all $MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS at-bound setups admitted (kit HELLO sent)") {
-                stalled.all { it.b.writeAttempts > 0 }
+            // Observe the actual HELLO, not a write-attempt counter increment before send().
+            // This also fixes the failure phase below: each hung-up setup is waiting to RECEIVE.
+            withTimeout(AWAIT_TIMEOUT_MS) {
+                stalled.forEach { pair ->
+                    assertIs<ProtocolEvent.Hello>(remoteProtocol.events(pair.a).first())
+                }
             }
 
             // One connection past the bound: refused before any allocation —
@@ -190,72 +230,88 @@ class InboundAdmissionControlTest {
                 logger.warnings.count { it.contains(preHandshakeRefusalFragment) },
                 "expected exactly one pre-handshake refusal"
             )
-        } finally {
-            bob.stop()
         }
     }
 
     @Test
     fun totalSessionBoundRefusesNetNewInboundSessions() = runBlocking {
-        val logger = RecordingLogger()
+        lateinit var logger: RecordingLogger
         val transport = FakeDataTransport()
-        val bob = incomingKit(transport, logger)
-        val surfaced = mutableListOf<String>()
-        var collector: Job? = null
-        try {
-            // Record everything the kit surfaces on the public incoming flow.
-            // Subscription is awaited before any connection is emitted:
-            // incomingSessions is replay=0, so an emission before the
-            // collector registers would be invisible to it.
-            val subscribed = CompletableDeferred<Unit>()
-            collector = launch {
-                bob.incomingSessions
-                    .onSubscription { subscribed.complete(Unit) }
-                    .collect { surfaced.add(it.peer.id.value) }
+        withTestKit(
+            create = { recorder ->
+                logger = recorder
+                incomingKit(transport, recorder)
+            },
+            verifyDiagnostics = { recorder ->
+                val expected = RecordingLogger.Entry(
+                    RecordingLogger.Level.WARN,
+                    "Inbound session refused for peer peer-ove: total active sessions at capacity " +
+                        "($MAX_TOTAL_ACTIVE_SESSIONS)"
+                )
+                assertEquals(
+                    listOf(expected),
+                    recorder.entries.filter {
+                        it.level == RecordingLogger.Level.WARN || it.level == RecordingLogger.Level.ERROR
+                    }
+                )
             }
-            subscribed.await()
+        ) { bob ->
+            val surfaced = mutableListOf<String>()
+            var collector: Job? = null
+            try {
+                // Record everything the kit surfaces on the public incoming flow.
+                // Subscription is awaited before any connection is emitted:
+                // incomingSessions is replay=0, so an emission before the
+                // collector registers would be invisible to it.
+                val subscribed = CompletableDeferred<Unit>()
+                collector = launch {
+                    bob.incomingSessions
+                        .onSubscription { subscribed.complete(Unit) }
+                        .collect { surfaced.add(it.peer.id.value) }
+                }
+                subscribed.await()
 
-            // Register sessions with distinct peerIds up to the bound, one at
-            // a time (each handshake completes before the next connection, so
-            // the pre-handshake gate never interferes).
-            for (i in 1..MAX_TOTAL_ACTIVE_SESSIONS) {
-                val pair = FakeConnectionPair()
-                transport.emitIncoming(pair.b)
-                remoteProtocol.sendHello(pair.a, remoteHello("peer-$i"))
-                withTimeout(AWAIT_TIMEOUT_MS) { bob.sessions.first { it.size == i } }
-            }
-            assertEquals(MAX_TOTAL_ACTIVE_SESSIONS, bob.sessions.value.size)
+                // Register sessions with distinct peerIds up to the bound, one at
+                // a time (each handshake completes before the next connection, so
+                // the pre-handshake gate never interferes).
+                for (i in 1..MAX_TOTAL_ACTIVE_SESSIONS) {
+                    val pair = FakeConnectionPair()
+                    transport.emitIncoming(pair.b)
+                    remoteProtocol.sendHello(pair.a, remoteHello("peer-$i"))
+                    withTimeout(AWAIT_TIMEOUT_MS) { bob.sessions.first { it.size == i } }
+                }
+                assertEquals(MAX_TOTAL_ACTIVE_SESSIONS, bob.sessions.value.size)
 
-            // The next net-new inbound session passes the handshake but is
-            // refused at registration: warned, closed cleanly, never listed,
-            // never surfaced on incomingSessions.
-            val overflow = FakeConnectionPair()
-            transport.emitIncoming(overflow.b)
-            remoteProtocol.sendHello(overflow.a, remoteHello("peer-overflow"))
-            awaitTrue("total-session refusal diagnostic") {
-                logger.warnings.any { it.contains(totalSessionRefusalFragment) }
+                // The next net-new inbound session passes the handshake but is
+                // refused at registration: warned, closed cleanly, never listed,
+                // never surfaced on incomingSessions.
+                val overflow = FakeConnectionPair()
+                transport.emitIncoming(overflow.b)
+                remoteProtocol.sendHello(overflow.a, remoteHello("peer-overflow"))
+                awaitTrue("total-session refusal diagnostic") {
+                    logger.warnings.any { it.contains(totalSessionRefusalFragment) }
+                }
+                awaitTrue("refused session's connection closed") {
+                    overflow.b.state.value == ConnectionState.Closed
+                }
+                assertEquals(
+                    MAX_TOTAL_ACTIVE_SESSIONS, bob.sessions.value.size,
+                    "the session list must stay at the bound"
+                )
+                assertTrue(
+                    bob.sessions.value.none { it.peer.id.value == "peer-overflow" },
+                    "a refused session must never appear in the public session list"
+                )
+                awaitTrue("all admitted sessions surfaced on incomingSessions") {
+                    surfaced.size == MAX_TOTAL_ACTIVE_SESSIONS
+                }
+                assertTrue(
+                    surfaced.none { it == "peer-overflow" },
+                    "a refused session must never surface on incomingSessions"
+                )
+            } finally {
+                withContext(NonCancellable) { collector?.cancelAndJoin() }
             }
-            awaitTrue("refused session's connection closed") {
-                overflow.b.state.value == ConnectionState.Closed
-            }
-            assertEquals(
-                MAX_TOTAL_ACTIVE_SESSIONS, bob.sessions.value.size,
-                "the session list must stay at the bound"
-            )
-            assertTrue(
-                bob.sessions.value.none { it.peer.id.value == "peer-overflow" },
-                "a refused session must never appear in the public session list"
-            )
-            awaitTrue("all admitted sessions surfaced on incomingSessions") {
-                surfaced.size == MAX_TOTAL_ACTIVE_SESSIONS
-            }
-            assertTrue(
-                surfaced.none { it == "peer-overflow" },
-                "a refused session must never surface on incomingSessions"
-            )
-        } finally {
-            collector?.cancel()
-            bob.stop()
         }
     }
 

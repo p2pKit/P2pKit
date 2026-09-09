@@ -1,8 +1,8 @@
 package dev.p2pkit.transport.lan
 
 import dev.p2pkit.core.AppId
+import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pKit
-import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.P2pSession
 import dev.p2pkit.core.Peer
@@ -20,6 +20,7 @@ import dev.p2pkit.core.transport.TransportPair
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -33,7 +34,6 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.nio.file.Files
-import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -63,26 +63,31 @@ class JvmLanAdmissionControlTest {
 
     private val unique = "p2pkit-itest-admission-${System.currentTimeMillis()}"
 
-    private val toStop = mutableListOf<P2pKit>()
+    private val diagnostics = KitTestDiagnostics()
     private val tempHomes = mutableListOf<File>()
 
     @AfterTest
     fun teardown() {
         runBlocking {
-            toStop.forEach { runCatching { it.stop() } }
-            toStop.clear()
-            tempHomes.forEach { runCatching { it.deleteRecursively() } }
-            tempHomes.clear()
+            diagnostics.finish {
+                tempHomes.forEach { runCatching { it.deleteRecursively() } }
+                tempHomes.clear()
+            }
         }
     }
 
     @Test
     fun oneSilentSourceCannotExhaustInboundAdmission() {
         runBlocking {
-            val bobLogger = AdmissionRecordingLogger()
+            val bobLogger = KitTestDiagnostics.Recording()
             val bobTransport = newLanTransport("Bob")
             val bobStub = AdmissionStubDiscovery()
-            val bob = newKit("Bob", bobLogger, AdmissionPairFactory(bobTransport, bobStub))
+            val bob = newKit("Bob", bobLogger, AdmissionPairFactory(bobTransport, bobStub)) { recording ->
+                // Only admitted silent sockets reach HELLO setup. Transport refusals are not
+                // core warnings; no global-capacity, listener, cleanup or ERROR entry is allowed.
+                assertEquals(MAX_PRE_HANDSHAKE_CONNECTIONS_PER_SOURCE, recording.entries.size)
+                recording.entries.forEach(::assertTruncatedHello)
+            }
             bob.start()
             val bobPort = requireNotNull(bobTransport.tcpPort.value)
 
@@ -141,7 +146,7 @@ class JvmLanAdmissionControlTest {
                 val aliceTransport = newLanTransport("Alice")
                 val alice = newKit(
                     "Alice",
-                    AdmissionRecordingLogger(),
+                    KitTestDiagnostics.Recording(),
                     AdmissionPairFactory(aliceTransport)
                 )
                 alice.start()
@@ -163,7 +168,7 @@ class JvmLanAdmissionControlTest {
                 val carolStub = AdmissionStubDiscovery()
                 val carol = newKit(
                     "Carol",
-                    AdmissionRecordingLogger(),
+                    KitTestDiagnostics.Recording(),
                     AdmissionPairFactory(
                         newLanTransport("Carol", InetAddress.getByName("::1")),
                         carolStub
@@ -201,7 +206,7 @@ class JvmLanAdmissionControlTest {
             val daveStub = AdmissionStubDiscovery()
             val dave = newKit(
                 "Dave",
-                AdmissionRecordingLogger(),
+                KitTestDiagnostics.Recording(),
                 AdmissionPairFactory(newLanTransport("Dave"), daveStub)
             )
             val (daveOutgoing, bobIncoming) = establishSession(
@@ -251,28 +256,33 @@ class JvmLanAdmissionControlTest {
             }
         )
 
-    private fun newKit(name: String, kitLogger: P2pLogger, factory: TransportFactory): P2pKit {
+    private fun newKit(
+        name: String,
+        kitLogger: KitTestDiagnostics.Recording,
+        factory: TransportFactory,
+        verifyDiagnostics: (KitTestDiagnostics.Recording) -> Unit = { it.assertQuiet() }
+    ): P2pKit {
         val tempHome = Files.createTempDirectory("p2pkit-itest-$name-").toFile()
         tempHomes.add(tempHome)
-        val kit = JvmGlobalStateTestGuard.withValues(
-            mapOf("user.home" to tempHome.absolutePath)
-        ) {
-            P2pKit.create {
-                appId = AppId(unique)
-                deviceName = name
-                security { mode = dev.p2pkit.core.SecurityMode.NoneForMvp }
-                logger = kitLogger
-                keepAlive {
-                    pingIntervalMillis = 60_000
-                    timeoutMillis = 120_000
-                }
-                transports {
-                    register(factory)
+        return diagnostics.create(kitLogger, verifyDiagnostics) { recording ->
+            JvmGlobalStateTestGuard.withValues(
+                mapOf("user.home" to tempHome.absolutePath)
+            ) {
+                P2pKit.create {
+                    appId = AppId(unique)
+                    deviceName = name
+                    security { mode = dev.p2pkit.core.SecurityMode.NoneForMvp }
+                    logger = recording
+                    keepAlive {
+                        pingIntervalMillis = 60_000
+                        timeoutMillis = 120_000
+                    }
+                    transports {
+                        register(factory)
+                    }
                 }
             }
         }
-        toStop.add(kit)
-        return kit
     }
 
     /**
@@ -340,6 +350,16 @@ class JvmLanAdmissionControlTest {
         }
     }
 
+    private fun assertTruncatedHello(entry: KitTestDiagnostics.Recording.Entry) {
+        assertEquals(KitTestDiagnostics.Recording.Level.WARN, entry.level)
+        assertEquals("Incoming session setup failed", entry.message)
+        val failure = assertIs<P2pError.ConnectionFailed>(entry.throwable)
+        val eof = assertIs<ClosedReceiveChannelException>(failure.cause)
+        assertEquals("Plaintext HELLO failed: ${eof.message}", failure.reason)
+        assertTrue(eof.suppressedExceptions.isEmpty())
+        assertTrue(failure.suppressedExceptions.isEmpty())
+    }
+
     private companion object {
         /** Raw connections opened that never send HELLO (> the bound). */
         const val NEVER_HELLO_COUNT: Int = MAX_PRE_HANDSHAKE_CONNECTIONS_PER_SOURCE + 2
@@ -352,24 +372,6 @@ class JvmLanAdmissionControlTest {
         const val AWAIT_TIMEOUT_MS: Long = 10_000
         const val SOCKET_PROBE_TIMEOUT_MS: Int = 2_000
     }
-}
-
-/** Thread-safe recording [P2pLogger] (the commonTest fixture isn't published). */
-private class AdmissionRecordingLogger : P2pLogger {
-    private val warnList = CopyOnWriteArrayList<String>()
-    private val errorList = CopyOnWriteArrayList<String>()
-    override fun debug(message: String) {}
-    override fun info(message: String) {}
-    override fun warn(message: String, throwable: Throwable?) {
-        warnList.add(message)
-    }
-
-    override fun error(message: String, throwable: Throwable?) {
-        errorList.add(message)
-    }
-
-    fun warnings(): List<String> = warnList.toList()
-    fun errors(): List<String> = errorList.toList()
 }
 
 /** Emits scripted [PeerEvent]s with the replay-zero delivery used in production. */

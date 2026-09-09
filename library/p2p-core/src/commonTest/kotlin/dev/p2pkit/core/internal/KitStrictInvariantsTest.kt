@@ -16,6 +16,7 @@ import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.RecordingLogger
 import dev.p2pkit.core.testfixtures.createSecureTestKit
 import dev.p2pkit.core.testfixtures.createTestKit
+import dev.p2pkit.core.testfixtures.withTestKit
 import dev.p2pkit.core.transfer.P2pFileOffer
 import dev.p2pkit.core.transfer.P2pFileTransfer
 import dev.p2pkit.core.transport.TransportContext
@@ -60,21 +61,24 @@ class KitStrictInvariantsTest {
 
     @Test
     fun secureTestKitUsesRealIdentityAndThrowsOnForcedStoreInconsistency() = runBlocking {
-        val kit = createSecureTestKit(
-            appId = AppId("secure.fixture.strict"),
-            name = "Strict secure kit",
-            transport = FakeDataTransport(),
-            authorization = PeerAuthorizationPolicy.RejectUnknown
-        )
-        try {
+        withTestKit(
+            create = { recorder ->
+                createSecureTestKit(
+                    appId = AppId("secure.fixture.strict"),
+                    name = "Strict secure kit",
+                    transport = FakeDataTransport(),
+                    authorization = PeerAuthorizationPolicy.RejectUnknown
+                ) {
+                    logger = recorder
+                }
+            }
+        ) { kit ->
             assertTrue(kit.localFingerprint != null, "the fixture must not take the legacy path")
             val impl = assertIs<P2pKitImpl>(kit)
             val failure = assertFailsWith<IllegalStateException> {
                 impl.forceSessionStoreInvariantViolationForTest(KitStubSession(syntheticPeer("peer-a", "A")))
             }
             assertTrue(failure.message.orEmpty().contains("INVARIANT"))
-        } finally {
-            kit.stop()
         }
     }
 
@@ -101,12 +105,16 @@ class KitStrictInvariantsTest {
 
     @Test
     fun strictTestKitThrowsOnForcedStoreInconsistency() = runBlocking {
-        val kit = createTestKit {
-            appId = AppId("com.example.test")
-            deviceName = "StrictKit"
-            transports { register(KitFactoryFor(FakeDataTransport())) }
-        }
-        try {
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("com.example.test")
+                    deviceName = "StrictKit"
+                    transports { register(KitFactoryFor(FakeDataTransport())) }
+                }
+            }
+        ) { kit ->
             val impl = assertIs<P2pKitImpl>(kit)
             val failure = assertFailsWith<IllegalStateException> {
                 impl.forceSessionStoreInvariantViolationForTest(
@@ -118,22 +126,36 @@ class KitStrictInvariantsTest {
                 message.contains("INVARIANT"),
                 "strict-mode failure should identify itself as an invariant violation, was: $message"
             )
-        } finally {
-            kit.stop()
         }
     }
 
     @Test
     fun explicitLegacyKitKeepsProductionWarnOnlyInvariantDisposition() = runBlocking {
-        val logger = RecordingLogger()
-        val kit = P2pKit.create {
-            appId = AppId("com.example.test")
-            deviceName = "DefaultKit"
-            this.logger = logger
-            security { mode = SecurityMode.NoneForMvp }
-            transports { register(KitFactoryFor(FakeDataTransport())) }
-        }
-        try {
+        lateinit var logger: RecordingLogger
+        withTestKit(
+            create = { recorder ->
+                logger = recorder
+                P2pKit.create {
+                    appId = AppId("com.example.test")
+                    deviceName = "DefaultKit"
+                    this.logger = recorder
+                    security { mode = SecurityMode.NoneForMvp }
+                    transports { register(KitFactoryFor(FakeDataTransport())) }
+                }
+            },
+            verifyDiagnostics = { recorder ->
+                // This one deliberate production-warn-only test forces exactly I-store-membership once.
+                val expected = RecordingLogger.Entry(
+                    RecordingLogger.Level.WARN,
+                    "SessionStore[forceInvariantViolationForTest] INVARIANT: " +
+                        "active byPeer entry missing from published sessions list. byPeer.size=1 visible.size=0"
+                )
+                val diagnostics = recorder.entries.filter {
+                    it.level == RecordingLogger.Level.WARN || it.level == RecordingLogger.Level.ERROR
+                }
+                assertEquals(listOf(expected), diagnostics)
+            }
+        ) { kit ->
             val impl = assertIs<P2pKitImpl>(kit)
             assertEquals(
                 0,
@@ -152,8 +174,6 @@ class KitStrictInvariantsTest {
                 logger.warnings.count { it.contains("INVARIANT") },
                 "expected exactly one invariant warning, warnings were: ${logger.warnings}"
             )
-        } finally {
-            kit.stop()
         }
     }
 

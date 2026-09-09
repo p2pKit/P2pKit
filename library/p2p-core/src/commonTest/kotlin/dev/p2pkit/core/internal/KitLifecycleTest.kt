@@ -21,6 +21,7 @@ import dev.p2pkit.core.testfixtures.MemorySecureIdentityStorage
 import dev.p2pkit.core.testfixtures.RecordingLogger
 import dev.p2pkit.core.testfixtures.createSecureTestKit
 import dev.p2pkit.core.testfixtures.createTestKit
+import dev.p2pkit.core.testfixtures.withTestKit
 import dev.p2pkit.core.transport.DataTransport
 import dev.p2pkit.core.transport.DiscoveryTransport
 import dev.p2pkit.core.transport.InternalPeer
@@ -36,9 +37,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -46,8 +49,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -81,66 +84,75 @@ class KitLifecycleTest {
     @Test
     fun stopClearsPeerRegistrySnapshots() = runBlocking {
         val transport = TrackingTransport()
-        val kit = createTestKit {
-            appId = AppId("stop-clears-peers-test")
-            deviceName = "Test"
-            transports { register(TrackingFactory(transport)) }
-        }
-        withTimeout(5_000) { transport.awaitPeerCollector() }
-        transport.emitPeer(
-            PeerEvent.Found(
-                InternalPeer(
-                    publicPeer = Peer(
-                        id = PeerId("discovered-before-stop"),
-                        name = "Peer",
-                        platform = Platform.JVM_DESKTOP,
-                        supportedTransports = setOf(TransportKind.LAN)
-                    ),
-                    transportHints = emptyList()
+        withTestKit(create = { recording ->
+            createTestKit {
+                logger = recording
+                appId = AppId("stop-clears-peers-test")
+                deviceName = "Test"
+                transports { register(TrackingFactory(transport)) }
+            }
+        }) { kit ->
+            withTimeout(5_000) { transport.awaitPeerCollector() }
+            transport.emitPeer(
+                PeerEvent.Found(
+                    InternalPeer(
+                        publicPeer = Peer(
+                            id = PeerId("discovered-before-stop"),
+                            name = "Peer",
+                            platform = Platform.JVM_DESKTOP,
+                            supportedTransports = setOf(TransportKind.LAN)
+                        ),
+                        transportHints = emptyList()
+                    )
                 )
             )
-        )
-        assertEquals(1, withTimeout(5_000) { kit.peers.first { it.size == 1 } }.size)
+            assertEquals(1, withTimeout(5_000) { kit.peers.first { it.size == 1 } }.size)
 
-        kit.stop()
+            kit.stop()
 
-        assertTrue(kit.peers.value.isEmpty())
-        assertEquals(null, kit.lastSeen(PeerId("discovered-before-stop")))
+            assertTrue(kit.peers.value.isEmpty())
+            assertEquals(null, kit.lastSeen(PeerId("discovered-before-stop")))
+        }
     }
 
     @Test
     fun stopClosesDataTransportAndStopsDiscoveryAdvertising() {
         runBlocking {
             val transport = TrackingTransport()
-            val kit = createTestKit {
-                appId = AppId("lifecycle-test")
-                deviceName = "Test"
-                transports { register(TrackingFactory(transport)) }
+            withTestKit(create = { recording ->
+                createTestKit {
+                    logger = recording
+                    appId = AppId("lifecycle-test")
+                    deviceName = "Test"
+                    transports { register(TrackingFactory(transport)) }
+                }
+            }) { kit ->
+                kit.startAdvertising()
+                kit.startDiscovery()
+                assertTrue(transport.advertisingStarted, "startAdvertising never propagated to transport")
+                assertTrue(transport.discoveryStarted, "startDiscovery never propagated to transport")
+
+                kit.stop()
+
+                assertEquals(P2pState.Stopped, kit.state.value)
+                assertTrue(transport.dataClosed, "DataTransport.close() should have been called")
+                assertTrue(transport.advertisingStopped, "stopAdvertising should have been called")
+                assertTrue(transport.discoveryStopped, "stopDiscovery should have been called")
             }
-
-            kit.startAdvertising()
-            kit.startDiscovery()
-            assertTrue(transport.advertisingStarted, "startAdvertising never propagated to transport")
-            assertTrue(transport.discoveryStarted, "startDiscovery never propagated to transport")
-
-            kit.stop()
-
-            assertEquals(P2pState.Stopped, kit.state.value)
-            assertTrue(transport.dataClosed, "DataTransport.close() should have been called")
-            assertTrue(transport.advertisingStopped, "stopAdvertising should have been called")
-            assertTrue(transport.discoveryStopped, "stopDiscovery should have been called")
         }
     }
 
     @Test
     fun defaultBackgroundPolicyStopsBothRequestedFeatures() = runBlocking {
         val transport = TrackingTransport()
-        val kit = createTestKit {
-            appId = AppId("background-feature-stop-test")
-            deviceName = "Test"
-            transports { register(TrackingFactory(transport)) }
-        }
-        try {
+        withTestKit(create = { recording ->
+            createTestKit {
+                logger = recording
+                appId = AppId("background-feature-stop-test")
+                deviceName = "Test"
+                transports { register(TrackingFactory(transport)) }
+            }
+        }) { kit ->
             kit.startAdvertising()
             kit.startDiscovery()
             assertEquals(FeatureState.Active, kit.advertisingState.value)
@@ -166,8 +178,6 @@ class KitLifecycleTest {
             kit.startDiscovery()
             assertEquals(FeatureState.Active, kit.advertisingState.value)
             assertEquals(FeatureState.Active, kit.discoveryState.value)
-        } finally {
-            kit.stop()
         }
     }
 
@@ -188,50 +198,61 @@ class KitLifecycleTest {
             stopAdvertisingFailure = providerFailure
         }
         val healthy = RollbackDiscoveryTransport(TransportKind.BLE)
-        val recording = RecordingLogger()
+        lateinit var recording: RecordingLogger
+        var expectedWarnings = emptyList<RecordingLogger.Entry>()
         val store = MemorySecureIdentityStorage()
-        val kit = P2pKit.create {
-            appId = AppId("background-stop-failure-channel")
-            deviceName = "Test"
-            secureIdentityStorage = store
-            strictSessionInvariants = true
-            security { mode = SecurityMode.AuthenticatedV2(PeerAuthorizationPolicy.RejectUnknown) }
-            logger = recording
-            transports {
-                register(RollbackDiscoveryFactory(failing))
-                register(RollbackDiscoveryFactory(healthy))
-            }
-        }
         try {
-            kit.startAdvertising()
-            kit.startDiscovery()
-            kit.notifyAppBackgrounded()
-            val failed = withTimeout(5_000) {
-                assertIs<FeatureState.Failed>(kit.advertisingState.first { it is FeatureState.Failed })
+            withTestKit(
+                create = { recorder ->
+                    recording = recorder
+                    P2pKit.create {
+                        appId = AppId("background-stop-failure-channel")
+                        deviceName = "Test"
+                        secureIdentityStorage = store
+                        strictSessionInvariants = true
+                        security { mode = SecurityMode.AuthenticatedV2(PeerAuthorizationPolicy.RejectUnknown) }
+                        logger = recorder
+                        transports {
+                            register(RollbackDiscoveryFactory(failing))
+                            register(RollbackDiscoveryFactory(healthy))
+                        }
+                    }
+                },
+                verifyDiagnostics = { recorder -> assertLifecycleDiagnostics(recorder, expectedWarnings) }
+            ) { kit ->
+                try {
+                    kit.startAdvertising()
+                    kit.startDiscovery()
+                    kit.notifyAppBackgrounded()
+                    val failed = withTimeout(5_000) {
+                        assertIs<FeatureState.Failed>(kit.advertisingState.first { it is FeatureState.Failed })
+                    }
+                    withTimeout(5_000) { kit.discoveryState.first { it == FeatureState.Idle } }
+                    val error = assertIs<P2pError.ConnectionFailed>(failed.error)
+                    expectedWarnings = listOf(
+                        lifecycleWarning("stop advertising failed for LAN discovery transport", providerFailure),
+                        lifecycleWarning("Background advertising stop failed", error)
+                    )
+                    val aggregate = assertIs<CleanupAggregateException>(error.cause)
+                    assertSame(providerFailure, aggregate.issues.single().cause)
+                    assertEquals(1, failing.stopAdvertisingCalls)
+                    assertEquals(1, healthy.stopAdvertisingCalls)
+                    assertEquals(1, failing.stopDiscoveryCalls)
+                    assertEquals(1, healthy.stopDiscoveryCalls)
+                    assertTrue(failing.advertisingActive, "failed cleanup must not be presented as settled")
+                    assertFalse(healthy.advertisingActive)
+                    assertFalse(failing.discoveryActive)
+                    assertFalse(healthy.discoveryActive)
+                    assertEquals(P2pState.Running, kit.state.value)
+                    val warning = recording.entries.single { it.message == "Background advertising stop failed" }
+                    assertEquals(RecordingLogger.Level.WARN, warning.level)
+                    assertSame(error, warning.throwable, "the logger and feature flow must describe the same failure")
+                } finally {
+                    failing.stopAdvertisingFailure = null
+                }
             }
-            withTimeout(5_000) { kit.discoveryState.first { it == FeatureState.Idle } }
-            val error = assertIs<P2pError.ConnectionFailed>(failed.error)
-            val aggregate = assertIs<CleanupAggregateException>(error.cause)
-            assertSame(providerFailure, aggregate.issues.single().cause)
-            assertEquals(1, failing.stopAdvertisingCalls)
-            assertEquals(1, healthy.stopAdvertisingCalls)
-            assertEquals(1, failing.stopDiscoveryCalls)
-            assertEquals(1, healthy.stopDiscoveryCalls)
-            assertTrue(failing.advertisingActive, "failed cleanup must not be presented as settled")
-            assertFalse(healthy.advertisingActive)
-            assertFalse(failing.discoveryActive)
-            assertFalse(healthy.discoveryActive)
-            assertEquals(P2pState.Running, kit.state.value)
-            val warning = recording.entries.single { it.message == "Background advertising stop failed" }
-            assertEquals(RecordingLogger.Level.WARN, warning.level)
-            assertSame(error, warning.throwable, "the logger and feature flow must describe the same failure")
         } finally {
-            failing.stopAdvertisingFailure = null
-            try {
-                kit.stop()
-            } finally {
-                store.clear()
-            }
+            store.clear()
         }
     }
 
@@ -239,32 +260,40 @@ class KitLifecycleTest {
     fun freshKitAfterStopIsIndependent() {
         runBlocking {
             val first = TrackingTransport()
-            val k1 = createTestKit {
-                appId = AppId("indep-test")
-                deviceName = "First"
-                transports { register(TrackingFactory(first)) }
+            withTestKit(create = { recording ->
+                createTestKit {
+                    logger = recording
+                    appId = AppId("indep-test")
+                    deviceName = "First"
+                    transports { register(TrackingFactory(first)) }
+                }
+            }) { k1 ->
+                k1.startAdvertising()
+                k1.stop()
+                assertTrue(first.dataClosed)
             }
-            k1.startAdvertising()
-            k1.stop()
-            assertTrue(first.dataClosed)
 
             // After stopping the first kit, a brand-new kit with a separate
             // transport should not see any state leak from the first.
             val second = TrackingTransport()
-            val k2 = createTestKit {
-                appId = AppId("indep-test")
-                deviceName = "Second"
-                transports { register(TrackingFactory(second)) }
+            withTestKit(create = { recording ->
+                createTestKit {
+                    logger = recording
+                    appId = AppId("indep-test")
+                    deviceName = "Second"
+                    transports { register(TrackingFactory(second)) }
+                }
+            }) { k2 ->
+                assertFalse(second.dataClosed, "Fresh transport should not be closed before any start")
+                assertFalse(second.advertisingStarted, "Fresh transport should not have any advertising history")
+
+                k2.startAdvertising()
+                assertTrue(second.advertisingStarted)
+                assertFalse(second.dataClosed)
+
+                k2.stop()
+                assertTrue(second.dataClosed)
             }
-            assertFalse(second.dataClosed, "Fresh transport should not be closed before any start")
-            assertFalse(second.advertisingStarted, "Fresh transport should not have any advertising history")
-
-            k2.startAdvertising()
-            assertTrue(second.advertisingStarted)
-            assertFalse(second.dataClosed)
-
-            k2.stop()
-            assertTrue(second.dataClosed)
         }
     }
 
@@ -280,37 +309,62 @@ class KitLifecycleTest {
     fun stopCompletesWhenATransportStartHangs() {
         runBlocking {
             val transport = HungStartTransport()
-            val kit = createTestKit {
-                appId = AppId("stop-hang-test")
-                deviceName = "Test"
-                transports { register(HungStartFactory(transport)) }
-            }
+            var expectedStopFailure: P2pError.ConnectionFailed? = null
+            var expectedWarnings = emptyList<RecordingLogger.Entry>()
+            // Preserve the deliberately cached failure; the scope must not hide a net failure in it.
+            val repeatedStopFailure = assertFailsWith<P2pError.ConnectionFailed> {
+                withTestKit(
+                    create = { recorder ->
+                        createTestKit {
+                            logger = recorder
+                            appId = AppId("stop-hang-test")
+                            deviceName = "Test"
+                            transports { register(HungStartFactory(transport)) }
+                        }
+                    },
+                    verifyDiagnostics = { recorder -> assertLifecycleDiagnostics(recorder, expectedWarnings) }
+                ) { kit ->
+                    // Park ensureStarted inside transport.start() while it holds the
+                    // start mutex. start() is expected to fail once stop() tears the
+                    // kit down (the post-bind stopped re-check throws); swallow it —
+                    // this coroutine exists only to keep the mutex held.
+                    val starter = launch { runCatching { kit.start() } }
+                    try {
+                        transport.startEntered.await()
 
-            // Park ensureStarted inside transport.start() while it holds the
-            // start mutex. start() is expected to fail once stop() tears the
-            // kit down (the post-bind stopped re-check throws); swallow it —
-            // this coroutine exists only to keep the mutex held.
-            val starter = launch { runCatching { kit.start() } }
-            transport.startEntered.await()
+                        // Pre-fix, stop() parked forever on the held mutex and this
+                        // outer bound (3x the 5 s mutex-acquisition bound) fired.
+                        val stopFailure = assertFailsWith<P2pError.ConnectionFailed> {
+                            withTimeout(15_000) { kit.stop() }
+                        }
+                        expectedStopFailure = stopFailure
+                        expectedWarnings = startupStopDiagnostics(stopFailure, observerTimeout = false)
+                        assertEquals(P2pState.Stopped, kit.state.value)
+                        assertTrue(
+                            transport.dataClosed,
+                            "lock-less teardown must still close the data transport"
+                        )
 
-            // Pre-fix, stop() parked forever on the held mutex and this
-            // outer bound (3x the 5 s mutex-acquisition bound) fired.
-            assertFailsWith<P2pError.ConnectionFailed> {
-                withTimeout(15_000) { kit.stop() }
+                        // Release the hung start(): the late ensureStarted resumes, must
+                        // see `stopped` after its bind loop, and must NOT latch Running.
+                        transport.releaseStart.complete(Unit)
+                        withTimeout(15_000) { starter.join() }
+                        assertEquals(
+                            P2pState.Stopped, kit.state.value,
+                            "a late ensureStarted must not overwrite Stopped with Running/Failed"
+                        )
+                    } finally {
+                        withContext(NonCancellable) {
+                            transport.releaseStart.complete(Unit)
+                            starter.cancelAndJoin()
+                        }
+                    }
+                }
             }
-            assertEquals(P2pState.Stopped, kit.state.value)
+            assertSame(expectedStopFailure, repeatedStopFailure)
             assertTrue(
-                transport.dataClosed,
-                "lock-less teardown must still close the data transport"
-            )
-
-            // Release the hung start(): the late ensureStarted resumes, must
-            // see `stopped` after its bind loop, and must NOT latch Running.
-            transport.releaseStart.complete(Unit)
-            withTimeout(15_000) { starter.join() }
-            assertEquals(
-                P2pState.Stopped, kit.state.value,
-                "a late ensureStarted must not overwrite Stopped with Running/Failed"
+                repeatedStopFailure.suppressedExceptions.isEmpty(),
+                "expected cached stop failure must not conceal teardown/net failures"
             )
         }
     }
@@ -324,26 +378,38 @@ class KitLifecycleTest {
     fun startDrivesIdleThroughStartingToRunning() {
         runBlocking {
             val transport = HungStartTransport()
-            val kit = createTestKit {
-                appId = AppId("state-machine-test")
-                deviceName = "Test"
-                transports { register(HungStartFactory(transport)) }
+            withTestKit(
+                create = { recorder ->
+                    createTestKit {
+                        logger = recorder
+                        appId = AppId("state-machine-test")
+                        deviceName = "Test"
+                        transports { register(HungStartFactory(transport)) }
+                    }
+                }
+            ) { kit ->
+                assertEquals(P2pState.Idle, kit.state.value, "a fresh kit must report Idle")
+
+                val starter = launch { kit.start() }
+                try {
+                    transport.startEntered.await()
+                    assertEquals(
+                        P2pState.Starting, kit.state.value,
+                        "state must report Starting while the bind loop is in flight"
+                    )
+
+                    transport.releaseStart.complete(Unit)
+                    withTimeout(15_000) { starter.join() }
+                    assertEquals(P2pState.Running, kit.state.value, "successful start must reach Running")
+
+                    kit.stop()
+                } finally {
+                    withContext(NonCancellable) {
+                        transport.releaseStart.complete(Unit)
+                        starter.cancelAndJoin()
+                    }
+                }
             }
-
-            assertEquals(P2pState.Idle, kit.state.value, "a fresh kit must report Idle")
-
-            val starter = launch { kit.start() }
-            transport.startEntered.await()
-            assertEquals(
-                P2pState.Starting, kit.state.value,
-                "state must report Starting while the bind loop is in flight"
-            )
-
-            transport.releaseStart.complete(Unit)
-            withTimeout(15_000) { starter.join() }
-            assertEquals(P2pState.Running, kit.state.value, "successful start must reach Running")
-
-            kit.stop()
         }
     }
 
@@ -360,34 +426,39 @@ class KitLifecycleTest {
             val transport = FakeDataTransport()
             val bindRefusal = IllegalStateException("simulated OS bind refusal")
             transport.startFailure = bindRefusal
-            val kit = createTestKit {
-                appId = AppId("bind-failure-test")
-                deviceName = "Test"
-                transports { register(DataOnlyFactory(transport)) }
+            withTestKit(
+                create = { recorder ->
+                    createTestKit {
+                        logger = recorder
+                        appId = AppId("bind-failure-test")
+                        deviceName = "Test"
+                        transports { register(DataOnlyFactory(transport)) }
+                    }
+                }
+            ) { kit ->
+                val thrown = assertFailsWith<P2pError.TransportStartFailed> { kit.start() }
+                assertEquals(TransportKind.LAN, thrown.transportKind)
+                assertSame(bindRefusal, thrown.underlying, "the OS-level cause must be preserved")
+                val failed = kit.state.value
+                assertIs<P2pState.Failed>(failed, "bind failure must publish P2pState.Failed")
+                assertSame(thrown, failed.error, "Failed must carry the thrown error instance")
+                assertEquals(
+                    1,
+                    transport.stopCalls,
+                    "even the failing transport may have acquired resources and must be rolled back"
+                )
+
+                // A failed start must not latch: the retry re-runs the bind.
+                transport.startFailure = null
+                withTimeout(15_000) { kit.start() }
+                assertEquals(P2pState.Running, kit.state.value, "retried start must reach Running")
+                assertEquals(
+                    2, transport.startCalls,
+                    "the retry must re-run transport.start(), not fast-path a latched failure"
+                )
+
+                kit.stop()
             }
-
-            val thrown = assertFailsWith<P2pError.TransportStartFailed> { kit.start() }
-            assertEquals(TransportKind.LAN, thrown.transportKind)
-            assertSame(bindRefusal, thrown.underlying, "the OS-level cause must be preserved")
-            val failed = kit.state.value
-            assertIs<P2pState.Failed>(failed, "bind failure must publish P2pState.Failed")
-            assertSame(thrown, failed.error, "Failed must carry the thrown error instance")
-            assertEquals(
-                1,
-                transport.stopCalls,
-                "even the failing transport may have acquired resources and must be rolled back"
-            )
-
-            // A failed start must not latch: the retry re-runs the bind.
-            transport.startFailure = null
-            withTimeout(15_000) { kit.start() }
-            assertEquals(P2pState.Running, kit.state.value, "retried start must reach Running")
-            assertEquals(
-                2, transport.startCalls,
-                "the retry must re-run transport.start(), not fast-path a latched failure"
-            )
-
-            kit.stop()
         }
     }
 
@@ -396,55 +467,63 @@ class KitLifecycleTest {
         val transport = FakeDataTransport().also {
             it.startFailure = IllegalStateException("lazy bind failed")
         }
-        val kit = createTestKit {
-            appId = AppId("lazy-connect-start-failure")
-            deviceName = "Test"
-            transports { register(DataOnlyFactory(transport)) }
-        }
-        val peer = Peer(
-            id = PeerId("remote-peer"),
-            name = "Remote",
-            platform = Platform.JVM_DESKTOP,
-            supportedTransports = setOf(TransportKind.LAN)
-        )
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("lazy-connect-start-failure")
+                    deviceName = "Test"
+                    transports { register(DataOnlyFactory(transport)) }
+                }
+            }
+        ) { kit ->
+            val peer = Peer(
+                id = PeerId("remote-peer"),
+                name = "Remote",
+                platform = Platform.JVM_DESKTOP,
+                supportedTransports = setOf(TransportKind.LAN)
+            )
 
-        try {
             val failure = assertFailsWith<P2pError.TransportStartFailed> {
                 kit.connect(peer)
             }
             assertEquals(TransportKind.LAN, failure.transportKind)
             assertTrue(transport.connectCalls.isEmpty())
             assertIs<P2pState.Failed>(kit.state.value)
-        } finally {
-            kit.stop()
         }
     }
 
     @Test
     fun terminalKitRejectsFeatureWorkWhileKitStopRemainsIdempotent() = runBlocking<Unit> {
         val transport = TrackingTransport()
-        val kit = createTestKit {
-            appId = AppId("terminal-public-contract")
-            deviceName = "Test"
-            transports { register(TrackingFactory(transport)) }
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("terminal-public-contract")
+                    deviceName = "Test"
+                    transports { register(TrackingFactory(transport)) }
+                }
+            }
+        ) { kit ->
+            val peer = Peer(
+                id = PeerId("remote-peer"),
+                name = "Remote",
+                platform = Platform.JVM_DESKTOP,
+                supportedTransports = setOf(TransportKind.LAN)
+            )
+
+            kit.stop()
+
+            kit.stop()
+            assertEquals(P2pState.Stopped, kit.state.value)
+            assertFailsWith<IllegalStateException> { kit.start() }
+            assertFailsWith<IllegalStateException> { kit.startAdvertising() }
+            assertFailsWith<IllegalStateException> { kit.startDiscovery() }
+            assertFailsWith<IllegalStateException> { kit.stopAdvertising() }
+            assertFailsWith<IllegalStateException> { kit.stopDiscovery() }
+            assertFailsWith<IllegalStateException> { kit.connect(peer) }
         }
-        val peer = Peer(
-            id = PeerId("remote-peer"),
-            name = "Remote",
-            platform = Platform.JVM_DESKTOP,
-            supportedTransports = setOf(TransportKind.LAN)
-        )
-
-        kit.stop()
-
-        kit.stop()
-        assertEquals(P2pState.Stopped, kit.state.value)
-        assertFailsWith<IllegalStateException> { kit.start() }
-        assertFailsWith<IllegalStateException> { kit.startAdvertising() }
-        assertFailsWith<IllegalStateException> { kit.startDiscovery() }
-        assertFailsWith<IllegalStateException> { kit.stopAdvertising() }
-        assertFailsWith<IllegalStateException> { kit.stopDiscovery() }
-        assertFailsWith<IllegalStateException> { kit.connect(peer) }
     }
 
     @Test
@@ -454,41 +533,46 @@ class KitLifecycleTest {
         val second = StartupProbeTransport(TransportKind.BLE, "second", calls).also {
             it.startFailure = IllegalStateException("second bind failed after acquisition")
         }
-        val kit = createTestKit {
-            appId = AppId("data-start-rollback-test")
-            deviceName = "Test"
-            transports {
-                register(DataOnlyFactory(first))
-                register(DataOnlyFactory(second))
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("data-start-rollback-test")
+                    deviceName = "Test"
+                    transports {
+                        register(DataOnlyFactory(first))
+                        register(DataOnlyFactory(second))
+                    }
+                }
             }
+        ) { kit ->
+            assertFailsWith<P2pError.TransportStartFailed> { kit.start() }
+            assertEquals(
+                listOf("start:first", "start:second", "stop:second", "stop:first"),
+                calls,
+                "rollback must include the failing transport and run in reverse entry order"
+            )
+            assertFalse(first.active)
+            assertFalse(second.active)
+            assertFalse(first.closed)
+            assertFalse(second.closed)
+
+            second.startFailure = null
+            kit.start()
+            assertEquals(
+                listOf(
+                    "start:first", "start:second", "stop:second", "stop:first",
+                    "start:first", "start:second"
+                ),
+                calls
+            )
+            assertTrue(first.active)
+            assertTrue(second.active)
+
+            kit.stop()
+            assertTrue(first.closed)
+            assertTrue(second.closed)
         }
-
-        assertFailsWith<P2pError.TransportStartFailed> { kit.start() }
-        assertEquals(
-            listOf("start:first", "start:second", "stop:second", "stop:first"),
-            calls,
-            "rollback must include the failing transport and run in reverse entry order"
-        )
-        assertFalse(first.active)
-        assertFalse(second.active)
-        assertFalse(first.closed)
-        assertFalse(second.closed)
-
-        second.startFailure = null
-        kit.start()
-        assertEquals(
-            listOf(
-                "start:first", "start:second", "stop:second", "stop:first",
-                "start:first", "start:second"
-            ),
-            calls
-        )
-        assertTrue(first.active)
-        assertTrue(second.active)
-
-        kit.stop()
-        assertTrue(first.closed)
-        assertTrue(second.closed)
     }
 
     @Test
@@ -503,36 +587,47 @@ class KitLifecycleTest {
             it.startFailure = bindFailure
         }
         val store = MemorySecureIdentityStorage()
-        val kit = createSecureTestKit(
-            appId = AppId("data-rollback-attribution"),
-            name = "Test",
-            store = store,
-            transport = first,
-            authorization = PeerAuthorizationPolicy.RejectUnknown
-        ) {
-            transports { register(DataOnlyFactory(second)) }
-        }
         try {
-            val failure = assertFailsWith<P2pError.TransportStartFailed> { kit.start() }
-            assertEquals(TransportKind.BLE, failure.transportKind)
-            assertSame(failure, assertIs<P2pState.Failed>(kit.state.value).error)
-            val aggregate = assertIs<CleanupAggregateException>(failure.cause)
-            assertEquals("failed data startup", aggregate.operation)
-            assertSame(cleanupFailure, aggregate.issues.single().cause)
-            val original = assertIs<P2pError.TransportStartFailed>(failure.suppressedExceptions.single())
-            assertEquals(TransportKind.BLE, original.transportKind)
-            assertSame(bindFailure, original.cause)
-            assertEquals(listOf("start:first", "start:second", "stop:second", "stop:first"), calls)
+            withTestKit(
+                create = { recorder ->
+                    createSecureTestKit(
+                        appId = AppId("data-rollback-attribution"),
+                        name = "Test",
+                        store = store,
+                        transport = first,
+                        authorization = PeerAuthorizationPolicy.RejectUnknown
+                    ) {
+                        logger = recorder
+                        transports { register(DataOnlyFactory(second)) }
+                    }
+                },
+                verifyDiagnostics = { recorder ->
+                    assertLifecycleDiagnostics(recorder, listOf(lifecycleWarning(
+                        "Late lifecycle cleanup failed for LAN data startup",
+                        cleanupFailure
+                    )))
+                }
+            ) { kit ->
+                try {
+                    val failure = assertFailsWith<P2pError.TransportStartFailed> { kit.start() }
+                    assertEquals(TransportKind.BLE, failure.transportKind)
+                    assertSame(failure, assertIs<P2pState.Failed>(kit.state.value).error)
+                    val aggregate = assertIs<CleanupAggregateException>(failure.cause)
+                    assertEquals("failed data startup", aggregate.operation)
+                    assertSame(cleanupFailure, aggregate.issues.single().cause)
+                    val original = assertIs<P2pError.TransportStartFailed>(failure.suppressedExceptions.single())
+                    assertEquals(TransportKind.BLE, original.transportKind)
+                    assertSame(bindFailure, original.cause)
+                    assertEquals(listOf("start:first", "start:second", "stop:second", "stop:first"), calls)
 
-            assertSame(failure, assertFailsWith<P2pError.TransportStartFailed> { kit.start() })
-            assertEquals(4, calls.size, "a blocked retry must not re-enter any transport")
-        } finally {
-            first.stopFailure = null
-            try {
-                kit.stop()
-            } finally {
-                store.clear()
+                    assertSame(failure, assertFailsWith<P2pError.TransportStartFailed> { kit.start() })
+                    assertEquals(4, calls.size, "a blocked retry must not re-enter any transport")
+                } finally {
+                    first.stopFailure = null
+                }
             }
+        } finally {
+            store.clear()
         }
         assertTrue(first.closed)
         assertTrue(second.closed)
@@ -543,48 +638,63 @@ class KitLifecycleTest {
     fun advertisingFailureIsIndependentAndRetryReachesActive() {
         runBlocking {
             val transport = TrackingTransport()
-            val kit = createTestKit {
-                appId = AppId("readvertise-test")
-                deviceName = "Test"
-                transports { register(TrackingFactory(transport)) }
+            withTestKit(
+                create = { recorder ->
+                    createTestKit {
+                        logger = recorder
+                        appId = AppId("readvertise-test")
+                        deviceName = "Test"
+                        transports { register(TrackingFactory(transport)) }
+                    }
+                }
+            ) { kit ->
+                kit.start()
+                assertEquals(P2pState.Running, kit.state.value)
+
+                transport.advertiseFailure = RuntimeException("simulated mDNS registration refusal")
+                val thrown = assertFailsWith<P2pError.ConnectionFailed> { kit.startAdvertising() }
+                val failed = assertIs<FeatureState.Failed>(
+                    kit.advertisingState.value,
+                    "advertising must retain its own failure"
+                )
+                assertSame(thrown, failed.error)
+                assertEquals(P2pState.Running, kit.state.value)
+                assertEquals(FeatureState.Idle, kit.discoveryState.value)
+
+                kit.startDiscovery()
+                assertEquals(FeatureState.Active, kit.discoveryState.value)
+                assertIs<FeatureState.Failed>(kit.advertisingState.value)
+
+                transport.advertiseFailure = null
+                kit.startAdvertising()
+                assertEquals(FeatureState.Active, kit.advertisingState.value)
+                assertEquals(FeatureState.Active, kit.discoveryState.value)
+                assertEquals(P2pState.Running, kit.state.value)
+
+                kit.stop()
             }
-
-            kit.start()
-            assertEquals(P2pState.Running, kit.state.value)
-
-            transport.advertiseFailure = RuntimeException("simulated mDNS registration refusal")
-            val thrown = assertFailsWith<P2pError.ConnectionFailed> { kit.startAdvertising() }
-            val failed = assertIs<FeatureState.Failed>(
-                kit.advertisingState.value,
-                "advertising must retain its own failure"
-            )
-            assertSame(thrown, failed.error)
-            assertEquals(P2pState.Running, kit.state.value)
-            assertEquals(FeatureState.Idle, kit.discoveryState.value)
-
-            kit.startDiscovery()
-            assertEquals(FeatureState.Active, kit.discoveryState.value)
-            assertIs<FeatureState.Failed>(kit.advertisingState.value)
-
-            transport.advertiseFailure = null
-            kit.startAdvertising()
-            assertEquals(FeatureState.Active, kit.advertisingState.value)
-            assertEquals(FeatureState.Active, kit.discoveryState.value)
-            assertEquals(P2pState.Running, kit.state.value)
-
-            kit.stop()
         }
     }
 
     @Test
     fun cancellationDuringFeatureRetryCleanupDoesNotStrandStarting() = runBlocking {
         val transport = RetryCleanupCancellationTransport()
-        val kit = createTestKit {
-            appId = AppId("cancel-feature-retry-cleanup-test")
-            deviceName = "Test"
-            transports { register(RetryCleanupCancellationFactory(transport)) }
-        }
-        try {
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("cancel-feature-retry-cleanup-test")
+                    deviceName = "Test"
+                    transports { register(RetryCleanupCancellationFactory(transport)) }
+                }
+            },
+            verifyDiagnostics = { recorder ->
+                assertLifecycleDiagnostics(recorder, listOf(lifecycleWarning(
+                    "Late lifecycle cleanup failed for LAN advertising",
+                    transport.firstRollbackFailure
+                )))
+            }
+        ) { kit ->
             assertFailsWith<P2pError.ConnectionFailed> { kit.startAdvertising() }
             assertIs<FeatureState.Failed>(kit.advertisingState.value)
             assertEquals(1, transport.startAdvertisingCalls)
@@ -599,86 +709,106 @@ class KitLifecycleTest {
                     throw failure
                 }
             }
-            transport.retryCleanupEntered.await()
-            retry.cancelAndJoin()
+            try {
+                transport.retryCleanupEntered.await()
+                retry.cancelAndJoin()
 
-            assertIs<CancellationException>(thrown)
-            assertEquals(
-                FeatureState.Idle,
-                kit.advertisingState.value,
-                "cancelled retry cleanup must settle the feature transaction"
-            )
-            assertEquals(3, transport.stopAdvertisingCalls)
-            assertFalse(transport.advertisingActive)
+                assertIs<CancellationException>(thrown)
+                assertEquals(
+                    FeatureState.Idle,
+                    kit.advertisingState.value,
+                    "cancelled retry cleanup must settle the feature transaction"
+                )
+                assertEquals(3, transport.stopAdvertisingCalls)
+                assertFalse(transport.advertisingActive)
 
-            kit.startAdvertising()
-            assertEquals(FeatureState.Active, kit.advertisingState.value)
-            assertEquals(2, transport.startAdvertisingCalls)
-        } finally {
-            kit.stop()
+                kit.startAdvertising()
+                assertEquals(FeatureState.Active, kit.advertisingState.value)
+                assertEquals(2, transport.startAdvertisingCalls)
+            } finally {
+                withContext(NonCancellable) { retry.cancelAndJoin() }
+            }
         }
     }
 
     @Test
     fun concurrentAdvertisingStartsCoalesceAndActiveStartIsIdempotent() = runBlocking {
         val transport = GatedDiscoveryTransport()
-        val kit = createTestKit {
-            appId = AppId("coalesced-advertising-test")
-            deviceName = "Test"
-            transports { register(GatedDiscoveryFactory(transport)) }
-        }
-        try {
-            val firstStart = launch { kit.startAdvertising() }
-            transport.advertisingEntered.await()
-            assertEquals(FeatureState.Starting, kit.advertisingState.value)
-
-            val secondStart = launch { kit.startAdvertising() }
-            yield()
-            assertEquals(1, transport.startAdvertisingCalls)
-
-            transport.releaseAdvertising.complete(Unit)
-            withTimeout(5_000) {
-                firstStart.join()
-                secondStart.join()
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("coalesced-advertising-test")
+                    deviceName = "Test"
+                    transports { register(GatedDiscoveryFactory(transport)) }
+                }
             }
-            assertEquals(FeatureState.Active, kit.advertisingState.value)
-            assertEquals(1, transport.startAdvertisingCalls)
+        ) { kit ->
+            val firstStart = launch { kit.startAdvertising() }
+            try {
+                transport.advertisingEntered.await()
+                assertEquals(FeatureState.Starting, kit.advertisingState.value)
 
-            kit.startAdvertising()
-            assertEquals(1, transport.startAdvertisingCalls)
-        } finally {
-            kit.stop()
+                val secondStart = launch { kit.startAdvertising() }
+                yield()
+                assertEquals(1, transport.startAdvertisingCalls)
+
+                transport.releaseAdvertising.complete(Unit)
+                withTimeout(5_000) {
+                    firstStart.join()
+                    secondStart.join()
+                }
+                assertEquals(FeatureState.Active, kit.advertisingState.value)
+                assertEquals(1, transport.startAdvertisingCalls)
+
+                kit.startAdvertising()
+                assertEquals(1, transport.startAdvertisingCalls)
+            } finally {
+                withContext(NonCancellable) {
+                    transport.releaseAdvertising.complete(Unit)
+                    firstStart.cancelAndJoin()
+                }
+            }
         }
     }
 
     @Test
     fun stopDuringAdvertisingStartWinsAndRollsBackLateResource() = runBlocking {
         val transport = GatedDiscoveryTransport()
-        val kit = createTestKit {
-            appId = AppId("stop-during-advertising-test")
-            deviceName = "Test"
-            transports { register(GatedDiscoveryFactory(transport)) }
-        }
-        try {
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("stop-during-advertising-test")
+                    deviceName = "Test"
+                    transports { register(GatedDiscoveryFactory(transport)) }
+                }
+            }
+        ) { kit ->
             val start = launch { kit.startAdvertising() }
-            transport.advertisingEntered.await()
-            assertEquals(FeatureState.Starting, kit.advertisingState.value)
+            try {
+                transport.advertisingEntered.await()
+                assertEquals(FeatureState.Starting, kit.advertisingState.value)
 
-            val stop = launch { kit.stopAdvertising() }
-            withTimeout(5_000) {
-                kit.advertisingState.first { it == FeatureState.Stopping }
-            }
+                val stop = launch { kit.stopAdvertising() }
+                withTimeout(5_000) {
+                    kit.advertisingState.first { it == FeatureState.Stopping }
+                }
 
-            transport.releaseAdvertising.complete(Unit)
-            withTimeout(5_000) {
-                start.join()
-                stop.join()
+                transport.releaseAdvertising.complete(Unit)
+                withTimeout(5_000) {
+                    start.join()
+                    stop.join()
+                }
+                assertEquals(FeatureState.Idle, kit.advertisingState.value)
+                assertEquals(1, transport.startAdvertisingCalls)
+                assertEquals(1, transport.stopAdvertisingCalls)
+            } finally {
+                withContext(NonCancellable) {
+                    transport.releaseAdvertising.complete(Unit)
+                    start.cancelAndJoin()
+                }
             }
-            assertEquals(FeatureState.Idle, kit.advertisingState.value)
-            assertEquals(1, transport.startAdvertisingCalls)
-            assertEquals(1, transport.stopAdvertisingCalls)
-        } finally {
-            kit.stop()
         }
     }
 
@@ -686,79 +816,89 @@ class KitLifecycleTest {
     fun explicitFeatureStopFailsBoundedlyWhenStartupOwnerDoesNotSettle() = runBlocking {
         val transport = GatedDiscoveryTransport()
         val laterTransport = RollbackDiscoveryTransport(TransportKind.BLE)
-        val kit = createTestKit {
-            appId = AppId("bounded-feature-stop-test")
-            deviceName = "Test"
-            featureOperationSettleTimeoutMillisForTest = 50
-            transports {
-                register(GatedDiscoveryFactory(transport))
-                register(RollbackDiscoveryFactory(laterTransport))
-            }
-        }
-        val start = async { runCatching { kit.startAdvertising() } }
-        try {
-            transport.advertisingEntered.await()
-
-            val failure = assertFailsWith<P2pError.ConnectionFailed> {
-                withTimeout(2_000) { kit.stopAdvertising() }
-            }
-            val aggregate = assertIs<CleanupAggregateException>(failure.cause)
-            assertTrue(
-                aggregate.issues.any {
-                    it.deadlineExceeded && it.resource.contains("advertising startup")
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("bounded-feature-stop-test")
+                    deviceName = "Test"
+                    featureOperationSettleTimeoutMillisForTest = 50
+                    transports {
+                        register(GatedDiscoveryFactory(transport))
+                        register(RollbackDiscoveryFactory(laterTransport))
+                    }
                 }
-            )
-            assertEquals(1, transport.stopAdvertisingCalls)
-            assertIs<FeatureState.Failed>(kit.advertisingState.value)
+            }
+        ) { kit ->
+            val start = async { runCatching { kit.startAdvertising() } }
+            try {
+                transport.advertisingEntered.await()
 
-            transport.releaseAdvertising.complete(Unit)
-            assertTrue(start.await().isFailure, "late startup must lose its invalidated token")
-            assertEquals(2, transport.stopAdvertisingCalls, "late completion must roll itself back")
-            assertEquals(
-                0,
-                laterTransport.startAdvertisingCalls,
-                "a stale startup owner must not enter a later transport"
-            )
-        } finally {
-            transport.releaseAdvertising.complete(Unit)
-            start.await()
-            kit.stop()
+                val failure = assertFailsWith<P2pError.ConnectionFailed> {
+                    withTimeout(2_000) { kit.stopAdvertising() }
+                }
+                val aggregate = assertIs<CleanupAggregateException>(failure.cause)
+                assertTrue(
+                    aggregate.issues.any {
+                        it.deadlineExceeded && it.resource.contains("advertising startup")
+                    }
+                )
+                assertEquals(1, transport.stopAdvertisingCalls)
+                assertIs<FeatureState.Failed>(kit.advertisingState.value)
+
+                transport.releaseAdvertising.complete(Unit)
+                assertTrue(start.await().isFailure, "late startup must lose its invalidated token")
+                assertEquals(2, transport.stopAdvertisingCalls, "late completion must roll itself back")
+                assertEquals(
+                    0,
+                    laterTransport.startAdvertisingCalls,
+                    "a stale startup owner must not enter a later transport"
+                )
+            } finally {
+                transport.releaseAdvertising.complete(Unit)
+                start.await()
+            }
         }
     }
 
     @Test
     fun concurrentFeatureStopCallersJoinOneTeardown() = runBlocking {
         val transport = GatedDiscoveryTransport(blockAdvertisingStop = true)
-        val kit = createTestKit {
-            appId = AppId("concurrent-feature-stop-test")
-            deviceName = "Test"
-            featureOperationSettleTimeoutMillisForTest = 50
-            transports { register(GatedDiscoveryFactory(transport)) }
-        }
-        transport.releaseAdvertising.complete(Unit)
-        kit.startAdvertising()
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("concurrent-feature-stop-test")
+                    deviceName = "Test"
+                    featureOperationSettleTimeoutMillisForTest = 50
+                    transports { register(GatedDiscoveryFactory(transport)) }
+                }
+            }
+        ) { kit ->
+            transport.releaseAdvertising.complete(Unit)
+            kit.startAdvertising()
 
-        val first = async { runCatching { kit.stopAdvertising() } }
-        try {
-            transport.stopAdvertisingEntered.await()
-            val second = async { runCatching { kit.stopAdvertising() } }
+            val first = async { runCatching { kit.stopAdvertising() } }
+            try {
+                transport.stopAdvertisingEntered.await()
+                val second = async { runCatching { kit.stopAdvertising() } }
 
-            assertEquals(
-                null,
-                withTimeoutOrNull(100) { second.await() },
-                "a follower feature stop must join rather than start a timed duplicate cleanup"
-            )
-            assertEquals(1, transport.stopAdvertisingCalls)
+                assertEquals(
+                    null,
+                    withTimeoutOrNull(100) { second.await() },
+                    "a follower feature stop must join rather than start a timed duplicate cleanup"
+                )
+                assertEquals(1, transport.stopAdvertisingCalls)
 
-            transport.releaseStopAdvertising.complete(Unit)
-            assertTrue(first.await().isSuccess)
-            assertTrue(second.await().isSuccess)
-            assertEquals(1, transport.stopAdvertisingCalls)
-            assertEquals(FeatureState.Idle, kit.advertisingState.value)
-        } finally {
-            transport.releaseStopAdvertising.complete(Unit)
-            first.await()
-            kit.stop()
+                transport.releaseStopAdvertising.complete(Unit)
+                assertTrue(first.await().isSuccess)
+                assertTrue(second.await().isSuccess)
+                assertEquals(1, transport.stopAdvertisingCalls)
+                assertEquals(FeatureState.Idle, kit.advertisingState.value)
+            } finally {
+                transport.releaseStopAdvertising.complete(Unit)
+                first.await()
+            }
         }
     }
 
@@ -769,15 +909,19 @@ class KitLifecycleTest {
         val second = RollbackDiscoveryTransport(TransportKind.BLE).apply {
             advertisingFailure = failure
         }
-        val kit = createTestKit {
-            appId = AppId("advertising-rollback-test")
-            deviceName = "Test"
-            transports {
-                register(RollbackDiscoveryFactory(first))
-                register(RollbackDiscoveryFactory(second))
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("advertising-rollback-test")
+                    deviceName = "Test"
+                    transports {
+                        register(RollbackDiscoveryFactory(first))
+                        register(RollbackDiscoveryFactory(second))
+                    }
+                }
             }
-        }
-        try {
+        ) { kit ->
             val thrown = assertFailsWith<P2pError.ConnectionFailed> {
                 kit.startAdvertising()
             }
@@ -786,8 +930,6 @@ class KitLifecycleTest {
             assertEquals(1, second.stopAdvertisingCalls)
             assertFalse(first.advertisingActive)
             assertFalse(second.advertisingActive)
-        } finally {
-            kit.stop()
         }
     }
 
@@ -795,15 +937,19 @@ class KitLifecycleTest {
     fun cancelledDiscoveryRollsBackEveryAttemptedTransportAndPreservesCancellation() = runBlocking {
         val first = RollbackDiscoveryTransport(TransportKind.LAN)
         val second = RollbackDiscoveryTransport(TransportKind.BLE, gateDiscovery = true)
-        val kit = createTestKit {
-            appId = AppId("discovery-cancellation-rollback-test")
-            deviceName = "Test"
-            transports {
-                register(RollbackDiscoveryFactory(first))
-                register(RollbackDiscoveryFactory(second))
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("discovery-cancellation-rollback-test")
+                    deviceName = "Test"
+                    transports {
+                        register(RollbackDiscoveryFactory(first))
+                        register(RollbackDiscoveryFactory(second))
+                    }
+                }
             }
-        }
-        try {
+        ) { kit ->
             var thrown: Throwable? = null
             val operation = launch {
                 try {
@@ -813,17 +959,21 @@ class KitLifecycleTest {
                     throw error
                 }
             }
-            second.discoveryEntered.await()
-            operation.cancelAndJoin()
+            try {
+                second.discoveryEntered.await()
+                operation.cancelAndJoin()
 
-            assertIs<CancellationException>(thrown)
-            assertEquals(1, first.stopDiscoveryCalls)
-            assertEquals(1, second.stopDiscoveryCalls)
-            assertFalse(first.discoveryActive)
-            assertFalse(second.discoveryActive)
-            assertEquals(FeatureState.Idle, kit.discoveryState.value)
-        } finally {
-            kit.stop()
+                assertIs<CancellationException>(thrown)
+                assertEquals(1, first.stopDiscoveryCalls)
+                assertEquals(1, second.stopDiscoveryCalls)
+                assertFalse(first.discoveryActive)
+                assertFalse(second.discoveryActive)
+                assertEquals(FeatureState.Idle, kit.discoveryState.value)
+            } finally {
+                withContext(NonCancellable) {
+                    operation.cancelAndJoin()
+                }
+            }
         }
     }
 
@@ -838,59 +988,75 @@ class KitLifecycleTest {
     fun cancellingStartMidBindPropagatesCancellationAndDoesNotLatchFailed() {
         runBlocking {
             val transport = HungStartTransport()
-            val kit = createTestKit {
-                appId = AppId("cancel-start-test")
-                deviceName = "Test"
-                transports { register(HungStartFactory(transport)) }
-            }
-
-            var thrown: Throwable? = null
-            val starter = launch {
+            withTestKit(
+                create = { recorder ->
+                    createTestKit {
+                        logger = recorder
+                        appId = AppId("cancel-start-test")
+                        deviceName = "Test"
+                        transports { register(HungStartFactory(transport)) }
+                    }
+                }
+            ) { kit ->
+                var thrown: Throwable? = null
+                val starter = launch {
+                    try {
+                        kit.start()
+                    } catch (e: Throwable) {
+                        thrown = e
+                        throw e
+                    }
+                }
                 try {
-                    kit.start()
-                } catch (e: Throwable) {
-                    thrown = e
-                    throw e
+                    transport.startEntered.await()
+                    assertEquals(P2pState.Starting, kit.state.value)
+
+                    starter.cancelAndJoin()
+
+                    assertIs<CancellationException>(
+                        thrown,
+                        "cancelling start() must surface the CancellationException, got: $thrown"
+                    )
+                    assertFalse(
+                        thrown is P2pError,
+                        "cancellation must never be wrapped into a typed P2pError"
+                    )
+                    assertEquals(
+                        P2pState.Idle, kit.state.value,
+                        "a cancelled start must roll back to the retryable Idle state"
+                    )
+                    assertEquals(1, transport.stopCalls, "cancelled startup must release partial resources")
+
+                    // The cancelled attempt must not have latched anything: the next
+                    // start() re-runs the bind and succeeds.
+                    transport.releaseStart.complete(Unit)
+                    withTimeout(15_000) { kit.start() }
+                    assertEquals(P2pState.Running, kit.state.value, "start() after a cancelled attempt must succeed")
+
+                    kit.stop()
+                } finally {
+                    withContext(NonCancellable) {
+                        transport.releaseStart.complete(Unit)
+                        starter.cancelAndJoin()
+                    }
                 }
             }
-            transport.startEntered.await()
-            assertEquals(P2pState.Starting, kit.state.value)
-
-            starter.cancelAndJoin()
-
-            assertIs<CancellationException>(
-                thrown,
-                "cancelling start() must surface the CancellationException, got: $thrown"
-            )
-            assertFalse(
-                thrown is P2pError,
-                "cancellation must never be wrapped into a typed P2pError"
-            )
-            assertEquals(
-                P2pState.Idle, kit.state.value,
-                "a cancelled start must roll back to the retryable Idle state"
-            )
-            assertEquals(1, transport.stopCalls, "cancelled startup must release partial resources")
-
-            // The cancelled attempt must not have latched anything: the next
-            // start() re-runs the bind and succeeds.
-            transport.releaseStart.complete(Unit)
-            withTimeout(15_000) { kit.start() }
-            assertEquals(P2pState.Running, kit.state.value, "start() after a cancelled attempt must succeed")
-
-            kit.stop()
         }
     }
 
     @Test
     fun dataTransportThatCancelsThenReturnsCannotPublishRunning() = runBlocking {
         val transport = CancelThenReturnDataTransport()
-        val kit = createTestKit {
-            appId = AppId("cancel-return-data-start-test")
-            deviceName = "Test"
-            transports { register(DataOnlyFactory(transport)) }
-        }
-        try {
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("cancel-return-data-start-test")
+                    deviceName = "Test"
+                    transports { register(DataOnlyFactory(transport)) }
+                }
+            }
+        ) { kit ->
             var thrown: Throwable? = null
             val starter = launch {
                 try {
@@ -900,31 +1066,39 @@ class KitLifecycleTest {
                     throw failure
                 }
             }
-            starter.join()
+            try {
+                starter.join()
 
-            assertIs<CancellationException>(thrown)
-            assertEquals(P2pState.Idle, kit.state.value)
-            assertEquals(1, transport.stopCalls)
-            assertFalse(transport.active)
+                assertIs<CancellationException>(thrown)
+                assertEquals(P2pState.Idle, kit.state.value)
+                assertEquals(1, transport.stopCalls)
+                assertFalse(transport.active)
 
-            kit.start()
-            assertEquals(P2pState.Running, kit.state.value)
-            assertEquals(2, transport.startCalls)
-            assertTrue(transport.active)
-        } finally {
-            kit.stop()
+                kit.start()
+                assertEquals(P2pState.Running, kit.state.value)
+                assertEquals(2, transport.startCalls)
+                assertTrue(transport.active)
+            } finally {
+                withContext(NonCancellable) {
+                    starter.cancelAndJoin()
+                }
+            }
         }
     }
 
     @Test
     fun discoveryTransportThatCancelsThenReturnsCannotPublishActive() = runBlocking {
         val transport = CancelThenReturnDiscoveryTransport()
-        val kit = createTestKit {
-            appId = AppId("cancel-return-discovery-start-test")
-            deviceName = "Test"
-            transports { register(CancelThenReturnDiscoveryFactory(transport)) }
-        }
-        try {
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("cancel-return-discovery-start-test")
+                    deviceName = "Test"
+                    transports { register(CancelThenReturnDiscoveryFactory(transport)) }
+                }
+            }
+        ) { kit ->
             var thrown: Throwable? = null
             val starter = launch {
                 try {
@@ -934,19 +1108,23 @@ class KitLifecycleTest {
                     throw failure
                 }
             }
-            starter.join()
+            try {
+                starter.join()
 
-            assertIs<CancellationException>(thrown)
-            assertEquals(FeatureState.Idle, kit.advertisingState.value)
-            assertEquals(1, transport.stopAdvertisingCalls)
-            assertFalse(transport.advertisingActive)
+                assertIs<CancellationException>(thrown)
+                assertEquals(FeatureState.Idle, kit.advertisingState.value)
+                assertEquals(1, transport.stopAdvertisingCalls)
+                assertFalse(transport.advertisingActive)
 
-            kit.startAdvertising()
-            assertEquals(FeatureState.Active, kit.advertisingState.value)
-            assertEquals(2, transport.startAdvertisingCalls)
-            assertTrue(transport.advertisingActive)
-        } finally {
-            kit.stop()
+                kit.startAdvertising()
+                assertEquals(FeatureState.Active, kit.advertisingState.value)
+                assertEquals(2, transport.startAdvertisingCalls)
+                assertTrue(transport.advertisingActive)
+            } finally {
+                withContext(NonCancellable) {
+                    starter.cancelAndJoin()
+                }
+            }
         }
     }
 
@@ -954,13 +1132,17 @@ class KitLifecycleTest {
     fun pathObserverThatCancelsThenReturnsCannotPublishRunning() = runBlocking {
         val transport = RestartableStartTrackingTransport()
         val observer = CancelThenReturnObserver()
-        val kit = createTestKit {
-            appId = AppId("cancel-return-observer-start-test")
-            deviceName = "Test"
-            lifecycle { networkPathObserver = observer }
-            transports { register(DataOnlyFactory(transport)) }
-        }
-        try {
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("cancel-return-observer-start-test")
+                    deviceName = "Test"
+                    lifecycle { networkPathObserver = observer }
+                    transports { register(DataOnlyFactory(transport)) }
+                }
+            }
+        ) { kit ->
             var thrown: Throwable? = null
             val starter = launch {
                 try {
@@ -970,20 +1152,24 @@ class KitLifecycleTest {
                     throw failure
                 }
             }
-            starter.join()
+            try {
+                starter.join()
 
-            assertIs<CancellationException>(thrown)
-            assertEquals(P2pState.Idle, kit.state.value)
-            assertEquals(1, observer.closeCalls)
-            assertFalse(observer.active)
-            assertEquals(1, transport.stopCalls)
+                assertIs<CancellationException>(thrown)
+                assertEquals(P2pState.Idle, kit.state.value)
+                assertEquals(1, observer.closeCalls)
+                assertFalse(observer.active)
+                assertEquals(1, transport.stopCalls)
 
-            kit.start()
-            assertEquals(P2pState.Running, kit.state.value)
-            assertEquals(2, observer.startCalls)
-            assertTrue(observer.active)
-        } finally {
-            kit.stop()
+                kit.start()
+                assertEquals(P2pState.Running, kit.state.value)
+                assertEquals(2, observer.startCalls)
+                assertTrue(observer.active)
+            } finally {
+                withContext(NonCancellable) {
+                    starter.cancelAndJoin()
+                }
+            }
         }
     }
 
@@ -992,13 +1178,17 @@ class KitLifecycleTest {
         runBlocking {
             val transport = RestartableStartTrackingTransport()
             val observer = FirstStartSuspendsObserver()
-            val kit = createTestKit {
-                appId = AppId("cancel-observer-start-test")
-                deviceName = "Test"
-                lifecycle { networkPathObserver = observer }
-                transports { register(DataOnlyFactory(transport)) }
-            }
-            try {
+            withTestKit(
+                create = { recorder ->
+                    createTestKit {
+                        logger = recorder
+                        appId = AppId("cancel-observer-start-test")
+                        deviceName = "Test"
+                        lifecycle { networkPathObserver = observer }
+                        transports { register(DataOnlyFactory(transport)) }
+                    }
+                }
+            ) { kit ->
                 var thrown: Throwable? = null
                 val starter = launch {
                     try {
@@ -1008,22 +1198,26 @@ class KitLifecycleTest {
                         throw failure
                     }
                 }
-                observer.firstStartEntered.await()
-                assertEquals(P2pState.Starting, kit.state.value)
+                try {
+                    observer.firstStartEntered.await()
+                    assertEquals(P2pState.Starting, kit.state.value)
 
-                starter.cancelAndJoin()
+                    starter.cancelAndJoin()
 
-                assertIs<CancellationException>(thrown)
-                assertEquals(P2pState.Idle, kit.state.value)
-                assertEquals(1, transport.stopCalls)
-                assertEquals(1, observer.closeCalls)
+                    assertIs<CancellationException>(thrown)
+                    assertEquals(P2pState.Idle, kit.state.value)
+                    assertEquals(1, transport.stopCalls)
+                    assertEquals(1, observer.closeCalls)
 
-                kit.start()
-                assertEquals(P2pState.Running, kit.state.value)
-                assertEquals(2, transport.startCalls)
-                assertEquals(2, observer.startCalls)
-            } finally {
-                kit.stop()
+                    kit.start()
+                    assertEquals(P2pState.Running, kit.state.value)
+                    assertEquals(2, transport.startCalls)
+                    assertEquals(2, observer.startCalls)
+                } finally {
+                    withContext(NonCancellable) {
+                        starter.cancelAndJoin()
+                    }
+                }
             }
         }
     }
@@ -1032,13 +1226,23 @@ class KitLifecycleTest {
     fun ordinaryObserverStartFailureIsDetachedBeforeStartupDegradesCleanly() = runBlocking {
         val transport = RestartableStartTrackingTransport()
         val observer = FailingStartObserver()
-        val kit = createTestKit {
-            appId = AppId("failed-observer-cleanup-test")
-            deviceName = "Test"
-            lifecycle { networkPathObserver = observer }
-            transports { register(DataOnlyFactory(transport)) }
-        }
-        try {
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("failed-observer-cleanup-test")
+                    deviceName = "Test"
+                    lifecycle { networkPathObserver = observer }
+                    transports { register(DataOnlyFactory(transport)) }
+                }
+            },
+            verifyDiagnostics = { recorder ->
+                assertLifecycleDiagnostics(recorder, listOf(lifecycleWarning(
+                    "NetworkPathObserver.start() failed; path-change recovery disabled for this session",
+                    observer.startFailure
+                )))
+            }
+        ) { kit ->
             kit.start()
 
             assertEquals(P2pState.Running, kit.state.value)
@@ -1054,8 +1258,6 @@ class KitLifecycleTest {
             kit.start()
             assertEquals(1, observer.startCalls, "successful degraded startup remains idempotent")
             assertEquals(1, transport.startCalls)
-        } finally {
-            kit.stop()
         }
         assertEquals(2, observer.closeCalls, "terminal stop may close the observer idempotently")
     }
@@ -1064,13 +1266,23 @@ class KitLifecycleTest {
     fun cancellationDuringOrdinaryObserverFailureCleanupSettlesWholeStartup() = runBlocking {
         val transport = RestartableStartTrackingTransport()
         val observer = FailingStartWithFirstCloseSuspendingObserver()
-        val kit = createTestKit {
-            appId = AppId("cancel-observer-failure-cleanup-test")
-            deviceName = "Test"
-            lifecycle { networkPathObserver = observer }
-            transports { register(DataOnlyFactory(transport)) }
-        }
-        try {
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("cancel-observer-failure-cleanup-test")
+                    deviceName = "Test"
+                    lifecycle { networkPathObserver = observer }
+                    transports { register(DataOnlyFactory(transport)) }
+                }
+            },
+            verifyDiagnostics = { recorder ->
+                assertLifecycleDiagnostics(recorder, listOf(lifecycleWarning(
+                    "NetworkPathObserver.start() failed; path-change recovery disabled for this session",
+                    observer.startFailure
+                )))
+            }
+        ) { kit ->
             var thrown: Throwable? = null
             val starter = launch {
                 try {
@@ -1080,26 +1292,28 @@ class KitLifecycleTest {
                     throw failure
                 }
             }
-            observer.firstCloseEntered.await()
+            try {
+                observer.firstCloseEntered.await()
 
-            starter.cancelAndJoin()
+                starter.cancelAndJoin()
 
-            assertIs<CancellationException>(thrown)
-            assertEquals(
-                P2pState.Idle,
-                kit.state.value,
-                "cancellation during observer cleanup must not strand Starting"
-            )
-            assertEquals(1, transport.stopCalls, "the already-bound data path must roll back")
-            assertEquals(2, observer.closeCalls, "the cancellation compensator must retry cleanup")
-            assertFalse(observer.active, "the retry must settle partial observer ownership")
+                assertIs<CancellationException>(thrown)
+                assertEquals(
+                    P2pState.Idle,
+                    kit.state.value,
+                    "cancellation during observer cleanup must not strand Starting"
+                )
+                assertEquals(1, transport.stopCalls, "the already-bound data path must roll back")
+                assertEquals(2, observer.closeCalls, "the cancellation compensator must retry cleanup")
+                assertFalse(observer.active, "the retry must settle partial observer ownership")
 
-            kit.start()
-            assertEquals(P2pState.Running, kit.state.value)
-            assertEquals(2, transport.startCalls)
-            assertEquals(2, observer.startCalls)
-        } finally {
-            kit.stop()
+                kit.start()
+                assertEquals(P2pState.Running, kit.state.value)
+                assertEquals(2, transport.startCalls)
+                assertEquals(2, observer.startCalls)
+            } finally {
+                withContext(NonCancellable) { starter.cancelAndJoin() }
+            }
         }
     }
 
@@ -1107,39 +1321,56 @@ class KitLifecycleTest {
     fun observerStartWithUnsettledCleanupRollsBackDataAndFailsClosed() = runBlocking {
         val transport = RestartableStartTrackingTransport()
         val observer = FailingStartObserver(failClose = true)
-        val kit = createTestKit {
-            appId = AppId("failed-observer-uncertain-cleanup-test")
-            deviceName = "Test"
-            lifecycle { networkPathObserver = observer }
-            transports { register(DataOnlyFactory(transport)) }
-        }
-        try {
-            val failure = assertFailsWith<P2pError.ConnectionFailed> { kit.start() }
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("failed-observer-uncertain-cleanup-test")
+                    deviceName = "Test"
+                    lifecycle { networkPathObserver = observer }
+                    transports { register(DataOnlyFactory(transport)) }
+                }
+            },
+            verifyDiagnostics = { recorder ->
+                assertLifecycleDiagnostics(recorder, listOf(
+                    lifecycleWarning(
+                        "NetworkPathObserver.start() failed; path-change recovery disabled for this session",
+                        observer.startFailure
+                    ),
+                    lifecycleWarning(
+                        "Late lifecycle cleanup failed for network path observer startup",
+                        observer.closeFailure
+                    )
+                ))
+            }
+        ) { kit ->
+            try {
+                val failure = assertFailsWith<P2pError.ConnectionFailed> { kit.start() }
 
-            assertEquals(
-                "failed network-path observer startup cleanup was incomplete; " +
-                    "call stop() and replace this P2pKit instance",
-                failure.reason
-            )
-            assertSame(observer.startFailure, failure.suppressedExceptions.single())
-            val aggregate = assertIs<CleanupAggregateException>(failure.cause)
-            assertEquals("failed network-path observer startup", aggregate.operation)
-            assertSame(observer.closeFailure, aggregate.issues.single().cause)
-            val failedState = assertIs<P2pState.Failed>(kit.state.value)
-            assertSame(failure, failedState.error)
-            assertTrue(observer.active, "failed detach retains uncertain native ownership")
-            assertEquals(1, observer.startCalls)
-            assertEquals(1, observer.closeCalls)
-            assertEquals(1, transport.startCalls)
-            assertEquals(1, transport.stopCalls)
+                assertEquals(
+                    "failed network-path observer startup cleanup was incomplete; " +
+                        "call stop() and replace this P2pKit instance",
+                    failure.reason
+                )
+                assertSame(observer.startFailure, failure.suppressedExceptions.single())
+                val aggregate = assertIs<CleanupAggregateException>(failure.cause)
+                assertEquals("failed network-path observer startup", aggregate.operation)
+                assertSame(observer.closeFailure, aggregate.issues.single().cause)
+                val failedState = assertIs<P2pState.Failed>(kit.state.value)
+                assertSame(failure, failedState.error)
+                assertTrue(observer.active, "failed detach retains uncertain native ownership")
+                assertEquals(1, observer.startCalls)
+                assertEquals(1, observer.closeCalls)
+                assertEquals(1, transport.startCalls)
+                assertEquals(1, transport.stopCalls)
 
-            val retryFailure = assertFailsWith<P2pError.ConnectionFailed> { kit.start() }
-            assertSame(failure, retryFailure)
-            assertEquals(1, observer.startCalls, "uncertain ownership must block observer reattachment")
-            assertEquals(1, transport.startCalls, "uncertain ownership must block data rebinding")
-        } finally {
-            observer.failClose = false
-            kit.stop()
+                val retryFailure = assertFailsWith<P2pError.ConnectionFailed> { kit.start() }
+                assertSame(failure, retryFailure)
+                assertEquals(1, observer.startCalls, "uncertain ownership must block observer reattachment")
+                assertEquals(1, transport.startCalls, "uncertain ownership must block data rebinding")
+            } finally {
+                observer.failClose = false
+            }
         }
         assertFalse(observer.active, "terminal stop must retry retained observer cleanup")
         assertEquals(2, observer.closeCalls)
@@ -1161,53 +1392,69 @@ class KitLifecycleTest {
         val data = if (includeData) RestartableStartTrackingTransport() else null
         val discovery = FakeDiscoveryTransport()
         val store = MemorySecureIdentityStorage()
-        val kit = P2pKit.create {
-            appId = AppId("observer-cancellation-attribution-$includeData")
-            deviceName = "Test"
-            secureIdentityStorage = store
-            strictSessionInvariants = true
-            security { mode = SecurityMode.AuthenticatedV2(PeerAuthorizationPolicy.RejectUnknown) }
-            lifecycle { networkPathObserver = observer }
-            transports {
-                register(object : TransportFactory {
-                    override val descriptor = if (includeData) {
-                        TransportDescriptor.dataAndDiscovery(TransportKind.LAN)
-                    } else {
-                        TransportDescriptor.discoveryOnly(TransportKind.LAN)
+        try {
+            withTestKit(
+                create = { recorder ->
+                    P2pKit.create {
+                        logger = recorder
+                        appId = AppId("observer-cancellation-attribution-$includeData")
+                        deviceName = "Test"
+                        secureIdentityStorage = store
+                        strictSessionInvariants = true
+                        security { mode = SecurityMode.AuthenticatedV2(PeerAuthorizationPolicy.RejectUnknown) }
+                        lifecycle { networkPathObserver = observer }
+                        transports {
+                            register(object : TransportFactory {
+                                override val descriptor = if (includeData) {
+                                    TransportDescriptor.dataAndDiscovery(TransportKind.LAN)
+                                } else {
+                                    TransportDescriptor.discoveryOnly(TransportKind.LAN)
+                                }
+
+                                override fun build(context: TransportContext): TransportPair =
+                                    TransportPair(data = data, discovery = discovery)
+                            })
+                        }
+                    }
+                },
+                verifyDiagnostics = { recorder ->
+                    assertLifecycleDiagnostics(recorder, listOf(lifecycleWarning(
+                        "Late lifecycle cleanup failed for network path observer startup",
+                        observer.closeFailure
+                    )))
+                }
+            ) { kit ->
+                try {
+                    val thrown = assertFailsWith<CancellationException> { kit.start() }
+                    assertSame(cancellation, thrown, "caller cancellation must remain the primary throwable")
+                    val blocker = assertIs<P2pError.ConnectionFailed>(thrown.suppressedExceptions.single())
+                    assertSame(blocker, assertIs<P2pState.Failed>(kit.state.value).error)
+                    assertTrue(
+                        blocker.reason.startsWith("cancelled network-path observer startup cleanup was incomplete")
+                    )
+                    val aggregate = assertIs<CleanupAggregateException>(blocker.cause)
+                    assertEquals("cancelled network-path observer startup", aggregate.operation)
+                    assertSame(observer.closeFailure, aggregate.issues.single().cause)
+                    assertTrue(
+                        blocker.suppressedExceptions.isEmpty(),
+                        "the blocker must not point back to cancellation"
+                    )
+                    assertTrue(observer.active)
+                    data?.let {
+                        assertEquals(1, it.startCalls)
+                        assertEquals(1, it.stopCalls)
                     }
 
-                    override fun build(context: TransportContext): TransportPair =
-                        TransportPair(data = data, discovery = discovery)
-                })
+                    assertSame(blocker, assertFailsWith<P2pError.ConnectionFailed> { kit.start() })
+                    assertEquals(1, observer.startCalls, "retry must not reattach the observer")
+                    assertEquals(1, observer.closeCalls, "retry must not repeat uncertain cleanup")
+                    data?.let { assertEquals(1, it.startCalls, "retry must not rebind a data listener") }
+                } finally {
+                    observer.failClose = false
+                }
             }
-        }
-        try {
-            val thrown = assertFailsWith<CancellationException> { kit.start() }
-            assertSame(cancellation, thrown, "caller cancellation must remain the primary throwable")
-            val blocker = assertIs<P2pError.ConnectionFailed>(thrown.suppressedExceptions.single())
-            assertSame(blocker, assertIs<P2pState.Failed>(kit.state.value).error)
-            assertTrue(blocker.reason.startsWith("cancelled network-path observer startup cleanup was incomplete"))
-            val aggregate = assertIs<CleanupAggregateException>(blocker.cause)
-            assertEquals("cancelled network-path observer startup", aggregate.operation)
-            assertSame(observer.closeFailure, aggregate.issues.single().cause)
-            assertTrue(blocker.suppressedExceptions.isEmpty(), "the blocker must not point back to cancellation")
-            assertTrue(observer.active)
-            data?.let {
-                assertEquals(1, it.startCalls)
-                assertEquals(1, it.stopCalls)
-            }
-
-            assertSame(blocker, assertFailsWith<P2pError.ConnectionFailed> { kit.start() })
-            assertEquals(1, observer.startCalls, "retry must not reattach the observer")
-            assertEquals(1, observer.closeCalls, "retry must not repeat uncertain cleanup")
-            data?.let { assertEquals(1, it.startCalls, "retry must not rebind a data listener") }
         } finally {
-            observer.failClose = false
-            try {
-                kit.stop()
-            } finally {
-                store.clear()
-            }
+            store.clear()
         }
         assertFalse(observer.active)
         assertEquals(2, observer.closeCalls, "terminal stop must attempt retained cleanup")
@@ -1216,47 +1463,60 @@ class KitLifecycleTest {
     @Test
     fun cancellationWithUnsettledDataRollbackFailsClosedAgainstDoubleStart() = runBlocking {
         val transport = CancellationWithHangingRollbackTransport()
-        val kit = createTestKit {
-            appId = AppId("cancel-hung-rollback-test")
-            deviceName = "Test"
-            transports { register(DataOnlyFactory(transport)) }
-        }
-        try {
-            var cancellation: Throwable? = null
-            val starter = launch {
-                try {
-                    kit.start()
-                } catch (failure: Throwable) {
-                    cancellation = failure
-                    throw failure
+        var expectedWarnings = emptyList<RecordingLogger.Entry>()
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("cancel-hung-rollback-test")
+                    deviceName = "Test"
+                    transports { register(DataOnlyFactory(transport)) }
                 }
+            },
+            verifyDiagnostics = { recorder -> assertLifecycleDiagnostics(recorder, expectedWarnings) }
+        ) { kit ->
+            try {
+                var cancellation: Throwable? = null
+                val starter = launch {
+                    try {
+                        kit.start()
+                    } catch (failure: Throwable) {
+                        cancellation = failure
+                        throw failure
+                    }
+                }
+                transport.startEntered.await()
+
+                starter.cancelAndJoin()
+
+                val cancelled = assertIs<CancellationException>(cancellation)
+                assertTrue(
+                    cancelled.suppressedExceptions.any { it is P2pError.TransportStartFailed },
+                    "caller cancellation must retain the fail-closed rollback diagnosis"
+                )
+                val failedState = assertIs<P2pState.Failed>(kit.state.value)
+                val blocker = assertIs<P2pError.TransportStartFailed>(failedState.error)
+                assertEquals(TransportKind.LAN, blocker.transportKind)
+                val aggregate = assertIs<CleanupAggregateException>(blocker.cause)
+                assertEquals("cancelled data startup", aggregate.operation)
+                expectedWarnings = listOf(lifecycleWarning(
+                    "Late lifecycle cleanup failed for LAN data startup",
+                    assertCleanupTimeout(aggregate.issues.single(), "LAN data startup", 2_000)
+                ))
+                assertTrue(blocker.reason.contains("cleanup was incomplete"))
+                assertEquals(1, transport.startCalls)
+                assertEquals(1, transport.stopCalls)
+
+                val retryFailure = assertFailsWith<P2pError.TransportStartFailed> { kit.start() }
+                assertSame(blocker, retryFailure)
+                assertEquals(
+                    1,
+                    transport.startCalls,
+                    "a cleanup-blocked instance must never attempt a second listener bind"
+                )
+            } finally {
+                transport.releaseHangingStop()
             }
-            transport.startEntered.await()
-
-            starter.cancelAndJoin()
-
-            val cancelled = assertIs<CancellationException>(cancellation)
-            assertTrue(
-                cancelled.suppressedExceptions.any { it is P2pError.TransportStartFailed },
-                "caller cancellation must retain the fail-closed rollback diagnosis"
-            )
-            val failedState = assertIs<P2pState.Failed>(kit.state.value)
-            val blocker = assertIs<P2pError.TransportStartFailed>(failedState.error)
-            assertEquals(TransportKind.LAN, blocker.transportKind)
-            assertTrue(blocker.reason.contains("cleanup was incomplete"))
-            assertEquals(1, transport.startCalls)
-            assertEquals(1, transport.stopCalls)
-
-            val retryFailure = assertFailsWith<P2pError.TransportStartFailed> { kit.start() }
-            assertSame(blocker, retryFailure)
-            assertEquals(
-                1,
-                transport.startCalls,
-                "a cleanup-blocked instance must never attempt a second listener bind"
-            )
-        } finally {
-            transport.releaseHangingStop()
-            kit.stop()
         }
     }
 
@@ -1273,39 +1533,64 @@ class KitLifecycleTest {
         runBlocking {
             val transport = TrackingTransport()
             val observer = MutexHeldObserver()
-            val kit = createTestKit {
-                appId = AppId("bounded-stop-observer-test")
-                deviceName = "Test"
-                lifecycle { networkPathObserver = observer }
-                transports { register(TrackingFactory(transport)) }
+            var expectedStopFailure: P2pError.ConnectionFailed? = null
+            var expectedWarnings = emptyList<RecordingLogger.Entry>()
+            // Preserve the deliberately cached failure; the scope must not hide a net failure in it.
+            val repeatedStopFailure = assertFailsWith<P2pError.ConnectionFailed> {
+                withTestKit(
+                    create = { recorder ->
+                        createTestKit {
+                            logger = recorder
+                            appId = AppId("bounded-stop-observer-test")
+                            deviceName = "Test"
+                            lifecycle { networkPathObserver = observer }
+                            transports { register(TrackingFactory(transport)) }
+                        }
+                    },
+                    verifyDiagnostics = { recorder -> assertLifecycleDiagnostics(recorder, expectedWarnings) }
+                ) { kit ->
+                    // Park ensureStarted inside observer.start() with the observer's
+                    // internal mutex held (the kit's startMutex is held too).
+                    val starter = launch { kit.start() }
+                    try {
+                        observer.startEntered.await()
+
+                        // Pre-fix, stop() parked forever inside pathObserver.close() on
+                        // the observer's mutex; this outer bound (3x the two 5 s internal
+                        // bounds) fired. Post-fix stop() is bounded.
+                        val stopFailure = assertFailsWith<P2pError.ConnectionFailed> {
+                            withTimeout(30_000) { kit.stop() }
+                        }
+                        expectedStopFailure = stopFailure
+                        expectedWarnings = startupStopDiagnostics(stopFailure, observerTimeout = true)
+                        assertEquals(P2pState.Stopped, kit.state.value)
+                        assertTrue(transport.dataClosed, "teardown must still close the data transport")
+                        assertTrue(observer.closeAttempted, "stop() must still attempt the observer close")
+                        assertFalse(
+                            observer.closeCompleted,
+                            "close() cannot complete while the hung start() holds the observer's mutex"
+                        )
+
+                        // Cleanup: cancel the parked starter. The CancellationException
+                        // must propagate out of kit.start() (AUDIT-2026-07 (ARCH-1)
+                        // observer-start site) rather than latching state over Stopped.
+                        starter.cancelAndJoin()
+                        assertEquals(
+                            P2pState.Stopped, kit.state.value,
+                            "the cancelled late start must not overwrite Stopped"
+                        )
+                    } finally {
+                        withContext(NonCancellable) {
+                            observer.releaseStart.complete(Unit)
+                            starter.cancelAndJoin()
+                        }
+                    }
+                }
             }
-
-            // Park ensureStarted inside observer.start() with the observer's
-            // internal mutex held (the kit's startMutex is held too).
-            val starter = launch { kit.start() }
-            observer.startEntered.await()
-
-            // Pre-fix, stop() parked forever inside pathObserver.close() on
-            // the observer's mutex; this outer bound (3x the two 5 s internal
-            // bounds) fired. Post-fix stop() is bounded.
-            assertFailsWith<P2pError.ConnectionFailed> {
-                withTimeout(30_000) { kit.stop() }
-            }
-            assertEquals(P2pState.Stopped, kit.state.value)
-            assertTrue(transport.dataClosed, "teardown must still close the data transport")
-            assertTrue(observer.closeAttempted, "stop() must still attempt the observer close")
-            assertFalse(
-                observer.closeCompleted,
-                "close() cannot complete while the hung start() holds the observer's mutex"
-            )
-
-            // Cleanup: cancel the parked starter. The CancellationException
-            // must propagate out of kit.start() (AUDIT-2026-07 (ARCH-1)
-            // observer-start site) rather than latching state over Stopped.
-            starter.cancelAndJoin()
-            assertEquals(
-                P2pState.Stopped, kit.state.value,
-                "the cancelled late start must not overwrite Stopped"
+            assertSame(expectedStopFailure, repeatedStopFailure)
+            assertTrue(
+                repeatedStopFailure.suppressedExceptions.isEmpty(),
+                "expected cached stop failure must not conceal teardown/net failures"
             )
         }
     }
@@ -1321,135 +1606,198 @@ class KitLifecycleTest {
         runBlocking {
             val transport = GatedCloseTransport()
             val observer = YieldingCloseObserver()
-            val kit = createTestKit {
-                appId = AppId("cancelled-stop-test")
-                deviceName = "Test"
-                lifecycle { networkPathObserver = observer }
-                transports { register(GatedCloseFactory(transport)) }
+            withTestKit(
+                create = { recorder ->
+                    createTestKit {
+                        logger = recorder
+                        appId = AppId("cancelled-stop-test")
+                        deviceName = "Test"
+                        lifecycle { networkPathObserver = observer }
+                        transports { register(GatedCloseFactory(transport)) }
+                    }
+                }
+            ) { kit ->
+                kit.start()
+                assertEquals(P2pState.Running, kit.state.value)
+
+                val stopper = launch { kit.stop() }
+                try {
+                    transport.closeEntered.await()
+                    // Cancel the stopping caller while teardown is deterministically
+                    // mid-flight, then let the parked transport close proceed.
+                    stopper.cancel()
+                    transport.releaseClose.complete(Unit)
+                    withTimeout(15_000) { stopper.join() }
+
+                    assertTrue(
+                        observer.closeCompleted,
+                        "a cancelled stop() caller must still run the observer close to completion"
+                    )
+                    assertTrue(transport.dataClosed, "teardown must still close the data transport")
+                    assertEquals(
+                        P2pState.Stopped, kit.state.value,
+                        "a cancelled stop() caller must still latch Stopped"
+                    )
+                } finally {
+                    withContext(NonCancellable) {
+                        transport.releaseClose.complete(Unit)
+                        stopper.cancelAndJoin()
+                    }
+                }
             }
-
-            kit.start()
-            assertEquals(P2pState.Running, kit.state.value)
-
-            val stopper = launch { kit.stop() }
-            transport.closeEntered.await()
-            // Cancel the stopping caller while teardown is deterministically
-            // mid-flight, then let the parked transport close proceed.
-            stopper.cancel()
-            transport.releaseClose.complete(Unit)
-            withTimeout(15_000) { stopper.join() }
-
-            assertTrue(
-                observer.closeCompleted,
-                "a cancelled stop() caller must still run the observer close to completion"
-            )
-            assertTrue(transport.dataClosed, "teardown must still close the data transport")
-            assertEquals(
-                P2pState.Stopped, kit.state.value,
-                "a cancelled stop() caller must still latch Stopped"
-            )
         }
     }
 
     @Test
     fun lateAdvertisingCompletionIsRolledBackAfterStop() = runBlocking {
         val transport = GatedDiscoveryTransport()
-        val kit = createTestKit {
-            appId = AppId("late-advertising-test")
-            deviceName = "Test"
-            transports { register(GatedDiscoveryFactory(transport)) }
-        }
-        kit.start()
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("late-advertising-test")
+                    deviceName = "Test"
+                    transports { register(GatedDiscoveryFactory(transport)) }
+                }
+            }
+        ) { kit ->
+            kit.start()
 
-        var failure: Throwable? = null
-        val advertiser = launch {
+            var failure: Throwable? = null
+            val advertiser = launch {
+                try {
+                    kit.startAdvertising()
+                } catch (e: Throwable) {
+                    failure = e
+                }
+            }
             try {
-                kit.startAdvertising()
-            } catch (e: Throwable) {
-                failure = e
+                transport.advertisingEntered.await()
+
+                kit.stop()
+                assertEquals(P2pState.Stopped, kit.state.value)
+                transport.releaseAdvertising.complete(Unit)
+                withTimeout(5_000) { advertiser.join() }
+
+                assertIs<IllegalStateException>(failure)
+                assertEquals(
+                    2,
+                    transport.stopAdvertisingCalls,
+                    "stop must close the in-flight resource and its late completion must compensate again"
+                )
+                assertEquals(P2pState.Stopped, kit.state.value)
+            } finally {
+                withContext(NonCancellable) {
+                    transport.releaseAdvertising.complete(Unit)
+                    advertiser.cancelAndJoin()
+                }
             }
         }
-        transport.advertisingEntered.await()
-
-        kit.stop()
-        assertEquals(P2pState.Stopped, kit.state.value)
-        transport.releaseAdvertising.complete(Unit)
-        withTimeout(5_000) { advertiser.join() }
-
-        assertIs<IllegalStateException>(failure)
-        assertEquals(
-            2,
-            transport.stopAdvertisingCalls,
-            "stop must close the in-flight resource and its late completion must compensate again"
-        )
-        assertEquals(P2pState.Stopped, kit.state.value)
     }
 
     @Test
     fun lateDiscoveryCompletionIsRolledBackAfterStop() = runBlocking {
         val transport = GatedDiscoveryTransport()
-        val kit = createTestKit {
-            appId = AppId("late-discovery-test")
-            deviceName = "Test"
-            transports { register(GatedDiscoveryFactory(transport)) }
-        }
-        kit.start()
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("late-discovery-test")
+                    deviceName = "Test"
+                    transports { register(GatedDiscoveryFactory(transport)) }
+                }
+            }
+        ) { kit ->
+            kit.start()
 
-        var failure: Throwable? = null
-        val discoverer = launch {
+            var failure: Throwable? = null
+            val discoverer = launch {
+                try {
+                    kit.startDiscovery()
+                } catch (e: Throwable) {
+                    failure = e
+                }
+            }
             try {
-                kit.startDiscovery()
-            } catch (e: Throwable) {
-                failure = e
+                transport.discoveryEntered.await()
+
+                kit.stop()
+                assertEquals(P2pState.Stopped, kit.state.value)
+                transport.releaseDiscovery.complete(Unit)
+                withTimeout(5_000) { discoverer.join() }
+
+                assertIs<IllegalStateException>(failure)
+                assertEquals(2, transport.stopDiscoveryCalls)
+                assertEquals(P2pState.Stopped, kit.state.value)
+            } finally {
+                withContext(NonCancellable) {
+                    transport.releaseDiscovery.complete(Unit)
+                    discoverer.cancelAndJoin()
+                }
             }
         }
-        transport.discoveryEntered.await()
-
-        kit.stop()
-        assertEquals(P2pState.Stopped, kit.state.value)
-        transport.releaseDiscovery.complete(Unit)
-        withTimeout(5_000) { discoverer.join() }
-
-        assertIs<IllegalStateException>(failure)
-        assertEquals(2, transport.stopDiscoveryCalls)
-        assertEquals(P2pState.Stopped, kit.state.value)
     }
 
     @Test
     fun observerThatReturnsAfterStopCannotResurrectKit() = runBlocking {
         val transport = TrackingTransport()
         val observer = LateReturningObserver()
-        val kit = createTestKit {
-            appId = AppId("late-observer-test")
-            deviceName = "Test"
-            lifecycle { networkPathObserver = observer }
-            transports { register(TrackingFactory(transport)) }
-        }
+        var expectedStopFailure: P2pError.ConnectionFailed? = null
+        var expectedWarnings = emptyList<RecordingLogger.Entry>()
+        // Preserve the deliberately cached failure; the scope must not hide a net failure in it.
+        val repeatedStopFailure = assertFailsWith<P2pError.ConnectionFailed> {
+            withTestKit(
+                create = { recorder ->
+                    createTestKit {
+                        logger = recorder
+                        appId = AppId("late-observer-test")
+                        deviceName = "Test"
+                        lifecycle { networkPathObserver = observer }
+                        transports { register(TrackingFactory(transport)) }
+                    }
+                },
+                verifyDiagnostics = { recorder -> assertLifecycleDiagnostics(recorder, expectedWarnings) }
+            ) { kit ->
+                var failure: Throwable? = null
+                val starter = launch {
+                    try {
+                        kit.start()
+                    } catch (e: Throwable) {
+                        failure = e
+                    }
+                }
+                try {
+                    observer.startEntered.await()
 
-        var failure: Throwable? = null
-        val starter = launch {
-            try {
-                kit.start()
-            } catch (e: Throwable) {
-                failure = e
+                    val stopFailure = assertFailsWith<P2pError.ConnectionFailed> {
+                        withTimeout(15_000) { kit.stop() }
+                    }
+                    expectedStopFailure = stopFailure
+                    expectedWarnings = startupStopDiagnostics(stopFailure, observerTimeout = false)
+                    assertEquals(P2pState.Stopped, kit.state.value)
+                    observer.releaseStart.complete(Unit)
+                    withTimeout(5_000) { starter.join() }
+
+                    assertIs<IllegalStateException>(failure)
+                    assertEquals(
+                        2,
+                        observer.closeCalls,
+                        "terminal teardown and the late-start compensation must both close idempotently"
+                    )
+                    assertEquals(P2pState.Stopped, kit.state.value)
+                } finally {
+                    withContext(NonCancellable) {
+                        observer.releaseStart.complete(Unit)
+                        starter.cancelAndJoin()
+                    }
+                }
             }
         }
-        observer.startEntered.await()
-
-        assertFailsWith<P2pError.ConnectionFailed> {
-            withTimeout(15_000) { kit.stop() }
-        }
-        assertEquals(P2pState.Stopped, kit.state.value)
-        observer.releaseStart.complete(Unit)
-        withTimeout(5_000) { starter.join() }
-
-        assertIs<IllegalStateException>(failure)
-        assertEquals(
-            2,
-            observer.closeCalls,
-            "terminal teardown and the late-start compensation must both close idempotently"
+        assertSame(expectedStopFailure, repeatedStopFailure)
+        assertTrue(
+            repeatedStopFailure.suppressedExceptions.isEmpty(),
+            "expected cached stop failure must not conceal teardown/net failures"
         )
-        assertEquals(P2pState.Stopped, kit.state.value)
     }
 
     @Test
@@ -1457,53 +1805,64 @@ class KitLifecycleTest {
         val pair = FakeConnectionPair()
         val aliceTransport = GatedConnectTransport(pair.a)
         val bobTransport = FakeDataTransport(preStagedIncoming = listOf(pair.b))
-        val alice = createTestKit {
-            appId = AppId("late-connect-test")
-            deviceName = "Alice"
-            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("alice-id"))
-            transports { register(GatedConnectFactory(aliceTransport)) }
-        }
-        val bob = createTestKit {
-            appId = AppId("late-connect-test")
-            deviceName = "Bob"
-            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
-            transports { register(DataOnlyFactory(bobTransport)) }
-        }
-        try {
-            alice.start()
-            bob.start()
-            val target = Peer(
-                id = PeerId("bob-id"),
-                name = "Bob",
-                platform = Platform.JVM_DESKTOP,
-                supportedTransports = setOf(TransportKind.LAN)
-            )
-            var failure: Throwable? = null
-            val connector = launch {
-                try {
-                    alice.connect(target)
-                } catch (e: Throwable) {
-                    failure = e
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("late-connect-test")
+                    deviceName = "Alice"
+                    peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("alice-id"))
+                    transports { register(GatedConnectFactory(aliceTransport)) }
                 }
             }
-            aliceTransport.connectEntered.await()
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    createTestKit {
+                        logger = recorder
+                        appId = AppId("late-connect-test")
+                        deviceName = "Bob"
+                        peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
+                        transports { register(DataOnlyFactory(bobTransport)) }
+                    }
+                },
+                verifyDiagnostics = ::assertPreHelloDialAborted
+            ) { bob ->
+                try {
+                    alice.start()
+                    bob.start()
+                    val target = Peer(
+                        id = PeerId("bob-id"),
+                        name = "Bob",
+                        platform = Platform.JVM_DESKTOP,
+                        supportedTransports = setOf(TransportKind.LAN)
+                    )
+                    var failure: Throwable? = null
+                    val connector = launch {
+                        try {
+                            alice.connect(target)
+                        } catch (e: Throwable) {
+                            failure = e
+                        }
+                    }
+                    aliceTransport.connectEntered.await()
 
-            alice.stop()
-            aliceTransport.releaseConnect.complete(Unit)
-            withTimeout(5_000) { connector.join() }
+                    alice.stop()
+                    aliceTransport.releaseConnect.complete(Unit)
+                    withTimeout(5_000) { connector.join() }
 
-            assertIs<IllegalStateException>(failure, "connect must fail with the terminal lifecycle error")
-            assertEquals(
-                ConnectionState.Closed,
-                pair.a.state.value,
-                "the raw connection created after stop must be closed before protocol setup"
-            )
-            assertTrue(alice.sessions.value.isEmpty(), "a late connection must never enter public sessions")
-            assertEquals(P2pState.Stopped, alice.state.value)
-        } finally {
-            aliceTransport.releaseConnect.complete(Unit)
-            alice.stop()
-            bob.stop()
+                    assertIs<IllegalStateException>(failure, "connect must fail with the terminal lifecycle error")
+                    assertEquals(
+                        ConnectionState.Closed,
+                        pair.a.state.value,
+                        "the raw connection created after stop must be closed before protocol setup"
+                    )
+                    assertTrue(alice.sessions.value.isEmpty(), "a late connection must never enter public sessions")
+                    assertEquals(P2pState.Stopped, alice.state.value)
+                } finally {
+                    aliceTransport.releaseConnect.complete(Unit)
+                }
+            }
         }
     }
 
@@ -1514,85 +1873,108 @@ class KitLifecycleTest {
         val releaseWatcher = CompletableDeferred<Unit>()
         val aliceTransport = FakeDataTransport(outgoingConnection = { pair.a })
         val bobTransport = FakeDataTransport(preStagedIncoming = listOf(pair.b))
-        val alice = createTestKit {
-            appId = AppId("committed-session-stop-test")
-            deviceName = "Alice"
-            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("alice-id"))
-            beforeTerminalWatcherRemovalForTest = {
-                watcherEntered.complete(Unit)
-                releaseWatcher.await()
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("committed-session-stop-test")
+                    deviceName = "Alice"
+                    peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("alice-id"))
+                    beforeTerminalWatcherRemovalForTest = {
+                        watcherEntered.complete(Unit)
+                        releaseWatcher.await()
+                    }
+                    transports { register(DataOnlyFactory(aliceTransport)) }
+                }
             }
-            transports { register(DataOnlyFactory(aliceTransport)) }
-        }
-        val bob = createTestKit {
-            appId = AppId("committed-session-stop-test")
-            deviceName = "Bob"
-            peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
-            transports { register(DataOnlyFactory(bobTransport)) }
-        }
-        try {
-            val session = withTimeout(5_000) {
-                alice.connect(
-                    Peer(
-                        id = PeerId("bob-id"),
-                        name = "Bob",
-                        platform = Platform.JVM_DESKTOP,
-                        supportedTransports = setOf(TransportKind.LAN)
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    createTestKit {
+                        logger = recorder
+                        appId = AppId("committed-session-stop-test")
+                        deviceName = "Bob"
+                        peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
+                        transports { register(DataOnlyFactory(bobTransport)) }
+                    }
+                }
+            ) { bob ->
+                try {
+                    val session = withTimeout(5_000) {
+                        alice.connect(
+                            Peer(
+                                id = PeerId("bob-id"),
+                                name = "Bob",
+                                platform = Platform.JVM_DESKTOP,
+                                supportedTransports = setOf(TransportKind.LAN)
+                            )
+                        )
+                    }
+                    assertEquals(ConnectionState.Connected, session.state.value)
+
+                    session.close()
+                    watcherEntered.await()
+                    assertEquals(
+                        listOf(session),
+                        alice.sessions.value,
+                        "the parked watcher must leave the terminal entry published before stop"
                     )
-                )
+
+                    alice.stop()
+
+                    assertEquals(
+                        ConnectionState.Closed,
+                        session.state.value,
+                        "a registration committed before the terminal gate must be in stop's snapshot"
+                    )
+                    assertTrue(
+                        alice.sessions.value.isEmpty(),
+                        "stop must atomically empty public sessions before its watcher scope is cancelled"
+                    )
+                    assertEquals(P2pState.Stopped, alice.state.value)
+                } finally {
+                    releaseWatcher.complete(Unit)
+                }
             }
-            assertEquals(ConnectionState.Connected, session.state.value)
-
-            session.close()
-            watcherEntered.await()
-            assertEquals(
-                listOf(session),
-                alice.sessions.value,
-                "the parked watcher must leave the terminal entry published before stop"
-            )
-
-            alice.stop()
-
-            assertEquals(
-                ConnectionState.Closed,
-                session.state.value,
-                "a registration committed before the terminal gate must be in stop's snapshot"
-            )
-            assertTrue(
-                alice.sessions.value.isEmpty(),
-                "stop must atomically empty public sessions before its watcher scope is cancelled"
-            )
-            assertEquals(P2pState.Stopped, alice.state.value)
-        } finally {
-            releaseWatcher.complete(Unit)
-            alice.stop()
-            bob.stop()
         }
     }
 
     @Test
     fun concurrentStopCallersJoinOneTeardown() = runBlocking {
         val transport = GatedCloseTransport()
-        val kit = createTestKit {
-            appId = AppId("concurrent-stop-test")
-            deviceName = "Test"
-            transports { register(GatedCloseFactory(transport)) }
-        }
-        kit.start()
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("concurrent-stop-test")
+                    deviceName = "Test"
+                    transports { register(GatedCloseFactory(transport)) }
+                }
+            }
+        ) { kit ->
+            kit.start()
 
-        val first = launch { kit.stop() }
-        transport.closeEntered.await()
-        val second = launch { kit.stop() }
-        yield()
-        assertFalse(second.isCompleted, "a follower stop must wait for the leader's teardown")
+            val first = launch { kit.stop() }
+            try {
+                transport.closeEntered.await()
+                val second = launch { kit.stop() }
+                yield()
+                assertFalse(second.isCompleted, "a follower stop must wait for the leader's teardown")
 
-        transport.releaseClose.complete(Unit)
-        withTimeout(5_000) {
-            first.join()
-            second.join()
+                transport.releaseClose.complete(Unit)
+                withTimeout(5_000) {
+                    first.join()
+                    second.join()
+                }
+                assertEquals(1, transport.closeCalls)
+                assertEquals(P2pState.Stopped, kit.state.value)
+            } finally {
+                withContext(NonCancellable) {
+                    transport.releaseClose.complete(Unit)
+                    first.cancelAndJoin()
+                }
+            }
         }
-        assertEquals(1, transport.closeCalls)
-        assertEquals(P2pState.Stopped, kit.state.value)
     }
 
     @Test
@@ -1600,73 +1982,195 @@ class KitLifecycleTest {
         val throwing = CleanupProbeTransport(TransportKind.LAN, CleanupBehavior.THROW)
         val hanging = CleanupProbeTransport(TransportKind.BLE, CleanupBehavior.HANG)
         val healthy = CleanupProbeTransport(TransportKind.RELAY, CleanupBehavior.SUCCEED)
-        val kit = createTestKit {
-            appId = AppId("bounded-cleanup-test")
-            deviceName = "Test"
-            transports {
-                register(CleanupProbeFactory(throwing))
-                register(CleanupProbeFactory(hanging))
-                register(CleanupProbeFactory(healthy))
+        var expectedStopFailure: P2pError.ConnectionFailed? = null
+        var expectedWarnings = emptyList<RecordingLogger.Entry>()
+        // Preserve the deliberately cached failure; the scope must not hide a net failure in it.
+        val repeatedStopFailure = assertFailsWith<P2pError.ConnectionFailed> {
+            withTestKit(
+                create = { recorder ->
+                    createTestKit {
+                        logger = recorder
+                        appId = AppId("bounded-cleanup-test")
+                        deviceName = "Test"
+                        transports {
+                            register(CleanupProbeFactory(throwing))
+                            register(CleanupProbeFactory(hanging))
+                            register(CleanupProbeFactory(healthy))
+                        }
+                    }
+                },
+                verifyDiagnostics = { recorder -> assertLifecycleDiagnostics(recorder, expectedWarnings) }
+            ) { kit ->
+                try {
+                    kit.start()
+
+                    val first = assertFailsWith<P2pError.ConnectionFailed> {
+                        withTimeout(10_000) { kit.stop() }
+                    }
+                    expectedStopFailure = first
+                    expectedWarnings = terminalResourceStopDiagnostics(first)
+                    assertEquals(1, throwing.closeCalls)
+                    assertEquals(1, hanging.closeCalls)
+                    assertEquals(1, healthy.closeCalls)
+                    assertTrue(healthy.closed, "a failed or hung sibling must not prevent later cleanup")
+                    assertEquals(P2pState.Stopped, kit.state.value)
+
+                    val aggregate = assertIs<CleanupAggregateException>(first.cause)
+                    assertEquals(2, aggregate.issues.size)
+                    assertTrue(aggregate.issues.any { it.resource.contains("LAN") })
+                    assertTrue(aggregate.issues.any { it.resource.contains("BLE") })
+                    hanging.releaseHangingClose()
+
+                    val follower = assertFailsWith<P2pError.ConnectionFailed> { kit.stop() }
+                    assertSame(first, follower, "all stop callers must observe the leader's exact result")
+                } finally {
+                    hanging.releaseHangingClose()
+                }
             }
         }
-        kit.start()
+        assertSame(expectedStopFailure, repeatedStopFailure)
+        assertTrue(
+            repeatedStopFailure.suppressedExceptions.isEmpty(),
+            "expected cached stop failure must not conceal teardown/net failures"
+        )
+    }
 
-        val first = assertFailsWith<P2pError.ConnectionFailed> {
-            withTimeout(10_000) { kit.stop() }
+    private fun lifecycleWarning(message: String, cause: Throwable? = null) =
+        RecordingLogger.Entry(RecordingLogger.Level.WARN, message, cause)
+
+    private fun assertLifecycleDiagnostics(recorder: RecordingLogger, expected: List<RecordingLogger.Entry>) {
+        val actual = recorder.entries.filter {
+            it.level == RecordingLogger.Level.WARN || it.level == RecordingLogger.Level.ERROR
         }
-        assertEquals(1, throwing.closeCalls)
-        assertEquals(1, hanging.closeCalls)
-        assertEquals(1, healthy.closeCalls)
-        assertTrue(healthy.closed, "a failed or hung sibling must not prevent later cleanup")
-        assertEquals(P2pState.Stopped, kit.state.value)
+        assertEquals(expected, actual, "only the controlled lifecycle fault may be diagnosed")
+    }
 
-        val aggregate = assertIs<CleanupAggregateException>(first.cause)
-        assertEquals(2, aggregate.issues.size)
-        assertTrue(aggregate.issues.any { it.resource.contains("LAN") })
-        assertTrue(aggregate.issues.any { it.resource.contains("BLE") })
-        hanging.releaseHangingClose()
+    private fun startupStopDiagnostics(
+        failure: P2pError.ConnectionFailed,
+        observerTimeout: Boolean
+    ): List<RecordingLogger.Entry> {
+        val aggregate = assertIs<CleanupAggregateException>(failure.cause)
+        assertEquals("stop", aggregate.operation)
+        val resources = buildList {
+            add("transport startup transaction")
+            if (observerTimeout) add("network path observer")
+        }
+        assertEquals(resources, aggregate.issues.map { it.resource })
+        val startup = aggregate.issues.first()
+        assertFalse(startup.deadlineExceeded)
+        val startupFailure = assertIs<IllegalStateException>(startup.cause)
+        assertEquals("start mutex was not released within 5000ms", startupFailure.message)
+        assertTrue(startupFailure.suppressedExceptions.isEmpty())
+        return buildList {
+            add(lifecycleWarning(
+                "stop(): startMutex not released within 5000ms " +
+                    "(a transport start() is likely hung); tearing down without the lock"
+            ))
+            add(lifecycleWarning("stop failed for transport startup transaction", startupFailure))
+            if (observerTimeout) {
+                add(lifecycleWarning(
+                    "stop failed for network path observer",
+                    assertCleanupTimeout(aggregate.issues[1], "network path observer", 5_000)
+                ))
+            }
+        }
+    }
 
-        val follower = assertFailsWith<P2pError.ConnectionFailed> { kit.stop() }
-        assertSame(first, follower, "all stop callers must observe the leader's exact result")
+    private fun terminalResourceStopDiagnostics(failure: P2pError.ConnectionFailed): List<RecordingLogger.Entry> {
+        val aggregate = assertIs<CleanupAggregateException>(failure.cause)
+        assertEquals("stop", aggregate.operation)
+        assertEquals(listOf("LAN data transport", "BLE data transport"), aggregate.issues.map { it.resource })
+        val refused = aggregate.issues.first()
+        assertFalse(refused.deadlineExceeded)
+        val refusal = assertIs<IllegalStateException>(refused.cause)
+        assertEquals("close failed for LAN", refusal.message)
+        assertTrue(refusal.suppressedExceptions.isEmpty())
+        return listOf(
+            lifecycleWarning("stop failed for LAN data transport", refusal),
+            lifecycleWarning(
+                "stop failed for BLE data transport",
+                assertCleanupTimeout(aggregate.issues[1], "BLE data transport", 6_000)
+            )
+        )
+    }
+
+    private fun assertCleanupTimeout(issue: CleanupIssue, resource: String, millis: Long): Throwable {
+        assertEquals(resource, issue.resource)
+        assertTrue(issue.deadlineExceeded)
+        val failure = assertIs<IllegalStateException>(issue.cause)
+        assertEquals("cleanup exceeded ${millis}ms", failure.message)
+        val deadline = assertIs<OwnedOperationTimeoutException>(failure.cause)
+        assertEquals("Operation timed out after $millis ms", deadline.message)
+        assertTrue(failure.suppressedExceptions.isEmpty())
+        assertTrue(deadline.suppressedExceptions.isEmpty())
+        return failure
+    }
+
+    private fun assertPreHelloDialAborted(recorder: RecordingLogger) {
+        val diagnostics = recorder.entries.filter {
+            it.level == RecordingLogger.Level.WARN || it.level == RecordingLogger.Level.ERROR
+        }
+        assertTrue(diagnostics.size <= 1, "only one controlled pre-HELLO dial was abandoned")
+        diagnostics.forEach { entry ->
+            assertEquals(RecordingLogger.Level.WARN, entry.level)
+            assertEquals("Incoming session setup failed", entry.message)
+            val failure = assertIs<P2pError.ConnectionFailed>(entry.throwable)
+            val eof = assertIs<ClosedReceiveChannelException>(failure.cause)
+            assertEquals("Plaintext HELLO failed: ${eof.message}", failure.reason)
+            assertTrue(failure.suppressedExceptions.isEmpty())
+            assertTrue(eof.suppressedExceptions.isEmpty())
+        }
     }
 
     @Test
     fun explicitFeatureStopAttemptsEveryTransportAndReportsFailures() = runBlocking {
+        val stopFailure = IllegalStateException("cannot unregister")
         val failing = RollbackDiscoveryTransport(TransportKind.LAN).apply {
-            stopAdvertisingFailure = IllegalStateException("cannot unregister")
+            stopAdvertisingFailure = stopFailure
         }
         val healthy = RollbackDiscoveryTransport(TransportKind.BLE)
-        val kit = createTestKit {
-            appId = AppId("feature-stop-cleanup-test")
-            deviceName = "Test"
-            transports {
-                register(RollbackDiscoveryFactory(failing))
-                register(RollbackDiscoveryFactory(healthy))
+        withTestKit(
+            create = { recorder ->
+                createTestKit {
+                    logger = recorder
+                    appId = AppId("feature-stop-cleanup-test")
+                    deviceName = "Test"
+                    transports {
+                        register(RollbackDiscoveryFactory(failing))
+                        register(RollbackDiscoveryFactory(healthy))
+                    }
+                }
+            },
+            verifyDiagnostics = { recorder ->
+                assertLifecycleDiagnostics(recorder, listOf(lifecycleWarning(
+                    "stop advertising failed for LAN discovery transport",
+                    stopFailure
+                )))
             }
-        }
-        try {
-            kit.startAdvertising()
-            val failure = assertFailsWith<P2pError.ConnectionFailed> {
-                kit.stopAdvertising()
-            }
-            assertIs<CleanupAggregateException>(failure.cause)
-            assertEquals(1, failing.stopAdvertisingCalls)
-            assertEquals(1, healthy.stopAdvertisingCalls)
-            assertFalse(healthy.advertisingActive)
-            assertIs<FeatureState.Failed>(kit.advertisingState.value)
-            assertEquals(FeatureState.Idle, kit.discoveryState.value)
-            assertEquals(P2pState.Running, kit.state.value)
+        ) { kit ->
+            try {
+                kit.startAdvertising()
+                val failure = assertFailsWith<P2pError.ConnectionFailed> {
+                    kit.stopAdvertising()
+                }
+                assertIs<CleanupAggregateException>(failure.cause)
+                assertEquals(1, failing.stopAdvertisingCalls)
+                assertEquals(1, healthy.stopAdvertisingCalls)
+                assertFalse(healthy.advertisingActive)
+                assertIs<FeatureState.Failed>(kit.advertisingState.value)
+                assertEquals(FeatureState.Idle, kit.discoveryState.value)
+                assertEquals(P2pState.Running, kit.state.value)
 
-            failing.stopAdvertisingFailure = null
-            kit.startAdvertising()
-            assertEquals(2, failing.stopAdvertisingCalls)
-            assertEquals(2, healthy.stopAdvertisingCalls)
-            assertTrue(failing.advertisingActive)
-            assertTrue(healthy.advertisingActive)
-            assertEquals(FeatureState.Active, kit.advertisingState.value)
-        } finally {
-            failing.stopAdvertisingFailure = null
-            kit.stop()
+                failing.stopAdvertisingFailure = null
+                kit.startAdvertising()
+                assertEquals(2, failing.stopAdvertisingCalls)
+                assertEquals(2, healthy.stopAdvertisingCalls)
+                assertTrue(failing.advertisingActive)
+                assertTrue(healthy.advertisingActive)
+                assertEquals(FeatureState.Active, kit.advertisingState.value)
+            } finally {
+                failing.stopAdvertisingFailure = null
+            }
         }
     }
 }
@@ -1760,7 +2264,8 @@ private class StartupProbeTransport(
 
     override fun canConnect(peer: InternalPeer): Boolean = false
     override suspend fun connect(peer: InternalPeer): RawConnection = error("not supported")
-    override fun incomingConnections(): Flow<RawConnection> = emptyFlow()
+    // A startup/rollback probe leaves acceptance idle; it does not model an ended listener.
+    override fun incomingConnections(): Flow<RawConnection> = flow { awaitCancellation() }
 
     override suspend fun close() {
         active = false
@@ -1803,6 +2308,7 @@ private class RetryCleanupCancellationTransport : DataTransport, DiscoveryTransp
     private val incoming = Channel<RawConnection>(Channel.UNLIMITED)
     private val peerEvents = MutableSharedFlow<PeerEvent>(extraBufferCapacity = 1)
     val retryCleanupEntered = CompletableDeferred<Unit>()
+    val firstRollbackFailure = IllegalStateException("first advertising rollback failed")
 
     @Volatile var advertisingActive: Boolean = false
     @Volatile var startAdvertisingCalls: Int = 0
@@ -1826,7 +2332,7 @@ private class RetryCleanupCancellationTransport : DataTransport, DiscoveryTransp
     override suspend fun stopAdvertising() {
         stopAdvertisingCalls += 1
         when (stopAdvertisingCalls) {
-            1 -> throw IllegalStateException("first advertising rollback failed")
+            1 -> throw firstRollbackFailure
             2 -> {
                 retryCleanupEntered.complete(Unit)
                 CompletableDeferred<Unit>().await()
@@ -2120,6 +2626,7 @@ private class FailingStartWithFirstCloseSuspendingObserver : NetworkPathObserver
     private val _status = MutableStateFlow<NetworkPathStatus>(NetworkPathStatus.Unknown)
     override val status: StateFlow<NetworkPathStatus> = _status.asStateFlow()
     val firstCloseEntered = CompletableDeferred<Unit>()
+    val startFailure = IllegalStateException("observer attach failed before cleanup cancellation")
 
     @Volatile var startCalls: Int = 0
     @Volatile var closeCalls: Int = 0
@@ -2129,7 +2636,7 @@ private class FailingStartWithFirstCloseSuspendingObserver : NetworkPathObserver
         startCalls += 1
         active = true
         if (startCalls == 1) {
-            throw IllegalStateException("observer attach failed before cleanup cancellation")
+            throw startFailure
         }
     }
 

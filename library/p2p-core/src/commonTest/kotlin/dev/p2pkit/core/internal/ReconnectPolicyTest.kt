@@ -3,6 +3,7 @@ package dev.p2pkit.core.internal
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.P2pKit
+import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
@@ -10,7 +11,10 @@ import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
+import dev.p2pkit.core.testfixtures.RecordingLogger
+import dev.p2pkit.core.testfixtures.StatefulTestFailure
 import dev.p2pkit.core.testfixtures.createTestKit
+import dev.p2pkit.core.testfixtures.withTestKit
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
@@ -69,8 +73,10 @@ class ReconnectPolicyTest {
     private fun outgoingKit(
         name: String,
         policy: ReconnectPolicy,
+        recording: P2pLogger,
         outgoingFactory: () -> RawConnection
     ): P2pKit = createTestKit {
+        logger = recording
         appId = AppId("com.example.test")
         deviceName = name
         peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("alice-id"))
@@ -86,8 +92,13 @@ class ReconnectPolicyTest {
         }
     }
 
-    private fun incomingKit(name: String, preStaged: List<RawConnection>): P2pKit =
+    private fun incomingKit(
+        name: String,
+        preStaged: List<RawConnection>,
+        recording: P2pLogger
+    ): P2pKit =
         createTestKit {
+            logger = recording
             appId = AppId("com.example.test")
             deviceName = name
             keepAlive {
@@ -101,6 +112,35 @@ class ReconnectPolicyTest {
                 register(ReconnectTestFactory(FakeDataTransport(preStagedIncoming = preStaged)))
             }
         }
+
+    /** Only a finite ordered prefix of this controlled factory's failed retry budget is valid. */
+    private fun assertFailedReconnectDiagnostics(
+        recorder: RecordingLogger,
+        wireDiagnostic: RecordingLogger.Entry?,
+        maxAttempts: Int,
+        failureReason: String,
+        exhausted: Boolean = false
+    ) {
+        val diagnostics = recorder.entries.filter {
+            it.level == RecordingLogger.Level.WARN || it.level == RecordingLogger.Level.ERROR
+        }
+        val retryFailures = (1..maxAttempts).map { attempt ->
+            RecordingLogger.Entry(
+                RecordingLogger.Level.WARN,
+                "reconnect: attempt=$attempt/$maxAttempts peer=bob-id name=Bob FAILED " +
+                    "dialed=LAN:?:? source=FALLBACK reason=$failureReason"
+            )
+        }
+        // The body may stop a retry episode at any point. Enumerate the source-defined prefixes,
+        // not an expected count obtained from the log. Exhaustion must publish the entire budget.
+        val permittedCounts = if (exhausted) maxAttempts..maxAttempts else 0..maxAttempts
+        assertTrue(
+            permittedCounts.any { count ->
+                diagnostics == listOfNotNull(wireDiagnostic) + retryFailures.take(count)
+            },
+            "unexpected diagnostics outside the controlled retry sequence: $diagnostics"
+        )
+    }
 
     /** Observe retry invocation while preserving the real driver and onWillReconnect callback. */
     private fun P2pSessionImpl.observeReconnectEntry(): CompletableDeferred<Unit> {
@@ -118,27 +158,47 @@ class ReconnectPolicyTest {
     @Test
     fun disabledPolicyTransitionsDirectlyToFailed() = runBlocking<Unit> {
         val pair = FakeConnectionPair()
-        val alice = outgoingKit("Alice", ReconnectPolicy.Disabled) { pair.a }
-        val bob = incomingKit("Bob", listOf(pair.b))
-        try {
-            val session = withTimeout(5_000) { alice.connect(targetPeer()) }
-            // alice.connect returning means the handshake completed on both
-            // sides — no need to observe bob.incomingSessions (it's replay=0
-            // and the emit may have happened before we could subscribe).
-            assertEquals(ConnectionState.Connected, session.state.value)
-
-            pair.a.breakWithException(RuntimeException("simulated wire break"))
-
-            val terminal = withTimeout(5_000) {
-                session.state.first { it == ConnectionState.Failed || it == ConnectionState.Closed }
+        val wireFailure = StatefulTestFailure("simulated wire break")
+        var expectedWireDiagnostic: RecordingLogger.Entry? = null
+        withTestKit(
+            create = { recorder ->
+                outgoingKit("Alice", ReconnectPolicy.Disabled, recording = recorder) { pair.a }
+            },
+            verifyDiagnostics = { recorder ->
+                assertEquals(
+                    listOfNotNull(expectedWireDiagnostic),
+                    recorder.entries.filter {
+                        it.level == RecordingLogger.Level.WARN || it.level == RecordingLogger.Level.ERROR
+                    }
+                )
             }
-            assertEquals(
-                ConnectionState.Failed, terminal,
-                "Disabled policy must transition broken sessions to Failed, never via Reconnecting"
-            )
-        } finally {
-            alice.stop()
-            bob.stop()
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", listOf(pair.b), recording = recorder)
+                }
+            ) { bob ->
+                val session = withTimeout(5_000) { alice.connect(targetPeer()) }
+                // alice.connect returning means the handshake completed on both
+                // sides — no need to observe bob.incomingSessions (it's replay=0
+                // and the emit may have happened before we could subscribe).
+                assertEquals(ConnectionState.Connected, session.state.value)
+
+                expectedWireDiagnostic = RecordingLogger.Entry(
+                    RecordingLogger.Level.WARN,
+                    "Session ${session.id}: routeEvents failed",
+                    wireFailure
+                )
+                pair.a.breakWithException(wireFailure)
+
+                val terminal = withTimeout(5_000) {
+                    session.state.first { it == ConnectionState.Failed || it == ConnectionState.Closed }
+                }
+                assertEquals(
+                    ConnectionState.Failed, terminal,
+                    "Disabled policy must transition broken sessions to Failed, never via Reconnecting"
+                )
+            }
         }
     }
 
@@ -146,29 +206,50 @@ class ReconnectPolicyTest {
     fun enabledPolicyEmitsReconnectingOnConnectionLoss() = runBlocking<Unit> {
         val pair = FakeConnectionPair()
         val queue = ArrayDeque<RawConnection>().apply { add(pair.a) }
-        val alice = outgoingKit(
-            "Alice",
-            ReconnectPolicy.Enabled(maxAttempts = 3, retryDelayMillis = 10)
-        ) {
-            queue.removeFirstOrNull() ?: throw RuntimeException("no more connections")
-        }
-        val bob = incomingKit("Bob", listOf(pair.b))
-        try {
-            val session = withTimeout(5_000) { alice.connect(targetPeer()) }
-            // alice.connect returning means the handshake completed on both
-            // sides — no need to observe bob.incomingSessions (it's replay=0
-            // and the emit may have happened before we could subscribe).
-            assertEquals(ConnectionState.Connected, session.state.value)
-
-            pair.a.breakWithException(RuntimeException("simulated wire break"))
-
-            val reconnecting = withTimeout(5_000) {
-                session.state.first { it == ConnectionState.Reconnecting }
+        val wireFailure = StatefulTestFailure("simulated wire break")
+        var expectedWireDiagnostic: RecordingLogger.Entry? = null
+        withTestKit(
+            create = { recorder ->
+                outgoingKit(
+                    "Alice",
+                    ReconnectPolicy.Enabled(maxAttempts = 3, retryDelayMillis = 10),
+                    recording = recorder
+                ) {
+                    queue.removeFirstOrNull() ?: throw RuntimeException("no more connections")
+                }
+            },
+            verifyDiagnostics = { recorder ->
+                assertFailedReconnectDiagnostics(
+                    recorder = recorder,
+                    wireDiagnostic = expectedWireDiagnostic,
+                    maxAttempts = 3,
+                    failureReason = "RuntimeException: no more connections"
+                )
             }
-            assertEquals(ConnectionState.Reconnecting, reconnecting)
-        } finally {
-            alice.stop()
-            bob.stop()
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", listOf(pair.b), recording = recorder)
+                }
+            ) { bob ->
+                val session = withTimeout(5_000) { alice.connect(targetPeer()) }
+                // alice.connect returning means the handshake completed on both
+                // sides — no need to observe bob.incomingSessions (it's replay=0
+                // and the emit may have happened before we could subscribe).
+                assertEquals(ConnectionState.Connected, session.state.value)
+
+                expectedWireDiagnostic = RecordingLogger.Entry(
+                    RecordingLogger.Level.WARN,
+                    "Session ${session.id}: routeEvents failed",
+                    wireFailure
+                )
+                pair.a.breakWithException(wireFailure)
+
+                val reconnecting = withTimeout(5_000) {
+                    session.state.first { it == ConnectionState.Reconnecting }
+                }
+                assertEquals(ConnectionState.Reconnecting, reconnecting)
+            }
         }
     }
 
@@ -180,41 +261,62 @@ class ReconnectPolicyTest {
             add(pair1.a); add(pair2.a)
         }
         val attempts = MutableStateFlow(0)
-        val alice = outgoingKit(
-            "Alice",
-            ReconnectPolicy.Enabled(maxAttempts = 5, retryDelayMillis = 20)
-        ) {
-            attempts.update { it + 1 }
-            queue.removeFirstOrNull() ?: throw RuntimeException("no more connections")
-        }
-        val bob = incomingKit("Bob", listOf(pair1.b, pair2.b))
-        try {
-            val session = withTimeout(5_000) { alice.connect(targetPeer()) }
-            // alice.connect returning means the handshake completed on both
-            // sides — no need to observe bob.incomingSessions (it's replay=0
-            // and the emit may have happened before we could subscribe).
-            assertEquals(ConnectionState.Connected, session.state.value)
-
-            pair1.a.breakWithException(RuntimeException("simulated wire break"))
-            withTimeout(5_000) { session.state.first { it == ConnectionState.Reconnecting } }
-
-            val rearmed = withTimeout(5_000) {
-                session.state.first { it == ConnectionState.Connected }
+        val wireFailure = StatefulTestFailure("simulated wire break")
+        var expectedWireDiagnostic: RecordingLogger.Entry? = null
+        withTestKit(
+            create = { recorder ->
+                outgoingKit(
+                    "Alice",
+                    ReconnectPolicy.Enabled(maxAttempts = 5, retryDelayMillis = 20),
+                    recording = recorder
+                ) {
+                    attempts.update { it + 1 }
+                    queue.removeFirstOrNull() ?: throw RuntimeException("no more connections")
+                }
+            },
+            verifyDiagnostics = { recorder ->
+                assertEquals(
+                    listOfNotNull(expectedWireDiagnostic),
+                    recorder.entries.filter {
+                        it.level == RecordingLogger.Level.WARN || it.level == RecordingLogger.Level.ERROR
+                    }
+                )
             }
-            assertEquals(ConnectionState.Connected, rearmed)
-            assertEquals(
-                2, attempts.value,
-                "Expected initial connect + exactly one retry to succeed"
-            )
-            // Session identity preserved across the rearm — kit.sessions still
-            // exposes the same P2pSession instance the caller is holding.
-            assertSame(
-                session, alice.sessions.value.firstOrNull(),
-                "Public session identity must survive reconnect"
-            )
-        } finally {
-            alice.stop()
-            bob.stop()
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", listOf(pair1.b, pair2.b), recording = recorder)
+                }
+            ) { bob ->
+                val session = withTimeout(5_000) { alice.connect(targetPeer()) }
+                // alice.connect returning means the handshake completed on both
+                // sides — no need to observe bob.incomingSessions (it's replay=0
+                // and the emit may have happened before we could subscribe).
+                assertEquals(ConnectionState.Connected, session.state.value)
+
+                expectedWireDiagnostic = RecordingLogger.Entry(
+                    RecordingLogger.Level.WARN,
+                    "Session ${session.id}: routeEvents failed",
+                    wireFailure
+                )
+                pair1.a.breakWithException(wireFailure)
+                withTimeout(5_000) { session.state.first { it == ConnectionState.Reconnecting } }
+
+                val rearmed = withTimeout(5_000) {
+                    session.state.first { it == ConnectionState.Connected }
+                }
+                assertEquals(ConnectionState.Connected, rearmed)
+                assertEquals(
+                    2, attempts.value,
+                    "Expected initial connect + exactly one retry to succeed"
+                )
+                // Session identity preserved across the rearm — kit.sessions still
+                // exposes the same P2pSession instance the caller is holding.
+                assertSame(
+                    session, alice.sessions.value.firstOrNull(),
+                    "Public session identity must survive reconnect"
+                )
+            }
         }
     }
 
@@ -223,31 +325,53 @@ class ReconnectPolicyTest {
         val pair = FakeConnectionPair()
         val attempts = MutableStateFlow(0)
         val maxAttempts = 3
-        val alice = outgoingKit(
-            "Alice",
-            ReconnectPolicy.Enabled(maxAttempts = maxAttempts, retryDelayMillis = 10)
-        ) {
-            val n = attempts.value
-            attempts.update { it + 1 }
-            if (n == 0) pair.a else throw RuntimeException("simulated transport unreachable")
-        }
-        val bob = incomingKit("Bob", listOf(pair.b))
-        try {
-            val session = withTimeout(5_000) { alice.connect(targetPeer()) }
-
-            pair.a.breakWithException(RuntimeException("simulated wire break"))
-
-            val terminal = withTimeout(5_000) {
-                session.state.first { it == ConnectionState.Failed || it == ConnectionState.Closed }
+        val wireFailure = StatefulTestFailure("simulated wire break")
+        var expectedWireDiagnostic: RecordingLogger.Entry? = null
+        withTestKit(
+            create = { recorder ->
+                outgoingKit(
+                    "Alice",
+                    ReconnectPolicy.Enabled(maxAttempts = maxAttempts, retryDelayMillis = 10),
+                    recording = recorder
+                ) {
+                    val n = attempts.value
+                    attempts.update { it + 1 }
+                    if (n == 0) pair.a else throw RuntimeException("simulated transport unreachable")
+                }
+            },
+            verifyDiagnostics = { recorder ->
+                assertFailedReconnectDiagnostics(
+                    recorder = recorder,
+                    wireDiagnostic = expectedWireDiagnostic,
+                    maxAttempts = maxAttempts,
+                    failureReason = "RuntimeException: simulated transport unreachable",
+                    exhausted = true
+                )
             }
-            assertEquals(ConnectionState.Failed, terminal)
-            assertEquals(
-                1 + maxAttempts, attempts.value,
-                "Factory should be called initial + exactly $maxAttempts retries"
-            )
-        } finally {
-            alice.stop()
-            bob.stop()
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", listOf(pair.b), recording = recorder)
+                }
+            ) { bob ->
+                val session = withTimeout(5_000) { alice.connect(targetPeer()) }
+
+                expectedWireDiagnostic = RecordingLogger.Entry(
+                    RecordingLogger.Level.WARN,
+                    "Session ${session.id}: routeEvents failed",
+                    wireFailure
+                )
+                pair.a.breakWithException(wireFailure)
+
+                val terminal = withTimeout(5_000) {
+                    session.state.first { it == ConnectionState.Failed || it == ConnectionState.Closed }
+                }
+                assertEquals(ConnectionState.Failed, terminal)
+                assertEquals(
+                    1 + maxAttempts, attempts.value,
+                    "Factory should be called initial + exactly $maxAttempts retries"
+                )
+            }
         }
     }
 
@@ -255,46 +379,64 @@ class ReconnectPolicyTest {
     fun closeDuringReconnectStopsRetriesAndEndsClosed() = runBlocking<Unit> {
         val pair = FakeConnectionPair()
         val attempts = MutableStateFlow(0)
-        val alice = outgoingKit(
-            "Alice",
-            ReconnectPolicy.Enabled(maxAttempts = 5, retryDelayMillis = 1_000)
-        ) {
-            val n = attempts.value
-            attempts.update { it + 1 }
-            if (n == 0) pair.a else throw RuntimeException("simulated transport unreachable")
-        }
-        val bob = incomingKit("Bob", listOf(pair.b))
-        try {
-            val session = assertIs<P2pSessionImpl>(withTimeout(5_000) { alice.connect(targetPeer()) })
-
-            val reconnectEntered = session.observeReconnectEntry()
-            pair.a.breakWithException(RuntimeException("simulated wire break"))
-            withTimeout(5_000) {
-                session.state.first { it == ConnectionState.Reconnecting }
-                reconnectEntered.await()
+        val wireFailure = StatefulTestFailure("simulated wire break")
+        var expectedWireDiagnostic: RecordingLogger.Entry? = null
+        withTestKit(
+            create = { recorder ->
+                outgoingKit(
+                    "Alice",
+                    ReconnectPolicy.Enabled(maxAttempts = 5, retryDelayMillis = 1_000),
+                    recording = recorder
+                ) {
+                    val n = attempts.value
+                    attempts.update { it + 1 }
+                    if (n == 0) pair.a else throw RuntimeException("simulated transport unreachable")
+                }
+            },
+            verifyDiagnostics = { recorder ->
+                assertFailedReconnectDiagnostics(
+                    recorder = recorder,
+                    wireDiagnostic = expectedWireDiagnostic,
+                    maxAttempts = 5,
+                    failureReason = "RuntimeException: simulated transport unreachable"
+                )
             }
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", listOf(pair.b), recording = recorder)
+                }
+            ) { bob ->
+                val session = assertIs<P2pSessionImpl>(withTimeout(5_000) { alice.connect(targetPeer()) })
 
-            val attemptsAtClose = attempts.value
-            session.close()
-            assertEquals(
-                ConnectionState.Closed, session.state.value,
-                "Manual close() must take precedence over reconnect exhaustion"
-            )
-            // Join the actual retry owner rather than sampling a short absence window.
-            withTimeout(5_000) { session.awaitRuntimeTermination() }
-            assertEquals(
-                attemptsAtClose, attempts.value,
-                "Factory must not be called after close()"
-            )
-            assertEquals(
-                ConnectionState.Closed, session.state.value,
-                "State must remain Closed after close() — never flip to Failed"
-            )
-        } finally {
-            try {
-                alice.stop()
-            } finally {
-                bob.stop()
+                val reconnectEntered = session.observeReconnectEntry()
+                expectedWireDiagnostic = RecordingLogger.Entry(
+                    RecordingLogger.Level.WARN,
+                    "Session ${session.id}: routeEvents failed",
+                    wireFailure
+                )
+                pair.a.breakWithException(wireFailure)
+                withTimeout(5_000) {
+                    session.state.first { it == ConnectionState.Reconnecting }
+                    reconnectEntered.await()
+                }
+
+                val attemptsAtClose = attempts.value
+                session.close()
+                assertEquals(
+                    ConnectionState.Closed, session.state.value,
+                    "Manual close() must take precedence over reconnect exhaustion"
+                )
+                // Join the actual retry owner rather than sampling a short absence window.
+                withTimeout(5_000) { session.awaitRuntimeTermination() }
+                assertEquals(
+                    attemptsAtClose, attempts.value,
+                    "Factory must not be called after close()"
+                )
+                assertEquals(
+                    ConnectionState.Closed, session.state.value,
+                    "State must remain Closed after close() — never flip to Failed"
+                )
             }
         }
     }
@@ -303,44 +445,62 @@ class ReconnectPolicyTest {
     fun kitStopDuringReconnectStopsRetries() = runBlocking<Unit> {
         val pair = FakeConnectionPair()
         val attempts = MutableStateFlow(0)
-        val alice = outgoingKit(
-            "Alice",
-            ReconnectPolicy.Enabled(maxAttempts = 5, retryDelayMillis = 1_000)
-        ) {
-            val n = attempts.value
-            attempts.update { it + 1 }
-            if (n == 0) pair.a else throw RuntimeException("simulated transport unreachable")
-        }
-        val bob = incomingKit("Bob", listOf(pair.b))
-        try {
-            val session = assertIs<P2pSessionImpl>(withTimeout(5_000) { alice.connect(targetPeer()) })
-
-            val reconnectEntered = session.observeReconnectEntry()
-            pair.a.breakWithException(RuntimeException("simulated wire break"))
-            withTimeout(5_000) {
-                session.state.first { it == ConnectionState.Reconnecting }
-                reconnectEntered.await()
+        val wireFailure = StatefulTestFailure("simulated wire break")
+        var expectedWireDiagnostic: RecordingLogger.Entry? = null
+        withTestKit(
+            create = { recorder ->
+                outgoingKit(
+                    "Alice",
+                    ReconnectPolicy.Enabled(maxAttempts = 5, retryDelayMillis = 1_000),
+                    recording = recorder
+                ) {
+                    val n = attempts.value
+                    attempts.update { it + 1 }
+                    if (n == 0) pair.a else throw RuntimeException("simulated transport unreachable")
+                }
+            },
+            verifyDiagnostics = { recorder ->
+                assertFailedReconnectDiagnostics(
+                    recorder = recorder,
+                    wireDiagnostic = expectedWireDiagnostic,
+                    maxAttempts = 5,
+                    failureReason = "RuntimeException: simulated transport unreachable"
+                )
             }
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", listOf(pair.b), recording = recorder)
+                }
+            ) { bob ->
+                val session = assertIs<P2pSessionImpl>(withTimeout(5_000) { alice.connect(targetPeer()) })
 
-            alice.stop()
-            assertEquals(
-                ConnectionState.Closed, session.state.value,
-                "kit.stop() must leave reconnecting sessions terminally Closed"
-            )
-            // A dial that crossed the stop boundary before shutdown acquired
-            // session ownership is allowed to finish being cancelled. The
-            // contract begins when stop() returns: no later retry may start.
-            val attemptsAfterStop = attempts.value
-            withTimeout(5_000) { session.awaitRuntimeTermination() }
-            assertEquals(
-                attemptsAfterStop, attempts.value,
-                "Factory must not be called after kit.stop() returns"
-            )
-        } finally {
-            try {
+                val reconnectEntered = session.observeReconnectEntry()
+                expectedWireDiagnostic = RecordingLogger.Entry(
+                    RecordingLogger.Level.WARN,
+                    "Session ${session.id}: routeEvents failed",
+                    wireFailure
+                )
+                pair.a.breakWithException(wireFailure)
+                withTimeout(5_000) {
+                    session.state.first { it == ConnectionState.Reconnecting }
+                    reconnectEntered.await()
+                }
+
                 alice.stop()
-            } finally {
-                bob.stop()
+                assertEquals(
+                    ConnectionState.Closed, session.state.value,
+                    "kit.stop() must leave reconnecting sessions terminally Closed"
+                )
+                // A dial that crossed the stop boundary before shutdown acquired
+                // session ownership is allowed to finish being cancelled. The
+                // contract begins when stop() returns: no later retry may start.
+                val attemptsAfterStop = attempts.value
+                withTimeout(5_000) { session.awaitRuntimeTermination() }
+                assertEquals(
+                    attemptsAfterStop, attempts.value,
+                    "Factory must not be called after kit.stop() returns"
+                )
             }
         }
     }
@@ -348,30 +508,51 @@ class ReconnectPolicyTest {
     @Test
     fun concurrentConnectDuringReconnectReturnsSameSession() = runBlocking<Unit> {
         val pair = FakeConnectionPair()
-        val alice = outgoingKit(
-            "Alice",
-            ReconnectPolicy.Enabled(maxAttempts = 5, retryDelayMillis = 1_000)
-        ) {
-            // First call serves initial connect; later calls fail to keep the
-            // session pinned in Reconnecting for the duration of this test.
-            if (pair.a.state.value == ConnectionState.Connected) pair.a
-            else throw RuntimeException("simulated transport unreachable")
-        }
-        val bob = incomingKit("Bob", listOf(pair.b))
-        try {
-            val firstSession = withTimeout(5_000) { alice.connect(targetPeer()) }
+        val wireFailure = StatefulTestFailure("simulated wire break")
+        var expectedWireDiagnostic: RecordingLogger.Entry? = null
+        withTestKit(
+            create = { recorder ->
+                outgoingKit(
+                    "Alice",
+                    ReconnectPolicy.Enabled(maxAttempts = 5, retryDelayMillis = 1_000),
+                    recording = recorder
+                ) {
+                    // First call serves initial connect; later calls fail to keep the
+                    // session pinned in Reconnecting for the duration of this test.
+                    if (pair.a.state.value == ConnectionState.Connected) pair.a
+                    else throw RuntimeException("simulated transport unreachable")
+                }
+            },
+            verifyDiagnostics = { recorder ->
+                assertFailedReconnectDiagnostics(
+                    recorder = recorder,
+                    wireDiagnostic = expectedWireDiagnostic,
+                    maxAttempts = 5,
+                    failureReason = "RuntimeException: simulated transport unreachable"
+                )
+            }
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", listOf(pair.b), recording = recorder)
+                }
+            ) { bob ->
+                val firstSession = withTimeout(5_000) { alice.connect(targetPeer()) }
 
-            pair.a.breakWithException(RuntimeException("simulated wire break"))
-            withTimeout(5_000) { firstSession.state.first { it == ConnectionState.Reconnecting } }
+                expectedWireDiagnostic = RecordingLogger.Entry(
+                    RecordingLogger.Level.WARN,
+                    "Session ${firstSession.id}: routeEvents failed",
+                    wireFailure
+                )
+                pair.a.breakWithException(wireFailure)
+                withTimeout(5_000) { firstSession.state.first { it == ConnectionState.Reconnecting } }
 
-            val secondSession = withTimeout(5_000) { alice.connect(targetPeer()) }
-            assertSame(
-                firstSession, secondSession,
-                "connect() during Reconnecting must return the existing session"
-            )
-        } finally {
-            alice.stop()
-            bob.stop()
+                val secondSession = withTimeout(5_000) { alice.connect(targetPeer()) }
+                assertSame(
+                    firstSession, secondSession,
+                    "connect() during Reconnecting must return the existing session"
+                )
+            }
         }
     }
 
@@ -385,37 +566,51 @@ class ReconnectPolicyTest {
         // the clean-Closed outcome the pre-fix completion branch could latch.
         val pair = FakeConnectionPair()
         val queue = ArrayDeque<RawConnection>().apply { add(pair.a) }
-        val alice = outgoingKit(
-            "Alice",
-            ReconnectPolicy.Enabled(maxAttempts = 5, retryDelayMillis = 1_000)
-        ) {
-            queue.removeFirstOrNull() ?: throw RuntimeException("no more connections")
-        }
-        val bob = incomingKit("Bob", listOf(pair.b))
-        try {
-            val session = withTimeout(5_000) { alice.connect(targetPeer()) }
-            assertEquals(ConnectionState.Connected, session.state.value)
-
-            // Subscribe to the FIRST transition out of Connected before the
-            // hang-up so the Reconnecting edge cannot be missed (UNDISPATCHED
-            // runs the collector to its first suspension point right here).
-            val firstTransition = async(start = CoroutineStart.UNDISPATCHED) {
-                session.state.first { it != ConnectionState.Connected }
+        withTestKit(
+            create = { recorder ->
+                outgoingKit(
+                    "Alice",
+                    ReconnectPolicy.Enabled(maxAttempts = 5, retryDelayMillis = 1_000),
+                    recording = recorder
+                ) {
+                    queue.removeFirstOrNull() ?: throw RuntimeException("no more connections")
+                }
+            },
+            verifyDiagnostics = { recorder ->
+                assertFailedReconnectDiagnostics(
+                    recorder = recorder,
+                    wireDiagnostic = null,
+                    maxAttempts = 5,
+                    failureReason = "RuntimeException: no more connections"
+                )
             }
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", listOf(pair.b), recording = recorder)
+                }
+            ) { bob ->
+                val session = withTimeout(5_000) { alice.connect(targetPeer()) }
+                assertEquals(ConnectionState.Connected, session.state.value)
 
-            // Production-shaped remote termination (fixture F1): Bob's end of
-            // the wire goes away without a CLOSE frame.
-            pair.hangUp(pair.b)
+                // Subscribe to the FIRST transition out of Connected before the
+                // hang-up so the Reconnecting edge cannot be missed (UNDISPATCHED
+                // runs the collector to its first suspension point right here).
+                val firstTransition = async(start = CoroutineStart.UNDISPATCHED) {
+                    session.state.first { it != ConnectionState.Connected }
+                }
 
-            assertEquals(
-                ConnectionState.Reconnecting,
-                withTimeout(5_000) { firstTransition.await() },
-                "abrupt remote termination (no CLOSE frame) must deterministically enter " +
-                    "Reconnecting under ReconnectPolicy.Enabled — never the clean-Closed outcome"
-            )
-        } finally {
-            alice.stop()
-            bob.stop()
+                // Production-shaped remote termination (fixture F1): Bob's end of
+                // the wire goes away without a CLOSE frame.
+                pair.hangUp(pair.b)
+
+                assertEquals(
+                    ConnectionState.Reconnecting,
+                    withTimeout(5_000) { firstTransition.await() },
+                    "abrupt remote termination (no CLOSE frame) must deterministically enter " +
+                        "Reconnecting under ReconnectPolicy.Enabled — never the clean-Closed outcome"
+                )
+            }
         }
     }
 
@@ -428,38 +623,44 @@ class ReconnectPolicyTest {
         val pair = FakeConnectionPair()
         val withheldAlice = FirstWriteWithheldConnection(pair.a)
         val attempts = MutableStateFlow(0)
-        val alice = outgoingKit(
-            "Alice",
-            ReconnectPolicy.Enabled(maxAttempts = 3, retryDelayMillis = 500)
-        ) {
-            val n = attempts.value
-            attempts.update { it + 1 }
-            if (n == 0) withheldAlice else throw RuntimeException("unexpected reconnect")
-        }
-        val bob = incomingKit("Bob", listOf(pair.b))
-        try {
-            val session = withTimeout(5_000) { alice.connect(targetPeer()) }
-            withheldAlice.firstWriteWithheld.await()
-            assertEquals(ConnectionState.Connected, session.state.value)
-            assertTrue(
-                bob.sessions.value.isEmpty(),
-                "the fixture must stop Bob inside the pre-registration handshake gap"
-            )
-            val terminal = async(start = CoroutineStart.UNDISPATCHED) {
-                session.state.first { it == ConnectionState.Closed }
+        withTestKit(
+            create = { recorder ->
+                outgoingKit(
+                    "Alice",
+                    ReconnectPolicy.Enabled(maxAttempts = 3, retryDelayMillis = 500),
+                    recording = recorder
+                ) {
+                    val n = attempts.value
+                    attempts.update { it + 1 }
+                    if (n == 0) withheldAlice else throw RuntimeException("unexpected reconnect")
+                }
             }
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", listOf(pair.b), recording = recorder)
+                }
+            ) { bob ->
+                val session = withTimeout(5_000) { alice.connect(targetPeer()) }
+                withheldAlice.firstWriteWithheld.await()
+                assertEquals(ConnectionState.Connected, session.state.value)
+                assertTrue(
+                    bob.sessions.value.isEmpty(),
+                    "the fixture must stop Bob inside the pre-registration handshake gap"
+                )
+                val terminal = async(start = CoroutineStart.UNDISPATCHED) {
+                    session.state.first { it == ConnectionState.Closed }
+                }
 
-            bob.stop()
+                bob.stop()
 
-            assertEquals(ConnectionState.Closed, withTimeout(5_000) { terminal.await() })
-            assertEquals(
-                1,
-                attempts.value,
-                "tracked setup shutdown must send CLOSE and never trigger Alice reconnect"
-            )
-        } finally {
-            alice.stop()
-            bob.stop()
+                assertEquals(ConnectionState.Closed, withTimeout(5_000) { terminal.await() })
+                assertEquals(
+                    1,
+                    attempts.value,
+                    "tracked setup shutdown must send CLOSE and never trigger Alice reconnect"
+                )
+            }
         }
     }
 
@@ -471,46 +672,49 @@ class ReconnectPolicyTest {
         // never trigger retry"), even under ReconnectPolicy.Enabled.
         val pair = FakeConnectionPair()
         val attempts = MutableStateFlow(0)
-        val alice = outgoingKit(
-            "Alice",
-            ReconnectPolicy.Enabled(maxAttempts = 5, retryDelayMillis = 1_000)
-        ) {
-            val n = attempts.value
-            attempts.update { it + 1 }
-            if (n == 0) pair.a else throw RuntimeException("no more connections")
-        }
-        val bob = incomingKit("Bob", listOf(pair.b))
-        try {
-            val session = assertIs<P2pSessionImpl>(withTimeout(5_000) { alice.connect(targetPeer()) })
-            assertEquals(ConnectionState.Connected, session.state.value)
-
-            // Peer-side clean close: Bob's session sends the CLOSE frame and
-            // then tears its raw connection down — the exact
-            // frame-then-socket-close sequence a shipped transport delivers.
-            val bobSession = withTimeout(5_000) { bob.sessions.first { it.isNotEmpty() } }.first()
-            bobSession.close()
-
-            val terminal = withTimeout(5_000) {
-                session.state.first { it == ConnectionState.Closed || it == ConnectionState.Failed }
+        withTestKit(
+            create = { recorder ->
+                outgoingKit(
+                    "Alice",
+                    ReconnectPolicy.Enabled(maxAttempts = 5, retryDelayMillis = 1_000),
+                    recording = recorder
+                ) {
+                    val n = attempts.value
+                    attempts.update { it + 1 }
+                    if (n == 0) pair.a else throw RuntimeException("no more connections")
+                }
             }
-            assertEquals(
-                ConnectionState.Closed, terminal,
-                "a received CLOSE frame must classify as a clean close — exactly Closed, never Failed"
-            )
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", listOf(pair.b), recording = recorder)
+                }
+            ) { bob ->
+                val session = assertIs<P2pSessionImpl>(withTimeout(5_000) { alice.connect(targetPeer()) })
+                assertEquals(ConnectionState.Connected, session.state.value)
 
-            // A CLOSE frame may correct a transient Reconnecting state.
-            // All owned retry work must finish before the no-redial assertion.
-            withTimeout(5_000) { session.awaitRuntimeTermination() }
-            assertEquals(
-                1, attempts.value,
-                "dial factory must not be re-invoked after a remote CLOSE frame"
-            )
-            assertEquals(ConnectionState.Closed, session.state.value)
-        } finally {
-            try {
-                alice.stop()
-            } finally {
-                bob.stop()
+                // Peer-side clean close: Bob's session sends the CLOSE frame and
+                // then tears its raw connection down — the exact
+                // frame-then-socket-close sequence a shipped transport delivers.
+                val bobSession = withTimeout(5_000) { bob.sessions.first { it.isNotEmpty() } }.first()
+                bobSession.close()
+
+                val terminal = withTimeout(5_000) {
+                    session.state.first { it == ConnectionState.Closed || it == ConnectionState.Failed }
+                }
+                assertEquals(
+                    ConnectionState.Closed, terminal,
+                    "a received CLOSE frame must classify as a clean close — exactly Closed, never Failed"
+                )
+
+                // A CLOSE frame may correct a transient Reconnecting state.
+                // All owned retry work must finish before the no-redial assertion.
+                withTimeout(5_000) { session.awaitRuntimeTermination() }
+                assertEquals(
+                    1, attempts.value,
+                    "dial factory must not be re-invoked after a remote CLOSE frame"
+                )
+                assertEquals(ConnectionState.Closed, session.state.value)
             }
         }
     }
@@ -525,34 +729,40 @@ class ReconnectPolicyTest {
         repeat(10) { iteration ->
             val pair = FakeConnectionPair()
             val attempts = MutableStateFlow(0)
-            val alice = outgoingKit(
-                "Alice",
-                ReconnectPolicy.Enabled(maxAttempts = 5, retryDelayMillis = 1_000)
-            ) {
-                val n = attempts.value
-                attempts.update { it + 1 }
-                if (n == 0) pair.a else throw RuntimeException("no more connections")
-            }
-            val bob = incomingKit("Bob", listOf(pair.b))
-            try {
-                val session = withTimeout(5_000) { alice.connect(targetPeer()) }
-                val bobSession = withTimeout(5_000) { bob.sessions.first { it.isNotEmpty() } }.first()
-                bobSession.close()
-
-                val terminal = withTimeout(5_000) {
-                    session.state.first { it == ConnectionState.Closed || it == ConnectionState.Failed }
+            withTestKit(
+                create = { recorder ->
+                    outgoingKit(
+                        "Alice",
+                        ReconnectPolicy.Enabled(maxAttempts = 5, retryDelayMillis = 1_000),
+                        recording = recorder
+                    ) {
+                        val n = attempts.value
+                        attempts.update { it + 1 }
+                        if (n == 0) pair.a else throw RuntimeException("no more connections")
+                    }
                 }
-                assertEquals(
-                    ConnectionState.Closed, terminal,
-                    "iteration $iteration: remote CLOSE must end exactly Closed, never Failed"
-                )
-                assertEquals(
-                    1, attempts.value,
-                    "iteration $iteration: dial factory must not be re-invoked after a remote CLOSE"
-                )
-            } finally {
-                alice.stop()
-                bob.stop()
+            ) { alice ->
+                withTestKit(
+                    create = { recorder ->
+                        incomingKit("Bob", listOf(pair.b), recording = recorder)
+                    }
+                ) { bob ->
+                    val session = withTimeout(5_000) { alice.connect(targetPeer()) }
+                    val bobSession = withTimeout(5_000) { bob.sessions.first { it.isNotEmpty() } }.first()
+                    bobSession.close()
+
+                    val terminal = withTimeout(5_000) {
+                        session.state.first { it == ConnectionState.Closed || it == ConnectionState.Failed }
+                    }
+                    assertEquals(
+                        ConnectionState.Closed, terminal,
+                        "iteration $iteration: remote CLOSE must end exactly Closed, never Failed"
+                    )
+                    assertEquals(
+                        1, attempts.value,
+                        "iteration $iteration: dial factory must not be re-invoked after a remote CLOSE"
+                    )
+                }
             }
         }
     }

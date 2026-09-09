@@ -2,6 +2,7 @@ package dev.p2pkit.core
 
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.createTestKit
+import dev.p2pkit.core.testfixtures.withTestKit
 import dev.p2pkit.core.transfer.FileTransferConfig
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportDescriptor
@@ -135,17 +136,20 @@ class PublicConfigurationValidationTest {
 
     @Test
     fun repeatedConfigurationBlocksAccumulatePriorValues() = runBlocking<Unit> {
-        val kit = createTestKit {
-            appId = AppId("repeated-configuration-test")
-            deviceName = "Device"
-            transports { register(ConfigurationTransportFactory) }
-            keepAlive { pingIntervalMillis = 100 }
-            keepAlive { timeoutMillis = 200 }
-            fileTransfer { maxFileSizeBytes = Int.MAX_VALUE.toLong() }
-            fileTransfer { chunkSizeBytes = 1 }
+        withTestKit(create = { recorder ->
+            createTestKit {
+                logger = recorder
+                appId = AppId("repeated-configuration-test")
+                deviceName = "Device"
+                transports { register(ConfigurationTransportFactory) }
+                keepAlive { pingIntervalMillis = 100 }
+                keepAlive { timeoutMillis = 200 }
+                fileTransfer { maxFileSizeBytes = Int.MAX_VALUE.toLong() }
+                fileTransfer { chunkSizeBytes = 1 }
+            }
+        }) { kit ->
+            kit.stop()
         }
-
-        kit.stop()
     }
 }
 

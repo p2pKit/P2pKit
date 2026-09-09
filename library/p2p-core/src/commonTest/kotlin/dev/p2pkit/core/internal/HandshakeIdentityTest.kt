@@ -4,13 +4,17 @@ import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pKit
+import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
+import dev.p2pkit.core.testfixtures.assertLegacyPeerMismatchDiagnostics
+import dev.p2pkit.core.testfixtures.assertLegacySelfCollisionDiagnostics
 import dev.p2pkit.core.testfixtures.createTestKit
+import dev.p2pkit.core.testfixtures.withTestKit
 import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
@@ -41,8 +45,9 @@ import kotlin.test.assertTrue
  */
 class HandshakeIdentityTest {
 
-    private fun outgoingKit(localId: String, outgoing: RawConnection): P2pKit =
+    private fun outgoingKit(localId: String, outgoing: RawConnection, recording: P2pLogger): P2pKit =
         createTestKit {
+            logger = recording
             appId = AppId("com.example.test")
             deviceName = "Alice"
             peerIdStorage = InMemoryPeerIdStorage(seed = PeerId(localId))
@@ -55,8 +60,9 @@ class HandshakeIdentityTest {
             }
         }
 
-    private fun incomingKit(localId: String, incoming: RawConnection): P2pKit =
+    private fun incomingKit(localId: String, incoming: RawConnection, recording: P2pLogger): P2pKit =
         createTestKit {
+            logger = recording
             appId = AppId("com.example.test")
             deviceName = "Bob"
             // The remote announces THIS id in its HELLO.
@@ -80,38 +86,49 @@ class HandshakeIdentityTest {
     @Test
     fun connectSucceedsWhenRemotePeerIdMatchesDialedId() = runBlocking<Unit> {
         val pair = FakeConnectionPair()
-        val alice = outgoingKit(localId = "alice-id", outgoing = pair.a)
-        val bob = incomingKit(localId = "bob-id", incoming = pair.b)
-        try {
-            bob.start() // ensure Bob accepts the staged inbound connection
-            val session = withTimeout(5_000) { alice.connect(peer("bob-id")) }
-            assertEquals(ConnectionState.Connected, session.state.value)
-            assertEquals("bob-id", session.peer.id.value)
-        } finally {
-            alice.stop()
-            bob.stop()
+        withTestKit(
+            create = { recorder ->
+                outgoingKit(localId = "alice-id", outgoing = pair.a, recording = recorder)
+            }
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit(localId = "bob-id", incoming = pair.b, recording = recorder)
+                }
+            ) { bob ->
+                bob.start() // ensure Bob accepts the staged inbound connection
+                val session = withTimeout(5_000) { alice.connect(peer("bob-id")) }
+                assertEquals(ConnectionState.Connected, session.state.value)
+                assertEquals("bob-id", session.peer.id.value)
+            }
         }
     }
 
     @Test
     fun connectRejectsWhenRemotePeerIdDoesNotMatchDialedId() = runBlocking<Unit> {
         val pair = FakeConnectionPair()
-        val alice = outgoingKit(localId = "alice-id", outgoing = pair.a)
-        // Alice dials "bob-id" but the device answering actually persists a
-        // different identity — a spoof / host:port race.
-        val impostor = incomingKit(localId = "impostor-id", incoming = pair.b)
-        try {
-            impostor.start()
-            val err = assertFailsWith<P2pError.HandshakeRejected> {
-                withTimeout(5_000) { alice.connect(peer("bob-id")) }
+        withTestKit(
+            create = { recorder ->
+                outgoingKit(localId = "alice-id", outgoing = pair.a, recording = recorder)
             }
-            assertTrue(
-                err.reason.contains("peerId mismatch"),
-                "expected a peerId-mismatch rejection, got: ${err.reason}"
-            )
-        } finally {
-            alice.stop()
-            impostor.stop()
+        ) { alice ->
+            // Alice dials "bob-id" but the device answering actually persists a
+            // different identity — a spoof / host:port race.
+            withTestKit(
+                create = { recorder ->
+                    incomingKit(localId = "impostor-id", incoming = pair.b, recording = recorder)
+                },
+                verifyDiagnostics = { recorder -> assertLegacyPeerMismatchDiagnostics(recorder, alice.localPeerId) }
+            ) { impostor ->
+                impostor.start()
+                val err = assertFailsWith<P2pError.HandshakeRejected> {
+                    withTimeout(5_000) { alice.connect(peer("bob-id")) }
+                }
+                assertTrue(
+                    err.reason.contains("peerId mismatch"),
+                    "expected a peerId-mismatch rejection, got: ${err.reason}"
+                )
+            }
         }
     }
 
@@ -121,20 +138,26 @@ class HandshakeIdentityTest {
         // Alice's own id and the dialed id are both "shared-id"; the remote also
         // announces "shared-id". The mismatch check passes (dialed == announced),
         // so the self-collision guard is the one that must reject.
-        val alice = outgoingKit(localId = "shared-id", outgoing = pair.a)
-        val bob = incomingKit(localId = "shared-id", incoming = pair.b)
-        try {
-            bob.start()
-            val err = assertFailsWith<P2pError.HandshakeRejected> {
-                withTimeout(5_000) { alice.connect(peer("shared-id")) }
+        withTestKit(
+            create = { recorder ->
+                outgoingKit(localId = "shared-id", outgoing = pair.a, recording = recorder)
             }
-            assertTrue(
-                err.reason.contains("our own peerId"),
-                "expected a self-collision rejection, got: ${err.reason}"
-            )
-        } finally {
-            alice.stop()
-            bob.stop()
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit(localId = "shared-id", incoming = pair.b, recording = recorder)
+                },
+                verifyDiagnostics = ::assertLegacySelfCollisionDiagnostics
+            ) { bob ->
+                bob.start()
+                val err = assertFailsWith<P2pError.HandshakeRejected> {
+                    withTimeout(5_000) { alice.connect(peer("shared-id")) }
+                }
+                assertTrue(
+                    err.reason.contains("our own peerId"),
+                    "expected a self-collision rejection, got: ${err.reason}"
+                )
+            }
         }
     }
 }

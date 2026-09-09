@@ -6,6 +6,7 @@ import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.PeerAuthorizationPolicy
 import dev.p2pkit.provisioning.desktop.jvm
+import kotlin.test.AfterTest
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
@@ -31,17 +32,24 @@ import kotlin.test.assertNotNull
  */
 @OptIn(ExperimentalP2pApi::class)
 class KmpConsumerLoopbackTest {
+    private val diagnostics = KitTestDiagnostics()
+
+    @AfterTest
+    fun checkDiagnostics() = runBlocking { diagnostics.finish() }
 
     private val appId = "kmp-consumer-itest-${System.currentTimeMillis()}"
 
     private fun createKit(
         deviceName: String,
         authorization: PeerAuthorizationPolicy = PeerAuthorizationPolicy.RejectUnknown
-    ): P2pKit = createJvmP2pKit(
-        appId = appId,
-        deviceName = deviceName,
-        authorization = authorization
-    ) { jvm() }
+    ): P2pKit = diagnostics.create { recording ->
+        createJvmP2pKit(
+            appId = appId,
+            deviceName = deviceName,
+            authorization = authorization,
+            logger = recording
+        ) { jvm() }
+    }
 
     @Test
     fun sharedFactoryCreatesAKitThatCanGreetAManualPeer() {
@@ -51,62 +59,57 @@ class KmpConsumerLoopbackTest {
                 "Bob", PeerAuthorizationPolicy.PinnedOnly(setOf(assertNotNull(greeter.localFingerprint)))
             )
 
-            try {
-                val incomingReady = CompletableDeferred<Unit>()
-                val incomingSession = async {
-                    responder.incomingSessions
-                        .onSubscription { incomingReady.complete(Unit) }
+            val incomingReady = CompletableDeferred<Unit>()
+            val incomingSession = async {
+                responder.incomingSessions
+                    .onSubscription { incomingReady.complete(Unit) }
+                    .first()
+            }
+            responder.start()
+            greeter.start()
+            incomingReady.await()
+
+            val responderInfo = assertNotNull(
+                responder.networkProvisioning.getManualConnectionInfo()
+            )
+            val responderFingerprint = assertNotNull(responderInfo.fingerprint)
+            assertEquals(
+                responderFingerprint,
+                greeter.parsePeerPairingQr(assertNotNull(responder.localPairingQr))
+            )
+            val responderPeer = greeter.networkProvisioning.createManualPeer(
+                host = "127.0.0.1",
+                port = responderInfo.port,
+                expectedFingerprint = responderFingerprint
+            )
+            val outgoing = withTimeout(10_000) {
+                greeter.connect(responderPeer, responderFingerprint)
+            }
+            assertEquals(ConnectionState.Connected, outgoing.state.value)
+            assertEquals(responderInfo.fingerprint, outgoing.peerIdentity.fingerprint)
+
+            withTimeout(10_000) {
+                val incoming = incomingSession.await()
+                val messageReady = CompletableDeferred<Unit>()
+                val firstMessage = async {
+                    incoming.incoming
+                        .onSubscription { messageReady.complete(Unit) }
                         .first()
                 }
-                responder.start()
-                greeter.start()
-                incomingReady.await()
 
-                val responderInfo = assertNotNull(
-                    responder.networkProvisioning.getManualConnectionInfo()
-                )
-                val responderFingerprint = assertNotNull(responderInfo.fingerprint)
-                assertEquals(
-                    responderFingerprint,
-                    greeter.parsePeerPairingQr(assertNotNull(responder.localPairingQr))
-                )
-                val responderPeer = greeter.networkProvisioning.createManualPeer(
-                    host = "127.0.0.1",
-                    port = responderInfo.port,
-                    expectedFingerprint = responderFingerprint
-                )
-                val outgoing = withTimeout(10_000) {
-                    greeter.connect(responderPeer, responderFingerprint)
-                }
-                assertEquals(ConnectionState.Connected, outgoing.state.value)
-                assertEquals(responderInfo.fingerprint, outgoing.peerIdentity.fingerprint)
+                // P2pSession.incoming is a replay-0 SharedFlow: sending
+                // before the receiver collector is active legitimately
+                // drops the message. A loaded hosted runner exposed that
+                // race even though the incoming-session collector was
+                // already active. Acknowledge both subscriptions before
+                // exercising the wire path; the existing 10-second bound
+                // still covers session delivery, subscription, send, and
+                // receive as one terminal operation.
+                messageReady.await()
+                outgoing.send(P2pMessage.Text("hello from Alice"))
 
-                withTimeout(10_000) {
-                    val incoming = incomingSession.await()
-                    val messageReady = CompletableDeferred<Unit>()
-                    val firstMessage = async {
-                        incoming.incoming
-                            .onSubscription { messageReady.complete(Unit) }
-                            .first()
-                    }
-
-                    // P2pSession.incoming is a replay-0 SharedFlow: sending
-                    // before the receiver collector is active legitimately
-                    // drops the message. A loaded hosted runner exposed that
-                    // race even though the incoming-session collector was
-                    // already active. Acknowledge both subscriptions before
-                    // exercising the wire path; the existing 10-second bound
-                    // still covers session delivery, subscription, send, and
-                    // receive as one terminal operation.
-                    messageReady.await()
-                    outgoing.send(P2pMessage.Text("hello from Alice"))
-
-                    val msg = assertIs<P2pMessage.Text>(firstMessage.await())
-                    assertEquals("hello from Alice", msg.value)
-                }
-            } finally {
-                greeter.stop()
-                responder.stop()
+                val msg = assertIs<P2pMessage.Text>(firstMessage.await())
+                assertEquals("hello from Alice", msg.value)
             }
         }
     }

@@ -10,6 +10,7 @@ import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.assertCannotAdd
 import dev.p2pkit.core.testfixtures.assertCannotPut
 import dev.p2pkit.core.testfixtures.createTestKit
+import dev.p2pkit.core.testfixtures.withTestKit
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.LocalPeerInfo
 import dev.p2pkit.core.transport.PeerAuthenticationHint
@@ -331,12 +332,14 @@ class PublicModelImmutabilityTest {
 
     @Test
     fun defaultFeatureStatesAreRuntimeReadOnly() = runBlocking {
-        val delegate = createTestKit {
-            appId = AppId("default-feature-state-test")
-            deviceName = "Default state"
-            transports { register(DefaultStateTransportFactory) }
-        }
-        try {
+        withTestKit(create = { recorder ->
+            createTestKit {
+                logger = recorder
+                appId = AppId("default-feature-state-test")
+                deviceName = "Default state"
+                transports { register(DefaultStateTransportFactory) }
+            }
+        }) { delegate ->
             val compatibilityImplementation = DefaultFeatureStateKit(delegate)
             val advertising = compatibilityImplementation.advertisingState
             val discovery = compatibilityImplementation.discoveryState
@@ -344,8 +347,6 @@ class PublicModelImmutabilityTest {
             assertSame(advertising, discovery)
             assertEquals(FeatureState.Idle, advertising.value)
             assertFalse(advertising is MutableStateFlow<*>)
-        } finally {
-            delegate.stop()
         }
     }
 }

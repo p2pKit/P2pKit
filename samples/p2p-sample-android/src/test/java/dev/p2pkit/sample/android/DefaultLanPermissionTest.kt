@@ -36,12 +36,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
@@ -230,25 +228,29 @@ class DefaultLanPermissionTest {
         val files = Files.createTempDirectory("p2pkit-permission-only-").toFile()
         val context = PermissionContext(application, files, target)
         val observer = InertObserver()
-        var kit: P2pKit? = null
+        val diagnostics = KitTestDiagnostics()
+        var primaryFailure: Throwable? = null
         try {
             ReflectionHelpers.setStaticField(Build.VERSION::class.java, "SDK_INT", sdk)
             P2pKitAndroid.initialize(context)
-            val created = P2pKit.create {
-                appId = AppId(files.name)
-                deviceName = "Synthetic permission fixture"
-                security { mode = SecurityMode.NoneForMvp }
-                lifecycle { networkPathObserver = observer }
-                permissionManager = permissionOverride
-                transports { factories.forEach { register(it) } }
+            val created = diagnostics.create { recording ->
+                P2pKit.create {
+                    logger = recording
+                    appId = AppId(files.name)
+                    deviceName = "Synthetic permission fixture"
+                    security { mode = SecurityMode.NoneForMvp }
+                    lifecycle { networkPathObserver = observer }
+                    permissionManager = permissionOverride
+                    transports { factories.forEach { register(it) } }
+                }
             }
-            kit = created
             assertTrue(factories.all { it.buildCalls == 1 })
             block(Fixture(created, context, observer, factories))
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
         } finally {
-            try {
-                withContext(NonCancellable) { kit?.stop() }
-            } finally {
+            diagnostics.finish(primaryFailure) {
                 try {
                     ReflectionHelpers.setStaticField(Build.VERSION::class.java, "SDK_INT", originalSdk)
                 } finally {

@@ -28,8 +28,10 @@ import dev.p2pkit.core.protocol.FileResultCode
 import dev.p2pkit.core.internal.security.sha256
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
+import dev.p2pkit.core.testfixtures.RecordingLogger
 import dev.p2pkit.core.testfixtures.assertCannotClear
 import dev.p2pkit.core.testfixtures.createTestKit
+import dev.p2pkit.core.testfixtures.withTestKit
 import dev.p2pkit.core.testfixtures.runWireBlocking
 import dev.p2pkit.core.transfer.FileTransferConfig
 import dev.p2pkit.core.transfer.FileTransferDestination
@@ -81,6 +83,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import kotlinx.io.Buffer
+import kotlinx.io.EOFException
 import kotlinx.io.IOException
 import kotlinx.io.RawSource
 import kotlinx.io.RawSink
@@ -99,8 +102,14 @@ import kotlin.test.assertTrue
 @Suppress("DEPRECATION")
 class FileTransferFlowTest {
 
-    private fun outgoingKit(name: String, outgoing: RawConnection, configureFileTransfer: Boolean = false): P2pKit =
+    private fun outgoingKit(
+        name: String,
+        outgoing: RawConnection,
+        configureFileTransfer: Boolean = false,
+        recording: P2pLogger
+    ): P2pKit =
         createTestKit {
+            logger = recording
             appId = AppId("com.example.ft")
             deviceName = name
             // The suite simulates two installations in one process. Explicit
@@ -128,8 +137,14 @@ class FileTransferFlowTest {
             }
         }
 
-    private fun incomingKit(name: String, incoming: RawConnection, configureFileTransfer: Boolean = false): P2pKit =
+    private fun incomingKit(
+        name: String,
+        incoming: RawConnection,
+        configureFileTransfer: Boolean = false,
+        recording: P2pLogger
+    ): P2pKit =
         createTestKit {
+            logger = recording
             appId = AppId("com.example.ft")
             deviceName = name
             keepAlive {
@@ -166,87 +181,89 @@ class FileTransferFlowTest {
     @Test
     fun smallFileTransfersEndToEnd() = runWireBlocking { delivery ->
         val pair = FakeConnectionPair(delivery)
-        val alice = outgoingKit("Alice", pair.a)
-        val bob = incomingKit("Bob", pair.b)
-        try {
-            val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
-            val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
-            val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
+        withTestKit(create = { outgoingKit("Alice", pair.a, recording = it) }) { alice ->
+            withTestKit(create = { incomingKit("Bob", pair.b, recording = it) }) { bob ->
+                val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
+                val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
+                val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
 
-            val payload = ByteArray(1024) { (it and 0xFF).toByte() }
-            val sink = Buffer()
+                val payload = ByteArray(1024) { (it and 0xFF).toByte() }
+                val sink = Buffer()
 
-            val transfer = outgoing.sendFile(
-                name = "blob.bin",
-                sizeBytes = payload.size.toLong(),
-                mimeType = "application/octet-stream",
-                source = Buffer().apply { write(payload) }
-            )
+                val transfer = outgoing.sendFile(
+                    name = "blob.bin",
+                    sizeBytes = payload.size.toLong(),
+                    mimeType = "application/octet-stream",
+                    source = Buffer().apply { write(payload) }
+                )
 
-            // Deliberately observe only after sendFile returns: retained state
-            // must make the offer available to a late subscriber.
-            val offer = withTimeout(5_000) {
-                incomingSession.pendingFileOffers.first { it.isNotEmpty() }.first()
+                // Deliberately observe only after sendFile returns: retained state
+                // must make the offer available to a late subscriber.
+                val offer = withTimeout(5_000) {
+                    incomingSession.pendingFileOffers.first { it.isNotEmpty() }.first()
+                }
+                assertEquals("blob.bin", offer.name)
+                assertEquals(payload.size.toLong(), offer.sizeBytes)
+                assertEquals("application/octet-stream", offer.mimeType)
+
+                val incomingTransfer = offer.accept(sink)
+
+                // Wait for both sides to terminate. The sender reaches Completed
+                // after FILE_DONE is written; the receiver reaches Completed after
+                // its StreamingFileReceiver.finish() runs in response to FILE_DONE.
+                // Reading the sink before the receiver finishes can race the last
+                // chunk write through the buffered sink wrapper.
+                val senderFinal = withTimeout(5_000) {
+                    transfer.state.first { it is FileTransferState.Completed || it is FileTransferState.Failed }
+                }
+                val receiverFinal = withTimeout(5_000) {
+                    incomingTransfer.state.first { it is FileTransferState.Completed || it is FileTransferState.Failed }
+                }
+                assertIs<FileTransferState.Completed>(senderFinal)
+                assertIs<FileTransferState.Completed>(receiverFinal)
+                assertEquals(payload.size.toLong(), transfer.bytesTransferred.value)
+                assertEquals(payload.size.toLong(), incomingTransfer.bytesTransferred.value)
+                assertContentEquals(payload, sink.readByteArray())
             }
-            assertEquals("blob.bin", offer.name)
-            assertEquals(payload.size.toLong(), offer.sizeBytes)
-            assertEquals("application/octet-stream", offer.mimeType)
-
-            val incomingTransfer = offer.accept(sink)
-
-            // Wait for both sides to terminate. The sender reaches Completed
-            // after FILE_DONE is written; the receiver reaches Completed after
-            // its StreamingFileReceiver.finish() runs in response to FILE_DONE.
-            // Reading the sink before the receiver finishes can race the last
-            // chunk write through the buffered sink wrapper.
-            val senderFinal = withTimeout(5_000) {
-                transfer.state.first { it is FileTransferState.Completed || it is FileTransferState.Failed }
-            }
-            val receiverFinal = withTimeout(5_000) {
-                incomingTransfer.state.first { it is FileTransferState.Completed || it is FileTransferState.Failed }
-            }
-            assertIs<FileTransferState.Completed>(senderFinal)
-            assertIs<FileTransferState.Completed>(receiverFinal)
-            assertEquals(payload.size.toLong(), transfer.bytesTransferred.value)
-            assertEquals(payload.size.toLong(), incomingTransfer.bytesTransferred.value)
-            assertContentEquals(payload, sink.readByteArray())
-        } finally {
-            alice.stop()
-            bob.stop()
         }
     }
 
     @Test
     fun rejectedOfferSurfacesOnSender() = runBlocking {
         val pair = FakeConnectionPair()
-        val alice = outgoingKit("Alice", pair.a)
-        val bob = incomingKit("Bob", pair.b)
-        try {
-            val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
-            val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
-            val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
-
-            val offerDeferred = async {
-                incomingSession.pendingFileOffers.first { it.isNotEmpty() }.first()
+        withTestKit(
+            create = { recorder ->
+                outgoingKit("Alice", pair.a, recording = recorder)
             }
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", pair.b, recording = recorder)
+                }
+            ) { bob ->
+                val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
+                val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
+                val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
 
-            val transfer = outgoing.sendFile(
-                name = "x.bin",
-                sizeBytes = 16L,
-                mimeType = null,
-                source = Buffer().apply { write(ByteArray(16)) }
-            )
-            val offer = withTimeout(5_000) { offerDeferred.await() }
-            offer.reject("no thanks")
+                val offerDeferred = async {
+                    incomingSession.pendingFileOffers.first { it.isNotEmpty() }.first()
+                }
 
-            val terminal = withTimeout(5_000) {
-                transfer.state.first { it is FileTransferState.Rejected || it is FileTransferState.Failed }
+                val transfer = outgoing.sendFile(
+                    name = "x.bin",
+                    sizeBytes = 16L,
+                    mimeType = null,
+                    source = Buffer().apply { write(ByteArray(16)) }
+                )
+                val offer = withTimeout(5_000) { offerDeferred.await() }
+                offer.reject("no thanks")
+
+                val terminal = withTimeout(5_000) {
+                    transfer.state.first { it is FileTransferState.Rejected || it is FileTransferState.Failed }
+                }
+                val rejected = assertIs<FileTransferState.Rejected>(terminal)
+                assertEquals("no thanks", rejected.reason)
             }
-            val rejected = assertIs<FileTransferState.Rejected>(terminal)
-            assertEquals("no thanks", rejected.reason)
-        } finally {
-            alice.stop()
-            bob.stop()
         }
     }
 
@@ -254,74 +271,84 @@ class FileTransferFlowTest {
     fun offerExceedingReceiverLimitAutoRejects() = runBlocking {
         val pair = FakeConnectionPair()
         // Receiver has 512-byte cap; sender wants to send 1024 bytes.
-        val alice = outgoingKit("Alice", pair.a, configureFileTransfer = false)
-        val bob = incomingKit("Bob", pair.b, configureFileTransfer = true)
-        try {
-            val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
-            val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
-            val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
-
-            // No accept side — receiver auto-rejects on size.
-            val transfer = outgoing.sendFile(
-                name = "huge.bin",
-                sizeBytes = 1024L,
-                mimeType = null,
-                source = Buffer().apply { write(ByteArray(1024)) }
-            )
-            val terminal = withTimeout(5_000) {
-                transfer.state.first { it is FileTransferState.Rejected || it is FileTransferState.Failed }
+        withTestKit(
+            create = { recorder ->
+                outgoingKit("Alice", pair.a, configureFileTransfer = false, recording = recorder)
             }
-            val rejected = assertIs<FileTransferState.Rejected>(terminal)
-            assertTrue(
-                rejected.reason?.contains("exceeds", ignoreCase = true) == true,
-                "Expected size-exceeds reason, got ${rejected.reason}"
-            )
-            assertTrue(
-                incomingSession.pendingFileOffers.value.isEmpty(),
-                "oversize offer must never enter retained pending state"
-            )
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", pair.b, configureFileTransfer = true, recording = recorder)
+                }
+            ) { bob ->
+                val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
+                val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
+                val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
 
-            // Sentinel: a conforming offer sent AFTER the oversize one must be
-            // the only offer the subscriber ever sees. Its arrival bounds the
-            // wait — a wrongly-emitted "huge.bin" would land before/alongside it.
-            outgoing.sendFile(
-                name = "small.bin",
-                sizeBytes = 16L,
-                mimeType = null,
-                source = Buffer().apply { write(ByteArray(16)) }
-            )
-            val retained = withTimeout(5_000) {
-                incomingSession.pendingFileOffers.first { it.isNotEmpty() }
+                // No accept side — receiver auto-rejects on size.
+                val transfer = outgoing.sendFile(
+                    name = "huge.bin",
+                    sizeBytes = 1024L,
+                    mimeType = null,
+                    source = Buffer().apply { write(ByteArray(1024)) }
+                )
+                val terminal = withTimeout(5_000) {
+                    transfer.state.first { it is FileTransferState.Rejected || it is FileTransferState.Failed }
+                }
+                val rejected = assertIs<FileTransferState.Rejected>(terminal)
+                assertTrue(
+                    rejected.reason?.contains("exceeds", ignoreCase = true) == true,
+                    "Expected size-exceeds reason, got ${rejected.reason}"
+                )
+                assertTrue(
+                    incomingSession.pendingFileOffers.value.isEmpty(),
+                    "oversize offer must never enter retained pending state"
+                )
+
+                // Sentinel: a conforming offer sent AFTER the oversize one must be
+                // the only offer the subscriber ever sees. Its arrival bounds the
+                // wait — a wrongly-emitted "huge.bin" would land before/alongside it.
+                outgoing.sendFile(
+                    name = "small.bin",
+                    sizeBytes = 16L,
+                    mimeType = null,
+                    source = Buffer().apply { write(ByteArray(16)) }
+                )
+                val retained = withTimeout(5_000) {
+                    incomingSession.pendingFileOffers.first { it.isNotEmpty() }
+                }
+                assertEquals(listOf("small.bin"), retained.map { it.name })
             }
-            assertEquals(listOf("small.bin"), retained.map { it.name })
-        } finally {
-            alice.stop()
-            bob.stop()
         }
     }
 
     @Test
     fun localPayloadTooLargeThrowsImmediately() = runBlocking<Unit> {
         val pair = FakeConnectionPair()
-        val alice = outgoingKit("Alice", pair.a, configureFileTransfer = true)
-        val bob = incomingKit("Bob", pair.b)
-        try {
-            val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
-            withTimeout(5_000) { bob.incomingSessions.first() }
-            val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
-
-            assertFailsWith<P2pError.PayloadTooLarge> {
-                // 512 cap on Alice's side — 600 bytes is rejected locally before any wire writes.
-                outgoing.sendFile(
-                    name = "n",
-                    sizeBytes = 600L,
-                    mimeType = null,
-                    source = Buffer().apply { write(ByteArray(600)) }
-                )
+        withTestKit(
+            create = { recorder ->
+                outgoingKit("Alice", pair.a, configureFileTransfer = true, recording = recorder)
             }
-        } finally {
-            alice.stop()
-            bob.stop()
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", pair.b, recording = recorder)
+                }
+            ) { bob ->
+                val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
+                withTimeout(5_000) { bob.incomingSessions.first() }
+                val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
+
+                assertFailsWith<P2pError.PayloadTooLarge> {
+                    // 512 cap on Alice's side — 600 bytes is rejected locally before any wire writes.
+                    outgoing.sendFile(
+                        name = "n",
+                        sizeBytes = 600L,
+                        mimeType = null,
+                        source = Buffer().apply { write(ByteArray(600)) }
+                    )
+                }
+            }
         }
     }
 
@@ -329,159 +356,177 @@ class FileTransferFlowTest {
     fun offerTimeoutAutoCancelsOnSender() = runBlocking {
         val pair = FakeConnectionPair()
         // Both sides have 200ms offer timeout.
-        val alice = outgoingKit("Alice", pair.a, configureFileTransfer = true)
-        val bob = incomingKit("Bob", pair.b, configureFileTransfer = true)
-        try {
-            val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
-            val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
-            val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
-
-            // The receiver is the normal unanswered-offer timeout authority;
-            // the sender watchdog has a response grace and cannot race it.
-            val transfer = outgoing.sendFile(
-                name = "x",
-                sizeBytes = 16L,
-                mimeType = null,
-                source = Buffer().apply { write(ByteArray(16)) }
-            )
-            val terminal = withTimeout(5_000) {
-                transfer.state.first { it.isTerminal() }
+        withTestKit(
+            create = { recorder ->
+                outgoingKit("Alice", pair.a, configureFileTransfer = true, recording = recorder)
             }
-            val rejected = assertIs<FileTransferState.Rejected>(terminal)
-            assertEquals("timeout", rejected.reason)
-            // Sanity: incomingSession was not closed by this — file transfer
-            // failures don't kill the data session.
-            assertEquals(dev.p2pkit.core.ConnectionState.Connected, incomingSession.state.value)
-        } finally {
-            alice.stop()
-            bob.stop()
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", pair.b, configureFileTransfer = true, recording = recorder)
+                }
+            ) { bob ->
+                val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
+                val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
+                val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
+
+                // The receiver is the normal unanswered-offer timeout authority;
+                // the sender watchdog has a response grace and cannot race it.
+                val transfer = outgoing.sendFile(
+                    name = "x",
+                    sizeBytes = 16L,
+                    mimeType = null,
+                    source = Buffer().apply { write(ByteArray(16)) }
+                )
+                val terminal = withTimeout(5_000) {
+                    transfer.state.first { it.isTerminal() }
+                }
+                val rejected = assertIs<FileTransferState.Rejected>(terminal)
+                assertEquals("timeout", rejected.reason)
+                // Sanity: incomingSession was not closed by this — file transfer
+                // failures don't kill the data session.
+                assertEquals(dev.p2pkit.core.ConnectionState.Connected, incomingSession.state.value)
+            }
         }
     }
 
     @Test
     fun cancelMidStreamPropagatesToReceiver() = runWireBlocking { delivery ->
         val pair = FakeConnectionPair(delivery)
-        val alice = outgoingKit("Alice", pair.a)
-        val bob = incomingKit("Bob", pair.b)
-        try {
-            val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
-            val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
-            val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
-
-            val offerDeferred = async {
-                incomingSession.pendingFileOffers.first { it.isNotEmpty() }.first()
+        withTestKit(
+            create = { recorder ->
+                outgoingKit("Alice", pair.a, recording = recorder)
             }
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", pair.b, recording = recorder)
+                }
+            ) { bob ->
+                try {
+                    val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
+                    val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
+                    val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
 
-            val transfer = outgoing.sendFile(
-                name = "abort.bin",
-                sizeBytes = 8L,
-                mimeType = null,
-                source = Buffer().apply { write(ByteArray(8)) }
-            )
-            val offer = withTimeout(5_000) { offerDeferred.await() }
+                    val offerDeferred = async {
+                        incomingSession.pendingFileOffers.first { it.isNotEmpty() }.first()
+                    }
 
-            // Hold the sender's first FILE_DATA write so this is genuinely a
-            // mid-stream cancellation test. With an eight-byte source and an
-            // unconstrained in-memory wire, the transfer could complete
-            // before cancel() was invoked, making the asserted lifecycle
-            // outcome scheduler-dependent.
-            pair.a.suspendWrites()
-            val writesBeforeAccept = pair.a.writeAttempts
-            val incomingTransfer = offer.accept(Buffer())
+                    val transfer = outgoing.sendFile(
+                        name = "abort.bin",
+                        sizeBytes = 8L,
+                        mimeType = null,
+                        source = Buffer().apply { write(ByteArray(8)) }
+                    )
+                    val offer = withTimeout(5_000) { offerDeferred.await() }
 
-            withTimeout(5_000) {
-                while (pair.a.writeAttempts == writesBeforeAccept) yield()
-            }
-            val cancellation = async { transfer.cancel("user aborted") }
-            withTimeout(5_000) {
-                transfer.state.first { it is FileTransferState.Cancelled }
-            }
-            pair.a.resumeWrites()
-            withTimeout(5_000) { cancellation.await() }
+                    // Hold the sender's first FILE_DATA write so this is genuinely a
+                    // mid-stream cancellation test. With an eight-byte source and an
+                    // unconstrained in-memory wire, the transfer could complete
+                    // before cancel() was invoked, making the asserted lifecycle
+                    // outcome scheduler-dependent.
+                    pair.a.suspendWrites()
+                    val writesBeforeAccept = pair.a.writeAttempts
+                    val incomingTransfer = offer.accept(Buffer())
 
-            val senderTerminal = withTimeout(5_000) {
-                transfer.state.first {
-                    it is FileTransferState.Cancelled || it is FileTransferState.Completed ||
-                        it is FileTransferState.Failed
+                    withTimeout(5_000) {
+                        while (pair.a.writeAttempts == writesBeforeAccept) yield()
+                    }
+                    val cancellation = async { transfer.cancel("user aborted") }
+                    withTimeout(5_000) {
+                        transfer.state.first { it is FileTransferState.Cancelled }
+                    }
+                    pair.a.resumeWrites()
+                    withTimeout(5_000) { cancellation.await() }
+
+                    val senderTerminal = withTimeout(5_000) {
+                        transfer.state.first {
+                            it is FileTransferState.Cancelled || it is FileTransferState.Completed ||
+                                it is FileTransferState.Failed
+                        }
+                    }
+                    val receiverTerminal = withTimeout(5_000) {
+                        incomingTransfer.state.first {
+                            it is FileTransferState.Cancelled || it is FileTransferState.Completed ||
+                                it is FileTransferState.Failed
+                        }
+                    }
+                    assertTrue(
+                        senderTerminal is FileTransferState.Cancelled,
+                        "Sender should observe Cancelled, got $senderTerminal"
+                    )
+                    assertTrue(
+                        receiverTerminal is FileTransferState.Cancelled,
+                        "Receiver should observe Cancelled, got $receiverTerminal"
+                    )
+                } finally {
+                    pair.a.resumeWrites()
                 }
             }
-            val receiverTerminal = withTimeout(5_000) {
-                incomingTransfer.state.first {
-                    it is FileTransferState.Cancelled || it is FileTransferState.Completed ||
-                        it is FileTransferState.Failed
-                }
-            }
-            assertTrue(
-                senderTerminal is FileTransferState.Cancelled,
-                "Sender should observe Cancelled, got $senderTerminal"
-            )
-            assertTrue(
-                receiverTerminal is FileTransferState.Cancelled,
-                "Receiver should observe Cancelled, got $receiverTerminal"
-            )
-        } finally {
-            pair.a.resumeWrites()
-            alice.stop()
-            bob.stop()
         }
     }
 
     @Test
     fun fileTransfersDoNotBlockMessages() = runBlocking {
         val pair = FakeConnectionPair()
-        val alice = outgoingKit("Alice", pair.a)
-        val bob = incomingKit("Bob", pair.b)
-        try {
-            val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
-            val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
-            val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
-
-            val msgReady = CompletableDeferred<Unit>()
-            val msgDeferred = async {
-                incomingSession.incoming.onSubscription { msgReady.complete(Unit) }.first()
+        withTestKit(
+            create = { recorder ->
+                outgoingKit("Alice", pair.a, recording = recorder)
             }
-            msgReady.await()
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", pair.b, recording = recorder)
+                }
+            ) { bob ->
+                val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
+                val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
+                val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
 
-            val offerDeferred = async {
-                incomingSession.pendingFileOffers.first { it.isNotEmpty() }.first()
+                val msgReady = CompletableDeferred<Unit>()
+                val msgDeferred = async {
+                    incomingSession.incoming.onSubscription { msgReady.complete(Unit) }.first()
+                }
+                msgReady.await()
+
+                val offerDeferred = async {
+                    incomingSession.pendingFileOffers.first { it.isNotEmpty() }.first()
+                }
+
+                // Kick off a file transfer, then send a regular message — message
+                // should land regardless of transfer state.
+                val payload = ByteArray(2048) { (it and 0xFF).toByte() }
+                val fileJob = launch {
+                    val transfer = outgoing.sendFile(
+                        name = "parallel.bin",
+                        sizeBytes = payload.size.toLong(),
+                        mimeType = null,
+                        source = Buffer().apply { write(payload) }
+                    )
+                    val offer = offerDeferred.await()
+                    offer.accept(Buffer())
+                    transfer.state.first { it is FileTransferState.Completed || it is FileTransferState.Failed }
+                }
+                outgoing.send(dev.p2pkit.core.P2pMessage.Text("ping"))
+                val msg = withTimeout(5_000) { msgDeferred.await() }
+                val text = assertIs<dev.p2pkit.core.P2pMessage.Text>(msg)
+                assertEquals("ping", text.value)
+
+                // Wait for the file transfer launch to finish before entering the
+                // finally block. Without this, `alice.stop()` in `finally` can race
+                // ahead of the launch's `offer.accept(...)`: alice's close tears
+                // down her wire, bob's `routeEvents` exits, bob's `markCleanlyClosed`
+                // fires, and bob's FileTransferDispatcher.closeAll evicts the
+                // pending offer — so the still-suspended `offer.accept(...)` would
+                // throw "Offer no longer pending" after the assertions are already
+                // done. The OLD SDK was lenient (markCleanlyClosed did NOT call
+                // closeAll), so the offer survived to be accepted on a wire that
+                // was being torn down. The S3 commit makes terminal transitions
+                // symmetric (file-transfer cleanup happens on every terminal path),
+                // which is the correct semantic — and exposes this test's reliance
+                // on the previous looseness.
+                withTimeout(5_000) { fileJob.join() }
             }
-
-            // Kick off a file transfer, then send a regular message — message
-            // should land regardless of transfer state.
-            val payload = ByteArray(2048) { (it and 0xFF).toByte() }
-            val fileJob = launch {
-                val transfer = outgoing.sendFile(
-                    name = "parallel.bin",
-                    sizeBytes = payload.size.toLong(),
-                    mimeType = null,
-                    source = Buffer().apply { write(payload) }
-                )
-                val offer = offerDeferred.await()
-                offer.accept(Buffer())
-                transfer.state.first { it is FileTransferState.Completed || it is FileTransferState.Failed }
-            }
-            outgoing.send(dev.p2pkit.core.P2pMessage.Text("ping"))
-            val msg = withTimeout(5_000) { msgDeferred.await() }
-            val text = assertIs<dev.p2pkit.core.P2pMessage.Text>(msg)
-            assertEquals("ping", text.value)
-
-            // Wait for the file transfer launch to finish before entering the
-            // finally block. Without this, `alice.stop()` in `finally` can race
-            // ahead of the launch's `offer.accept(...)`: alice's close tears
-            // down her wire, bob's `routeEvents` exits, bob's `markCleanlyClosed`
-            // fires, and bob's FileTransferDispatcher.closeAll evicts the
-            // pending offer — so the still-suspended `offer.accept(...)` would
-            // throw "Offer no longer pending" after the assertions are already
-            // done. The OLD SDK was lenient (markCleanlyClosed did NOT call
-            // closeAll), so the offer survived to be accepted on a wire that
-            // was being torn down. The S3 commit makes terminal transitions
-            // symmetric (file-transfer cleanup happens on every terminal path),
-            // which is the correct semantic — and exposes this test's reliance
-            // on the previous looseness.
-            withTimeout(5_000) { fileJob.join() }
-        } finally {
-            alice.stop()
-            bob.stop()
         }
     }
 
@@ -494,58 +539,80 @@ class FileTransferFlowTest {
         // transfer, notify the peer via FILE_CANCEL so the accepted receiver
         // does not wait indefinitely, and leave the session Connected.
         val pair = FakeConnectionPair()
-        val alice = outgoingKit("Alice", pair.a)
-        val bob = incomingKit("Bob", pair.b)
-        try {
-            val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
-            val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
-            val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
-
-            val msgReady = CompletableDeferred<Unit>()
-            val msgDeferred = async {
-                incomingSession.incoming.onSubscription { msgReady.complete(Unit) }.first()
+        var expectedDiagnostic: RecordingLogger.Entry? = null
+        withTestKit(
+            create = { recorder ->
+                outgoingKit("Alice", pair.a, recording = recorder)
+            },
+            verifyDiagnostics = { recorder ->
+                val expected = expectedDiagnostic
+                recorder.assertNoUnexpectedWarnOrError { it == expected }
+                if (expected != null) assertEquals(1, recorder.entries.count { it == expected })
             }
-            msgReady.await()
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", pair.b, recording = recorder)
+                }
+            ) { bob ->
+                val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
+                val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
+                val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
 
-            val offerDeferred = async {
-                incomingSession.pendingFileOffers.first { it.isNotEmpty() }.first()
+                val msgReady = CompletableDeferred<Unit>()
+                val msgDeferred = async {
+                    incomingSession.incoming.onSubscription { msgReady.complete(Unit) }.first()
+                }
+                msgReady.await()
+
+                val offerDeferred = async {
+                    incomingSession.pendingFileOffers.first { it.isNotEmpty() }.first()
+                }
+
+                val source = CloseTrackingSource(Buffer().apply { write(ByteArray(512) { 9 }) })
+                val transfer = outgoing.sendFile(
+                    name = "short.bin",
+                    sizeBytes = 1024L,
+                    mimeType = null,
+                    source = source
+                )
+                val offer = withTimeout(5_000) { offerDeferred.await() }
+                val incomingTransfer = offer.accept(Buffer())
+
+                val senderTerminal = withTimeout(5_000) { transfer.state.first { it.isTerminal() } }
+                val senderFailure = assertIs<FileTransferState.Failed>(senderTerminal)
+                val senderError = assertIs<P2pError.FileTransferFailed>(senderFailure.error)
+                assertEquals(FileTransferFailureKind.SOURCE_IO, senderError.kind)
+                assertEquals(FileTransferPhase.SOURCE_READ, senderError.phase)
+                val eof = assertIs<EOFException>(senderError.cause)
+                assertTrue(eof.suppressedExceptions.isEmpty(), "expected EOF must not hide cleanup failure")
+                // One intentionally short source, not an allowance for any transfer failure.
+                expectedDiagnostic = RecordingLogger.Entry(
+                    RecordingLogger.Level.WARN,
+                    "Session ${outgoing.id}: outgoing transfer ${transfer.id} failed",
+                    eof
+                )
+                // Receiver must reach a terminal state within a bound — the
+                // sender-side FILE_CANCEL crossed the wire.
+                val receiverTerminal = withTimeout(5_000) { incomingTransfer.state.first { it.isTerminal() } }
+                val cancelled = assertIs<FileTransferState.Cancelled>(receiverTerminal)
+                assertTrue(
+                    cancelled.reason?.contains("sender source failure") == true,
+                    "receiver should carry the sender-side failure reason, got ${cancelled.reason}"
+                )
+
+                // Transfer-failure isolation: sessions stay Connected and still move messages.
+                assertEquals(dev.p2pkit.core.ConnectionState.Connected, outgoing.state.value)
+                assertEquals(dev.p2pkit.core.ConnectionState.Connected, incomingSession.state.value)
+                outgoing.send(dev.p2pkit.core.P2pMessage.Text("still alive"))
+                val msg = withTimeout(5_000) { msgDeferred.await() }
+                assertEquals("still alive", assertIs<dev.p2pkit.core.P2pMessage.Text>(msg).value)
+
+                // Source released exactly once (P1-20 tie-in).
+                withTimeout(5_000) { while (source.closeCount < 1) delay(10) }
+                delay(50)
+                assertEquals(1, source.closeCount)
             }
-
-            val source = CloseTrackingSource(Buffer().apply { write(ByteArray(512) { 9 }) })
-            val transfer = outgoing.sendFile(
-                name = "short.bin",
-                sizeBytes = 1024L,
-                mimeType = null,
-                source = source
-            )
-            val offer = withTimeout(5_000) { offerDeferred.await() }
-            val incomingTransfer = offer.accept(Buffer())
-
-            val senderTerminal = withTimeout(5_000) { transfer.state.first { it.isTerminal() } }
-            assertIs<FileTransferState.Failed>(senderTerminal)
-            // Receiver must reach a terminal state within a bound — the
-            // sender-side FILE_CANCEL crossed the wire.
-            val receiverTerminal = withTimeout(5_000) { incomingTransfer.state.first { it.isTerminal() } }
-            val cancelled = assertIs<FileTransferState.Cancelled>(receiverTerminal)
-            assertTrue(
-                cancelled.reason?.contains("sender source failure") == true,
-                "receiver should carry the sender-side failure reason, got ${cancelled.reason}"
-            )
-
-            // Transfer-failure isolation: sessions stay Connected and still move messages.
-            assertEquals(dev.p2pkit.core.ConnectionState.Connected, outgoing.state.value)
-            assertEquals(dev.p2pkit.core.ConnectionState.Connected, incomingSession.state.value)
-            outgoing.send(dev.p2pkit.core.P2pMessage.Text("still alive"))
-            val msg = withTimeout(5_000) { msgDeferred.await() }
-            assertEquals("still alive", assertIs<dev.p2pkit.core.P2pMessage.Text>(msg).value)
-
-            // Source released exactly once (P1-20 tie-in).
-            withTimeout(5_000) { while (source.closeCount < 1) delay(10) }
-            delay(50)
-            assertEquals(1, source.closeCount)
-        } finally {
-            alice.stop()
-            bob.stop()
         }
     }
 
@@ -556,54 +623,59 @@ class FileTransferFlowTest {
         // sides' handles (no awaiter hangs) and release the sender's source
         // exactly once.
         val pair = FakeConnectionPair()
-        val alice = outgoingKit("Alice", pair.a)
-        val bob = incomingKit("Bob", pair.b)
-        try {
-            val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
-            val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
-            val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
-
-            val offerDeferred = async {
-                incomingSession.pendingFileOffers.first { it.isNotEmpty() }.first()
+        withTestKit(
+            create = { recorder ->
+                outgoingKit("Alice", pair.a, recording = recorder)
             }
-
-            val source = CloseTrackingSource(Buffer().apply { write(ByteArray(1024) { 4 }) })
-            val transfer = outgoing.sendFile(
-                name = "midstream.bin",
-                sizeBytes = 1024L,
-                mimeType = null,
-                source = source
-            )
-            val offer = withTimeout(5_000) { offerDeferred.await() }
-            // Park alice's writes AFTER the offer is out: the streamer's next
-            // chunk write suspends like a stalled socket write, pinning the
-            // transfer deterministically mid-stream (it can never complete).
-            pair.a.suspendWrites()
-            val incomingTransfer = offer.accept(Buffer())
-            withTimeout(5_000) { transfer.state.first { it is FileTransferState.Sending } }
-
-            withTimeout(10_000) { outgoing.close() }
-
-            val senderTerminal = withTimeout(5_000) { transfer.state.first { it.isTerminal() } }
-            assertIs<FileTransferState.Failed>(senderTerminal)
-            val receiverTerminal = withTimeout(5_000) { incomingTransfer.state.first { it.isTerminal() } }
-            assertTrue(
-                receiverTerminal is FileTransferState.Failed || receiverTerminal is FileTransferState.Cancelled,
-                "receiver handle must terminalize, got $receiverTerminal"
-            )
-            assertEquals(dev.p2pkit.core.ConnectionState.Closed, outgoing.state.value)
-            withTimeout(5_000) {
-                incomingSession.state.first {
-                    it == dev.p2pkit.core.ConnectionState.Closed || it == dev.p2pkit.core.ConnectionState.Failed
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", pair.b, recording = recorder)
                 }
-            }
+            ) { bob ->
+                val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
+                val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
+                val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
 
-            withTimeout(5_000) { while (source.closeCount < 1) delay(10) }
-            delay(50)  // grace so a (wrong) second close would surface
-            assertEquals(1, source.closeCount, "close() mid-stream must release the source exactly once")
-        } finally {
-            alice.stop()
-            bob.stop()
+                val offerDeferred = async {
+                    incomingSession.pendingFileOffers.first { it.isNotEmpty() }.first()
+                }
+
+                val source = CloseTrackingSource(Buffer().apply { write(ByteArray(1024) { 4 }) })
+                val transfer = outgoing.sendFile(
+                    name = "midstream.bin",
+                    sizeBytes = 1024L,
+                    mimeType = null,
+                    source = source
+                )
+                val offer = withTimeout(5_000) { offerDeferred.await() }
+                // Park alice's writes AFTER the offer is out: the streamer's next
+                // chunk write suspends like a stalled socket write, pinning the
+                // transfer deterministically mid-stream (it can never complete).
+                pair.a.suspendWrites()
+                val incomingTransfer = offer.accept(Buffer())
+                withTimeout(5_000) { transfer.state.first { it is FileTransferState.Sending } }
+
+                withTimeout(10_000) { outgoing.close() }
+
+                val senderTerminal = withTimeout(5_000) { transfer.state.first { it.isTerminal() } }
+                assertIs<FileTransferState.Failed>(senderTerminal)
+                val receiverTerminal = withTimeout(5_000) { incomingTransfer.state.first { it.isTerminal() } }
+                assertTrue(
+                    receiverTerminal is FileTransferState.Failed || receiverTerminal is FileTransferState.Cancelled,
+                    "receiver handle must terminalize, got $receiverTerminal"
+                )
+                assertEquals(dev.p2pkit.core.ConnectionState.Closed, outgoing.state.value)
+                withTimeout(5_000) {
+                    incomingSession.state.first {
+                        it == dev.p2pkit.core.ConnectionState.Closed || it == dev.p2pkit.core.ConnectionState.Failed
+                    }
+                }
+
+                withTimeout(5_000) { while (source.closeCount < 1) delay(10) }
+                delay(50)  // grace so a (wrong) second close would surface
+                assertEquals(1, source.closeCount, "close() mid-stream must release the source exactly once")
+            }
         }
     }
 
@@ -612,50 +684,55 @@ class FileTransferFlowTest {
         // AUDIT-2026-07 (FIL-1 / P1-24 / P1-20 stop-mid-stream): kit.stop()
         // variant of the mid-stream teardown — same invariants as close().
         val pair = FakeConnectionPair()
-        val alice = outgoingKit("Alice", pair.a)
-        val bob = incomingKit("Bob", pair.b)
-        try {
-            val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
-            val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
-            val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
-
-            val offerDeferred = async {
-                incomingSession.pendingFileOffers.first { it.isNotEmpty() }.first()
+        withTestKit(
+            create = { recorder ->
+                outgoingKit("Alice", pair.a, recording = recorder)
             }
-
-            val source = CloseTrackingSource(Buffer().apply { write(ByteArray(1024) { 6 }) })
-            val transfer = outgoing.sendFile(
-                name = "midstream-stop.bin",
-                sizeBytes = 1024L,
-                mimeType = null,
-                source = source
-            )
-            val offer = withTimeout(5_000) { offerDeferred.await() }
-            pair.a.suspendWrites()
-            val incomingTransfer = offer.accept(Buffer())
-            withTimeout(5_000) { transfer.state.first { it is FileTransferState.Sending } }
-
-            withTimeout(10_000) { alice.stop() }
-
-            val senderTerminal = withTimeout(5_000) { transfer.state.first { it.isTerminal() } }
-            assertIs<FileTransferState.Failed>(senderTerminal)
-            val receiverTerminal = withTimeout(5_000) { incomingTransfer.state.first { it.isTerminal() } }
-            assertTrue(
-                receiverTerminal is FileTransferState.Failed || receiverTerminal is FileTransferState.Cancelled,
-                "receiver handle must terminalize, got $receiverTerminal"
-            )
-            withTimeout(5_000) {
-                outgoing.state.first {
-                    it == dev.p2pkit.core.ConnectionState.Closed || it == dev.p2pkit.core.ConnectionState.Failed
+        ) { alice ->
+            withTestKit(
+                create = { recorder ->
+                    incomingKit("Bob", pair.b, recording = recorder)
                 }
-            }
+            ) { bob ->
+                val outgoingDeferred = async { alice.connect(syntheticPeer("bob-id", "Bob")) }
+                val incomingSession = withTimeout(5_000) { bob.incomingSessions.first() }
+                val outgoing = withTimeout(5_000) { outgoingDeferred.await() }
 
-            withTimeout(5_000) { while (source.closeCount < 1) delay(10) }
-            delay(50)
-            assertEquals(1, source.closeCount, "kit.stop() mid-stream must release the source exactly once")
-        } finally {
-            alice.stop()
-            bob.stop()
+                val offerDeferred = async {
+                    incomingSession.pendingFileOffers.first { it.isNotEmpty() }.first()
+                }
+
+                val source = CloseTrackingSource(Buffer().apply { write(ByteArray(1024) { 6 }) })
+                val transfer = outgoing.sendFile(
+                    name = "midstream-stop.bin",
+                    sizeBytes = 1024L,
+                    mimeType = null,
+                    source = source
+                )
+                val offer = withTimeout(5_000) { offerDeferred.await() }
+                pair.a.suspendWrites()
+                val incomingTransfer = offer.accept(Buffer())
+                withTimeout(5_000) { transfer.state.first { it is FileTransferState.Sending } }
+
+                withTimeout(10_000) { alice.stop() }
+
+                val senderTerminal = withTimeout(5_000) { transfer.state.first { it.isTerminal() } }
+                assertIs<FileTransferState.Failed>(senderTerminal)
+                val receiverTerminal = withTimeout(5_000) { incomingTransfer.state.first { it.isTerminal() } }
+                assertTrue(
+                    receiverTerminal is FileTransferState.Failed || receiverTerminal is FileTransferState.Cancelled,
+                    "receiver handle must terminalize, got $receiverTerminal"
+                )
+                withTimeout(5_000) {
+                    outgoing.state.first {
+                        it == dev.p2pkit.core.ConnectionState.Closed || it == dev.p2pkit.core.ConnectionState.Failed
+                    }
+                }
+
+                withTimeout(5_000) { while (source.closeCount < 1) delay(10) }
+                delay(50)
+                assertEquals(1, source.closeCount, "kit.stop() mid-stream must release the source exactly once")
+            }
         }
     }
 
