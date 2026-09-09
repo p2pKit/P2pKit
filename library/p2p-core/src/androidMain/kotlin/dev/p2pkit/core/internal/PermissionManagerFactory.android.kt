@@ -2,6 +2,7 @@ package dev.p2pkit.core.internal
 
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Build
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.android.androidApplicationContextOrNull
 import dev.p2pkit.core.permission.NoOpP2pPermissionManager
@@ -14,7 +15,7 @@ import dev.p2pkit.core.permission.P2pPermissionManager
  * no context to query, so it degrades to a no-op (with a warn) rather than
  * guessing.
  *
- * The LAN transport relies only on **normal (install-time)** permissions
+ * The LAN transport always relies on **normal (install-time)** permissions
  * (`INTERNET`, `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE`,
  * `CHANGE_WIFI_MULTICAST_STATE`) — auto-granted at install iff declared in
  * the manifest, impossible to request at runtime. They therefore must never
@@ -25,10 +26,13 @@ import dev.p2pkit.core.permission.P2pPermissionManager
  * mistake, so it is flagged as a construction-time warn instead (see
  * [warnIfLanManifestPermissionsUndeclared]) — the classic "forgot
  * CHANGE_WIFI_MULTICAST_STATE → silent zero-discovery" case is still caught
- * without gating startAdvertising/startDiscovery (AUDIT-2026-06
- * permission-gate regression fix).
+ * without misreporting them as runtime requests. Separately, device API 37+
+ * with final application target SDK 37+ requires the live dangerous
+ * `ACCESS_LOCAL_NETWORK` grant for raw LAN access. Library compile SDK does
+ * not determine the consumer's target or grant.
  */
-internal actual fun defaultPlatformPermissionManager(logger: P2pLogger): P2pPermissionManager {
+internal actual fun defaultPlatformPermissionManager(logger: P2pLogger, usesLan: Boolean): P2pPermissionManager {
+    if (!usesLan) return NoOpP2pPermissionManager()
     val ctx = androidApplicationContextOrNull()
     if (ctx == null) {
         logger.warn(
@@ -38,7 +42,7 @@ internal actual fun defaultPlatformPermissionManager(logger: P2pLogger): P2pPerm
         return NoOpP2pPermissionManager()
     }
     warnIfLanManifestPermissionsUndeclared(ctx.applicationContext, logger)
-    return AndroidLanPermissionManager()
+    return AndroidLanPermissionManager(ctx.applicationContext)
 }
 
 /**
@@ -67,17 +71,11 @@ private fun warnIfLanManifestPermissionsUndeclared(appContext: Context, logger: 
 }
 
 /**
- * Reports **no runtime permissions**: core LAN discovery/advertising needs
- * none on any supported API level (minSdk 24+). The Wi-Fi permissions the
- * transport depends on are install-time (see file header); reporting them
- * from [missingPermissions] made [P2pKitImpl] throw
- * [dev.p2pkit.core.P2pError.PermissionMissing] from
- * startAdvertising/startDiscovery for apps that worked under the previous
- * no-op default. Dropping the mapping also removes the double meaning of
- * [P2pPermission.ChangeWifiState] (core mapped it to
- * `CHANGE_WIFI_MULTICAST_STATE` while the provisioning sidecar maps it to
- * `CHANGE_WIFI_STATE`) — the enum member now has a single Android mapping,
- * the sidecar's.
+ * Reports only the applicable runtime LAN grant, never normal manifest
+ * permissions. Use the permission name rather than an API 37 SDK constant so
+ * the library continues to compile against API 36. Both device and final app
+ * target must opt into the Android 17 enforcement boundary. Android 16's
+ * explicit compatibility-test opt-in is a separate policy, not the default.
  *
  * Provisioning sidecars DO require real runtime permissions
  * (`NEARBY_WIFI_DEVICES` / `ACCESS_FINE_LOCATION`) and ship their own
@@ -88,8 +86,17 @@ private fun warnIfLanManifestPermissionsUndeclared(appContext: Context, logger: 
  * 2026-07-04): keep this default on the kit and query the sidecar's manager
  * immediately before provisioning calls only.
  */
-private class AndroidLanPermissionManager : P2pPermissionManager {
-    override suspend fun requiredPermissions(): List<P2pPermission> = emptyList()
-    override suspend fun missingPermissions(): List<P2pPermission> = emptyList()
-    override suspend fun hasRequiredPermissions(): Boolean = true
+private class AndroidLanPermissionManager(private val appContext: Context) : P2pPermissionManager {
+    override suspend fun requiredPermissions(): List<P2pPermission> =
+        if (Build.VERSION.SDK_INT >= 37 && appContext.applicationInfo.targetSdkVersion >= 37) {
+            listOf(P2pPermission.LocalNetwork)
+        } else {
+            emptyList()
+        }
+
+    override suspend fun missingPermissions(): List<P2pPermission> = requiredPermissions().filter {
+        appContext.checkSelfPermission("android.permission.ACCESS_LOCAL_NETWORK") != PackageManager.PERMISSION_GRANTED
+    }
+
+    override suspend fun hasRequiredPermissions(): Boolean = missingPermissions().isEmpty()
 }

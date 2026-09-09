@@ -12,6 +12,9 @@ package dev.p2pkit.core.permission
  * [dev.p2pkit.core.P2pKit.startDiscovery] throw
  * [dev.p2pkit.core.P2pError.PermissionMissing] if any required permission is
  * absent.
+ * Preflight is not an atomic grant guarantee. Hosts must also check before
+ * direct `start()`/`connect()` calls, which do not perform this feature gate,
+ * and handle operation failures if access changes after the check.
  */
 public interface P2pPermissionManager {
     public suspend fun requiredPermissions(): List<P2pPermission>
@@ -26,6 +29,7 @@ public interface P2pPermissionManager {
  * [P2pPermissionManager.requiredPermissions] for the active list.
  */
 public enum class P2pPermission {
+    /** Android raw LAN: `ACCESS_LOCAL_NETWORK` on device API 37+ with app target SDK 37+. */
     LocalNetwork,
     NearbyWifiDevices,
     Bluetooth,

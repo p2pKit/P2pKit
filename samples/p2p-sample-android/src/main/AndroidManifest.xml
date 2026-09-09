@@ -6,6 +6,8 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!-- The target-37 application requests this at runtime on API 37+, not from a library manifest. -->
+    <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
 
     <!-- v0.2.1: Network Provisioning (LocalOnlyHotspot host) -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />

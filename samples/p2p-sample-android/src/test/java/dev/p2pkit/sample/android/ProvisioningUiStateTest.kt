@@ -1037,7 +1037,21 @@ class ProvisioningUiStateTest {
         val stop = vm.substringAfter("fun stop() {").substringBefore("override fun onCleared()")
         assertTrue(stop.contains("provisioningUi.detach()"))
         assertTrue(stop.indexOf("provisioningUi.detach()") < stop.indexOf("runScope?.cancel()"))
-        assertTrue(vm.contains("override fun onCleared() {\n        provisioningUi.detach()"))
+        val clear = vm.substringAfter("override fun onCleared() {")
+            .substringBefore("private fun releaseDiagnosticInstrumentation()")
+        val detach = clear.indexOf("provisioningUi.detach()")
+        assertTrue(detach >= 0, "ViewModel clearing must detach provisioning state")
+        // Callback-retirement flags may precede detach, but no branch, return, call or nested block may do so.
+        // This keeps detach unconditional without requiring it to be the method's literal first statement.
+        val scalarAssignment = Regex("""[A-Za-z_]\w*\s*(?:=|\+=)\s*(?:true|false|\d+)""")
+        val beforeDetach = clear.take(detach).lineSequence().map(String::trim).filter(String::isNotEmpty)
+        assertTrue(
+            beforeDetach.all(scalarAssignment::matches),
+            "Only unconditional scalar lifecycle assignments may precede provisioning detach"
+        )
+        assertTrue(detach < clear.indexOf("retireForegroundRestore()"))
+        assertTrue(detach < clear.indexOf("cleanupScope.launch"))
+        assertTrue(detach < clear.indexOf("cleanupScope.cancel()"))
         assertFalse(vm.contains("_hotspotResult.value ="))
         assertFalse(vm.contains("_joinResult.value ="))
         assertTrue(ui.contains("val busy by vm.joinProvisioningBusy.collectAsState()"))

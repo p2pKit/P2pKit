@@ -174,6 +174,26 @@ Declare the base LAN permissions:
 <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 ```
 
+For an app **targeting SDK 37+**, raw LAN additionally needs the dangerous
+`android.permission.ACCESS_LOCAL_NETWORK` grant **on Android 17/API 37+**.
+Declare it in that final app (not in apps targeting SDK 36 or lower):
+
+```xml
+<uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
+```
+
+The current development source reports this live grant as
+`P2pPermission.LocalNetwork` through `kit.permissions`; this is not a claim
+about older published binaries. The app requests access using Android's
+permission APIs and rechecks the live result before retrying its intended
+operation. Denial/revocation must not trigger automatic start or prompt loops.
+Preflight direct `start()`/`connect()` calls too; only the advertising/discovery
+feature entry points perform the SDK permission gate. A preflight cannot prevent
+a later OS revocation, so handle operation failures and keep cleanup available.
+Android 16's explicit local-network compatibility opt-in is a separate test
+mode, not ordinary API 36 behavior. See the
+[Android policy](https://developer.android.com/privacy-and-security/local-network-permission#android-17-enforcement).
+
 The optional network-provisioning sidecar has separate runtime permission and
 system-state requirements. Query its permission manager immediately before a
 provisioning operation; do not gate the base LAN transport on those permissions.

@@ -10,5 +10,5 @@ import dev.p2pkit.core.permission.P2pPermissionManager
  * pre-check API to surface here — so the default manager is a no-op. The iOS
  * sample detects a denial behaviourally (browser never reaches `ready`).
  */
-internal actual fun defaultPlatformPermissionManager(logger: P2pLogger): P2pPermissionManager =
+internal actual fun defaultPlatformPermissionManager(logger: P2pLogger, usesLan: Boolean): P2pPermissionManager =
     NoOpP2pPermissionManager()

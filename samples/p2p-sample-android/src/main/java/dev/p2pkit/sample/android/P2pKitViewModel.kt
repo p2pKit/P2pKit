@@ -16,6 +16,7 @@ import dev.p2pkit.core.AndroidNetworkPathObserver
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.NetworkPathStatus
+import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.sample.diagnostics.SampleConsole
@@ -63,6 +64,7 @@ import dev.p2pkit.sample.kmp.runUnverifiedDiscoverAndGreetForLocalTestingOnly
 import dev.p2pkit.transport.lan.AndroidLanDiag
 import dev.p2pkit.transport.lan.lan
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -70,10 +72,14 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -101,7 +107,12 @@ import java.io.File
  * Lifecycle survives Activity recreation (rotation, dark-mode, locale, …).
  * Process death is out of scope.
  */
-class P2pKitViewModel(application: Application) : AndroidViewModel(application) {
+class P2pKitViewModel internal constructor(
+    application: Application,
+    private val kitFactories: SampleKitFactories?,
+    cleanupDispatcher: CoroutineDispatcher
+) : AndroidViewModel(application) {
+    constructor(application: Application) : this(application, null, Dispatchers.Default)
 
     // --- identity ----------------------------------------------------------
 
@@ -260,6 +271,15 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     private val _missingPermissions = MutableStateFlow<List<P2pPermission>>(emptyList())
     val missingPermissions: StateFlow<List<P2pPermission>> = _missingPermissions.asStateFlow()
 
+    /** LAN access is independent of hotspot/join's Nearby/Location requirements and launchers. */
+    private val _lanPermissionState = MutableStateFlow(SampleLanPermissionState())
+    internal val lanPermissionState: StateFlow<SampleLanPermissionState> = _lanPermissionState.asStateFlow()
+    private val preCreationLanPermissions by lazy {
+        SampleLanPermissionManager(getApplication<Application>().applicationContext)
+    }
+    private var lanPermissionRefreshJob: Job? = null
+    private var lanPermissionObservation = 0L
+
     /**
      * Latest hotspot-join result. `null` when no join attempt has been
      * made. `Joined` while the device is connected to a peer's hotspot;
@@ -270,12 +290,19 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
 
     // --- internals --------------------------------------------------------
 
-    private var kit: P2pKit? = null
+    private val roomKit = MutableStateFlow<P2pKit?>(null)
+    private val smokeKit = MutableStateFlow<SampleSmokeKitOwner?>(null)
+    private var kit: P2pKit?
+        get() = roomKit.value
+        set(value) { roomKit.value = value }
     private var runScope: CoroutineScope? = null
-    private val cleanupScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private val cleanupScope = CoroutineScope(cleanupDispatcher + SupervisorJob())
     private val advertisingToggleMutex = Mutex()
     private val discoveryToggleMutex = Mutex()
     private val foregroundRestoreCoordinator = ForegroundRestoreCoordinator()
+    private var appForeground = false
+    private var foregroundEpisode = 0L
+    private var viewModelCleared = false
 
     @Volatile
     private var foregroundRestoreJob: Job? = null
@@ -297,8 +324,32 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
      * [cleanupScope] underneath it.
      */
     private var pendingStopJob: Job? = null
+    private var pendingSmokeJob: Job? = null
+    private var autoMeshEnableJob: Job? = null
 
     private var nextMessageId: Long = 1L
+
+    internal val runAdmission: Flow<SampleRunAdmission> = combine(
+        combine(_isRunning, _isStarting, _isStopping, _cleanupPending, _kmpSmokeBusy) {
+            running, starting, stopping, cleanupPending, smokeBusy ->
+            SampleRunAdmission(running, starting, stopping, cleanupPending, smokeBusy)
+        },
+        roomKit,
+        smokeKit
+    ) { admission, ownedRoom, ownedSmoke ->
+        admission.copy(roomOwnsKit = ownedRoom != null, smokeOwnsKit = ownedSmoke != null)
+    }.distinctUntilChanged()
+
+    /** Actions read synchronously; a not-yet-recomposed button must not bypass admission. */
+    internal fun currentRunAdmission(): SampleRunAdmission = SampleRunAdmission(
+        running = _isRunning.value,
+        starting = _isStarting.value,
+        stopping = _isStopping.value,
+        cleanupPending = _cleanupPending.value,
+        smokeBusy = _kmpSmokeBusy.value,
+        roomOwnsKit = kit != null,
+        smokeOwnsKit = smokeKit.value != null
+    )
 
     // --- intents from the UI ----------------------------------------------
 
@@ -416,27 +467,72 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
      */
     @OptIn(ExplicitSecurityRisk::class)
     fun runKmpConsumerSmoke() {
-        if (_isRunning.value || _isStarting.value || _isStopping.value || _kmpSmokeBusy.value) return
+        if (viewModelCleared) return
+        val retained = smokeKit.value
+        if (retained != null) {
+            if (currentRunAdmission().canRetryKmpCleanup) retryKmpCleanup(retained)
+            return
+        }
+        if (!currentRunAdmission().canRunKmpSmoke) return
+        val episode = foregroundEpisodeForAction() ?: return
         _kmpSmokeBusy.value = true
         _kmpSmokeResult.value = "Running KMP advertise/discover/connect/send/close/stop…"
-        viewModelScope.launch {
-            val result = runCatchingNonCancel {
-                val smoke = createP2pKit(
+        pendingSmokeJob = viewModelScope.launch {
+            var owner: SampleSmokeKitOwner? = null
+            try {
+                val smoke = kitFactories?.createSmokeKit() ?: createP2pKit(
                     appId = APP_ID,
                     deviceName = "Android-KMP-${Build.MODEL.take(16)}",
                     authorization = PeerAuthorizationPolicy.AcceptAnyAuthenticatedSameApp
                 )
-                runUnverifiedDiscoverAndGreetForLocalTestingOnly(
-                    p2p = smoke,
+                val owned = SampleSmokeKitOwner(smoke) { expected ->
+                    requireCurrentSmokeAcquisition(expected, episode)
+                    requireLanPermission(expected)
+                    requireCurrentSmokeAcquisition(expected, episode)
+                }
+                owner = owned
+                smokeKit.value = owned
+                val result = runUnverifiedDiscoverAndGreetForLocalTestingOnly(
+                    p2p = owned,
                     greetingFrom = "Android KMP consumer",
                     discoveryTimeoutMillis = 10_000
                 )
+                _kmpSmokeResult.value = "KMP consumer: $result"
+            } catch (cancelled: CancellationException) {
+                _kmpSmokeResult.value = "KMP consumer canceled; tap Run KMP consumer smoke again when ready."
+                throw cancelled
+            } catch (error: Throwable) {
+                _kmpSmokeResult.value = "KMP consumer failed: ${error.message ?: error::class.simpleName}"
+            } finally {
+                if (owner?.stopped == true && smokeKit.value === owner) smokeKit.value = null
+                if (smokeKit.value != null) {
+                    _kmpSmokeResult.value = "${_kmpSmokeResult.value.orEmpty()} $KMP_CLEANUP_UNRESOLVED"
+                }
+                _kmpSmokeBusy.value = false
             }
-            _kmpSmokeResult.value = result.fold(
-                onSuccess = { "KMP consumer: $it" },
-                onFailure = { "KMP consumer failed: ${it.message ?: it::class.simpleName}" }
-            )
-            _kmpSmokeBusy.value = false
+        }
+    }
+
+    private fun requireCurrentSmokeAcquisition(expected: P2pKit, episode: Long) {
+        if (viewModelCleared || smokeKit.value !== expected || !isActionForegroundCurrent(episode)) {
+            throw CancellationException("KMP smoke no longer belongs to the current foreground episode")
+        }
+    }
+
+    private fun retryKmpCleanup(retained: SampleSmokeKitOwner) {
+        _kmpSmokeBusy.value = true
+        _kmpSmokeResult.value = "Retrying KMP cleanup…"
+        pendingSmokeJob = viewModelScope.launch {
+            try {
+                runCatchingNonCancel { retained.stop() }
+                    .onSuccess {
+                        if (smokeKit.value === retained) smokeKit.value = null
+                        _kmpSmokeResult.value = "KMP cleanup completed. A new run may now be started."
+                    }
+                    .onFailure { _kmpSmokeResult.value = KMP_CLEANUP_UNRESOLVED }
+            } finally {
+                _kmpSmokeBusy.value = false
+            }
         }
     }
 
@@ -450,21 +546,40 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun toggleAutoMesh() {
-        _autoMesh.value = !_autoMesh.value
-        Log.i(LOG_TAG, "auto-mesh = ${_autoMesh.value}")
+        if (_autoMesh.value || autoMeshEnableJob?.isActive == true) {
+            autoMeshEnableJob?.cancel()
+            _autoMesh.value = false
+            return
+        }
+        val currentKit = kit ?: return
+        val scope = runScope ?: return
+        val episode = foregroundEpisodeForAction() ?: return
+        if (!_isRunning.value) return
+        autoMeshEnableJob = scope.launch {
+            runCatchingNonCancel {
+                requireLanPermission(currentKit)
+                if (!isRoomAcquisitionCurrent(currentKit, scope, episode) || !_isRunning.value) return@launch
+                _autoMesh.value = true
+                Log.i(LOG_TAG, "auto-mesh = true")
+            }.onFailure { error ->
+                Log.w(LOG_TAG, "enable auto-mesh failed; errorType=${SampleConsole.failure(error)}")
+            }
+        }
     }
 
     @OptIn(ExplicitSecurityRisk::class)
     fun start() {
+        if (viewModelCleared) return
         // AUDIT-2026-06: D-G8-samples-android-02 — also refuse while the
         // previous kit is still stopping, or two kits would overlap (duplicate
         // mDNS advertisements + two TCP listeners).
-        if (_isRunning.value || _isStarting.value || _isStopping.value) return  // idempotent + re-entry safe
+        if (!currentRunAdmission().canStartOrRetryCleanup) return
         if (kit != null) {
             appendSystemMessage("cleanup is still pending; retrying kit stop before a new start")
             stop()
             return
         }
+        val episode = foregroundEpisodeForAction() ?: return
         val trimmedName = deviceName.trim()
         if (trimmedName.isEmpty()) {
             Log.w(LOG_TAG, "start aborted: deviceName is blank")
@@ -498,7 +613,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                     line = it
                 )
             }
-            P2pKit.create {
+            kitFactories?.createRoomKit() ?: P2pKit.create {
                 appId = AppId(APP_ID)
                 this.deviceName = this@P2pKitViewModel.deviceName
                 security {
@@ -644,7 +759,12 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         }
         scope.launch {
             try {
+                requireLanPermission(newKit)
+                if (!isRoomAcquisitionCurrent(newKit, scope, episode)) {
+                    throw CancellationException("Room startup no longer belongs to the current foreground episode")
+                }
                 newKit.startAdvertising()
+                currentCoroutineContext().ensureActive()
                 _advertising.value = true
                 recordDiagnostic(
                     DiagnosticRecord(
@@ -653,7 +773,12 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                         currentState = "advertising"
                     )
                 )
+                requireLanPermission(newKit)
+                if (!isRoomAcquisitionCurrent(newKit, scope, episode)) {
+                    throw CancellationException("Room startup no longer belongs to the current foreground episode")
+                }
                 newKit.startDiscovery()
+                currentCoroutineContext().ensureActive()
                 _discovering.value = true
                 recordDiagnostic(
                     DiagnosticRecord(
@@ -664,6 +789,9 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 )
                 _isRunning.value = true
             } catch (cancelled: CancellationException) {
+                // A new suspended preflight can outlive foreground intent. Stop still owns teardown,
+                // unless Stop/onCleared already retired this run; do not abandon the constructed kit.
+                if (!viewModelCleared && kit === newKit && runScope === scope && !_isStopping.value) stop()
                 throw cancelled
             } catch (t: Throwable) {
                 provisioningUi.detach()
@@ -698,7 +826,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 runScope = null
                 _kitState.value = P2pState.Stopped
-                cancel()
+                scope.cancel()
             } finally {
                 _isStarting.value = false
             }
@@ -733,7 +861,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                     if (pendingConnectPeerIds.contains(peer.id.value)) continue
                     if (myId < peer.id.value) {
                         Log.i(LOG_TAG, "auto-mesh: initiating connect to ${peer.consoleId}")
-                        connect(peer)
+                        connect(peer, automatic = true)
                     }
                 }
             }
@@ -743,9 +871,13 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         // advertise/discover startup never presents a usable room.
     }
 
-    fun connect(peer: Peer) {
+    fun connect(peer: Peer) = connect(peer, automatic = false)
+
+    private fun connect(peer: Peer, automatic: Boolean) {
         val currentKit = kit ?: return
         val scope = runScope ?: return
+        val episode = foregroundEpisodeForAction() ?: return
+        if (!_isRunning.value || _isStopping.value || (automatic && !_autoMesh.value)) return
         val peerId = peer.id.value
         if (pendingConnectPeerIds.contains(peerId)) {
             appendSystemMessage("already connecting to ${peer.name}")
@@ -767,7 +899,13 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         pendingConnectPeerIds.add(peerId)
         scope.launch {
             try {
-                runCatchingNonCancel { currentKit.connect(peer) }.onFailure {
+                runCatchingNonCancel {
+                    requireLanPermission(currentKit)
+                    if (!isRoomAcquisitionCurrent(currentKit, scope, episode) || !_isRunning.value ||
+                        (automatic && !_autoMesh.value)
+                    ) return@launch
+                    currentKit.connect(peer)
+                }.onFailure {
                     recordDiagnostic(
                         DiagnosticRecord(
                             peerId = peerId,
@@ -788,11 +926,109 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /** User-driven prompt only. The launcher is invoked synchronously and is never retained by the ViewModel. */
+    internal fun requestLanAccess(launch: (String) -> Unit) {
+        if (!appForeground || !_lanPermissionState.value.canRequest) return
+        _lanPermissionState.update { it.copy(requestInFlight = true) }
+        try {
+            launch(ACCESS_LOCAL_NETWORK_PERMISSION)
+        } catch (cancelled: CancellationException) {
+            _lanPermissionState.update { it.copy(requestInFlight = false) }
+            throw cancelled
+        } catch (error: RuntimeException) {
+            _lanPermissionState.update {
+                it.copy(requestInFlight = false, message = "Could not open the LAN permission request. Try again.")
+            }
+            Log.w(LOG_TAG, "LAN permission launcher failed; errorType=${SampleConsole.failure(error)}")
+        }
+    }
+
+    /** Late, duplicate, denied and granted callbacks all observe live state; none replays an action. */
+    internal fun onLanPermissionRequestResult() {
+        _lanPermissionState.update { it.copy(requestInFlight = false) }
+        refreshLanPermissions(afterRequest = true)
+    }
+
+    fun refreshLanPermissions() = refreshLanPermissions(afterRequest = false)
+
+    private fun refreshLanPermissions(afterRequest: Boolean) {
+        lanPermissionRefreshJob?.cancel()
+        lanPermissionRefreshJob = viewModelScope.launch {
+            runCatchingNonCancel { readLanPermissions(currentPermissionOwner(), afterRequest) }
+        }
+    }
+
+    private fun currentPermissionOwner(): P2pKit? = kit ?: smokeKit.value
+
+    private suspend fun readLanPermissions(owner: P2pKit?, afterRequest: Boolean = false): List<P2pPermission> {
+        val observation = ++lanPermissionObservation
+        try {
+            val missing = (owner?.permissions ?: preCreationLanPermissions).missingPermissions()
+            currentCoroutineContext().ensureActive()
+            if (observation == lanPermissionObservation && currentPermissionOwner() === owner) {
+                if (missing.isNotEmpty()) retirePermissionBlockedAutomaticActions(owner)
+                _lanPermissionState.update { previous ->
+                    previous.copy(
+                        missing = missing,
+                        checkFailed = false,
+                        message = when {
+                            missing.isNotEmpty() ->
+                                "LAN access is missing. Grant access, then tap the intended action again."
+                            afterRequest || previous.missing.isNotEmpty() || previous.checkFailed ->
+                                "LAN access is available. Tap the intended action again."
+                            else -> null
+                        }
+                    )
+                }
+            }
+            return missing
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            if (observation == lanPermissionObservation && currentPermissionOwner() === owner) {
+                retirePermissionBlockedAutomaticActions(owner)
+                _lanPermissionState.update {
+                    it.copy(checkFailed = true, message = "Could not check LAN access. Refresh access before retrying.")
+                }
+            }
+            Log.w(LOG_TAG, "LAN permission check failed; errorType=${SampleConsole.failure(error)}")
+            throw error
+        }
+    }
+
+    private suspend fun requireLanPermission(owner: P2pKit) {
+        val missing = readLanPermissions(owner)
+        if (missing.isNotEmpty()) throw P2pError.PermissionMissing(missing)
+    }
+
+    private fun retirePermissionBlockedAutomaticActions(owner: P2pKit?) {
+        if (owner !== kit) return
+        _autoMesh.value = false
+        if (foregroundRestoreJob?.isActive == true) {
+            // A background pause can still be settling when access is revoked and then granted.
+            // Retire that pending restore, not just this observation, so the grant cannot replay it.
+            _advertising.value = false
+            _discovering.value = false
+            foregroundRestoreJob?.cancel()
+            foregroundRestoreJob = null
+        }
+    }
+
+    private fun foregroundEpisodeForAction(): Long? = foregroundEpisode.takeIf { appForeground }
+
+    private fun isActionForegroundCurrent(episode: Long): Boolean = appForeground && foregroundEpisode == episode
+
+    private fun isRoomAcquisitionCurrent(owner: P2pKit, scope: CoroutineScope, episode: Long): Boolean =
+        !viewModelCleared && kit === owner && runScope === scope && !_isStopping.value &&
+            isActionForegroundCurrent(episode)
+
     /**
      * Refresh missing-permission state. Call this after the user grants or
      * denies a permission so the UI updates.
      */
     fun refreshMissingPermissions() {
+        // A Nearby-group result may also change LAN access, but its callback Boolean proves neither grant.
+        refreshLanPermissions()
         val scope = runScope ?: viewModelScope
         scope.launch {
             val pm = AndroidP2pPermissionManager(getApplication<Application>().applicationContext)
@@ -1619,14 +1855,22 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     fun toggleAdvertising() {
         val currentKit = kit ?: return
         val scope = runScope ?: return
+        val episode = foregroundEpisodeForAction()
         scope.launch {
             advertisingToggleMutex.withLock {
+                if (kit !== currentKit || runScope !== scope || _isStopping.value) return@withLock
                 if (_advertising.value) {
                     runCatchingNonCancel { currentKit.stopAdvertising() }
                         .onSuccess { _advertising.value = false }
                         .onFailure { Log.w(LOG_TAG, "stopAdvertising failed; errorType=${SampleConsole.failure(it)}") }
                 } else {
-                    runCatchingNonCancel { currentKit.startAdvertising() }
+                    if (episode == null) return@withLock
+                    runCatchingNonCancel {
+                        requireLanPermission(currentKit)
+                        if (!isRoomAcquisitionCurrent(currentKit, scope, episode)) return@withLock
+                        currentKit.startAdvertising()
+                        currentCoroutineContext().ensureActive()
+                    }
                         .onSuccess { _advertising.value = true }
                         .onFailure { Log.w(LOG_TAG, "startAdvertising failed; errorType=${SampleConsole.failure(it)}") }
                 }
@@ -1637,14 +1881,22 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     fun toggleDiscovery() {
         val currentKit = kit ?: return
         val scope = runScope ?: return
+        val episode = foregroundEpisodeForAction()
         scope.launch {
             discoveryToggleMutex.withLock {
+                if (kit !== currentKit || runScope !== scope || _isStopping.value) return@withLock
                 if (_discovering.value) {
                     runCatchingNonCancel { currentKit.stopDiscovery() }
                         .onSuccess { _discovering.value = false }
                         .onFailure { Log.w(LOG_TAG, "stopDiscovery failed; errorType=${SampleConsole.failure(it)}") }
                 } else {
-                    runCatchingNonCancel { currentKit.startDiscovery() }
+                    if (episode == null) return@withLock
+                    runCatchingNonCancel {
+                        requireLanPermission(currentKit)
+                        if (!isRoomAcquisitionCurrent(currentKit, scope, episode)) return@withLock
+                        currentKit.startDiscovery()
+                        currentCoroutineContext().ensureActive()
+                    }
                         .onSuccess { _discovering.value = true }
                         .onFailure { Log.w(LOG_TAG, "startDiscovery failed; errorType=${SampleConsole.failure(it)}") }
                 }
@@ -1725,6 +1977,9 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     override fun onCleared() {
+        viewModelCleared = true
+        appForeground = false
+        foregroundEpisode += 1
         provisioningUi.detach()
         retireForegroundRestore()
         releaseDiagnosticInstrumentation()
@@ -1736,6 +1991,8 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         // then finish our own teardown, and only cancel the scope at the end.
         val finalCleanup = cleanupScope.launch {
             pendingStopJob?.join()
+            // The shared Demo owns its first stop. Join it before attempting final retained cleanup.
+            pendingSmokeJob?.join()
             val toStop = kit
             if (toStop != null) {
                 offersToReject.forEach { pending ->
@@ -1755,6 +2012,15 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                         _cleanupPending.value = true
                     }
             }
+            val retainedSmoke = smokeKit.value
+            if (retainedSmoke != null) {
+                runCatchingNonCancel { retainedSmoke.stop() }
+                    .onSuccess { if (smokeKit.value === retainedSmoke) smokeKit.value = null }
+                    .onFailure { error ->
+                        Log.e(LOG_TAG, "final KMP cleanup failed; errorType=${SampleConsole.failure(error)}")
+                    }
+            }
+            _kmpSmokeBusy.value = false
         }
         finalCleanup.invokeOnCompletion { cleanupScope.cancel() }
     }
@@ -1772,6 +2038,10 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun notifyForegrounded() {
+        if (viewModelCleared) return
+        appForeground = true
+        foregroundEpisode += 1
+        refreshLanPermissions()
         val foregroundLease = foregroundRestoreCoordinator.foregrounded()
         recordDiagnostic(
             DiagnosticRecord(
@@ -1780,6 +2050,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 currentState = "foreground"
             )
         )
+        smokeKit.value?.notifyAppForegrounded()
         val currentKit = kit ?: return
         currentKit.notifyAppForegrounded()
         val scope = runScope ?: return
@@ -1790,6 +2061,8 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun notifyBackgrounded() {
+        appForeground = false
+        foregroundEpisode += 1
         retireForegroundRestore()
         recordDiagnostic(
             DiagnosticRecord(
@@ -1799,6 +2072,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
             )
         )
         kit?.notifyAppBackgrounded()
+        smokeKit.value?.notifyAppBackgrounded()
     }
 
     private fun retireForegroundRestore() {
@@ -1825,6 +2099,8 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 return@withLock
             }
             runCatchingNonCancel {
+                // Observe denial before waiting for background cleanup, not only after it settles.
+                requireLanPermission(currentKit)
                 restoreRequestedFeatureAfterForeground(
                     isStillRequested = {
                         isForegroundRestoreCurrent(
@@ -1834,7 +2110,13 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                         )
                     },
                     states = currentKit.advertisingState,
-                    start = currentKit::startAdvertising
+                    start = {
+                        requireLanPermission(currentKit)
+                        if (!isForegroundRestoreCurrent(currentKit, foregroundLease, _advertising.value)) {
+                            throw CancellationException("Advertising foreground restore was retired")
+                        }
+                        currentKit.startAdvertising()
+                    }
                 )
             }
                 .onSuccess { restored ->
@@ -1858,6 +2140,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                 return@withLock
             }
             runCatchingNonCancel {
+                requireLanPermission(currentKit)
                 restoreRequestedFeatureAfterForeground(
                     isStillRequested = {
                         isForegroundRestoreCurrent(
@@ -1867,7 +2150,13 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                         )
                     },
                     states = currentKit.discoveryState,
-                    start = currentKit::startDiscovery
+                    start = {
+                        requireLanPermission(currentKit)
+                        if (!isForegroundRestoreCurrent(currentKit, foregroundLease, _discovering.value)) {
+                            throw CancellationException("Discovery foreground restore was retired")
+                        }
+                        currentKit.startDiscovery()
+                    }
                 )
             }
                 .onSuccess { restored ->
@@ -1893,7 +2182,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
         lease: ForegroundRestoreCoordinator.Lease,
         featureRequested: Boolean
     ): Boolean =
-        kit === expectedKit &&
+        !viewModelCleared && kit === expectedKit && _isRunning.value && !_isStopping.value &&
             featureRequested &&
             foregroundRestoreCoordinator.isCurrent(lease)
 
@@ -1974,7 +2263,7 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
                         RoomMessage(
                             id = nextMessageId++,
                             senderName = session.peer.name,
-                            body = msg.displayForTimeline(),
+                            body = msg.displayForTimeline(payloadSize),
                             timestamp = System.currentTimeMillis(),
                             direction = RoomMessage.Direction.Incoming
                         )
@@ -2096,6 +2385,9 @@ class P2pKitViewModel(application: Application) : AndroidViewModel(application) 
 /** The sample must require an explicit user action before auto-connecting. */
 internal const val DEFAULT_AUTO_MESH_ENABLED: Boolean = false
 
+private const val KMP_CLEANUP_UNRESOLVED =
+    "KMP cleanup is unresolved. Retry KMP cleanup; a latched failure may require restarting the app."
+
 /**
  * AUDIT-2026-06: C-G8-samples-android-18 — `runCatching` variant that rethrows
  * [CancellationException]. Plain runCatching around suspend SDK calls caught
@@ -2180,9 +2472,9 @@ data class RoomMessage(
 }
 
 /** Converts an SDK message to bounded timeline text without retaining payload bytes. */
-private fun P2pMessage.displayForTimeline(): String = when (this) {
+private fun P2pMessage.displayForTimeline(payloadSize: Long): String = when (this) {
     is P2pMessage.Text -> value
-    is P2pMessage.Binary -> "<binary ${bytes.size}B>"
+    is P2pMessage.Binary -> "<binary ${payloadSize}B>"
 }
 
 /** Targeting choice for an outgoing room send. */

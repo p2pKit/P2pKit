@@ -6,8 +6,10 @@ package dev.p2pkit.core.permission
  *
  * Reports no required permissions and treats every check as "granted". Apps
  * can provide another implementation through
- * [dev.p2pkit.core.dsl.P2pKitBuilder.permissionManager]. Core LAN uses only
- * install-time Android permissions; provisioning sidecars expose their own
+ * [dev.p2pkit.core.dsl.P2pKitBuilder.permissionManager]. Do not substitute this
+ * manager for the Android LAN default where a runtime LocalNetwork grant is
+ * required (device API 37+ and application target SDK 37+).
+ * Provisioning sidecars expose their own
  * runtime-permission managers and should be queried immediately around those
  * provisioning operations rather than used to over-gate core LAN features.
  */

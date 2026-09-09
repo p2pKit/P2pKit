@@ -23,11 +23,10 @@ import kotlin.test.assertTrue
  * Pins the permission-gate contract after the AUDIT-2026-06 permission-gate
  * regression fix:
  *
- * 1. The **default** permission path reports zero missing runtime permissions,
- *    so `startAdvertising()`/`startDiscovery()` are never gated out of the
- *    box. Core LAN needs no runtime-requestable permission on any shipped
- *    platform — Android's Wi-Fi permissions are install-time (normal) and
- *    must not appear on the runtime-request surface.
+ * 1. The JVM/iOS **default** permission path reports zero missing runtime
+ *    permissions. Android's normal manifest permissions must not appear on
+ *    this runtime-request surface; its separate API 37+/target 37+ LAN grant
+ *    is covered by Android-source host tests, not this common test default.
  * 2. The gate mechanism itself stays intact: a manager that reports genuinely
  *    missing runtime permissions (the provisioning sidecar's
  *    `AndroidP2pPermissionManager` reports `NEARBY_WIFI_DEVICES` /
@@ -40,8 +39,8 @@ import kotlin.test.assertTrue
  * the remaining tests pin the runtime gate. Physical-device evidence still
  * verifies PackageManager/logcat behavior: omit each documented normal
  * permission in turn after `P2pKitAndroid.initialize(context)`; construction
- * must warn, while startAdvertising()/startDiscovery() remain ungated because
- * no runtime prompt can grant a missing manifest declaration.
+ * must warn without reporting those declarations as missing runtime grants.
+ * A separate missing API 37+/target 37+ LAN grant can still gate the operation.
  */
 class PermissionGateTest {
 
@@ -73,9 +72,7 @@ class PermissionGateTest {
         runBlocking {
             val discovery = FakeDiscoveryTransport()
             // No permissionManager override: exercises the platform default
-            // (NoOp on the JVM/iOS targets this common test runs on; the
-            // Android default reports the same empty set — see the manual
-            // recipe in the class KDoc).
+            // (NoOp on the JVM/iOS targets this common test runs on).
             val kit = createTestKit {
                 appId = AppId("permission-gate-test")
                 deviceName = "Default"

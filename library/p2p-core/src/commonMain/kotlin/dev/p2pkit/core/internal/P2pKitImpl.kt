@@ -1702,7 +1702,10 @@ internal fun newP2pKit(
     return try {
         val validatedLocalPeerId = validateLocalPeerId(localPeerId)
         val pathObserver = networkPathObserverOverride ?: defaultNetworkPathObserver(safeLogger)
-        val permissionManager = permissionManagerOverride ?: defaultPlatformPermissionManager(safeLogger)
+        val permissionManager = permissionManagerOverride ?: defaultPlatformPermissionManager(
+            safeLogger,
+            usesLan = transportFactories.any { it.descriptor.kind == TransportKind.LAN }
+        )
         P2pKitImpl(
             appId = appId,
             deviceName = deviceName,

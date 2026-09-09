@@ -117,13 +117,20 @@ internal const val SECURITY_POSTURE_WARNING: String =
 
 class MainActivity : ComponentActivity() {
     private val sampleViewModel: P2pKitViewModel by viewModels()
+    // Register outside either screen: rotation, room navigation and diagnostics must not retire the result owner.
+    private val lanPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+        // The callback Boolean is not a live grant and never authorizes replay of a previous action.
+        sampleViewModel.onLanPermissionRequestResult()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    P2pKitSampleApp(sampleViewModel)
+                    P2pKitSampleApp(sampleViewModel) {
+                        sampleViewModel.requestLanAccess { permission -> lanPermissionLauncher.launch(permission) }
+                    }
                 }
             }
         }
@@ -142,7 +149,7 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun P2pKitSampleApp(vm: P2pKitViewModel) {
+private fun P2pKitSampleApp(vm: P2pKitViewModel, onGrantLanAccess: () -> Unit) {
     val isRunning by vm.isRunning.collectAsState()
     var showDiagnostics by rememberSaveable { mutableStateOf(false) }
 
@@ -168,7 +175,8 @@ private fun P2pKitSampleApp(vm: P2pKitViewModel) {
                     }
                 }
             )
-        }
+        },
+        bottomBar = { LanPermissionStatus(vm, onGrantLanAccess) }
     ) { padding ->
         if (showDiagnostics) {
             AndroidDiagnosticsScreen(
@@ -190,6 +198,36 @@ private fun P2pKitSampleApp(vm: P2pKitViewModel) {
     }
 }
 
+@Composable
+private fun LanPermissionStatus(vm: P2pKitViewModel, onGrantLanAccess: () -> Unit) {
+    val permission by vm.lanPermissionState.collectAsState()
+    if (permission.message == null && !permission.requestInFlight) return
+    Card(modifier = Modifier.fillMaxWidth().padding(Dimens.ScreenPadding)) {
+        Column(
+            modifier = Modifier.padding(Dimens.CardPadding),
+            verticalArrangement = Arrangement.spacedBy(Dimens.ItemGap)
+        ) {
+            Text(permission.message ?: "Waiting for the LAN permission result…")
+            Text(
+                "Permission results only update access status. Tap Start, KMP smoke, Connect or a switch again.",
+                style = MaterialTheme.typography.bodySmall
+            )
+            if (permission.canRequest || permission.requestInFlight) {
+                Button(onClick = onGrantLanAccess, enabled = permission.canRequest) {
+                    Text(if (permission.requestInFlight) "Waiting for LAN access…" else "Grant LAN access")
+                }
+                Text(
+                    "If Android no longer shows a dialog, review Local network access in this app's Settings.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            TextButton(onClick = vm::refreshLanPermissions, enabled = !permission.requestInFlight) {
+                Text("Refresh LAN access")
+            }
+        }
+    }
+}
+
 // =====================================================================
 // Setup screen
 // =====================================================================
@@ -207,6 +245,7 @@ private fun SetupScreen(
     val cleanupPending by vm.cleanupPending.collectAsState()
     val kmpSmokeBusy by vm.kmpSmokeBusy.collectAsState()
     val kmpSmokeResult by vm.kmpSmokeResult.collectAsState()
+    val admission by vm.runAdmission.collectAsState(vm.currentRunAdmission())
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -247,7 +286,7 @@ private fun SetupScreen(
         Spacer(Modifier.height(Dimens.ItemGap))
         Button(
             onClick = vm::start,
-            enabled = vm.deviceName.trim().isNotEmpty() && !isStarting && !isStopping,
+            enabled = admission.canUseStartAction(vm.deviceName),
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(
@@ -262,10 +301,16 @@ private fun SetupScreen(
 
         Button(
             onClick = vm::runKmpConsumerSmoke,
-            enabled = !isStarting && !isStopping && !kmpSmokeBusy,
+            enabled = admission.canRunKmpSmoke || admission.canRetryKmpCleanup,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text(if (kmpSmokeBusy) "Running KMP consumer smoke…" else "Run KMP consumer smoke")
+            Text(
+                when {
+                    kmpSmokeBusy -> "Running KMP consumer smoke…"
+                    admission.canRetryKmpCleanup -> "Retry KMP cleanup"
+                    else -> "Run KMP consumer smoke"
+                }
+            )
         }
         if (kmpSmokeResult != null) {
             Text(

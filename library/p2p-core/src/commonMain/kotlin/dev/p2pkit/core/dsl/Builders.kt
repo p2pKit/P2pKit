@@ -87,17 +87,23 @@ public class P2pKitBuilder internal constructor() {
     /**
      * Optional host-provided [P2pPermissionManager]. When `null`, the kit uses
      * the platform default ([dev.p2pkit.core.internal.defaultPlatformPermissionManager]):
-     * a real manifest-permission checker on Android (once
+     * a live LAN permission checker on Android (once
      * `P2pKitAndroid.initialize(context)` has run), no-op on JVM/iOS.
      *
      * Recommended wiring (decision #7a, 2026-07-04): keep this default even
-     * when the app uses hotspot/Wi-Fi-join provisioning — core LAN
-     * discovery/advertising needs no runtime permissions, and a kit-wide
+     * when the app uses hotspot/Wi-Fi-join provisioning — base LAN and
+     * provisioning have different runtime requirements, and a kit-wide
      * sidecar manager (e.g. `AndroidP2pPermissionManager`) gates
      * `startAdvertising`/`startDiscovery` on provisioning-only permissions,
      * re-creating the install-time over-gating the AUDIT-2026-06
      * permission-gate fix removed. Query the sidecar's manager immediately
      * before provisioning calls instead.
+     *
+     * For Android LAN, device API 37+ and application target SDK 37+ require
+     * `ACCESS_LOCAL_NETWORK`. The default reports its live grant through
+     * [dev.p2pkit.core.permission.P2pPermission.LocalNetwork]; it never prompts.
+     * A custom LAN transport using an exempt system-mediated picker can supply
+     * its own manager. Non-LAN configurations are not gated by this default.
      */
     public var permissionManager: P2pPermissionManager? = null
 
@@ -237,8 +243,9 @@ public class TransportsBuilder internal constructor() {
     internal val registrations: MutableList<RegisteredTransportFactory> = mutableListOf()
 
     /**
-     * Register a transport after validating its static descriptor. Duplicate
-     * kinds are rejected before any factory can allocate a resource.
+     * Register a transport after validating its static descriptor. Reusing a factory
+     * instance or registering the same transport kind twice throws [IllegalArgumentException]
+     * before any factory's build method can allocate a resource.
      */
     public fun register(factory: TransportFactory) {
         require(registrations.none { it.factory === factory }) {

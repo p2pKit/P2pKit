@@ -29,13 +29,24 @@ import dev.p2pkit.core.transport.TransportPair
  * }
  * ```
  *
- * Required permissions in `AndroidManifest.xml`:
+ * Base normal permissions in `AndroidManifest.xml` (not runtime requests):
  * - `android.permission.INTERNET` (install-time)
  * - `android.permission.ACCESS_NETWORK_STATE` (install-time)
+ * - `android.permission.ACCESS_WIFI_STATE` (install-time)
  * - `android.permission.CHANGE_WIFI_MULTICAST_STATE` (install-time; needed for
  *   mDNS reception on some devices/Wi-Fi states)
- * - `android.permission.NEARBY_WIFI_DEVICES` (runtime, API 33+); without this,
- *   add `android.permission.ACCESS_FINE_LOCATION` for older API levels.
+ *
+ * On device API 37+ with application target SDK 37+, raw LAN also requires
+ * `android.permission.ACCESS_LOCAL_NETWORK`: declare it in the final app and
+ * request its runtime grant. Do not add it to apps targeting SDK 36 or lower.
+ * The default kit permission manager reports the live
+ * [dev.p2pkit.core.permission.P2pPermission.LocalNetwork] requirement; the host
+ * owns prompts and must preflight direct start/connect calls too.
+ *
+ * `NEARBY_WIFI_DEVICES` / `ACCESS_FINE_LOCATION` belong to optional network
+ * provisioning operations, not ordinary base LAN startup. Keep the kit's
+ * default manager and query `AndroidP2pPermissionManager` separately before
+ * hotspot/join operations; the app owns those prompts as well.
  *
  * The actual `ServerSocket(0)` bind happens inside the transport's `start()`
  * (called by [dev.p2pkit.core.P2pKit.start], or lazily by the first
