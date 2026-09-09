@@ -581,10 +581,10 @@ class Host:
                                                 "platforms;android-36", "platforms;android-37.0"], kind="command"):
             raise ValueError("Android platform installation failed; no required platform is skipped")
         properties = {}
-        for name, api in (("android-36", "36"), ("android-37.0", "37")):
+        for name, api in (("android-36", "36"), ("android-37.0", "37.0")):
             path = sdk / "platforms" / name / "source.properties"
             content = path.read_text(encoding="utf-8")
-            require(re.search(r"^AndroidVersion.ApiLevel\s*=\s*" + api + r"\s*$", content, re.M),
+            require(re.search(r"^AndroidVersion\.ApiLevel\s*=\s*" + re.escape(api) + r"\s*$", content, re.M),
                     "Wrong Android platform metadata: " + name)
             properties[name] = {"sha256": digest(path), "content": content}
         self.write("android-platforms.json", properties)

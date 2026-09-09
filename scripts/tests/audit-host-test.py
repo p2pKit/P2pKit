@@ -15,6 +15,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -1833,6 +1834,219 @@ class HostInvocationTest(unittest.TestCase):
                     self.assertEqual(b"preserve original required evidence\n", sentinel.read_bytes())
                     self.assertFalse((self.host.evidence / (operation + "-" + position)).exists())
                     self.assertFalse((self.host.evidence / (operation + "-" + position + "-manifest.json")).exists())
+
+
+class SdkSetupTest(unittest.TestCase):
+    """Real SDK admission/invocation with synthetic manager/native process boundaries."""
+
+    @contextlib.contextmanager
+    def fixture(self, role="windows-x64", newline="\n"):
+        # Each table row needs a fresh write-once evidence/context namespace.
+        fixture = HostInvocationTest()
+        try:
+            fixture.setUp()
+            host = fixture.host
+            host.role = role
+            host.wrapper = fixture.repo / ("gradlew.bat" if role == "windows-x64" else "gradlew")
+            host.admission["role"] = role
+            fixture.context["host"] = role
+            fixture.context_bytes = (json.dumps(fixture.context, indent=2) + "\n").encode("utf-8")
+            (fixture.state / "context.json").write_bytes(fixture.context_bytes)
+            host.context = copy.deepcopy(fixture.context)
+            host.context_hash = hashlib.sha256(fixture.context_bytes).hexdigest()
+            sdk = fixture.work / "Android SDK with spaces Ω"
+            manager = sdk / "cmdline-tools/latest/bin" / (
+                "sdkmanager.bat" if role == "windows-x64" else "sdkmanager")
+            manager.parent.mkdir(parents=True)
+            manager.write_text("synthetic manager; never execute\n", encoding="utf-8")
+            properties = {}
+            for name, api in (("android-36", "36"), ("android-37.0", "37.0")):
+                # Canonical API spellings from Google's installed platforms;
+                # these fixtures do not certify a native install or archive.
+                raw = newline.join(("Pkg.Revision=2", "AndroidVersion.ApiLevel=" + api,
+                                    "AndroidVersion.IsBaseSdk=true", "")).encode("utf-8")
+                path = sdk / "platforms" / name / "source.properties"
+                path.parent.mkdir(parents=True)
+                path.write_bytes(raw)
+                properties[name] = path
+            host.environment["ANDROID_HOME"] = str(sdk)
+            facade = types.SimpleNamespace(**vars(os))
+            facade.name = "nt" if role == "windows-x64" else "posix"
+            with mock.patch.object(HOST, "os", facade):
+                yield fixture, sdk, manager, properties
+        finally:
+            fixture.doCleanups()
+
+    def assert_manager_receipt(self, fixture, sdk, manager, status=0):
+        command = fixture.calls[-1]["command"]
+        self.assertEqual([str(manager), "--sdk_root=" + str(sdk),
+                          "platforms;android-36", "platforms;android-37.0"],
+                         command[command.index("--") + 1:])
+        self.assertEqual("command", command[command.index("--kind") + 1])
+        self.assertEqual(str(fixture.host.wrapper), command[command.index("--wrapper") + 1])
+        self.assertEqual(fixture.host.environment, fixture.calls[-1]["options"]["env"])
+        receipt = fixture.host.receipts["android-platforms"]
+        self.assertEqual(status, receipt["productExitCode"])
+        self.assertEqual(0, receipt["stopExitCode"])
+        self.assertEqual([], receipt["ownedSurvivors"])
+        self.assertTrue(receipt["sourceUnchanged"])
+        self.assertTrue(fixture.host.rows[-1]["cleanupComplete"])
+
+    def test_required_platform_metadata_is_accepted_and_retained_for_each_role(self):
+        for role in HOST.ROLES:
+            for newline in ("\n", "\r\n"):
+                with self.subTest(role=role, newline=repr(newline)), self.fixture(role, newline) as data:
+                    fixture, sdk, manager, properties = data
+                    fixture.host.setup_sdk()
+                    self.assertEqual(1, len(fixture.calls))
+                    self.assert_manager_receipt(fixture, sdk, manager)
+                    observed = json.loads((fixture.host.evidence / "android-platforms.json").read_text(encoding="utf-8"))
+                    self.assertEqual({name: {"sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                                             "content": path.read_text(encoding="utf-8")}
+                                      for name, path in properties.items()}, observed)
+
+    def test_missing_or_nonabsolute_sdk_and_inapplicable_manager_fail_before_invocation(self):
+        for role in HOST.ROLES:
+            for problem in ("unset", "relative", "missing", "file", "manager"):
+                with self.subTest(role=role, problem=problem), self.fixture(role) as data:
+                    fixture, sdk, manager, _ = data
+                    if problem == "unset":
+                        fixture.host.environment.pop("ANDROID_HOME")
+                    elif problem == "relative":
+                        fixture.host.environment["ANDROID_HOME"] = "relative-sdk"
+                    elif problem == "missing":
+                        fixture.host.environment["ANDROID_HOME"] = str(sdk / "absent")
+                    elif problem == "file":
+                        fixture.host.environment["ANDROID_HOME"] = str(manager)
+                    else:
+                        other = "sdkmanager" if manager.name == "sdkmanager.bat" else "sdkmanager.bat"
+                        manager.rename(manager.with_name(other))
+                    with self.assertRaisesRegex(ValueError, "command-line tools" if problem == "manager" else "ANDROID_HOME"):
+                        fixture.host.setup_sdk()
+                    self.assertEqual([], fixture.calls)
+                    self.assertFalse((fixture.host.evidence / "android-platforms.json").exists())
+
+    def test_failed_sdk_manager_blocks_success_even_with_valid_properties(self):
+        for role in HOST.ROLES:
+            with self.subTest(role=role), self.fixture(role) as data:
+                fixture, sdk, manager, _ = data
+                fixture.next_status = 7
+                with self.assertRaisesRegex(ValueError, "Android platform installation failed"):
+                    fixture.host.setup_sdk()
+                self.assertEqual(1, len(fixture.calls))
+                self.assert_manager_receipt(fixture, sdk, manager, status=7)
+                self.assertFalse((fixture.host.evidence / "android-platforms.json").exists())
+
+    def test_missing_platform_properties_fail_after_manager_finishes(self):
+        for role in HOST.ROLES:
+            for platform in ("android-36", "android-37.0"):
+                with self.subTest(role=role, platform=platform), self.fixture(role) as data:
+                    fixture, sdk, manager, properties = data
+                    properties[platform].unlink()
+                    with self.assertRaises(FileNotFoundError):
+                        fixture.host.setup_sdk()
+                    self.assert_manager_receipt(fixture, sdk, manager)
+                    self.assertFalse((fixture.host.evidence / "android-platforms.json").exists())
+
+    def test_api_values_and_keys_are_matched_literally_for_the_required_platform(self):
+        invalid = [("android-36", "AndroidVersion.ApiLevel=" + value)
+                   for value in ("", "37.0", "36.0", "360", "36suffix")]
+        invalid += [("android-37.0", "AndroidVersion.ApiLevel=" + value)
+                    for value in ("", "36", "37", "37x0", "370", "37.1", "37.00", "037.0", "37.0suffix")]
+        invalid += [(platform, key + "=" + value)
+                    for platform, value in (("android-36", "36"), ("android-37.0", "37.0"))
+                    for key in ("OtherKey", "AndroidVersionXApiLevel")]
+        for role in HOST.ROLES:
+            for platform, content in invalid:
+                with self.subTest(role=role, platform=platform, content=content), self.fixture(role) as data:
+                    fixture, sdk, manager, properties = data
+                    properties[platform].write_text(content + "\n", encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, "Wrong Android platform metadata: " + re.escape(platform)):
+                        fixture.host.setup_sdk()
+                    self.assert_manager_receipt(fixture, sdk, manager)
+                    self.assertFalse((fixture.host.evidence / "android-platforms.json").exists())
+
+    def run_fixture(self, fixture, sdk, *, manager_status=0):
+        # Recreate only this owned temporary context through real initialize/run.
+        role = fixture.host.role
+        shutil.rmtree(fixture.state)
+        fixture.host = HOST.Host(role, fixture.state)
+        host = fixture.host
+        host.environment["ANDROID_HOME"] = str(sdk)
+        admission = {"commit": fixture.source["commit"], "tree": fixture.source["tree"],
+                     "ref": HOST.REF, "role": role}
+        host.admission = admission
+        event = fixture.work / "event.json"
+        event.write_text("{}", encoding="utf-8")
+
+        def controller(command, **kwargs):
+            purpose = command[command.index("--purpose") + 1]
+            fixture.next_status = manager_status if purpose == "android-platforms" else 0
+            if purpose == "intel-platform":
+                self.assertTrue((host.evidence / "android-platforms.json").is_file())
+            return fixture.controller(command, **kwargs)
+
+        def products():
+            self.assertTrue((host.evidence / "android-platforms.json").is_file())
+            self.assertEqual(["executor-native-controls", "android-platforms"],
+                             [row["component"] for row in host.rows])
+
+        with mock.patch.dict(os.environ, {"GITHUB_EVENT_PATH": str(event)}), \
+                mock.patch.object(HOST, "admit", return_value=admission), \
+                mock.patch.object(HOST.subprocess, "run", side_effect=fixture.initialize_boundary(host)), \
+                mock.patch.object(HOST.subprocess, "Popen", side_effect=controller), \
+                mock.patch.object(HOST, "source_snapshot", return_value=copy.deepcopy(fixture.source)), \
+                mock.patch.object(host, "prerequisites"), \
+                mock.patch.object(host, "windows", side_effect=products) as windows, \
+                mock.patch.object(host, "mac", side_effect=products) as mac, \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            result = host.run()
+        return result, windows.call_count, mac.call_count
+
+    def test_run_routes_all_roles_only_after_sdk_validation(self):
+        for role in HOST.ROLES:
+            with self.subTest(role=role), self.fixture(role) as data:
+                fixture, sdk, _, _ = data
+                result, windows, mac = self.run_fixture(fixture, sdk)
+                self.assertEqual(0, result)
+                self.assertEqual(int(role == "windows-x64"), windows)
+                self.assertEqual(int(role == "macos-arm64"), mac)
+                expected = ["executor-native-controls", "android-platforms"]
+                if role == "macos-x64":
+                    expected.append("intel-platform")
+                self.assertEqual(expected, [row["component"] for row in fixture.host.rows])
+                self.assertEqual("PASS", fixture.summary()["result"])
+                self.assertTrue(fixture.summary()["safeToContinue"])
+
+    def test_run_blocks_all_products_and_finalizes_invalid_metadata(self):
+        for role in HOST.ROLES:
+            with self.subTest(role=role), self.fixture(role) as data:
+                fixture, sdk, _, properties = data
+                properties["android-37.0"].write_text("AndroidVersion.ApiLevel=37.1\n", encoding="utf-8")
+                result, windows, mac = self.run_fixture(fixture, sdk)
+                self.assertEqual((1, 0, 0), (result, windows, mac))
+                self.assertEqual(["executor-native-controls", "android-platforms"],
+                                 [row["component"] for row in fixture.host.rows])
+                self.assertIn("Wrong Android platform metadata: android-37.0", fixture.summary()["error"])
+                self.assertEqual("FAIL", fixture.summary()["result"])
+                self.assertFalse(fixture.summary()["safeToContinue"])
+                self.assertFalse((fixture.host.evidence / "android-platforms.json").exists())
+                self.assertNotIn("safe_to_continue=true", fixture.output.read_text(encoding="utf-8"))
+
+    def test_run_blocks_all_products_and_finalizes_failed_sdk_installation(self):
+        for role in HOST.ROLES:
+            with self.subTest(role=role), self.fixture(role) as data:
+                fixture, sdk, _, _ = data
+                result, windows, mac = self.run_fixture(fixture, sdk, manager_status=7)
+                self.assertEqual((1, 0, 0), (result, windows, mac))
+                self.assertEqual(["executor-native-controls", "android-platforms"],
+                                 [row["component"] for row in fixture.host.rows])
+                self.assertEqual("FAIL", fixture.host.rows[-1]["result"])
+                self.assertTrue(fixture.host.rows[-1]["cleanupComplete"])
+                self.assertIn("Android platform installation failed", fixture.summary()["error"])
+                self.assertFalse(fixture.summary()["safeToContinue"])
+                self.assertFalse((fixture.host.evidence / "android-platforms.json").exists())
+                self.assertNotIn("safe_to_continue=true", fixture.output.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

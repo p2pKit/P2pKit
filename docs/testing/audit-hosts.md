@@ -87,6 +87,12 @@ for platforms **36 and 37.0**; installing only platform 36 is insufficient for t
 Android application sample. Windows/JDK 17 tests need the
 [real symbolic-link prerequisites](local.md#jvm-host-coverage), not skipped tests.
 
+After the SDK manager succeeds, the driver requires each requested platform's
+`source.properties` to name its literal `AndroidVersion.ApiLevel`: `36` for
+`android-36` and `37.0` for `android-37.0`. An integer `37` is not the latter
+package's canonical metadata. Both property contents and file hashes are retained;
+missing or mismatched metadata blocks product execution rather than skipping a platform.
+
 ### What the Apple Silicon component replay retains
 
 The driver preserves actual policy/fixture checks and real full graph probes,
