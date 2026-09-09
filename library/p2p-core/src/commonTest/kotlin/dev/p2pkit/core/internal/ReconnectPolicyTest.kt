@@ -18,7 +18,6 @@ import dev.p2pkit.core.transport.TransportPair
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -30,6 +29,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -49,10 +49,13 @@ import kotlin.test.assertTrue
  * (P1-01 / P1-02).
  *
  * Determinism rules:
- *   - retry delays are tiny except where the test needs a window to interpose
- *     `close()` / `stop()` (then 1000 ms — comfortably longer than CI scheduling jitter).
+ *   - retry delays are tiny except for lifecycle-interposition scenarios;
+ *     their 1000 ms delay is not evidence that retries have stopped.
  *   - state observation always goes through `state.first { ... }` with a
  *     bounded `withTimeout`. No arbitrary sleeps for synchronization.
+ *   - retry retirement is observed by joining the actual session runtime,
+ *     without cancelling it. Public Closed alone does not prove that every
+ *     owned retry child has finished.
  */
 class ReconnectPolicyTest {
 
@@ -98,6 +101,19 @@ class ReconnectPolicyTest {
                 register(ReconnectTestFactory(FakeDataTransport(preStagedIncoming = preStaged)))
             }
         }
+
+    /** Observe retry invocation while preserving the real driver and onWillReconnect callback. */
+    private fun P2pSessionImpl.observeReconnectEntry(): CompletableDeferred<Unit> {
+        val entered = CompletableDeferred<Unit>()
+        val delegate = checkNotNull(reconnectHandler)
+        reconnectHandler = object : ReconnectHandler by delegate {
+            override suspend fun onConnectionLost(session: P2pSessionImpl) {
+                entered.complete(Unit)
+                delegate.onConnectionLost(session)
+            }
+        }
+        return entered
+    }
 
     @Test
     fun disabledPolicyTransitionsDirectlyToFailed() = runBlocking<Unit> {
@@ -249,10 +265,14 @@ class ReconnectPolicyTest {
         }
         val bob = incomingKit("Bob", listOf(pair.b))
         try {
-            val session = withTimeout(5_000) { alice.connect(targetPeer()) }
+            val session = assertIs<P2pSessionImpl>(withTimeout(5_000) { alice.connect(targetPeer()) })
 
+            val reconnectEntered = session.observeReconnectEntry()
             pair.a.breakWithException(RuntimeException("simulated wire break"))
-            withTimeout(5_000) { session.state.first { it == ConnectionState.Reconnecting } }
+            withTimeout(5_000) {
+                session.state.first { it == ConnectionState.Reconnecting }
+                reconnectEntered.await()
+            }
 
             val attemptsAtClose = attempts.value
             session.close()
@@ -260,8 +280,8 @@ class ReconnectPolicyTest {
                 ConnectionState.Closed, session.state.value,
                 "Manual close() must take precedence over reconnect exhaustion"
             )
-            // Give any in-flight retry a chance to run if it weren't cancelled.
-            delay(150)
+            // Join the actual retry owner rather than sampling a short absence window.
+            withTimeout(5_000) { session.awaitRuntimeTermination() }
             assertEquals(
                 attemptsAtClose, attempts.value,
                 "Factory must not be called after close()"
@@ -271,8 +291,11 @@ class ReconnectPolicyTest {
                 "State must remain Closed after close() — never flip to Failed"
             )
         } finally {
-            alice.stop()
-            bob.stop()
+            try {
+                alice.stop()
+            } finally {
+                bob.stop()
+            }
         }
     }
 
@@ -290,10 +313,14 @@ class ReconnectPolicyTest {
         }
         val bob = incomingKit("Bob", listOf(pair.b))
         try {
-            val session = withTimeout(5_000) { alice.connect(targetPeer()) }
+            val session = assertIs<P2pSessionImpl>(withTimeout(5_000) { alice.connect(targetPeer()) })
 
+            val reconnectEntered = session.observeReconnectEntry()
             pair.a.breakWithException(RuntimeException("simulated wire break"))
-            withTimeout(5_000) { session.state.first { it == ConnectionState.Reconnecting } }
+            withTimeout(5_000) {
+                session.state.first { it == ConnectionState.Reconnecting }
+                reconnectEntered.await()
+            }
 
             alice.stop()
             assertEquals(
@@ -304,13 +331,17 @@ class ReconnectPolicyTest {
             // session ownership is allowed to finish being cancelled. The
             // contract begins when stop() returns: no later retry may start.
             val attemptsAfterStop = attempts.value
-            delay(150)
+            withTimeout(5_000) { session.awaitRuntimeTermination() }
             assertEquals(
                 attemptsAfterStop, attempts.value,
                 "Factory must not be called after kit.stop() returns"
             )
         } finally {
-            bob.stop()
+            try {
+                alice.stop()
+            } finally {
+                bob.stop()
+            }
         }
     }
 
@@ -450,7 +481,7 @@ class ReconnectPolicyTest {
         }
         val bob = incomingKit("Bob", listOf(pair.b))
         try {
-            val session = withTimeout(5_000) { alice.connect(targetPeer()) }
+            val session = assertIs<P2pSessionImpl>(withTimeout(5_000) { alice.connect(targetPeer()) })
             assertEquals(ConnectionState.Connected, session.state.value)
 
             // Peer-side clean close: Bob's session sends the CLOSE frame and
@@ -467,17 +498,20 @@ class ReconnectPolicyTest {
                 "a received CLOSE frame must classify as a clean close — exactly Closed, never Failed"
             )
 
-            // Terminal Closed is latched (the retry loop re-checks state
-            // before every dial), so the factory must never be re-invoked.
-            delay(150)
+            // A CLOSE frame may correct a transient Reconnecting state.
+            // All owned retry work must finish before the no-redial assertion.
+            withTimeout(5_000) { session.awaitRuntimeTermination() }
             assertEquals(
                 1, attempts.value,
                 "dial factory must not be re-invoked after a remote CLOSE frame"
             )
             assertEquals(ConnectionState.Closed, session.state.value)
         } finally {
-            alice.stop()
-            bob.stop()
+            try {
+                alice.stop()
+            } finally {
+                bob.stop()
+            }
         }
     }
 
