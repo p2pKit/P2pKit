@@ -35,6 +35,7 @@ TOKEN = "abcdef0123456789abcdef0123456789"
 WINDOWS_TASKS = {":p2p-core:jvmTest", ":p2p-transport-lan:jvmTest",
                  ":p2p-network-provisioning-desktop:test"}
 WINDOWS_FOLLOWUP_TASKS = {":p2p-core:jvmTest", ":p2p-core:testAndroidHostTest", ":p2p-transport-lan:jvmTest"}
+WINDOWS_DIAGNOSTICS_TASKS = {":p2p-transport-lan:jvmTest"}
 SWIFT_TARGETS = ("p2pkit-sample-tests", "p2pkit-sample-uitests")
 
 
@@ -357,30 +358,33 @@ class WindowsAssessmentTest(unittest.TestCase):
                         self.assess(report)
 
     def test_focused_tasks_keep_complete_model_and_cannot_pass_as_full_windows(self):
-        report = windows_report(WINDOWS_FOLLOWUP_TASKS)
-        self.assertEqual(WINDOWS_FOLLOWUP_TASKS, set(HOST.assess_windows(
-            report, POLICY, TOKEN, WINDOWS_FOLLOWUP_TASKS)))
-        with self.assertRaises(ValueError):
-            self.assess(report)
-        for task in WINDOWS_FOLLOWUP_TASKS:
-            for field, value in (("outcome", "FROM-CACHE"), ("passed", 0), ("failed", 1), ("inGraph", False)):
+        for required in (WINDOWS_FOLLOWUP_TASKS, WINDOWS_DIAGNOSTICS_TASKS):
+            report = windows_report(required)
+            self.assertEqual(required, set(HOST.assess_windows(report, POLICY, TOKEN, required)))
+            with self.assertRaises(ValueError):
+                self.assess(report)
+            if required == WINDOWS_DIAGNOSTICS_TASKS:
+                with self.assertRaises(ValueError):
+                    HOST.assess_windows(report, POLICY, TOKEN, WINDOWS_FOLLOWUP_TASKS)
+            for task in required:
+                for field, value in (("outcome", "FROM-CACHE"), ("passed", 0), ("failed", 1), ("inGraph", False)):
+                    mutated = copy.deepcopy(report)
+                    mutated["tests"][task][field] = value
+                    with self.subTest(required=required, task=task, field=field), self.assertRaises(ValueError):
+                        HOST.assess_windows(mutated, POLICY, TOKEN, required)
+            for change in ("failed-unrequested", "missing-inventory", "stale-token"):
                 mutated = copy.deepcopy(report)
-                mutated["tests"][task][field] = value
-                with self.subTest(task=task, field=field), self.assertRaises(ValueError):
-                    HOST.assess_windows(mutated, POLICY, TOKEN, WINDOWS_FOLLOWUP_TASKS)
+                if change == "failed-unrequested":
+                    mutated["tests"][":p2p-network-provisioning-desktop:test"]["failed"] = 1
+                elif change == "missing-inventory":
+                    del mutated["tests"][":p2p-transport-lan:jvmTest"]
+                else:
+                    mutated["token"] = "stale"
+                with self.subTest(required=required, change=change), self.assertRaises(ValueError):
+                    HOST.assess_windows(mutated, POLICY, TOKEN, required)
         for required in (set(), {":p2p-core:jvmTest"}, {":unclassified:test"}):
             with self.subTest(required=required), self.assertRaises(ValueError):
                 HOST.assess_windows(report, POLICY, TOKEN, required)
-        for change in ("failed-unrequested", "missing-inventory", "stale-token"):
-            mutated = copy.deepcopy(report)
-            if change == "failed-unrequested":
-                mutated["tests"][":p2p-network-provisioning-desktop:test"]["failed"] = 1
-            elif change == "missing-inventory":
-                del mutated["tests"][":p2p-transport-lan:jvmTest"]
-            else:
-                mutated["token"] = "stale"
-            with self.subTest(change=change), self.assertRaises(ValueError):
-                HOST.assess_windows(mutated, POLICY, TOKEN, WINDOWS_FOLLOWUP_TASKS)
 
     def test_stale_dry_failed_wrong_host_and_malformed_reports_cannot_pass(self):
         for field, value in (("schema", True), ("schema", 2), ("token", "previous-token"),
@@ -659,7 +663,8 @@ class HostInvocationTest(unittest.TestCase):
 
     def test_unknown_or_mismatched_scope_is_rejected_before_state_or_process_creation(self):
         for role, scope in (("windows-x64", "invented"), ("macos-arm64", "windows-followup"),
-                             ("macos-x64", "windows-followup"), ("unknown", "full")):
+                             ("macos-x64", "windows-followup"), ("macos-arm64", "windows-diagnostics"),
+                             ("macos-x64", "windows-diagnostics"), ("unknown", "full")):
             state = self.work / (role + "-" + scope)
             with self.subTest(role=role, scope=scope), self.assertRaisesRegex(ValueError, "role/scope"):
                 HOST.Host(role, state, scope=scope)
@@ -698,6 +703,28 @@ class HostInvocationTest(unittest.TestCase):
             clean.assert_called_once_with()
             self.assertEqual(2 if success else 0, read.call_count)
         self.assertEqual([{"component": "windows-followup-execution", "result": "PASS", "inspectionOnly": True}],
+                         self.host.rows)
+
+    def test_windows_diagnostics_has_only_the_filtered_lan_graph_assessment_and_cleanup(self):
+        gate = HOST.load_gate()
+        expected = [
+            ":p2p-transport-lan:jvmTest", "--tests", "dev.p2pkit.transport.lan.JvmLanAcceptLoopResilienceTest",
+            "--tests", "dev.p2pkit.transport.lan.JvmLanAdmissionControlTest",
+            "--continue", "--init-script", str(self.repo / "gradle/platform-test-coverage.init.gradle"),
+            "-Pp2pkit.testCoverageRoot=" + str(self.repo), "-Pp2pkit.testCoverageToken=" + TOKEN,
+        ]
+        for success in (True, False):
+            with self.subTest(success=success), \
+                    mock.patch.object(HOST.uuid, "uuid4", return_value=types.SimpleNamespace(hex=TOKEN)), \
+                    mock.patch.object(self.host, "invoke", return_value=success) as invoke, \
+                    mock.patch.object(self.host, "clean_outputs") as clean, \
+                    mock.patch.object(HOST, "load_gate", return_value=gate), \
+                    mock.patch.object(gate, "read_json", side_effect=[windows_report(WINDOWS_DIAGNOSTICS_TASKS), POLICY]) as read:
+                self.host.windows_diagnostics()
+            invoke.assert_called_once_with("windows-diagnostics", expected)
+            clean.assert_called_once_with()
+            self.assertEqual(2 if success else 0, read.call_count)
+        self.assertEqual([{"component": "windows-diagnostics-execution", "result": "PASS", "inspectionOnly": True}],
                          self.host.rows)
 
     def test_constructor_does_not_borrow_foreign_state_or_caller_opt_ins(self):
@@ -2070,19 +2097,22 @@ class SdkSetupTest(unittest.TestCase):
                 mock.patch.object(host, "prerequisites"), \
                 mock.patch.object(host, "windows", side_effect=products) as windows, \
                 mock.patch.object(host, "windows_followup", side_effect=products) as followup, \
+                mock.patch.object(host, "windows_diagnostics", side_effect=products) as diagnostics, \
                 mock.patch.object(host, "mac", side_effect=products) as mac, \
                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             result = host.run()
-        return result, windows.call_count, mac.call_count, followup.call_count
+        return result, windows.call_count, mac.call_count, followup.call_count, diagnostics.call_count
 
     def test_run_routes_all_roles_only_after_sdk_validation(self):
-        for role, scope in [*((role, "full") for role in HOST.ROLES), ("windows-x64", "windows-followup")]:
+        for role, scope in [*((role, "full") for role in HOST.ROLES),
+                             ("windows-x64", "windows-followup"), ("windows-x64", "windows-diagnostics")]:
             with self.subTest(role=role, scope=scope), self.fixture(role) as data:
                 fixture, sdk, _, _ = data
-                result, windows, mac, followup = self.run_fixture(fixture, sdk, scope=scope)
+                result, windows, mac, followup, diagnostics = self.run_fixture(fixture, sdk, scope=scope)
                 self.assertEqual(0, result)
                 self.assertEqual(int(role == "windows-x64" and scope == "full"), windows)
                 self.assertEqual(int(scope == "windows-followup"), followup)
+                self.assertEqual(int(scope == "windows-diagnostics"), diagnostics)
                 self.assertEqual(int(role == "macos-arm64"), mac)
                 expected = ["executor-native-controls", "android-platforms"]
                 if role == "macos-x64":
@@ -2096,12 +2126,13 @@ class SdkSetupTest(unittest.TestCase):
                 self.assertTrue(fixture.summary()["safeToContinue"])
 
     def test_run_blocks_all_products_and_finalizes_invalid_metadata(self):
-        for role, scope in [*((role, "full") for role in HOST.ROLES), ("windows-x64", "windows-followup")]:
+        for role, scope in [*((role, "full") for role in HOST.ROLES),
+                             ("windows-x64", "windows-followup"), ("windows-x64", "windows-diagnostics")]:
             with self.subTest(role=role, scope=scope), self.fixture(role) as data:
                 fixture, sdk, _, properties = data
                 properties["android-37.0"].write_text("AndroidVersion.ApiLevel=37.1\n", encoding="utf-8")
-                result, windows, mac, followup = self.run_fixture(fixture, sdk, scope=scope)
-                self.assertEqual((1, 0, 0, 0), (result, windows, mac, followup))
+                result, windows, mac, followup, diagnostics = self.run_fixture(fixture, sdk, scope=scope)
+                self.assertEqual((1, 0, 0, 0, 0), (result, windows, mac, followup, diagnostics))
                 self.assertEqual(["executor-native-controls", "android-platforms"],
                                  [row["component"] for row in fixture.host.rows])
                 self.assertIn("Wrong Android platform metadata: android-37.0", fixture.summary()["error"])
@@ -2111,11 +2142,12 @@ class SdkSetupTest(unittest.TestCase):
                 self.assertNotIn("safe_to_continue=true", fixture.output.read_text(encoding="utf-8"))
 
     def test_run_blocks_all_products_and_finalizes_failed_sdk_installation(self):
-        for role, scope in [*((role, "full") for role in HOST.ROLES), ("windows-x64", "windows-followup")]:
+        for role, scope in [*((role, "full") for role in HOST.ROLES),
+                             ("windows-x64", "windows-followup"), ("windows-x64", "windows-diagnostics")]:
             with self.subTest(role=role, scope=scope), self.fixture(role) as data:
                 fixture, sdk, _, _ = data
-                result, windows, mac, followup = self.run_fixture(fixture, sdk, manager_status=7, scope=scope)
-                self.assertEqual((1, 0, 0, 0), (result, windows, mac, followup))
+                result, windows, mac, followup, diagnostics = self.run_fixture(fixture, sdk, manager_status=7, scope=scope)
+                self.assertEqual((1, 0, 0, 0, 0), (result, windows, mac, followup, diagnostics))
                 self.assertEqual(["executor-native-controls", "android-platforms"],
                                  [row["component"] for row in fixture.host.rows])
                 self.assertEqual("FAIL", fixture.host.rows[-1]["result"])

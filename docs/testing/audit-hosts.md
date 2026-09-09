@@ -54,12 +54,33 @@ workflows or local builds, and GitHub can replace an older pending run even with
 `cancel-in-progress: false`. Do not queue another triggering push while a run is
 active or pending; preserve earlier failure/cancellation records.
 
-## Selected Windows follow-up scope
+## Selected Windows diagnostics scope
 
 The current literal job is `Audit native Windows x64` on `windows-2025`, using
-native Python, Java 21 then 17 and the checked-in `gradlew.bat`. Its finite
-`windows-followup` scope retains the unchanged native ownership controls and SDK
-admission, then runs one product graph:
+native Python, Java 21 then 17 and the checked-in `gradlew.bat`. Its optional
+`windows-diagnostics` scope retains the unchanged native ownership controls and
+SDK admission, then selects only the affected strict LAN diagnostic callers:
+
+```text
+:p2p-transport-lan:jvmTest
+  --tests dev.p2pkit.transport.lan.JvmLanAcceptLoopResilienceTest
+  --tests dev.p2pkit.transport.lan.JvmLanAdmissionControlTest
+```
+
+The existing source-bound event assessor requires fresh nonzero successful LAN
+JVM execution and rejects stale, failed or incomplete task evidence. Inspect both
+selected class XMLs and exact cases, including the expected-diagnostic negative
+control. Admission, strict dependency verification, resource limits, per-invocation
+wrapper stop, owned-output cleanup and sealed handoff are unchanged. The distinct
+`windows-diagnostics-execution` record is not the full/follow-up scope's assessment.
+Core durability, the broader LAN selection and Desktop packaging are not repeated;
+reuse earlier successful evidence only with its original source and reviewed limits.
+This scope does not supply native discovery, whole-host or external qualification.
+
+## Retained Windows follow-up scope
+
+The optional `windows-followup` scope also retains the native ownership controls
+and SDK admission, then runs one broader product graph:
 
 ```text
 :p2p-core:jvmTest
@@ -97,19 +118,21 @@ sockets and deterministic test-discovery callbacks, not native JmDNS/multicast
 validation. None is inferred merely from a task's aggregate count.
 
 `requestedScope` is bound across admission, summary and workflow bootstrap/handoff.
-For this scope, `hostQualification` is always
+For either focused scope, `hostQualification` is always
 `NOT_ESTABLISHED_BY_FOCUSED_SCOPE`, including when the selected components pass.
-The CLI accepts only `full` for the existing roles or `windows-followup` for
-Windows, rejecting other pairs before state initialization. Full defaults remain
+The CLI accepts `full` for the existing roles, or `windows-followup` and
+`windows-diagnostics` only for Windows, rejecting other pairs before state
+initialization. Full defaults remain
 unchanged; `FULL_COMPONENT_SCOPE` describes their requested scope, not a successful
 qualification. Omitted full-profile components are **NOT_EXECUTED by this run**,
-not waived. The focused graph does not repeat wrapper-checkout, whole library
-suites, provisioning, CLI/KMP consumers or Desktop UI tests. It adds only the
+not waived. The retained `windows-followup` graph does not repeat wrapper-checkout,
+whole library suites, provisioning, CLI/KMP consumers or Desktop UI tests. It adds only the
 newly affected registry/raw-I/O and selected diagnostic-network callers to the
 existing durable-transfer and packaged-output cleanup controls. Gradle exit zero
 or failure to reproduce an earlier cleanup error does not establish a repair.
 The mandatory native executor suite retains the actual Windows read-only-file
-recovery/hardlink refusal controls; packaged-image cleanup must also succeed.
+recovery/hardlink refusal controls; when packaging is selected, packaged-image
+cleanup must also succeed.
 
 ### Full profiles retained by the driver, not selected by this workflow revision
 

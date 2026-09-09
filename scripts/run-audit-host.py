@@ -26,9 +26,10 @@ WORKFLOW = ".github/workflows/audit-host-validation.yml"
 REF = "refs/heads/audit/complete-2026-09-04"
 ROLES = {"windows-x64": ("Windows", "x64"), "macos-arm64": ("Darwin", "arm64"),
          "macos-x64": ("Darwin", "x64")}
-SCOPES = {"full": set(ROLES), "windows-followup": {"windows-x64"}}
+SCOPES = {"full": set(ROLES), "windows-followup": {"windows-x64"}, "windows-diagnostics": {"windows-x64"}}
 WINDOWS_TASKS = {":p2p-core:jvmTest", ":p2p-transport-lan:jvmTest", ":p2p-network-provisioning-desktop:test"}
 WINDOWS_FOLLOWUP_TASKS = {":p2p-core:jvmTest", ":p2p-core:testAndroidHostTest", ":p2p-transport-lan:jvmTest"}
+WINDOWS_DIAGNOSTICS_TASKS = {":p2p-transport-lan:jvmTest"}
 DESKTOP_TASKS = [":p2p-sample-desktop:check", ":p2p-sample-desktop:installDist", ":p2p-sample-desktop-ui:test",
                  ":p2p-sample-desktop-ui:checkRuntime", ":p2p-sample-desktop-ui:hotRunArgfile",
                  ":p2p-sample-desktop-ui:createDistributable"]
@@ -192,7 +193,8 @@ def admit(event, environment, role, root=ROOT, scope="full"):
 
 def assess_windows(report, policy, token, required_tasks=WINDOWS_TASKS):
     """Use real Gradle execution events, not stale XML or compilation as a test pass."""
-    require(required_tasks in (WINDOWS_TASKS, WINDOWS_FOLLOWUP_TASKS), "Unsupported Windows required-task set")
+    require(required_tasks in (WINDOWS_TASKS, WINDOWS_FOLLOWUP_TASKS, WINDOWS_DIAGNOSTICS_TASKS),
+            "Unsupported Windows required-task set")
     gate = load_gate()
     gate.validate_policy(policy)
     require(type(report) is dict and type(report.get("schema")) is int and report["schema"] == 1,
@@ -640,6 +642,22 @@ class Host:
                 gate.read_json(ROOT / "gradle/platform-test-policy.json"), token, WINDOWS_FOLLOWUP_TASKS))
         self.clean_outputs()
 
+    def windows_diagnostics(self):
+        """Only the affected strict LAN diagnostic callers, not full Windows qualification."""
+        token = uuid.uuid4().hex
+        success = self.invoke("windows-diagnostics", [
+            ":p2p-transport-lan:jvmTest", "--tests", "dev.p2pkit.transport.lan.JvmLanAcceptLoopResilienceTest",
+            "--tests", "dev.p2pkit.transport.lan.JvmLanAdmissionControlTest",
+            "--continue", "--init-script", str(ROOT / "gradle/platform-test-coverage.init.gradle"),
+            "-Pp2pkit.testCoverageRoot=" + str(ROOT), "-Pp2pkit.testCoverageToken=" + token,
+        ])
+        if success:
+            gate = load_gate()
+            self.check("windows-diagnostics-execution", lambda: assess_windows(
+                gate.read_json(ROOT / "build/reports/platform-tests" / token / "execution.json"),
+                gate.read_json(ROOT / "gradle/platform-test-policy.json"), token, WINDOWS_DIAGNOSTICS_TASKS))
+        self.clean_outputs()
+
     def mac_policies(self):
         # Preserve release-gate ordering; no no-op replacement of real graph/native probes.
         scripts = ["scripts/check-gradle-wrapper.sh", "scripts/check-dependency-verification.sh",
@@ -1065,7 +1083,9 @@ class Host:
                 raise InfrastructureFailure("Native executor controls failed; product execution is blocked")
             self.safe = True
             self.setup_sdk()
-            if self.scope == "windows-followup":
+            if self.scope == "windows-diagnostics":
+                self.windows_diagnostics()
+            elif self.scope == "windows-followup":
                 self.windows_followup()
             elif self.role == "windows-x64":
                 self.windows()

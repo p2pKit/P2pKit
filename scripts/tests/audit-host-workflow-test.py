@@ -173,7 +173,7 @@ class Fixture:
         self.evidence = self.state / "evidence"
         self.evidence.mkdir(parents=True)
         self.role = role
-        self.scope = scope or ("windows-followup" if role == "windows-x64" else "full")
+        self.scope = scope or ("windows-diagnostics" if role == "windows-x64" else "full")
         self.current = {"commit": COMMIT, "tree": TREE, "status": "", "diffSha256": EMPTY_HASH}
         self.git_current = copy.deepcopy(self.current)
         self.git_diff = b""
@@ -421,7 +421,7 @@ class WorkflowTestCase(unittest.TestCase):
 
 class HandoffTest(WorkflowTestCase):
     def test_focused_scope_cannot_be_relabelled_as_full_qualification(self):
-        for scope in ("full", "windows-followup"):
+        for scope in ("full", "windows-followup", "windows-diagnostics"):
             case = Fixture(self, scope=scope)
             self.assert_safe(case, case.invoke())
         for target, key, value in (("summary", "requestedScope", "full"),
@@ -1188,7 +1188,7 @@ class WorkflowOrchestrationTest(WorkflowTestCase):
         self.assertEqual(yaml_value(block, "runs-on", 4), "windows-2025")
         self.assertEqual(yaml_value(block, "shell", 8), "python {0}")
         self.assertEqual(yaml_value(block, "P2PKIT_AUDIT_ROLE", 6), "windows-x64")
-        self.assertEqual(yaml_value(block, "P2PKIT_AUDIT_SCOPE", 6), "windows-followup")
+        self.assertEqual(yaml_value(block, "P2PKIT_AUDIT_SCOPE", 6), "windows-diagnostics")
 
     def test_actual_artifact_output_requires_success_and_a_nonempty_upload_id(self):
         expression = yaml_value(job_block("selected_host"), "artifact_uploaded", 6)

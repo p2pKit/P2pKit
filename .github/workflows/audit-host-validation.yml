@@ -1,6 +1,6 @@
 name: Audit host validation
 
-# Run revision: 5. Change this comment in a reviewed audit-branch push to
+# Run revision: 6. Change this comment in a reviewed audit-branch push to
 # request a new frozen-source run. Helpers/docs-only pushes do not trigger it.
 on:
   push:
@@ -30,7 +30,7 @@ jobs:
         shell: python {0}
     env:
       P2PKIT_AUDIT_ROLE: windows-x64
-      P2PKIT_AUDIT_SCOPE: windows-followup
+      P2PKIT_AUDIT_SCOPE: windows-diagnostics
       P2PKIT_AUDIT_DRIVER_TIMEOUT_SECONDS: "8400"
     outputs: &host_outputs
       safe_to_continue: ${{ steps.handoff.outcome == 'success' && steps.handoff.outputs.safe_to_continue == 'true' }}
