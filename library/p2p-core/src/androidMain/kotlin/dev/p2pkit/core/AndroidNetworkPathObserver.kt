@@ -53,8 +53,9 @@ import kotlinx.coroutines.sync.withLock
  *
  * A successful [close] resets [status] to [NetworkPathStatus.Unknown] and
  * invalidates the callback generation. If native unregister fails, the
- * observer retains ownership so another [close] can retry; [start] will not
- * attach a second callback over that registration.
+ * observer retains ownership so another [close] can retry. A later [start]
+ * warns through the configured logger and will not attach a second callback
+ * over that registration; retry [close] before restarting.
  */
 public class AndroidNetworkPathObserver internal constructor(
     private val monitor: AndroidNetworkPathMonitor,
@@ -74,10 +75,22 @@ public class AndroidNetworkPathObserver internal constructor(
     private val startMutex = Mutex()
     private val callbackStateLock = Any()
     private val callbackState = NetworkPathCallbackState<Any>()
+    // Guarded by startMutex; distinguish healthy idempotence from failed detach.
+    private var unregisterFailed: Boolean = false
 
     public override suspend fun start(): Unit = startMutex.withLock {
         val generation = synchronized(callbackStateLock) { callbackState.begin() }
-            ?: return@withLock
+            ?: run {
+                if (unregisterFailed) {
+                    logger.warn(
+                        "NetworkPathObserver.start() declined: callback retained after unregister failure; " +
+                            "retry close() to unregister"
+                    )
+                } else {
+                    logger.debug("NetworkPathObserver.start() ignored: path observer already owns a callback")
+                }
+                return@withLock
+            }
         val listener = object : AndroidNetworkPathListener {
             override fun onAvailable(network: Any) {
                 synchronized(callbackStateLock) {
@@ -111,12 +124,14 @@ public class AndroidNetworkPathObserver internal constructor(
             // Keep ownership and the live generation so a later close retries
             // the exact registration instead of leaking it and attaching a
             // second callback on restart.
+            unregisterFailed = true
             logger.warn("unregisterNetworkCallback failed; path observer still owns callback", e)
             return@withLock
         }
         synchronized(callbackStateLock) {
             callbackState.detach(generation)?.let { _status.value = it }
         }
+        unregisterFailed = false
     }
 }
 
