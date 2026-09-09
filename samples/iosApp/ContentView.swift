@@ -103,6 +103,14 @@ struct ContentView: View {
     @State private var transfers: [TransferRow] = []
     /// Incoming file offers stay pending until the user explicitly accepts or rejects them.
     @State private var pendingOffers: [TransferKey: PendingOffer] = [:]
+    #if DEBUG
+    private static let consentFixtureSession = "ui-consent-fixture-session"
+    private let consentFixtureEnabled = ProcessInfo.processInfo.arguments
+        .contains("--p2pkit-ui-test-pending-offer")
+    @State private var consentFixtureAccepts = 0
+    @State private var consentFixtureRejects = 0
+    @State private var consentFixtureError: String?
+    #endif
     @State private var draft: String = "hi from iPhone"
     @State private var manualHost: String = ""
     @State private var manualPort: String = ""
@@ -336,6 +344,11 @@ struct ContentView: View {
                 manualConnectSection
                 Divider()
                 sessionsSection
+                #if DEBUG
+                if consentFixtureEnabled {
+                    consentFixtureControls
+                }
+                #endif
                 if !pendingOffers.isEmpty || !transfers.isEmpty {
                     Divider()
                     transfersSection
@@ -1324,6 +1337,62 @@ struct ContentView: View {
 
     // MARK: - File transfer
 
+    #if DEBUG
+    /// Test input and observations only: the actual body and consent actions above render/handle the offer.
+    @ViewBuilder
+    private var consentFixtureControls: some View {
+        Button("Inject synthetic pending offer") {
+            runLifecycle.launchAction { run in await injectConsentFixture(run: run) }
+        }
+        .accessibilityIdentifier("ui-consent-fixture-inject")
+        .disabled(runLifecycle.phase != .running || !pendingOffers.isEmpty || !transfers.isEmpty)
+        Button("Remove synthetic offer snapshot") {
+            runLifecycle.launchAction { run in
+                _ = runLifecycle.withActiveRun(run) {
+                    reconcileIncomingOffers([], sessionId: Self.consentFixtureSession)
+                }
+            }
+        }
+        .accessibilityIdentifier("ui-consent-fixture-empty")
+        .disabled(runLifecycle.phase != .running)
+        Text("accept=\(String(consentFixtureAccepts)) reject=\(String(consentFixtureRejects))")
+            .accessibilityIdentifier("ui-consent-fixture-decisions")
+        if let consentFixtureError {
+            Text(consentFixtureError).accessibilityIdentifier("ui-consent-fixture-error")
+        }
+    }
+
+    @MainActor
+    private func injectConsentFixture(run: SampleRunLifecycle.Run) async {
+        guard consentFixtureEnabled, runLifecycle.acceptsWork(run), runLifecycle.phase == .running,
+              pendingOffers.isEmpty, transfers.isEmpty, (1...65_535).contains(localTcpPort),
+              let kit, let qr = kit.localPairingQr,
+              let fingerprint = kit.parsePeerPairingQr(value: qr) else { return }
+        do {
+            // Obtain a real Peer through the existing pinned registration API; never connect or send a file.
+            let peer = try await kit.networkProvisioning.createManualPeer(
+                host: "127.0.0.1", port: Int32(localTcpPort), expectedFingerprint: fingerprint
+            )
+            guard !Task.isCancelled else { return }
+            _ = runLifecycle.withActiveRun(run) {
+                guard pendingOffers.isEmpty, transfers.isEmpty else { return }
+                consentFixtureError = nil
+                let offer = UIConsentFixtureOffer(peer: peer) { accepted in
+                    guard runLifecycle.owns(run) else { return }
+                    if accepted { consentFixtureAccepts += 1 } else { consentFixtureRejects += 1 }
+                }
+                reconcileIncomingOffers([], sessionId: Self.consentFixtureSession)
+                reconcileIncomingOffers([offer], sessionId: Self.consentFixtureSession)
+            }
+        } catch {
+            guard !Task.isCancelled else { return }
+            _ = runLifecycle.withActiveRun(run) {
+                consentFixtureError = "Synthetic offer setup failed."
+            }
+        }
+    }
+    #endif
+
     /// AUDIT-2026-06 (D-G9-samples-desktop-ios-03 / A-G9-samples-desktop-ios-07):
     /// Queue an incoming offer until the user explicitly accepts or rejects it.
     /// The old auto-accept policy let an untrusted peer consume disk space
@@ -2266,6 +2335,48 @@ struct ContentView: View {
 }
 
 // MARK: - FlowCollector adapters
+
+#if DEBUG
+/// A UI-only offer input, not an SDK/transport simulator. Never writes or claims successful acceptance.
+private final class UIConsentFixtureOffer: NSObject, P2pFileOffer {
+    let id = "11111111111111111111111111111111"
+    let peer: Peer
+    let name = "synthetic-consent.bin"
+    let sizeBytes: Int64 = 16
+    let mimeType: String? = "application/octet-stream"
+    private let onDecision: @MainActor (Bool) -> Void
+
+    init(peer: Peer, onDecision: @escaping @MainActor (Bool) -> Void) {
+        self.peer = peer
+        self.onDecision = onDecision
+    }
+
+    func accept(sink: Kotlinx_io_coreRawSink, completionHandler: @escaping (P2pFileTransfer?, Error?) -> Void) {
+        recordUnexpectedAccept(completionHandler)
+    }
+
+    func accept(
+        destination: FileTransferDestination,
+        completionHandler: @escaping (P2pFileTransfer?, Error?) -> Void
+    ) {
+        recordUnexpectedAccept(completionHandler)
+    }
+
+    func reject(reason: String?, completionHandler: @escaping (Error?) -> Void) {
+        Task { @MainActor in
+            self.onDecision(false)
+            completionHandler(nil)
+        }
+    }
+
+    private func recordUnexpectedAccept(_ completion: @escaping (P2pFileTransfer?, Error?) -> Void) {
+        Task { @MainActor in
+            self.onDecision(true)
+            completion(nil, NSError(domain: "P2pKitSample.UIConsentFixture", code: 1))
+        }
+    }
+}
+#endif
 
 /// Swift adapter for `kotlinx.coroutines.flow.FlowCollector<P2pSession>`.
 final class SessionCollector: NSObject, Kotlinx_coroutines_coreFlowCollector {
