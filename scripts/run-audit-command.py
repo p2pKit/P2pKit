@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import errno
 import hashlib
 import json
 import os
@@ -919,7 +920,8 @@ def inspect_disposable_tree(path: Path) -> dict[str, Any]:
     require(os.name == "nt" or shutil.rmtree.avoids_symlink_attacks,
             "POSIX cleanup requires fd-based no-follow rmtree")
     reject_symlinks(path)
-    root_device = path.lstat().st_dev
+    root_info = path.lstat()
+    root_device = root_info.st_dev
     pending = [(path, 0)]
     count, metadata_bytes = 0, 0
     links = []
@@ -962,7 +964,8 @@ def inspect_disposable_tree(path: Path) -> dict[str, Any]:
                     pending.append((child, depth + 1))
                 else:
                     require(stat.S_ISREG(info.st_mode), "Unexpected special file blocks disposable-output cleanup")
-    return {"path": str(path), "entryCount": count, "links": sorted(links, key=lambda item: item["path"]),
+    return {"path": str(path), "rootIdentity": {"device": root_info.st_dev, "inode": root_info.st_ino},
+            "entryCount": count, "links": sorted(links, key=lambda item: item["path"]),
             "noTargetTraversal": True, "removal": "shutil.rmtree; child symlinks/junctions are unlinked"}
 
 
@@ -1017,6 +1020,73 @@ def removal_failure_detail(root: Path, operation: Any, entry: Any, error: BaseEx
     return detail
 
 
+def retry_windows_readonly_unlink(root: Path, root_identity: dict[str, int], operation: Any, entry: Any,
+                                  error: BaseException, attempt: dict[str, Any], persist: Any) -> bool:
+    """One leaf retry under the existing quiescent, already-finalized output contract.
+
+    Windows chmod changes only READONLY, not ACLs. Python 3.12 cannot chmod a
+    Windows fd/no-follow path; physical ancestor and same-file checks below retain
+    rmtree's explicit non-hostile-name-mutation limitation. Never chmod a link,
+    directory, hardlink, unknown attribute class or unverified output root.
+    """
+    if (sys.platform != "win32" or operation is not os.unlink or not isinstance(error, PermissionError) or
+            error.errno != errno.EACCES or getattr(error, "winerror", None) != 5):
+        return False
+    attempt["stage"] = "admission"
+    path = Path(entry)
+    require(path.is_absolute() and ".." not in path.parts and path != root and within(path, root),
+            "Readonly retry requires a strict lexical child of the admitted output")
+    relative = path.relative_to(root).as_posix()
+    require(len(str(path)) <= 32768 and len(relative) <= 1024 and len(path.parts) <= 512 and ":" not in relative,
+            "Readonly retry path is oversized or not an ordinary leaf name")
+    require(root_identity["inode"] > 0, "Readonly retry requires a known preflight root identity")
+
+    def observe():
+        # Even lstat follows intermediate links: inspect from the filesystem root
+        # before approaching the leaf. Descendants must stay on the preflight disk.
+        for parent in reversed(path.parents):
+            info = parent.lstat()
+            require(stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode) and
+                    not (getattr(info, "st_file_attributes", 0) & 0x400), "Readonly retry has a nonphysical ancestor")
+            if parent == root:
+                require((info.st_dev, info.st_ino) == (root_identity["device"], root_identity["inode"]),
+                        "Readonly retry output root changed after preflight")
+            if within(parent, root):
+                require(info.st_dev == root_identity["device"], "Readonly retry ancestor changed device")
+        info = path.lstat()
+        require(stat.S_ISREG(info.st_mode) and not (getattr(info, "st_file_attributes", 0) & 0x400) and
+                getattr(info, "st_reparse_tag", 0) == 0, "Readonly retry leaf is not an ordinary non-reparse file")
+        require(info.st_dev == root_identity["device"] and info.st_ino > 0 and info.st_nlink == 1,
+                "Readonly retry leaf is foreign, unidentified or hardlinked")
+        return info
+
+    before = observe()
+    attributes = getattr(before, "st_file_attributes", None)
+    require(attributes in (0x1, 0x21), "Readonly retry requires only READONLY and optional ARCHIVE attributes")
+    identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_nlink)
+    attempt.update({"relativePath": relative, "leafIdentity": {"device": before.st_dev, "inode": before.st_ino,
+                    "links": before.st_nlink, "bytes": before.st_size, "mtimeNs": before.st_mtime_ns},
+                    "attributesBefore": attributes, "outcome": "PENDING", "stage": "retain-original-failure"})
+    persist()  # Durably retain the original unlink error before any attribute change.
+    current = observe()
+    require((current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns, current.st_nlink) == identity and
+            current.st_file_attributes == attributes, "Readonly retry leaf changed before chmod")
+    attempt["stage"] = "clear-readonly"
+    os.chmod(path, stat.S_IWRITE)  # Windows only: clear exactly FILE_ATTRIBUTE_READONLY.
+    attempt["stage"] = "revalidate-before-unlink"
+    current = observe()
+    # NORMAL is the Windows marker for no remaining attributes, not another permission.
+    allowed_after = (0, 0x80) if attributes == 0x1 else (0x20,)
+    require((current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns, current.st_nlink) == identity and
+            current.st_file_attributes in allowed_after, "Readonly retry leaf changed beyond its readonly bit")
+    attempt["attributesAfter"] = current.st_file_attributes
+    attempt["stage"] = "unlink-once"
+    os.unlink(path)
+    require(existing_lstat(path) is None, "Readonly retry did not remove its exact leaf")
+    attempt.update({"stage": "finished", "outcome": "REMOVED"})
+    return True
+
+
 def cleanup(args: argparse.Namespace) -> int:
     state, context = context_at(args.state)
     root = Path(context["root"])
@@ -1053,17 +1123,57 @@ def cleanup(args: argparse.Namespace) -> int:
         # Retain no-follow provenance before deletion, not just after successful
         # removal. The final record separately reports partial failures.
         write_new_json(state / "evidence" / f"cleanup-{record['id']}-start.json", record)
+        readonly_retried = set()
         for index, path in enumerate(targets):
             detail = None
 
             def failed(operation, entry, exception):
                 nonlocal detail
+                recovered, retained = False, False
+                attempt = {}
                 try:
                     detail = removal_failure_detail(path, operation, entry, exception[1])
+                    attempt = {"originalFailure": {**detail, "failedRootIndex": index}, "outcome": "REFUSED"}
+
+                    def retain_attempt():
+                        nonlocal retained
+                        rows = record.get("readonlyRecoveries", [])
+                        candidate = record if retained else {**record, "readonlyRecoveries": [*rows, attempt]}
+                        require(len(json_bytes(candidate)) + MAX_REMOVAL_DETAIL_BYTES + 1024 <= MAX_JSON_BYTES,
+                                "Readonly retry evidence exceeds the cleanup bound")
+                        if not retained:
+                            record.setdefault("readonlyRecoveries", []).append(attempt)
+                            retained = True
+
+                    def before_change():
+                        leaf = Path(entry)
+                        require(leaf not in readonly_retried, "A readonly leaf cannot be retried twice")
+                        readonly_retried.add(leaf)
+                        retain_attempt()
+                        write_new_json(state / "evidence" / f"cleanup-{record['id']}-readonly-{len(readonly_retried)}-start.json",
+                                       {"cleanupId": record["id"], "jobId": context["id"], "recovery": attempt})
+
+                    try:
+                        recovered = retry_windows_readonly_unlink(path, inspections[index]["rootIdentity"],
+                                                                  operation, entry, exception[1], attempt, before_change)
+                    except Exception as retry_error:
+                        attempt["outcome"] = "FAILED" if retained else "REFUSED"
+                        attempt["failureType"] = type(retry_error).__name__[:128]
+                        if isinstance(retry_error, AuditError):
+                            attempt["reason"] = str(retry_error)[:256]
+                        for field in ("errno", "winerror"):
+                            value = getattr(retry_error, field, None)
+                            attempt[field] = value if type(value) is int and -(2 ** 31) <= value < 2 ** 32 else None
+                    if "stage" in attempt:
+                        attempt["endedUtc"] = utc()
+                        retain_attempt()
+                except Exception:
+                    recovered = False  # Evidence failure never licenses successful removal.
                 finally:
-                    # Python 3.8+ onerror: retain the exact failing operation,
-                    # then immediately rethrow the same error without remediation.
-                    raise exception[1].with_traceback(exception[2])
+                    if not recovered:
+                        # Keep the first unlink/removal exception authoritative even
+                        # when admission, chmod, revalidation, retry or diagnostics fail.
+                        raise exception[1].with_traceback(exception[2])
 
             try:
                 reject_symlinks(path)

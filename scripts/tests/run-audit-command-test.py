@@ -247,7 +247,7 @@ class StatFields:
 
 @contextmanager
 def cleanup_metadata(test, *, cached_device=0, full_device=47, child_fields=None,
-                     entry_fields=None, child_error=None, blocked_scan=None):
+                     entry_fields=None, child_error=None, blocked_scan=None, leaf_fields=None):
     """Real tiny tree with modeled stat boundaries; never a native Windows claim.
 
     Windows DirEntry caches can have zero identity fields despite a nonzero full
@@ -274,6 +274,8 @@ def cleanup_metadata(test, *, cached_device=0, full_device=47, child_fields=None
                 if path == child and child_error is not None:
                     raise child_error
             actual = real_lstat(path, *args, **kwargs)
+            if path == deeper / "report.xml" and leaf_fields is not None:
+                return StatFields(actual, **{"st_dev": full_device, **leaf_fields})
             if path not in directories:
                 return actual
             fields = {"st_dev": full_device}
@@ -308,6 +310,127 @@ def cleanup_metadata(test, *, cached_device=0, full_device=47, child_fields=None
 
 
 class PurePolicyTests(unittest.TestCase):
+    def test_readonly_retry_is_only_windows_exact_unlink_access_denied(self):
+        denied = PermissionError(errno.EACCES, "synthetic original failure")
+        denied.winerror = 5
+        other_errno = PermissionError(errno.EPERM, "not the supported error")
+        other_errno.winerror = 5
+        other_winerror = PermissionError(errno.EACCES, "not the supported Windows error")
+        other_winerror.winerror = 32
+        impostor = mock.Mock(__name__="unlink")
+        for platform, operation, error in (("linux", os.unlink, denied), ("darwin", os.unlink, denied),
+                ("win32", os.rmdir, denied), ("win32", impostor, denied),
+                ("win32", os.unlink, OSError(errno.EIO, "not a permission error")),
+                ("win32", os.unlink, other_errno), ("win32", os.unlink, other_winerror)):
+            with self.subTest(platform=platform, operation=operation, error=error), \
+                    mock.patch.object(sys, "platform", platform), mock.patch.object(Path, "lstat") as metadata, \
+                    mock.patch.object(os, "chmod") as chmod:
+                persist = mock.Mock()
+                self.assertFalse(runner.retry_windows_readonly_unlink(Path("unused"), {}, operation,
+                                                                       "unused", error, {}, persist))
+                metadata.assert_not_called()
+                chmod.assert_not_called()
+                persist.assert_not_called()
+
+    def test_readonly_retry_refuses_unsafe_paths_ancestors_identity_types_and_hardlinks(self):
+        denied = PermissionError(errno.EACCES, "synthetic original failure")
+        denied.winerror = 5
+        cases = ({"st_mode": stat.S_IFDIR | 0o700}, {"st_mode": stat.S_IFLNK | 0o777},
+                 {"st_mode": stat.S_IFIFO | 0o600}, {"st_file_attributes": 0x421, "st_reparse_tag": 0xA000000C},
+                 {"st_reparse_tag": 0xA0000003}, {"st_file_attributes": 0x20},
+                 {"st_file_attributes": 0x3}, {"st_ino": 0}, {"st_nlink": 2}, {"st_dev": 53})
+        for changed in cases:
+            fields = {"st_file_attributes": 0x21, "st_reparse_tag": 0, **changed}
+            with self.subTest(changed=changed), cleanup_metadata(self, leaf_fields=fields) as (root, _, deeper, _):
+                identity = {"device": root.lstat().st_dev, "inode": root.lstat().st_ino}
+                with mock.patch.object(sys, "platform", "win32"), mock.patch.object(os, "chmod") as chmod, \
+                        mock.patch.object(os, "unlink") as unlink:
+                    persist = mock.Mock()
+                    with self.assertRaises(runner.AuditError):
+                        runner.retry_windows_readonly_unlink(root, identity, os.unlink, deeper / "report.xml",
+                                                               denied, {}, persist)
+                    chmod.assert_not_called()
+                    unlink.assert_not_called()
+                    persist.assert_not_called()
+        for child_fields, child_error, wrong_root in (({"st_file_attributes": 0x400}, None, False),
+                ({"st_dev": 53}, None, False), ({}, PermissionError("unreadable parent"), False),
+                ({}, FileNotFoundError("missing parent"), False), ({}, None, True)):
+            with self.subTest(child_fields=child_fields, child_error=child_error, wrong_root=wrong_root), \
+                    cleanup_metadata(self, child_fields=child_fields, child_error=child_error,
+                                     leaf_fields={"st_file_attributes": 0x21, "st_reparse_tag": 0}) as fixture:
+                root, _, deeper, _ = fixture
+                identity = {"device": root.lstat().st_dev, "inode": root.lstat().st_ino ^ int(wrong_root)}
+                with mock.patch.object(sys, "platform", "win32"), mock.patch.object(os, "chmod") as chmod, \
+                        mock.patch.object(os, "unlink") as unlink:
+                    persist = mock.Mock()
+                    with self.assertRaises((runner.AuditError, OSError)):
+                        runner.retry_windows_readonly_unlink(root, identity, os.unlink, deeper / "report.xml",
+                                                               denied, {}, persist)
+                    chmod.assert_not_called()
+                    unlink.assert_not_called()
+                    persist.assert_not_called()
+        with cleanup_metadata(self) as (root, _, _, _):
+            for leaf in (root, root.parent / "foreign", Path("relative"), root / ".." / "foreign", root / "file:stream"):
+                with self.subTest(leaf=leaf), mock.patch.object(sys, "platform", "win32"), \
+                        mock.patch.object(Path, "lstat") as metadata, mock.patch.object(os, "chmod") as chmod:
+                    with self.assertRaises(runner.AuditError):
+                        runner.retry_windows_readonly_unlink(root, {"inode": 1}, os.unlink, leaf, denied, {}, mock.Mock())
+                    metadata.assert_not_called()
+                    chmod.assert_not_called()
+
+    def test_readonly_retry_retains_before_mutation_and_revalidates_before_one_unlink(self):
+        cases = ((None, 0x21, 0x20), (None, 1, 0), (None, 1, 0x80),
+                 *[(fault, 0x21, 0x20) for fault in ("journal", "before-identity", "chmod", "identity", "attributes", "unlink")])
+        for fault, before_attributes, after_attributes in cases:
+            fields = {"st_file_attributes": before_attributes, "st_reparse_tag": 0}
+            with self.subTest(fault=fault, before=before_attributes, after=after_attributes), \
+                    cleanup_metadata(self, leaf_fields=fields) as (root, _, deeper, _):
+                leaf = deeper / "report.xml"
+                identity = {"device": root.lstat().st_dev, "inode": root.lstat().st_ino}
+                original_inode = leaf.lstat().st_ino
+                denied = PermissionError(errno.EACCES, "synthetic original failure")
+                denied.winerror = 5
+                events, attempt = [], {}
+                real_unlink = os.unlink
+
+                def persist():
+                    events.append("journal")
+                    self.assertEqual(before_attributes, attempt["attributesBefore"])
+                    if fault == "before-identity":
+                        fields["st_ino"] = original_inode ^ 1
+                    if fault == "journal":
+                        raise OSError(errno.ENOSPC, "synthetic full evidence storage")
+
+                def chmod(path, mode):
+                    self.assertEqual((leaf, stat.S_IWRITE), (path, mode))
+                    self.assertEqual(["journal"], events)
+                    events.append("chmod")
+                    if fault == "chmod":
+                        raise PermissionError(errno.EACCES, "synthetic chmod failure")
+                    fields["st_file_attributes"] = after_attributes if fault != "attributes" else 0x2
+                    if fault == "identity":
+                        fields["st_ino"] = original_inode ^ 1
+
+                def unlink(path):
+                    self.assertEqual(leaf, path)
+                    self.assertEqual(["journal", "chmod"], events)
+                    events.append("unlink")
+                    if fault == "unlink":
+                        raise PermissionError(errno.EACCES, "synthetic exact retry failure")
+                    real_unlink(path)
+
+                with mock.patch.object(sys, "platform", "win32"), mock.patch.object(os, "chmod", side_effect=chmod), \
+                        mock.patch.object(os, "unlink", side_effect=unlink) as retry:
+                    if fault is None:
+                        self.assertTrue(runner.retry_windows_readonly_unlink(root, identity, os.unlink, leaf,
+                                                                              denied, attempt, persist))
+                        self.assertEqual("REMOVED", attempt["outcome"])
+                    else:
+                        with self.assertRaises((runner.AuditError, OSError)):
+                            runner.retry_windows_readonly_unlink(root, identity, os.unlink, leaf, denied, attempt, persist)
+                    self.assertEqual(1 if fault in (None, "unlink") else 0, retry.call_count)
+                self.assertEqual(fault is not None, leaf.exists())
+
     def test_removal_diagnostic_reads_only_owned_no_follow_metadata(self):
         cases = ((stat.S_IFREG | 0o444, 1, 0, "file", True),
                  (stat.S_IFLNK | 0o777, 0x400, 0xA000000C, "symlink", False),
@@ -1283,6 +1406,69 @@ while True:
         self.assertEqual("UNAVAILABLE", detail["metadataObservation"]["status"])
         self.assertEqual("UNAVAILABLE", detail["relativePath"])
 
+    def test_modeled_readonly_retry_failure_keeps_original_error_and_does_not_advance_roots(self):
+        directory, later = self.root / "build", self.state / "fixtures"
+        directory.mkdir()
+        later.mkdir()
+        leaf = directory / "launcher.exe"
+        leaf.write_bytes(b"synthetic readonly launcher")
+        (later / "keep.txt").write_bytes(b"later output sentinel")
+        original = PermissionError(errno.EACCES, "original private message")
+        original.winerror = 5
+        retry_error = PermissionError(errno.EACCES, "retry private message")
+        retry_error.winerror = 5
+        attrs, removals, retries = [0x21], [], []
+        real_lstat, real_unlink = Path.lstat, os.unlink
+
+        def metadata(path, *args, **kwargs):
+            info = real_lstat(path, *args, **kwargs)
+            return StatFields(info, st_file_attributes=attrs[0], st_reparse_tag=0) if path == leaf else info
+
+        def chmod(path, mode):
+            self.assertEqual((leaf, stat.S_IWRITE), (path, mode))
+            starts = list((self.state / "evidence").glob("cleanup-*-readonly-1-start.json"))
+            self.assertEqual(1, len(starts), "Original error must be durable before changing attributes")
+            self.assertEqual(5, runner.read_json(starts[0])["recovery"]["originalFailure"]["winerror"])
+            attrs[0] = 0x20
+
+        def unlink(path, *args, **kwargs):
+            if Path(path) != leaf:
+                return real_unlink(path, *args, **kwargs)  # Preserve actual leaf-lock release.
+            retries.append(Path(path))
+            raise retry_error
+
+        def remove(path, *, onerror):
+            removals.append(path)
+            self.assertEqual(directory, path, "A retry failure must not remove any later root")
+            try:
+                raise original
+            except PermissionError:
+                exception = sys.exc_info()
+            with self.assertRaises(PermissionError) as caught:
+                onerror(os.unlink, str(leaf), exception)
+            self.assertIs(original, caught.exception)
+            raise caught.exception
+
+        with mock.patch.object(sys, "platform", "win32"), mock.patch.object(Path, "lstat", new=metadata), \
+                mock.patch.object(shutil, "rmtree", side_effect=remove), \
+                mock.patch.object(os, "chmod", side_effect=chmod) as change, mock.patch.object(os, "unlink", side_effect=unlink):
+            code = runner.cleanup(argparse.Namespace(state=str(self.state), path=[str(directory), str(later)]))
+        self.assertEqual(125, code)
+        self.assertEqual([directory], removals)
+        self.assertEqual([leaf], retries)
+        change.assert_called_once_with(leaf, stat.S_IWRITE)
+        record = self.cleanup_record(expected_errors=("Removal failed: PermissionError",))
+        self.assertEqual([], record["removed"])
+        self.assertEqual(["Removal failed: PermissionError"], record["errors"])
+        attempt = record["readonlyRecoveries"][0]
+        self.assertEqual(("FAILED", "unlink-once", "PermissionError", errno.EACCES, 5),
+                         (attempt["outcome"], attempt["stage"], attempt["failureType"], attempt["errno"], attempt["winerror"]))
+        self.assertEqual(0x21, attempt["originalFailure"]["metadataObservation"]["fileAttributes"])
+        self.assertNotIn(b"private message", runner.json_bytes(record))
+        self.assertEqual(b"synthetic readonly launcher", leaf.read_bytes())
+        self.assertEqual(b"later output sentinel", (later / "keep.txt").read_bytes())
+        self.assertEqual("original source\n", (self.root / "source.txt").read_text())
+
     def test_cleanup_only_exact_new_xcode_project_and_preserves_preexisting_project(self):
         project = self.root / "samples/iosApp/p2pkit-sample.xcodeproj"
         project.mkdir(parents=True)
@@ -1302,11 +1488,11 @@ while True:
         if CASE_EVIDENCE is not None:
             shutil.copy2(second_state / "context.json", CASE_EVIDENCE / "preexisting-project-context.json")
 
-    def cleanup_record(self):
+    def cleanup_record(self, expected_errors=()):
         records = [json.loads(path.read_text()) for path in (self.state / "evidence").glob("cleanup-*.json")
                    if not path.name.endswith("-start.json")]
         self.assertEqual(len(records), 1)
-        self.assertEqual(records[0]["errors"], [])
+        self.assertEqual(records[0]["errors"], list(expected_errors))
         return records[0]
 
     def test_cleanup_unlinks_child_symlinks_without_following_external_broken_or_loop_targets(self):
@@ -2109,6 +2295,69 @@ class DarwinNativeTests(PosixNativeTests):
 
 
 class WindowsNativeTests(ExecutorFixtureTests):
+    def test_windows_readonly_nested_launcher_cleanup_preserves_source_and_outside_sentinel(self):
+        code, _, err, receipt = self.run_leaf(["report"])
+        self.assertEqual(0, code, err.decode(errors="replace"))
+        directory = self.root / "build"
+        launcher = directory / "compose/binaries/main/app/P2pKit Sample/P2pKit Sample.exe"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_bytes(b"synthetic packaged executable; not an actual application")
+        outside = self.base / "outside-readonly.txt"
+        outside.write_bytes(b"outside sentinel")
+        os.chmod(outside, stat.S_IREAD)
+        self.addCleanup(os.chmod, outside, stat.S_IWRITE)  # Only this exact test-created sentinel, after assertions.
+        outside_info = outside.lstat()
+        source = self.root / "buildSrc/src/main/java/dev/p2pkit/build/Source.java"
+        source_bytes = source.read_bytes()
+        os.chmod(launcher, stat.S_IREAD)
+        before = launcher.lstat()
+        self.assertTrue(before.st_file_attributes & 1)
+        self.assertEqual((0, 1), (before.st_reparse_tag, before.st_nlink))
+        code, _, err = self.cleanup_command(directory)
+        self.assertEqual(0, code, err.decode(errors="replace"))
+        self.assertFalse(directory.exists())
+        self.assertEqual(b"outside sentinel", outside.read_bytes())
+        self.assertEqual(outside_info.st_file_attributes, outside.lstat().st_file_attributes)
+        self.assertEqual(source_bytes, source.read_bytes())
+        self.assertTrue((Path(receipt["evidenceDirectory"]) / "receipt.json").is_file())
+        record = self.cleanup_record()
+        self.assertEqual([str(directory)], record["removed"])
+        self.assertEqual([], record["errors"])
+        self.assertEqual(1, len(record["readonlyRecoveries"]))
+        attempt = record["readonlyRecoveries"][0]
+        self.assertEqual(("REMOVED", "finished", before.st_file_attributes),
+                         (attempt["outcome"], attempt["stage"], attempt["attributesBefore"]))
+        self.assertIn(attempt["attributesAfter"], (0, 0x80) if before.st_file_attributes == 1 else (0x20,))
+        self.assertEqual(("unlink", errno.EACCES, 5), (attempt["originalFailure"]["operation"],
+                         attempt["originalFailure"]["errno"], attempt["originalFailure"]["winerror"]))
+        start = runner.read_json(self.state / "evidence" / f"cleanup-{record['id']}-readonly-1-start.json")
+        self.assertEqual("PENDING", start["recovery"]["outcome"])
+        self.assertEqual(before.st_ino, start["recovery"]["leafIdentity"]["inode"])
+
+    def test_windows_readonly_hardlink_refusal_keeps_external_file_and_original_failure(self):
+        directory = self.root / "build"
+        directory.mkdir()
+        outside = self.base / "outside-hardlinked-launcher.exe"
+        outside.write_bytes(b"shared readonly sentinel")
+        launcher = directory / "launcher.exe"
+        os.link(outside, launcher)
+        os.chmod(outside, stat.S_IREAD)
+        self.addCleanup(os.chmod, outside, stat.S_IWRITE)  # Exact test-created shared file; production must refuse it.
+        before = outside.lstat()
+        self.assertEqual(2, before.st_nlink)
+        self.assertTrue(before.st_file_attributes & 1)
+        code, _, err = self.cleanup_command(directory)
+        self.assertEqual(125, code, err.decode(errors="replace"))
+        self.assertEqual(b"shared readonly sentinel", outside.read_bytes())
+        self.assertEqual(b"shared readonly sentinel", launcher.read_bytes())
+        self.assertEqual(before.st_file_attributes, outside.lstat().st_file_attributes)
+        record = self.cleanup_record(expected_errors=("Removal failed: PermissionError",))
+        self.assertEqual([], record["removed"])
+        self.assertEqual(["Removal failed: PermissionError"], record["errors"])
+        self.assertEqual("REFUSED", record["readonlyRecoveries"][0]["outcome"])
+        self.assertIn("hardlinked", record["readonlyRecoveries"][0]["reason"])
+        self.assertEqual([], list((self.state / "evidence").glob("cleanup-*-readonly-*-start.json")))
+
     def test_windows_launch_trace_records_exact_system_cmd_framing(self):
         requested = ["argv", "two words", "Ω", "", "tail\\"]
         code, out, err, receipt = self.run_leaf(requested)
