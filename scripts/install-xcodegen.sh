@@ -14,7 +14,7 @@ verify_xcodegen_archive() {
     local archive="$1"
     local expected_sha256="$2"
     local actual_sha256
-    actual_sha256="$(calculate_sha256 "$archive")"
+    actual_sha256="$(calculate_sha256 "$archive")" || return "$?"
     if [[ "$actual_sha256" != "$expected_sha256" ]]; then
         echo "FATAL: XcodeGen archive checksum mismatch." >&2
         echo "Expected: $expected_sha256" >&2
@@ -27,14 +27,14 @@ install_xcodegen_archive() {
     local archive="$1"
     local install_root="$2"
     local expected_version="$3"
-    local unpack_root binary version_output
+    local unpack_root binary version_output status
 
     if [[ -e "$install_root" ]]; then
         echo "FATAL: XcodeGen install destination already exists: $install_root" >&2
         return 1
     fi
 
-    unpack_root="$(mktemp -d "${TMPDIR:-/tmp}/p2pkit-xcodegen-unpack.XXXXXX")"
+    unpack_root="$(mktemp -d "${TMPDIR:-/tmp}/p2pkit-xcodegen-unpack.XXXXXX")" || return "$?"
     if ! unzip -q "$archive" -d "$unpack_root"; then
         rm -rf -- "$unpack_root"
         return 1
@@ -45,30 +45,57 @@ install_xcodegen_archive() {
         rm -rf -- "$unpack_root"
         return 1
     fi
-    version_output="$($binary --version)"
+    # Main captures this function's output; errexit is not a failure guard there.
+    version_output="$("$binary" --version)" || {
+        status=$?
+        echo "FATAL: XcodeGen version probe failed (exit $status)." >&2
+        rm -rf -- "$unpack_root"
+        return "$status"
+    }
     if [[ "$version_output" != "Version: $expected_version" ]]; then
         echo "FATAL: XcodeGen version mismatch: $version_output" >&2
         rm -rf -- "$unpack_root"
         return 1
     fi
 
-    mkdir -p -- "$(dirname "$install_root")"
-    mv -- "$unpack_root/xcodegen" "$install_root"
-    rmdir -- "$unpack_root"
-    printf '%s\n' "$install_root/bin"
+    if mkdir -p -- "$(dirname "$install_root")" &&
+        mv -- "$unpack_root/xcodegen" "$install_root" &&
+        rmdir -- "$unpack_root"; then
+        printf '%s\n' "$install_root/bin"
+    else
+        status=$?
+        rm -rf -- "$unpack_root"
+        return "$status"
+    fi
 }
 
-main() {
+cleanup_xcodegen_download() {
+    local status="$1" download_root="$2"
+    trap - EXIT
+    if ! rm -rf -- "$download_root"; then
+        echo "FATAL: could not remove XcodeGen download directory: $download_root" >&2
+        if [[ "$status" -eq 0 ]]; then
+            status=1
+        fi
+    fi
+    exit "$status"
+}
+
+# Isolate EXIT handling from callers which source this script and call main.
+main() (
+    trap - EXIT
     if [[ $# -ne 1 || -z "$1" ]]; then
         echo "Usage: $0 INSTALL_ROOT" >&2
         return 2
     fi
 
     local install_root="$1"
-    local download_root archive bin_dir
-    download_root="$(mktemp -d "${TMPDIR:-/tmp}/p2pkit-xcodegen-download.XXXXXX")"
+    local download_root archive bin_dir cleanup_command
+    download_root="$(mktemp -d "${TMPDIR:-/tmp}/p2pkit-xcodegen-download.XXXXXX")" || return "$?"
     archive="$download_root/xcodegen.zip"
-    trap 'rm -rf -- "${download_root:-}"' EXIT
+    # Capture the concrete owned path, not a main-local variable unavailable at EXIT.
+    printf -v cleanup_command 'cleanup_xcodegen_download "$?" %q' "$download_root"
+    trap "$cleanup_command" EXIT
 
     curl \
         --fail \
@@ -80,14 +107,11 @@ main() {
         --connect-timeout 30 \
         --max-time 180 \
         --output "$archive" \
-        "$XCODEGEN_URL"
-    verify_xcodegen_archive "$archive" "$XCODEGEN_SHA256"
-    bin_dir="$(install_xcodegen_archive "$archive" "$install_root" "$XCODEGEN_VERSION")"
-    rm -rf -- "$download_root"
-    download_root=""
-    trap - EXIT
+        "$XCODEGEN_URL" || return "$?"
+    verify_xcodegen_archive "$archive" "$XCODEGEN_SHA256" || return "$?"
+    bin_dir="$(install_xcodegen_archive "$archive" "$install_root" "$XCODEGEN_VERSION")" || return "$?"
     printf '%s\n' "$bin_dir"
-}
+)
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     main "$@"
