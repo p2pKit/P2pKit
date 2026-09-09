@@ -192,7 +192,7 @@ verify_detached_signature() {
     local packet_output issuer_fingerprints issuer_key_ids fingerprint_count key_id_count
     local reference_type issuer_reference derived_key_id existing_listing matching_fingerprints
     local key_downloaded key_urls key_url key_listing import_output fingerprint verification valid_fingerprints
-    packet_output="$(gpg --batch --list-packets "$signature" 2>/dev/null)" ||
+    packet_output="$(GNUPGHOME="$gnupg" gpg --batch --list-packets "$signature" 2>/dev/null)" ||
         fail "detached signature packet is malformed for $label"
     [[ "$(grep -c '^:signature packet:' <<<"$packet_output" || true)" -eq 1 ]] ||
         fail "detached signature must contain exactly one signature packet for $label"
@@ -249,7 +249,7 @@ verify_detached_signature() {
                 -o "$work/signing-key.asc" "$key_url"; then
                 continue
             fi
-            key_listing="$(gpg --batch --show-keys --with-colons \
+            key_listing="$(GNUPGHOME="$gnupg" gpg --batch --show-keys --with-colons \
                 --with-subkey-fingerprint "$work/signing-key.asc" 2>/dev/null || true)"
             matching_fingerprints="$(matching_key_fingerprints \
                 "$key_listing" "$reference_type" "$issuer_reference")"

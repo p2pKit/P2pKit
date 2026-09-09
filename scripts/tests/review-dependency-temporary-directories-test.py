@@ -259,6 +259,28 @@ class TemporaryDirectoryTest(unittest.TestCase):
                 self.assertNotEqual(event["home"], str(self.ambient))
         self.assertEqual((self.workspace / "preserve.txt").read_text(), "caller-owned sentinel\n")
 
+    def test_ambient_gpg_configuration_is_ignored_and_untouched(self):
+        config = self.ambient / "gpg.conf"
+        # Unittest cleanups run last-in-first-out: remove the synthetic poison
+        # before the existing fixture-owned ambient-home shutdown, even on failure.
+        self.addCleanup(config.unlink, missing_ok=True)
+        contents = b"p2pkit-probe-invalid-option\n"
+        config.write_bytes(contents)
+
+        self.curate()
+        events = self.events()
+        homes = {event["path"] for event in events
+                 if event["tool"] == "mktemp" and "path" in event
+                 and Path(event["path"]).name.startswith("p2pkit-gpg.")}
+        self.assertEqual(len(homes), 1)
+        calls = [event for event in events if event["tool"] == "gpg"]
+        self.assertEqual({event["home"] for event in calls}, homes)
+        for operation in ("--list-packets", "--list-keys", "--show-keys", "--import", "--verify"):
+            self.assertTrue(any(operation in event["args"] for event in calls), operation)
+        self.assertEqual(list(self.ambient.iterdir()), [config])
+        self.assertEqual(config.read_bytes(), contents)
+        self.assert_clean()
+
     def test_long_artifact_volume_and_default_short_keyring(self):
         del self.environment["P2PKIT_GPG_TMPDIR"]
         self.curate()
