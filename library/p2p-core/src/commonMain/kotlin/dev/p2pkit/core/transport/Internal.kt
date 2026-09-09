@@ -193,6 +193,12 @@ public class LocalPeerInfo(
     public val platform: Platform,
     public val appId: AppId,
     supportedTransports: Set<TransportKind>,
+    /**
+     * Whole-kit profile, always supplied explicitly when the kit advertises. The
+     * legacy default exists only for source compatibility. Preserve this value and
+     * [fingerprint] in the provider's namespace/version/metadata; never infer the
+     * kit's mode from a fresh default-valued object or an untrusted remote record.
+     */
     public val securityProfile: TransportSecurityProfile = TransportSecurityProfile.LegacyPlaintextV1,
     public val fingerprint: PeerFingerprint? = null
 ) {

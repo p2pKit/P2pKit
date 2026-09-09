@@ -26,6 +26,12 @@ public data class TransportContext(
     val localPeerId: PeerId,
     val deviceName: String,
     val platform: Platform,
+    /**
+     * Whole-kit profile, always supplied explicitly by P2pKit. The legacy default
+     * preserves source compatibility; providers must propagate the supplied value
+     * and [localFingerprint] into discovery rather than relying on that default.
+     * This describes the selected mode; it does not select the security engine.
+     */
     val securityProfile: TransportSecurityProfile = TransportSecurityProfile.LegacyPlaintextV1,
     /** Full local fingerprint in secure mode; never an authorization decision. */
     val localFingerprint: PeerFingerprint? = null

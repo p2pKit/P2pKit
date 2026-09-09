@@ -63,7 +63,9 @@ before using it as an independent test oracle.
 - Public models expose deep snapshot values; callers do not receive mutable
   internal collections.
 - Transport factories declare capabilities before creation. Unsupported
-  features are not represented by ambiguous `null` success values.
+  features are not represented by ambiguous `null` success values. See the
+  [custom transport contract](../guides/custom-transports.md) for profile
+  propagation, resource-inert construction, cancellation, and raw-stream ownership.
 - Incoming sessions and messages are hot streams. Subscribe before exposing a
   peer and attach collectors promptly.
 - Only the outgoing owner reconnects. Clean close is terminal; interruption may
@@ -82,6 +84,13 @@ before using it as an independent test oracle.
   fail closed. There is no automatic downgrade to plaintext protocol v1.
 - `_p2pkit2._tcp` is the secure-v2 discovery namespace. Deprecated plaintext
   v1 uses `_p2pkit._tcp` and is isolated.
+
+## Error handling
+
+Use the [error and recovery guide](../guides/error-handling.md) for typed
+operation failures, file-transfer dispositions, local-identity recovery, and
+provisioning results. Cancellation, terminal disposal, and security rejection
+are not blanket-retry signals.
 
 ## File transfer
 

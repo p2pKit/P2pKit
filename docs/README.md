@@ -12,6 +12,8 @@ remediation records. Start with the repository [README](../README.md).
 - [Compatibility policy](compatibility.md)
 - [Versioning policy](versioning.md)
 - [Migration from 0.6.x](guides/migrating-to-0.7.md)
+- [Error handling and recovery](guides/error-handling.md)
+- [Custom transport providers](guides/custom-transports.md)
 - [Samples](guides/samples.md)
 
 ## Test and release
