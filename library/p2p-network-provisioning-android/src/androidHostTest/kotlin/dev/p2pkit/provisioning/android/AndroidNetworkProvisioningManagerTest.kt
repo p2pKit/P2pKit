@@ -66,19 +66,50 @@ class AndroidNetworkProvisioningManagerTest {
     private fun ctx(
         lanTcpPort: Int? = 42_000,
         registrar: ManualPeerRegistrar = RecordingRegistrar(),
-        parentJob: Job? = null
+        parentJob: Job? = null,
+        logger: P2pLogger = P2pLogger.NoOp
     ): ProvisioningContext = ProvisioningContext(
         appId = AppId("provisioning-android-test"),
         localPeerId = PeerId("local-id"),
         localDeviceName = "Pixel",
         config = NetworkProvisioningConfig(enableLocalHotspot = true),
-        logger = P2pLogger.NoOp,
+        logger = logger,
         lanTcpPort = { lanTcpPort },
         manualPeerRegistrar = registrar,
         localFingerprint = testFingerprint,
         localPairingQr = testPairingQr,
         parentJob = parentJob
     )
+
+    @Test
+    @Suppress("DEPRECATION")
+    fun provisioningLogsDoNotPersistManualEndpointsPinsOrJoinedSsid() = runBlocking<Unit> {
+        val logger = RecordingProvisioningLogger()
+        val wifi = FakeWifiManagerWrapper(
+            behavior = FakeWifiManagerWrapper.Behavior.JoinSucceeds(
+                NetworkState.ConnectedToWifi(ssid = null, localIpAddresses = listOf("203.0.113.77"))
+            )
+        )
+        val manager = AndroidNetworkProvisioningManager(ctx(logger = logger), wifi)
+        try {
+            manager.createManualPeer("203.0.113.77", 47_561)
+            manager.createManualPeer("203.0.113.77", 47_561, testFingerprint)
+            assertIs<JoinNetworkResult.Joined>(manager.joinLocalNetwork(testCreds))
+            assertEquals(
+                listOf(
+                    "provisioning: createManualPeer",
+                    "provisioning: createManualPeer with authenticated pin",
+                    "provisioning: joined Wi-Fi network"
+                ),
+                logger.messages
+            )
+            for (privateValue in listOf("203.0.113.77", "47561", testFingerprint.value, testCreds.ssid!!)) {
+                assertTrue(logger.messages.none { privateValue in it })
+            }
+        } finally {
+            manager.close()
+        }
+    }
 
     @Test
     fun startReturnsFailedPermissionMissingWhenWrapperThrowsSecurityException() = runBlocking<Unit> {
@@ -1942,4 +1973,12 @@ private class RecordingRegistrar : ManualPeerRegistrar {
             supportedTransports = setOf(kind)
         )
     }
+}
+
+private class RecordingProvisioningLogger : P2pLogger {
+    val messages = mutableListOf<String>()
+    override fun debug(message: String) { messages += message }
+    override fun info(message: String) { messages += message }
+    override fun warn(message: String, throwable: Throwable?) { messages += message }
+    override fun error(message: String, throwable: Throwable?) { messages += message }
 }

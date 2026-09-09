@@ -522,7 +522,7 @@ public class AndroidNetworkProvisioningManager internal constructor(
                     }
                     published = true
                     publication.complete(Unit)
-                    ctx.logger.info("provisioning: joined Wi-Fi network \"$ssid\"")
+                    ctx.logger.info("provisioning: joined Wi-Fi network")
                     JoinNetworkResult.Joined(nstate)
                 } finally {
                     if (!published) {
@@ -592,7 +592,7 @@ public class AndroidNetworkProvisioningManager internal constructor(
     override suspend fun createManualPeer(host: String, port: Int): Peer =
         runManagerOperation({ throw NetworkProvisioningError.ManagerClosed() }) {
             ensureOpen()
-            ctx.logger.info("provisioning: createManualPeer host=$host port=$port")
+            ctx.logger.info("provisioning: createManualPeer")
             ctx.manualPeerRegistrar.registerManualPeer(host = host, port = port)
         }
 
@@ -603,7 +603,7 @@ public class AndroidNetworkProvisioningManager internal constructor(
         expectedFingerprint: PeerFingerprint
     ): Peer = runManagerOperation({ throw NetworkProvisioningError.ManagerClosed() }) {
         ensureOpen()
-        ctx.logger.info("provisioning: createManualPeer host=$host port=$port with authenticated pin")
+        ctx.logger.info("provisioning: createManualPeer with authenticated pin")
         ctx.manualPeerRegistrar.registerManualPeer(
             host = host,
             port = port,

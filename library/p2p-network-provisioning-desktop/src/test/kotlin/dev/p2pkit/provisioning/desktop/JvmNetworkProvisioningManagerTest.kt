@@ -51,19 +51,41 @@ class JvmNetworkProvisioningManagerTest {
         registrar: ManualPeerRegistrar = RecordingRegistrar(),
         parentJob: Job? = null,
         localFingerprint: PeerFingerprint? = null,
-        localPairingQr: String? = null
+        localPairingQr: String? = null,
+        logger: P2pLogger = P2pLogger.NoOp
     ): ProvisioningContext = ProvisioningContext(
         appId = AppId("jvmnp-test"),
         localPeerId = PeerId("local-id"),
         localDeviceName = "Tester",
         config = NetworkProvisioningConfig(),
-        logger = P2pLogger.NoOp,
+        logger = logger,
         lanTcpPort = { lanTcpPort },
         manualPeerRegistrar = registrar,
         localFingerprint = localFingerprint,
         localPairingQr = localPairingQr,
         parentJob = parentJob
     )
+
+    @Test
+    @Suppress("DEPRECATION")
+    fun manualRegistrationLogsKeepContextWithoutPersistingEndpointOrPin() = runBlocking<Unit> {
+        val logger = RecordingProvisioningLogger()
+        val manager = JvmNetworkProvisioningManager(ctx(logger = logger), 60_000, { emptyList() })
+        val pin = PeerFingerprint("p2f1-${"a".repeat(52)}")
+        try {
+            manager.createManualPeer("203.0.113.77", 47_561)
+            manager.createManualPeer("203.0.113.77", 47_561, pin)
+            assertEquals(
+                listOf("provisioning: createManualPeer", "provisioning: createManualPeer with authenticated pin"),
+                logger.messages
+            )
+            for (privateValue in listOf("203.0.113.77", "47561", pin.value)) {
+                assertTrue(logger.messages.none { privateValue in it })
+            }
+        } finally {
+            manager.close()
+        }
+    }
 
     @Test
     fun startLocalNetworkReturnsUnsupported() = runBlocking<Unit> {
@@ -415,4 +437,12 @@ private class RecordingRegistrar : ManualPeerRegistrar {
             supportedTransports = setOf(kind)
         )
     }
+}
+
+private class RecordingProvisioningLogger : P2pLogger {
+    val messages = mutableListOf<String>()
+    override fun debug(message: String) { messages += message }
+    override fun info(message: String) { messages += message }
+    override fun warn(message: String, throwable: Throwable?) { messages += message }
+    override fun error(message: String, throwable: Throwable?) { messages += message }
 }

@@ -147,8 +147,8 @@ public class IosManualNetworkProvisioningManager internal constructor(
     override suspend fun createManualPeer(host: String, port: Int): Peer =
         runManagerOperation({ throw NetworkProvisioningError.ManagerClosed() }) {
             ensureOpen()
-            ctx.logger.info("provisioning: createManualPeer host=$host port=$port")
-            IosLanDebug.log("provision", "createManualPeer host=$host port=$port")
+            ctx.logger.info("provisioning: createManualPeer")
+            IosLanDebug.log("provision", "createManualPeer")
             ctx.manualPeerRegistrar.registerManualPeer(host = host, port = port)
         }
 
@@ -159,8 +159,8 @@ public class IosManualNetworkProvisioningManager internal constructor(
         expectedFingerprint: PeerFingerprint
     ): Peer = runManagerOperation({ throw NetworkProvisioningError.ManagerClosed() }) {
         ensureOpen()
-        ctx.logger.info("provisioning: createManualPeer host=$host port=$port with authenticated pin")
-        IosLanDebug.log("provision", "createManualPeer host=$host port=$port with authenticated pin")
+        ctx.logger.info("provisioning: createManualPeer with authenticated pin")
+        IosLanDebug.log("provision", "createManualPeer with authenticated pin")
         ctx.manualPeerRegistrar.registerManualPeer(
             host = host,
             port = port,

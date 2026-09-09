@@ -163,7 +163,7 @@ public class JvmNetworkProvisioningManager private constructor(
     override suspend fun createManualPeer(host: String, port: Int): Peer =
         runManagerOperation({ throw NetworkProvisioningError.ManagerClosed() }) {
             ensureOpen()
-            ctx.logger.info("provisioning: createManualPeer host=$host port=$port")
+            ctx.logger.info("provisioning: createManualPeer")
             ctx.manualPeerRegistrar.registerManualPeer(host = host, port = port)
         }
 
@@ -174,7 +174,7 @@ public class JvmNetworkProvisioningManager private constructor(
         expectedFingerprint: PeerFingerprint
     ): Peer = runManagerOperation({ throw NetworkProvisioningError.ManagerClosed() }) {
         ensureOpen()
-        ctx.logger.info("provisioning: createManualPeer host=$host port=$port with authenticated pin")
+        ctx.logger.info("provisioning: createManualPeer with authenticated pin")
         ctx.manualPeerRegistrar.registerManualPeer(
             host = host,
             port = port,
