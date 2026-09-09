@@ -1,6 +1,7 @@
 # Android physical-device validation
 
-**Status: NOT STARTED.** Emulator and JVM results do not satisfy this plan.
+[Current campaign status](README.md#android-physical). Emulator and JVM
+results do not satisfy this plan.
 
 ## Purpose and scope
 
@@ -139,7 +140,8 @@ settlement, retained failed cleanup and retry, device-plus-target SDK
 permission selection, passphrase validation, and manual-info identity fields
 against controlled fakes. These results do **not** prove real
 `LocalOnlyHotspotReservation`, `NetworkCallback`, process binding, permission
-UI, or OEM callback order; this handbook therefore remains **NOT STARTED**.
+UI, or OEM callback order; they do not supply the physical evidence required
+by [this campaign](README.md#android-physical).
 
 ## Test cases
 

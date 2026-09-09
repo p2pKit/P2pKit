@@ -1,7 +1,7 @@
 # Two-machine hostile-network validation
 
-**Status: NOT STARTED.** Loopback tests and a single-host firewall do not
-satisfy `LAN-T08` or `ENV-02`.
+[Current campaign status](README.md#hostile-network). Loopback tests and a
+single-host firewall do not satisfy `LAN-T08` or `ENV-02`.
 
 ## Purpose and safety boundary
 

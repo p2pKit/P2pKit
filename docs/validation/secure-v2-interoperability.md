@@ -1,7 +1,8 @@
 # Independent secure-v2 interoperability validation
 
-**Status: NOT STARTED.** P2pKit-to-P2pKit tests share implementation code and
-therefore do not prove independent interoperability.
+[Current campaign status](README.md#independent-interop). P2pKit-to-P2pKit
+tests share implementation code and therefore do not prove independent
+interoperability.
 
 The repository's [frozen-wire regression suite](../testing/wire-goldens.md) pins a synthetic P2pKit baseline and
 both kit-level v1/v2 rejection directions. It does not satisfy the independence or platform matrix below;

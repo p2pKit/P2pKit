@@ -1,8 +1,8 @@
 # Professional cryptographic-audit preparation
 
-**Status: EXTERNAL AUDIT REQUIRED.** P2pKit is **not professionally
-cryptographically audited**. This document prepares a review package; it is not
-an audit report, certification, or security endorsement.
+[Current campaign status](README.md#professional-crypto). P2pKit is **not
+professionally cryptographically audited**. This document prepares a review
+package; it is not an audit report, certification, or security endorsement.
 
 ## Purpose and auditor qualification
 
@@ -217,5 +217,6 @@ limitation must appear prominently in the final report.
 - [ ] Secure communication and vulnerability-triage process exercised.
 - [ ] Draft review, remediation, retest, and final signed deliverables completed.
 
-Until every applicable step is completed by a qualified external auditor, the
-status remains **EXTERNAL AUDIT REQUIRED**.
+Do not mark [the professional-review row](README.md#professional-crypto)
+complete until every applicable step is completed by a qualified external
+auditor and the evidence is retained.

@@ -13,13 +13,13 @@ supports Android, JVM/Desktop, and iOS through one transport-independent API.
 
 `0.7.0-rc3` is available from Maven Central under
 `io.github.apdelrahman1911`. It is a release candidate: the automated release
-gates are extensive, but the external validation areas listed below remain
-pending.
+gates are extensive, but campaign status is governed by the
+[validation authority](docs/validation/README.md#current-status).
 
-The immutable RC3 tag and published artifacts are the candidate for the
-pending physical-device, hostile-network, independent-interoperability, and
-professional-review campaigns. Results from later `main` snapshots must not be
-reported as RC3 evidence.
+RC3's immutable tag and artifacts are historical release evidence. Each new
+campaign must explicitly freeze its approved commit and artifact set under
+that handbook; results from later `main` snapshots must not be reported as
+RC3 evidence.
 
 ## What it provides
 
@@ -275,10 +275,21 @@ Read the [security model](docs/security/model.md),
 
 ## Validation status
 
-The automated module/platform, ABI, strict Dokka, publication-shape, isolated
-consumer, SBOM, signing, provenance, Swift warnings-as-errors, and XCFramework
-gates passed for the published `0.7.0-rc3` commit. This does not replace
-external evidence.
+The [`0.7.0-rc3` release record](docs/releases/0.7.0-rc3.md) records the
+historical automated gate, ABI, strict Dokka, signing/provenance, Swift
+warnings-as-errors build and XCFramework checks for that exact release commit.
+Its macOS module gate covered JVM/Android-host and runnable iOS simulator tests,
+not Android ART, physical devices or every published Kotlin target. Those
+results do not validate the later `0.7.0-SNAPSHOT` source.
+
+Prepublication artifact-shape and isolated-consumer checks use **locally built**
+Maven artifacts. The SBOM is generated from the configured resolved library
+dependency graphs; its content gate is not a scan of distributed binary bytes.
+Separately, RC3's publication workflow verified remote Maven Central bytes
+against its signed bundle and compiled fresh remote consumer fixtures after
+publication, as the release record documents. That genuine remote evidence is
+historical, not a current-snapshot or runtime-consumer result. None of these
+checks replaces external campaign evidence.
 
 Current CI reports actual Kotlin test-task execution and skipped targets;
 `check` success alone is not an all-runtime result. The published `iosX64`
@@ -288,18 +299,13 @@ the tested commit. `iosArm64` device execution needs external hardware.
 No Android instrumented/device test suite is authored; Android host JVM
 tests (including Robolectric shadows) are not ART or physical-device evidence.
 
-These areas remain explicitly pending:
-
-1. Android physical-device validation.
-2. Apple device, AWDL, path-rotation, background, and restart validation.
-3. Two-machine hostile-network validation.
-4. CLI fault injection and headful Desktop observation.
-5. Independent secure-v2 interoperability validation.
-6. Professional cryptographic audit.
-
-See [validation status](docs/testing/validation-status.md) and the operational
-[real-world validation handbook](docs/validation/README.md). Do not treat this
-release candidate as fully production validated or independently audited.
+The [canonical six-area status table](docs/validation/README.md#current-status)
+records external campaign progress and links each execution handbook. In
+particular, the CLI/Desktop row's partial automated coverage is not a completed
+fault-injection or real-display campaign. See
+[automated scope and history](docs/testing/validation-status.md) for the distinct
+host/target evidence. Do not treat this release candidate as fully production
+validated or independently audited.
 
 ## Contributing and support
 

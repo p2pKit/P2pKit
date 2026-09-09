@@ -1,8 +1,8 @@
 # Apple physical-device and AWDL validation
 
-**Status: NOT STARTED.** Simulator compilation and simulator UI tests do not
-prove Local Network permission, AWDL, radio/path changes, suspension, or
-real-device process recovery.
+[Current campaign status](README.md#apple-physical). Simulator compilation
+and simulator UI tests do not prove Local Network permission, AWDL, radio/path
+changes, suspension, or real-device process recovery.
 
 ## Purpose and scope
 
@@ -18,8 +18,8 @@ passes four Apple manual-provisioning lifecycle tests inside the 89-test
 arm64-simulator suite. They prove manager-owned caller cancellation, terminal
 parent-job shutdown, post-close rejection, and fingerprint/pairing-QR
 projection in a controlled runtime. Simulator evidence cannot prove actual
-iOS suspension, termination, signing, radio paths, or AWDL, so this handbook's
-status remains **NOT STARTED**.
+iOS suspension, termination, signing, radio paths, or AWDL; it does not supply
+[this campaign's physical evidence](README.md#apple-physical).
 
 ## Required equipment and coverage
 

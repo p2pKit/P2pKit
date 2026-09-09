@@ -12,7 +12,8 @@
 Those are immutable historical RC3 results. Current `main` is a post-RC3
 `0.7.0-SNAPSHOT` development line. Automated results for current `main` do not
 retroactively validate RC3, and RC3 results do not validate later fixes. The
-six campaigns below must use one separately frozen commit and artifact set.
+six campaigns in the [canonical status table](../validation/README.md#current-status)
+must use one separately frozen commit and artifact set.
 
 ## Informational automated history (not release or campaign evidence)
 
@@ -67,19 +68,16 @@ job can supply evidence. These structural gaps differ from an existing physical
 test procedure that has not yet been performed. See
 [platform execution evidence](local.md#platform-execution-evidence).
 
-## Pending external validation
+## External campaign status
 
-The following remain pending and must not be described as verified:
+The [canonical six-area table](../validation/README.md#current-status) is the
+sole current campaign-status record. Its CLI/Desktop partial status refers to
+automated coverage, not completed fault injection or headful observation.
+Android instrumentation authoring/ART execution and the target gaps above are
+separate prerequisites, not evidence of physical-device campaign completion.
 
-1. Android instrumented-suite authoring, ART execution, and physical-device validation.
-2. Apple physical-device, AWDL, path-rotation, background, and process-restart validation.
-3. Two-machine hostile-network validation.
-4. CLI fault injection and headful Desktop observation.
-5. Independent secure-v2 interoperability validation.
-6. Professional cryptographic audit.
-
-The exact equipment, steps, UI observations, logs, evidence exports, pass/fail
-criteria, and result templates are in the
-[real-world validation handbook](../validation/README.md). The cross-platform
-tracker-ID procedures and logging matrix are in its
-[test catalog](../validation/test-catalog.md).
+Follow the table's individual handbooks for equipment, steps, observations,
+logs, evidence exports, pass/fail criteria and result templates. The
+cross-platform tracker-ID procedures and logging matrix are in the
+[test catalog](../validation/test-catalog.md). No host or simulator result may
+stand in for the required external evidence.

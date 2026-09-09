@@ -14,14 +14,19 @@ exact tested tree and artifacts.
 
 ## Current status
 
+This table is the **sole mutable campaign-status authority** for the six areas.
+Overviews and individual handbooks link here instead of maintaining separate
+status labels. Dated release/audit records describe their own tested source and
+remain historical evidence; they are not another current-status table.
+
 | Area | Status | Handbook | Principal tracker coverage |
 | --- | --- | --- | --- |
-| Android physical devices | **NOT STARTED** | [Android physical-device validation](android-physical-device.md) | `PROV-A12`, `PT-T20`, `LAN-T01`, `PS-T01`, `PS-T02`, `PS-T04`, Android portions of `ENV-01`, `PS-T08`, `PS-T09` |
-| Apple devices and AWDL | **NOT STARTED** | [Apple physical-device and AWDL validation](apple-physical-awdl.md) | `LAN-T07`, `ENV-01`, `ENV-04`, `PS-T07`, `PS-T08`, `PS-T09` |
-| Two-machine hostile networks | **NOT STARTED** | [Hostile-network validation](hostile-network.md) | `LAN-T08`, `ENV-02` |
-| CLI fault injection and headful Desktop | **PARTIALLY VALIDATED** | [CLI/Desktop validation](cli-desktop-faults.md) | `PS-T05`, `PS-T06` |
-| Independent secure-v2 interoperability | **NOT STARTED** | [Secure-v2 interoperability](secure-v2-interoperability.md) | `SECURE-V2-INTEROP-01` |
-| Professional cryptographic review | **EXTERNAL AUDIT REQUIRED** | [Cryptographic-audit preparation](cryptographic-audit-preparation.md) | `CRYPTO-AUDIT-01` |
+| <a id="android-physical"></a>Android physical devices | **NOT STARTED** | [Android physical-device validation](android-physical-device.md) | `PROV-A12`, `PT-T20`, `LAN-T01`, `PS-T01`, `PS-T02`, `PS-T04`, Android portions of `ENV-01`, `PS-T08`, `PS-T09` |
+| <a id="apple-physical"></a>Apple devices and AWDL | **NOT STARTED** | [Apple physical-device and AWDL validation](apple-physical-awdl.md) | `LAN-T07`, `ENV-01`, `ENV-04`, `PS-T07`, `PS-T08`, `PS-T09` |
+| <a id="hostile-network"></a>Two-machine hostile networks | **NOT STARTED** | [Hostile-network validation](hostile-network.md) | `LAN-T08`, `ENV-02` |
+| <a id="cli-desktop"></a>CLI fault injection and headful Desktop | **PARTIALLY VALIDATED** | [CLI/Desktop validation](cli-desktop-faults.md) | `PS-T05`, `PS-T06` |
+| <a id="independent-interop"></a>Independent secure-v2 interoperability | **NOT STARTED** | [Secure-v2 interoperability](secure-v2-interoperability.md) | `SECURE-V2-INTEROP-01` |
+| <a id="professional-crypto"></a>Professional cryptographic review | **EXTERNAL AUDIT REQUIRED** | [Cryptographic-audit preparation](cryptographic-audit-preparation.md) | `CRYPTO-AUDIT-01` |
 
 `PARTIALLY VALIDATED` for CLI/Desktop means local builds and automated tests
 exist. It does not mean the fault-injection and headful observation procedures

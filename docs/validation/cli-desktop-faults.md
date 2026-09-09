@@ -1,9 +1,10 @@
 # CLI fault injection and headful Desktop validation
 
-**Status: PARTIALLY VALIDATED.** Parser, diagnostics, transfer, and build tests
-run locally; the controlled process/network failures and real-display
-observation in `PS-T05` and `PS-T06` have not been executed as a complete
-evidence-bearing campaign.
+[Current campaign status](README.md#cli-desktop). Automated parser,
+diagnostics, transfer and build coverage is separate from the controlled
+process/network failures and real-display observation in `PS-T05` and `PS-T06`.
+Those procedures require their own complete evidence-bearing campaign; do not
+infer it from the table's partial automated-coverage status.
 
 ## Purpose and separation
 
