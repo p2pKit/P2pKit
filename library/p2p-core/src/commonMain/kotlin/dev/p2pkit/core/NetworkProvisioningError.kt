@@ -8,8 +8,9 @@ import dev.p2pkit.core.permission.P2pPermission
  * either generally (catch [P2pError]) or specifically (catch
  * [NetworkProvisioningError] or a particular variant).
  *
- * Declared in the same package as [P2pError] because Kotlin requires sealed
- * subclasses to share the parent's package in this compiler version.
+ * Kotlin's sealed-class rule requires direct subclasses to share the parent's
+ * package and module. This type intentionally stays beside [P2pError] in
+ * `dev.p2pkit.core`; it cannot move to `dev.p2pkit.core.provisioning`.
  *
  * **Note on the `PlatformError` variant:** the spec named the wrapped throwable
  * `cause`, but that clashes with [Throwable.cause]. The field is named

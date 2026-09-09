@@ -42,11 +42,15 @@ export P2PKIT_TREE="$(git rev-parse 'HEAD^{tree}')"
 test "$P2PKIT_SHA" = "$P2PKIT_CANDIDATE_SHA"
 test -z "$(git status --short)"
 ./gradlew --no-daemon :p2p-sample-android:clean \
-  :p2p-sample-android:assembleDebug \
-  :p2p-sample-android:assembleDebugAndroidTest
+  :p2p-sample-android:assembleDebug
 shasum -a 256 samples/p2p-sample-android/build/outputs/apk/debug/*.apk
 adb devices -l
 ```
+
+These commands prepare the ordinary sample APK, not an instrumentation suite.
+No Android instrumented/device suite is currently authored. See the Android
+portions of the catalog's [build and installation baseline](test-catalog.md#13-build-and-installation-baseline)
+and the harness prerequisites below.
 
 Record `P2PKIT_SHA`, `P2PKIT_TREE`, and every APK hash. Do not substitute the
 immutable `v0.7.0-rc3` tag unless the campaign has explicitly been approved to
@@ -85,6 +89,23 @@ Start a timestamped OS log in a dedicated file:
 adb logcat -c
 adb logcat -v threadtime > <evidence-dir>/<device-role>-logcat.txt
 ```
+
+### Instrumentation and fault-injection prerequisites
+
+The A1/A2 cells requiring instrumentation results, controlled callback delivery,
+or injected cleanup failures need a separately authored, owner-approved Android
+harness. The sample's **Test diagnostics** screen records and exports evidence;
+it does not provide those fault-injection controls. Include the harness in the
+approved frozen campaign source/artifact set, and record its source revision,
+APK hashes, runner/component, exact build/install/execution commands, and
+per-case runtime results.
+
+Until those controls are available, mark each affected mandatory cell **BLOCKED**
+with its missing prerequisite. Keep the cells in the result record; a blocked
+mandatory cell prevents campaign completion. Ordinary sample UI, host/Robolectric
+results, and test-APK assembly cannot substitute for that instrumentation evidence.
+All physical-device, permission-UI, OEM callback, and radio requirements below
+remain mandatory after the harness is available.
 
 ## Common in-app procedure
 

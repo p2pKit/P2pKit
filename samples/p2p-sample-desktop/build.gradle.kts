@@ -13,10 +13,11 @@ application {
 tasks.named<JavaExec>("run") {
     standardInput = System.`in`
 
-    // The maintained Alice/Bob IDE configurations must share the same appId
-    // (otherwise they cannot discover each other) while persisting different
-    // PeerIds. A named profile gives each child JVM a stable, separate home
-    // beneath the operator's real home without changing CLI defaults.
+    // The maintained Alice/Bob IDE configurations share an appId for discovery.
+    // A named profile gives each child JVM separate default diagnostics/incoming-file
+    // directories beneath the operator's real home; no profile leaves defaults unchanged.
+    // It does not persist identity: the CLI's development-only in-memory store
+    // loses its keys, fingerprint and PeerId on process exit.
     providers.gradleProperty("p2pkit.sample.identityProfile").orNull?.let { profile ->
         require(profile.matches(Regex("[A-Za-z0-9_-]{1,32}"))) {
             "p2pkit.sample.identityProfile must match [A-Za-z0-9_-]{1,32}"

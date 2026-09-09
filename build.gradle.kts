@@ -490,12 +490,13 @@ tasks.cyclonedxBom {
 // `maven-publish`). Centralized here so the four library modules stay identical
 // and only their POM differs.
 //
-// Signing is REQUIRED only when a PGP key is supplied via Gradle properties or
-// env vars (`ORG_GRADLE_PROJECT_signingInMemoryKey[+Password]` → the
-// `signingInMemoryKey[+Password]` project properties). So `publishToMavenLocal`
-// and ordinary dev/CI builds need no keys and are unaffected (Sign tasks are
-// skipped); a Maven Central release just sets those two properties. See
-// docs/STABILIZATION_AND_RELEASE.md for the release recipe.
+// Signing is required when an in-memory PGP key is supplied, or when
+// releasePublication=true (which also requires a non-empty key password).
+// Configure signingInMemoryKey or signingInMemoryKeyBase64, never both;
+// corresponding ORG_GRADLE_PROJECT_* environment variables are accepted.
+// Ordinary keyless dev/CI builds skip Sign tasks. See
+// docs/releasing/maven-central.md for the signing variables and local bundle
+// recipe, and docs/releasing/checklist.md for the complete release gates.
 subprojects {
     val sub = this
 

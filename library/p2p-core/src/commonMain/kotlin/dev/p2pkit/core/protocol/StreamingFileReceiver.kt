@@ -114,7 +114,7 @@ internal class StreamingFileReceiver(
         preparedSummary?.let { return it }
         if (bytesWritten != sizeBytes) {
             throw P2pError.ProtocolError(
-                "FILE_DONE for $transferId arrived after $bytesWritten of " +
+                "Completion signal for $transferId arrived after $bytesWritten of " +
                     "$sizeBytes bytes; transfer is incomplete"
             )
         }
