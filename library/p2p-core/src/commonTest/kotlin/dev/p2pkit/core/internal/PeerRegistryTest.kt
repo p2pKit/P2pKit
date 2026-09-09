@@ -216,26 +216,70 @@ class PeerRegistryTest {
                 securityProfile = TransportSecurityProfile.AuthenticatedV2,
                 peerIdFromFingerprint = { peerId }
             )
-            registry.registerManualPeer(
+            val manual = registry.registerManualPeer(
                 host = "192.0.2.101",
                 port = 9_101,
+                deviceName = "Trusted",
                 expectedFingerprint = applicationPin
             )
-            registry.processEvent(
-                PeerEvent.Found(
-                    peer(peerId.value).copy(
-                        authenticationHint = PeerAuthenticationHint.TrustedApplicationPin(discoveryClaim)
-                    )
-                )
+            val manualHint = TransportHint(TransportKind.LAN, "192.0.2.101", 9_101)
+            val discoveryHints = listOf(
+                TransportHint(TransportKind.LAN, "192.0.2.102", 9_102),
+                TransportHint(TransportKind.BLE)
+            )
+            val discovered = peer(peerId.value, "Untrusted").copy(
+                publicPeer = peer(peerId.value, "Untrusted").publicPeer.copy(
+                    platform = Platform.IOS,
+                    supportedTransports = setOf(TransportKind.BLE)
+                ),
+                transportHints = discoveryHints,
+                authenticationHint = PeerAuthenticationHint.TrustedApplicationPin(discoveryClaim)
             )
 
+            fun assertManualIdentity(expectedName: String) {
+                val retained = assertNotNull(registry.internalPeer(peerId))
+                assertEquals(
+                    manual.copy(
+                        name = expectedName,
+                        supportedTransports = setOf(TransportKind.LAN, TransportKind.BLE)
+                    ),
+                    registry.peers.value.single()
+                )
+                assertEquals(Platform.UNKNOWN, retained.publicPeer.platform)
+                assertEquals(PeerOrigin.Manual, retained.origin)
+                assertEquals(listOf(manualHint) + discoveryHints, retained.transportHints)
+                assertEquals(
+                    applicationPin,
+                    assertIs<PeerAuthenticationHint.TrustedApplicationPin>(
+                        retained.authenticationHint
+                    ).fingerprint
+                )
+            }
+
+            registry.processEvent(PeerEvent.Found(discovered))
+            assertManualIdentity("Trusted")
+            registry.processEvent(
+                PeerEvent.Updated(discovered.copy(publicPeer = discovered.publicPeer.copy(name = "Changed claim")))
+            )
+            assertManualIdentity("Trusted")
+
+            val renamed = registry.registerManualPeer(
+                host = "192.0.2.101",
+                port = 9_101,
+                deviceName = "Renamed by application",
+                expectedFingerprint = applicationPin
+            )
+            assertEquals("Renamed by application", renamed.name)
+            assertManualIdentity("Renamed by application")
+
+            registry.processEvent(PeerEvent.Lost(peerId))
+            assertEquals(manual.copy(name = "Renamed by application"), registry.peers.value.single())
             val retained = assertNotNull(registry.internalPeer(peerId))
             assertEquals(PeerOrigin.Manual, retained.origin)
+            assertEquals(listOf(manualHint), retained.transportHints)
             assertEquals(
                 applicationPin,
-                assertIs<PeerAuthenticationHint.TrustedApplicationPin>(
-                    retained.authenticationHint
-                ).fingerprint
+                assertIs<PeerAuthenticationHint.TrustedApplicationPin>(retained.authenticationHint).fingerprint
             )
         } finally {
             supervisor.cancel()

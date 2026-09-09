@@ -731,7 +731,8 @@ private data class TrackedPeer(
             val discovered = discoveredBy.entries
                 .sortedBy { it.key.index }
                 .map { it.value.internalPeer }
-            val primary = discovered.firstOrNull() ?: checkNotNull(manual).internalPeer
+            // Application-supplied display identity wins; discovery only adds routing claims.
+            val primary = manual?.internalPeer ?: discovered.first()
             val allClaims = buildList {
                 manual?.let { add(it.internalPeer) }
                 addAll(discovered)
