@@ -42,7 +42,7 @@ internal class FilePeerIdStorage(
     private val logger: P2pLogger
 ) : PeerIdStorage {
 
-    private val legacySegment = sanitizeAppIdForFilesystem(rawAppId)
+    private val legacySegment = sanitizeAppIdLegacySegment(rawAppId)
     private val storageDir: File =
         File(File(File(rootDir, ".p2pkit"), "peer-id-v2"), peerIdStorageKey(rawAppId))
     private val storageFile: File = File(storageDir, "peer-id")
@@ -265,25 +265,4 @@ private fun InputStream.readBoundedPeerIdBytes(): ByteArray {
         "persistent PeerId exceeds $MAX_PERSISTED_PEER_ID_BYTES bytes"
     }
     return buffer.copyOf(total)
-}
-
-/**
- * Reduce a raw appId to a path-safe directory-name segment.
- *
- * - Keeps Unicode letters/digits plus `[._-]`; replaces anything else with `_`.
- * - Collapses any `..` sequence to `._` so the result cannot navigate up.
- * - Trims leading dots so we don't create hidden directories.
- * - Caps the result at 64 chars.
- */
-internal fun sanitizeAppIdForFilesystem(raw: String): String {
-    if (raw.isBlank()) return "_"
-    val sb = StringBuilder(raw.length)
-    for (c in raw) {
-        sb.append(if (c.isLetterOrDigit() || c == '_' || c == '-' || c == '.') c else '_')
-    }
-    // Replace every `..` with `._` (replace-all is non-overlapping, single
-    // pass is sufficient to eliminate every traversal pair).
-    val noTraversal = sb.toString().replace("..", "._")
-    val trimmed = noTraversal.trimStart('.').ifEmpty { "_" }
-    return trimmed.take(64)
 }

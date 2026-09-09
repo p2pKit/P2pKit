@@ -44,7 +44,7 @@ internal class NSUserDefaultsPeerIdStorage(
     private val synchronizeDefaults: () -> Boolean = { defaults.synchronize() }
 ) : PeerIdStorage {
 
-    private val legacySuffix = sanitizeAppIdForKey(appId.value)
+    private val legacySuffix = sanitizeAppIdLegacySegment(appId.value)
     private val legacyKey = "dev.p2pkit.peerId.$legacySuffix"
     private val bucketKey = "dev.p2pkit.peerId.v2.$legacySuffix"
     private val entryKey = peerIdStorageKey(appId.value)
@@ -174,23 +174,4 @@ internal class NSUserDefaultsPeerIdStorage(
     private companion object {
         private val processLock = NSLock()
     }
-}
-
-/**
- * Reduce a raw appId to a safe `NSUserDefaults` key suffix.
- *
- * Keeps Unicode letters/digits plus `[._-]`, replaces anything else with
- * `_`, collapses any `..` to `._` (parallels
- * `sanitizeAppIdForFilesystem` on JVM/Android), and caps the result at 64
- * characters.
- */
-internal fun sanitizeAppIdForKey(raw: String): String {
-    if (raw.isBlank()) return "_"
-    val sb = StringBuilder(raw.length)
-    for (c in raw) {
-        sb.append(if (c.isLetterOrDigit() || c == '_' || c == '-' || c == '.') c else '_')
-    }
-    val noTraversal = sb.toString().replace("..", "._")
-    val trimmed = noTraversal.trimStart('.').ifEmpty { "_" }
-    return trimmed.take(64)
 }

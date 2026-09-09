@@ -89,8 +89,8 @@ class FilePeerIdStorageTest {
         val first = FilePeerIdStorage(tempDir, "tenant/a", P2pLogger.NoOp)
         val second = FilePeerIdStorage(tempDir, "tenant?a", P2pLogger.NoOp)
         assertEquals(
-            sanitizeAppIdForFilesystem("tenant/a"),
-            sanitizeAppIdForFilesystem("tenant?a"),
+            sanitizeAppIdLegacySegment("tenant/a"),
+            sanitizeAppIdLegacySegment("tenant?a"),
             "the fixture must reproduce the legacy collision"
         )
 
@@ -104,8 +104,8 @@ class FilePeerIdStorageTest {
         val first = FilePeerIdStorage(tempDir, sharedPrefix + "-one", P2pLogger.NoOp)
         val second = FilePeerIdStorage(tempDir, sharedPrefix + "-two", P2pLogger.NoOp)
         assertEquals(
-            sanitizeAppIdForFilesystem(sharedPrefix + "-one"),
-            sanitizeAppIdForFilesystem(sharedPrefix + "-two")
+            sanitizeAppIdLegacySegment(sharedPrefix + "-one"),
+            sanitizeAppIdLegacySegment(sharedPrefix + "-two")
         )
         assertNotEquals(first.storagePath, second.storagePath)
     }
@@ -267,9 +267,37 @@ class FilePeerIdStorageTest {
 
     // ---- Legacy-directory migration (2026-07 review P1-12, A04 §3 r3) ----
 
+    @Test
+    fun literalHistoricalPathsMigrateInOrderWithoutChangingRollbackFiles() {
+        // Literal historical names must not be derived through the helper under test.
+        val hidden = File(tempDir, ".p2pkit/tenant_é/peer-id").also {
+            it.parentFile.mkdirs()
+            it.writeText("literal-hidden-id")
+        }
+        val visible = File(tempDir, "p2pkit/tenant_é/peer-id").also {
+            it.parentFile.mkdirs()
+            it.writeText("literal-visible-id")
+        }
+        val storage = FilePeerIdStorage(tempDir, "tenant/é", P2pLogger.NoOp)
+
+        assertEquals("literal-hidden-id", storage.loadOrGenerate().value)
+        assertEquals("literal-hidden-id", File(storage.storagePath).readText())
+        assertEquals("literal-hidden-id", hidden.readText())
+        assertEquals("literal-visible-id", visible.readText())
+
+        val visibleOnly = File(tempDir, "p2pkit/old_é/peer-id").also {
+            it.parentFile.mkdirs()
+            it.writeText("literal-visible-only-id")
+        }
+        val visibleStorage = FilePeerIdStorage(tempDir, "old/é", P2pLogger.NoOp)
+        assertEquals("literal-visible-only-id", visibleStorage.loadOrGenerate().value)
+        assertEquals("literal-visible-only-id", File(visibleStorage.storagePath).readText())
+        assertEquals("literal-visible-only-id", visibleOnly.readText())
+    }
+
     /** Writes a peer-id file at the pre-AUDIT-2026-06 visible `p2pkit` location. */
     private fun writeLegacyId(appId: String, id: String): File {
-        val legacyFile = File(File(File(tempDir, "p2pkit"), sanitizeAppIdForFilesystem(appId)), "peer-id")
+        val legacyFile = File(File(File(tempDir, "p2pkit"), sanitizeAppIdLegacySegment(appId)), "peer-id")
         legacyFile.parentFile.mkdirs()
         legacyFile.writeText(id)
         return legacyFile
@@ -277,7 +305,7 @@ class FilePeerIdStorageTest {
 
     /** Writes the immediately previous hidden, sanitizer-keyed layout. */
     private fun writePreviousHiddenId(appId: String, id: String): File {
-        val previous = File(File(File(tempDir, ".p2pkit"), sanitizeAppIdForFilesystem(appId)), "peer-id")
+        val previous = File(File(File(tempDir, ".p2pkit"), sanitizeAppIdLegacySegment(appId)), "peer-id")
         previous.parentFile.mkdirs()
         previous.writeText(id)
         return previous
@@ -359,10 +387,10 @@ class FilePeerIdStorageTest {
     @Test
     fun sanitizationFunctionStripsTraversal() {
         // Direct sanitiser tests — easier to reason about than going through storage.
-        assertEquals("com.example.transfer", sanitizeAppIdForFilesystem("com.example.transfer"))
-        assertEquals("_", sanitizeAppIdForFilesystem(""))
+        assertEquals("com.example.transfer", sanitizeAppIdLegacySegment("com.example.transfer"))
+        assertEquals("_", sanitizeAppIdLegacySegment(""))
         // `..` is collapsed to `._`; leading dots stripped.
-        val sanitized = sanitizeAppIdForFilesystem("../../etc/passwd")
+        val sanitized = sanitizeAppIdLegacySegment("../../etc/passwd")
         assertTrue(!sanitized.contains("/"), "sanitised='$sanitized' must not contain a path separator")
         assertTrue(!sanitized.startsWith("."), "sanitised='$sanitized' must not start with a dot")
         assertTrue(!sanitized.contains(".."), "sanitised='$sanitized' must not contain '..'")

@@ -22,7 +22,7 @@ internal class FilePeerIdStorage(
     private val logger: P2pLogger
 ) : PeerIdStorage {
 
-    private val legacySegment = sanitizeAppIdForFilesystem(rawAppId)
+    private val legacySegment = sanitizeAppIdLegacySegment(rawAppId)
     private val storageDir: File =
         File(File(File(rootDir, "p2pkit"), "peer-id-v2"), peerIdStorageKey(rawAppId))
     private val storageFile: File = File(storageDir, "peer-id")
@@ -207,15 +207,4 @@ private fun InputStream.readBoundedPeerIdBytes(): ByteArray {
         "persistent PeerId exceeds $MAX_PERSISTED_PEER_ID_BYTES bytes"
     }
     return buffer.copyOf(total)
-}
-
-internal fun sanitizeAppIdForFilesystem(raw: String): String {
-    if (raw.isBlank()) return "_"
-    val sb = StringBuilder(raw.length)
-    for (c in raw) {
-        sb.append(if (c.isLetterOrDigit() || c == '_' || c == '-' || c == '.') c else '_')
-    }
-    val noTraversal = sb.toString().replace("..", "._")
-    val trimmed = noTraversal.trimStart('.').ifEmpty { "_" }
-    return trimmed.take(64)
 }

@@ -26,8 +26,8 @@ class NSUserDefaultsPeerIdStorageTest {
         val unique = uniqueSuffix()
         val firstAppId = "tenant/$unique"
         val secondAppId = "tenant?$unique"
-        val suffix = sanitizeAppIdForKey(firstAppId)
-        assertEquals(suffix, sanitizeAppIdForKey(secondAppId))
+        val suffix = sanitizeAppIdLegacySegment(firstAppId)
+        assertEquals(suffix, sanitizeAppIdLegacySegment(secondAppId))
 
         val first = NSUserDefaultsPeerIdStorage(AppId(firstAppId), P2pLogger.NoOp, defaults)
             .loadOrGenerate()
@@ -43,7 +43,7 @@ class NSUserDefaultsPeerIdStorageTest {
     @Test
     fun legacyStringMigratesWithoutDeletingRollbackValue() {
         val appId = "legacy-${uniqueSuffix()}"
-        val suffix = sanitizeAppIdForKey(appId)
+        val suffix = sanitizeAppIdLegacySegment(appId)
         val legacyKey = "dev.p2pkit.peerId.$suffix"
         defaults.setObject("legacy-peer-id", legacyKey)
         defaults.synchronize()
@@ -58,9 +58,45 @@ class NSUserDefaultsPeerIdStorageTest {
     }
 
     @Test
+    fun literalLegacyKeyMigratesWithoutChangingTheExistingCollidingBucketEntry() {
+        val appId = "tenant/é"
+        val collision = "tenant?é"
+        val legacyKey = "dev.p2pkit.peerId.tenant_é"
+        val bucketKey = "dev.p2pkit.peerId.v2.tenant_é"
+        defaults.setObject("literal-legacy-id", legacyKey)
+        defaults.setObject(mapOf(peerIdStorageKey(collision) to "existing-collision-id"), bucketKey)
+        defaults.synchronize()
+
+        val loaded = NSUserDefaultsPeerIdStorage(AppId(appId), P2pLogger.NoOp, defaults).loadOrGenerate()
+
+        assertEquals("literal-legacy-id", loaded.value)
+        assertEquals("literal-legacy-id", defaults.stringForKey(legacyKey))
+        val bucket = assertNotNull(defaults.dictionaryForKey(bucketKey))
+        assertEquals("literal-legacy-id", bucket[peerIdStorageKey(appId)])
+        assertEquals("existing-collision-id", bucket[peerIdStorageKey(collision)])
+    }
+
+    @Test
+    fun literalCurrentBucketRemainsDiscoverableAndOutranksTheLegacyString() {
+        val appId = "current/é"
+        val legacyKey = "dev.p2pkit.peerId.current_é"
+        val bucketKey = "dev.p2pkit.peerId.v2.current_é"
+        defaults.setObject("stale-legacy-id", legacyKey)
+        defaults.setObject(mapOf(peerIdStorageKey(appId) to "existing-current-id"), bucketKey)
+        defaults.synchronize()
+
+        val loaded = NSUserDefaultsPeerIdStorage(AppId(appId), P2pLogger.NoOp, defaults).loadOrGenerate()
+
+        assertEquals("existing-current-id", loaded.value)
+        assertEquals("stale-legacy-id", defaults.stringForKey(legacyKey))
+        val bucket = assertNotNull(defaults.dictionaryForKey(bucketKey))
+        assertEquals("existing-current-id", bucket[peerIdStorageKey(appId)])
+    }
+
+    @Test
     fun failedSynchronizationDoesNotRotateSameStorageInstance() {
         val appId = "sync-failure-${uniqueSuffix()}"
-        val suffix = sanitizeAppIdForKey(appId)
+        val suffix = sanitizeAppIdLegacySegment(appId)
         val storage = NSUserDefaultsPeerIdStorage(
             appId = AppId(appId),
             logger = P2pLogger.NoOp,
@@ -74,7 +110,7 @@ class NSUserDefaultsPeerIdStorageTest {
     @Test
     fun invalidBucketEntryIsRejectedAndReplacedWithAProtocolValidIdentity() {
         val appId = "invalid-entry-${uniqueSuffix()}"
-        val suffix = sanitizeAppIdForKey(appId)
+        val suffix = sanitizeAppIdLegacySegment(appId)
         val bucketKey = "dev.p2pkit.peerId.v2.$suffix"
         val entryKey = peerIdStorageKey(appId)
         val invalid = "x".repeat(MAX_PERSISTED_PEER_ID_BYTES + 1)
@@ -93,7 +129,7 @@ class NSUserDefaultsPeerIdStorageTest {
     @Test
     fun invalidLegacyEntryIsNotMigratedIntoTheHashedBucket() {
         val appId = "invalid-legacy-${uniqueSuffix()}"
-        val suffix = sanitizeAppIdForKey(appId)
+        val suffix = sanitizeAppIdLegacySegment(appId)
         val legacyKey = "dev.p2pkit.peerId.$suffix"
         val invalid = "unsafe\u202Epeer-id"
         defaults.setObject(invalid, legacyKey)
