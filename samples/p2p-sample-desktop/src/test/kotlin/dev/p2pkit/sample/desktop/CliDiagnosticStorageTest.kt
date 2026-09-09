@@ -1,17 +1,35 @@
 package dev.p2pkit.sample.desktop
 
+import dev.p2pkit.core.KeepAliveConfig
 import dev.p2pkit.sample.diagnostics.DiagnosticRecord
 import dev.p2pkit.sample.diagnostics.DiagnosticClearAction
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
+import java.util.zip.ZipFile
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class CliDiagnosticStorageTest {
+    @Test
+    fun exportReportsTheSdkKeepAliveDefault() = withHome { home ->
+        configure(home, File(home, "cli.jsonl"))
+        ZipFile(CliDiagnostics.export()).use { zip ->
+            val entry = assertNotNull(zip.getEntry("summary.json"))
+            val summary = zip.getInputStream(entry).bufferedReader().use { it.readText() }
+            val timeout = KeepAliveConfig().timeoutMillis
+            assertTrue(
+                Regex(""""timeoutsMillis"\s*:\s*\{[^}]*"keepAlive"\s*:\s*$timeout(?=\s*[,}])""")
+                    .containsMatchIn(summary),
+                "Exported keep-alive must match the SDK default used by the CLI"
+            )
+        }
+    }
+
     @Test
     fun actualClearCommandReportsPartialStorageFailureAndRemainsUsableForRetry() = withHome { home ->
         val direct = File(home, "cli.jsonl")

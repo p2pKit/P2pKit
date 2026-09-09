@@ -1,6 +1,7 @@
 package dev.p2pkit.sample.desktop
 
 import dev.p2pkit.core.BuildInfo
+import dev.p2pkit.core.KeepAliveConfig
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.sample.diagnostics.DiagnosticClearAction
 import dev.p2pkit.sample.diagnostics.DiagnosticConfiguration
@@ -69,7 +70,11 @@ internal object CliDiagnostics {
             ),
             configuration = DiagnosticConfiguration(
                 protocolVersion = "secure-v2",
-                timeoutsMillis = mapOf("keepAlive" to 6_000L, "durableCommit" to 30_000L),
+                // The kit builder leaves keep-alive at the SDK default.
+                timeoutsMillis = mapOf(
+                    "keepAlive" to KeepAliveConfig().timeoutMillis,
+                    "durableCommit" to 30_000L
+                ),
                 retryValues = mapOf("configuredByLaunch" to 1L),
                 packetLimits = mapOf("sampleReceiveQuotaBytes" to 50L * 1024L * 1024L),
                 faultInjection = mapOf("enabled" to "false"),

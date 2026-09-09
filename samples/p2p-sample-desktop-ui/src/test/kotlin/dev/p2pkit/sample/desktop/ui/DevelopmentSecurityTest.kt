@@ -15,6 +15,7 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.use
+import dev.p2pkit.core.KeepAliveConfig
 import java.io.File
 import java.nio.file.Files
 import java.util.zip.ZipFile
@@ -53,6 +54,12 @@ class DevelopmentSecurityTest {
         ZipFile(state.diagnostics.export()).use { zip ->
             val entry = assertNotNull(zip.getEntry("summary.json"))
             val summary = zip.getInputStream(entry).bufferedReader().use { it.readText() }
+            val timeout = KeepAliveConfig().timeoutMillis
+            assertTrue(
+                Regex(""""timeoutsMillis"\s*:\s*\{[^}]*"keepAlive"\s*:\s*$timeout(?=\s*[,}])""")
+                    .containsMatchIn(summary),
+                "Exported keep-alive must match the SDK default used by Desktop UI"
+            )
             expected.forEach { (key, value) ->
                 assertTrue(Regex("\"$key\"\\s*:\\s*\"$value\"").containsMatchIn(summary), key)
             }
