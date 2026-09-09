@@ -2,6 +2,8 @@ package dev.p2pkit.transport.lan
 
 import dev.p2pkit.core.ConnectionState
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
@@ -14,6 +16,7 @@ import java.net.ServerSocket
 import java.net.Socket
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -128,6 +131,28 @@ class JvmRawConnectionCancellationTest {
                     "cancelled read collector must release the local socket fd"
                 )
                 assertEquals(ConnectionState.Closed, connection.state.value)
+            }
+        }
+    }
+
+    @Test
+    fun remoteHalfCloseEndsReadFlowNormallyAndReleasesTheSocket() = runBlocking {
+        openLoopbackPair().use { pair ->
+            val connection = JvmRawConnection(pair.local)
+            val reader = async(start = CoroutineStart.UNDISPATCHED) {
+                connection.read().collect { error("The FIN-only peer must not send payload bytes") }
+            }
+            try {
+                // Send a TCP FIN without closing the peer's read side or its descriptor.
+                pair.remote.shutdownOutput()
+                withTimeout(TIMEOUT_MS) { reader.await() }
+
+                assertFalse(pair.remote.isClosed, "the fixture must half-close, not close both directions")
+                assertTrue(pair.local.isClosed, "normal EOF must release the local descriptor before explicit close()")
+                assertEquals(ConnectionState.Closed, connection.state.value)
+            } finally {
+                connection.close()
+                withTimeout(TIMEOUT_MS) { reader.cancelAndJoin() }
             }
         }
     }

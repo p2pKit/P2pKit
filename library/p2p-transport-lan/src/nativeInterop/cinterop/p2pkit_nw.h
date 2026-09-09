@@ -210,6 +210,14 @@ static inline int p2pkit_test_bind_tcp_port(uint16_t port, bool ipv6) {
     return bind_errno;
 }
 
+/** Test-only TCP write-half-close; keep the native peer alive to observe remote termination. */
+static inline void p2pkit_test_nw_connection_send_fin(
+    nw_connection_t connection,
+    void (^completion)(nw_error_t error)
+) {
+    nw_connection_send(connection, NULL, NW_CONNECTION_FINAL_MESSAGE_CONTEXT, true, completion);
+}
+
 /**
  * Send the given byte buffer over an established connection using the
  * default-message context. Performs the dispatch_data_create + nw_connection_send
