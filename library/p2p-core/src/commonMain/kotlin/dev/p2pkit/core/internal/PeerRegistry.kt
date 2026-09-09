@@ -22,17 +22,15 @@ import dev.p2pkit.core.transport.TransportSecurityProfile
 import dev.p2pkit.core.transport.TransportHint
 import kotlin.concurrent.atomics.AtomicBoolean
 import kotlin.concurrent.atomics.AtomicLong
+import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 import kotlin.jvm.JvmInline
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.ExperimentalForInheritanceCoroutinesApi
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -89,8 +87,7 @@ internal class PeerRegistry(
      */
     private val registryState: MutableStateFlow<PeerRegistryState> =
         MutableStateFlow(PeerRegistryState())
-    private val peerPublication: MutableStateFlow<PeerPublication> =
-        MutableStateFlow(PeerPublication(0L, immutableListSnapshot(emptyList())))
+    private val peerPublication = PeerListPublication()
     // Default kits retain the NoOp singleton through failure isolation. Do not
     // allocate counters or read the diagnostic clock when logging is disabled.
     private val rejectionWarnings = if (logger === P2pLogger.NoOp) {
@@ -104,7 +101,7 @@ internal class PeerRegistry(
      * [PeerEvent]; emits a new value only when the visible peer set actually
      * changes (heartbeat-only updates to `lastSeen` do not churn this flow).
      */
-    val peers: StateFlow<List<Peer>> = PeerListStateFlow(peerPublication).asStateFlow()
+    val peers: StateFlow<List<Peer>> = peerPublication.peers
 
     fun lastSeen(peerId: PeerId): Long? =
         registryState.value.tracked[peerId]?.lastSeenAtMillis
@@ -250,7 +247,7 @@ internal class PeerRegistry(
 
     /** Publish only if [snapshot] is newer than every state already exposed. */
     private fun publishPeers(snapshot: PeerRegistryState) {
-        if (peerPublication.value.generation >= snapshot.generation) return
+        if (peerPublication.hasPublished(snapshot.generation)) return
         val newList = if (snapshot.closed) {
             emptyList()
         } else {
@@ -258,15 +255,7 @@ internal class PeerRegistry(
         }
         val candidatePeers = immutableListSnapshot(newList)
         beforePeerPublicationForTest?.invoke(snapshot.generation)
-        while (true) {
-            val published = peerPublication.value
-            if (published.generation >= snapshot.generation) return
-            // Reuse equal immutable lists, but keep the newer generation in
-            // the CAS record so delayed publications remain fenced out.
-            val peers = if (published.peers == candidatePeers) published.peers else candidatePeers
-            val candidate = PeerPublication(snapshot.generation, peers)
-            if (peerPublication.compareAndSet(published, candidate)) return
-        }
+        peerPublication.publish(snapshot.generation, candidatePeers)
     }
 
     /**
@@ -748,70 +737,90 @@ private class DiscoveryRejectionWindow {
     }
 }
 
-private data class PeerPublication(
-    val generation: Long,
-    val peers: List<Peer>
-)
-
 /**
- * Projects generation-bearing publications onto the established public state
- * type while retaining StateFlow's equality de-noising for heartbeat updates.
- * Keep value publication synchronous and independent of the owner's scope.
+ * Native list state plus a generation-stamped, identity-CAS publication permit.
  *
- * The mutable facade lets the public asStateFlow factory supply coroutine
- * operator fusion without referencing hidden coroutine interfaces. No mutable
- * view escapes the registry. Its write operations still honor MutableStateFlow
- * semantics against the same atomic record, preserving the generation fence.
+ * There is deliberately no projecting collector: the native StateFlow receives
+ * the original collector and owns subscription hooks, fusion and conflation.
+ * A pending permit authorizes exactly one unequal native write. Once that new
+ * list is visible, any publisher can finish the permit, even while its original
+ * owner is still inside an unconfined collector notification. No public callback
+ * runs while progress depends on that callback's original publisher returning.
+ * Waiting for a preempted permit owner means this protocol is not lock-free.
  */
-@OptIn(ExperimentalForInheritanceCoroutinesApi::class)
-private class PeerListStateFlow(
-    private val source: MutableStateFlow<PeerPublication>
-) : MutableStateFlow<List<Peer>> {
-    override var value: List<Peer>
-        get() = source.value.peers
-        set(value) {
-            val peers = immutableListSnapshot(value)
-            source.updateAndGet { current -> current.copy(peers = peers) }
-        }
+@OptIn(ExperimentalAtomicApi::class)
+private class PeerListPublication {
+    private val initialPeers = immutableListSnapshot<Peer>(emptyList())
+    private val publicState = MutableStateFlow(initialPeers)
+    private val publication = AtomicReference(PeerPublication(0L, initialPeers))
 
-    override val replayCache: List<List<Peer>> get() = listOf(value)
+    val peers: StateFlow<List<Peer>> = publicState.asStateFlow()
 
-    override val subscriptionCount: StateFlow<Int> get() = source.subscriptionCount
+    fun hasPublished(generation: Long): Boolean {
+        val current = publication.load()
+        return !current.pending && current.generation >= generation
+    }
 
-    override fun compareAndSet(expect: List<Peer>, update: List<Peer>): Boolean {
-        val peers = immutableListSnapshot(update)
+    fun publish(generation: Long, peers: List<Peer>) {
+        var pendingSpins = 0
         while (true) {
-            val current = source.value
-            if (current.peers != expect) return false
-            if (source.compareAndSet(current, current.copy(peers = peers))) return true
-        }
-    }
-
-    override fun tryEmit(value: List<Peer>): Boolean {
-        this.value = value
-        return true
-    }
-
-    override suspend fun emit(value: List<Peer>) {
-        this.value = value
-    }
-
-    @OptIn(ExperimentalCoroutinesApi::class)
-    override fun resetReplayCache() = source.resetReplayCache()
-
-    override suspend fun collect(collector: FlowCollector<List<Peer>>): Nothing {
-        var initialized = false
-        var previous: List<Peer> = emptyList()
-        source.collect { publication ->
-            val next = publication.peers
-            if (!initialized || (previous !== next && previous != next)) {
-                initialized = true
-                previous = next
-                collector.emit(next)
+            val current = publication.load()
+            if (current.pending) {
+                // An unequal native write stores the exact new list before any
+                // subscriber is resumed. Seeing it proves this permit's sole
+                // write has happened; a stale helper's identity CAS then fails.
+                if (publicState.value === current.peers) {
+                    publication.compareAndSet(current, current.copy(pending = false))
+                    pendingSpins = 0
+                } else if (pendingSpins < MAX_PENDING_SPINS) {
+                    pendingSpins += 1
+                } else {
+                    // The owner may be preempted or waiting for the native
+                    // StateFlow monitor. Pause this competing thread rather
+                    // than burn a core; never run a callback or suspend its Job.
+                    pausePeerPublication()
+                }
+                continue
             }
+            pendingSpins = 0
+            if (current.generation >= generation) return
+            if (current.peers == peers) {
+                // A heartbeat advances the watermark without replacing the
+                // immutable visible list or waking public state collectors.
+                val unchanged = PeerPublication(generation, current.peers)
+                if (publication.compareAndSet(current, unchanged)) return
+                continue
+            }
+            val completed = PeerPublication(generation, peers)
+            val pending = completed.copy(pending = true)
+            if (!publication.compareAndSet(current, pending)) continue
+            try {
+                // The permit owner writes exactly once. Reentrant publishers
+                // may retire this permit after this assignment linearizes;
+                // they never perform its write or wait for its notifications.
+                // No suspension, test hook or user code belongs before this write.
+                publicState.value = peers
+            } finally {
+                // An exceptional pre-write failure must not strand the permit.
+                // If another publisher already helped it or moved on, this
+                // identity CAS cannot restore an old generation or old list.
+                val settled = if (publicState.value === peers) completed else current
+                publication.compareAndSet(pending, settled)
+            }
+            return
         }
+    }
+
+    private companion object {
+        const val MAX_PENDING_SPINS: Int = 16
     }
 }
+
+private data class PeerPublication(
+    val generation: Long,
+    val peers: List<Peer>,
+    val pending: Boolean = false
+)
 
 private data class DiscoveryContribution(
     val internalPeer: InternalPeer,
