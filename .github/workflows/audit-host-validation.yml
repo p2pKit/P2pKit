@@ -1,6 +1,6 @@
 name: Audit host validation
 
-# Run revision: 3. Change this comment in a reviewed audit-branch push to
+# Run revision: 4. Change this comment in a reviewed audit-branch push to
 # request a new frozen-source run. Helpers/docs-only pushes do not trigger it.
 on:
   push:
