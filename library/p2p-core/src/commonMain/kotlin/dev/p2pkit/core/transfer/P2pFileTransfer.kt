@@ -44,7 +44,21 @@ public interface P2pFileTransfer {
     /** Current lifecycle state. */
     public val state: StateFlow<FileTransferState>
 
-    /** Bytes transferred so far. Monotonically non-decreasing until terminal state. */
+    /**
+     * Monotonically non-decreasing local payload-byte progress for this attempt.
+     *
+     * Outgoing counts are recorded after successful local transport writes:
+     * submission is not proof that the peer received or acknowledged those bytes.
+     * Incoming counts describe bytes accepted by the receive sink/buffer, not
+     * necessarily flushed, digest-verified, or durably committed content. A failed
+     * or cancelled attempt retains its last reported local progress.
+     *
+     * Reaching [sizeBytes] (100%) is not [FileTransferState.Completed]; consult
+     * that state for the negotiated completion semantics. Only an authenticated
+     * sender waits for the matching durable-commit acknowledgement; legacy
+     * transfers do not provide that confirmation. This flow and [state] are
+     * independent snapshots, so their notifications are not atomic.
+     */
     public val bytesTransferred: StateFlow<Long>
 
     /**

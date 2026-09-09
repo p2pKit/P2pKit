@@ -72,6 +72,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -2265,6 +2266,86 @@ class FileTransferFlowTest {
             assertEquals(1, source.closeCount)
         } finally {
             scope.cancel()
+        }
+    }
+
+    @Test
+    fun incomingProgressNeverRetractsWhenByteCollectorTerminalizesTransfer() = runTest {
+        val dispatcher = directDispatcher(backgroundScope, RecordingFileProtocol())
+        val id = MessageId.random(Random(8_249))
+        dispatcher.onFileOffer(id, FileOfferPayload("progress.bin", 4L))
+        val offer = assertIs<IncomingFileSession>(dispatcher.pendingFileOffers.value.single())
+        offer.accept(Buffer())
+        val observed = mutableListOf<Long>()
+        val collector = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            offer.bytesTransferred.collect { total ->
+                observed += total
+                if (total == 4L) {
+                    assertTrue(offer.transitionTerminalWithoutCleanup(FileTransferState.Cancelled("observer")))
+                }
+            }
+        }
+        try {
+            assertEquals(
+                2L,
+                offer.acceptData(
+                    Frame(
+                        type = dev.p2pkit.core.protocol.PacketType.FILE_DATA,
+                        flags = 0,
+                        messageId = id,
+                        chunkIndex = 0,
+                        totalChunks = 2,
+                        payload = byteArrayOf(1, 2)
+                    )
+                )
+            )
+            val finalTotal = offer.acceptData(
+                Frame(
+                    type = dev.p2pkit.core.protocol.PacketType.FILE_DATA,
+                    flags = dev.p2pkit.core.protocol.FrameFlags.LAST_CHUNK.toByte(),
+                    messageId = id,
+                    chunkIndex = 1,
+                    totalChunks = 2,
+                    payload = byteArrayOf(3, 4)
+                )
+            )
+
+            assertEquals(listOf(0L, 2L, 4L), observed, "published progress must never be rolled back")
+            assertEquals(4L, finalTotal)
+            assertEquals(4L, offer.bytesTransferred.value)
+            assertIs<FileTransferState.Cancelled>(offer.state.value)
+            assertEquals(null, offer.acceptData(fileFrame(id, byteArrayOf(5))))
+            assertEquals(listOf(0L, 2L, 4L), observed)
+        } finally {
+            collector.cancelAndJoin()
+            // This direct state-CAS fixture owns the cleanup normally scheduled by the dispatcher.
+            offer.detachTerminalResources()
+            dispatcher.closeAll("test complete")
+        }
+    }
+
+    @Test
+    fun incomingStateCollectorCanTerminalizeBeforeBytePublication() = runTest {
+        val dispatcher = directDispatcher(backgroundScope, RecordingFileProtocol())
+        val id = MessageId.random(Random(8_250))
+        dispatcher.onFileOffer(id, FileOfferPayload("terminal-progress.bin", 2L))
+        val offer = assertIs<IncomingFileSession>(dispatcher.pendingFileOffers.value.single())
+        offer.accept(Buffer())
+        val collector = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            offer.state.collect { state ->
+                if (state is FileTransferState.Sending) {
+                    assertTrue(offer.transitionTerminalWithoutCleanup(FileTransferState.Cancelled("observer")))
+                }
+            }
+        }
+        try {
+            assertEquals(null, offer.acceptData(fileFrame(id, byteArrayOf(1, 2))))
+            assertEquals(0L, offer.bytesTransferred.value)
+            assertIs<FileTransferState.Cancelled>(offer.state.value)
+        } finally {
+            collector.cancelAndJoin()
+            offer.detachTerminalResources()
+            dispatcher.closeAll("test complete")
         }
     }
 

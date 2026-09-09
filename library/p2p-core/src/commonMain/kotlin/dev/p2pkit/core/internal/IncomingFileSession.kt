@@ -31,9 +31,9 @@ import kotlinx.io.RawSink
  * survives the transition so observers see one continuous lifecycle.
  *
  * `accept` returns `this` cast to [P2pFileTransfer]. A per-transfer mutex
- * serializes sink write/finalize/abort and the associated progress/state
- * commits. The dispatcher map lock is deliberately never held across these
- * operations because the sink is application-controlled I/O.
+ * serializes sink write/finalize/abort and nonterminal progress/state updates.
+ * Terminal transitions deliberately bypass it. The dispatcher map lock is
+ * never held across these operations because the sink is application-controlled I/O.
  */
 internal class IncomingFileSession(
     override val peer: Peer,
@@ -93,19 +93,19 @@ internal class IncomingFileSession(
         val ownedReceiver = receiver
             ?: throw P2pError.ProtocolError("FILE_DATA for $transferId arrived before acceptance committed")
         val total = ownedReceiver.acceptDataChunk(frame)
-        if (_state.value.isTerminal()) return@withLock null
-        val previousTotal = _bytes.value
-        _bytes.value = total
         if (sizeBytes > 0L) {
             val progress = (total.toDouble() / sizeBytes.toDouble()).coerceIn(0.0, 1.0).toFloat()
             val current = _state.value
             if (current.isTerminal() ||
                 !_state.compareAndSet(current, FileTransferState.Sending(progress))
             ) {
-                _bytes.compareAndSet(total, previousTotal)
                 return@withLock null
             }
         }
+        // A state collector can terminalize synchronously during the Sending CAS.
+        // Recheck before publishing, and never retract an observable byte total.
+        if (_state.value.isTerminal()) return@withLock null
+        _bytes.value = total
         total
     }
 
@@ -234,6 +234,10 @@ internal class IncomingFileSession(
         return changed
     }
 
+    // Unlike OutgoingFileTransferImpl, terminal state must not wait for the
+    // operationLock held by application sink/commit I/O. acceptData therefore
+    // guards Sending with CAS before its forward-only byte publication; the
+    // two public flows still do not form an atomic snapshot.
     internal fun transitionTerminalWithoutCleanup(newState: FileTransferState): Boolean {
         check(newState.isTerminal()) { "transitionTerminalWithoutCleanup requires a terminal state" }
         while (true) {

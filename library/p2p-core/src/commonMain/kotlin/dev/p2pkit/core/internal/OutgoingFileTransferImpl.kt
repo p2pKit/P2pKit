@@ -144,6 +144,9 @@ internal class OutgoingFileTransferImpl(
         return changed
     }
 
+    // Unlike IncomingFileSession, every outgoing state/byte writer, including
+    // terminal transitions, takes lifecycleLock. Plain state assignments rely on
+    // that complete exclusion; do not make this path lock-free in isolation.
     internal suspend fun transitionTerminalWithoutCleanup(
         newState: FileTransferState
     ): OutgoingTerminalResources? {
@@ -156,6 +159,9 @@ internal class OutgoingFileTransferImpl(
         return if (changed) OutgoingTerminalResources(takeSourceForClose()) else null
     }
 
+    // Called after a successful local transport write, not a per-chunk peer ACK.
+    // lifecycleLock excludes terminal writers, so this path does not need the
+    // incoming handle's compare-and-set guard against lock-free terminalization.
     internal suspend fun recordBytesSent(delta: Int): Boolean = lifecycleLock.withLock {
         if (_state.value.isTerminal()) return@withLock false
         val total = _bytes.value + delta.toLong()
