@@ -17,12 +17,16 @@ import dev.p2pkit.core.provisioning.NetworkState
 import dev.p2pkit.core.provisioning.ProvisioningContext
 import dev.p2pkit.core.provisioning.WifiCredentials
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -30,9 +34,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import platform.Foundation.NSLock
 
 /**
  * Minimum-viable iOS implementation of [NetworkProvisioningManager].
@@ -70,7 +74,9 @@ public class IosManualNetworkProvisioningManager internal constructor(
 
     private val scopeJob = SupervisorJob(parent = ctx.parentJob)
     private val scope = CoroutineScope(Dispatchers.Default + scopeJob)
-    private val closeLock = Mutex()
+    private val lifecycleLock = NSLock()
+    private var closeAttempt: CompletableDeferred<Throwable?>? = null
+    private var closeSucceeded = false
     @kotlin.concurrent.Volatile
     private var closed: Boolean = false
 
@@ -88,10 +94,16 @@ public class IosManualNetworkProvisioningManager internal constructor(
     override val events: Flow<NetworkProvisioningEvent> = _events.asSharedFlow()
 
     init {
-        scopeJob.invokeOnCompletion {
-            closed = true
-            _networkState.value = NetworkState.Unknown
-            _state.value = NetworkProvisioningState.Closed
+        scopeJob.invokeOnCompletion { finishClose() }
+        // A public-coroutines cancellation observer begins the transition
+        // while other owned children may still be inside non-cooperative I/O.
+        // Completion alone is too late to represent that interval.
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                awaitCancellation()
+            } finally {
+                beginClose()
+            }
         }
     }
 
@@ -122,7 +134,9 @@ public class IosManualNetworkProvisioningManager internal constructor(
             // `kit.start()` (or the first lifecycle call) succeeds.
             val port = ctx.lanTcpPort() ?: return@runManagerOperation null
             lifecycleHooks.beforeManualInfoResult()
+            ensureOpen()
             val addressSnapshot = addressScanner.scan()
+            ensureOpen()
             addressSnapshot.enumerationErrorCode?.let { errorCode ->
                 ctx.logger.warn(
                     "provisioning: Apple interface address snapshot failed with errno=$errorCode"
@@ -168,15 +182,73 @@ public class IosManualNetworkProvisioningManager internal constructor(
         )
     }
 
+    /**
+     * Terminally cancel owned operations and wait up to five seconds per close
+     * attempt. Concurrent callers share that attempt and its result. A timed-out
+     * native call is not interrupted or detached: its job remains owned, later
+     * publications are suppressed, and another [close] can retry the join.
+     * [NetworkProvisioningError.CleanupFailed] is reported after terminal state
+     * is published. [NetworkProvisioningState.Closing] is transient; StateFlow
+     * collectors are not guaranteed to observe every intermediate state.
+     */
     override suspend fun close(): Unit = withContext(NonCancellable) {
-        closeLock.withLock {
-            if (!closed) {
-                closed = true
-                _state.value = NetworkProvisioningState.Closing
+        val acquired = withLifecycleLock {
+            if (closeSucceeded) {
+                null
+            } else {
+                val current = closeAttempt
+                if (current != null && !current.isCompleted) {
+                    current to false
+                } else {
+                    CompletableDeferred<Throwable?>().also { closeAttempt = it } to true
+                }
             }
-            scopeJob.cancelAndJoin()
-            _networkState.value = NetworkState.Unknown
-            _state.value = NetworkProvisioningState.Closed
+        } ?: return@withContext
+        val (attempt, ownsAttempt) = acquired
+        if (ownsAttempt) {
+            val failure = try {
+                beginClose()
+                val joined = withTimeoutOrNull(PROVISIONING_CLOSE_TIMEOUT_MS) {
+                    scopeJob.cancelAndJoin()
+                    true
+                } ?: false
+                if (joined) null else NetworkProvisioningError.CleanupFailed(
+                    "provisioning work did not stop within ${PROVISIONING_CLOSE_TIMEOUT_MS}ms; " +
+                        "ownership retained for a later close retry"
+                )
+            } catch (failure: Throwable) {
+                failure
+            } finally {
+                finishClose()
+            }
+            withLifecycleLock {
+                if (failure == null) closeSucceeded = true
+            }
+            attempt.complete(failure)
+        }
+        attempt.await()?.let { throw it }
+    }
+
+    private fun beginClose() {
+        closed = true
+        // Apple manual provisioning has only Idle before terminal disposal.
+        // CAS cannot regress a concurrently completed close back to Closing.
+        // Flow callbacks may run unconfined: never publish while NSLock is held.
+        _state.compareAndSet(NetworkProvisioningState.Idle, NetworkProvisioningState.Closing)
+    }
+
+    private fun finishClose() {
+        beginClose()
+        _networkState.value = NetworkState.Unknown
+        _state.value = NetworkProvisioningState.Closed
+    }
+
+    private inline fun <T> withLifecycleLock(block: () -> T): T {
+        lifecycleLock.lock()
+        return try {
+            block()
+        } finally {
+            lifecycleLock.unlock()
         }
     }
 
@@ -245,3 +317,5 @@ public object IosManualProvisioningFactory : NetworkProvisioningFactory {
 public fun NetworkProvisioningConfigBuilder.iosManualIp() {
     register(IosManualProvisioningFactory)
 }
+
+private const val PROVISIONING_CLOSE_TIMEOUT_MS = 5_000L

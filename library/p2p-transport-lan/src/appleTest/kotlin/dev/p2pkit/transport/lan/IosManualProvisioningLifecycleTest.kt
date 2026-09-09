@@ -19,19 +19,138 @@ import dev.p2pkit.core.provisioning.WifiCredentials
 import dev.p2pkit.core.provisioning.WifiPassword
 import dev.p2pkit.core.provisioning.WifiSecurityType
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertSame
+import kotlin.test.assertTrue
 
 @OptIn(ExperimentalP2pApi::class)
 class IosManualProvisioningLifecycleTest {
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun boundedCloseSharesFailureAndRetainsOwnedWorkForRetry() = runBlocking<Unit> {
+        val parent = Job()
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val manager = heldManager(parent, entered, release)
+        val owned = parent.children.single()
+        val scheduler = TestCoroutineScheduler()
+        val closingDispatcher = StandardTestDispatcher(scheduler)
+        try {
+            supervisorScope {
+                val info = async { manager.getManualConnectionInfo() }
+                try {
+                    withTimeout(2_000) { entered.await() }
+                    val first = async(closingDispatcher) { runCatching { manager.close() }.exceptionOrNull() }
+                    val second = async(closingDispatcher) { runCatching { manager.close() }.exceptionOrNull() }
+                    scheduler.runCurrent()
+                    assertEquals(NetworkProvisioningState.Closing, manager.state.value)
+                    scheduler.advanceTimeBy(4_999)
+                    scheduler.runCurrent()
+                    assertFalse(first.isCompleted)
+                    assertFalse(second.isCompleted)
+                    scheduler.advanceTimeBy(1)
+                    scheduler.runCurrent()
+                    val failure = assertIs<NetworkProvisioningError.CleanupFailed>(
+                        withTimeout(2_000) { first.await() }
+                    )
+                    assertSame(failure, withTimeout(2_000) { second.await() })
+                    assertEquals(NetworkProvisioningState.Closed, manager.state.value)
+                    assertFalse(owned.isCompleted)
+                    assertTrue(parent.children.any { it === owned }, "timeout must retain the original owner")
+                    assertIs<NetworkProvisioningError.ManagerClosed>(
+                        assertIs<LocalNetworkResult.Failed>(manager.startLocalNetwork(LocalNetworkConfig())).error
+                    )
+                    release.complete(Unit)
+                    withTimeout(2_000) { owned.join() }
+                    assertFailsWith<NetworkProvisioningError.ManagerClosed> { info.await() }
+                    manager.close()
+                    manager.close()
+                } finally {
+                    release.complete(Unit)
+                    owned.cancel()
+                    withTimeout(2_000) { owned.join() }
+                    scheduler.runCurrent()
+                }
+            }
+        } finally {
+            release.complete(Unit)
+            manager.close()
+            parent.cancel()
+            parent.join()
+        }
+    }
+
+    @Test
+    fun parentCancellationBeginsClosingBeforeNonCooperativeWorkCompletes() = runBlocking<Unit> {
+        val parent = Job()
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val manager = heldManager(parent, entered, release)
+        try {
+            supervisorScope {
+                val info = async { manager.getManualConnectionInfo() }
+                try {
+                    withTimeout(2_000) { entered.await() }
+                    parent.cancel()
+                    withTimeout(2_000) { manager.state.first { it == NetworkProvisioningState.Closing } }
+                    assertFalse(parent.isCompleted)
+                    release.complete(Unit)
+                    withTimeout(2_000) { parent.join() }
+                    assertEquals(NetworkProvisioningState.Closed, manager.state.value)
+                    assertFailsWith<NetworkProvisioningError.ManagerClosed> { info.await() }
+                } finally {
+                    release.complete(Unit)
+                }
+            }
+        } finally {
+            release.complete(Unit)
+            manager.close()
+            parent.cancel()
+            parent.join()
+        }
+    }
+
+    private fun heldManager(
+        parent: Job,
+        entered: CompletableDeferred<Unit>,
+        release: CompletableDeferred<Unit>
+    ) = IosManualNetworkProvisioningManager(
+        ProvisioningContext(
+            appId = AppId("ios-provisioning-bounded-close"),
+            localPeerId = PeerId("local"),
+            localDeviceName = "synthetic",
+            config = NetworkProvisioningConfig(),
+            logger = P2pLogger.NoOp,
+            lanTcpPort = { 42_000 },
+            manualPeerRegistrar = RejectingRegistrar,
+            parentJob = parent
+        ),
+        IosManualProvisioningLifecycleHooks(beforeManualInfoResult = {
+            withContext(NonCancellable) {
+                entered.complete(Unit)
+                release.await()
+            }
+        }),
+        AppleInterfaceAddressScanner { error("terminal work must not proceed to a new scan") }
+    )
 
     @Test
     fun closeIsTerminalIdempotentAndFutureOperationsAreDeterministic() = runBlocking<Unit> {

@@ -38,6 +38,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -46,6 +47,7 @@ import kotlinx.coroutines.yield
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -400,6 +402,104 @@ class JvmNetworkProvisioningManagerTest {
                 scanRelease.countDown()
                 mgr.close()
             }
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun boundedCloseSharesFailureAndRetainsBlockedOperationUntilRetry() = runBlocking<Unit> {
+        val parent = Job()
+        val calls = AtomicInteger()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val manager = JvmNetworkProvisioningManager(ctx(parentJob = parent), 60_000, {
+            if (calls.incrementAndGet() == 1) {
+                emptyList()
+            } else {
+                entered.countDown()
+                check(release.await(2, TimeUnit.SECONDS)) { "test did not release owned scanner" }
+                listOf("192.0.2.42")
+            }
+        })
+        val owned = parent.children.single()
+        val scheduler = TestCoroutineScheduler()
+        val closingDispatcher = StandardTestDispatcher(scheduler)
+        try {
+            withTimeout(2_000) { while (calls.get() == 0) yield() }
+            supervisorScope {
+                val info = async(Dispatchers.Default) { manager.getManualConnectionInfo() }
+                try {
+                    assertTrue(entered.await(2, TimeUnit.SECONDS), "manual scan did not enter")
+                    val first = async(closingDispatcher) { runCatching { manager.close() }.exceptionOrNull() }
+                    val second = async(closingDispatcher) { runCatching { manager.close() }.exceptionOrNull() }
+                    scheduler.runCurrent()
+                    assertEquals(NetworkProvisioningState.Closing, manager.state.value)
+                    scheduler.advanceTimeBy(4_999)
+                    scheduler.runCurrent()
+                    assertFalse(first.isCompleted)
+                    assertFalse(second.isCompleted)
+                    scheduler.advanceTimeBy(1)
+                    scheduler.runCurrent()
+                    val failure = assertIs<NetworkProvisioningError.CleanupFailed>(
+                        withTimeout(2_000) { first.await() }
+                    )
+                    assertSame(
+                        failure,
+                        withTimeout(2_000) { second.await() },
+                        "concurrent close callers must share one attempt"
+                    )
+                    assertEquals(NetworkProvisioningState.Closed, manager.state.value)
+                    assertEquals(NetworkState.Unknown, manager.networkState.value)
+                    assertFalse(owned.isCompleted, "timeout must not pretend the worker stopped")
+                    assertTrue(parent.children.any { it === owned }, "timed-out work must stay parent-owned")
+                    assertIs<NetworkProvisioningError.ManagerClosed>(
+                        assertIs<LocalNetworkResult.Failed>(manager.startLocalNetwork(LocalNetworkConfig())).error
+                    )
+                    release.countDown()
+                    withTimeout(2_000) { owned.join() }
+                    assertFailsWith<NetworkProvisioningError.ManagerClosed> { info.await() }
+                    manager.close() // Retrying joins the same, now-finished scope.
+                    manager.close()
+                    assertEquals(NetworkState.Unknown, manager.networkState.value)
+                } finally {
+                    release.countDown()
+                    owned.cancel()
+                    withTimeout(2_000) { owned.join() }
+                    scheduler.runCurrent()
+                }
+            }
+        } finally {
+            release.countDown()
+            withTimeout(2_000) { manager.close() }
+            parent.cancel()
+            parent.join()
+        }
+    }
+
+    @Test
+    fun parentCancellationPublishesClosingWhileScanIsStillOwnedAndSuppressesLateSnapshot() = runBlocking<Unit> {
+        val parent = Job()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val manager = JvmNetworkProvisioningManager(ctx(parentJob = parent), 60_000, {
+            entered.countDown()
+            check(release.await(2, TimeUnit.SECONDS)) { "test did not release cancelled poll" }
+            listOf("192.0.2.42")
+        })
+        try {
+            assertTrue(entered.await(2, TimeUnit.SECONDS), "poll did not enter")
+            parent.cancel()
+            withTimeout(2_000) { manager.state.first { it == NetworkProvisioningState.Closing } }
+            assertFalse(parent.isCompleted, "cancellation must still own the blocked scan")
+            release.countDown()
+            withTimeout(2_000) { parent.join() }
+            assertEquals(NetworkProvisioningState.Closed, manager.state.value)
+            assertEquals(NetworkState.Unknown, manager.networkState.value)
+        } finally {
+            release.countDown()
+            manager.close()
+            parent.cancel()
+            parent.join()
         }
     }
 

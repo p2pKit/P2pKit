@@ -22,12 +22,15 @@ import java.net.NetworkInterface
 import java.net.SocketException
 import java.util.Collections
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
@@ -39,9 +42,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * JVM desktop implementation of [NetworkProvisioningManager].
@@ -99,7 +101,9 @@ public class JvmNetworkProvisioningManager private constructor(
 
     private val scopeJob = SupervisorJob(parent = ctx.parentJob)
     private val scope = CoroutineScope(dispatcher + scopeJob)
-    private val closeLock = Mutex()
+    private val lifecycleLock = Any()
+    private var closeAttempt: CompletableDeferred<Throwable?>? = null
+    private var closeSucceeded = false
 
     @Volatile
     private var closed: Boolean = false
@@ -118,10 +122,16 @@ public class JvmNetworkProvisioningManager private constructor(
     override val events: Flow<NetworkProvisioningEvent> = _events.asSharedFlow()
 
     init {
-        scopeJob.invokeOnCompletion {
-            closed = true
-            _networkState.value = NetworkState.Unknown
-            _state.value = NetworkProvisioningState.Closed
+        scopeJob.invokeOnCompletion { finishClose() }
+        // A public-coroutines cancellation observer begins the transition
+        // while other owned children may still be inside non-cooperative I/O.
+        // Completion alone is too late to represent that interval.
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                awaitCancellation()
+            } finally {
+                beginClose()
+            }
         }
         scope.launch { pollNetworkLoop() }
     }
@@ -151,6 +161,7 @@ public class JvmNetworkProvisioningManager private constructor(
             ensureOpen()
             val port = ctx.lanTcpPort() ?: return@runManagerOperation null
             val ips = withContext(Dispatchers.IO) { addressScanner.scan() }
+            ensureOpen()
             if (ips.isEmpty()) return@runManagerOperation null
             ManualConnectionInfo(
                 hostAddresses = ips,
@@ -190,16 +201,76 @@ public class JvmNetworkProvisioningManager private constructor(
         )
     }
 
-    /** Terminally cancel and join the background polling loop. */
+    /**
+     * Terminally cancel owned operations and wait up to five seconds per close
+     * attempt. Concurrent callers share that attempt and its result. A timed-out
+     * native call is not interrupted or detached: its job remains owned, later
+     * publications are suppressed, and another [close] can retry the join.
+     * [NetworkProvisioningError.CleanupFailed] is reported after terminal state
+     * is published. [NetworkProvisioningState.Closing] is transient; StateFlow
+     * collectors are not guaranteed to observe every intermediate state.
+     */
     override suspend fun close(): Unit = withContext(NonCancellable) {
-        closeLock.withLock {
-            if (!closed) {
-                closed = true
-                _state.value = NetworkProvisioningState.Closing
+        val acquired = withLifecycleLock {
+            if (closeSucceeded) {
+                null
+            } else {
+                val current = closeAttempt
+                if (current != null && !current.isCompleted) {
+                    current to false
+                } else {
+                    CompletableDeferred<Throwable?>().also { closeAttempt = it } to true
+                }
             }
-            scopeJob.cancelAndJoin()
+        } ?: return@withContext
+        val (attempt, ownsAttempt) = acquired
+        if (ownsAttempt) {
+            val failure = try {
+                beginClose()
+                val joined = withTimeoutOrNull(PROVISIONING_CLOSE_TIMEOUT_MS) {
+                    scopeJob.cancelAndJoin()
+                    true
+                } ?: false
+                if (joined) null else NetworkProvisioningError.CleanupFailed(
+                    "provisioning work did not stop within ${PROVISIONING_CLOSE_TIMEOUT_MS}ms; " +
+                        "ownership retained for a later close retry"
+                )
+            } catch (failure: Throwable) {
+                failure
+            } finally {
+                finishClose()
+            }
+            withLifecycleLock {
+                if (failure == null) closeSucceeded = true
+            }
+            attempt.complete(failure)
+        }
+        attempt.await()?.let { throw it }
+    }
+
+    private fun beginClose() = withLifecycleLock {
+        if (!closed) {
+            closed = true
             _networkState.value = NetworkState.Unknown
-            _state.value = NetworkProvisioningState.Closed
+            _state.value = NetworkProvisioningState.Closing
+        }
+    }
+
+    private fun finishClose() = withLifecycleLock {
+        if (!closed) {
+            closed = true
+            _state.value = NetworkProvisioningState.Closing
+        }
+        _networkState.value = NetworkState.Unknown
+        _state.value = NetworkProvisioningState.Closed
+    }
+
+    private inline fun <T> withLifecycleLock(block: () -> T): T = synchronized(lifecycleLock, block)
+
+    private inline fun commitIfOpen(block: () -> Unit): Boolean = withLifecycleLock {
+        if (isClosingOrClosed()) false else {
+            block()
+            true
         }
     }
 
@@ -239,27 +310,37 @@ public class JvmNetworkProvisioningManager private constructor(
             try {
                 val ips = addressScanner.scan()
                 consecutiveFailures = 0
-                _networkState.value = if (ips.isEmpty()) {
+                val snapshot = if (ips.isEmpty()) {
                     NetworkState.NoNetwork
                 } else {
                     NetworkState.ConnectedToWifi(ssid = null, localIpAddresses = ips)
                 }
+                if (!commitIfOpen { _networkState.value = snapshot }) return
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _networkState.value = NetworkState.Unknown
-                // Saturate at the reporting threshold: one bounded diagnostic
-                // per failure streak, not an exception/stack trace every poll.
-                if (consecutiveFailures < POLL_FAILURE_THRESHOLD) {
-                    consecutiveFailures += 1
-                    if (consecutiveFailures == 1) {
-                        ctx.logger.debug("provisioning: network address poll failed; retrying")
+                var debug = false
+                var warn = false
+                if (!commitIfOpen {
+                        _networkState.value = NetworkState.Unknown
+                        // Saturate at the threshold and publish at most once
+                        // per failure streak, while terminal admission is held.
+                        if (consecutiveFailures < POLL_FAILURE_THRESHOLD) {
+                            consecutiveFailures += 1
+                            debug = consecutiveFailures == 1
+                            warn = consecutiveFailures == POLL_FAILURE_THRESHOLD
+                            if (warn) {
+                                _events.tryEmit(
+                                    NetworkProvisioningEvent.Failed(NetworkProvisioningError.PlatformError(e))
+                                )
+                            }
+                        }
                     }
-                    if (consecutiveFailures == POLL_FAILURE_THRESHOLD) {
-                        _events.tryEmit(NetworkProvisioningEvent.Failed(NetworkProvisioningError.PlatformError(e)))
-                        ctx.logger.warn("provisioning: network address polling failed repeatedly; retrying", e)
-                    }
-                }
+                ) return
+                // A host logger is outside the lifecycle lock. Its documented
+                // nonblocking contract still applies during cancellation.
+                if (debug) ctx.logger.debug("provisioning: network address poll failed; retrying")
+                if (warn) ctx.logger.warn("provisioning: network address polling failed repeatedly; retrying", e)
             }
             delay(pollIntervalMillis)
         }
@@ -344,3 +425,5 @@ internal fun selectUsableNetworkAddresses(
     .toList()
 
 private const val POLL_FAILURE_THRESHOLD = 3
+
+private const val PROVISIONING_CLOSE_TIMEOUT_MS = 5_000L
