@@ -1368,19 +1368,28 @@ class ExecutorFixtureTests(unittest.TestCase):
         path = self.state / "wrong-home.json"
         arguments = [str(EXECUTOR), "--cwd", str(self.root), "--wrapper", str(self.wrapper), "--purpose", "wrong-home",
                      "--receipt", str(path), "--", "success"]
-        # Mutate the input inside our already-owned controller. Do not forge a
-        # contradictory OS ownership domain just to construct an admission control.
-        bootstrap = ("import os,runpy,sys; sys.dont_write_bytecode=True; "
-                     "sys.path.insert(0,sys.argv[1]); os.environ['GRADLE_USER_HOME']=sys.argv[2]; "
-                     "sys.argv=sys.argv[3:]; runpy.run_path(sys.argv[0],run_name='__main__')")
-        capture = Capture(self.scope.spawn([PYTHON, "-c", bootstrap, str(SCRIPTS), str(self.base / "shared"), *arguments],
-                                           str(self.root), self.env))
+        # The negative leaf input must remain a consistently owned descendant.
+        # Append a child domain; never contradict or rewrite any ancestor's home.
+        wrong_home = self.base / "shared"
+        environment = processes.ownership_environment(self.env, self.context["id"], uuid.uuid4().hex,
+            str(self.state), str(wrong_home), allow_new_context=True)
+        domains = processes.ownership_domains(environment[processes.CHAIN_ENV], environment[processes.DOMAINS_ENV])
+        self.assertEqual(domains[:-1], processes.ownership_domains(
+            self.env[processes.CHAIN_ENV], self.env[processes.DOMAINS_ENV]))
+        self.assertEqual(domains[-1]["home"], str(wrong_home))
+        if isinstance(self.scope, processes.PosixScope):
+            self.assertTrue(self.scope._ours({os.fsencode(key): os.fsencode(value)
+                                             for key, value in environment.items()}))
+        capture = Capture(self.scope.spawn([PYTHON, *arguments], str(self.root), environment))
         code, _, _ = capture.finish(self.scope)
         receipt = json.loads(path.read_text())
         self.assertEqual(code, 125)
         self.assertIsNone(receipt["productExitCode"])
         self.assertIsNone(receipt["stopExitCode"])
+        self.assertTrue(any("Inherited GRADLE_USER_HOME differs from the job-owned home" in error
+                            for error in receipt["errors"]))
         self.assertEqual(self.calls(), [])
+        self.assertFalse(wrong_home.exists())
 
     def test_property_alias_admission_refusal_never_launches_product_or_stop(self):
         foreign = self.state / "must-not-create-foreign-home"
