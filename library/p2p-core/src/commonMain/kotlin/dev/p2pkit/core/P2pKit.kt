@@ -195,9 +195,13 @@ public interface P2pKit {
      *   startup failure could not be rolled back completely.
      *
      * (The `@Throws(Exception::class)` annotation exists so Kotlin/Native
-     * bridges thrown errors to a catchable Swift `NSError` instead of
-     * terminating the process. Same reasoning applies to every other public
-     * suspend method below.)
+     * bridges the listed Exception subclasses to a catchable Swift `NSError`
+     * instead of terminating the process. Recover the original typed value with
+     * `(error as NSError).kotlinException as? P2pError`; this is optional for
+     * arbitrary Swift errors and non-P2p Kotlin exceptions. Preserve the original
+     * error when unhandled, including cancellation. The annotation does not cover
+     * arbitrary non-Exception Throwable subclasses. Same reasoning applies to
+     * every other public suspend method below.)
      */
     @Throws(Exception::class)
     public suspend fun start()

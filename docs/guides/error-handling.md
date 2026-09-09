@@ -169,8 +169,86 @@ accept a different key, or retry authenticated-v2 failure as plaintext. See
 
 Java consumers can use ordinary error getters and `instanceof`; this is not a
 complete Java SDK promise (see [consumer-language limits](../compatibility.md#consumer-languages-and-java-interop)).
-Kotlin/Native bridges annotated failures to catchable `NSError`/Swift `Error`;
-a Swift catch is not automatically a typed Kotlin match. Exact generated-header
-bridging examples and Apple validation remain separately tracked in
-[#191](https://github.com/p2pKit/P2pKit/issues/191). Do not parse localized error
-strings or invent an unverified `NSError.userInfo` key to recover the type.
+
+## Swift: recover the original Kotlin error
+
+Kotlin/Native's existing `NSError.kotlinException` property provides the extra
+hop from a caught Swift `Error` to the exported Kotlin object. This is optional
+recovery, not a new `P2pError.code` property or an exhaustive Swift error enum:
+
+```swift
+import Foundation
+import P2pKitShared
+
+func p2pError(from error: Error) -> P2pError? {
+    (error as NSError).kotlinException as? P2pError
+}
+
+func fileRecoveryHint(from error: Error) -> String? {
+    guard let failure = p2pError(from: error) as? P2pError.FileTransferFailed else {
+        return nil
+    }
+    // Keep `failure`: kind, phase, transferId and cause remain available.
+    // These hints do not execute a retry or resume the failed handle.
+    switch failure.retryability {
+    case .retrySameSession:
+        return "After the blocking condition clears, start a new transfer on the still-connected session."
+    case .retryNewSession:
+        return "Re-establish an authorized usable session before starting a new transfer."
+    case .retryAfterUserAction:
+        return "Resolve the required local condition or user action before a new transfer."
+    case .notRetryable:
+        return "Do not retry automatically; investigate and explicitly correct the cause."
+    default:
+        return "Unknown disposition; do not retry automatically."
+    }
+}
+```
+
+Those four Swift members correspond to the four `Retryability` rows above;
+there is no generic `RETRYABLE` member, and only `FileTransferFailed` has that
+field. Similarly, cast to `P2pError.LocalIdentityUnavailable` and inspect its
+`kind` and `recovery`; for example `.retryAfterDeviceUnlock` waits for unlock,
+whereas `.explicitResetRequired` requires an explicit destructive-reset decision
+and trusted peer re-pinning. Do not choose a recovery action by parsing `reason`,
+`NSError.code`, domain, `localizedDescription`, or the text of a nested cause.
+
+In a throwing caller, preserve the original error when you do not handle it,
+including cancellation and an unexpected non-P2p Kotlin/Foundation failure:
+
+```swift
+func connect(_ kit: P2pKit, to peer: Peer) async throws -> P2pSession {
+    do {
+        return try await kit.connect(peer: peer)
+    } catch {
+        if Task.isCancelled || error is CancellationError { throw error }
+        if let typed = p2pError(from: error), typed is P2pError.AuthenticatedIdentityMismatch {
+            // Stop this attempt. Do not automatically replace a pin or downgrade.
+            // An app may present a fixed safe hint before propagating the same error.
+        }
+        throw error
+    }
+}
+```
+
+`FileTransferState.Failed.error` is already a `P2pError` value: cast that value
+directly to its subtype; do not wrap it in NSError or force `FileTransferFailed`.
+Swift subtype switches need an unknown-case fallback even for Kotlin sealed
+hierarchies. The [sample helper](../../samples/iosApp/SampleP2pError.swift) retains
+the typed object, reads file/identity metadata, and demonstrates create/connect/
+manual-connect and failed-transfer presentation. Its arbitrary-error UI fallback
+keeps the existing localized description. The connect catch also sends that
+fallback to the test-diagnostic `errorDescription` field, whose existing
+`redactText` processing is best-effort, not a closed-field privacy guarantee.
+Review stored/exported test evidence before sharing. The console remains
+code-only and must not print userInfo, reasons, causes or private identifiers.
+
+Keep the published `@Throws(Exception::class)` annotations unchanged. They cover
+the listed exception classes/subclasses, not arbitrary non-Exception Kotlin
+`Throwable` subclasses; a Swift `try` alone is not proof of a runtime failure
+being forwarded. The native sample regressions call a genuinely failing
+synchronous `create` and a suspend provisioning method and check the recovered
+objects. Their source does not establish a passed execution: use the current
+candidate's source-built XCFramework/header and Apple test gate. Simulator
+results cannot establish physical-device, hostile-network, independent
+interoperability or cryptographic acceptance.

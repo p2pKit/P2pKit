@@ -917,8 +917,10 @@ struct ContentView: View {
                 }
             }
         } catch {
-            status = "Create failed: \(error.localizedDescription)"
-            errorBanner = "Could not load the secure local identity: \(error.localizedDescription)"
+            if Task.isCancelled || error is CancellationError { return }
+            let detail = SampleP2pError.userMessage(error)
+            status = "Create failed: \(detail)"
+            errorBanner = "Could not create P2pKit: \(detail)"
             diag("kit", "create FAILED: \(SampleConsole.failure(error))")
             return
         }
@@ -1743,7 +1745,8 @@ struct ContentView: View {
         case let s as FileTransferState.Cancelled:
             return ("Cancelled" + (s.reason.map { ": \($0)" } ?? ""), true)
         case let s as FileTransferState.Failed:
-            return ("Failed: \(s.error.message ?? "\(s.error)")", true)
+            // This value is already typed; only a caught Swift Error needs NSError recovery.
+            return ("Failed: \(SampleP2pError.userMessage(s.error))", true)
         default:
             // Unknown future SDK states must not leave a transfer watcher
             // suspended forever with an open destination.
@@ -1824,19 +1827,31 @@ struct ContentView: View {
             )
             attachCollectors(to: session, label: "outgoing")
         } catch {
+            if Task.isCancelled || error is CancellationError { return }
+            let typed = SampleP2pError.recover(error)
+            let detail: String
+            if let typed {
+                // Keep the original SDK object; subtype fields, not localized text,
+                // determine the hint. The sample never retries or changes a pin here.
+                detail = SampleP2pError.userMessage(typed)
+            } else {
+                detail = error.localizedDescription
+            }
             diagnostics.record(TestDiagnosticRecord(
                 peerId: row.id,
                 category: "connection",
-                eventName: TestDiagnosticEventName.connectionAuthenticationFailed,
+                eventName: SampleP2pError.isSecurityRejection(typed)
+                    ? TestDiagnosticEventName.connectionAuthenticationFailed
+                    : TestDiagnosticEventName.connectionStateChanged,
                 severity: .error,
                 currentState: "failed",
                 errorCode: "CONNECT_FAILED",
-                errorDescription: error.localizedDescription,
+                errorDescription: detail,
                 outcome: .failure
             ))
             diag("ui", "kit.connect THREW: \(SampleConsole.failure(error))")
-            appendMessage("connect failed (\(row.name)): \(error.localizedDescription)", kind: .error)
-            errorBanner = "Connect to \(row.name) failed: \(error.localizedDescription)"
+            appendMessage("connect failed (\(row.name)): \(detail)", kind: .error)
+            errorBanner = "Connect to \(row.name) failed: \(detail)"
         }
     }
 
@@ -1909,9 +1924,11 @@ struct ContentView: View {
             )
             attachCollectors(to: session, label: "manual")
         } catch {
+            if Task.isCancelled || error is CancellationError { return }
+            let detail = SampleP2pError.userMessage(error)
             diag("ui", "manual dial THREW: \(SampleConsole.failure(error))")
-            appendMessage("manual: failed - \(error.localizedDescription)", kind: .error)
-            errorBanner = "Manual connect failed: \(error.localizedDescription)"
+            appendMessage("manual: failed - \(detail)", kind: .error)
+            errorBanner = "Manual connect failed: \(detail)"
         }
     }
 

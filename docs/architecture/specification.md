@@ -105,6 +105,44 @@ operation failures, file-transfer dispositions, local-identity recovery, and
 provisioning results. Cancellation, terminal disposal, and security rejection
 are not blanket-retry signals.
 
+### Swift error handling
+
+With `Foundation` and `P2pKitShared` imported, a caught Swift `Error` can recover
+the original Kotlin subtype through the existing nullable bridge property:
+
+```swift
+let typed = (error as NSError).kotlinException as? P2pError // inside catch
+if let file = typed as? P2pError.FileTransferFailed {
+    // Inspect file.kind, file.phase, file.retryability and file.transferId.
+    // Keep this object if its diagnostic cause is needed; do not copy it.
+    _ = (file.kind, file.phase, file.retryability, file.transferId)
+}
+if let identity = typed as? P2pError.LocalIdentityUnavailable {
+    // Inspect identity.kind and identity.recovery; never reset automatically.
+    _ = (identity.kind, identity.recovery)
+}
+```
+
+Only `FileTransferFailed` has `retryability`: `.retrySameSession` permits a new
+transfer after the condition clears on a still-connected session;
+`.retryNewSession` needs a newly usable authorized session first;
+`.retryAfterUserAction` waits for that action; `.notRetryable` does not authorize
+an automatic retry. Failed handles never resume. Local identity recovery uses
+its separate enum; explicit reset changes identity and requires trusted re-pinning.
+Use the [complete Swift recipe and recovery tables](../guides/error-handling.md#swift-recover-the-original-kotlin-error)
+and [reference sample helper](../../samples/iosApp/SampleP2pError.swift).
+
+`connect` documents nine operational variants: `NoTransportAvailable`,
+`TransportStartFailed`, `ConnectionFailed`, `SecurityConfigurationInvalid`,
+`HandshakeRejected`, `AuthenticationFailed`, `AuthorizationRejected`,
+`AuthenticatedIdentityMismatch`, and `VersionMismatch`; using a stopped kit
+can instead throw lifecycle-misuse `IllegalStateException`. Not every caught
+error is P2pError. Preserve the original error when unhandled, including
+cancellation; never infer type/retry policy from localized text or a nested cause.
+`FileTransferState.Failed.error` is already typed and needs no NSError round trip.
+The published throws annotations/API are unchanged; actual generated-header and
+native throwing-call tests are required evidence, not a source-only `try` check.
+
 ## File transfer
 
 - Incoming offers remain in `pendingFileOffers` until accepted, rejected,
