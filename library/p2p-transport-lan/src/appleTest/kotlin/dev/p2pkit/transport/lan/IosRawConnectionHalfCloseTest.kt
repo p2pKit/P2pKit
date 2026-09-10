@@ -61,7 +61,6 @@ class IosRawConnectionHalfCloseTest {
                             IllegalStateException("Native half-close peer failed to connect")
                         )
                     }
-                    Unit
                 }
                 nw_connection_start(peer)
                 val inbound = withTimeout(TIMEOUT_MS) {
@@ -76,7 +75,6 @@ class IosRawConnectionHalfCloseTest {
                         val peerTerminated = CompletableDeferred<Boolean>()
                         p2pkit_nw_connection_receive_default(peer, 1u, 1u) { _, _, complete, error ->
                             peerTerminated.complete(complete || error != null)
-                            Unit
                         }
                         val finSent = CompletableDeferred<Unit>()
                         p2pkit_test_nw_connection_send_fin(peer) { error ->
@@ -85,7 +83,6 @@ class IosRawConnectionHalfCloseTest {
                             } else {
                                 finSent.completeExceptionally(IllegalStateException("Native FIN send failed"))
                             }
-                            Unit
                         }
                         withTimeout(TIMEOUT_MS) {
                             finSent.await()
