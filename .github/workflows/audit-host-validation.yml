@@ -1,6 +1,6 @@
 name: Audit host validation
 
-# Run revision: 16. Change this comment in a reviewed audit-branch push to
+# Run revision: 17. Change this comment in a reviewed audit-branch push to
 # request a new frozen-source run. Helpers/docs-only pushes do not trigger it.
 on:
   push:
@@ -22,17 +22,16 @@ env:
 
 jobs:
   selected_host:
-    name: Audit native Intel ABI and Swift follow-through
-    runs-on: macos-15-intel
-    timeout-minutes: 360
+    name: Audit native Windows full component follow-through
+    runs-on: windows-2025
+    timeout-minutes: 180
     defaults:
       run:
-        shell: python3 {0}
+        shell: python {0}
     env:
-      P2PKIT_AUDIT_ROLE: macos-x64
+      P2PKIT_AUDIT_ROLE: windows-x64
       P2PKIT_AUDIT_SCOPE: full
-      P2PKIT_AUDIT_DRIVER_TIMEOUT_SECONDS: "19200"
-      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      P2PKIT_AUDIT_DRIVER_TIMEOUT_SECONDS: "8400"
     outputs: &host_outputs
       safe_to_continue: ${{ steps.handoff.outcome == 'success' && steps.handoff.outputs.safe_to_continue == 'true' }}
       artifact_uploaded: ${{ steps.evidence.outcome == 'success' && steps.evidence.outputs['artifact-id'] != '' }}
@@ -116,9 +115,9 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Execute source-bound Intel ABI and Swift follow-through and finalize ownership
+      - name: Execute source-bound Windows full components and finalize ownership
         id: audit
-        timeout-minutes: 330
+        timeout-minutes: 150
         run: &run_host |
           import os
           from pathlib import Path

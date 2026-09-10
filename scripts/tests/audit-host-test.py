@@ -801,7 +801,11 @@ class HostInvocationTest(unittest.TestCase):
                 self.assertEqual("gradle", command[command.index("--kind") + 1])
                 self.assertEqual(tools["environment"]["PATH"], call["options"]["env"]["PATH"])
             self.assertTrue(WINDOWS_TASKS <= set(libraries["command"]))
-            self.assertEqual(HOST.DESKTOP_TASKS, desktop["command"][desktop["command"].index("--") + 1:])
+            self.assertEqual(
+                [*HOST.DESKTOP_TASKS, ":p2p-core:downloadKotlinNativeDistribution",
+                 ":p2p-sample-android:assembleDebug", "--continue"],
+                desktop["command"][desktop["command"].index("--") + 1:],
+            )
             for call in self.calls:
                 command = call["command"]
                 self.assertEqual([sys.executable, str(self.host.runner)], command[:2])
@@ -852,7 +856,11 @@ class HostInvocationTest(unittest.TestCase):
                 self.assertEqual(str(self.repo / "gradlew.bat"),
                                  call["command"][call["command"].index("--wrapper") + 1])
             self.assertTrue(WINDOWS_TASKS <= set(libraries["command"]))
-            self.assertEqual(HOST.DESKTOP_TASKS, desktop["command"][desktop["command"].index("--") + 1:])
+            self.assertEqual(
+                [*HOST.DESKTOP_TASKS, ":p2p-core:downloadKotlinNativeDistribution",
+                 ":p2p-sample-android:assembleDebug", "--continue"],
+                desktop["command"][desktop["command"].index("--") + 1:],
+            )
             self.assertEqual(tools["environment"], self.host.environment)
             self.assertEqual(tools["environment"]["PATH"], os.environ["PATH"])
             self.assertFalse(any(row["command"][0] == "bash" for row in tools["calls"]))

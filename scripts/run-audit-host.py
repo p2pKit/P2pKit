@@ -612,7 +612,12 @@ class Host:
                 gate.read_json(ROOT / "build/reports/platform-tests" / token / "execution.json"),
                 gate.read_json(ROOT / "gradle/platform-test-policy.json"), token))
         self.clean_outputs()
-        self.invoke("windows-desktop-samples", DESKTOP_TASKS)
+        self.invoke("windows-desktop-samples", [
+            *DESKTOP_TASKS,
+            ":p2p-core:downloadKotlinNativeDistribution",
+            ":p2p-sample-android:assembleDebug",
+            "--continue",
+        ])
         self.clean_outputs()
 
     def windows_followup(self):

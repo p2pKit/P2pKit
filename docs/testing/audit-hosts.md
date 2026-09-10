@@ -54,16 +54,60 @@ workflows or local builds, and GitHub can replace an older pending run even with
 `cancel-in-progress: false`. Do not queue another triggering push while a run is
 active or pending; preserve earlier failure/cancellation records.
 
-## Selected native Intel ABI and Swift follow-through
+## Selected native Windows full components
 
-The current literal job is `Audit native Intel ABI and Swift follow-through` on
-`macos-15-intel`, using native Python 3, Java 21 then 17, the checked-in `gradlew`
-and fixed `/Applications/Xcode_26.3.app/Contents/Developer`. Its existing
-`macos-x64`/`full` role/scope requires real Intel/non-Rosetta and Xcode 26.3
-admission. No Windows or Apple Silicon job precedes or follows it automatically.
-At selection time this new composition is **NOT_RUN**, not PASS. Record actual
-execution and independent review separately; workflow text is an obligation,
-not a result.
+The current literal job is `Audit native Windows full component follow-through`
+on `windows-2025`, using native `python`, Java 21 then 17 and the checked-in
+`gradlew.bat`. Its `windows-x64`/`full` route selects the existing library and
+sample graphs, with Native-distribution and Android-assembly tasks added only
+to the Windows sample batch. No Apple host precedes or follows it automatically. At selection time this new request is **NOT_RUN**, not PASS.
+Record actual execution and independent evidence review separately; workflow
+text is not a passing result.
+
+The unchanged prerequisites require native Windows x64, real Job Object ownership
+controls, Java/tool versions, Git for Windows Bash and both Android SDK platforms.
+Then the existing full route runs, serially:
+
+1. `wrapper-checkouts`: the maintained wrapper-checkout fixture through the exact
+   admitted Git for Windows `bash.exe`, not ambient Bash/WSL.
+2. `windows-libraries`: whole `:p2p-core:jvmTest`, `:p2p-transport-lan:jvmTest` and
+   `:p2p-network-provisioning-desktop:test` with `--continue` and a fresh
+   source/model/nonce-bound platform event report, then owned output cleanup.
+3. `windows-desktop-samples`: `:p2p-sample-desktop:check` and `installDist`, plus
+   `:p2p-sample-desktop-ui:test`, `checkRuntime`, `hotRunArgfile` and
+   `createDistributable`, together with `:p2p-core:downloadKotlinNativeDistribution`
+   and `:p2p-sample-android:assembleDebug`, then owned output cleanup. The shared
+   graph uses `--continue` without suppressing any failure.
+
+The explicit Native task exercises strict Windows compiler-archive admission;
+it is not Windows iOS or native application execution. Android assembly exercises
+the Windows AAPT2 classifier, not ART or device behavior. Inspect those actual
+task/download outcomes separately: SDK installation alone proves neither one.
+
+The CLI and Desktop UI consume project dependencies. This route does **not**
+invoke isolated published-artifact consumers, KMP consumer checks, a Maven
+publication, Android instrumentation or the full repository `check`/release gate.
+Do not infer those results from sample compilation or packaging. All native
+Gradle commands keep the original Windows PATH; only the admitted Bash probe and
+wrapper fixture receive that Git installation's utility PATH prefix.
+
+Earlier focused Windows results retain their own source bindings. This request
+fills the absent full component scope rather than separately repeating the
+filtered follow-up/diagnostic graphs. Their JVM classes remain within the whole
+library suites; the focused Android-host task is not selected by this full route.
+`FULL_COMPONENT_SCOPE` describes requested components,
+not a successful host/release verdict. Inspect actual tests, package cleanup and
+sealed stop/ownership/evidence outcomes. Desktop packaging is not headful UI or
+physical/hostile-network/independent-interoperability acceptance.
+
+## Unselected native Intel ABI and Swift follow-through
+
+The retained `macos-x64`/`full` route uses `macos-15-intel`, native Python 3,
+Java 21 then 17, the checked-in `gradlew` and fixed
+`/Applications/Xcode_26.3.app/Contents/Developer`. It requires real
+Intel/non-Rosetta and Xcode 26.3 admission. It is unselected by this workflow
+revision; record its actual execution and independent review separately.
+Workflow text is an obligation, not a result.
 
 After the unchanged native ownership controls and SDK admission, an Intel-only
 read-only preflight retains actual `simctl list --json runtimes` and
@@ -168,7 +212,7 @@ interoperability. Unaffected accepted evidence retains its original bindings.
 The retained `macos-arm64`/`apple-followup` route uses `macos-26`, native Python 3,
 Java 21 then 17, checked-in `gradlew` and fixed
 `/Applications/Xcode_26.5.app/Contents/Developer`. It is not selected by this
-workflow revision and is not repeated merely to reassure an Intel execution.
+workflow revision and is not repeated merely to reassure a different-host execution.
 Its mandatory native ownership controls and SDK admission remain unchanged.
 A later selection must pass actual ARM64/non-Rosetta and Xcode-version admission;
 an advertised image label or workflow text is not execution evidence.
@@ -327,20 +371,20 @@ cleanup must also succeed.
 ### Full profiles supported by the driver
 
 These profiles describe each role's component graph, not equivalent whole-host
-qualification. This revision selects the expanded Intel `full` route above;
-Windows and full Apple Silicon remain unselected. Any later native selection
+qualification. This revision selects the expanded Windows `full` route above;
+Intel and full Apple Silicon remain unselected. Any later native selection
 requires a separately reviewed literal change and terminal-attempt reconciliation.
 
 | Role and fixed label | Selected tools | Components, not broader acceptance |
 | --- | --- | --- |
-| Native Windows x64, `windows-2025` | Native Python, Java 21 then 17, checked-in `gradlew.bat` | Fresh core/LAN/provisioning library JVM suites; CLI/Desktop sample checks and distribution builds |
+| Native Windows x64, `windows-2025` | Native Python, Java 21 then 17, checked-in `gradlew.bat` | Fresh core/LAN/provisioning library JVM suites; CLI/Desktop checks and distributions; strict Windows Native archive admission and Android sample assembly |
 | Native Apple Silicon, `macos-26` | Xcode 26.5, native Python 3, Java 21 then 17 | Full platform `check`, policy/script gates, Android/Desktop samples, ABI/Dokka/SBOM, local publications/isolated consumers, XCFramework and Swift build/unit/UI simulator tests |
 | Native Intel, `macos-15-intel` | Xcode 26.3, native Python 3, Java 21 then 17 | Both core and LAN `iosX64Test` suites; one publication/isolated-consumer/archive gate; seven ABI checks batched with CLI preparation; existing XCFramework and Swift build/unit/UI/live-peer sequence, then isolated cancellation observation |
 
 `macos-15` without `-intel` is not the Intel role. Rosetta, cross-compilation and an
 ARM simulator pass do not establish native Intel execution. The original Intel
 profile's two Kotlin suites alone were not the complete Swift bridge/sample
-`ENV-04` procedure; the selected extension still needs actual independent review
+`ENV-04` procedure; the retained extension still needs actual independent review
 of all required native evidence. Windows product commands do not run through WSL
 or a POSIX wrapper.
 A sample packaging pass is not rendered headful Desktop observation.
@@ -522,12 +566,12 @@ The workflow redirects stdout/stderr to separate fresh bootstrap logs and invoke
 the exact checked-out driver with `runpy` in the **same native Python process**.
 There is no extra unsupervised wrapper child, launcher replacement or product
 monkeypatch. The driver's own deadline, cancellation and ownership finalizers run.
-The selected expanded Intel driver explicitly retains a 19,200-second budget,
-with step/job ceilings of 330/360 minutes. The constructor defaults remain 8,400
-seconds on Windows/Intel and 19,200 on Apple Silicon; the selected Intel override
-covers its consumer/archive/ABI/CLI/framework/Swift components and is not the old two-suite
-budget. A later selection must review its native tools and explicit budget;
-the earlier full Windows request used 8,400 seconds and 150/180-minute ceilings.
+The selected Windows driver uses its existing 8,400-second budget, with step/job
+ceilings of 150/180 minutes. Constructor defaults remain 8,400 seconds on
+Windows/Intel and 19,200 on Apple Silicon. The unselected expanded Intel route's
+prior literal request used an explicit 19,200 seconds and 330/360-minute ceilings
+for its consumer/archive/ABI/CLI/framework/Swift components, not the old two-suite budget.
+A later selection must review its native tools and explicit budget.
 The driver retains its 360-second finalization reserve. These are resource
 ceilings, not elapsed-time estimates, relaxed assertions or automatic retries.
 
@@ -665,8 +709,8 @@ Independent secure-v2 interoperability (#133), professional cryptographic review
 and owner architecture/product decisions (#120) require their own participants,
 inputs and evidence. This facility does not supply them or change their dispositions.
 Actual OSV results and successful dependency submission also remain separate from
-policy fixtures/lockfile coverage. Native Windows, Apple Silicon and Linux
-corroboration are not supplied by this selected Intel run.
+policy fixtures/lockfile coverage. Native Apple Silicon, Intel and Linux
+corroboration are not supplied by this selected Windows run.
 
 Follow the [release checklist](../releasing/checklist.md) for any future release.
 The audit's 0.8.0+ compatibility decisions remain in force despite snapshot naming.
