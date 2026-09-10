@@ -968,7 +968,9 @@ class ConsumerGateTest(unittest.TestCase):
         self.assertEqual(verification["verificationRecordCount"], 102)
         build_recipe = (self.work / "consumer/build.gradle.kts").read_text()
         self.assertIn('kotlin("jvm") version "91.0.0"', build_recipe)
-        self.assertIn('id("com.android.library") version "92.0.0"', build_recipe)
+        self.assertIn('id("com.android.application") version "92.0.0"', build_recipe)
+        self.assertIn('id("com.android.kotlin.multiplatform.library") version "92.0.0"', build_recipe)
+        self.assertNotIn('id("com.android.library")', build_recipe)
 
     def test_module_file_aliases_cannot_expand_or_rebind_physical_trust(self):
         cases = (

@@ -19,7 +19,6 @@ module VersionInputPolicy
             'kotlin("jvm") version "$KOTLIN_VERSION" apply false',
             'kotlin("multiplatform") version "$KOTLIN_VERSION" apply false',
             'id("com.android.application") version "$AGP_VERSION" apply false',
-            'id("com.android.library") version "$AGP_VERSION" apply false',
             'id("com.android.kotlin.multiplatform.library") version "$AGP_VERSION" apply false',
             '}',
         ]

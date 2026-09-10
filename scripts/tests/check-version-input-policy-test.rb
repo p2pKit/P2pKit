@@ -31,7 +31,7 @@ count = 0
         count += 1
     end
 end
-%w[com.android.application com.android.library com.android.kotlin.multiplatform.library].each do |plugin|
+%w[com.android.application com.android.kotlin.multiplatform.library].each do |plugin|
     candidate = replace_once(CONSUMER, "id(\"#{plugin}\") version \"$AGP_VERSION\"",
                              "id(\"#{plugin}\") version \"9.9.9\"")
     reject("#{plugin} literal", "must use their catalog input variables") do
@@ -39,6 +39,12 @@ end
     end
     count += 1
 end
+application = 'id("com.android.application") version "$AGP_VERSION" apply false'
+unused_library = 'id("com.android.library") version "$AGP_VERSION" apply false'
+reject("unused library plugin", "must use their catalog input variables") do
+    VersionInputPolicy.check_consumer(replace_once(CONSUMER, application, "#{application}\n    #{unused_library}"))
+end
+count += 1
 declaration = 'kotlin("jvm") version "$KOTLIN_VERSION" apply false'
 ["", "# #{declaration}", declaration.sub("KOTLIN_VERSION", "AGP_VERSION"),
  "#{declaration}\n    #{declaration}"].each do |replacement|
