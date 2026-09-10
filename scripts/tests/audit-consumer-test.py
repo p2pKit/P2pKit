@@ -35,7 +35,9 @@ OWNERSHIP_FIELDS = (
 )
 NAMESPACE = "https://schema.gradle.org/dependency-verification"
 GROUP = "io.github.apdelrahman1911"
-VERSION = "9.11.0-SNAPSHOT"
+# Non-SNAPSHOT source versions are supported too; Gradle's changing-module skip
+# must not hide the logical-name contract. These remain fake-boundary tests.
+VERSION = "9.11.0"
 EXTERNAL_BYTES = b"independently reviewed external fixture bytes\n"
 EXTERNAL_SHA256 = hashlib.sha256(EXTERNAL_BYTES).hexdigest()
 CONSUMER_REPORT_BYTES = b'{"fixtureOnly":true,"result":"synthetic-consumer-report-not-compilation"}\n'
@@ -57,6 +59,37 @@ EXPECTED_NATIVE_PUBLICATIONS = (
 EXPECTED_INTEROP_PUBLICATIONS = (
     "p2p-transport-lan-iosarm64", "p2p-transport-lan-iossimulatorarm64", "p2p-transport-lan-iosx64",
 )
+# Independent logical name -> physical basename expectations from actual GMM.
+EXPECTED_LOGICAL_ALIASES = [
+    ("p2p-core", f"p2p-core-metadata-{VERSION}.jar", f"p2p-core-{VERSION}.jar"),
+    ("p2p-core", f"p2p-core-kotlin-{VERSION}-sources.jar", f"p2p-core-{VERSION}-sources.jar"),
+    ("p2p-transport-lan", f"p2p-transport-lan-metadata-{VERSION}.jar", f"p2p-transport-lan-{VERSION}.jar"),
+    ("p2p-transport-lan", f"p2p-transport-lan-kotlin-{VERSION}-sources.jar", f"p2p-transport-lan-{VERSION}-sources.jar"),
+    ("p2p-network-provisioning-android", f"p2p-network-provisioning-android-metadata-{VERSION}.jar",
+     f"p2p-network-provisioning-android-{VERSION}.jar"),
+    ("p2p-network-provisioning-android", f"p2p-network-provisioning-android-kotlin-{VERSION}-sources.jar",
+     f"p2p-network-provisioning-android-{VERSION}-sources.jar"),
+    ("p2p-core-android", "p2p-core.aar", f"p2p-core-android-{VERSION}.aar"),
+    ("p2p-transport-lan-android", "p2p-transport-lan.aar", f"p2p-transport-lan-android-{VERSION}.aar"),
+    ("p2p-network-provisioning-android-android", "p2p-network-provisioning-android.aar",
+     f"p2p-network-provisioning-android-android-{VERSION}.aar"),
+    ("p2p-core-iosarm64", f"p2p-core-iosArm64Main-{VERSION}.klib", f"p2p-core-iosarm64-{VERSION}.klib"),
+    ("p2p-core-iossimulatorarm64", f"p2p-core-iosSimulatorArm64Main-{VERSION}.klib",
+     f"p2p-core-iossimulatorarm64-{VERSION}.klib"),
+    ("p2p-core-iosx64", f"p2p-core-iosX64Main-{VERSION}.klib", f"p2p-core-iosx64-{VERSION}.klib"),
+    ("p2p-transport-lan-iosarm64", f"p2p-transport-lan-iosArm64Main-{VERSION}.klib",
+     f"p2p-transport-lan-iosarm64-{VERSION}.klib"),
+    ("p2p-transport-lan-iossimulatorarm64", f"p2p-transport-lan-iosSimulatorArm64Main-{VERSION}.klib",
+     f"p2p-transport-lan-iossimulatorarm64-{VERSION}.klib"),
+    ("p2p-transport-lan-iosx64", f"p2p-transport-lan-iosX64Main-{VERSION}.klib",
+     f"p2p-transport-lan-iosx64-{VERSION}.klib"),
+    ("p2p-transport-lan-iosarm64", f"p2p-transport-lan-iosArm64Cinterop-p2pkit_nwMain-{VERSION}.klib",
+     f"p2p-transport-lan-iosarm64-{VERSION}-cinterop-p2pkit_nw.klib"),
+    ("p2p-transport-lan-iossimulatorarm64", f"p2p-transport-lan-iosSimulatorArm64Cinterop-p2pkit_nwMain-{VERSION}.klib",
+     f"p2p-transport-lan-iossimulatorarm64-{VERSION}-cinterop-p2pkit_nw.klib"),
+    ("p2p-transport-lan-iosx64", f"p2p-transport-lan-iosX64Cinterop-p2pkit_nwMain-{VERSION}.klib",
+     f"p2p-transport-lan-iosx64-{VERSION}-cinterop-p2pkit_nw.klib"),
+]
 EXPECTED_TASKS = [
     ":coreJvm:compileKotlin", ":coreJvm:compileJava", ":lanJvm:compileKotlin", ":desktopJvm:compileKotlin",
     ":androidConsumer:compileDebugKotlin", ":androidConsumer:processDebugManifest", ":kmpConsumer:compileKotlinJvm",
@@ -94,6 +127,7 @@ PUBLICATIONS = __PUBLICATIONS__
 TOOLING_PUBLICATIONS = __TOOLING_PUBLICATIONS__
 NATIVE_PUBLICATIONS = __NATIVE_PUBLICATIONS__
 INTEROP_PUBLICATIONS = __INTEROP_PUBLICATIONS__
+LOGICAL_ALIASES = __LOGICAL_ALIASES__
 DEPS = __DEPS__
 PERMISSIONS = __PERMISSIONS__
 GROUP = __GROUP__
@@ -151,9 +185,6 @@ def publish(repo):
             component = "p2p-transport-lan"
         elif artifact == "p2p-network-provisioning-android-android":
             component = "p2p-network-provisioning-android"
-        (folder / f"{artifact}-{VERSION}.module").write_text(json.dumps({
-            "formatVersion": "1.1", "component": {"group": GROUP, "module": component, "version": VERSION},
-        }))
         if artifact in TOOLING_PUBLICATIONS and not (
                 artifact == "p2p-core" and os.environ.get("FAKE_TOOLING_CHANGE") == "add"):
             (folder / f"{artifact}-{VERSION}-kotlin-tooling-metadata.json").write_text(json.dumps({
@@ -161,6 +192,55 @@ def publish(repo):
                 "buildPlugin": "org.jetbrains.kotlin.gradle.plugin.KotlinMultiplatformPluginWrapper",
                 "buildPluginVersion": "91.0.0",
             }))
+        aliases = {url: name for owner, name, url in LOGICAL_ALIASES if owner == artifact}
+        def file_record(ending):
+            url = f"{artifact}-{VERSION}{ending}"
+            content = (folder / url).read_bytes()
+            return {"name": aliases.get(url, url), "url": url, "size": len(content),
+                    "sha256": hashlib.sha256(content).hexdigest()}
+        api_files = [file_record(suffix)]
+        if artifact in INTEROP_PUBLICATIONS:
+            api_files.append(file_record("-cinterop-p2pkit_nw.klib"))
+        variants = [{"name": "apiElements", "files": api_files},
+                    {"name": "sourcesElements", "files": [file_record("-sources.jar")]}]
+        if artifact in NATIVE_PUBLICATIONS:
+            variants.append({"name": "metadataElements", "files": [file_record("-metadata.jar")]})
+        if suffix == ".aar" or artifact.endswith("-jvm") or artifact == "p2p-network-provisioning-desktop":
+            variants.append({"name": "runtimeElements", "files": [dict(entry) for entry in api_files]})
+        if artifact in TOOLING_PUBLICATIONS:
+            target = artifact + "-android"
+            variants.append({"name": "androidApiElements-published", "available-at": {
+                "url": f"../../{target}/{VERSION}/{target}-{VERSION}.module",
+                "group": GROUP, "module": target, "version": VERSION,
+            }})
+        if artifact == "p2p-core" and os.environ.get("FAKE_MODULE_FILE_CHANGE"):
+            change = os.environ["FAKE_MODULE_FILE_CHANGE"]
+            entry = api_files[0]
+            source_binding = {key: variants[1]["files"][0][key] for key in ("url", "sha256", "size")}
+            if change == "missing-alias":
+                api_files.clear()
+            elif change == "unapproved-name":
+                entry["name"] = "unapproved-logical.jar"
+            elif change == "wrong-target":
+                entry.update(source_binding)
+            elif change == "traversal":
+                entry["url"] = "../" + entry["url"]
+            elif change == "remote":
+                entry["url"] = "https://repository.example.invalid/" + entry["url"]
+            elif change == "tooling-sidecar":
+                api_files.append(file_record("-kotlin-tooling-metadata.json"))
+            elif change == "wrong-sha256":
+                entry["sha256"] = "0" * 64
+            elif change == "wrong-size":
+                entry["size"] += 1
+            elif change == "conflicting-alias":
+                variants.append({"name": "conflictingRuntime", "files": [{**entry, **source_binding}]})
+            else:
+                raise AssertionError("unknown module file control: " + change)
+        (folder / f"{artifact}-{VERSION}.module").write_text(json.dumps({
+            "formatVersion": "1.1", "component": {"group": GROUP, "module": component, "version": VERSION},
+            "variants": variants,
+        }))
         (folder.parent / "maven-metadata-local.xml").write_text("<metadata/>\n")
         (folder / "maven-metadata-local.xml").write_text("<metadata/>\n")
     if os.environ.get("FAKE_EXTRA_TOOLING"):
@@ -385,6 +465,7 @@ class ConsumerGateTest(unittest.TestCase):
             "PUBLICATIONS": EXPECTED_PUBLICATIONS, "DEPS": POM_DEPENDENCIES, "PERMISSIONS": PERMISSIONS,
             "TOOLING_PUBLICATIONS": EXPECTED_TOOLING_PUBLICATIONS,
             "NATIVE_PUBLICATIONS": EXPECTED_NATIVE_PUBLICATIONS, "INTEROP_PUBLICATIONS": EXPECTED_INTEROP_PUBLICATIONS,
+            "LOGICAL_ALIASES": EXPECTED_LOGICAL_ALIASES,
             "GROUP": GROUP, "VERSION": VERSION, "EXTERNAL_SHA256": EXTERNAL_SHA256,
             "OWNERSHIP_FIELDS": OWNERSHIP_FIELDS, "CONSUMER_REPORT_BYTES": CONSUMER_REPORT_BYTES,
         }.items():
@@ -828,6 +909,8 @@ class ConsumerGateTest(unittest.TestCase):
         local = [node for node in components if node.get("group") == GROUP]
         self.assertEqual({node.get("name") for node in local}, {name for name, _ in EXPECTED_PUBLICATIONS})
         actual = {}
+        expected_alias_records = {}
+        record_count = 0
         for component in local:
             self.assertEqual(component.get("version"), VERSION)
             module = component.get("name")
@@ -836,20 +919,38 @@ class ConsumerGateTest(unittest.TestCase):
                 endings.append("-metadata.jar")
             if module in EXPECTED_INTEROP_PUBLICATIONS:
                 endings.append("-cinterop-p2pkit_nw.klib")
-            self.assertEqual({artifact.get("name") for artifact in component},
-                             {f"{module}-{VERSION}{ending}" for ending in endings})
-            self.assertEqual(len(component), len(endings))
+            aliases = {name: url for owner, name, url in EXPECTED_LOGICAL_ALIASES if owner == module}
+            expected_names = {f"{module}-{VERSION}{ending}": f"{module}-{VERSION}{ending}" for ending in endings}
+            expected_names.update(aliases)
+            self.assertEqual({artifact.get("name") for artifact in component}, set(expected_names))
+            self.assertEqual(len(component), len(expected_names))
+            record_count += len(component)
             for artifact in component:
-                relative = Path(GROUP.replace(".", "/")) / component.get("name") / VERSION / artifact.get("name")
+                name = artifact.get("name")
+                relative = Path(GROUP.replace(".", "/")) / module / VERSION / expected_names[name]
+                content = (self.work / "repository" / relative).read_bytes()
                 actual[relative.as_posix()] = artifact[0].get("value")
+                self.assertEqual(len(artifact), 1)
                 self.assertEqual(artifact[0].tag, f"{{{NAMESPACE}}}sha256")
-                self.assertEqual(artifact[0].get("value"), hashlib.sha256((self.work / "repository" / relative).read_bytes()).hexdigest())
+                self.assertEqual(artifact[0].get("value"), hashlib.sha256(content).hexdigest())
+                if name in aliases:
+                    expected_alias_records[(module, name)] = {
+                        "group": GROUP, "module": module, "version": VERSION, "name": name,
+                        "path": relative.as_posix(), "sha256": hashlib.sha256(content).hexdigest(), "bytes": len(content),
+                    }
         self.assertEqual(len(actual), 84)
+        self.assertEqual(len(expected_alias_records), 18)
+        self.assertEqual(record_count, 102)
         self.assertNotIn(b"<trust", metadata)
         manifest_path = next(self.state.glob("consumer-receipts.*/consumer-publication-manifest.json"))
         manifest = json.loads(manifest_path.read_text())
         self.assertEqual(manifest["publicationCount"], 15)
         self.assertEqual(manifest["artifactCount"], 84)
+        self.assertEqual(manifest["verificationRecordCount"], 102)
+        self.assertEqual(len(manifest["localArtifacts"]), 84)
+        self.assertEqual(len(manifest["logicalAliases"]), 18)
+        self.assertEqual({(row["module"], row["name"]): row for row in manifest["logicalAliases"]}, expected_alias_records)
+        self.assertIn("Gradle skips per-artifact verification for changing/SNAPSHOT modules", manifest["limitations"])
         self.assertEqual(len(manifest["repositoryFiles"]), 117)
         for module in EXPECTED_TOOLING_PUBLICATIONS:
             relative = (Path(GROUP.replace(".", "/")) / module / VERSION /
@@ -861,10 +962,36 @@ class ConsumerGateTest(unittest.TestCase):
         self.assertEqual({row["path"]: row["sha256"] for row in manifest["localArtifacts"]}, actual)
         evidence = manifest_path.parent
         self.assertEqual((evidence / "reviewed-verification-metadata.xml").read_bytes(), self.reviewed)
-        self.assertEqual(json.loads((evidence / "consumer-metadata-verification.json").read_text())["result"], "PASS")
+        verification = json.loads((evidence / "consumer-metadata-verification.json").read_text())
+        self.assertEqual(verification["result"], "PASS")
+        self.assertEqual(verification["artifactCount"], 84)
+        self.assertEqual(verification["verificationRecordCount"], 102)
         build_recipe = (self.work / "consumer/build.gradle.kts").read_text()
         self.assertIn('kotlin("jvm") version "91.0.0"', build_recipe)
         self.assertIn('id("com.android.library") version "92.0.0"', build_recipe)
+
+    def test_module_file_aliases_cannot_expand_or_rebind_physical_trust(self):
+        cases = (
+            ("missing-alias", "missing required logical aliases"),
+            ("unapproved-name", "unapproved source-local module file name"),
+            ("wrong-target", "source-local module file URL mismatch"),
+            ("traversal", "source-local module file URL mismatch"),
+            ("remote", "source-local module file URL mismatch"),
+            ("tooling-sidecar", "unapproved source-local module file name"),
+            ("wrong-sha256", "source-local module file content mismatch"),
+            ("wrong-size", "source-local module file content mismatch"),
+            ("conflicting-alias", "conflicting source-local module file"),
+        )
+        for change, message in cases:
+            with self.subTest(change=change):
+                work = self.work_root / change
+                result = self.run_gate({**self.audit_options(), "P2PKIT_CONSUMER_WORK_DIR": str(work),
+                                        "FAKE_MODULE_FILE_CHANGE": change})
+                self.assert_rejected(result, message)
+                self.assertEqual(result.returncode, 125)
+                self.assertFalse((work / "consumer/gradle/verification-metadata.xml").exists())
+        self.assertEqual(len(self.calls("gradle")), len(cases), "only publication may execute for invalid GMM")
+        self.assertFalse(list(self.state.glob("consumer-receipts.*/consumer-publication-manifest.json")))
 
     def test_missing_or_malformed_publication_receipt_cannot_prepare_trust(self):
         mutations = [
@@ -915,9 +1042,9 @@ class ConsumerGateTest(unittest.TestCase):
 
     def test_tampered_external_copy_and_local_artifact_fail_after_build(self):
         for flag, text in (("FAKE_TAMPER_EXTERNAL", "prepared external/local verification metadata was modified"),
-                           ("FAKE_TAMPER_LOCAL", "prepared consumer publication binding changed"),
-                           ("FAKE_TAMPER_NATIVE_METADATA", "prepared consumer publication binding changed"),
-                           ("FAKE_TAMPER_NATIVE_INTEROP", "prepared consumer publication binding changed")):
+                           ("FAKE_TAMPER_LOCAL", "source-local module file content mismatch"),
+                           ("FAKE_TAMPER_NATIVE_METADATA", "source-local module file content mismatch"),
+                           ("FAKE_TAMPER_NATIVE_INTEROP", "source-local module file content mismatch")):
             with self.subTest(flag=flag):
                 work = self.work_root / flag
                 result = self.run_gate({**self.audit_options(), "P2PKIT_CONSUMER_WORK_DIR": str(work), flag: "1"})

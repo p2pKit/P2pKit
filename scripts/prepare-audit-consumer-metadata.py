@@ -14,6 +14,8 @@ its source check, wrapper stop, and owned-worker drain before returning a receip
 Subsequent verification rejects changed/missing/extra publication bytes and any
 change to the copied external allowlist. External authenticity remains that of
 the reviewed committed allowlist; hosted consumers are not release acceptance.
+Gradle skips per-artifact verification for changing/SNAPSHOT modules; their local
+integrity boundary is exclusive ownership and these pre/post byte checks.
 """
 
 import argparse
@@ -61,6 +63,42 @@ NATIVE_ARTIFACT_SUFFIXES = {
     "p2p-transport-lan-iosarm64": ("-metadata.jar", "-cinterop-p2pkit_nw.klib"),
     "p2p-transport-lan-iossimulatorarm64": ("-metadata.jar", "-cinterop-p2pkit_nw.klib"),
     "p2p-transport-lan-iosx64": ("-metadata.jar", "-cinterop-p2pkit_nw.klib"),
+}
+# Gradle verifies GMM files by logical name, not their Maven URL basename. These
+# 18 aliases name existing required inputs, not additional files or metadata-
+# supplied trust. Keep both spellings for GMM and POM/fallback consumers. Review
+# this exact policy when publication naming changes; never infer arbitrary aliases.
+LOGICAL_ARTIFACT_ALIASES = {
+    "p2p-core": (
+        ("p2p-core-metadata-{version}.jar", ".jar"),
+        ("p2p-core-kotlin-{version}-sources.jar", "-sources.jar"),
+    ),
+    "p2p-transport-lan": (
+        ("p2p-transport-lan-metadata-{version}.jar", ".jar"),
+        ("p2p-transport-lan-kotlin-{version}-sources.jar", "-sources.jar"),
+    ),
+    "p2p-network-provisioning-android": (
+        ("p2p-network-provisioning-android-metadata-{version}.jar", ".jar"),
+        ("p2p-network-provisioning-android-kotlin-{version}-sources.jar", "-sources.jar"),
+    ),
+    "p2p-core-android": (("p2p-core.aar", ".aar"),),
+    "p2p-transport-lan-android": (("p2p-transport-lan.aar", ".aar"),),
+    "p2p-network-provisioning-android-android": (("p2p-network-provisioning-android.aar", ".aar"),),
+    "p2p-core-iosarm64": (("p2p-core-iosArm64Main-{version}.klib", ".klib"),),
+    "p2p-core-iossimulatorarm64": (("p2p-core-iosSimulatorArm64Main-{version}.klib", ".klib"),),
+    "p2p-core-iosx64": (("p2p-core-iosX64Main-{version}.klib", ".klib"),),
+    "p2p-transport-lan-iosarm64": (
+        ("p2p-transport-lan-iosArm64Main-{version}.klib", ".klib"),
+        ("p2p-transport-lan-iosArm64Cinterop-p2pkit_nwMain-{version}.klib", "-cinterop-p2pkit_nw.klib"),
+    ),
+    "p2p-transport-lan-iossimulatorarm64": (
+        ("p2p-transport-lan-iosSimulatorArm64Main-{version}.klib", ".klib"),
+        ("p2p-transport-lan-iosSimulatorArm64Cinterop-p2pkit_nwMain-{version}.klib", "-cinterop-p2pkit_nw.klib"),
+    ),
+    "p2p-transport-lan-iosx64": (
+        ("p2p-transport-lan-iosX64Main-{version}.klib", ".klib"),
+        ("p2p-transport-lan-iosX64Cinterop-p2pkit_nwMain-{version}.klib", "-cinterop-p2pkit_nw.klib"),
+    ),
 }
 CONSUMER_TASKS = [
     ":coreJvm:compileKotlin",
@@ -325,6 +363,44 @@ def file_digest(path):
     return {"sha256": digest.hexdigest(), "bytes": before.st_size}
 
 
+def inspect_module_files(module, artifact, version, required_artifacts):
+    aliases = {name.format(version=version): f"{artifact}-{version}{suffix}"
+               for name, suffix in LOGICAL_ARTIFACT_ALIASES.get(artifact, ())}
+    require(not aliases.keys() & required_artifacts.keys() and
+            set(aliases.values()).issubset(required_artifacts), f"invalid logical artifact policy: {artifact}")
+    expected_urls = {name: name for name in required_artifacts}
+    expected_urls.update(aliases)
+    variants = module.get("variants")
+    require(isinstance(variants, list) and variants, f"source-local module has no variants: {artifact}")
+    seen = {}
+    for variant in variants:
+        require(isinstance(variant, dict), f"invalid source-local module variant: {artifact}")
+        # Root available-at variants have no local files. Only files records can
+        # corroborate an alias, never redirect URLs, dependencies or sidecars.
+        entries = variant.get("files", [])
+        require(isinstance(entries, list), f"invalid source-local module files: {artifact}")
+        for entry in entries:
+            require(isinstance(entry, dict) and isinstance(entry.get("name"), str) and
+                    isinstance(entry.get("url"), str), f"invalid source-local module file: {artifact}")
+            name, url = entry["name"], entry["url"]
+            require(name in expected_urls, f"unapproved source-local module file name: {artifact}: {name}")
+            binding = (url, entry.get("sha256"), entry.get("size"))
+            require(name not in seen or seen[name] == binding,
+                    f"conflicting source-local module file: {artifact}: {name}")
+            # Exact same-component basenames only: do not normalize traversal,
+            # absolute/remote URLs, query strings or alternate physical targets.
+            require(url == expected_urls[name], f"source-local module file URL mismatch: {artifact}: {name}")
+            expected = required_artifacts[url]
+            require(entry.get("sha256") == expected["sha256"] and type(entry.get("size")) is int and
+                    entry["size"] == expected["bytes"], f"source-local module file content mismatch: {artifact}: {name}")
+            seen[name] = binding
+    require(aliases.keys() <= seen.keys(),
+            f"source-local module is missing required logical aliases: {artifact}: " + ", ".join(sorted(aliases.keys() - seen.keys())))
+    # Checksums/path/size come only from already-hashed required physical inputs.
+    # Repeated API/runtime names collapse to one verification record.
+    return [{**required_artifacts[url], "name": name} for name, url in sorted(aliases.items())]
+
+
 def inspect_repository(context):
     repo = physical_directory(str(context["repository"]))
     group, version = context["group"], context["version"]
@@ -367,6 +443,7 @@ def inspect_repository(context):
     for relative, (artifact, filename) in sorted(required.items()):
         artifacts.append({"group": group, "module": artifact, "version": version, "name": filename,
                           "path": relative, **files[relative]})
+    logical_aliases = []
     for artifact in PUBLICATIONS:
         directory = repo / group_path / artifact / version
         pom = parse_xml(bounded_bytes(directory / f"{artifact}-{version}.pom"), "local POM")
@@ -376,7 +453,12 @@ def inspect_repository(context):
         require(pom.tag.rsplit("}", 1)[-1] == "project" and
                 (direct.get("groupId"), direct.get("artifactId"), direct.get("version")) == (group, artifact, version),
                 f"source-local POM coordinate mismatch: {artifact}")
-        module = read_json(directory / f"{artifact}-{version}.module")
+        module_path = directory / f"{artifact}-{version}.module"
+        module_bytes = bounded_bytes(module_path)
+        require(sha256(module_bytes) == files[module_path.relative_to(repo).as_posix()]["sha256"],
+                f"source-local module changed during inspection: {artifact}")
+        module = parse_json(module_bytes)
+        require(isinstance(module, dict), f"expected source-local module object: {artifact}")
         component_module = artifact
         if artifact.startswith("p2p-core-"):
             component_module = "p2p-core"
@@ -388,7 +470,9 @@ def inspect_repository(context):
         require(isinstance(component, dict) and module.get("formatVersion") == "1.1" and
                 (component.get("group"), component.get("module"), component.get("version")) == (group, component_module, version),
                 f"source-local module coordinate mismatch: {artifact}")
-    return files, artifacts
+        required_artifacts = {item["name"]: item for item in artifacts if item["module"] == artifact}
+        logical_aliases.extend(inspect_module_files(module, artifact, version, required_artifacts))
+    return files, artifacts, logical_aliases
 
 
 def render_metadata(context, artifacts, publication_id):
@@ -411,15 +495,16 @@ def render_metadata(context, artifacts, publication_id):
 def prepared_fields(context):
     admission_sha = validate_admission(context)
     receipt_sha, receipt_id = validate_receipt(context["receipt"], context, "consumer-publish", publish_arguments(context))
-    files, artifacts = inspect_repository(context)
-    prepared = render_metadata(context, artifacts, receipt_id)
+    files, artifacts, logical_aliases = inspect_repository(context)
+    prepared = render_metadata(context, artifacts + logical_aliases, receipt_id)
     fields = {
         "schema": 1, "source": context["source"], "root": str(context["root"]), "workDir": str(context["work"]),
         "contextSha256": context["contextSha256"], "admissionSha256": admission_sha,
         "publicationReceiptSha256": receipt_sha, "publicationId": receipt_id,
         "reviewedMetadataSha256": sha256(context["reviewed"]), "preparedMetadataSha256": sha256(prepared),
         "publicationCount": len(PUBLICATIONS), "artifactCount": len(artifacts),
-        "localArtifacts": artifacts, "repositoryFiles": files,
+        "verificationRecordCount": len(artifacts) + len(logical_aliases),
+        "localArtifacts": artifacts, "logicalAliases": logical_aliases, "repositoryFiles": files,
     }
     return fields, prepared
 
@@ -433,10 +518,14 @@ def prepare(context):
     require(source_snapshot(context["root"]) == context["source"], "source changed during metadata preparation")
     write_new(gradle / "verification-metadata.xml", prepared)
     fields["preparedUtc"] = utc_now()
-    fields["limitations"] = "Source-local first-read checksums, not external authentication or release acceptance; exclusive owned repository required."
+    fields["limitations"] = (
+        "Source-local first-read checksums, not external authentication or release acceptance; exclusive owned repository required. "
+        "Gradle skips per-artifact verification for changing/SNAPSHOT modules; final unchanged-byte checks remain required."
+    )
     write_json(context["evidence"] / "consumer-publication-manifest.json", fields)
     print(f"==> Prepared strict consumer metadata: unchanged external allowlist + "
-          f"{fields['publicationCount']} source-local publications / {fields['artifactCount']} artifacts")
+          f"{fields['publicationCount']} source-local publications / {fields['artifactCount']} physical inputs / "
+          f"{len(fields['logicalAliases'])} logical aliases / {fields['verificationRecordCount']} verification records")
 
 
 def verify(context):
@@ -455,6 +544,7 @@ def verify(context):
         "consumerBuildReceiptSha256": build_sha, "consumerBuildId": build_id,
         "preparedMetadataSha256": fields["preparedMetadataSha256"],
         "publicationCount": fields["publicationCount"], "artifactCount": fields["artifactCount"],
+        "verificationRecordCount": fields["verificationRecordCount"],
         "result": "PASS", "scope": "unchanged source-local publication bytes and strict fixture allowlist only",
     })
     print("==> Verified unchanged source-local publication bytes, original external metadata, and both finalized leaf receipts")
