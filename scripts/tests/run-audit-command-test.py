@@ -604,7 +604,7 @@ class PurePolicyTests(unittest.TestCase):
                 delivered.set()
 
         with tempfile.TemporaryDirectory(prefix="audit tee prefix ") as temporary, LiveOutput() as live:
-            destination = Path(temporary) / "stderr.log"
+            destination = Path(temporary).resolve() / "stderr.log"
             read_fd, write_fd = os.pipe()
             with os.fdopen(read_fd, "rb", buffering=0) as source, os.fdopen(write_fd, "wb", buffering=0) as writer:
                 errors = []
@@ -625,7 +625,7 @@ class PurePolicyTests(unittest.TestCase):
 
     def test_tee_reports_evidence_flush_failure_and_continues_draining(self):
         with tempfile.TemporaryDirectory(prefix="audit tee flush ") as temporary:
-            destination = Path(temporary) / "stderr.log"
+            destination = Path(temporary).resolve() / "stderr.log"
             with runner.new_file(destination) as output, io.BytesIO(b"\x00\xff" * 40000) as source, \
                     io.BytesIO() as live:
                 wrapped = mock.Mock(wraps=output)
