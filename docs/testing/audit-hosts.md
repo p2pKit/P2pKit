@@ -54,27 +54,70 @@ workflows or local builds, and GitHub can replace an older pending run even with
 `cancel-in-progress: false`. Do not queue another triggering push while a run is
 active or pending; preserve earlier failure/cancellation records.
 
-## Selected Apple Silicon full-component scope
+## Selected Apple Silicon follow-up scope
 
-The current literal job is `Audit native Apple Silicon components` on `macos-26`,
+The current literal job is `Audit native Apple Silicon follow-up` on `macos-26`,
 using native Python 3, Java 21 then 17, the checked-in `gradlew` and the fixed
-`/Applications/Xcode_26.5.app/Contents/Developer`. Its existing `macos-arm64`/`full`
-role/scope retains mandatory native ownership controls and SDK admission before
-the [full Apple component replay](#what-the-full-apple-silicon-component-replay-requires).
-No Windows or Intel job precedes or follows it automatically. The host must pass
+`/Applications/Xcode_26.5.app/Contents/Developer`. Its `macos-arm64`/`apple-followup`
+role/scope retains mandatory native ownership controls and SDK admission. No
+Windows or Intel job precedes or follows it automatically. The host must pass
 actual ARM64/non-Rosetta and Xcode-version admission; an advertised image label
 or the presence of this workflow is not execution evidence.
 
-`requestedScope` is bound across admission, summary and workflow bootstrap/handoff.
-`FULL_COMPONENT_SCOPE` describes the requested component set, not qualification
-or successful completion. Inspect every actual component result, receipt, source
-binding and cleanup outcome. The monolithic release gate and external acceptance
-remain separate.
+This targeted route retains the existing failed-policy callers in release order:
+lock-write policy (3), Android ABI graph (13), Xcode project generation fixture
+(18), release workflow fixture (27), audit leaf hooks (30), and audit workflow
+fixture (33), plus the new Swift/JVM coordinator controls (34). Existing numbers
+retain their full-policy meanings; checks are not copied. It then invokes
+`scripts/run-platform-tests.py ios-arm64`
+for exactly `:p2p-core:iosSimulatorArm64Test` and
+`:p2p-transport-lan:iosSimulatorArm64Test`. The existing source/model/nonce assessor
+requires fresh successful cases for both tasks and reports other tasks as not
+requested; an ARM-only report cannot satisfy the full profile. This is native
+simulator execution, not physical iOS-device or Intel qualification.
 
-Before the existing Mac component builds, a read-only inspection retains the
-actual selected `iphoneos` and `iphonesimulator` SDK path, version and build
-queries plus each complete `Network.framework/Headers/tcp_options.h`. SDK and
-framework aliases may resolve only inside the selected Developer/SDK roots.
+The downstream callers perform isolated source-local publication and
+consumer builds, inspect all 15 publication sets only after consumer success,
+retain publication/framework evidence, then run the existing XCFramework
+provenance, Swift warnings-as-errors, and unit/UI simulator sequence. The new
+runner still needs these source-bound framework prerequisites; do not bypass the
+Xcode provenance phase or use old header observations as Swift execution.
+
+One separately selected Swift UI/JVM CLI integration case follows successful
+ordinary Swift tests. It uses the real installed CLI, explicit receiver consent,
+one pinned secure-v2 connection, and two distinct 204800-byte files with both
+endpoints' transfer records and independent durable-file hash checks. The CLI
+distribution is prepared once immediately before Apple work and retained until
+the live peer finishes. This is same-codebase simulator/host integration, **not
+independent interoperability (#133)**.
+
+The focused route finally runs one isolated Swift Task/Flow cancellation probe,
+outside both acceptance schemes. It reuses an exact simulator positively observed
+initially Shutdown, preferring such an available device, and proves its shutdown
+before and unconditionally after the probe. An initially Booted/unowned device is
+never retired. No available owned device produces an explicit NOT_EXECUTED
+investigation record, not a pass or a physical-hardware claim. Probe failures and
+raw xcresults remain separate from acceptance outcomes; process retirement is
+fallback cleanup, never proof that Flow cancellation succeeded.
+
+This route does **not** repeat full `check`, the unrelated Android/Desktop sample
+artifact batch, a standalone Dokka/SBOM graph, or selected TCP SDK-header
+inspection. Required fresh-source publication still builds its real Dokka Javadoc
+artifacts; these dependencies are not skipped. Existing successful results keep
+their original source/evidence bindings; omitted work is not newly passed or
+waived. Full-profile checks remain required; its live peer preparation likewise
+reuses one CLI distribution instead of packaging it twice.
+
+`requestedScope` is bound across admission, summary and workflow bootstrap/handoff.
+For `apple-followup`, `hostQualification` remains
+`NOT_ESTABLISHED_BY_FOCUSED_SCOPE`, even when every selected component passes.
+Inspect every actual result, receipt, source binding and cleanup outcome. The
+monolithic release gate and external acceptance remain separate.
+
+Before the unselected full Mac scope's component builds, a read-only inspection
+retains the actual selected `iphoneos` and `iphonesimulator` SDK path, version and
+build queries plus each complete `Network.framework/Headers/tcp_options.h`. SDK
+and framework aliases may resolve only inside the selected Developer/SDK roots.
 The header is bounded to 1 MiB and retained verbatim as
 `apple-sdk-<sdk>-tcp_options.h.log`; its binding records both resolved paths,
 SHA-256, size, exact source and the retained Xcode prerequisite record. Original
@@ -83,6 +126,7 @@ This supplies declarations for #156 inspection, **not** compilation, actual
 socket-option state, latency improvement or issue acceptance. It never copies
 an entire SDK or changes installed tools. Independent later components may run
 after a failed read-only inspection, but the failed component cannot become PASS.
+This inspection is not repeated by the focused follow-up.
 
 ## Unselected Windows diagnostics scope retained by the driver
 
@@ -151,9 +195,9 @@ validation. None is inferred merely from a task's aggregate count.
 
 For either focused Windows scope, `hostQualification` is always
 `NOT_ESTABLISHED_BY_FOCUSED_SCOPE`, including when the selected components pass.
-The CLI accepts `full` for the existing roles, or `windows-followup` and
-`windows-diagnostics` only for Windows, rejecting other pairs before state
-initialization. Full defaults remain
+The CLI accepts `full` for the existing roles, `windows-followup` and
+`windows-diagnostics` only for Windows, and `apple-followup` only for Apple Silicon,
+rejecting other pairs before state initialization. Full defaults remain
 unchanged; `FULL_COMPONENT_SCOPE` describes their requested scope, not a successful
 qualification. Omitted Windows full-profile components are **NOT_EXECUTED by
 such a focused run**, not waived. The retained `windows-followup` graph does not
@@ -168,8 +212,9 @@ cleanup must also succeed.
 
 ### Full profiles supported by the driver
 
-This workflow revision selects only the Apple Silicon row. The other native
-roles require a later independently reviewed literal selection.
+These full profiles are retained but unselected by this workflow revision,
+which selects the focused Apple Silicon follow-up above. Any full/native-role
+selection requires a later independently reviewed literal change.
 
 | Role and fixed label | Selected tools | Components, not broader acceptance |
 | --- | --- | --- |

@@ -423,6 +423,7 @@ struct ContentView: View {
         // the deployed SDK version before starting any hardware
         // test, without grepping logs.
         Text(BuildInfo.shared.describe())
+            .accessibilityIdentifier("sample-build-info")
             .font(.caption)
             .foregroundColor(.secondary)
             .textSelection(.enabled)
@@ -602,6 +603,7 @@ struct ContentView: View {
                         .fill(sessionDotColor(for: row))
                         .frame(width: 8, height: 8)
                     Text("\(row.peerName) — \(row.state)").font(.callout)
+                        .accessibilityIdentifier("sample-session-state")
                     Spacer()
                     // Test-only deterministic presets cover normal,
                     // multi-megabyte, and near-quota transfers without a
@@ -613,10 +615,12 @@ struct ContentView: View {
                                     await sendTestFile(to: row, preset: preset, run: run)
                                 }
                             }
+                            .accessibilityIdentifier("send-test-file-\(preset.byteCount)")
                         }
                     }
                     .buttonStyle(.bordered)
                     .disabled(!row.isConnected || isStopping || sendingFileSessionIds.contains(row.id))
+                    .accessibilityIdentifier("send-test-file")
                     // AUDIT-2026-06 (D-G9-samples-desktop-ios-17): default
                     // control size — .small put the tap target well under
                     // the 44 pt guideline.
@@ -675,6 +679,7 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("\(offer.name) from \(offer.peer.name)").font(.caption)
                         Text("\(fmtBytes(offer.sizeBytes)) — waiting for consent")
+                            .accessibilityIdentifier("offer-size-\(offer.name)")
                             .font(.system(.caption2, design: .monospaced))
                             .foregroundColor(.secondary)
                     }
@@ -683,6 +688,7 @@ struct ContentView: View {
                         runLifecycle.launchAction { run in await acceptIncomingOffer(pending, run: run) }
                     }
                     .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("accept-offer-\(offer.name)")
                     Button("Reject") {
                         runLifecycle.launchAction { run in await rejectIncomingOffer(pending, run: run) }
                     }
@@ -709,6 +715,7 @@ struct ContentView: View {
                 }
                 ProgressView(value: t.progress)
                 Text(transferCaption(for: t))
+                    .accessibilityIdentifier("transfer-\(t.direction == .send ? "send" : "receive")-\(t.fileName)")
                     .font(.system(.caption2, design: .monospaced))
                     .foregroundColor(.secondary)
                     .textSelection(.enabled)

@@ -54,6 +54,12 @@ class CoveragePolicyTest(unittest.TestCase):
         self.assertEqual(14, len(arm))
         self.assertEqual(14, len(intel))
         self.assertEqual({":p2p-core:iosX64Test", ":p2p-transport-lan:iosX64Test"}, x64_only)
+        native_arm = [":p2p-core:iosSimulatorArm64Test", ":p2p-transport-lan:iosSimulatorArm64Test"]
+        self.assertEqual(native_arm, GATE.PROFILES["ios-arm64"])
+        arm_only = example_report("ios-arm64", "arm64")
+        self.assertEqual(set(native_arm), self.assess(arm_only, "ios-arm64", "arm64"))
+        with self.assertRaises(ValueError):
+            self.assess(arm_only, "full", "arm64")
         self.assertIn(":sample-kmp-shared:testAndroidHostTest", arm)
         self.assertIn(":p2p-core:testAndroidHostTest", arm)
         self.assertIn(":p2p-core:iosSimulatorArm64Test", arm)
@@ -61,7 +67,7 @@ class CoveragePolicyTest(unittest.TestCase):
         self.assertNotIn(":p2p-core:iosSimulatorArm64Test", intel)
 
     def test_every_expected_task_must_execute_fresh_successful_cases(self):
-        for profile, arch in (("full", "arm64"), ("full", "x64"), ("ios-x64", "x64")):
+        for profile, arch in (("full", "arm64"), ("full", "x64"), ("ios-x64", "x64"), ("ios-arm64", "arm64")):
             baseline = example_report(profile, arch)
             for name in GATE.required_tasks(POLICY, profile, arch):
                 changes = [("outcome", outcome) for outcome in (
@@ -159,7 +165,8 @@ class CoveragePolicyTest(unittest.TestCase):
                        {"schema": 1, "model": {":bad": {"targets": {}, "tests": [False]}}}):
             with self.assertRaises(ValueError):
                 GATE.required_tasks(policy, "full", "arm64")
-        for profile, arch in (("ios-x64", "arm64"), ("full", "unknown"), ("other", "x64")):
+        for profile, arch in (("ios-x64", "arm64"), ("ios-arm64", "x64"), ("ios-arm64", "unknown"),
+                              ("full", "unknown"), ("other", "x64")):
             with self.assertRaises(ValueError):
                 GATE.required_tasks(POLICY, profile, arch)
 
@@ -336,6 +343,115 @@ class DriverLifecycleTest(unittest.TestCase):
                     pass
 
 
+@contextlib.contextmanager
+def darwin_group_diagnostic(leader_exits_first):
+    """Adjacent raw worker observations for #157; never a new cleanup authority."""
+    if sys.platform != "darwin":
+        yield None
+        return
+
+    def emit(record):
+        try:
+            print("P2PKIT_DARWIN_GROUP " + json.dumps({"leaderExitsFirst": leader_exits_first, **record}),
+                  file=sys.stderr, flush=True)
+        except Exception:
+            pass  # Diagnostic output cannot replace a syscall result or prevent fixture cleanup.
+
+    try:
+        spec = importlib.util.spec_from_file_location("group_diagnostic_processes", ROOT / "scripts/audit_processes.py")
+        processes = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(processes)
+        domains = processes.ownership_domains(os.environ.get(processes.CHAIN_ENV, ""),
+                                              os.environ.get(processes.DOMAINS_ENV, ""))
+        if not domains:
+            raise processes.OwnershipError("Diagnostic has no current audit ownership domain")
+        domain = domains[-1]
+        if (os.environ.get(processes.JOB_ENV), os.environ.get(processes.STATE_ENV),
+                os.environ.get("GRADLE_USER_HOME")) != (domain["job"], domain["state"], domain["home"]):
+            raise processes.OwnershipError("Diagnostic ownership domain is not current")
+        observer = processes.DarwinScope(domain["job"], domain["id"], domain["state"], domain["home"])
+    except Exception as error:
+        emit({"event": "unavailable", "errorType": type(error).__name__})
+        yield None
+        return
+
+    group = worker = initial_key = None
+
+    def snapshot():
+        try:
+            at = time.monotonic_ns()
+            current = observer._identity(worker, required=True)
+            state = ("ABSENT" if current is None else "UNBOUND" if initial_key is None else
+                     "SAME_LIFETIME" if observer._key(current) == initial_key else "REPLACED")
+            return {"monotonicNs": at, "state": state, "identity": current}
+        except Exception as error:
+            # Raw required reads retain zombie/replacement state and do not reconcile/retry.
+            return {"state": "UNKNOWN", "errorType": type(error).__name__, "error": str(error)}
+
+    def bind_worker(group_pid, worker_pid):
+        nonlocal group, worker, initial_key
+        group, worker = group_pid, worker_pid
+        try:
+            observed = snapshot()
+            current = observed.get("identity")
+            if current is not None:
+                initial_key = observer._key(current)
+                observed["state"] = "INITIAL"
+            matches = (current is not None and current["live"] and current["group"] == group and
+                       current["uid"] == os.geteuid() and current["realUid"] == os.getuid())
+            emit({"event": "worker-ready", "group": group, "worker": worker, "initialKey": initial_key,
+                  "readyMatchesFixture": matches, "snapshotsAreNonAtomic": True, "observation": observed})
+        except Exception as error:
+            emit({"event": "bind-failed", "errorType": type(error).__name__})
+
+    bind_worker.phase = "drain"
+    killpg, kill = os.killpg, os.kill
+
+    def traced_call(name, original, pid, signum):
+        if group is None or not ((name == "killpg" and pid == group) or
+                                 (name == "kill" and pid == worker and signum == 0)):
+            return original(pid, signum)
+        before = snapshot()
+        failure = None
+        result = None
+        started = None
+        try:
+            started = time.monotonic_ns()
+        except Exception:
+            pass  # An unavailable diagnostic clock must not prevent the original syscall.
+        try:
+            result = original(pid, signum)
+            return result
+        except BaseException as error:
+            failure = error
+            raise
+        finally:
+            try:
+                finished = time.monotonic_ns()
+                # Only existing TERM/KILL, failed group calls and the worker's zero probe.
+                # Successful drain polls emit nothing; no extra probes, sleeps or retries.
+                if failure is not None or signum != 0 or name == "kill":
+                    emit({"event": "call", "phase": bind_worker.phase,
+                          "operation": name, "pid": pid, "signal": int(signum),
+                          "syscallStartedMonotonicNs": started, "syscallFinishedMonotonicNs": finished,
+                          "returned": failure is None, "result": result,
+                          "errorType": None if failure is None else type(failure).__name__,
+                          "errno": 0 if failure is None else getattr(failure, "errno", None),
+                          "before": before, "after": snapshot()})
+            except Exception as error:
+                emit({"event": "capture-failed", "errorType": type(error).__name__})
+
+    try:
+        with mock.patch.object(os, "killpg", lambda pid, sig: traced_call("killpg", killpg, pid, sig)), \
+                mock.patch.object(os, "kill", lambda pid, sig: traced_call("kill", kill, pid, sig)):
+            yield bind_worker
+    finally:
+        try:
+            observer.close()
+        except Exception as error:
+            emit({"event": "close-failed", "errorType": type(error).__name__})
+
+
 class OwnedProcessGroupTest(unittest.TestCase):
     def test_fixture_attempts_remaining_retirements_after_cleanup_failure(self):
         # Exercise the actual fixture finalizer, without creating any processes.
@@ -389,7 +505,7 @@ class OwnedProcessGroupTest(unittest.TestCase):
         self.assertEqual([mock.call(123, signal.SIGTERM), mock.call(123, 0),
                           mock.call(123, signal.SIGKILL), mock.call(123, 0)], kill.call_args_list)
 
-    def resistant_worker_control(self, leader_exits_first):
+    def resistant_worker_control(self, leader_exits_first, bind_worker=None):
         with tempfile.TemporaryDirectory(prefix="p2pkit-owned-group-") as temporary:
             ready = Path(temporary) / "worker.pid"
             worker_code = (
@@ -411,19 +527,27 @@ class OwnedProcessGroupTest(unittest.TestCase):
                     time.sleep(0.02)
                 self.assertTrue(ready.exists(), "TERM-resistant worker never reached ready state")
                 worker = int(ready.read_text())
+                if bind_worker is not None:
+                    bind_worker(leader.pid, worker)
                 if leader_exits_first:
                     self.assertEqual(0, leader.wait(timeout=10))
                 # Bound a deterministic control's grace period without lengthening
                 # production timeouts or changing assertions. R1 has no constant.
                 with mock.patch.object(GATE, "TERMINATION_GRACE_SECONDS", 0.2, create=True):
                     drained = GATE.terminate_process(leader)
+                if bind_worker is not None:
+                    bind_worker.phase = "worker-zero"
                 with self.assertRaises(ProcessLookupError, msg="Owned resistant worker survived cleanup"):
                     os.kill(worker, 0)
+                if bind_worker is not None:
+                    bind_worker.phase = "group-zero"
                 with self.assertRaises(ProcessLookupError, msg="Owned process group was not drained"):
                     os.killpg(leader.pid, 0)
                 self.assertTrue(drained)
                 self.assertIsNone(unrelated.poll(), "Cleanup touched an unrelated process group")
             finally:
+                if bind_worker is not None:
+                    bind_worker.phase = "finalizer-kill"
                 # A red control must not leave its intentionally resistant child.
                 try:
                     try:
@@ -440,10 +564,12 @@ class OwnedProcessGroupTest(unittest.TestCase):
                             unrelated.wait(timeout=10)
 
     def test_term_resistant_worker_is_killed_after_leader_exits_on_term(self):
-        self.resistant_worker_control(leader_exits_first=False)
+        with darwin_group_diagnostic(leader_exits_first=False) as bind_worker:
+            self.resistant_worker_control(leader_exits_first=False, bind_worker=bind_worker)
 
     def test_surviving_group_is_drained_even_when_leader_already_exited(self):
-        self.resistant_worker_control(leader_exits_first=True)
+        with darwin_group_diagnostic(leader_exits_first=True) as bind_worker:
+            self.resistant_worker_control(leader_exits_first=True, bind_worker=bind_worker)
 
 
 if __name__ == "__main__":

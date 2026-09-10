@@ -26,7 +26,8 @@ WORKFLOW = ".github/workflows/audit-host-validation.yml"
 REF = "refs/heads/audit/complete-2026-09-04"
 ROLES = {"windows-x64": ("Windows", "x64"), "macos-arm64": ("Darwin", "arm64"),
          "macos-x64": ("Darwin", "x64")}
-SCOPES = {"full": set(ROLES), "windows-followup": {"windows-x64"}, "windows-diagnostics": {"windows-x64"}}
+SCOPES = {"full": set(ROLES), "windows-followup": {"windows-x64"}, "windows-diagnostics": {"windows-x64"},
+          "apple-followup": {"macos-arm64"}}
 WINDOWS_TASKS = {":p2p-core:jvmTest", ":p2p-transport-lan:jvmTest", ":p2p-network-provisioning-desktop:test"}
 WINDOWS_FOLLOWUP_TASKS = {":p2p-core:jvmTest", ":p2p-core:testAndroidHostTest", ":p2p-transport-lan:jvmTest"}
 WINDOWS_DIAGNOSTICS_TASKS = {":p2p-transport-lan:jvmTest"}
@@ -677,8 +678,10 @@ class Host:
                    "scripts/tests/release-workflow-test.sh", "scripts/tests/check-sample-run-profiles.sh",
                    "scripts/tests/run-ios-app-test.sh", "scripts/tests/audit-leaf-hooks-test.py",
                    "scripts/tests/audit-consumer-test.py", "scripts/tests/audit-host-test.py",
-                   "scripts/tests/audit-host-workflow-test.py"]
+                   "scripts/tests/audit-host-workflow-test.py", "scripts/tests/swift-jvm-transfer-test.py"]
         for number, path in enumerate(scripts):
+            if self.scope == "apple-followup" and number not in {3, 13, 18, 27, 30, 33, 34}:
+                continue
             tool = sys.executable if path.endswith(".py") else "ruby" if path.endswith(".rb") else "bash"
             # Default fake-boundary suites must not inherit real opt-in leaves
             # against their fake source trees. Retain the outer ownership chain.
@@ -758,21 +761,27 @@ class Host:
         return {"bindings": bindings, "limits": "Inspection only; review both original SDK headers before API claims."}
 
     def mac(self):
-        self.check("apple-tcp-options-sdk", self.inspect_tcp_options_headers)
+        if self.scope == "full":
+            self.check("apple-tcp-options-sdk", self.inspect_tcp_options_headers)
         self.install_xcodegen()
         self.mac_policies()
-        self.invoke("mac-platform-full", [sys.executable, "scripts/run-platform-tests.py", "full"], kind="command", timeout=7200)
+        profile = "ios-arm64" if self.scope == "apple-followup" else "full"
+        self.invoke("mac-platform-" + profile, [sys.executable, "scripts/run-platform-tests.py", profile],
+                    kind="command", timeout=7200)
         self.clean_outputs()
-        # The full check already runs all four Kotlin and three Android ABI
-        # compares. Inspect their actual task outcomes in that leaf's raw log;
-        # platform execution.json inventories test tasks, not ABI execution.
-        artifacts = [":p2p-sample-android:assembleDebug", *DESKTOP_TASKS,
-                     *[":" + module + ":dokkaGeneratePublicationHtml" for module in MODULES],
-                     "cyclonedxBom", "--continue"]
-        if self.invoke("mac-artifact-build", artifacts):
-            self.invoke("sbom-inspect", ["bash", "scripts/check-sbom.sh", "build/reports/cyclonedx/bom.json",
-                                         "build/reports/cyclonedx/bom.xml"], kind="command")
-        self.clean_outputs()
+        if self.scope == "full":
+            # The full check already runs all four Kotlin and three Android ABI
+            # compares. Inspect their actual task outcomes in that leaf's raw log;
+            # platform execution.json inventories test tasks, not ABI execution.
+            # Prepare installDist once immediately before its live Swift counterpart.
+            artifacts = [":p2p-sample-android:assembleDebug",
+                         *[task for task in DESKTOP_TASKS if task != ":p2p-sample-desktop:installDist"],
+                         *[":" + module + ":dokkaGeneratePublicationHtml" for module in MODULES],
+                         "cyclonedxBom", "--continue"]
+            if self.invoke("mac-artifact-build", artifacts):
+                self.invoke("sbom-inspect", ["bash", "scripts/check-sbom.sh", "build/reports/cyclonedx/bom.json",
+                                             "build/reports/cyclonedx/bom.xml"], kind="command")
+            self.clean_outputs()
         # The maintained consumer publishes this exact source to its fresh owned
         # repository. Inspect/retain that same publication rather than rebuild it.
         consumer = self.state / "work/consumer"
@@ -786,6 +795,8 @@ class Host:
             self.retain_publication(consumer / "repository", "consumer-publication")
         self.retain_consumer_framework(consumer)
         self.clean_outputs()
+        # Retain the real CLI distribution until its live Swift counterpart has finished.
+        self.invoke("swift-jvm-cli-prepare", [":p2p-sample-desktop:installDist"])
         # Receipt/helper manifests are copied by finalize(); preserve failed fixtures until that copy, too.
         self.apple()
 
@@ -924,6 +935,10 @@ class Host:
                     if device.get("name") == "iPhone 17" and device.get("isAvailable") is not False:
                         choices.append((tuple(map(int, match[1].split("-"))), device["udid"], device["state"]))
         require(choices, "No available exact iPhone17 simulator; required Swift tests are not skipped")
+        if self.scope == "apple-followup":
+            # Prefer an already Shutdown available device for the terminal
+            # isolated probe; a Booted newest choice is not a hardware blocker.
+            choices = [choice for choice in choices if choice[2] == "Shutdown"] or choices
         _, udid, state_before = sorted(choices)[-1]
         require(re.fullmatch(r"[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}", udid) and
                 state_before in ("Booted", "Shutdown"), "Invalid simulator metadata")
@@ -949,8 +964,117 @@ class Host:
                                              ["xcrun", "xcresulttool", "get", "object", "--legacy", "--format", "json",
                                               "--path", str(bundle), "--id", identifier])
                 objects.append(load_gate().read_json(details))
+        if tested and self.check("swift-case-execution", lambda: assess_swift(objects)):
+            self.swift_jvm_transfer(ui_dir, udid)
+        # Investigation stays last and separate from both acceptance processes.
+        # A cleaned integration/product failure must not erase independent evidence.
+        if self.scope == "apple-followup":
+            self.swift_cancellation_probe(ui_dir, udid)
+
+    def swift_jvm_transfer(self, ui_dir, udid):
+        # Only one JVM peer and one XCTest coexist, after all builds have ended
+        # and the existing executor has stopped their task-isolated Gradle home.
+        prepared = self.receipts.get("swift-jvm-cli-prepare")
+        require(prepared is not None, "Real CLI preparation receipt is missing")
+        if prepared.get("finalExitCode") != 0:
+            return
+        environment = {"IOS_RUN_DIR": str(ui_dir), "KEEP_IOS_RUN_ARTIFACTS": "1", "SIM_UDID": udid}
+        if not self.invoke("swift-jvm-ui-prepare", ["bash", "scripts/run-ios-ui-tests.sh", "prepare-jvm-transfer"],
+                           kind="command", timeout=3600, extra_env=environment):
+            return
+        tested = self.invoke("swift-jvm-transfer", ["bash", "scripts/run-ios-ui-tests.sh", "run-jvm-transfer"],
+                             kind="command", timeout=900, extra_env=environment)
+        bundles = sorted(ui_dir.glob("DerivedData/Logs/Test/swift-jvm-transfer-*.xcresult"))
+        for index, bundle in enumerate(bundles):
+            manifest = self.retain_tree(bundle, self.evidence / "swift-xcresult" / bundle.name)
+            self.write("swift-jvm-bundle-" + str(index) + ".json", {"path": str(bundle), "files": manifest})
         if tested:
-            self.check("swift-case-execution", lambda: assess_swift(objects))
+            def inspect_result():
+                result = read_json(ui_dir / "jvm-transfer/result.json")
+                case = ("p2pkit-sample-jvm-transfer-tests/SwiftJvmTransferUITests/"
+                        "testBidirectionalSecure204800ByteTransferWithJvmPeer()")
+                require(len(bundles) == 1 and result.get("schema") == 1 and result.get("result") == "PASS" and
+                        result.get("source") == self.context["source"] and result.get("case") == case and
+                        result.get("nativeCase") == {"identifier": case, "status": "Success"} and
+                        result.get("resultBundle") == str(bundles[0].relative_to(ui_dir / "DerivedData")),
+                        "Missing source-bound exact native Swift/JVM case")
+                transfers = result.get("transfers", [])
+                require(len(transfers) == 2 and {row.get("direction") for row in transfers} ==
+                        {"swift-to-jvm", "jvm-to-swift"} and len({row.get("transferId") for row in transfers}) == 2 and
+                        all(row.get("bytes") == 204800 and re.fullmatch(r"[0-9a-f]{64}", row.get("sha256", "")) and
+                            row.get("sender", {}).get("events") and row.get("receiver", {}).get("events")
+                            for row in transfers) and not result.get("cleanupErrors") and not result.get("unresolvedChildren"),
+                        "Missing genuine bidirectional integrity or graceful cleanup results")
+                return result
+            self.check("swift-jvm-case-integrity", inspect_result)
+
+    def swift_cancellation_probe(self, ui_dir, udid):
+        """One explicit investigative host; shutdown is cleanup, never cancellation success."""
+        require(self.role == "macos-arm64" and self.scope == "apple-followup",
+                "Cancellation investigation requires the explicit focused Apple route")
+        case = ("p2pkit-sample-cancellation-probe-tests/SwiftFlowCancellationProbeTests/"
+                "testSwiftTaskCancellationFinishesActualDiagnosticCollection")
+        admitted = bool(self.simulator and self.simulator.get("udid") == udid and
+                        self.simulator.get("stateBefore") == "Shutdown")
+        self.write("swift-cancellation-probe-admission.json", {
+            "source": self.admission, "case": case, "udid": udid,
+            "initialStateObservation": "simulators-before.stdout.log",
+            "result": "ADMITTED" if admitted else "NOT_EXECUTED",
+            "reason": None if admitted else "No exact originally Shutdown simulator is owned; preserve originally Booted/unowned devices",
+        })
+        if not admitted:
+            self.rows.append({"component": "swift-cancellation-probe-admission", "result": "FAIL",
+                              "inspectionOnly": True, "investigationOnly": True,
+                              "reason": "Owned initially Shutdown simulator unavailable"})
+            return
+        bundle = ui_dir / "DerivedData/Logs/Test/swift-cancellation-probe.xcresult"
+        require(not bundle.exists(), "Cancellation probe result path is not fresh")
+        tested, retired = None, False
+        try:
+            # Positively retire prior acceptance hosts before cold-booting this
+            # otherwise reused simulator. No new runtime/device/cache is needed.
+            self.shutdown_simulator(label="swift-cancellation-isolate")
+            self.simulator.pop("stateAfter", None)
+            tested = self.invoke("swift-cancellation-probe-invocation",
+                                 ["bash", "scripts/run-ios-ui-tests.sh", "run-cancellation-probe"],
+                                 kind="command", timeout=900,
+                                 extra_env={"IOS_RUN_DIR": str(ui_dir), "KEEP_IOS_RUN_ARTIFACTS": "1", "SIM_UDID": udid})
+        finally:
+            # The existing executor drains its own workers/Gradle home, not an
+            # arbitrary launchd-owned simulator app. Use the reserved cleanup
+            # interval to prove this exact originally Shutdown device is retired.
+            finalizing = self.finalizing
+            self.finalizing = True
+            try:
+                self.shutdown_simulator(label="swift-cancellation-retire")
+                retired = self.simulator.get("stateAfter") == "Shutdown"
+                require(retired, "Isolated cancellation test-host retirement is not proven")
+            except BaseException:
+                self.safe = False
+                raise
+            finally:
+                self.finalizing = finalizing
+                files = None
+                if bundle.is_dir():
+                    files = self.retain_tree(bundle, self.evidence / "swift-xcresult" / bundle.name)
+                self.write("swift-cancellation-probe-result.json", {
+                    "source": self.admission, "case": case, "udid": udid,
+                    "invocationSucceeded": tested, "ownedSimulatorShutdownObserved": retired,
+                    "cancellationVerdict": "PENDING_NATIVE_EVIDENCE_REVIEW",
+                    "resultBundle": str(bundle), "retainedFiles": files,
+                    "limits": "Retirement is fallback cleanup, not Flow cancellation or acceptance-suite success.",
+                })
+        if bundle.is_dir():
+            # Retain the actual case tree for root's observation review. Do not
+            # create a second acceptance assessor or invert a failing assertion.
+            arguments = ["xcrun", "xcresulttool", "get", "object", "--legacy", "--format", "json", "--path", str(bundle)]
+            actions = read_json(self.inspect_tool("swift-cancellation-probe-actions", arguments))
+            identifiers = {item["actionResult"]["testsRef"]["id"]["_value"]
+                           for item in actions.get("actions", {}).get("_values", [])
+                           if "testsRef" in item.get("actionResult", {})}
+            for index, identifier in enumerate(sorted(identifiers)):
+                self.inspect_tool("swift-cancellation-probe-tests-" + str(index), arguments + ["--id", identifier])
+        require(tested is not True or bundle.is_dir(), "Successful probe invocation has no raw xcresult")
 
     def inspect_tool(self, label, arguments):
         """Retain read-only native tool output; this never builds or runs tests."""
@@ -963,7 +1087,7 @@ class Host:
         require(result.returncode == 0, "Native evidence inspection failed: " + label)
         return stdout
 
-    def shutdown_simulator(self):
+    def shutdown_simulator(self, label="simulator-cleanup"):
         if not self.simulator or self.simulator["stateBefore"] != "Shutdown":
             return
         udid = self.simulator["udid"]
@@ -973,11 +1097,12 @@ class Host:
             devices = [item for group in data["devices"].values() for item in group if item["udid"] == udid]
             require(len(devices) == 1, "Cannot prove state of exact initially shutdown simulator")
             return devices[0]["state"]
-        observed = current("simulator-cleanup-before")
+        observed = current(label + "-before")
         if observed != "Shutdown":
-            require(self.invoke("owned-simulator-shutdown", ["xcrun", "simctl", "shutdown", udid], kind="command", timeout=120),
+            operation = "owned-simulator-shutdown" if label == "simulator-cleanup" else label + "-shutdown"
+            require(self.invoke(operation, ["xcrun", "simctl", "shutdown", udid], kind="command", timeout=120),
                     "Exact job-booted simulator shutdown failed")
-        observed = current("simulator-cleanup-after")
+        observed = current(label + "-after")
         require(observed == "Shutdown", "Job-booted simulator did not return to its original shutdown state")
         self.simulator["stateAfter"] = observed
 

@@ -10,6 +10,21 @@ PROJECT_DIR="$REPO_ROOT/samples/iosApp"
 SIM_NAME="${SIM_NAME:-iPhone 17}"
 SIM_UDID="${SIM_UDID:-}"
 RUN_DIR="${IOS_RUN_DIR:-}"
+action="${1:-}"
+case "$action" in
+    "") [[ $# -eq 0 ]] ;;
+    prepare-jvm-transfer|run-jvm-transfer|run-cancellation-probe)
+        [[ $# -eq 1 && -n "$RUN_DIR" && -n "${P2PKIT_AUDIT_STATE_DIR:-}" ]] || {
+            echo "[ios-run] Scoped XCTest requires an owned audit invocation and explicit IOS_RUN_DIR." >&2
+            exit 2
+        }
+        ;;
+    *) echo "usage: $0 [prepare-jvm-transfer|run-jvm-transfer|run-cancellation-probe]" >&2; exit 2 ;;
+esac
+if [[ "$action" == "run-cancellation-probe" && -z "$SIM_UDID" ]]; then
+    echo "[ios-run] Cancellation investigation requires the outer owner's exact simulator UDID." >&2
+    exit 2
+fi
 
 # shellcheck source=run-ios-app.sh
 source "$SCRIPT_DIR/run-ios-app.sh"
@@ -30,18 +45,55 @@ DERIVED_DATA="$RUN_DIR/DerivedData"
 
 acquire_ios_run_lock "$IOS_LAUNCH_LOCK"
 IOS_LAUNCH_OWNS_LOCK=1
-ensure_ios_xcframework_present "$REPO_ROOT"
-(cd "$PROJECT_DIR" && run_ios_mutation xcodegen generate) | tail -3
+# Neither terminal run action may bootstrap/regenerate its already prepared
+# source-bound project/framework; the Xcode provenance phase remains mandatory.
+if [[ "$action" != "run-jvm-transfer" && "$action" != "run-cancellation-probe" ]]; then
+    ensure_ios_xcframework_present "$REPO_ROOT"
+    (cd "$PROJECT_DIR" && run_ios_mutation xcodegen generate) | tail -3
+fi
 boot_and_wait_for_simulator "$udid"
 
-run_ios_xcodebuild \
-    -project "$PROJECT_DIR/p2pkit-sample.xcodeproj" \
-    -scheme p2pkit-sample-ui \
-    -configuration Debug \
-    -sdk iphonesimulator \
-    -destination "platform=iOS Simulator,id=$udid" \
-    -derivedDataPath "$DERIVED_DATA" \
-    -parallel-testing-enabled NO \
-    test
+if [[ -z "$action" ]]; then
+    run_ios_xcodebuild \
+        -project "$PROJECT_DIR/p2pkit-sample.xcodeproj" \
+        -scheme p2pkit-sample-ui \
+        -configuration Debug \
+        -sdk iphonesimulator \
+        -destination "platform=iOS Simulator,id=$udid" \
+        -derivedDataPath "$DERIVED_DATA" \
+        -parallel-testing-enabled NO \
+        test
 
-echo "RESULT: PASS — iOS simulator launched the sample and completed start/stop UI automation"
+    echo "RESULT: PASS — iOS simulator launched the sample and completed start/stop UI automation"
+elif [[ "$action" == "prepare-jvm-transfer" ]]; then
+    run_ios_xcodebuild \
+        -project "$PROJECT_DIR/p2pkit-sample.xcodeproj" \
+        -scheme p2pkit-sample-jvm-transfer \
+        -configuration Debug \
+        -sdk iphonesimulator \
+        -destination "platform=iOS Simulator,id=$udid" \
+        -derivedDataPath "$DERIVED_DATA" \
+        -parallel-testing-enabled NO \
+        SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
+        build-for-testing
+elif [[ "$action" == "run-jvm-transfer" ]]; then
+    run_ios_mutation python3 "$SCRIPT_DIR/run-swift-jvm-transfer.py" \
+        --derived-data "$DERIVED_DATA" --simulator "$udid"
+else
+    # This one-method host is retired by Host.swift_cancellation_probe, including
+    # when XCTest fails. Never append normal acceptance tests to this invocation.
+    run_ios_xcodebuild \
+        -project "$PROJECT_DIR/p2pkit-sample.xcodeproj" \
+        -scheme p2pkit-sample-cancellation-probe \
+        -configuration Debug \
+        -sdk iphonesimulator \
+        -destination "platform=iOS Simulator,id=$udid" \
+        -derivedDataPath "$DERIVED_DATA" \
+        -resultBundlePath "$DERIVED_DATA/Logs/Test/swift-cancellation-probe.xcresult" \
+        -parallel-testing-enabled NO \
+        -maximum-concurrent-test-simulator-destinations 1 \
+        -test-iterations 1 \
+        -only-testing:p2pkit-sample-cancellation-probe-tests/SwiftFlowCancellationProbeTests/testSwiftTaskCancellationFinishesActualDiagnosticCollection \
+        SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
+        test
+fi

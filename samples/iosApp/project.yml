@@ -97,6 +97,20 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.p2pkit.sample.uitests
         GENERATE_INFOPLIST_FILE: YES
+  # The real JVM peer is required only by this explicitly selected integration case.
+  # Ordinary unit/UI suites never acquire an ambient fixture-dependent skip.
+  p2pkit-sample-jvm-transfer-tests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "15.0"
+    sources:
+      - PeerIntegrationUITests
+    dependencies:
+      - target: p2pkit-sample
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.p2pkit.sample.jvmtransfer.tests
+        GENERATE_INFOPLIST_FILE: YES
   p2pkit-sample-tests:
     type: bundle.unit-test
     platform: iOS
@@ -112,6 +126,21 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.p2pkit.sample.tests
+        GENERATE_INFOPLIST_FILE: YES
+
+  # Investigative only: never include this potentially non-retiring collector
+  # in DiagnosticsTests or either ordinary/real-peer acceptance scheme.
+  p2pkit-sample-cancellation-probe-tests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "15.0"
+    sources:
+      - CancellationProbeTests
+    dependencies:
+      - target: p2pkit-sample
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.p2pkit.sample.cancellationprobe.tests
         GENERATE_INFOPLIST_FILE: YES
 
 schemes:
@@ -133,3 +162,19 @@ schemes:
       targets:
         - p2pkit-sample-tests
         - p2pkit-sample-uitests
+  p2pkit-sample-jvm-transfer:
+    build:
+      targets:
+        p2pkit-sample: all
+        p2pkit-sample-jvm-transfer-tests: [test]
+    test:
+      targets:
+        - p2pkit-sample-jvm-transfer-tests
+  p2pkit-sample-cancellation-probe:
+    build:
+      targets:
+        p2pkit-sample: all
+        p2pkit-sample-cancellation-probe-tests: [test]
+    test:
+      targets:
+        - p2pkit-sample-cancellation-probe-tests

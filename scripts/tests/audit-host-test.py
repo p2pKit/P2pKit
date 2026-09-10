@@ -664,7 +664,8 @@ class HostInvocationTest(unittest.TestCase):
     def test_unknown_or_mismatched_scope_is_rejected_before_state_or_process_creation(self):
         for role, scope in (("windows-x64", "invented"), ("macos-arm64", "windows-followup"),
                              ("macos-x64", "windows-followup"), ("macos-arm64", "windows-diagnostics"),
-                             ("macos-x64", "windows-diagnostics"), ("unknown", "full")):
+                             ("macos-x64", "windows-diagnostics"), ("windows-x64", "apple-followup"),
+                             ("macos-x64", "apple-followup"), ("unknown", "full")):
             state = self.work / (role + "-" + scope)
             with self.subTest(role=role, scope=scope), self.assertRaisesRegex(ValueError, "role/scope"):
                 HOST.Host(role, state, scope=scope)
@@ -1379,7 +1380,8 @@ class HostInvocationTest(unittest.TestCase):
         consumer = host.state / "work/consumer"
         repository = consumer / "repository"
         repository.mkdir(parents=True)
-        artifacts = [":p2p-sample-android:assembleDebug", *HOST.DESKTOP_TASKS,
+        artifacts = [":p2p-sample-android:assembleDebug",
+                     *[task for task in HOST.DESKTOP_TASKS if task != ":p2p-sample-desktop:installDist"],
                      *[":" + module + ":dokkaGeneratePublicationHtml" for module in HOST.MODULES],
                      "cyclonedxBom", "--continue"]
         for batch_ok, consumer_ok in ((True, True), (False, True), (True, False), (False, False)):
@@ -1410,16 +1412,100 @@ class HostInvocationTest(unittest.TestCase):
                 if consumer_ok:
                     expected_calls.append(mock.call("consumer-publication-inspect",
                         ["bash", "scripts/check-publish-artifacts.sh", str(repository)], kind="command"))
+                expected_calls.append(mock.call("swift-jvm-cli-prepare", [":p2p-sample-desktop:installDist"]))
                 self.assertEqual(expected_calls, invoked.call_args_list)
                 self.assertEqual(["check", "install_xcodegen", "mac_policies", "mac-platform-full", "clean_outputs",
                                   "mac-artifact-build", *(["sbom-inspect"] if batch_ok else []), "clean_outputs",
                                   "isolated-consumers", *(["consumer-publication-inspect"] if consumer_ok else []),
-                                  "retain_publication", "retain_consumer_framework", "clean_outputs", "apple"], events)
+                                  "retain_publication", "retain_consumer_framework", "clean_outputs",
+                                  "swift-jvm-cli-prepare", "apple"], events)
                 operations["check"].assert_called_once_with("apple-tcp-options-sdk", host.inspect_tcp_options_headers)
                 operations["retain_publication"].assert_called_once_with(repository, "consumer-publication")
                 operations["retain_consumer_framework"].assert_called_once_with(consumer)
                 self.assertFalse((host.state / "work/publication").exists(), "Do not create a redundant publication")
         self.assertEqual([], self.calls, "Orchestration fixture must not invoke a product subprocess")
+
+    def test_apple_followup_selects_failed_leaves_and_remaining_native_dependents_without_full_rebuild(self):
+        host = HOST.Host("macos-arm64", self.state / "apple-followup-order", scope="apple-followup")
+        consumer = host.state / "work/consumer"
+        repository = consumer / "repository"
+        repository.mkdir(parents=True)
+        policies = [
+            (3, "scripts/tests/check-lock-write-policy-test.sh"),
+            (13, "scripts/check-android-abi-guard.sh"),
+            (18, "scripts/tests/ios-project-generation-test.py"),
+            (27, "scripts/tests/release-workflow-test.sh"),
+            (30, "scripts/tests/audit-leaf-hooks-test.py"),
+            (33, "scripts/tests/audit-host-workflow-test.py"),
+            (34, "scripts/tests/swift-jvm-transfer-test.py"),
+        ]
+        for product_ok in (True, False):
+            with self.subTest(product_ok=product_ok):
+                events = []
+                def invoke(label, arguments, **kwargs):
+                    events.append(label)
+                    return product_ok
+                def observe(name):
+                    return lambda *args, **kwargs: events.append(name)
+                with contextlib.ExitStack() as stack:
+                    operations = {name: stack.enter_context(mock.patch.object(host, name, side_effect=observe(name)))
+                                  for name in ("check", "install_xcodegen", "clean_outputs", "retain_publication",
+                                               "retain_consumer_framework", "apple")}
+                    invoked = stack.enter_context(mock.patch.object(host, "invoke", side_effect=invoke))
+                    host.mac()
+                expected_calls, policy_events = [], []
+                for number, path in policies:
+                    label = "policy-" + str(number) + "-" + Path(path).stem
+                    tool = sys.executable if path.endswith(".py") else "bash"
+                    env = None if number in (3, 13) else {key: None for key in HOST.ADAPTER_OPT_INS}
+                    expected_calls.append(mock.call(label, [tool, path], kind="command", extra_env=env))
+                    policy_events.extend((label, "clean_outputs"))
+                expected_calls.extend([
+                    mock.call("mac-platform-ios-arm64", [sys.executable, "scripts/run-platform-tests.py", "ios-arm64"],
+                              kind="command", timeout=7200),
+                    mock.call("isolated-consumers", ["bash", "scripts/check-published-consumers.sh"],
+                              kind="command", timeout=7200,
+                              extra_env={"P2PKIT_CONSUMER_WORK_DIR": str(consumer),
+                                         "P2PKIT_CONSUMER_AUDIT_METADATA": "1"}),
+                ])
+                if product_ok:
+                    expected_calls.append(mock.call("consumer-publication-inspect",
+                        ["bash", "scripts/check-publish-artifacts.sh", str(repository)], kind="command"))
+                expected_calls.append(mock.call("swift-jvm-cli-prepare", [":p2p-sample-desktop:installDist"]))
+                self.assertEqual(expected_calls, invoked.call_args_list)
+                self.assertEqual(["install_xcodegen", *policy_events, "mac-platform-ios-arm64", "clean_outputs",
+                                  "isolated-consumers", *(["consumer-publication-inspect"] if product_ok else []),
+                                  "retain_publication", "retain_consumer_framework", "clean_outputs",
+                                  "swift-jvm-cli-prepare", "apple"], events)
+                operations["check"].assert_not_called()
+                operations["retain_publication"].assert_called_once_with(repository, "consumer-publication")
+                operations["retain_consumer_framework"].assert_called_once_with(consumer)
+                operations["apple"].assert_called_once_with()
+                self.assertFalse((host.state / "work/publication").exists())
+        self.assertEqual([], self.calls, "Routing fixture must not invoke a product subprocess")
+
+    def test_swift_jvm_peer_requires_successful_cli_receipt_and_serial_ui_preparation(self):
+        ui_dir = self.state / "work/swift-ui"
+        udid = "11111111-1111-1111-1111-111111111111"
+        labels = ["swift-jvm-ui-prepare", "swift-jvm-transfer"]
+        with self.assertRaisesRegex(ValueError, "CLI preparation receipt is missing"):
+            self.host.swift_jvm_transfer(ui_dir, udid)
+        for failure in ("cli", *labels):
+            with self.subTest(failure=failure):
+                self.host.receipts["swift-jvm-cli-prepare"] = {"finalExitCode": 1 if failure == "cli" else 0}
+                def invoke(label, arguments, **kwargs):
+                    return label != failure
+                with mock.patch.object(self.host, "invoke", side_effect=invoke) as invoked:
+                    self.host.swift_jvm_transfer(ui_dir, udid)
+                calls = invoked.call_args_list
+                expected = [] if failure == "cli" else labels[:labels.index(failure) + 1]
+                self.assertEqual(expected, [call.args[0] for call in calls])
+                for call, action in zip(calls, ("prepare-jvm-transfer", "run-jvm-transfer")):
+                    self.assertEqual(["bash", "scripts/run-ios-ui-tests.sh", action], call.args[1])
+                    self.assertEqual("command", call.kwargs["kind"])
+                    self.assertEqual({"IOS_RUN_DIR": str(ui_dir), "KEEP_IOS_RUN_ARTIFACTS": "1", "SIM_UDID": udid},
+                                     call.kwargs["extra_env"])
+        self.assertEqual([], self.calls, "No actual product subprocess belongs in this orchestration fixture")
 
     def test_consumer_framework_inspection_is_bound_and_missing_binary_is_not_a_pass(self):
         self.host.receipts["isolated-consumers"] = {"id": "b" * 32}
@@ -1983,6 +2069,79 @@ class HostInvocationTest(unittest.TestCase):
         self.assertEqual([], self.calls)
         self.assertEqual("Shutdown", self.host.simulator["stateAfter"])
 
+    def test_cancellation_probe_is_isolated_and_retired_after_success_failure_or_interruption(self):
+        udid = "11111111-1111-1111-1111-111111111111"
+        for outcome in (True, False, "interrupted", "retirement-failed", "unowned"):
+            with self.subTest(outcome=outcome):
+                fixture = HostInvocationTest()
+                fixture.setUp()
+                self.addCleanup(fixture.doCleanups)
+                host = fixture.host
+                host.role, host.scope = "macos-arm64", "apple-followup"
+                host.simulator = {"udid": udid, "stateBefore": "Booted" if outcome == "unowned" else "Shutdown"}
+                ui_dir = fixture.state / "work/swift-ui"
+                bundle = ui_dir / "DerivedData/Logs/Test/swift-cancellation-probe.xcresult"
+                events = []
+                def invoke(label, arguments, **kwargs):
+                    events.append(label)
+                    if label.endswith("-shutdown"):
+                        self.assertEqual(["xcrun", "simctl", "shutdown", udid], arguments)
+                        if label == "swift-cancellation-retire-shutdown":
+                            self.assertTrue(host.finalizing, "retirement can use the reserved cleanup interval")
+                            return outcome != "retirement-failed"
+                        return True
+                    self.assertEqual("swift-cancellation-probe-invocation", label)
+                    self.assertEqual(["bash", "scripts/run-ios-ui-tests.sh", "run-cancellation-probe"], arguments)
+                    self.assertEqual(udid, kwargs["extra_env"]["SIM_UDID"])
+                    self.assertEqual(900, kwargs["timeout"])
+                    self.assertNotIn("stateAfter", host.simulator, "pre-probe shutdown cannot masquerade as final retirement")
+                    bundle.mkdir(parents=True)
+                    (bundle / "retained-observation.txt").write_text("synthetic bounded observation, not native evidence")
+                    if outcome == "interrupted":
+                        host.safe = False  # Mirror an executor ownership/cancellation failure.
+                        raise HOST.InfrastructureFailure("synthetic interrupted probe")
+                    return outcome is not False
+                simulator = fixture.simulator_inspection(["Booted", "Shutdown", "Booted", "Shutdown"])
+                def inspect(label, arguments):
+                    if label.startswith("swift-cancellation-probe-"):
+                        expected = ["xcrun", "xcresulttool", "get", "object", "--legacy", "--format", "json",
+                                    "--path", str(bundle)]
+                        if label.endswith("tests-0"):
+                            expected += ["--id", "synthetic-tests"]
+                        self.assertEqual(expected, arguments)
+                        path = host.evidence / (label + ".json")
+                        path.write_text(json.dumps({"actions": {"_values": [{"actionResult": {
+                            "testsRef": {"id": {"_value": "synthetic-tests"}}}}]}}))
+                        return path
+                    return simulator(label, arguments)
+                with mock.patch.object(host, "invoke", side_effect=invoke), \
+                        mock.patch.object(host, "inspect_tool", side_effect=inspect):
+                    if outcome in ("interrupted", "retirement-failed"):
+                        with self.assertRaises((HOST.InfrastructureFailure, ValueError)):
+                            host.swift_cancellation_probe(ui_dir, udid)
+                    else:
+                        host.swift_cancellation_probe(ui_dir, udid)
+                if outcome == "unowned":
+                    self.assertEqual([], events)
+                    self.assertEqual({"component": "swift-cancellation-probe-admission", "result": "FAIL",
+                                      "inspectionOnly": True, "investigationOnly": True,
+                                      "reason": "Owned initially Shutdown simulator unavailable"}, host.rows[-1])
+                    admission = json.loads((host.evidence / "swift-cancellation-probe-admission.json").read_text())
+                    self.assertEqual("NOT_EXECUTED", admission["result"])
+                    self.assertFalse((host.evidence / "swift-cancellation-probe-result.json").exists())
+                    continue
+                self.assertEqual(["swift-cancellation-isolate-shutdown", "swift-cancellation-probe-invocation",
+                                  "swift-cancellation-retire-shutdown"], events)
+                report = json.loads((host.evidence / "swift-cancellation-probe-result.json").read_text())
+                self.assertEqual(outcome != "retirement-failed", report["ownedSimulatorShutdownObserved"])
+                self.assertEqual("PENDING_NATIVE_EVIDENCE_REVIEW", report["cancellationVerdict"])
+                self.assertEqual(False if outcome is False else None if outcome == "interrupted" else True,
+                                 report["invocationSucceeded"])
+                self.assertTrue((host.evidence / "swift-xcresult" / bundle.name / "retained-observation.txt").is_file())
+                self.assertFalse(host.finalizing)
+                if outcome in ("interrupted", "retirement-failed"):
+                    self.assertFalse(host.safe)
+
     def test_failed_simulator_shutdown_blocks_final_continuation(self):
         self.host.simulator = {"udid": "11111111-1111-1111-1111-111111111111", "stateBefore": "Shutdown"}
         self.next_status = 7
@@ -2390,7 +2549,8 @@ class SdkSetupTest(unittest.TestCase):
 
     def test_run_routes_all_roles_only_after_sdk_validation(self):
         for role, scope in [*((role, "full") for role in HOST.ROLES),
-                             ("windows-x64", "windows-followup"), ("windows-x64", "windows-diagnostics")]:
+                             ("windows-x64", "windows-followup"), ("windows-x64", "windows-diagnostics"),
+                             ("macos-arm64", "apple-followup")]:
             with self.subTest(role=role, scope=scope), self.fixture(role) as data:
                 fixture, sdk, _, _ = data
                 result, windows, mac, followup, diagnostics = self.run_fixture(fixture, sdk, scope=scope)
@@ -2412,7 +2572,8 @@ class SdkSetupTest(unittest.TestCase):
 
     def test_run_blocks_all_products_and_finalizes_invalid_metadata(self):
         for role, scope in [*((role, "full") for role in HOST.ROLES),
-                             ("windows-x64", "windows-followup"), ("windows-x64", "windows-diagnostics")]:
+                             ("windows-x64", "windows-followup"), ("windows-x64", "windows-diagnostics"),
+                             ("macos-arm64", "apple-followup")]:
             with self.subTest(role=role, scope=scope), self.fixture(role) as data:
                 fixture, sdk, _, properties = data
                 properties["android-37.0"].write_text("AndroidVersion.ApiLevel=37.1\n", encoding="utf-8")
@@ -2428,7 +2589,8 @@ class SdkSetupTest(unittest.TestCase):
 
     def test_run_blocks_all_products_and_finalizes_failed_sdk_installation(self):
         for role, scope in [*((role, "full") for role in HOST.ROLES),
-                             ("windows-x64", "windows-followup"), ("windows-x64", "windows-diagnostics")]:
+                             ("windows-x64", "windows-followup"), ("windows-x64", "windows-diagnostics"),
+                             ("macos-arm64", "apple-followup")]:
             with self.subTest(role=role, scope=scope), self.fixture(role) as data:
                 fixture, sdk, _, _ = data
                 result, windows, mac, followup, diagnostics = self.run_fixture(fixture, sdk, manager_status=7, scope=scope)

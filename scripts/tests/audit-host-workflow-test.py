@@ -495,17 +495,23 @@ class HandoffTest(WorkflowTestCase):
                                  b"synthetic source; never an owned output\n")
 
     def test_cleaned_product_failure_stays_failed_but_may_release_the_next_host_after_upload(self):
-        case = Fixture(self)
-        case.summary["result"] = "FAIL"
-        case.summary["components"][1].update(result="FAIL", exitCode=17)
-        case.write_receipt(PRODUCT_ID, "gradle-check", finalExitCode=17)
-        case.save_summary()
-        case.seal()
-        case.environment["AUDIT_DRIVER_OUTCOME"] = "failure"
-        result = case.invoke()
-        self.assert_safe(case, result, product="FAIL")
-        self.assertEqual(result.record["setupAndDriverOutcomes"]["driver"], "failure")
-        self.assertEqual(json_file(case.evidence / "host-summary.json")["components"][1]["result"], "FAIL")
+        for inspection_only in (False, True):
+            with self.subTest(inspection_only=inspection_only):
+                case = Fixture(self)
+                case.summary["result"] = "FAIL"
+                index = 2 if inspection_only else 1
+                if inspection_only:
+                    case.summary["components"][index].update(result="FAIL")
+                else:
+                    case.summary["components"][index].update(result="FAIL", exitCode=17)
+                    case.write_receipt(PRODUCT_ID, "gradle-check", finalExitCode=17)
+                case.save_summary()
+                case.seal()
+                case.environment["AUDIT_DRIVER_OUTCOME"] = "failure"
+                result = case.invoke()
+                self.assert_safe(case, result, product="FAIL")
+                self.assertEqual(result.record["setupAndDriverOutcomes"]["driver"], "failure")
+                self.assertEqual(json_file(case.evidence / "host-summary.json")["components"][index]["result"], "FAIL")
 
     def test_false_missing_or_nonliteral_driver_output_cannot_borrow_an_optimistic_summary(self):
         for value in (None, "", "false", "True", "1", " true"):
@@ -1184,11 +1190,11 @@ class WorkflowOrchestrationTest(WorkflowTestCase):
         self.assertIn("cancel-in-progress: false", TEXT)
         self.assertNotIn("needs:", TEXT)
         block = job_block("selected_host")
-        self.assertEqual(yaml_value(block, "name", 4), "Audit native Apple Silicon components")
+        self.assertEqual(yaml_value(block, "name", 4), "Audit native Apple Silicon follow-up")
         self.assertEqual(yaml_value(block, "runs-on", 4), "macos-26")
         self.assertEqual(yaml_value(block, "shell", 8), "python3 {0}")
         self.assertEqual(yaml_value(block, "P2PKIT_AUDIT_ROLE", 6), "macos-arm64")
-        self.assertEqual(yaml_value(block, "P2PKIT_AUDIT_SCOPE", 6), "full")
+        self.assertEqual(yaml_value(block, "P2PKIT_AUDIT_SCOPE", 6), "apple-followup")
         self.assertEqual(yaml_value(block, "P2PKIT_AUDIT_DRIVER_TIMEOUT_SECONDS", 6), '"19200"')
         self.assertEqual(yaml_value(block, "timeout-minutes", 4), "360")
         self.assertIn("        id: audit\n        timeout-minutes: 330\n        run: &run_host |", block)

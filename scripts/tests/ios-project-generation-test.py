@@ -82,6 +82,31 @@ class IosProjectGenerationTest(unittest.TestCase):
             for entry in entries
         ))
 
+    def test_cancellation_probe_is_excluded_from_both_acceptance_schemes(self):
+        target = "p2pkit-sample-cancellation-probe-tests"
+        scheme = self.scheme("p2pkit-sample-cancellation-probe")
+        testables = scheme.findall("TestAction/Testables/TestableReference")
+        self.assertEqual(1, len(testables))
+        self.assertEqual("NO", testables[0].attrib["skipped"])
+        self.assertEqual(target, testables[0].find("BuildableReference").attrib["BlueprintName"])
+        for name in ("p2pkit-sample", "p2pkit-sample-ui", "p2pkit-sample-jvm-transfer"):
+            with self.subTest(scheme=name):
+                ordinary = self.scheme(name)
+                self.assertNotIn(target, {
+                    entry.attrib["BlueprintName"] for entry in ordinary.findall(".//BuildableReference")})
+
+    def test_real_jvm_peer_case_has_one_separate_explicit_target(self):
+        scheme = self.scheme("p2pkit-sample-jvm-transfer")
+        testables = scheme.findall("TestAction/Testables/TestableReference")
+        self.assertEqual(1, len(testables))
+        self.assertEqual("NO", testables[0].attrib["skipped"])
+        self.assertEqual("p2pkit-sample-jvm-transfer-tests",
+                         testables[0].find("BuildableReference").attrib["BlueprintName"])
+        ordinary = self.scheme("p2pkit-sample-ui")
+        self.assertNotIn("p2pkit-sample-jvm-transfer-tests", {
+            test.find("BuildableReference").attrib["BlueprintName"]
+            for test in ordinary.findall("TestAction/Testables/TestableReference")})
+
     def test_ui_and_release_callers_preserve_both_test_targets(self):
         for caller in ("scripts/run-ios-ui-tests.sh", "scripts/run-release-gate.sh"):
             with self.subTest(caller=caller):
