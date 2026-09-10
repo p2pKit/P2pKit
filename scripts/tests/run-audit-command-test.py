@@ -899,6 +899,7 @@ class DarwinObservationTests(unittest.TestCase):
         self.scope.known, self.scope.handles = {}, {}
         self.scope.leaders, self.scope.launches = [], []
         self.scope.discovery_errors, self.scope.baseline = set(), set()
+        self.scope.pending_discoveries, self.scope.discovery_reconciliations = {}, []
         self.scope.observation_reconciliations = []
         self.scope.self_port, self.scope.argmax = 7, 4096
         self.scope.system, self.scope.proc = mock.Mock(), mock.Mock()
@@ -980,6 +981,97 @@ class DarwinObservationTests(unittest.TestCase):
                 self.assertEqual(event["outcome"], "unresolved")
                 self.assertEqual(event["lastIdentity"], self.current)
                 self.assertIn("Mach result 5", event["firstFailure"])
+
+    def fail_environment_census(self):
+        with self.clock(), mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                mock.patch.object(self.scope, "_environment", side_effect=processes.DarwinObservationError(
+                    "Darwin process environment failed: errno 5")):
+            self.assertEqual(self.scope.discover(), [])
+        self.assertEqual(len(self.scope.discovery_errors), 1)
+        self.assertLessEqual(self.elapsed, 0.250001)
+        self.assertEqual(self.scope.observation_reconciliations[-1]["outcome"], "unresolved")
+
+    def test_later_environment_census_resolves_only_positive_marker_observation(self):
+        for marked in (False, True):
+            with self.subTest(marked=marked):
+                self.setUp()
+                self.fail_environment_census()
+                environment = processes.ownership_environment({}, self.scope.job, self.scope.invocation,
+                                                                self.scope.state, self.scope.home) if marked else {}
+                environment = {key.encode(): value.encode() for key, value in environment.items()}
+                with self.clock(), mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                        mock.patch.object(self.scope, "_environment", return_value=environment), \
+                        mock.patch.object(self.scope, "_acquire", return_value=processes.AuditToken()) as acquire:
+                    self.assertEqual(self.scope.discover(), [self.identity] if marked else [])
+                self.assertEqual(self.scope.discovery_errors, set())
+                self.assertEqual(acquire.call_count, int(marked))
+                self.assertEqual(self.scope.observation_reconciliations[0]["outcome"], "unresolved")
+                record = self.scope.description()["discoveryReconciliations"][-1]
+                self.assertEqual(record["outcome"], "owned" if marked else "unmarked")
+                self.assertIn("errno 5", record["firstFailure"])
+
+    def test_pending_discovery_lifetime_is_rechecked_even_when_missing_from_census(self):
+        for terminal, outcome in ((None, "lifetime-ended"),
+                                  ({**self.identity, "status": 5, "live": False}, "nonrunning"),
+                                  ({**self.identity, "uniqueId": 100}, "replaced")):
+            with self.subTest(outcome=outcome):
+                self.setUp()
+                self.fail_environment_census()
+                self.current = terminal
+                self.scope._pids = lambda: []
+                with self.clock(), mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                        mock.patch.object(self.scope, "_environment", return_value={}) as environment, \
+                        mock.patch.object(self.scope, "_acquire") as acquire:
+                    self.assertEqual(self.scope.discover(), [])
+                self.assertEqual(self.scope.discovery_errors, set())
+                record = self.scope.description()["discoveryReconciliations"][-1]
+                self.assertEqual((record["outcome"], record["lastIdentity"]), (outcome, terminal))
+                self.assertEqual(environment.call_count, int(outcome == "replaced"))
+                acquire.assert_not_called()
+                self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_pending_discovery_identity_denial_is_not_absence_or_ineligibility(self):
+        for error in (0, errno.EPERM, errno.EACCES):
+            with self.subTest(errno=error):
+                self.setUp()
+                self.fail_environment_census()
+                self.scope._pids = lambda: []
+                self.scope._identity = processes.DarwinScope._identity.__get__(self.scope)
+
+                def unavailable(*_args):
+                    ctypes.set_errno(error)
+                    return 0
+
+                self.scope.proc.proc_pidinfo.side_effect = unavailable
+                with self.clock(), self.assertRaisesRegex(processes.OwnershipError, "unresolved"):
+                    self.scope.discover()
+                self.assertEqual(len(self.scope.discovery_errors), 1)
+                self.assertEqual(self.scope.discovery_reconciliations[-1]["outcome"], "unresolved")
+
+    def test_pending_discovery_credential_changes_do_not_clear_failed_observation(self):
+        for field in ("uid", "realUid"):
+            with self.subTest(field=field):
+                self.setUp()
+                self.fail_environment_census()
+                self.current[field] = 0
+                with self.clock(), mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                        mock.patch.object(self.scope, "_environment", side_effect=processes.DarwinObservationError(
+                            "environment access still denied")):
+                    self.assertEqual(self.scope.discover(), [])
+                self.assertEqual(len(self.scope.discovery_errors), 1)
+                self.assertEqual(self.scope.discovery_reconciliations[-1]["outcome"], "unresolved")
+
+    def test_positive_exit_cannot_clear_structural_discovery_failure(self):
+        self.fail_environment_census()
+        with self.clock(), mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                mock.patch.object(self.scope, "_environment", side_effect=processes.OwnershipError(
+                    "Darwin process environment exceeded admitted bound")):
+            self.assertEqual(self.scope.discover(), [])
+        self.current = None
+        self.scope._pids = lambda: []
+        self.assertEqual(self.scope.discover(), [])
+        self.assertEqual(self.scope.discovery_errors,
+                         {f"Cannot inspect new same-uid process {self.identity['pid']}: OwnershipError"})
 
     def test_reused_pid_does_not_acquire_or_signal_the_replacement(self):
         self.on_sleep = lambda: setattr(self, "current", {**self.identity, "uniqueId": 100})

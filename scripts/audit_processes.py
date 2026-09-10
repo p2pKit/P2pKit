@@ -217,6 +217,8 @@ class PosixScope:
         self.leaders: list[PosixProcess] = []
         self.launches: list[dict[str, Any]] = []
         self.discovery_errors: set[str] = set()
+        self.pending_discoveries: dict[int, dict[str, Any]] = {}
+        self.discovery_reconciliations: list[dict[str, Any]] = []
         self.baseline: set[tuple[int, ...]] = set()
         self._admit()
         for pid in self._pids():
@@ -276,13 +278,30 @@ class PosixScope:
             raise OwnershipError("Owned process current context does not match its last domain")
         return {"id": self.invocation, "job": self.job, "state": self.state, "home": self.home} in domains
 
+    def _discovery_failed(self, identity: dict[str, Any], error: Exception) -> str:
+        message = f"Cannot inspect new same-uid process {identity['pid']}: {type(error).__name__}"
+        self.discovery_errors.add(message)
+        return message
+
+    def _discovery_resolved(self, pid: int, outcome: str, current: dict[str, Any] | None = None) -> None:
+        record = self.pending_discoveries.pop(pid, None)
+        if record is not None:
+            record.update(outcome=outcome, lastIdentity=current)
+            self.discovery_errors.discard(record["message"])
+
     def discover(self) -> list[dict[str, Any]]:
         for leader in self.leaders:
             leader.poll()  # Reap our children; a zombie is not a running worker.
-        for pid in self._pids():
+        # A missing census entry is not exit evidence for an unresolved lifetime.
+        for pid in dict.fromkeys([*self._pids(), *self.pending_discoveries]):
             if pid == os.getpid():
                 continue
             identity = self._identity(pid)
+            pending = self.pending_discoveries.get(pid)
+            if pending is not None and (identity is None or not identity["live"] or
+                                        self._key(identity) != self._key(pending["identity"])):
+                outcome = "lifetime-ended" if identity is None else "nonrunning" if not identity["live"] else "replaced"
+                self._discovery_resolved(pid, outcome, identity)
             if identity is None or not identity["live"] or identity["uid"] != os.getuid():
                 continue
             key = self._key(identity)
@@ -294,11 +313,13 @@ class PosixScope:
             try:
                 environment = self._inspect_environment(identity)
             except (PermissionError, OwnershipError) as error:
-                self.discovery_errors.add(f"Cannot inspect new same-uid process {pid}: {type(error).__name__}")
+                self._discovery_failed(identity, error)
                 continue
             except ProcessLookupError:
+                self._discovery_resolved(pid, "lifetime-ended")
                 continue
             if not self._ours(environment):
+                self._discovery_resolved(pid, "unmarked", identity)
                 continue
             try:
                 # Both native backends recheck the bound lifetime while acquiring
@@ -306,9 +327,11 @@ class PosixScope:
                 # as absence before this positively owned process is registered.
                 handle = self._acquire(identity)
             except ProcessLookupError:
+                self._discovery_resolved(pid, "lifetime-ended")
                 continue
             self.known[key] = identity
             self.handles[key] = handle
+            self._discovery_resolved(pid, "owned", identity)
         live = []
         for key, previous in list(self.known.items()):
             current = self._identity(previous["pid"])
@@ -376,6 +399,7 @@ class PosixScope:
                 "invocation": self.invocation, "job": self.job,
                 "launches": self.launches,
                 "startedIdentities": sorted(self.known.values(), key=lambda item: item["pid"]),
+                "discoveryReconciliations": self.discovery_reconciliations,
                 "discoveryErrors": sorted(self.discovery_errors)}
 
     def close(self) -> None:
@@ -485,6 +509,10 @@ class DarwinObservationError(OwnershipError):
     """A failed observation, not proof of exit or an unreleased kernel right."""
 
 
+class DarwinObservationExhausted(OwnershipError):
+    """Still unresolved at this census; a later positive observation may reconcile it."""
+
+
 class DarwinScope(PosixScope):
     name = "darwin-libproc-audit-token"
 
@@ -579,7 +607,26 @@ class DarwinScope(PosixScope):
     def _recorded_identity(self, pid: int) -> dict[str, Any] | None:
         # Only failed observations need this history lookup, not every ordinary
         # successful census read. A PID may have more than one recorded lifetime.
+        pending = self.pending_discoveries.get(pid)
+        if pending is not None:
+            return pending["identity"]
         return next((item for item in reversed(self.known.values()) if item["pid"] == pid), None)
+
+    def _discovery_failed(self, identity: dict[str, Any], error: Exception) -> str:
+        message = super()._discovery_failed(identity, error)
+        # Defer only a reconciler's exhausted observation, never structural errors
+        # or leaked Mach rights. No extra wait or relaxed finalizer is introduced.
+        if isinstance(error, DarwinObservationExhausted):
+            record = self.pending_discoveries.get(identity["pid"])
+            if record is None:
+                if len(self.discovery_reconciliations) >= 1024:
+                    raise OwnershipError("Darwin discovery evidence exceeds its bound")
+                record = {"identity": dict(identity), "message": message, "firstFailure": str(error),
+                          "failures": 0, "outcome": "unresolved"}
+                self.pending_discoveries[identity["pid"]] = record
+                self.discovery_reconciliations.append(record)
+            record.update(lastIdentity=dict(identity), lastFailure=str(error), failures=record["failures"] + 1)
+        return message
 
     def _reconcile_identity(self, previous: dict[str, Any], failure: DarwinObservationError) -> dict[str, Any] | None:
         # A known child can temporarily become unreadable, including across a
@@ -630,7 +677,7 @@ class DarwinScope(PosixScope):
                 if remaining <= 0 or attempts == 26:
                     break
                 time.sleep(min(0.01, remaining))
-            raise OwnershipError(f"Darwin {operation} unresolved after bounded observation: {last_error}")
+            raise DarwinObservationExhausted(f"Darwin {operation} unresolved after bounded observation: {last_error}")
         finally:
             if first_error is not None:
                 if len(self.observation_reconciliations) >= 1024:
