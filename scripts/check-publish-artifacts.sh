@@ -5,6 +5,8 @@
 # ~/.m2) and asserts that every publication of the four library modules carries
 # the full Maven-Central-required artifact set:
 #   main artifact (.jar / .aar / .klib) + -sources.jar + -javadoc.jar + .pom + .module
+# Native coordinates also require -metadata.jar; LAN's native coordinates
+# additionally require the named -cinterop-p2pkit_nw.klib dependency artifact.
 #
 # Referenced from docs/releasing/checklist.md (local release-shape gate).
 # The six iOS klib publications require a macOS host (iOS targets compile only
@@ -64,13 +66,25 @@ check() {
     local javadoc="$dir/$artifact-$VERSION-javadoc.jar"
     local pom="$dir/$artifact-$VERSION.pom"
     local module="$dir/$artifact-$VERSION.module"
+    local native_metadata="" cinterop=""
+    local required_artifacts=("$artifact-$VERSION$main_suffix"
+                              "$artifact-$VERSION-sources.jar"
+                              "$artifact-$VERSION-javadoc.jar"
+                              "$artifact-$VERSION.pom"
+                              "$artifact-$VERSION.module")
+    if [[ "$main_suffix" == ".klib" ]]; then
+        native_metadata="$dir/$artifact-$VERSION-metadata.jar"
+        required_artifacts+=("$artifact-$VERSION-metadata.jar")
+        case "$artifact" in
+            p2p-transport-lan-iosarm64|p2p-transport-lan-iossimulatorarm64|p2p-transport-lan-iosx64)
+                cinterop="$dir/$artifact-$VERSION-cinterop-p2pkit_nw.klib"
+                required_artifacts+=("$artifact-$VERSION-cinterop-p2pkit_nw.klib")
+                ;;
+        esac
+    fi
     local missing=""
     local f
-    for f in "$artifact-$VERSION$main_suffix" \
-             "$artifact-$VERSION-sources.jar" \
-             "$artifact-$VERSION-javadoc.jar" \
-             "$artifact-$VERSION.pom" \
-             "$artifact-$VERSION.module"; do
+    for f in "${required_artifacts[@]}"; do
         [[ -f "$dir/$f" ]] || missing="$missing $f"
     done
     checked=$((checked + 1))
@@ -86,6 +100,12 @@ check() {
     unzip -tq "$main" >/dev/null 2>&1 || invalid="$invalid unreadable-main"
     unzip -tq "$sources" >/dev/null 2>&1 || invalid="$invalid unreadable-sources"
     unzip -tq "$javadoc" >/dev/null 2>&1 || invalid="$invalid unreadable-javadoc"
+    if [[ -n "$native_metadata" ]]; then
+        unzip -tq "$native_metadata" >/dev/null 2>&1 || invalid="$invalid unreadable-native-metadata"
+    fi
+    if [[ -n "$cinterop" ]]; then
+        unzip -tq "$cinterop" >/dev/null 2>&1 || invalid="$invalid unreadable-cinterop"
+    fi
 
     local source_entries javadoc_entries
     source_entries="$(unzip -Z1 "$sources")"
@@ -96,13 +116,17 @@ check() {
     [[ "$javadoc_entries" =~ (^|$'\n')([^$'\n']*/)?index\.html($|$'\n') ]] ||
         invalid="$invalid javadoc-without-index"
 
-    # Embedded-license policy: main JAR/AAR plus every sources/Dokka JAR.
+    # Embedded-license policy: main JAR/AAR, native metadata and every sources/Dokka JAR.
     # Keep the KLIB packaging exception explicit; it is not a legal waiver.
     local license_archives=("$sources" "$javadoc")
     case "$main_suffix" in
         .jar|.aar) license_archives+=("$main") ;;
         .klib)
+            license_archives+=("$native_metadata")
             echo "EXEMPT $artifact main KLIB — embedded-license check only; POM license remains required"
+            if [[ -n "$cinterop" ]]; then
+                echo "EXEMPT $(basename "$cinterop") — embedded-license check only; POM license remains required"
+            fi
             ;;
         *) invalid="$invalid unsupported-main-license-policy" ;;
     esac

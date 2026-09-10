@@ -74,12 +74,14 @@ For future candidate builds, the root `Jar`/`BundleAar` rules copy the repositor
 
 | Artifact class | Required content / inspection |
 | --- | --- |
-| Main JVM and KMP-metadata JARs; Android AARs | Exactly one `META-INF/LICENSE`, byte-identical to repository `LICENSE`. |
+| Main JVM and KMP-metadata JARs; six native `-metadata.jar` archives; Android AARs | Exactly one `META-INF/LICENSE`, byte-identical to repository `LICENSE`. |
 | Every publication's `-sources.jar` and Dokka `-javadoc.jar`, including iOS coordinates | The same single canonical embedded license, in addition to the existing source/index checks. |
-| Kotlin/Native main `.klib` | Explicit **embedded-license-check exemption**: not produced by `Jar`/`BundleAar`, and not rewritten. The gate still requires the sibling POM's Apache-2.0 metadata and the existing readable-artifact/KLIB-identity checks. It prints `EXEMPT`, not an embedded-license pass. |
+| Six Kotlin/Native main `.klib` and three LAN `-cinterop-p2pkit_nw.klib` archives | Explicit **embedded-license-check exemption**: not produced by `Jar`/`BundleAar`, and not rewritten. The gate requires each archive to exist and be readable, plus the sibling POM's Apache-2.0 metadata; the six main KLIBs also retain their existing identity checks. It prints `EXEMPT`, not an embedded-license pass. |
 | Source-built `P2pKitShared.xcframework` | Separate Apple output, not an artifact in this Maven publication set. Its provenance/minimum-OS checks do not certify license embedding. A redistributor must separately include the applicable license/notice material. |
 
-Every checked publication produces success, failure or an explicit KLIB-main
+The complete macOS set has 54 archives: 45 license-covered JARs/AARs and nine
+explicitly exempt KLIBs, across 15 publication coordinates.
+Every checked publication produces success, failure or an explicit KLIB
 exception; missing, changed or duplicate license entries in a covered JAR/AAR
 fail the gate. Non-macOS omission of the six iOS publication rows is a host
 execution limitation, **not** that license exception or a complete release pass.

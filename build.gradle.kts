@@ -500,7 +500,7 @@ tasks.cyclonedxBom {
 subprojects {
     val sub = this
 
-    // Embed the canonical license in Jar outputs (main, sources and Dokka)
+    // Embed the canonical license in Jar outputs (main, native metadata, sources and Dokka)
     // and Android AARs. Kotlin/Native KLIBs are not Jar tasks and are not
     // rewritten here; their license metadata is in the sibling POM. See
     // docs/releasing/checklist.md#archive-license-policy for scope and checks.

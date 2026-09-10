@@ -23,10 +23,12 @@ cases = [
     ("main-jar", ".jar", None, "valid"),
     ("main-aar", ".aar", None, "valid"),
     ("klib-main-exempt", ".klib", None, "valid"),
+    ("klib-interop-exempt", ".klib", None, "valid"),
     ("missing-source-license", ".jar", "sources", "missing"),
     ("changed-dokka-license", ".jar", "javadoc", "changed"),
     ("duplicate-main-license", ".aar", "main", "duplicate"),
     ("klib-source-not-exempt", ".klib", "sources", "missing"),
+    ("klib-metadata-not-exempt", ".klib", "metadata", "missing"),
     ("unreadable-dokka", ".jar", "javadoc", "unreadable"),
     ("unknown-main-policy", ".zip", None, "valid"),
 ]
@@ -37,6 +39,11 @@ for name, suffix, damaged, mode in cases:
         paths = {"main": work / ("fixture" + suffix),
                  "sources": work / "fixture-sources.jar",
                  "javadoc": work / "fixture-javadoc.jar"}
+        if suffix == ".klib":
+            paths["metadata"] = work / "fixture-metadata.jar"
+        has_interop = name == "klib-interop-exempt"
+        if has_interop:
+            paths["cinterop"] = work / "fixture-cinterop-p2pkit_nw.klib"
         for role, path in paths.items():
             kind = mode if damaged == role else "valid"
             if kind == "unreadable":
@@ -44,7 +51,7 @@ for name, suffix, damaged, mode in cases:
                 continue
             with zipfile.ZipFile(path, "w") as archive:
                 archive.writestr("fixture.txt", "synthetic")
-                if kind != "missing" and not (role == "main" and suffix == ".klib"):
+                if kind != "missing" and not (role in ("main", "cinterop") and suffix == ".klib"):
                     archive.writestr("META-INF/LICENSE", b"changed" if kind == "changed" else license_bytes)
                 if kind == "duplicate":
                     with warnings.catch_warnings():
@@ -56,19 +63,24 @@ INSPECTION_DIR="$1"
 run_policy() {
     local artifact=fixture main_suffix="$2" invalid=""
     local main="$1/fixture$2" sources="$1/fixture-sources.jar" javadoc="$1/fixture-javadoc.jar"
+    local native_metadata="" cinterop=""
+    if [[ "$2" == ".klib" ]]; then native_metadata="$1/fixture-metadata.jar"; fi
+    if [[ "$3" == "interop" ]]; then cinterop="$1/fixture-cinterop-p2pkit_nw.klib"; fi
 """ + policy + """
     [[ -z "$invalid" ]] || { echo "FAIL $invalid"; return 1; }
 }
-run_policy "$1" "$2"
+run_policy "$1" "$2" "$3"
 """
-        result = subprocess.run(["bash", "-c", shell, "license-test", str(work), suffix],
+        result = subprocess.run(["bash", "-c", shell, "license-test", str(work), suffix,
+                                 "interop" if has_interop else "none"],
                                 capture_output=True, text=True, timeout=15)
         expected_pass = damaged is None and suffix != ".zip"
         assert (result.returncode == 0) == expected_pass, (name, result.returncode, result.stdout, result.stderr)
         assert ("EXEMPT " in result.stdout) == (suffix == ".klib"), (name, result.stdout)
+        if has_interop:
+            assert result.stdout.count("EXEMPT ") == 2, result.stdout
         if expected_pass:
-            expected_count = 2 if suffix == ".klib" else 3
-            assert result.stdout.count("one canonical META-INF/LICENSE") == expected_count, result.stdout
+            assert result.stdout.count("one canonical META-INF/LICENSE") == 3, result.stdout
         else:
             assert "FAIL " in result.stdout, (name, result.stdout, result.stderr)
         print(f"OK {name}")
