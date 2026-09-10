@@ -301,6 +301,10 @@ def build(args):
             tooling.unlink()
         else:
             tooling.write_text('{"changedAfterPreparation":true}\n')
+    if os.environ.get("FAKE_PLUGIN_INPUT_CHANGE"):
+        name = os.environ["FAKE_PLUGIN_INPUT_CHANGE"]
+        target = fixture / name
+        target.write_bytes(target.read_bytes() + b"\n# changed after preparation\n")
 
 def main():
     name, args = Path(sys.argv[0]).name, sys.argv[1:]
@@ -443,8 +447,17 @@ class ConsumerGateTest(unittest.TestCase):
         for path in (self.root / "scripts", self.root / "gradle", self.tools, self.state, self.work_root,
                      self.base / "temporary"):
             path.mkdir(parents=True)
-        for name in ("check-published-consumers.sh", "prepare-audit-consumer-metadata.py", "check-audit-receipt.py"):
+        for name in ("check-published-consumers.sh", "prepare-audit-consumer-metadata.py", "check-audit-receipt.py",
+                     "consumer-buildscript.gradle.kts"):
             shutil.copy2(ROOT / "scripts" / name, self.root / "scripts" / name)
+        (self.root / "buildscript-gradle.lockfile").write_text(
+            "# Synthetic plugin graph data, not a real Gradle-resolution result.\n"
+            "org.jetbrains.kotlin.jvm:org.jetbrains.kotlin.jvm.gradle.plugin:91.0.0=classpath\n"
+            "org.jetbrains.kotlin.multiplatform:org.jetbrains.kotlin.multiplatform.gradle.plugin:91.0.0=classpath\n"
+            "com.android.application:com.android.application.gradle.plugin:92.0.0=classpath\n"
+            "com.android.kotlin.multiplatform.library:com.android.kotlin.multiplatform.library.gradle.plugin:92.0.0=classpath\n"
+            "org.example.reviewed:external:1.0=classpath\nempty=\n"
+        )
         (self.root / "gradle.properties").write_text(
             f"GROUP={GROUP}\nVERSION_NAME={VERSION}\nLATEST_PUBLISHED_VERSION={VERSION.removesuffix('-SNAPSHOT')}\nIOS_MIN_VERSION=14.0\n"
         )
@@ -966,11 +979,30 @@ class ConsumerGateTest(unittest.TestCase):
         self.assertEqual(verification["result"], "PASS")
         self.assertEqual(verification["artifactCount"], 84)
         self.assertEqual(verification["verificationRecordCount"], 102)
+        self.assertEqual(manifest["reviewedPluginInputs"], {
+            name: hashlib.sha256((self.root / name).read_bytes()).hexdigest()
+            for name in ("scripts/consumer-buildscript.gradle.kts", "buildscript-gradle.lockfile")
+        })
+        self.assertEqual((self.work / "consumer/consumer-plugin-versions.lock").read_bytes(),
+                         (self.root / "buildscript-gradle.lockfile").read_bytes())
         build_recipe = (self.work / "consumer/build.gradle.kts").read_text()
+        self.assertTrue(build_recipe.startswith((self.root / "scripts/consumer-buildscript.gradle.kts").read_text()))
+        self.assertEqual(manifest["consumerRootBuildSha256"], hashlib.sha256(build_recipe.encode()).hexdigest())
         self.assertIn('kotlin("jvm") version "91.0.0"', build_recipe)
         self.assertIn('id("com.android.application") version "92.0.0"', build_recipe)
         self.assertIn('id("com.android.kotlin.multiplatform.library") version "92.0.0"', build_recipe)
         self.assertNotIn('id("com.android.library")', build_recipe)
+
+    def test_consumer_plugin_policy_inputs_cannot_change_after_preparation(self):
+        for name, message in (
+                ("consumer-plugin-versions.lock", "copied consumer plugin versions differ"),
+                ("build.gradle.kts", "prepared consumer publication binding changed: consumerRootBuildSha256")):
+            with self.subTest(name=name):
+                work = self.work_root / name
+                result = self.run_gate({**self.audit_options(), "P2PKIT_CONSUMER_WORK_DIR": str(work),
+                                        "FAKE_PLUGIN_INPUT_CHANGE": name})
+                self.assert_rejected(result, message)
+        self.assertFalse(list(self.state.glob("consumer-receipts.*/consumer-metadata-verification.json")))
 
     def test_module_file_aliases_cannot_expand_or_rebind_physical_trust(self):
         cases = (

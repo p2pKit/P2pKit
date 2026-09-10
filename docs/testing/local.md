@@ -430,6 +430,17 @@ in the release-workflow test. Run `ruby scripts/tests/check-version-input-policy
 for deterministic future-version/negative controls (also called by the toolchain policy); it performs no Gradle build.
 These are static source/lock and synthetic installer checks, not dependency resolution or publisher authentication.
 
+The isolated consumer's build tools use `scripts/consumer-buildscript.gradle.kts`
+before its plugin requests. Exact constraints come from a data copy of the reviewed
+root `buildscript-gradle.lockfile`; unused root plugins are not pulled into this
+smaller graph. Unknown modules and changed selections fail during classpath
+resolution, before plugin application. Only the buildscript classpath is affected,
+not the published library dependencies being tested. Audit mode also binds the
+copied lock and generated root recipe before/after compilation. Root lock/floor
+and checksum review still applies; a checksum for an older tool is not permission
+to bypass this version binding. Changes to this policy require an actual strict
+consumer configuration check, not only the shell fixture's synthetic success.
+
 ### Reviewed update workflow
 
 Dependency and wrapper updates remain fail closed. A version-catalog change

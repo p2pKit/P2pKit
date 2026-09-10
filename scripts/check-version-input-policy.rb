@@ -11,8 +11,14 @@ module VersionInputPolicy
     def self.check_consumer(source)
         # This is the maintained shell heredoc recipe, not an arbitrary Bash or
         # Kotlin parser. A new generator shape must be reviewed with this guard.
-        blocks = source.scan(/^cat > "\$FIXTURE_DIR\/build\.gradle\.kts" <<EOF\n(.*?)^EOF$/m).flatten
+        blocks = source.scan(/^cat >> "\$FIXTURE_DIR\/build\.gradle\.kts" <<EOF\n(.*?)^EOF$/m).flatten
         require_policy(blocks.size == 1, "expected one expanding root consumer build heredoc")
+        prefix = 'cat "$ROOT/scripts/consumer-buildscript.gradle.kts" > "$FIXTURE_DIR/build.gradle.kts"' + "\n" +
+                 'cp "$ROOT/buildscript-gradle.lockfile" "$FIXTURE_DIR/consumer-plugin-versions.lock"' + "\n"
+        header = 'cat >> "$FIXTURE_DIR/build.gradle.kts" <<EOF'
+        require_policy(source.scan(/^#{Regexp.escape(prefix)}/).size == 1 &&
+                       source.match?(/^#{Regexp.escape(prefix + header)}\n/),
+                       "consumer build must copy the reviewed plugin policy and versions before its plugins")
         declarations = blocks.first.lines.map(&:strip).reject(&:empty?)
         expected = [
             'plugins {',

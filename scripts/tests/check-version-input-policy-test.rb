@@ -53,18 +53,25 @@ declaration = 'kotlin("jvm") version "$KOTLIN_VERSION" apply false'
     end
     count += 1
 end
-header = 'cat > "$FIXTURE_DIR/build.gradle.kts" <<EOF'
+header = 'cat >> "$FIXTURE_DIR/build.gradle.kts" <<EOF'
 ["# #{header}", header.sub("<<EOF", "<<'EOF'"), header.sub("<<EOF", "<<'OTHER'")].each do |replacement|
     reject("non-expanding/missing heredoc", "expected one expanding") do
         VersionInputPolicy.check_consumer(replace_once(CONSUMER, header, replacement))
     end
     count += 1
 end
-root_block = CONSUMER[/^cat > "\$FIXTURE_DIR\/build\.gradle\.kts" <<EOF\n.*?^EOF$/m]
+root_block = CONSUMER[/^cat >> "\$FIXTURE_DIR\/build\.gradle\.kts" <<EOF\n.*?^EOF$/m]
 reject("duplicate root generator", "expected one expanding") do
     VersionInputPolicy.check_consumer(CONSUMER + "\n" + root_block + "\n")
 end
 count += 1
+['cat "$ROOT/scripts/consumer-buildscript.gradle.kts" > "$FIXTURE_DIR/build.gradle.kts"',
+ 'cp "$ROOT/buildscript-gradle.lockfile" "$FIXTURE_DIR/consumer-plugin-versions.lock"'].each do |copy|
+    reject("missing plugin policy input", "must copy the reviewed plugin policy") do
+        VersionInputPolicy.check_consumer(replace_once(CONSUMER, copy, "# #{copy}"))
+    end
+    count += 1
+end
 ['kotlin("jvm") version "9.9.9"', 'id("org.jetbrains.kotlin.jvm").version("9.9.9")',
  "kotlin(\"jvm\") version\n    \"9.9.9\""].each do |pin|
     reject("literal elsewhere #{pin.inspect}", "literal plugin version") do

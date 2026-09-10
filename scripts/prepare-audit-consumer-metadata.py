@@ -280,11 +280,17 @@ def setup(args):
     require(isinstance(context.get("id"), str) and context["id"], "audit context has no ownership id")
     group, version = coordinates(root)
     reviewed = reviewed_metadata(root, group, version)
+    plugin_inputs = {}
+    for name in ("scripts/consumer-buildscript.gradle.kts", "buildscript-gradle.lockfile"):
+        data = bounded_bytes(root / name)
+        require(data == git(root, "cat-file", "blob", f"HEAD:{name}"),
+                f"consumer plugin input differs from committed reviewed bytes: {name}")
+        plugin_inputs[name] = data
     return {
         "root": root, "work": work, "state": state, "evidence": evidence, "receipt": receipt,
         "repository": work / "repository", "fixture": work / "consumer", "source": source,
         "contextSha256": sha256(context_bytes), "contextId": context["id"],
-        "group": group, "version": version, "reviewed": reviewed,
+        "group": group, "version": version, "reviewed": reviewed, "pluginInputs": plugin_inputs,
     }
 
 
@@ -322,6 +328,7 @@ def admission_fields(context):
         "source": context["source"], "contextSha256": context["contextSha256"],
         "contextId": context["contextId"], "publicationReceipt": str(context["receipt"]),
         "requestedPublishArgv": publish_arguments(context), "reviewedMetadataSha256": sha256(context["reviewed"]),
+        "reviewedPluginInputs": {name: sha256(data) for name, data in context["pluginInputs"].items()},
     }
 
 
@@ -495,6 +502,12 @@ def render_metadata(context, artifacts, publication_id):
 def prepared_fields(context):
     admission_sha = validate_admission(context)
     receipt_sha, receipt_id = validate_receipt(context["receipt"], context, "consumer-publish", publish_arguments(context))
+    plugin_lock = bounded_bytes(context["fixture"] / "consumer-plugin-versions.lock")
+    root_build = bounded_bytes(context["fixture"] / "build.gradle.kts")
+    require(plugin_lock == context["pluginInputs"]["buildscript-gradle.lockfile"],
+            "copied consumer plugin versions differ from reviewed root lock")
+    require(root_build.startswith(context["pluginInputs"]["scripts/consumer-buildscript.gradle.kts"]),
+            "consumer root build is missing the exact reviewed plugin policy")
     files, artifacts, logical_aliases = inspect_repository(context)
     prepared = render_metadata(context, artifacts + logical_aliases, receipt_id)
     fields = {
@@ -502,6 +515,8 @@ def prepared_fields(context):
         "contextSha256": context["contextSha256"], "admissionSha256": admission_sha,
         "publicationReceiptSha256": receipt_sha, "publicationId": receipt_id,
         "reviewedMetadataSha256": sha256(context["reviewed"]), "preparedMetadataSha256": sha256(prepared),
+        "reviewedPluginInputs": {name: sha256(data) for name, data in context["pluginInputs"].items()},
+        "consumerRootBuildSha256": sha256(root_build), "consumerPluginVersionsSha256": sha256(plugin_lock),
         "publicationCount": len(PUBLICATIONS), "artifactCount": len(artifacts),
         "verificationRecordCount": len(artifacts) + len(logical_aliases),
         "localArtifacts": artifacts, "logicalAliases": logical_aliases, "repositoryFiles": files,

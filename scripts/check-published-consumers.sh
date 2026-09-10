@@ -287,7 +287,9 @@ rootProject.name = "p2pkit-published-consumers"
 include(":coreJvm", ":lanJvm", ":desktopJvm", ":androidConsumer", ":kmpConsumer")
 EOF
 
-cat > "$FIXTURE_DIR/build.gradle.kts" <<EOF
+cat "$ROOT/scripts/consumer-buildscript.gradle.kts" > "$FIXTURE_DIR/build.gradle.kts"
+cp "$ROOT/buildscript-gradle.lockfile" "$FIXTURE_DIR/consumer-plugin-versions.lock"
+cat >> "$FIXTURE_DIR/build.gradle.kts" <<EOF
 plugins {
     kotlin("jvm") version "$KOTLIN_VERSION" apply false
     kotlin("multiplatform") version "$KOTLIN_VERSION" apply false
