@@ -91,7 +91,7 @@ case "$XCF_STATE" in
 esac
 
 case "$XCF_FINGERPRINT" in
-    *[!0-9a-f]*|'')
+    *[!0123456789abcdef]*|'')
         echo "error: invalid XCFramework input fingerprint"
         exit 1
         ;;
