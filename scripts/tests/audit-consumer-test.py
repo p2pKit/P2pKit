@@ -50,6 +50,13 @@ EXPECTED_PUBLICATIONS = [
     ("p2p-core-iosx64", ".klib"), ("p2p-transport-lan-iosx64", ".klib"),
 ]
 EXPECTED_TOOLING_PUBLICATIONS = ("p2p-core", "p2p-transport-lan", "p2p-network-provisioning-android")
+EXPECTED_NATIVE_PUBLICATIONS = (
+    "p2p-core-iosarm64", "p2p-core-iossimulatorarm64", "p2p-core-iosx64",
+    "p2p-transport-lan-iosarm64", "p2p-transport-lan-iossimulatorarm64", "p2p-transport-lan-iosx64",
+)
+EXPECTED_INTEROP_PUBLICATIONS = (
+    "p2p-transport-lan-iosarm64", "p2p-transport-lan-iossimulatorarm64", "p2p-transport-lan-iosx64",
+)
 EXPECTED_TASKS = [
     ":coreJvm:compileKotlin", ":coreJvm:compileJava", ":lanJvm:compileKotlin", ":desktopJvm:compileKotlin",
     ":androidConsumer:compileDebugKotlin", ":androidConsumer:processDebugManifest", ":kmpConsumer:compileKotlinJvm",
@@ -85,6 +92,8 @@ import time
 
 PUBLICATIONS = __PUBLICATIONS__
 TOOLING_PUBLICATIONS = __TOOLING_PUBLICATIONS__
+NATIVE_PUBLICATIONS = __NATIVE_PUBLICATIONS__
+INTEROP_PUBLICATIONS = __INTEROP_PUBLICATIONS__
 DEPS = __DEPS__
 PERMISSIONS = __PERMISSIONS__
 GROUP = __GROUP__
@@ -126,7 +135,12 @@ def publish(repo):
     for artifact, suffix in PUBLICATIONS:
         folder = repo / GROUP.replace(".", "/") / artifact / VERSION
         folder.mkdir(parents=True, exist_ok=True)
-        for ending in [suffix, "-sources.jar", "-javadoc.jar"]:
+        endings = [suffix, "-sources.jar", "-javadoc.jar"]
+        if artifact in NATIVE_PUBLICATIONS:
+            endings.append("-metadata.jar")
+        if artifact in INTEROP_PUBLICATIONS:
+            endings.append("-cinterop-p2pkit_nw.klib")
+        for ending in endings:
             name = f"{artifact}-{VERSION}{ending}"
             (folder / name).write_bytes(("synthetic fixture artifact " + name + "\n").encode())
         (folder / f"{artifact}-{VERSION}.pom").write_text(pom(artifact))
@@ -152,6 +166,14 @@ def publish(repo):
     if os.environ.get("FAKE_EXTRA_TOOLING"):
         (repo / GROUP.replace(".", "/") / "p2p-core-jvm" / VERSION /
          f"p2p-core-jvm-{VERSION}-kotlin-tooling-metadata.json").write_text("{}\n")
+    if os.environ.get("FAKE_EXTRA_NATIVE_INTEROP"):
+        (repo / GROUP.replace(".", "/") / "p2p-core-iosarm64" / VERSION /
+         f"p2p-core-iosarm64-{VERSION}-cinterop-p2pkit_nw.klib").write_bytes(b"unapproved interop coordinate")
+    for flag, artifact, ending in (
+            ("FAKE_MISSING_NATIVE_METADATA", "p2p-core-iosarm64", "-metadata.jar"),
+            ("FAKE_MISSING_NATIVE_INTEROP", "p2p-transport-lan-iosarm64", "-cinterop-p2pkit_nw.klib")):
+        if os.environ.get(flag):
+            (repo / GROUP.replace(".", "/") / artifact / VERSION / f"{artifact}-{VERSION}{ending}").unlink()
     if os.environ.get("FAKE_MISSING_POM"):
         artifact = os.environ["FAKE_MISSING_POM"]
         (repo / GROUP.replace(".", "/") / artifact / VERSION / f"{artifact}-{VERSION}.pom").unlink()
@@ -186,6 +208,12 @@ def build(args):
     if os.environ.get("FAKE_TAMPER_LOCAL"):
         repo = Path(next(arg.split("=", 1)[1] for arg in args if arg.startswith("-PconsumerRepo=")))
         (repo / GROUP.replace(".", "/") / "p2p-core-jvm" / VERSION / f"p2p-core-jvm-{VERSION}.jar").write_bytes(b"changed after prepared allowlist")
+    for flag, artifact, ending in (
+            ("FAKE_TAMPER_NATIVE_METADATA", "p2p-core-iosarm64", "-metadata.jar"),
+            ("FAKE_TAMPER_NATIVE_INTEROP", "p2p-transport-lan-iosarm64", "-cinterop-p2pkit_nw.klib")):
+        if os.environ.get(flag):
+            repo = Path(next(arg.split("=", 1)[1] for arg in args if arg.startswith("-PconsumerRepo=")))
+            (repo / GROUP.replace(".", "/") / artifact / VERSION / f"{artifact}-{VERSION}{ending}").write_bytes(b"changed native dependency input")
     if os.environ.get("FAKE_TOOLING_CHANGE"):
         repo = Path(next(arg.split("=", 1)[1] for arg in args if arg.startswith("-PconsumerRepo=")))
         tooling = repo / GROUP.replace(".", "/") / "p2p-core" / VERSION / f"p2p-core-{VERSION}-kotlin-tooling-metadata.json"
@@ -356,6 +384,7 @@ class ConsumerGateTest(unittest.TestCase):
         for key, value in {
             "PUBLICATIONS": EXPECTED_PUBLICATIONS, "DEPS": POM_DEPENDENCIES, "PERMISSIONS": PERMISSIONS,
             "TOOLING_PUBLICATIONS": EXPECTED_TOOLING_PUBLICATIONS,
+            "NATIVE_PUBLICATIONS": EXPECTED_NATIVE_PUBLICATIONS, "INTEROP_PUBLICATIONS": EXPECTED_INTEROP_PUBLICATIONS,
             "GROUP": GROUP, "VERSION": VERSION, "EXTERNAL_SHA256": EXTERNAL_SHA256,
             "OWNERSHIP_FIELDS": OWNERSHIP_FIELDS, "CONSUMER_REPORT_BYTES": CONSUMER_REPORT_BYTES,
         }.items():
@@ -770,7 +799,7 @@ class ConsumerGateTest(unittest.TestCase):
         self.assertFalse(self.calls("gradle"))
         self.assertFalse(self.calls("curl"))
 
-    def test_metadata_preserves_external_bytes_and_only_exact_75_local_hashes(self):
+    def test_metadata_preserves_external_bytes_and_only_exact_84_local_hashes(self):
         result = self.run_gate(self.audit_options())
         self.assert_pass(result)
         metadata = (self.work / "consumer/gradle/verification-metadata.xml").read_bytes()
@@ -785,19 +814,27 @@ class ConsumerGateTest(unittest.TestCase):
         actual = {}
         for component in local:
             self.assertEqual(component.get("version"), VERSION)
-            self.assertEqual(len(component), 5)
+            module = component.get("name")
+            endings = [dict(EXPECTED_PUBLICATIONS)[module], "-sources.jar", "-javadoc.jar", ".pom", ".module"]
+            if module in EXPECTED_NATIVE_PUBLICATIONS:
+                endings.append("-metadata.jar")
+            if module in EXPECTED_INTEROP_PUBLICATIONS:
+                endings.append("-cinterop-p2pkit_nw.klib")
+            self.assertEqual({artifact.get("name") for artifact in component},
+                             {f"{module}-{VERSION}{ending}" for ending in endings})
+            self.assertEqual(len(component), len(endings))
             for artifact in component:
                 relative = Path(GROUP.replace(".", "/")) / component.get("name") / VERSION / artifact.get("name")
                 actual[relative.as_posix()] = artifact[0].get("value")
                 self.assertEqual(artifact[0].tag, f"{{{NAMESPACE}}}sha256")
                 self.assertEqual(artifact[0].get("value"), hashlib.sha256((self.work / "repository" / relative).read_bytes()).hexdigest())
-        self.assertEqual(len(actual), 75)
+        self.assertEqual(len(actual), 84)
         self.assertNotIn(b"<trust", metadata)
         manifest_path = next(self.state.glob("consumer-receipts.*/consumer-publication-manifest.json"))
         manifest = json.loads(manifest_path.read_text())
         self.assertEqual(manifest["publicationCount"], 15)
-        self.assertEqual(manifest["artifactCount"], 75)
-        self.assertEqual(len(manifest["repositoryFiles"]), 108)
+        self.assertEqual(manifest["artifactCount"], 84)
+        self.assertEqual(len(manifest["repositoryFiles"]), 117)
         for module in EXPECTED_TOOLING_PUBLICATIONS:
             relative = (Path(GROUP.replace(".", "/")) / module / VERSION /
                         f"{module}-{VERSION}-kotlin-tooling-metadata.json").as_posix()
@@ -842,8 +879,11 @@ class ConsumerGateTest(unittest.TestCase):
     def test_unexpected_missing_and_symlink_publications_are_not_trusted(self):
         for flag, text in (("FAKE_EXTRA_ARTIFACT", "unexpected publication artifact"),
                            ("FAKE_EXTRA_TOOLING", "unexpected publication artifact"),
+                           ("FAKE_EXTRA_NATIVE_INTEROP", "unexpected publication artifact"),
                            ("FAKE_EXTRA_GROUP", "unexpected publication directory"),
                            ("FAKE_MISSING_ARTIFACT", "missing required artifacts"),
+                           ("FAKE_MISSING_NATIVE_METADATA", "missing required artifacts"),
+                           ("FAKE_MISSING_NATIVE_INTEROP", "missing required artifacts"),
                            ("FAKE_SYMLINK_ARTIFACT", "not a regular publication file")):
             with self.subTest(flag=flag):
                 work = self.work_root / flag
@@ -859,7 +899,9 @@ class ConsumerGateTest(unittest.TestCase):
 
     def test_tampered_external_copy_and_local_artifact_fail_after_build(self):
         for flag, text in (("FAKE_TAMPER_EXTERNAL", "prepared external/local verification metadata was modified"),
-                           ("FAKE_TAMPER_LOCAL", "prepared consumer publication binding changed")):
+                           ("FAKE_TAMPER_LOCAL", "prepared consumer publication binding changed"),
+                           ("FAKE_TAMPER_NATIVE_METADATA", "prepared consumer publication binding changed"),
+                           ("FAKE_TAMPER_NATIVE_INTEROP", "prepared consumer publication binding changed")):
             with self.subTest(flag=flag):
                 work = self.work_root / flag
                 result = self.run_gate({**self.audit_options(), "P2PKIT_CONSUMER_WORK_DIR": str(work), flag: "1"})

@@ -51,6 +51,17 @@ PUBLICATIONS = {
     "p2p-network-provisioning-android-android": ".aar",
     "p2p-network-provisioning-desktop": ".jar",
 }
+# Native publications also carry their shared metadata and LAN's named C interop.
+# These are dependency inputs, not optional tooling sidecars. Keep each admitted
+# coordinate/classifier explicit and include its checksum in the local allowlist.
+NATIVE_ARTIFACT_SUFFIXES = {
+    "p2p-core-iosarm64": ("-metadata.jar",),
+    "p2p-core-iossimulatorarm64": ("-metadata.jar",),
+    "p2p-core-iosx64": ("-metadata.jar",),
+    "p2p-transport-lan-iosarm64": ("-metadata.jar", "-cinterop-p2pkit_nw.klib"),
+    "p2p-transport-lan-iossimulatorarm64": ("-metadata.jar", "-cinterop-p2pkit_nw.klib"),
+    "p2p-transport-lan-iosx64": ("-metadata.jar", "-cinterop-p2pkit_nw.klib"),
+}
 CONSUMER_TASKS = [
     ":coreJvm:compileKotlin",
     ":coreJvm:compileJava",
@@ -322,7 +333,8 @@ def inspect_repository(context):
     optional = set()
     for artifact, suffix in PUBLICATIONS.items():
         directory = group_path / artifact / version
-        for ending in (suffix, "-sources.jar", "-javadoc.jar", ".pom", ".module"):
+        for ending in (suffix, "-sources.jar", "-javadoc.jar", ".pom", ".module",
+                       *NATIVE_ARTIFACT_SUFFIXES.get(artifact, ())):
             relative = directory / f"{artifact}-{version}{ending}"
             required[relative.as_posix()] = (artifact, relative.name)
         # Maven-local housekeeping is recorded, never added as trusted artifacts.
@@ -330,7 +342,7 @@ def inspect_repository(context):
         optional.add((directory / "maven-metadata-local.xml").as_posix())
         # KMP emits one tooling sidecar for each root publication. Like Maven
         # housekeeping, bind these bytes for the final unchanged-repository check
-        # without expanding the 75-artifact dependency-verification allowlist.
+        # without adding them to the dependency-verification allowlist.
         if artifact in ("p2p-core", "p2p-transport-lan", "p2p-network-provisioning-android"):
             optional.add((directory / f"{artifact}-{version}-kotlin-tooling-metadata.json").as_posix())
     allowed_files = set(required) | optional
@@ -423,7 +435,8 @@ def prepare(context):
     fields["preparedUtc"] = utc_now()
     fields["limitations"] = "Source-local first-read checksums, not external authentication or release acceptance; exclusive owned repository required."
     write_json(context["evidence"] / "consumer-publication-manifest.json", fields)
-    print("==> Prepared strict consumer metadata: unchanged external allowlist + 15 source-local publications / 75 artifacts")
+    print(f"==> Prepared strict consumer metadata: unchanged external allowlist + "
+          f"{fields['publicationCount']} source-local publications / {fields['artifactCount']} artifacts")
 
 
 def verify(context):
