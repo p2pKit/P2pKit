@@ -2563,18 +2563,43 @@ class LinuxNativeTests(PosixNativeTests):
 class DarwinNativeTests(PosixNativeTests):
     def test_real_opaque_task_token_and_stale_token_leave_sentinel_alive(self):
         self.assertIsInstance(self.scope, processes.DarwinScope)
-        child = self.scope.spawn([PYTHON, "-c", "import time; time.sleep(120)"], str(self.root), self.env)
+        # Framework Python can re-exec after Popen returns. Bind the saved token
+        # only after the final interpreter has entered its non-execing body.
+        ready = self.state / "opaque-token-ready"
+        code = ("import os,pathlib,sys,time; path=pathlib.Path(sys.argv[1]); "
+                "pending=path.with_suffix('.pending'); pending.write_text(str(os.getpid()),encoding='ascii'); "
+                "pending.replace(path); time.sleep(120)")
+        child = self.scope.spawn([PYTHON, "-c", code, str(ready)], str(self.root), self.env)
         capture = Capture(child)
-        identity = self.scope._identity(child.pid)
+        self.ready(ready)
+        self.assertEqual(ready.read_text(encoding="ascii"), str(child.pid))
+        self.assertIsNone(child.poll(), "Ready token child exited before authority binding")
+        identity = self.scope._identity(child.pid, required=True)
         self.assertIsNotNone(identity)
+        self.assertTrue(identity["live"])
         token = self.scope._acquire(identity)
         sentinel = self.sentinel()
-        result = self.scope.proc.proc_signal_with_audittoken(ctypes.byref(token), signal.SIGTERM)
-        self.assertEqual(result, 0, "Actual Darwin identity-scoped signal was not admitted")
-        capture.finish(self.scope)
-        result = self.scope.proc.proc_signal_with_audittoken(ctypes.byref(token), signal.SIGTERM)
-        self.assertEqual(result, errno.ESRCH, "Exited audit token must not be accepted or converted to a PID signal")
-        self.assertIsNone(sentinel.poll())
+        observation = {"boundIdentity": identity, "preSignalIdentity": None,
+                       "initialSignalResult": None, "staleSignalResult": None}
+        try:
+            current = self.scope._identity(child.pid, required=True)
+            observation["preSignalIdentity"] = current
+            self.assertIsNotNone(current)
+            self.assertTrue(current["live"])
+            self.assertEqual(self.scope._key(current), self.scope._key(identity))
+            for field in ("uid", "realUid", "pidVersion"):
+                self.assertEqual(current[field], identity[field], "Ready token child changed identity before signaling")
+            result = self.scope.proc.proc_signal_with_audittoken(ctypes.byref(token), signal.SIGTERM)
+            observation["initialSignalResult"] = result
+            self.assertEqual(result, 0, "Actual Darwin identity-scoped signal was not admitted")
+            capture.finish(self.scope)
+            result = self.scope.proc.proc_signal_with_audittoken(ctypes.byref(token), signal.SIGTERM)
+            observation["staleSignalResult"] = result
+            self.assertEqual(result, errno.ESRCH, "Exited audit token must not be accepted or converted to a PID signal")
+            self.assertIsNone(sentinel.poll())
+        finally:
+            # Preserve observations even when an assertion fails, never token bytes.
+            runner.write_new_json(CASE_EVIDENCE / "opaque-token-control.json", observation)
 
 
 class WindowsNativeTests(ExecutorFixtureTests):
