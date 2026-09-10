@@ -1339,7 +1339,13 @@ class WorkflowOrchestrationTest(WorkflowTestCase):
                     run = stack.enter_context(mock.patch("runpy.run_path"))
                     stack.enter_context(mock.patch.object(subprocess, "Popen", side_effect=AssertionError("Unexpected native process")))
                     if kind == "linked":
-                        stack.enter_context(metadata_patch(driver, st_mode=stat.S_IFLNK | 0o777))
+                        original_is_symlink = Path.is_symlink
+
+                        def is_symlink(path):
+                            return path == driver or original_is_symlink(path)
+
+                        # Model the predicate the workflow calls, not pathlib's version-specific stat internals.
+                        stack.enter_context(mock.patch.object(Path, "is_symlink", new=is_symlink))
                     with self.assertRaises(FileExistsError if kind == "old-log" else RuntimeError):
                         exec(compile(python_body("run_host"), str(WORKFLOW) + ":run_host", "exec"), {})
                     dup.assert_not_called()
