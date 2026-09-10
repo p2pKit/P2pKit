@@ -1603,7 +1603,7 @@ internal class SessionManager(
         )
 
         val existingStateLabel = (outcome as? RegisterOutcome.Replaced)?.loser?.state?.value?.name
-            ?: (outcome as? RegisterOutcome.Rejected)?.loser?.state?.value?.name
+            ?: (outcome as? RegisterOutcome.Rejected)?.winner?.state?.value?.name
         logger.info(
             "registerSession ${if (isIncoming) "in" else "out"} peer=${peerId.value.take(8)} " +
                 "decision=${outcome::class.simpleName} " +
