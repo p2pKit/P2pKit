@@ -1,51 +1,55 @@
 <!-- audit-current:start -->
-# Current audit continuation — R13 results / R14 remaining gates
+# Current audit continuation — R14 results / R15 residual gates
 
-**Whole audit NOT_READY; #133 independent NOT_STARTED.**
-179/218 independently approved repository repairs (82.1%); 180/218 independently resolved rows (82.6%) including #287 without a repair; 38 unresolved (17.4%): 14 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 85 new audit findings.
+**Whole audit NOT_READY; #133 independent NOT_STARTED.** 179/218 independently approved repository repairs (82.1%); 180/218 independently resolved rows (82.6%) including #287 without a repair; 38 unresolved (17.4%): 14 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 85 new audit findings.
 
-R13 at `ae37c18f21f6e35ff128abe98d6b7975fbf547d2` **FAILED**: core774/775PASS,
-one path-recovery timeout; LAN not completed. Publication208tasks passed, then genuine
-tooling sidecars blocked consumers. **PARTIAL_SALVAGE,365omissions/details truncated,
-safe=false; full remote cleanup/tree NOT_PROVEN.** Scoped native #396/#397/#398 repairs
-are independently approved; their passes do not repair the aggregate failure.
+Current source **`5bf2e7bb9d3fbf914d7e1ab17318a644e86c3b53`**, tree `eb49c744a564963e5cd58ff0b2cfbf2031d67136`; four focused followup commits are
+**local/not pushed at this binding**. R15 native execution is **NOT_RUN**.
 
-Later #402 (sidecar metadata), #403 (diagnostic owner), #404 (bounded reconnect transport
-retirement) are independently approved. #404 final41focused Linux tests pass; the earlier
-72/73 run and review findings remain historical. Local close is not remote-store retirement
-acknowledgment, and the R13 timeout phase/cause remains UNKNOWN. #157 zero-signal follow-up
-is source-approved with seven focused controls; two actual Darwin methods remain pending.
-Neither same-issue #157/#390 follow-ups adds a second repair count.
+R14/run 34469526553 at `3b06abc` **FAILED**: 780 core cases PASS (#207's 291 and
+#404's 41 are overlapping subsets); LAN executed 0 cases because three unused Unit
+tails failed `-Werror`. #157's two actual Darwin methods were independently accepted.
+Publication: 208 tasks PASS; #402's incomplete metadata policy then failed with exit
+125 before consumers/Swift. **PARTIAL_SALVAGE: 367 omissions/details truncated;
+safe=false; full remote cleanup/tree NOT_PROVEN.** The 11:32:38 UTC lease release
+was scheduling only. R12/R13 failures remain historical evidence.
 
-Current committed source `47d568c3b02e93c0e2f142f50c5cb5c76a264fd2`, tree `b07bb80006ef75c675edcc380299a96d08c9284d`,
-includes unchanged reviewed R14 operational scope: **full existing executor suite unchanged**, then
-only the two #157 resistant-worker policy methods, core/LAN ARM, actual consumers/all15
-publication inspections, CLI once, XCFramework/headers, Swift unit/UI/live peer and the
-separate cancellation probe. Three focused route controls pass; **R14 not pushed/run at
-this binding**. Omitted/reused policy work is not new PASS evidence.
+Reviewed followups: **5263979/#209** removes only those three tails (native pending);
+**d0f37f6/#402** admits exactly 84 trusted publication inputs (8 helper methods PASS);
+**44ab597/#236** inspects 54 archives: 45 covered + 9 explicit KLIB exemptions
+(11 ZIP fixtures PASS; actual native inspection pending). **5bf2e7b/R15** selects
+LAN-only residual work with 4 focused controls PASS; full native executor admission
+and downstream consumer/framework/Swift gates remain. Reuse unchanged R14 core/#157
+evidence, not a new PASS.
 
-Latest Linux rootcheck + Androiddebug assembly + Desktop distributable **PASS:1786fresh
-cases/228XML/12testtasks**,211executed+17up-to-date,8m28s,0/0/0. Executed3995+reviewed#207
-diff, later identical47d—not clean47d execution. Earlier R1 **926/927PASS,1FAIL** is retained.
-The existing #207 responder-readiness follow-up is host/source approved; native acceptance
-and counts are unchanged. Clean3995 CLI runtime also proves real49MiB partial receive,
-SIGTERM abort cleanup and a same-home **new-identity4096byte** transfer; not mutual incoming
-PinnedOnly, same-key reconnect/resume, full catalog or #133 interoperability.
+Linux root check / Android debug / Desktop distributable **1,786 fresh PASS** remains
+bound to `3995` + reviewed #207 diff (later identical `47d`), not clean `5bf2`
+execution; no redundant full Linux build. Prior clean `3995` CLI SIGTERM/new-identity
+recovery remains scoped evidence.
 
-Fresh09:52–09:56UTC GitHub reconciliation:218open rows/325issues/79PRs/404full bodies;
-554unchanged visible comments and linked-PR histories explicitly reused. Coverage projects
-**1,151paths at47d**, preserving259structural rows, six qualified administrative histories
-and the unbound ledger self-row; only #207 adds a new source-read binding since3995.
-Current source deltas compose actual independent reviews, not
-new whole-file reads or whole-repository correctness. Earlier failures stay below.
+Clean `5bf2` Linux CLI abrupt-exit observation **independently APPROVED (scoped)**:
+4 KiB committed baseline preserved; 131,072-byte partial positively observed before
+owned SIGKILL; same-home/new-identity restart completes a distinct hash-verified
+4 KiB transfer. Stale part removed on first ACCEPT, not startup; empty reservation
+remains, not a committed file. Seven ZIPs/raw journals retained; owned children
+reaped and disposable outputs removed. Not full PS-T05/PS-T06/#133 acceptance.
 
-Next: acquire source freeze/task-owned execution lease after Actions/ref reconciliation;
-run the targeted Apple route, then remaining Intel/fullWindows/strict supported-Mac
-Dokka/ABI, actual consumers and inspected release gates. Current rootcheck/applicable Linux
-samples already pass; repeat only for materially affected later changes. No overlapping builds; max2workers/no parallel Gradle,
-retain logs/isolated wrapper stops, exact owned cleanup and disposable-output removal.
-Physical/hostile-network/ART/independent/crypto and owner120/274/284 obligations remain;
-no closure/main/tag/settings/release authority. [Details](repairs/cohort-2026-09-09-native-followups.md#r14-prepublication-linux-gates-and-existing-207-follow-up).
+Fresh 12:15 UTC GitHub refresh: 218 open / 325 issues, 79 PRs / 7 open, 404 full
+bodies; no issue/comment/inline or substantive PR change. PR deltas are only nested
+repository size statistics. Unchanged complete comments/linked histories reused,
+not a new whole-history reread. Coverage: 1,151 paths / 13 reviewed source deltas;
+all 5,750 original historical cells preserved, not blanket correctness.
+
+Next: fresh Actions/refs, source freeze and owned execution lease before R15 push;
+LAN / actual 15-publication inspections / consumers, CLI once, XCFramework / strict
+Swift / unit / UI / live peer and separate cancellation probe. Reconcile Intel 16 /
+full Windows 17 and pending Android ART extension. Reuse unaffected successful release
+components; component replay is not literal monolithic release-script execution.
+Serialize builds / max 2 workers; retain logs / isolated stops / exact-owned cleanup.
+Physical / hostile / headful / independent / crypto and owner #120/#274/#284 remain;
+no main/tag/settings/closure/release authority.
+
+[Exact evidence and continuation](repairs/cohort-2026-09-09-native-followups.md#apple-r14-results-and-r15-residual-continuation).
 
 <!-- audit-current:end -->
 

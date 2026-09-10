@@ -3,31 +3,36 @@
 
 179/218 independently approved repository repairs (82.1%); 180/218 independently resolved rows (82.6%) including #287 without a repair; 38 unresolved (17.4%): 14 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 85 new audit findings. **Whole audit NOT_READY; #133 independent NOT_STARTED.**
 
-#396/#397/#398 have final scoped R13 native approval; #402/#403/#404 have final independent
-repair approval. Existing #157/#390 follow-ups carry zero additional repair credit.
-R13 remainsFAIL/PARTIAL_SALVAGE365/fullremoteCleanupNOT_PROVEN. Current47dsource includes
-approved targeted R14 routing, not yet pushed/run at this binding. Fresh09:52–09:56UTC
-218membership/404bodies and554unchanged retained comments match this inventory.
-[Evidence and continuation](repairs/cohort-2026-09-09-native-followups.md#r14-prepublication-linux-gates-and-existing-207-follow-up).
+R14 at `3b06abc` remains **FAIL / PARTIAL_SALVAGE (367 omissions) / full remote
+cleanup NOT_PROVEN**, despite independent core (780 cases) / #157 (two methods)
+scoped acceptance. No row promotion. Current `5bf2` contains source-reviewed #209 /
+#236 native-pending and final #402 helper followups plus the focused R15 residual
+request; four commits local/unpushed, native R15 **NOT_RUN** here.
 
-Latest Linux rootcheck + Androiddebug assembly + Desktop distributable **PASS:1786fresh
-cases/228XML/12testtasks**,211executed+17up-to-date,8m28s,0/0/0. Executed3995+reviewed#207
-diff, later identical47d—not clean47d execution. Earlier R1 **926/927PASS,1FAIL** is retained.
-The existing #207 responder-readiness follow-up is host/source approved; native acceptance
-and counts are unchanged. Clean3995 CLI runtime also proves real49MiB partial receive,
-SIGTERM abort cleanup and a same-home **new-identity4096byte** transfer; not mutual incoming
-PinnedOnly, same-key reconnect/resume, full catalog or #133 interoperability.
+Fresh 12:15 UTC: 404 full bodies / 218 open membership match; no substantive
+issue/PR/comment change, nested repository-size statistics only. Unchanged complete
+histories explicitly reused. Current Linux 1,786 PASS is reused at its exact `3995`
++ #207 diff binding, not clean `5bf2` execution.
+
+Clean `5bf2` Linux CLI abrupt-exit observation **independently APPROVED (scoped)**:
+4 KiB committed baseline preserved; 131,072-byte partial positively observed before
+owned SIGKILL; same-home/new-identity restart completes a distinct hash-verified
+4 KiB transfer. Stale part removed on first ACCEPT, not startup; empty reservation
+remains, not a committed file. Seven ZIPs/raw journals retained; owned children
+reaped and disposable outputs removed. Not full PS-T05/PS-T06/#133 acceptance.
+
+[Exact evidence](repairs/cohort-2026-09-09-native-followups.md#apple-r14-results-and-r15-residual-continuation).
 
 ## Unresolved repairs / native or platform acceptance (14)
 
 | Issue | Work | Current disposition |
 | --- | --- | --- |
-| [#156](https://github.com/p2pKit/P2pKit/issues/156) | TCP options/native helper | Source-approved; selected SDK header inspection is not actual Apple LAN compile/parameter/recovery acceptance. |
+| [#156](https://github.com/p2pKit/P2pKit/issues/156) | TCP options/native helper | Source-approved; R14 helper/cinterop/main compilation succeeded, but LAN test compilation blocked all runtime; selected-SDK/parameter/recovery acceptance pending. |
 | [#158](https://github.com/p2pKit/P2pKit/issues/158) | Shared receive admission depth | Actual Apple capacity16/FIFO/reject17/recovery cases remain pending;0.8.0+. |
-| [#191](https://github.com/p2pKit/P2pKit/issues/191) | Swift typed error bridge | Real generated headers retained; Swift compile/typed-error cases still not reached. |
-| [#207](https://github.com/p2pKit/P2pKit/issues/207) | Strict teardown diagnostic convention | Linux/Windows plus latest207JVM3/3 and wholecheck1786PASS accepted; R13scoped15readiness+4helper passes coexist with coreFAIL/LANnotcompleted. Whole native row pending. |
-| [#209](https://github.com/p2pKit/P2pKit/issues/209) | Remote FIN receive behavior | Actual Apple FIN-helper/half-close read termination pending. |
-| [#236](https://github.com/p2pKit/P2pKit/issues/236) | Published license/artifact policy | R13 publication208tasks PASS, then sidecar metadata rejection402; helper repaired, actual15license inspections still NOT_RUN. |
+| [#191](https://github.com/p2pKit/P2pKit/issues/191) | Swift typed error bridge | R14 Swift/header/typed-error consumer not reached; prior source/header evidence retains its original binding. |
+| [#207](https://github.com/p2pKit/P2pKit/issues/207) | Strict teardown diagnostic convention | R14 core 780 PASS includes 24 adoption classes / 291 declared methods; prior Linux/Windows accepted. LAN 0 cases; whole #207 pending LAN. Overlapping subsets not summed. |
+| [#209](https://github.com/p2pKit/P2pKit/issues/209) | Remote FIN receive behavior | R14 compile FAIL at 3 unused Unit tails; 5263979 source-only correction approved. Actual repaired Apple FIN compile/link/runtime pending. |
+| [#236](https://github.com/p2pKit/P2pKit/issues/236) | Published license/artifact policy | 44ab597 source-approved: 54 archives / 45 covered + 9 KLIB exemptions; 11 ZIP fixtures PASS. R14 publication 208 tasks PASS, but actual 15-set/native license inspection not reached. |
 | [#275](https://github.com/p2pKit/P2pKit/issues/275) | Manual endpoint diagnostic privacy | Real Apple logger/native diagnostic stream pending; Android/Desktop accepted. |
 | [#279](https://github.com/p2pKit/P2pKit/issues/279) | Provisioning cancellation/shared bounded close | Actual Apple owner/retry/recovery scope pending. |
 | [#291](https://github.com/p2pKit/P2pKit/issues/291) | iOS backup exclusion policy | Swift policy/wiring tests not reached; physical backups separate. |

@@ -970,3 +970,133 @@ reassurance. Continue source-bound R14 ARM, then remaining Intel/fullWindows,
 strict supported-MacDokka/ABI, actual consumers and inspected release gates. Earlier
 R13FAIL/PARTIAL_SALVAGE365/fullremoteCleanupNOT_PROVEN and all external/owner obligations
 remain. Later affected source/environment changes require only their appropriate scope.
+
+
+## Apple R14 results and R15 residual continuation
+
+**179/218 independently approved repository repairs (82.1%); 180/218 independently resolved rows (82.6%) including #287 without a repair; 38 unresolved (17.4%): 14 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 85 new audit findings. Whole audit NOT_READY; #133 independent NOT_STARTED.**
+Current source `5bf2e7bb9d3fbf914d7e1ab17318a644e86c3b53`, tree `eb49c744a564963e5cd58ff0b2cfbf2031d67136`: four focused commits local/not pushed at
+this binding. R15native NOT_RUN. Earlier source/failure narratives above remain dated history.
+
+### Actual R14 and scoped independent verdicts
+
+Run[34469526553/1](https://github.com/p2pKit/P2pKit/actions/runs/34469526553),
+job102845906065, exact3b06/tree9f5c98ee; artifact10149303925 SHA256
+`2903ca26c34f3b4d1691d4309bd424a6ffc3150058c1996137ea808b2381382a`.
+**Aggregate FAIL/PARTIAL_SALVAGE,367omissions/truncated details,safe=false;
+full remote cleanup/tree NOT_PROVEN.** All1122retained ZIP member hashes reconcile;
+this does not supply missing original contents. Original manifest1481members,
+1114available originals plus its manifest retained;1115driver files/3998659bytes.
+
+| Scope | Actual evidence / verdict |
+| --- | --- |
+| Full executor admission |90/90PASS,93.090s;33pure/19modeledDarwin/38real-host fixtures, not product tests. |
+| #157 group probes |2/2nativePASS,1.114s;both observed transient zero-probeEPERM then positiveESRCH. **APPROVE_FINAL_FOLLOWUP_NATIVE_EXECUTED**, no secondcredit. |
+| Core/#207/#404 |780freshPASS/84XML/0failures/errors/skips. **APPROVE_CORE_NATIVE_SCOPE**;#20724classes/291declared methods and#40441methods overlap. Whole207pendingLAN. |
+| LAN |0cases/NOT_COMPLETED;compileTestKotlinIosSimulatorArm64 fails three unusedUnit expressions at64/79/88 under unchanged-Werror. Combined platform1/0/1; helper/main compilation is not test/runtime acceptance. |
+| Publication |208executed tasksPASS/3m22s/0-0-0. |
+| Isolated consumers |125/0/125: exact policy rejected real native metadata JAR; six metadata JARs+three LANcinteropKLIBs missing from policy. Actual consumers/all15archive inspections not reached. |
+| Swift seven pending rows |**NO_NATIVE_APPROVAL/NOT_RUN**:191/291/322/330/341/363/383;framework/headers/strictSwift/unit/UI/livepeer and separate cancellation probe not reached. |
+
+Seven top-level leaf stops0/recorded owned-survivors empty and earlier six-root cleanup
+are scoped observations. Consumer cleanupComplete=false and later publication outputs
+prevent whole cleanup approval. The11:32:38.870316UTC lease release is **scheduling only**,
+following11:31:26–11:31:33idle/ref observation. R12PID5470 and R13timeout causes/unknowns
+remain unchanged; no after-the-fact aggregate pass.
+
+Independent report SHA256: core `033d10dc95c24c104af0970d25d8ad3947a519d40b7c6387aecd85e077bfb890`;
+LAN/publication `419570ca4eafe51eb332d6b31f13db6f1ab729b4fa6248de66b30819bb85d833`;
+Swift `2a787a9d0bbbe8b607554fcb1bea281b67e303453168bcf3d63094b3d6440be1`;
+#157 `8a44ede065e4111d2e3bd1ce57a767a9fb6949a90cd3ae4572a5e950a69949ed`;
+terminal `fbb62ac8b33dd2e0f00ad0dc86b4d053771956f6a25ace04cce0fb1debe4660a`.
+Full safe bindings: `checkpoint.json` → `nativeFollowups.r14Continuation`.
+
+### Sequential reviewed corrections, no new row count
+
+| Commit | Correction | Final evidence boundary |
+| --- | --- | --- |
+|`526397908b725b994d36b27602e9617b8de7e60d` #209|Remove only three redundant native-void Unit tails; completions/FIN/EOF/deadlines/Werror unchanged.|**APPROVE_SOURCE_ONLY**; actual corrected native compile/link/runtime pending. No redundant new test.|
+|`d0f37f6d84f5de7e8039ea614d860d63cbbac7a2` #402|Exact six metadataJAR+three LANinteropKLIB inputs:15coordinates/84trusted artifacts; three ancillary tooling sidecars remain separately bound.|**APPROVE_FINAL_REPAIR**, source/helper;8focused methodsPASS/81.498s. Actual nativeconsumer pending; sameissue/zero secondcredit.|
+|`44ab597714fa5959c2843486f39abe7ecfef0375` #236|Require/read54archives:45canonical-license-covered+9explicitKLIB exemptions across15coordinates. No rewrite of KLIB/native binaries.|**APPROVE_SOURCE_ONLY**;11ZIPfixtures plus Bashsyntax/whitespacePASS. Actual45license+9exemption/native inspection pending; no absent-license allegation.|
+|`5bf2e7bb9d3fbf914d7e1ab17318a644e86c3b53` R15|Exactios-lan-arm64 profile in apple-followup; reuse780core and157two-method native acceptance. Full executor admission and downstream consumer/framework/Swift path unchanged.|**APPROVE_SOURCE_ONLY**;4focused controlsPASS. Six applied postimages match reviewed candidate; nativeNOT_RUN.|
+
+Source review SHA256:209 `0d539012c6d07126ebd2aeb8e0ad97af8bbe9840d097c9e7467dcbd4aeb9fab8`;
+402 `3b575b5b3c6d5078dd6f2342b4da28780c2747bee57a429205c4e72b9916feea`;
+236 `be45c17a08b7689ded18db1edee037f2d557075425e23aff9a19efeb596d6c01`;
+R15 `215435d0ccc4926e95499cddc1862436ef5a40939f6c6876eeffcdb54fed7fa8`.
+Three focused run receipts all0/0/0,source unchanged,owned survivors empty,no disposable
+outputs:402 `d83ea8ab5c07f2f8731f3a72f7e53762f370636ea4dbb2dc3a9e3a1b706cab89`;
+236 `e4903630da43811d9e7ff57697d88c47f9099d6a9fb052fc19bda9cb84f382a0`;
+R15 `c5de39a7cabf8f82711dadd2d2965b7ba66134b725565f70f80456865feeef04`.
+These executed priorcommits+exactdiffs, not clean5bf2native/product tests. R15root
+application binding SHA256 `7bd2e46dfe6146bbf206804f5ac81701bc79e3b7297f835631c7ab8c54e11288`
+reconciles the reviewed candidate with actualpatch `c64067184fcaaff8116599048970f8b14b68d79e6edfa62a164a1e3a63c266f8`.
+
+### Reused gates, current inventory and next step
+
+Linux rootcheck+Androiddebug+Desktopdistributable1786freshPASS remains precisely at
+3995+reviewed207diff(later identical47d), not clean5bf2execution. Prior clean3995CLI
+SIGTERM partial-abort/new-identity4096byte recovery and its exclusions remain unchanged.
+
+### Actual Linux CLI abrupt exit and same-home restart
+
+Clean `5bf2e7bb9d3fbf914d7e1ab17318a644e86c3b53` / tree
+`eb49c744a564963e5cd58ff0b2cfbf2031d67136`: focused `:p2p-sample-desktop:installDist`
+PASS (17 executed tasks / 1m3s / no test-method credit), then a 22.130810-second
+actual Linux/JVM observation. **APPROVE_SCOPED_RUNTIME_OBSERVATIONS**, no actionable
+findings; review SHA256 `1564cf7ff4b7c362918ab1c4374bdd277444541821855a067863fd0ca3458d8e`.
+
+A prior 4 KiB committed file survived. A 49 MiB offer produced a positively observed
+131,072-byte partial before owned STOP then SIGKILL (receiver exit -9); the old
+sender failed. Same-home B2 had a new identity/current outgoing pin and completed
+a distinct hash-verified 4 KiB transfer. Stale part cleanup occurs on first ACCEPT,
+not startup. The original empty reservation remains, **not a committed file**.
+Incoming policy remained development same-AppId, not mutual PinnedOnly; startup
+was not advertisement-free. A/B/B2 exits were 0/-9/0, all reaped. No invented old
+receiver terminal, interruption resume, stable identity or power-loss guarantee.
+
+All seven ZIPs, direct streams/transcripts and two unfiltered raw home journals
+are retained; shared B history includes B then B2 with no incomplete tail/rotation.
+Manifest SHA256 `9fae7c6ec42cc90b49ff9fcb8a15deaca548a07a0c4fa4ff2a45289d18de513d`.
+Observation receipt `08df1f70fd31d716fb038d3fcdb2e203261507c6ab6e0756db19ba64bd0171b6`; producer/runtime receipts
+`a0c1bbd0cbfd47d0ae8cd1dc09fbcbd2015cc9d79b3883fb6f1db34330be76ab` /
+`3b73d77cd3beaad9e266dc2cef02eb8d2b8dd58a2d5bc50b71de15942a39e7ad`.
+
+After independent inspection release, exact cleanup completed at 12:18:34.924505
+UTC: 8 synthetic paths / 51,495,787 bytes and 8 generated roots / 32,842,527 bytes
+removed; 19 required evidence files (including the seven ZIPs) byte-preserved.
+Build/runtime/cleanup envelopes each 0/0/0, unchanged source and no owned survivors.
+Cleanup receipt `dca060fde583864d9bf5d2fd9789fb8bbcb7fda48d25980834d01b0e89ceac8a`;
+removal manifest `ddd563b747d7be9d51a3697222438df6aae04f035a1e947c55cbbe7fc0d7c31b`.
+Source/shared caches/unrelated tasks untouched. No full PS-T05/D2/D5, headful
+PS-T06, physical/hostile/independent #133/crypto/release credit or row promotion.
+
+### Current census and remaining supported-host work
+
+12:15:42.039644–12:15:49.669649 UTC refresh: 325 issues / 218 open / 107 closed,
+79 PRs / 7 open, 404 fresh full bodies. No issue, comment, inline, membership or
+substantive PR change. All 79 raw head/base PR deltas are solely nested repository
+size statistics, 9629→9863; full deep reconciliation found no source refs/SHAs,
+body/state/decision/label/reviewer change. The six known earlier outcome comments
+remain in the separate 11:44 observation. Unchanged complete visible comments and
+linked histories explicitly reused; prior missing-patch/upstream visibility gaps
+persist. Summary SHA256 `d418eb34d818ff3911bbd5dc363d35bb679422968aab205949b2ad85783258a1`; PR reconciliation SHA256
+`f5d9e9a8417e291bb8e51edfb52b237dd66ae17017af3215753cd17b442c205b`. Not an atomic
+census, human full-history reread or future lease.
+
+Coverage projects1151tracked paths at5bf2 with13exact independently reviewed source
+deltas. All5750original and5755current-preimage first-five cells preserved(nonadditive);
+earlier readcells remain in immutable3b06coverage Git blob`71908d3d4f5f06258f773ef28ecb1f1375899513`.
+Current administration is author-only delta with qualified histories/self-row, not a
+fresh whole-file/corpus correctness claim. No protected instruction changes.
+
+Before push: fresh Actions/refs, one source-freeze/owned execution lease. R15must run
+repaired LAN, actual15publication inspections/isolated consumers, CLI once, framework/
+provenance/headers and strictSwift/unit/UI/livepeer plus separate cancellation probe.
+No repeat unchanged core/#157 cycle. Reconcile prepared Intel16/fullWindows17; Android
+ART extension remains pending. Reuse unaffected strictMacDokka/SBOM/OSV/dependency
+components; hosted replay is **not** literal monolithic release-scriptPASS. Keep only
+real physical/OEM/AWDL/hostile/headful/independent/crypto and owner120/274/284 blockers;
+unexecuted feasible process cells are not automatically hardware-blocked. Max2workers,
+no parallel/overlapping builds; retained logs, isolated stops, exact-owned cleanup and
+removal only after dependent inspection. No main/tag/settings/closure/release authority.
