@@ -1,6 +1,6 @@
 # Native and local continuation — 9–10 September 2026
 
-> Current outcome: [R14 prepublication Linux gates](#r14-prepublication-linux-gates-and-existing-207-follow-up) below; R13 failures and all dated histories remain unchanged.
+> Current outcome: [Intel R16 readiness and current technical observations](#intel-r16-readiness-and-current-technical-observations) below; prior failures and dated source bindings remain unchanged.
 
 ## Preserved pre-R10 state
 
