@@ -337,6 +337,49 @@ class DriverLifecycleTest(unittest.TestCase):
 
 
 class OwnedProcessGroupTest(unittest.TestCase):
+    def test_fixture_attempts_remaining_retirements_after_cleanup_failure(self):
+        # Exercise the actual fixture finalizer, without creating any processes.
+        for failing_operation in ("group", "leader"):
+            with self.subTest(failing_operation=failing_operation):
+                failure = (PermissionError(1, "injected group EPERM") if failing_operation == "group"
+                           else subprocess.TimeoutExpired("fixture leader", 10))
+                leader = mock.Mock(pid=123)
+                unrelated = mock.Mock(pid=124)
+                unrelated.poll.return_value = None
+                if failing_operation == "leader":
+                    leader.wait.side_effect = failure
+
+                def signal_group(pid, signum):
+                    if signum == 0:
+                        raise ProcessLookupError(pid)
+                    if failing_operation == "group":
+                        raise failure
+
+                group_kill = mock.Mock(side_effect=signal_group)
+                retirements = mock.Mock()
+                for name, operation in (("group_kill", group_kill), ("leader_wait", leader.wait),
+                                        ("unrelated_terminate", unrelated.terminate),
+                                        ("unrelated_wait", unrelated.wait)):
+                    retirements.attach_mock(operation, name)
+                with mock.patch.object(tempfile, "TemporaryDirectory") as directory, \
+                        mock.patch.object(Path, "exists", return_value=True), \
+                        mock.patch.object(Path, "read_text", return_value="125"), \
+                        mock.patch.object(subprocess, "Popen", side_effect=[leader, unrelated]), \
+                        mock.patch.object(GATE, "terminate_process", return_value=True), \
+                        mock.patch.object(os, "kill", side_effect=ProcessLookupError), \
+                        mock.patch.object(os, "killpg", group_kill):
+                    directory.return_value.__enter__.return_value = "/synthetic-owned-group"
+                    with self.assertRaises(type(failure)) as raised:
+                        self.resistant_worker_control(leader_exits_first=False)
+                self.assertIs(failure, raised.exception, "cleanup must not swallow the original failure")
+                self.assertEqual([
+                    mock.call.group_kill(123, 0),
+                    mock.call.group_kill(123, signal.SIGKILL),
+                    mock.call.leader_wait(timeout=10),
+                    mock.call.unrelated_terminate(),
+                    mock.call.unrelated_wait(timeout=10),
+                ], retirements.mock_calls)
+
     def test_unterminated_group_fails_after_both_bounded_deadlines(self):
         process = mock.Mock(pid=123)
         with mock.patch.object(GATE, "TERMINATION_GRACE_SECONDS", 0), \
@@ -383,12 +426,18 @@ class OwnedProcessGroupTest(unittest.TestCase):
             finally:
                 # A red control must not leave its intentionally resistant child.
                 try:
-                    os.killpg(leader.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                leader.wait(timeout=10)
-                unrelated.terminate()
-                unrelated.wait(timeout=10)
+                    try:
+                        os.killpg(leader.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                finally:
+                    try:
+                        leader.wait(timeout=10)
+                    finally:
+                        try:
+                            unrelated.terminate()
+                        finally:
+                            unrelated.wait(timeout=10)
 
     def test_term_resistant_worker_is_killed_after_leader_exits_on_term(self):
         self.resistant_worker_control(leader_exits_first=False)
