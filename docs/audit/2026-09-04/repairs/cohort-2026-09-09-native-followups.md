@@ -1,6 +1,6 @@
 # Native and local continuation — 9–10 September 2026
 
-> Current outcome: [Apple R10](#apple-r10-final-fixture-approvals-later-policy-failure) below supersedes the dated pre-R10 counts/queue. Earlier failures and evidence remain unchanged.
+> Current outcome: [R14 prepublication Linux gates](#r14-prepublication-linux-gates-and-existing-207-follow-up) below; R13 failures and all dated histories remain unchanged.
 
 ## Preserved pre-R10 state
 
@@ -824,3 +824,149 @@ new0822/91e8coverage or whole correctness. Structural233historicalXML+17binary+
 of215,17native+21external+3decisions unchanged;133NOT_STARTED/auditNOT_READY.
 Current wholecheck/samples/consumers/nativeIntel/fullWindows/ABI/Swift/release and
 physical/hostile/independent/crypto remain. Earlier report prefix/failures retained.
+
+
+## Apple R13 results and post-R13 repairs
+
+179/218 independently approved repository repairs (82.1%); 180/218 independently resolved rows (82.6%) including #287 without a repair; 38 unresolved (17.4%): 14 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 85 new audit findings.
+**Whole audit NOT_READY; #133 independent NOT_STARTED.** Current source `3995f4fbe276b14680b860fc7ade71d419601470`,
+tree `71fde927476dfb4e8eb8a58a70ebc9e95b4c15cc`; locally committed/not pushed at this binding.
+
+### Retained R13 boundary
+
+Run34450916806/1, job102786220217 executed `ae37c18f21f6e35ff128abe98d6b7975fbf547d2`,
+tree `d26ec08568fcd2c1fdf59dd0d4c555e72e4eca1f`. Artifact10142124367 (1493025bytes), SHA256
+`3dd85f26720d61eea2e3d9aa3aa498dfa38d5d605689b90471f6e9b89eb75034`.
+Whole **FAIL/PARTIAL_SALVAGE,365omissions/details truncated,safe=false**, full remote
+cleanup/tree **NOT_PROVEN**. Local lease release08:13:44.184491UTC is scheduling only.
+No scoped pass or later repair retroactively proves remote cleanup.
+
+- Complete executor suite90/90PASS on Darwin (85.826s tests;94.604s leaf), not90native
+  product cases. #390 retained independent verdict: **APPROVE_FINAL_FOLLOWUP**, review SHA256
+`0dfd05f1e94be8fdbf1d7f53c544e31d123c3dd20369c542d6a0c5c2b4525c7d`. The new retained verdict covers the observer/native
+  callers, not a missing historical report or a second repair. The exact natural race was
+  NOT observed; deterministic transitions and actual native controls support this scope.
+  Six raw call streams and one fixture properties member remain omitted; no sealed
+  fixture archive claim. R12 ownership/kernel cause/eventual state remain UNKNOWN.
+- #396 XcodeGen5PASS/17.094s, #397 Darwinsh27PASS/39.851s, #398 Python3.14.7
+  51PASS/7.305s: **APPROVE_FINAL_REPAIR**, no findings. Native #397 locale UNKNOWN;
+  earlier successful unchanged Linux locale controls are reused, not fresh. Review SHA256
+  `ac8e5b849176d1eab764fe4ac1344298726a83cb4ef72de65a03a9371194d5b5`.
+- Core774/775PASS,1FAIL,0errors/skips,84XML; LAN0cases/NOT_COMPLETED. #207scoped15readiness
+  and4helper cases accepted, whole row pending. #399ordering6/6PASS/no second credit;
+  #400native integration fails10.965s timeout, wait phase/causeUNKNOWN. Review SHA256
+  `77d80d4390c9055091536b1127a1bdb832989f06fdc79511d6c4c9bf81944280`.
+- Actual publication208tasksPASS/5m6s/0-0-0, then tooling-sidecar rejection#402:
+  outer125-0-125; consumers/all15 inspections/XCFramework/Swift NOT_REACHED.
+  Whole policy27FAIL is retained, regardless of future two-method #157 acceptance.
+
+### Sequential approved corrections
+
+| Issue | Exact commit | Final verdict and sufficient scoped evidence |
+| --- | --- | --- |
+| #402 | `fe1b2e13edc4abc6103e95842269c48fdb7d7490` | APPROVE_FINAL_REPAIR; one red method, seven green methods/64.584s. Exactly three separately hashed optional tooling sidecars;15publications/75trusted artifacts unchanged. Actual consumers still pending. |
+| #157 follow-up | `a4b44651d85d712b9ba52eed7da6dc1c714d7136` | APPROVE (final source; native pending); two red methods, seven green controls/0.760s. Zero-signal PermissionError waits only within original deadlines for ESRCH; signal denial/other errors remain fatal. No extra repair count. |
+| #403 | `4d6813f06d7c9bab91fd16e8696249378c8a68b2` | APPROVE_FINAL_REPAIR by source review; Rejected reads winner state, Replaced still loser. Existing store tests inspected, not rerun; no admission/privacy/lifecycle/protocol change. |
+| #404 | `9f53043c7af7825d4d44e52c2ee7a814d5d311fb` | APPROVE_FINAL_REPAIR after corrections; fresh41/41PASS,5XML,0failures/errors/skips,1m27s. Bounded installed-transport retirement before dial preserves buffered secure authentication/CLOSE, epoch/identity and duplicate rejection. |
+
+Final review SHA256: #402 `6fdc42401dc905c8ebdd03c88d156df299aab3cf16f9c5e431eb08733b8608fc`;
+#157 `f988cac97d20c7130d2b90459ec900c6f0e7b75bb5cf3a23fd20754ddf5775ba`;
+#403 `770c90a7e76d5e6a6122492351c1426a8684fc4f242dfa871b20c787aaa78201`;
+#404 `5c2ec6ecca069081237fc955f0a673f3f8d324c5a4f3c97ffce39b936112fa6d`. Exact patches/receipts are in
+`checkpoint.json` → `nativeFollowups.postR13Repairs`; private raw payloads are not committed.
+
+#404 characterization's bad-behavior assertions are not acceptance. First acceptance
+72/73PASS/1FAIL and initial review blockers remain historical. Final41 tests cover
+NetworkPathRecovery7, SecureSessionLifecycle6, SessionFlow11, SessionReconnectFailure9,
+SecureV2Transport8. Final receiptSHA256
+`37578a57fa1757b974cae3015c8eb47a99d86972637f81f9a234054936da6362`.
+Local close does **not** acknowledge remote store retirement; no R13 timeout-cause claim.
+Final executed focused validations had invocation/isolated stop/final exits0/0/0; no owned
+survivors. #403 required no new execution. After evidence
+retention, only archived root/buildSrc/core outputs (26857523bytes) were removed;
+shared caches, source, protected `buildSrc/src/main/java/dev/p2pkit/build` and evidence kept.
+
+### Next scope and provenance
+
+R14 operational commit `3995f4fbe276b14680b860fc7ade71d419601470` is **APPROVE_FINAL_REVISION**, not repair credit;
+reviewSHA256 `b278e31b9daf244e3b6c30052ba4b925a9764534089cb86f314c4ce94e087d9c`. Three existing focused route/workflow controlsPASS,
+0/0/0/no survivors. Keep full executor admission, replacing broad policy replays with
+only existing #157 methods `test_term_resistant_worker_is_killed_after_leader_exits_on_term`
+and `test_surviving_group_is_drained_even_when_leader_already_exited`. No `--suite`
+selector or fabricated historical PASS rows. Core/LAN ARM, real consumers/all15 artifact
+inspections, CLI once, XCFramework/headers/provenance, Swift warnings/unit/UI/live Swift-JVM
+and isolated cancellation probe remain. SDK36+37.0/Xcode26.5/nativeARM source binding,
+strict ownership/finalization and isolated cleanup are unchanged. R14 not pushed/run here.
+
+Latest GitHub observation09:52:06.876398–09:56:51.920670UTC:325issues/218open/107closed,
+79PRs/7open,404fresh full bodies;554unchanged comments (379on open issues) explicitly reused.
+No changed existing requirements/closed decisions/PR metadata; only402–404added.
+Observation reportSHA256 `edaff961a30321946db0c0fcfb0efccbc964c758b3eb9bfd05c0cce7cefe18eb`. Preserve402local/33upstream omitted
+patches,7inline gaps,3historical counters and checkout2454 backlink uncertainty. One capture
+was corrected after181 redundant reads; exact-owned cancellation and corrected continuation
+are retained, not hidden. No issue closure/API mutation by the refresh.
+
+Coverage composes current3995 source/review deltas, one entirely added #404 file, unchanged
+prior reads and scoped new administrative text;1,151paths, all5,750 inherited historical
+cells preserved,259structural rows/six qualified administrative histories/self-row unbound.
+It is not whole-repository semantic correctness, a new full historical read, or platform
+execution. Latest successful root check remains `final-linux-check-20260909-r3`, at0dbc+exactdiff
+(later identical655203),1780freshPASS/228XML; it is not current3995 or strict LAN Dokka.
+Continue pending14platform rows, Intel/fullWindows/strict supportedMacDokka/ABI, final
+current root check/applicable samples/consumers and inspected release gates. Only genuine
+physical/hostile-network/ART/independent133/professionalcrypto and owner120/274/284 decisions
+remain external; ordinary available gates are not excused. No release/main/tag/closure authority.
+
+
+## R14 prepublication Linux gates and existing #207 follow-up
+
+Counts unchanged: **179/218 repairs (82.1%),180/218 resolved (82.6%),38 unresolved
+(17.4%)**. Source `47d568c3b02e93c0e2f142f50c5cb5c76a264fd2`, tree `b07bb80006ef75c675edcc380299a96d08c9284d`;
+R14 still **NOT_PUSHED/NOT_RUN**, whole auditNOT_READY, #133independentNOT_STARTED.
+
+- Original current Linux check/sample attempt at clean3995 **FAIL:926/927PASS,1FAIL**,
+  111XML,1/0/1. Positive `HandshakeIdentityTest` tore down Bob before his independent
+  incoming lifecycle commit; the strict diagnostic net caught it. This is an existing
+  missed #207 readiness adopter, not a new defect/count or weakened production identity
+  check. R1receiptSHA256 `d8396d2761c64a97940bdeed7ecab59a0e92c871b83c331a353fc65331a0faf4`.
+- Final one-file responder-publication barrier keeps original connect deadlines,
+  local/remote identity assertions and strict post-stop diagnostics. Independent
+  **APPROVE_FINAL_REPAIR (host/source follow-up only)**; reviewSHA256 `2f87fb9fd88876d7b2eb90af2d184f65ea0d9186f9b7e99a78628a4458b47caa`.
+  Actual changed JVM suite3/3PASS includes both anti-spoof rejection cases. Apple/common
+  native acceptance for whole#207 remains pending; no second repair credit.
+- Actual `./gradlew check :p2p-sample-android:assembleDebug
+  :p2p-sample-desktop-ui:createDistributable --console=plain` with strict dependency
+  verification, no parallel/build/configuration caches and max2workers **PASS**:
+  **1786fresh cases/228XML/12testtasks**,211executed+17up-to-date,8m28s. Actual source
+  was3995+diff `b097b2c1417d0159438c014a2c9ee03767d2804756d81abd6784ac581e682a0b`, later identically committed47d;
+  **not clean47d execution**. Invocation10:32:24.353131–10:40:54.132954UTC,0/0/0,
+  source unchanged/no owned survivors. LauncherJAVA_HOME17/recorded Gradle9.7 daemon21;
+  no all-test-JVM17 or ART/device attestation. R2receiptSHA256
+  `a13a26290f77c08563dc8f1c7ff2032f96c6adb42099ee32968b2df3692e074f`.
+- Separate clean3995 Linux/JVM CLI runtime **APPROVE_SCOPED_RUNTIME_OBSERVATIONS**,
+  reviewSHA256 `9b3a202339d76e8d34befb4c96d9c4aec6c0361ebbedb647983db09082e15d72`: real49MiB source, receiver stopped at
+  filesystem-visible65536-byte partial, catchable TERM/CONT then143exit without KILL,
+  empty exit inventory; same-home **new-identity/new-session4096byte** transfer has
+  matching hash/durable commit/ack. No explicit receiver-negative diagnostic is invented;
+  diagnostic session remains intentional CANCELLATION, not whole-testSUCCESS. Outgoing
+  current fingerprint pins use development incoming authorization, **not mutual incoming
+  PinnedOnly**. No same-key reconnect/resume, partial-byte fsync durability, completed-file
+  preservation, SIGKILL/powerloss, full PS-T05/PS-T06, native/physical/hostile/#133/crypto
+  or release acceptance. All7exports/direct/persisted streams reconciled.
+
+After independent inspection, root removed11exact generated output roots
+**1,282,374,300bytes** at10:44:37.793899UTC;228XML/reports/logs/diffs/failure history retained.
+Cleanup receiptSHA256 `0fd7dff720668755a067a93c58ab673c96e40615eeda83e138e376e7ee03e461`.
+Earlier10:43CLI cleanup removed51,485,435bytes, retaining16evidence files including
+**all7ZIPs** and direct streams; cleanupSHA256
+`1ef2ffe6e19d3f979c97d987fd3e911a729779073d232ca7a21b76e85b9cd7fe`.
+Isolated stops/drain already complete; no cleanup signals, source/shared-cache/unrelated
+job deletion. Protected `buildSrc/src/main/java/dev/p2pkit/build` remains source.
+
+Current coverage advances only `HandshakeIdentityTest.kt` beyond the private3995projection;
+1,151paths and prior read categories/historical cells unchanged. Root/sample confidence
+is current to47d-equivalent bytes; do not rerun unchanged expensive gates merely for
+reassurance. Continue source-bound R14 ARM, then remaining Intel/fullWindows,
+strict supported-MacDokka/ABI, actual consumers and inspected release gates. Earlier
+R13FAIL/PARTIAL_SALVAGE365/fullremoteCleanupNOT_PROVEN and all external/owner obligations
+remain. Later affected source/environment changes require only their appropriate scope.

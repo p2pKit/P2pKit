@@ -5,45 +5,50 @@
   "branch": "audit/complete-2026-09-04",
   "lastInheritedReviewedSourceCommit": "32dc5c03658145741c6e23cdfec3c14cd2eba5e7",
   "lastInheritedReviewedSourceTree": "a6144952d3592b6e189114bc73822d0af1ab0853",
-  "sourceCheckpointCommit": "91e8a9a287333be52ca114022b0cd6c4a9664e23",
-  "sourceCheckpointTree": "f24ef0a0bdd4faa3b22a2b2d90231ccf04f1a250",
+  "sourceCheckpointCommit": "47d568c3b02e93c0e2f142f50c5cb5c76a264fd2",
+  "sourceCheckpointTree": "b07bb80006ef75c675edcc380299a96d08c9284d",
   "preservedDraftPatchSha256": "2dc0dd26cb738d89d14136fb1fe5348afabd6f2a3de2fd47847be8f1d91ed1b4",
-  "activeIssue": 390,
-  "activeIssueState": "R12_INFRASTRUCTURE_FAIL;390_FOLLOWUP_SOURCE_APPROVED_NATIVE_PENDING;R13_ARM_PLANNED_NOT_PUSHED;WHOLE_AUDIT_NOT_READY",
-  "issueCountDenominator": 215,
+  "activeIssue": null,
+  "activeIssueState": "207_FOLLOWUP_HOST_SOURCE_APPROVED;CURRENT_LINUX_CHECK_SAMPLES_PASS;R14_ARM_NOT_PUSHED_NOT_RUN;WHOLE_AUDIT_NOT_READY",
+  "issueCountDenominator": 218,
   "dispositions": {
     "EXTERNAL_VALIDATION_PENDING": 21,
     "PARTIAL_MITIGATION_ARCHITECTURE_DECISION_PENDING": 1,
-    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 173,
-    "PENDING_REMEDIATION": 19,
+    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 179,
+    "PENDING_REMEDIATION": 16,
     "REVIEWED_NO_REPAIR_REQUIRED": 1
   },
-  "completedIssueCount": 173,
-  "remainingIssueCount": 41,
-  "percentageMeaning": "173/215 independently approved repository repairs (80.5%); 174/215 independently resolved rows (80.9%) including #287 without a repair; 41 unresolved (19.1%): 17 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 82 new audit findings.",
-  "githubIssueListRefreshedUtc": "2026-09-10T06:36:18.275273Z",
-  "githubTotalIssuesAtRefresh": 322,
-  "githubOpenIssuesAtRefresh": 215,
-  "newAuditIssueCount": 82,
+  "completedIssueCount": 179,
+  "remainingIssueCount": 38,
+  "percentageMeaning": "179/218 independently approved repository repairs (82.1%); 180/218 independently resolved rows (82.6%) including #287 without a repair; 38 unresolved (17.4%): 14 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 85 new audit findings.",
+  "githubIssueListRefreshedUtc": "2026-09-10T09:56:51.920670+00:00",
+  "githubTotalIssuesAtRefresh": 325,
+  "githubOpenIssuesAtRefresh": 218,
+  "newAuditIssueCount": 85,
   "rawEvidenceIncludedInGit": false,
   "originalEvidenceContinuity": "Some original raw evidence and initial audit ledger were lost. Recovered summaries are not original logs. Later raw evidence remains private. Fresh corroboration and integrated verification required.",
   "scope": "Branch continuation only; not a merge, release, independent crypto assurance, or physical-device completion.",
   "preservedDraftCommit": "eb564e9487f2887f83f519575c82d4e7657864cb",
   "preservedDraftTree": "69161ac65e02bbf33d390bde2575d3131a9d7996",
-  "lastReviewedIssue": 401,
+  "lastReviewedIssue": 207,
   "lastIntegratedCheck": {
-    "commit": "d1523e889c6760098bf881c505971666d435f3aa",
-    "tree": "a70c3e214c30e80c0e3d6dbd702351e907fcd937",
-    "executionWasCleanCommit": true,
-    "xmlFiles": 199,
-    "executedTasks": 245,
-    "invocation": "trial4-clean-d152-linux-check-samples-dokka",
-    "scope": "Actual clean-d152 Linux root check + Android debug assembly + CLI check/installDist + Desktop UI test/runtime/argfile/distributable + core-only HTML Dokka;1607 passed/199XML/12 test tasks and245 actionable tasks executed. Not a clean128 source-review replay or a future administrative execution. Launcher17/daemon21/one observed worker17, not every test JVM attested. Apple simulator tasks skipped/cinterop and unsupported-ABI diagnostics retained; no Windows/Apple/ART/device/headful/package-content/isolated consumer/platform-assessor/full-release/external acceptance. Prior source-bound runs remain separate, not additive.",
-    "passed": 1607,
+    "reference": "nativeFollowups.r14PrepublicationLinux.passingAttempt",
+    "status": "PASS",
+    "invocation": "current-linux-check-samples-207-r2-20260910",
+    "sourceCommit": "3995f4fbe276b14680b860fc7ade71d419601470",
+    "sourceTree": "71fde927476dfb4e8eb8a58a70ebc9e95b4c15cc",
+    "sourceDiffSha256": "b097b2c1417d0159438c014a2c9ee03767d2804756d81abd6784ac581e682a0b",
+    "executionWasCleanCommit": false,
+    "laterIdenticalSourceCommit": "47d568c3b02e93c0e2f142f50c5cb5c76a264fd2",
+    "passed": 1786,
     "failures": 0,
     "errors": 0,
     "skipped": 0,
-    "status": "PASS"
+    "xmlFiles": 228,
+    "executedTasks": 211,
+    "upToDateTasks": 17,
+    "testTasks": 12,
+    "scope": "Actual rootcheck + Androiddebug assembly + Desktop createDistributable PASS,1786fresh/228XML/12testtasks. Executed3995+exact207diff, later identical47d; NOT clean47d execution. LaunchJAVA_HOME17/recorded Gradle9.7 daemonJDK21; no all-test-JVM17 attestation. Strict diagnostics/anti-spoof cases unchanged; Apple/native, ART/device, strict supportedMacDokka/consumers/release remain separate. No new207 whole-row approval."
   },
   "protectedInstructionFilesCaveat": "Issue325 feasible correction preserves AGENTS.md:9 library-only SDK wording by owner instruction. Canonical setup explicitly warns about missing sample SDK. Literal alignment requires new owner authorization; not claimed fixed. CLAUDE.md unchanged.",
   "initialScopedVerification369": {
@@ -996,6 +1001,13 @@
     "scope": "Complete four-file failed-destination cleanup correction APPROVED/pushed. Three-test original repro2failures/1control;final-test original production JVM10/8failures/2controls,Android16/7failures/9controls;focused33passes;three restored mutations. Full2459passes/0failure/error/1manual skip;14static gates;1797sealed entries/28cleanup receipts. Two compilation failures and initial evidence-verifier failure retained. No API/ABI/wire/authentication/dependency/durability change. Physical/ART/OEM/independent gates pending."
   },
   "lastReviewedIssues": [
+    207,
+    404,
+    403,
+    402,
+    398,
+    397,
+    396,
     401,
     400,
     399,
@@ -1077,7 +1089,7 @@
     "scope": "Historical transfer-device cleanup at the prior checkpoint. Every source invocation stopped its task-isolated wrapper/owned workers. Three ignored unused project caches were removed after separate stop and no-open-descriptor checks. Shared caches, private evidence, settings, source/stashes and unrelated projects were preserved. Later admin/push receipts are separate."
   },
   "pendingRepairSeverities": {
-    "low": 19
+    "low": 16
   },
   "githubRefreshEvidence": {
     "startedUtc": "2026-09-08T10:24:33.734412+00:00",
@@ -1194,21 +1206,9 @@
     "scope": "Latest combined check/Android assembly/strict core Dokka after#144/#360; not whole-audit/release/external completion."
   },
   "latestAffectedGateAttempt": {
-    "commit": "8dd65ce3f4e8f0274c24d09a667b11c653d9eb4b",
-    "tree": "facccdaae07e66ae7d3017ef8525c09611b2c70a",
-    "invocation": "223-final-wrapper-tests",
+    "reference": "nativeFollowups.r14PrepublicationLinux.passingAttempt",
     "result": "PASS",
-    "command": [
-      "bash",
-      "scripts/tests/check-gradle-wrapper-test.sh"
-    ],
-    "startedUtc": "2026-09-08T12:13:26.873641+00:00",
-    "commandEndedUtc": "2026-09-08T12:13:27.974952+00:00",
-    "finishedUtc": "2026-09-08T12:13:28.712995+00:00",
-    "commandExitCode": 0,
-    "finalExitCode": 0,
-    "receiptSha256": "d452167c5d6c088a2537370524440baac17a30c21d3ab323301cd901a1336ae1",
-    "scope": "Actual clean committed8ddwrapper fixture: three checkout modes, exact attributes/index/HEAD preservation, two attribute mutations plus restored positive, four old tamper controls retained. Not product Gradle/XML, nativeWindows or all-text checkout verification."
+    "scope": "Latest completed local affected rootcheck/sample gate. Latest hostedR13 remains FAIL at its own source; R14 not run."
   },
   "completedTransferCheckpoint": {
     "commit": "d823bb9cc0d187ec746714af67b08904a28331b6",
@@ -1250,9 +1250,6 @@
     "scope": "Every #145 build/test/failure finalized its task-isolated wrapper stop and owned-worker cleanup; dependent disposable outputs removed. Source,protected files,required evidence,shared caches and unrelated tasks preserved. This receipt does not cover later#367 work."
   },
   "continuationQueue": [
-    396,
-    397,
-    398,
     207,
     383,
     341,
@@ -1268,7 +1265,7 @@
     330,
     236
   ],
-  "continuationQueueScope": "390followup0822 APPROVE_FINAL_SOURCE_NATIVE_PENDING; actual native policy3/existing ownership controls next. R13ARM mechanical request91e8 planned/notpushed at binding; Intel candidate private/unapplied. Keep R12FAIL/PARTIAL_SALVAGE62/fullremoteCleanupNOT_PROVEN/safe=false despite stops0/locallease release.17native+21external+3decisions unchanged. RefreshActions/refs and new task-ownedlease/sourcefreeze before triggeringpush; serialize at most2workers, preserve logs/isolatedstop/exactownedcleanup. Finish current check/samples/consumers/Intel/fullWindows/ABI/Swift/release and later-source corroboration.133NOT_STARTED/auditNOT_READY; no closure/release authority.",
+  "continuationQueueScope": "Run the source-bound R14 ARM apple-followup: unchanged complete executor admission, only the two existing #157 resistant-worker policy methods, core/LAN ARM graph, actual isolated consumers/all15 publication inspections, CLI installDist once, XCFramework/headers/provenance, Swift warnings/unit/UI, live Swift/JVM transfer and separate cancellation probe. Do not mark omitted/reused policy work as fresh PASS. After terminal retention/review, continue Intel/full Windows, supported-Mac strict Dokka/ABI, actual consumers and inspected release gates. Rootcheck/Androiddebug/Desktopdistributable already pass on47d-equivalent source; repeat only after materially affected source/environment changes. Refresh Actions/refs and acquire task-owned execution lease/source freeze before triggering push; never overlap builds, max2 Gradle workers/no parallel Gradle. Preserve logs, isolated wrapper stops and exact owned cleanup. Leave genuine physical/hostile-network/ART/independent133/crypto and owner120/274/284 obligations explicitly pending; no closure/main/tag/settings/release authority.",
   "completedInvestigation145": {
     "issue": 145,
     "baselineCommit": "d823bb9cc0d187ec746714af67b08904a28331b6",
@@ -1282,7 +1279,7 @@
     "status": "OWNER_AUTHORIZED_TRIAL1_AND2_FAILED_PREINVOKE_TRIAL3_PENDING",
     "scope": "After final independent approval of the exact eleven administrative files and applied bytes, refresh live Actions and audit/main/PR refs, hold the one global local/hosted execution lease, freeze the exact approved source tree, and pause all local builds/tests BEFORE the audit-branch push that triggers the hosted workflow. With that lease and source freeze already held, push only the audit branch, verify its exact remote commit/tree and record the outcome separately, then inspect the controlled Windows -> ARM Mac -> Intel Mac trial under the same lease. Verify native controls, actual SDK admission, strict dependency/source/stop/ownership/full-artifact evidence before advancing. Both failed hosted trials remain unsafe/partial and remote cleanup/full-tree NOT_PROVEN; a local lease release is not remote cleanup. #268/#133 remain NOT_STARTED; continue all feasible sequential work. No new physical/hostile-network/independent/pro-crypto/main/settings/release authority."
   },
-  "lastDispositionUpdateUtc": "2026-09-10T07:29:39.079169+00:00",
+  "lastDispositionUpdateUtc": "2026-09-10T10:56:44.539460+00:00",
   "previousGithubRefreshEvidence145": {
     "startedUtc": "2026-09-08T09:17:23.275604+00:00",
     "endedUtc": "2026-09-08T09:28:07.480134+00:00",
@@ -1422,34 +1419,10 @@
     "tree": "44cd608fb05d16d3593d496b355e690af928a247"
   },
   "lastStandaloneCheckAttempt": {
-    "commit": "c221d54b549d7d65d19fb47457416ac3e43e6b37",
-    "tree": "c72ba8380a510c187298aa69efc721453c07f6c8",
-    "invocation": "368-linux-standalone-check-r1",
+    "reference": "nativeFollowups.r14PrepublicationLinux.passingAttempt",
     "result": "PASS",
-    "command": [
-      "./gradlew",
-      "check",
-      "--console=plain",
-      "--rerun-tasks",
-      "--no-build-cache",
-      "--no-configuration-cache",
-      "--dependency-verification",
-      "strict",
-      "-Pkotlin.compiler.execution.strategy=in-process",
-      "-Dorg.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=768m -XX:ActiveProcessorCount=2 -Dfile.encoding=UTF-8",
-      "--max-workers=2",
-      "--no-parallel"
-    ],
-    "startedUtc": "2026-09-08T11:30:17.254802+00:00",
-    "finishedUtc": "2026-09-08T11:37:51.008750+00:00",
-    "executedTasks": 194,
-    "xmlFiles": 199,
-    "executedTestResultsPassed": 1607,
-    "testFailures": 0,
-    "testErrors": 0,
-    "testSkips": 0,
-    "allRequestedTasksCompleted": true,
-    "scope": "Clean final c221d54 source; strict uncached bounded serialized Linux execution. Each whole check contains110diagnostics cases/12XML; overlapping1607totals are not additive. Apple skips/cinterop/ABI unavailable diagnostics remain; zeroXMLskips is not Apple execution. Not later administrative/223source verification, ART/device, Windows/Mac, hostile-network, independent interop, professional crypto, final isolated-consumer or release acceptance."
+    "invocation": "current-linux-check-samples-207-r2-20260910",
+    "scope": "Latest actual successful rootcheck with Android/desktop sample companions,1786freshPASS. Not a standalone-only command or clean47d execution; strictMacDokka/consumer/native gates separate."
   },
   "completedInvestigation367": {
     "issue": 367,
@@ -2011,29 +1984,22 @@
     "tree": "db432eb14791d9637e812333305e811edceb834e"
   },
   "activeWorkItem": {
-    "name": "390_SOURCE_APPROVED_R13_ARM_NATIVE_PENDING",
-    "status": "SOURCE_APPROVED_NATIVE_PENDING",
+    "name": "R14_AFFECTED_NATIVE_AND_REMAINING_PLATFORM_GATES",
+    "status": "OPERATIONAL_SOURCE_APPROVED_HOSTED_EXECUTION_PENDING",
     "owner": "primary agent",
-    "scope": "390followup0822 APPROVE_FINAL_SOURCE_NATIVE_PENDING; actual native policy3/existing ownership controls next. R13ARM mechanical request91e8 planned/notpushed at binding; Intel candidate private/unapplied. Keep R12FAIL/PARTIAL_SALVAGE62/fullremoteCleanupNOT_PROVEN/safe=false despite stops0/locallease release.17native+21external+3decisions unchanged. RefreshActions/refs and new task-ownedlease/sourcefreeze before triggeringpush; serialize at most2workers, preserve logs/isolatedstop/exactownedcleanup. Finish current check/samples/consumers/Intel/fullWindows/ABI/Swift/release and later-source corroboration.133NOT_STARTED/auditNOT_READY; no closure/release authority."
+    "scope": "Run the source-bound R14 ARM apple-followup: unchanged complete executor admission, only the two existing #157 resistant-worker policy methods, core/LAN ARM graph, actual isolated consumers/all15 publication inspections, CLI installDist once, XCFramework/headers/provenance, Swift warnings/unit/UI, live Swift/JVM transfer and separate cancellation probe. Do not mark omitted/reused policy work as fresh PASS. After terminal retention/review, continue Intel/full Windows, supported-Mac strict Dokka/ABI, actual consumers and inspected release gates. Rootcheck/Androiddebug/Desktopdistributable already pass on47d-equivalent source; repeat only after materially affected source/environment changes. Refresh Actions/refs and acquire task-owned execution lease/source freeze before triggering push; never overlap builds, max2 Gradle workers/no parallel Gradle. Preserve logs, isolated wrapper stops and exact owned cleanup. Leave genuine physical/hostile-network/ART/independent133/crypto and owner120/274/284 obligations explicitly pending; no closure/main/tag/settings/release authority."
   },
   "latestGithubListObservation": {
-    "startedUtc": "2026-09-09T14:14:10.710942+00:00",
-    "finishedUtc": "2026-09-09T14:14:18.202983+00:00",
-    "totalIssues": 302,
-    "openIssues": 195,
-    "closedIssues": 107,
+    "reference": "nativeFollowups.githubPost404Refresh",
+    "apiWindowUtc": [
+      "2026-09-10T09:52:06.876398+00:00",
+      "2026-09-10T09:56:51.920670+00:00"
+    ],
+    "totalIssues": 325,
+    "openIssues": 218,
     "pullRequests": 79,
     "openPullRequests": 7,
-    "closedPullRequests": 72,
-    "issueStyleBodies": 381,
-    "conversationComments": 540,
-    "inlineReviewComments": 0,
-    "freshOwnTimelines": 54,
-    "timelineSupplementFinishedUtc": "2026-09-09T14:20:42.820522+00:00",
-    "freshCompleteHistories": false,
-    "reportSha256": "2561ef42d8215530f505622f1d62c7d36ab59468e49616b2648ac0fa993b7401",
-    "reconciliationSha256": "5d730d2ea07fcaf36044300c0f511977577225e5e0dbf952f719ac87d19ee056",
-    "scope": "Authoritative 381-item end list; all bodies/conversation comments and PR own list fields freshly fetched. Only 54 changed/new timelines refreshed. Unchanged detailed local PR/own histories and 117 upstream histories remain historical; eight visibility gaps, 402/33 missing patch fields and checkout2454 backlink uncertainty remain. Initial and exact-Link retry 200-item traversals are incomplete, cause UNKNOWN; their summaries/deltas are not authoritative. No Actions, execution lease or runtime approval."
+    "scope": "Latest body/list reconciliation with explicit unchanged-history reuse; not a new complete-history crawl."
   },
   "completedInvestigation223": {
     "issue": 223,
@@ -2422,9 +2388,9 @@
     "sealedUtc": "2026-09-08T19:50:01.960459+00:00",
     "scope": "Fresh complete local own histories and all returned local/first-hop PR collections, including closed decisions. Actual payload comparison, not equality inferred from counters. Eight upstream content gaps and omitted patches remain; no full textual patch reconstruction or semantic re-audit of every unchanged claim/current caller. Per-endpoint, not transactional/current indefinitely or an execution lease. Local freshness ends19:22:50; later upstream/analysis/sealing does not extend it. #369 not present in this capture; individually added later. Earlier10h/16h/18h records and historical row states remain unchanged."
   },
-  "sourceCheckpointScope": "Final399/400/401repair head; earlier396–398source approvals remain native-pending. Tests retain actual priorcommit+diff bindings, not a cleanf0b whole-product run. R11 executed18681only; R12 planned/not run at this snapshot. Future operational/workflow/admin commits require separate binding.",
-  "lastScopedVerificationRole": "Final399/400/401independent Linux approvals; exactpriorcommit+diff/logs/receipts in nativeFollowups.postR11SequentialFollowups. No cleanf0b whole-product/native run.",
-  "latestAffectedGateAttemptRole": "Historical223 wrapper fixture attempt retained unchanged. Current native attempt and final review are nativeFollowups.windows, not a new passing product graph.",
+  "sourceCheckpointScope": "Current47d adds only reviewed207positive-responder readiness to3995. Actual Linuxroot/sample run3995+exactb097diff equals committed47d; CLI runtime clean3995. R13 ran ae37 only; R14NOT_PUSHED/NOT_RUN. Exact source/read deltas bound separately; no clean47d execution claim.",
+  "lastScopedVerificationRole": "207final review uses actualfresh3-case changed suite plus1786case wholecheck; CLI runtime review verifies49MiB partial cancellation and new4096byte transfer with strict exclusions. Not current native or whole catalog acceptance.",
+  "latestAffectedGateAttemptRole": "Local root/sample R2 passes on47d-equivalent source; hosted R13FAIL/PARTIAL_SALVAGE365 and remote cleanupNOT_PROVEN remain separately retained in nativeFollowups.r13Continuation.",
   "hostedValidationFacility": {
     "name": "SERIALIZED_HOSTED_MAC_WINDOWS_APPLE_VALIDATION_FACILITY",
     "status": "ORIGINAL_FACILITY_PUBLISHED_TRIAL1_AND2_FAILED_PREINVOKE_369FOLLOWUP_370_371_APPROVED_LOCAL",
@@ -3143,7 +3109,7 @@
     "sealedBytes": 19280452,
     "scope": "Narrow fresh371addition/directbacklinkcontext and start/end allstate list observation; NOT another full postwrite history refresh. Fresh lists do not refresh365other histories/79PRsets/117upstream. Filing and parent source approval remain separate; no closure, new runtime/native acceptance or implementation approval by metadata task."
   },
-  "lastIntegratedCheckRole": "Last successful full integrated check remains historical clean-d152, not current source. Later focused successes do not convert failed aggregate checks into PASS.",
+  "lastIntegratedCheckRole": "Current actual Linux rootcheck/Androiddebug/Desktopdistributable1786PASS at3995+reviewed207diff; later identical47d. Separate clean3995CLI runtime approved narrowly. EarlierR1/R13 failures retained; no native, strictMacDokka, actualconsumer, release or whole-audit acceptance.",
   "previousGithubFullRefreshHosted1608": {
     "startedUtc": "2026-09-08T16:02:38.964754+00:00",
     "endedUtc": "2026-09-08T16:08:26.627459+00:00",
@@ -5385,9 +5351,9 @@
     "scope": "Later cleanbd611 Linux rootcheck+AndroidassembleDebug+CLIcheck/installDist+Desktoptest/runtime/argfile/distributable+coreDokka. Not a followup-source execution, Windows/Apple/ART/device, sample launch, isolated consumer or package-content inspection. Same1607cases as prior cohorts, not additive. Java17launcher/Java21Gradledaemon observed; alltestJVM17 not attested. AppleSKIPPED/sixcinterop-KLib warnings remain. Deliberately excluded from frozenR3 and added in this successor; not retroactive approval/evidence."
   },
   "currentCleanFollowupProductObservation": {
-    "status": "PASS_INDEPENDENTLY_CORROBORATED_CLEAN_D152_LINUX_ONLY",
-    "recordReference": "lastIntegratedAttempt",
-    "scope": "Later clean-d152 root check/samples/coreDokka, not clean128 source373, future administrative, nativeWindows/Apple/ART/device/isolated-consumer or release execution. Exact prioraab8 event preserved in priorCanonicalAab8Product; not additive."
+    "status": "PASS_AT_REVIEWED_3995_PLUS_DIFF_NOT_CLEAN_47D_EXECUTION",
+    "recordReference": "nativeFollowups.r14PrepublicationLinux.passingAttempt",
+    "scope": "Current product/test bytes later committed identically47d; legacy key name does not assert clean-commit execution. Earlier clean-d152 observation preserved beforeR14LinuxR2."
   },
   "administrativePublication369R3": {
     "commit": "638d005784776a059c465d6940abac218e1a0d71",
@@ -6298,25 +6264,24 @@
     }
   ],
   "corroborationProjection": {
-    "sourceCommit": "6d11f7336da3892e302efab0c35ef9d2d83494dc",
-    "sourceTree": "2b1fc516425fe81cdee0dc01eca9ef3e26b6c112",
-    "observedUtc": "2026-09-10T06:54:37.358995+00:00",
-    "projectionPaths": 1150,
+    "sourceCommit": "47d568c3b02e93c0e2f142f50c5cb5c76a264fd2",
+    "sourceTree": "b07bb80006ef75c675edcc380299a96d08c9284d",
+    "observedUtc": "2026-09-10T10:56:44.539460+00:00",
+    "projectionPaths": 1151,
     "countsByReadStatus": {
-      "FULL_TEXT_CURRENT": 659,
-      "FULL_SEMANTIC_DELTA_CURRENT": 224,
+      "FULL_TEXT_CURRENT": 653,
+      "FULL_SEMANTIC_DELTA_CURRENT": 231,
       "REOPENED_HISTORICAL_TEXT_CURRENT_DELTA_BOUND": 6,
       "STRUCTURAL_ONLY_CURRENT": 259,
       "SELF_DESCRIBING_LEDGER_NO_CURRENT_SELF_BINDING": 1,
       "COMPLETE_SEMANTIC_INVENTORY_CURRENT": 1
     },
-    "newPaths": 4,
-    "exactReviewedReadAdvances": 15,
-    "existingHistoricalFiveColumnCellsPreserved": 5730,
-    "mappingSha256": "0fdb4d5bb114dccafad20f49db1922110421f1365701a40158beeef06f23beda",
-    "reviewSha256": "bb2d6b35f9a019b705295ff7137c8186f0855afb1803b4dea34b37aa84bcfbe9",
-    "reviewedDiffSha256": "55bc139f9a8838da1235277a1f439dfae292a81c391b7367a6fb605928d1b7d9",
-    "scope": "Explicit6d11snapshot, not later0822/91e8source coverage. Exact15postimages match reviewedR2; fournew complete-added-file and entirehostguide reads, tenother changedfiles semantic-delta.1134unchanged nonoperational/nonself readblobs match.259structural=233historicalXML+17binary+8lockfiles+1wrapper; qualified dependency inventory. Sixnewadminpostimages scoped/reopened, report additive,selfunbound. Priorreadrows at immutable6d11, no fullhistory/currentwholecorrectness/execution approval."
+    "newPaths": 1,
+    "exactReviewedReadAdvances": 21,
+    "existingHistoricalFiveColumnCellsPreserved": 5750,
+    "mappingSha256": "e806ff4ed88aad143f5ba46513a19ea1e0cdcf1112250013ba6c220abdfcc13a",
+    "scope": "Explicit47dsource projection; only207current row advances from private3995candidate, retaining all other source/read bindings.21total source advances sinceae37 (20existing/1new);1151paths.5750original plus5755priorcandidate historical cells preserved. Six prospective admin histories remain qualified, report semantic-delta/self unbound. Not new unrelated fulltext reading or whole-source correctness/native acceptance.",
+    "privatePredecessorFiveColumnCellsPreserved": 5755
   },
   "successorAdministrativeScope369370371": {
     "evidenceFrozenUtc": "2026-09-09T01:18:20.220814+00:00",
@@ -7913,11 +7878,12 @@
     "scope": "Separately approved operational request, locally committed, NOT_PUSHED; no extra repair approval. Actual complete committed source read may honestly bind d152. No hosted trial4/native Windows/Apple acceptance. Final administrative review plus live Actions/ref observation/global lease/source freeze/local-test pause required BEFORE triggering publication."
   },
   "currentAdministrativeInputSource": {
-    "commit": "6d11f7336da3892e302efab0c35ef9d2d83494dc",
-    "tree": "2b1fc516425fe81cdee0dc01eca9ef3e26b6c112",
-    "alsoByteIdenticalAtCommit": "91e8a9a287333be52ca114022b0cd6c4a9664e23",
-    "preparedUtc": "2026-09-10T07:29:39.079169+00:00",
-    "scope": "Eight immutable6d11preimages equal91e8; private unapplied packet only. Latestsource/commit mechanical request is separately bound. Root owns batch/application/publication."
+    "commit": "47d568c3b02e93c0e2f142f50c5cb5c76a264fd2",
+    "tree": "b07bb80006ef75c675edcc380299a96d08c9284d",
+    "preimageAdministrativeCommit": "ae37c18f21f6e35ff128abe98d6b7975fbf547d2",
+    "preparedUtc": "2026-09-10T10:56:44.539460+00:00",
+    "privatePredecessorPatchSha256": "6aabfd1f58f7a562e8108a197c4d3a51992e3ab1ba847d2515775c58df384819",
+    "scope": "Successor to private3995candidate; same8checkout preimages unchanged. Only207 source/read advance plus settled current verification; root applies/publishes separately."
   },
   "priorCanonicalAab8Product": {
     "lastIntegratedCheck": {
@@ -8237,91 +8203,9 @@
     }
   },
   "lastIntegratedAttempt": {
-    "startedUtc": "2026-09-09T07:28:19.001529+00:00",
-    "finishedUtc": "2026-09-09T07:36:49.980427+00:00",
-    "commandExitCode": 1,
-    "stopExitCode": 0,
-    "finalExitCode": 1,
-    "receiptSha256": "a2ad718ae064764c842c00ac4dbbdc49b962625e4d9d74881e8d66b135a56ce4",
-    "commandLogSha256": "de0c6f26e03b55921536040f9f5842fff947f288e55c3aae26d5127b869b87e9",
-    "sourceCommit": "6a2a78c9ba45038278641bd4770d841f0e863ac9",
-    "sourceTree": "aa6d47e595db885d785ccc9ada5b40cb77703e85",
-    "diffSha256": "a90c2579cf40ae5737e2a800aafaab40d558b18042c71bbefbc3c126644a71ce",
-    "sourceUnchanged": true,
-    "ownedSurvivors": {},
-    "tests.jsonSha256": "dd7fa5c6d3f0c2a9f6053da9c913d26f7fe22da463a968bed5f7edb8dd791402",
-    "source.diffSha256": "a90c2579cf40ae5737e2a800aafaab40d558b18042c71bbefbc3c126644a71ce",
-    "gradle-stop.logSha256": "fa35640e019e1822cbae53923c032427ff502263ac8bea1bededc399474649a3",
-    "invocation": "cohort-0909-product-final-r1",
-    "status": "FAIL",
-    "command": [
-      "./gradlew",
-      "check",
-      ":p2p-sample-android:assembleDebug",
-      ":p2p-sample-desktop:installDist",
-      ":p2p-sample-desktop-ui:createDistributable",
-      ":p2p-core:dokkaGeneratePublicationHtml",
-      ":p2p-transport-lan:dokkaGeneratePublicationHtml",
-      "--continue",
-      "--no-parallel",
-      "--max-workers=2",
-      "--dependency-verification",
-      "strict",
-      "--console=plain",
-      "--info"
-    ],
-    "executionWasCleanCommit": false,
-    "counts": {
-      "tests": 1631,
-      "failures": 1,
-      "errors": 0,
-      "skipped": 0,
-      "passed": 1630,
-      "xmlFiles": 204
-    },
-    "actionableTasks": 247,
-    "executedTasks": 199,
-    "upToDateTasks": 48,
-    "failures": [
-      "ProvisioningUiStateTest source-adjacency oracle: safe scalar assignments now precede mandatory detach; later final oracle correction has one fresh passing rerun.",
-      "p2p-transport-lan strict Dokka:32 unresolved appleMain warnings, not resolved or waived."
-    ],
-    "passingComponents": [
-      "24 new Android sample host cases",
-      "Corrected375 JVM11/Android-host4 cases",
-      "Corrected361 actual-manager seven-input method",
-      "Android debug assembly/lint",
-      "CLI installDist and Desktop UI distributable",
-      "Core strict Dokka"
-    ],
-    "runtime": "Linux JVM/Android host only; sample test executor JDK21 despite launcher17. SDK35 Robolectric policy model is not API37 OS execution.",
-    "successorFocusedResult": {
-      "invocation": "cohort-0909-provisioning-oracle-r2",
-      "startedUtc": "2026-09-09T08:04:47.718463+00:00",
-      "finishedUtc": "2026-09-09T08:05:48.567944+00:00",
-      "commandExitCode": 0,
-      "stopExitCode": 0,
-      "finalExitCode": 0,
-      "receiptSha256": "0b7c01ce4d3e1955c89a64ff3d6716235db40e9cc0e51068e246d20d455843bd",
-      "commandLogSha256": "38743c7a9054e7ab8576bff5dfd14ce680be26a00f5d1d70ad62d060d7bf77a8",
-      "sourceCommit": "59f6abc0fa638093d39d1fe3c4cf8e37c009d2db",
-      "sourceTree": "0cad5a2cada6eb10a6222d58af3e50f06dabfe75",
-      "diffSha256": "f8e7fafa90d3f66e3a82dc11d973170f28a4d9b9d82955b254eca5e95ccb03c9",
-      "sourceUnchanged": true,
-      "ownedSurvivors": {},
-      "tests.jsonSha256": "09658c082bb7be5b1a0c8dfb24eb23f9189110959b69cf05f5e311e7572ad9c8",
-      "source.diffSha256": "f8e7fafa90d3f66e3a82dc11d973170f28a4d9b9d82955b254eca5e95ccb03c9",
-      "gradle-stop.logSha256": "fa35640e019e1822cbae53923c032427ff502263ac8bea1bededc399474649a3",
-      "freshTests": 1,
-      "freshPassed": 1,
-      "freshFailures": 0,
-      "xmlCensusWarning": "1513/190 aggregate includes1512 old cases in189 byte-identical r1XML; not1513 fresh passes. No whole-check/LAN-Dokka rerun."
-    },
-    "cleanup": {
-      "removedOutputRoots": 11,
-      "removedOutputBytes": 1283233072,
-      "scope": "r1 deferred outputs only for dependent inspection/r2; task-isolated stops0, no owned survivors. r2 removed11 confirmed generated roots including inspected APK after retention; required evidence/source/shared caches preserved."
-    }
+    "reference": "nativeFollowups.r14PrepublicationLinux.passingAttempt",
+    "status": "PASS",
+    "scope": "Latest completed root check/sample invocation; R1FAIL and earlier aggregate failures retained separately; not native/release acceptance."
   },
   "cohort0909": {
     "recordedUtc": "2026-09-09T08:46:16.352677+00:00",
@@ -8657,7 +8541,7 @@
     "public373Outcome": "https://github.com/p2pKit/P2pKit/issues/373#issuecomment-5597019604",
     "scope": "Actual historical failed trial, independently inspected retained evidence; diagnostics-only d5d0c1e is not its cleanup repair. Older operational request/trial records remain historical."
   },
-  "corroborationProjectionRole": "Latest limited source/read projection, not whole-repository semantic correctness or current complete audit approval; earlier projection preserved.",
+  "corroborationProjectionRole": "Current47dsource/read projection with one independently reviewed207successor delta; actual root/sample/CLI results separately source-bound. No fresh full historical reread or independent admin approval.",
   "previousCorroborationProjectionBeforeCohort0909": {
     "latestApprovedNumberedSourceCommit": "128136ff8ab040f0b5c61dc5402d2b9736d63c86",
     "latestApprovedNumberedSourceTree": "747189670275c32b9ef67b3f1842cb3fad3cb381",
@@ -11285,19 +11169,19 @@
     "scope": "Fresh all-open full bodies, all-state changes and conversation comments since14:13; unchanged earlier full bodies/history/linked PR sets remain historically bound, not freshly reread. Not an Actions lease. The existing14:14 githubIssueListRefreshedUtc/latestGithubListObservation remain the historical complete all-state list; this later observation is the current bounded all-open/delta refresh, not an Actions lease or history recrawl."
   },
   "nativeFollowups": {
-    "recordedUtc": "2026-09-10T07:29:39.079169+00:00",
+    "recordedUtc": "2026-09-10T10:56:44.539460+00:00",
     "observationCutoffUtc": "2026-09-10T07:29:39.079169+00:00",
     "report": "repairs/cohort-2026-09-09-native-followups.md",
     "currentCounts": {
-      "repairApproved": 173,
-      "denominator": 215,
+      "repairApproved": 179,
+      "denominator": 218,
       "reviewedNoRepair": 1,
-      "resolved": 174,
-      "unresolved": 41,
-      "repairOrNativeValidation": 17,
+      "resolved": 180,
+      "unresolved": 38,
+      "repairOrNativeValidation": 14,
       "externalValidation": 21,
       "ownerDecisions": 3,
-      "newAuditFindings": 82
+      "newAuditFindings": 85
     },
     "countSequence": [
       "156/201 before388 filing",
@@ -11314,7 +11198,7 @@
       "R10 final independent391and393native approvals:164repair/165resolved of207;42unresolved. #390 and17native/platform remain, no product credit.",
       "394actualLowfiling adds one pendingrepair:164repair/165resolved of208,43unresolved. CLI scoped runtime approval and390modeledgreen do not add repaircredit.",
       "394finalrepairAPPROVED/local79a18:165repair/166resolved of208,42unresolved. No390native/product credit; mechanicalR11request557156isNOT_PUSHED/NOT_RUN.",
-      "R11fourfinalnativeapprovals390/250/261/379 plus395–398actualfilings together:169repair/170resolved of212;42unresolved. Combinedprojection, not a claim about the approval/filing interleave.",
+      "R11fourfinalnativeapprovals390/250/261/379 plus395\u2013398actualfilings together:169repair/170resolved of212;42unresolved. Combinedprojection, not a claim about the approval/filing interleave.",
       "395 finalfocusedapproval:170repair/171resolved of212;41unresolved, no affectedMacproduct credit.",
       "399/400actualfilings:170repair/171resolved of214;43unresolved.396/397/398source-onlyapprovals add no repaircredit.",
       "399and400finalapprovals:172repair/173resolved of214;41unresolved.",
@@ -11338,10 +11222,16 @@
       395,
       399,
       400,
-      401
+      401,
+      396,
+      397,
+      398,
+      402,
+      403,
+      404
     ],
-    "sourceCommit": "91e8a9a287333be52ca114022b0cd6c4a9664e23",
-    "sourceTree": "f24ef0a0bdd4faa3b22a2b2d90231ccf04f1a250",
+    "sourceCommit": "47d568c3b02e93c0e2f142f50c5cb5c76a264fd2",
+    "sourceTree": "b07bb80006ef75c675edcc380299a96d08c9284d",
     "publicationBefore9ecd": {
       "status": "PUSHED_AUDIT_BRANCH_REF_TREE_VERIFIED",
       "commit": "165e4e9263cd6ddfe73a51ed401259d149b63731",
@@ -11438,13 +11328,13 @@
       "changedConversationComments": 0,
       "scope": "Bounded all-state issue/comment delta since15:27 then individual successful388 creation. Not a fresh202-row complete-history/linked-PR crawl, separate refetch, repair approval or closure. Existing14:14 list and15:27 open-body records retain their exact scope."
     },
-    "pendingBoundary": "173/215 independently approved repository repairs (80.5%); 174/215 independently resolved rows (80.9%) including #287 without a repair; 41 unresolved (19.1%): 17 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 82 new audit findings. R12no pendingnative/productscope reached;390followup sourceapproved/nativepending, no countchange.",
+    "pendingBoundary": "179/218 independently approved repository repairs (82.1%); 180/218 independently resolved rows (82.6%) including #287 without a repair; 38 unresolved (17.4%): 14 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 85 new audit findings. Current14rows remain native/platform pending; #157 Darwin followup pending without second credit.",
     "deferredProjections": [
       "Current whole-source semantic corroboration beyond exact supplied read chains",
       "Older dated cohort reports/continuation narratives remain historical"
     ],
-    "scope": "Current R12 terminal/publication/census and later390source-only continuation. Exact6d11coverage plus scoped newadministration; old raw events preserved, not fresh fullhistorical read or wholeaudit/release approval.",
-    "sourceBindingRole": "R12 actualfailedsource6d11; later390source0822 and ARMcomment-only91e8 local/nativepending. Coverage explicit6d11snapshot; no rebind of prior executions or unexecuted acceptance.",
+    "scope": "Current R13failures/native approvals and postR13repairs plus settled207R2root/sample and clean3995CLI scoped runtime. Only207read binding advances to47d; no new row credit, historic failure relabeling or native/release completion.",
+    "sourceBindingRole": "Current47d adds only reviewed207positive-responder readiness to3995. Actual Linuxroot/sample run3995+exactb097diff equals committed47d; CLI runtime clean3995. R13 ran ae37 only; R14NOT_PUSHED/NOT_RUN. Exact source/read deltas bound separately; no clean47d execution claim.",
     "newIssues": [
       388,
       389,
@@ -11459,7 +11349,10 @@
       398,
       399,
       400,
-      401
+      401,
+      402,
+      403,
+      404
     ],
     "sourcePointBeforeR10": {
       "commit": "41909f43b65a96af5bc689aa29aa33d319c308a6",
@@ -12774,10 +12667,10 @@
       "scope": "Point-in-time global idle observation and administrative local lease release only; later policy2 UNKNOWN drain and full remote cleanupNOT_PROVEN remain. No standing lock/future idle/clean remote runner assertion."
     },
     "currentSourcePoint": {
-      "commit": "91e8a9a287333be52ca114022b0cd6c4a9664e23",
-      "tree": "f24ef0a0bdd4faa3b22a2b2d90231ccf04f1a250",
-      "publicationStatus": "LOCAL_NOT_PUSHED_AT_THIS_BINDING",
-      "scope": "390source-approved/nativepending0822 then mechanical ARMcomment13; R12 ran only published6d11. Later push/run separate."
+      "commit": "47d568c3b02e93c0e2f142f50c5cb5c76a264fd2",
+      "tree": "b07bb80006ef75c675edcc380299a96d08c9284d",
+      "publicationStatus": "LOCALLY_COMMITTED_NOT_PUSHED_AT_THIS_BINDING",
+      "scope": "207host/source followup after approvedR14routing3995; actual root/sample run3995+diff equals47d, not clean47d execution. HostedR14 remains NOT_RUN."
     },
     "githubRefresh": {
       "apiWindowUtc": [
@@ -14293,34 +14186,425 @@
       "inventoryExactlyMatchesOpenIssues": true,
       "reportSha256": "d07a1b3a0e8bd39a6c3b2249035df3478e9651876316dc0a7950c62179cfb3ae",
       "scope": "Fresh401bodies/215membership;551comments=retained547+fourdelta, seven affected histories freshly returned.79local/117upstream metadata unchanged; detailed histories reused. Preserve402local/33upstream omittedpatches,7upstreaminline gaps,3historical counter discrepancies and checkout2454 backlink gap. Later399/400/401outcomes additive, not new full census."
+    },
+    "r13Continuation": {
+      "recordedUtc": "2026-09-10T10:27:46.163863+00:00",
+      "runId": 34450916806,
+      "attempt": 1,
+      "jobId": 102786220217,
+      "sourceCommit": "ae37c18f21f6e35ff128abe98d6b7975fbf547d2",
+      "sourceTree": "d26ec08568fcd2c1fdf59dd0d4c555e72e4eca1f",
+      "conclusion": "failure",
+      "evidenceClassification": "PARTIAL_SALVAGE",
+      "omissions": 365,
+      "omissionDetailsTruncated": true,
+      "safeToContinue": false,
+      "fullRemoteCleanup": "NOT_PROVEN",
+      "fullTreeCompleteness": "NOT_PROVEN",
+      "artifact": {
+        "id": 10142124367,
+        "bytes": 1493025,
+        "sha256": "3dd85f26720d61eea2e3d9aa3aa498dfa38d5d605689b90471f6e9b89eb75034"
+      },
+      "executor": {
+        "methodsPassed": 90,
+        "suiteSeconds": 85.826,
+        "leafSeconds": 94.604,
+        "commandStopFinal": [
+          0,
+          0,
+          0
+        ],
+        "scope": "90methods=33pure-policy+19modeledDarwin+38real-host fixture controls on actual Darwin; not90 product-native cases."
+      },
+      "nativePolicyApprovals": {
+        "issues": [
+          396,
+          397,
+          398
+        ],
+        "verdict": "APPROVE_FINAL_REPAIR",
+        "findings": [],
+        "report": "r13-policy-native-review/REPORT.md",
+        "reportSha256": "ac8e5b849176d1eab764fe4ac1344298726a83cb4ef72de65a03a9371194d5b5",
+        "396": "5 actual XcodeGen methods PASS/17.094s, including two later composition controls.",
+        "397": "Darwinsh policy30:27PASS/39.851s; exact native locale UNKNOWN; successful unchanged Linux locale controls reused, not fresh.",
+        "398": "Python3.14.7 policy33:51PASS/7.305s; production no-follow predicate intact."
+      },
+      "core": {
+        "tests": 775,
+        "passed": 774,
+        "failures": 1,
+        "errors": 0,
+        "skips": 0,
+        "xmlFiles": 84,
+        "commandStopFinal": [
+          1,
+          0,
+          1
+        ],
+        "report": "r12-core-lan-native-independent-review/R13-TERMINAL-REPORT.md",
+        "reportSha256": "77d80d4390c9055091536b1127a1bdb832989f06fdc79511d6c4c9bf81944280",
+        "bindingsSha256": "3730a2e42ae2b606fad12d824a906d9ea14d7c5f40dd3eeca6601e4119decabc",
+        "scope": "207scoped15 readiness+4 helper cases accepted, whole207 pending;399ordering6/6PASS with no second credit.400native integration FAIL, original source approval retained. pathSatisfied wait10.965s timeout; phase/causeUNKNOWN. LAN0cases/NOT_COMPLETED; later Swift not reached."
+      },
+      "consumers": {
+        "publicationTasks": 208,
+        "publicationResult": "PASS",
+        "publicationBuildDuration": "5m6s",
+        "publicationCommandStopFinal": [
+          0,
+          0,
+          0
+        ],
+        "outerCommandStopFinal": [
+          125,
+          0,
+          125
+        ],
+        "scope": "Real publication completed, then metadata rejected genuine tooling sidecars (#402). Actual consumers/all15 artifact inspections/XCFramework/Swift NOT_REACHED."
+      },
+      "policy27": "FAIL preserved; future two-method #157 acceptance cannot retroactively promote original whole27.",
+      "localLeaseReleaseUtc": "2026-09-10T08:13:44.184491+00:00",
+      "leaseReleaseRole": "Local scheduling only after terminal retention; not safe remote handoff or proven cleanup.",
+      "390Followup": {
+        "verdict": "APPROVE_FINAL_FOLLOWUP",
+        "reviewer": "/root/review_390_r13_evidence",
+        "report": "390-r12-followup/R13-native-review.md",
+        "reportSha256": "0dfd05f1e94be8fdbf1d7f53c544e31d123c3dd20369c542d6a0c5c2b4525c7d",
+        "recordedUtc": "2026-09-10T10:24:43.851234+00:00",
+        "findings": [],
+        "countedNewApproval": false,
+        "sourceCommit": "0822edebff523ef5299fd8943ca572b8ec3a7ccf",
+        "executedCommit": "ae37c18f21f6e35ff128abe98d6b7975fbf547d2",
+        "scope": "New retained independent verdict, not retroactive proof of a missing earlier review.90/90methods=33pure-policy+19modeledDarwin+38real-host fixture controls; five added between-census methods passed. Actual policy3 and five nested wrapper stops accepted. Exact natural between-census race NOT observed; deterministic transitions/source review plus native ownership/caller controls support scoped observer approval. Six raw call streams and one fixture properties member omitted from selected archives; no fully sealed fixture/archive claim. No second repair credit; wholeR13FAIL/PARTIAL_SALVAGE365/safe=false/fullremoteCleanupNOT_PROVEN and R12ownership/kernelcause/eventualstateUNKNOWN remain."
+      },
+      "scope": "Only scoped independently approved396/397/398 promote rows. Whole R13 remains FAIL/PARTIAL_SALVAGE; source-specific passes are not a current3995 whole-host pass."
+    },
+    "postR13Repairs": {
+      "402": {
+        "commit": "fe1b2e13edc4abc6103e95842269c48fdb7d7490",
+        "tree": "f0894aca9690ad22a9cb45ae3b4460a4e22c8ba4",
+        "patchSha256": "01fd11faa973d08382f42181662aa5112094c72c0e97aca1c18eee318270ecc3",
+        "verdict": "APPROVE_FINAL_REPAIR",
+        "findings": [],
+        "reviewReport": "r13-tooling-metadata-repair/independent-review.md",
+        "reviewReportSha256": "6fdc42401dc905c8ebdd03c88d156df299aab3cf16f9c5e431eb08733b8608fc",
+        "red": "One existing method fails on genuine source-produced Kotlin tooling metadata; no trusted-set relaxation.",
+        "green": {
+          "methodsPassed": 7,
+          "seconds": 64.584,
+          "commandStopFinal": [
+            0,
+            0,
+            0
+          ],
+          "receiptSha256": "1159177397d534bf6f145494d4695cd4830b759cc261392db3113d54a7f1c685"
+        },
+        "scope": "Exactly3 optional genuine tooling sidecars are separately recorded/hashed;15 publications/75 trusted artifacts and path/source/receipt/mutation defenses unchanged. Helper-scope approval, actual consumers/all15 inspections pending. No owned survivors/outputs.",
+        "redReceiptSha256": "595f62a797908f286a722ecdcaba5906081d7fe2bab7e8d928069ec1973d0b26",
+        "publicationStatus": "LOCALLY_COMMITTED_NOT_PUSHED_AT_THIS_BINDING"
+      },
+      "157": {
+        "commit": "a4b44651d85d712b9ba52eed7da6dc1c714d7136",
+        "tree": "fd0ebe49c4b3813db4a7a68dcd8e39168c5e2f40",
+        "patchSha256": "7749b78fe95262b5a6007eddd0c8b1bc9e61c34c32f13fe7ed2aa16223f4644b",
+        "verdict": "APPROVE",
+        "acceptanceStatus": "FINAL_SOURCE_APPROVED_NATIVE_PENDING",
+        "findings": [],
+        "reviewReport": "157-group-probe-repair/independent-review.md",
+        "reviewReportSha256": "f988cac97d20c7130d2b90459ec900c6f0e7b75bb5cf3a23fd20754ddf5775ba",
+        "red": "Two methods fail against original zero-signal PermissionError handling.",
+        "green": {
+          "methodsPassed": 7,
+          "seconds": 0.76,
+          "commandStopFinal": [
+            0,
+            0,
+            0
+          ],
+          "receiptSha256": "01b50ff3d8db93f2fc9ef44ef4d568268fcf1cff772774cf0d70971f14d8670f"
+        },
+        "scope": "Only zero-signal PermissionError waits within original deadlines for positive ESRCH; signal-delivery denial/other errors remain fatal. Modeled/Linux controls are not native acceptance; two actual Darwin methods pending. Existing approved row adds zero numerator. No owned survivors/outputs.",
+        "redReceiptSha256": "7ee1449b4df4c8ee39175ba421ef6fd3e0d3ae5fd4414a62f5444568c6e642a2",
+        "countedNewApproval": false,
+        "publicationStatus": "LOCALLY_COMMITTED_NOT_PUSHED_AT_THIS_BINDING"
+      },
+      "403": {
+        "commit": "4d6813f06d7c9bab91fd16e8696249378c8a68b2",
+        "tree": "7abd6ff5116dd9bdf860f9e2445cf9f32baa3ad0",
+        "patchSha256": "c7ccd49ea01a560ede237d9aab12e72d3656b6a9dc3bea360fe236acd4b1f3fd",
+        "verdict": "APPROVE_FINAL_REPAIR",
+        "findings": [],
+        "reviewReport": "registration-label-repair-20260910/independent-review.md",
+        "reviewReportSha256": "770c90a7e76d5e6a6122492351c1426a8684fc4f242dfa871b20c787aaa78201",
+        "scope": "Source-only mechanical diagnostic correction: Rejected existingState reads winner; Replaced continues loser. Existing store tests read, not rerun. No admission/lifecycle/privacy/protocol change; no new build/test required.",
+        "publicationStatus": "LOCALLY_COMMITTED_NOT_PUSHED_AT_THIS_BINDING"
+      },
+      "404": {
+        "commit": "9f53043c7af7825d4d44e52c2ee7a814d5d311fb",
+        "tree": "783e24bf1232e0e198425a3b70bb0c357cd67378",
+        "patchSha256": "12361b12e98d7b4d30fa43c6c0fdc90040ecf0594f0b2a4f8d3df41c9129d47e",
+        "verdict": "APPROVE_FINAL_REPAIR",
+        "findings": [],
+        "reviewReport": "404-reconnect-retirement-repair/independent-review.md",
+        "reviewReportSha256": "5c2ec6ecca069081237fc955f0a673f3f8d324c5a4f3c97ffce39b936112fa6d",
+        "history": "Characterization assertions of bad behavior passed, not acceptance. First acceptance run72/73PASS with1FAIL and initial review blockers remain historical; corrected before final approval.",
+        "green": {
+          "invocation": "404-core-focused-r2-20260910",
+          "methodsPassed": 41,
+          "xmlFiles": 5,
+          "failures": 0,
+          "errors": 0,
+          "skips": 0,
+          "commandStopFinal": [
+            0,
+            0,
+            0
+          ],
+          "reportedBuildDuration": "1m27s",
+          "receiptSha256": "37578a57fa1757b974cae3015c8eb47a99d86972637f81f9a234054936da6362",
+          "testsIndexSha256": "062696860613b27839965e5b887caf7196bd01d853313c611d2cf7096b84099e"
+        },
+        "characterizationReceiptSha256": "726e102a06f5a7305b553160bc44f05b32a328d53688fac13f9bfd84c8f48909",
+        "scope": "Bounded installed-transport retirement precedes retry refresh/dial; buffered secure authentication/CLOSE classifications and epoch/identity/duplicate-admission fencing remain. Linux focused41PASS, not current native acceptance. Local close does NOT acknowledge remote store retirement; R13 timeout phase/cause remains UNKNOWN.",
+        "cleanup": {
+          "reportSha256": "bfb86ff9b95e298ab828fbba64ba62b9ff9c81d85299272d4b9888c20c938ec5",
+          "finishedUtc": "2026-09-10T10:02:11.566432+00:00",
+          "removedArchivedOutputBytes": 26857523,
+          "scope": "Only archived root/buildSrc/core generated outputs removed after dependent evidence; source/shared caches/evidence preserved; no owned survivors."
+        },
+        "publicationStatus": "LOCALLY_COMMITTED_NOT_PUSHED_AT_THIS_BINDING"
+      }
+    },
+    "r14Scope": {
+      "commit": "3995f4fbe276b14680b860fc7ade71d419601470",
+      "tree": "71fde927476dfb4e8eb8a58a70ebc9e95b4c15cc",
+      "verdict": "APPROVE_FINAL_REVISION",
+      "findings": [],
+      "patchSha256": "3b7e7e44837a8c783bb167281bce22bf666814f8a3b699cb6a057c46dde4eb07",
+      "reviewReport": "r14-scope-review/independent-review.md",
+      "reviewReportSha256": "b278e31b9daf244e3b6c30052ba4b925a9764534089cb86f314c4ce94e087d9c",
+      "focusedVerification": {
+        "invocation": "r14-scope-focused-20260910",
+        "methodsPassed": 3,
+        "commandStopFinal": [
+          0,
+          0,
+          0
+        ],
+        "receiptSha256": "b1e3a282769a0642888f6d28adb16bbded135948af83f83a0b904190a7f380db",
+        "scope": "Two existing host route methods0.015s plus workflow orchestration method0.001s; no owned survivors, three empty modeled outputs removed. XML0 is not the Python method count."
+      },
+      "publicationStatus": "LOCALLY_COMMITTED_NOT_PUSHED_AT_THIS_BINDING",
+      "hostedExecutionStatus": "NOT_STARTED_AT_THIS_BINDING",
+      "nativeExecutorScope": "Full existing suite unchanged; no --suite selector added.",
+      "policyCommand": [
+        "python3",
+        "scripts/tests/run-platform-tests-test.py",
+        "OwnedProcessGroupTest.test_term_resistant_worker_is_killed_after_leader_exits_on_term",
+        "OwnedProcessGroupTest.test_surviving_group_is_drained_even_when_leader_already_exited"
+      ],
+      "scope": "Run the source-bound R14 ARM apple-followup: unchanged complete executor admission, only the two existing #157 resistant-worker policy methods, core/LAN ARM graph, actual isolated consumers/all15 publication inspections, CLI installDist once, XCFramework/headers/provenance, Swift warnings/unit/UI, live Swift/JVM transfer and separate cancellation probe. Do not mark omitted/reused policy work as fresh PASS. After terminal retention/review, continue Intel/full Windows, supported-Mac strict Dokka/ABI, current root check/applicable samples/consumers and inspected release gates. Refresh Actions/refs and acquire task-owned execution lease/source freeze before triggering push; never overlap builds, max2 Gradle workers/no parallel Gradle. Preserve logs, isolated wrapper stops and exact owned cleanup. Leave genuine physical/hostile-network/ART/independent133/crypto and owner120/274/284 obligations explicitly pending; no closure/main/tag/settings/release authority.",
+      "countedNewApproval": false,
+      "currentComposedSourceCommit": "47d568c3b02e93c0e2f142f50c5cb5c76a264fd2",
+      "currentComposedSourceTree": "b07bb80006ef75c675edcc380299a96d08c9284d",
+      "currentContinuationScope": "Run the source-bound R14 ARM apple-followup: unchanged complete executor admission, only the two existing #157 resistant-worker policy methods, core/LAN ARM graph, actual isolated consumers/all15 publication inspections, CLI installDist once, XCFramework/headers/provenance, Swift warnings/unit/UI, live Swift/JVM transfer and separate cancellation probe. Do not mark omitted/reused policy work as fresh PASS. After terminal retention/review, continue Intel/full Windows, supported-Mac strict Dokka/ABI, actual consumers and inspected release gates. Rootcheck/Androiddebug/Desktopdistributable already pass on47d-equivalent source; repeat only after materially affected source/environment changes. Refresh Actions/refs and acquire task-owned execution lease/source freeze before triggering push; never overlap builds, max2 Gradle workers/no parallel Gradle. Preserve logs, isolated wrapper stops and exact owned cleanup. Leave genuine physical/hostile-network/ART/independent133/crypto and owner120/274/284 obligations explicitly pending; no closure/main/tag/settings/release authority.",
+      "currentCompositionScope": "Operational four-file commit3995 unchanged;47d adds only independently approved207common-test fixture. No full native selector or product-stage changes; R14 NOT_PUSHED/NOT_RUN."
+    },
+    "githubPost404Refresh": {
+      "apiWindowUtc": [
+        "2026-09-10T09:52:06.876398+00:00",
+        "2026-09-10T09:56:51.920670+00:00"
+      ],
+      "totalIssues": 325,
+      "openIssues": 218,
+      "closedIssues": 107,
+      "pullRequests": 79,
+      "openPullRequests": 7,
+      "freshLocalFullBodies": 404,
+      "visibleRetainedComments": 554,
+      "reusedUnchangedComments": 554,
+      "freshOrEditedComments": 0,
+      "openIssueRetainedComments": 379,
+      "inventoryExactlyMatchesOpenIssues": true,
+      "reportSha256": "edaff961a30321946db0c0fcfb0efccbc964c758b3eb9bfd05c0cce7cefe18eb",
+      "reconciliationSha256": "f8ef2eae1b980717895b88b9ea1ce0c5ff98a05d82c37bf5989babb22487f6b8",
+      "observationDeltaSha256": "4409866b69cecedab5beceb985dd56e70b0e562328b8d117d6cdcce4cd0cf49b",
+      "scope": "Fresh all-local bodies/membership; 554 unchanged visible comments and unchanged detailed local/117 first-hop linked-PR histories explicitly reused. Only402/403/404 missing from prior215 ledger; no changed existing requirement/closed decision/PR metadata. Not an atomic census or repair approval. Preserve402local/33upstream omitted patches,7 inline gaps,3 historical counters and checkout2454 backlink gap.",
+      "captureCorrection": "Overbroad nested PR repository fields caused181 redundant reads; exact-owned cancellation143, corrected continuation0.207 successful reads=26 necessary+181 redundant;1 interrupted GET. No API mutations/builds. FinalizationSHA256409054a4ae7ff3a82e47ecc811445e7036fe7aecf898358070fed19ab7cbacaf; no survivors."
+    },
+    "r14PrepublicationLinux": {
+      "recordedUtc": "2026-09-10T10:56:44.539460+00:00",
+      "sourceCommit": "47d568c3b02e93c0e2f142f50c5cb5c76a264fd2",
+      "sourceTree": "b07bb80006ef75c675edcc380299a96d08c9284d",
+      "countChanges": false,
+      "issue": 207,
+      "sourcePatchSha256": "b097b2c1417d0159438c014a2c9ee03767d2804756d81abd6784ac581e682a0b",
+      "reviewReport": "207-handshake-readiness-followup/independent-review.md",
+      "reviewReportSha256": "2f87fb9fd88876d7b2eb90af2d184f65ea0d9186f9b7e99a78628a4458b47caa",
+      "verdict": "APPROVE_FINAL_REPAIR",
+      "verdictScope": "Existing207 one-file host/source followup; whole207native acceptance still pending, no new finding/repair credit.",
+      "failedAttempt": {
+        "invocation": "current-linux-check-samples-3995-20260910",
+        "sourceCommit": "3995f4fbe276b14680b860fc7ade71d419601470",
+        "sourceTree": "71fde927476dfb4e8eb8a58a70ebc9e95b4c15cc",
+        "sourceDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "executionWasCleanCommit": true,
+        "command": [
+          "./gradlew",
+          "check",
+          ":p2p-sample-android:assembleDebug",
+          ":p2p-sample-desktop-ui:createDistributable",
+          "--console=plain",
+          "--no-parallel",
+          "--max-workers=2",
+          "--dependency-verification",
+          "strict",
+          "--no-build-cache",
+          "--no-configuration-cache"
+        ],
+        "startedUtc": "2026-09-10T10:20:06.111848+00:00",
+        "finishedUtc": "2026-09-10T10:23:05.389016+00:00",
+        "commandStopFinal": [
+          1,
+          0,
+          1
+        ],
+        "freshTests": {
+          "tests": 927,
+          "failures": 1,
+          "errors": 0,
+          "skipped": 0,
+          "passed": 926,
+          "xmlFiles": 111
+        },
+        "sourceUnchanged": true,
+        "ownedSurvivors": [],
+        "receiptSha256": "d8396d2761c64a97940bdeed7ecab59a0e92c871b83c331a353fc65331a0faf4",
+        "result": "FAIL",
+        "scope": "Unmodified3995 whole-check/sample attempt FAIL:927tests/926PASS/1FAIL/111XML. Positive HandshakeIdentity fixture stopped responder before incoming lifecycle commit; strict logger caught Incoming session setup failed/P2pKit stopped before session committed. Other two rejection cases passed. Existing207 missed-adopter cause, not a new product defect/count. LaterR2 does not relabel this run."
+      },
+      "passingAttempt": {
+        "invocation": "current-linux-check-samples-207-r2-20260910",
+        "sourceCommit": "3995f4fbe276b14680b860fc7ade71d419601470",
+        "sourceTree": "71fde927476dfb4e8eb8a58a70ebc9e95b4c15cc",
+        "sourceDiffSha256": "b097b2c1417d0159438c014a2c9ee03767d2804756d81abd6784ac581e682a0b",
+        "executionWasCleanCommit": false,
+        "command": [
+          "./gradlew",
+          "check",
+          ":p2p-sample-android:assembleDebug",
+          ":p2p-sample-desktop-ui:createDistributable",
+          "--console=plain",
+          "--no-parallel",
+          "--max-workers=2",
+          "--dependency-verification",
+          "strict",
+          "--no-build-cache",
+          "--no-configuration-cache"
+        ],
+        "startedUtc": "2026-09-10T10:32:24.353131+00:00",
+        "finishedUtc": "2026-09-10T10:40:54.132954+00:00",
+        "commandStopFinal": [
+          0,
+          0,
+          0
+        ],
+        "freshTests": {
+          "tests": 1786,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "passed": 1786,
+          "xmlFiles": 228
+        },
+        "sourceUnchanged": true,
+        "ownedSurvivors": [],
+        "receiptSha256": "a13a26290f77c08563dc8f1c7ff2032f96c6adb42099ee32968b2df3692e074f",
+        "result": "PASS",
+        "laterIdenticalSourceCommit": "47d568c3b02e93c0e2f142f50c5cb5c76a264fd2",
+        "laterIdenticalSourceTree": "b07bb80006ef75c675edcc380299a96d08c9284d",
+        "executedTasks": 211,
+        "upToDateTasks": 17,
+        "testTasks": 12,
+        "reportedBuildDuration": "8m28s",
+        "reviewVerdict": "APPROVE_FINAL_REPAIR_HOST_SOURCE_SCOPE_ONLY",
+        "reviewReport": "207-handshake-readiness-followup/independent-review.md",
+        "reviewReportSha256": "2f87fb9fd88876d7b2eb90af2d184f65ea0d9186f9b7e99a78628a4458b47caa",
+        "freshnessReconciliationSha256": "cde35e00abcd3fab7067aad205c44a983e9322aa4787029bd3e410b48dfb4a9c",
+        "affectedSuite": {
+          "methodsPassed": 3,
+          "positiveSeconds": 0.019,
+          "xmlSha256": "46aef130e0c38c81dfcd6b3ffa832bdbe329954521cc53efafdef776d9178691"
+        },
+        "scope": "Actual rootcheck + Androiddebug assembly + Desktop createDistributable PASS,1786fresh/228XML/12testtasks. Executed3995+exact207diff, later identical47d; NOT clean47d execution. LaunchJAVA_HOME17/recorded Gradle9.7 daemonJDK21; no all-test-JVM17 attestation. Strict diagnostics/anti-spoof cases unchanged; Apple/native, ART/device, strict supportedMacDokka/consumers/release remain separate. No new207 whole-row approval.",
+        "cleanup": {
+          "finishedUtc": "2026-09-10T10:44:37.793899+00:00",
+          "removedOutputRoots": 11,
+          "removedBytes": 1282374300,
+          "reportSha256": "0fd7dff720668755a067a93c58ab673c96e40615eeda83e138e376e7ee03e461",
+          "scope": "All228XML/reports, failure history, reviewed diff and logs, source/protected guides/shared caches/unrelated jobs preserved. No new signals; invocation stop/drain already0/no owned survivors."
+        }
+      },
+      "cliRuntime": {
+        "sourceCommit": "3995f4fbe276b14680b860fc7ade71d419601470",
+        "sourceTree": "71fde927476dfb4e8eb8a58a70ebc9e95b4c15cc",
+        "executionWasCleanCommit": true,
+        "reviewVerdict": "APPROVE_SCOPED_RUNTIME_OBSERVATIONS",
+        "findings": [],
+        "reviewReport": "cli-partial-sigterm-restart-plan-20260910/independent-review/RUNTIME.md",
+        "reviewReportSha256": "9b3a202339d76e8d34befb4c96d9c4aec6c0361ebbedb647983db09082e15d72",
+        "runtimeSeconds": 20.5145,
+        "sourceBytes": 51380224,
+        "observedPartialBytes": 65536,
+        "recoveryTransferBytes": 4096,
+        "producerReceiptSha256": "5b3b1c2312c1466a2d723d634456f7648de76322058de54439f626a60138a9dc",
+        "runtimeEnvelopeReceiptSha256": "9b79a1b691f501ef7710dcdf304f9f1f453313c86a2871635d3e5f99b74e266d",
+        "runtimeReceiptSha256": "042a5bc831a510c74796397892b783a6572c60946cde6d528e9c587f656bf730",
+        "commandStopFinal": [
+          0,
+          0,
+          0
+        ],
+        "ownedSurvivors": [],
+        "scope": "Real49MiB source, stopped receiver with filesystem-visible65536-byte partial and empty zero-byte reservation; owned STOP/TERM/CONT, receiver exit143/reaped without KILL, empty exit inventory. Then same-home new-identity/new-session4096-byte transfer has matching hash/durable-commit/ack and sender completion; remaining peers quit0. Seven exports/direct/persisted streams reconciled. No explicit receiver-negative transfer diagnostic was emitted; diagnostic session remains intentional CANCELLATION, not whole-test SUCCESS.",
+        "limits": "Outgoing current full-fingerprint pinning with development AcceptAnyAuthenticatedSameApp incoming policy; NOT mutual incoming PinnedOnly, same-key reconnect, interrupted-transfer resumption, fsync durability of partial bytes, SIGKILL/powerloss or preexisting completed-file preservation. Not full PS-T05/PS-T06 catalog, headful/Desktop, native/physical/hostile-network, independent133, professionalcrypto, release or whole-audit acceptance. Zero issue/count credit.",
+        "cleanup": {
+          "finishedUtc": "2026-09-10T10:43:25.514615+00:00",
+          "removedBytes": 51485435,
+          "retainedEvidenceFiles": 16,
+          "retainedZipCount": 7,
+          "reportSha256": "1ef2ffe6e19d3f979c97d987fd3e911a729779073d232ca7a21b76e85b9cd7fe",
+          "scope": "Only two fixture payloads and exact owned home/tmp disposables removed after independent review; all7ZIPs/direct streams/receipts/logs retained, shared caches/source untouched; no cleanup signals."
+        }
+      },
+      "scope": "Settled current Linux check/sample and separate source3995 CLI runtime evidence. No clean47d execution or R14/native acceptance. R14 operational routing3995 is inherited unchanged; publication/hosted execution NOT_STARTED at this binding."
     }
   },
   "lastScopedVerification": {
-    "reference": "nativeFollowups.postR11SequentialFollowups",
-    "scope": "399red1failure/green23PASS;400sixPASS;401red1method/twofailedsubcases then4PASS. Allisolatedstops0/nosurvivors; dependent399/400outputsremoved,401nooutputs. Native/R11wholeFAIL/externalgaps remain."
+    "reference": "nativeFollowups.r14PrepublicationLinux",
+    "scope": "Final independent207host/source followup accepted from current wholecheck; separate clean3995CLI partial/SIGTERM/newidentity recovery scoped approval. No new issue/repair credit."
   },
   "hostedValidationAuthorization": {
     "status": "OWNER_AUTHORIZED_SEPARATE_SUPPORTED_HOST_GATES",
-    "scope": "No active unapproved issue implementation in this checkpoint. #394 finalrepairAPPROVED/local79a18, fivefocusedPASS at21339+exact493d; no clean79a18/fullproduct pass inferred. #390 finalsourceapproved/local21339 remains nativepending/no completioncredit. Currentlocal557156 adds only mechanicalcomment10-to11; R11 PLANNED_NOT_RUN/NOT_PUSHED. Refresh Actions/refs and hold task-owned execution lease/source freeze BEFORE any triggering audit-branch push; pause local builds/tests. Require relevant realDarwin identity/stale-token/sentinel/consumer controls and actualpolicy2/GPGcaller, then inspect product/ownedstop/cleanup/evidence outcomes and independentnative verdict. Never bypass unknownownership or repeat unrelated unchanged scopes. R10failedpolicy2/null-null-125/UNKNOWN/PARTIAL_SALVAGE62/fullremoteCleanupNOT_PROVEN/productsNOT_RUN and all earlierfailures remain. Continue18repair/native+21external+3owner120/274/284, currentwhole-source/check/samples/isolatedconsumers/nativeIntel/fullWindows/strictsupportedMacDokka/ABI/Swift/release gates. Physical/hostile/independent133/professionalcrypto remain separate. Max2workers/no parallelGradle; retainlogs/stops/exactownedcleanup before selectivedisposal. No closure/main/settings/tag/release authority."
+    "scope": "Run the source-bound R14 ARM apple-followup: unchanged complete executor admission, only the two existing #157 resistant-worker policy methods, core/LAN ARM graph, actual isolated consumers/all15 publication inspections, CLI installDist once, XCFramework/headers/provenance, Swift warnings/unit/UI, live Swift/JVM transfer and separate cancellation probe. Do not mark omitted/reused policy work as fresh PASS. After terminal retention/review, continue Intel/full Windows, supported-Mac strict Dokka/ABI, actual consumers and inspected release gates. Rootcheck/Androiddebug/Desktopdistributable already pass on47d-equivalent source; repeat only after materially affected source/environment changes. Refresh Actions/refs and acquire task-owned execution lease/source freeze before triggering push; never overlap builds, max2 Gradle workers/no parallel Gradle. Preserve logs, isolated wrapper stops and exact owned cleanup. Leave genuine physical/hostile-network/ART/independent133/crypto and owner120/274/284 obligations explicitly pending; no closure/main/tag/settings/release authority."
   },
-  "repairApprovedIssueCount": 173,
+  "repairApprovedIssueCount": 179,
   "reviewedNoRepairIssueCount": 1,
-  "resolvedIssueCount": 174,
-  "unresolvedIssueCount": 41,
-  "repairApprovalComplementIssueCount": 42,
+  "resolvedIssueCount": 180,
+  "unresolvedIssueCount": 38,
+  "repairApprovalComplementIssueCount": 39,
   "currentCountMeanings": {
-    "denominator": "215open inventory members freshly corroborated06:36UTC; approval counts from independent verdicts, not GitHub state.",
-    "completedIssueCount": "173independently approvedrepairs; excludesno-repair287.",
-    "remainingIssueCount": "41unresolved=215-174; not42-row repairapprovalcomplement.",
-    "resolvedIssueCount": "173repairs+1reviewedno-repair287; no issueclosure.",
-    "PENDING_REMEDIATION": "19members=17repair/native+owner274/284;120separate.",
-    "unresolvedWork": "17repair/native+21external+3ownerdecisions; independent133/externalobligations attached toapprovedrows remain."
+    "denominator": "218 open inventory members freshly reconciled09:52\u201309:56UTC; row approvals come from independent verdicts, not GitHub state.",
+    "completedIssueCount": "179 independently approved repairs; excludes no-repair287.",
+    "remainingIssueCount": "38 unresolved=218-180, NOT39 repair-approval complement.",
+    "resolvedIssueCount": "179 repairs+1 reviewed no-repair287; no issue closure.",
+    "PENDING_REMEDIATION": "16 members=14 repair/native+owner274/284;120 separate.",
+    "unresolvedWork": "14 repair/native+21 external+3 owner decisions; external obligations attached to approved rows remain."
   },
   "currentUnresolvedWork": {
     "repairOrNativeIssueNumbers": [
-      396,
-      397,
-      398,
       207,
       383,
       341,
@@ -14388,20 +14672,25 @@
   },
   "latestGithubOpenIssueObservation": {
     "apiWindowUtc": [
-      "2026-09-10T06:36:12.641636Z",
-      "2026-09-10T06:36:47.282396Z"
+      "2026-09-10T09:52:06.876398+00:00",
+      "2026-09-10T09:56:51.920670+00:00"
     ],
-    "freshListFinishedUtc": "2026-09-10T06:36:18.275273Z",
-    "totalIssues": 322,
-    "openIssues": 215,
+    "totalIssues": 325,
+    "openIssues": 218,
     "closedIssues": 107,
     "pullRequests": 79,
     "openPullRequests": 7,
-    "freshLocalFullBodies": 401,
-    "visibleRetainedComments": 551,
+    "freshLocalFullBodies": 404,
+    "visibleRetainedComments": 554,
+    "reusedUnchangedComments": 554,
+    "freshOrEditedComments": 0,
+    "openIssueRetainedComments": 379,
     "inventoryExactlyMatchesOpenIssues": true,
-    "reportSha256": "d07a1b3a0e8bd39a6c3b2249035df3478e9651876316dc0a7950c62179cfb3ae",
-    "scope": "Fresh401bodies/215membership;551comments=retained547+fourdelta, seven affected histories freshly returned.79local/117upstream metadata unchanged; detailed histories reused. Preserve402local/33upstream omittedpatches,7upstreaminline gaps,3historical counter discrepancies and checkout2454 backlink gap. Later399/400/401outcomes additive, not new full census."
+    "reportSha256": "edaff961a30321946db0c0fcfb0efccbc964c758b3eb9bfd05c0cce7cefe18eb",
+    "reconciliationSha256": "f8ef2eae1b980717895b88b9ea1ce0c5ff98a05d82c37bf5989babb22487f6b8",
+    "observationDeltaSha256": "4409866b69cecedab5beceb985dd56e70b0e562328b8d117d6cdcce4cd0cf49b",
+    "scope": "Fresh all-local bodies/membership; 554 unchanged visible comments and unchanged detailed local/117 first-hop linked-PR histories explicitly reused. Only402/403/404 missing from prior215 ledger; no changed existing requirement/closed decision/PR metadata. Not an atomic census or repair approval. Preserve402local/33upstream omitted patches,7 inline gaps,3 historical counters and checkout2454 backlink gap.",
+    "captureCorrection": "Overbroad nested PR repository fields caused181 redundant reads; exact-owned cancellation143, corrected continuation0.207 successful reads=26 necessary+181 redundant;1 interrupted GET. No API mutations/builds. FinalizationSHA256409054a4ae7ff3a82e47ecc811445e7036fe7aecf898358070fed19ab7cbacaf; no survivors."
   },
   "githubListingBeforePost394": {
     "githubIssueListRefreshedUtc": "2026-09-10T01:00:15.892733+00:00",
@@ -14467,7 +14756,7 @@
       "newPaths": 0,
       "exactReviewedReadAdvances": 9,
       "existingHistoricalFiveColumnCellsPreserved": 5730,
-      "scope": "Prior five395–398 source advances plus four399–401changed paths.399/400compose exact newsemantic deltas with priorreads; changedwatchdog conservatively FULL_TEXT→FULL_SEMANTIC_DELTA.401reviewer explicitly read complete changed testfile, maintaining FULL_TEXT. Other classifications/5730historicalcells preserved;1146trackedpaths matchf0b. Sixadminrows scoped/reopened; selfrowunbound. No whole-source/runtime acceptance."
+      "scope": "Prior five395\u2013398 source advances plus four399\u2013401changed paths.399/400compose exact newsemantic deltas with priorreads; changedwatchdog conservatively FULL_TEXT\u2192FULL_SEMANTIC_DELTA.401reviewer explicitly read complete changed testfile, maintaining FULL_TEXT. Other classifications/5730historicalcells preserved;1146trackedpaths matchf0b. Sixadminrows scoped/reopened; selfrowunbound. No whole-source/runtime acceptance."
     },
     "latestGithubOpenIssueObservation": {
       "apiWindowUtc": [
@@ -14493,7 +14782,429 @@
       "inventoryAfterSeparatelyBoundFilings": 215,
       "reportSha256": "876e69e59d60b546f27ad9211c43ae395d978d5b62bc9cb3cf5e7516bf62b6be",
       "reference": "nativeFollowups.githubPostR11Refresh; postR11Filings; postR11SequentialFollowups.pre401FilingDelta",
-      "scope": "Initial208membership/394bodies and reused histories retain04:30–04:42 bindings; seven actual separately bound filings yield215. Root05:48four-GET delta contains only399/400filings/no comments;157body/fourcomments returned unchanged. Not fresh215census or full-history reread."
+      "scope": "Initial208membership/394bodies and reused histories retain04:30\u201304:42 bindings; seven actual separately bound filings yield215. Root05:48four-GET delta contains only399/400filings/no comments;157body/fourcomments returned unchanged. Not fresh215census or full-history reread."
     }
+  },
+  "currentStateBeforeR13": {
+    "sourceCheckpointCommit": "91e8a9a287333be52ca114022b0cd6c4a9664e23",
+    "sourceCheckpointTree": "f24ef0a0bdd4faa3b22a2b2d90231ccf04f1a250",
+    "sourceCheckpointScope": "Final399/400/401repair head; earlier396\u2013398source approvals remain native-pending. Tests retain actual priorcommit+diff bindings, not a cleanf0b whole-product run. R11 executed18681only; R12 planned/not run at this snapshot. Future operational/workflow/admin commits require separate binding.",
+    "activeIssue": 390,
+    "activeIssueState": "R12_INFRASTRUCTURE_FAIL;390_FOLLOWUP_SOURCE_APPROVED_NATIVE_PENDING;R13_ARM_PLANNED_NOT_PUSHED;WHOLE_AUDIT_NOT_READY",
+    "activeWorkItem": {
+      "name": "390_SOURCE_APPROVED_R13_ARM_NATIVE_PENDING",
+      "status": "SOURCE_APPROVED_NATIVE_PENDING",
+      "owner": "primary agent",
+      "scope": "390followup0822 APPROVE_FINAL_SOURCE_NATIVE_PENDING; actual native policy3/existing ownership controls next. R13ARM mechanical request91e8 planned/notpushed at binding; Intel candidate private/unapplied. Keep R12FAIL/PARTIAL_SALVAGE62/fullremoteCleanupNOT_PROVEN/safe=false despite stops0/locallease release.17native+21external+3decisions unchanged. RefreshActions/refs and new task-ownedlease/sourcefreeze before triggeringpush; serialize at most2workers, preserve logs/isolatedstop/exactownedcleanup. Finish current check/samples/consumers/Intel/fullWindows/ABI/Swift/release and later-source corroboration.133NOT_STARTED/auditNOT_READY; no closure/release authority."
+    },
+    "issueCountDenominator": 215,
+    "dispositions": {
+      "EXTERNAL_VALIDATION_PENDING": 21,
+      "PARTIAL_MITIGATION_ARCHITECTURE_DECISION_PENDING": 1,
+      "FIXED_REVIEWED_IN_AUDIT_HISTORY": 173,
+      "PENDING_REMEDIATION": 19,
+      "REVIEWED_NO_REPAIR_REQUIRED": 1
+    },
+    "completedIssueCount": 173,
+    "remainingIssueCount": 41,
+    "percentageMeaning": "173/215 independently approved repository repairs (80.5%); 174/215 independently resolved rows (80.9%) including #287 without a repair; 41 unresolved (19.1%): 17 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 82 new audit findings.",
+    "githubIssueListRefreshedUtc": "2026-09-10T06:36:18.275273Z",
+    "githubTotalIssuesAtRefresh": 322,
+    "githubOpenIssuesAtRefresh": 215,
+    "newAuditIssueCount": 82,
+    "lastReviewedIssue": 401,
+    "lastReviewedIssues": [
+      401,
+      400,
+      399,
+      395,
+      379,
+      261,
+      250,
+      390,
+      394,
+      393,
+      391,
+      392,
+      388,
+      389,
+      287,
+      172,
+      176,
+      378
+    ],
+    "lastDispositionUpdateUtc": "2026-09-10T07:29:39.079169+00:00",
+    "continuationQueue": [
+      396,
+      397,
+      398,
+      207,
+      383,
+      341,
+      363,
+      156,
+      158,
+      191,
+      209,
+      275,
+      279,
+      291,
+      322,
+      330,
+      236
+    ],
+    "continuationQueueScope": "390followup0822 APPROVE_FINAL_SOURCE_NATIVE_PENDING; actual native policy3/existing ownership controls next. R13ARM mechanical request91e8 planned/notpushed at binding; Intel candidate private/unapplied. Keep R12FAIL/PARTIAL_SALVAGE62/fullremoteCleanupNOT_PROVEN/safe=false despite stops0/locallease release.17native+21external+3decisions unchanged. RefreshActions/refs and new task-ownedlease/sourcefreeze before triggeringpush; serialize at most2workers, preserve logs/isolatedstop/exactownedcleanup. Finish current check/samples/consumers/Intel/fullWindows/ABI/Swift/release and later-source corroboration.133NOT_STARTED/auditNOT_READY; no closure/release authority.",
+    "hostedValidationAuthorization": {
+      "status": "OWNER_AUTHORIZED_SEPARATE_SUPPORTED_HOST_GATES",
+      "scope": "No active unapproved issue implementation in this checkpoint. #394 finalrepairAPPROVED/local79a18, fivefocusedPASS at21339+exact493d; no clean79a18/fullproduct pass inferred. #390 finalsourceapproved/local21339 remains nativepending/no completioncredit. Currentlocal557156 adds only mechanicalcomment10-to11; R11 PLANNED_NOT_RUN/NOT_PUSHED. Refresh Actions/refs and hold task-owned execution lease/source freeze BEFORE any triggering audit-branch push; pause local builds/tests. Require relevant realDarwin identity/stale-token/sentinel/consumer controls and actualpolicy2/GPGcaller, then inspect product/ownedstop/cleanup/evidence outcomes and independentnative verdict. Never bypass unknownownership or repeat unrelated unchanged scopes. R10failedpolicy2/null-null-125/UNKNOWN/PARTIAL_SALVAGE62/fullremoteCleanupNOT_PROVEN/productsNOT_RUN and all earlierfailures remain. Continue18repair/native+21external+3owner120/274/284, currentwhole-source/check/samples/isolatedconsumers/nativeIntel/fullWindows/strictsupportedMacDokka/ABI/Swift/release gates. Physical/hostile/independent133/professionalcrypto remain separate. Max2workers/no parallelGradle; retainlogs/stops/exactownedcleanup before selectivedisposal. No closure/main/settings/tag/release authority."
+    },
+    "lastScopedVerification": {
+      "reference": "nativeFollowups.postR11SequentialFollowups",
+      "scope": "399red1failure/green23PASS;400sixPASS;401red1method/twofailedsubcases then4PASS. Allisolatedstops0/nosurvivors; dependent399/400outputsremoved,401nooutputs. Native/R11wholeFAIL/externalgaps remain."
+    },
+    "lastScopedVerificationRole": "Final399/400/401independent Linux approvals; exactpriorcommit+diff/logs/receipts in nativeFollowups.postR11SequentialFollowups. No cleanf0b whole-product/native run.",
+    "latestAffectedGateAttempt": {
+      "commit": "8dd65ce3f4e8f0274c24d09a667b11c653d9eb4b",
+      "tree": "facccdaae07e66ae7d3017ef8525c09611b2c70a",
+      "invocation": "223-final-wrapper-tests",
+      "result": "PASS",
+      "command": [
+        "bash",
+        "scripts/tests/check-gradle-wrapper-test.sh"
+      ],
+      "startedUtc": "2026-09-08T12:13:26.873641+00:00",
+      "commandEndedUtc": "2026-09-08T12:13:27.974952+00:00",
+      "finishedUtc": "2026-09-08T12:13:28.712995+00:00",
+      "commandExitCode": 0,
+      "finalExitCode": 0,
+      "receiptSha256": "d452167c5d6c088a2537370524440baac17a30c21d3ab323301cd901a1336ae1",
+      "scope": "Actual clean committed8ddwrapper fixture: three checkout modes, exact attributes/index/HEAD preservation, two attribute mutations plus restored positive, four old tamper controls retained. Not product Gradle/XML, nativeWindows or all-text checkout verification."
+    },
+    "latestAffectedGateAttemptRole": "Historical223 wrapper fixture attempt retained unchanged. Current native attempt and final review are nativeFollowups.windows, not a new passing product graph.",
+    "lastStandaloneCheckAttempt": {
+      "commit": "c221d54b549d7d65d19fb47457416ac3e43e6b37",
+      "tree": "c72ba8380a510c187298aa69efc721453c07f6c8",
+      "invocation": "368-linux-standalone-check-r1",
+      "result": "PASS",
+      "command": [
+        "./gradlew",
+        "check",
+        "--console=plain",
+        "--rerun-tasks",
+        "--no-build-cache",
+        "--no-configuration-cache",
+        "--dependency-verification",
+        "strict",
+        "-Pkotlin.compiler.execution.strategy=in-process",
+        "-Dorg.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=768m -XX:ActiveProcessorCount=2 -Dfile.encoding=UTF-8",
+        "--max-workers=2",
+        "--no-parallel"
+      ],
+      "startedUtc": "2026-09-08T11:30:17.254802+00:00",
+      "finishedUtc": "2026-09-08T11:37:51.008750+00:00",
+      "executedTasks": 194,
+      "xmlFiles": 199,
+      "executedTestResultsPassed": 1607,
+      "testFailures": 0,
+      "testErrors": 0,
+      "testSkips": 0,
+      "allRequestedTasksCompleted": true,
+      "scope": "Clean final c221d54 source; strict uncached bounded serialized Linux execution. Each whole check contains110diagnostics cases/12XML; overlapping1607totals are not additive. Apple skips/cinterop/ABI unavailable diagnostics remain; zeroXMLskips is not Apple execution. Not later administrative/223source verification, ART/device, Windows/Mac, hostile-network, independent interop, professional crypto, final isolated-consumer or release acceptance."
+    },
+    "lastIntegratedCheckRole": "Last successful full integrated check remains historical clean-d152, not current source. Later focused successes do not convert failed aggregate checks into PASS.",
+    "pendingRepairSeverities": {
+      "low": 19
+    },
+    "latestGithubOpenIssueObservation": {
+      "apiWindowUtc": [
+        "2026-09-10T06:36:12.641636Z",
+        "2026-09-10T06:36:47.282396Z"
+      ],
+      "freshListFinishedUtc": "2026-09-10T06:36:18.275273Z",
+      "totalIssues": 322,
+      "openIssues": 215,
+      "closedIssues": 107,
+      "pullRequests": 79,
+      "openPullRequests": 7,
+      "freshLocalFullBodies": 401,
+      "visibleRetainedComments": 551,
+      "inventoryExactlyMatchesOpenIssues": true,
+      "reportSha256": "d07a1b3a0e8bd39a6c3b2249035df3478e9651876316dc0a7950c62179cfb3ae",
+      "scope": "Fresh401bodies/215membership;551comments=retained547+fourdelta, seven affected histories freshly returned.79local/117upstream metadata unchanged; detailed histories reused. Preserve402local/33upstream omittedpatches,7upstreaminline gaps,3historical counter discrepancies and checkout2454 backlink gap. Later399/400/401outcomes additive, not new full census."
+    },
+    "latestGithubListObservation": {
+      "startedUtc": "2026-09-09T14:14:10.710942+00:00",
+      "finishedUtc": "2026-09-09T14:14:18.202983+00:00",
+      "totalIssues": 302,
+      "openIssues": 195,
+      "closedIssues": 107,
+      "pullRequests": 79,
+      "openPullRequests": 7,
+      "closedPullRequests": 72,
+      "issueStyleBodies": 381,
+      "conversationComments": 540,
+      "inlineReviewComments": 0,
+      "freshOwnTimelines": 54,
+      "timelineSupplementFinishedUtc": "2026-09-09T14:20:42.820522+00:00",
+      "freshCompleteHistories": false,
+      "reportSha256": "2561ef42d8215530f505622f1d62c7d36ab59468e49616b2648ac0fa993b7401",
+      "reconciliationSha256": "5d730d2ea07fcaf36044300c0f511977577225e5e0dbf952f719ac87d19ee056",
+      "scope": "Authoritative 381-item end list; all bodies/conversation comments and PR own list fields freshly fetched. Only 54 changed/new timelines refreshed. Unchanged detailed local PR/own histories and 117 upstream histories remain historical; eight visibility gaps, 402/33 missing patch fields and checkout2454 backlink uncertainty remain. Initial and exact-Link retry 200-item traversals are incomplete, cause UNKNOWN; their summaries/deltas are not authoritative. No Actions, execution lease or runtime approval."
+    },
+    "corroborationProjection": {
+      "sourceCommit": "6d11f7336da3892e302efab0c35ef9d2d83494dc",
+      "sourceTree": "2b1fc516425fe81cdee0dc01eca9ef3e26b6c112",
+      "observedUtc": "2026-09-10T06:54:37.358995+00:00",
+      "projectionPaths": 1150,
+      "countsByReadStatus": {
+        "FULL_TEXT_CURRENT": 659,
+        "FULL_SEMANTIC_DELTA_CURRENT": 224,
+        "REOPENED_HISTORICAL_TEXT_CURRENT_DELTA_BOUND": 6,
+        "STRUCTURAL_ONLY_CURRENT": 259,
+        "SELF_DESCRIBING_LEDGER_NO_CURRENT_SELF_BINDING": 1,
+        "COMPLETE_SEMANTIC_INVENTORY_CURRENT": 1
+      },
+      "newPaths": 4,
+      "exactReviewedReadAdvances": 15,
+      "existingHistoricalFiveColumnCellsPreserved": 5730,
+      "mappingSha256": "0fdb4d5bb114dccafad20f49db1922110421f1365701a40158beeef06f23beda",
+      "reviewSha256": "bb2d6b35f9a019b705295ff7137c8186f0855afb1803b4dea34b37aa84bcfbe9",
+      "reviewedDiffSha256": "55bc139f9a8838da1235277a1f439dfae292a81c391b7367a6fb605928d1b7d9",
+      "scope": "Explicit6d11snapshot, not later0822/91e8source coverage. Exact15postimages match reviewedR2; fournew complete-added-file and entirehostguide reads, tenother changedfiles semantic-delta.1134unchanged nonoperational/nonself readblobs match.259structural=233historicalXML+17binary+8lockfiles+1wrapper; qualified dependency inventory. Sixnewadminpostimages scoped/reopened, report additive,selfunbound. Priorreadrows at immutable6d11, no fullhistory/currentwholecorrectness/execution approval."
+    },
+    "currentAdministrativeInputSource": {
+      "commit": "6d11f7336da3892e302efab0c35ef9d2d83494dc",
+      "tree": "2b1fc516425fe81cdee0dc01eca9ef3e26b6c112",
+      "alsoByteIdenticalAtCommit": "91e8a9a287333be52ca114022b0cd6c4a9664e23",
+      "preparedUtc": "2026-09-10T07:29:39.079169+00:00",
+      "scope": "Eight immutable6d11preimages equal91e8; private unapplied packet only. Latestsource/commit mechanical request is separately bound. Root owns batch/application/publication."
+    },
+    "nativeCanonical": {
+      "currentCounts": {
+        "repairApproved": 173,
+        "denominator": 215,
+        "reviewedNoRepair": 1,
+        "resolved": 174,
+        "unresolved": 41,
+        "repairOrNativeValidation": 17,
+        "externalValidation": 21,
+        "ownerDecisions": 3,
+        "newAuditFindings": 82
+      },
+      "newlyApprovedIssues": [
+        172,
+        176,
+        378,
+        389,
+        388,
+        392,
+        391,
+        393,
+        394,
+        390,
+        250,
+        261,
+        379,
+        395,
+        399,
+        400,
+        401
+      ],
+      "sourceCommit": "91e8a9a287333be52ca114022b0cd6c4a9664e23",
+      "sourceTree": "f24ef0a0bdd4faa3b22a2b2d90231ccf04f1a250",
+      "sourceBindingRole": "R12 actualfailedsource6d11; later390source0822 and ARMcomment-only91e8 local/nativepending. Coverage explicit6d11snapshot; no rebind of prior executions or unexecuted acceptance.",
+      "currentSourcePoint": {
+        "commit": "91e8a9a287333be52ca114022b0cd6c4a9664e23",
+        "tree": "f24ef0a0bdd4faa3b22a2b2d90231ccf04f1a250",
+        "publicationStatus": "LOCAL_NOT_PUSHED_AT_THIS_BINDING",
+        "scope": "390source-approved/nativepending0822 then mechanical ARMcomment13; R12 ran only published6d11. Later push/run separate."
+      },
+      "pendingBoundary": "173/215 independently approved repository repairs (80.5%); 174/215 independently resolved rows (80.9%) including #287 without a repair; 41 unresolved (19.1%): 17 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 82 new audit findings. R12no pendingnative/productscope reached;390followup sourceapproved/nativepending, no countchange.",
+      "scope": "Current R12 terminal/publication/census and later390source-only continuation. Exact6d11coverage plus scoped newadministration; old raw events preserved, not fresh fullhistorical read or wholeaudit/release approval."
+    }
+  },
+  "currentStateBeforeR14LinuxR2": {
+    "lastIntegratedCheck": {
+      "commit": "d1523e889c6760098bf881c505971666d435f3aa",
+      "tree": "a70c3e214c30e80c0e3d6dbd702351e907fcd937",
+      "executionWasCleanCommit": true,
+      "xmlFiles": 199,
+      "executedTasks": 245,
+      "invocation": "trial4-clean-d152-linux-check-samples-dokka",
+      "scope": "Actual clean-d152 Linux root check + Android debug assembly + CLI check/installDist + Desktop UI test/runtime/argfile/distributable + core-only HTML Dokka;1607 passed/199XML/12 test tasks and245 actionable tasks executed. Not a clean128 source-review replay or a future administrative execution. Launcher17/daemon21/one observed worker17, not every test JVM attested. Apple simulator tasks skipped/cinterop and unsupported-ABI diagnostics retained; no Windows/Apple/ART/device/headful/package-content/isolated consumer/platform-assessor/full-release/external acceptance. Prior source-bound runs remain separate, not additive.",
+      "passed": 1607,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "status": "PASS"
+    },
+    "lastIntegratedAttempt": {
+      "startedUtc": "2026-09-09T07:28:19.001529+00:00",
+      "finishedUtc": "2026-09-09T07:36:49.980427+00:00",
+      "commandExitCode": 1,
+      "stopExitCode": 0,
+      "finalExitCode": 1,
+      "receiptSha256": "a2ad718ae064764c842c00ac4dbbdc49b962625e4d9d74881e8d66b135a56ce4",
+      "commandLogSha256": "de0c6f26e03b55921536040f9f5842fff947f288e55c3aae26d5127b869b87e9",
+      "sourceCommit": "6a2a78c9ba45038278641bd4770d841f0e863ac9",
+      "sourceTree": "aa6d47e595db885d785ccc9ada5b40cb77703e85",
+      "diffSha256": "a90c2579cf40ae5737e2a800aafaab40d558b18042c71bbefbc3c126644a71ce",
+      "sourceUnchanged": true,
+      "ownedSurvivors": {},
+      "tests.jsonSha256": "dd7fa5c6d3f0c2a9f6053da9c913d26f7fe22da463a968bed5f7edb8dd791402",
+      "source.diffSha256": "a90c2579cf40ae5737e2a800aafaab40d558b18042c71bbefbc3c126644a71ce",
+      "gradle-stop.logSha256": "fa35640e019e1822cbae53923c032427ff502263ac8bea1bededc399474649a3",
+      "invocation": "cohort-0909-product-final-r1",
+      "status": "FAIL",
+      "command": [
+        "./gradlew",
+        "check",
+        ":p2p-sample-android:assembleDebug",
+        ":p2p-sample-desktop:installDist",
+        ":p2p-sample-desktop-ui:createDistributable",
+        ":p2p-core:dokkaGeneratePublicationHtml",
+        ":p2p-transport-lan:dokkaGeneratePublicationHtml",
+        "--continue",
+        "--no-parallel",
+        "--max-workers=2",
+        "--dependency-verification",
+        "strict",
+        "--console=plain",
+        "--info"
+      ],
+      "executionWasCleanCommit": false,
+      "counts": {
+        "tests": 1631,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 1630,
+        "xmlFiles": 204
+      },
+      "actionableTasks": 247,
+      "executedTasks": 199,
+      "upToDateTasks": 48,
+      "failures": [
+        "ProvisioningUiStateTest source-adjacency oracle: safe scalar assignments now precede mandatory detach; later final oracle correction has one fresh passing rerun.",
+        "p2p-transport-lan strict Dokka:32 unresolved appleMain warnings, not resolved or waived."
+      ],
+      "passingComponents": [
+        "24 new Android sample host cases",
+        "Corrected375 JVM11/Android-host4 cases",
+        "Corrected361 actual-manager seven-input method",
+        "Android debug assembly/lint",
+        "CLI installDist and Desktop UI distributable",
+        "Core strict Dokka"
+      ],
+      "runtime": "Linux JVM/Android host only; sample test executor JDK21 despite launcher17. SDK35 Robolectric policy model is not API37 OS execution.",
+      "successorFocusedResult": {
+        "invocation": "cohort-0909-provisioning-oracle-r2",
+        "startedUtc": "2026-09-09T08:04:47.718463+00:00",
+        "finishedUtc": "2026-09-09T08:05:48.567944+00:00",
+        "commandExitCode": 0,
+        "stopExitCode": 0,
+        "finalExitCode": 0,
+        "receiptSha256": "0b7c01ce4d3e1955c89a64ff3d6716235db40e9cc0e51068e246d20d455843bd",
+        "commandLogSha256": "38743c7a9054e7ab8576bff5dfd14ce680be26a00f5d1d70ad62d060d7bf77a8",
+        "sourceCommit": "59f6abc0fa638093d39d1fe3c4cf8e37c009d2db",
+        "sourceTree": "0cad5a2cada6eb10a6222d58af3e50f06dabfe75",
+        "diffSha256": "f8e7fafa90d3f66e3a82dc11d973170f28a4d9b9d82955b254eca5e95ccb03c9",
+        "sourceUnchanged": true,
+        "ownedSurvivors": {},
+        "tests.jsonSha256": "09658c082bb7be5b1a0c8dfb24eb23f9189110959b69cf05f5e311e7572ad9c8",
+        "source.diffSha256": "f8e7fafa90d3f66e3a82dc11d973170f28a4d9b9d82955b254eca5e95ccb03c9",
+        "gradle-stop.logSha256": "fa35640e019e1822cbae53923c032427ff502263ac8bea1bededc399474649a3",
+        "freshTests": 1,
+        "freshPassed": 1,
+        "freshFailures": 0,
+        "xmlCensusWarning": "1513/190 aggregate includes1512 old cases in189 byte-identical r1XML; not1513 fresh passes. No whole-check/LAN-Dokka rerun."
+      },
+      "cleanup": {
+        "removedOutputRoots": 11,
+        "removedOutputBytes": 1283233072,
+        "scope": "r1 deferred outputs only for dependent inspection/r2; task-isolated stops0, no owned survivors. r2 removed11 confirmed generated roots including inspected APK after retention; required evidence/source/shared caches preserved."
+      }
+    },
+    "lastStandaloneCheckAttempt": {
+      "reference": "nativeFollowups.linuxFollowup.r3",
+      "result": "PASS",
+      "invocation": "final-linux-check-20260909-r3",
+      "scope": "Latest actual successful root ./gradlew check invocation, with CLI installDist companion:1780freshPASS/228XML,100executed/96upToDate,0/0/0. Bound0dbc+f749diff/later identical655203, NOT current3995 or strict LAN Dokka acceptance."
+    },
+    "currentCleanFollowupProductObservation": {
+      "status": "PASS_INDEPENDENTLY_CORROBORATED_CLEAN_D152_LINUX_ONLY",
+      "recordReference": "lastIntegratedAttempt",
+      "scope": "Later clean-d152 root check/samples/coreDokka, not clean128 source373, future administrative, nativeWindows/Apple/ART/device/isolated-consumer or release execution. Exact prioraab8 event preserved in priorCanonicalAab8Product; not additive."
+    },
+    "latestAffectedGateAttempt": {
+      "reference": "nativeFollowups.r13Continuation",
+      "result": "FAIL",
+      "runId": 34450916806,
+      "attempt": 1,
+      "sourceCommit": "ae37c18f21f6e35ff128abe98d6b7975fbf547d2"
+    },
+    "latestAffectedGateAttemptRole": "Latest completed hosted affected-platform attempt is R13FAIL/PARTIAL_SALVAGE. Later local404/R14focused evidence is separate; no historical failure relabeling.",
+    "lastScopedVerification": {
+      "reference": "nativeFollowups.r14Scope.focusedVerification",
+      "scope": "Latest operational scope controls3PASS; latest product-scoped acceptance404R2 has41freshPASS in nativeFollowups.postR13Repairs.404. Neither is a native/full-product run."
+    },
+    "lastScopedVerificationRole": "R14 final operational review and exact focused route evidence; #404 product/source approval separately bound. No cheap test duplicates or clean3995 full-root/native pass inferred.",
+    "lastIntegratedCheckRole": "Historical clean-d152 combined integrated gate remains separately retained. Later actual root check+CLI r3 passed at0dbc+diff/later655203; it is not merely focused, but neither establishes current3995 full-product/native/release acceptance.",
+    "sourceCheckpointCommit": "3995f4fbe276b14680b860fc7ade71d419601470",
+    "sourceCheckpointTree": "71fde927476dfb4e8eb8a58a70ebc9e95b4c15cc",
+    "sourceCheckpointScope": "Committed402/157/403/404 repairs plus independently approved R14 routing3995. R13 executed ae37 only. Exact source/read composition is3995; execution/review records retain their actual priorcommit+diff bindings, not a clean3995 full-product pass.",
+    "currentAdministrativeInputSource": {
+      "commit": "3995f4fbe276b14680b860fc7ade71d419601470",
+      "tree": "71fde927476dfb4e8eb8a58a70ebc9e95b4c15cc",
+      "preimageAdministrativeCommit": "ae37c18f21f6e35ff128abe98d6b7975fbf547d2",
+      "preparedUtc": "2026-09-10T10:27:46.163863+00:00",
+      "scope": "Eight immutable3995 preimages equal ae37 administrative bytes. Private guarded candidate only; operational source/host guide untouched. Application/publication/later execution separate."
+    },
+    "corroborationProjection": {
+      "sourceCommit": "3995f4fbe276b14680b860fc7ade71d419601470",
+      "sourceTree": "71fde927476dfb4e8eb8a58a70ebc9e95b4c15cc",
+      "observedUtc": "2026-09-10T10:27:46.163863+00:00",
+      "projectionPaths": 1151,
+      "countsByReadStatus": {
+        "FULL_TEXT_CURRENT": 653,
+        "FULL_SEMANTIC_DELTA_CURRENT": 231,
+        "REOPENED_HISTORICAL_TEXT_CURRENT_DELTA_BOUND": 6,
+        "STRUCTURAL_ONLY_CURRENT": 259,
+        "SELF_DESCRIBING_LEDGER_NO_CURRENT_SELF_BINDING": 1,
+        "COMPLETE_SEMANTIC_INVENTORY_CURRENT": 1
+      },
+      "newPaths": 1,
+      "exactReviewedReadAdvances": 20,
+      "existingHistoricalFiveColumnCellsPreserved": 5750,
+      "mappingSha256": "186e5afd845a18cfa65a49e8dc626583e87e3a977f48367eae42b804806a151e",
+      "scope": "Explicit3995source projection:19 existing reviewed deltas and1 complete added-file read; current host guide fully read; all other nonadmin source blobs match inherited reads. Eight prospective admin postimages separately bound; six qualified/reopened histories, report semantic delta and self unbound. Prior rows at immutableae37 coverage blob 2d422238c90ab6768afef16f300ddff2a0e73cfe. Not full-history rereading or current whole-source correctness/platform execution."
+    },
+    "lastReviewedIssue": 404,
+    "lastReviewedIssues": [
+      404,
+      403,
+      402,
+      398,
+      397,
+      396,
+      401,
+      400,
+      399,
+      395,
+      379,
+      261,
+      250,
+      390,
+      394,
+      393,
+      391,
+      392,
+      388,
+      389,
+      287,
+      172,
+      176,
+      378
+    ]
   }
 }
