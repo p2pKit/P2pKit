@@ -1396,6 +1396,8 @@ class HostInvocationTest(unittest.TestCase):
                     operations = {name: stack.enter_context(mock.patch.object(host, name, side_effect=observe(name)))
                                   for name in ("check", "install_xcodegen", "mac_policies", "clean_outputs",
                                                "retain_publication", "retain_consumer_framework", "apple")}
+                    published = stack.enter_context(mock.patch.object(host, "consumer_publication_ready",
+                        side_effect=lambda value: events.append("consumer-publication-ready") or True))
                     invoked = stack.enter_context(mock.patch.object(host, "invoke", side_effect=invoke))
                     host.mac()
                 expected_calls = [
@@ -1409,17 +1411,17 @@ class HostInvocationTest(unittest.TestCase):
                 expected_calls.append(mock.call("isolated-consumers", ["bash", "scripts/check-published-consumers.sh"],
                     kind="command", timeout=7200, extra_env={"P2PKIT_CONSUMER_WORK_DIR": str(consumer),
                                                             "P2PKIT_CONSUMER_AUDIT_METADATA": "1"}))
-                if consumer_ok:
-                    expected_calls.append(mock.call("consumer-publication-inspect",
-                        ["bash", "scripts/check-publish-artifacts.sh", str(repository)], kind="command"))
+                expected_calls.append(mock.call("consumer-publication-inspect",
+                    ["bash", "scripts/check-publish-artifacts.sh", str(repository)], kind="command"))
                 expected_calls.append(mock.call("swift-jvm-cli-prepare", [":p2p-sample-desktop:installDist"]))
                 self.assertEqual(expected_calls, invoked.call_args_list)
                 self.assertEqual(["check", "install_xcodegen", "mac_policies", "mac-platform-full", "clean_outputs",
                                   "mac-artifact-build", *(["sbom-inspect"] if batch_ok else []), "clean_outputs",
-                                  "isolated-consumers", *(["consumer-publication-inspect"] if consumer_ok else []),
+                                  "isolated-consumers", "consumer-publication-ready", "consumer-publication-inspect",
                                   "retain_publication", "retain_consumer_framework", "clean_outputs",
                                   "swift-jvm-cli-prepare", "apple"], events)
                 operations["check"].assert_called_once_with("apple-tcp-options-sdk", host.inspect_tcp_options_headers)
+                published.assert_called_once_with(consumer)
                 operations["retain_publication"].assert_called_once_with(repository, "consumer-publication")
                 operations["retain_consumer_framework"].assert_called_once_with(consumer)
                 self.assertFalse((host.state / "work/publication").exists(), "Do not create a redundant publication")
@@ -1442,6 +1444,8 @@ class HostInvocationTest(unittest.TestCase):
                     operations = {name: stack.enter_context(mock.patch.object(host, name, side_effect=observe(name)))
                                   for name in ("check", "install_xcodegen", "clean_outputs", "retain_publication",
                                                "retain_consumer_framework", "apple")}
+                    published = stack.enter_context(mock.patch.object(host, "consumer_publication_ready",
+                        side_effect=lambda value: events.append("consumer-publication-ready") or product_ok))
                     invoked = stack.enter_context(mock.patch.object(host, "invoke", side_effect=invoke))
                     host.mac()
                 expected_calls = [
@@ -1459,15 +1463,68 @@ class HostInvocationTest(unittest.TestCase):
                 expected_calls.append(mock.call("swift-jvm-cli-prepare", [":p2p-sample-desktop:installDist"]))
                 self.assertEqual(expected_calls, invoked.call_args_list)
                 self.assertEqual(["install_xcodegen", "mac-platform-ios-lan-arm64", "clean_outputs",
-                                  "isolated-consumers", *(["consumer-publication-inspect"] if product_ok else []),
+                                  "isolated-consumers", "consumer-publication-ready",
+                                  *(["consumer-publication-inspect"] if product_ok else []),
                                   "retain_publication", "retain_consumer_framework", "clean_outputs",
                                   "swift-jvm-cli-prepare", "apple"], events)
                 operations["check"].assert_not_called()
+                published.assert_called_once_with(consumer)
                 operations["retain_publication"].assert_called_once_with(repository, "consumer-publication")
                 operations["retain_consumer_framework"].assert_called_once_with(consumer)
                 operations["apple"].assert_called_once_with()
                 self.assertFalse((host.state / "work/publication").exists())
         self.assertEqual([], self.calls, "Routing fixture must not invoke a product subprocess")
+
+    def test_consumer_archive_prerequisite_uses_the_exact_publisher_not_consumer_success_or_partial_files(self):
+        cases = [(0, 0, None), (0, 7, None), (7, 7, None), (None, 7, "missing"),
+                 (0, 7, "wrong-parent"), (0, 7, "wrong-repository"), (0, 7, "ambiguous"), (0, 7, "not-empty")]
+        for publisher_status, consumer_status, fault in cases:
+            with self.subTest(publisher=publisher_status, consumer=consumer_status, fault=fault):
+                fixture = HostInvocationTest()
+                fixture.setUp()
+                self.addCleanup(fixture.doCleanups)
+                host = fixture.host
+                host.role, host.wrapper = "macos-x64", fixture.repo / "gradlew"
+                outer = {"id": "a" * 32, "ancestorInvocationIds": [], "finalExitCode": consumer_status}
+                host.receipts["isolated-consumers"] = outer
+                consumer = host.state / "work/consumer"
+                (consumer / "repository").mkdir(parents=True)
+                (consumer / "repository/partial.txt").write_text("Existence is not publication proof\n")
+                if publisher_status is not None:
+                    fixture.arguments = ["--no-daemon", "--console=plain", "publishToMavenLocal",
+                        "-Dmaven.repo.local=" + str(consumer / ("foreign" if fault == "wrong-repository" else "repository"))]
+                    fixture.next_status = publisher_status
+                    def lineage(record, receipt, evidence, phase):
+                        if phase == "before-write":
+                            record["ancestorInvocationIds"] = ["b" * 32 if fault == "wrong-parent" else outer["id"]]
+                    fixture.next_mutation = lineage
+                    self.assertEqual(publisher_status == 0, fixture.invoke("consumer-publish"))
+                    receipts = host.state / "consumer-receipts.synthetic"
+                    receipts.mkdir()
+                    receipt = receipts / "consumer-publish.json"
+                    shutil.copyfile(host.state / "host-consumer-publish.json", receipt)
+                    admission = {"source": host.context["source"], "workDir": str(consumer),
+                                 "repository": str(consumer / "repository"), "publicationReceipt": str(receipt),
+                                 "repositoryInitiallyAbsent": fault != "not-empty"}
+                    (receipts / "consumer-admission.json").write_text(json.dumps(admission))
+                    if fault == "ambiguous":
+                        duplicate = host.state / "consumer-receipts.duplicate"
+                        duplicate.mkdir()
+                        shutil.copyfile(receipt, duplicate / receipt.name)
+                if fault not in (None, "missing"):
+                    with self.assertRaises(ValueError):
+                        host.consumer_publication_ready(consumer)
+                    self.assertFalse((host.evidence / "consumer-publication-prerequisite.json").exists())
+                else:
+                    self.assertEqual(publisher_status == 0, host.consumer_publication_ready(consumer))
+                    proof = json.loads((host.evidence / "consumer-publication-prerequisite.json").read_text())
+                    self.assertEqual("PASS" if publisher_status == 0 else "NOT_EXECUTED", proof["result"])
+                    if publisher_status is not None:
+                        self.assertEqual(publisher_status, proof["publisherExitCode"])
+                        self.assertEqual(consumer_status, proof["consumerExitCode"])
+                        self.assertEqual(hashlib.sha256(receipt.read_bytes()).hexdigest(), proof["publisherReceiptSha256"])
+                self.assertEqual(0 if publisher_status is None else 1, len(fixture.calls),
+                                 "Readiness inspection must not publish, compile or run the archive gate itself")
 
     def test_swift_jvm_peer_requires_successful_cli_receipt_and_serial_ui_preparation(self):
         ui_dir = self.state / "work/swift-ui"
@@ -2056,13 +2113,16 @@ class HostInvocationTest(unittest.TestCase):
 
     def test_cancellation_probe_is_isolated_and_retired_after_success_failure_or_interruption(self):
         udid = "11111111-1111-1111-1111-111111111111"
-        for outcome in (True, False, "interrupted", "retirement-failed", "unowned"):
-            with self.subTest(outcome=outcome):
+        cases = [("macos-arm64", "apple-followup", outcome)
+                 for outcome in (True, False, "interrupted", "retirement-failed", "unowned")]
+        cases.extend(("macos-x64", "full", outcome) for outcome in (True, False, "unowned"))
+        for role, scope, outcome in cases:
+            with self.subTest(role=role, scope=scope, outcome=outcome):
                 fixture = HostInvocationTest()
                 fixture.setUp()
                 self.addCleanup(fixture.doCleanups)
                 host = fixture.host
-                host.role, host.scope = "macos-arm64", "apple-followup"
+                host.role, host.scope = role, scope
                 host.simulator = {"udid": udid, "stateBefore": "Booted" if outcome == "unowned" else "Shutdown"}
                 ui_dir = fixture.state / "work/swift-ui"
                 bundle = ui_dir / "DerivedData/Logs/Test/swift-cancellation-probe.xcresult"
@@ -2493,7 +2553,7 @@ class SdkSetupTest(unittest.TestCase):
                     self.assert_manager_receipt(fixture, sdk, manager)
                     self.assertFalse((fixture.host.evidence / "android-platforms.json").exists())
 
-    def run_fixture(self, fixture, sdk, *, manager_status=0, scope="full"):
+    def run_fixture(self, fixture, sdk, *, manager_status=0, scope="full", prepare_status=0, simulator_problem=None):
         # Recreate only this owned temporary context through real initialize/run.
         role = fixture.host.role
         shutil.rmtree(fixture.state)
@@ -2505,12 +2565,44 @@ class SdkSetupTest(unittest.TestCase):
         host.admission = admission
         event = fixture.work / "event.json"
         event.write_text("{}", encoding="utf-8")
+        order = []
+        clean_outputs = host.clean_outputs
+        initialize_boundary = fixture.initialize_boundary(host)
+        runtime_id = "com.apple.CoreSimulator.SimRuntime.iOS-26-2"
+        device_id = "11111111-1111-1111-1111-111111111111"
+
+        def native_inventory(command, **kwargs):
+            if command[0] != "xcrun":
+                return initialize_boundary(command, **kwargs)
+            self.assertTrue((host.evidence / "android-platforms.json").is_file())
+            query = command[4]
+            self.assertIn(query, ("runtimes", "devices"))
+            self.assertEqual(["xcrun", "simctl", "list", "--json", query] +
+                             (["available"] if query == "devices" else []), command)
+            order.append("intel-simulator-" + query)
+            payload = {"runtimes": [{"identifier": runtime_id, "isAvailable": simulator_problem != "unavailable-runtime"}]}
+            if query == "devices":
+                payload = {"devices": {runtime_id: [{"name": "iPhone 16" if simulator_problem == "missing-device" else "iPhone 17",
+                           "udid": device_id, "state": "Shutdown", "isAvailable": True}]}}
+            kwargs["stdout"].write((json.dumps(payload) + "\n").encode("utf-8"))
+            kwargs["stderr"].write(b"synthetic read-only inventory boundary\n")
+            return subprocess.CompletedProcess(command, 7 if simulator_problem == "query" else 0)
 
         def controller(command, **kwargs):
             purpose = command[command.index("--purpose") + 1]
-            fixture.next_status = manager_status if purpose == "android-platforms" else 0
-            if purpose == "intel-platform":
+            fixture.next_status = {"android-platforms": manager_status,
+                                   "swift-jvm-cli-prepare": prepare_status}.get(purpose, 0)
+            if purpose in ("intel-platform", "swift-jvm-cli-prepare"):
                 self.assertTrue((host.evidence / "android-platforms.json").is_file())
+                order.append(purpose)
+            if purpose == "swift-jvm-cli-prepare":
+                self.assertEqual([
+                    ":p2p-core:checkKotlinAbi", ":p2p-transport-lan:checkKotlinAbi",
+                    ":p2p-network-provisioning-android:checkKotlinAbi",
+                    ":p2p-network-provisioning-desktop:checkKotlinAbi",
+                    ":p2p-core:checkAndroidAbi", ":p2p-transport-lan:checkAndroidAbi",
+                    ":p2p-network-provisioning-android:checkAndroidAbi",
+                    ":p2p-sample-desktop:installDist", "--continue"], command[command.index("--") + 1:])
             return fixture.controller(command, **kwargs)
 
         def products():
@@ -2518,9 +2610,13 @@ class SdkSetupTest(unittest.TestCase):
             self.assertEqual(["executor-native-controls", "android-platforms"],
                              [row["component"] for row in host.rows])
 
+        def clean():
+            order.append("clean_outputs")
+            return clean_outputs()
+
         with mock.patch.dict(os.environ, {"GITHUB_EVENT_PATH": str(event)}), \
                 mock.patch.object(HOST, "admit", return_value=admission), \
-                mock.patch.object(HOST.subprocess, "run", side_effect=fixture.initialize_boundary(host)), \
+                mock.patch.object(HOST.subprocess, "run", side_effect=native_inventory), \
                 mock.patch.object(HOST.subprocess, "Popen", side_effect=controller), \
                 mock.patch.object(HOST, "source_snapshot", return_value=copy.deepcopy(fixture.source)), \
                 mock.patch.object(host, "prerequisites"), \
@@ -2528,32 +2624,74 @@ class SdkSetupTest(unittest.TestCase):
                 mock.patch.object(host, "windows_followup", side_effect=products) as followup, \
                 mock.patch.object(host, "windows_diagnostics", side_effect=products) as diagnostics, \
                 mock.patch.object(host, "mac", side_effect=products) as mac, \
+                mock.patch.object(host, "clean_outputs", side_effect=clean), \
+                mock.patch.object(host, "install_xcodegen", side_effect=lambda: order.append("install_xcodegen")), \
+                mock.patch.object(host, "isolated_consumers", side_effect=lambda: order.append("isolated_consumers")), \
+                mock.patch.object(host, "apple", side_effect=lambda: order.append("apple")), \
                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             result = host.run()
-        return result, windows.call_count, mac.call_count, followup.call_count, diagnostics.call_count
+        return result, windows.call_count, mac.call_count, followup.call_count, diagnostics.call_count, order
 
     def test_run_routes_all_roles_only_after_sdk_validation(self):
-        for role, scope in [*((role, "full") for role in HOST.ROLES),
-                             ("windows-x64", "windows-followup"), ("windows-x64", "windows-diagnostics"),
-                             ("macos-arm64", "apple-followup")]:
-            with self.subTest(role=role, scope=scope), self.fixture(role) as data:
+        cases = [(role, "full", 0) for role in HOST.ROLES]
+        cases.extend([("windows-x64", "windows-followup", 0), ("windows-x64", "windows-diagnostics", 0),
+                      ("macos-arm64", "apple-followup", 0), ("macos-x64", "full", 7)])
+        for role, scope, prepare_status in cases:
+            with self.subTest(role=role, scope=scope, prepare_status=prepare_status), self.fixture(role) as data:
                 fixture, sdk, _, _ = data
-                result, windows, mac, followup, diagnostics = self.run_fixture(fixture, sdk, scope=scope)
-                self.assertEqual(0, result)
+                result, windows, mac, followup, diagnostics, order = self.run_fixture(
+                    fixture, sdk, scope=scope, prepare_status=prepare_status)
+                self.assertEqual(int(prepare_status != 0), result)
                 self.assertEqual(int(role == "windows-x64" and scope == "full"), windows)
                 self.assertEqual(int(scope == "windows-followup"), followup)
                 self.assertEqual(int(scope == "windows-diagnostics"), diagnostics)
                 self.assertEqual(int(role == "macos-arm64"), mac)
                 expected = ["executor-native-controls", "android-platforms"]
                 if role == "macos-x64":
-                    expected.append("intel-platform")
+                    expected.extend(["intel-simulator-prerequisites", "intel-platform", "swift-jvm-cli-prepare"])
+                    self.assertEqual(prepare_status,
+                                     fixture.host.receipts["swift-jvm-cli-prepare"]["finalExitCode"])
+                    self.assertEqual(["intel-simulator-runtimes", "intel-simulator-devices", "intel-platform",
+                                      "clean_outputs", "install_xcodegen", "isolated_consumers", "clean_outputs",
+                                      "swift-jvm-cli-prepare", "apple",
+                                      "clean_outputs"], order)
+                    inventory = json.loads((fixture.host.evidence / "intel-simulator-prerequisites.json").read_text())
+                    self.assertEqual([{"runtime": "com.apple.CoreSimulator.SimRuntime.iOS-26-2",
+                                       "udid": "11111111-1111-1111-1111-111111111111", "state": "Shutdown"}],
+                                     inventory["details"]["availableCandidates"])
+                    self.assertIsNone(fixture.host.simulator, "Read-only inventory must not acquire simulator ownership")
+                else:
+                    self.assertEqual(["clean_outputs"], order)
                 self.assertEqual(expected, [row["component"] for row in fixture.host.rows])
-                self.assertEqual("PASS", fixture.summary()["result"])
+                self.assertEqual("FAIL" if prepare_status else "PASS", fixture.summary()["result"])
                 self.assertEqual(scope, fixture.summary()["requestedScope"])
                 self.assertEqual(scope, fixture.summary()["source"]["requestedScope"])
                 self.assertEqual("FULL_COMPONENT_SCOPE" if scope == "full" else
                                  "NOT_ESTABLISHED_BY_FOCUSED_SCOPE", fixture.summary()["hostQualification"])
                 self.assertTrue(fixture.summary()["safeToContinue"])
+
+    def test_intel_unavailable_or_failed_inventory_blocks_builds_and_preserves_read_only_evidence(self):
+        for problem in ("unavailable-runtime", "missing-device", "query"):
+            with self.subTest(problem=problem), self.fixture("macos-x64") as data:
+                fixture, sdk, _, _ = data
+                result, windows, mac, followup, diagnostics, order = self.run_fixture(
+                    fixture, sdk, simulator_problem=problem)
+                self.assertEqual((1, 0, 0, 0, 0), (result, windows, mac, followup, diagnostics))
+                queries = ["intel-simulator-runtimes"] + ([] if problem == "query" else ["intel-simulator-devices"])
+                self.assertEqual(queries, order)
+                self.assertEqual(["executor-native-controls", "android-platforms", "intel-simulator-prerequisites"],
+                                 [row["component"] for row in fixture.host.rows])
+                self.assertEqual("FAIL", fixture.host.rows[-1]["result"])
+                self.assertTrue(fixture.host.rows[-1]["inspectionOnly"])
+                self.assertFalse(fixture.summary()["safeToContinue"])
+                self.assertIn("Intel simulator prerequisite failed", fixture.summary()["error"])
+                for label in queries:
+                    self.assertTrue((fixture.host.evidence / (label + ".stdout.log")).is_file())
+                    self.assertTrue((fixture.host.evidence / (label + ".stderr.log")).is_file())
+                    observation = json.loads((fixture.host.evidence / (label + "-inspection.json")).read_text())
+                    self.assertEqual(7 if problem == "query" else 0, observation["exitCode"])
+                self.assertIsNone(fixture.host.simulator)
+                self.assertNotIn("swift-jvm-cli-prepare", fixture.host.receipts)
 
     def test_run_blocks_all_products_and_finalizes_invalid_metadata(self):
         for role, scope in [*((role, "full") for role in HOST.ROLES),
@@ -2562,8 +2700,9 @@ class SdkSetupTest(unittest.TestCase):
             with self.subTest(role=role, scope=scope), self.fixture(role) as data:
                 fixture, sdk, _, properties = data
                 properties["android-37.0"].write_text("AndroidVersion.ApiLevel=37.1\n", encoding="utf-8")
-                result, windows, mac, followup, diagnostics = self.run_fixture(fixture, sdk, scope=scope)
+                result, windows, mac, followup, diagnostics, order = self.run_fixture(fixture, sdk, scope=scope)
                 self.assertEqual((1, 0, 0, 0, 0), (result, windows, mac, followup, diagnostics))
+                self.assertEqual([], order)
                 self.assertEqual(["executor-native-controls", "android-platforms"],
                                  [row["component"] for row in fixture.host.rows])
                 self.assertIn("Wrong Android platform metadata: android-37.0", fixture.summary()["error"])
@@ -2578,8 +2717,10 @@ class SdkSetupTest(unittest.TestCase):
                              ("macos-arm64", "apple-followup")]:
             with self.subTest(role=role, scope=scope), self.fixture(role) as data:
                 fixture, sdk, _, _ = data
-                result, windows, mac, followup, diagnostics = self.run_fixture(fixture, sdk, manager_status=7, scope=scope)
+                result, windows, mac, followup, diagnostics, order = self.run_fixture(
+                    fixture, sdk, manager_status=7, scope=scope)
                 self.assertEqual((1, 0, 0, 0, 0), (result, windows, mac, followup, diagnostics))
+                self.assertEqual([], order)
                 self.assertEqual(["executor-native-controls", "android-platforms"],
                                  [row["component"] for row in fixture.host.rows])
                 self.assertEqual("FAIL", fixture.host.rows[-1]["result"])

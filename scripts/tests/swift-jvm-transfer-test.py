@@ -4,6 +4,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import signal
 import subprocess
@@ -140,6 +141,137 @@ class SwiftJvmTransferControls(unittest.TestCase):
                         with self.assertRaises(ValueError):
                             TRANSFER.transfer_evidence(broken, "synthetic-transfer", "a" * 64,
                                                        swift=swift, receiver=receiver)
+
+    def test_quit_timeout_dump_binds_the_unreaped_child_and_bounds_only_one_diagnostic(self):
+        for fault in (None, "reaped", "parent", "domain", "exec-version", "attach-failed", "attach-timeout"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory(prefix="swift-jvm-dump-") as temporary:
+                directory = Path(temporary).resolve()
+                java_home = directory / "jdk17"
+                (java_home / "bin").mkdir(parents=True)
+                jcmd = java_home / "bin/jcmd"
+                jcmd.write_text("synthetic tool; never execute\n")
+                jcmd.chmod(0o700)
+                experiment = object.__new__(TRANSFER.Experiment)
+                experiment.directory = directory
+                experiment.context = {"javaHomes": [str(java_home)]}
+                experiment.ownership_domain = {"job": "a" * 32, "id": "b" * 32,
+                                               "state": str(directory), "home": str(directory / "home")}
+                experiment.record = {"result": "FAIL", "unresolvedChildren": []}
+                experiment.audit = types.SimpleNamespace(utc=lambda: "synthetic-clock",
+                    reject_symlinks=lambda path: None, new_file=lambda path: path.open("xb"))
+                cli = mock.Mock(pid=9000, returncode=0 if fault == "reaped" else None,
+                                args=[str(java_home / "bin/java")])
+                cli.poll.side_effect = AssertionError("Do not reap the target during attach")
+                cli.wait.side_effect = AssertionError("The natural30s wait has already failed")
+                experiment.cli = cli
+                owner = {"pid": os.getpid(), "uid": os.getuid(), "uniqueId": 41}
+                target = {"pid": cli.pid, "uid": owner["uid"], "uniqueId": 42, "startSeconds": 10,
+                          "startMicroseconds": 20, "pidVersion": 1, "live": True,
+                          "parentPid": os.getpid(), "parentUniqueId": 99 if fault == "parent" else 41}
+                identities = 0
+                def identity(pid, *, required):
+                    nonlocal identities
+                    self.assertTrue(required)
+                    if pid == os.getpid():
+                        return dict(owner)
+                    self.assertEqual(cli.pid, pid)
+                    identities += 1
+                    return dict(target, pidVersion=2 if fault == "exec-version" and identities > 1 else 1)
+                observer = mock.Mock()
+                observer._identity.side_effect = identity
+                observer._key.side_effect = lambda value: tuple(value[key] for key in
+                    ("pid", "uniqueId", "startSeconds", "startMicroseconds"))
+                observer._ours.return_value = fault != "domain"
+                factory = mock.Mock(return_value=observer)
+                child = mock.Mock(pid=9001, returncode=None if fault == "attach-timeout" else 7 if fault == "attach-failed" else 0)
+                if fault == "attach-timeout":
+                    child.wait.side_effect = subprocess.TimeoutExpired("synthetic-jcmd", 10)
+                else:
+                    child.wait.return_value = child.returncode
+                def launch(command, **options):
+                    self.assertEqual([str(jcmd), "-J-Xmx64m", "-J-XX:MaxMetaspaceSize=128m",
+                        "-J-XX:ActiveProcessorCount=2", str(cli.pid), "Thread.print", "-l"], command)
+                    self.assertEqual(subprocess.DEVNULL, options["stdin"])
+                    options["preexec_fn"]()  # Modeled only; setrlimit below is intercepted.
+                    options["stdout"].write(b"synthetic thread observation, not native evidence\n")
+                    return child
+                with mock.patch.dict(sys.modules, {"audit_processes": types.SimpleNamespace(DarwinScope=factory)}), \
+                        mock.patch.object(TRANSFER.subprocess, "Popen", side_effect=launch) as popen, \
+                        mock.patch.object(TRANSFER.resource, "setrlimit") as limit:
+                    experiment.observe_cli_quit_timeout()
+                observed = experiment.record["cliQuitThreadDump"]
+                self.assertEqual("FAIL", experiment.record["result"])
+                rejected = fault in ("reaped", "parent", "domain", "exec-version")
+                self.assertEqual(int(not rejected), popen.call_count)
+                self.assertEqual(rejected, "error" in observed)
+                if not rejected:
+                    child.wait.assert_called_once_with(timeout=10)
+                    limit.assert_called_once_with(TRANSFER.resource.RLIMIT_FSIZE, (2 * TRANSFER.MIB, 2 * TRANSFER.MIB))
+                    self.assertTrue(observed["auditTokenAcquired"])
+                    self.assertEqual(10, observed["toolTimeoutSeconds"])
+                    self.assertFalse(observed["outputLimitReached"])
+                    self.assertEqual(fault == "attach-timeout", observed.get("timedOut", False))
+                    self.assertEqual([] if fault != "attach-timeout" else
+                                     [{"kind": "cli-quit-thread-dump", "pid": child.pid}],
+                                     experiment.record["unresolvedChildren"])
+                    if fault != "attach-timeout":
+                        self.assertEqual(child.returncode, observed["exitCode"])
+                cli.poll.assert_not_called()
+                cli.wait.assert_not_called()
+                cli.terminate.assert_not_called()
+                cli.kill.assert_not_called()
+                child.terminate.assert_not_called()
+                child.kill.assert_not_called()
+                observer.signal_all.assert_not_called()
+                observer.drain.assert_not_called()
+                if fault != "reaped":
+                    observer.close.assert_called_once_with()
+
+    def test_only_natural_quit_timeout_observes_threads_and_original_failure_is_preserved(self):
+        for timed_out in (False, True):
+            with self.subTest(timed_out=timed_out), tempfile.TemporaryDirectory(prefix="swift-jvm-quit-") as temporary:
+                directory = Path(temporary).resolve()
+                experiment = object.__new__(TRANSFER.Experiment)
+                experiment.directory = directory
+                experiment.identity = directory.stat().st_dev, directory.stat().st_ino
+                experiment.home = directory / "home"
+                experiment.home.mkdir()
+                experiment.name = "synthetic.bin"
+                (directory / experiment.name).write_bytes(b"synthetic fixture")
+                (directory / "cli.stdout.log").write_text("Stopping…\n")
+                (directory / "cli.stderr.log").write_bytes(b"")
+                experiment.audit = types.SimpleNamespace(utc=lambda: "synthetic-clock", reject_symlinks=lambda path: None,
+                    source_snapshot=lambda root: {"fixture": "source"},
+                    write_new_json=lambda path, value: path.write_text(json.dumps(value)))
+                experiment.context = {"source": {"fixture": "source"}}
+                experiment.xcode = experiment.xctestrun = experiment.received_identity = None
+                experiment.record = {"result": "PASS", "cleanupErrors": [], "unresolvedChildren": []}
+                cli = mock.Mock(pid=9000, returncode=None)
+                cli.stdin.closed = False
+                cli.stdin.close.side_effect = lambda: setattr(cli.stdin, "closed", True)
+                cli.poll.side_effect = lambda: cli.returncode
+                def wait(*, timeout):
+                    self.assertEqual(30, timeout)
+                    if timed_out:
+                        raise subprocess.TimeoutExpired("synthetic-cli", 30)
+                    cli.returncode = 0
+                    return 0
+                cli.wait.side_effect = wait
+                experiment.cli = cli
+                experiment.events = mock.Mock(return_value=[{"eventName": "application.shutdown"}])
+                with mock.patch.object(TRANSFER.signal, "signal"), mock.patch("builtins.print"), \
+                        mock.patch.object(experiment, "observe_cli_quit_timeout") as observe:
+                    self.assertEqual(int(timed_out), experiment.finish())
+                self.assertEqual(int(timed_out), observe.call_count)
+                cli.stdin.write.assert_called_once_with(b"quit\n")
+                cli.stdin.flush.assert_called_once_with()
+                result = json.loads((directory / "result.json").read_text())
+                self.assertEqual("FAIL" if timed_out else "PASS", result["result"])
+                self.assertEqual(timed_out, "cliQuitTimeoutUtc" in result)
+                self.assertEqual(timed_out, experiment.home.exists())
+                if timed_out:
+                    self.assertTrue(any("timed out after 30 seconds" in error for error in result["cleanupErrors"]))
+                    self.assertEqual([{"kind": "cli", "pid": cli.pid}], result["unresolvedChildren"])
 
     def test_exact_committed_file_read_and_unresolved_child_refuse_success_without_signaling(self):
         with tempfile.TemporaryDirectory(prefix="swift-jvm-controls-") as temporary:

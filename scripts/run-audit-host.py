@@ -761,6 +761,37 @@ class Host:
             bindings.append({"path": name, "sha256": digest(self.evidence / name)})
         return {"bindings": bindings, "limits": "Inspection only; review both original SDK headers before API claims."}
 
+    def inspect_intel_simulators(self):
+        """Check the actual read-only inventory before Intel product builds, never boot a device."""
+        require(self.role == "macos-x64", "Intel simulator inventory requires the native Intel role")
+        runtime_path = self.inspect_tool("intel-simulator-runtimes",
+                                         ["xcrun", "simctl", "list", "--json", "runtimes"])
+        device_path = self.inspect_tool("intel-simulator-devices",
+                                        ["xcrun", "simctl", "list", "--json", "devices", "available"])
+        runtimes, devices = read_json(runtime_path).get("runtimes"), read_json(device_path).get("devices")
+        require(type(runtimes) is list and type(devices) is dict, "Missing actual Intel simulator inventory")
+        require(all(type(runtime) is dict and type(runtime.get("identifier")) is str for runtime in runtimes),
+                "Malformed Intel simulator runtime inventory")
+        available = {runtime["identifier"] for runtime in runtimes
+                     if re.search(r"\.SimRuntime\.iOS-[0-9-]+$", runtime["identifier"]) and
+                     runtime.get("isAvailable") is True}
+        candidates = []
+        for runtime, entries in devices.items():
+            if runtime not in available:
+                continue
+            require(type(entries) is list and all(type(device) is dict for device in entries),
+                    "Malformed available Intel simulator devices")
+            for device in entries:
+                if device.get("name") == "iPhone 17" and device.get("isAvailable") is not False:
+                    udid, state = device.get("udid"), device.get("state")
+                    require(type(udid) is str and
+                            re.fullmatch(r"[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}", udid) and
+                            state in ("Booted", "Shutdown"), "Invalid Intel simulator device metadata")
+                    candidates.append({"runtime": runtime, "udid": udid, "state": state})
+        require(candidates, "No available iOS runtime with an exact iPhone17 simulator; product builds are NOT_EXECUTED")
+        return {"availableCandidates": candidates,
+                "limits": "Inventory only, not boot, x86_64 execution or qualification; Apple execution revalidates its exact device."}
+
     def mac(self):
         if self.scope == "full":
             self.check("apple-tcp-options-sdk", self.inspect_tcp_options_headers)
@@ -783,23 +814,64 @@ class Host:
                 self.invoke("sbom-inspect", ["bash", "scripts/check-sbom.sh", "build/reports/cyclonedx/bom.json",
                                              "build/reports/cyclonedx/bom.xml"], kind="command")
             self.clean_outputs()
-        # The maintained consumer publishes this exact source to its fresh owned
-        # repository. Inspect/retain that same publication rather than rebuild it.
-        consumer = self.state / "work/consumer"
-        consumer_ok = self.invoke("isolated-consumers", ["bash", "scripts/check-published-consumers.sh"],
-                                 kind="command", timeout=7200,
-                                 extra_env={"P2PKIT_CONSUMER_WORK_DIR": str(consumer), "P2PKIT_CONSUMER_AUDIT_METADATA": "1"})
-        if (consumer / "repository").is_dir():
-            if consumer_ok:
-                self.invoke("consumer-publication-inspect", ["bash", "scripts/check-publish-artifacts.sh",
-                                                              str(consumer / "repository")], kind="command")
-            self.retain_publication(consumer / "repository", "consumer-publication")
-        self.retain_consumer_framework(consumer)
+        self.isolated_consumers()
         self.clean_outputs()
         # Retain the real CLI distribution until its live Swift counterpart has finished.
         self.invoke("swift-jvm-cli-prepare", [":p2p-sample-desktop:installDist"])
         # Receipt/helper manifests are copied by finalize(); preserve failed fixtures until that copy, too.
         self.apple()
+
+    def isolated_consumers(self):
+        # One source-local publisher also supplies the independent archive gate.
+        # A later consumer compile failure does not invalidate its successful receipt.
+        consumer = self.state / "work/consumer"
+        self.invoke("isolated-consumers", ["bash", "scripts/check-published-consumers.sh"],
+                    kind="command", timeout=7200,
+                    extra_env={"P2PKIT_CONSUMER_WORK_DIR": str(consumer), "P2PKIT_CONSUMER_AUDIT_METADATA": "1"})
+        try:
+            if self.consumer_publication_ready(consumer):
+                self.invoke("consumer-publication-inspect", ["bash", "scripts/check-publish-artifacts.sh",
+                                                              str(consumer / "repository")], kind="command")
+        finally:
+            if (consumer / "repository").is_dir():
+                self.retain_publication(consumer / "repository", "consumer-publication")
+            self.retain_consumer_framework(consumer)
+
+    def consumer_publication_ready(self, consumer):
+        outer = self.receipts["isolated-consumers"]
+        candidates = sorted(self.state.glob("consumer-receipts.*/consumer-publish.json"))
+        if not candidates:
+            require(outer["finalExitCode"] != 0, "Successful consumer lacks its publisher receipt")
+            self.write("consumer-publication-prerequisite.json", {"result": "NOT_EXECUTED",
+                       "reason": "No finalized publisher receipt; no partial repository is trusted"})
+            return False
+        require(len(candidates) == 1, "Ambiguous consumer publisher receipts")
+        receipt = candidates[0]
+        record = read_json(receipt)
+        arguments = ["--no-daemon", "--console=plain", "publishToMavenLocal",
+                     "-Dmaven.repo.local=" + str(consumer / "repository")]
+        # Reuse the complete nested-leaf checker, including source, stop, drain,
+        # original argv, canonical copies and retained reports. Invalid finalization
+        # stops this host rather than allowing another product build.
+        self.validate_receipt(record, record.get("finalExitCode"), record.get("id"), "consumer-publish",
+                              "gradle", arguments, receipt)
+        require(record.get("ancestorInvocationIds") == [*outer["ancestorInvocationIds"], outer["id"]],
+                "Publisher is not the exact isolated-consumer descendant")
+        admission = read_json(receipt.parent / "consumer-admission.json")
+        require(admission.get("source") == self.context["source"] and
+                admission.get("workDir") == str(consumer) and
+                admission.get("repository") == str(consumer / "repository") and
+                admission.get("publicationReceipt") == str(receipt) and
+                admission.get("repositoryInitiallyAbsent") is True,
+                "Publisher repository was not admitted empty for this source and work root")
+        ready = record["finalExitCode"] == 0
+        require(ready or outer["finalExitCode"] != 0, "Successful consumer has a failed publisher")
+        require(not ready or physical(consumer / "repository").is_dir(), "Successful publisher repository is absent")
+        self.write("consumer-publication-prerequisite.json", {"result": "PASS" if ready else "NOT_EXECUTED",
+                   "publisherInvocationId": record["id"], "publisherExitCode": record["finalExitCode"],
+                   "publisherReceiptSha256": digest(receipt), "consumerExitCode": outer["finalExitCode"],
+                   "limits": "Publisher prerequisite only, not consumer or archive acceptance"})
+        return ready
 
     def retain_consumer_framework(self, consumer):
         # The unchanged consumer gate captures vtool in a shell variable. Keep an
@@ -936,7 +1008,7 @@ class Host:
                     if device.get("name") == "iPhone 17" and device.get("isAvailable") is not False:
                         choices.append((tuple(map(int, match[1].split("-"))), device["udid"], device["state"]))
         require(choices, "No available exact iPhone17 simulator; required Swift tests are not skipped")
-        if self.scope == "apple-followup":
+        if (self.role, self.scope) in (("macos-arm64", "apple-followup"), ("macos-x64", "full")):
             # Prefer an already Shutdown available device for the terminal
             # isolated probe; a Booted newest choice is not a hardware blocker.
             choices = [choice for choice in choices if choice[2] == "Shutdown"] or choices
@@ -969,7 +1041,7 @@ class Host:
             self.swift_jvm_transfer(ui_dir, udid)
         # Investigation stays last and separate from both acceptance processes.
         # A cleaned integration/product failure must not erase independent evidence.
-        if self.scope == "apple-followup":
+        if (self.role, self.scope) in (("macos-arm64", "apple-followup"), ("macos-x64", "full")):
             self.swift_cancellation_probe(ui_dir, udid)
 
     def swift_jvm_transfer(self, ui_dir, udid):
@@ -1011,8 +1083,8 @@ class Host:
 
     def swift_cancellation_probe(self, ui_dir, udid):
         """One explicit investigative host; shutdown is cleanup, never cancellation success."""
-        require(self.role == "macos-arm64" and self.scope == "apple-followup",
-                "Cancellation investigation requires the explicit focused Apple route")
+        require((self.role, self.scope) in (("macos-arm64", "apple-followup"), ("macos-x64", "full")),
+                "Cancellation investigation requires an explicit native Apple follow-through route")
         case = ("p2pkit-sample-cancellation-probe-tests/SwiftFlowCancellationProbeTests/"
                 "testSwiftTaskCancellationFinishesActualDiagnosticCollection")
         admitted = bool(self.simulator and self.simulator.get("udid") == udid and
@@ -1298,8 +1370,21 @@ class Host:
             elif self.role == "macos-arm64":
                 self.mac()
             else:
+                require(self.check("intel-simulator-prerequisites", self.inspect_intel_simulators),
+                        "Intel simulator prerequisite failed; product builds are NOT_EXECUTED")
                 self.invoke("intel-platform", [sys.executable, "scripts/run-platform-tests.py", "ios-x64"], kind="command", timeout=7200)
                 self.clean_outputs()
+                self.install_xcodegen()
+                self.isolated_consumers()
+                self.clean_outputs()
+                preparation = [*[":" + module + ":checkKotlinAbi" for module in MODULES],
+                               *[":" + module + ":checkAndroidAbi" for module in (
+                                   "p2p-core", "p2p-transport-lan", "p2p-network-provisioning-android")],
+                               ":p2p-sample-desktop:installDist", "--continue"]
+                self.invoke("swift-jvm-cli-prepare", preparation)
+                # Independent Apple work may continue after a finalized graph failure.
+                # The live peer still requires this actual preparation receipt to succeed.
+                self.apple()
         except (Exception, KeyboardInterrupt) as failure:
             error = type(failure).__name__ + ": " + str(failure)
             print("FATAL: " + error, file=sys.stderr, flush=True)

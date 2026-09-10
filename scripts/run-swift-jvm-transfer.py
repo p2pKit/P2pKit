@@ -203,6 +203,7 @@ class Experiment:
         require(domains and domains[-1]["job"] == self.context["id"] == os.environ.get(OWNERSHIP[0]) and
                 domains[-1]["state"] == str(self.state) and domains[-1]["home"] == self.context["gradleHome"] ==
                 os.environ.get("GRADLE_USER_HOME"), "Missing/mismatched active executor ownership")
+        self.ownership_domain = dict(domains[-1])
         require(Path(self.context["root"]) == ROOT and self.audit.source_snapshot(ROOT) == self.context["source"],
                 "Source differs from the admitted clean build")
         for key in ("JAVA_OPTS", "GRADLE_OPTS", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS"):
@@ -511,6 +512,68 @@ class Experiment:
         self.guard()
         self.record["result"] = "PASS"
 
+    def observe_cli_quit_timeout(self):
+        """One bounded attach after failure, never an alternative graceful-exit path."""
+        name, limit = "cli-quit-thread-dump", 2 * MIB
+        observation = {"startedUtc": self.audit.utc(), "toolTimeoutSeconds": 10, "perStreamByteLimit": limit,
+                       "inspectionOnly": True, "stdout": name + ".log", "stderr": name + ".stderr.log",
+                       "limits": "Post-timeout HotSpot attach observation, not natural-exit success or a root-cause verdict"}
+        self.record["cliQuitThreadDump"] = observation
+        observer, process = None, None
+        try:
+            from audit_processes import DarwinScope
+            # wait(timeout) left this original direct child unreaped. Do not poll,
+            # reap or replace it during attach: its PID cannot be reused meanwhile.
+            require(self.cli.returncode is None, "CLI has already been reaped; do not attach")
+            domain = self.ownership_domain
+            observer = DarwinScope(domain["job"], domain["id"], domain["state"], domain["home"])
+            owner = observer._identity(os.getpid(), required=True)
+            target = observer._identity(self.cli.pid, required=True)
+            require(owner is not None and target is not None and target["live"] and
+                    target["parentPid"] == os.getpid() and target["parentUniqueId"] == owner["uniqueId"] and
+                    target["uid"] == owner["uid"] and observer._ours(observer._inspect_environment(target)),
+                    "CLI lifetime/parent/domain is not positively owned")
+            observer._acquire(target)  # Existing opaque audit-token acquisition releases its Mach port.
+            confirmed = observer._identity(self.cli.pid, required=True)
+            require(confirmed is not None and confirmed["live"] and observer._key(confirmed) == observer._key(target) and
+                    confirmed["pidVersion"] == target["pidVersion"] and
+                    confirmed["parentUniqueId"] == owner["uniqueId"], "CLI lifetime changed before attach")
+            observation.update({"controllerIdentity": owner, "cliIdentity": confirmed, "auditTokenAcquired": True})
+            java = Path(self.cli.args[0])
+            require(java.name == "java" and java.parent.name == "bin" and
+                    str(java.parent.parent) in self.context["javaHomes"], "CLI Java home was not admitted")
+            jcmd = java.with_name("jcmd")
+            self.audit.reject_symlinks(jcmd)
+            require(jcmd.is_file() and os.access(jcmd, os.X_OK), "Admitted CLI JDK has no executable jcmd")
+            command = [str(jcmd), "-J-Xmx64m", "-J-XX:MaxMetaspaceSize=128m", "-J-XX:ActiveProcessorCount=2",
+                       str(self.cli.pid), "Thread.print", "-l"]
+            observation["command"] = command
+            # Single-threaded controller; lower only this diagnostic child's file
+            # bound before exec. No pipe reader thread, controller signal or retry is added.
+            with self.audit.new_file(self.directory / observation["stdout"]) as output, \
+                    self.audit.new_file(self.directory / observation["stderr"]) as errors:
+                process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=output, stderr=errors,
+                    env=dict(os.environ), preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit)))
+                observation["diagnosticPid"] = process.pid
+                try:
+                    observation["exitCode"] = process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    observation["timedOut"] = True
+                    # The same outer executor owns its bounded subsequent drain.
+                    # Do not signal a PID or treat late diagnostic exit as success.
+                observation["bytesAtReturn"] = {key: (self.directory / observation[key]).stat().st_size
+                                                 for key in ("stdout", "stderr")}
+                observation["outputLimitReached"] = any(size >= limit for size in observation["bytesAtReturn"].values())
+            observation["cliIdentityAfter"] = observer._identity(self.cli.pid, required=True)
+        except Exception as error:
+            observation["error"] = type(error).__name__ + ": " + str(error)
+        finally:
+            if process is not None and process.returncode is None:
+                self.record["unresolvedChildren"].append({"kind": name, "pid": process.pid})
+            if observer is not None:
+                observer.close()  # No leaders or signal/drain authority was registered here.
+            observation["endedUtc"] = self.audit.utc()
+
     def finish(self):
         # No terminate()/kill()/numeric-PID fallback. The already admitted executor
         # handles any unresolved descendants and must fail this invocation, not
@@ -520,10 +583,18 @@ class Experiment:
         if self.cli is not None:
             try:
                 if self.cli.poll() is None:
+                    self.record["cliQuitWriteUtc"] = self.audit.utc()
                     self.cli.stdin.write(b"quit\n")
                     self.cli.stdin.flush()
+                    self.record["cliQuitFlushedUtc"] = self.audit.utc()
                 self.cli.stdin.close()
-                require(self.cli.wait(timeout=30) == 0, "CLI graceful exit was not zero")
+                try:
+                    status = self.cli.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    self.record["cliQuitTimeoutUtc"] = self.audit.utc()
+                    self.observe_cli_quit_timeout()
+                    raise  # Keep the original natural30s timeout as a failure.
+                require(status == 0, "CLI graceful exit was not zero")
                 output = self.output() + self.read(self.directory / "cli.stderr.log").decode("utf-8")
                 require(output.count("Stopping…") == 1 and not any(value in output for value in
                         ("CLI failed:", "kit.stop() failed:", "CLI shutdown exceeded 30s; cleanup is incomplete")),
