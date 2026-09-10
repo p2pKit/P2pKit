@@ -1431,13 +1431,7 @@ class HostInvocationTest(unittest.TestCase):
         repository = consumer / "repository"
         repository.mkdir(parents=True)
         policies = [
-            (3, "scripts/tests/check-lock-write-policy-test.sh"),
-            (13, "scripts/check-android-abi-guard.sh"),
-            (18, "scripts/tests/ios-project-generation-test.py"),
-            (27, "scripts/tests/release-workflow-test.sh"),
-            (30, "scripts/tests/audit-leaf-hooks-test.py"),
-            (33, "scripts/tests/audit-host-workflow-test.py"),
-            (34, "scripts/tests/swift-jvm-transfer-test.py"),
+            (15, "scripts/tests/run-platform-tests-test.py"),
         ]
         for product_ok in (True, False):
             with self.subTest(product_ok=product_ok):
@@ -1458,7 +1452,10 @@ class HostInvocationTest(unittest.TestCase):
                     label = "policy-" + str(number) + "-" + Path(path).stem
                     tool = sys.executable if path.endswith(".py") else "bash"
                     env = None if number in (3, 13) else {key: None for key in HOST.ADAPTER_OPT_INS}
-                    expected_calls.append(mock.call(label, [tool, path], kind="command", extra_env=env))
+                    expected_calls.append(mock.call(label, [tool, path,
+                        "OwnedProcessGroupTest.test_term_resistant_worker_is_killed_after_leader_exits_on_term",
+                        "OwnedProcessGroupTest.test_surviving_group_is_drained_even_when_leader_already_exited",
+                    ], kind="command", extra_env=env))
                     policy_events.extend((label, "clean_outputs"))
                 expected_calls.extend([
                     mock.call("mac-platform-ios-arm64", [sys.executable, "scripts/run-platform-tests.py", "ios-arm64"],

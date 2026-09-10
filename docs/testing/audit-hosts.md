@@ -64,11 +64,13 @@ Windows or Intel job precedes or follows it automatically. The host must pass
 actual ARM64/non-Rosetta and Xcode-version admission; an advertised image label
 or the presence of this workflow is not execution evidence.
 
-This targeted route retains the existing failed-policy callers in release order:
-lock-write policy (3), Android ABI graph (13), Xcode project generation fixture
-(18), release workflow fixture (27), audit leaf hooks (30), and audit workflow
-fixture (33), plus the new Swift/JVM coordinator controls (34). Existing numbers
-retain their full-policy meanings; checks are not copied. It then invokes
+This targeted route retains the complete current-host executor admission suite,
+then runs only the two affected process-group controls from platform policy (15):
+`OwnedProcessGroupTest.test_term_resistant_worker_is_killed_after_leader_exits_on_term`
+and `OwnedProcessGroupTest.test_surviving_group_is_drained_even_when_leader_already_exited`.
+Unchanged broad policy results retain their original run/source bindings; omitted
+checks are not new passes. Full-profile policy selection and all ownership,
+failure and cleanup checks remain unchanged. The focused route then invokes
 `scripts/run-platform-tests.py ios-arm64`
 for exactly `:p2p-core:iosSimulatorArm64Test` and
 `:p2p-transport-lan:iosSimulatorArm64Test`. The existing source/model/nonce assessor
