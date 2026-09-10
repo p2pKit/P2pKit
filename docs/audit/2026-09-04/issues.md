@@ -3,10 +3,14 @@
 
 173/215 independently approved repository repairs (80.5%); 174/215 independently resolved rows (80.9%) including #287 without a repair; 41 unresolved (19.1%): 17 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 82 new audit findings. **Whole audit NOT_READY; #133 independent NOT_STARTED.**
 
-**#399/#400/#401 final repairs approved**, local repair headf0b5789. Affected native
-corroboration remains;401does not resolve #157's unknown native group-EPERM cause.
-Earlier R11 native approvals/395approval stand;396–398 remain native-pending. See
-[repair evidence](repairs/cohort-2026-09-09-native-followups.md#post-r11-sequential-repairs-and-fixture-follow-up).
+399/400/401repairs and outcome comments are published within6d11. Fresh06:36UTC census
+matches215open rows. **R12 failed firstpolicy3 after85executor controls; all17 acceptance
+scopes below NOT_REACHED**. PARTIAL_SALVAGE62/fullremoteCleanupNOT_PROVEN/safe=false.
+Later390follow-up0822 is source-approved/native-pending, red2methods/fivefailedsubcases
+then22PASS; no count change or R12-cause/cleanup attribution. Local91e8 only bumps ARM
+request12→13; R13not pushed/run at this binding, Intel candidate private/unapplied.
+Earlier dated table observations remain history, not fresh R12 results.
+[Failure/follow-up](repairs/cohort-2026-09-09-native-followups.md#apple-r12-terminal-failure-and-discovery-follow-up).
 
 ## Unresolved repairs / native or platform acceptance (17)
 
@@ -26,7 +30,7 @@ Earlier R11 native approvals/395approval stand;396–398 remain native-pending. 
 | [#341](https://github.com/p2pKit/P2pKit/issues/341) | Ungrouped pairing port presentation | Rendered production-bound regression committed; real Swift UI/locale/parser execution pending. |
 | [#363](https://github.com/p2pKit/P2pKit/issues/363) | First incoming offer consent controls | Rendered production-bound regression committed; first-offer UI/consent execution pending. |
 | [#383](https://github.com/p2pKit/P2pKit/issues/383) | Exact-run Swift lifecycle ownership | Source-approved86d4ca8; native Swift/lifecycle/UI pending; Flow cancellation suspicion separate. |
-| [#396](https://github.com/p2pKit/P2pKit/issues/396) | iOS generation fixture sibling resources | Sourceapproved583d9/no findings; actual three native fixturemethods pending, no repaircount credit. |
+| [#396](https://github.com/p2pKit/P2pKit/issues/396) | iOS generation fixture sibling resources | Original583d9 approval retained;6d11 composition has five methods (three original + peer/probe controls), all R12NOT_REACHED; no repair credit. |
 | [#397](https://github.com/p2pKit/P2pKit/issues/397) | Locale-independent canonical fingerprint | Sourceapproved3db03/no findings; two existing Linuxmethods PASS in two locales; actual Darwinsh validation pending. |
 | [#398](https://github.com/p2pKit/P2pKit/issues/398) | Hosted symlink fixture predicate | Sourceapproved65f3/no findings; two Linuxinlinecontrols PASS, corrected nativePython3.14 control pending; productionguardunchanged. |
 

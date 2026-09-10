@@ -1,36 +1,47 @@
 <!-- audit-current:start -->
-# Current follow-ups after R11
+# Current follow-ups after R12
 
-173/215 independently approved repository repairs (80.5%); 174/215 independently resolved rows (80.9%) including #287 without a repair; 41 unresolved (19.1%): 17 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 82 new audit findings. **Whole audit NOT_READY; #133 independent NOT_STARTED.**
+**Whole audit NOT_READY; #133 independent NOT_STARTED.**
+173/215 independently approved repository repairs (80.5%); 174/215 independently resolved rows (80.9%) including #287 without a repair; 41 unresolved (19.1%): 17 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 82 new audit findings.
 
-1. **#399/#400/#401 independently approved/no findings**, repair headf0b5789;
-   locally committed/not pushed at this snapshot. Scoped399red/23PASS,400sixPASS,
-   401twofailedsubcases/fourPASS remain source-bound, not native/wholecheck results.
-   Allapplicable stops0/no survivors;399/400dependent outputs disposed,401nooutputs.
-2. #401fixture-finalizer exception coupling is fixed; keep unknown native group-EPERM
-   state under #157 separate. Observe actual phase/identity before attribution;
-   never infer zombies or convert permission denial to absence/success.
-3. Preserve390/250/261/379native and395focused approvals.396–398need actual native
-   acceptance. R11wholeFAIL, nativeIntel skip, later graph/ABI/consumer/Swift gaps and
-   R10UNKNOWN/62omissions/fullremoteCleanupNOT_PROVEN remain historical evidence.
-4. Prepare affected replay after prerequisite review. **R12 planned only**; future
-   workflow/operational/admin commits need separate binding. Refresh global Actions/
-   refs; acquire task-owned lease/source freeze **before triggering audit push**;
-   no overlapping local/hosted builds. Prior R11 lease is released, not reusable.
-5. Finish current whole-source corroboration, `./gradlew check --console=plain`,
-   applicable samples/isolated consumers/nativeIntel/fullWindows and inspected
-   ABI/Swift/release gates. See [remaining rows](issues.md); SwiftTask.cancel→KotlinFlow
-   is a separate unproved suspicion. Strict MacDokka components are not a release
-   monolith pass. Physical/hostile/independent/crypto and120/274/284decisions remain.
+Published R12 source `6d11f7336da3892e302efab0c35ef9d2d83494dc`, tree `2b1fc516425fe81cdee0dc01eca9ef3e26b6c112`,
+was normally pushed/ref-verified06:39UTC;399/400/401outcome comments published06:41UTC.
+**Run34446158462/1 failed firstpolicy3**, after85executor-native controlsPASS. Nested and
+enclosing leaves returned **1/0/125**: same-livePID5470 environmentEIO discovery remained
+unresolved. All17 pending native/product scopes, consumers/15publication inspections
+and Swift compilation/unit/UI/integration/cancellation probe were **NOT_REACHED**.
 
-Initial208membership+sevenactualfilings yields215, not freshcensus. Root05:48fourGETs
-returned only399/400/no comments;157body/fourcomments unchanged. Earlier complete-
-history reuse/visibility gaps retain their original bindings.
-[Repair evidence](repairs/cohort-2026-09-09-native-followups.md#post-r11-sequential-repairs-and-fixture-follow-up).
-Only current administrative deltas newly read; coverage self-row unbound. At most2
-Gradleworkers/no parallel execution; keep every log/isolatedstop, retire only owned
-workers, then remove confirmed disposable outputs. Preserve source/AGENTS/CLAUDE/
-userwork/caches; no closure/main/force-push/tag/settings/release authority.
+**PARTIAL_SALVAGE,62omissions,fullremoteCleanup/fulltreeNOT_PROVEN,safe=false** remain.
+Five actual wrapperstops0/source snapshots unchanged do not establish full ownership
+or remote zero survivors. Local scheduling lease released07:02:02.507936UTC after
+terminal retention/idle observation, zero freezeviolations; **not a safe handoff**.
+
+Later #390 follow-up **APPROVE_FINAL_SOURCE_NATIVE_PENDING**, no findings, committed
+`0822edebff523ef5299fd8943ca572b8ec3a7ccf`: exhausted discovery errors now reconcile only
+against later positive lifetime/environment evidence; structural/persistent failures
+stay fatal. Red2methods/fivefailedsubcases1/0/1; final22PASS (19modeled Darwin/3realLinux),
+0/0/0/no owned survivors or outputs. Native execution pending; R12 PID ownership/kernel
+cause/eventual state remainUNKNOWN. No new repair count or retroactive R12 cleanup.
+Latest local source `91e8a9a287333be52ca114022b0cd6c4a9664e23`, tree `f24ef0a0bdd4faa3b22a2b2d90231ccf04f1a250`,
+adds only root-reviewed workflow comment12→13. **R13 ARM follow-up planned/not pushed
+at this binding**; Intel candidate remains private/unapplied. Later push/run must be
+separately bound and admitted, not inferred from this packet.
+
+Fresh06:36 census matches215open rows/322issues/79PRs/401full bodies;551visible comments
+use an explicit retained-history/delta chain. Later outcome comments are additive,
+not a new all-comment census. Coverage projects **1,150paths at6d11**, with259structural
+and six qualified administrative histories/self boundary retained. It does not claim
+new full-history reading or bind the later0822/91e8source edits into old coverage.
+
+Next: actual390/native policy3 and existing ownership controls, then17pending scopes;
+keep #157 group-EPERM and Swift cancellation separate. Refresh Actions/refs and acquire
+a new task-owned lease/source freeze before triggering push. No overlapping builds;
+at most2Gradleworkers, preserve logs/isolated stops and only exact owned disposal.
+Finish current `./gradlew check --console=plain`, samples/consumers and inspected
+Intel/fullWindows/ABI/Swift/release gates; physical/hostile/independent/crypto and
+owner120/274/284 obligations remain. No closure/main/tag/settings/release authority.
+
+[R12 retained failure/follow-up](repairs/cohort-2026-09-09-native-followups.md#apple-r12-terminal-failure-and-discovery-follow-up).
 
 <!-- audit-current:end -->
 

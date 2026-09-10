@@ -3,8 +3,8 @@
   "repository": "https://github.com/p2pKit/P2pKit",
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
-  "githubIssueListRefreshedUtc": "2026-09-10T04:30:26.520407+00:00",
-  "provenance": "173/215 independently approved repository repairs (80.5%); 174/215 independently resolved rows (80.9%) including #287 without a repair; 41 unresolved (19.1%): 17 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 82 new audit findings. Final399/400/401sourcef0b local/notpushed;396–398nativepending. R11wholeFAIL and original failures/history preserved. Sevenfilings extend initial208membership to215, not freshcensus. See nativeFollowups.postR11SequentialFollowups;R12plannedonly. WholeauditNOT_READY;133NOT_STARTED.",
+  "githubIssueListRefreshedUtc": "2026-09-10T06:36:18.275273Z",
+  "provenance": "173/215 independently approved repository repairs (80.5%); 174/215 independently resolved rows (80.9%) including #287 without a repair; 41 unresolved (19.1%): 17 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 82 new audit findings. R12published6d11firstpolicy3FAIL/85controls;PARTIAL_SALVAGE62/fullremoteCleanupNOT_PROVEN/safe=false.390followup0822sourceapproved/nativepending;91e8mechanicalARMrequest13local/notpushedatbinding. No count/nativecredit.06:36fresh215membership/401bodies,551commentsretained/delta; outcomecommentsadditive. Sourcecoverage6d11only.133NOT_STARTED/auditNOT_READY.",
   "issues": [
     {
       "number": 21,
@@ -8512,6 +8512,12 @@
         "reviewReportSha256": "ebaf20cc808008674c6f600ca12baeeb1561105930e3a1434834d0628f071285",
         "evidenceReference": "checkpoint.json nativeFollowups.appleR11.final390Approval",
         "scope": "Final exact census bytes execute on real Darwin. Saved-token initialSIGTERM0/exit-15/same-tokenESRCH3/live sentinel and three complete six-identity consumer cancellation/recovery controls pass. Four actual known-PID EPERM observations reconcile to positively observed absence (attempts2/3/2/2);17 reconciliations resolved. Actual policy2/GPG caller passes. No claim those PIDs were setuidps or proof of R10 exact kernel attribution; original failures retained. Whole R11 FAIL remains."
+      },
+      "postR12SourceFollowup": {
+        "reference": "checkpoint.json nativeFollowups.r12Continuation.subsequent390",
+        "commit": "0822edebff523ef5299fd8943ca572b8ec3a7ccf",
+        "verdict": "APPROVE_FINAL_SOURCE_NATIVE_PENDING",
+        "scope": "R11scopednativeapproval preserved; later sticky-error residual repaired/sourceapproved with red2methods5subcases and final22PASS. Actualnativepending; no newnumerator/R12cause/cleanup attribution."
       }
     },
     {
@@ -8970,6 +8976,10 @@
           }
         },
         "scope": "Only omit already-admitted matching console/dependency-verification/max-workers defaults; preserve raw caller prefix, all other mandatory controls and caller-created duplicates. New15subcase method red15FAIL, final9methods PASS6.338s and genuine checked-in Gradle9.7 parser --help exits0. Real Linux executor/synthetic consumer retains ownership/isolated paths/receipts; fixture archives independently checked40entries and removed. All outer stops0/no survivors or generated outputs. Not actual native consumer/provenance/policy gate reruns, clean1ea product verification or native/release approval."
+      },
+      "r12ReachedCallerObservation": {
+        "reference": "checkpoint.json nativeFollowups.r12Continuation",
+        "scope": "Actualabbreviatedcaller reached intendedwrite-lockpolicyrejection, notformerparsererror; discovery1/0/125 stillpolicy3FAIL, no consumer/provenance credit."
       }
     },
     {
@@ -9024,6 +9034,11 @@
         "findings": [],
         "countedRepairApproval": false,
         "publicationStatus": "LOCALLY_COMMITTED_NOT_PUSHED_AT_THIS_OBSERVATION"
+      },
+      "r12SourceComposition": {
+        "commit": "6d11f7336da3892e302efab0c35ef9d2d83494dc",
+        "nativeMethods": 5,
+        "scope": "Threeoriginal plus peer/probe schemecontrols, both siblingJSONresources retained; R12NOT_REACHED, no repaircredit."
       }
     },
     {
@@ -9170,7 +9185,15 @@
       },
       "repairReport": "repairs/cohort-2026-09-09-native-followups.md#post-r11-sequential-repairs-and-fixture-follow-up",
       "verificationRequired": "Affected native/common-test replay remains; no physical/independent/release credit.",
-      "postR11FinalRepairReference": "checkpoint.json nativeFollowups.postR11SequentialFollowups.repairs.399"
+      "postR11FinalRepairReference": "checkpoint.json nativeFollowups.postR11SequentialFollowups.repairs.399",
+      "publishedOutcomeR12": {
+        "commit": "6d11f7336da3892e302efab0c35ef9d2d83494dc",
+        "commentId": 5614299643,
+        "createdUtc": "2026-09-10T06:41:14Z",
+        "url": "https://github.com/p2pKit/P2pKit/issues/399#issuecomment-5614299643",
+        "bodySha256": "9b5ac67c1ee0177387f81d7398b44255d82a24e41551f434fcd343558a61bcc4",
+        "scope": "Actualcapturedresponse matchesauthoredbytes; priorrepairapproval unchanged, notR12nativeapproval/closure."
+      }
     },
     {
       "number": 400,
@@ -9210,7 +9233,15 @@
       },
       "repairReport": "repairs/cohort-2026-09-09-native-followups.md#post-r11-sequential-repairs-and-fixture-follow-up",
       "verificationRequired": "Affected native/common-test replay remains; no physical/independent/release credit.",
-      "postR11FinalRepairReference": "checkpoint.json nativeFollowups.postR11SequentialFollowups.repairs.400"
+      "postR11FinalRepairReference": "checkpoint.json nativeFollowups.postR11SequentialFollowups.repairs.400",
+      "publishedOutcomeR12": {
+        "commit": "6d11f7336da3892e302efab0c35ef9d2d83494dc",
+        "commentId": 5614299993,
+        "createdUtc": "2026-09-10T06:41:16Z",
+        "url": "https://github.com/p2pKit/P2pKit/issues/400#issuecomment-5614299993",
+        "bodySha256": "05bc50f221374b55556c6702f49fd8939cef2005faa8944e1aae8444011d4a78",
+        "scope": "Actualcapturedresponse matchesauthoredbytes; priorrepairapproval unchanged, notR12nativeapproval/closure."
+      }
     },
     {
       "number": 401,
@@ -9247,10 +9278,18 @@
       },
       "repairReport": "repairs/cohort-2026-09-09-native-followups.md#post-r11-sequential-repairs-and-fixture-follow-up",
       "verificationRequired": "Focused correction complete; separate native failure-state investigation remains157. No Darwin/group-EPERM-cause/wholeaudit approval.",
-      "postR11FinalRepairReference": "checkpoint.json nativeFollowups.postR11SequentialFollowups.repairs.401"
+      "postR11FinalRepairReference": "checkpoint.json nativeFollowups.postR11SequentialFollowups.repairs.401",
+      "publishedOutcomeR12": {
+        "commit": "6d11f7336da3892e302efab0c35ef9d2d83494dc",
+        "commentId": 5614300222,
+        "createdUtc": "2026-09-10T06:41:17Z",
+        "url": "https://github.com/p2pKit/P2pKit/issues/401#issuecomment-5614300222",
+        "bodySha256": "95c3c30b44fa13cc577cdfa6bfe4f89654b810e7ed8e88374f521d6d4adb9b40",
+        "scope": "Actualcapturedresponse matchesauthoredbytes; priorrepairapproval unchanged, notR12nativeapproval/closure."
+      }
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-10T06:17:26.583910+00:00",
+  "lastDispositionUpdateUtc": "2026-09-10T07:29:39.079169+00:00",
   "githubRefreshEvidence": {
     "startedUtc": "2026-09-08T10:24:33.734412+00:00",
     "endedUtc": "2026-09-08T10:30:05.205645+00:00",
@@ -11102,7 +11141,7 @@
     "scope": "Allopenbody/link/ownmetadata and completecomment reconciliation; serial freshness/unchangedclosed/PRreuse limits explicit. Current approval arithmetic includes388after this GitHub report; no new row."
   },
   "nativeFollowups": {
-    "recordedUtc": "2026-09-10T06:17:26.583910+00:00",
+    "recordedUtc": "2026-09-10T07:29:39.079169+00:00",
     "report": "repairs/cohort-2026-09-09-native-followups.md",
     "currentCounts": {
       "repairApproved": 173,
@@ -11137,7 +11176,7 @@
     "evidenceReference": "checkpoint.json nativeFollowups",
     "previousCurrentProvenance": "156/201 independently approved repository-repair rows (77.6%); 45 remaining (22.4%): 23 repairs, 21 external-validation rows and architecture decision #120; 68 new audit findings. Five independently approved followup repairs382/384/385/386/387 are locally committed;383 remains source-confirmed/native NOT_RUN.151/201 filing-time and151/195 cohort snapshots stay historical. Latest15:27 bounded all-open/body/delta observation matches201 inventory IDs, not a fresh complete-history crawl. No closure/platform/release acceptance; whole audit NOT_READY;133 NOT_STARTED.",
     "previousDispositionUpdateUtc": "2026-09-09T15:31:07.028235+00:00",
-    "scope": "173/215 independently approved repository repairs (80.5%); 174/215 independently resolved rows (80.9%) including #287 without a repair; 41 unresolved (19.1%): 17 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 82 new audit findings. Final399/400/401approved/localf0b;396–398nativepending. R11wholeFAIL retained; R12planned only.",
+    "scope": "173/215 independently approved repository repairs (80.5%); 174/215 independently resolved rows (80.9%) including #287 without a repair; 41 unresolved (19.1%): 17 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 82 new audit findings. R12failed/noacceptance;390sourcefollowup nativepending and ARMrequest13local, no countchange. Priorfailures preserved; current binding in r12ContinuationReference.",
     "newIssues": [
       388,
       389,
@@ -11196,7 +11235,9 @@
     },
     "r11EvidenceReference": "checkpoint.json nativeFollowups.appleR11",
     "postR11RepairReference": "checkpoint.json nativeFollowups.postR11Repair395",
-    "postR11SequentialFollowupsReference": "checkpoint.json nativeFollowups.postR11SequentialFollowups"
+    "postR11SequentialFollowupsReference": "checkpoint.json nativeFollowups.postR11SequentialFollowups",
+    "r12ContinuationReference": "checkpoint.json nativeFollowups.r12Continuation",
+    "r12CensusReference": "checkpoint.json nativeFollowups.githubR12PrepublicationRefresh"
   },
   "githubOpenObservationBeforeResumed1951": {
     "startedUtc": "2026-09-09T15:27:45.724357+00:00",
@@ -11236,29 +11277,20 @@
   "postR10FollowupsReference": "checkpoint.json nativeFollowups.postR10Followups",
   "latestGithubOpenIssueObservation": {
     "apiWindowUtc": [
-      "2026-09-10T04:30:17.527902+00:00",
-      "2026-09-10T04:42:16.717296+00:00"
+      "2026-09-10T06:36:12.641636Z",
+      "2026-09-10T06:36:47.282396Z"
     ],
-    "openIssuesAtInitialCensus": 208,
-    "closedIssuesAtInitialCensus": 107,
+    "freshListFinishedUtc": "2026-09-10T06:36:18.275273Z",
+    "totalIssues": 322,
+    "openIssues": 215,
+    "closedIssues": 107,
     "pullRequests": 79,
     "openPullRequests": 7,
-    "freshLocalFullBodies": 394,
-    "reusedVisibleComments": 545,
-    "initialRetainedCommentProjection": 546,
-    "individualAdditions": [
-      395,
-      396,
-      397,
-      398,
-      399,
-      400,
-      401
-    ],
-    "inventoryAfterSeparatelyBoundFilings": 215,
-    "reportSha256": "876e69e59d60b546f27ad9211c43ae395d978d5b62bc9cb3cf5e7516bf62b6be",
-    "reference": "checkpoint.json nativeFollowups.githubPostR11Refresh; postR11Filings; postR11SequentialFollowups.pre401FilingDelta",
-    "scope": "Initial208membership/394bodies and reused histories retain04:30–04:42 bindings; seven actual separately bound filings yield215. Root05:48four-GET delta contains only399/400filings/no comments;157body/fourcomments returned unchanged. Not fresh215census or full-history reread."
+    "freshLocalFullBodies": 401,
+    "visibleRetainedComments": 551,
+    "inventoryExactlyMatchesOpenIssues": true,
+    "reportSha256": "d07a1b3a0e8bd39a6c3b2249035df3478e9651876316dc0a7950c62179cfb3ae",
+    "scope": "Fresh401bodies/215membership;551comments=retained547+fourdelta, seven affected histories freshly returned.79local/117upstream metadata unchanged; detailed histories reused. Preserve402local/33upstream omittedpatches,7upstreaminline gaps,3historical counter discrepancies and checkout2454 backlink gap. Later399/400/401outcomes additive, not new full census."
   },
   "githubIssueListRefreshedUtcBeforePost394": "2026-09-10T01:00:15.892733+00:00",
   "currentStateBeforeR11": {
@@ -11282,5 +11314,35 @@
     }
   },
   "postR11FilingsReference": "checkpoint.json nativeFollowups.postR11Filings",
-  "postR11PublicationsReference": "checkpoint.json nativeFollowups.postR11Publications"
+  "postR11PublicationsReference": "checkpoint.json nativeFollowups.postR11Publications",
+  "currentStateBeforeR12": {
+    "provenance": "173/215 independently approved repository repairs (80.5%); 174/215 independently resolved rows (80.9%) including #287 without a repair; 41 unresolved (19.1%): 17 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 82 new audit findings. Final399/400/401sourcef0b local/notpushed;396–398nativepending. R11wholeFAIL and original failures/history preserved. Sevenfilings extend initial208membership to215, not freshcensus. See nativeFollowups.postR11SequentialFollowups;R12plannedonly. WholeauditNOT_READY;133NOT_STARTED.",
+    "lastDispositionUpdateUtc": "2026-09-10T06:17:26.583910+00:00",
+    "latestGithubOpenIssueObservation": {
+      "apiWindowUtc": [
+        "2026-09-10T04:30:17.527902+00:00",
+        "2026-09-10T04:42:16.717296+00:00"
+      ],
+      "openIssuesAtInitialCensus": 208,
+      "closedIssuesAtInitialCensus": 107,
+      "pullRequests": 79,
+      "openPullRequests": 7,
+      "freshLocalFullBodies": 394,
+      "reusedVisibleComments": 545,
+      "initialRetainedCommentProjection": 546,
+      "individualAdditions": [
+        395,
+        396,
+        397,
+        398,
+        399,
+        400,
+        401
+      ],
+      "inventoryAfterSeparatelyBoundFilings": 215,
+      "reportSha256": "876e69e59d60b546f27ad9211c43ae395d978d5b62bc9cb3cf5e7516bf62b6be",
+      "reference": "checkpoint.json nativeFollowups.githubPostR11Refresh; postR11Filings; postR11SequentialFollowups.pre401FilingDelta",
+      "scope": "Initial208membership/394bodies and reused histories retain04:30–04:42 bindings; seven actual separately bound filings yield215. Root05:48four-GET delta contains only399/400filings/no comments;157body/fourcomments returned unchanged. Not fresh215census or full-history reread."
+    }
+  }
 }

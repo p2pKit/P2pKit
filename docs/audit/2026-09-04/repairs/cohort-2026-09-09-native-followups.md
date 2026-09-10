@@ -753,3 +753,74 @@ conservatively semantic-delta, not a claimed full-file reread.401reviewer explic
 read its complete changed testfile, retaining FULL_TEXT. Sixadminsiblings stay
 scoped/reopened; selfrowunbound. R12plannedonly; future workflow/admin integration
 needs separate binding. No whole-repository/native/physical/external/release credit.
+
+
+## Apple R12 terminal failure and discovery follow-up
+
+R12 published `6d11f7336da3892e302efab0c35ef9d2d83494dc` / tree`2b1fc516425fe81cdee0dc01eca9ef3e26b6c112`; normal push/ref
+verification06:38:57–06:39:05UTC. Actual outcome comments created06:41:14–17UTC:
+[399](https://github.com/p2pKit/P2pKit/issues/399#issuecomment-5614299643),
+[400](https://github.com/p2pKit/P2pKit/issues/400#issuecomment-5614299993),
+[401](https://github.com/p2pKit/P2pKit/issues/401#issuecomment-5614300222).
+Captured response bodies equal authored bytes; earlier final repair approvals stand.
+
+[Run34446158462/1](https://github.com/p2pKit/P2pKit/actions/runs/34446158462), job102771292014,
+completed **failure**06:45:17UTC, macOS26.6.2 ARM64/Python3.14.7. Independent verdict
+**ACCEPT_FAILED_RUN_DISPOSITION_ONLY**, SHA
+`69b0267ac117cb46dff51e2ae939d34328abf5c598e34a42efb5bb777c9bfebc`.
+85executor-native controlsPASS89.946s/0/0/0; platform preparation/XcodeGen installation
+also0/0/0. First real lock-policy caller reached the intended --write-locks rejection,
+not #395's former parser error; ownership failure still makes policy3FAIL.
+
+Nested935acecce457431999f0ebaf94a61833 and enclosing7eaa078ba44c4b68b0314105cc6c6343
+both1/0/125: new same-UID PID5470 environmenterrno5 unresolved after10/8attempts,
+first/last same live identity. No later positive outcome proves ownership, kernel
+cause or eventual state. Not a #157 group-EPERM, zombie/absence or audit-owned claim.
+Five actual stops0 and source snapshots unchanged do not establish complete discovery,
+remote zero survivors or disposal. Safe-only finalizer refused cleanup.
+
+**PARTIAL_SALVAGE/safe=false/fullTreeCompleteness/remoteCleanupNOT_PROVEN** retained:
+62untruncated omissions31yml/30jsonl/1properties. Artifact10139883092,953728bytes,
+ZIP SHA`7a50f9c28002f653c76e2ca1b146eb297a6d9e0234bc5e7ed772205a598f0203`;
+981bootstrap/976salvage entries independently rehashed, no mismatch; extracted982files/
+2757759bytes. Transferred integrity is not remote completeness. Driver selected no
+simulator; no VM-wide process assertion. Policies13/18/27/30/33/34, ARMcore/LAN,
+consumers/all15publication inspections and all Swift/probe scopes **NOT_REACHED**.
+
+Local lease released07:02:02.507936UTC, zero freezeviolations, following07:01:20–27
+fresh idle observation and authoritative terminal retention/review. ReleaseSHA
+`87a92cfc0d374efa26fb0bdc6a2bff2fc5776b8de0b9ab3a302afaf7591e79da`; idleSHA
+`0f8ba00a699162517b6407304ab74ad8aca79cc8490a972914b209ac361fa870`.
+Administrative scheduling only, not safe handoff, VM destruction or standing lease.
+
+### Subsequent390 source prerequisite, not native approval
+
+Commit`0822edebff523ef5299fd8943ca572b8ec3a7ccf`, tree`a6066351079a3fda635e45d9fec99883cf55f8a6`,
+two-file diffSHA`de86ca9952f6113fc4b47e0e939c38f3fa337ce1fabcacce785d825de9c215ac`.
+Independent **APPROVE_FINAL_SOURCE_NATIVE_PENDING/no findings**, reviewSHA
+`00c03749e24c80b1ae54c8f94f2638fa107b6c0a9658018a6a383a0cc66513f5`.
+Already-owned390cause: an exhausted environment observation stayed permanently in
+current discoveryErrors after later positive reconciliation. New pending records bind
+full lifetime identity; later positive environment/terminal/replacement evidence may
+remove only that matching exhausted error, never EIO/permission/time alone. Persistent/
+structural failures and token/domain checks stay fatal; original failure events remain.
+No new distinct filing or repair numerator. Native Darwin qualification remains pending.
+
+Original production red2methods/fivefailedsubcases1/0/1; exact final22PASS4.455s,
+19modeled Darwin plus3realLinux executor controls,0/0/0/sourceunchanged/noownedworkers/
+nooutputs. Real fixture timeout/cancel leaves intentionally-15/0/125, not product passes;
+all three fixture teardowns complete. ReceiptSHA
+`de2fe36ee796880237f08221ca5986877f1fcafb246293fa34d0a92352d04911`.
+R12ownership/kernelcause/eventualstate remainUNKNOWN; failed salvage not repaired.
+
+Latest local`91e8a9a287333be52ca114022b0cd6c4a9664e23`/tree`f24ef0a0bdd4faa3b22a2b2d90231ccf04f1a250` adds only root-reviewed
+workflow comment12→13, ARMfollowup selection unchanged. R13planned/notpushed at this
+binding; private Intel candidate is not applied. Bind later publication/execution.
+Fresh06:36census215open/322issues/79PRs/401bodies,551visiblecomments via retained/delta
+chain; no whole-history recrawl. Coverage projects1150paths at6d11 (659fulltext/
+224semanticdelta/259structural/6qualifiedadmin/1semanticinventory/1unboundself), not
+new0822/91e8coverage or whole correctness. Structural233historicalXML+17binary+
+8lockfiles+1wrapper and opaque dependency-inventory limits remain.173repair/174resolved
+of215,17native+21external+3decisions unchanged;133NOT_STARTED/auditNOT_READY.
+Current wholecheck/samples/consumers/nativeIntel/fullWindows/ABI/Swift/release and
+physical/hostile/independent/crypto remain. Earlier report prefix/failures retained.

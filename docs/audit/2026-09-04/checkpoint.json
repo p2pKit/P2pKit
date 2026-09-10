@@ -5,11 +5,11 @@
   "branch": "audit/complete-2026-09-04",
   "lastInheritedReviewedSourceCommit": "32dc5c03658145741c6e23cdfec3c14cd2eba5e7",
   "lastInheritedReviewedSourceTree": "a6144952d3592b6e189114bc73822d0af1ab0853",
-  "sourceCheckpointCommit": "f0b5789f665b585d8f4d6508bdfbbb42a4f1f8a5",
-  "sourceCheckpointTree": "e6b39e865ea257669c3bf2d2d1a2cc17b6498a00",
+  "sourceCheckpointCommit": "91e8a9a287333be52ca114022b0cd6c4a9664e23",
+  "sourceCheckpointTree": "f24ef0a0bdd4faa3b22a2b2d90231ccf04f1a250",
   "preservedDraftPatchSha256": "2dc0dd26cb738d89d14136fb1fe5348afabd6f2a3de2fd47847be8f1d91ed1b4",
-  "activeIssue": 396,
-  "activeIssueState": "R11_WHOLE_FAIL;399_400_401_FINAL_REPAIR_APPROVED;396_397_398_SOURCE_APPROVED_NATIVE_PENDING;R12_PLANNED_NOT_RUN;WHOLE_AUDIT_NOT_READY",
+  "activeIssue": 390,
+  "activeIssueState": "R12_INFRASTRUCTURE_FAIL;390_FOLLOWUP_SOURCE_APPROVED_NATIVE_PENDING;R13_ARM_PLANNED_NOT_PUSHED;WHOLE_AUDIT_NOT_READY",
   "issueCountDenominator": 215,
   "dispositions": {
     "EXTERNAL_VALIDATION_PENDING": 21,
@@ -21,9 +21,9 @@
   "completedIssueCount": 173,
   "remainingIssueCount": 41,
   "percentageMeaning": "173/215 independently approved repository repairs (80.5%); 174/215 independently resolved rows (80.9%) including #287 without a repair; 41 unresolved (19.1%): 17 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 82 new audit findings.",
-  "githubIssueListRefreshedUtc": "2026-09-10T04:30:26.520407+00:00",
-  "githubTotalIssuesAtRefresh": 315,
-  "githubOpenIssuesAtRefresh": 208,
+  "githubIssueListRefreshedUtc": "2026-09-10T06:36:18.275273Z",
+  "githubTotalIssuesAtRefresh": 322,
+  "githubOpenIssuesAtRefresh": 215,
   "newAuditIssueCount": 82,
   "rawEvidenceIncludedInGit": false,
   "originalEvidenceContinuity": "Some original raw evidence and initial audit ledger were lost. Recovered summaries are not original logs. Later raw evidence remains private. Fresh corroboration and integrated verification required.",
@@ -1268,7 +1268,7 @@
     330,
     236
   ],
-  "continuationQueueScope": "Affected hosted-native/product replay is next;396–398native acceptance and #157 failure-state investigation remain. See followups.md for task-owned Actions lease/source freeze, serialized verification/cleanup and whole-source/check/samples/consumer/Intel/Windows/ABI/Swift/release requirements. R12 is planned only; no future workflow commit or outcome inferred. #133 NOT_STARTED, audit NOT_READY.",
+  "continuationQueueScope": "390followup0822 APPROVE_FINAL_SOURCE_NATIVE_PENDING; actual native policy3/existing ownership controls next. R13ARM mechanical request91e8 planned/notpushed at binding; Intel candidate private/unapplied. Keep R12FAIL/PARTIAL_SALVAGE62/fullremoteCleanupNOT_PROVEN/safe=false despite stops0/locallease release.17native+21external+3decisions unchanged. RefreshActions/refs and new task-ownedlease/sourcefreeze before triggeringpush; serialize at most2workers, preserve logs/isolatedstop/exactownedcleanup. Finish current check/samples/consumers/Intel/fullWindows/ABI/Swift/release and later-source corroboration.133NOT_STARTED/auditNOT_READY; no closure/release authority.",
   "completedInvestigation145": {
     "issue": 145,
     "baselineCommit": "d823bb9cc0d187ec746714af67b08904a28331b6",
@@ -1282,7 +1282,7 @@
     "status": "OWNER_AUTHORIZED_TRIAL1_AND2_FAILED_PREINVOKE_TRIAL3_PENDING",
     "scope": "After final independent approval of the exact eleven administrative files and applied bytes, refresh live Actions and audit/main/PR refs, hold the one global local/hosted execution lease, freeze the exact approved source tree, and pause all local builds/tests BEFORE the audit-branch push that triggers the hosted workflow. With that lease and source freeze already held, push only the audit branch, verify its exact remote commit/tree and record the outcome separately, then inspect the controlled Windows -> ARM Mac -> Intel Mac trial under the same lease. Verify native controls, actual SDK admission, strict dependency/source/stop/ownership/full-artifact evidence before advancing. Both failed hosted trials remain unsafe/partial and remote cleanup/full-tree NOT_PROVEN; a local lease release is not remote cleanup. #268/#133 remain NOT_STARTED; continue all feasible sequential work. No new physical/hostile-network/independent/pro-crypto/main/settings/release authority."
   },
-  "lastDispositionUpdateUtc": "2026-09-10T06:17:26.583910+00:00",
+  "lastDispositionUpdateUtc": "2026-09-10T07:29:39.079169+00:00",
   "previousGithubRefreshEvidence145": {
     "startedUtc": "2026-09-08T09:17:23.275604+00:00",
     "endedUtc": "2026-09-08T09:28:07.480134+00:00",
@@ -2011,10 +2011,10 @@
     "tree": "db432eb14791d9637e812333305e811edceb834e"
   },
   "activeWorkItem": {
-    "name": "R11_FAILED_GATES_SEQUENTIAL_PREREQUISITES_AND_AFFECTED_NATIVE_REPLAY",
-    "status": "IN_PROGRESS_NOT_READY",
+    "name": "390_SOURCE_APPROVED_R13_ARM_NATIVE_PENDING",
+    "status": "SOURCE_APPROVED_NATIVE_PENDING",
     "owner": "primary agent",
-    "scope": "Affected hosted-native/product replay is next;396–398native acceptance and #157 failure-state investigation remain. See followups.md for task-owned Actions lease/source freeze, serialized verification/cleanup and whole-source/check/samples/consumer/Intel/Windows/ABI/Swift/release requirements. R12 is planned only; no future workflow commit or outcome inferred. #133 NOT_STARTED, audit NOT_READY."
+    "scope": "390followup0822 APPROVE_FINAL_SOURCE_NATIVE_PENDING; actual native policy3/existing ownership controls next. R13ARM mechanical request91e8 planned/notpushed at binding; Intel candidate private/unapplied. Keep R12FAIL/PARTIAL_SALVAGE62/fullremoteCleanupNOT_PROVEN/safe=false despite stops0/locallease release.17native+21external+3decisions unchanged. RefreshActions/refs and new task-ownedlease/sourcefreeze before triggeringpush; serialize at most2workers, preserve logs/isolatedstop/exactownedcleanup. Finish current check/samples/consumers/Intel/fullWindows/ABI/Swift/release and later-source corroboration.133NOT_STARTED/auditNOT_READY; no closure/release authority."
   },
   "latestGithubListObservation": {
     "startedUtc": "2026-09-09T14:14:10.710942+00:00",
@@ -6298,22 +6298,25 @@
     }
   ],
   "corroborationProjection": {
-    "sourceCommit": "f0b5789f665b585d8f4d6508bdfbbb42a4f1f8a5",
-    "sourceTree": "e6b39e865ea257669c3bf2d2d1a2cc17b6498a00",
-    "observedUtc": "2026-09-10T06:17:26.583910+00:00",
-    "projectionPaths": 1146,
+    "sourceCommit": "6d11f7336da3892e302efab0c35ef9d2d83494dc",
+    "sourceTree": "2b1fc516425fe81cdee0dc01eca9ef3e26b6c112",
+    "observedUtc": "2026-09-10T06:54:37.358995+00:00",
+    "projectionPaths": 1150,
     "countsByReadStatus": {
       "FULL_TEXT_CURRENT": 659,
-      "FULL_SEMANTIC_DELTA_CURRENT": 220,
+      "FULL_SEMANTIC_DELTA_CURRENT": 224,
       "REOPENED_HISTORICAL_TEXT_CURRENT_DELTA_BOUND": 6,
       "STRUCTURAL_ONLY_CURRENT": 259,
       "SELF_DESCRIBING_LEDGER_NO_CURRENT_SELF_BINDING": 1,
       "COMPLETE_SEMANTIC_INVENTORY_CURRENT": 1
     },
-    "newPaths": 0,
-    "exactReviewedReadAdvances": 9,
+    "newPaths": 4,
+    "exactReviewedReadAdvances": 15,
     "existingHistoricalFiveColumnCellsPreserved": 5730,
-    "scope": "Prior five395–398 source advances plus four399–401changed paths.399/400compose exact newsemantic deltas with priorreads; changedwatchdog conservatively FULL_TEXT→FULL_SEMANTIC_DELTA.401reviewer explicitly read complete changed testfile, maintaining FULL_TEXT. Other classifications/5730historicalcells preserved;1146trackedpaths matchf0b. Sixadminrows scoped/reopened; selfrowunbound. No whole-source/runtime acceptance."
+    "mappingSha256": "0fdb4d5bb114dccafad20f49db1922110421f1365701a40158beeef06f23beda",
+    "reviewSha256": "bb2d6b35f9a019b705295ff7137c8186f0855afb1803b4dea34b37aa84bcfbe9",
+    "reviewedDiffSha256": "55bc139f9a8838da1235277a1f439dfae292a81c391b7367a6fb605928d1b7d9",
+    "scope": "Explicit6d11snapshot, not later0822/91e8source coverage. Exact15postimages match reviewedR2; fournew complete-added-file and entirehostguide reads, tenother changedfiles semantic-delta.1134unchanged nonoperational/nonself readblobs match.259structural=233historicalXML+17binary+8lockfiles+1wrapper; qualified dependency inventory. Sixnewadminpostimages scoped/reopened, report additive,selfunbound. Priorreadrows at immutable6d11, no fullhistory/currentwholecorrectness/execution approval."
   },
   "successorAdministrativeScope369370371": {
     "evidenceFrozenUtc": "2026-09-09T01:18:20.220814+00:00",
@@ -7910,11 +7913,11 @@
     "scope": "Separately approved operational request, locally committed, NOT_PUSHED; no extra repair approval. Actual complete committed source read may honestly bind d152. No hosted trial4/native Windows/Apple acceptance. Final administrative review plus live Actions/ref observation/global lease/source freeze/local-test pause required BEFORE triggering publication."
   },
   "currentAdministrativeInputSource": {
-    "commit": "18681d6b93165e4fa7557aed95b92a09da6c8c90",
-    "tree": "0dec0fd73aed47223fd8b9f5e254e8428c35f88a",
-    "observedUtc": "2026-09-10T06:17:26.583910+00:00",
-    "inputBindingsSha256": "2614a4ee87a8611cf85d223336053e79456ef508dabeee87a2d1098e1fc79787",
-    "scope": "Immutable18681eight-pathpreimages also matchf0b. Originalprivate65f3packet preserved; root owns integration/review/publication."
+    "commit": "6d11f7336da3892e302efab0c35ef9d2d83494dc",
+    "tree": "2b1fc516425fe81cdee0dc01eca9ef3e26b6c112",
+    "alsoByteIdenticalAtCommit": "91e8a9a287333be52ca114022b0cd6c4a9664e23",
+    "preparedUtc": "2026-09-10T07:29:39.079169+00:00",
+    "scope": "Eight immutable6d11preimages equal91e8; private unapplied packet only. Latestsource/commit mechanical request is separately bound. Root owns batch/application/publication."
   },
   "priorCanonicalAab8Product": {
     "lastIntegratedCheck": {
@@ -11282,8 +11285,8 @@
     "scope": "Fresh all-open full bodies, all-state changes and conversation comments since14:13; unchanged earlier full bodies/history/linked PR sets remain historically bound, not freshly reread. Not an Actions lease. The existing14:14 githubIssueListRefreshedUtc/latestGithubListObservation remain the historical complete all-state list; this later observation is the current bounded all-open/delta refresh, not an Actions lease or history recrawl."
   },
   "nativeFollowups": {
-    "recordedUtc": "2026-09-10T06:17:26.583910+00:00",
-    "observationCutoffUtc": "2026-09-10T06:17:26.583910+00:00",
+    "recordedUtc": "2026-09-10T07:29:39.079169+00:00",
+    "observationCutoffUtc": "2026-09-10T07:29:39.079169+00:00",
     "report": "repairs/cohort-2026-09-09-native-followups.md",
     "currentCounts": {
       "repairApproved": 173,
@@ -11337,8 +11340,8 @@
       400,
       401
     ],
-    "sourceCommit": "65f3f2c8d6b827285704cc54093d9368dc86cccc",
-    "sourceTree": "f0d2345ae1c7976874793d7d13f603ca002dc79d",
+    "sourceCommit": "91e8a9a287333be52ca114022b0cd6c4a9664e23",
+    "sourceTree": "f24ef0a0bdd4faa3b22a2b2d90231ccf04f1a250",
     "publicationBefore9ecd": {
       "status": "PUSHED_AUDIT_BRANCH_REF_TREE_VERIFIED",
       "commit": "165e4e9263cd6ddfe73a51ed401259d149b63731",
@@ -11435,13 +11438,13 @@
       "changedConversationComments": 0,
       "scope": "Bounded all-state issue/comment delta since15:27 then individual successful388 creation. Not a fresh202-row complete-history/linked-PR crawl, separate refetch, repair approval or closure. Existing14:14 list and15:27 open-body records retain their exact scope."
     },
-    "pendingBoundary": "173/215 independently approved repository repairs (80.5%); 174/215 independently resolved rows (80.9%) including #287 without a repair; 41 unresolved (19.1%): 17 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 82 new audit findings. Final399/400/401approved;396–398nativepending.",
+    "pendingBoundary": "173/215 independently approved repository repairs (80.5%); 174/215 independently resolved rows (80.9%) including #287 without a repair; 41 unresolved (19.1%): 17 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 82 new audit findings. R12no pendingnative/productscope reached;390followup sourceapproved/nativepending, no countchange.",
     "deferredProjections": [
       "Current whole-source semantic corroboration beyond exact supplied read chains",
       "Older dated cohort reports/continuation narratives remain historical"
     ],
-    "scope": "Current eight-path R11 administration and private coverage projection. Earlier raw evidence objects/narratives preserved; no full historical semantic reread or whole-audit/release/closure approval.",
-    "sourceBindingRole": "Final399/400/401repair head; earlier396–398source approvals remain native-pending. Tests retain actual priorcommit+diff bindings, not a cleanf0b whole-product run. R11 executed18681only; R12 planned/not run at this snapshot. Future operational/workflow/admin commits require separate binding.",
+    "scope": "Current R12 terminal/publication/census and later390source-only continuation. Exact6d11coverage plus scoped newadministration; old raw events preserved, not fresh fullhistorical read or wholeaudit/release approval.",
+    "sourceBindingRole": "R12 actualfailedsource6d11; later390source0822 and ARMcomment-only91e8 local/nativepending. Coverage explicit6d11snapshot; no rebind of prior executions or unexecuted acceptance.",
     "newIssues": [
       388,
       389,
@@ -12744,7 +12747,7 @@
       "countedRepairApproval": true,
       "finalNativeApprovalReference": "nativeFollowups.appleR10.approval393"
     },
-    "deferredProjectionScope": "Six administrative files remain scoped/current-delta only with historical text reopened; report composes prior complete read plus exact authored delta.1146coverage rows structurally checked; no cyclic output hash or full-source/native completion from hashing.",
+    "deferredProjectionScope": "1150coverage projects6d11; later0822/91e8source reads separately recorded but not promoted in this ledger. Sixadminhistories qualified, selfrowunbound; no cyclic outputhash or native/fullsource approval.",
     "publication": {
       "status": "PUSHED_AUDIT_BRANCH_REF_TREE_VERIFIED",
       "commit": "9ecd4e5be7fbbbae1c250c5de9170090fa8676a7",
@@ -12771,11 +12774,10 @@
       "scope": "Point-in-time global idle observation and administrative local lease release only; later policy2 UNKNOWN drain and full remote cleanupNOT_PROVEN remain. No standing lock/future idle/clean remote runner assertion."
     },
     "currentSourcePoint": {
-      "commit": "f0b5789f665b585d8f4d6508bdfbbb42a4f1f8a5",
-      "tree": "e6b39e865ea257669c3bf2d2d1a2cc17b6498a00",
-      "observedUtc": "2026-09-10T06:17:26.583910+00:00",
-      "publicationStatus": "LOCALLY_COMMITTED_NOT_PUSHED_AT_THIS_OBSERVATION",
-      "scope": "Final399/400/401repair head; earlier396–398source approvals remain native-pending. Tests retain actual priorcommit+diff bindings, not a cleanf0b whole-product run. R11 executed18681only; R12 planned/not run at this snapshot. Future operational/workflow/admin commits require separate binding."
+      "commit": "91e8a9a287333be52ca114022b0cd6c4a9664e23",
+      "tree": "f24ef0a0bdd4faa3b22a2b2d90231ccf04f1a250",
+      "publicationStatus": "LOCAL_NOT_PUSHED_AT_THIS_BINDING",
+      "scope": "390source-approved/nativepending0822 then mechanical ARMcomment13; R12 ran only published6d11. Later push/run separate."
     },
     "githubRefresh": {
       "apiWindowUtc": [
@@ -14108,6 +14110,189 @@
       },
       "scope": "Final399/400/401reviews and exactcommitted diffs read; executions reused, not rerun by administrator.399red1intendedfailure/green23PASS;400sixPASS/no freshcause-specificred;401one-method/two-failed-subcase red then4PASS including2realLinuxcontrols. R11 path-wake schedule and157native group-EPERM cause remain unidentified; R12 planned, no native/wholeaudit/release credit.",
       "filing401Reference": "nativeFollowups.postR11Filings[number=401]"
+    },
+    "r12Continuation": {
+      "recordedUtc": "2026-09-10T07:29:39.079169+00:00",
+      "runId": 34446158462,
+      "attempt": 1,
+      "jobId": 102771292014,
+      "sourceCommit": "6d11f7336da3892e302efab0c35ef9d2d83494dc",
+      "sourceTree": "2b1fc516425fe81cdee0dc01eca9ef3e26b6c112",
+      "completedUtc": "2026-09-10T06:45:17Z",
+      "conclusion": "failure",
+      "reviewVerdict": "ACCEPT_FAILED_RUN_DISPOSITION_ONLY",
+      "reviewSha256": "69b0267ac117cb46dff51e2ae939d34328abf5c598e34a42efb5bb777c9bfebc",
+      "nativeExecutorControls": {
+        "methodsPassed": 85,
+        "seconds": 89.946,
+        "commandStopFinal": [
+          0,
+          0,
+          0
+        ]
+      },
+      "failedPolicy": 3,
+      "nestedAndOuterCommandStopFinal": [
+        1,
+        0,
+        125
+      ],
+      "discoveryObservation": "Same live PID5470 environmenterrno5; nested10/outer8unresolved attempts, no later positive outcome. Ownership/kernelcause/eventualstateUNKNOWN; not157groupEPERM or zombie/absence.",
+      "notReachedPolicies": [
+        13,
+        18,
+        27,
+        30,
+        33,
+        34
+      ],
+      "notReached": "All17pending native/product rows; core/LANARM, consumers/all15publication inspection, XCFramework/provenance and Swift compilation/unit/UI/peer/cancellation probe.",
+      "cleanup": {
+        "actualWrapperStops": 5,
+        "allStopsZero": true,
+        "allSourceSnapshotsUnchanged": true,
+        "safeToContinue": false,
+        "remoteCleanup": "NOT_PROVEN",
+        "fullTreeCompleteness": "NOT_PROVEN",
+        "evidenceClassification": "PARTIAL_SALVAGE",
+        "omissions": 62,
+        "omittedExtensions": {
+          "yml": 31,
+          "jsonl": 30,
+          "properties": 1
+        },
+        "scope": "Empty reported ownedSurvivors cannot classify unreadable same-UID process. Safe-only disposal refused; no full remote retirement claim."
+      },
+      "artifact": {
+        "id": 10139883092,
+        "bytes": 953728,
+        "sha256": "7a50f9c28002f653c76e2ca1b146eb297a6d9e0234bc5e7ed772205a598f0203",
+        "bootstrapEntries": 981,
+        "salvageEntries": 976,
+        "hashMismatches": 0,
+        "extractedFiles": 982,
+        "extractedBytes": 2757759,
+        "scope": "Transferred integrity only, not remote completeness."
+      },
+      "publication": {
+        "commit": "6d11f7336da3892e302efab0c35ef9d2d83494dc",
+        "refVerified": true,
+        "pushExitCode": 0,
+        "windowUtc": [
+          "2026-09-10T06:38:57.889618+00:00",
+          "2026-09-10T06:39:05.199420+00:00"
+        ],
+        "bindingSha256": "24cc2616f52ad1cdb9205ab371ebba8d4951d42335580a69477980b670190be5",
+        "outcomeComments": [
+          {
+            "issue": 399,
+            "startedUtc": "2026-09-10T06:41:11.996746+00:00",
+            "serverCreatedUtc": "2026-09-10T06:41:14Z",
+            "url": "https://github.com/p2pKit/P2pKit/issues/399#issuecomment-5614299643",
+            "id": 5614299643,
+            "bodySha256": "9b5ac67c1ee0177387f81d7398b44255d82a24e41551f434fcd343558a61bcc4",
+            "sourceCommit": "243d0a241adf65e3eaee1b2e3232306ea5dac222",
+            "pushedWithinCommit": "6d11f7336da3892e302efab0c35ef9d2d83494dc"
+          },
+          {
+            "issue": 400,
+            "startedUtc": "2026-09-10T06:41:13.547178+00:00",
+            "serverCreatedUtc": "2026-09-10T06:41:16Z",
+            "url": "https://github.com/p2pKit/P2pKit/issues/400#issuecomment-5614299993",
+            "id": 5614299993,
+            "bodySha256": "05bc50f221374b55556c6702f49fd8939cef2005faa8944e1aae8444011d4a78",
+            "sourceCommit": "810d8c9a0e04e6cf98d98b9578bca720fd28d733",
+            "pushedWithinCommit": "6d11f7336da3892e302efab0c35ef9d2d83494dc"
+          },
+          {
+            "issue": 401,
+            "startedUtc": "2026-09-10T06:41:15.678356+00:00",
+            "serverCreatedUtc": "2026-09-10T06:41:17Z",
+            "url": "https://github.com/p2pKit/P2pKit/issues/401#issuecomment-5614300222",
+            "id": 5614300222,
+            "bodySha256": "95c3c30b44fa13cc577cdfa6bfe4f89654b810e7ed8e88374f521d6d4adb9b40",
+            "sourceCommit": "f0b5789f665b585d8f4d6508bdfbbb42a4f1f8a5",
+            "pushedWithinCommit": "6d11f7336da3892e302efab0c35ef9d2d83494dc"
+          }
+        ]
+      },
+      "localLeaseRelease": {
+        "releasedUtc": "2026-09-10T07:02:02.507936+00:00",
+        "sourceFreezeViolations": 0,
+        "releaseSha256": "87a92cfc0d374efa26fb0bdc6a2bff2fc5776b8de0b9ab3a302afaf7591e79da",
+        "idleWindowUtc": [
+          "2026-09-10T07:01:20.887186+00:00",
+          "2026-09-10T07:01:27.934785+00:00"
+        ],
+        "activeUnion": [],
+        "idleSha256": "0f8ba00a699162517b6407304ab74ad8aca79cc8490a972914b209ac361fa870",
+        "scope": "Administrative scheduling after authoritative terminal status and retention/review; not safe handoff, remote cleanup, VM destruction or new lease."
+      },
+      "subsequent390": {
+        "commit": "0822edebff523ef5299fd8943ca572b8ec3a7ccf",
+        "tree": "a6066351079a3fda635e45d9fec99883cf55f8a6",
+        "diffSha256": "de86ca9952f6113fc4b47e0e939c38f3fa337ce1fabcacce785d825de9c215ac",
+        "reviewVerdict": "APPROVE_FINAL_SOURCE_NATIVE_PENDING",
+        "reviewSha256": "00c03749e24c80b1ae54c8f94f2638fa107b6c0a9658018a6a383a0cc66513f5",
+        "red": {
+          "methods": 2,
+          "failedSubcases": 5,
+          "commandStopFinal": [
+            1,
+            0,
+            1
+          ]
+        },
+        "final": {
+          "methodsPassed": 22,
+          "modeledDarwin": 19,
+          "realLinux": 3,
+          "commandStopFinal": [
+            0,
+            0,
+            0
+          ],
+          "seconds": 4.455,
+          "ownedSurvivors": [],
+          "disposableOutputs": [],
+          "receiptSha256": "de2fe36ee796880237f08221ca5986877f1fcafb246293fa34d0a92352d04911"
+        },
+        "scope": "Same390 sticky exhausted-discovery cause, no distinctfiling/numerator. Only later positive evidence reconciles matching lifetime; persistent/structural failures remain fatal. Nativepending; R12 ownership/kernelcause/eventualstate and remote cleanup remainUNKNOWN."
+      },
+      "currentMechanicalRequest": {
+        "commit": "91e8a9a287333be52ca114022b0cd6c4a9664e23",
+        "tree": "f24ef0a0bdd4faa3b22a2b2d90231ccf04f1a250",
+        "scope": "Root-reviewed workflow comment12to13 only; ARM apple-followup unchanged. R13planned/notpushed/run at this binding; Intelcandidate private/unapplied."
+      },
+      "countsUnchanged": {
+        "repairApproved": 173,
+        "denominator": 215,
+        "reviewedNoRepair": 1,
+        "resolved": 174,
+        "unresolved": 41,
+        "repairOrNativeValidation": 17,
+        "externalValidation": 21,
+        "ownerDecisions": 3,
+        "newAuditFindings": 82
+      },
+      "scope": "Exact failed R12 disposition plus later390source approval; no new native/product/fullhost/release/external approval. Prior R10/R11 and repair evidence preserved;133NOT_STARTED/auditNOT_READY."
+    },
+    "githubR12PrepublicationRefresh": {
+      "apiWindowUtc": [
+        "2026-09-10T06:36:12.641636Z",
+        "2026-09-10T06:36:47.282396Z"
+      ],
+      "freshListFinishedUtc": "2026-09-10T06:36:18.275273Z",
+      "totalIssues": 322,
+      "openIssues": 215,
+      "closedIssues": 107,
+      "pullRequests": 79,
+      "openPullRequests": 7,
+      "freshLocalFullBodies": 401,
+      "visibleRetainedComments": 551,
+      "inventoryExactlyMatchesOpenIssues": true,
+      "reportSha256": "d07a1b3a0e8bd39a6c3b2249035df3478e9651876316dc0a7950c62179cfb3ae",
+      "scope": "Fresh401bodies/215membership;551comments=retained547+fourdelta, seven affected histories freshly returned.79local/117upstream metadata unchanged; detailed histories reused. Preserve402local/33upstream omittedpatches,7upstreaminline gaps,3historical counter discrepancies and checkout2454 backlink gap. Later399/400/401outcomes additive, not new full census."
     }
   },
   "lastScopedVerification": {
@@ -14124,7 +14309,7 @@
   "unresolvedIssueCount": 41,
   "repairApprovalComplementIssueCount": 42,
   "currentCountMeanings": {
-    "denominator": "215=initial208membership+seven separatelybound actualfilings; not fresh215census.",
+    "denominator": "215open inventory members freshly corroborated06:36UTC; approval counts from independent verdicts, not GitHub state.",
     "completedIssueCount": "173independently approvedrepairs; excludesno-repair287.",
     "remainingIssueCount": "41unresolved=215-174; not42-row repairapprovalcomplement.",
     "resolvedIssueCount": "173repairs+1reviewedno-repair287; no issueclosure.",
@@ -14203,29 +14388,20 @@
   },
   "latestGithubOpenIssueObservation": {
     "apiWindowUtc": [
-      "2026-09-10T04:30:17.527902+00:00",
-      "2026-09-10T04:42:16.717296+00:00"
+      "2026-09-10T06:36:12.641636Z",
+      "2026-09-10T06:36:47.282396Z"
     ],
-    "openIssuesAtInitialCensus": 208,
-    "closedIssuesAtInitialCensus": 107,
+    "freshListFinishedUtc": "2026-09-10T06:36:18.275273Z",
+    "totalIssues": 322,
+    "openIssues": 215,
+    "closedIssues": 107,
     "pullRequests": 79,
     "openPullRequests": 7,
-    "freshLocalFullBodies": 394,
-    "reusedVisibleComments": 545,
-    "initialRetainedCommentProjection": 546,
-    "individualAdditions": [
-      395,
-      396,
-      397,
-      398,
-      399,
-      400,
-      401
-    ],
-    "inventoryAfterSeparatelyBoundFilings": 215,
-    "reportSha256": "876e69e59d60b546f27ad9211c43ae395d978d5b62bc9cb3cf5e7516bf62b6be",
-    "reference": "nativeFollowups.githubPostR11Refresh; postR11Filings; postR11SequentialFollowups.pre401FilingDelta",
-    "scope": "Initial208membership/394bodies and reused histories retain04:30–04:42 bindings; seven actual separately bound filings yield215. Root05:48four-GET delta contains only399/400filings/no comments;157body/fourcomments returned unchanged. Not fresh215census or full-history reread."
+    "freshLocalFullBodies": 401,
+    "visibleRetainedComments": 551,
+    "inventoryExactlyMatchesOpenIssues": true,
+    "reportSha256": "d07a1b3a0e8bd39a6c3b2249035df3478e9651876316dc0a7950c62179cfb3ae",
+    "scope": "Fresh401bodies/215membership;551comments=retained547+fourdelta, seven affected histories freshly returned.79local/117upstream metadata unchanged; detailed histories reused. Preserve402local/33upstream omittedpatches,7upstreaminline gaps,3historical counter discrepancies and checkout2454 backlink gap. Later399/400/401outcomes additive, not new full census."
   },
   "githubListingBeforePost394": {
     "githubIssueListRefreshedUtc": "2026-09-10T01:00:15.892733+00:00",
@@ -14268,5 +14444,56 @@
       236
     ]
   },
-  "githubIssueListRefreshedUtcBeforeR11": "2026-09-10T02:37:32.433205+00:00"
+  "githubIssueListRefreshedUtcBeforeR11": "2026-09-10T02:37:32.433205+00:00",
+  "currentStateBeforeR12": {
+    "sourceCheckpointCommit": "f0b5789f665b585d8f4d6508bdfbbb42a4f1f8a5",
+    "sourceCheckpointTree": "e6b39e865ea257669c3bf2d2d1a2cc17b6498a00",
+    "activeIssue": 396,
+    "activeIssueState": "R11_WHOLE_FAIL;399_400_401_FINAL_REPAIR_APPROVED;396_397_398_SOURCE_APPROVED_NATIVE_PENDING;R12_PLANNED_NOT_RUN;WHOLE_AUDIT_NOT_READY",
+    "lastDispositionUpdateUtc": "2026-09-10T06:17:26.583910+00:00",
+    "corroborationProjection": {
+      "sourceCommit": "f0b5789f665b585d8f4d6508bdfbbb42a4f1f8a5",
+      "sourceTree": "e6b39e865ea257669c3bf2d2d1a2cc17b6498a00",
+      "observedUtc": "2026-09-10T06:17:26.583910+00:00",
+      "projectionPaths": 1146,
+      "countsByReadStatus": {
+        "FULL_TEXT_CURRENT": 659,
+        "FULL_SEMANTIC_DELTA_CURRENT": 220,
+        "REOPENED_HISTORICAL_TEXT_CURRENT_DELTA_BOUND": 6,
+        "STRUCTURAL_ONLY_CURRENT": 259,
+        "SELF_DESCRIBING_LEDGER_NO_CURRENT_SELF_BINDING": 1,
+        "COMPLETE_SEMANTIC_INVENTORY_CURRENT": 1
+      },
+      "newPaths": 0,
+      "exactReviewedReadAdvances": 9,
+      "existingHistoricalFiveColumnCellsPreserved": 5730,
+      "scope": "Prior five395–398 source advances plus four399–401changed paths.399/400compose exact newsemantic deltas with priorreads; changedwatchdog conservatively FULL_TEXT→FULL_SEMANTIC_DELTA.401reviewer explicitly read complete changed testfile, maintaining FULL_TEXT. Other classifications/5730historicalcells preserved;1146trackedpaths matchf0b. Sixadminrows scoped/reopened; selfrowunbound. No whole-source/runtime acceptance."
+    },
+    "latestGithubOpenIssueObservation": {
+      "apiWindowUtc": [
+        "2026-09-10T04:30:17.527902+00:00",
+        "2026-09-10T04:42:16.717296+00:00"
+      ],
+      "openIssuesAtInitialCensus": 208,
+      "closedIssuesAtInitialCensus": 107,
+      "pullRequests": 79,
+      "openPullRequests": 7,
+      "freshLocalFullBodies": 394,
+      "reusedVisibleComments": 545,
+      "initialRetainedCommentProjection": 546,
+      "individualAdditions": [
+        395,
+        396,
+        397,
+        398,
+        399,
+        400,
+        401
+      ],
+      "inventoryAfterSeparatelyBoundFilings": 215,
+      "reportSha256": "876e69e59d60b546f27ad9211c43ae395d978d5b62bc9cb3cf5e7516bf62b6be",
+      "reference": "nativeFollowups.githubPostR11Refresh; postR11Filings; postR11SequentialFollowups.pre401FilingDelta",
+      "scope": "Initial208membership/394bodies and reused histories retain04:30–04:42 bindings; seven actual separately bound filings yield215. Root05:48four-GET delta contains only399/400filings/no comments;157body/fourcomments returned unchanged. Not fresh215census or full-history reread."
+    }
+  }
 }
