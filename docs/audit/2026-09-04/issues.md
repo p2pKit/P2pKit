@@ -1,18 +1,27 @@
 <!-- audit-current:start -->
-# Current issue dispositions — 207-row inventory
+# Current issue dispositions — 208-row inventory
 
-162/207 independently approved repository repairs (78.3%); 163/207 independently resolved rows (78.7%) including one reviewed no-repair disposition; 44 unresolved (21.3%): 20 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 74 new audit findings. **Whole audit NOT_READY**; #133 independent interoperability NOT_STARTED.
+165/208 independently approved repository repairs (79.3%); 166/208 independently resolved rows (79.8%) including #287 without a repair; 42 unresolved (20.2%): 18 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 75 new audit findings. **Whole audit NOT_READY; #133 independent NOT_STARTED.**
 
-The current table/JSON, not the dated b67 tables below, governs work allocation.
-Approval is scoped:162 repository corrections, now including the actual Darwin
-#392 wrong-home repair, not a passing80-method suite. #391's three affected controls
-pass, but its genuine-token prerequisite fails; #390/#391 final native approval
-remains withheld. #393 final source07bc is approved/local/not pushed/native pending.
-See [the report](repairs/cohort-2026-09-09-native-followups.md) and [JSON](issues.json).
-Published165e4 binds r9;207 rows = prior203 full refresh + four individual filings,
-not a new full census. Historical administrative text is not freshly re-corroborated.
+**#391/#393 now have final independent native repair approval** at executed9ecd,
+not whole-host/product acceptance. #392's R9 approval remains. #394 is now
+**APPROVE_FINAL_REPAIR**, local79a18 plus approvedfixturefollowupbf65e7a.
+FivefocusedLinuxmethodsPASS; two existing methods also PASS through an owned symlink
+temporary root after two original path errors. No new native or repair-count credit. All80 R10executor
+methods pass, but laterpolicy2 fails recorded-identity reinspection and #390 stays
+unapproved. PARTIAL_SALVAGE62/full remote cleanupNOT_PROVEN; productsNOT_RUN.
+[Scoped391 outcome](https://github.com/p2pKit/P2pKit/issues/391#issuecomment-5611405453) · [Scoped393 outcome](https://github.com/p2pKit/P2pKit/issues/393#issuecomment-5611405568).
+Fresh GitHub02:24:47–02:37:32UTC: **315 issues,208 open/107 closed;79 PRs,7 open**.
+All394 local issue/PR bodies and545 visible comments freshly returned/count-matched;
+old393 bodies/543 comments unchanged. Only known394 filing and391/393 outcomes are
+new; closing3 deltas empty, no changed owner decision/conflict. Detailed79-local/
+117-upstream PR histories remain explicitly reused; prior visibility gaps remain.
+All208 inventory members are now freshly corroborated, not merely207+filing.
+This serial metadata reconciliation grants no repair credit or execution lease;
+see `checkpoint.json` `nativeFollowups.githubPost394Refresh` and the current report.
+Earlier tables below remain dated historical snapshots.
 
-## Unresolved repairs / native or platform acceptance (20)
+## Unresolved repairs / native or platform acceptance (18)
 
 | Issue | Work | Current disposition |
 | --- | --- | --- |
@@ -33,9 +42,7 @@ not a new full census. Historical administrative text is not freshly re-corrobor
 | [#363](https://github.com/p2pKit/P2pKit/issues/363) | First incoming offer consent controls | Rendered production-bound regression committed; actual first-offer UI/consent execution pending. |
 | [#379](https://github.com/p2pKit/P2pKit/issues/379) | Peer subscription hook/publication semantics | Host scope accepted; affected Apple/common hook/registry/discovery cases pending. |
 | [#383](https://github.com/p2pKit/P2pKit/issues/383) | Exact-run Swift lifecycle ownership | Source-approved86d4ca8 committed; native Swift/lifecycle/UI execution pending; Flow cancellation suspicion separate. |
-| [#390](https://github.com/p2pKit/P2pKit/issues/390) | Darwin transient exit observation | Source3c038 approved/published, r8 native mechanism corroborated. Final native approval still withheld;391cancellation now passes but393genuine-token prerequisite remains. Original failures retained. |
-| [#391](https://github.com/p2pKit/P2pKit/issues/391) | Unsupported Darwin signal-zero fixture probe | Source49f05 approved/published;12modeled and3actualR9 affected methods PASS. FINAL_NATIVE_APPROVAL_WITHHELD: genuine opaque-token control fails before stale/sentinel assertions;393 prerequisite pending. |
-| [#393](https://github.com/p2pKit/P2pKit/issues/393) | Saved-token child readiness | Low, filed; finalsource07bc approved after F1 original-child guard, locally committed/not pushed. Actual final Darwin same-token/sentinel/cleanup execution pending; initial AST is zero tests/not final revision. |
+| [#390](https://github.com/p2pKit/P2pKit/issues/390) | Darwin census/identity observation | Finalsourceapproved21339/localNOT_PUSHED,14modeledPASS at9ecd+a3c676; nativeNOT_RUN/no final credit. R10UNKNOWN failure and historical attribution limits remain. |
 
 ## External validation (21)
 
@@ -62,7 +69,7 @@ commit, build, hardware or owner decision is required; GitHub issue remains open
 It adds one resolved row, **zero repair approvals**, and is not an implementation queue item.
 
 The PENDING_REMEDIATION JSON bucket retains274/284 for historical category continuity;
-current work counts separate those decisions from20 genuine repair/native rows.
+current work counts separate those decisions from18 genuine repair/native rows.
 Physical/independent/professional acceptance attached to already-approved rows remains
 open separately. No artifact/source approval converts a failed graph intoPASS.
 

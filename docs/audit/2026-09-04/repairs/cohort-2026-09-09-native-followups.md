@@ -1,6 +1,8 @@
 # Native and local continuation — 9–10 September 2026
 
-## Current state
+> Current outcome: [Apple R10](#apple-r10-final-fixture-approvals-later-policy-failure) below supersedes the dated pre-R10 counts/queue. Earlier failures and evidence remain unchanged.
+
+## Preserved pre-R10 state
 
 162/207 independently approved repository repairs (78.3%); 163/207 independently resolved rows (78.7%) including one reviewed no-repair disposition; 44 unresolved (21.3%): 20 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 74 new audit findings. **Whole audit NOT_READY; #133 independent NOT_STARTED.**
 #287 is independently resolved without a fix; it does not inflate repair credit.
@@ -384,3 +386,166 @@ current authored administrative deltas only; historical text is not freshly
 re-corroborated, and no cyclic coverage hash or independent admin approval is invented. Protected AGENTS.md/CLAUDE.md unchanged. This preparation
 ran no build/test/API/native probe or cleanup and grants no issue-closure/main/tag/
 settings/release authority.
+
+## Apple R10: final fixture approvals, later policy failure
+
+**Current outcome,10September2026.** 165/208 independently approved repository repairs (79.3%); 166/208 independently resolved rows (79.8%) including #287 without a repair; 42 unresolved (20.2%): 18 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 75 new audit findings. **Whole audit NOT_READY; #133 independent NOT_STARTED.**
+
+Actual normal push/ref verification01:10:40.964UTC published `9ecd4e5be7fbbbae1c250c5de9170090fa8676a7`,
+tree `8c443ebeddfdeec32c60a32b9719f18552730b58`, while the task-ownedlease/sourcefreeze was held;
+receipt SHA256 `61b84b26a88bfd9dbbc310a6854510d675d64fd9ce17665a94481053a10fbdb1`.
+[Run34424409933/1](https://github.com/p2pKit/P2pKit/actions/runs/34424409933),
+job102706473770,01:10:51–01:13:59UTC onmacos-26ARM/Python3.14.7, **FAILS overall**.
+
+- **#393 APPROVE_FINAL_REPAIR_NATIVE_EXECUTED**, no findings; report
+  `c165ee7fa3f8797229e0a17cc1389e3affbad46ab78765c135def581aa08c6b1`.29selected retained evidence hashes checked;
+  target readiness/original-child-live preconditions, same-tokenSIGTERM0,
+  targetexit-15, post-exitESRCH3 and unrelated-sentinel survival pass. Complete
+  scoped fixture/enclosing retirement; readiness marker itself not retained.
+  [Actual safe outcome](https://github.com/p2pKit/P2pKit/issues/393#issuecomment-5611405568)
+  posted01:44:01serverUTC; issue stays open. HistoricalR9exactcause remains unobserved.
+- **#391 APPROVE_FINAL_REPAIR_NATIVE_EXECUTED**, no findings; report
+  `fdac4094be187383d9642c98502c8f7bbb64581d1922cd9f60f3ec7bfc4a5e9f`.46selected files/9essentialZIPcomparisons,
+  all3 actual Darwin cancellation/recovery methods and required393control pass.
+  Complete6/6 chain proofs, preserved1/6and0/6 deliberate primary failures and
+  separate full recovery/resolution; final fixture cleanup complete.10JSONLcall
+  journals omitted inside affected trees, not the required identity/proof/receipt/
+  control/cleanup records. [Actual safe outcome](https://github.com/p2pKit/P2pKit/issues/391#issuecomment-5611405453)
+  posted01:44:00serverUTC; issue stays open. #392 keeps its earlierR9 approval.
+
+Native executor **80/80 PASS**,87.040s:30pure policy,12modeled Darwin,38Darwin-selected
+methods, not80independent native experiments. Outer command/ownedstop/final0/0/0,
+sourceunchanged/noerrors/survivors; actual same-owned wrapperstop0. AndroidSDK36/37.0
+provisioning, SDK TCP-header inspection, XcodeGen and policy0wrapper/1verification
+pass. Header inspection is not compilation or generated Swift bridge approval.
+
+Later `policy-2-check-dependency-update-policy-test` leaf
+`8e120e53c8654925820d72caf1bca4a8` fails
+`OwnershipError: Cannot reinspect a recorded Darwin process identity`:
+**null/null/125**, failed pre/finaldrain and wrapperstop/pipe completion,
+**UNKNOWN survivors**. **#390 remains unapproved**; exact failing identity/cause
+not established. All library/native/Swift/UI/ABI/Dokka/publication/consumer/release
+products **NOT_RUN**, simulatornull, release monolithNOT_EXECUTED_COMPONENT_REPLAY.
+
+Artifact10132152568/984192bytes SHA256
+`c81e231577a221b52e5b797460fb4c74be2bd7c67ccac540ae2e4b8d5b28da4e`;
+existing extraction inventory1008regularfiles/3012868bytes. Independent scoped
+inspections above do not invent a new complete-corpus audit. **PARTIAL_SALVAGE,
+62omissions**, full tree/full remote cleanup **NOT_PROVEN**, safe=false.
+Clean accepted invocation retirement does not seal the whole host/evidence tree.
+
+Fresh global idle01:36:23–01:36:29UTC precedes actual lease release01:37:27.051UTC,
+sourceunchanged/zero freeze violations; release SHA256
+`279da5db5a40a6455ff79abe5cf67b223d8dd80c2556a88e51320708d129c19b`.
+Administrative only, not remote cleanup or a standing execution lease.
+
+Bounded GitHub refresh00:45:15–01:00:15UTC:39successful reads,314issues207open/107closed,
+79PRs7open,286freshopen/PRbodies,543completevisiblecomments/368openissuecomments,
+812openlinkevents and28reconciledtimeline deltas. No new owner decision/untracked
+defect; unchanged107closed bodies/decisions and detailedPR/117firsthop histories
+reused. Report SHA256 `5b4cf6726024d3ad6b2194fc1d17d671f6f96b2ff9988c113e284aa177c3be2e`.
+Its201-row committed-ledger observation predates9ecd; the bounded207rows were corroborated before the separate394filing.
+Two01:44outcomecomments above are later individual deltas, not a fresh census.
+Historical missingpatch/inline/comment/backlink gaps and preliminary offline parser/
+REST-MERGED representation failures remain. Only separately bound completed local-run outcomes are included; no future source
+result is inferred. Continue plannedR11/390native and the18repair/native queue, final
+whole-source/check/sample/consumer/release and separately required external gates.
+
+### Post-R10 filing and scoped CLI follow-up
+
+[#394](https://github.com/p2pKit/P2pKit/issues/394) was actually filed Low at02:00:34serverUTC,
+client02:00:33.010–02:00:33.706; bodySHA256 `b3ac157d70deb7c144f6b2e34457b4bd8fb29b62466b7e65d7d5bdc184f7239a`.
+BufferedTee retained-file writes wait for EOF despite live prefix delivery;
+actual2,551-byte stderr prefix is absent from retained0-byte leaf stderr. This
+is distinct from390 and371; loststdout and exactremote buffering/kernelstate are
+not established. No reproduction/repair existed at filing; the finalrepair section below supersedes
+that original filing-only scope.
+The02:00:04 three-endpoint delta since01:00:15 found onlyexpected391/393bodies/
+outcomecomments, inline0. Actual filing yields208rows, not fresh208fullcensus.
+
+#390's current candidate patch`a3c6768a46a6e24b7632db6fa52521ce1c2f294f202ec31eb8703aa361837682`
+at9ecd+diff passes14modeledmethods/0.032s,02:05:42–02:05:43UTC,0/0/0/noownedworkers.
+**APPROVE_SOURCE_EXECUTION_PENDING**, no findings; final reportSHA256
+`f132e33f1d413ffb7e7bfd0fa21a262aabfbca3282a0bbee68cb277c9e0bfeb6`. Exact approved patch is locally committed
+`21339c1dc769470b622a04cd8105198db6f4c43a`, tree`6800534bca12c7235a03fe3ec3c5ce69836e67ef`,
+**NOT_PUSHED/final nativeNOT_RUN**, no newcredit.14modeledPASS remains9ecd+diff,
+not clean21339execution. Initialred/R1review/green evidence is retained. Relevant
+realidentity/sentinel/consumer controls and actualpolicy2/GPGcaller still required.
+
+Actual clean9ecd installed-CLI follow-up is independently **APPROVE_SCOPED_LINUX_RUNTIME**:
+installDist17tasks/zero tests and runtime both0/0/0; receiverFDlimit restored in
+0.104195s, same-session4KiB recovery, pending-unaccepted-offer SIGTERM143/0.407201s.
+32,867,485 disposable bytes removed after review; logs/JSONL/allZIPs retained,
+no owned workers. This is not fullPS-T05/D2/D5 or external/native qualification.
+Review SHA256 `ae4c3ae2414d6f931b007f722d4b0be53c946620d2f090ea1b3f2e4dd70ba944`; disposal receipt
+`ecdf2232ebe987b836cf58e326da07a48c3f8fedf24aa7ccdde26ee62e2fc776`.
+This completed15.807s Linux/JDK17 paired-loopback slice retains cancellation,
+sevenZIPsnapshots/35manifesthashes and exactchild-limit restoration. No in-flight/
+SIGKILL/restart/sustainedpressure/disk/otherhost/device/hostile/interop/crypto claim.
+JSON currentevent: `nativeFollowups.postR10Followups`; whole audit **NOT_READY**.
+
+### #394 final repair and R11 boundary
+
+**#394 APPROVE_FINAL_REPAIR**, no findings; final review SHA256
+`a1245ff8b89baf6678055b23d5f618d8ec832cd7f58904924f6e56c9f93abfb5`. Exact patch
+`493d262ac4faabdb6bea0430254491780555d009feb0b32937d2a4a9b0bccb86` is locally committed as
+`79a18dee1f9b4196db29ecf14b5bd2638849cef7`, tree`8e536701ba2e94dfdd37702dc9b3afd4685dd66e`,
+parent21339. Shared same-reader chunk flush publishes exact evidence before live
+output; finalfsync/noEOF/errors/ownership unchanged, no per-chunkpowerloss claim.
+Original2FAIL/3.009s/1-0-1 at21339+testonlypatch is retained; final5PASS/7.302s/0-0-0
+ran at21339+493d, not clean79a18. TwoactualTee binaryprefix/flusherror controls and
+3realLinux nested success/raw, timeout/cancel controls pass their strict assertions;
+negative leaves remain-15/0/125. Complete3fixture cleanup/realouterstop0/noownedworkers
+or projectoutputs. Fixture wrappers are fake; these are not product/Gradle tests.
+Required logs/receipts remain. OldmissingR10logs/UNKNOWN/62omissions are not repaired
+retroactively; no exactremote buffer/kernel attribution or390nativecredit follows.
+
+Currentlocal `557156171d1f642c12ad6c7f87591b1af7ceaf23`, tree`71d48f59513731e65f9f803ba2f2bd016bbdabb4`, adds only the
+mechanicalcomment10-to11 after79a18. **NOT_PUSHED; nextARM R11 planned NOT_RUN.**
+Refresh Actions/refs and hold task-ownedlease/sourcefreeze **BEFORE triggeringpush**;
+require relevantchangedDarwin controls/actualpolicy2caller and independentnative
+verdicts before advancing. Currentcount165repair/166resolved of208,42unresolved;
+wholeauditNOT_READY/independent133NOT_STARTED. No futurepublication/run inferred.
+
+### Post-#394 GitHub inventory refresh
+
+Current API window02:24:47.699838–02:37:32.433205UTC:30 successful reads, closing
+item/conversation/inline deltas empty. **315 issues,208 open/107 closed;79 PRs,7 open**.
+All394 local full bodies and545 visible comments freshly returned/count-matched;
+old393 bodies/543 comments unchanged. Known394 filing and391/393 outcome comments
+are the only new text. All818 open-issue links,2 open-PR links and7 open-PR REST
+timelines refreshed. No missed distinct defect, changed owner decision or conflict.
+All208 open inventory members now freshly corroborated; prior203 adds390–394,
+prior207 adds394 alone. Repair numerators remain independent-verdict based.
+
+Report SHA256 `5bfaab9875a356a05266acaebe27c8e604fd44ba27486de73c3b7282679e6b01`;
+reconciliation SHA256 `4cef93794435099ec7f340aa87be4f2cb3ad31e5570c4b2fd29986a3c5ab6d42`.
+`checkpoint.json` `nativeFollowups.githubPost394Refresh` binds the concise scope.
+All107 closed bodies/comments are now fresh and unchanged; detailed79local/117upstream
+PR histories remain reused after metadata equality, not recrawled or newly manually
+reread. Earlier freshness statements above remain their dated observations. Preserve
+missing patch/inline/comment/backlink limits and initial private parsing stops; no API
+or product test failure. Serial metadata only, no Actions lease/native/repair approval.
+
+### #394 pre-push fixture portability follow-up
+
+Final composition **APPROVE_FINAL_REPAIR**, no findings; review SHA256
+`83dee9c983b74319462b103c88d928cf7a1688824e5b310973fa44260e20154f`. Focused commit `bf65e7a921a32bbdcca42bd868cf3ae306d8c8a0`,
+tree`4da795235429a5c4167ec276acca3ab8760e1f3e`, adds only `resolve()` on the two newly created,
+test-owned temporary roots. Production no-follow checks, raw-byte assertions,
+error/drain behavior and teardown are unchanged. This follows the existing fixture
+contract; it is not an observed macOS failure or an extra repair row.
+
+Controlled owned symlink temporary root: original two methods ERROR in0.002s
+before their behavior assertions, command/stop/final1/0/1; final two methods PASS
+in3.009s,0/0/0. Both logs/receipts retained, physical temporary roots and aliases
+disposed, no owned workers/project outputs. Eight administrative changes stayed
+identical across both runs; neither was a clean-commit execution. Original #394
+five-method evidence/production approval reused unchanged. See JSON
+`nativeFollowups.postR10Followups.fixturePortability394` for exact bindings.
+
+Current focused source bf65e7a is **NOT_PUSHED**, R11 **PLANNED_NOT_RUN**.
+The earlier557156 record remains its dated mechanical-request observation.
+No #390native/product/whole-audit credit. The previously completed497-link check
+passes; this wording-only follow-up adds no new link. No redundant build/link
+cycle is needed; JSON parsing and whitespace checks still apply.

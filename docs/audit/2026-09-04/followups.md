@@ -1,53 +1,56 @@
 <!-- audit-current:start -->
-# Current follow-ups and remaining work
+# Current follow-ups after R10
 
-162/207 independently approved repository repairs (78.3%); 163/207 independently resolved rows (78.7%) including one reviewed no-repair disposition; 44 unresolved (21.3%): 20 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 74 new audit findings. **Whole audit NOT_READY**; #133 NOT_STARTED.
-The [current queue](issues.md) and [report](repairs/cohort-2026-09-09-native-followups.md)
-govern; earlier tables below are dated historical records.
+165/208 independently approved repository repairs (79.3%); 166/208 independently resolved rows (79.8%) including #287 without a repair; 42 unresolved (20.2%): 18 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 75 new audit findings. **Whole audit NOT_READY; #133 independent NOT_STARTED.**
 
-1. **#393 final source approved, native pending.** Currentlocal41909/tree8e3d contains
-   finalfix07bc/resolvedF1 plus comment-only R10request; notpushed/R10NOT_RUN.
-   Publishedsource remains165e4. Initial AST
-   syntax inspection executes zero tests and is not rebound to the final guard.
-   Refresh Actions/refs and hold the task-owned execution lease/source freeze BEFORE
-   any audit-branch push that triggers R10. Publish only independently approved safe
-   source/admin while that lease/freeze is already held. Require target-generated readiness,
-   one saved opaque token: initialSIGTERM0, post-exitESRCH3, unrelated sentinel alive,
-   and complete owned retirement/evidence. Exact r9 exec/kernel cause is unobserved.
-2. Obtain independent **#393/#390/#391 final native verdicts**, no source-only credit.
-   Reuse unchanged R9 three-cancellation success where reviewers permit; never waive
-   the genuine control or substitute its old r8 pass for the current r9 failure.
-   **#392 is finally native-approved**, not an implementation queue item. Actual
-   wrong-home evidence14/14 and retirement pass; its safe outcome is public/open.
-3. Resume actual Apple obligations **156,158,191,207,209,236,250,261,275,279,291,
-   322,330,341,363,379,383** only after executor controls pass. R7/R8/R9 never reach
-   SDK/product/header/ABI/Dokka/Swift/publication/consumer gates. #236 needs all15
-   publications; #207 accepted selected Windows/Linux scopes are not fullWindows.
-4. Preserve **R9FAIL79/80**, enclosing1/0/1/no owned survivors separately from its
-   31omission PARTIAL_SALVAGE/safe=false/full remote cleanupNOT_PROVEN. Actual local
-   lease release00:19:32UTC is administrative. R8null/null/125/UNKNOWNcleanup and
-   R7-15/0/125/nine omissions remain failures. #388hosted and #389Linux repairs are
-   approved within scope; the unchanged GHSAexception expires2026-10-31, not a patch.
-5. Allocate21 external campaigns and owner decisions **120/274/284**; document exact
-   hardware/access/owner blockers and move to feasible work. #287 requires no repair.
+Fresh02:24:47–02:37:32UTC GitHub reconciliation corroborates all208 open members;
+no new decision/conflict. See `checkpoint.json` `nativeFollowups.githubPost394Refresh`
+for fresh bodies/comments versus explicitly reused detailed histories. No repair credit.
 
-Final current-source corroboration, required rootcheck, applicable samples/isolated
-consumers, nativeIntel/fullWindows, strict supportedMacDokka/rendered signatures and
-inspected release gates remain. The earlier rootcheck1780freshPASS is0dbc+CLIpatch,
-not a new07bc result. Preserve strictLAN34-warning unsupportedLinuxDokka failure;
-do not suppress warnings or remove links indiscriminately. Component replay is not
-the release monolith. Physical/headful/hostile/independent133/crypto evidence cannot
-be inferred from hosted builds. Swift Task.cancel→KotlinFlow propagation remains a
-separate unproved suspicion, not established by383exact-run fencing.
+1. **R11 planned NOT_RUN.** Currentlocalbf65e7a includes mechanicalcomment10-to11
+   at557156,390sourceapproved21339,394finallyapproved79a18 and its approved
+   two-line owned-temp-root correction (controlledLinuxsymlink2ERROR->2PASS).
+   Production/assertions unchanged; no Macexecution implied. NOT_PUSHED. Refresh
+   Actions/refs and hold executionlease/sourcefreeze **BEFORE triggeringpush**.
+   Require changedDarwin realidentity/stale-token/sentinel/consumer controls and
+   actualpolicy2/GPGcaller, then inspect native/product/stop/evidence outcomes.
+   #390 remains nativepending/no completioncredit. #394's exact493d correction
+   passes5focusedLinuxmethods after2originalfailures; no newnative/product credit.
+2. **#391/#393 final native repairs are independently approved**; #392 retains R9
+   approval. Do not repeat unchanged accepted cases. R10's80mixed executorPASS and
+   SDK/header/XcodeGen/policy0/1 successes do not establish product acceptance.
+3. Resume actual native/platform obligations **156,158,191,207,209,236,250,261,
+   275,279,291,322,330,341,363,379,383** once the infrastructure failure is resolved.
+   #236 still needs15publication inspections; selected Windows/Linux207 successes
+   are not fullWindows or Apple acceptance. SDK header declarations alone are not
+   bridge compilation, generated Swift headers or runtime behavior.
+4. Preserve R10 **null/null/125, UNKNOWNdrain/pipe finalization,62omissions,
+   PARTIAL_SALVAGE/full remote cleanupNOT_PROVEN**, and all originalR7/R8/R9,
+   Windows/Linux failures.01:37:27 lease release is administrative only. Fresh
+   Actions/ref observations and a held execution lease/source freeze are required
+   **BEFORE any triggering audit-branch push**; no local/hosted build overlap.
+5. Finish current whole-source/qualified coverage, `./gradlew check --console=plain`,
+   applicable samples/isolated consumers/nativeIntel/fullWindows and inspected
+   strict supportedMacDokka/ABI/Swift/release gates. The separately completed CLI
+   follow-up below is narrowly scoped, not a new rootcheck/campaign pass. The prior1780fresh rootcheck remains0dbc+CLIpatch; strictLAN34
+   Linux Dokka failure remains. Component replay is not the release monolith.
+6. Allocate21 external campaigns and owner decisions **120/274/284**. Hosted tests
+   do not prove physical/ART/OEM/headful/hostile/independent133/crypto behavior.
+   Swift Task.cancel→KotlinFlow propagation remains a separate unproved suspicion.
 
-Coverage records the current authored administrative delta; historical administrative
-text remains qualified/reopened, not a fresh complete source audit. Bind the new
-report separately without cyclic coverage hashes. One local/hosted build at a time,
-max2workers/no parallelGradle; retain every failure/cancellation/success log, applicable
-owned wrapper stop and exact-worker cleanup. Remove only confirmed disposable output
-after dependent evidence. Never blanket-delete build/source/caches, signal historical
-PIDs or treat a failed runner as proven safe. Only safe audit-branch publication is
-authorized; no force-push/main/closure/settings/tag/release changes.
+Actual clean9ecd installed-CLI follow-up is independently **APPROVE_SCOPED_LINUX_RUNTIME**:
+installDist17tasks/zero tests and runtime both0/0/0; receiverFDlimit restored in
+0.104195s, same-session4KiB recovery, pending-unaccepted-offer SIGTERM143/0.407201s.
+32,867,485 disposable bytes removed after review; logs/JSONL/allZIPs retained,
+no owned workers. This is not fullPS-T05/D2/D5 or external/native qualification.
+
+[Current queue](issues.md) · [R10 report](repairs/cohort-2026-09-09-native-followups.md#apple-r10-final-fixture-approvals-later-policy-failure).
+Only current authored deltas are newly inspected; historical administration stays
+qualified/reopened, not a new full-text audit. No coverage edits or cyclic hashes.
+Serialize at most2Gradleworkers/no parallel execution, retain all invocation logs,
+applicable owned-wrapper stops and exact-worker cleanup. Selectively remove only
+confirmed disposable outputs after dependent evidence; preserve source/caches.
+No force-push/main/closure/settings/tag/release authorization is added.
 
 <!-- audit-current:end -->
 
