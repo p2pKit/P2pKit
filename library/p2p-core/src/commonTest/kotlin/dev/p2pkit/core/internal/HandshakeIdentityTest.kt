@@ -19,6 +19,7 @@ import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
@@ -100,6 +101,11 @@ class HandshakeIdentityTest {
                 val session = withTimeout(5_000) { alice.connect(peer("bob-id")) }
                 assertEquals(ConnectionState.Connected, session.state.value)
                 assertEquals("bob-id", session.peer.id.value)
+                // Local connect does not join Bob's independent incoming commit.
+                // Do not stop a still-uncommitted responder in this successful-pair fixture.
+                val incoming = withTimeout(5_000) { bob.sessions.first { it.isNotEmpty() } }.single()
+                assertEquals(alice.localPeerId, incoming.peer.id)
+                assertEquals(ConnectionState.Connected, incoming.state.value)
             }
         }
     }
