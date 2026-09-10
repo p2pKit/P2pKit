@@ -1,8 +1,8 @@
-# Authenticated-v2 wire contract — 2026-09-09 candidate
+# Authenticated-v2 wire contract — candidate and current continuation
 
-**Status: source-reviewed preparation for #133, not an independent
+**Status: candidate-bound preparation for #133, not an independent
 interoperability result or professional cryptographic assurance. External #133
-remains NOT_STARTED.** This describes a specific committed candidate, including
+remains NOT_STARTED.** This describes the committed candidates in §1, including
 caller behavior that a pure codec does not establish. It does not certify a
 published release, execute an independent peer, or grant repository-repair or
 whole-audit readiness credit. Labeled contract questions remain separate from
@@ -11,7 +11,7 @@ is a finding to resolve, not permission to codify an implementation accident.
 
 ## 1. Candidate, scope and notation
 
-Source binding date: **2026-09-09 UTC**.
+Original source binding date: **2026-09-09 UTC**; preserved historical preparation.
 
 | Candidate identity | Exact value |
 | --- | --- |
@@ -19,16 +19,34 @@ Source binding date: **2026-09-09 UTC**.
 | Tree | `88a3b7fe4d016c526a1256f1b456ab04dd2ed954` |
 | Source review scope | Candidate byte grammar and actual caller/state boundaries; no runtime or external acceptance claim |
 
-The compact [source manifest](secure-v2-wire-candidate.sources.tsv) lists the
-repository path, Git blob SHA-1 and file SHA-256 for all 70 source, documentation
-and existing vector files used to ground the reviewed description. Every file
-was compared with the committed candidate and matches the reviewed bytes.
-Source names below resolve through this manifest; inspect them at the pinned
-commit, not a later branch HEAD. Relative documentation links are maintained
-navigation, not a claim that future revisions still describe this candidate.
-The commit/tree binding identifies the described source before this document
-was added. A later relevant source change requires a scoped delta review and
-an updated candidate binding; preserve this binding as historical evidence.
+The original [source manifest](secure-v2-wire-candidate.sources.tsv) retains the
+70 source, documentation and existing-vector inputs, Git blob SHA-1 and literal
+file SHA-256 from the reviewed `9f9e57c` description. That original commit/tree
+and manifest are unchanged historical bindings, not a claim about later HEADs.
+
+### Current source continuation — 2026-09-10
+
+| Binding | Exact value / scope |
+| --- | --- |
+| Intermediate source comparison | `91e8a9a287333be52ca114022b0cd6c4a9664e23` / tree `f24ef0a0bdd4faa3b22a2b2d90231ccf04f1a250`; #399 reconnect-wake ordering, no wire-contract change; source inspection only |
+| Current candidate | `4a409a8f60ad4b4f23db58725f71de0523a29bf5` |
+| Current tree | `f45afc779049d6557485efe77936871dfeeb70a9` |
+| Current delta | #403 diagnostic owner attribution and #404 lost-transport retirement; no byte grammar, key derivation or negotiated-feature change |
+
+The [current sparse source bindings](secure-v2-wire-candidate.2026-09-10.sources.tsv)
+replace five original manifest rows and add `ReconnectTransportRetirement.kt`.
+The other 65 original inputs are byte-identical: the composed current inventory
+has 71 paths. Source names below resolve through that composition at `4a409a8`,
+not arbitrary later source. The five current rows also record the intermediate
+`91e8a9a` blobs; its earlier source-only comparison remains historical evidence.
+Section 9 adds the current local retirement/terminal boundary. This continuation
+is source-contract preparation, not a new independent peer, runtime result,
+cryptographic review or campaign acceptance.
+
+Relative documentation links remain navigation, not future-source certification.
+The original and current source commits precede their respective documentation
+updates. Review/rebind any later relevant source delta; do not silently transfer
+these bindings or turn observed implementation details into new normative rules.
 
 Scope: one ordered, reliable, bidirectional byte stream, from secure preface
 through encrypted application/file traffic and termination. LAN discovery,
@@ -521,11 +539,35 @@ when the stream ends. `DefaultP2pProtocol.events` has no application
 case. The session still treats absence of CLOSE as connection loss, not clean
 completion. Partial secure records have the separate EOF behavior in §4.
 
-PING prompts PONG; P2pKit creates a new PONG messageId rather than echoing the
-PING ID. PONG refreshes the keepalive deadline. Reconnect creates fresh Noise
+On an active epoch, PING prompts PONG. P2pKit creates a new PONG messageId rather
+than echoing the PING ID. PONG refreshes the keepalive deadline. Reconnect creates fresh Noise
 keys/counters, HELLO/feature state and transfer epoch; it is not silent protocol
 downgrade or automatic file resume. An established authentication/protocol
 terminal outcome must not be replaced by a reconnectable raw EOF.
+
+### Current outgoing-reconnect retirement boundary
+
+Before the outgoing retry driver refreshes discovery or dials a replacement,
+P2pKit retires the lost raw transport and waits, within its existing local cleanup
+budget, for the old secure/protocol reader and event router to finish classifying
+buffered input. It does not install a replacement connection at this stage.
+During this local retirement, new secure writes are rejected; failures of writes
+interrupted by retirement do not discard queued receive records. Those records
+still undergo the original authentication and protocol checks. An already-queued
+CLOSE or typed authentication/protocol failure therefore remains authoritative
+over retry; a retryable PONG-write/peer-error event does not abandon the remaining
+queued events. Failed or incomplete controlled retirement does not authorize a
+new dial. Ordinary write failure outside retirement still disposes the secure
+stream; ciphertext and nonce state are never reused for a replacement connection.
+
+Local retirement is **not a wire acknowledgement that the remote session/store
+has processed EOF**. A remote owner that is still healthy can legitimately reject
+a duplicate replacement. This is local lifecycle/admission behavior, not a new
+packet, handshake flight, peer timeout, negotiated feature or durable-file ACK.
+
+Sources: `ReconnectTransportRetirement.kt`, `AuthenticatedV2SecurityEngine.kt`,
+`NoiseSecureRawConnection.kt`, `SingleCollectorRawPump.kt`, `P2pSessionImpl.kt`,
+`SessionManager.kt`.
 
 Current defaults below are **local resource/time policy**, not fields that
 HELLO negotiates or promises an arbitrary peer will share:
@@ -573,11 +615,11 @@ generic nonempty handshake payloads; those payload sizes are **not** legal
 production-v2 flights. Neither that vector nor P2pKit-to-P2pKit goldens supply
 a separate P2pKit protocol/state-machine implementation.
 
-Source review and exact committed-candidate rebinding of this preparation are
-complete. Resolve any labeled contract question before using the affected
-clause as a normative external negative oracle. An independently owned
-implementation can then use the reviewed specification and independent crypto
-dependencies, without copying/linking P2pKit codecs. New independently generated
+The original source review and candidate rebinding remain preserved; §1 records
+the focused current continuation separately. Resolve any labeled contract question
+before using the affected clause as a normative external negative oracle. An
+independently owned implementation can then use the reviewed specification and
+independent crypto dependencies, without copying/linking P2pKit codecs. New independently generated
 vectors/transcripts must have their own provenance; do not relabel the existing
 goldens. Full external acceptance still requires the roles, negative/durable
 cases, people/dependency provenance and physical platform matrix in the
