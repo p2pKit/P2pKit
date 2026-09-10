@@ -1,56 +1,50 @@
 <!-- audit-current:start -->
-# Current audit continuation — R14 results / R15 residual gates
+# Current audit continuation — consumer repairs approved / Intel R16 ready
 
-**Whole audit NOT_READY; #133 independent NOT_STARTED.** 179/218 independently approved repository repairs (82.1%); 180/218 independently resolved rows (82.6%) including #287 without a repair; 38 unresolved (17.4%): 14 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 85 new audit findings.
+**195/221 independently approved repairs (88.2%);196/221 resolved (88.7%);
+25 unresolved (11.3%)**: #236,21external rows and owner#120/#274/#284.
+#287 is resolved without repair; repair-approval complement26(11.8%).88new findings.
+Counts are rows, not effort/readiness. **Whole audit NOT_READY; #133 independent NOT_STARTED.**
 
-Current source **`5bf2e7bb9d3fbf914d7e1ab17318a644e86c3b53`**, tree `eb49c744a564963e5cd58ff0b2cfbf2031d67136`; four focused followup commits are
-**local/not pushed at this binding**. R15 native execution is **NOT_RUN**.
+Source **`8765e3ea66f119bf6d48e5c866798ed798fc2aa5`**, tree`6375e7ab10967a22512e19b8c086ff3ee23e6c5f`:
+seven focused commits after pushed`4a409a8`, **local/not pushed at this binding**;
+this administrative successor is separate. R15 aggregate**FAIL/FULL_SEALED** remains,
+with13scoped native approvals (LAN184PASS+1manual skip;Swift79PASS). Prior failures
+and #291physical backup obligation are preserved.
 
-R14/run 34469526553 at `3b06abc` **FAILED**: 780 core cases PASS (#207's 291 and
-#404's 41 are overlapping subsets); LAN executed 0 cases because three unused Unit
-tails failed `-Werror`. #157's two actual Darwin methods were independently accepted.
-Publication: 208 tasks PASS; #402's incomplete metadata policy then failed with exit
-125 before consumers/Swift. **PARTIAL_SALVAGE: 367 omissions/details truncated;
-safe=false; full remote cleanup/tree NOT_PROVEN.** The 11:32:38 UTC lease release
-was scheduling only. R12/R13 failures remain historical evidence.
+**#407/e5bd38d** and canonical**#112/5fac409** have final independent approval.
+Real strict consumer configuration nowPASS:115exact selected/177permitted components;
+unknown-module/conflicting-strict controls reject. No product dependency forcing,
+metadata weakening or extra112credit. Full consumers and54archive/native inspection
+remain pending. #405/#406/#402 approvals and R15 failures stay separately bound.
 
-Reviewed followups: **5263979/#209** removes only those three tails (native pending);
-**d0f37f6/#402** admits exactly 84 trusted publication inputs (8 helper methods PASS);
-**44ab597/#236** inspects 54 archives: 45 covered + 9 explicit KLIB exemptions
-(11 ZIP fixtures PASS; actual native inspection pending). **5bf2e7b/R15** selects
-LAN-only residual work with 4 focused controls PASS; full native executor admission
-and downstream consumer/framework/Swift gates remain. Reuse unchanged R14 core/#157
-evidence, not a new PASS.
+Reused clean4a product against AI spec-only Python peer: both Noise roles,
+10messages/540386contentbytes, mutualpins/nonempty metadata/PING/PONG/ACK-aware close;
+separate wrong-manual-pin typed rejection and natural teardown independently approved.
+Not independent human/vendor133, physical, hostile-network or crypto acceptance.
+Released probe/interop artifacts and isolated Python environment cleaned; required
+CLI distribution retained only for upcoming Android peer verification.
 
-Linux root check / Android debug / Desktop distributable **1,786 fresh PASS** remains
-bound to `3995` + reviewed #207 diff (later identical `47d`), not clean `5bf2`
-execution; no redundant full Linux build. Prior clean `3995` CLI SIGTERM/new-identity
-recovery remains scoped evidence.
+**R16/8765e3e APPROVE_FINAL_EXECUTION_READINESS**;9focused methodsPASS,0/0/0,
+no survivors. GenuineIntel/Xcode26.3 execution **NOT_RUN**. One publisher/consumer,
+54archives after exact successful publisher, sevenABI+CLIonce, framework/Swift/live
+peer and isolated cancellation; timeout-only CLI thread observation never rescuesFAIL.
+Do not repeat unchanged ARM successes or infer earlier ARM linger resolved by Intel.
 
-Clean `5bf2` Linux CLI abrupt-exit observation **independently APPROVED (scoped)**:
-4 KiB committed baseline preserved; 131,072-byte partial positively observed before
-owned SIGKILL; same-home/new-identity restart completes a distinct hash-verified
-4 KiB transfer. Stale part removed on first ACCEPT, not startup; empty reservation
-remains, not a committed file. Seven ZIPs/raw journals retained; owned children
-reaped and disposable outputs removed. Not full PS-T05/PS-T06/#133 acceptance.
+Fresh17:08UTC:328issues/221open/107closed,79PRs/7open,407fullbodies; only407creation
+and known112comment, no substantivePR/inline delta. Unchanged complete histories
+explicitly reused, prior gaps preserved. Coverage1153paths;5755existing historical
+cells retained. Last1786Linuxcheck/sample passes remain bound to3995+reviewed207diff,
+not currentclean8765source.
 
-Fresh 12:15 UTC GitHub refresh: 218 open / 325 issues, 79 PRs / 7 open, 404 full
-bodies; no issue/comment/inline or substantive PR change. PR deltas are only nested
-repository size statistics. Unchanged complete comments/linked histories reused,
-not a new whole-history reread. Coverage: 1,151 paths / 13 reviewed source deltas;
-all 5,750 original historical cells preserved, not blanket correctness.
+Next: freshrefs/Actions, sourcefreeze/ownedlease before push; Intel,Windows17,
+combinedART37→24→25 and genuine372recreation/peer work, then final current rootcheck,
+samples/consumers and inspected releasegates. **Estimate:3–7engineering days accessible;
+2–6+weeks external after access/reviewers**, conditional, not completion promises.
+Serialize builds/max2workers; preserve logs/isolated stops/exact-owned cleanup.
+No main/tag/settings/closure/release authority; continue all feasible work.
 
-Next: fresh Actions/refs, source freeze and owned execution lease before R15 push;
-LAN / actual 15-publication inspections / consumers, CLI once, XCFramework / strict
-Swift / unit / UI / live peer and separate cancellation probe. Reconcile Intel 16 /
-full Windows 17 and pending Android ART extension. Reuse unaffected successful release
-components; component replay is not literal monolithic release-script execution.
-Serialize builds / max 2 workers; retain logs / isolated stops / exact-owned cleanup.
-Physical / hostile / headful / independent / crypto and owner #120/#274/#284 remain;
-no main/tag/settings/closure/release authority.
-
-[Exact evidence and continuation](repairs/cohort-2026-09-09-native-followups.md#apple-r14-results-and-r15-residual-continuation).
-
+[Exact evidence and continuation](repairs/cohort-2026-09-09-native-followups.md#intel-r16-readiness-and-current-technical-observations).
 <!-- audit-current:end -->
 
 ## Preserved pre-native checkpoint narratives (dated historical evidence)

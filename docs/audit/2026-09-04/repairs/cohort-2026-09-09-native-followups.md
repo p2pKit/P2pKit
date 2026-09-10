@@ -1100,3 +1100,207 @@ real physical/OEM/AWDL/hostile/headful/independent/crypto and owner120/274/284 b
 unexecuted feasible process cells are not automatically hardware-blocked. Max2workers,
 no parallel/overlapping builds; retained logs, isolated stops, exact-owned cleanup and
 removal only after dependent inspection. No main/tag/settings/closure/release authority.
+
+## Apple R15 scoped acceptance and follow-up repairs
+
+Current implementation `047ee2bd6d68e7d957b84b9f972c418376398690` / tree
+`deae51eb77f2e9f28b323f3d63f83bd9eeec8571`; three approved405/406/402 commits after
+pushed4a409a8 are local/notpushed at this binding. Separate dirty wire documents
+and the private IntelR16 packet are excluded; R16 is unapplied/unexecuted.
+
+**194/220 independently approved repairs (88.2%);195 resolved (88.6%);25 unresolved
+(11.4%)** =236 +21external rows +owner120/274/284. Repair complement26includes
+no-repair287. 133pre-existing+87new findings. Counts are rows, not effort/readiness.
+**Whole audit NOT_READY; #133 independent NOT_STARTED.**
+
+### Actual R15: aggregate failure, scoped final approvals
+
+Run34476944789/1, job102869909133, artifact10153389356; clean
+`4a409a8f60ad4b4f23db58725f71de0523a29bf5` / tree
+`f45afc779049d6557485efe77936871dfeeb70a9`, macOS26.6.2ARM/Xcode26.5(17F42)/SDK26.5.
+Artifact145788531bytes, SHA256
+`c57b2797311fd12591803153bd21039ef6d2a00444a1d3d32ae51d121ffa70cc`.
+
+| Scope | Actual result / independent verdict |
+| --- | --- |
+| LAN156/158/207/209/275/279 | **APPROVE_FINAL_REPAIR_SCOPED_REPOSITORY**;184PASS,0failures/errors,1unchanged manual skip/29XML/18tasks;0/0/0. #20713LAN methods complete reused R14core291within780 and prior Linux/Windows acceptance; subsets overlap. No measured Nagle/physicalAWDL/17realhandshakes/universal syscall interruption claim. |
+| Swift191/291/322/330/341/363/383 | **APPROVE repository-repair/native scope**;73unit+6UI=79uniquePASS; generated headers/framework/provenance and strictSwift pass. #291physical backup-set absence remains unperformed;341notOSclipboard/successfuldial;383notTask.cancel-to-Flow proof. |
+| Publication/402 |208tasksPASS;15coordinates/84physicalinputs actually admitted. **ACCEPT_REAL_NATIVE_PUBLICATION_ADMISSION**, no second402credit. Consumers fail before tasks at Portal/Central marker checksum mismatch; finalhelperverify not reached. |
+| 236 |**NATIVE_ARTIFACT_ACCEPTANCE_NOT_EXECUTED**.54archives=45license-covered+9explicitKLIB exemptions absent from retained artifact; hashes/POMs are not embedded-license proof. |
+| Swift/JVM transfer |Two actual204800-byte endpoint/hash transfersPASS; enclosing1/0/1 because CLI did not exit. Export precedes earliest possible adapter rescue by30.442114s: quit-path finalization completed, linger cause unknown/not automatically389. |
+| Cancellation probe |64/0/64,failedToStart/no build/zero methods due invalid-test-iterations1. **NOT_RUN**, not a Flow failure. |
+| Terminal/owned cleanup |**APPROVE_SCOPED_TERMINAL_HANDOFF**;FULL_SEALED/all4657members verified,21canonical leaves/16outer,all applicable stops0/no survivors. Executor90/90PASS; selected simulator restoredShutdown and owned disposable work/generated outputs removed. |
+
+R15 remains **FAIL**, not full-host/monolithic release acceptance. Earlier
+R12/R13/R14 failures, UNKNOWN ownership and partial-salvage limits are unchanged.
+Source-suspected responder-readiness race did not reproduce; SwiftUI runtime frame
+warnings remain untriaged suspicions, not additional confirmed issue filings.
+
+Independent review SHA256:
+LAN `22b8ce1c73dce6f1abaf93c8224a91732cfca7096871b650c7017fd6766e4099`;
+Swift `389c9397a830ce347513f808a2755fe741da18b2c109e4ae0f60942deed4bcd8`;
+publication `6eb36c89ad039862e6c4ecef19095b4f2b2590a92d841045d863342c3309ea56`;
+terminal `4376a7bc43f332f565cad70825370a225120704e6930e5db4a0c26e7ea327a7e`.
+
+### Sequential focused repairs after R15
+
+| Issue / commit | Final approved scope and verification |
+| --- | --- |
+| [405](https://github.com/p2pKit/P2pKit/issues/405) /`50e48b443cfd3e05c61e92718f112279410f16ee` |FilteredGoogle→Central→Portal matches existing reviewed marker route; no new checksum/trust. Official source bytes corroborate mismatch.2focusedmethodsPASS7.108s,39version negatives,syntax/whitespace;0/0/0. |
+| [406](https://github.com/p2pKit/P2pKit/issues/406) /`403ee7000bc60c98c8f81037a3882b3c121ba20a` |Remove invalid-iterations1 only; retain exact one-method probe/provenance/strict warnings/owned retirement.2focusedmethodsPASS0.817s,syntax/whitespace;0/0/0. |
+| [402](https://github.com/p2pKit/P2pKit/issues/402) /`047ee2bd6d68e7d957b84b9f972c418376398690` |84physicalinputs+18exactGMMaliases=102records, same-component basename/hash/size and post-build checks.5methodsPASS72.462s;0/0/0. All15realR15GMMs independently corroborate alias policy, not unretained binaries. No second credit. |
+
+All three **APPROVE_FINAL_REPAIR_SCOPED_REPOSITORY**, no actionable findings.
+Actual corrected consumers/final-helper verification and native cancellation probe
+remain **NOT_RUN**; focused fixtures fake Gradle/Xcode boundaries.402aliases solve
+a latent supported non-changing-version gap, not R15's first error; source-local
+SNAPSHOT integrity relies on owned pre/post-byte checks, not claimed Gradle XML
+verification of changing artifacts. Review SHA256:405
+`3e43937541b4cb84395239201606717493fbed8e6f31c25fa4eb2c78da5c4c05`;
+406 `07a38fc1e52f158ea9792658655407367af10c531ca101a0c4a19ea30042d045`;
+402 `e289b290cd30bc10027b6bd19943616040caa2fb17cd59f60549b8598c261d42`.
+
+### Actual Linux CLI idle same-process/key recovery
+
+Clean4a409a8 producer:installDist17executedtasks/58s, no test-method credit;
+actual44.714693-second Linux/JDK17 observation, both envelopes0/0/0/no survivors.
+**APPROVE_SCOPED_RUNTIME_OBSERVATIONS**, reviewSHA256
+`3a7d9ee966c3619ed8c644496cc91177c67b6d65f502c5a93135d9defc3d2b22`.
+Positive owned STOP/CONT held30.055999962s; actual timeout/automatic retry, original
+sender owner recovered and incoming owner replaced without manual reconnect.
+Both processes/keys unchanged. A new consented hash-correct4096-byte durable
+transfer passes, prior4096-byte commit survives, original sender observes clean
+peerClosed/no late retry; bothCLIs exit0/reaped. Final catalog outcomes remain
+operatorCANCELLATION, not campaignSUCCESS; incoming admission is development
+same-AppId, not mutualPinnedOnly. No interrupted-transfer/power-loss/fullPS-T05/
+headfulPS-T06/independent133/crypto acceptance or repaired-row increment.
+
+All sixZIPs/directstreams/transcripts and unfiltered raw journals retained.
+Post-review14:13:52UTC cleanup removes exact synthetic homes/tmp/fixtures; required
+CLI distribution/generated inputs retained for root's next dependent verification.
+CleanupSHA256 `e94a3488afef122d4609538ec6779b3b7ffa8c4eae86306df1937c382f243479`;
+runtimeenvelope `b642ad4adbf0272109628c8e9dff4cd9e393247ced6455c8cee1c7448d1248ea`.
+No unrelated source/shared-cache/process deletion.
+
+### Current census, coverage and remaining work
+
+15:20:35.606590–15:20:43.558178UTC:327issues/220open/107closed,79PRs/7open,
+406freshfullbodies; new405/406 and one known402comment delta only; no inline or
+substantivePR delta. Complete unchanged visible histories/linkedPRs/closed decisions
+explicitly reused, prior gaps preserved; not a full-history reread/atomic lease.
+SummarySHA256 `a74a760dd964674237d3eb4b689520bc5b0502d88d55a510a09bc3efc5023207`.
+Coverage1151trackedpaths:five exact reviewed source-delta rebindings; all5755current
+first-five cells preserved, original5750subset nonadditive. Prior full readrows at
+047ee2b coverageGitblob`2eb98eca739a6dfc14e90e8732ceef5d24b5eaed` remain immutable;
+current administration is author-only delta, not a fresh full-corpus correctness claim.
+
+Review/reconcile private IntelR16, then Windows and sequential hosted AndroidART;
+none executed here. Run corrected consumers/final metadata verification and actual
+54archive inspector after successful owned publisher even if consumer build fails.
+Run selected cancellation probe/timeout-only CLI thread dump; avoid redoing unchanged
+successful ARM suites solely for reassurance. Continue feasible CLI fault cells;
+private technical-peer preparation is not independent133 campaign acceptance.
+Reuse unaffected Linux1786check/sample and strictMacDokka/SBOM/OSV/dependency
+components; finish current-source corroboration, final rootcheck, applicable samples/
+consumers and inspected release gates. Monolithic release execution remains separate.
+Fresh refs/Actions/owned freeze before push/dispatch, serialized bounded builds,
+isolated stops/retained logs/exact-owned cleanup. External291physicalbackup,
+133independent/physical/OEM/AWDL/hostile/headful/crypto and owner120/274/284 remain.
+Planning range:3–7engineeringdays accessible work;2–6+weeks external qualification
+once equipment/participants/access exist, longer for owner/professional/legal scheduling;
+not a promise or an effort estimate inferred from row percentages.
+
+
+## Intel R16 readiness and current technical observations
+
+**195/221 independently approved repository repairs (88.2%); 196/221 resolved rows (88.7%) including #287 without a repair; 25 unresolved (11.3%): one repair/native row (#236), 21 external-validation rows and three owner decisions (#120/#274/#284). 88 new findings. Repair-approval complement is26 (11.8%), not the unresolved count; percentages count rows, not effort or readiness. Whole audit NOT_READY; #133 independent NOT_STARTED.**
+Source `8765e3ea66f119bf6d48e5c866798ed798fc2aa5` / tree `6375e7ab10967a22512e19b8c086ff3ee23e6c5f` includes seven local commits after pushed
+`4a409a8`; **NOT_PUSHED at this binding**. This administrative successor is separate.
+Earlier R15 and failed-run sections retain their original evidence; no historical
+product result is rebound to this source.
+
+### Consumer boundary completed, full consumers still pending
+
+- **#407 / `e5bd38d` APPROVE_FINAL_REPAIR_SCOPED_REPOSITORY**: remove unused
+  Android library plugin only. Existing shell method and39negative policy controls
+  pass. Real strict configuration advances to a separate SLF4J1.7.30 rejection,
+  not full PASS. Review SHA256
+  `04fdeada3680db0f46e5270caf6f255011b7f2f9d13441fadd959d147ae36953`.
+- **Canonical #112 / `5fac409` APPROVE_FINAL_REPAIR_SCOPED_REPOSITORY**:
+  bind generated build tools to an allowed subset of the existing reviewed root
+  lock before plugin application. Actual strict configuration passes with115
+  selected exact components from177entries;62unrelated components stay absent.
+  Unknown-module and contradictory-strict-version controls fail before tasks.
+  Two shell methods and41negative policy controls pass. No product dependency
+  forcing, new metadata trust, duplicate issue or extra repair credit.
+  [Canonical continuation](https://github.com/p2pKit/P2pKit/issues/112#issuecomment-5622049988).
+  Review SHA256 `91d22451c8f19418b2825d2ee8cd68332195509848e0c7779a346855eb1983fe`.
+- Original executed112patch `1ac8f684092a6f67eb742eb34313fb0b05f5fba32f07c6478c775927774e5119`
+  remains bound separately from final `d7c274a0b1136ea7297fbd7cc603da5715cc6b0384153532e02af3c0503d7bf2`:
+  only logger line wrapping differs, so no redundant rerun. Strict constraints
+  can pin an ordinary higher request downward; final exact selection is the
+  contract, not rejection of every higher request. All three owned stops0,
+  no survivors; released private probe outputs removed, reports retained.
+
+### Useful technical interoperability, not independent #133 acceptance
+
+Reused clean`4a409a8` product artifacts against an **AI-authored spec-only Python
+peer** on Linux loopback; no new build or published-Maven qualification. Both
+reversed Noise roles genuinely exchanged10messages/540386contentbytes, with
+mutual pins, Unicode/nonempty metadata, large binaries, PING/PONG, ACK-aware close.
+Four children naturally exit0/reaped; wrapper0/0/0.
+**APPROVE_SCOPED_TECHNICAL_INTEROPERABILITY**, review SHA256
+`0f41eae8864f8c3695957c37a3978fa014885bbf703f53152d1c5757b753d9b4`.
+
+A separate one-role wrong-manual-pin observation receives exact JVM
+`AuthenticatedIdentityMismatch`, zero accepted sessions/messages and natural
+exit1/reaped for both children, no signals; expected-negative wrapper0/0/0.
+**APPROVE_SCOPED_WRONG_MANUAL_PIN_TECHNICAL_OBSERVATION**, review SHA256
+`0ace0ac5acdea41e71c52c8fea13383a34a25d0590e553f331fcf663b204fb46`.
+The public manual API derives internal PeerId from its supplied pin: this is
+not fingerprint-only isolation with a correct internal ID. Python terminal
+failure is generic corroboration, not a typed EOF/authentication oracle.
+
+All23JARs and161pinned installed wheel members were independently rebound.
+Raw logs, reports, source and provenance remain; released synthetic controls,
+empty homes/tmp, private endpoint build and Python environment are removed.
+Maintained CLI distribution remains solely for upcoming Android peer work.
+**No independent human/vendor campaign, physical/hostile-network, professional
+crypto, files/reconnect matrix or release credit; #133 remains NOT_STARTED.**
+Wire-doc rebind`639185c` preserves original70input history and composes current71
+sources with the sparse TSV; its independent review SHA256 is
+`6476ab1cf6b2f79f60b22cc4298251a0dd23180861da99ab75249482a1ecef10`.
+
+### R16: exact readiness, not native execution
+
+`8765e3e` is **APPROVE_FINAL_EXECUTION_READINESS**, review SHA256
+`c6f5ba7e7525d78e2b38be37500be1c9a57fde1767a0b11ec8f5d0906388207a`.
+All9focused selectors pass (6host+2peer+1workflow), command/stop/final0/0/0,
+unchanged executed5fac409+exactdiff`795d8d4c8a3e3388178a75a9f8046fd74d695833b1af1857246c1c24bf91a10d`,
+no owned survivors. This is no new native test result or repair approval.
+
+One genuine Intel/Xcode26.3 campaign runs core/LAN, one publisher/consumer pass,
+54archive inspection after its exact successful publisher even if consumers fail,
+sevenABI+CLI once, framework/strictSwift/unit/UI/live peer and isolated cancellation.
+The unchanged30s CLI quit failure permits only one bounded owned thread dump;
+attach cannot rescue PASS. Intel success would not resolve the earlier ARM linger.
+R15 aggregateFAIL/FULL_SEALED and all prior failures remain unchanged.
+
+Fresh17:08:28–35UTC:328issues/221open/107closed,79PRs/7open,407fullbodies;
+only407creation and known112comment5622049988, no substantivePR/inline delta.
+Complete unchanged visible histories/linkedPRs/closeddecisions reused explicitly;
+prior gaps preserved. Summary SHA256
+`a3c1a333472506fc8ab55ecbb13ec9329a1c65a7eed48ea438084e7f91d8f01b`.
+Coverage1153paths, preserving5755existing historical cells; the two new paths
+have no inherited assessment. Source/delta corroboration is not blanket correctness.
+
+Next: fresh Actions/refs and held global source-freeze lease before audit push;
+then inspect actual Intel evidence, Windows17, one combinedART37→24→25 campaign
+and the smallest genuine372recreation/controlled-peer extension. No simulated
+same-instance revocation or repeated unchanged fullARM suites. Finish final current
+rootcheck/sample/consumer/release components; last1786Linuxpasses remain old-source.
+Approximate remaining accessible work **3–7engineering days**; external qualification
+**2–6+weeks after access/reviewers exist**, conditional estimates, not measured effort
+or promises. Serialize builds, max2workers/no parallel; logs, isolated stops and
+exact-owned cleanup. Only genuine external/owner/account/hardware/release blockers
+may remain; no main/tag/settings/closure/release authority.

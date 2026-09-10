@@ -1,46 +1,56 @@
 <!-- audit-current:start -->
-# Current issue dispositions — 218-row inventory
+# Current audit continuation — consumer repairs approved / Intel R16 ready
 
-179/218 independently approved repository repairs (82.1%); 180/218 independently resolved rows (82.6%) including #287 without a repair; 38 unresolved (17.4%): 14 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 85 new audit findings. **Whole audit NOT_READY; #133 independent NOT_STARTED.**
+**195/221 independently approved repairs (88.2%);196/221 resolved (88.7%);
+25 unresolved (11.3%)**: #236,21external rows and owner#120/#274/#284.
+#287 is resolved without repair; repair-approval complement26(11.8%).88new findings.
+Counts are rows, not effort/readiness. **Whole audit NOT_READY; #133 independent NOT_STARTED.**
 
-R14 at `3b06abc` remains **FAIL / PARTIAL_SALVAGE (367 omissions) / full remote
-cleanup NOT_PROVEN**, despite independent core (780 cases) / #157 (two methods)
-scoped acceptance. No row promotion. Current `5bf2` contains source-reviewed #209 /
-#236 native-pending and final #402 helper followups plus the focused R15 residual
-request; four commits local/unpushed, native R15 **NOT_RUN** here.
+Source **`8765e3ea66f119bf6d48e5c866798ed798fc2aa5`**, tree`6375e7ab10967a22512e19b8c086ff3ee23e6c5f`:
+seven focused commits after pushed`4a409a8`, **local/not pushed at this binding**;
+this administrative successor is separate. R15 aggregate**FAIL/FULL_SEALED** remains,
+with13scoped native approvals (LAN184PASS+1manual skip;Swift79PASS). Prior failures
+and #291physical backup obligation are preserved.
 
-Fresh 12:15 UTC: 404 full bodies / 218 open membership match; no substantive
-issue/PR/comment change, nested repository-size statistics only. Unchanged complete
-histories explicitly reused. Current Linux 1,786 PASS is reused at its exact `3995`
-+ #207 diff binding, not clean `5bf2` execution.
+**#407/e5bd38d** and canonical**#112/5fac409** have final independent approval.
+Real strict consumer configuration nowPASS:115exact selected/177permitted components;
+unknown-module/conflicting-strict controls reject. No product dependency forcing,
+metadata weakening or extra112credit. Full consumers and54archive/native inspection
+remain pending. #405/#406/#402 approvals and R15 failures stay separately bound.
 
-Clean `5bf2` Linux CLI abrupt-exit observation **independently APPROVED (scoped)**:
-4 KiB committed baseline preserved; 131,072-byte partial positively observed before
-owned SIGKILL; same-home/new-identity restart completes a distinct hash-verified
-4 KiB transfer. Stale part removed on first ACCEPT, not startup; empty reservation
-remains, not a committed file. Seven ZIPs/raw journals retained; owned children
-reaped and disposable outputs removed. Not full PS-T05/PS-T06/#133 acceptance.
+Reused clean4a product against AI spec-only Python peer: both Noise roles,
+10messages/540386contentbytes, mutualpins/nonempty metadata/PING/PONG/ACK-aware close;
+separate wrong-manual-pin typed rejection and natural teardown independently approved.
+Not independent human/vendor133, physical, hostile-network or crypto acceptance.
+Released probe/interop artifacts and isolated Python environment cleaned; required
+CLI distribution retained only for upcoming Android peer verification.
 
-[Exact evidence](repairs/cohort-2026-09-09-native-followups.md#apple-r14-results-and-r15-residual-continuation).
+**R16/8765e3e APPROVE_FINAL_EXECUTION_READINESS**;9focused methodsPASS,0/0/0,
+no survivors. GenuineIntel/Xcode26.3 execution **NOT_RUN**. One publisher/consumer,
+54archives after exact successful publisher, sevenABI+CLIonce, framework/Swift/live
+peer and isolated cancellation; timeout-only CLI thread observation never rescuesFAIL.
+Do not repeat unchanged ARM successes or infer earlier ARM linger resolved by Intel.
 
-## Unresolved repairs / native or platform acceptance (14)
+Fresh17:08UTC:328issues/221open/107closed,79PRs/7open,407fullbodies; only407creation
+and known112comment, no substantivePR/inline delta. Unchanged complete histories
+explicitly reused, prior gaps preserved. Coverage1153paths;5755existing historical
+cells retained. Last1786Linuxcheck/sample passes remain bound to3995+reviewed207diff,
+not currentclean8765source.
+
+Next: freshrefs/Actions, sourcefreeze/ownedlease before push; Intel,Windows17,
+combinedART37→24→25 and genuine372recreation/peer work, then final current rootcheck,
+samples/consumers and inspected releasegates. **Estimate:3–7engineering days accessible;
+2–6+weeks external after access/reviewers**, conditional, not completion promises.
+Serialize builds/max2workers; preserve logs/isolated stops/exact-owned cleanup.
+No main/tag/settings/closure/release authority; continue all feasible work.
+
+[Exact scoped evidence](repairs/cohort-2026-09-09-native-followups.md#intel-r16-readiness-and-current-technical-observations).
+
+## Unresolved repair / native artifact acceptance (1)
 
 | Issue | Work | Current disposition |
 | --- | --- | --- |
-| [#156](https://github.com/p2pKit/P2pKit/issues/156) | TCP options/native helper | Source-approved; R14 helper/cinterop/main compilation succeeded, but LAN test compilation blocked all runtime; selected-SDK/parameter/recovery acceptance pending. |
-| [#158](https://github.com/p2pKit/P2pKit/issues/158) | Shared receive admission depth | Actual Apple capacity16/FIFO/reject17/recovery cases remain pending;0.8.0+. |
-| [#191](https://github.com/p2pKit/P2pKit/issues/191) | Swift typed error bridge | R14 Swift/header/typed-error consumer not reached; prior source/header evidence retains its original binding. |
-| [#207](https://github.com/p2pKit/P2pKit/issues/207) | Strict teardown diagnostic convention | R14 core 780 PASS includes 24 adoption classes / 291 declared methods; prior Linux/Windows accepted. LAN 0 cases; whole #207 pending LAN. Overlapping subsets not summed. |
-| [#209](https://github.com/p2pKit/P2pKit/issues/209) | Remote FIN receive behavior | R14 compile FAIL at 3 unused Unit tails; 5263979 source-only correction approved. Actual repaired Apple FIN compile/link/runtime pending. |
-| [#236](https://github.com/p2pKit/P2pKit/issues/236) | Published license/artifact policy | 44ab597 source-approved: 54 archives / 45 covered + 9 KLIB exemptions; 11 ZIP fixtures PASS. R14 publication 208 tasks PASS, but actual 15-set/native license inspection not reached. |
-| [#275](https://github.com/p2pKit/P2pKit/issues/275) | Manual endpoint diagnostic privacy | Real Apple logger/native diagnostic stream pending; Android/Desktop accepted. |
-| [#279](https://github.com/p2pKit/P2pKit/issues/279) | Provisioning cancellation/shared bounded close | Actual Apple owner/retry/recovery scope pending. |
-| [#291](https://github.com/p2pKit/P2pKit/issues/291) | iOS backup exclusion policy | Swift policy/wiring tests not reached; physical backups separate. |
-| [#322](https://github.com/p2pKit/P2pKit/issues/322) | Session-owned diagnostic loss accounting | Swift drop/clear/export cases not reached; Kotlin scope accepted. |
-| [#330](https://github.com/p2pKit/P2pKit/issues/330) | Active transfer history retention | Real Swift active-row/history-cap cases not reached. |
-| [#341](https://github.com/p2pKit/P2pKit/issues/341) | Ungrouped pairing port presentation | Rendered production-bound regression committed; real Swift UI/locale/parser execution pending. |
-| [#363](https://github.com/p2pKit/P2pKit/issues/363) | First incoming offer consent controls | Rendered production-bound regression committed; first-offer UI/consent execution pending. |
-| [#383](https://github.com/p2pKit/P2pKit/issues/383) | Exact-run Swift lifecycle ownership | Source-approved86d4ca8; native Swift/lifecycle/UI pending; Flow cancellation suspicion separate. |
+| [#236](https://github.com/p2pKit/P2pKit/issues/236) | Published license/artifact policy | Source-approved44ab597:54archives/45covered+9explicitKLIB exemptions; actual native inspection NOT_EXECUTED. R15publication208tasksPASS does not inspect absent retained binaries. Run inspector after successful owned publisher even if consumer compilation fails. |
 
 ## External validation (21)
 
@@ -66,11 +76,12 @@ The runtime-only permission contract/finite selector refute the allegation. No f
 commit, build, hardware or owner decision is required; GitHub issue remains open.
 It adds one resolved row, **zero repair approvals**, and is not an implementation queue item.
 
-The PENDING_REMEDIATION JSON bucket retains274/284 for historical category continuity;
-current work counts separate those decisions from14 genuine repair/native rows.
-Physical/independent/professional acceptance attached to already-approved rows remains
-open separately. No artifact/source approval converts a failed graph intoPASS.
-
+The PENDING_REMEDIATION JSON bucket retains236/274/284; only236 is current repair/
+native work, while274/284 join120 as owner decisions. Supported Intel/Windows/ART,
+corrected consumers/cancellation, feasible CLI fault slices and final gates remain
+productive work, not automatically hardware-blocked. Physical backup291 and
+independent133 are acceptance obligations on approved rows, not new denominator
+entries. No source/artifact success converts the failed R15 graph intoPASS.
 <!-- audit-current:end -->
 
 ## Earlier issue narratives and tables — dated historical snapshots only
