@@ -1,3 +1,50 @@
+<!-- audit-current:start -->
+# Current audit continuation — PRE-R10 native gate
+
+**Whole audit NOT_READY.** **162/207 repository repairs approved (78.3%)**;
+**163/207 independently resolved (78.7%)**, including #287 without a repair.
+**44 unresolved (21.3%)**: #393/#391/#390,17 native/platform rows,21 external
+rows and3 owner decisions (#120/#274/#284).74 new audit findings; not effort.
+
+Current prepush source `41909f43b65a96af5bc689aa29aa33d319c308a6`, tree
+`8e3dfd566f570fbaa0809184d41d1a809f89f9d0`: final-source-approved #393 fix
+`07bc74eaa4afdcb2a91ce248d033803a95d5cf3f` plus comment-only R10 request.
+**Not pushed; actual R10 NOT_RUN** at this checkpoint. Last verified published
+source `165e4e9263cd6ddfe73a51ed401259d149b63731`, tree
+`2ebd1faba818c0bdcb3b6ed79e7cc523f89e2f69`, binds actual Apple r9.
+
+- **#392 APPROVE_FINAL_REPAIR_NATIVE_EXECUTED**, no findings: actual wrong-home
+  refusal/owned retirement and complete14/14 evidence subset; only new repair credit.
+- Apple [34418616858/1](https://github.com/p2pKit/P2pKit/actions/runs/34418616858)
+  **FAILS:79/80 methods, first opaque-token SIGTERM returns ESRCH3**. Enclosing
+  command/stop/final **1/0/1**, no errors/owned survivors, but **PARTIAL_SALVAGE**,
+  31 omissions/full remote cleanup **NOT_PROVEN**, safe=false, products **NOT_RUN**.
+  Local lease release00:19:32UTC on10September is administrative, not whole cleanup.
+- #391's three actual cancellation controls now pass; **final #390/#391 approval
+  remains withheld**. #393 adds bounded target readiness and original-child guard;
+  the particular r9 exec epoch was not observed. Its initial AST pass executed
+  **zero tests** and does not cover the final one-line F1 revision.
+- Prior r7/r8 failures/unsafe cleanup remain. #388 hosted approval retains its
+  unchanged expiring GHSA exception; selected Windows and Linux/CLI successes keep
+  their original scopes. Rootcheck1780freshPASS ran0dbc+exactCLIpatch, not07bc.
+
+Refresh Actions/refs and hold the task-owned execution lease/source freeze BEFORE
+any audit-branch push that triggers R10. Publish only independently reviewed safe
+source/admin while that lease/freeze is already held. Require actual
+same-token success/stale rejection/sentinel/cleanup and independent final verdicts;
+continue Apple products only after native controls pass. [Report](repairs/cohort-2026-09-09-native-followups.md) and
+[queue](issues.md) bind exact sources, evidence and limits. The207-row inventory is
+the prior203 full refresh plus four individual filings, not a new full census.
+Historical admin text remains a qualified read boundary; current authored deltas
+and the new report are not whole-repository re-corroboration. Required current
+check/samples/consumers/nativeIntel/fullWindows/release gates remain; physical,
+hostile-network and professional validation stay separate. **#133 NOT_STARTED**.
+Earlier failures and dated narratives are preserved once below.
+
+<!-- audit-current:end -->
+
+## Preserved pre-native checkpoint narratives (dated historical evidence)
+
 # Current approvals — #382 and #384–#387
 
 **Whole audit NOT_READY.** 156/201 independently approved repository-repair rows (77.6%); 45 remaining (22.4%): 23 repairs, 21 external-validation rows and architecture decision #120; 68 new audit findings.

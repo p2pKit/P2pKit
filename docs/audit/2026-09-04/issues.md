@@ -1,3 +1,75 @@
+<!-- audit-current:start -->
+# Current issue dispositions — 207-row inventory
+
+162/207 independently approved repository repairs (78.3%); 163/207 independently resolved rows (78.7%) including one reviewed no-repair disposition; 44 unresolved (21.3%): 20 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 74 new audit findings. **Whole audit NOT_READY**; #133 independent interoperability NOT_STARTED.
+
+The current table/JSON, not the dated b67 tables below, governs work allocation.
+Approval is scoped:162 repository corrections, now including the actual Darwin
+#392 wrong-home repair, not a passing80-method suite. #391's three affected controls
+pass, but its genuine-token prerequisite fails; #390/#391 final native approval
+remains withheld. #393 final source07bc is approved/local/not pushed/native pending.
+See [the report](repairs/cohort-2026-09-09-native-followups.md) and [JSON](issues.json).
+Published165e4 binds r9;207 rows = prior203 full refresh + four individual filings,
+not a new full census. Historical administrative text is not freshly re-corroborated.
+
+## Unresolved repairs / native or platform acceptance (20)
+
+| Issue | Work | Current disposition |
+| --- | --- | --- |
+| [#156](https://github.com/p2pKit/P2pKit/issues/156) | TCP options/native helper | Source-approved; selected SDK/C compile and real Apple LAN parameter/recovery cases pending. |
+| [#158](https://github.com/p2pKit/P2pKit/issues/158) | Shared receive admission depth | Source-approved; actual Apple capacity16/FIFO/reject17/recovery cases pending;0.8.0+. |
+| [#191](https://github.com/p2pKit/P2pKit/issues/191) | Swift typed error bridge | Source-approved; real generated headers, Swift compile and typed-error cases pending. |
+| [#207](https://github.com/p2pKit/P2pKit/issues/207) | Strict teardown diagnostic convention | Linux19affected methods and Windowsr6fourLANmethods independently accepted; Windows FULL_SEALED cleanup approved. Whole207Apple/common pending, no row credit; prior failures preserved. |
+| [#209](https://github.com/p2pKit/P2pKit/issues/209) | Remote FIN receive behavior | Host accepted; actual Apple FIN-helper/half-close read termination pending. |
+| [#236](https://github.com/p2pKit/P2pKit/issues/236) | Published license/artifact policy | Real macOS all15 publication inspections pending; KLIB main embedding exemption remains narrow. |
+| [#250](https://github.com/p2pKit/P2pKit/issues/250) | Secure identity namespace serialization | Source-approved; actual Apple lock/storage/recovery tests pending, not physical Keychain proof. |
+| [#261](https://github.com/p2pKit/P2pKit/issues/261) | Legacy appId storage compatibility | Host accepted; literal legacy/current NSUserDefaults and collision/rollback native cases pending. |
+| [#275](https://github.com/p2pKit/P2pKit/issues/275) | Manual endpoint diagnostic privacy | Android/Desktop accepted; real Apple logger plus native diagnostic stream pending. |
+| [#279](https://github.com/p2pKit/P2pKit/issues/279) | Provisioning cancellation/shared bounded close | Source-approved/Desktop accepted; actual Apple owner/retry/recovery scope pending. |
+| [#291](https://github.com/p2pKit/P2pKit/issues/291) | iOS backup exclusion policy | Source-approved; Swift policy/wiring tests pending; physical backups remain separate. |
+| [#322](https://github.com/p2pKit/P2pKit/issues/322) | Session-owned diagnostic loss accounting | Kotlin scope accepted; Swift drop/clear/export cases pending. |
+| [#330](https://github.com/p2pKit/P2pKit/issues/330) | Active transfer history retention | Source-approved; real Swift active-row/history-cap cases pending. |
+| [#341](https://github.com/p2pKit/P2pKit/issues/341) | Ungrouped pairing port presentation | Rendered production-bound regression committed; locale/real parser Swift UI execution pending. |
+| [#363](https://github.com/p2pKit/P2pKit/issues/363) | First incoming offer consent controls | Rendered production-bound regression committed; actual first-offer UI/consent execution pending. |
+| [#379](https://github.com/p2pKit/P2pKit/issues/379) | Peer subscription hook/publication semantics | Host scope accepted; affected Apple/common hook/registry/discovery cases pending. |
+| [#383](https://github.com/p2pKit/P2pKit/issues/383) | Exact-run Swift lifecycle ownership | Source-approved86d4ca8 committed; native Swift/lifecycle/UI execution pending; Flow cancellation suspicion separate. |
+| [#390](https://github.com/p2pKit/P2pKit/issues/390) | Darwin transient exit observation | Source3c038 approved/published, r8 native mechanism corroborated. Final native approval still withheld;391cancellation now passes but393genuine-token prerequisite remains. Original failures retained. |
+| [#391](https://github.com/p2pKit/P2pKit/issues/391) | Unsupported Darwin signal-zero fixture probe | Source49f05 approved/published;12modeled and3actualR9 affected methods PASS. FINAL_NATIVE_APPROVAL_WITHHELD: genuine opaque-token control fails before stale/sentinel assertions;393 prerequisite pending. |
+| [#393](https://github.com/p2pKit/P2pKit/issues/393) | Saved-token child readiness | Low, filed; finalsource07bc approved after F1 original-child guard, locally committed/not pushed. Actual final Darwin same-token/sentinel/cleanup execution pending; initial AST is zero tests/not final revision. |
+
+## External validation (21)
+
+| Campaign group | Issue rows | Remaining evidence |
+| --- | --- | --- |
+| Android OEM/network/background/soak | [#21](https://github.com/p2pKit/P2pKit/issues/21), [#26](https://github.com/p2pKit/P2pKit/issues/26), [#28](https://github.com/p2pKit/P2pKit/issues/28), [#29](https://github.com/p2pKit/P2pKit/issues/29), [#30](https://github.com/p2pKit/P2pKit/issues/30), [#33](https://github.com/p2pKit/P2pKit/issues/33), [#35](https://github.com/p2pKit/P2pKit/issues/35), [#36](https://github.com/p2pKit/P2pKit/issues/36), [#39](https://github.com/p2pKit/P2pKit/issues/39), [#43](https://github.com/p2pKit/P2pKit/issues/43) | Required physical/real-network repeat matrix and both-peer evidence; hosted compilation is not a substitute. |
+| Physical Apple restart/AWDL/path/write lifecycle | [#23](https://github.com/p2pKit/P2pKit/issues/23), [#27](https://github.com/p2pKit/P2pKit/issues/27), [#32](https://github.com/p2pKit/P2pKit/issues/32), [#34](https://github.com/p2pKit/P2pKit/issues/34), [#37](https://github.com/p2pKit/P2pKit/issues/37), [#38](https://github.com/p2pKit/P2pKit/issues/38), [#41](https://github.com/p2pKit/P2pKit/issues/41) | Required physical/real-network repeat matrix and both-peer evidence; hosted compilation is not a substitute. |
+| Real interface/LAN/hostile/cable campaigns | [#25](https://github.com/p2pKit/P2pKit/issues/25), [#31](https://github.com/p2pKit/P2pKit/issues/31), [#40](https://github.com/p2pKit/P2pKit/issues/40), [#44](https://github.com/p2pKit/P2pKit/issues/44) | Required physical/real-network repeat matrix and both-peer evidence; hosted compilation is not a substitute. |
+
+## Owner decisions (3)
+
+| Issue | Required owner decision |
+| --- | --- |
+| [#120](https://github.com/p2pKit/P2pKit/issues/120) | Trusted/protected discovery admission or explicit residual-risk acceptance; mitigation is not a repaired architecture. |
+| [#274](https://github.com/p2pKit/P2pKit/issues/274) | Constructor/factory SPI API evolution; no current behavior violation. |
+| [#284](https://github.com/p2pKit/P2pKit/issues/284) | Optional leave API/product semantics; terminal close contract is intentional. |
+
+## Independently resolved without repair (1)
+
+[#287](https://github.com/p2pKit/P2pKit/issues/287): **APPROVE_NO_REPAIR_CURRENT_CONTRACT**,
+reviewSHA `254b85c7c8f1da3fb0c0645e91aa1bc26ad45793bafaa9314040249a4ccf9642`.
+The runtime-only permission contract/finite selector refute the allegation. No fix
+commit, build, hardware or owner decision is required; GitHub issue remains open.
+It adds one resolved row, **zero repair approvals**, and is not an implementation queue item.
+
+The PENDING_REMEDIATION JSON bucket retains274/284 for historical category continuity;
+current work counts separate those decisions from20 genuine repair/native rows.
+Physical/independent/professional acceptance attached to already-approved rows remains
+open separately. No artifact/source approval converts a failed graph intoPASS.
+
+<!-- audit-current:end -->
+
+## Earlier issue narratives and tables — dated historical snapshots only
+
 # Current issue dispositions — continued September9 cohort
 
 **Whole audit NOT_READY.** 145/193 independently approved repository-repair rows (75.1%); 48 remaining (24.9%): 26 repair-category rows, 21 external-validation rows and architecture decision #120; 60 new audit findings. Counts are not effort, GitHub closures, platform acceptance or release readiness.

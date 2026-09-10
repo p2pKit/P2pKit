@@ -1,3 +1,58 @@
+<!-- audit-current:start -->
+# Current follow-ups and remaining work
+
+162/207 independently approved repository repairs (78.3%); 163/207 independently resolved rows (78.7%) including one reviewed no-repair disposition; 44 unresolved (21.3%): 20 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 74 new audit findings. **Whole audit NOT_READY**; #133 NOT_STARTED.
+The [current queue](issues.md) and [report](repairs/cohort-2026-09-09-native-followups.md)
+govern; earlier tables below are dated historical records.
+
+1. **#393 final source approved, native pending.** Currentlocal41909/tree8e3d contains
+   finalfix07bc/resolvedF1 plus comment-only R10request; notpushed/R10NOT_RUN.
+   Publishedsource remains165e4. Initial AST
+   syntax inspection executes zero tests and is not rebound to the final guard.
+   Refresh Actions/refs and hold the task-owned execution lease/source freeze BEFORE
+   any audit-branch push that triggers R10. Publish only independently approved safe
+   source/admin while that lease/freeze is already held. Require target-generated readiness,
+   one saved opaque token: initialSIGTERM0, post-exitESRCH3, unrelated sentinel alive,
+   and complete owned retirement/evidence. Exact r9 exec/kernel cause is unobserved.
+2. Obtain independent **#393/#390/#391 final native verdicts**, no source-only credit.
+   Reuse unchanged R9 three-cancellation success where reviewers permit; never waive
+   the genuine control or substitute its old r8 pass for the current r9 failure.
+   **#392 is finally native-approved**, not an implementation queue item. Actual
+   wrong-home evidence14/14 and retirement pass; its safe outcome is public/open.
+3. Resume actual Apple obligations **156,158,191,207,209,236,250,261,275,279,291,
+   322,330,341,363,379,383** only after executor controls pass. R7/R8/R9 never reach
+   SDK/product/header/ABI/Dokka/Swift/publication/consumer gates. #236 needs all15
+   publications; #207 accepted selected Windows/Linux scopes are not fullWindows.
+4. Preserve **R9FAIL79/80**, enclosing1/0/1/no owned survivors separately from its
+   31omission PARTIAL_SALVAGE/safe=false/full remote cleanupNOT_PROVEN. Actual local
+   lease release00:19:32UTC is administrative. R8null/null/125/UNKNOWNcleanup and
+   R7-15/0/125/nine omissions remain failures. #388hosted and #389Linux repairs are
+   approved within scope; the unchanged GHSAexception expires2026-10-31, not a patch.
+5. Allocate21 external campaigns and owner decisions **120/274/284**; document exact
+   hardware/access/owner blockers and move to feasible work. #287 requires no repair.
+
+Final current-source corroboration, required rootcheck, applicable samples/isolated
+consumers, nativeIntel/fullWindows, strict supportedMacDokka/rendered signatures and
+inspected release gates remain. The earlier rootcheck1780freshPASS is0dbc+CLIpatch,
+not a new07bc result. Preserve strictLAN34-warning unsupportedLinuxDokka failure;
+do not suppress warnings or remove links indiscriminately. Component replay is not
+the release monolith. Physical/headful/hostile/independent133/crypto evidence cannot
+be inferred from hosted builds. Swift Task.cancel→KotlinFlow propagation remains a
+separate unproved suspicion, not established by383exact-run fencing.
+
+Coverage records the current authored administrative delta; historical administrative
+text remains qualified/reopened, not a fresh complete source audit. Bind the new
+report separately without cyclic coverage hashes. One local/hosted build at a time,
+max2workers/no parallelGradle; retain every failure/cancellation/success log, applicable
+owned wrapper stop and exact-worker cleanup. Remove only confirmed disposable output
+after dependent evidence. Never blanket-delete build/source/caches, signal historical
+PIDs or treat a failed runner as proven safe. Only safe audit-branch publication is
+authorized; no force-push/main/closure/settings/tag/release changes.
+
+<!-- audit-current:end -->
+
+## Earlier follow-up narratives — dated historical snapshots only
+
 # Current follow-ups — continued September9 cohort
 
 **Whole audit NOT_READY.** 145/193 independently approved repository-repair rows (75.1%); 48 remaining (24.9%): 26 repair-category rows, 21 external-validation rows and architecture decision #120; 60 new audit findings. Counts are not effort, GitHub closures, platform acceptance or release readiness.
