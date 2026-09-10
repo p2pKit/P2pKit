@@ -19,10 +19,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
@@ -111,6 +113,45 @@ class StuckReconnectWatchdogTest {
             assertEquals(beforeLoss.size, liveChildren().size)
             advanceBy(30_000)
             logger.assertNoUnexpectedWarnOrError()
+        }
+    }
+
+    @Test
+    fun pathWakeBaselineIsCapturedBeforePublishingReconnecting() = runBlocking {
+        var diagnostics: RecordingLogger? = null
+        try {
+            withFixture(eager = true) {
+                diagnostics = logger
+                var generation = 0
+                var baseline = -1
+                val wakePendingAtHandlerEntry = CompletableDeferred<Boolean>()
+                val recovered = async(UnconfinedTestDispatcher(scheduler), start = CoroutineStart.UNDISPATCHED) {
+                    session.state.first { it == ConnectionState.Reconnecting }
+                    generation++
+                }
+                try {
+                    session.reconnectHandler = object : ReconnectHandler {
+                        override fun onWillReconnect() {
+                            baseline = generation
+                        }
+
+                        override suspend fun onConnectionLost(session: P2pSessionImpl) {
+                            wakePendingAtHandlerEntry.complete(generation != baseline)
+                        }
+                    }
+                    session.notifyPathLost()
+                    assertTrue(recovered.isCompleted, "the recovery observer must run at state publication")
+                    recovered.await()
+                    assertEquals(1, generation)
+                    assertEquals(0, baseline, "publication must not let a delivered recovery enter the baseline")
+                    assertTrue(wakePendingAtHandlerEntry.isCompleted, "the handler must enter eagerly")
+                    assertTrue(wakePendingAtHandlerEntry.await(), "the delivered wake must remain pending")
+                } finally {
+                    recovered.cancelAndJoin()
+                }
+            }
+        } finally {
+            diagnostics?.assertNoUnexpectedWarnOrError()
         }
     }
 

@@ -65,12 +65,12 @@ internal interface ReconnectHandler {
     suspend fun onConnectionLost(session: P2pSessionImpl)
 
     /**
-     * Called synchronously at the instant the session transitions to
-     * `Reconnecting`, under the connection lock and before the retry loop is
-     * launched. Lets the handler snapshot any "wake early on network
-     * recovery" baseline at the exact Reconnecting edge, so a path-Satisfied
-     * signal that arrives between the transition and the (async) start of the
-     * retry loop is not missed (AUDIT-2026-06). Default: no-op.
+     * Called synchronously before publishing `Reconnecting`, under the
+     * connection lock and before the retry loop is launched. Snapshot any
+     * "wake early on network recovery" baseline before state observers can
+     * trigger recovery; they do not acquire this lock. A path-Satisfied signal
+     * delivered after publication must remain pending even if the async retry
+     * loop has not started. Default: no-op.
      */
     fun onWillReconnect() {}
 }
@@ -1618,13 +1618,11 @@ internal class P2pSessionImpl(
                         }
                         reconnectEpisode = ReconnectEpisode(token, watchdog)
                         reconnectWatchdogToStart = watchdog
-                        _state.value = ConnectionState.Reconnecting
-                        // Snapshot the path-wake baseline at the exact
-                        // Reconnecting edge (still under the lock, before the
-                        // async retry loop launches) so a Satisfied signal that
-                        // lands in that gap still wakes the handler early
-                        // (AUDIT-2026-06).
+                        // The independent path collector and public state
+                        // observers do not take connectionLock. Capture the
+                        // baseline before publication lets them deliver a wake.
                         h.onWillReconnect()
+                        _state.value = ConnectionState.Reconnecting
                         h
                     }
                 }
