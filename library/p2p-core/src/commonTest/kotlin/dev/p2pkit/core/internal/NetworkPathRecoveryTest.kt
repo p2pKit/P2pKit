@@ -13,8 +13,6 @@ import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.FakeNetworkPathObserver
-import dev.p2pkit.core.testfixtures.RecordingLogger
-import dev.p2pkit.core.testfixtures.StatefulTestFailure
 import dev.p2pkit.core.testfixtures.createTestKit
 import dev.p2pkit.core.testfixtures.withTestKit
 import dev.p2pkit.core.transport.RawConnection
@@ -226,7 +224,7 @@ class NetworkPathRecoveryTest {
 
     @Test
     fun pathSatisfiedWakesParkedReconnectHandlerBeforeDelayExpires() = runBlocking<Unit> {
-        // Two pairs: the first breaks, the second is what the retry will reach.
+        // Two pairs: path loss retires the first; the retry reaches the second.
         // The retry delay is deliberately much longer than the test's bounded
         // observation window. If the path-satisfied signal does NOT wake the
         // handler early, the retry dial cannot begin before the assertion
@@ -239,8 +237,6 @@ class NetworkPathRecoveryTest {
         }
         val attempts = MutableStateFlow(0)
         val fake = FakeNetworkPathObserver(initial = NetworkPathStatus.Satisfied)
-        val wireFailure = StatefulTestFailure("simulated wire break")
-        var expectedWireDiagnostic: RecordingLogger.Entry? = null
         withTestKit(
             create = { recorder ->
                 outgoingKit(
@@ -252,14 +248,6 @@ class NetworkPathRecoveryTest {
                     attempts.update { it + 1 }
                     queue.removeFirstOrNull() ?: throw RuntimeException("no more connections")
                 }
-            },
-            verifyDiagnostics = { recorder ->
-                val diagnostics = recorder.entries.filter {
-                    it.level == RecordingLogger.Level.WARN || it.level == RecordingLogger.Level.ERROR
-                }
-                // The simultaneous Unsatisfied path can cancel this reader before its throwing-read catch.
-                // Only that one original session/cause is permitted; all retry/cleanup warnings still fail.
-                assertTrue(diagnostics.isEmpty() || diagnostics == listOfNotNull(expectedWireDiagnostic))
             }
         ) { alice ->
             withTestKit(
@@ -270,16 +258,10 @@ class NetworkPathRecoveryTest {
                 val session = withTimeout(5_000) { alice.connect(targetPeer()) }
                 assertEquals(ConnectionState.Connected, session.state.value)
 
-                // Drive: drop the wire AND drop the path. Both fire
-                // onConnectionLost; the connection lock short-circuits the
-                // second one. Session is now Reconnecting and the handler is
-                // parked in `withTimeoutOrNull(5_000) { pathSatisfied.first() }`.
-                expectedWireDiagnostic = RecordingLogger.Entry(
-                    RecordingLogger.Level.WARN,
-                    "Session ${session.id}: routeEvents failed",
-                    wireFailure
-                )
-                pair1.a.breakWithException(wireFailure)
+                // Path loss is the only trigger, so Reconnecting acknowledges
+                // that SessionManager consumed Unsatisfied. An independent wire
+                // break could publish that state first and let StateFlow conflate
+                // away Unsatisfied before its collector ever received it.
                 fake.emit(NetworkPathStatus.Unsatisfied)
                 withTimeout(5_000) {
                     session.state.first { it == ConnectionState.Reconnecting }
