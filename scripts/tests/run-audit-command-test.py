@@ -685,6 +685,36 @@ class PurePolicyTests(unittest.TestCase):
         self.assertIn("--max-workers=2", result)
         self.assertIn("strict", result)
 
+    def test_matching_singleton_options_are_not_appended_twice(self):
+        cases = []
+        for option, value in (("console", "plain"), ("dependency-verification", "strict"), ("max-workers", "2")):
+            for prefix in ("-", "--"):
+                for spelling in ([prefix + option, value], [prefix + option + "=" + value]):
+                    cases.append((["--help", *spelling], {option}))
+        cases.extend([
+            (["--help", "--console=plain", "--dependency-verification", "strict", "--max-workers=2"],
+             {"console", "dependency-verification", "max-workers"}),
+            (["--no-daemon", "--console=plain", "publishToMavenLocal", "-Dmaven.repo.local=/tmp/owned repo"],
+             {"console"}),
+            # Preserve an invalid original vector; never silently repair caller duplicates.
+            (["--help", "--console=plain", "--console=plain"], {"console"}),
+        ])
+        for original, supplied in cases:
+            with self.subTest(original=original):
+                snapshot = list(original)
+                expected = ["--no-daemon"]
+                if "console" not in supplied:
+                    expected.append("--console=plain")
+                if "dependency-verification" not in supplied:
+                    expected.extend(["--dependency-verification", "strict"])
+                expected.extend(["--rerun-tasks", "--no-build-cache", "--no-configuration-cache", "--no-parallel"])
+                if "max-workers" not in supplied:
+                    expected.append("--max-workers=2")
+                expected.extend(["-Pkotlin.compiler.execution.strategy=in-process",
+                                 f"-Dorg.gradle.jvmargs={runner.JVM_ARGUMENTS}"])
+                self.assertEqual(runner.gradle_arguments(original), [*snapshot, *expected])
+                self.assertEqual(original, snapshot)
+
     def test_real_init_script_negative_control_is_not_removed(self):
         original = ["indirectLockRefresh", "--dry-run", "--init-script", "/tmp/owned-policy.init.gradle.kts"]
         self.assertEqual(runner.gradle_arguments(original)[:len(original)], original)
@@ -2617,7 +2647,11 @@ class PosixNativeTests(ExecutorFixtureTests):
             self.assertEqual(receipt["ownership"]["discoveryErrors"], [])
             self.assertIn(invocation, receipt["ancestorInvocationIds"])
             self.assertEqual(receipt["executedArgv"],
-                             [str(fixture_root / "gradlew"), *receipt["requestedArgv"], *runner.AUDIT_FLAGS])
+                             [str(fixture_root / "gradlew"), *receipt["requestedArgv"], "--no-daemon",
+                              "--dependency-verification", "strict", "--rerun-tasks", "--no-build-cache",
+                              "--no-configuration-cache", "--no-parallel", "--max-workers=2",
+                              "-Pkotlin.compiler.execution.strategy=in-process",
+                              f"-Dorg.gradle.jvmargs={runner.JVM_ARGUMENTS}"])
             self.assertEqual(receipt["stopArgv"], [str(fixture_root / "gradlew"), "--stop", "--console=plain",
                              "--no-parallel", "--max-workers=2", f"-Dorg.gradle.jvmargs={runner.JVM_ARGUMENTS}"])
             self.assertEqual(runner.read_json(directory / "start.json")["id"], receipt["id"])

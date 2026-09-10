@@ -321,6 +321,7 @@ def gradle_arguments(original: list[str]) -> list[str]:
                           "org.gradle.workers.max": "2", "org.gradle.caching": "false",
                           "org.gradle.configuration-cache": "false", "org.gradle.daemon": "false",
                           "kotlin.compiler.execution.strategy": "in-process"}
+    supplied_policy_options: set[str] = set()
     index = 0
     while index < len(original):
         argument = original[index]
@@ -355,6 +356,7 @@ def gradle_arguments(original: list[str]) -> list[str]:
                 require(index < len(original), "Missing Gradle policy option value")
                 value = original[index]
             require(value == allowed_values[option], "Conflicting Gradle verification/resource option")
+            supplied_policy_options.add(option)
         expression = None
         if option in ("D", "P", "system-prop", "project-prop"):
             if separator:
@@ -376,7 +378,18 @@ def gradle_arguments(original: list[str]) -> list[str]:
         index += 1
     # Do not add --no-configure-on-demand: an intentional policy rejection uses its
     # opposite. Preserve every original token, especially isolated Maven paths.
-    return [*original, *AUDIT_FLAGS]
+    # Gradle rejects repeated singleton options even when their values agree.
+    # Only omit defaults already validated above, not duplicates in caller argv.
+    defaults = iter(AUDIT_FLAGS)
+    enforced = []
+    for argument in defaults:
+        option, separator, _ = argument.removeprefix("--").partition("=")
+        tokens = [argument]
+        if option in allowed_values and not separator:
+            tokens.append(next(defaults))  # Keep a separate default value paired with its option.
+        if option not in supplied_policy_options:
+            enforced.extend(tokens)
+    return [*original, *enforced]
 
 
 class LeafLock:
