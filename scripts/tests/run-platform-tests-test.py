@@ -3,6 +3,7 @@
 
 import contextlib
 import copy
+import errno
 import importlib.util
 import io
 import json
@@ -497,13 +498,48 @@ class OwnedProcessGroupTest(unittest.TestCase):
                 ], retirements.mock_calls)
 
     def test_unterminated_group_fails_after_both_bounded_deadlines(self):
+        for probe_denied in (False, True):
+            with self.subTest(probe_denied=probe_denied):
+                def signal_group(pid, signum):
+                    if signum == 0 and probe_denied:
+                        raise PermissionError(errno.EPERM, "group remains uncertain")
+
+                process = mock.Mock(pid=123)
+                with mock.patch.object(GATE, "TERMINATION_GRACE_SECONDS", 0), \
+                        mock.patch.object(GATE, "TERMINATION_KILL_SECONDS", 0), \
+                        mock.patch.object(GATE.os, "killpg", side_effect=signal_group) as kill, \
+                        contextlib.redirect_stderr(io.StringIO()):
+                    self.assertFalse(GATE.terminate_process(process))
+                self.assertEqual([mock.call(123, signal.SIGTERM), mock.call(123, 0),
+                                  mock.call(123, signal.SIGKILL), mock.call(123, 0)], kill.call_args_list)
+
+    def test_exit_transition_probe_denial_requires_later_group_absence(self):
         process = mock.Mock(pid=123)
         with mock.patch.object(GATE, "TERMINATION_GRACE_SECONDS", 0), \
-                mock.patch.object(GATE, "TERMINATION_KILL_SECONDS", 0), \
-                mock.patch.object(GATE.os, "killpg") as kill, contextlib.redirect_stderr(io.StringIO()):
-            self.assertFalse(GATE.terminate_process(process))
+                mock.patch.object(GATE.time, "monotonic", side_effect=[0, 0, 1, 1.01]), \
+                mock.patch.object(GATE.time, "sleep") as sleep, \
+                mock.patch.object(GATE.os, "killpg", side_effect=[
+                    None, None, None, PermissionError(errno.EPERM, "exiting group"),
+                    ProcessLookupError(errno.ESRCH, "group absent"),
+                ]) as kill:
+            self.assertTrue(GATE.terminate_process(process))
         self.assertEqual([mock.call(123, signal.SIGTERM), mock.call(123, 0),
-                          mock.call(123, signal.SIGKILL), mock.call(123, 0)], kill.call_args_list)
+                          mock.call(123, signal.SIGKILL), mock.call(123, 0),
+                          mock.call(123, 0)], kill.call_args_list)
+        sleep.assert_called_once_with(0.05)
+
+    def test_signal_denial_and_non_permission_probe_error_remain_fatal(self):
+        for side_effect in ([PermissionError(errno.EPERM, "TERM denied")],
+                            [None, None, PermissionError(errno.EPERM, "KILL denied")],
+                            [None, OSError(errno.EIO, "probe failed")]):
+            with self.subTest(side_effect=side_effect), \
+                    mock.patch.object(GATE, "TERMINATION_GRACE_SECONDS", 0), \
+                    mock.patch.object(GATE.os, "killpg", side_effect=side_effect) as kill, \
+                    mock.patch.object(GATE.time, "sleep") as sleep, \
+                    contextlib.redirect_stderr(io.StringIO()):
+                self.assertFalse(GATE.terminate_process(mock.Mock(pid=123)))
+                self.assertEqual(len(side_effect), kill.call_count)
+                sleep.assert_not_called()
 
     def resistant_worker_control(self, leader_exits_first, bind_worker=None):
         with tempfile.TemporaryDirectory(prefix="p2pkit-owned-group-") as temporary:

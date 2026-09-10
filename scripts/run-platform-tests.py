@@ -190,7 +190,13 @@ def terminate_process(process):
             deadline = time.monotonic() + timeout
             while True:
                 process.poll()  # Reap the leader too; a zombie can keep the group present.
-                os.killpg(process.pid, 0)
+                try:
+                    os.killpg(process.pid, 0)
+                except PermissionError:
+                    # Darwin may report EPERM while a killed group's members are
+                    # exiting but not yet reaped. This is uncertainty, not drain:
+                    # keep the same deadline and require a later actual ESRCH.
+                    pass
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     break
@@ -201,7 +207,7 @@ def terminate_process(process):
     except OSError as error:
         print(f"FATAL: Could not drain owned process group {process.pid}: {error}", file=sys.stderr)
         return False
-    print(f"FATAL: Owned process group {process.pid} survived TERM/KILL deadlines", file=sys.stderr)
+    print(f"FATAL: Owned process group {process.pid} was not proven absent within TERM/KILL deadlines", file=sys.stderr)
     return False
 
 
