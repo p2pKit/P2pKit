@@ -660,6 +660,9 @@ class Host:
         self.clean_outputs()
 
     def mac_policies(self):
+        if self.scope == "apple-followup":
+            # Reuse unaffected source-bound policy results; native executor admission still runs above.
+            return
         # Preserve release-gate ordering; no no-op replacement of real graph/native probes.
         scripts = ["scripts/check-gradle-wrapper.sh", "scripts/check-dependency-verification.sh",
                    "scripts/tests/check-dependency-update-policy-test.sh", "scripts/tests/check-lock-write-policy-test.sh",
@@ -680,22 +683,12 @@ class Host:
                    "scripts/tests/audit-consumer-test.py", "scripts/tests/audit-host-test.py",
                    "scripts/tests/audit-host-workflow-test.py", "scripts/tests/swift-jvm-transfer-test.py"]
         for number, path in enumerate(scripts):
-            if self.scope == "apple-followup" and number != 15:
-                continue
             tool = sys.executable if path.endswith(".py") else "ruby" if path.endswith(".rb") else "bash"
             # Default fake-boundary suites must not inherit real opt-in leaves
             # against their fake source trees. Retain the outer ownership chain.
             env = None if path in ("scripts/tests/check-lock-write-policy-test.sh",
                                   "scripts/check-android-abi-guard.sh") else {key: None for key in ADAPTER_OPT_INS}
-            arguments = [tool, path]
-            if self.scope == "apple-followup":
-                # Recheck the affected Darwin process-group behavior, not
-                # unchanged broad policy suites from the retained prior run.
-                arguments.extend([
-                    "OwnedProcessGroupTest.test_term_resistant_worker_is_killed_after_leader_exits_on_term",
-                    "OwnedProcessGroupTest.test_surviving_group_is_drained_even_when_leader_already_exited",
-                ])
-            self.invoke("policy-" + str(number) + "-" + Path(path).stem, arguments, kind="command", extra_env=env)
+            self.invoke("policy-" + str(number) + "-" + Path(path).stem, [tool, path], kind="command", extra_env=env)
             self.clean_outputs()
 
     def install_xcodegen(self):
@@ -773,7 +766,7 @@ class Host:
             self.check("apple-tcp-options-sdk", self.inspect_tcp_options_headers)
         self.install_xcodegen()
         self.mac_policies()
-        profile = "ios-arm64" if self.scope == "apple-followup" else "full"
+        profile = "ios-lan-arm64" if self.scope == "apple-followup" else "full"
         self.invoke("mac-platform-" + profile, [sys.executable, "scripts/run-platform-tests.py", profile],
                     kind="command", timeout=7200)
         self.clean_outputs()

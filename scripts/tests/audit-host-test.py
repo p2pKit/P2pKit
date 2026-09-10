@@ -1430,9 +1430,6 @@ class HostInvocationTest(unittest.TestCase):
         consumer = host.state / "work/consumer"
         repository = consumer / "repository"
         repository.mkdir(parents=True)
-        policies = [
-            (15, "scripts/tests/run-platform-tests-test.py"),
-        ]
         for product_ok in (True, False):
             with self.subTest(product_ok=product_ok):
                 events = []
@@ -1447,30 +1444,21 @@ class HostInvocationTest(unittest.TestCase):
                                                "retain_consumer_framework", "apple")}
                     invoked = stack.enter_context(mock.patch.object(host, "invoke", side_effect=invoke))
                     host.mac()
-                expected_calls, policy_events = [], []
-                for number, path in policies:
-                    label = "policy-" + str(number) + "-" + Path(path).stem
-                    tool = sys.executable if path.endswith(".py") else "bash"
-                    env = None if number in (3, 13) else {key: None for key in HOST.ADAPTER_OPT_INS}
-                    expected_calls.append(mock.call(label, [tool, path,
-                        "OwnedProcessGroupTest.test_term_resistant_worker_is_killed_after_leader_exits_on_term",
-                        "OwnedProcessGroupTest.test_surviving_group_is_drained_even_when_leader_already_exited",
-                    ], kind="command", extra_env=env))
-                    policy_events.extend((label, "clean_outputs"))
-                expected_calls.extend([
-                    mock.call("mac-platform-ios-arm64", [sys.executable, "scripts/run-platform-tests.py", "ios-arm64"],
+                expected_calls = [
+                    mock.call("mac-platform-ios-lan-arm64",
+                              [sys.executable, "scripts/run-platform-tests.py", "ios-lan-arm64"],
                               kind="command", timeout=7200),
                     mock.call("isolated-consumers", ["bash", "scripts/check-published-consumers.sh"],
                               kind="command", timeout=7200,
                               extra_env={"P2PKIT_CONSUMER_WORK_DIR": str(consumer),
                                          "P2PKIT_CONSUMER_AUDIT_METADATA": "1"}),
-                ])
+                ]
                 if product_ok:
                     expected_calls.append(mock.call("consumer-publication-inspect",
                         ["bash", "scripts/check-publish-artifacts.sh", str(repository)], kind="command"))
                 expected_calls.append(mock.call("swift-jvm-cli-prepare", [":p2p-sample-desktop:installDist"]))
                 self.assertEqual(expected_calls, invoked.call_args_list)
-                self.assertEqual(["install_xcodegen", *policy_events, "mac-platform-ios-arm64", "clean_outputs",
+                self.assertEqual(["install_xcodegen", "mac-platform-ios-lan-arm64", "clean_outputs",
                                   "isolated-consumers", *(["consumer-publication-inspect"] if product_ok else []),
                                   "retain_publication", "retain_consumer_framework", "clean_outputs",
                                   "swift-jvm-cli-prepare", "apple"], events)

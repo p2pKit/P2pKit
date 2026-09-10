@@ -64,18 +64,20 @@ Windows or Intel job precedes or follows it automatically. The host must pass
 actual ARM64/non-Rosetta and Xcode-version admission; an advertised image label
 or the presence of this workflow is not execution evidence.
 
-This targeted route retains the complete current-host executor admission suite,
-then runs only the two affected process-group controls from platform policy (15):
-`OwnedProcessGroupTest.test_term_resistant_worker_is_killed_after_leader_exits_on_term`
-and `OwnedProcessGroupTest.test_surviving_group_is_drained_even_when_leader_already_exited`.
-Unchanged broad policy results retain their original run/source bindings; omitted
-checks are not new passes. Full-profile policy selection and all ownership,
-failure and cleanup checks remain unchanged. The focused route then invokes
-`scripts/run-platform-tests.py ios-arm64`
-for exactly `:p2p-core:iosSimulatorArm64Test` and
-`:p2p-transport-lan:iosSimulatorArm64Test`. The existing source/model/nonce assessor
-requires fresh successful cases for both tasks and reports other tasks as not
-requested; an ARM-only report cannot satisfy the full profile. This is native
+This residual route retains the complete current-host executor admission suite,
+but does not repeat the already executed core ARM suite or the two unchanged
+#157 process-group controls. Their earlier native results retain their original
+source/run bindings; omitted work is not a new pass and earlier failures remain
+historical evidence. Full-profile policy selection and all ownership, failure
+and cleanup checks remain unchanged.
+
+The focused route invokes `scripts/run-platform-tests.py ios-lan-arm64` for exactly
+`:p2p-transport-lan:iosSimulatorArm64Test`. This additive Apple-Silicon-only profile
+uses the same complete committed model, native host admission, fresh nonce and
+successful nonzero-case assessment. Other task records remain present and are
+classified as actually observed; core ARM is not requested by this invocation.
+A LAN-only report cannot satisfy either `ios-arm64` or `full`. The existing
+`ios-arm64` two-suite, `ios-x64` and full profiles remain unchanged. This is native
 simulator execution, not physical iOS-device or Intel qualification.
 
 The downstream callers perform isolated source-local publication and

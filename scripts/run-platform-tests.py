@@ -23,6 +23,7 @@ PROFILES = {
     "full": ["check"],
     "ios-x64": [":p2p-core:iosX64Test", ":p2p-transport-lan:iosX64Test"],
     "ios-arm64": [":p2p-core:iosSimulatorArm64Test", ":p2p-transport-lan:iosSimulatorArm64Test"],
+    "ios-lan-arm64": [":p2p-transport-lan:iosSimulatorArm64Test"],
 }
 FLAGS = ["--no-daemon", "--no-build-cache", "--no-configuration-cache", "--rerun-tasks",
          "--dependency-verification", "strict", "--max-workers=2", "--no-parallel", "--console=plain"]
@@ -83,8 +84,8 @@ def required_tasks(policy, profile, arch):
         required = set(PROFILES[profile])
         require(required <= tasks, "Intel test targets are missing from the committed model")
         return required
-    if profile == "ios-arm64":
-        require(arch == "arm64", "ios-arm64 requires an Apple Silicon macOS host, not Intel")
+    if profile in ("ios-arm64", "ios-lan-arm64"):
+        require(arch == "arm64", profile + " requires an Apple Silicon macOS host, not Intel")
         required = set(PROFILES[profile])
         require(required <= tasks, "ARM simulator test targets are missing from the committed model")
         return required
