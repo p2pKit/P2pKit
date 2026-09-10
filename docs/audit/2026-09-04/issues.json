@@ -3,8 +3,8 @@
   "repository": "https://github.com/p2pKit/P2pKit",
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
-  "githubIssueListRefreshedUtc": "2026-09-10T02:37:32.433205+00:00",
-  "provenance": "165/208 independently approved repository repairs (79.3%); 166/208 independently resolved rows (79.8%) including #287 without a repair; 42 unresolved (20.2%): 18 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 75 new audit findings. Currentlocal557156 includesfinalapproved394repair79a18 andsourceapproved39021339; NOT_PUSHED/R11PLANNED_NOT_RUN.394verificationat21339+493d, olderR10/CLI9ecd scopes retained.All208open members freshly corroborated02:24:47-02:37:32UTC; all394localbodies/545visiblecomments fresh, detailed79local/117upstream histories explicitly reused. See checkpoint.json nativeFollowups.githubPost394Refresh; no metadata-derived repaircredit. WholeauditNOT_READY;133NOT_STARTED.",
+  "githubIssueListRefreshedUtc": "2026-09-10T04:30:26.520407+00:00",
+  "provenance": "173/215 independently approved repository repairs (80.5%); 174/215 independently resolved rows (80.9%) including #287 without a repair; 41 unresolved (19.1%): 17 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 82 new audit findings. Final399/400/401sourcef0b local/notpushed;396–398nativepending. R11wholeFAIL and original failures/history preserved. Sevenfilings extend initial208membership to215, not freshcensus. See nativeFollowups.postR11SequentialFollowups;R12plannedonly. WholeauditNOT_READY;133NOT_STARTED.",
   "issues": [
     {
       "number": 21,
@@ -3579,15 +3579,16 @@
         248,
         253
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
       "recordedFixCommitsOrFinalRevision": [
         "d4ce3598a1d139721e0a2744a3779f2f38bfc7de"
       ],
-      "recordedIndependentReview": "APPROVE_SOURCE; not counted complete. Apple IosSecureIdentityOperationLocksTest and existing storage ownership/recovery selectors.",
+      "recordedIndependentReview": "APPROVE_FINAL_REPAIR_NATIVE_EXECUTED/no findings; actual R11 at18681; reportSHA256 3c4cd265e7f07c13e2053baf8506719d40c6c92c6d5d37483a32014e32e145dd. Scoped native repair approval, whole-host FAIL retained.",
       "publicInvestigationAndOutcomeUrls": [
-        "https://github.com/p2pKit/P2pKit/issues/250#issuecomment-5406165808"
+        "https://github.com/p2pKit/P2pKit/issues/250#issuecomment-5406165808",
+        "https://github.com/p2pKit/P2pKit/issues/250#issuecomment-5613317013"
       ],
       "dispositionBeforeContinuedCohort": {
         "status": "PENDING_REMEDIATION",
@@ -3611,6 +3612,36 @@
         "remainingMaterialValidation": "Apple IosSecureIdentityOperationLocksTest and existing storage ownership/recovery selectors.",
         "countedApproved": false,
         "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      },
+      "dispositionBeforeR11": {
+        "status": "PENDING_REMEDIATION",
+        "recordedIndependentReview": "APPROVE_SOURCE; not counted complete. Apple IosSecureIdentityOperationLocksTest and existing storage ownership/recovery selectors.",
+        "publicInvestigationAndOutcomeUrls": [
+          "https://github.com/p2pKit/P2pKit/issues/250#issuecomment-5406165808"
+        ]
+      },
+      "r11FinalNativeApproval": {
+        "verdict": "APPROVE_FINAL_REPAIR_NATIVE_EXECUTED",
+        "reviewer": "/root/triage_r11_consumers",
+        "reviewReportSha256": "3c4cd265e7f07c13e2053baf8506719d40c6c92c6d5d37483a32014e32e145dd",
+        "findings": [],
+        "countedRepairApproval": true,
+        "fixCommit": "d4ce3598a1d139721e0a2744a3779f2f38bfc7de",
+        "executedCommit": "18681d6b93165e4fa7557aed95b92a09da6c8c90",
+        "executedTree": "0dec0fd73aed47223fd8b9f5e254e8428c35f88a",
+        "nativeRun": "34432810650/1",
+        "affectedNativeMethodsPassed": 17,
+        "publicOutcome": {
+          "issue": 250,
+          "url": "https://github.com/p2pKit/P2pKit/issues/250#issuecomment-5613317013",
+          "commentId": 5613317013,
+          "createdServerUtc": "2026-09-10T04:46:12Z",
+          "bodySha256": "bd413a8a3da0f41ed7105ef47e59d3166080382b6773128a9f393b91b53bacf4",
+          "requestSha256": "25d92be9f8c7c063a68903fbacb83f43278d2f99dfef83e0d79645f40d19e066",
+          "responseSha256": "d6e69bb695cbc9af727efe4f0780c7eb65cc66305c05733913a0b4ed652b14c2",
+          "scope": "Actual individual publication after04:42 API window; not a later full census or issue closure."
+        },
+        "scope": "17affected native cases PASS:3namespace-lock+14storage/recovery. Real NSLock and native storage fixtures, not physical Keychain/first-unlock/powerloss. Exact21commit postimages across three repairs unchanged; prior host/source reviews reused. Surrounding core JVM path-wake failure remains; no whole207/ABI/remaining LAN graph/release/external credit."
       }
     },
     {
@@ -3822,15 +3853,16 @@
         253,
         259
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Initial audit/investigation completed before repairs; revalidate current code when this issue is taken.",
       "recordedFixCommitsOrFinalRevision": [
         "e0e52cb9598e9ba367420fa7f5d1c012832223c6"
       ],
-      "recordedIndependentReview": "APPROVE_SOURCE; not counted complete. Apple shared vectors and NSUserDefaults historical/current-bucket migration selectors.",
+      "recordedIndependentReview": "APPROVE_FINAL_REPAIR_NATIVE_EXECUTED/no findings; actual R11 at18681; reportSHA256 3c4cd265e7f07c13e2053baf8506719d40c6c92c6d5d37483a32014e32e145dd. Scoped native repair approval, whole-host FAIL retained.",
       "publicInvestigationAndOutcomeUrls": [
-        "https://github.com/p2pKit/P2pKit/issues/261#issuecomment-5406167502"
+        "https://github.com/p2pKit/P2pKit/issues/261#issuecomment-5406167502",
+        "https://github.com/p2pKit/P2pKit/issues/261#issuecomment-5613317195"
       ],
       "dispositionBeforeContinuedCohort": {
         "status": "PENDING_REMEDIATION",
@@ -3854,6 +3886,36 @@
         "remainingMaterialValidation": "Apple shared vectors and NSUserDefaults historical/current-bucket migration selectors.",
         "countedApproved": false,
         "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_REVIEW"
+      },
+      "dispositionBeforeR11": {
+        "status": "PENDING_REMEDIATION",
+        "recordedIndependentReview": "APPROVE_SOURCE; not counted complete. Apple shared vectors and NSUserDefaults historical/current-bucket migration selectors.",
+        "publicInvestigationAndOutcomeUrls": [
+          "https://github.com/p2pKit/P2pKit/issues/261#issuecomment-5406167502"
+        ]
+      },
+      "r11FinalNativeApproval": {
+        "verdict": "APPROVE_FINAL_REPAIR_NATIVE_EXECUTED",
+        "reviewer": "/root/triage_r11_consumers",
+        "reviewReportSha256": "3c4cd265e7f07c13e2053baf8506719d40c6c92c6d5d37483a32014e32e145dd",
+        "findings": [],
+        "countedRepairApproval": true,
+        "fixCommit": "e0e52cb9598e9ba367420fa7f5d1c012832223c6",
+        "executedCommit": "18681d6b93165e4fa7557aed95b92a09da6c8c90",
+        "executedTree": "0dec0fd73aed47223fd8b9f5e254e8428c35f88a",
+        "nativeRun": "34432810650/1",
+        "affectedNativeMethodsPassed": 8,
+        "publicOutcome": {
+          "issue": 261,
+          "url": "https://github.com/p2pKit/P2pKit/issues/261#issuecomment-5613317195",
+          "commentId": 5613317195,
+          "createdServerUtc": "2026-09-10T04:46:13Z",
+          "bodySha256": "f9d857de4fff077fdf462b79256964afdd8cb26586bd397841b2c6324b7f23a7",
+          "requestSha256": "95abf543dd817b62aca34da84614fe639d2c37cd98b4cbdaaf122a56d51e05c7",
+          "responseSha256": "993e6d35f0bf460cdcb107414299971b894baeb3cc5ca21778d7f7977fe2148c",
+          "scope": "Actual individual publication after04:42 API window; not a later full census or issue closure."
+        },
+        "scope": "8affected native methods PASS:1method with24literal shared sanitizer vectors+7NSUserDefaults storage/migration/rollback cases. Real Foundation, not Android ART/device persistence. Exact21commit postimages across three repairs unchanged; prior host/source reviews reused. Surrounding core JVM path-wake failure remains; no whole207/ABI/remaining LAN graph/release/external credit."
       }
     },
     {
@@ -7670,15 +7732,16 @@
       "relatedIssuesAndDependencies": [
         173
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
       "assessmentAtCheckpoint": "Confirmed and filed; original reproduction is not final repair approval. See the dated continued-cohort report.",
       "recordedFixCommitsOrFinalRevision": [
         "f260136be7b6e5115c785965b3ee29e6d791439d"
       ],
-      "recordedIndependentReview": "APPROVE_HOST_SCOPE_ONLY_APPLE_PENDING; /root/review_cohort_0910_execution; exact final committed composition bound independently; see repairs/cohort-2026-09-09-0912.md.",
+      "recordedIndependentReview": "APPROVE_FINAL_REPAIR_NATIVE_EXECUTED/no findings; actual R11 at18681; reportSHA256 3c4cd265e7f07c13e2053baf8506719d40c6c92c6d5d37483a32014e32e145dd. Scoped native repair approval, whole-host FAIL retained.",
       "publicInvestigationAndOutcomeUrls": [
-        "https://github.com/p2pKit/P2pKit/issues/379"
+        "https://github.com/p2pKit/P2pKit/issues/379",
+        "https://github.com/p2pKit/P2pKit/issues/379#issuecomment-5613317360"
       ],
       "initialFilingObservation": {
         "createdUtc": "2026-09-09T11:37:24Z",
@@ -7705,6 +7768,36 @@
         "countedApproved": false,
         "publicationStatus": "LOCAL_COMMITTED_NOT_PUSHED_AT_FINAL_BINDING",
         "finalCommitBindingSha256": "fd0fc2bcf812a33b7a6ae6c26c901f5796d9bed2221ba21170836ffbbd2c1c30"
+      },
+      "dispositionBeforeR11": {
+        "status": "PENDING_REMEDIATION",
+        "recordedIndependentReview": "APPROVE_HOST_SCOPE_ONLY_APPLE_PENDING; /root/review_cohort_0910_execution; exact final committed composition bound independently; see repairs/cohort-2026-09-09-0912.md.",
+        "publicInvestigationAndOutcomeUrls": [
+          "https://github.com/p2pKit/P2pKit/issues/379"
+        ]
+      },
+      "r11FinalNativeApproval": {
+        "verdict": "APPROVE_FINAL_REPAIR_NATIVE_EXECUTED",
+        "reviewer": "/root/triage_r11_consumers",
+        "reviewReportSha256": "3c4cd265e7f07c13e2053baf8506719d40c6c92c6d5d37483a32014e32e145dd",
+        "findings": [],
+        "countedRepairApproval": true,
+        "fixCommit": "f260136be7b6e5115c785965b3ee29e6d791439d",
+        "executedCommit": "18681d6b93165e4fa7557aed95b92a09da6c8c90",
+        "executedTree": "0dec0fd73aed47223fd8b9f5e254e8428c35f88a",
+        "nativeRun": "34432810650/1",
+        "affectedNativeMethodsPassed": 50,
+        "publicOutcome": {
+          "issue": 379,
+          "url": "https://github.com/p2pKit/P2pKit/issues/379#issuecomment-5613317360",
+          "commentId": 5613317360,
+          "createdServerUtc": "2026-09-10T04:46:14Z",
+          "bodySha256": "2ba300ad2819d7eda8befaa7af04097503da9207633829edd2ed7c60255c926d",
+          "requestSha256": "3cea0c5e75d1675f8d08fc7a81d82a9d1af922b6837caf2b9d6f04a195f1c877",
+          "responseSha256": "f8ab2bb87098ce8f939ce2c8d9c57441744adc2e176b5a13823639f89c12b981",
+          "scope": "Actual individual publication after04:42 API window; not a later full census or issue closure."
+        },
+        "scope": "50affected native cases PASS:4hooks+43registry+3reemit, including17exact required controls. Not lock-free/hard-time guarantees or SwiftTask-to-KotlinFlow cancellation. Exact21commit postimages across three repairs unchanged; prior host/source reviews reused. Surrounding core JVM path-wake failure remains; no whole207/ABI/remaining LAN graph/release/external credit."
       }
     },
     {
@@ -8318,16 +8411,17 @@
         378,
         389
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": null,
       "assessmentAtCheckpoint": "Distinct Low non-security audit infrastructure lifecycle cause confirmed against actual source/officialXNU semantics and actualcaller modeledreproduction. Not P2pKitprotocol/permissionbypass; originalMacMach5exactattribution unknown because failingBSDflags/status not retained.",
       "recordedFixCommitsOrFinalRevision": [
         "3c038f6ed8f4d877a4cd78a14e5f83946b851567",
         "21339c1dc769470b622a04cd8105198db6f4c43a"
       ],
-      "recordedIndependentReview": "FinalcensusR2 APPROVE_SOURCE_EXECUTION_PENDING/no findings, reportf132e33f; exacta3c676 committed21339/localNOT_PUSHED.14modeledPASS, nativeNOT_RUN/no finalrepaircredit. HistoricalR8/R9/R10failures preserved.",
+      "recordedIndependentReview": "APPROVE_FINAL_REPAIR_NATIVE_EXECUTED/no findings; actual R11 at18681; reportSHA256 ebaf20cc808008674c6f600ca12baeeb1561105930e3a1434834d0628f071285. Scoped native repair approval, whole-host FAIL retained.",
       "publicInvestigationAndOutcomeUrls": [
-        "https://github.com/p2pKit/P2pKit/issues/390"
+        "https://github.com/p2pKit/P2pKit/issues/390",
+        "https://github.com/p2pKit/P2pKit/issues/390#issuecomment-5613203287"
       ],
       "initialFilingObservation": {
         "createdServerUtc": "2026-09-09T21:17:12Z",
@@ -8371,7 +8465,7 @@
         "scope": "Both realDarwinreconciliationpaths execute; finalaffectedcancellation acceptance blocked by separatefixture operations. NativeproductgatesNOT_RUN; remoteCleanupNOT_PROVEN/UNKNOWNsurvivors. Originalredreproduction andr7failures preserved.",
         "remainingAcceptance": "R9formerlyfailingcancellation controls pass and392isfinallyapproved, but genuineopaque/sentinelcontrolfailsfirstSIGTERM;393sourceapproved/nativepending. No390finalnativeapproval supplied; earlierr8mechanism evidence remains scoped."
       },
-      "currentRepairState": {
+      "repairStateBeforeR11": {
         "sourceCommit": "3c038f6ed8f4d877a4cd78a14e5f83946b851567",
         "status": "FINAL_SOURCE_APPROVED_LOCAL_NATIVE_PENDING",
         "countedRepairApproval": false,
@@ -8383,6 +8477,41 @@
         "committedTree": "6800534bca12c7235a03fe3ec3c5ce69836e67ef",
         "finalSourceReviewSha256": "f132e33f1d413ffb7e7bfd0fa21a262aabfbca3282a0bbee68cb277c9e0bfeb6",
         "publicationStatus": "LOCALLY_COMMITTED_NOT_PUSHED"
+      },
+      "dispositionBeforeR11": {
+        "status": "PENDING_REMEDIATION",
+        "recordedIndependentReview": "FinalcensusR2 APPROVE_SOURCE_EXECUTION_PENDING/no findings, reportf132e33f; exacta3c676 committed21339/localNOT_PUSHED.14modeledPASS, nativeNOT_RUN/no finalrepaircredit. HistoricalR8/R9/R10failures preserved.",
+        "publicInvestigationAndOutcomeUrls": [
+          "https://github.com/p2pKit/P2pKit/issues/390"
+        ]
+      },
+      "r11FinalNativeApproval": {
+        "verdict": "APPROVE_FINAL_REPAIR_NATIVE_EXECUTED",
+        "reviewer": "/root/review_390_census",
+        "reviewReportSha256": "ebaf20cc808008674c6f600ca12baeeb1561105930e3a1434834d0628f071285",
+        "findings": [],
+        "countedRepairApproval": true,
+        "sourceCommit": "21339c1dc769470b622a04cd8105198db6f4c43a",
+        "executedCommit": "18681d6b93165e4fa7557aed95b92a09da6c8c90",
+        "executedTree": "0dec0fd73aed47223fd8b9f5e254e8428c35f88a",
+        "nativeRun": "34432810650/1",
+        "publicOutcome": {
+          "id": 5613203287,
+          "url": "https://github.com/p2pKit/P2pKit/issues/390#issuecomment-5613203287",
+          "createdUtc": "2026-09-10T04:33:28Z",
+          "bodyMatchesFreshGet": true,
+          "responseSha256": "cc0020ba5bfefa2ed049ec3a50093039efa128e82ad998fc860ac3a55e878a93"
+        },
+        "scope": "Final exact census bytes execute on real Darwin. Saved-token initialSIGTERM0/exit-15/same-tokenESRCH3/live sentinel and three complete six-identity consumer cancellation/recovery controls pass. Four actual known-PID EPERM observations reconcile to positively observed absence (attempts2/3/2/2);17 reconciliations resolved. Actual policy2/GPG caller passes. No claim those PIDs were setuidps or proof of R10 exact kernel attribution; original failures retained. Whole R11 FAIL remains."
+      },
+      "currentRepairState": {
+        "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
+        "sourceCommit": "21339c1dc769470b622a04cd8105198db6f4c43a",
+        "countedRepairApproval": true,
+        "publicationStatus": "PUBLISHED_IN_18681",
+        "reviewReportSha256": "ebaf20cc808008674c6f600ca12baeeb1561105930e3a1434834d0628f071285",
+        "evidenceReference": "checkpoint.json nativeFollowups.appleR11.final390Approval",
+        "scope": "Final exact census bytes execute on real Darwin. Saved-token initialSIGTERM0/exit-15/same-tokenESRCH3/live sentinel and three complete six-identity consumer cancellation/recovery controls pass. Four actual known-PID EPERM observations reconcile to positively observed absence (attempts2/3/2/2);17 reconciliations resolved. Actual policy2/GPG caller passes. No claim those PIDs were setuidps or proof of R10 exact kernel attribution; original failures retained. Whole R11 FAIL remains."
       }
     },
     {
@@ -8662,9 +8791,10 @@
         "79a18dee1f9b4196db29ecf14b5bd2638849cef7",
         "bf65e7a921a32bbdcca42bd868cf3ae306d8c8a0"
       ],
-      "recordedIndependentReview": "APPROVE_FINAL_REPAIR/no findings; exact493d262a committed79a18/localNOT_PUSHED. Original2FAIL andfinal5PASS withrealLinuxnestedcontrols/completecleanup; no390native/Appleproduct approval. Finalfixtureportability bf65e7a also APPROVE_FINAL_REPAIR/83dee9c9; controlledLinuxsymlink2PASS, no Macclaim.",
+      "recordedIndependentReview": "APPROVE_FINAL_REPAIR/no findings; original79a18 plus approvedbf65e7a fixture portability published in clean18681/R11. Prior focused evidence/approvals unchanged; no extra repaircount or blanket nativeproduct credit.",
       "publicInvestigationAndOutcomeUrls": [
-        "https://github.com/p2pKit/P2pKit/issues/394"
+        "https://github.com/p2pKit/P2pKit/issues/394",
+        "https://github.com/p2pKit/P2pKit/issues/394#issuecomment-5612132413"
       ],
       "initialFilingObservation": {
         "issue": 394,
@@ -8683,7 +8813,7 @@
         "triageReportSha256": "f3f1dd20c91dc4ef83e7dfbef3f672dd1445c75b8f2c5cf57df4e6c342e9a0da",
         "scope": "Confirmed distinct bufferedTee failure-prefix publication gap; actual2551byte live stderr prefix absent from retained0-byte leaf stderr. No loststdout/exactremote buffer/kernel attribution claimed. No fresh reproduction or repair/native/product approval. One actual filing adds208thinventory row after bounded207census."
       },
-      "currentRepairState": {
+      "repairStateBeforeR11": {
         "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
         "commit": "79a18dee1f9b4196db29ecf14b5bd2638849cef7",
         "tree": "8e536701ba2e94dfdd37702dc9b3afd4685dd66e",
@@ -8708,10 +8838,419 @@
         "reviewSha256": "83dee9c983b74319462b103c88d928cf7a1688824e5b310973fa44260e20154f",
         "evidenceReference": "checkpoint.json nativeFollowups.postR10Followups.fixturePortability394",
         "scope": "Two owned-temp-path resolutions; original production repair unchanged. Controlledsymlink2ERROR->2PASS, no Mac/native claim or count change."
+      },
+      "dispositionBeforeR11": {
+        "recordedIndependentReview": "APPROVE_FINAL_REPAIR/no findings; exact493d262a committed79a18/localNOT_PUSHED. Original2FAIL andfinal5PASS withrealLinuxnestedcontrols/completecleanup; no390native/Appleproduct approval. Finalfixtureportability bf65e7a also APPROVE_FINAL_REPAIR/83dee9c9; controlledLinuxsymlink2PASS, no Macclaim.",
+        "publicInvestigationAndOutcomeUrls": [
+          "https://github.com/p2pKit/P2pKit/issues/394"
+        ]
+      },
+      "currentRepairState": {
+        "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
+        "commit": "79a18dee1f9b4196db29ecf14b5bd2638849cef7",
+        "tree": "8e536701ba2e94dfdd37702dc9b3afd4685dd66e",
+        "publicationStatus": "PUBLISHED_IN_18681",
+        "countedRepairApproval": true,
+        "reviewSha256": "a1245ff8b89baf6678055b23d5f618d8ec832cd7f58904924f6e56c9f93abfb5",
+        "evidenceReference": "checkpoint.json nativeFollowups.postR10Followups.repair394",
+        "scope": "SharedTee per-chunkflush preserves exactrawprefix beforelive delivery withoutwaitingEOF. FivefocusedLinux/PythonmethodsPASS aftertwooriginal failures; stop/cleanupcomplete. No oldoutput recovery or nativeproduct/390credit. Later actual R11 publishes/executesthis unchanged repair; no retroactive recovery of missingR10logs.",
+        "publishedSourceCommit": "18681d6b93165e4fa7557aed95b92a09da6c8c90"
       }
+    },
+    {
+      "number": 395,
+      "title": "[AUDIT][Low] Audit Gradle adapter duplicates already-supplied singleton options",
+      "url": "https://github.com/p2pKit/P2pKit/issues/395",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "Adapter validates already-supplied safe singleton values then appends duplicate enforced flags; real Gradle rejects the resulting argv before affected tasks configure.",
+      "affectedComponentsExcerpt": "scripts/run-audit-command.py gradle_arguments; Swift provenance, isolated consumers, lock policy3 and ABI policy13.",
+      "relatedIssuesAndDependencies": [
+        228,
+        369,
+        394
+      ],
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
+      "githubStateAtListRefresh": null,
+      "githubStateAtIndividualRefresh": "open",
+      "assessmentAtCheckpoint": "Confirmed distinct underlying cause after current-body/closed-decision/PR duplicate reconciliation; actual R11 failure retained. Filing is not repair approval.",
+      "recordedFixCommitsOrFinalRevision": [
+        "1ea177bc4e3094e1e33f3cd3dac355b65db7faa4"
+      ],
+      "recordedIndependentReview": "APPROVE_FINAL_REPAIR/no findings; exact98f393 committed1ea177b, focused9methods PASS+realGradle parser0; affectednative productgates remainpending.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/395",
+        "https://github.com/p2pKit/P2pKit/issues/395#issuecomment-5613440522"
+      ],
+      "initialFilingObservation": {
+        "number": 395,
+        "title": "[AUDIT][Low] Audit Gradle adapter duplicates already-supplied singleton options",
+        "createdUtc": "2026-09-10T04:36:13Z",
+        "bodySha256": "024d5fa0b9fc5bcb5a6b1d7c0c454edec80be4b336b0527b56244045a338185f",
+        "requestSha256": "6684e90cff29ddcbba7e943f13f626833696b02a16effff45a66fad5d8b00671",
+        "responseSha256": "804228d322432a09ecb8f9a2727c1d71c3fd656a98c34bbe5a13844ea08d05cd",
+        "freshGetSha256": "804228d322432a09ecb8f9a2727c1d71c3fd656a98c34bbe5a13844ea08d05cd",
+        "comments": 0,
+        "state": "open",
+        "scope": "Actual separate filing after initial208member census; first395–398 affected fullGETs in04:42window,399/400bound to rootcreationresponses05:17:05. New214projection is not fresh214fullcensus. Zero comments at each filing observation, not a permanent claim."
+      },
+      "repairReport": "repairs/cohort-2026-09-09-native-followups.md#apple-r11-scoped-native-approvals-and-product-failures",
+      "verificationRequired": "Rerun real affected Mac policies3/13, provenance and consumer tasks; scoped parser repair approved independently.",
+      "finalRepairApproval": {
+        "verdict": "APPROVE_FINAL_REPAIR",
+        "reviewer": "/root/review_390_census",
+        "reviewReportSha256": "9c97b5b312c2e791d4310383b4871b2e6c434ea070f8a41935c08d1094ee4b8b",
+        "findings": [],
+        "countedRepairApproval": true,
+        "fixCommit": "1ea177bc4e3094e1e33f3cd3dac355b65db7faa4",
+        "fixTree": "89f4c45ce2e6e317e64b4fce39b951ecab516a56",
+        "patchSha256": "98f3939367aaca3d491e2ec447c6e876e518620040b266e844ad673bebd86b69",
+        "publicationStatus": "PUBLISHED_AUDIT_BRANCH_REF_VERIFIED",
+        "publication": {
+          "issue": 395,
+          "url": "https://github.com/p2pKit/P2pKit/issues/395#issuecomment-5613440522",
+          "commentId": 5613440522,
+          "createdServerUtc": "2026-09-10T05:01:31Z",
+          "bodySha256": "a2b5c6de73b1bb40383ef287e840ba9ecb6304da4ebb19b2c09cb454e0801321",
+          "requestSha256": "9b93c28fffd69c4ac66ed6b4eb2161f25e3b17eeaed4f5b368c8a9e6b438f2cb",
+          "responseSha256": "6bf02e427f2f19f5d8ff48d96b5c63f57e3a00630e6b82cc52f45383bcc48298",
+          "publicationReceipt": {
+            "observedUtc": "2026-09-10T05:00:51.957775+00:00",
+            "commit": "1ea177bc4e3094e1e33f3cd3dac355b65db7faa4",
+            "tree": "89f4c45ce2e6e317e64b4fce39b951ecab516a56",
+            "normalAuditPush": true,
+            "remoteRefVerified": true,
+            "workflowChanged": false
+          },
+          "publicationReceiptSha256": "b3297c0107beeac84920476154f394821b03d1bc57b7bcba8e5dcc167c86d39e",
+          "scope": "Actual normal audit-only push/ref verification and individual outcome, not a new full census or closure."
+        },
+        "sourceFiles": [
+          "scripts/run-audit-command.py",
+          "scripts/tests/run-audit-command-test.py"
+        ],
+        "verification": {
+          "red": {
+            "invocation": "395-singletons-red-20260910-r1",
+            "startedUtc": "2026-09-10T04:40:10.244213+00:00",
+            "finishedUtc": "2026-09-10T04:40:11.444492+00:00",
+            "sourceCommit": "18681d6b93165e4fa7557aed95b92a09da6c8c90",
+            "sourceTree": "0dec0fd73aed47223fd8b9f5e254e8428c35f88a",
+            "sourceDiffSha256": "c70eb58938eb3726b1bcb94eb7018637bd8c69aceceae018447ae96c22b11775",
+            "commandStopFinalExits": [
+              1,
+              0,
+              1
+            ],
+            "receiptSha256": "47007dd15f565d28a6e89936ae2829c91b485f32396d6f801db0be831e34b4e8",
+            "commandLogSha256": "00ac6b2fde7a2a65bc4ac0f0c04b5cac789aa71f729297daf298369721dae0b8",
+            "wrapperStopLogSha256": "9bb9c19238f3fdde3213f2be84912b0c7e87b3e2295ec372ec245deab200d46d",
+            "sourceUnchanged": true,
+            "ownedSurvivors": {},
+            "removedOutputs": []
+          },
+          "green": {
+            "invocation": "395-singletons-green-20260910-r1",
+            "startedUtc": "2026-09-10T04:41:11.581790+00:00",
+            "finishedUtc": "2026-09-10T04:41:19.880931+00:00",
+            "sourceCommit": "18681d6b93165e4fa7557aed95b92a09da6c8c90",
+            "sourceTree": "0dec0fd73aed47223fd8b9f5e254e8428c35f88a",
+            "sourceDiffSha256": "98f3939367aaca3d491e2ec447c6e876e518620040b266e844ad673bebd86b69",
+            "commandStopFinalExits": [
+              0,
+              0,
+              0
+            ],
+            "receiptSha256": "d8fd78dee8a5f901b02269b6423bed5d95046827cd46dc2d1004e90a70b239da",
+            "commandLogSha256": "9a193676bef8ae9b83c8b1d6fb56736241b3ab8a8c9180956d9e347ebe665856",
+            "wrapperStopLogSha256": "9bb9c19238f3fdde3213f2be84912b0c7e87b3e2295ec372ec245deab200d46d",
+            "sourceUnchanged": true,
+            "ownedSurvivors": {},
+            "removedOutputs": []
+          }
+        },
+        "scope": "Only omit already-admitted matching console/dependency-verification/max-workers defaults; preserve raw caller prefix, all other mandatory controls and caller-created duplicates. New15subcase method red15FAIL, final9methods PASS6.338s and genuine checked-in Gradle9.7 parser --help exits0. Real Linux executor/synthetic consumer retains ownership/isolated paths/receipts; fixture archives independently checked40entries and removed. All outer stops0/no survivors or generated outputs. Not actual native consumer/provenance/policy gate reruns, clean1ea product verification or native/release approval."
+      }
+    },
+    {
+      "number": 396,
+      "title": "[AUDIT][Low] iOS generation fixture omits required sibling test resources",
+      "url": "https://github.com/p2pKit/P2pKit/issues/396",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "iOS project-generation fixture copies iosApp without two required sibling diagnostic JSON resources; native fixture setup fails before its three test methods execute.",
+      "affectedComponentsExcerpt": "scripts/tests/ios-project-generation-test.py fixture tree and samples diagnostic JSON siblings.",
+      "relatedIssuesAndDependencies": [
+        313,
+        346,
+        352
+      ],
+      "status": "PENDING_REMEDIATION",
+      "githubStateAtListRefresh": null,
+      "githubStateAtIndividualRefresh": "open",
+      "assessmentAtCheckpoint": "Confirmed distinct underlying cause after current-body/closed-decision/PR duplicate reconciliation; actual R11 failure retained. Filing is not repair approval.",
+      "recordedFixCommitsOrFinalRevision": [
+        "583d9ba239d4904320fbc401038abf862245e743"
+      ],
+      "recordedIndependentReview": "APPROVE_FINAL_SOURCE_NATIVE_PENDING; no findings; nativepending/no repaircount credit. ReportSHA256 b3c0e9f25505ad012319db16832cee7d5c67ee1e723a6518e856f95076712338",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/396"
+      ],
+      "initialFilingObservation": {
+        "number": 396,
+        "title": "[AUDIT][Low] iOS generation fixture omits required sibling test resources",
+        "createdUtc": "2026-09-10T04:36:14Z",
+        "bodySha256": "d016a37c9055b091e69b3f9232b1b95099738549741065911dabfca2a3247d29",
+        "requestSha256": "acb437cd994e1e67e83e6be2db15a9b8ddd28f73dd88240c8e99a1aa40d50272",
+        "responseSha256": "5d80f372f6f498720aebf8389f3d0da0822076e5446eca805a16a4f445865e7d",
+        "freshGetSha256": "5d80f372f6f498720aebf8389f3d0da0822076e5446eca805a16a4f445865e7d",
+        "comments": 0,
+        "state": "open",
+        "scope": "Actual separate filing after initial208member census; first395–398 affected fullGETs in04:42window,399/400bound to rootcreationresponses05:17:05. New214projection is not fresh214fullcensus. Zero comments at each filing observation, not a permanent claim."
+      },
+      "repairReport": "repairs/cohort-2026-09-09-native-followups.md#apple-r11-scoped-native-approvals-and-product-failures",
+      "verificationRequired": "Real XcodeGen three existing fixture cases using complete transitive input tree, no assertions removed.",
+      "sourceOnlyApproval": {
+        "sourceCommit": "583d9ba239d4904320fbc401038abf862245e743",
+        "sourceTree": "40be79962d4b6a620ff6d532285cfb31d18cce2b",
+        "verdict": "APPROVE_FINAL_SOURCE_NATIVE_PENDING",
+        "reviewer": "/root/triage_r11_swift",
+        "reviewReportSha256": "b3c0e9f25505ad012319db16832cee7d5c67ee1e723a6518e856f95076712338",
+        "patchSha256": "bbd7dbb171a6e7a4d56111e00ac978c4350482ee0a0d84d11f522967dd97f530",
+        "sourcePath": "scripts/tests/ios-project-generation-test.py",
+        "sourceSha256": "4d5f591dfd59b7e692b50c14af5a3e1d3c77eed8b2caf8257e5d2cf5fc709f63",
+        "sourceReadLevel": "FULL_TEXT",
+        "scope": "Only add two exact tracked siblingJSON pathspecs; all three original real XcodeGen/Xcode assertions unchanged. R11setupfailed with0tests, actual fullrepo projectgenerationpassed. Corrected native3methods NOT_RUN; no repaircount credit.",
+        "findings": [],
+        "countedRepairApproval": false,
+        "publicationStatus": "LOCALLY_COMMITTED_NOT_PUSHED_AT_THIS_OBSERVATION"
+      }
+    },
+    {
+      "number": 397,
+      "title": "[AUDIT][Low] XCFramework shell fingerprint guard depends on locale collation",
+      "url": "https://github.com/p2pKit/P2pKit/issues/397",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "POSIX shell canonical SHA256 guard uses locale-sensitive 0-9/a-f ranges; uppercase fingerprint input was accepted by actual native sh. Exact original LC_* values were not retained.",
+      "affectedComponentsExcerpt": "samples/iosApp/scripts/check-xcframework.sh canonical fingerprint guard; maintained XcodeGen caller and audit-leaf fixtures.",
+      "relatedIssuesAndDependencies": [
+        314,
+        343
+      ],
+      "status": "PENDING_REMEDIATION",
+      "githubStateAtListRefresh": null,
+      "githubStateAtIndividualRefresh": "open",
+      "assessmentAtCheckpoint": "Confirmed distinct underlying cause after current-body/closed-decision/PR duplicate reconciliation; actual R11 failure retained. Filing is not repair approval.",
+      "recordedFixCommitsOrFinalRevision": [
+        "3db03bb08521547edf77b9a923eb4fc6ddce208d"
+      ],
+      "recordedIndependentReview": "APPROVE_SOURCE_EXECUTION_PENDING; no findings; nativepending/no repaircount credit. ReportSHA256 df8ac8ba1d0e627a6d0c7216bc89adab557136ea2a3ae41b1ef9f66eacc1c2c5",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/397"
+      ],
+      "initialFilingObservation": {
+        "number": 397,
+        "title": "[AUDIT][Low] XCFramework shell fingerprint guard depends on locale collation",
+        "createdUtc": "2026-09-10T04:36:15Z",
+        "bodySha256": "bdcab37cda53f1af7441d817532969925931b241d3dc9d71da1b45bc7baa2ebf",
+        "requestSha256": "ab0e3f2231031a3e9f544dabb67541f9710018a3d3851c6ba3e368f6c8ce401f",
+        "responseSha256": "f47fec9bf21de57dd859ebf490363a0582a02b36fe0ffdf42da0ce69f2144292",
+        "freshGetSha256": "f47fec9bf21de57dd859ebf490363a0582a02b36fe0ffdf42da0ce69f2144292",
+        "comments": 0,
+        "state": "open",
+        "scope": "Actual separate filing after initial208member census; first395–398 affected fullGETs in04:42window,399/400bound to rootcreationresponses05:17:05. New214projection is not fresh214fullcensus. Zero comments at each filing observation, not a permanent claim."
+      },
+      "repairReport": "repairs/cohort-2026-09-09-native-followups.md#apple-r11-scoped-native-approvals-and-product-failures",
+      "verificationRequired": "Actual Darwinsh existing canonical-hash negative vectors and unchanged fingerprint/provenance positive controls; record locale without relaxing fail-closed acceptance.",
+      "sourceOnlyApproval": {
+        "sourceCommit": "3db03bb08521547edf77b9a923eb4fc6ddce208d",
+        "sourceTree": "5e8489c996d6e7b64922e3aa663cf3137b87cfc1",
+        "verdict": "APPROVE_SOURCE_EXECUTION_PENDING",
+        "reviewer": "/root/triage_r11_policies",
+        "reviewReportSha256": "df8ac8ba1d0e627a6d0c7216bc89adab557136ea2a3ae41b1ef9f66eacc1c2c5",
+        "patchSha256": "3b72109577e00b57de09890fbb27a395fe5627648d4d7678865373b63a2a3aed",
+        "sourcePath": "samples/iosApp/scripts/check-xcframework.sh",
+        "sourceSha256": "c74964ed1ab5aabe75bf3ba8280c383da9ec3da1b52de0f064d52ba71a207e63",
+        "sourceReadLevel": "FULL_TEXT",
+        "scope": "One-line literalASCII character set replaces locale-sensitive ranges; length/empty checks and both verification routes unchanged. Two existing methods Linuxsh C1.157s/en_US.utf8 1.161s PASS0/0/0/no survivors or outputs. Exact R11LCvalues notretained; actual Darwinsh controls pending, no repaircount credit.",
+        "findings": [],
+        "countedRepairApproval": false,
+        "publicationStatus": "LOCALLY_COMMITTED_NOT_PUSHED_AT_THIS_OBSERVATION"
+      }
+    },
+    {
+      "number": 398,
+      "title": "[AUDIT][Low] Hosted driver symlink fixture mocks a pathlib implementation detail",
+      "url": "https://github.com/p2pKit/P2pKit/issues/398",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "Hosted driver symlink fixture mocks Path.lstat but production boundary calls Path.is_symlink; Python3.14 no longer traverses that mocked implementation detail.",
+      "affectedComponentsExcerpt": "scripts/tests/audit-host-workflow-test.py planned-driver symlink control; production path predicate remains enforced.",
+      "relatedIssuesAndDependencies": [
+        373,
+        378
+      ],
+      "status": "PENDING_REMEDIATION",
+      "githubStateAtListRefresh": null,
+      "githubStateAtIndividualRefresh": "open",
+      "assessmentAtCheckpoint": "Confirmed distinct underlying cause after current-body/closed-decision/PR duplicate reconciliation; actual R11 failure retained. Filing is not repair approval.",
+      "recordedFixCommitsOrFinalRevision": [
+        "65f3f2c8d6b827285704cc54093d9368dc86cccc"
+      ],
+      "recordedIndependentReview": "APPROVE_FINAL_SOURCE_NATIVE_PENDING; no findings; nativepending/no repaircount credit. ReportSHA256 671eacffc44779db5b2a58aa7d0102fcaaafaa459f9e5dc3d85b8e477cd62301",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/398"
+      ],
+      "initialFilingObservation": {
+        "number": 398,
+        "title": "[AUDIT][Low] Hosted driver symlink fixture mocks a pathlib implementation detail",
+        "createdUtc": "2026-09-10T04:36:15Z",
+        "bodySha256": "bee5af713f8eb119a3c6d5ca86baeffad9beb0b87cf9f5fc6b918cb623dcf2d7",
+        "requestSha256": "83023a09a4d98d536a1c2d244c03ef8c0344a0e9c83158a0d9b98f8c18cc8760",
+        "responseSha256": "4bfea813869271c5994ee4c1068f56aaa517ba6c8d0206722b0a8ee606827966",
+        "freshGetSha256": "4bfea813869271c5994ee4c1068f56aaa517ba6c8d0206722b0a8ee606827966",
+        "comments": 0,
+        "state": "open",
+        "scope": "Actual separate filing after initial208member census; first395–398 affected fullGETs in04:42window,399/400bound to rootcreationresponses05:17:05. New214projection is not fresh214fullcensus. Zero comments at each filing observation, not a permanent claim."
+      },
+      "repairReport": "repairs/cohort-2026-09-09-native-followups.md#apple-r11-scoped-native-approvals-and-product-failures",
+      "verificationRequired": "Actual symlink-predicate mutation plus genuine driver guard on native Python3.14; do not bypass production no-follow enforcement.",
+      "sourceOnlyApproval": {
+        "sourceCommit": "65f3f2c8d6b827285704cc54093d9368dc86cccc",
+        "sourceTree": "f0d2345ae1c7976874793d7d13f603ca002dc79d",
+        "verdict": "APPROVE_FINAL_SOURCE_NATIVE_PENDING",
+        "reviewer": "/root/inspect_gpg_darwin_contract",
+        "reviewReportSha256": "671eacffc44779db5b2a58aa7d0102fcaaafaa459f9e5dc3d85b8e477cd62301",
+        "patchSha256": "9d37ddaff55ec62d0abd2049d154c1f348ee548db9940e5c6c9650e2d75861b8",
+        "sourcePath": "scripts/tests/audit-host-workflow-test.py",
+        "sourceSha256": "dc4ae19145f2a4ba3688cb713baf4d97f9b58c230c506b12c45261e5eafa2a3c",
+        "sourceReadLevel": "FULL_SEMANTIC_DELTA",
+        "scope": "Mock exactfixture driver.is_symlink predicate; all otherpaths delegate, productionguardunchanged. Two existing inlinebodycontrols PASS0.012s/r2,0/0/0/no survivors or outputs. R1wrongclassselectors2ERROR historical, not redproductfailure. Corrected nativePython3.14 control pending, no repaircount credit.",
+        "findings": [],
+        "countedRepairApproval": false,
+        "publicationStatus": "LOCALLY_COMMITTED_NOT_PUSHED_AT_THIS_OBSERVATION"
+      }
+    },
+    {
+      "number": 399,
+      "title": "[AUDIT][Low] Reconnect publication can swallow an already delivered path-recovery wake",
+      "url": "https://github.com/p2pKit/P2pKit/issues/399",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "Reconnect state is published before onWillReconnect captures the path-wake generation, allowing a delivered recovery event to be absorbed as the baseline.",
+      "affectedComponentsExcerpt": "P2pSessionImpl.onConnectionLost and SessionManager.SessionReconnectHandler/applyPathChange; common JVM/Android/Apple callers.",
+      "relatedIssuesAndDependencies": [
+        205,
+        207,
+        245,
+        400
+      ],
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
+      "githubStateAtListRefresh": null,
+      "githubStateAtIndividualRefresh": "open",
+      "assessmentAtCheckpoint": "Confirmed distinct underlying cause after current-body/closed-decision/PR duplicate reconciliation; actual R11 failure retained. Filing is not repair approval.",
+      "recordedFixCommitsOrFinalRevision": [
+        "243d0a241adf65e3eaee1b2e3232306ea5dac222"
+      ],
+      "recordedIndependentReview": "APPROVE_FINAL_REPAIR/no findings; SHA256 5d3c316da2ce2b7e159c15a5a8a608e48bc349da1a11f274b28714f88b8c02b6",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/399"
+      ],
+      "initialFilingObservation": {
+        "number": 399,
+        "title": "[AUDIT][Low] Reconnect publication can swallow an already delivered path-recovery wake",
+        "createdUtc": "2026-09-10T05:17:05Z",
+        "bodySha256": "502f29dbcc58009d58e6acd751c85ecef3dd8f4261682c81f9e85a2b49747201",
+        "requestSha256": "2467e6d1a9ac022ec9ba118278eb5f39c34290d843f219ddc9847478b1ac07ed",
+        "responseSha256": "5800d2b47876e30e488ed448faa22afe6e8326366a4660db6353e529943b404d",
+        "comments": 0,
+        "scope": "Actual separate filing after initial208member census; first395–398 affected fullGETs in04:42window,399/400bound to rootcreationresponses05:17:05. New214projection is not fresh214fullcensus. Zero comments at each filing observation, not a permanent claim.",
+        "state": "open"
+      },
+      "repairReport": "repairs/cohort-2026-09-09-native-followups.md#post-r11-sequential-repairs-and-fixture-follow-up",
+      "verificationRequired": "Affected native/common-test replay remains; no physical/independent/release credit.",
+      "postR11FinalRepairReference": "checkpoint.json nativeFollowups.postR11SequentialFollowups.repairs.399"
+    },
+    {
+      "number": 400,
+      "title": "[AUDIT][Low] Path-wake test mistakes wire-loss state for consumed network-path loss",
+      "url": "https://github.com/p2pKit/P2pKit/issues/400",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "Path-wake test treats independent wire-loss Reconnecting as acknowledgement that Unsatisfied was consumed; subsequent Satisfied can conflate away that input.",
+      "affectedComponentsExcerpt": "NetworkPathRecoveryTest.pathSatisfiedWakesParkedReconnectHandlerBeforeDelayExpires; fake path StateFlow and actual SessionManager consumer.",
+      "relatedIssuesAndDependencies": [
+        205,
+        207,
+        245,
+        399
+      ],
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
+      "githubStateAtListRefresh": null,
+      "githubStateAtIndividualRefresh": "open",
+      "assessmentAtCheckpoint": "Confirmed distinct underlying cause after current-body/closed-decision/PR duplicate reconciliation; actual R11 failure retained. Filing is not repair approval.",
+      "recordedFixCommitsOrFinalRevision": [
+        "810d8c9a0e04e6cf98d98b9578bca720fd28d733"
+      ],
+      "recordedIndependentReview": "APPROVE_FINAL_REPAIR/no findings; SHA256 4b8ea99a49197845ae84dbd493bcb9e78f1eb75d888514de4763644e76672748",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/400"
+      ],
+      "initialFilingObservation": {
+        "number": 400,
+        "title": "[AUDIT][Low] Path-wake test mistakes wire-loss state for consumed network-path loss",
+        "createdUtc": "2026-09-10T05:17:05Z",
+        "bodySha256": "ccfc9efa45b82158bef4c8f7a2d0c09eb7f3295261ee0c635cd6ca8ad5297f4b",
+        "requestSha256": "c11bb1a0e880b87d7480dcf219b8450ef795bb348e86d37f629d90a427d33e81",
+        "responseSha256": "a59e6f620fb38e1c3773c89324b0f823da83c276a4208ef49b63f34b8e2dbd71",
+        "comments": 0,
+        "scope": "Actual separate filing after initial208member census; first395–398 affected fullGETs in04:42window,399/400bound to rootcreationresponses05:17:05. New214projection is not fresh214fullcensus. Zero comments at each filing observation, not a permanent claim.",
+        "state": "open"
+      },
+      "repairReport": "repairs/cohort-2026-09-09-native-followups.md#post-r11-sequential-repairs-and-fixture-follow-up",
+      "verificationRequired": "Affected native/common-test replay remains; no physical/independent/release credit.",
+      "postR11FinalRepairReference": "checkpoint.json nativeFollowups.postR11SequentialFollowups.repairs.400"
+    },
+    {
+      "number": 401,
+      "title": "[AUDIT][Low] Platform process fixture skips remaining cleanup after a group-signal failure",
+      "url": "https://github.com/p2pKit/P2pKit/issues/401",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "A fixture group-signal or leader-wait exception skips remaining process retirement operations.",
+      "affectedComponentsExcerpt": "scripts/tests/run-platform-tests-test.py OwnedProcessGroupTest.resistant_worker_control finalizer.",
+      "relatedIssuesAndDependencies": [
+        157
+      ],
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
+      "githubStateAtListRefresh": null,
+      "githubStateAtIndividualRefresh": "open",
+      "assessmentAtCheckpoint": "Distinct source-confirmed fixture exception coupling; original native group-EPERM cause remains157.",
+      "recordedFixCommitsOrFinalRevision": [
+        "f0b5789f665b585d8f4d6508bdfbbb42a4f1f8a5"
+      ],
+      "recordedIndependentReview": "APPROVE_FINAL_REPAIR/no findings; SHA256 3036ae09a6e4ffa6a73a7153c00f2eebf307b865e1d777debbf0bae77afeec9c",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/401"
+      ],
+      "initialFilingObservation": {
+        "number": 401,
+        "title": "[AUDIT][Low] Platform process fixture skips remaining cleanup after a group-signal failure",
+        "createdUtc": "2026-09-10T05:52:20Z",
+        "bodySha256": "3feddeab668e5d19f70481bd9bea77b2706905e67075b9c96943e2750b1ca703",
+        "requestSha256": "07186f572b748bb20c653f7a3da9dcc45469983eb21fbc2f6f1fe05552864f1e",
+        "responseSha256": "c46dae2000849d72dd33312dff739a4c7d6b972cdae4f05273861e7b0f5d2a94",
+        "comments": 0,
+        "scope": "Actual05:52:20Z separate filing; duplicate review separates fixture exception coupling from unresolved157 native group-EPERM cause. Zero comments is filing-time only; no fresh215 census.",
+        "state": "open"
+      },
+      "repairReport": "repairs/cohort-2026-09-09-native-followups.md#post-r11-sequential-repairs-and-fixture-follow-up",
+      "verificationRequired": "Focused correction complete; separate native failure-state investigation remains157. No Darwin/group-EPERM-cause/wholeaudit approval.",
+      "postR11FinalRepairReference": "checkpoint.json nativeFollowups.postR11SequentialFollowups.repairs.401"
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-10T02:41:40.936599+00:00",
+  "lastDispositionUpdateUtc": "2026-09-10T06:17:26.583910+00:00",
   "githubRefreshEvidence": {
     "startedUtc": "2026-09-08T10:24:33.734412+00:00",
     "endedUtc": "2026-09-08T10:30:05.205645+00:00",
@@ -10563,18 +11102,18 @@
     "scope": "Allopenbody/link/ownmetadata and completecomment reconciliation; serial freshness/unchangedclosed/PRreuse limits explicit. Current approval arithmetic includes388after this GitHub report; no new row."
   },
   "nativeFollowups": {
-    "recordedUtc": "2026-09-10T02:41:40.936599+00:00",
+    "recordedUtc": "2026-09-10T06:17:26.583910+00:00",
     "report": "repairs/cohort-2026-09-09-native-followups.md",
     "currentCounts": {
-      "repairApproved": 165,
-      "denominator": 208,
+      "repairApproved": 173,
+      "denominator": 215,
       "reviewedNoRepair": 1,
-      "resolved": 166,
-      "unresolved": 42,
-      "repairOrNativeValidation": 18,
+      "resolved": 174,
+      "unresolved": 41,
+      "repairOrNativeValidation": 17,
       "externalValidation": 21,
       "ownerDecisions": 3,
-      "newAuditFindings": 75
+      "newAuditFindings": 82
     },
     "newlyApprovedIssues": [
       172,
@@ -10585,12 +11124,20 @@
       392,
       391,
       393,
-      394
+      394,
+      390,
+      250,
+      261,
+      379,
+      395,
+      399,
+      400,
+      401
     ],
     "evidenceReference": "checkpoint.json nativeFollowups",
     "previousCurrentProvenance": "156/201 independently approved repository-repair rows (77.6%); 45 remaining (22.4%): 23 repairs, 21 external-validation rows and architecture decision #120; 68 new audit findings. Five independently approved followup repairs382/384/385/386/387 are locally committed;383 remains source-confirmed/native NOT_RUN.151/201 filing-time and151/195 cohort snapshots stay historical. Latest15:27 bounded all-open/body/delta observation matches201 inventory IDs, not a fresh complete-history crawl. No closure/platform/release acceptance; whole audit NOT_READY;133 NOT_STARTED.",
     "previousDispositionUpdateUtc": "2026-09-09T15:31:07.028235+00:00",
-    "scope": "394finallyapproved/local79a18:165repair/166resolved of208,42unresolved.390sourceapproved21339/nativepending;currentmechanical557156R11requestNOT_PUSHED/NOT_RUN. ExistingR10UNKNOWN/62omissions/fullcleanupNOT_PROVEN/productsNOT_RUN andpriorfailures preserved.",
+    "scope": "173/215 independently approved repository repairs (80.5%); 174/215 independently resolved rows (80.9%) including #287 without a repair; 41 unresolved (19.1%): 17 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 82 new audit findings. Final399/400/401approved/localf0b;396–398nativepending. R11wholeFAIL retained; R12planned only.",
     "newIssues": [
       388,
       389,
@@ -10598,13 +11145,58 @@
       391,
       392,
       393,
-      394
+      394,
+      395,
+      396,
+      397,
+      398,
+      399,
+      400,
+      401
     ],
     "reviewedNoRepairIssues": [
       287
     ],
     "r10EvidenceReference": "checkpoint.json nativeFollowups.appleR10",
-    "postR10FollowupsReference": "checkpoint.json nativeFollowups.postR10Followups"
+    "postR10FollowupsReference": "checkpoint.json nativeFollowups.postR10Followups",
+    "stateBeforeR11": {
+      "recordedUtc": "2026-09-10T02:41:40.936599+00:00",
+      "currentCounts": {
+        "repairApproved": 165,
+        "denominator": 208,
+        "reviewedNoRepair": 1,
+        "resolved": 166,
+        "unresolved": 42,
+        "repairOrNativeValidation": 18,
+        "externalValidation": 21,
+        "ownerDecisions": 3,
+        "newAuditFindings": 75
+      },
+      "newlyApprovedIssues": [
+        172,
+        176,
+        378,
+        389,
+        388,
+        392,
+        391,
+        393,
+        394
+      ],
+      "newIssues": [
+        388,
+        389,
+        390,
+        391,
+        392,
+        393,
+        394
+      ],
+      "scope": "394finallyapproved/local79a18:165repair/166resolved of208,42unresolved.390sourceapproved21339/nativepending;currentmechanical557156R11requestNOT_PUSHED/NOT_RUN. ExistingR10UNKNOWN/62omissions/fullcleanupNOT_PROVEN/productsNOT_RUN andpriorfailures preserved."
+    },
+    "r11EvidenceReference": "checkpoint.json nativeFollowups.appleR11",
+    "postR11RepairReference": "checkpoint.json nativeFollowups.postR11Repair395",
+    "postR11SequentialFollowupsReference": "checkpoint.json nativeFollowups.postR11SequentialFollowups"
   },
   "githubOpenObservationBeforeResumed1951": {
     "startedUtc": "2026-09-09T15:27:45.724357+00:00",
@@ -10644,18 +11236,51 @@
   "postR10FollowupsReference": "checkpoint.json nativeFollowups.postR10Followups",
   "latestGithubOpenIssueObservation": {
     "apiWindowUtc": [
-      "2026-09-10T02:24:47.699838+00:00",
-      "2026-09-10T02:37:32.433205+00:00"
+      "2026-09-10T04:30:17.527902+00:00",
+      "2026-09-10T04:42:16.717296+00:00"
     ],
-    "openIssues": 208,
-    "closedIssues": 107,
+    "openIssuesAtInitialCensus": 208,
+    "closedIssuesAtInitialCensus": 107,
     "pullRequests": 79,
     "openPullRequests": 7,
     "freshLocalFullBodies": 394,
-    "completeVisibleComments": 545,
-    "reportSha256": "5bfaab9875a356a05266acaebe27c8e604fd44ba27486de73c3b7282679e6b01",
-    "reference": "checkpoint.json nativeFollowups.githubPost394Refresh",
-    "scope": "Fresh208open membership, all394localbodies and545visiblecomments countmatched; unchanged detailed79local/117upstream histories reused. Closing3deltasempty. Not repairapproval/fullhistoryrecrawl/Actionslease."
+    "reusedVisibleComments": 545,
+    "initialRetainedCommentProjection": 546,
+    "individualAdditions": [
+      395,
+      396,
+      397,
+      398,
+      399,
+      400,
+      401
+    ],
+    "inventoryAfterSeparatelyBoundFilings": 215,
+    "reportSha256": "876e69e59d60b546f27ad9211c43ae395d978d5b62bc9cb3cf5e7516bf62b6be",
+    "reference": "checkpoint.json nativeFollowups.githubPostR11Refresh; postR11Filings; postR11SequentialFollowups.pre401FilingDelta",
+    "scope": "Initial208membership/394bodies and reused histories retain04:30–04:42 bindings; seven actual separately bound filings yield215. Root05:48four-GET delta contains only399/400filings/no comments;157body/fourcomments returned unchanged. Not fresh215census or full-history reread."
   },
-  "githubIssueListRefreshedUtcBeforePost394": "2026-09-10T01:00:15.892733+00:00"
+  "githubIssueListRefreshedUtcBeforePost394": "2026-09-10T01:00:15.892733+00:00",
+  "currentStateBeforeR11": {
+    "provenance": "165/208 independently approved repository repairs (79.3%); 166/208 independently resolved rows (79.8%) including #287 without a repair; 42 unresolved (20.2%): 18 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 75 new audit findings. Currentlocal557156 includesfinalapproved394repair79a18 andsourceapproved39021339; NOT_PUSHED/R11PLANNED_NOT_RUN.394verificationat21339+493d, olderR10/CLI9ecd scopes retained.All208open members freshly corroborated02:24:47-02:37:32UTC; all394localbodies/545visiblecomments fresh, detailed79local/117upstream histories explicitly reused. See checkpoint.json nativeFollowups.githubPost394Refresh; no metadata-derived repaircredit. WholeauditNOT_READY;133NOT_STARTED.",
+    "githubIssueListRefreshedUtc": "2026-09-10T02:37:32.433205+00:00",
+    "lastDispositionUpdateUtc": "2026-09-10T02:41:40.936599+00:00",
+    "latestGithubOpenIssueObservation": {
+      "apiWindowUtc": [
+        "2026-09-10T02:24:47.699838+00:00",
+        "2026-09-10T02:37:32.433205+00:00"
+      ],
+      "openIssues": 208,
+      "closedIssues": 107,
+      "pullRequests": 79,
+      "openPullRequests": 7,
+      "freshLocalFullBodies": 394,
+      "completeVisibleComments": 545,
+      "reportSha256": "5bfaab9875a356a05266acaebe27c8e604fd44ba27486de73c3b7282679e6b01",
+      "reference": "checkpoint.json nativeFollowups.githubPost394Refresh",
+      "scope": "Fresh208open membership, all394localbodies and545visiblecomments countmatched; unchanged detailed79local/117upstream histories reused. Closing3deltasempty. Not repairapproval/fullhistoryrecrawl/Actionslease."
+    }
+  },
+  "postR11FilingsReference": "checkpoint.json nativeFollowups.postR11Filings",
+  "postR11PublicationsReference": "checkpoint.json nativeFollowups.postR11Publications"
 }

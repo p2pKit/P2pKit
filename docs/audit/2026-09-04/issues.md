@@ -1,48 +1,34 @@
 <!-- audit-current:start -->
-# Current issue dispositions — 208-row inventory
+# Current issue dispositions — 215-row inventory
 
-165/208 independently approved repository repairs (79.3%); 166/208 independently resolved rows (79.8%) including #287 without a repair; 42 unresolved (20.2%): 18 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 75 new audit findings. **Whole audit NOT_READY; #133 independent NOT_STARTED.**
+173/215 independently approved repository repairs (80.5%); 174/215 independently resolved rows (80.9%) including #287 without a repair; 41 unresolved (19.1%): 17 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 82 new audit findings. **Whole audit NOT_READY; #133 independent NOT_STARTED.**
 
-**#391/#393 now have final independent native repair approval** at executed9ecd,
-not whole-host/product acceptance. #392's R9 approval remains. #394 is now
-**APPROVE_FINAL_REPAIR**, local79a18 plus approvedfixturefollowupbf65e7a.
-FivefocusedLinuxmethodsPASS; two existing methods also PASS through an owned symlink
-temporary root after two original path errors. No new native or repair-count credit. All80 R10executor
-methods pass, but laterpolicy2 fails recorded-identity reinspection and #390 stays
-unapproved. PARTIAL_SALVAGE62/full remote cleanupNOT_PROVEN; productsNOT_RUN.
-[Scoped391 outcome](https://github.com/p2pKit/P2pKit/issues/391#issuecomment-5611405453) · [Scoped393 outcome](https://github.com/p2pKit/P2pKit/issues/393#issuecomment-5611405568).
-Fresh GitHub02:24:47–02:37:32UTC: **315 issues,208 open/107 closed;79 PRs,7 open**.
-All394 local issue/PR bodies and545 visible comments freshly returned/count-matched;
-old393 bodies/543 comments unchanged. Only known394 filing and391/393 outcomes are
-new; closing3 deltas empty, no changed owner decision/conflict. Detailed79-local/
-117-upstream PR histories remain explicitly reused; prior visibility gaps remain.
-All208 inventory members are now freshly corroborated, not merely207+filing.
-This serial metadata reconciliation grants no repair credit or execution lease;
-see `checkpoint.json` `nativeFollowups.githubPost394Refresh` and the current report.
-Earlier tables below remain dated historical snapshots.
+**#399/#400/#401 final repairs approved**, local repair headf0b5789. Affected native
+corroboration remains;401does not resolve #157's unknown native group-EPERM cause.
+Earlier R11 native approvals/395approval stand;396–398 remain native-pending. See
+[repair evidence](repairs/cohort-2026-09-09-native-followups.md#post-r11-sequential-repairs-and-fixture-follow-up).
 
-## Unresolved repairs / native or platform acceptance (18)
+## Unresolved repairs / native or platform acceptance (17)
 
 | Issue | Work | Current disposition |
 | --- | --- | --- |
-| [#156](https://github.com/p2pKit/P2pKit/issues/156) | TCP options/native helper | Source-approved; selected SDK/C compile and real Apple LAN parameter/recovery cases pending. |
-| [#158](https://github.com/p2pKit/P2pKit/issues/158) | Shared receive admission depth | Source-approved; actual Apple capacity16/FIFO/reject17/recovery cases pending;0.8.0+. |
-| [#191](https://github.com/p2pKit/P2pKit/issues/191) | Swift typed error bridge | Source-approved; real generated headers, Swift compile and typed-error cases pending. |
-| [#207](https://github.com/p2pKit/P2pKit/issues/207) | Strict teardown diagnostic convention | Linux19affected methods and Windowsr6fourLANmethods independently accepted; Windows FULL_SEALED cleanup approved. Whole207Apple/common pending, no row credit; prior failures preserved. |
-| [#209](https://github.com/p2pKit/P2pKit/issues/209) | Remote FIN receive behavior | Host accepted; actual Apple FIN-helper/half-close read termination pending. |
-| [#236](https://github.com/p2pKit/P2pKit/issues/236) | Published license/artifact policy | Real macOS all15 publication inspections pending; KLIB main embedding exemption remains narrow. |
-| [#250](https://github.com/p2pKit/P2pKit/issues/250) | Secure identity namespace serialization | Source-approved; actual Apple lock/storage/recovery tests pending, not physical Keychain proof. |
-| [#261](https://github.com/p2pKit/P2pKit/issues/261) | Legacy appId storage compatibility | Host accepted; literal legacy/current NSUserDefaults and collision/rollback native cases pending. |
-| [#275](https://github.com/p2pKit/P2pKit/issues/275) | Manual endpoint diagnostic privacy | Android/Desktop accepted; real Apple logger plus native diagnostic stream pending. |
-| [#279](https://github.com/p2pKit/P2pKit/issues/279) | Provisioning cancellation/shared bounded close | Source-approved/Desktop accepted; actual Apple owner/retry/recovery scope pending. |
-| [#291](https://github.com/p2pKit/P2pKit/issues/291) | iOS backup exclusion policy | Source-approved; Swift policy/wiring tests pending; physical backups remain separate. |
-| [#322](https://github.com/p2pKit/P2pKit/issues/322) | Session-owned diagnostic loss accounting | Kotlin scope accepted; Swift drop/clear/export cases pending. |
-| [#330](https://github.com/p2pKit/P2pKit/issues/330) | Active transfer history retention | Source-approved; real Swift active-row/history-cap cases pending. |
-| [#341](https://github.com/p2pKit/P2pKit/issues/341) | Ungrouped pairing port presentation | Rendered production-bound regression committed; locale/real parser Swift UI execution pending. |
-| [#363](https://github.com/p2pKit/P2pKit/issues/363) | First incoming offer consent controls | Rendered production-bound regression committed; actual first-offer UI/consent execution pending. |
-| [#379](https://github.com/p2pKit/P2pKit/issues/379) | Peer subscription hook/publication semantics | Host scope accepted; affected Apple/common hook/registry/discovery cases pending. |
-| [#383](https://github.com/p2pKit/P2pKit/issues/383) | Exact-run Swift lifecycle ownership | Source-approved86d4ca8 committed; native Swift/lifecycle/UI execution pending; Flow cancellation suspicion separate. |
-| [#390](https://github.com/p2pKit/P2pKit/issues/390) | Darwin census/identity observation | Finalsourceapproved21339/localNOT_PUSHED,14modeledPASS at9ecd+a3c676; nativeNOT_RUN/no final credit. R10UNKNOWN failure and historical attribution limits remain. |
+| [#156](https://github.com/p2pKit/P2pKit/issues/156) | TCP options/native helper | Source-approved; selected SDK header inspection is not actual Apple LAN compile/parameter/recovery acceptance. |
+| [#158](https://github.com/p2pKit/P2pKit/issues/158) | Shared receive admission depth | Actual Apple capacity16/FIFO/reject17/recovery cases remain pending;0.8.0+. |
+| [#191](https://github.com/p2pKit/P2pKit/issues/191) | Swift typed error bridge | Real generated headers retained; Swift compile/typed-error cases still not reached. |
+| [#207](https://github.com/p2pKit/P2pKit/issues/207) | Strict teardown diagnostic convention | Selected Linux/Windows scopes accepted; R11 core aggregate fails path-wake and later graph not completed. No whole-row approval. |
+| [#209](https://github.com/p2pKit/P2pKit/issues/209) | Remote FIN receive behavior | Actual Apple FIN-helper/half-close read termination pending. |
+| [#236](https://github.com/p2pKit/P2pKit/issues/236) | Published license/artifact policy | R11 consumer publication fails at adapter parser;15license inspections remain NOT_RUN. |
+| [#275](https://github.com/p2pKit/P2pKit/issues/275) | Manual endpoint diagnostic privacy | Real Apple logger/native diagnostic stream pending; Android/Desktop accepted. |
+| [#279](https://github.com/p2pKit/P2pKit/issues/279) | Provisioning cancellation/shared bounded close | Actual Apple owner/retry/recovery scope pending. |
+| [#291](https://github.com/p2pKit/P2pKit/issues/291) | iOS backup exclusion policy | Swift policy/wiring tests not reached; physical backups separate. |
+| [#322](https://github.com/p2pKit/P2pKit/issues/322) | Session-owned diagnostic loss accounting | Swift drop/clear/export cases not reached; Kotlin scope accepted. |
+| [#330](https://github.com/p2pKit/P2pKit/issues/330) | Active transfer history retention | Real Swift active-row/history-cap cases not reached. |
+| [#341](https://github.com/p2pKit/P2pKit/issues/341) | Ungrouped pairing port presentation | Rendered production-bound regression committed; real Swift UI/locale/parser execution pending. |
+| [#363](https://github.com/p2pKit/P2pKit/issues/363) | First incoming offer consent controls | Rendered production-bound regression committed; first-offer UI/consent execution pending. |
+| [#383](https://github.com/p2pKit/P2pKit/issues/383) | Exact-run Swift lifecycle ownership | Source-approved86d4ca8; native Swift/lifecycle/UI pending; Flow cancellation suspicion separate. |
+| [#396](https://github.com/p2pKit/P2pKit/issues/396) | iOS generation fixture sibling resources | Sourceapproved583d9/no findings; actual three native fixturemethods pending, no repaircount credit. |
+| [#397](https://github.com/p2pKit/P2pKit/issues/397) | Locale-independent canonical fingerprint | Sourceapproved3db03/no findings; two existing Linuxmethods PASS in two locales; actual Darwinsh validation pending. |
+| [#398](https://github.com/p2pKit/P2pKit/issues/398) | Hosted symlink fixture predicate | Sourceapproved65f3/no findings; two Linuxinlinecontrols PASS, corrected nativePython3.14 control pending; productionguardunchanged. |
 
 ## External validation (21)
 
@@ -69,7 +55,7 @@ commit, build, hardware or owner decision is required; GitHub issue remains open
 It adds one resolved row, **zero repair approvals**, and is not an implementation queue item.
 
 The PENDING_REMEDIATION JSON bucket retains274/284 for historical category continuity;
-current work counts separate those decisions from18 genuine repair/native rows.
+current work counts separate those decisions from17 genuine repair/native rows.
 Physical/independent/professional acceptance attached to already-approved rows remains
 open separately. No artifact/source approval converts a failed graph intoPASS.
 

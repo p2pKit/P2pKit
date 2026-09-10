@@ -1,56 +1,36 @@
 <!-- audit-current:start -->
-# Current follow-ups after R10
+# Current follow-ups after R11
 
-165/208 independently approved repository repairs (79.3%); 166/208 independently resolved rows (79.8%) including #287 without a repair; 42 unresolved (20.2%): 18 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 75 new audit findings. **Whole audit NOT_READY; #133 independent NOT_STARTED.**
+173/215 independently approved repository repairs (80.5%); 174/215 independently resolved rows (80.9%) including #287 without a repair; 41 unresolved (19.1%): 17 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 82 new audit findings. **Whole audit NOT_READY; #133 independent NOT_STARTED.**
 
-Fresh02:24:47–02:37:32UTC GitHub reconciliation corroborates all208 open members;
-no new decision/conflict. See `checkpoint.json` `nativeFollowups.githubPost394Refresh`
-for fresh bodies/comments versus explicitly reused detailed histories. No repair credit.
-
-1. **R11 planned NOT_RUN.** Currentlocalbf65e7a includes mechanicalcomment10-to11
-   at557156,390sourceapproved21339,394finallyapproved79a18 and its approved
-   two-line owned-temp-root correction (controlledLinuxsymlink2ERROR->2PASS).
-   Production/assertions unchanged; no Macexecution implied. NOT_PUSHED. Refresh
-   Actions/refs and hold executionlease/sourcefreeze **BEFORE triggeringpush**.
-   Require changedDarwin realidentity/stale-token/sentinel/consumer controls and
-   actualpolicy2/GPGcaller, then inspect native/product/stop/evidence outcomes.
-   #390 remains nativepending/no completioncredit. #394's exact493d correction
-   passes5focusedLinuxmethods after2originalfailures; no newnative/product credit.
-2. **#391/#393 final native repairs are independently approved**; #392 retains R9
-   approval. Do not repeat unchanged accepted cases. R10's80mixed executorPASS and
-   SDK/header/XcodeGen/policy0/1 successes do not establish product acceptance.
-3. Resume actual native/platform obligations **156,158,191,207,209,236,250,261,
-   275,279,291,322,330,341,363,379,383** once the infrastructure failure is resolved.
-   #236 still needs15publication inspections; selected Windows/Linux207 successes
-   are not fullWindows or Apple acceptance. SDK header declarations alone are not
-   bridge compilation, generated Swift headers or runtime behavior.
-4. Preserve R10 **null/null/125, UNKNOWNdrain/pipe finalization,62omissions,
-   PARTIAL_SALVAGE/full remote cleanupNOT_PROVEN**, and all originalR7/R8/R9,
-   Windows/Linux failures.01:37:27 lease release is administrative only. Fresh
-   Actions/ref observations and a held execution lease/source freeze are required
-   **BEFORE any triggering audit-branch push**; no local/hosted build overlap.
-5. Finish current whole-source/qualified coverage, `./gradlew check --console=plain`,
+1. **#399/#400/#401 independently approved/no findings**, repair headf0b5789;
+   locally committed/not pushed at this snapshot. Scoped399red/23PASS,400sixPASS,
+   401twofailedsubcases/fourPASS remain source-bound, not native/wholecheck results.
+   Allapplicable stops0/no survivors;399/400dependent outputs disposed,401nooutputs.
+2. #401fixture-finalizer exception coupling is fixed; keep unknown native group-EPERM
+   state under #157 separate. Observe actual phase/identity before attribution;
+   never infer zombies or convert permission denial to absence/success.
+3. Preserve390/250/261/379native and395focused approvals.396–398need actual native
+   acceptance. R11wholeFAIL, nativeIntel skip, later graph/ABI/consumer/Swift gaps and
+   R10UNKNOWN/62omissions/fullremoteCleanupNOT_PROVEN remain historical evidence.
+4. Prepare affected replay after prerequisite review. **R12 planned only**; future
+   workflow/operational/admin commits need separate binding. Refresh global Actions/
+   refs; acquire task-owned lease/source freeze **before triggering audit push**;
+   no overlapping local/hosted builds. Prior R11 lease is released, not reusable.
+5. Finish current whole-source corroboration, `./gradlew check --console=plain`,
    applicable samples/isolated consumers/nativeIntel/fullWindows and inspected
-   strict supportedMacDokka/ABI/Swift/release gates. The separately completed CLI
-   follow-up below is narrowly scoped, not a new rootcheck/campaign pass. The prior1780fresh rootcheck remains0dbc+CLIpatch; strictLAN34
-   Linux Dokka failure remains. Component replay is not the release monolith.
-6. Allocate21 external campaigns and owner decisions **120/274/284**. Hosted tests
-   do not prove physical/ART/OEM/headful/hostile/independent133/crypto behavior.
-   Swift Task.cancel→KotlinFlow propagation remains a separate unproved suspicion.
+   ABI/Swift/release gates. See [remaining rows](issues.md); SwiftTask.cancel→KotlinFlow
+   is a separate unproved suspicion. Strict MacDokka components are not a release
+   monolith pass. Physical/hostile/independent/crypto and120/274/284decisions remain.
 
-Actual clean9ecd installed-CLI follow-up is independently **APPROVE_SCOPED_LINUX_RUNTIME**:
-installDist17tasks/zero tests and runtime both0/0/0; receiverFDlimit restored in
-0.104195s, same-session4KiB recovery, pending-unaccepted-offer SIGTERM143/0.407201s.
-32,867,485 disposable bytes removed after review; logs/JSONL/allZIPs retained,
-no owned workers. This is not fullPS-T05/D2/D5 or external/native qualification.
-
-[Current queue](issues.md) · [R10 report](repairs/cohort-2026-09-09-native-followups.md#apple-r10-final-fixture-approvals-later-policy-failure).
-Only current authored deltas are newly inspected; historical administration stays
-qualified/reopened, not a new full-text audit. No coverage edits or cyclic hashes.
-Serialize at most2Gradleworkers/no parallel execution, retain all invocation logs,
-applicable owned-wrapper stops and exact-worker cleanup. Selectively remove only
-confirmed disposable outputs after dependent evidence; preserve source/caches.
-No force-push/main/closure/settings/tag/release authorization is added.
+Initial208membership+sevenactualfilings yields215, not freshcensus. Root05:48fourGETs
+returned only399/400/no comments;157body/fourcomments unchanged. Earlier complete-
+history reuse/visibility gaps retain their original bindings.
+[Repair evidence](repairs/cohort-2026-09-09-native-followups.md#post-r11-sequential-repairs-and-fixture-follow-up).
+Only current administrative deltas newly read; coverage self-row unbound. At most2
+Gradleworkers/no parallel execution; keep every log/isolatedstop, retire only owned
+workers, then remove confirmed disposable outputs. Preserve source/AGENTS/CLAUDE/
+userwork/caches; no closure/main/force-push/tag/settings/release authority.
 
 <!-- audit-current:end -->
 

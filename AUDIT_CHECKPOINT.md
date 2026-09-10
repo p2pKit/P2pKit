@@ -1,68 +1,36 @@
 <!-- audit-current:start -->
-# Current audit continuation — R10 outcome
+# Current audit continuation — post-R11 repairs
 
-**Whole audit NOT_READY.** **165/208 repairs approved (79.3%)**;
-**166/208 independently resolved (79.8%)**, including #287 without a repair.
-**42 unresolved (20.2%)**: #390 plus17 native/platform rows,21 external rows and
-3 owner decisions (#120/#274/#284).75 new findings; these are not effort percentages.
+**Whole audit NOT_READY; #133 independent NOT_STARTED.**
+173/215 independently approved repository repairs (80.5%); 174/215 independently resolved rows (80.9%) including #287 without a repair; 41 unresolved (19.1%): 17 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 82 new audit findings.
 
-Published/executed baseline `9ecd4e5be7fbbbae1c250c5de9170090fa8676a7`, tree
-`8c443ebeddfdeec32c60a32b9719f18552730b58`: normal audit push/ref verified01:10:40UTC,
-then Apple [R10](https://github.com/p2pKit/P2pKit/actions/runs/34424409933),10September01:10:51–01:13:59UTC.
-**#391 and #393 independently APPROVE_FINAL_REPAIR_NATIVE_EXECUTED**; #392's
-R9 approval remains. #393 passes readiness/same-token SIGTERM0/post-exitESRCH3/
-sentinel/cleanup; #391 passes all3 actual Darwin cancellation/recovery controls.
-Both safe outcomes are public and issues remain open; see the current report.
+Repair head `f0b5789f665b585d8f4d6508bdfbbb42a4f1f8a5`, tree `e6b39e865ea257669c3bf2d2d1a2cc17b6498a00`,
+locally committed/not pushed at this snapshot. **#399/#400/#401 APPROVE_FINAL_REPAIR**,
+no findings:399 deterministic red1failure then23PASS;400existing class6PASS;
+401actual-finalizer redtwofailedsubcases then4PASS including2realLinuxcontrols.
+These are scoped Linux results, not native/release acceptance. Allapplicable isolated
+wrapper stops0/no survivors;26,405,623dependent bytes disposed after400,401nooutputs.
+#401 fixes fixture exception coupling; #157's native group-EPERM cause stays unknown.
 
-R10's80 mixed executor methods PASS, command/owned-stop/final **0/0/0**;
-SDK provisioning, TCP-header inspection, XcodeGen and policy0/1 also pass.
-**Whole job FAILS later** in policy2 recorded-Darwin-identity reinspection:
-**null/null/125**, UNKNOWN final drain/pipe completion. **#390 remains unapproved**;
-exact failing identity/cause is not established. All library/Swift/UI/ABI/Dokka/
-publication/consumer/release products **NOT_RUN**; SDK inspection is not compilation.
-Artifact10132152568: **PARTIAL_SALVAGE,62 omissions**, full tree/remote cleanup
-**NOT_PROVEN**, safe=false. Accepted case retirement is not whole-host cleanup.
-Global idle01:36:23–29 and lease release01:37:27UTC are administrative observations,
-not a standing execution lease, remote cleanup proof or future run outcome.
+Earlier **#390/#250/#261/#379 native approvals and #395 final pushed repair** stand.
+396–398 remain source-approved/native-pending. R11 at clean18681 was **whole FAIL**,
+despite FULL_SEALED/PROVED evidence and owned cleanup. Later root/ABI/consumer/Swift/
+Intel gates are not credited; all R10/R11 failures remain in the repair report.
 
-Fresh GitHub02:24:47–02:37:32UTC: **315 issues,208 open/107 closed;79 PRs,7 open**.
-All394 local issue/PR bodies and545 visible comments freshly returned/count-matched;
-old393 bodies/543 comments unchanged. Only known394 filing and391/393 outcomes are
-new; closing3 deltas empty, no changed owner decision/conflict. Detailed79-local/
-117-upstream PR histories remain explicitly reused; prior visibility gaps remain.
-All208 inventory members are now freshly corroborated, not merely207+filing.
-This serial metadata reconciliation grants no repair credit or execution lease;
-see `checkpoint.json` `nativeFollowups.githubPost394Refresh` and the current report.
+215rows = initial208membership + seven separately bound filings, **not a fresh215
+census**. Root05:48four-GET delta returned only399/400/no comments;157body/fourcomments
+unchanged. Earlier full-body/comment/PR freshness and visibility limitations remain.
 
-#390's census follow-up remains finally source-approved/local21339, nativepending;
-14modeledpasses ran at9ecd+exacta3c676diff, not a clean21339/native execution.
-**#394 APPROVE_FINAL_REPAIR**, no findings, locally committed
-`79a18dee1f9b4196db29ecf14b5bd2638849cef7`. Original2FAIL/3.009s/1-0-1 retained;
-final5PASS/7.302s/0-0-0 at21339+493d includes3realLinux nested success/raw,
-timeout/cancel controls; complete cleanup/real outerstop0/no project outputs.
-Current focused source `bf65e7a921a32bbdcca42bd868cf3ae306d8c8a0`, tree
-`4da795235429a5c4167ec276acca3ab8760e1f3e`, also canonicalizes the two test-owned temporary roots.
-Final394composition **APPROVE_FINAL_REPAIR**, review`83dee9c983b74319462b103c88d928cf7a1688824e5b310973fa44260e20154f`;
-controlledLinuxsymlink2ERROR->2PASS/3.009s, stops0/no survivors/temporaryroots removed.
-No production/assertion/no-follow change or observedMacfailure. MechanicalR11request remains557156.
-**NOT_PUSHED; R11 planned NOT_RUN.** No new390native/product credit.
+Next: affected native/product replay and #157 failure-state investigation. **R12 is
+planned only**; future workflow/integration commits require separate binding.
+Refresh global Actions/refs; hold task-owned lease/source freeze **before triggering
+push**; serialize builds, at most2Gradleworkers, preserve logs/isolated stops/exact
+owned cleanup. Finish whole-source corroboration, `./gradlew check --console=plain`,
+applicable samples/consumers and inspected Intel/Windows/ABI/Swift/release gates.
+Physical/hostile/independent/crypto evidence and owner120/274/284 decisions remain;
+no closure/main/tag/release authority. Preserve later root changes.
 
-Actual clean9ecd installed-CLI follow-up is independently **APPROVE_SCOPED_LINUX_RUNTIME**:
-installDist17tasks/zero tests and runtime both0/0/0; receiverFDlimit restored in
-0.104195s, same-session4KiB recovery, pending-unaccepted-offer SIGTERM143/0.407201s.
-32,867,485 disposable bytes removed after review; logs/JSONL/allZIPs retained,
-no owned workers. This is not fullPS-T05/D2/D5 or external/native qualification.
-
-Next: admit R11's changedDarwin identity/stale-token/sentinel/consumer controls
-and actualpolicy2/GPGcaller, then applicableAppleproducts; keep results/review
-and failed cleanup distinct. Refresh Actions/refs and hold the task-owned execution lease/source
-freeze **BEFORE any triggering audit-branch push**. Do not repeat unchanged accepted
-scopes. Finish current whole-source corroboration, required check/samples/consumers,
-nativeIntel/fullWindows and strict supportedMacDokka/ABI/Swift/release gates.
-Physical/hostile/independent133/professionalcrypto and owner decisions remain;
-**#133 independent NOT_STARTED**. No future source, commit or native result is inferred.
-
-[Current issue queue](docs/audit/2026-09-04/issues.md) · [R10 report](docs/audit/2026-09-04/repairs/cohort-2026-09-09-native-followups.md#apple-r10-final-fixture-approvals-later-policy-failure).
+[Bound repair evidence](docs/audit/2026-09-04/repairs/cohort-2026-09-09-native-followups.md#post-r11-sequential-repairs-and-fixture-follow-up).
 
 <!-- audit-current:end -->
 

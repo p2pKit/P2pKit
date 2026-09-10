@@ -549,3 +549,207 @@ The earlier557156 record remains its dated mechanical-request observation.
 No #390native/product/whole-audit credit. The previously completed497-link check
 passes; this wording-only follow-up adds no new link. No redundant build/link
 cycle is needed; JSON parsing and whitespace checks still apply.
+
+## Apple R11: scoped native approvals and product failures
+
+**Current successor,10September2026, bound to source65f3 after final395 and source-only396–398 reviews.**
+170/214 independently approved repository repairs (79.4%); 171/214 independently resolved rows (79.9%) including #287 without a repair; 43 unresolved (20.1%): 19 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 81 new audit findings. **Whole audit NOT_READY; #133 independent NOT_STARTED.**
+This section supersedes earlier planned-R11/current-pending statements only for the
+actual observations below. All earlier report text and failed evidence are retained.
+
+Actual [R11/1](https://github.com/p2pKit/P2pKit/actions/runs/34432810650), job102731677129,
+executes published clean `18681d6b93165e4fa7557aed95b92a09da6c8c90` / tree`0dec0fd73aed47223fd8b9f5e254e8428c35f88a`;
+job03:18:29–03:53:03UTC, host03:18:38–03:52:53UTC, macOS26.6.2ARM/Python3.14.7/Xcode26.5.
+**Whole result FAIL.** Artifact10135840583/4,737,391bytes SHA256
+`fcfd14de335ccd558cc337604af9f49a922842ebbc77d8536e39bcda338a27ec` is **FULL_SEALED,
+fullTreeCompletenessPROVED**, not salvage. Independent390 review checked all2,569
+manifest members; existing authenticated extraction2,575files and full-hash review
+were reused, not repeated. ManifestSHA256`a18d439562cd78703b948df7fe1292215a57163c8b14fd1df7cffc271e2c31a8`;
+hostSummarySHA256`5763c4b3b69c0ac90ae65d401271c64663a54cde0759e1fe3970fd528fea7aa2`.
+`safeToContinue=true` concerns complete evidence/owned cleanup, never product acceptance.
+
+### Final native repair verdicts
+
+- **#390 APPROVE_FINAL_REPAIR_NATIVE_EXECUTED**, no findings; finalcensus21339
+  unchangedat18681. ReviewSHA256`ebaf20cc808008674c6f600ca12baeeb1561105930e3a1434834d0628f071285`.
+  Actual saved-tokenSIGTERM0/targetexit-15/same-tokenESRCH3/live sentinel and allthree
+  six-identity cancellation/partial/prebind recovery controls pass. Four actual
+  known-PID identityEPERM events resolve to positively observed absence (attempts
+  2/3/2/2),17reconciliations resolved. Actualpolicy2/GPGcaller0/0/0. This does **not**
+  identify those PIDs as setuidps or establish R10's exact kernel cause.
+  [Published390outcome](https://github.com/p2pKit/P2pKit/issues/390#issuecomment-5613203287),04:33:28serverUTC.
+- **#250/#261/#379 APPROVE_FINAL_REPAIR_NATIVE_EXECUTED**, no findings; shared
+  independentreviewSHA256`3c4cd265e7f07c13e2053baf8506719d40c6c92c6d5d37483a32014e32e145dd`. All21original repairpostimages unchanged:
+  250`d4ce3598a1d139721e0a2744a3779f2f38bfc7de`,261`e0e52cb9598e9ba367420fa7f5d1c012832223c6`,379`f260136be7b6e5115c785965b3ee29e6d791439d`.
+  Actualnative **17/8/50methods PASS**:3namespace-lock+14storage/recovery;
+  1shared24-literalvector+7NSUserDefaults;4hooks+43registry+3discovery-reemit.
+  Fresh matching XML/execution/task/source bindings independently inspected; prior
+  successful host/source reviews reused. These75methods are not75newtests.
+  Publicoutcomes [250](https://github.com/p2pKit/P2pKit/issues/250#issuecomment-5613317013),
+  [261](https://github.com/p2pKit/P2pKit/issues/261#issuecomment-5613317195),
+  [379](https://github.com/p2pKit/P2pKit/issues/379#issuecomment-5613317360),04:46:12–14serverUTC,
+  after the refresh window; individually bound, not a later census. Allissues remainopen.
+
+No physicalKeychain/first-unlock/powerloss, AndroidART/persistence-device, lock-free/
+hard-time guarantee, SwiftTask-to-KotlinFlow, #207whole-row, Intelruntime, ABI, LAN/
+remainingrootgraph or external/release credit follows from these scoped approvals.
+
+### Actual component results and failed gates
+
+| Component | Actual R11 result / remaining boundary |
+| --- | --- |
+| Executor controls | 84mixed methodsPASS83.808s,0/0/0; not84independentnativeexperiments. |
+| Policy2/GPG | PASS0/0/0; previousR10failure remains historical. |
+| Policies3/13/18/27/30/33 | FAIL1/0/1 each; other28policy scripts PASS. |
+| Root platform profile | FAIL1/0/1: coreARMsim774PASS,Androidhost82PASS,JVM838PASS+1FAIL. Remaining LAN/provisioning/sample graphNOT_COMPLETED; ABI not reached. iosX64compiles/links,testSKIPPED. |
+| Artifact tasks/SBOM | PASS0/0/0: AndroidassembleDebug,CLIcheck/installDist,DesktopUItest/checkRuntime/hotRunArgfile/createDistributable,four strict supportedMacDokka publications,CycloneDX; SBOMinspectionPASS. |
+| Isolated consumers | FAIL1/0/1 at publication duplicateconsole parser; actual consumerbuild/15licensechecksNOT_RUN. |
+| XCFramework/XcodeGen | Build/minimumOSinspection/actualprojectgenerationPASS; both404857-byteheaders retained,SHA256`c4304db73e64cd944cd991505b0c50a05a0ea4a0addf2cafabe6b8b3e9f7a179`. |
+| Swift warnings build | FAIL65/0/65 in nestedprebuild provenance1/0/1 **beforeSwiftcompilation**; unit/UI NOT_RUN,simulatornull. |
+| Release monolith | NOT_EXECUTED_COMPONENT_REPLAY; component passes are not releaseapproval. |
+
+Corefailure is `NetworkPathRecoveryTest.pathSatisfiedWakesParkedReconnectHandlerBeforeDelayExpires`:
+second dial absent within10s; strict-logger incoming-handshake timeout is retained
+as suppressed teardown failure. Source triage identifies two feasible schedules:
+testReconnecting can precede Unsatisfied consumption; productionReconnecting is
+published before onWillReconnect captures wakegeneration. Actual R11trace does not
+identify which happened. Deterministic causality/regressions, not timeout extension,
+are required. Separate399/400actualfilings05:17:05 track these causes; no repair approval
+or cause-specific freshreproduction is inferred from filing or the shared R11failure.
+
+Policy27 group-drainEPERM stays **#157 follow-up**, not a proven zombie defect or
+#390duplicate. Earlier identical20methodsPASS; later resistant-worker failure lacks
+failure-time raw workerstate/signalphase. XNUzombie-onlygroups are a hypothesis;
+never turnEPERM into disappearance. Outer cleanup success does not excuse failed
+inner fixture cleanup/assertions. Triage hashes are retained inJSONappleR11.triage.
+
+### Actual findings395–400 and source/repair boundaries
+
+Root filed four distinct Low causes04:36:13–15serverUTC after currentbody/comment/
+linkedPR/closed-decision duplicate reconciliation:
+
+- [#395](https://github.com/p2pKit/P2pKit/issues/395): one adapter-appended singleton
+  cause shared by Swiftprovenance/consumers/policy3/policy13, not four defects.
+- [#396](https://github.com/p2pKit/P2pKit/issues/396): generationfixture omits two
+  sibling diagnosticJSONresources, distinct from346scheme/313352diagnosticbehavior.
+- [#397](https://github.com/p2pKit/P2pKit/issues/397): canonicalhash POSIXranges depend
+  on locale; actualnativeuppercase accepted, distinct from343GPG/314phase docs.
+- [#398](https://github.com/p2pKit/P2pKit/issues/398): fixture mocksPath.lstat while
+  actualguard callsPath.is_symlink; Python3.14 boundary differs, not demonstrated
+  production symlink bypass or373/378cause.
+
+**#395 APPROVE_FINAL_REPAIR**, no findings; independentreviewSHA256`9c97b5b312c2e791d4310383b4871b2e6c434ea070f8a41935c08d1094ee4b8b`;
+exactpatchSHA256`98f3939367aaca3d491e2ec447c6e876e518620040b266e844ad673bebd86b69` committed`1ea177bc4e3094e1e33f3cd3dac355b65db7faa4`,
+tree`89f4c45ce2e6e317e64b4fce39b951ecab516a56`. **Normal audit push/ref verified05:00:51.957775UTC**,
+[actual395outcome](https://github.com/p2pKit/P2pKit/issues/395#issuecomment-5613440522) posted05:01:31serverUTC.
+Twofiles only; original raw callerprefix and all unsafeoption/resource/provenance/
+ownership rejections remain. Only validated matching singleton defaults are omitted;
+callerduplicates remain untouched. Existing syntheticconsumer assertion also updated.
+
+Freshred04:40:10–11: newmethod15subcasesFAIL1/0/1 at18681+testonlypatch
+`c70eb58938eb3726b1bcb94eb7018637bd8c69aceceae018447ae96c22b11775`.
+Freshgreen04:41:11–19:9methodsPASS6.338s plus actual checked-inGradle9.7parser0,
+0/0/0 at18681+98f393, not clean1eaexecution. RealLinuxexecutor/syntheticconsumer
+integration retains exactrequestedargv/isolatedMavenpaths/receipts. Payload wrappers
+are synthetic, not productcompilation. All40retainedarchiveentries independently
+checked; fixturedeleted/noownedworkers or generatedoutputs, realouterwrapperstop0.
+Nativeaffected callers/policies remainpending. Required original red/green logs and receipts remain.
+
+Source-only finalreviews have no findings and **add no repaircount**:
+396`583d9ba239d4904320fbc401038abf862245e743` adds only twoexacttracked resources;
+397`3db03bb08521547edf77b9a923eb4fc6ddce208d` replaces the shellrange with literalASCII;
+398`65f3f2c8d6b827285704cc54093d9368dc86cccc` models the exactis_symlinkpredicate.
+Currentlocal65f3/tree`f0d2345ae1c7976874793d7d13f603ca002dc79d` is **not yet pushed at this observation**.
+396's actualthreeXcodeGenmethods pending (R11setup0tests).397's twoexistingLinuxsh
+methods PASS C1.157s/en_US.utf8 1.161s,0/0/0; exactR11localeunknown, nativepending.
+398's twoexistinginlinecontrols PASS0.012s/r2,0/0/0; r1wrongclassselector2ERROR
+preserved, not redproductfailures; actualnativePython3.14 pending. No survivors or
+outputs in localinvocations; all actualownership/assertions remain.
+ReviewSHA256s:396`b3c0e9f25505ad012319db16832cee7d5c67ee1e723a6518e856f95076712338`,
+397`df8ac8ba1d0e627a6d0c7216bc89adab557136ea2a3ae41b1ef9f66eacc1c2c5`,
+398`671eacffc44779db5b2a58aa7d0102fcaaafaa459f9e5dc3d85b8e477cd62301`.
+
+[399](https://github.com/p2pKit/P2pKit/issues/399) productionpublication and
+[400](https://github.com/p2pKit/P2pKit/issues/400) fixtureconsumption were actuallyfiled
+05:17:05serverUTC. Distinctcauses/currentcallers plus205/207/245/closed15/20 inspected;
+sourceconfirmed, freshcause-specific localreproduction NOT_STARTED **atfiling**.
+PriorR11doesnotuniquelyattributeonefailure. Fix399before400 sequentially, preserve
+watchdogregistration/terminalfencing and strengthen testcausality withouttimeouts.
+Laterrootworkingchanges remain outside this65f3source-bound successor.
+
+### GitHub, cleanup and continuation bindings
+
+GET-only04:30:17.527902–04:42:16.717296UTC,146success/zero APIparserfailures.
+Initial315issues208open/107closed;79PRs7open;all394fullbodies fresh/unchanged.
+Prior545completevisiblecomments explicitlyreused plus known394outcome5612132413:
+546projection countmatches all394initialitems, not fresh endpoint retrieval/manual
+reread ofall546comments.79localPRlistmetadata and117firsthop fullRESTmetadata match;
+REST lacks historicalGraphQLlastEdited/reviewthread/countfields, not relabeledfresh.
+Detailed unchangedhistories reused. Closing bounded delta has only390outcome and
+four actualfilings; fullaffectedbodies/comments/timelines fresh. **212=fresh208+four
+separatelyboundfilings** at04:42, not a new212fullcensus. Later05:17:03pointdelta
+returns only known250/261/379/395outcomes; actual399/400filings then yield214, not a
+new214census. Allfour lateroutcomes are separatepublications. RefreshreportSHA256`876e69e59d60b546f27ad9211c43ae395d978d5b62bc9cb3cf5e7516bf62b6be`;
+reconciliationSHA256`89bdaf96c66d21abd9ff4db081fd1cd39ab9e7c4e82f6118cb3f98feab60d11f`. Prior402local/33upstream
+omittedpatchfields,7inlinegaps,3historicalconversationdiscrepancies and checkout2454
+unexplainedbacklink preserved. No unrelated decision/conflict or fabricated lostbytes.
+
+All45outerreceipts: applicableownedwrapperstop0, unchangedsource, errors[] and
+ownedSurvivors[]. Four outputcleanupreceipts errors[]; precise disposableproducts
+removed after retaineddependent evidence. Source/sharedcaches/requiredlogs retained.
+FreshglobalActionsidle04:25:22–28 precedes lease release04:27:47.671895UTC, zero
+sourcefreezeviolations; releaseSHA256`270cd9a6e158e3448920129f5743a48da3a316149276c3b838ef9bf6483638a4`.
+This is administrative release, not a futurelease. R10UNKNOWN/null-null-125/62omissions/
+PARTIAL_SALVAGE/fullremoteCleanupNOT_PROVEN and allpriorfailures stay unchanged.
+
+Continue [currentqueue](../issues.md)/[follow-ups](../followups.md), sequential fixes
+and fresh independentfinalreviews, then affectednative replay under lease/freeze.
+Currentwhole-source/check/samples/consumers/Intel/fullWindows/ABI/Swift/release and
+physical/hostile/independent133/professionalcrypto/ownerdecisions remain. Sixadminfiles
+retain scopedcurrent-delta/readhistorical limitations; report composes unchangedprior
+fullread with completeauthorread ofthisdelta. No cycliccoveragehash/selfapproval.
+This preparation used private data/GET-onlyrefresh/read-onlygit; no projectbuild/test,
+repositoryedits/imports/APIwrites/processcontrol or subagents. Root owns application,
+currentcommit/publication reconciliation and finaladministrativeacceptance.
+
+## Post-R11 sequential repairs and fixture follow-up
+
+**Current repair head,10September2026, `f0b5789f665b585d8f4d6508bdfbbb42a4f1f8a5`, tree `e6b39e865ea257669c3bf2d2d1a2cc17b6498a00`; locally committed/not pushed.**
+173/215 independently approved repository repairs (80.5%); 174/215 independently resolved rows (80.9%) including #287 without a repair; 41 unresolved (19.1%): 17 repair/native rows, 21 external-validation rows and 3 owner decisions (#120/#274/#284). 82 new audit findings. Whole audit **NOT_READY**;133independent **NOT_STARTED**.
+The preceding65f3-bound R11 section is the earlier snapshot, not current399/400/401 disposition.
+
+| Issue | Exact final repair | Independent verdict | Focused evidence |
+| --- | --- | --- | --- |
+| [399](https://github.com/p2pKit/P2pKit/issues/399) | `243d0a241adf65e3eaee1b2e3232306ea5dac222`; diffSHA`5d4acb55f31d095123df95ede2e6fb7d31fdb6cbf5d9776e45a681325a0efc1c` | APPROVE_FINAL_REPAIR/no findings; reviewSHA`5d3c316da2ce2b7e159c15a5a8a608e48bc349da1a11f274b28714f88b8c02b6` | Original production1test/1intended baseline0vs1 failure; exact same regression then23PASS across watchdog/path/retry classes. |
+| [400](https://github.com/p2pKit/P2pKit/issues/400) | `810d8c9a0e04e6cf98d98b9578bca720fd28d733`; diffSHA`3d9002f10a227875f711bec03d9e9a4802034c16f053a04659eeaa10f283c645` | APPROVE_FINAL_REPAIR/no findings; reviewSHA`4b8ea99a49197845ae84dbd493bcb9e78f1eb75d888514de4763644e76672748` | Existing six-method path classPASS; no claimed fresh cause-specific red. |
+| [401](https://github.com/p2pKit/P2pKit/issues/401) | `f0b5789f665b585d8f4d6508bdfbbb42a4f1f8a5`; diffSHA`034ae6ad10335ad0e40ea9667ccd67a849bf6bcd7623da2bb207e18829cdf89f` | APPROVE_FINAL_REPAIR/no findings; reviewSHA`3036ae09a6e4ffa6a73a7153c00f2eebf307b865e1d777debbf0bae77afeec9c` | Actualfixture red1method/twofailedsubcases; final4PASS0.676s, including2realLinuxresistant-worker controls. |
+
+399snapshots path-wake generation before state publication; lazy-watchdog/terminal
+fences remain.400uses consumed Unsatisfied as sole initial loss trigger, preserving
+second-dial2, Connected rearm and shorter-than-retry bounds while removing obsolete
+wire-warning allowance. Native/common-test replay remains; R11 cannot distinguish
+which schedule caused its historical failure. No authenticated-v2/physical/independent
+or release qualification follows from these Linux/JVM in-memory fixtures.
+
+Red05:23:20–05:24:39UTC had1/0/1; green05:26:13–05:26:59 had0/0/0;400run05:44:37–
+05:45:51 had0/0/0. Allsourceunchanged/noownedSurvivors.399deferred generated outputs
+were disposed after400dependent verification:26,405,623bytes, evidence/caches/source
+retained. Exact receipts and verdicts are in `nativeFollowups.postR11SequentialFollowups`.
+
+[401](https://github.com/p2pKit/P2pKit/issues/401) actually filed05:52:20Z: fixture
+finalizer exception coupling skips remaining retirements after group-signal or
+leader-wait failure. Final401nestedfinally correction attempts all four retirements
+with unchanged deadlines/ownership and visible/chained errors; no swallowing EPERM.
+Red05:54:19–20UTC was1/0/1; green05:56:36–38 was0/0/0, unchangedsource/no survivors/
+nooutputs. Counts are Pythoncommand.log methods, not empty GradleXML counters.
+Keep the unknown native group-EPERM cause under157 separate:401is not its fix.
+Full filing/request/response equality checked; requestSHA`07186f572b748bb20c653f7a3da9dcc45469983eb21fbc2f6f1fe05552864f1e`,
+responseSHA`c46dae2000849d72dd33312dff739a4c7d6b972cdae4f05273861e7b0f5d2a94`. Root05:48:17–19fourGETs found only399/400
+filings/no comments and returned157body/fourcomments unchanged. No fresh215census:
+initial208membership+sevenfilings. Earlier history/visibility/failed-run limits stand.
+
+Coverage composes three399/400semantic deltas with prior reads; watchdog is
+conservatively semantic-delta, not a claimed full-file reread.401reviewer explicitly
+read its complete changed testfile, retaining FULL_TEXT. Sixadminsiblings stay
+scoped/reopened; selfrowunbound. R12plannedonly; future workflow/admin integration
+needs separate binding. No whole-repository/native/physical/external/release credit.
