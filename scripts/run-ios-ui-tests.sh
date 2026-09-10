@@ -92,7 +92,6 @@ else
         -resultBundlePath "$DERIVED_DATA/Logs/Test/swift-cancellation-probe.xcresult" \
         -parallel-testing-enabled NO \
         -maximum-concurrent-test-simulator-destinations 1 \
-        -test-iterations 1 \
         -only-testing:p2pkit-sample-cancellation-probe-tests/SwiftFlowCancellationProbeTests/testSwiftTaskCancellationFinishesActualDiagnosticCollection \
         SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
         test

@@ -100,12 +100,12 @@ class LauncherLifecycleTest(unittest.TestCase):
                 pass
             process.communicate(timeout=5)
 
-    def start(self, script="run-ios-app.sh", cwd=None, absolute=False, **overrides):
+    def start(self, script="run-ios-app.sh", cwd=None, absolute=False, arguments=(), **overrides):
         cwd = cwd or self.repo
         path = self.repo / "scripts" / script
         # The default matches Gradle's repository-root, relative-path invocation.
         argument = str(path) if absolute else os.path.relpath(path, cwd)
-        process = subprocess.Popen([BASH, argument], cwd=cwd,
+        process = subprocess.Popen([BASH, argument, *arguments], cwd=cwd,
                                    env=dict(self.env, **overrides), stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, text=True, start_new_session=True)
         self.processes.append(process)
@@ -177,6 +177,25 @@ printf 'invoked\\n' >> fake-gradle-invocations
         self.finish(self.start("run-ios-ui-tests.sh"))
         self.assertFalse(self.lock.exists())
         self.assertEqual([], self.run_dirs())
+
+    def test_cancellation_probe_selects_one_case_without_invalid_repetition_option(self):
+        external = self.root / "owned-probe-output"
+        self.finish(self.start("run-ios-ui-tests.sh", arguments=("run-cancellation-probe",),
+                               IOS_RUN_DIR=str(external), P2PKIT_AUDIT_STATE_DIR=str(self.root / "audit-state")))
+        calls = (self.root / "tools.log").read_text().splitlines()
+        xcode = [call for call in calls if call.startswith("xcodebuild ")]
+        self.assertEqual(1, len(xcode))
+        self.assertNotIn("-test-iterations", xcode[0])
+        self.assertIn("-parallel-testing-enabled NO", xcode[0])
+        self.assertIn("-maximum-concurrent-test-simulator-destinations 1", xcode[0])
+        self.assertIn("-only-testing:p2pkit-sample-cancellation-probe-tests/"
+                      "SwiftFlowCancellationProbeTests/testSwiftTaskCancellationFinishesActualDiagnosticCollection",
+                      xcode[0])
+        self.assertIn("-scheme p2pkit-sample-cancellation-probe", xcode[0])
+        self.assertIn("SWIFT_TREAT_WARNINGS_AS_ERRORS=YES", xcode[0])
+        self.assertFalse(any(call.startswith("xcodegen ") for call in calls))
+        self.assertFalse(self.lock.exists())
+        self.assertTrue(external.is_dir())
 
     def test_external_run_directory_creates_missing_lock_parent_and_is_preserved(self):
         external = self.root / "external-owned-output"
