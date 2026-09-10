@@ -34,7 +34,12 @@ class IosProjectGenerationTest(unittest.TestCase):
         cls.workspace = pathlib.Path(temporary.name)
         # Copy only first-party tracked inputs, never a user's generated project,
         # build directory, local signing files, or other ignored/untracked files.
-        names = run_tool(["git", "ls-files", "-z", "--", "samples/iosApp"], ROOT).split("\0")
+        # The unit-test target also references these two sibling resource files.
+        names = run_tool([
+            "git", "ls-files", "-z", "--", "samples/iosApp",
+            "samples/p2p-sample-diagnostics/src/test/resources/diagnostic-detail-policy.json",
+            "samples/p2p-sample-diagnostics/src/test/resources/diagnostic-session-selection.json",
+        ], ROOT).split("\0")
         for name in filter(None, names):
             target = cls.workspace / name
             target.parent.mkdir(parents=True, exist_ok=True)
