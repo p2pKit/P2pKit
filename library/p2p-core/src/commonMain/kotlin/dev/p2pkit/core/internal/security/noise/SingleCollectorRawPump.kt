@@ -138,6 +138,11 @@ internal class SingleCollectorRawPump(
         }
     }
 
+    /** Keep queued ciphertext available to the sole secure reader after transport loss. */
+    suspend fun retireTransportForReconnect() {
+        withContext(NonCancellable) { closeRawWithinDeadline() }?.let { throw it }
+    }
+
     suspend fun close() {
         val closeFailure = withContext(NonCancellable) {
             var failure = closeRawWithinDeadline()

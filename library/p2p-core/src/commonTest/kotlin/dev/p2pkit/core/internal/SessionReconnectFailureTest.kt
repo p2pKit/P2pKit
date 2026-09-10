@@ -87,6 +87,93 @@ class SessionReconnectFailureTest {
     }
 
     @Test
+    fun queuedCloseWinsFailedPongDuringReconnectRetirement() = runBlocking {
+        val pair = FakeConnectionPair()
+        pair.a.suspendWrites()
+        val pongEntered = CompletableDeferred<Unit>()
+        val pongFailed = CompletableDeferred<Throwable>()
+        val raw = object : RawConnection by pair.a {
+            override suspend fun write(bytes: ByteArray) {
+                pongEntered.complete(Unit)
+                try {
+                    pair.a.write(bytes)
+                } catch (failure: Throwable) {
+                    pongFailed.complete(failure)
+                    throw failure
+                }
+            }
+        }
+        val fixture = realDispatcherSession(raw, ProtocolSessionState.legacy())
+        val retryAdmitted = CompletableDeferred<Unit>()
+        fixture.session.reconnectHandler = object : ReconnectHandler {
+            override suspend fun onConnectionLost(session: P2pSessionImpl) {
+                if (session.retireLostEpochBeforeReconnect()) retryAdmitted.complete(Unit)
+            }
+        }
+        try {
+            fixture.session.start()
+            withTimeout(5_000) {
+                fixture.events.send(ProtocolEvent.Ping)
+                pongEntered.await()
+                assertEquals(ConnectionState.Connected, fixture.session.state.value)
+                // CLOSE is already queued behind the in-flight PONG when
+                // path loss retires raw and forces that write to fail.
+                fixture.events.send(ProtocolEvent.Close)
+                fixture.events.close()
+                fixture.session.notifyPathLost()
+                assertEquals(
+                    "connection closed while write was suspended",
+                    assertIs<IllegalStateException>(pongFailed.await()).message
+                )
+                fixture.session.state.first { it == ConnectionState.Closed }
+                fixture.session.awaitRuntimeTermination()
+            }
+            assertEquals(false, retryAdmitted.isCompleted)
+            assertEquals(1, pair.a.writeAttempts)
+            assertEquals(false, fixture.session.runtimeJobIsActiveForTest)
+        } finally {
+            pair.a.resumeWrites()
+            fixture.session.close()
+            fixture.supervisor.cancel()
+            pair.b.close()
+        }
+    }
+
+    @Test
+    fun queuedCloseAfterPeerErrorPreventsReconnectAdmission() = runBlocking {
+        val pair = FakeConnectionPair()
+        val fixture = realDispatcherSession(pair.a, ProtocolSessionState.legacy())
+        val reconnectRequested = CompletableDeferred<Unit>()
+        val retryAdmitted = CompletableDeferred<Unit>()
+        fixture.session.reconnectHandler = object : ReconnectHandler {
+            override fun onWillReconnect() {
+                reconnectRequested.complete(Unit)
+            }
+
+            override suspend fun onConnectionLost(session: P2pSessionImpl) {
+                if (session.retireLostEpochBeforeReconnect()) retryAdmitted.complete(Unit)
+            }
+        }
+        try {
+            fixture.events.send(ProtocolEvent.PeerError("retryable control before CLOSE"))
+            fixture.events.send(ProtocolEvent.Close)
+            fixture.events.close()
+            fixture.session.start()
+            withTimeout(5_000) {
+                fixture.session.state.first { it == ConnectionState.Closed }
+                fixture.session.awaitRuntimeTermination()
+            }
+            assertEquals(true, reconnectRequested.isCompleted)
+            assertEquals(false, retryAdmitted.isCompleted)
+            assertEquals(false, fixture.session.runtimeJobIsActiveForTest)
+        } finally {
+            fixture.session.close()
+            fixture.supervisor.cancel()
+            pair.b.close()
+        }
+    }
+
+    @Test
     fun authenticatedProtocolViolationIsTerminalAndNeverReconnects() = runTest {
         val fixture = reconnectingSession()
         val reconnectCalled = CompletableDeferred<Unit>()

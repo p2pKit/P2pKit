@@ -2,6 +2,7 @@ package dev.p2pkit.core.internal.security.noise
 
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.P2pError
+import dev.p2pkit.core.internal.security.ReconnectTransportRetirement
 import dev.p2pkit.core.internal.security.SecureTerminalFailureSource
 import dev.p2pkit.core.security.PlatformSecurityCryptography
 import dev.p2pkit.core.security.platformSecurityCryptography
@@ -9,6 +10,7 @@ import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeRawConnection
 import dev.p2pkit.core.testfixtures.runWireTest
 import dev.p2pkit.core.transport.RawConnection
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
@@ -121,6 +123,84 @@ class SecureV2TransportTest {
             assertEquals(ConnectionState.Failed, responder.connection.state.value)
             assertIs<P2pError.AuthenticationFailed>(failureSource.terminalFailure.value)
         } finally {
+            initiator.clearMetadata()
+            responder.clearMetadata()
+            initiator.connection.close()
+            responder.connection.close()
+            initiatorStatic.destroy()
+            responderStatic.destroy()
+        }
+    }
+
+    @Test
+    fun localReconnectRetirementDrainsValidRecordBeforeClassifyingQueuedTamper() = runWireTest { delivery ->
+        val pair = FakeConnectionPair(delivery)
+        val initiatorPump = SingleCollectorRawPump(CopyingRawConnection(pair.a), this)
+        val responderPump = SingleCollectorRawPump(CopyingRawConnection(pair.b), this)
+        val initiatorStatic = generatedKeyPair()
+        val responderStatic = generatedKeyPair()
+        val initiatorDeferred = async {
+            driver.establish(initiatorPump, NoiseRole.Initiator, "secure.test", initiatorStatic) { true }
+        }
+        val responderDeferred = async {
+            driver.establish(responderPump, NoiseRole.Responder, "secure.test", responderStatic) { true }
+        }
+        val initiator = initiatorDeferred.await()
+        val responder = responderDeferred.await()
+        try {
+            // One valid prefix is a positive control: retirement must preserve
+            // usable cipher state, not simply classify every remaining read as tampered.
+            val validPrefix = "valid-before-retirement".encodeToByteArray()
+            initiator.connection.write(validPrefix)
+            initiator.connection.write("tamper-me".encodeToByteArray())
+            val encryptedRecord = pair.a.writtenChunks.last()
+            encryptedRecord[encryptedRecord.lastIndex] =
+                (encryptedRecord.last().toInt() xor 0x01).toByte()
+            testScheduler.runCurrent()
+            assertEquals(ConnectionState.Connected, pair.b.state.value)
+
+            // Enter a real secure write before retirement, held inside the raw
+            // transport. Capture its result so the expected failure cannot cancel this test.
+            pair.b.suspendWrites()
+            val attemptsBeforeBlockedWrite = pair.b.writeAttempts
+            val blockedWrite = async(start = CoroutineStart.UNDISPATCHED) {
+                runCatching { responder.connection.write("blocked-old-write".encodeToByteArray()) }
+            }
+            assertEquals(attemptsBeforeBlockedWrite + 1, pair.b.writeAttempts)
+            assertEquals(false, blockedWrite.isCompleted)
+
+            // Unlike the existing remote-EOF control, the receiver itself
+            // retires its raw transport while its secure reader has not started.
+            assertIs<ReconnectTransportRetirement>(responder.connection).retireTransportForReconnect()
+            assertEquals(ConnectionState.Closed, pair.b.state.value)
+            testScheduler.runCurrent()
+            val blockedFailure = assertIs<IllegalStateException>(blockedWrite.await().exceptionOrNull())
+            assertEquals("connection closed while write was suspended", blockedFailure.message)
+            assertEquals(ConnectionState.Connected, responder.connection.state.value)
+            val failureSource = assertIs<SecureTerminalFailureSource>(responder.connection)
+            assertEquals(null, failureSource.terminalFailure.value)
+
+            // A newly submitted write must be rejected before another raw write,
+            // without turning write refusal into destructive receive-side cleanup.
+            val attemptsAfterRetirement = pair.b.writeAttempts
+            assertFailsWith<IllegalStateException> {
+                responder.connection.write("rejected-new-write".encodeToByteArray())
+            }
+            assertEquals(attemptsAfterRetirement, pair.b.writeAttempts)
+            assertEquals(ConnectionState.Connected, responder.connection.state.value)
+            assertEquals(null, failureSource.terminalFailure.value)
+
+            val delivered = mutableListOf<ByteArray>()
+            assertFailsWith<NoiseAuthenticationException> {
+                responder.connection.read().collect { delivered += it }
+            }
+            assertEquals(1, delivered.size, "only the valid queued record may publish plaintext")
+            assertContentEquals(validPrefix, delivered.single())
+            assertEquals(ConnectionState.Failed, responder.connection.state.value)
+            assertIs<P2pError.AuthenticationFailed>(failureSource.terminalFailure.value)
+        } finally {
+            // An earlier assertion must not leave the fixture's non-cancellable writer parked.
+            pair.b.resumeWrites()
             initiator.clearMetadata()
             responder.clearMetadata()
             initiator.connection.close()

@@ -430,10 +430,16 @@ private const val SECURE_ENGINE_CLEANUP_TIMEOUT_MILLIS: Long = 2_000
 private class AuthenticatedSecureConnection(
     private val delegate: RawConnection,
     override val peerIdentity: PeerIdentity,
-) : SecureConnection, RawConnection by delegate, SecureTerminalFailureSource {
+) : SecureConnection, RawConnection by delegate, SecureTerminalFailureSource, ReconnectTransportRetirement {
     private val secureDelegate: SecureTerminalFailureSource =
         delegate as? SecureTerminalFailureSource
             ?: error("Authenticated secure transport does not expose its failure source")
 
     override val terminalFailure = secureDelegate.terminalFailure
+
+    override suspend fun retireTransportForReconnect() {
+        checkNotNull(delegate as? ReconnectTransportRetirement) {
+            "Authenticated secure transport cannot retire without discarding buffered input"
+        }.retireTransportForReconnect()
+    }
 }

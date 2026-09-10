@@ -2,6 +2,7 @@ package dev.p2pkit.core.internal.security.noise
 
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.P2pError
+import dev.p2pkit.core.internal.security.ReconnectTransportRetirement
 import dev.p2pkit.core.internal.security.SecureTerminalFailureSource
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
@@ -23,7 +24,7 @@ internal class NoiseSecureRawConnection(
     private val pump: SingleCollectorRawPump,
     private val sendCipher: NoiseCipherState,
     private val receiveCipher: NoiseCipherState,
-) : RawConnection, SecureTerminalFailureSource {
+) : RawConnection, SecureTerminalFailureSource, ReconnectTransportRetirement {
     // Do not expose the underlying raw stream's terminal state directly. The
     // pump can reach EOF after queuing a final encrypted record, before this
     // layer has authenticated that record. Publishing raw Closed at that
@@ -41,12 +42,16 @@ internal class NoiseSecureRawConnection(
     private val receiveMutex = Mutex()
     private val readClaimMutex = Mutex()
     private var closed: Boolean = false
+    private var retiringTransport: Boolean = false
     private var readClaimed: Boolean = false
 
     override suspend fun write(bytes: ByteArray) {
         try {
             writeMutex.withLock {
-                ensureOpen()
+                lifecycleMutex.withLock {
+                    check(!closed) { "Secure connection is closed" }
+                    check(!retiringTransport) { "Secure connection transport is retired" }
+                }
                 if (bytes.isEmpty()) {
                     writeRecord(ByteArray(0))
                 } else {
@@ -64,7 +69,7 @@ internal class NoiseSecureRawConnection(
                 }
             }
         } catch (cause: Throwable) {
-            closeAfterFailure(cause)
+            closeAfterFailure(cause, preserveReadDuringRetirement = true)
         }
     }
 
@@ -129,6 +134,13 @@ internal class NoiseSecureRawConnection(
         }
     }
 
+    override suspend fun retireTransportForReconnect() {
+        // Do not latch secure Closed, cancel the pump, or destroy ciphers:
+        // complete queued records must still be authenticated by read().
+        lifecycleMutex.withLock { retiringTransport = true }
+        pump.retireTransportForReconnect()
+    }
+
     override suspend fun close() {
         closeInternal(primaryFailure = null)
     }
@@ -152,8 +164,11 @@ internal class NoiseSecureRawConnection(
         }
     }
 
-    private suspend fun closeAfterFailure(primaryFailure: Throwable): Nothing {
-        closeInternal(primaryFailure)
+    private suspend fun closeAfterFailure(
+        primaryFailure: Throwable,
+        preserveReadDuringRetirement: Boolean = false
+    ): Nothing {
+        closeInternal(primaryFailure, preserveReadDuringRetirement)
         throw primaryFailure
     }
 
@@ -175,11 +190,18 @@ internal class NoiseSecureRawConnection(
         }
     }
 
-    private suspend fun closeInternal(primaryFailure: Throwable?) {
+    private suspend fun closeInternal(
+        primaryFailure: Throwable?,
+        preserveReadDuringRetirement: Boolean = false
+    ) {
         var cleanupFailure: Throwable? = null
         withContext(NonCancellable) {
             val ownsClose = lifecycleMutex.withLock {
-                if (closed) false else {
+                // Raw retirement deliberately fails admitted writers. Their
+                // errors must not discard the receive-side classification that
+                // retirement is waiting for. Decide atomically with retirement,
+                // while ordinary write failures still close the entire stream.
+                if (closed || (preserveReadDuringRetirement && retiringTransport)) false else {
                     closed = true
                     mutableState.value = if (
                         primaryFailure == null || primaryFailure is CancellationException

@@ -5,6 +5,7 @@ import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.NetworkPathStatus
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pLogger
+import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
@@ -19,6 +20,9 @@ import dev.p2pkit.core.transport.RawConnection
 import dev.p2pkit.core.transport.TransportContext
 import dev.p2pkit.core.transport.TransportFactory
 import dev.p2pkit.core.transport.TransportPair
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.isActive
@@ -29,6 +33,8 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotSame
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
@@ -80,7 +86,8 @@ class NetworkPathRecoveryTest {
     private fun incomingKit(
         name: String,
         preStaged: List<RawConnection>,
-        recording: P2pLogger
+        recording: P2pLogger,
+        transport: FakeDataTransport = FakeDataTransport(preStagedIncoming = preStaged)
     ): P2pKit =
         createTestKit {
             logger = recording
@@ -94,7 +101,7 @@ class NetworkPathRecoveryTest {
             // verification passes (mirrors production discovery).
             peerIdStorage = InMemoryPeerIdStorage(seed = PeerId("bob-id"))
             transports {
-                register(PathRecoveryTestFactory(FakeDataTransport(preStagedIncoming = preStaged)))
+                register(PathRecoveryTestFactory(transport))
             }
         }
 
@@ -224,79 +231,152 @@ class NetworkPathRecoveryTest {
 
     @Test
     fun pathSatisfiedWakesParkedReconnectHandlerBeforeDelayExpires() = runBlocking<Unit> {
-        // Two pairs: path loss retires the first; the retry reaches the second.
-        // The retry delay is deliberately much longer than the test's bounded
-        // observation window. If the path-satisfied signal does NOT wake the
-        // handler early, the retry dial cannot begin before the assertion
-        // fails. Observing the dial separately from the completed handshake
-        // avoids coupling the wake-up invariant to runner scheduling load.
         val pair1 = FakeConnectionPair()
         val pair2 = FakeConnectionPair()
-        val queue = ArrayDeque<RawConnection>().apply {
-            add(pair1.a); add(pair2.a)
-        }
+        val bobTransport = FakeDataTransport(preStagedIncoming = listOf(pair1.b))
         val attempts = MutableStateFlow(0)
         val fake = FakeNetworkPathObserver(initial = NetworkPathStatus.Satisfied)
-        withTestKit(
-            create = { recorder ->
-                outgoingKit(
-                    "Alice",
-                    ReconnectPolicy.Enabled(maxAttempts = 3, retryDelayMillis = 30_000),
-                    fake,
-                    recording = recorder
-                ) {
-                    attempts.update { it + 1 }
-                    queue.removeFirstOrNull() ?: throw RuntimeException("no more connections")
-                }
+        val oldCloseEntered = CompletableDeferred<Unit>()
+        val releaseOldClose = CompletableDeferred<Unit>()
+        val firstRaw = object : RawConnection by pair1.a {
+            override suspend fun close() {
+                oldCloseEntered.complete(Unit)
+                releaseOldClose.await()
+                pair1.a.close()
             }
-        ) { alice ->
+        }
+        try {
             withTestKit(
                 create = { recorder ->
-                    incomingKit("Bob", listOf(pair1.b, pair2.b), recording = recorder)
+                    outgoingKit(
+                        "Alice",
+                        ReconnectPolicy.Enabled(maxAttempts = 3, retryDelayMillis = 30_000),
+                        fake,
+                        recording = recorder
+                    ) {
+                        attempts.update { it + 1 }
+                        when (attempts.value) {
+                            1 -> firstRaw
+                            2 -> {
+                                // A second accept begins only when its matching dial starts.
+                                bobTransport.emitIncoming(pair2.b)
+                                pair2.a
+                            }
+                            else -> error("unexpected third transport dial")
+                        }
+                    }
                 }
-            ) { bob ->
-                val session = withTimeout(5_000) { alice.connect(targetPeer()) }
-                assertEquals(ConnectionState.Connected, session.state.value)
+            ) { alice ->
+                withTestKit(
+                    create = { recorder -> incomingKit("Bob", emptyList(), recorder, bobTransport) }
+                ) { bob ->
+                    try {
+                        val session = withTimeout(5_000) { alice.connect(targetPeer()) }
+                        val oldBob = withTimeout(5_000) { bob.sessions.first { it.isNotEmpty() }.single() }
+                        assertEquals(ConnectionState.Connected, oldBob.state.value)
 
-                // Path loss is the only trigger, so Reconnecting acknowledges
-                // that SessionManager consumed Unsatisfied. An independent wire
-                // break could publish that state first and let StateFlow conflate
-                // away Unsatisfied before its collector ever received it.
-                fake.emit(NetworkPathStatus.Unsatisfied)
-                withTimeout(5_000) {
-                    session.state.first { it == ConnectionState.Reconnecting }
+                        // Path loss is the sole trigger; no independent wire break
+                        // may conflate away the Unsatisfied input (#400).
+                        fake.emit(NetworkPathStatus.Unsatisfied)
+                        withTimeout(5_000) { session.state.first { it == ConnectionState.Reconnecting } }
+                        // Retirement must precede any retry, not wait for its handshake.
+                        withTimeout(5_000) { oldCloseEntered.await() }
+                        assertEquals(1, attempts.value)
+                        assertEquals(ConnectionState.Connected, pair1.a.state.value)
+                        assertSame(oldBob, bob.sessions.value.single())
+                        releaseOldClose.complete(Unit)
+
+                        // Local close is not remote-store acknowledgement. Establish
+                        // that independent precondition before testing wake/adoption.
+                        withTimeout(5_000) { oldBob.state.first { it == ConnectionState.Failed } }
+                        fake.emit(NetworkPathStatus.Satisfied)
+                        // Timer expiry (30 s) cannot satisfy this 10 s wake assertion.
+                        withTimeout(10_000) {
+                            assertEquals(2, attempts.first { it >= 2 })
+                            session.state.first { it == ConnectionState.Connected }
+                        }
+                        val newBob = withTimeout(5_000) {
+                            bob.sessions.first { sessions ->
+                                sessions.singleOrNull()?.let {
+                                    it !== oldBob && it.state.value == ConnectionState.Connected
+                                } == true
+                            }.single()
+                        }
+                        assertNotSame(oldBob, newBob)
+                        val received = async(start = CoroutineStart.UNDISPATCHED) {
+                            withTimeout(5_000) { newBob.incoming.first() }
+                        }
+                        val message = P2pMessage.Text("usable replacement after path recovery")
+                        session.send(message)
+                        assertEquals(message, received.await())
+                        assertEquals(2, attempts.value)
+                    } finally {
+                        releaseOldClose.complete(Unit)
+                    }
                 }
-
-                // Wake the parked retry by emitting Satisfied. The generation-
-                // counter signal (AUDIT-2026-06 fix in SessionManager) retains the
-                // transition even if it lands before the handler parks, so a single
-                // emit is now race-free.
-                fake.emit(NetworkPathStatus.Satisfied)
-
-                // The second transport dial is the direct evidence that Satisfied
-                // woke the retry waiter. The 10 s safety bound is one third of the
-                // configured delay, so an ordinary timer expiry cannot satisfy the
-                // assertion even on a heavily loaded hosted runner.
-                val wokenAttempt = withTimeout(10_000) {
-                    attempts.first { it >= 2 }
-                }
-                assertEquals(
-                    2,
-                    wokenAttempt,
-                    "Satisfied must trigger exactly the first retry before the scheduled delay"
-                )
-
-                // Keep the end-to-end rearm assertion, but do not use handshake
-                // completion itself as the timing probe for the wake-up invariant.
-                val rearmed = withTimeout(10_000) {
-                    session.state.first { it == ConnectionState.Connected }
-                }
-                assertEquals(ConnectionState.Connected, rearmed)
-                assertEquals(
-                    2, attempts.value,
-                    "Expected initial connect + exactly one retry triggered by Satisfied wake-up"
-                )
             }
+        } finally {
+            releaseOldClose.complete(Unit)
+            pair1.a.close()
+            pair1.b.close()
+            pair2.a.close()
+            pair2.b.close()
+        }
+    }
+
+    @Test
+    fun closeDuringPathRetirementSharesRawOwnerAndPreventsRetry() = runBlocking<Unit> {
+        val pair = FakeConnectionPair()
+        val path = FakeNetworkPathObserver(NetworkPathStatus.Satisfied)
+        val calls = MutableStateFlow(0)
+        val dials = MutableStateFlow(0)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val raw = object : RawConnection by pair.a {
+            override suspend fun close() {
+                calls.update { it + 1 }
+                entered.complete(Unit)
+                release.await()
+                pair.a.close()
+            }
+        }
+        try {
+            withTestKit(create = { recorder ->
+                outgoingKit("Alice", ReconnectPolicy.Enabled(3, 30_000), path, recorder) {
+                    dials.update { it + 1 }
+                    check(dials.value == 1) { "Closing must prevent a replacement dial" }
+                    raw
+                }
+            }) { alice ->
+                withTestKit(create = { recorder -> incomingKit("Bob", listOf(pair.b), recorder) }) { bob ->
+                    try {
+                        val session = withTimeout(5_000) { alice.connect(targetPeer()) }
+                        withTimeout(5_000) { bob.sessions.first { it.isNotEmpty() } }
+                        path.emit(NetworkPathStatus.Unsatisfied)
+                        withTimeout(5_000) { entered.await() }
+                        val closing = async(start = CoroutineStart.UNDISPATCHED) { session.close() }
+                        withTimeout(5_000) {
+                            session.state.first { it == ConnectionState.Closing || it == ConnectionState.Closed }
+                        }
+                        path.emit(NetworkPathStatus.Satisfied)
+                        assertEquals(1, calls.value)
+                        release.complete(Unit)
+                        withTimeout(5_000) {
+                            closing.await()
+                            (session as P2pSessionImpl).awaitRuntimeTermination()
+                        }
+                        assertEquals(ConnectionState.Closed, session.state.value)
+                        assertEquals(1, calls.value)
+                        assertEquals(1, dials.value)
+                    } finally {
+                        release.complete(Unit)
+                    }
+                }
+            }
+        } finally {
+            release.complete(Unit)
+            pair.a.close()
+            pair.b.close()
         }
     }
 

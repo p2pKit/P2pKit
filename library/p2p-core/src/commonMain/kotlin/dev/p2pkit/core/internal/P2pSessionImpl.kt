@@ -14,6 +14,7 @@ import dev.p2pkit.core.Retryability
 import dev.p2pkit.core.protocol.P2pProtocol
 import dev.p2pkit.core.protocol.ProtocolEvent
 import dev.p2pkit.core.protocol.ProtocolSessionState
+import dev.p2pkit.core.internal.security.ReconnectTransportRetirement
 import dev.p2pkit.core.internal.security.SecureTerminalFailureSource
 import dev.p2pkit.core.transfer.FileTransferConfig
 import dev.p2pkit.core.transfer.P2pFileOffer
@@ -277,7 +278,9 @@ internal class P2pSessionImpl(
         val epochConnection = connection
         val epoch = ConnectionEpoch(epochConnection, readerJob, job, epochToken)
         lastPongAt.value = monotonicClock()
-        epochScope.launch { routeEvents(events) }
+        epochScope.launch { routeEvents(events, epoch) }.invokeOnCompletion {
+            epoch.epochToken.eventsFinished.complete(Unit)
+        }
         epochScope.launch { keepAliveLoop(epochConnection) }
         // Keep liveness enforcement independent of outbound writes. A peer
         // that stops draining its socket can park another holder of
@@ -643,6 +646,66 @@ internal class P2pSessionImpl(
 
     private fun newCleanupBudget(timeoutMillis: Long = SESSION_CLOSE_BUDGET_MS): SessionCleanupBudget =
         SessionCleanupBudget(timeoutMillis, cleanupClock, cleanupDeadlineDispatcher)
+
+    /**
+     * Retire the lost transport before the production reconnect driver dials.
+     * Preserve and drain the old secure/protocol input so a buffered CLOSE or
+     * authentication failure wins over retry. No new stream is installed here.
+     * Local retirement does not acknowledge the remote store's EOF processing.
+     */
+    internal suspend fun retireLostEpochBeforeReconnect(): Boolean {
+        val captured = connectionLock.withLock {
+            if (terminalTransitionClaim != null || _state.value != ConnectionState.Reconnecting) {
+                null
+            } else {
+                ConnectionEpoch(connection, readerJob, epochJob, epochToken)
+            }
+        } ?: return false
+        val budget = newCleanupBudget(SESSION_RESOURCE_CLOSE_TIMEOUT_MS)
+        val issue = withContext(NonCancellable) {
+            retireOwnedEpochTransport(captured, budget)
+                ?: captured.readerJob?.let { reader ->
+                    budget.join(reader, SESSION_RESOURCE_CLOSE_TIMEOUT_MS)
+                        .sessionCleanupIssue("session $id lost protocol reader")
+                }
+                ?: budget.await(captured.epochToken.eventsFinished, SESSION_RESOURCE_CLOSE_TIMEOUT_MS)
+                    .sessionCleanupIssue("session $id lost protocol events")
+        }
+        if (issue != null) {
+            logCleanupIssues(logger, "session $id reconnect retirement", listOf(issue))
+            failRearmCleanupIfCurrent(captured, listOf(issue))
+            throw cleanupError("session $id reconnect retirement", listOf(issue))
+        }
+        currentCoroutineContext().ensureActive()
+        return connectionLock.withLock {
+            terminalTransitionClaim == null && _state.value == ConnectionState.Reconnecting &&
+                epochToken === captured.epochToken && connection === captured.connection &&
+                readerJob === captured.readerJob && epochJob === captured.runtimeJob
+        }
+    }
+
+    private suspend fun retireOwnedEpochTransport(
+        epoch: ConnectionEpoch,
+        budget: SessionCleanupBudget
+    ): CleanupIssue? {
+        val secure = epoch.connection as? ReconnectTransportRetirement
+            ?: return closeOwnedEpochConnection(epoch, "session $id lost raw connection", budget)
+        val token = epoch.epochToken
+        val cleanup = token.rawCloseLock.withLock {
+            token.transportRetirementCleanup ?: RetainedSessionCleanup(
+                operationDispatcher = cleanupOperationDispatcher,
+                onFailure = { logger.warn("Retained session $id transport retirement failed", it) }
+            ) {
+                secure.retireTransportForReconnect()
+            }.also {
+                token.transportRetirementCleanup = it
+                token.rawCloseStarted.complete(Unit)
+            }
+        }
+        cleanup.start()
+        return budget.awaitResult(cleanup.completion, SESSION_RESOURCE_CLOSE_TIMEOUT_MS)
+            .sessionCleanupIssue("session $id lost secure transport")
+    }
 
     /**
      * Replace the underlying connection after a successful reconnect. The
@@ -1298,100 +1361,101 @@ internal class P2pSessionImpl(
         )
     }
 
-    private suspend fun routeEvents(channel: ReceiveChannel<ProtocolEvent>) {
+    private suspend fun routeEvents(channel: ReceiveChannel<ProtocolEvent>, epoch: ConnectionEpoch) {
         try {
             for (event in channel) {
-                when (event) {
-                    is ProtocolEvent.Message -> {
-                        // Detached-session protection. If we're about to push
-                        // a message into the public `incoming` flow but SessionManager
-                        // no longer treats us as the registered session for
-                        // this peer (either evicted or replaced), the public
-                        // session-list view is desynced from the live
-                        // message stream — the failure mode described in the
-                        // architecture review's hypothesis B1. Before this
-                        // session's registration commits, absence from the
-                        // store is normal and the check is deliberately idle.
-                        val reg = lookupRegistration
-                            ?.takeIf { registrationCommitted.value }
-                            ?.let { lookup ->
-                                runCatching { lookup(this@P2pSessionImpl) }.getOrNull()
+                try {
+                    when (event) {
+                        is ProtocolEvent.Message -> {
+                            // Detached-session protection. If we're about to push
+                            // a message into the public `incoming` flow but SessionManager
+                            // no longer treats us as the registered session for
+                            // this peer (either evicted or replaced), the public
+                            // session-list view is desynced from the live
+                            // message stream — the failure mode described in the
+                            // architecture review's hypothesis B1. Before this
+                            // session's registration commits, absence from the
+                            // store is normal and the check is deliberately idle.
+                            val reg = lookupRegistration
+                                ?.takeIf { registrationCommitted.value }
+                                ?.let { lookup ->
+                                    runCatching { lookup(this@P2pSessionImpl) }.getOrNull()
+                                }
+                            if (reg != null) {
+                                val differentActive = reg.activeSessionId != null &&
+                                    reg.activeSessionId != id
+                                if (!reg.isInPublicList || differentActive) {
+                                    logger.warn(
+                                        "Detached session dropped Message: " +
+                                            "sessionId=$id " +
+                                            "peerId=${peer.id.value.take(8)} " +
+                                            "state=${_state.value.name} " +
+                                            "activeSessionId=${reg.activeSessionId ?: "(none)"} " +
+                                            "inPublicList=${reg.isInPublicList}"
+                                    )
+                                    continue
+                                }
                             }
-                        if (reg != null) {
-                            val differentActive = reg.activeSessionId != null &&
-                                reg.activeSessionId != id
-                            if (!reg.isInPublicList || differentActive) {
+                            if (!enqueueApplicationMessage(event.message)) {
                                 logger.warn(
-                                    "Detached session dropped Message: " +
-                                        "sessionId=$id " +
-                                        "peerId=${peer.id.value.take(8)} " +
-                                        "state=${_state.value.name} " +
-                                        "activeSessionId=${reg.activeSessionId ?: "(none)"} " +
-                                        "inPublicList=${reg.isInPublicList}"
+                                    "Session $id: application receive backlog exceeded " +
+                                        "$MAX_QUEUED_APPLICATION_MESSAGES messages / " +
+                                        "$MAX_QUEUED_APPLICATION_BYTES bytes"
                                 )
-                                continue
+                                transitionToTerminal(
+                                    ConnectionState.Failed,
+                                    "application receive backlog exceeded"
+                                )
+                                return
                             }
                         }
-                        if (!enqueueApplicationMessage(event.message)) {
-                            logger.warn(
-                                "Session $id: application receive backlog exceeded " +
-                                    "$MAX_QUEUED_APPLICATION_MESSAGES messages / " +
-                                    "$MAX_QUEUED_APPLICATION_BYTES bytes"
-                            )
-                            transitionToTerminal(
-                                ConnectionState.Failed,
-                                "application receive backlog exceeded"
-                            )
+                        is ProtocolEvent.Ping -> {
+                            sendMutex.withLock {
+                                if (!epoch.epochToken.rawCloseStarted.isCompleted) {
+                                    protocol.sendPong(epoch.connection)
+                                }
+                            }
+                        }
+                        is ProtocolEvent.Pong -> lastPongAt.value = monotonicClock()
+                        is ProtocolEvent.Hello -> {
+                            logger.debug("Session $id: ignoring late HELLO")
+                        }
+                        is ProtocolEvent.Ack -> {
+                            // Parsed for wire compatibility; no retransmission or
+                            // application-delivery acknowledgement is implemented.
+                        }
+                        is ProtocolEvent.Close -> {
+                            // Clean close from peer — never retry. The received
+                            // CLOSE frame is the single remote-side clean-close
+                            // authority (AUDIT-2026-07 SES-1); see
+                            // [markCleanlyClosed].
+                            markCleanlyClosed()
                             return
                         }
-                    }
-                    is ProtocolEvent.Ping -> {
-                        try {
-                            sendMutex.withLock { protocol.sendPong(connection) }
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (failure: Throwable) {
-                            logger.warn("Session $id: failed to send PONG", failure)
-                            onConnectionLost(
-                                "PONG send failed: ${failure.message ?: failure::class.simpleName}"
-                            )
-                            return
+                        is ProtocolEvent.PeerError -> {
+                            logger.warn("Session $id: peer error: ${event.reason}")
+                            onConnectionLost("peer error: ${event.reason}")
+                            if (_state.value != ConnectionState.Reconnecting) return
                         }
+                        is ProtocolEvent.FileOffer -> fileTransferDispatcher.onFileOffer(
+                            event.transferId,
+                            event.payload,
+                            event.secureOffer
+                        )
+                        is ProtocolEvent.FileAccept -> fileTransferDispatcher.onFileAccept(event.transferId)
+                        is ProtocolEvent.FileReject -> fileTransferDispatcher.onFileReject(event.transferId, event.reason)
+                        is ProtocolEvent.FileData -> fileTransferDispatcher.onFileData(event.frame)
+                        is ProtocolEvent.FileDone -> fileTransferDispatcher.onFileDone(event.transferId)
+                        is ProtocolEvent.FileFinish -> fileTransferDispatcher.onFileFinish(event.payload)
+                        is ProtocolEvent.FileCommit -> fileTransferDispatcher.onFileCommit(event.payload)
+                        is ProtocolEvent.FileResult -> fileTransferDispatcher.onFileResult(event.payload)
+                        is ProtocolEvent.FileCancel -> fileTransferDispatcher.onFileCancel(event.transferId, event.reason)
                     }
-                    is ProtocolEvent.Pong -> lastPongAt.value = monotonicClock()
-                    is ProtocolEvent.Hello -> {
-                        logger.debug("Session $id: ignoring late HELLO")
-                    }
-                    is ProtocolEvent.Ack -> {
-                        // Parsed for wire compatibility; no retransmission or
-                        // application-delivery acknowledgement is implemented.
-                    }
-                    is ProtocolEvent.Close -> {
-                        // Clean close from peer — never retry. The received
-                        // CLOSE frame is the single remote-side clean-close
-                        // authority (AUDIT-2026-07 SES-1); see
-                        // [markCleanlyClosed].
-                        markCleanlyClosed()
-                        return
-                    }
-                    is ProtocolEvent.PeerError -> {
-                        logger.warn("Session $id: peer error: ${event.reason}")
-                        onConnectionLost("peer error: ${event.reason}")
-                        return
-                    }
-                    is ProtocolEvent.FileOffer -> fileTransferDispatcher.onFileOffer(
-                        event.transferId,
-                        event.payload,
-                        event.secureOffer
-                    )
-                    is ProtocolEvent.FileAccept -> fileTransferDispatcher.onFileAccept(event.transferId)
-                    is ProtocolEvent.FileReject -> fileTransferDispatcher.onFileReject(event.transferId, event.reason)
-                    is ProtocolEvent.FileData -> fileTransferDispatcher.onFileData(event.frame)
-                    is ProtocolEvent.FileDone -> fileTransferDispatcher.onFileDone(event.transferId)
-                    is ProtocolEvent.FileFinish -> fileTransferDispatcher.onFileFinish(event.payload)
-                    is ProtocolEvent.FileCommit -> fileTransferDispatcher.onFileCommit(event.payload)
-                    is ProtocolEvent.FileResult -> fileTransferDispatcher.onFileResult(event.payload)
-                    is ProtocolEvent.FileCancel -> fileTransferDispatcher.onFileCancel(event.transferId, event.reason)
+                } catch (failure: Throwable) {
+                    handleRouteFailure(failure, pongEpoch = epoch.takeIf { event is ProtocolEvent.Ping })
+                    if (_state.value != ConnectionState.Reconnecting) return
+                    // A retryable event-handler failure does not consume the
+                    // remaining channel. In particular CLOSE must still win.
                 }
             }
             // AUDIT-2026-07 (SES-1): the events channel completed without a
@@ -1409,60 +1473,78 @@ internal class P2pSessionImpl(
             // markCleanlyClosed(), racing [observeRawState] for the terminal
             // outcome on every remote loss.)
             onConnectionLost("remote hangup without CLOSE frame")
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: ClosedReceiveChannelException) {
-            // AUDIT-2026-07 (SES-1): same classification as the completion
-            // branch above — the channel ended without delivering a CLOSE.
-            onConnectionLost("remote hangup without CLOSE frame (receive on closed channel)")
-        } catch (e: P2pError.FileTransferFailed) {
-            if (e.kind == FileTransferFailureKind.TRANSFER_PROTOCOL) {
-                logger.warn("Session $id: structural file-transfer protocol violation", e)
+        } catch (failure: Throwable) {
+            handleRouteFailure(failure)
+        }
+    }
+
+    private suspend fun handleRouteFailure(e: Throwable, pongEpoch: ConnectionEpoch? = null) {
+        when (e) {
+            is CancellationException -> throw e
+            is ClosedReceiveChannelException -> {
+                onConnectionLost("remote hangup without CLOSE frame (receive on closed channel)")
+            }
+            is P2pError.FileTransferFailed -> {
+                if (e.kind == FileTransferFailureKind.TRANSFER_PROTOCOL) {
+                    logger.warn("Session $id: structural file-transfer protocol violation", e)
+                    transitionToTerminal(
+                        target = ConnectionState.Failed,
+                        cause = e.reason,
+                        fileFailureKind = FileTransferFailureKind.TRANSFER_PROTOCOL,
+                        fileRetryability = Retryability.NOT_RETRYABLE
+                    )
+                } else {
+                    logger.warn("Session $id: routeEvents file-transfer failure", e)
+                    onConnectionLost("routeEvents threw: ${e.message ?: e::class.simpleName}")
+                }
+            }
+            is P2pError.ProtocolError -> {
+                logger.warn("Session $id: authenticated protocol violation", e)
                 transitionToTerminal(
                     target = ConnectionState.Failed,
                     cause = e.reason,
                     fileFailureKind = FileTransferFailureKind.TRANSFER_PROTOCOL,
                     fileRetryability = Retryability.NOT_RETRYABLE
                 )
-            } else {
-                logger.warn("Session $id: routeEvents file-transfer failure", e)
-                onConnectionLost("routeEvents threw: ${e.message ?: e::class.simpleName}")
             }
-        } catch (e: P2pError.ProtocolError) {
-            logger.warn("Session $id: authenticated protocol violation", e)
-            transitionToTerminal(
-                target = ConnectionState.Failed,
-                cause = e.reason,
-                fileFailureKind = FileTransferFailureKind.TRANSFER_PROTOCOL,
-                fileRetryability = Retryability.NOT_RETRYABLE
-            )
-        } catch (e: P2pError.AuthenticatedIdentityMismatch) {
-            logger.warn("Session $id: authenticated envelope identity mismatch", e)
-            transitionToTerminal(
-                target = ConnectionState.Failed,
-                cause = e.reason,
-                fileFailureKind = FileTransferFailureKind.AUTHENTICATION,
-                fileRetryability = Retryability.NOT_RETRYABLE
-            )
-        } catch (e: P2pError.VersionMismatch) {
-            logger.warn("Session $id: protocol version mismatch", e)
-            transitionToTerminal(
-                target = ConnectionState.Failed,
-                cause = e.message ?: "Protocol version mismatch",
-                fileFailureKind = FileTransferFailureKind.TRANSFER_PROTOCOL,
-                fileRetryability = Retryability.NOT_RETRYABLE
-            )
-        } catch (e: P2pError.AuthenticationFailed) {
-            logger.warn("Session $id: authenticated transport failure", e)
-            transitionToTerminal(
-                target = ConnectionState.Failed,
-                cause = e.reason,
-                fileFailureKind = FileTransferFailureKind.AUTHENTICATION,
-                fileRetryability = Retryability.NOT_RETRYABLE
-            )
-        } catch (e: Throwable) {
-            logger.warn("Session $id: routeEvents failed", e)
-            onConnectionLost("routeEvents threw: ${e.message ?: e::class.simpleName}")
+            is P2pError.AuthenticatedIdentityMismatch -> {
+                logger.warn("Session $id: authenticated envelope identity mismatch", e)
+                transitionToTerminal(
+                    target = ConnectionState.Failed,
+                    cause = e.reason,
+                    fileFailureKind = FileTransferFailureKind.AUTHENTICATION,
+                    fileRetryability = Retryability.NOT_RETRYABLE
+                )
+            }
+            is P2pError.VersionMismatch -> {
+                logger.warn("Session $id: protocol version mismatch", e)
+                transitionToTerminal(
+                    target = ConnectionState.Failed,
+                    cause = e.message ?: "Protocol version mismatch",
+                    fileFailureKind = FileTransferFailureKind.TRANSFER_PROTOCOL,
+                    fileRetryability = Retryability.NOT_RETRYABLE
+                )
+            }
+            is P2pError.AuthenticationFailed -> {
+                logger.warn("Session $id: authenticated transport failure", e)
+                transitionToTerminal(
+                    target = ConnectionState.Failed,
+                    cause = e.reason,
+                    fileFailureKind = FileTransferFailureKind.AUTHENTICATION,
+                    fileRetryability = Retryability.NOT_RETRYABLE
+                )
+            }
+            else -> {
+                if (pongEpoch == null) {
+                    logger.warn("Session $id: routeEvents failed", e)
+                    onConnectionLost("routeEvents threw: ${e.message ?: e::class.simpleName}")
+                } else if (!pongEpoch.epochToken.rawCloseStarted.isCompleted) {
+                    logger.warn("Session $id: failed to send PONG", e)
+                    onConnectionLost("PONG send failed: ${e.message ?: e::class.simpleName}")
+                }
+                // Retirement-induced PONG write failure is retryable, but
+                // cannot hide typed terminal failures or abandon queued CLOSE.
+            }
         }
     }
 
@@ -1761,6 +1843,8 @@ private class ConnectionEpochToken {
     val rawCloseStarted: CompletableDeferred<Unit> = CompletableDeferred()
     var rawCloseCleanup: RetainedSessionCleanup<Unit>? = null
     val rawCloseObservation: CompletableDeferred<CleanupIssue?> = CompletableDeferred()
+    var transportRetirementCleanup: RetainedSessionCleanup<Unit>? = null
+    val eventsFinished: CompletableDeferred<Unit> = CompletableDeferred()
 }
 
 /** Referential episode identity keeps an old timer from diagnosing a newer reconnect. */

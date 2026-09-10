@@ -1293,6 +1293,7 @@ internal class SessionManager(
         }
 
         override suspend fun onConnectionLost(session: P2pSessionImpl) {
+            if (!session.retireLostEpochBeforeReconnect()) return
             var attempt = 0
             var lastResolvedHints = originalInternalPeer.transportHints
             val peerShort = expectedPeer.id.value.take(8)

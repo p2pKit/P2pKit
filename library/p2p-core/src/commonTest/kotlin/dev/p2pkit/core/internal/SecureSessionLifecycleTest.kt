@@ -2,6 +2,7 @@ package dev.p2pkit.core.internal
 
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ConnectionState
+import dev.p2pkit.core.NetworkPathStatus
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pMessage
@@ -17,6 +18,7 @@ import dev.p2pkit.core.security.platformSecurityCryptography
 import dev.p2pkit.core.testfixtures.CopyingRawConnection
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
 import dev.p2pkit.core.testfixtures.FakeDataTransport
+import dev.p2pkit.core.testfixtures.FakeNetworkPathObserver
 import dev.p2pkit.core.testfixtures.MemorySecureIdentityStorage
 import dev.p2pkit.core.testfixtures.RecordingLogger
 import dev.p2pkit.core.testfixtures.TrackedTransportKey
@@ -26,6 +28,7 @@ import dev.p2pkit.core.testfixtures.withTestKit
 import dev.p2pkit.core.testfixtures.peerForSecureKit
 import dev.p2pkit.core.testfixtures.runWireBlocking
 import dev.p2pkit.core.transport.DataTransport
+import dev.p2pkit.core.transport.RawConnection
 import kotlin.concurrent.atomics.AtomicInt
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.test.Test
@@ -43,8 +46,10 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onSubscription
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 
@@ -332,6 +337,95 @@ class SecureSessionLifecycleTest {
             } finally {
                 retry.a.resumeWrites()
             }
+        }
+    }
+
+    @Test
+    fun pathLossRetiresAuthenticatedTransportBeforeWakeAndKeepsReplacementPinned() = runBlocking {
+        val initial = FakeConnectionPair()
+        val retry = FakeConnectionPair()
+        val path = FakeNetworkPathObserver(NetworkPathStatus.Satisfied)
+        val holdClose = MutableStateFlow(false)
+        val closeEntered = CompletableDeferred<Unit>()
+        val releaseClose = CompletableDeferred<Unit>()
+        val rawCloseCalls = AtomicInt(0)
+        val firstRaw = object : RawConnection by CopyingRawConnection(initial.a) {
+            override suspend fun close() {
+                rawCloseCalls.addAndFetch(1)
+                if (holdClose.value) {
+                    closeEntered.complete(Unit)
+                    releaseClose.await()
+                }
+                initial.a.close()
+            }
+        }
+        val bobData = FakeDataTransport(preStagedIncoming = listOf(CopyingRawConnection(initial.b)))
+        val dials = AtomicInt(0)
+        val aliceData = FakeDataTransport(outgoingConnection = {
+            when (dials.addAndFetch(1)) {
+                1 -> firstRaw
+                2 -> {
+                    assertEquals(ConnectionState.Closed, initial.a.state.value)
+                    bobData.emitIncoming(CopyingRawConnection(retry.b))
+                    CopyingRawConnection(retry.a)
+                }
+                else -> error("unexpected extra authenticated dial")
+            }
+        })
+        try {
+            withSecurePair(
+                "path-retirement", aliceData, bobData,
+                aliceConfigure = {
+                    lifecycle {
+                        reconnectPolicy = ReconnectPolicy.Enabled(3, 30_000)
+                        networkPathObserver = path
+                    }
+                }
+            ) { kits ->
+                try {
+                    val session = withTimeout(5_000) { kits.alice.connect(peerForSecureKit(kits.bob)) }
+                    val oldBob = withTimeout(5_000) {
+                        kits.bob.sessions.first { it.isNotEmpty() }.single()
+                    }
+                    kits.assertAuthenticated(session, oldBob)
+                    holdClose.value = true
+                    path.emit(NetworkPathStatus.Unsatisfied)
+                    withTimeout(5_000) {
+                        session.state.first { it == ConnectionState.Reconnecting }
+                        closeEntered.await()
+                    }
+                    assertEquals(1, dials.load(), "retire before starting the replacement handshake")
+                    assertEquals(ConnectionState.Connected, initial.a.state.value)
+                    releaseClose.complete(Unit)
+                    // The remote store must independently observe EOF; a local
+                    // close alone cannot establish this cross-peer precondition.
+                    withTimeout(5_000) { oldBob.state.first { it == ConnectionState.Failed } }
+                    withTimeout(5_000) { kits.awaitKeyCounts(total = 2, cleared = 2) }
+                    path.emit(NetworkPathStatus.Satisfied)
+                    withTimeout(10_000) { session.state.first { it == ConnectionState.Connected } }
+                    val newBob = withTimeout(5_000) {
+                        kits.bob.sessions.first { sessions ->
+                            sessions.singleOrNull()?.let {
+                                it !== oldBob && it.state.value == ConnectionState.Connected
+                            } == true
+                        }.single()
+                    }
+                    kits.assertAuthenticated(session, newBob)
+                    exchange(session, newBob, "recovered authenticated outbound")
+                    exchange(newBob, session, "recovered authenticated inbound")
+                    kits.assertKeyCounts(total = 4, cleared = 2)
+                    assertEquals(2, dials.load())
+                    assertEquals(1, rawCloseCalls.load(), "pump retirement and disposal share one raw-close owner")
+                } finally {
+                    releaseClose.complete(Unit)
+                }
+            }
+        } finally {
+            releaseClose.complete(Unit)
+            initial.a.close()
+            initial.b.close()
+            retry.a.close()
+            retry.b.close()
         }
     }
 
