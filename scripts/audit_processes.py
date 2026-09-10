@@ -551,35 +551,57 @@ class DarwinScope(PosixScope):
         got = self.proc.proc_pidinfo(pid, 18, 1, ctypes.byref(value), ctypes.sizeof(value))
         if got == 0:
             error = ctypes.get_errno()
-            if error in (errno.ESRCH, errno.ENOENT) or (error == 0 and not required):
+            if error in (errno.ESRCH, errno.ENOENT):
                 return None
-            if not required and error in (errno.EPERM, errno.EACCES) and pid != os.getpid():
-                if any(key[0] == pid for key in self.known):
-                    raise OwnershipError("Cannot reinspect a recorded Darwin process identity")
-                return None
-            raise DarwinObservationError(f"Darwin process identity failed: errno {error}")
+            failure = DarwinObservationError(f"Darwin process identity failed for pid {pid}: errno {error}")
+            if not required:
+                previous = self._recorded_identity(pid)
+                if previous is not None:
+                    return self._reconcile_identity(previous, failure)
+                if error == 0 or (error in (errno.EPERM, errno.EACCES) and pid != os.getpid()):
+                    return None
+            raise failure
         if got != ctypes.sizeof(value) or value.bsd.pid != pid:
             raise OwnershipError("Unsupported Darwin combined identity response")
-        if required and value.bsd.status not in (1, 2, 3, 4, 5):
-            raise DarwinObservationError("Unsupported Darwin bound process status")
+        if value.bsd.status not in (1, 2, 3, 4, 5):
+            failure = DarwinObservationError(f"Unsupported Darwin bound process status for pid {pid}")
+            if required:
+                raise failure
+            previous = self._recorded_identity(pid)
+            if previous is not None:
+                return self._reconcile_identity(previous, failure)
         return {"pid": pid, "uid": value.bsd.uid, "parentPid": value.bsd.ppid, "group": value.bsd.pgid,
                 "uniqueId": value.unique.uniqueid, "parentUniqueId": value.unique.parentuniqueid,
                 "pidVersion": value.unique.pidversion, "startSeconds": value.bsd.startsec,
                 "startMicroseconds": value.bsd.startusec, "realUid": value.bsd.ruid,
                 "status": value.bsd.status, "flags": value.bsd.flags, "live": value.bsd.status not in (0, 5)}
 
+    def _recorded_identity(self, pid: int) -> dict[str, Any] | None:
+        # Only failed observations need this history lookup, not every ordinary
+        # successful census read. A PID may have more than one recorded lifetime.
+        return next((item for item in reversed(self.known.values()) if item["pid"] == pid), None)
+
+    def _reconcile_identity(self, previous: dict[str, Any], failure: DarwinObservationError) -> dict[str, Any] | None:
+        # A known child can temporarily become unreadable, including across a
+        # privileged exec. Required rechecks are raw and cannot recurse here.
+        try:
+            return self._observe(previous, "identity", lambda current: current, initial_error=failure)
+        except ProcessLookupError:
+            return None  # Observed exit/replacement, never permission denial alone.
+
     def _key(self, identity: dict[str, Any]) -> tuple[int, ...]:
         # Exec can change pidVersion without changing process ownership. Signaling
         # obtains a fresh opaque token and checks the full current identity below.
         return (identity["pid"], identity["uniqueId"], identity["startSeconds"], identity["startMicroseconds"])
 
-    def _observe(self, identity: dict[str, Any], operation: str, action: Any) -> Any:
+    def _observe(self, identity: dict[str, Any], operation: str, action: Any,
+                 *, initial_error: DarwinObservationError | None = None) -> Any:
         # libproc's zombie-list lookup can still return a non-SZOMB INEXIT proc
         # after Mach/procargs lookup loses it. INEXIT is pending, not completion.
         # Reconcile only failed observations; do not slow every process census or
         # extend product deadlines. This bounds retries, not a blocking kernel API.
         deadline = time.monotonic() + 0.25
-        first_error = last_error = None
+        first_error = last_error = None if initial_error is None else str(initial_error)
         current, outcome, attempts = identity, "unresolved", 0
 
         def recheck():

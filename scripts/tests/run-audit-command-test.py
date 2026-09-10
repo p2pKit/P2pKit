@@ -973,6 +973,84 @@ class DarwinObservationTests(unittest.TestCase):
                 self.scope.system.task_name_for_pid.assert_not_called()
                 self.assertEqual(self.scope.observation_reconciliations[-1]["outcome"], "unresolved")
 
+    def test_recorded_census_identity_denial_reconciles_only_observed_recovery_or_exit(self):
+        self.scope._identity = processes.DarwinScope._identity.__get__(self.scope)
+        transitions = [
+            (errno.EPERM, self.identity, True, "recovered"),
+            (errno.EACCES, None, False, "absent"),
+            (0, {**self.identity, "status": 5, "live": False}, True, "nonrunning"),
+            (errno.EPERM, {**self.identity, "uniqueId": 100}, False, "replaced"),
+        ]
+        for error, terminal, enumerate_pid, outcome in transitions:
+            with self.subTest(errno=error, outcome=outcome):
+                key = self.scope._key(self.identity)
+                self.scope.known = {key: dict(self.identity)}
+                self.scope.handles = {key: processes.AuditToken()}
+                self.scope._pids = lambda: [self.identity["pid"]] if enumerate_pid else []
+                self.scope.observation_reconciliations.clear()
+                self.elapsed = 0.0
+
+                def pidinfo(pid, _flavor, _arg, pointer, _size):
+                    if self.elapsed == 0:
+                        ctypes.set_errno(error)
+                        return 0
+                    if terminal is None:
+                        ctypes.set_errno(errno.ESRCH)
+                        return 0
+                    value = ctypes.cast(pointer, ctypes.POINTER(processes.DarwinIdentity)).contents
+                    for native, field in (("pid", "pid"), ("uid", "uid"), ("ruid", "realUid"),
+                                          ("ppid", "parentPid"), ("pgid", "group"), ("status", "status"),
+                                          ("flags", "flags"), ("startsec", "startSeconds"),
+                                          ("startusec", "startMicroseconds")):
+                        setattr(value.bsd, native, terminal[field])
+                    for native, field in (("uniqueid", "uniqueId"), ("parentuniqueid", "parentUniqueId"),
+                                          ("pidversion", "pidVersion")):
+                        setattr(value.unique, native, terminal[field])
+                    return ctypes.sizeof(value)
+
+                self.scope.proc.proc_pidinfo.side_effect = pidinfo
+                with self.clock(), mock.patch.object(processes.os, "getuid", return_value=1000, create=True):
+                    self.assertEqual(self.scope.discover(), [self.identity] if outcome == "recovered" else [])
+                self.assertGreater(self.elapsed, 0)
+                self.assertLessEqual(self.elapsed, 0.250001)
+                event = self.scope.observation_reconciliations[-1]
+                self.assertEqual((event["operation"], event["outcome"]), ("identity", outcome))
+                self.assertEqual(event["identity"], self.identity)
+                self.assertIn(f"errno {error}", event["firstFailure"])
+                self.assertEqual(self.scope.discovery_errors, set())
+                self.scope.system.task_name_for_pid.assert_not_called()
+                self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_recorded_census_identity_persistent_denial_or_empty_response_stays_fatal(self):
+        self.scope._identity = processes.DarwinScope._identity.__get__(self.scope)
+        key = self.scope._key(self.identity)
+        self.scope.known = {key: dict(self.identity)}
+        self.scope.handles = {key: processes.AuditToken()}
+        self.scope._pids = lambda: []  # Exercise the final known-lifetime refresh directly.
+        for error in (errno.EPERM, 0, "unknown-status"):
+            with self.subTest(errno=error):
+                self.elapsed = 0.0
+                self.scope.proc.proc_pidinfo.reset_mock()
+
+                def unavailable(pid, _flavor, _arg, pointer, _size):
+                    if error == "unknown-status":
+                        value = ctypes.cast(pointer, ctypes.POINTER(processes.DarwinIdentity)).contents
+                        value.bsd.pid, value.bsd.status = pid, 0
+                        return ctypes.sizeof(value)
+                    ctypes.set_errno(error)
+                    return 0
+
+                self.scope.proc.proc_pidinfo.side_effect = unavailable
+                with self.clock(), self.assertRaisesRegex(processes.OwnershipError, "unresolved"):
+                    self.scope.discover()
+                self.assertGreater(self.elapsed, 0)
+                self.assertLessEqual(self.elapsed, 0.250001)
+                self.assertLessEqual(self.scope.proc.proc_pidinfo.call_count, 27)
+                self.assertEqual(self.scope.observation_reconciliations[-1]["outcome"], "unresolved")
+                self.assertEqual(self.scope.known, {key: self.identity})
+                self.scope.system.task_name_for_pid.assert_not_called()
+                self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
     def test_native_status_flags_are_retained_but_only_zombie_is_terminal(self):
         self.scope._identity = processes.DarwinScope._identity.__get__(self.scope)
         for status, flags, live in ((2, 4, True), (2, 0x4000, True), (4, 0, True), (5, 4, False), (0, 4, None)):
