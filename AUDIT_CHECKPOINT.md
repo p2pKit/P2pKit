@@ -1,50 +1,49 @@
 <!-- audit-current:start -->
-# Current audit continuation — consumer repairs approved / Intel R16 ready
+# Current audit continuation — R16 reconciled; Windows17 ready
 
-**195/221 independently approved repairs (88.2%);196/221 resolved (88.7%);
-25 unresolved (11.3%)**: #236,21external rows and owner#120/#274/#284.
-#287 is resolved without repair; repair-approval complement26(11.8%).88new findings.
-Counts are rows, not effort/readiness. **Whole audit NOT_READY; #133 independent NOT_STARTED.**
+**196/222 repair-approved (88.3%); 197/222 resolved (88.7%); 25 unresolved (11.3%).**
+Remaining: #408, 21 external-validation rows and owner decisions #120/#274/#284.
+#287 is resolved without repair; repair-approval complement: 26 (11.7%). 89 new findings.
+These count issue rows, not effort or readiness. **Audit NOT_READY; #133 independent NOT_STARTED.**
 
-Source **`8765e3ea66f119bf6d48e5c866798ed798fc2aa5`**, tree`6375e7ab10967a22512e19b8c086ff3ee23e6c5f`:
-seven focused commits after pushed`4a409a8`, **local/not pushed at this binding**;
-this administrative successor is separate. R15 aggregate**FAIL/FULL_SEALED** remains,
-with13scoped native approvals (LAN184PASS+1manual skip;Swift79PASS). Prior failures
-and #291physical backup obligation are preserved.
+R16 ran clean `393a991` on native Intel/Xcode26.3: **FAIL/PARTIAL_SALVAGE**.
+Independent scoped approvals: core780 PASS, seven ABI checks + CLI, real publication/consumers,
+54 archives (45 canonical-license passes + 9 explicit KLIB exemptions), strict Swift and
+79 unit/UI cases. **#236 gains final repair approval.** No extra #402/#405/#407/#112 credit.
+LAN:175 PASS/9 timeouts/1 manual skip; live peer:zero verified transfers; natural CLI quit:FAIL;
+cancellation:zero methods executed. Successful components do not erase these failures.
+All23 actual wrapper stops/drains/source checks are corroborated. Final remote output/work/home
+cleanup remains **NOT_PROVEN**; exact owned simulator shutdown was observed. Lease release
+at22:40 was local scheduling only. Missing xcresult/binary objects remain explicit limitations.
 
-**#407/e5bd38d** and canonical**#112/5fac409** have final independent approval.
-Real strict consumer configuration nowPASS:115exact selected/177permitted components;
-unknown-module/conflicting-strict controls reject. No product dependency forcing,
-metadata weakening or extra112credit. Full consumers and54archive/native inspection
-remain pending. #405/#406/#402 approvals and R15 failures stay separately bound.
+Windows17 source **`684968970fdd98a30fd4d7d268b051d409cb6fcf`**, tree`570d6fb4cd57c9ddeb1f7071b2a18a27792b147d` is
+**locally committed/NOT_PUSHED** at this binding. Two focused methods passed; final independent
+execution-readiness approval obtained. One full Windows run follows fresh refs/Actions and
+an owned lease; native execution is **NOT_RUN**. #408 separately tracks redundant provenance
+rebuilds; private repair preparation only. Keep live verification and the900s probe deadline.
 
-Reused clean4a product against AI spec-only Python peer: both Noise roles,
-10messages/540386contentbytes, mutualpins/nonempty metadata/PING/PONG/ACK-aware close;
-separate wrong-manual-pin typed rejection and natural teardown independently approved.
-Not independent human/vendor133, physical, hostile-network or crypto acceptance.
-Released probe/interop artifacts and isolated Python environment cleaned; required
-CLI distribution retained only for upcoming Android peer verification.
+Three new local technical interoperability lanes are independently **APPROVED**: wrong-AppId
+rejection; two5MiB files, an empty file and cancellation after64KiB; first-HELLO record-tag
+rejection. They shared one small endpoint build and13 new fixtures. Actual product JARs
+remain bound to clean`4a409a8`, not relabeled current source. All five invocations finished
+0/0/0; six children exited naturally. After review,18 disposable paths/84,258,910 bytes
+were removed; required evidence and the CLI distribution for upcoming verification remain.
+This is AI technical loopback evidence, **not** formal #133, physical or cryptographic acceptance.
 
-**R16/8765e3e APPROVE_FINAL_EXECUTION_READINESS**;9focused methodsPASS,0/0/0,
-no survivors. GenuineIntel/Xcode26.3 execution **NOT_RUN**. One publisher/consumer,
-54archives after exact successful publisher, sevenABI+CLIonce, framework/Swift/live
-peer and isolated cancellation; timeout-only CLI thread observation never rescuesFAIL.
-Do not repeat unchanged ARM successes or infer earlier ARM linger resolved by Intel.
+Fresh23:27UTC:329 issues/222 open/107 closed;79 PRs/7 open;408 full bodies. Only known
+#408 creation and #236 outcome changed; unchanged complete visible histories were explicitly
+reused, with prior gaps preserved. Next: Windows17, #408/narrow remaining Apple work,
+combined ART37→24→25/recreation/peer checks, then current rootcheck, Android/Desktop samples
+and inspected release components. Reuse unaffected core/ABI/consumers/79Swift/Dokka/SBOM results.
+Physical/OEM/AWDL/hostile-network, independent #133, professional crypto, physical backup
+and owner decisions remain separate. **Planning estimate:3–7 engineering days accessible;
+2–6+ weeks external after access/reviewers, conditional on native findings, not a promise.**
+Serialize builds, max2 workers; retain logs, isolated stops and exact-owned cleanup.
+Preserve guides, source and shared caches. Audit-branch publication only; no main merge,
+tag/settings changes, issue closure or release authority.
 
-Fresh17:08UTC:328issues/221open/107closed,79PRs/7open,407fullbodies; only407creation
-and known112comment, no substantivePR/inline delta. Unchanged complete histories
-explicitly reused, prior gaps preserved. Coverage1153paths;5755existing historical
-cells retained. Last1786Linuxcheck/sample passes remain bound to3995+reviewed207diff,
-not currentclean8765source.
+[Exact evidence and continuation](docs/audit/2026-09-04/repairs/cohort-2026-09-09-native-followups.md#r16-terminal-results-and-windows17-continuation).
 
-Next: freshrefs/Actions, sourcefreeze/ownedlease before push; Intel,Windows17,
-combinedART37→24→25 and genuine372recreation/peer work, then final current rootcheck,
-samples/consumers and inspected releasegates. **Estimate:3–7engineering days accessible;
-2–6+weeks external after access/reviewers**, conditional, not completion promises.
-Serialize builds/max2workers; preserve logs/isolated stops/exact-owned cleanup.
-No main/tag/settings/closure/release authority; continue all feasible work.
-
-[Exact evidence and continuation](docs/audit/2026-09-04/repairs/cohort-2026-09-09-native-followups.md#intel-r16-readiness-and-current-technical-observations).
 <!-- audit-current:end -->
 
 ## Preserved pre-native checkpoint narratives (dated historical evidence)

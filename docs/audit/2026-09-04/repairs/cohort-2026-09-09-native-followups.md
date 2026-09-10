@@ -1,6 +1,6 @@
 # Native and local continuation — 9–10 September 2026
 
-> Current outcome: [Intel R16 readiness and current technical observations](#intel-r16-readiness-and-current-technical-observations) below; prior failures and dated source bindings remain unchanged.
+> Current outcome: [R16 terminal results and Windows17 continuation](#r16-terminal-results-and-windows17-continuation) below; prior failures and dated source bindings remain unchanged.
 
 ## Preserved pre-R10 state
 
@@ -1304,3 +1304,91 @@ Approximate remaining accessible work **3–7engineering days**; external qualif
 or promises. Serialize builds, max2workers/no parallel; logs, isolated stops and
 exact-owned cleanup. Only genuine external/owner/account/hardware/release blockers
 may remain; no main/tag/settings/closure/release authority.
+
+
+## R16 terminal results and Windows17 continuation
+
+
+**196/222 repair-approved (88.3%); 197/222 resolved (88.7%); 25 unresolved (11.3%).**
+Remaining: #408, 21 external-validation rows and owner decisions #120/#274/#284.
+#287 is resolved without repair; repair-approval complement: 26 (11.7%). 89 new findings.
+These count issue rows, not effort or readiness. **Audit NOT_READY; #133 independent NOT_STARTED.**
+
+R16 ran clean `393a991` on native Intel/Xcode26.3: **FAIL/PARTIAL_SALVAGE**.
+Independent scoped approvals: core780 PASS, seven ABI checks + CLI, real publication/consumers,
+54 archives (45 canonical-license passes + 9 explicit KLIB exemptions), strict Swift and
+79 unit/UI cases. **#236 gains final repair approval.** No extra #402/#405/#407/#112 credit.
+LAN:175 PASS/9 timeouts/1 manual skip; live peer:zero verified transfers; natural CLI quit:FAIL;
+cancellation:zero methods executed. Successful components do not erase these failures.
+All23 actual wrapper stops/drains/source checks are corroborated. Final remote output/work/home
+cleanup remains **NOT_PROVEN**; exact owned simulator shutdown was observed. Lease release
+at22:40 was local scheduling only. Missing xcresult/binary objects remain explicit limitations.
+
+Windows17 source **`684968970fdd98a30fd4d7d268b051d409cb6fcf`**, tree`570d6fb4cd57c9ddeb1f7071b2a18a27792b147d` is
+**locally committed/NOT_PUSHED** at this binding. Two focused methods passed; final independent
+execution-readiness approval obtained. One full Windows run follows fresh refs/Actions and
+an owned lease; native execution is **NOT_RUN**. #408 separately tracks redundant provenance
+rebuilds; private repair preparation only. Keep live verification and the900s probe deadline.
+
+Three new local technical interoperability lanes are independently **APPROVED**: wrong-AppId
+rejection; two5MiB files, an empty file and cancellation after64KiB; first-HELLO record-tag
+rejection. They shared one small endpoint build and13 new fixtures. Actual product JARs
+remain bound to clean`4a409a8`, not relabeled current source. All five invocations finished
+0/0/0; six children exited naturally. After review,18 disposable paths/84,258,910 bytes
+were removed; required evidence and the CLI distribution for upcoming verification remain.
+This is AI technical loopback evidence, **not** formal #133, physical or cryptographic acceptance.
+
+Fresh23:27UTC:329 issues/222 open/107 closed;79 PRs/7 open;408 full bodies. Only known
+#408 creation and #236 outcome changed; unchanged complete visible histories were explicitly
+reused, with prior gaps preserved. Next: Windows17, #408/narrow remaining Apple work,
+combined ART37→24→25/recreation/peer checks, then current rootcheck, Android/Desktop samples
+and inspected release components. Reuse unaffected core/ABI/consumers/79Swift/Dokka/SBOM results.
+Physical/OEM/AWDL/hostile-network, independent #133, professional crypto, physical backup
+and owner decisions remain separate. **Planning estimate:3–7 engineering days accessible;
+2–6+ weeks external after access/reviewers, conditional on native findings, not a promise.**
+Serialize builds, max2 workers; retain logs, isolated stops and exact-owned cleanup.
+Preserve guides, source and shared caches. Audit-branch publication only; no main merge,
+tag/settings changes, issue closure or release authority.
+
+### Exact final evidence bindings
+
+- Run34508769089/attempt1/job102977374250, artifact10174060600, ZIP SHA256
+  `eb23ddb803c626b53e628c4bc0fc6b7b20afb6b1b8a6ea4bb1267444abe5a2dc`.
+  1453members/16,881,384uncompressedbytes;3301entryoriginalmanifest/1856omissions.
+  ExportedJSON/XML/logs support scoped results,not fullxcresult/binaryreinspection.
+- Publication review `c39420c99911baa19e659c4e5ab3b71500bffe12d108fb10a741d8d4c206a2e4`:208publisher+23consumer tasks,
+  all10requestedcompile/linktasks,84physicalinputs+18aliases=102 post-byte records;
+  115exactselectedbuildtools/177permitted. #236finalapproval alone adds one credit.
+  [Published outcome](https://github.com/p2pKit/P2pKit/issues/236#issuecomment-5626799161).
+- Native review `eabe20a94c736b0fe2b1df5083347e07d37c56fff506cb5801db8a14f79f2be5`:core780PASS;LAN175PASS/9timeouts/1manualskip.
+  SevenABI+CLI56actualtasksPASS. Nine timeouts are not nine confirmed defects.
+- Swift review `2c6b90d2ccb0d58ca11cbb057579de209a3480d7c1dcdb4b264968f66ea8cf93`:framework31tasks,strictbuild,73unit+6UIuniquePASS.
+  Peerfirst-offer timeout precedesStart/manualdial;zero transfers. CLI export/finalization
+  returned before rescue; non-daemonJmDNSState.Timer observed,underlyingcauseunconfirmed.
+  Cancellation900souterdeadline interrupted anotherprovenance rebuild;zero methods.
+- Terminal review `61f0d0b38f266216903a7b11456bd87f9cdd7ef7b2fb65d95e83ae2af79b048f`:23actualisolatedstops0/noowned
+  survivors/sourcechanges;twofinal125receipts correctlypreventhandoff/finaloutputcleanup.
+  ExactsimulatorShutdown corroborated; locallease release is not remote cleanup approval.
+- Windows17 finalreadiness review
+  `f7346a12d8f44e9e6e8286a3856d8f0dbc61a7d35cdf988248ef1ca8a061e593`;
+  exactexecuteddiff`2b301750e84db02476b20df2dbf3420551bacda9ad43bdfac02598730febaf65`.
+  TwomethodsPASS22:42:33–35UTC,0/0/0. Committed source6849689 is equivalent;
+  those tests remain bound to393+diff,not retroactively a clean684execution.
+- [#408](https://github.com/p2pKit/P2pKit/issues/408) created23:22:24UTC after
+  source/actualR16/duplicate inspection; no repair approval. Three successful nested
+  provenance leaves cost7072.487s inclusive; savings are not promised. Preserve the
+  realno-outputverifier,existingproducer/sidecarbinding and ordinaryfreshdefaults.
+- Localnewpeerlanes: endpointSHA256
+  `7c836519150286c7b009432e800a65827661e576ebd1bf49719ee489759aeb28`;
+  onecompile4tasks,12file+1recordfixtures,threeserialcontrollersPASS. Actualproduct
+  BuildInfo4a409a8/22JARs,161pinnedwheelmembersrebound; independent final review
+  `5d6147c185fd8873feba12fab2c9baa67fbb513de78573f05b040d4276450016` approves all three
+  technical observations. All five0/0/0; reviewed synthetic files, environment and private
+  build outputs removed afterward:18 paths/84,258,910 bytes. Cleanup receiptSHA256
+  `f91f972d5e4a252758294d792a8bc365313be1e9724cc5a92e16a8ecf8bbb35e`.
+  Formalindependent133 remainsNOT_STARTED; broaderfile/reconnect/physical/crypto excluded.
+
+Currentpreimage remains immutable6849689ledgers; all dated earlierreport sections
+and failures preserved. JSONnativeFollowups.r16Acceptance is the current scoped
+record. Countsbridge195/221→196/221 after236,then196/222 afterunapproved408.
+No completionpercent or liveGitHubclosure is inferred from repair counts.
