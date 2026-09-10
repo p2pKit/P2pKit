@@ -328,6 +328,11 @@ def inspect_repository(context):
         # Maven-local housekeeping is recorded, never added as trusted artifacts.
         optional.add((group_path / artifact / "maven-metadata-local.xml").as_posix())
         optional.add((directory / "maven-metadata-local.xml").as_posix())
+        # KMP emits one tooling sidecar for each root publication. Like Maven
+        # housekeeping, bind these bytes for the final unchanged-repository check
+        # without expanding the 75-artifact dependency-verification allowlist.
+        if artifact in ("p2p-core", "p2p-transport-lan", "p2p-network-provisioning-android"):
+            optional.add((directory / f"{artifact}-{version}-kotlin-tooling-metadata.json").as_posix())
     allowed_files = set(required) | optional
     allowed_dirs = {"."}
     for name in allowed_files:

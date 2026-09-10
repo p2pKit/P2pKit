@@ -49,6 +49,7 @@ EXPECTED_PUBLICATIONS = [
     ("p2p-core-iossimulatorarm64", ".klib"), ("p2p-transport-lan-iossimulatorarm64", ".klib"),
     ("p2p-core-iosx64", ".klib"), ("p2p-transport-lan-iosx64", ".klib"),
 ]
+EXPECTED_TOOLING_PUBLICATIONS = ("p2p-core", "p2p-transport-lan", "p2p-network-provisioning-android")
 EXPECTED_TASKS = [
     ":coreJvm:compileKotlin", ":coreJvm:compileJava", ":lanJvm:compileKotlin", ":desktopJvm:compileKotlin",
     ":androidConsumer:compileDebugKotlin", ":androidConsumer:processDebugManifest", ":kmpConsumer:compileKotlinJvm",
@@ -83,6 +84,7 @@ import sys
 import time
 
 PUBLICATIONS = __PUBLICATIONS__
+TOOLING_PUBLICATIONS = __TOOLING_PUBLICATIONS__
 DEPS = __DEPS__
 PERMISSIONS = __PERMISSIONS__
 GROUP = __GROUP__
@@ -138,8 +140,18 @@ def publish(repo):
         (folder / f"{artifact}-{VERSION}.module").write_text(json.dumps({
             "formatVersion": "1.1", "component": {"group": GROUP, "module": component, "version": VERSION},
         }))
+        if artifact in TOOLING_PUBLICATIONS and not (
+                artifact == "p2p-core" and os.environ.get("FAKE_TOOLING_CHANGE") == "add"):
+            (folder / f"{artifact}-{VERSION}-kotlin-tooling-metadata.json").write_text(json.dumps({
+                "schemaVersion": "1.1.0", "buildSystem": "Gradle",
+                "buildPlugin": "org.jetbrains.kotlin.gradle.plugin.KotlinMultiplatformPluginWrapper",
+                "buildPluginVersion": "91.0.0",
+            }))
         (folder.parent / "maven-metadata-local.xml").write_text("<metadata/>\n")
         (folder / "maven-metadata-local.xml").write_text("<metadata/>\n")
+    if os.environ.get("FAKE_EXTRA_TOOLING"):
+        (repo / GROUP.replace(".", "/") / "p2p-core-jvm" / VERSION /
+         f"p2p-core-jvm-{VERSION}-kotlin-tooling-metadata.json").write_text("{}\n")
     if os.environ.get("FAKE_MISSING_POM"):
         artifact = os.environ["FAKE_MISSING_POM"]
         (repo / GROUP.replace(".", "/") / artifact / VERSION / f"{artifact}-{VERSION}.pom").unlink()
@@ -174,6 +186,13 @@ def build(args):
     if os.environ.get("FAKE_TAMPER_LOCAL"):
         repo = Path(next(arg.split("=", 1)[1] for arg in args if arg.startswith("-PconsumerRepo=")))
         (repo / GROUP.replace(".", "/") / "p2p-core-jvm" / VERSION / f"p2p-core-jvm-{VERSION}.jar").write_bytes(b"changed after prepared allowlist")
+    if os.environ.get("FAKE_TOOLING_CHANGE"):
+        repo = Path(next(arg.split("=", 1)[1] for arg in args if arg.startswith("-PconsumerRepo=")))
+        tooling = repo / GROUP.replace(".", "/") / "p2p-core" / VERSION / f"p2p-core-{VERSION}-kotlin-tooling-metadata.json"
+        if os.environ["FAKE_TOOLING_CHANGE"] == "delete":
+            tooling.unlink()
+        else:
+            tooling.write_text('{"changedAfterPreparation":true}\n')
 
 def main():
     name, args = Path(sys.argv[0]).name, sys.argv[1:]
@@ -336,6 +355,7 @@ class ConsumerGateTest(unittest.TestCase):
         code = BOUNDARY
         for key, value in {
             "PUBLICATIONS": EXPECTED_PUBLICATIONS, "DEPS": POM_DEPENDENCIES, "PERMISSIONS": PERMISSIONS,
+            "TOOLING_PUBLICATIONS": EXPECTED_TOOLING_PUBLICATIONS,
             "GROUP": GROUP, "VERSION": VERSION, "EXTERNAL_SHA256": EXTERNAL_SHA256,
             "OWNERSHIP_FIELDS": OWNERSHIP_FIELDS, "CONSUMER_REPORT_BYTES": CONSUMER_REPORT_BYTES,
         }.items():
@@ -777,7 +797,14 @@ class ConsumerGateTest(unittest.TestCase):
         manifest = json.loads(manifest_path.read_text())
         self.assertEqual(manifest["publicationCount"], 15)
         self.assertEqual(manifest["artifactCount"], 75)
-        self.assertEqual(len(manifest["repositoryFiles"]), 105)
+        self.assertEqual(len(manifest["repositoryFiles"]), 108)
+        for module in EXPECTED_TOOLING_PUBLICATIONS:
+            relative = (Path(GROUP.replace(".", "/")) / module / VERSION /
+                        f"{module}-{VERSION}-kotlin-tooling-metadata.json").as_posix()
+            content = (self.work / "repository" / relative).read_bytes()
+            self.assertEqual(manifest["repositoryFiles"][relative],
+                             {"bytes": len(content), "sha256": hashlib.sha256(content).hexdigest()})
+            self.assertNotIn(relative, actual, "tooling sidecars must not expand the trusted artifact set")
         self.assertEqual({row["path"]: row["sha256"] for row in manifest["localArtifacts"]}, actual)
         evidence = manifest_path.parent
         self.assertEqual((evidence / "reviewed-verification-metadata.xml").read_bytes(), self.reviewed)
@@ -814,6 +841,7 @@ class ConsumerGateTest(unittest.TestCase):
 
     def test_unexpected_missing_and_symlink_publications_are_not_trusted(self):
         for flag, text in (("FAKE_EXTRA_ARTIFACT", "unexpected publication artifact"),
+                           ("FAKE_EXTRA_TOOLING", "unexpected publication artifact"),
                            ("FAKE_EXTRA_GROUP", "unexpected publication directory"),
                            ("FAKE_MISSING_ARTIFACT", "missing required artifacts"),
                            ("FAKE_SYMLINK_ARTIFACT", "not a regular publication file")):
@@ -836,6 +864,16 @@ class ConsumerGateTest(unittest.TestCase):
                 work = self.work_root / flag
                 result = self.run_gate({**self.audit_options(), "P2PKIT_CONSUMER_WORK_DIR": str(work), flag: "1"})
                 self.assert_rejected(result, text)
+                self.assertTrue((work / "consumer/gradle/verification-metadata.xml").is_file())
+        self.assertFalse(list(self.state.glob("consumer-receipts.*/consumer-metadata-verification.json")))
+
+    def test_tooling_sidecar_mutation_deletion_or_addition_after_preparation_is_rejected(self):
+        for change in ("modify", "delete", "add"):
+            with self.subTest(change=change):
+                work = self.work_root / change
+                result = self.run_gate({**self.audit_options(), "P2PKIT_CONSUMER_WORK_DIR": str(work),
+                                        "FAKE_TOOLING_CHANGE": change})
+                self.assert_rejected(result, "prepared consumer publication binding changed: repositoryFiles")
                 self.assertTrue((work / "consumer/gradle/verification-metadata.xml").is_file())
         self.assertFalse(list(self.state.glob("consumer-receipts.*/consumer-metadata-verification.json")))
 
