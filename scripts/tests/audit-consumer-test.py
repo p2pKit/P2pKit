@@ -616,6 +616,22 @@ class ConsumerGateTest(unittest.TestCase):
         work = self.assert_complete_arguments(self.calls("gradle"))
         self.assertTrue((work / "repository").is_dir())
         self.assertTrue((work / "consumer").is_dir())
+        settings = (work / "consumer/settings.gradle.kts").read_text()
+        # Kotlin marker bytes differ between Central and the Plugin Portal.
+        # Keep the reviewed routing/filter policy, not merely both repositories.
+        self.assertEqual(settings.split("\ndependencyResolutionManagement", 1)[0], r'''pluginManagement {
+    repositories {
+        google {
+            content {
+                includeGroupByRegex("com\\.android.*")
+                includeGroupByRegex("com\\.google.*")
+                includeGroupByRegex("androidx.*")
+            }
+        }
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}''')
         self.assertIn(self.work_root, work.parents)
         self.assertEqual({row["home"] for row in self.calls("gradle") + self.calls("gradle-stop")},
                          {str(self.state / "gradle-home")})
