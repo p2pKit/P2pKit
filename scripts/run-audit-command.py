@@ -443,6 +443,7 @@ class Tee:
                 if file_ok:
                     try:
                         self.output.write(block)
+                        self.output.flush()  # Retain the prefix before live delivery, even without EOF.
                     except OSError as error:
                         self.errors.append(f"Evidence stream write failed: {type(error).__name__}")
                         file_ok = False

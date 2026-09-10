@@ -595,6 +595,58 @@ class PurePolicyTests(unittest.TestCase):
             self.assertNotIn(("lstat", child), events)
             self.assertNotIn(("scan", child), events)
 
+    def test_tee_retains_live_binary_prefix_even_when_owned_pipe_has_no_eof(self):
+        delivered = threading.Event()
+
+        class LiveOutput(io.BytesIO):
+            def flush(self):
+                super().flush()
+                delivered.set()
+
+        with tempfile.TemporaryDirectory(prefix="audit tee prefix ") as temporary, LiveOutput() as live:
+            destination = Path(temporary) / "stderr.log"
+            read_fd, write_fd = os.pipe()
+            with os.fdopen(read_fd, "rb", buffering=0) as source, os.fdopen(write_fd, "wb", buffering=0) as writer:
+                errors = []
+                tee = runner.Tee(source, destination, live, errors)
+                prefix = b"partial stderr\x00\xff\r\nwithout EOF\n"
+                try:
+                    self.assertEqual(writer.write(prefix), len(prefix))
+                    self.assertTrue(delivered.wait(timeout=3), "Reader did not deliver the prefix live")
+                    tee.finish()  # Keep the real writer open through the bounded failure path.
+                    self.assertTrue(tee.thread.is_alive())
+                    self.assertEqual(errors, ["Owned pipe did not reach EOF after worker drain"])
+                    self.assertEqual(live.getvalue(), prefix)
+                    self.assertEqual(destination.read_bytes(), prefix)
+                finally:
+                    writer.close()
+                    tee.thread.join(timeout=3)
+                    self.assertFalse(tee.thread.is_alive(), "Fixture reader did not retire after EOF")
+
+    def test_tee_reports_evidence_flush_failure_and_continues_draining(self):
+        with tempfile.TemporaryDirectory(prefix="audit tee flush ") as temporary:
+            destination = Path(temporary) / "stderr.log"
+            with runner.new_file(destination) as output, io.BytesIO(b"\x00\xff" * 40000) as source, \
+                    io.BytesIO() as live:
+                wrapped = mock.Mock(wraps=output)
+
+                def flush():
+                    if wrapped.flush.call_count == 1:
+                        raise OSError(errno.EIO, "injected evidence flush failure")
+                    output.flush()
+
+                wrapped.flush.side_effect = flush
+                errors = []
+                with mock.patch.object(runner, "new_file", return_value=wrapped):
+                    tee = runner.Tee(source, destination, live, errors)
+                    tee.finish()
+                self.assertFalse(tee.thread.is_alive())
+                self.assertEqual(errors, ["Evidence stream write failed: OSError"])
+                self.assertEqual(live.getvalue(), b"\x00\xff" * 40000)
+                self.assertEqual(wrapped.write.call_count, 1)
+                self.assertTrue(source.closed)
+                self.assertTrue(output.closed)
+
     def test_fixture_markers_are_flushed_raw_bytes_under_both_text_newline_policies(self):
         # Exercise the actual embedded program, not a duplicate marker implementation.
         # Buffered binary streams make a missing explicit flush observable before close.
