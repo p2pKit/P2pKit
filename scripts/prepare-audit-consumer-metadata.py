@@ -100,6 +100,9 @@ LOGICAL_ARTIFACT_ALIASES = {
         ("p2p-transport-lan-iosX64Cinterop-p2pkit_nwMain-{version}.klib", "-cinterop-p2pkit_nw.klib"),
     ),
 }
+# This admission remains complete/source-local only. The supplemental local
+# lan-jvm-android shell profile cannot use this helper or the audit executor;
+# it must never reduce the fifteen-publication or native-consumer contract.
 CONSUMER_TASKS = [
     ":coreJvm:compileKotlin",
     ":coreJvm:compileJava",
@@ -111,6 +114,15 @@ CONSUMER_TASKS = [
     ":kmpConsumer:compileAndroidMain",
     ":kmpConsumer:compileKotlinIosSimulatorArm64",
     ":kmpConsumer:linkDebugFrameworkIosSimulatorArm64",
+    ":lanJvm:runEmbeddedJmdnsSmoke",
+    ":lanJvm:runEmbeddedJmdnsCoexistenceSmoke",
+    ":lanJvm:runEmbeddedJmdnsCoexistenceUpstreamFirstSmoke",
+    ":lanJvm:runEmbeddedJmdnsPomSmoke",
+    ":androidConsumer:assembleDebug",
+    ":androidConsumer:assembleRelease",
+    ":androidConsumer:assembleCoexistDebug",
+    ":androidConsumer:assembleCoexistRelease",
+    ":androidConsumer:verifyEmbeddedJmdnsPackaging",
 ]
 NAMESPACE = "https://schema.gradle.org/dependency-verification"
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()

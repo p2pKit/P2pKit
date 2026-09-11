@@ -3,6 +3,11 @@ import dev.p2pkit.build.GitDirtyValueSource
 import dev.p2pkit.build.P2pPomMetadata
 import dev.p2pkit.build.VerifyXcframeworkProvenanceTask
 import dev.p2pkit.build.WriteXcframeworkProvenanceTask
+import org.gradle.api.tasks.compile.JavaCompile
+import org.gradle.api.tasks.testing.Test
+import org.gradle.jvm.tasks.Jar
+import org.gradle.jvm.toolchain.JavaLanguageVersion
+import org.gradle.jvm.toolchain.JavaToolchainService
 import org.jetbrains.kotlin.gradle.plugin.mpp.apple.XCFramework
 import kotlinx.validation.KotlinApiBuildTask
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
@@ -13,6 +18,59 @@ plugins {
     alias(libs.plugins.dokka)
     `maven-publish`
 }
+
+// JmDNS is a private source component, not a replacement published under the
+// upstream coordinate. One Java8 producer supplies both JVM and Android; a
+// local file dependency alone would not embed it in the published JVM JAR.
+val embeddedJmdnsVendor = layout.projectDirectory.dir("vendor/jmdns")
+val embeddedJmdnsSlf4j = "org.slf4j:slf4j-api:2.0.7"
+val embeddedJmdnsCompileClasspath = configurations.create("embeddedJmdnsCompileClasspath") {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    description = "Compile classpath for the private Java8 JmDNS source component."
+}
+dependencies {
+    add(embeddedJmdnsCompileClasspath.name, embeddedJmdnsSlf4j)
+}
+
+val compileEmbeddedJmdnsJava = tasks.register<JavaCompile>("compileEmbeddedJmdnsJava") {
+    description = "Compiles the reviewed, privately relocated JmDNS production sources."
+    source(embeddedJmdnsVendor.dir("src/main/java"))
+    classpath = embeddedJmdnsCompileClasspath
+    destinationDirectory.set(layout.buildDirectory.dir("classes/embeddedJmdns/main"))
+    options.release.set(8)
+    options.encoding = "UTF-8"
+}
+val embeddedJmdnsResources = copySpec {
+    from(embeddedJmdnsVendor.dir("src/main/resources"))
+    from(embeddedJmdnsVendor) {
+        include("NOTICE.txt", "MODIFICATIONS.txt", "PROVENANCE.json", "patches/410-lifecycle.patch")
+        into("META-INF/p2pkit/third-party/jmdns")
+    }
+}
+
+fun Jar.includeEmbeddedJmdnsResources() {
+    with(embeddedJmdnsResources)
+    // CopySpec ignores missing files; these required inputs must not. No
+    // artifact may claim a source identity before its real patch is recorded.
+    inputs.file(embeddedJmdnsVendor.file("PROVENANCE.json"))
+        .withPropertyName("embeddedJmdnsProvenance")
+    inputs.file(embeddedJmdnsVendor.file("patches/410-lifecycle.patch"))
+        .withPropertyName("embeddedJmdnsLifecyclePatch")
+}
+
+val embeddedJmdnsJar = tasks.register<Jar>("embeddedJmdnsJar") {
+    description = "Builds the private embedded JmDNS component, not a Maven publication."
+    archiveFileName.set("p2pkit-internal-jmdns.jar")
+    destinationDirectory.set(layout.buildDirectory.dir("embedded-jmdns"))
+    isPreserveFileTimestamps = false
+    isReproducibleFileOrder = true
+    from(compileEmbeddedJmdnsJava.flatMap { it.destinationDirectory })
+    includeEmbeddedJmdnsResources()
+    // The existing root Jar rule supplies exactly one canonical META-INF/LICENSE.
+}
+val embeddedJmdnsDependency = files(embeddedJmdnsJar.flatMap { it.archiveFile })
+    .builtBy(embeddedJmdnsJar)
 
 kotlin {
     @OptIn(org.jetbrains.kotlin.gradle.dsl.abi.ExperimentalAbiValidation::class)
@@ -101,19 +159,49 @@ kotlin {
             implementation(libs.kotlinx.coroutines.test)
         }
         jvmMain.dependencies {
-            implementation(libs.jmdns)
+            implementation(embeddedJmdnsDependency)
+            implementation(embeddedJmdnsSlf4j)
         }
         // Task #25 (v0.5): Android uses JmDNS instead of NsdManager to own the
         // mDNS cache in-process and unblock per-peer record invalidation that
         // the system NSD daemon does not expose. Pure-Java jar, no native
-        // bits, so the same artifact as jvmMain.
+        // bits, so Android bundles the same private producer as jvmMain.
         androidMain.dependencies {
-            implementation(libs.jmdns)
+            implementation(embeddedJmdnsDependency)
+            implementation(embeddedJmdnsSlf4j)
         }
         getByName("androidHostTest").dependencies {
             implementation(kotlin("test"))
             implementation(libs.kotlinx.coroutines.test)
         }
+    }
+}
+
+val embeddedJmdnsToolchains = extensions.getByType<JavaToolchainService>()
+compileEmbeddedJmdnsJava.configure {
+    javaCompiler.set(embeddedJmdnsToolchains.compilerFor {
+        languageVersion.set(JavaLanguageVersion.of(17))
+    })
+}
+
+tasks.named<Jar>("jvmJar") {
+    // Flatten only the owned classes and declared resources, never the private
+    // JAR's manifest/license or a nested JAR invisible to the JVM classloader.
+    from(compileEmbeddedJmdnsJava.flatMap { it.destinationDirectory })
+    includeEmbeddedJmdnsResources()
+}
+tasks.withType<Jar>().matching { it.name in setOf("jvmSourcesJar", "androidSourcesJar") }.configureEach {
+    from(embeddedJmdnsVendor.dir("src/main/java"))
+    includeEmbeddedJmdnsResources()
+}
+val jmdnsCloseFixtureReports = layout.buildDirectory.dir("reports/jmdns-close")
+tasks.named<Test>("jvmTest") {
+    outputs.dir(jmdnsCloseFixtureReports).withPropertyName("jmdnsCloseFixtureReports")
+    // Gradle's worker java.class.path need not contain the test runtime. The
+    // owned real-resource child fixture must receive this task's exact graph.
+    doFirst {
+        systemProperty("p2pkit.jmdns.fixture.classpath", classpath.asPath)
+        systemProperty("p2pkit.jmdns.fixture.outputDir", jmdnsCloseFixtureReports.get().asFile.absolutePath)
     }
 }
 

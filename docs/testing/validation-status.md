@@ -53,7 +53,7 @@ target. Cached XML, a dry-run, disabled tasks, and compilation are not execution
 | Target / suite | Configured coverage and limitation |
 | --- | --- |
 | JVM | Full macOS gate; required Ubuntu/Windows library matrix described above. |
-| Android | Host JVM only: framework stubs and provisioning Robolectric shadows. Core's `*AndroidHostTest` filter excludes its common suite; there is no authored instrumented/device suite or ART runner. |
+| Android | Host JVM gates use framework stubs and Robolectric shadows; core's `*AndroidHostTest` filter excludes its common suite. The separate ART driver has one focused API37 permission/recreation/TCP instrumentation case, not a general device suite or evidence of unexecuted runtime/catalog cases. |
 | `iosSimulatorArm64` | Expected execution on the default Apple Silicon macOS runner. |
 | `iosX64` | Published simulator slice; task is registered but disabled on arm64. Weekly/manual `Intel iOS simulator tests` uses `macos-15-intel` and requires both library suites to execute. No hosted Intel pass for this revision is recorded here. |
 | `iosArm64` | Device target has no configured device-test execution task. GitHub-hosted simulators cannot establish physical-device coverage; external hardware/runner integration is required. |
@@ -63,8 +63,8 @@ target. Cached XML, a dry-run, disabled tasks, and compilation are not execution
 Intel runner configuration is not a claim of execution or a decision to ship
 untested. Retain a same-source Intel result before claiming that slice tested;
 runner availability must be rechecked rather than assuming an end-of-support
-date. Android instrumentation requires new test authoring before any emulator
-job can supply evidence. These structural gaps differ from an existing physical
+date. Android instrumentation beyond the focused API37 case still requires
+test authoring; an authored case also needs an inspected actual run. These structural gaps differ from an existing physical
 test procedure that has not yet been performed. See
 [platform execution evidence](local.md#platform-execution-evidence).
 

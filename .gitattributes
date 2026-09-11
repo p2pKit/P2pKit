@@ -19,3 +19,5 @@ gradlew.bat text eol=lf
 docs/archive/evidence/v0.3/jvm-cli.log -text whitespace=-blank-at-eol
 docs/archive/remediation/2026-06/PROBLEMS_P2PKIT.md -text whitespace=-blank-at-eol
 docs/archive/remediation/2026-07/OPEN_DECISIONS_2026-07.md -text whitespace=-blank-at-eof
+library/p2p-transport-lan/vendor/jmdns/** text eol=lf
+LICENSE text eol=lf

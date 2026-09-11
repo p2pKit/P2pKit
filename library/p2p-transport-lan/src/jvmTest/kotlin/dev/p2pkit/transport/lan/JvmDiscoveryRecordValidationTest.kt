@@ -4,7 +4,7 @@ import dev.p2pkit.core.AppId
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.transport.PeerEvent
-import javax.jmdns.ServiceInfo
+import dev.p2pkit.transport.lan.internal.jmdns.ServiceInfo
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.onStart

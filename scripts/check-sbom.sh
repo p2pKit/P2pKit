@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Generates (or validates) the aggregate release SBOM and rejects incomplete or
-# build-environment-contaminated output.
+# build-environment-contaminated output. Existing-pair mode also requires the
+# checked-in vendor inputs and the owned LAN producer JAR; it does not rebuild.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

@@ -2870,10 +2870,20 @@ class PosixNativeTests(ExecutorFixtureTests):
         self.assertEqual(build["requestedArgv"][5:], [":coreJvm:compileKotlin", ":coreJvm:compileJava",
             ":lanJvm:compileKotlin", ":desktopJvm:compileKotlin", ":androidConsumer:compileDebugKotlin",
             ":androidConsumer:processDebugManifest", ":kmpConsumer:compileKotlinJvm", ":kmpConsumer:compileAndroidMain",
-            ":kmpConsumer:compileKotlinIosSimulatorArm64", ":kmpConsumer:linkDebugFrameworkIosSimulatorArm64"])
+            ":kmpConsumer:compileKotlinIosSimulatorArm64", ":kmpConsumer:linkDebugFrameworkIosSimulatorArm64",
+            ":lanJvm:runEmbeddedJmdnsSmoke", ":lanJvm:runEmbeddedJmdnsCoexistenceSmoke",
+            ":lanJvm:runEmbeddedJmdnsCoexistenceUpstreamFirstSmoke", ":lanJvm:runEmbeddedJmdnsPomSmoke",
+            ":androidConsumer:assembleDebug", ":androidConsumer:assembleRelease",
+            ":androidConsumer:assembleCoexistDebug", ":androidConsumer:assembleCoexistRelease",
+            ":androidConsumer:verifyEmbeddedJmdnsPackaging"])
         self.assertEqual(receipts["consumer-publish"]["reports"], [])
-        self.assertEqual(len(build["reports"]), 1)
-        report = build["reports"][0]
+        self.assertEqual(len(build["reports"]), 2)
+        packaging_path = paths["consumerWorkDir"] / "consumer/androidConsumer/build/reports/embedded-jmdns/packaging.txt"
+        report_source = "external/" + paths["fixtureReport"].relative_to(child_state).as_posix()
+        packaging_source = "external/" + packaging_path.relative_to(child_state).as_posix()
+        reports = {report["source"]: report for report in build["reports"]}
+        self.assertEqual(set(reports), {report_source, packaging_source})
+        report = reports[report_source]
         expected = b'{"fixtureOnly":true,"result":"synthetic-consumer-report-not-compilation"}\n'
         self.assertEqual(report["source"], "external/" + paths["fixtureReport"].relative_to(child_state).as_posix())
         self.assertEqual(report["classification"], "changed-since-admission")
@@ -2882,6 +2892,13 @@ class PosixNativeTests(ExecutorFixtureTests):
         self.assertEqual(paths["fixtureReport"].read_bytes(), expected)
         self.assertEqual(completion["fixtureReportSha256"], runner.digest(expected))
         self.assertEqual((Path(build["evidenceDirectory"]) / report["retained"]).read_bytes(), expected)
+        packaging = reports[packaging_source]
+        expected_packaging = b"PASS: embedded JmDNS Android D8/R8 plain+coexistence; POM-only runtime graphs\n"
+        self.assertEqual(packaging["classification"], "changed-since-admission")
+        self.assertEqual(packaging["sha256"], runner.digest(expected_packaging))
+        self.assertEqual(packaging["bytes"], len(expected_packaging))
+        self.assertEqual(packaging_path.read_bytes(), expected_packaging)
+        self.assertEqual((Path(build["evidenceDirectory"]) / packaging["retained"]).read_bytes(), expected_packaging)
         optional = list(child_state.glob("consumer-receipts.*"))
         self.assertEqual(len(optional), 1)
         self.assertEqual({path.name for path in optional[0].iterdir()}, {"consumer-publish.json", "consumer-build.json"})

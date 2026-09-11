@@ -1,0 +1,2785 @@
+--- a/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/DNSRecord.java
++++ b/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/DNSRecord.java
+@@ -404,5 +404,2 @@
+-                        dns.getLocalHost().incrementHostName();
+-                        dns.getCache().clear();
+-                        for (ServiceInfo serviceInfo : dns.getServices().values()) {
+-                            ServiceInfoImpl info = (ServiceInfoImpl) serviceInfo;
+-                            info.revertState();
++                        if (!dns.renameHostAfterConflict()) {
++                            return false;
+@@ -427,5 +424,2 @@
+-                    dns.getLocalHost().incrementHostName();
+-                    dns.getCache().clear();
+-                    for (ServiceInfo serviceInfo : dns.getServices().values()) {
+-                        ServiceInfoImpl info = (ServiceInfoImpl) serviceInfo;
+-                        info.revertState();
++                    if (!dns.renameHostAfterConflict()) {
++                        return false;
+@@ -826,3 +820,7 @@
+-                    info.setName(NameRegister.Factory.getRegistry().incrementName(dns.getLocalHost().getInetAddress(), info.getName(), NameRegister.NameType.SERVICE));
+-                    dns.getServices().remove(oldName);
+-                    dns.getServices().put(info.getQualifiedName().toLowerCase(), info);
++                    String replacement = NameRegister.Factory.getRegistry().incrementName(
++                            dns.getLocalHost().getInetAddress(), info.getName(), NameRegister.NameType.SERVICE);
++                    String instance = replacement == null ? "" : replacement;
++                    String newKey = (instance.isEmpty() ? info.getType() : instance + "." + info.getType()).toLowerCase();
++                    if (!dns.publishServiceRename(info, oldName, replacement, newKey)) {
++                        return false;
++                    }
+@@ -832 +830 @@
+-                    info.revertState();
++                    dns.revertServiceAfterConflict(info);
+@@ -853,3 +851,7 @@
+-                    info.setName(NameRegister.Factory.getRegistry().incrementName(dns.getLocalHost().getInetAddress(), info.getName(), NameRegister.NameType.SERVICE));
+-                    dns.getServices().remove(oldName);
+-                    dns.getServices().put(info.getQualifiedName().toLowerCase(), info);
++                    String replacement = NameRegister.Factory.getRegistry().incrementName(
++                            dns.getLocalHost().getInetAddress(), info.getName(), NameRegister.NameType.SERVICE);
++                    String instance = replacement == null ? "" : replacement;
++                    String newKey = (instance.isEmpty() ? info.getType() : instance + "." + info.getType()).toLowerCase();
++                    if (!dns.publishServiceRename(info, oldName, replacement, newKey)) {
++                        return false;
++                    }
+@@ -859 +861 @@
+-                info.revertState();
++                dns.revertServiceAfterConflict(info);
+--- a/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/DNSStatefulObject.java
++++ b/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/DNSStatefulObject.java
+@@ -433,0 +434,28 @@
++        /** Close/recovery-specific wait: register under the state lock and preserve interruption. */
++        public final boolean waitForCanceledInterruptibly(long timeout) throws InterruptedException {
++            Thread thread = Thread.currentThread();
++            Semaphore semaphore = new Semaphore(0);
++            long origin = System.nanoTime();
++            long allowance = TimeUnit.MILLISECONDS.toNanos(timeout);
++            if (!this.tryLock(allowance, TimeUnit.NANOSECONDS)) {
++                return this.isCanceled();
++            }
++            try {
++                if (this.isCanceled()) {
++                    return true;
++                }
++                // setState signals under the same lock, so cancellation cannot
++                // fall between the state check and this waiter's registration.
++                _canceling._semaphores.put(thread, semaphore);
++            } finally {
++                this.unlock();
++            }
++            try {
++                long remaining = Math.max(0L, allowance - Math.max(0L, System.nanoTime() - origin));
++                semaphore.tryAcquire(remaining, TimeUnit.NANOSECONDS);
++                return this.isCanceled();
++            } finally {
++                _canceling._semaphores.remove(thread, semaphore);
++            }
++        }
++
+--- a/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/DNSTaskStarter.java
++++ b/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/DNSTaskStarter.java
+@@ -161,0 +162,5 @@
++        /** Detach only the retained original owner, and only after its timers dispose. */
++        void disposeStarter(JmDNSImpl jmDNSImpl, DNSTaskStarter expected) {
++            _instances.remove(jmDNSImpl, expected);
++        }
++
+@@ -222,0 +228 @@
++                super.cancel();
+@@ -224 +229,0 @@
+-                super.cancel();
+@@ -293 +298,6 @@
+-            _stateTimer = new StarterTimer("JmDNS(" + _jmDNSImpl.getName() + ").State.Timer", false);
++            try {
++                _stateTimer = new StarterTimer("JmDNS(" + _jmDNSImpl.getName() + ").State.Timer", false);
++            } catch (RuntimeException | Error failure) {
++                _timer.cancel();
++                throw failure;
++            }
+@@ -338 +348,10 @@
+-            new Prober(_jmDNSImpl).start(_stateTimer);
++            final Prober task;
++            if (!_jmDNSImpl.beginTaskStart(false)) {
++                return;
++            }
++            try {
++                task = new Prober(_jmDNSImpl);
++            } finally {
++                _jmDNSImpl.endProducerMutation();
++            }
++            task.start(_stateTimer);
+@@ -347 +366,10 @@
+-            new Announcer(_jmDNSImpl).start(_stateTimer);
++            final Announcer task;
++            if (!_jmDNSImpl.beginTaskStart(false)) {
++                return;
++            }
++            try {
++                task = new Announcer(_jmDNSImpl);
++            } finally {
++                _jmDNSImpl.endProducerMutation();
++            }
++            task.start(_stateTimer);
+@@ -356 +384,10 @@
+-            new Renewer(_jmDNSImpl).start(_stateTimer);
++            final Renewer task;
++            if (!_jmDNSImpl.beginTaskStart(false)) {
++                return;
++            }
++            try {
++                task = new Renewer(_jmDNSImpl);
++            } finally {
++                _jmDNSImpl.endProducerMutation();
++            }
++            task.start(_stateTimer);
+@@ -365 +402,10 @@
+-            new Canceler(_jmDNSImpl).start(_stateTimer);
++            final Canceler task;
++            if (!_jmDNSImpl.beginTaskStart(true)) {
++                return;
++            }
++            try {
++                task = new Canceler(_jmDNSImpl);
++            } finally {
++                _jmDNSImpl.endProducerMutation();
++            }
++            task.start(_stateTimer);
+@@ -374 +420,10 @@
+-            new RecordReaper(_jmDNSImpl).start(_timer);
++            final RecordReaper task;
++            if (!_jmDNSImpl.beginTaskStart(false)) {
++                return;
++            }
++            try {
++                task = new RecordReaper(_jmDNSImpl);
++            } finally {
++                _jmDNSImpl.endProducerMutation();
++            }
++            task.start(_timer);
+@@ -383 +438,12 @@
+-            new ServiceInfoResolver(_jmDNSImpl, info).start(_timer);
++            final ServiceInfoResolver resolver;
++            if (!_jmDNSImpl.beginTaskStart(false)) {
++                return;
++            }
++            try {
++                resolver = new ServiceInfoResolver(_jmDNSImpl, info);
++            } finally {
++                _jmDNSImpl.endProducerMutation();
++            }
++            // start installs/replays the DNS listener and re-admits scheduling;
++            // never keep the constructor slice through an inline replay callback.
++            resolver.start(_timer);
+@@ -392 +458,10 @@
+-            new TypeResolver(_jmDNSImpl).start(_timer);
++            final TypeResolver task;
++            if (!_jmDNSImpl.beginTaskStart(false)) {
++                return;
++            }
++            try {
++                task = new TypeResolver(_jmDNSImpl);
++            } finally {
++                _jmDNSImpl.endProducerMutation();
++            }
++            task.start(_timer);
+@@ -401 +476,10 @@
+-            new ServiceResolver(_jmDNSImpl, type).start(_timer);
++            if (!_jmDNSImpl.beginTaskStart(false)) {
++                return;
++            }
++            final ServiceResolver task;
++            try {
++                task = new ServiceResolver(_jmDNSImpl, type);
++            } finally {
++                _jmDNSImpl.endProducerMutation();
++            }
++            task.start(_timer);
+@@ -410 +494,15 @@
+-            new Responder(_jmDNSImpl, in, addr, port).start(_timer);
++            if (!_jmDNSImpl.beginTaskStart(false)) {
++                return;
++            }
++            final Responder task;
++            try {
++                task = new Responder(_jmDNSImpl, in, addr, port, new Runnable() {
++                    @Override
++                    public void run() {
++                        _jmDNSImpl.requestCloseFromResponder();
++                    }
++                });
++            } finally {
++                _jmDNSImpl.endProducerMutation();
++            }
++            task.start(_timer);
+--- a/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/HostInfo.java
++++ b/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/HostInfo.java
+@@ -197,0 +198,8 @@
++    final synchronized boolean renameForLifetime(String expected, String replacement) {
++        if (!_name.equals(expected)) {
++            return false;
++        }
++        _name = replacement;
++        return true;
++    }
++
+@@ -448,0 +457,8 @@
++    final boolean waitForCanceledInterruptibly(long timeout) throws InterruptedException {
++        if (_address == null) {
++            // Preserve the original never-announced-host special case.
++            return true;
++        }
++        return _state.waitForCanceledInterruptibly(timeout);
++    }
++
+--- a/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/JmDNSImpl.java
++++ b/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/JmDNSImpl.java
+@@ -36,0 +37 @@
++import java.util.IdentityHashMap;
+@@ -42,0 +44 @@
++import java.util.Timer;
+@@ -47,0 +50 @@
++import java.util.concurrent.TimeUnit;
+@@ -65,0 +69 @@
++import dev.p2pkit.transport.lan.internal.jmdns.impl.tasks.state.DNSStateTask;
+@@ -341 +345,4 @@
+-    private final ExecutorService _executor = Executors.newSingleThreadExecutor(new NamedThreadFactory("JmDNS"));
++    // Initialized before any constructor dispatch; protocol state is not ownership.
++    private final JmDNSLifecycle _lifecycle = new JmDNSLifecycle();
++    private final ExecutorService _executor;
++    private volatile DNSTaskStarter _taskStarter;
+@@ -436 +443,2 @@
+-        _typeListeners = Collections.synchronizedSet(new HashSet<>());
++        _typeListeners = Collections.synchronizedSet(Collections.newSetFromMap(
++                new IdentityHashMap<ServiceTypeListenerStatus, Boolean>()));
+@@ -444,0 +453 @@
++        _executor = Executors.newSingleThreadExecutor(new NamedThreadFactory("JmDNS"));
+@@ -455,5 +464,31 @@
+-        // Bind to multicast socket
+-        this.openMulticastSocket(this.getLocalHost());
+-        this.start(this.getServices().values());
+-
+-        this.startReaper();
++        synchronized (_lifecycle) {
++            _lifecycle.startupInProgress = true;
++            _lifecycle.startupOwner = Thread.currentThread();
++        }
++        try {
++            // Allocate once, before any task or listener can run. Never look it up
++            // through the allocating factory again, including after failed close.
++            DNSTaskStarter starter = DNSTaskStarter.Factory.getInstance().getStarter(this);
++            synchronized (_lifecycle) {
++                _taskStarter = starter;
++            }
++            if (!this.openMulticastSocket(this.getLocalHost(), null)) {
++                throw new IOException("JmDNS was closed during construction");
++            }
++            this.start(this.getServices().values());
++            this.startReaper();
++        } catch (IOException | RuntimeException | Error failure) {
++            finishStartupOwnership();
++            abortConstruction(failure);
++            throw failure;
++        } finally {
++            finishStartupOwnership();
++        }
++    }
++
++    private void finishStartupOwnership() {
++        synchronized (_lifecycle) {
++            _lifecycle.startupInProgress = false;
++            _lifecycle.startupOwner = null;
++            _lifecycle.notifyAll();
++        }
+@@ -463,4 +498 @@
+-        if (_incomingListener == null) {
+-            _incomingListener = new SocketListener(this);
+-            _incomingListener.start();
+-        }
++        startSocketListener();
+@@ -476,0 +509,36 @@
++    private void startSocketListener() {
++        MulticastSocket socket = _socket;
++        if (socket == null || isTerminalRequested()) {
++            return;
++        }
++        // Construction may call public getName(); keep it outside the slice.
++        SocketListener listener = new SocketListener(this, socket);
++        if (!_lifecycle.beginMutation(false)) {
++            return;
++        }
++        JmDNSLifecycle.OwnedThread owned = new JmDNSLifecycle.OwnedThread();
++        owned.thread = listener;
++        try {
++            synchronized (_lifecycle) {
++                if (_incomingListener != null || _socket != socket) {
++                    return;
++                }
++                _incomingListener = listener;
++                _lifecycle.listeners.add(owned);
++            }
++            try {
++                listener.start();
++                synchronized (_lifecycle) {
++                    owned.started = true;
++                }
++            } finally {
++                synchronized (_lifecycle) {
++                    owned.launchResolved = true;
++                    _lifecycle.notifyAll();
++                }
++            }
++        } finally {
++            _lifecycle.endMutation();
++        }
++    }
++
+@@ -485 +553 @@
+-    private void openMulticastSocket(HostInfo hostInfo) throws IOException {
++    private boolean openMulticastSocket(HostInfo hostInfo, JmDNSLifecycle.Recovery recovery) throws IOException {
+@@ -487,2 +555,18 @@
+-            if (hostInfo.getInetAddress() instanceof Inet6Address) {
+-                _group = InetAddress.getByName(DNSConstants.MDNS_GROUP_IPV6);
++            _group = InetAddress.getByName(hostInfo.getInetAddress() instanceof Inet6Address
++                    ? DNSConstants.MDNS_GROUP_IPV6 : DNSConstants.MDNS_GROUP);
++        }
++        if (isTerminalRequested()) {
++            return false;
++        }
++        // A candidate is private until every operation which can fail has run.
++        MulticastSocket candidate = new MulticastSocket(getMulticastBindAddress(hostInfo));
++        synchronized (_lifecycle) {
++            _lifecycle.sockets.add(candidate);
++        }
++        boolean published = false;
++        Throwable preparationFailure = null;
++        try {
++            if (hostInfo.getInterface() != null) {
++                SocketAddress multicastAddr = new InetSocketAddress(_group, DNSConstants.MDNS_PORT);
++                candidate.setNetworkInterface(hostInfo.getInterface());
++                candidate.joinGroup(multicastAddr, hostInfo.getInterface());
+@@ -490,15 +574,54 @@
+-                _group = InetAddress.getByName(DNSConstants.MDNS_GROUP);
+-            }
+-        }
+-        if (_socket != null) {
+-            this.closeMulticastSocket();
+-        }
+-        _socket = new MulticastSocket(getMulticastBindAddress(hostInfo));
+-        if ((hostInfo != null) && (hostInfo.getInterface() != null)) {
+-            final SocketAddress multicastAddr = new InetSocketAddress(_group, DNSConstants.MDNS_PORT);
+-            _socket.setNetworkInterface(hostInfo.getInterface());
+-
+-            logger.trace("Trying to joinGroup({}, {})", multicastAddr, hostInfo.getInterface());
+-
+-            // this joinGroup() might be less surprisingly so this is the default
+-            _socket.joinGroup(multicastAddr, hostInfo.getInterface());
++                candidate.joinGroup(_group);
++            }
++            candidate.setTimeToLive(255);
++            if (recovery != null) {
++                beforeRecoverySocketPublication(candidate);
++            }
++            synchronized (_lifecycle) {
++                if (!_lifecycle.terminalRequested && (recovery == null
++                        || (_lifecycle.recovery == recovery && recovery.mutating))) {
++                    _socket = candidate;
++                    _lifecycle.socketPublications++;
++                    published = true;
++                }
++            }
++            return published;
++        } catch (IOException | RuntimeException | Error failure) {
++            preparationFailure = failure;
++            throw failure;
++        } finally {
++            if (!published) {
++                List<Throwable> failures = new ArrayList<>();
++                disposeSocket(candidate, failures);
++                for (Throwable failure : failures) {
++                    if (preparationFailure != null) {
++                        preparationFailure.addSuppressed(failure);
++                    } else {
++                        logger.warn("Could not dispose unpublished multicast socket", failure);
++                    }
++                }
++            }
++        }
++    }
++
++    private void disposeSocket(MulticastSocket socket, List<Throwable> failures) {
++        if (!socket.isClosed()) {
++            try {
++                socket.leaveGroup(_group);
++            } catch (Throwable failure) {
++                failures.add(failure);
++            }
++            // A leaveGroup failure must never skip the independent close.
++            try {
++                socket.close();
++            } catch (Throwable failure) {
++                failures.add(failure);
++            }
++        }
++        if (socket.isClosed()) {
++            synchronized (_lifecycle) {
++                _lifecycle.sockets.remove(socket);
++                if (_socket == socket) {
++                    _socket = null;
++                }
++            }
+@@ -506,44 +629,191 @@
+-            logger.trace("Trying to joinGroup({})", _group);
+-            _socket.joinGroup(_group);
+-        }
+-
+-        _socket.setTimeToLive(255);
+-    }
+-
+-    private void closeMulticastSocket() {
+-        // jP: 20010-01-18. See below. We'll need this monitor...
+-        // assert (Thread.holdsLock(this));
+-        logger.debug("closeMulticastSocket()");
+-        if (_socket != null) {
+-            // close socket
+-            try {
+-                try {
+-                    _socket.leaveGroup(_group);
+-                } catch (SocketException exception) {
+-                    //
+-                }
+-                _socket.close();
+-                // jP: 20010-01-18. It isn't safe to join() on the listener
+-                // thread - it attempts to lock the IoLock object, and deadlock
+-                // ensues. Per issue #2933183, changed this to wait on the JmDNS
+-                // monitor, checking on each notify (or timeout) that the
+-                // listener thread has stopped.
+-                //
+-                while (_incomingListener != null && _incomingListener.isAlive()) {
+-                    synchronized (this) {
+-                        try {
+-                            if (_incomingListener != null && _incomingListener.isAlive()) {
+-                                // wait time is arbitrary, we're really expecting notification.
+-                                logger.debug("closeMulticastSocket(): waiting for jmDNS monitor");
+-                                this.wait(1000);
+-                            }
+-                        } catch (InterruptedException ignored) {
+-                            // Ignored
+-                        }
+-                    }
+-                }
+-                _incomingListener = null;
+-            } catch (final Exception exception) {
+-                logger.warn("closeMulticastSocket() Close socket exception ", exception);
+-            }
+-            _socket = null;
++            failures.add(new JmDNSLifecycle.CloseIncompleteException("Multicast socket remains open"));
++        }
++    }
++
++    private void disposeSockets(List<Throwable> failures) {
++        List<MulticastSocket> sockets;
++        synchronized (_lifecycle) {
++            sockets = new ArrayList<>(_lifecycle.sockets);
++        }
++        for (MulticastSocket socket : sockets) {
++            disposeSocket(socket, failures);
++        }
++    }
++
++    private void awaitOwnedThread(JmDNSLifecycle.OwnedThread owned, JmDNSLifecycle.WaitBudget budget,
++            String obligation) throws InterruptedException {
++        synchronized (_lifecycle) {
++            while (!owned.launchResolved) {
++                budget.await(_lifecycle, obligation + " launch");
++            }
++        }
++        if (owned.started) {
++            budget.join(owned.thread, obligation);
++        }
++    }
++
++    private void drainSocketListeners(JmDNSLifecycle.WaitBudget budget) throws InterruptedException {
++        List<JmDNSLifecycle.OwnedThread> listeners;
++        synchronized (_lifecycle) {
++            listeners = new ArrayList<>(_lifecycle.listeners);
++        }
++        for (JmDNSLifecycle.OwnedThread listener : listeners) {
++            awaitOwnedThread(listener, budget, "socket listener");
++            synchronized (_lifecycle) {
++                _lifecycle.listeners.remove(listener);
++                if (_incomingListener == listener.thread) {
++                    _incomingListener = null;
++                }
++            }
++        }
++    }
++
++    private void abortConstruction(Throwable original) {
++        try {
++            // The same arbiter owns constructor unwind, including tasks/recovery
++            // already launched by constructor dispatch. Never a second disposer.
++            closeOwnedLifetime();
++        } catch (Throwable disposalFailure) {
++            original.addSuppressed(disposalFailure);
++        }
++    }
++
++    public final boolean isTerminalRequested() {
++        synchronized (_lifecycle) {
++            return _lifecycle.terminalRequested;
++        }
++    }
++
++    public final boolean enterTaskExecution(boolean cancellationTask) {
++        return _lifecycle.enterTask(cancellationTask);
++    }
++
++    public final void exitTaskExecution() {
++        _lifecycle.exitTask();
++    }
++
++    public final boolean beginProducerMutation() {
++        return _lifecycle.beginMutation(false);
++    }
++
++    public final void endProducerMutation() {
++        _lifecycle.endMutation();
++    }
++
++    private boolean beginOwnedTaskMutation(boolean cancellation) {
++        synchronized (_lifecycle) {
++            if (cancellation && _lifecycle.terminalRequested) {
++                Thread caller = Thread.currentThread();
++                boolean closeOwner = _lifecycle.attempt != null && _lifecycle.attempt.owner == caller
++                        && _lifecycle.attempt.outcome == null;
++                boolean recoveryOwner = _lifecycle.recovery != null && _lifecycle.recovery.thread == caller
++                        && _lifecycle.recovery.mutating;
++                if (!closeOwner && !recoveryOwner) {
++                    return false;
++                }
++            }
++            return _lifecycle.beginMutation(cancellation);
++        }
++    }
++
++    boolean beginTaskStart(boolean cancellation) {
++        if (!beginOwnedTaskMutation(cancellation)) {
++            return false;
++        }
++        if (!cancellation) {
++            synchronized (_lifecycle) {
++                _lifecycle.normalTaskStarts++;
++            }
++        }
++        return true;
++    }
++
++    /** Called only inside the same admitted slice as actual Timer insertion. */
++    private void associateTaskForLifetime(DNSTask task, DNSState state) {
++        synchronized (this) {
++            _localHost.associateWithTask(task, state);
++        }
++        for (ServiceInfo info : _services.values()) {
++            ((ServiceInfoImpl) info).associateWithTaskForLifetime(task, state);
++        }
++    }
++
++    /** Actual Timer insertion is fenced after all start calculations/overrides. */
++    public final void scheduleTask(DNSTask task, Timer timer, long delay, long period, boolean cancellation) {
++        if (!beginOwnedTaskMutation(cancellation)) {
++            return;
++        }
++        try {
++            associateScheduledTask(task);
++            timer.schedule(task, delay, period);
++        } finally {
++            _lifecycle.endMutation();
++        }
++    }
++
++    public final void scheduleTask(DNSTask task, Timer timer, long delay, boolean cancellation) {
++        if (!beginOwnedTaskMutation(cancellation)) {
++            return;
++        }
++        try {
++            associateScheduledTask(task);
++            timer.schedule(task, delay);
++        } finally {
++            _lifecycle.endMutation();
++        }
++    }
++
++    private void associateScheduledTask(DNSTask task) {
++        if (task instanceof DNSStateTask) {
++            associateTaskForLifetime(task, ((DNSStateTask) task).getInitialAssociationState());
++        }
++    }
++
++    void enterListenerExecution() {
++        _lifecycle.enterDependent();
++    }
++
++    void exitListenerExecution() {
++        _lifecycle.exitDependent();
++        synchronized (_lifecycle) {
++            _lifecycle.notifyAll();
++        }
++    }
++
++    private void dispatchCallback(Runnable callback) {
++        if (!_lifecycle.reserveCallback(false)) {
++            return;
++        }
++        _lifecycle.enterDependent();
++        try {
++            callback.run();
++        } finally {
++            _lifecycle.exitDependent();
++            _lifecycle.endCallback();
++        }
++    }
++
++    private void submitCallback(final Runnable callback) {
++        if (!_lifecycle.reserveCallback(true)) {
++            return;
++        }
++        boolean accepted = false;
++        try {
++            _executor.submit(new Runnable() {
++                @Override
++                public void run() {
++                    _lifecycle.enterDependent();
++                    try {
++                        callback.run();
++                    } finally {
++                        _lifecycle.exitDependent();
++                        _lifecycle.endCallback();
++                    }
++                }
++            });
++            accepted = true;
++        } finally {
++            if (!accepted) {
++                _lifecycle.endCallback();
++            }
++            _lifecycle.endSubmission();
+@@ -567 +837,8 @@
+-        return this._localHost.revertState();
++        if (!beginProducerMutation()) {
++            return false;
++        }
++        try {
++            return this._localHost.revertState();
++        } finally {
++            endProducerMutation();
++        }
+@@ -591 +868,8 @@
+-        return this._localHost.recoverState();
++        if (!beginProducerMutation()) {
++            return false;
++        }
++        try {
++            return this._localHost.recoverState();
++        } finally {
++            endProducerMutation();
++        }
+@@ -784 +1068,11 @@
+-        this.cleanCache();
++        if (!isTerminalRequested()) {
++            this.cleanCache();
++            this.registerServiceType(type);
++            ensureServiceCollector(type);
++        }
++        final ServiceInfoImpl info = this.getServiceInfoFromCache(type, name, subtype, persistent);
++        this.startServiceInfoResolver(info);
++        return info;
++    }
++
++    private ServiceCollector ensureServiceCollector(String type) {
+@@ -786,11 +1080,20 @@
+-        this.registerServiceType(type);
+-        if (_serviceCollectors.putIfAbsent(loType, new ServiceCollector(type)) == null) {
+-            this.addServiceListener(loType, _serviceCollectors.get(loType), ListenerStatus.SYNCHRONOUS, true);
+-        }
+-
+-        // Check if the answer is in the cache.
+-        final ServiceInfoImpl info = this.getServiceInfoFromCache(type, name, subtype, persistent);
+-        // We still run the resolver to do the dispatch but if the info is already there it will quit immediately
+-        this.startServiceInfoResolver(info);
+-
+-        return info;
++        ServiceCollector collector;
++        boolean created = false;
++        if (!beginProducerMutation()) {
++            return null;
++        }
++        try {
++            collector = _serviceCollectors.get(loType);
++            if (collector == null) {
++                ServiceCollector candidate = new ServiceCollector(type);
++                ServiceCollector existing = _serviceCollectors.putIfAbsent(loType, candidate);
++                collector = existing == null ? candidate : existing;
++                created = existing == null;
++            }
++        } finally {
++            endProducerMutation();
++        }
++        if (created) {
++            this.addServiceListener(loType, collector, ListenerStatus.SYNCHRONOUS, true);
++        }
++        return collector;
+@@ -867 +1170 @@
+-                if (info.hasData()) {
++                if (info.hasData() || isTerminalRequested()) {
+@@ -923 +1226 @@
+-                        _executor.submit(new Runnable() {
++                        submitCallback(new Runnable() {
+@@ -945,8 +1248,12 @@
+-        ServiceTypeListenerStatus status = new ServiceTypeListenerStatus(listener, ListenerStatus.ASYNCHRONOUS);
+-        _typeListeners.add(status);
+-
+-        // report cached service types
+-        for (String type : _serviceTypes.keySet()) {
+-            status.serviceTypeAdded(new ServiceEventImpl(this, type, "", null));
+-        }
+-
++        final ServiceTypeListenerStatus status = new ServiceTypeListenerStatus(listener, ListenerStatus.ASYNCHRONOUS);
++        if (!addTypeListenerStatus(status)) {
++            return;
++        }
++        for (final String type : _serviceTypes.keySet()) {
++            dispatchCallback(new Runnable() {
++                @Override
++                public void run() {
++                    status.serviceTypeAdded(new ServiceEventImpl(JmDNSImpl.this, type, "", null));
++                }
++            });
++        }
+@@ -953,0 +1261,35 @@
++    }
++
++    private boolean addTypeListenerStatus(ServiceTypeListenerStatus status) {
++        for (;;) {
++            ServiceTypeListenerStatus[] snapshot = _typeListeners.toArray(new ServiceTypeListenerStatus[0]);
++            boolean duplicate = false;
++            for (ServiceTypeListenerStatus old : snapshot) {
++                // Listener equals/hashCode may be application code. Do not own
++                // a producer slice across it; validate the identity snapshot later.
++                if (status.equals(old)) {
++                    duplicate = true;
++                    break;
++                }
++            }
++            if (!beginProducerMutation()) {
++                return false;
++            }
++            try {
++                synchronized (_typeListeners) {
++                    boolean unchanged = _typeListeners.size() == snapshot.length;
++                    for (ServiceTypeListenerStatus old : snapshot) {
++                        unchanged &= _typeListeners.contains(old); // identity-backed set
++                    }
++                    if (!unchanged) {
++                        continue;
++                    }
++                    if (!duplicate) {
++                        _typeListeners.add(status);
++                    }
++                    return true;
++                }
++            } finally {
++                endProducerMutation();
++            }
++        }
+@@ -962 +1304,5 @@
+-        _typeListeners.remove(status);
++        for (ServiceTypeListenerStatus old : _typeListeners.toArray(new ServiceTypeListenerStatus[0])) {
++            if (status.equals(old)) {
++                _typeListeners.remove(old); // identity-backed, no user code under lock
++            }
++        }
+@@ -974 +1320 @@
+-        ServiceListenerStatus status = new ServiceListenerStatus(listener, synch);
++        final ServiceListenerStatus status = new ServiceListenerStatus(listener, synch);
+@@ -976,0 +1323 @@
++        ServiceCollector newCollector = null;
+@@ -978,9 +1325,46 @@
+-            if (_serviceListeners.putIfAbsent(loType, new LinkedList<>()) == null) {
+-                if (_serviceCollectors.putIfAbsent(loType, new ServiceCollector(type)) == null) {
+-                    // We have a problem here. The service collectors must be called synchronously so that their cache get cleaned up immediately, or we will report .
+-                    this.addServiceListener(loType, _serviceCollectors.get(loType), ListenerStatus.SYNCHRONOUS, false);
+-                }
+-            }
+-            list = _serviceListeners.get(loType);
+-        }
+-        if (list != null) {
++            if (!beginProducerMutation()) {
++                return;
++            }
++            try {
++                if (_serviceListeners.putIfAbsent(loType, new LinkedList<ServiceListenerStatus>()) == null) {
++                    ServiceCollector candidate = new ServiceCollector(type);
++                    if (_serviceCollectors.putIfAbsent(loType, candidate) == null) {
++                        newCollector = candidate;
++                    }
++                }
++                list = _serviceListeners.get(loType);
++            } finally {
++                endProducerMutation();
++            }
++        }
++        if (newCollector != null) {
++            // Collector recursion and its cached replay are outside the slice.
++            this.addServiceListener(loType, newCollector, ListenerStatus.SYNCHRONOUS, false);
++        }
++        if (list == null || !addServiceListenerStatus(list, status)) {
++            return;
++        }
++        final List<ServiceEvent> serviceEvents = new ArrayList<>();
++        for (DNSEntry entry : this.getCache().allValues()) {
++            final DNSRecord record = (DNSRecord) entry;
++            if (record.getRecordType() == DNSRecordType.TYPE_SRV && record.getKey().endsWith(loType)) {
++                serviceEvents.add(new ServiceEventImpl(this, record.getType(),
++                        toUnqualifiedName(record.getType(), record.getName()), record.getServiceInfo()));
++            }
++        }
++        for (final ServiceEvent serviceEvent : serviceEvents) {
++            dispatchCallback(new Runnable() {
++                @Override
++                public void run() {
++                    status.serviceAdded(serviceEvent);
++                }
++            });
++        }
++        if (shouldStartServiceResolver) {
++            this.startServiceResolver(type);
++        }
++    }
++
++    private boolean addServiceListenerStatus(List<ServiceListenerStatus> list, ServiceListenerStatus status) {
++        for (;;) {
++            List<ServiceListenerStatus> snapshot;
+@@ -988,26 +1372,23 @@
+-                if (!list.contains(status)) {
+-                    list.add(status);
+-                }
+-            }
+-        }
+-        // report cached service types
+-        final List<ServiceEvent> serviceEvents = new ArrayList<>();
+-        Collection<DNSEntry> dnsEntryLits = this.getCache().allValues();
+-        for (DNSEntry entry : dnsEntryLits) {
+-            final DNSRecord record = (DNSRecord) entry;
+-            if (record.getRecordType() == DNSRecordType.TYPE_SRV) {
+-                if (record.getKey().endsWith(loType)) {
+-                    // Do not use the record embedded method for generating event this will not work.
+-                    // serviceEvents.add(record.getServiceEvent(this));
+-                    serviceEvents.add(new ServiceEventImpl(this, record.getType(), toUnqualifiedName(record.getType(), record.getName()), record.getServiceInfo()));
+-                }
+-            }
+-        }
+-        // Actually call listener with all service events added above
+-        for (ServiceEvent serviceEvent : serviceEvents) {
+-            status.serviceAdded(serviceEvent);
+-        }
+-        if (shouldStartServiceResolver) {
+-            // Fix for starting service resolving not too often and avoid flooding the network with mDNS calls
+-            // Create/start ServiceResolver
+-            this.startServiceResolver(type);
++                snapshot = new ArrayList<>(list);
++            }
++            boolean duplicate = snapshot.contains(status); // may invoke application equals
++            if (!beginProducerMutation()) {
++                return false;
++            }
++            try {
++                synchronized (list) {
++                    boolean unchanged = list.size() == snapshot.size();
++                    for (int index = 0; unchanged && index < snapshot.size(); index++) {
++                        unchanged = list.get(index) == snapshot.get(index);
++                    }
++                    if (!unchanged) {
++                        continue;
++                    }
++                    if (!duplicate) {
++                        list.add(status);
++                    }
++                    return true;
++                }
++            } finally {
++                endProducerMutation();
++            }
+@@ -1024,6 +1405,20 @@
+-        if (list != null) {
+-            synchronized (list) {
+-                ServiceListenerStatus status = new ServiceListenerStatus(listener, ListenerStatus.ASYNCHRONOUS);
+-                list.remove(status);
+-                if (list.isEmpty()) {
+-                    _serviceListeners.remove(loType, list);
++        if (list == null) {
++            return;
++        }
++        List<ServiceListenerStatus> snapshot;
++        synchronized (list) {
++            snapshot = new ArrayList<>(list);
++        }
++        ServiceListenerStatus requested = new ServiceListenerStatus(listener, ListenerStatus.ASYNCHRONOUS);
++        for (ServiceListenerStatus status : snapshot) {
++            if (requested.equals(status)) {
++                synchronized (list) {
++                    for (int index = 0; index < list.size(); index++) {
++                        if (list.get(index) == status) {
++                            list.remove(index);
++                            break;
++                        }
++                    }
++                    if (list.isEmpty()) {
++                        _serviceListeners.remove(loType, list);
++                    }
+@@ -1040 +1435 @@
+-        if (this.isClosing() || this.isClosed()) {
++        if (isTerminalRequested() || this.isClosing() || this.isClosed()) {
+@@ -1044 +1438,0 @@
+-
+@@ -1053 +1446,0 @@
+-
+@@ -1055,2 +1447,0 @@
+-
+-        // bind the service to this address
+@@ -1061,2 +1452,2 @@
+-
+-        do {
++        for (;;) {
++            // Includes the replaceable NameRegister: never keep admission across it.
+@@ -1064,2 +1455,12 @@
+-        } while (_services.putIfAbsent(info.getKey(), info) != null);
+-
++            String key = info.getKey();
++            if (!beginProducerMutation()) {
++                throw new IllegalStateException("This DNS is closing.");
++            }
++            try {
++                if (_services.putIfAbsent(key, info) == null) {
++                    break;
++                }
++            } finally {
++                endProducerMutation();
++            }
++        }
+@@ -1067 +1467,0 @@
+-
+@@ -1125 +1524,0 @@
+-        boolean typeAdded = false;
+@@ -1130,16 +1529,28 @@
+-        String subtype = map.get(Fields.Subtype);
+-
+-        final String name = (!application.isEmpty() ? "_" + application + "." : "") + (!protocol.isEmpty() ? "_" + protocol + "." : "") + domain + ".";
+-        final String loname = name.toLowerCase();
+-        logger.debug("{} registering service type: {} as: {}{}{}",
+-            this.getName(),
+-            type,
+-            name,
+-            (!subtype.isEmpty() ? " subtype: " : ""),
+-            (!subtype.isEmpty() ? subtype : "")
+-        );
+-        if (!_serviceTypes.containsKey(loname) && !application.equalsIgnoreCase("dns-sd") && !domain.toLowerCase().endsWith("in-addr.arpa") && !domain.toLowerCase().endsWith("ip6.arpa")) {
+-            typeAdded = _serviceTypes.putIfAbsent(loname, new ServiceTypeEntry(name)) == null;
+-            if (typeAdded) {
+-                final ServiceTypeListenerStatus[] list = _typeListeners.toArray(new ServiceTypeListenerStatus[0]);
+-                final ServiceEvent event = new ServiceEventImpl(this, name, "", null);
++        final String subtype = map.get(Fields.Subtype);
++        final String name = (!application.isEmpty() ? "_" + application + "." : "")
++                + (!protocol.isEmpty() ? "_" + protocol + "." : "") + domain + ".";
++        String loname = name.toLowerCase();
++        boolean typeAdded = false;
++        boolean subtypeAdded = false;
++        if (!beginProducerMutation()) {
++            return false;
++        }
++        try {
++            if (!application.equalsIgnoreCase("dns-sd") && !domain.toLowerCase().endsWith("in-addr.arpa")
++                    && !domain.toLowerCase().endsWith("ip6.arpa")) {
++                typeAdded = _serviceTypes.putIfAbsent(loname, new ServiceTypeEntry(name)) == null;
++            }
++            if (!subtype.isEmpty()) {
++                ServiceTypeEntry subtypes = _serviceTypes.get(loname);
++                if (subtypes != null) {
++                    synchronized (subtypes) {
++                        subtypeAdded = subtypes.add(subtype);
++                    }
++                }
++            }
++        } finally {
++            endProducerMutation();
++        }
++        if (typeAdded) {
++            final ServiceEvent event = new ServiceEventImpl(this, name, "", null);
++            for (final ServiceTypeListenerStatus status : _typeListeners.toArray(new ServiceTypeListenerStatus[0])) {
+@@ -1147,39 +1558,4 @@
+-                    for (final ServiceTypeListenerStatus status : list) {
+-                        _executor.submit(new Runnable() {
+-                            /**
+-                             * {@inheritDoc}
+-                             */
+-                            @Override
+-                            public void run() {
+-                                status.serviceTypeAdded(event);
+-                            }
+-                        });
+-                    }
+-                } catch (RejectedExecutionException exc) {
+-                    logger.warn("Failed to submit runnable for serviceEvent in registerServiceType (1)", exc);
+-                }
+-            }
+-        }
+-        if (!subtype.isEmpty()) {
+-            ServiceTypeEntry subtypes = _serviceTypes.get(loname);
+-            if ((subtypes != null) && (!subtypes.contains(subtype))) {
+-                synchronized (subtypes) {
+-                    if (!subtypes.contains(subtype)) {
+-                        typeAdded = true;
+-                        subtypes.add(subtype);
+-                        final ServiceTypeListenerStatus[] list = _typeListeners.toArray(new ServiceTypeListenerStatus[0]);
+-                        final ServiceEvent event = new ServiceEventImpl(this, "_" + subtype + "._sub." + name, "", null);
+-                        try {
+-                            for (final ServiceTypeListenerStatus status : list) {
+-                                _executor.submit(new Runnable() {
+-                                    /**
+-                                     * {@inheritDoc}
+-                                     */
+-                                    @Override
+-                                    public void run() {
+-                                        status.subTypeForServiceTypeAdded(event);
+-                                    }
+-                                });
+-                            }
+-                        } catch (RejectedExecutionException exc) {
+-                            logger.warn("Failed to submit runnable for serviceEvent in registerServiceType (2)", exc);
++                    submitCallback(new Runnable() {
++                        @Override
++                        public void run() {
++                            status.serviceTypeAdded(event);
+@@ -1187,5 +1563,22 @@
+-                    }
+-                }
+-            }
+-        }
+-        return typeAdded;
++                    });
++                } catch (RejectedExecutionException failure) {
++                    logger.warn("Failed to submit service type callback", failure);
++                }
++            }
++        }
++        if (subtypeAdded) {
++            final ServiceEvent event = new ServiceEventImpl(this, "_" + subtype + "._sub." + name, "", null);
++            for (final ServiceTypeListenerStatus status : _typeListeners.toArray(new ServiceTypeListenerStatus[0])) {
++                try {
++                    submitCallback(new Runnable() {
++                        @Override
++                        public void run() {
++                            status.subTypeForServiceTypeAdded(event);
++                        }
++                    });
++                } catch (RejectedExecutionException failure) {
++                    logger.warn("Failed to submit service subtype callback", failure);
++                }
++            }
++        }
++        return typeAdded || subtypeAdded;
+@@ -1245 +1638 @@
+-    public void addListener(DNSListener listener, DNSQuestion question) {
++    public void addListener(final DNSListener listener, DNSQuestion question) {
+@@ -1247,6 +1640,8 @@
+-
+-        // add the new listener
+-        _listeners.add(listener);
+-
+-        // report existing matched records
+-
++        if (!beginProducerMutation()) {
++            return;
++        }
++        try {
++            _listeners.add(listener);
++        } finally {
++            endProducerMutation();
++        }
+@@ -1254 +1649 @@
+-            for (DNSEntry dnsEntry : this.getCache().getDNSEntryList(question.getName().toLowerCase())) {
++            for (final DNSEntry dnsEntry : this.getCache().getDNSEntryList(question.getName().toLowerCase())) {
+@@ -1256 +1651,6 @@
+-                    listener.updateRecord(this.getCache(), now, dnsEntry);
++                    dispatchCallback(new Runnable() {
++                        @Override
++                        public void run() {
++                            listener.updateRecord(_cache, now, dnsEntry);
++                        }
++                    });
+@@ -1269 +1669,16 @@
+-        _listeners.remove(listener);
++        List<DNSListener> snapshot;
++        synchronized (_listeners) {
++            snapshot = new ArrayList<>(_listeners);
++        }
++        for (DNSListener old : snapshot) {
++            if (listener == old || (listener != null && listener.equals(old))) {
++                synchronized (_listeners) {
++                    for (int index = 0; index < _listeners.size(); index++) {
++                        if (_listeners.get(index) == old) {
++                            _listeners.remove(index);
++                            return;
++                        }
++                    }
++                }
++            }
++        }
+@@ -1281,0 +1697,50 @@
++        }
++    }
++
++    final boolean renameHostAfterConflict() {
++        String oldName = _localHost.getName();
++        // The replaceable registry is outside both admission and the host monitor.
++        String replacement = NameRegister.Factory.getRegistry().incrementName(
++                _localHost.getInetAddress(), oldName, NameRegister.NameType.HOST);
++        if (!beginProducerMutation()) {
++            return false;
++        }
++        try {
++            if (!_localHost.renameForLifetime(oldName, replacement)) {
++                return false;
++            }
++            _cache.clear();
++            for (ServiceInfo service : _services.values()) {
++                ((ServiceInfoImpl) service).revertStateForLifetime();
++            }
++            return true;
++        } finally {
++            endProducerMutation();
++        }
++    }
++
++    final boolean publishServiceRename(ServiceInfoImpl info, String oldKey, String replacement, String newKey) {
++        if (!beginProducerMutation()) {
++            return false;
++        }
++        try {
++            if (_services.get(oldKey) != info) {
++                return false;
++            }
++            info.renameForLifetime(replacement);
++            _services.remove(oldKey, info);
++            _services.put(newKey, info);
++            return true;
++        } finally {
++            endProducerMutation();
++        }
++    }
++
++    final void revertServiceAfterConflict(ServiceInfoImpl info) {
++        if (!beginProducerMutation()) {
++            return;
++        }
++        try {
++            info.revertStateForLifetime();
++        } finally {
++            endProducerMutation();
+@@ -1308,2 +1773,9 @@
+-            for (DNSListener listener : listenerList) {
+-                listener.updateRecord(this.getCache(), now, rec);
++            for (final DNSListener listener : listenerList) {
++                final long callbackTime = now;
++                final DNSRecord callbackRecord = rec;
++                dispatchCallback(new Runnable() {
++                    @Override
++                    public void run() {
++                        listener.updateRecord(_cache, callbackTime, callbackRecord);
++                    }
++                });
+@@ -1348 +1820,6 @@
+-                                listener.serviceAdded(localEvent);
++                                dispatchCallback(new Runnable() {
++                                    @Override
++                                    public void run() {
++                                        listener.serviceAdded(localEvent);
++                                    }
++                                });
+@@ -1351 +1828 @@
+-                                    _executor.submit(new Runnable() {
++                                    submitCallback(new Runnable() {
+@@ -1369 +1846,6 @@
+-                                listener.serviceRemoved(localEvent);
++                                dispatchCallback(new Runnable() {
++                                    @Override
++                                    public void run() {
++                                        listener.serviceRemoved(localEvent);
++                                    }
++                                });
+@@ -1372 +1854 @@
+-                                    _executor.submit(new Runnable() {
++                                    submitCallback(new Runnable() {
+@@ -1411,49 +1893,33 @@
+-        // update the cache
+-        if (!newRecord.isServicesDiscoveryMetaQuery() && !newRecord.isDomainDiscoveryQuery()) {
+-            final boolean unique = newRecord.isUnique();
+-            final DNSRecord cachedRecord = (DNSRecord) this.getCache().getDNSEntry(newRecord);
+-            logger.debug("{} handle response cached record: {}", this.getName(), cachedRecord);
+-            // RFC 6762, section 10.2 Announcements to Flush Outdated Cache Entries
+-            // https://tools.ietf.org/html/rfc6762#section-10.2
+-            // if (cache-flush a.k.a unique), remove all existing records matching these criterias :--
+-            //     1. same name
+-            //     2. same record type
+-            //     3. same record class
+-            //     4. record is older than 1 second.
+-            if (unique) {
+-                for (DNSEntry entry : this.getCache().getDNSEntryList(newRecord.getKey())) {
+-                    if (    newRecord.getRecordType().equals(entry.getRecordType()) &&
+-                            newRecord.getRecordClass().equals(entry.getRecordClass()) &&
+-                            isOlderThanOneSecond( (DNSRecord)entry, now )
+-                    ) {
+-                        logger.trace("setWillExpireSoon() on: {}", entry);
+-                        // this set ttl to 1 second,
+-                        ((DNSRecord) entry).setWillExpireSoon(now);
+-                    }
+-                }
+-            }
+-            if (cachedRecord != null) {
+-                if (expired) {
+-                    // if the record has a 0 ttl that means we have a cancel record we need to delay the removal by 1s
+-                    if (newRecord.getTTL() == 0) {
+-                        cacheOperation = Operation.Noop;
+-                        logger.trace("Record is expired - setWillExpireSoon() on:\n\t{}", cachedRecord);
+-                        cachedRecord.setWillExpireSoon(now);
+-                        // the actual record will be disposed of by the record reaper.
+-                    } else {
+-                        cacheOperation = Operation.Remove;
+-                        logger.trace("Record is expired - removeDNSEntry() on:\n\t{}", cachedRecord);
+-                        this.getCache().removeDNSEntry(cachedRecord);
+-                    }
+-                } else {
+-                    // If the record content has changed we need to inform our listeners.
+-                    if (    !newRecord.sameValue(cachedRecord) ||
+-                            (
+-                                    !newRecord.sameSubtype(cachedRecord) &&
+-                                    (!newRecord.getSubtype().isEmpty())
+-                            )
+-                    ) {
+-                        if (newRecord.isSingleValued()) {
+-                            cacheOperation = Operation.Update;
+-                            logger.trace("Record (singleValued) has changed - replaceDNSEntry() on:\n\t{}\n\t{}", newRecord, cachedRecord);
+-                            this.getCache().replaceDNSEntry(newRecord, cachedRecord);
++        if (!beginProducerMutation()) {
++            return;
++        }
++        try {
++            // update the cache
++            if (!newRecord.isServicesDiscoveryMetaQuery() && !newRecord.isDomainDiscoveryQuery()) {
++                final boolean unique = newRecord.isUnique();
++                final DNSRecord cachedRecord = (DNSRecord) _cache.getDNSEntry(newRecord);
++                // RFC 6762, section 10.2 Announcements to Flush Outdated Cache Entries
++                // https://tools.ietf.org/html/rfc6762#section-10.2
++                // if (cache-flush a.k.a unique), remove all existing records matching these criterias :--
++                //     1. same name
++                //     2. same record type
++                //     3. same record class
++                //     4. record is older than 1 second.
++                if (unique) {
++                    for (DNSEntry entry : _cache.getDNSEntryList(newRecord.getKey())) {
++                        if (    newRecord.getRecordType().equals(entry.getRecordType()) &&
++                                newRecord.getRecordClass().equals(entry.getRecordClass()) &&
++                                isOlderThanOneSecond( (DNSRecord)entry, now )
++                        ) {
++                            // this set ttl to 1 second,
++                            ((DNSRecord) entry).setWillExpireSoon(now);
++                        }
++                    }
++                }
++                if (cachedRecord != null) {
++                    if (expired) {
++                        // if the record has a 0 ttl that means we have a cancel record we need to delay the removal by 1s
++                        if (newRecord.getTTL() == 0) {
++                            cacheOperation = Operation.Noop;
++                            cachedRecord.setWillExpireSoon(now);
++                            // the actual record will be disposed of by the record reaper.
+@@ -1461,4 +1927,2 @@
+-                            // Address record can have more than one value on multi-homed machines
+-                            cacheOperation = Operation.Add;
+-                            logger.trace("Record (multiValue) has changed - addDNSEntry on:\n\t{}", newRecord);
+-                            this.getCache().addDNSEntry(newRecord);
++                            cacheOperation = Operation.Remove;
++                            _cache.removeDNSEntry(cachedRecord);
+@@ -1467,12 +1931,32 @@
+-                        cachedRecord.resetTTL(newRecord);
+-                        newRecord = cachedRecord;
+-                    }
+-                }
+-            } else {
+-                if (!expired) {
+-                    cacheOperation = Operation.Add;
+-                    logger.trace("Record not cached - addDNSEntry on:\n\t{}", newRecord);
+-                    this.getCache().addDNSEntry(newRecord);
+-                }
+-            }
+-        }
++                        // If the record content has changed we need to inform our listeners.
++                        if (    !newRecord.sameValue(cachedRecord) ||
++                                (
++                                        !newRecord.sameSubtype(cachedRecord) &&
++                                        (!newRecord.getSubtype().isEmpty())
++                                )
++                        ) {
++                            if (newRecord.isSingleValued()) {
++                                cacheOperation = Operation.Update;
++                                _cache.replaceDNSEntry(newRecord, cachedRecord);
++                            } else {
++                                // Address record can have more than one value on multi-homed machines
++                                cacheOperation = Operation.Add;
++                                _cache.addDNSEntry(newRecord);
++                            }
++                        } else {
++                            cachedRecord.resetTTL(newRecord);
++                            newRecord = cachedRecord;
++                        }
++                    }
++                } else {
++                    if (!expired) {
++                        cacheOperation = Operation.Add;
++                        _cache.addDNSEntry(newRecord);
++                    }
++                }
++            }
++        } finally {
++            endProducerMutation();
++        }
++
++        logger.trace("{} cache operation {} for record {}", _name, cacheOperation, newRecord);
+@@ -1605,8 +2089,18 @@
+-            if (_plannedAnswer != null) {
+-                _plannedAnswer.append(in);
+-            } else {
+-                DNSIncoming plannedAnswer = in.clone();
+-                if (in.isTruncated()) {
+-                    _plannedAnswer = plannedAnswer;
+-                }
+-                this.startResponder(plannedAnswer, addr, port);
++            DNSIncoming response = null;
++            if (!beginProducerMutation()) {
++                return;
++            }
++            try {
++                if (_plannedAnswer != null) {
++                    _plannedAnswer.append(in);
++                } else {
++                    response = in.clone();
++                    if (in.isTruncated()) {
++                        _plannedAnswer = response;
++                    }
++                }
++            } finally {
++                endProducerMutation();
++            }
++            if (response != null) {
++                this.startResponder(response, addr, port);
+@@ -1714 +2208 @@
+-        DNSTaskStarter.Factory.getInstance().getStarter(this.getDns()).purgeTimer();
++        _taskStarter.purgeTimer();
+@@ -1723 +2217 @@
+-        DNSTaskStarter.Factory.getInstance().getStarter(this.getDns()).purgeStateTimer();
++        _taskStarter.purgeStateTimer();
+@@ -1732 +2226,3 @@
+-        DNSTaskStarter.Factory.getInstance().getStarter(this.getDns()).cancelTimer();
++        if (_taskStarter != null) {
++            _taskStarter.cancelTimer();
++        }
+@@ -1741 +2237,3 @@
+-        DNSTaskStarter.Factory.getInstance().getStarter(this.getDns()).cancelStateTimer();
++        if (_taskStarter != null) {
++            _taskStarter.cancelStateTimer();
++        }
+@@ -1750 +2248 @@
+-        DNSTaskStarter.Factory.getInstance().getStarter(this.getDns()).startProber();
++        _taskStarter.startProber();
+@@ -1759 +2257 @@
+-        DNSTaskStarter.Factory.getInstance().getStarter(this.getDns()).startAnnouncer();
++        _taskStarter.startAnnouncer();
+@@ -1768 +2266 @@
+-        DNSTaskStarter.Factory.getInstance().getStarter(this.getDns()).startRenewer();
++        _taskStarter.startRenewer();
+@@ -1777 +2275,3 @@
+-        DNSTaskStarter.Factory.getInstance().getStarter(this.getDns()).startCanceler();
++        if (_taskStarter != null) {
++            _taskStarter.startCanceler();
++        }
+@@ -1786 +2286 @@
+-        DNSTaskStarter.Factory.getInstance().getStarter(this.getDns()).startReaper();
++        _taskStarter.startReaper();
+@@ -1795 +2295 @@
+-        DNSTaskStarter.Factory.getInstance().getStarter(this.getDns()).startServiceInfoResolver(info);
++        _taskStarter.startServiceInfoResolver(info);
+@@ -1804 +2304 @@
+-        DNSTaskStarter.Factory.getInstance().getStarter(this.getDns()).startTypeResolver();
++        _taskStarter.startTypeResolver();
+@@ -1813 +2313 @@
+-        DNSTaskStarter.Factory.getInstance().getStarter(this.getDns()).startServiceResolver(type);
++        _taskStarter.startServiceResolver(type);
+@@ -1822,8 +2322,4 @@
+-        DNSTaskStarter.Factory.getInstance().getStarter(this.getDns()).startResponder(in, addr, port);
+-    }
+-
+-    private final Object _recoverLock = new Object();
+-
+-    /**
+-     * Recover jmDNS when there is an error.
+-     */
++        _taskStarter.startResponder(in, addr, port);
++    }
++
++    /** Recover in one tracked mutation phase, then invoke any delegate outside it. */
+@@ -1831,3 +2326,0 @@
+-        logger.debug("{}.recover()", this.getName());
+-        // We have an IO error so lets try to recover if anything happens lets close it.
+-        // This should cover the case of the IP address changing under our feet
+@@ -1837,6 +2330,40 @@
+-
+-        // We need some definite lock here as we may have multiple timer running in the same thread that will not be stopped by the reentrant lock
+-        // in the state object. This is only a problem in this case as we are going to execute in seperate thread so that the timer can clear.
+-        synchronized (_recoverLock) {
+-            // Stop JmDNS
+-            // This protects against recursive calls
++        final JmDNSLifecycle.Recovery recovery = new JmDNSLifecycle.Recovery();
++        Thread worker = new Thread(new Runnable() {
++            @Override
++            public void run() {
++                _lifecycle.enterDependent();
++                try {
++                    __recover(recovery);
++                } finally {
++                    synchronized (_lifecycle) {
++                        recovery.mutating = false;
++                        if (_lifecycle.recovery == recovery) {
++                            _lifecycle.recovery = null;
++                        }
++                        _lifecycle.notifyAll();
++                    }
++                    _lifecycle.exitDependent();
++                }
++            }
++        }, _name + ".recover()");
++        recovery.thread = worker;
++        synchronized (_lifecycle) {
++            if (_lifecycle.terminalRequested || _lifecycle.recovery != null) {
++                return;
++            }
++            // Retire prior worker identities only after actual termination was
++            // observed; do not grow a history of dead threads across recoveries.
++            Iterator<JmDNSLifecycle.Recovery> previous = _lifecycle.recoveries.iterator();
++            while (previous.hasNext()) {
++                JmDNSLifecycle.Recovery old = previous.next();
++                if (old.launchResolved && (!old.started || !old.thread.isAlive())) {
++                    previous.remove();
++                }
++            }
++            _lifecycle.recovery = recovery;
++            _lifecycle.recoveries.add(recovery);
++        }
++        boolean started = false;
++        _lifecycle.enterDependent();
++        try {
++            // False and exceptional cancellation must also resolve admission.
+@@ -1844,26 +2371,22 @@
+-                final String newThreadName = this.getName() + ".recover()";
+-                logger.debug("{} thread {}", newThreadName, Thread.currentThread().getName());
+-                Thread recover = new Thread(newThreadName) {
+-                    /**
+-                     * {@inheritDoc}
+-                     */
+-                    @Override
+-                    public void run() {
+-                        __recover();
+-                    }
+-                };
+-                recover.start();
+-            }
+-        }
+-    }
+-
+-    void __recover() {
+-        // Synchronize only if we are not already in process to prevent deadlocks
+-        //
+-        logger.debug("{}.recover() Cleanning up", this.getName());
+-
+-        logger.warn("RECOVERING");
+-        // Purge the timer
+-        this.purgeTimer();
+-
+-        // We need to keep a copy for reregistration
++                worker.start();
++                started = true;
++            }
++        } catch (Throwable failure) {
++            logger.warn("Could not launch JmDNS recovery", failure);
++        } finally {
++            synchronized (_lifecycle) {
++                recovery.started = started;
++                recovery.launchResolved = true;
++                if (!started) {
++                    recovery.mutating = false;
++                    if (_lifecycle.recovery == recovery) {
++                        _lifecycle.recovery = null;
++                    }
++                }
++                _lifecycle.notifyAll();
++            }
++            _lifecycle.exitDependent();
++        }
++    }
++
++    private void __recover(JmDNSLifecycle.Recovery recovery) {
+@@ -1871,42 +2394,60 @@
+-
+-        // Cancel all services
+-        this.unregisterAllServices();
+-        this.disposeServiceCollectors();
+-
+-        this.waitForCanceled(DNSConstants.CLOSE_TIMEOUT);
+-
+-        // Purge the canceler timer
+-        this.purgeStateTimer();
+-
+-        //
+-        // close multicast socket
+-        this.closeMulticastSocket();
+-
+-        //
+-        this.getCache().clear();
+-        logger.debug("{}.recover() All is clean", this.getName());
+-
+-        if (this.isCanceled()) {
+-            //
+-            // All is clear now start the services
+-            //
+-            for (ServiceInfo info : oldServiceInfos) {
+-                ((ServiceInfoImpl) info).recoverState();
+-            }
+-            this.recoverState();
+-
+-            try {
+-                this.openMulticastSocket(this.getLocalHost());
+-                this.start(oldServiceInfos);
+-            } catch (final Exception exception) {
+-                logger.warn("{}.recover() Start services exception ", this.getName(), exception);
+-            }
+-            logger.warn("{}.recover() We are back!", this.getName());
+-        } else {
+-            // We have a problem. We could not clear the state.
+-            logger.warn("{}.recover() Could not recover we are Down!", this.getName());
+-            if (this.getDelegate() != null) {
+-                this.getDelegate().cannotRecoverFromIOError(this.getDns(), oldServiceInfos);
+-            }
+-        }
+-
++        boolean notifyFailure = false;
++        try {
++            logger.warn("RECOVERING");
++            this.purgeTimer();
++            this.unregisterAllServices();
++            this.disposeServiceCollectors();
++            _localHost.waitForCanceledInterruptibly(DNSConstants.CLOSE_TIMEOUT);
++            this.purgeStateTimer();
++
++            List<Throwable> failures = new ArrayList<>();
++            disposeSockets(failures);
++            drainSocketListeners(new JmDNSLifecycle.WaitBudget());
++            for (Throwable failure : failures) {
++                logger.warn("Recovery socket disposal failed", failure);
++            }
++            this.getCache().clear();
++            if (this.isCanceled()) {
++                // Every restart producer re-admits; this token alone does not
++                // authorize publishing a socket or scheduling work after close.
++                for (ServiceInfo info : oldServiceInfos) {
++                    if (isTerminalRequested()) {
++                        break;
++                    }
++                    ((ServiceInfoImpl) info).recoverState();
++                }
++                this.recoverState();
++                if (this.openMulticastSocket(this.getLocalHost(), recovery)) {
++                    this.start(oldServiceInfos);
++                }
++            } else {
++                notifyFailure = true;
++                logger.warn("{}.recover() Could not recover we are Down!", this.getName());
++            }
++        } catch (InterruptedException failure) {
++            Thread.currentThread().interrupt();
++            logger.warn("Recovery interrupted", failure);
++            notifyFailure = true;
++        } catch (Throwable failure) {
++            logger.warn("Recovery failed", failure);
++            notifyFailure = true;
++        } finally {
++            Delegate delegate = _delegate;
++            boolean callbackReserved = false;
++            synchronized (_lifecycle) {
++                if (notifyFailure && delegate != null && !_lifecycle.terminalRequested) {
++                    _lifecycle.callbacks++;
++                    callbackReserved = true;
++                }
++                // The worker/callback remains owned until actual Thread exit.
++                recovery.mutating = false;
++                _lifecycle.notifyAll();
++            }
++            if (callbackReserved) {
++                try {
++                    delegate.cannotRecoverFromIOError(this, oldServiceInfos);
++                } finally {
++                    _lifecycle.endCallback();
++                }
++            }
++        }
+@@ -1937 +2478,7 @@
+-                    this.getCache().removeDNSEntry(record);
++                    if (beginProducerMutation()) {
++                        try {
++                            _cache.removeDNSEntry(record);
++                        } finally {
++                            endProducerMutation();
++                        }
++                    }
+@@ -1939 +2486,8 @@
+-                    record.incrementRefreshPercentage();
++                    if (!beginProducerMutation()) {
++                        return;
++                    }
++                    try {
++                        record.incrementRefreshPercentage();
++                    } finally {
++                        endProducerMutation();
++                    }
+@@ -1959 +2513,206 @@
+-        if (this.isClosing()) {
++        closeOwnedLifetime();
++    }
++
++    private void closeOwnedLifetime() {
++        // A successful return means disposal, never merely a request. Native
++        // callbacks/tasks cannot synchronously wait for the work they themselves own.
++        if (_lifecycle.isDependent() || _ioLock.isHeldByCurrentThread()) {
++            throw new IllegalStateException("Blocking close is not supported from JmDNS-managed work");
++        }
++        JmDNSLifecycle.WaitBudget budget = new JmDNSLifecycle.WaitBudget();
++        for (;;) {
++            JmDNSLifecycle.Attempt attempt;
++            boolean owner = false;
++            boolean retryBarrier = false;
++            synchronized (_lifecycle) {
++                attempt = _lifecycle.attempt;
++                if (_lifecycle.startupInProgress && _lifecycle.startupOwner == Thread.currentThread()) {
++                    throw new IllegalStateException("Blocking close cannot reenter JmDNS construction");
++                }
++                if (attempt != null && attempt.owner == Thread.currentThread() && attempt.outcome == null) {
++                    throw new IllegalStateException("Blocking close cannot reenter its cleanup owner");
++                }
++                if (attempt == null) {
++                    _lifecycle.terminalRequested = true;
++                    attempt = new JmDNSLifecycle.Attempt(++_lifecycle.nextAttempt,
++                            Thread.currentThread(), false, budget);
++                    _lifecycle.attempt = attempt;
++                    owner = true;
++                } else if (attempt.outcome != null && attempt.outcome.failure != null) {
++                    retryBarrier = true;
++                } else {
++                    attempt.joinedCallers++;
++                }
++            }
++            if (retryBarrier) {
++                // No retry may overtake a native owner's post-outcome thread tail.
++                awaitPreviousHelper(attempt, budget);
++                synchronized (_lifecycle) {
++                    if (_lifecycle.attempt != attempt) {
++                        continue;
++                    }
++                    attempt = new JmDNSLifecycle.Attempt(++_lifecycle.nextAttempt,
++                            Thread.currentThread(), false, budget);
++                    _lifecycle.attempt = attempt;
++                    owner = true;
++                }
++            }
++            if (owner) {
++                List<Throwable> initialFailures = new ArrayList<>();
++                try {
++                    afterCloseAttemptAdmission(attempt.id, true);
++                } catch (Throwable failure) {
++                    initialFailures.add(failure);
++                }
++                finishClose(attempt, initialFailures);
++                attempt.outcome.report();
++                return;
++            }
++            try {
++                afterCloseAttemptAdmission(attempt.id, false);
++                JmDNSLifecycle.Outcome outcome;
++                if (Thread.interrupted()) {
++                    throw new InterruptedException("Interrupted joining close");
++                }
++                synchronized (_lifecycle) {
++                    while (attempt.outcome == null) {
++                        budget.await(_lifecycle, "close attempt " + attempt.id);
++                    }
++                    outcome = attempt.outcome;
++                }
++                if (attempt.helper != null) {
++                    awaitOwnedThread(attempt.helper, budget, "native close helper");
++                }
++                beforeCloseOutcomeConsumption(attempt.id);
++                outcome.report();
++                return;
++            } catch (InterruptedException failure) {
++                Thread.currentThread().interrupt();
++                throw new JmDNSLifecycle.CloseIncompleteException("Interrupted waiting for JmDNS close", failure);
++            } finally {
++                synchronized (_lifecycle) {
++                    attempt.joinedCallers--;
++                    _lifecycle.notifyAll();
++                }
++            }
++        }
++    }
++
++    private void awaitPreviousHelper(JmDNSLifecycle.Attempt attempt, JmDNSLifecycle.WaitBudget budget) {
++        try {
++            if (Thread.interrupted()) {
++                throw new InterruptedException("Interrupted before close retry");
++            }
++            if (attempt.helper != null) {
++                awaitOwnedThread(attempt.helper, budget, "previous native close helper");
++            }
++        } catch (InterruptedException failure) {
++            Thread.currentThread().interrupt();
++            throw new JmDNSLifecycle.CloseIncompleteException("Interrupted before JmDNS close retry", failure);
++        }
++    }
++
++    /** The sole nonwaiting native entrypoint: Responder's exceptional timer path. */
++    void requestCloseFromResponder() {
++        final JmDNSLifecycle.Attempt attempt;
++        synchronized (_lifecycle) {
++            if (_lifecycle.terminalRequested || _lifecycle.attempt != null) {
++                return; // Coalesce, including failure: native requests never retry.
++            }
++            _lifecycle.terminalRequested = true;
++            attempt = new JmDNSLifecycle.Attempt(++_lifecycle.nextAttempt, null, true,
++                    new JmDNSLifecycle.WaitBudget());
++            _lifecycle.attempt = attempt;
++        }
++        try {
++            Thread helper = new Thread(new Runnable() {
++                @Override
++                public void run() {
++                    _lifecycle.enterDependent();
++                    try {
++                        finishClose(attempt, new ArrayList<Throwable>());
++                    } finally {
++                        _lifecycle.exitDependent();
++                    }
++                }
++            }, _name + ".terminal-close");
++            helper.setDaemon(false);
++            synchronized (_lifecycle) {
++                attempt.owner = helper;
++                attempt.helper.thread = helper;
++            }
++            afterCloseAttemptAdmission(attempt.id, true);
++            helper.start();
++            synchronized (_lifecycle) {
++                attempt.helper.started = true;
++                attempt.helper.launchResolved = true;
++                _lifecycle.notifyAll();
++            }
++        } catch (Throwable failure) {
++            synchronized (_lifecycle) {
++                attempt.helper.launchResolved = true;
++                if (attempt.outcome == null) {
++                    attempt.outcome = new JmDNSLifecycle.Outcome(attempt.id,
++                            Collections.singletonList(failure));
++                }
++                _lifecycle.notifyAll();
++            }
++            logger.warn("Could not launch native terminal close helper", failure);
++        }
++    }
++
++    private void finishClose(JmDNSLifecycle.Attempt attempt, List<Throwable> failures) {
++        boolean interrupted = Thread.currentThread().isInterrupted();
++        if (interrupted) {
++            failures.add(new InterruptedException("Close owner was interrupted"));
++        }
++        try {
++            disposeOwnedResources(attempt.budget, failures, interrupted);
++        } catch (Throwable failure) {
++            // All individual operations below are isolated; keep a final outcome
++            // even if an unexpected bookkeeping failure escapes them.
++            failures.add(failure);
++        } finally {
++            interrupted |= Thread.currentThread().isInterrupted();
++            synchronized (_lifecycle) {
++                attempt.outcome = new JmDNSLifecycle.Outcome(attempt.id, failures);
++                _lifecycle.notifyAll();
++            }
++            if (interrupted) {
++                Thread.currentThread().interrupt();
++            }
++        }
++    }
++
++    private void disposeOwnedResources(JmDNSLifecycle.WaitBudget budget, List<Throwable> failures,
++            boolean interrupted) {
++        boolean handoffAcquired;
++        synchronized (_lifecycle) {
++            handoffAcquired = !_lifecycle.startupInProgress && _lifecycle.mutations == 0
++                    && (_lifecycle.recovery == null || !_lifecycle.recovery.mutating);
++        }
++        if (!handoffAcquired && !interrupted) {
++            try {
++                synchronized (_lifecycle) {
++                    while (_lifecycle.startupInProgress || _lifecycle.mutations != 0
++                            || (_lifecycle.recovery != null && _lifecycle.recovery.mutating)) {
++                        budget.await(_lifecycle, "producer/recovery mutation handoff");
++                    }
++                    handoffAcquired = true;
++                }
++            } catch (InterruptedException failure) {
++                interrupted = true;
++                failures.add(failure);
++            } catch (Throwable failure) {
++                failures.add(failure);
++            }
++        }
++        if (!handoffAcquired) {
++            failures.add(new JmDNSLifecycle.CloseIncompleteException("Mutation ownership was not handed off"));
++            // Timers and the executor are original, stable identities. Socket,
++            // service and collector ownership still belongs to the live mutation
++            // phase: never traverse/dispose/detach those as if handoff succeeded.
++            initiateShutdownWithoutHandoff(failures);
++            if (interrupted) {
++                Thread.currentThread().interrupt();
++            }
+@@ -1963,13 +2722,90 @@
+-        logger.debug("Cancelling JmDNS: {}", this);
+-
+-        // Stop JmDNS
+-        // This protects against recursive calls
+-        if (this.cancelState()) {
+-            // We got the tie-break now clean up
+-
+-            // Stop the timer
+-            logger.debug("Canceling the timer");
+-            this.cancelTimer();
+-
+-            // Cancel all services
+-            this.unregisterAllServices();
++        if (!_lifecycle.generalTimerDisposed) {
++            try {
++                this.cancelTimer();
++                synchronized (_lifecycle) {
++                    _lifecycle.generalTimerDisposed = true;
++                }
++            } catch (Throwable failure) {
++                failures.add(failure);
++            }
++        }
++
++        if (_taskStarter != null && !_lifecycle.dispatchSealed) {
++            // Resource-only retries must not wait for impossible protocol progress
++            // once the original timer dispatch phase has irreversibly ended.
++            // Real cancellation is attempted even when cancelState() returns false.
++            // Keep the original socket and state timer usable for actual TTL=0 sends.
++            Collection<ServiceInfo> services = new ArrayList<>(_services.values());
++            try {
++                this.cancelState();
++            } catch (Throwable failure) {
++                failures.add(failure);
++            }
++            for (ServiceInfo service : services) {
++                try {
++                    ((ServiceInfoImpl) service).cancelState();
++                } catch (Throwable failure) {
++                    failures.add(failure);
++                }
++            }
++            if (_socket != null && !_socket.isClosed()) {
++                try {
++                    this.startCanceler();
++                } catch (Throwable failure) {
++                    failures.add(failure);
++                }
++                if (!interrupted) {
++                    for (ServiceInfo service : services) {
++                        try {
++                            budget.pauseForGoodbyeWait();
++                            ((ServiceInfoImpl) service).waitForCanceledInterruptibly(DNSConstants.CLOSE_TIMEOUT);
++                        } catch (InterruptedException failure) {
++                            interrupted = true;
++                            failures.add(failure);
++                            break;
++                        } catch (Throwable failure) {
++                            // Protocol best effort is distinct from resource disposal.
++                            logger.warn("Service goodbye wait failed", failure);
++                        } finally {
++                            budget.resumeAfterGoodbyeWait();
++                        }
++                    }
++                }
++                if (!interrupted) {
++                    try {
++                        budget.pauseForGoodbyeWait();
++                        _localHost.waitForCanceledInterruptibly(DNSConstants.CLOSE_TIMEOUT);
++                    } catch (InterruptedException failure) {
++                        interrupted = true;
++                        failures.add(failure);
++                    } catch (Throwable failure) {
++                        logger.warn("Host goodbye wait failed", failure);
++                    } finally {
++                        budget.resumeAfterGoodbyeWait();
++                    }
++                }
++            }
++
++        }
++
++        synchronized (_lifecycle) {
++            // Even a task dequeued by Timer before cancel must pass this seal.
++            _lifecycle.dispatchSealed = true;
++        }
++        if (!_lifecycle.stateTimerDisposed) {
++            try {
++                this.cancelStateTimer();
++                synchronized (_lifecycle) {
++                    _lifecycle.stateTimerDisposed = true;
++                }
++            } catch (Throwable failure) {
++                failures.add(failure);
++            }
++        }
++        disposeSockets(failures);
++        try {
++            _executor.shutdown();
++        } catch (Throwable failure) {
++            failures.add(failure);
++        }
++        try {
+@@ -1977,13 +2813,120 @@
+-
+-            logger.debug("Wait for JmDNS cancel: {}", this);
+-
+-            this.waitForCanceled(DNSConstants.CLOSE_TIMEOUT);
+-
+-            // Stop the canceler timer
+-            logger.debug("Canceling the state timer");
+-            this.cancelStateTimer();
+-
+-            // close socket
+-            this.closeMulticastSocket();
+-
+-            // Stop the executor
++        } catch (Throwable failure) {
++            failures.add(failure);
++        }
++        if (_shutdown != null) {
++            try {
++                Runtime.getRuntime().removeShutdownHook(_shutdown);
++                _shutdown = null;
++            } catch (Throwable failure) {
++                failures.add(failure);
++            }
++        }
++        if (_lifecycle.generalTimerDisposed && _lifecycle.stateTimerDisposed && !_lifecycle.starterDetached) {
++            try {
++                if (_taskStarter != null) {
++                    DNSTaskStarter.Factory.getInstance().disposeStarter(this, _taskStarter);
++                }
++                synchronized (_lifecycle) {
++                    _lifecycle.starterDetached = true;
++                }
++            } catch (Throwable failure) {
++                failures.add(failure);
++            }
++        }
++
++        // All unblock/shutdown actions precede every dependent-work drain.
++        if (!interrupted) {
++            try {
++                synchronized (_lifecycle) {
++                    while (_lifecycle.mutations != 0 || _lifecycle.submissions != 0
++                            || _lifecycle.tasks != 0 || _lifecycle.callbacks != 0) {
++                        budget.await(_lifecycle, "admitted tasks, callbacks and submissions");
++                    }
++                }
++            } catch (InterruptedException failure) {
++                interrupted = true;
++                failures.add(failure);
++            } catch (Throwable failure) {
++                failures.add(failure);
++            }
++        }
++        if (!interrupted) {
++            try {
++                drainSocketListeners(budget);
++            } catch (InterruptedException failure) {
++                interrupted = true;
++                failures.add(failure);
++            } catch (Throwable failure) {
++                failures.add(failure);
++            }
++        }
++        if (!interrupted) {
++            try {
++                drainRecoveries(budget);
++            } catch (InterruptedException failure) {
++                interrupted = true;
++                failures.add(failure);
++            } catch (Throwable failure) {
++                failures.add(failure);
++            }
++        }
++        if (!interrupted) {
++            try {
++                awaitExecutor(budget);
++            } catch (InterruptedException failure) {
++                interrupted = true;
++                failures.add(failure);
++            } catch (Throwable failure) {
++                failures.add(failure);
++            }
++        }
++        synchronized (_lifecycle) {
++            if (!_lifecycle.generalTimerDisposed || !_lifecycle.stateTimerDisposed
++                    || !_lifecycle.starterDetached || !_lifecycle.sockets.isEmpty()
++                    || !_lifecycle.listeners.isEmpty() || !_lifecycle.recoveries.isEmpty()
++                    || _lifecycle.startupInProgress || _lifecycle.mutations != 0 || _lifecycle.tasks != 0
++                    || _lifecycle.callbacks != 0 || _lifecycle.submissions != 0
++                    || !_executor.isTerminated() || _shutdown != null) {
++                failures.add(new JmDNSLifecycle.CloseIncompleteException("JmDNS retains incomplete disposal obligations"));
++            }
++        }
++        if (failures.isEmpty()) {
++            _services.clear();
++            _serviceCollectors.clear();
++            _serviceListeners.clear();
++            _typeListeners.clear();
++            _listeners.clear();
++            // Bookkeeping follows proof, never substitutes for it.
++            _localHost.closeState();
++            _localHost.advanceState(null);
++        }
++        if (interrupted) {
++            Thread.currentThread().interrupt();
++        }
++    }
++
++    private void initiateShutdownWithoutHandoff(List<Throwable> failures) {
++        if (_taskStarter != null && !_lifecycle.generalTimerDisposed) {
++            try {
++                this.cancelTimer();
++                synchronized (_lifecycle) {
++                    _lifecycle.generalTimerDisposed = true;
++                }
++            } catch (Throwable failure) {
++                failures.add(failure);
++            }
++        }
++        synchronized (_lifecycle) {
++            _lifecycle.dispatchSealed = true;
++        }
++        if (_taskStarter != null && !_lifecycle.stateTimerDisposed) {
++            try {
++                this.cancelStateTimer();
++                synchronized (_lifecycle) {
++                    _lifecycle.stateTimerDisposed = true;
++                }
++            } catch (Throwable failure) {
++                failures.add(failure);
++            }
++        }
++        try {
+@@ -1991,13 +2934,47 @@
+-
+-            // remove the shutdown hook
+-            if (_shutdown != null) {
+-                Runtime.getRuntime().removeShutdownHook(_shutdown);
+-            }
+-
+-            // earlier we did a DNSTaskStarter.Factory.getInstance().getStarter(this.getDns())
+-            // now we must release the resources associated with the starter for this JmDNS instance
+-            DNSTaskStarter.Factory.getInstance().disposeStarter(this.getDns());
+-
+-            logger.debug("JmDNS closed.");
+-        }
+-        advanceState(null);
++        } catch (Throwable failure) {
++            failures.add(failure);
++        }
++    }
++
++    private void awaitExecutor(JmDNSLifecycle.WaitBudget budget) throws InterruptedException {
++        if (!_executor.isTerminated()) {
++            long remaining = budget.remainingNanos();
++            if (remaining == 0L || !_executor.awaitTermination(remaining, TimeUnit.NANOSECONDS)) {
++                throw new JmDNSLifecycle.CloseIncompleteException("Timed out waiting for callback executor termination");
++            }
++        }
++    }
++
++    private void drainRecoveries(JmDNSLifecycle.WaitBudget budget) throws InterruptedException {
++        List<JmDNSLifecycle.Recovery> recoveries;
++        synchronized (_lifecycle) {
++            recoveries = new ArrayList<>(_lifecycle.recoveries);
++        }
++        for (JmDNSLifecycle.Recovery recovery : recoveries) {
++            awaitOwnedThread(recovery, budget, "recovery worker");
++            synchronized (_lifecycle) {
++                _lifecycle.recoveries.remove(recovery);
++                if (_lifecycle.recovery == recovery) {
++                    _lifecycle.recovery = null;
++                }
++            }
++        }
++    }
++
++    JmDNSLifecycle.Snapshot lifecycleSnapshot() {
++        int listenerCount = _listeners.size();
++        synchronized (_lifecycle) {
++            return new JmDNSLifecycle.Snapshot(_lifecycle, _taskStarter, _executor, listenerCount);
++        }
++    }
++
++    void beforeRecoverySocketPublication(MulticastSocket candidate) {
++        // Package-private, outside-gate observation seam for the real-resource fixture.
++    }
++
++    void afterCloseAttemptAdmission(long attemptId, boolean owner) {
++        // Package-private, outside-gate observation seam; no lifecycle authority.
++    }
++
++    void beforeCloseOutcomeConsumption(long attemptId) {
++        // Joined callers retain their immutable attempt across this observation seam.
+@@ -2073,0 +3051,3 @@
++        if (isTerminalRequested() || this.isCanceling() || this.isCanceled()) {
++            return new ServiceInfo[0];
++        }
+@@ -2075,27 +3055,2 @@
+-        // Implementation note: The first time a list for a given type is
+-        // requested, a ServiceCollector is created which collects service
+-        // infos. This greatly speeds up the performance of subsequent calls
+-        // to this method. The caveats are, that 1) the first call to this
+-        // method for a given type is slow, and 2) we spawn a ServiceCollector
+-        // instance for each service type which increases network traffic a
+-        // little.
+-
+-        String loType = type.toLowerCase();
+-
+-        boolean newCollectorCreated;
+-        if (this.isCanceling() || this.isCanceled()) {
+-            return new ServiceInfo[0];
+-        }
+-
+-        ServiceCollector collector = _serviceCollectors.get(loType);
+-        if (collector == null) {
+-            newCollectorCreated = _serviceCollectors.putIfAbsent(loType, new ServiceCollector(type)) == null;
+-            collector = _serviceCollectors.get(loType);
+-            if (newCollectorCreated) {
+-                this.addServiceListener(type, collector, ListenerStatus.SYNCHRONOUS, true);
+-            }
+-        }
+-        logger.debug("{}-collector: {}", this.getName(), collector);
+-
+-        // At this stage the collector should never be null, but it keeps findbugs happy.
+-        return (collector != null ? collector.list(timeout) : new ServiceInfo[0]);
++        ServiceCollector collector = ensureServiceCollector(type);
++        return collector != null ? collector.list(timeout) : new ServiceInfo[0];
+@@ -2142 +3096,0 @@
+-        logger.debug("disposeServiceCollectors()");
+@@ -2144,6 +3098,16 @@
+-            final ServiceCollector collector = entry.getValue();
+-            if (collector != null) {
+-                final String type = entry.getKey();
+-                this.removeServiceListener(type, collector);
+-                _serviceCollectors.remove(type, collector);
+-            }
++            ServiceCollector collector = entry.getValue();
++            List<ServiceListenerStatus> listeners = _serviceListeners.get(entry.getKey());
++            if (listeners != null) {
++                synchronized (listeners) {
++                    Iterator<ServiceListenerStatus> iterator = listeners.iterator();
++                    while (iterator.hasNext()) {
++                        if (iterator.next().getListener() == collector) {
++                            iterator.remove();
++                        }
++                    }
++                    if (listeners.isEmpty()) {
++                        _serviceListeners.remove(entry.getKey(), listeners);
++                    }
++                }
++            }
++            _serviceCollectors.remove(entry.getKey(), collector);
+@@ -2317 +3281,8 @@
+-        this._lastThrottleIncrement = lastThrottleIncrement;
++        if (!beginProducerMutation()) {
++            return;
++        }
++        try {
++            this._lastThrottleIncrement = lastThrottleIncrement;
++        } finally {
++            endProducerMutation();
++        }
+@@ -2325 +3296,8 @@
+-        this._throttle = throttle;
++        if (!beginProducerMutation()) {
++            return;
++        }
++        try {
++            this._throttle = throttle;
++        } finally {
++            endProducerMutation();
++        }
+@@ -2345 +3323,8 @@
+-        this._plannedAnswer = plannedAnswer;
++        if (!beginProducerMutation()) {
++            return;
++        }
++        try {
++            this._plannedAnswer = plannedAnswer;
++        } finally {
++            endProducerMutation();
++        }
+--- /dev/null
++++ b/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/JmDNSLifecycle.java
+@@ -0,0 +1,295 @@
++/*
++ * Copyright 2026 P2pKit contributors.
++ * Licensed under the Apache License, Version 2.0.
++ * P2pKit lifecycle bookkeeping for the privately relocated JmDNS implementation.
++ * See the accompanying PROVENANCE.json and MODIFICATIONS.txt.
++ */
++package dev.p2pkit.transport.lan.internal.jmdns.impl;
++
++import java.net.MulticastSocket;
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.IdentityHashMap;
++import java.util.List;
++import java.util.Set;
++import java.util.concurrent.ExecutorService;
++import java.util.concurrent.TimeUnit;
++
++import dev.p2pkit.transport.lan.internal.jmdns.impl.constants.DNSConstants;
++
++/**
++ * Per-instance lifetime ownership, deliberately independent of DNS protocol state.
++ * Mutable fields are protected by this object's monitor. No user code or blocking
++ * resource operation is called with that monitor held.
++ */
++final class JmDNSLifecycle {
++    boolean terminalRequested;
++    boolean startupInProgress;
++    Thread startupOwner;
++    boolean dispatchSealed;
++    boolean generalTimerDisposed;
++    boolean stateTimerDisposed;
++    boolean starterDetached;
++    int mutations;
++    int tasks;
++    int callbacks;
++    int submissions;
++    long nextAttempt;
++    long socketPublications;
++    long normalTaskStarts;
++    Attempt attempt;
++    Recovery recovery;
++    final Set<MulticastSocket> sockets = Collections.newSetFromMap(
++            new IdentityHashMap<MulticastSocket, Boolean>());
++    final List<OwnedThread> listeners = new ArrayList<>();
++    final List<Recovery> recoveries = new ArrayList<>();
++
++    // ThreadLocal.withInitial is API 26 on Android; this library also runs on 24.
++    private final ThreadLocal<Integer> dependentDepth = new ThreadLocal<Integer>() {
++        @Override
++        protected Integer initialValue() {
++            return 0;
++        }
++    };
++
++    void enterDependent() {
++        dependentDepth.set(dependentDepth.get() + 1);
++    }
++
++    void exitDependent() {
++        int depth = dependentDepth.get() - 1;
++        if (depth == 0) {
++            dependentDepth.remove();
++        } else {
++            dependentDepth.set(depth);
++        }
++    }
++
++    boolean isDependent() {
++        return dependentDepth.get() != 0;
++    }
++
++    synchronized boolean beginMutation(boolean cancellation) {
++        if (dispatchSealed || (terminalRequested && !cancellation)) {
++            return false;
++        }
++        mutations++;
++        enterDependent();
++        return true;
++    }
++
++    synchronized void endMutation() {
++        exitDependent();
++        mutations--;
++        notifyAll();
++    }
++
++    synchronized boolean enterTask(boolean cancellation) {
++        if (dispatchSealed || (terminalRequested && !cancellation)) {
++            return false;
++        }
++        tasks++;
++        enterDependent();
++        return true;
++    }
++
++    synchronized void exitTask() {
++        exitDependent();
++        tasks--;
++        notifyAll();
++    }
++
++    synchronized boolean reserveCallback(boolean submission) {
++        if (terminalRequested) {
++            return false;
++        }
++        callbacks++;
++        if (submission) {
++            submissions++;
++        }
++        return true;
++    }
++
++    synchronized void endSubmission() {
++        submissions--;
++        notifyAll();
++    }
++
++    synchronized void endCallback() {
++        callbacks--;
++        notifyAll();
++    }
++
++    static class OwnedThread {
++        Thread thread;
++        boolean launchResolved;
++        boolean started;
++    }
++
++    static final class Recovery extends OwnedThread {
++        boolean mutating = true;
++    }
++
++    static final class Attempt {
++        final long id;
++        final WaitBudget budget;
++        final boolean nativeRequest;
++        final OwnedThread helper;
++        Thread owner;
++        int joinedCallers;
++        Outcome outcome;
++
++        Attempt(long id, Thread owner, boolean nativeRequest, WaitBudget budget) {
++            this.id = id;
++            this.owner = owner;
++            this.nativeRequest = nativeRequest;
++            this.budget = budget;
++            this.helper = nativeRequest ? new OwnedThread() : null;
++        }
++    }
++
++    /** Published exactly once. A later retry never changes a joined result. */
++    static final class Outcome {
++        final Throwable failure;
++
++        Outcome(long attemptId, List<Throwable> failures) {
++            if (failures.isEmpty()) {
++                failure = null;
++            } else {
++                CloseIncompleteException combined = new CloseIncompleteException(
++                        "JmDNS close attempt " + attemptId + " did not dispose all owned resources",
++                        failures.get(0));
++                for (int index = 1; index < failures.size(); index++) {
++                    combined.addSuppressed(failures.get(index));
++                }
++                failure = combined;
++            }
++        }
++
++        void report() {
++            if (failure != null) {
++                // Do not change the shared outcome or another caller's interrupt status.
++                throw new CloseIncompleteException(failure.getMessage(), failure);
++            }
++        }
++    }
++
++    static final class CloseIncompleteException extends IllegalStateException {
++        private static final long serialVersionUID = 1L;
++
++        CloseIncompleteException(String message) {
++            super(message);
++        }
++
++        CloseIncompleteException(String message, Throwable cause) {
++            super(message, cause);
++        }
++    }
++
++    /**
++     * One 5000ms new-drain budget. The monotonic origin is caller/attempt admission.
++     * Remaining time is budget minus nanoTime elapsed, never a new per-resource
++     * timeout. Only the existing bounded, non-overridable goodbye waits pause the
++     * owner's clock; they retain their own original CLOSE_TIMEOUT allowance.
++     * Joiners never pause their clock. Retry carries its remaining budget across
++     * the old helper barrier into the new attempt.
++     */
++    static final class WaitBudget {
++        private long remaining = TimeUnit.MILLISECONDS.toNanos(DNSConstants.CLOSE_TIMEOUT);
++        private long origin = System.nanoTime();
++        private boolean paused;
++
++        long remainingNanos() {
++            if (!paused) {
++                long now = System.nanoTime();
++                remaining = Math.max(0L, remaining - Math.max(0L, now - origin));
++                origin = now;
++            }
++            return remaining;
++        }
++
++        void pauseForGoodbyeWait() {
++            remainingNanos();
++            paused = true;
++        }
++
++        void resumeAfterGoodbyeWait() {
++            origin = System.nanoTime();
++            paused = false;
++        }
++
++        void await(Object monitor, String obligation) throws InterruptedException {
++            long nanos = remainingNanos();
++            if (nanos == 0L) {
++                throw new CloseIncompleteException("Timed out waiting for " + obligation);
++            }
++            TimeUnit.NANOSECONDS.timedWait(monitor, nanos);
++        }
++
++        void join(Thread thread, String obligation) throws InterruptedException {
++            while (thread.isAlive()) {
++                long nanos = remainingNanos();
++                if (nanos == 0L) {
++                    throw new CloseIncompleteException("Timed out waiting for " + obligation);
++                }
++                TimeUnit.NANOSECONDS.timedJoin(thread, nanos);
++            }
++        }
++    }
++
++    /** Read-only fixture observations; identities are never obtained by allocation. */
++    static final class Snapshot {
++        final boolean terminalRequested;
++        final long attemptId;
++        final Thread owner;
++        final Thread helper;
++        final boolean helperLaunchResolved;
++        final boolean helperStarted;
++        final boolean workComplete;
++        final Throwable failure;
++        final int joinedCallers;
++        final int activeMutations;
++        final int activeTasks;
++        final int activeCallbacks;
++        final int submissionsInFlight;
++        final boolean recoveryMutationActive;
++        final Thread recoveryWorker;
++        final DNSTaskStarter retainedStarter;
++        final ExecutorService executor;
++        final int dnsListenerCount;
++        final long socketPublications;
++        final long normalTaskStarts;
++        final List<MulticastSocket> ownedSockets;
++        final List<Thread> socketListeners;
++
++        Snapshot(JmDNSLifecycle life, DNSTaskStarter starter, ExecutorService executor, int listenerCount) {
++            terminalRequested = life.terminalRequested;
++            Attempt current = life.attempt;
++            attemptId = current == null ? 0L : current.id;
++            owner = current == null ? null : current.owner;
++            helper = current == null || current.helper == null ? null : current.helper.thread;
++            helperLaunchResolved = current == null || current.helper == null || current.helper.launchResolved;
++            helperStarted = current != null && current.helper != null && current.helper.started;
++            workComplete = current != null && current.outcome != null;
++            failure = !workComplete ? null : current.outcome.failure;
++            joinedCallers = current == null ? 0 : current.joinedCallers;
++            activeMutations = life.mutations;
++            activeTasks = life.tasks;
++            activeCallbacks = life.callbacks;
++            submissionsInFlight = life.submissions;
++            recoveryMutationActive = life.recovery != null && life.recovery.mutating;
++            recoveryWorker = life.recovery == null ? null : life.recovery.thread;
++            retainedStarter = starter;
++            this.executor = executor;
++            dnsListenerCount = listenerCount;
++            socketPublications = life.socketPublications;
++            normalTaskStarts = life.normalTaskStarts;
++            ownedSockets = Collections.unmodifiableList(new ArrayList<>(life.sockets));
++            List<Thread> threads = new ArrayList<>();
++            for (OwnedThread listener : life.listeners) {
++                threads.add(listener.thread);
++            }
++            socketListeners = Collections.unmodifiableList(threads);
++        }
++    }
++}
+--- a/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/ServiceInfoImpl.java
++++ b/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/ServiceInfoImpl.java
+@@ -108 +108 @@
+-            if ((this._task == null) && _info.needTextAnnouncing()) {
++            if ((this._task == null) && _info._needTextAnnouncing) {
+@@ -111 +111 @@
+-                    if ((this._task == null) && _info.needTextAnnouncing()) {
++                    if ((this._task == null) && _info._needTextAnnouncing) {
+@@ -114 +114 @@
+-                            if (this.getDns() != null) {
++                            if (this.getDns() != null && !this.getDns().isTerminalRequested()) {
+@@ -118 +118 @@
+-                        _info.setNeedTextAnnouncing(false);
++                        _info._needTextAnnouncing = false;
+@@ -1099,0 +1100,18 @@
++    final boolean waitForCanceledInterruptibly(long timeout) throws InterruptedException {
++        return _state.waitForCanceledInterruptibly(timeout);
++    }
++
++    final void associateWithTaskForLifetime(DNSTask task, DNSState state) {
++        _state.associateWithTask(task, state);
++    }
++
++    final void renameForLifetime(String name) {
++        _name = name;
++        _key = null;
++    }
++
++    final void revertStateForLifetime() {
++        _state.revertState();
++    }
++
++
+@@ -1297,0 +1316,7 @@
++        // The constructor clears this flag before initializing _state.
++        if (needTextAnnouncing) {
++            JmDNSImpl dns = _state.getDns();
++            if (dns != null && dns.isTerminalRequested()) {
++                return;
++            }
++        }
+--- a/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/SocketListener.java
++++ b/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/SocketListener.java
+@@ -22,0 +23 @@
++import java.net.MulticastSocket;
+@@ -35,0 +37 @@
++    private final MulticastSocket _socket;
+@@ -37 +39 @@
+-    SocketListener(JmDNSImpl jmDNSImpl) {
++    SocketListener(JmDNSImpl jmDNSImpl, MulticastSocket socket) {
+@@ -40,0 +43 @@
++        this._socket = socket;
+@@ -57,0 +61,9 @@
++        _jmDNSImpl.enterListenerExecution();
++        try {
++            runListener();
++        } finally {
++            _jmDNSImpl.exitListenerExecution();
++        }
++    }
++
++    private void runListener() {
+@@ -62 +74 @@
+-            while (!this._jmDNSImpl.isCanceling() && !this._jmDNSImpl.isCanceled()) {
++            while (!this._jmDNSImpl.isTerminalRequested() && !this._jmDNSImpl.isCanceling() && !this._jmDNSImpl.isCanceled()) {
+@@ -65,2 +77,2 @@
+-                this._jmDNSImpl.getSocket().receive(packet);
+-                if (this._jmDNSImpl.isCanceling() || this._jmDNSImpl.isCanceled() || this._jmDNSImpl.isClosing() || this._jmDNSImpl.isClosed()) {
++                _socket.receive(packet);
++                if (this._jmDNSImpl.isTerminalRequested() || this._jmDNSImpl.isCanceling() || this._jmDNSImpl.isCanceled() || this._jmDNSImpl.isClosing() || this._jmDNSImpl.isClosed()) {
+@@ -99 +111 @@
+-            if (!this._jmDNSImpl.isCanceling() && !this._jmDNSImpl.isCanceled() && !this._jmDNSImpl.isClosing() && !this._jmDNSImpl.isClosed()) {
++            if (!this._jmDNSImpl.isTerminalRequested() && !this._jmDNSImpl.isCanceling() && !this._jmDNSImpl.isCanceled() && !this._jmDNSImpl.isClosing() && !this._jmDNSImpl.isClosed()) {
+--- a/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/tasks/DNSTask.java
++++ b/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/tasks/DNSTask.java
+@@ -55,0 +56,31 @@
++     * Keep dispatch on the scheduled task itself so cancellation and periodic scheduling retain their identity.
++     */
++    @Override
++    public final void run() {
++        final JmDNSImpl dns = this.getDns();
++        if (!dns.enterTaskExecution(this.isCancellationTask())) {
++            // A dequeued task may enter after disposal sealed dispatch; even cancel() can mutate associations.
++            return;
++        }
++        try {
++            this.runTask();
++        } finally {
++            dns.exitTaskExecution();
++        }
++    }
++
++    /**
++     * Execute one admitted timer firing.
++     */
++    protected abstract void runTask();
++
++    /**
++     * Identify real goodbye work, which remains admissible until final timer dispatch is sealed.
++     *
++     * @return whether this task performs protocol cancellation
++     */
++    protected boolean isCancellationTask() {
++        return false;
++    }
++
++    /**
+--- a/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/tasks/RecordReaper.java
++++ b/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/tasks/RecordReaper.java
+@@ -54 +54,2 @@
+-            timer.schedule(this, DNSConstants.RECORD_REAPER_INTERVAL, DNSConstants.RECORD_REAPER_INTERVAL);
++            this.getDns().scheduleTask(this, timer,
++                    DNSConstants.RECORD_REAPER_INTERVAL, DNSConstants.RECORD_REAPER_INTERVAL, false);
+@@ -59 +60 @@
+-    public void run() {
++    protected void runTask() {
+--- a/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/tasks/Responder.java
++++ b/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/tasks/Responder.java
+@@ -45,0 +46 @@
++    private final Runnable terminalCloseRequest;
+@@ -47 +48,2 @@
+-    public Responder(JmDNSImpl jmDNSImpl, DNSIncoming in, InetAddress addr, int port) {
++    public Responder(JmDNSImpl jmDNSImpl, DNSIncoming in, InetAddress addr, int port,
++            final Runnable terminalCloseRequest) {
+@@ -52,0 +55 @@
++        this.terminalCloseRequest = terminalCloseRequest;
+@@ -101 +104 @@
+-            timer.schedule(this, delay);
++            this.getDns().scheduleTask(this, timer, delay, false);
+@@ -106 +109 @@
+-    public void run() {
++    protected void runTask() {
+@@ -158 +161,2 @@
+-                this.getDns().close();
++                // The general timer cannot wait for its own disposal.
++                this.terminalCloseRequest.run();
+--- a/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/tasks/resolver/DNSResolverTask.java
++++ b/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/tasks/resolver/DNSResolverTask.java
+@@ -68 +68,2 @@
+-            timer.schedule(this, DNSConstants.QUERY_WAIT_INTERVAL, DNSConstants.QUERY_WAIT_INTERVAL);
++            this.getDns().scheduleTask(this, timer,
++                    DNSConstants.QUERY_WAIT_INTERVAL, DNSConstants.QUERY_WAIT_INTERVAL, false);
+@@ -74 +75 @@
+-     * @see java.util.TimerTask#run()
++     * @see dev.p2pkit.transport.lan.internal.jmdns.impl.tasks.DNSTask#runTask()
+@@ -77 +78 @@
+-    public void run() {
++    protected void runTask() {
+--- a/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/tasks/resolver/ServiceInfoResolver.java
++++ b/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/tasks/resolver/ServiceInfoResolver.java
+@@ -21,0 +22 @@
++import java.util.Timer;
+@@ -44,0 +46,7 @@
++    }
++
++    @Override
++    public void start(Timer timer) {
++        if (getDns().isTerminalRequested()) {
++            return;
++        }
+@@ -46 +54,8 @@
+-        getDns().addListener(info, DNSQuestion.newQuestion(serviceInfo.getQualifiedName(), DNSRecordType.TYPE_ANY, DNSRecordClass.CLASS_IN, DNSRecordClass.NOT_UNIQUE));
++        getDns().addListener(serviceInfo, DNSQuestion.newQuestion(serviceInfo.getQualifiedName(),
++                DNSRecordType.TYPE_ANY, DNSRecordClass.CLASS_IN, DNSRecordClass.NOT_UNIQUE));
++        // addListener can replay inline user work. The following schedule must
++        // re-admit instead of inheriting authority from before that callback.
++        super.start(timer);
++        if (getDns().isTerminalRequested()) {
++            getDns().removeListener(serviceInfo);
++        }
+--- a/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/tasks/state/Announcer.java
++++ b/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/tasks/state/Announcer.java
+@@ -72 +72,2 @@
+-            timer.schedule(this, DNSConstants.ANNOUNCE_WAIT_INTERVAL, DNSConstants.ANNOUNCE_WAIT_INTERVAL);
++            this.getDns().scheduleTask(this, timer,
++                    DNSConstants.ANNOUNCE_WAIT_INTERVAL, DNSConstants.ANNOUNCE_WAIT_INTERVAL, false);
+--- a/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/tasks/state/Canceler.java
++++ b/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/tasks/state/Canceler.java
+@@ -43,0 +44,5 @@
++    @Override
++    protected boolean isCancellationTask() {
++        return true;
++    }
++
+@@ -68 +73 @@
+-        timer.schedule(this, 0, DNSConstants.ANNOUNCE_WAIT_INTERVAL);
++        this.getDns().scheduleTask(this, timer, 0, DNSConstants.ANNOUNCE_WAIT_INTERVAL, true);
+--- a/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/tasks/state/DNSStateTask.java
++++ b/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/tasks/state/DNSStateTask.java
+@@ -57,0 +58,2 @@
++    private DNSState initialAssociationState;
++
+@@ -90 +92 @@
+-     * Associate the DNS host and the service infos with this task if not already associated and in the same state.
++     * Record the DNS host and service association to apply atomically with admitted scheduling.
+@@ -95,6 +97,10 @@
+-        synchronized (this.getDns()) {
+-            this.getDns().associateWithTask(this, state);
+-        }
+-        for (ServiceInfo serviceInfo : this.getDns().getServices().values()) {
+-            ((ServiceInfoImpl) serviceInfo).associateWithTask(this, state);
+-        }
++        this.initialAssociationState = state;
++    }
++
++    /**
++     * Return the association requested by construction, without applying it before scheduling admission.
++     *
++     * @return initial association state
++     */
++    public final DNSState getInitialAssociationState() {
++        return this.initialAssociationState;
+@@ -119 +125 @@
+-    public void run() {
++    protected void runTask() {
+--- a/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/tasks/state/Prober.java
++++ b/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/tasks/state/Prober.java
+@@ -83 +83,3 @@
+-            timer.schedule(this, JmDNSImpl.getRandom().nextInt(1 + DNSConstants.PROBE_WAIT_INTERVAL), DNSConstants.PROBE_WAIT_INTERVAL);
++            this.getDns().scheduleTask(this, timer,
++                    JmDNSImpl.getRandom().nextInt(1 + DNSConstants.PROBE_WAIT_INTERVAL),
++                    DNSConstants.PROBE_WAIT_INTERVAL, false);
+@@ -85 +87,2 @@
+-            timer.schedule(this, DNSConstants.PROBE_CONFLICT_INTERVAL, DNSConstants.PROBE_CONFLICT_INTERVAL);
++            this.getDns().scheduleTask(this, timer,
++                    DNSConstants.PROBE_CONFLICT_INTERVAL, DNSConstants.PROBE_CONFLICT_INTERVAL, false);
+--- a/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/tasks/state/Renewer.java
++++ b/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/tasks/state/Renewer.java
+@@ -69 +69,2 @@
+-            timer.schedule(this, DNSConstants.ANNOUNCED_RENEWAL_TTL_INTERVAL, DNSConstants.ANNOUNCED_RENEWAL_TTL_INTERVAL);
++            this.getDns().scheduleTask(this, timer,
++                    DNSConstants.ANNOUNCED_RENEWAL_TTL_INTERVAL, DNSConstants.ANNOUNCED_RENEWAL_TTL_INTERVAL, false);

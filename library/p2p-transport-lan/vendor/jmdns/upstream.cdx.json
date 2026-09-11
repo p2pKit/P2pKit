@@ -1,0 +1,33 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "version": 1,
+  "metadata": {
+    "properties": [
+      {
+        "name": "p2pkit:embedded-jmdns:inventory-purpose",
+        "value": "upstream-advisory-ancestry-only"
+      },
+      {
+        "name": "p2pkit:embedded-jmdns:source-manifest-sha256",
+        "value": "4733a40100ce5e4a48b9dd6ca6fc11fb4af388f4e54945c74bb3393b2d70e537"
+      }
+    ]
+  },
+  "components": [
+    {
+      "bom-ref": "pkg:maven/org.jmdns/jmdns@3.6.3",
+      "type": "library",
+      "group": "org.jmdns",
+      "name": "jmdns",
+      "version": "3.6.3",
+      "purl": "pkg:maven/org.jmdns/jmdns@3.6.3",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "6b6eb1623cb1d9e51467312ea62c567da005c2aa5a95347f566a11b8703c0ef1"
+        }
+      ]
+    }
+  ]
+}

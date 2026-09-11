@@ -236,11 +236,25 @@ needed by dependent consumer validation before deleting disposable build directo
 
 The report distinguishes the other-host simulator slice, device-only
 `iosArm64`, compilation-only metadata, and separately run Swift tests. Android
-host/shadow tests do not run ART; no instrumented suite is authored. Core's
+host/shadow tests do not run ART. The sample's dependency-free
+`LanPermissionRuntimeInstrumentation` is one targeted API37 case, invoked by
+`scripts/run-android-art-smoke.py` with an owned JVM CLI and raw-socket control.
+It checks an outstanding real permission request across Activity recreation,
+completed-result UI, retained VM/process/default-manager grant observation, and
+actual authenticated traffic. Android retains default `RejectUnknown` plus an exact
+manual/per-connect fingerprint pin; the maintained CLI uses its disclosed
+sample-only `AcceptAnyAuthenticatedSameApp` policy, not symmetric pinning.
+It requires actual pregrant socket denial; a gateway exemption is not a pass.
+Assembly/source review is not execution, and this is not a general device suite. Core's
 intentional `*AndroidHostTest` filter still excludes its common suite because
 host stubs are not an Android runtime. JVM/native common-test passes do not
-substitute for the missing Android runtime tier. See
+substitute for unexecuted Android runtime/catalog cases. See
 [validation status](validation-status.md#kotlin-target-execution-and-structural-gaps).
+
+The optional `audit-android-art.yml` workflow runs only after a reviewed change to
+that workflow on `audit/complete-2026-09-04` with `[audit-art]` in the pushed head
+commit message. Hold the shared audit execution lease before requesting it.
+A skipped job is not runtime evidence and does not replace any required gate.
 
 ## iOS launcher cleanup and recovery
 

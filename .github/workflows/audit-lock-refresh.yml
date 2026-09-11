@@ -1,0 +1,426 @@
+name: Audit 410 macOS full lock refresh
+
+# Qualification-only workflow; successful generation is not release approval.
+# Run revision: 1. Only a reviewed change to this file requests this one job.
+# The lead holds the separate global local/remote lease through terminal/upload reconciliation.
+on:
+  push:
+    branches: [audit/complete-2026-09-04]
+    paths: [.github/workflows/audit-lock-refresh.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p2pkit-audit-host-validation
+  cancel-in-progress: false
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONUNBUFFERED: "1"
+  DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+
+jobs:
+  lock_refresh:
+    name: Native macOS arm64 complete supported lock write (mutation is not an immutable PASS)
+    if: ${{ github.repository == 'p2pKit/P2pKit' && github.event_name == 'push' }}
+    runs-on: macos-26
+    # Includes native controls, SDK setup, a bounded 120m product leaf, and finalization/upload headroom.
+    timeout-minutes: 210
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Allocate a new external physical state parent
+        id: allocate
+        timeout-minutes: 1
+        shell: python3 {0}
+        run: |
+          import json
+          import os
+          from pathlib import Path
+          import platform
+          import tempfile
+
+          assert os.environ["RUNNER_ENVIRONMENT"] == "github-hosted"
+          root = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
+          temporary = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
+          assert not temporary.is_relative_to(root)
+          parent = Path(tempfile.mkdtemp(prefix="p2pkit-lock-410-", dir=temporary))
+          bootstrap = parent / "bootstrap"
+          bootstrap.mkdir(mode=0o700)
+          record = {"expectedCommit": os.environ["GITHUB_SHA"], "repository": os.environ["GITHUB_REPOSITORY"],
+                    "ref": os.environ["GITHUB_REF"], "runId": os.environ["GITHUB_RUN_ID"],
+                    "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"], "os": platform.platform(),
+                    "architecture": platform.machine(), "imageOS": os.environ.get("ImageOS"),
+                    "imageVersion": os.environ.get("ImageVersion"), "bootstrapIdentity":
+                    {"device": bootstrap.stat().st_dev, "inode": bootstrap.stat().st_ino}}
+          with (bootstrap / "workflow-start.json").open("x", encoding="utf-8") as stream:
+              json.dump(record, stream, indent=2)
+              stream.write("\n")
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as stream:
+              stream.write("P2PKIT_AUDIT_STATE_DIR=" + str(parent / "state") + "\n")
+              stream.write("P2PKIT_AUDIT_BOOTSTRAP_DIR=" + str(bootstrap) + "\n")
+              stream.write("KONAN_DATA_DIR=" + str(parent / "state/konan") + "\n")
+              stream.write("ANDROID_USER_HOME=" + str(parent / "state/android-user") + "\n")
+              stream.write("ANDROID_SDK_ROOT=\n")
+
+      - name: Check out the exact pushed source without persisted credentials
+        id: checkout
+        timeout-minutes: 5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Configure daemon prerequisite Java 21
+        timeout-minutes: 5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Keep the daemon toolchain path
+        timeout-minutes: 1
+        run: printf 'P2PKIT_AUDIT_JDK21=%s\n' "$JAVA_HOME" >> "$GITHUB_ENV"
+
+      - name: Configure launcher and library compiler Java 17
+        timeout-minutes: 5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Admit the clean source and retain ownership and tool prerequisites
+        id: init
+        timeout-minutes: 3
+        shell: python3 {0}
+        run: |
+          import argparse
+          import importlib.util
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          root = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
+          sys.path.insert(0, str(root / "scripts"))
+          spec = importlib.util.spec_from_file_location("lock_executor", root / "scripts/run-audit-command.py")
+          runner = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(runner)
+          state_path = os.environ["P2PKIT_AUDIT_STATE_DIR"]
+          runner.initialize(argparse.Namespace(root=str(root), state=state_path,
+              expected_commit=os.environ["GITHUB_SHA"], host="macos-arm64"))
+          state, context = runner.context_at(state_path)
+          bootstrap = runner.absolute_path(os.environ["P2PKIT_AUDIT_BOOTSTRAP_DIR"])
+          runner.write_new_json(bootstrap / "context.json", context)
+          cache_names = (".gradle", ".kotlin", "buildSrc/.gradle", "buildSrc/.kotlin")
+          absent = [*runner.disposable_roots(root), *[root / name for name in cache_names]]
+          runner.require(not context["preexistingOutputPaths"] and
+              all(runner.existing_lstat(path) is None for path in absent), "Fresh output/cache baseline required")
+          lockfiles = [os.fsdecode(name) for name in runner.git(root, "ls-files", "-z", "--", "*lockfile").split(b"\0") if name]
+          runner.write_new_json(bootstrap / "ownership-baseline.json", {
+              "jobId": context["id"], "contextSha256": runner.file_digest(state / "context.json"),
+              "stateIdentity": {"device": state.stat().st_dev, "inode": state.stat().st_ino},
+              "absentPaths": [str(path) for path in absent], "lockfiles": lockfiles})
+          tools = {"java17": [str(Path(os.environ["JAVA_HOME"]) / "bin/java"), "-version"],
+                   "java21": [str(Path(os.environ["P2PKIT_AUDIT_JDK21"]) / "bin/java"), "-version"],
+                   "xcode": ["xcodebuild", "-version"],
+                   "sdk": ["xcrun", "--show-sdk-version", "--sdk", "iphonesimulator"]}
+          versions = {}
+          for name, argv in tools.items():
+              result = subprocess.run(argv, capture_output=True, text=True, timeout=45)
+              versions[name] = {"argv": argv, "exitCode": result.returncode,
+                                "stdout": result.stdout, "stderr": result.stderr}
+          runner.write_new_json(bootstrap / "tools.json", versions)
+          runner.require(all(row["exitCode"] == 0 for row in versions.values()), "Required tool query failed")
+          runner.require('version "17.' in versions["java17"]["stderr"] + versions["java17"]["stdout"] and
+              'version "21.' in versions["java21"]["stderr"] + versions["java21"]["stdout"], "Wrong Java prerequisites")
+          runner.require(versions["xcode"]["stdout"].splitlines()[0] == "Xcode 26.5", "Wrong selected Xcode")
+
+      - name: Exercise the unchanged real native executor controls before product execution
+        id: controls
+        timeout-minutes: 35
+        run: |
+          set -euo pipefail
+          python3 scripts/run-audit-command.py --cwd "$GITHUB_WORKSPACE" \
+            --wrapper "$GITHUB_WORKSPACE/gradlew" --kind command --purpose lock-native-controls \
+            --timeout 1800 --receipt "$P2PKIT_AUDIT_BOOTSTRAP_DIR/native-controls-receipt.json" -- \
+            python3 scripts/tests/run-audit-command-test.py --expected-host macos-arm64 \
+            --evidence-dir "$P2PKIT_AUDIT_STATE_DIR/evidence/native-controls"
+
+      - name: Install both required Android platforms through existing owned execution
+        id: sdk
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          test -n "$ANDROID_HOME"
+          python3 scripts/run-audit-command.py --cwd "$GITHUB_WORKSPACE" \
+            --wrapper "$GITHUB_WORKSPACE/gradlew" --kind command --purpose lock-android-platforms \
+            --timeout 600 --receipt "$P2PKIT_AUDIT_BOOTSTRAP_DIR/android-platforms-receipt.json" -- \
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "--sdk_root=$ANDROID_HOME" \
+            'platforms;android-36' 'platforms;android-37.0'
+
+      - name: Retain the exact installed platform metadata
+        timeout-minutes: 1
+        shell: python3 {0}
+        run: |
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+
+          versions = {}
+          for name, api in (("android-36", "36"), ("android-37.0", "37.0")):
+              raw = (Path(os.environ["ANDROID_HOME"]) / "platforms" / name / "source.properties").read_bytes()
+              content = raw.decode("utf-8")
+              assert re.search(r"^AndroidVersion\.ApiLevel\s*=\s*" + re.escape(api) + r"\s*$", content, re.M)
+              versions[name] = {"sha256": hashlib.sha256(raw).hexdigest(), "content": content}
+          with (Path(os.environ["P2PKIT_AUDIT_BOOTSTRAP_DIR"]) / "android-platforms.json").open("x") as stream:
+              json.dump(versions, stream, indent=2)
+              stream.write("\n")
+
+      - name: Execute the complete supported lock-writing graph exactly once
+        id: refresh
+        timeout-minutes: 135
+        # Deliberately no continue-on-error, task exclusions, dry-run or source-guard exception.
+        # The adapter appends strict verification, forced freshness and the existing two-worker policy.
+        run: |
+          set -euo pipefail
+          python3 scripts/run-audit-command.py --cwd "$GITHUB_WORKSPACE" \
+            --wrapper "$GITHUB_WORKSPACE/gradlew" --purpose lock-refresh-410 \
+            --timeout 7200 --receipt "$P2PKIT_AUDIT_BOOTSTRAP_DIR/lock-refresh-receipt.json" -- \
+            --no-configure-on-demand resolveAndLockAll --write-locks \
+            :p2p-transport-lan:embeddedJmdnsJar :p2p-transport-lan:jvmTest \
+            :p2p-transport-lan:testAndroidHostTest :p2p-transport-lan:checkKotlinAbi \
+            :p2p-transport-lan:checkAndroidAbi :p2p-sample-android:assembleDebugAndroidTest
+
+      - name: Retain generated locks and explicitly dispose only proved owned outputs
+        id: finalize
+        timeout-minutes: 10
+        if: ${{ always() && steps.init.outcome == 'success' }}
+        shell: python3 {0}
+        run: |
+          import contextlib
+          import importlib.util
+          import os
+          from pathlib import Path
+          import shutil
+          import sys
+
+          root = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
+          sys.path.insert(0, str(root / "scripts"))
+          spec = importlib.util.spec_from_file_location("lock_executor", root / "scripts/run-audit-command.py")
+          runner = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(runner)
+          state, context = runner.context_at(os.environ["P2PKIT_AUDIT_STATE_DIR"])
+          bootstrap = runner.absolute_path(os.environ["P2PKIT_AUDIT_BOOTSTRAP_DIR"])
+          result = {"scope": "LOCK_GENERATION_ONLY", "immutableGate": "NOT_PASSED", "cleanup": "NOT_PROVEN",
+                    "productExitCode": None, "executorFinalExitCode": None, "removed": [], "errors": []}
+          lease = runner.LeafLock(state)
+          try:
+              lease.acquire()
+              baseline = runner.read_json(bootstrap / "ownership-baseline.json")
+              runner.require(baseline["jobId"] == context["id"] and baseline["contextSha256"] ==
+                  runner.file_digest(state / "context.json") and baseline["stateIdentity"] ==
+                  {"device": state.stat().st_dev, "inode": state.stat().st_ino}, "Owned state/context changed")
+              after = runner.source_snapshot(root)
+              runner.write_new_json(bootstrap / "source-after.json", after)
+              receipt = runner.read_json(bootstrap / "lock-refresh-receipt.json")
+              result.update(productExitCode=receipt["productExitCode"], executorFinalExitCode=receipt["finalExitCode"],
+                            executorErrors=receipt["errors"], sourceUnchanged=receipt["sourceUnchanged"])
+              runner.require(receipt == runner.read_json(state / "evidence" / receipt["id"] / "receipt.json") and
+                  receipt["jobId"] == context["id"] and receipt["purpose"] == "lock-refresh-410" and
+                  receipt["kind"] == "gradle" and receipt["sourceBefore"] == context["source"] and
+                  receipt["sourceAfter"] == after, "Wrong or changed lock receipt/source")
+              runner.require(after["commit"] == context["expectedCommit"] and after["tree"] == context["tree"],
+                  "Source revision switched during execution")
+              # Never erase/filter this source error or revalidate it as an immutable PASS.
+              # A different infrastructure error refuses disposal; the original receipt always remains failed.
+              expected_errors = [] if receipt["sourceUnchanged"] else ["Exact admitted source changed or could not be admitted"]
+              runner.require(receipt["errors"] == expected_errors and receipt["stopExitCode"] == 0 and
+                  receipt["ownedSurvivors"] == [] and not receipt.get("cancelledSignals") and
+                  not receipt.get("cancelRequested") and receipt.get("ownership", {}).get("discoveryErrors") == [],
+                  "Unresolved infrastructure/worker/stop evidence; preserve outputs")
+              runner.require(receipt["finalExitCode"] == (receipt["productExitCode"] if receipt["sourceUnchanged"] else 125),
+                  "Executor failed to preserve its original verdict")
+              for name, purpose in (("native-controls-receipt.json", "lock-native-controls"),
+                                    ("android-platforms-receipt.json", "lock-android-platforms")):
+                  prior = runner.read_json(bootstrap / name)
+                  runner.require(prior == runner.read_json(state / "evidence" / prior["id"] / "receipt.json") and
+                      prior["jobId"] == context["id"] and prior["purpose"] == purpose and
+                      prior["sourceBefore"] == prior["sourceAfter"] == context["source"] and
+                      prior["sourceUnchanged"] is True and prior["errors"] == [] and
+                      prior["productExitCode"] == prior["finalExitCode"] == prior["stopExitCode"] == 0 and
+                      prior["ownedSurvivors"] == [], "Prerequisite receipt unresolved")
+              locks = set(baseline["lockfiles"])
+              changed = {os.fsdecode(name) for name in runner.git(root, "diff", "--name-only", "--no-renames", "-z", "HEAD").split(b"\0") if name}
+              untracked = runner.git(root, "ls-files", "--others", "--exclude-standard", "-z")
+              patch = runner.git(root, "diff", "--binary", "--no-ext-diff", "--no-textconv", "HEAD")
+              with runner.new_file(bootstrap / "generated-locks.patch") as stream:
+                  stream.write(patch)
+              extra = state / "evidence/lock-outputs"
+              extra.mkdir(mode=0o700)
+              copied = []
+              def retain(source, relative):
+                  runner.reject_symlinks(source)
+                  target = extra / relative
+                  target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                  before = runner.file_digest(source)
+                  with source.open("rb") as incoming, runner.new_file(target) as outgoing:
+                      shutil.copyfileobj(incoming, outgoing)
+                  runner.require(before == runner.file_digest(source) == runner.file_digest(target), "Evidence changed while copying")
+                  copied.append({"path": relative, "bytes": target.stat().st_size, "sha256": before})
+              for name in sorted(locks):
+                  retain(root / name, "locks/" + name)
+              for build in runner.output_roots(root):
+                  dokka = build / "dokka/html"
+                  if runner.physical_directory_present(dokka):
+                      for path in runner.regular_report_files(dokka, [0]):
+                          retain(path, "dokka/" + path.relative_to(root).as_posix())
+              producer = root / "library/p2p-transport-lan/build/embedded-jmdns/p2pkit-internal-jmdns.jar"
+              if runner.existing_lstat(producer) is not None:
+                  retain(producer, "producer/p2pkit-internal-jmdns.jar")
+              runner.write_new_json(bootstrap / "lock-output-manifest.json", {"files": copied, "changedLocks": sorted(changed),
+                  "patchSha256": runner.digest(patch), "limitation": "Raw Gradle result is separate from failed immutable-source receipt"})
+              runner.require(changed <= locks and not untracked, "Unexpected non-lock source mutation; preserve remaining outputs")
+              # All 12 lockfiles are compared. OSV's ten scanned inputs are NOT ten freely mutable locks.
+              six = {"library/p2p-transport-lan/gradle.lockfile", "library/p2p-network-provisioning-desktop/gradle.lockfile",
+                     "samples/p2p-sample-android/gradle.lockfile", "samples/p2p-sample-desktop/gradle.lockfile",
+                     "samples/p2p-sample-desktop-ui/gradle.lockfile", "samples/sample-kmp-shared/gradle.lockfile"}
+              try:
+                  def rows(raw):
+                      parsed = {}
+                      for line in raw.decode("utf-8").splitlines():
+                          if not line or line.startswith("#"):
+                              continue
+                          key, delimiter, value = line.partition("=")
+                          runner.require(delimiter and key not in parsed, "Malformed/duplicate lock row")
+                          members = value.split(",") if value else []
+                          runner.require(len(members) == len(set(members)), "Duplicate lock membership")
+                          parsed[key] = set(members)
+                      return parsed
+                  runner.require(len(locks) == 12 and changed == six, "Expected exactly the six source-justified changed locks")
+                  for name in sorted(locks):
+                      before = runner.git(root, "show", "HEAD:" + name)
+                      actual = (root / name).read_bytes()
+                      if name not in six:
+                          runner.require(actual == before, "Unrelated lock bytes changed: " + name)
+                          continue
+                      expected = rows(before)
+                      runner.require("org.jmdns:jmdns:3.6.3" in expected, "Missing original JmDNS dependency row")
+                      del expected["org.jmdns:jmdns:3.6.3"]
+                      if name == "library/p2p-transport-lan/gradle.lockfile":
+                          expected["org.slf4j:slf4j-api:2.0.7"].add("embeddedJmdnsCompileClasspath")
+                      runner.require(rows(actual) == expected, "Unreviewed dependency/version/configuration delta: " + name)
+                  result["lockSemanticAssessment"] = "EXPECTED_SIX_LOCK_DELTA"
+              except Exception as error:
+                  result["lockSemanticAssessment"] = "FAIL_REVIEW_REQUIRED"
+                  result["errors"].append("Lock semantics: " + type(error).__name__ + ": " + str(error))
+              # Existing paired validator API, in-process: no second Gradle leaf, new worker, or dirty-source opt-in.
+              # This is the exact validator main() called by check-sbom.sh's explicit JSON/XML mode.
+              try:
+                  validator_path = root / "scripts/validate-sbom.py"
+                  validator_spec = importlib.util.spec_from_file_location("lock_sbom_validator", validator_path)
+                  validator = importlib.util.module_from_spec(validator_spec)
+                  validator_spec.loader.exec_module(validator)
+                  props = dict(line.split("=", 1) for line in (root / "gradle.properties").read_text().splitlines()
+                               if line.startswith(("GROUP=", "VERSION_NAME=")))
+                  args = [str(root / "build/reports/cyclonedx/bom.json"), str(root / "build/reports/cyclonedx/bom.xml"),
+                          props["GROUP"].strip(), props["VERSION_NAME"].strip()]
+                  with (bootstrap / "paired-sbom.log").open("x", encoding="utf-8") as stream:
+                      with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
+                          code = validator.main(args)
+                  result["pairedSbom"] = {"exitCode": code, "argv": args, "validatorSha256": runner.file_digest(validator_path)}
+                  if code != 0:
+                      result["errors"].append("Strict paired JSON/XML SBOM inspection failed")
+              except Exception as error:
+                  result["errors"].append("Paired SBOM: " + type(error).__name__ + ": " + str(error))
+              # The unchanged adapter already copied test-results/reports (including SBOM) before finishing.
+              runner.require(isinstance(receipt.get("reports"), list) and
+                  (state / "evidence" / receipt["id"] / "report-manifest.json").is_file(), "Report retention missing")
+              retained = runner.regular_report_files(state / "evidence", [0])
+              runner.require(sum(path.stat().st_size for path in retained) <= runner.MAX_ARCHIVE_BYTES,
+                  "Evidence exceeds retained-byte bound; preserve originals")
+              # Separate disposal, not the executor's immutable-gate cleanup API: exact absent-before roots only.
+              targets = [*runner.disposable_roots(root), *[root / name for name in
+                         (".gradle", ".kotlin", "buildSrc/.gradle", "buildSrc/.kotlin")]]
+              runner.require(baseline["absentPaths"] == [str(path) for path in targets], "Disposal allowlist changed")
+              targets += [state / name for name in ("gradle-home", "konan", "android-user")]
+              for index, path in enumerate(targets):
+                  if runner.existing_lstat(path) is None:
+                      continue
+                  runner.reject_symlinks(path)
+                  if runner.within(path, root):
+                      runner.require(not runner.git(root, "ls-files", "-z", "--", path.relative_to(root).as_posix()),
+                          "Refuse tracked output/cache cleanup")
+                  inspection = runner.inspect_disposable_tree(path)
+                  runner.write_new_json(bootstrap / f"disposal-{index}-start.json", inspection)
+                  runner.require(inspection["rootIdentity"] == {"device": path.stat().st_dev, "inode": path.stat().st_ino},
+                      "Disposable root identity changed")
+                  shutil.rmtree(path)
+                  runner.require(runner.existing_lstat(path) is None, "Disposable output remained")
+                  result["removed"].append(str(path))
+              runner.require(runner.source_snapshot(root) == after, "Source changed during evidence/disposal")
+              result["cleanup"] = "EXPLICIT_OWNED_OUTPUT_DISPOSAL_COMPLETE"
+          except Exception as error:
+              result["errors"].append(type(error).__name__ + ": " + str(error))
+          finally:
+              lease.close()
+              runner.write_new_json(bootstrap / "lock-refresh-final.json", result)
+          if result["errors"]:
+              raise SystemExit(1)
+
+      - name: Seal only regular bounded evidence on success or failure
+        id: seal
+        timeout-minutes: 5
+        if: ${{ always() && steps.checkout.outcome == 'success' && steps.allocate.outcome == 'success' }}
+        shell: python3 {0}
+        run: |
+          import importlib.util
+          import os
+          from pathlib import Path
+          import sys
+
+          root = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
+          sys.path.insert(0, str(root / "scripts"))
+          spec = importlib.util.spec_from_file_location("lock_executor", root / "scripts/run-audit-command.py")
+          runner = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(runner)
+          bootstrap = runner.absolute_path(os.environ["P2PKIT_AUDIT_BOOTSTRAP_DIR"])
+          start = runner.read_json(bootstrap / "workflow-start.json")
+          runner.require(start["expectedCommit"] == os.environ["GITHUB_SHA"] and start["bootstrapIdentity"] ==
+              {"device": bootstrap.stat().st_dev, "inode": bootstrap.stat().st_ino}, "Bootstrap identity changed")
+          directories = [bootstrap]
+          evidence = Path(os.environ["P2PKIT_AUDIT_STATE_DIR"]) / "evidence"
+          if runner.physical_directory_present(evidence):
+              directories.append(evidence)
+          files = []
+          budget = [0]
+          for directory in directories:
+              files.extend(runner.regular_report_files(directory, budget))
+          runner.require(sum(path.stat().st_size for path in files) <= runner.MAX_ARCHIVE_BYTES,
+              "Evidence exceeds the existing bounded archive limit; upload is not proved")
+          runner.write_new_json(bootstrap / "evidence-sha256.json", [
+              {"path": path.relative_to(bootstrap.parent).as_posix(), "bytes": path.stat().st_size,
+               "sha256": runner.file_digest(path)} for path in sorted(files)])
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as stream:
+              stream.write("bootstrap=" + str(bootstrap) + "\n")
+              stream.write("evidence=" + (str(evidence) if len(directories) == 2 else "") + "\n")
+
+      - name: Upload retained lock bytes and failed-or-passed raw execution evidence
+        id: evidence
+        timeout-minutes: 5
+        if: ${{ always() && steps.seal.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: audit-lock-refresh-410-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.seal.outputs.bootstrap }}
+            ${{ steps.seal.outputs.evidence }}
+          if-no-files-found: error
+          include-hidden-files: true
+          overwrite: false
+          retention-days: 14

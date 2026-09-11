@@ -49,7 +49,9 @@ adb devices -l
 ```
 
 These commands prepare the ordinary sample APK, not an instrumentation suite.
-No Android instrumented/device suite is currently authored. See the Android
+The separate focused API37 permission/recreation/TCP instrumentation case is driven
+by `scripts/run-android-art-smoke.py`; it is not this physical-device campaign or a
+replacement for its callback/radio harnesses. See the Android
 portions of the catalog's [build and installation baseline](test-catalog.md#13-build-and-installation-baseline)
 and the harness prerequisites below.
 

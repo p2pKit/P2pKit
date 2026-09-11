@@ -1,7 +1,7 @@
 package dev.p2pkit.transport.lan
 
 import dev.p2pkit.core.transport.LocalPeerInfo
-import javax.jmdns.ServiceInfo
+import dev.p2pkit.transport.lan.internal.jmdns.ServiceInfo
 
 /** Read raw TXT, not JmDNS's already-normalized string or byte property map. */
 internal fun validateJmdnsDiscoveryRecord(

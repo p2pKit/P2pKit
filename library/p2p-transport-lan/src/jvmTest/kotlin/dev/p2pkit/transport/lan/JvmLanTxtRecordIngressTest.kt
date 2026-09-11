@@ -6,7 +6,7 @@ import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.transport.PeerEvent
 import dev.p2pkit.core.transport.TransportSecurityProfile
-import javax.jmdns.ServiceInfo
+import dev.p2pkit.transport.lan.internal.jmdns.ServiceInfo
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancelAndJoin

@@ -5,7 +5,7 @@ import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.transport.TransportSecurityProfile
-import javax.jmdns.ServiceInfo
+import dev.p2pkit.transport.lan.internal.jmdns.ServiceInfo
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals

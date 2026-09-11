@@ -18,7 +18,8 @@ sys.dont_write_bytecode = True
 SPEC = importlib.util.spec_from_file_location("osv_scan", ROOT / "scripts/run-osv-scan.py")
 SCAN = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(SCAN)
-ARGUMENTS = "--config=./osv-scanner.toml\n--lockfile=gradle.lockfile:./buildscript-gradle.lockfile"
+UPSTREAM_ARGUMENT = "--sbom=./library/p2p-transport-lan/vendor/jmdns/upstream.cdx.json"
+ARGUMENTS = "--config=./osv-scanner.toml\n--lockfile=gradle.lockfile:./buildscript-gradle.lockfile\n" + UPSTREAM_ARGUMENT
 CLEAN_SARIF = json.dumps({"version": "2.1.0", "runs": [{
     "tool": {"driver": {"name": "osv-scanner"}}, "results": [],
 }]}).encode()
@@ -29,10 +30,11 @@ class OsvScanTest(unittest.TestCase):
         report_dir = root / "reports"
         outputs = root / "outputs"
 
-        def original_scanner(command, *, stdout, stderr, check):
+        def original_scanner(command, *, cwd, stdout, stderr, check):
             self.assertEqual(command[:5], ["admitted-scanner", "scan", "source", "--all-vulns", "--format=sarif"])
             self.assertEqual(command[5], f"--output-file={report_dir / 'results.sarif'}")
             self.assertEqual(command[6:], ARGUMENTS.splitlines())
+            self.assertEqual(cwd, ROOT)
             self.assertEqual(stderr, subprocess.STDOUT)
             self.assertFalse(check)
             stdout.write(b"controlled original scanner log\n")
@@ -41,10 +43,13 @@ class OsvScanTest(unittest.TestCase):
             return subprocess.CompletedProcess(command, returncode)
 
         with mock.patch.object(SCAN.subprocess, "run", side_effect=original_scanner), \
+                mock.patch.object(SCAN.SBOM, "validate_upstream_inventory") as inventory, \
                 mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(outputs)}, clear=True), \
                 io.TextIOWrapper(io.BytesIO()) as log, mock.patch.object(sys, "stdout", log), \
                 mock.patch.object(sys, "stderr", io.StringIO()):
             result = SCAN.scan("admitted-scanner", report_dir, ARGUMENTS)
+            inventory.assert_called_once_with(SCAN.ROOT / SCAN.SBOM.VENDOR_RELATIVE / "upstream.cdx.json",
+                                              SCAN.ROOT / SCAN.SBOM.VENDOR_RELATIVE)
         return result, report_dir, outputs.read_text()
 
     def test_original_exit_cannot_be_replaced_by_a_successful_report(self):
@@ -68,7 +73,8 @@ class OsvScanTest(unittest.TestCase):
                 self.assertNotIn("sarif_ready=true", outputs)
 
     def test_existing_report_is_not_reused(self):
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(SCAN.subprocess, "run") as run:
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(SCAN.subprocess, "run") as run, \
+                mock.patch.object(SCAN.SBOM, "validate_upstream_inventory"):
             reports = Path(directory) / "reports"
             reports.mkdir()
             (reports / "results.sarif").write_bytes(CLEAN_SARIF)
@@ -78,10 +84,29 @@ class OsvScanTest(unittest.TestCase):
             self.assertEqual((reports / "results.sarif").read_bytes(), CLEAN_SARIF)
 
     def test_caller_cannot_override_strict_scanning(self):
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(SCAN.subprocess, "run") as run:
-            with self.assertRaises(ValueError):
-                SCAN.scan("admitted-scanner", Path(directory) / "reports", ARGUMENTS + "\n--allow-no-lockfiles")
+        invalid = (
+            ARGUMENTS + "\n--allow-no-lockfiles",
+            ARGUMENTS.replace("\n" + UPSTREAM_ARGUMENT, ""),
+            ARGUMENTS + "\n" + UPSTREAM_ARGUMENT,
+            ARGUMENTS.replace(UPSTREAM_ARGUMENT, "--sbom=./arbitrary.cdx.json"),
+        )
+        for arguments in invalid:
+            with self.subTest(arguments=arguments), tempfile.TemporaryDirectory() as directory, \
+                    mock.patch.object(SCAN.subprocess, "run") as run, \
+                    mock.patch.object(SCAN.SBOM, "validate_upstream_inventory") as inventory:
+                with self.assertRaises(ValueError):
+                    SCAN.scan("admitted-scanner", Path(directory) / "reports", arguments)
+                run.assert_not_called()
+                inventory.assert_not_called()
+
+    def test_missing_vendor_provenance_blocks_launch_without_a_fresh_report(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(SCAN.subprocess, "run") as run, \
+                mock.patch.object(SCAN, "ROOT", Path(directory)):
+            reports = Path(directory) / "reports"
+            with self.assertRaises(SCAN.SBOM.SbomError):
+                SCAN.scan("admitted-scanner", reports, ARGUMENTS)
             run.assert_not_called()
+            self.assertFalse(reports.exists())
 
     def test_local_workflow_reference_is_same_revision_and_cannot_escape(self):
         text = (ROOT / "scripts/tests/release-workflow-test.sh").read_text()
@@ -136,6 +161,8 @@ done
         leaf = workflow("osv-scanner-reusable.yml")
         self.assertEqual(set(caller["jobs"]), {"scan"})
         self.assertEqual(caller["jobs"]["scan"]["uses"], "./.github/workflows/osv-scanner-reusable.yml")
+        arguments = caller["jobs"]["scan"]["with"]["scan-args"].splitlines()
+        self.assertEqual([argument for argument in arguments if argument.startswith("--sbom=")], [UPSTREAM_ARGUMENT])
         self.assertEqual(set(leaf["jobs"]), {"osv-scan"})
         job = leaf["jobs"]["osv-scan"]
         self.assertNotIn("continue-on-error", caller["jobs"]["scan"])

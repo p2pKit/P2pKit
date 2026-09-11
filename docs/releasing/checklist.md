@@ -51,14 +51,29 @@ and checksums. Before upload, the publisher then regenerates its aggregate
 CycloneDX SBOM without cached/up-to-date task outputs and validates both JSON
 and XML. A generation or content failure blocks upload. Both files are retained
 in `maven-central-publication-<tag>`, separately from verification-job evidence.
-This SBOM describes the resolved library dependency graph; it is neither an
-embedded Maven artifact nor a scan of the ZIP's binary contents.
+This SBOM describes the resolved library graph plus the explicitly identified
+modified embedded JmDNS producer; it is neither an embedded Maven artifact nor
+a scan of the ZIP's binary contents. Its private-producer JAR hash is not the
+upstream JmDNS hash or an outer-publication hash; staged archive inspection
+separately verifies the actual embedded members.
 
 `scripts/check-sbom.sh` requires Python 3. It checks matching release identity,
 component coordinates/hashes and dependency edges in the flat aggregate JSON
 and CycloneDX 1.6 XML, including duplicate/unresolved references and contamination.
 Inputs are limited to 16 MiB each before parsing; XML DTD/entity declarations
-are rejected. This is not a full CycloneDX-schema or vulnerability scan.
+are rejected. Both formats must also match the reviewed vendor manifest,
+actual source/resource/patch bytes, the owned producer JAR, upstream pedigree,
+and LAN-to-embedded-to-SLF4J edges. Source/notice normalization is recorded in
+the manifest; upstream archive hashes describe the original inputs. This is
+not a full CycloneDX-schema or vulnerability scan.
+
+OSV scans every populated Gradle lock plus the explicitly admitted
+`library/p2p-transport-lan/vendor/jmdns/upstream.cdx.json`. That small inventory
+is bound to the verified vendor manifest and retains real upstream Maven
+advisory identity; it is not the modified component's runtime SBOM. The pinned
+scanner supports the explicit `--sbom` input (deprecated upstream in favor of
+`-L`). Existing advisory exceptions and their expiry remain unchanged; a local
+lifecycle patch does not establish remediation of upstream advisories.
 
 Remote byte comparison and isolated consumers run **after** publication; they
 cannot roll back an immutable Central release. XCFramework checks cover a

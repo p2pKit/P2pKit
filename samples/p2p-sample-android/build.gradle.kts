@@ -17,6 +17,8 @@ android {
         targetSdk = libs.versions.android.sample.targetSdk.get().toInt()
         versionCode = 1
         versionName = "0.1.0"
+        // One API37 runtime case, driven explicitly by run-android-art-smoke.py; no third-party test runner.
+        testInstrumentationRunner = "dev.p2pkit.sample.android.runtime.LanPermissionRuntimeInstrumentation"
     }
 
     buildFeatures {

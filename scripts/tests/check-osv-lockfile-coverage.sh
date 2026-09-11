@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 WORKFLOW="$ROOT/.github/workflows/osv-scanner.yml"
 CONFIG="$ROOT/osv-scanner.toml"
+UPSTREAM_SBOM="library/p2p-transport-lan/vendor/jmdns/upstream.cdx.json"
 
 fail() {
     echo "FATAL: $*" >&2
@@ -27,6 +28,14 @@ git -C "$ROOT" ls-files --error-unmatch "$buildscript_lock" >/dev/null 2>&1 ||
     fail "root build-plugin lock is not tracked: $buildscript_lock"
 grep -Eq '^[^#[:space:]][^=]*:[^=]*=([^,]*,)*classpath(,|$)' "$ROOT/$buildscript_lock" ||
     fail "root build-plugin lock contains no classpath dependencies"
+
+git -C "$ROOT" ls-files --error-unmatch "$UPSTREAM_SBOM" >/dev/null 2>&1 ||
+    fail "embedded JmDNS upstream advisory inventory is not tracked: $UPSTREAM_SBOM"
+[[ "$(grep -Fxc "        --sbom=./$UPSTREAM_SBOM" "$WORKFLOW" || true)" == "1" ]] ||
+    fail "OSV workflow must scan the exact upstream advisory inventory once"
+[[ "$(grep -Ec '^[[:space:]]+--sbom=' "$WORKFLOW" || true)" == "1" ]] ||
+    fail "OSV workflow must not admit other upstream SBOM inputs"
+python3 "$ROOT/scripts/validate-sbom.py" --upstream-inventory
 
 git -C "$ROOT" ls-files --error-unmatch "osv-scanner.toml" >/dev/null 2>&1 ||
     fail "OSV exception policy is not tracked"
@@ -56,4 +65,4 @@ actual_count="$(grep -Ec '^[[:space:]]+--lockfile=' "$WORKFLOW")"
 [[ "$actual_count" == "${#expected[@]}" ]] ||
     fail "OSV workflow has $actual_count lockfile arguments; expected ${#expected[@]} non-empty dependency inputs"
 
-echo "RESULT: PASS — OSV scans all ${#expected[@]} non-empty Gradle dependency locks, including build plugins"
+echo "RESULT: PASS — OSV scans all ${#expected[@]} non-empty Gradle dependency locks and the verified upstream inventory"

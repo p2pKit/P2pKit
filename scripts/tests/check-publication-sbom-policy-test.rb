@@ -6,6 +6,7 @@ require "tmpdir"
 require "fileutils"
 require "open3"
 require "cgi"
+require "digest"
 
 ROOT = File.expand_path("../..", __dir__)
 JSON_REPORT = "build/reports/cyclonedx/bom.json"
@@ -127,30 +128,92 @@ properties = File.read(File.join(ROOT, "gradle.properties"))
 group = properties.match(/^GROUP=(.*)$/)[1].strip
 version = properties.match(/^VERSION_NAME=(.*)$/)[1].strip
 modules = %w[p2p-core p2p-transport-lan p2p-network-provisioning-android p2p-network-provisioning-desktop]
-names = modules + %w[kotlinx-coroutines-core jmdns cryptography-provider-jdk-jvm
+names = modules + %w[kotlinx-coroutines-core jmdns slf4j-api cryptography-provider-jdk-jvm
                      cryptography-provider-cryptokit-iosarm64 cryptography-provider-cryptokit-iossimulatorarm64
                      cryptography-provider-cryptokit-iosx64]
+vendor_path = "library/p2p-transport-lan/vendor/jmdns"
+producer_path = "library/p2p-transport-lan/build/embedded-jmdns/p2pkit-internal-jmdns.jar"
+producer_bytes = "controlled publication fixture producer bytes, not a compiled JAR\n"
+# Reuse the real, checked vendor contract for this shell-controller fixture.
+# The producer is deliberately synthetic; this is still not a packaging/build test.
+fixture_code = <<~'PY'
+  import importlib.util, json, pathlib, sys
+  sys.dont_write_bytecode = True
+  root = pathlib.Path(sys.argv[1])
+  spec = importlib.util.spec_from_file_location("sbom_fixture", root / "scripts/validate-sbom.py")
+  validator = importlib.util.module_from_spec(spec)
+  spec.loader.exec_module(validator)
+  manifest, digest = validator.load_vendor_manifest(root / validator.VENDOR_RELATIVE)
+  print(json.dumps(validator.embedded_component(manifest, digest, sys.argv[2])))
+PY
+embedded_json, fixture_error, fixture_status = Open3.capture3(
+    "python3", "-c", fixture_code, ROOT, Digest::SHA256.hexdigest(producer_bytes))
+raise "cannot prepare vendor-bound publication fixture: #{fixture_error}" unless fixture_status.success?
+embedded = JSON.parse(embedded_json)
 components = names.map do |name|
-    {"type" => "library", "group" => group, "name" => name, "version" => version, "bom-ref" => name}
+    if name == "jmdns"
+        embedded
+    elsif name == "slf4j-api"
+        {"type" => "library", "group" => "org.slf4j", "name" => name, "version" => "2.0.7", "bom-ref" => name}
+    else
+        {"type" => "library", "group" => group, "name" => name, "version" => version, "bom-ref" => name}
+    end
 end
 document = {
     "bomFormat" => "CycloneDX", "specVersion" => "1.6", "version" => 1,
     "metadata" => {"component" => {"type" => "library", "group" => group, "name" => "p2pkit",
                                   "version" => version, "bom-ref" => "root"}},
     "components" => components,
-    "dependencies" => [{"ref" => "root", "dependsOn" => modules}],
+    "dependencies" => [
+        {"ref" => "root", "dependsOn" => modules},
+        {"ref" => "p2p-transport-lan", "dependsOn" => [embedded.fetch("bom-ref")]},
+        {"ref" => embedded.fetch("bom-ref"), "dependsOn" => ["slf4j-api"]},
+    ],
+}
+xml_hashes = ->(hashes) {
+    next "" if hashes.nil? || hashes.empty?
+    "<hashes>" + hashes.map { |hash|
+        %(<hash alg="#{CGI.escapeHTML(hash.fetch("alg"))}">#{CGI.escapeHTML(hash.fetch("content"))}</hash>)
+    }.join + "</hashes>"
 }
 xml_component = ->(component) {
-    %(<component type="library" bom-ref="#{CGI.escapeHTML(component.fetch("bom-ref"))}">) +
-        %w[group name version].map { |key| "<#{key}>#{CGI.escapeHTML(component.fetch(key))}</#{key}>" }.join +
-        "</component>"
+    body = %(<component type="library" bom-ref="#{CGI.escapeHTML(component.fetch("bom-ref"))}">)
+    %w[group name version purl].each do |key|
+        body += "<#{key}>#{CGI.escapeHTML(component.fetch(key))}</#{key}>" if component.key?(key)
+    end
+    body += xml_hashes.call(component["hashes"])
+    body += "<modified>#{component.fetch("modified")}</modified>" if component.key?("modified")
+    if component.key?("pedigree")
+        pedigree = component.fetch("pedigree")
+        body += "<pedigree><ancestors>" + pedigree.fetch("ancestors").map { |c| xml_component.call(c) }.join
+        body += "</ancestors><patches>" + pedigree.fetch("patches").map { |patch|
+            %(<patch type="#{CGI.escapeHTML(patch.fetch("type"))}"><diff><url>) +
+                CGI.escapeHTML(patch.fetch("diff").fetch("url")) + "</url></diff></patch>"
+        }.join + "</patches></pedigree>"
+    end
+    if component.key?("externalReferences")
+        body += "<externalReferences>" + component.fetch("externalReferences").map { |reference|
+            %(<reference type="#{CGI.escapeHTML(reference.fetch("type"))}"><url>) +
+                CGI.escapeHTML(reference.fetch("url")) + "</url>" +
+                xml_hashes.call(reference["hashes"]) + "</reference>"
+        }.join + "</externalReferences>"
+    end
+    if component.key?("properties")
+        body += "<properties>" + component.fetch("properties").map { |property|
+            %(<property name="#{CGI.escapeHTML(property.fetch("name"))}">) +
+                CGI.escapeHTML(property.fetch("value")) + "</property>"
+        }.join + "</properties>"
+    end
+    body + "</component>"
 }
 xml = '<bom xmlns="http://cyclonedx.org/schema/bom/1.6" version="1"><metadata>' +
     xml_component.call(document.fetch("metadata").fetch("component")) + "</metadata><components>" +
     components.map { |component| xml_component.call(component) }.join +
-    '</components><dependencies><dependency ref="root">' +
-    modules.map { |name| %(<dependency ref="#{name}"/>) }.join +
-    "</dependency></dependencies></bom>"
+    "</components><dependencies>" + document.fetch("dependencies").map { |entry|
+        %(<dependency ref="#{CGI.escapeHTML(entry.fetch("ref"))}">) +
+            entry.fetch("dependsOn").map { |ref| %(<dependency ref="#{CGI.escapeHTML(ref)}"/>) }.join +
+            "</dependency>"
+    }.join + "</dependencies></bom>"
 cases = {
     "valid" => nil,
     "generation-failure-with-stale-reports" => nil,
@@ -165,6 +228,10 @@ cases.each do |mode, expected_error|
         FileUtils.mkdir_p(File.join(dir, "scripts"))
         FileUtils.cp(File.join(ROOT, "scripts/check-sbom.sh"), File.join(dir, "scripts/check-sbom.sh"))
         FileUtils.cp(File.join(ROOT, "scripts/validate-sbom.py"), File.join(dir, "scripts/validate-sbom.py"))
+        FileUtils.mkdir_p(File.dirname(File.join(dir, vendor_path)))
+        FileUtils.cp_r(File.join(ROOT, vendor_path), File.join(dir, vendor_path))
+        FileUtils.mkdir_p(File.dirname(File.join(dir, producer_path)))
+        File.write(File.join(dir, producer_path), producer_bytes)
         File.write(File.join(dir, "gradle.properties"), "GROUP=#{group}\nVERSION_NAME=#{version}\n")
         data = Marshal.load(Marshal.dump(document))
         data["components"].reject! { |c| c["name"] == "jmdns" } if mode == "missing-component"

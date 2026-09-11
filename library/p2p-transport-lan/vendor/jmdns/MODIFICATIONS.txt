@@ -1,0 +1,26 @@
+P2pKit embedded JmDNS modifications
+
+Upstream: org.jmdns:jmdns:3.6.3, tag v3.6.3,
+commit 93b326381940f3fcd250d770a14a36de4c2dfcda.
+Private component revision: 3.6.3-p2pkit.410.1.
+
+Mechanical integration relocates the complete javax.jmdns production package
+into dev.p2pkit.transport.lan.internal.jmdns. Java source uses LF line endings,
+no trailing spaces or tabs, and exactly one final newline. Added modification
+notices do not replace the original license headers or author attributions.
+Version and command-line diagnostic resource lookups use the private
+version.properties path instead of a root resource or upstream Maven descriptor.
+LICENSE is preserved byte-for-byte. NOTICE.txt keeps the upstream substantive
+text and attributions; only three trailing spaces were removed (775 original
+bytes, 772 distributed bytes). PROVENANCE.json records the original NOTICE
+digest separately from the normalized distributed resource.
+
+patches/410-lifecycle.patch records the separate native lifecycle correction
+against the mechanically relocated, normalized source baseline. It is a
+zero-context unified patch: replay from this vendor directory against the
+baseline with git apply --unidiff-zero and verify the baseline and final hashes
+recorded in PROVENANCE.json. That manifest identifies the original,
+relocated-baseline and final source bytes and the patch digest.
+Neither the private package nor its Java-public types are supported P2pKit API.
+The upstream Maven identity is provenance, not a claim that these modified bytes
+are the original upstream artifact or an independently published fork.

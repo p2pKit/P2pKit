@@ -10,14 +10,29 @@ import org.gradle.api.services.BuildService
 import org.gradle.api.services.BuildServiceParameters
 import org.cyclonedx.gradle.CyclonedxDirectTask
 import org.cyclonedx.gradle.utils.CyclonedxUtils
+import org.cyclonedx.model.Ancestors
+import org.cyclonedx.model.Component
 import org.cyclonedx.model.Dependency
+import org.cyclonedx.model.Diff
+import org.cyclonedx.model.ExternalReference
+import org.cyclonedx.model.Hash
+import org.cyclonedx.model.Patch
+import org.cyclonedx.model.Pedigree
+import org.cyclonedx.model.Property as CyclonedxProperty
 import org.cyclonedx.parsers.BomParserFactory
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 import com.android.build.gradle.tasks.BundleAar
+import com.fasterxml.jackson.annotation.JsonInclude
+import com.fasterxml.jackson.core.JsonParser
+import com.fasterxml.jackson.databind.JsonNode
+import com.fasterxml.jackson.databind.ObjectMapper
 import kotlinx.validation.KotlinApiBuildTask
 import kotlinx.validation.KotlinApiCompareTask
 import java.util.Base64
+import java.util.HexFormat
+import java.nio.file.Files
+import java.security.MessageDigest
 
 // Plugin DSL dependencies resolve before the allprojects rules below exist.
 // Apply the same advisory floors to the root build classpath so build tools
@@ -433,7 +448,15 @@ gradle.projectsEvaluated {
 }
 
 val aggregateSbomGroup = group.toString()
+val embeddedJmdnsVendorRelative = "library/p2p-transport-lan/vendor/jmdns"
+val embeddedJmdnsVendor = layout.projectDirectory.dir(embeddedJmdnsVendorRelative)
+// Resolve the actual producer output only for the selected aggregate task.
+// An unconditional projectsEvaluated lookup would break unrelated CoD builds.
+val embeddedJmdnsArchive = providers.provider {
+    project(":p2p-transport-lan").tasks.named<Jar>("embeddedJmdnsJar").get().archiveFile.get()
+}
 tasks.cyclonedxBom {
+    dependsOn(":p2p-transport-lan:embeddedJmdnsJar")
     projectType.set(org.cyclonedx.model.Component.Type.LIBRARY)
     componentGroup = project.group.toString()
     componentName = rootProject.name
@@ -443,15 +466,137 @@ tasks.cyclonedxBom {
     includeLicenseText = false
     jsonOutput.set(layout.buildDirectory.file("reports/cyclonedx/bom.json"))
     xmlOutput.set(layout.buildDirectory.file("reports/cyclonedx/bom.xml"))
+    inputs.file(embeddedJmdnsArchive).withPropertyName("embeddedJmdnsProducer")
+    inputs.files(fileTree(embeddedJmdnsVendor) {
+        include("PROVENANCE.json", "src/main/**", "patches/**", "LICENSE", "NOTICE.txt", "MODIFICATIONS.txt")
+    }).withPropertyName("embeddedJmdnsSources").withPathSensitivity(PathSensitivity.RELATIVE)
 
-    // CycloneDX's aggregate task merges each subproject graph but does not
-    // connect its synthetic root component to those subprojects. Add the four
-    // published modules as the exact top-level dependency set so consumers can
-    // traverse the aggregate SBOM instead of receiving a disconnected graph.
+    // The plugin merges resolved Maven graphs, not privately embedded file-JAR
+    // contents. Preserve that graph, join the four-module root, and explicitly
+    // describe the owned modified producer rather than impersonating upstream.
     doLast {
+        // Diff otherwise emits absent text as null, which is not a valid
+        // CycloneDX attachment. Keep this URL-only representation schema-valid.
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        class ReferencedPatchDiff : Diff()
+
+        fun boundedBytes(file: java.io.File): ByteArray {
+            val limit = 16 * 1024 * 1024
+            val bytes = file.inputStream().use { it.readNBytes(limit + 1) }
+            check(bytes.isNotEmpty() && bytes.size <= limit) { "Invalid embedded JmDNS input: $file" }
+            return bytes
+        }
+        fun sha256(bytes: ByteArray) = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes))
+        fun requiredText(node: JsonNode, name: String): String {
+            val value = node.path(name)
+            check(value.isTextual && value.textValue().isNotBlank()) { "Invalid JmDNS provenance field: $name" }
+            return value.textValue()
+        }
+        val vendorRoot = embeddedJmdnsVendor.asFile.toPath()
+        fun vendorFile(relative: String): java.io.File {
+            val path = java.nio.file.Path.of(relative)
+            check(
+                !path.isAbsolute && !relative.contains('\\') && relative.matches(Regex("[A-Za-z0-9_./-]+")) &&
+                    path.normalize().toString().replace(java.io.File.separatorChar, '/') == relative &&
+                    path.none { it.toString() == ".." }
+            ) { "Unsafe embedded JmDNS provenance path" }
+            var current = vendorRoot
+            for (part in path) {
+                current = current.resolve(part)
+                check(!Files.isSymbolicLink(current)) { "Symlinked embedded JmDNS input" }
+            }
+            check(Files.isRegularFile(current)) { "Missing embedded JmDNS input: $relative" }
+            return current.toFile()
+        }
+        val manifestBytes = boundedBytes(vendorFile("PROVENANCE.json"))
+        val manifest = ObjectMapper().enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION).readTree(manifestBytes)
+        check(manifest.path("schema").isIntegralNumber && manifest.path("schema").intValue() == 1) {
+            "Unsupported embedded JmDNS provenance schema"
+        }
+        check(manifest.path("sources").isArray && manifest.path("resources").isArray) {
+            "Missing embedded JmDNS source/resource roster"
+        }
+        val patchRecord = manifest.path("lifecyclePatch")
+        val records = manifest.path("sources").toList() + manifest.path("resources").toList() + listOf(patchRecord)
+        for (record in records) {
+            val expected = requiredText(record, "sha256")
+            check(expected.matches(Regex("[0-9a-f]{64}"))) { "Invalid embedded JmDNS source digest" }
+            check(sha256(boundedBytes(vendorFile(requiredText(record, "path")))) == expected) {
+                "Embedded JmDNS source/resource/patch bytes differ from provenance"
+            }
+        }
+        val identity = manifest.path("component")
+        val upstream = manifest.path("upstream")
+        val upstreamRef = requiredText(upstream, "purl")
+        check(upstreamRef == "pkg:maven/org.jmdns/jmdns@3.6.3") { "Unexpected embedded JmDNS ancestor" }
+        val upstreamCommit = requiredText(upstream, "commit")
+        val sourceUrl = requiredText(upstream, "sourceUrl")
+        val sourceSha256 = requiredText(upstream, "sourceSha256")
+        val ancestor = Component().apply {
+            type = Component.Type.LIBRARY
+            bomRef = upstreamRef
+            group = "org.jmdns"
+            name = "jmdns"
+            version = "3.6.3"
+            purl = upstreamRef
+            hashes = listOf(Hash(Hash.Algorithm.SHA_256, requiredText(upstream, "binarySha256")))
+            externalReferences = listOf(
+                ExternalReference().apply {
+                    type = ExternalReference.Type.SOURCE_DISTRIBUTION
+                    url = sourceUrl
+                    hashes = listOf(Hash(Hash.Algorithm.SHA_256, sourceSha256))
+                },
+                ExternalReference().apply {
+                    type = ExternalReference.Type.VCS
+                    url = "https://github.com/jmdns/jmdns/tree/$upstreamCommit"
+                },
+            )
+        }
+        val embeddedRef = requiredText(identity, "bomRef")
+        val patchPath = requiredText(patchRecord, "path")
+        val provenanceProperties = sortedMapOf(
+            "hash-scope" to "private-producer-jar",
+            "namespace" to requiredText(manifest.path("relocation"), "to"),
+            "provenance-path" to "$embeddedJmdnsVendorRelative/PROVENANCE.json",
+            "source-manifest-sha256" to sha256(manifestBytes),
+            "upstream-source-sha256" to sourceSha256,
+            "lifecycle-patch-sha256" to requiredText(patchRecord, "sha256"),
+            "upstream-commit" to upstreamCommit,
+            "upstream-tree" to requiredText(upstream, "tree"),
+        )
+        val embedded = Component().apply {
+            type = Component.Type.LIBRARY
+            bomRef = embeddedRef
+            group = requiredText(identity, "group")
+            name = requiredText(identity, "name")
+            version = requiredText(identity, "version")
+            purl = requiredText(identity, "purl")
+            // This is the owned producer JAR, not the upstream JAR or outer publication.
+            hashes = listOf(Hash(Hash.Algorithm.SHA_256, sha256(boundedBytes(embeddedJmdnsArchive.get().asFile))))
+            modified = true
+            pedigree = Pedigree().apply {
+                ancestors = Ancestors().apply { components = listOf(ancestor) }
+                patches = listOf(Patch().apply {
+                    type = Patch.Type.UNOFFICIAL
+                    diff = ReferencedPatchDiff().apply { url = "$embeddedJmdnsVendorRelative/$patchPath" }
+                })
+            }
+            properties = provenanceProperties.map { (key, value) ->
+                CyclonedxProperty("p2pkit:embedded-jmdns:$key", value)
+            }
+        }
         val jsonFile = jsonOutput.get().asFile
         val xmlFile = xmlOutput.get().asFile
         val bom = BomParserFactory.createParser(jsonFile).parse(jsonFile)
+        check(bom.components.orEmpty().none {
+            it.name == "jmdns" || it.bomRef == embeddedRef || it.group == "unspecified"
+        }) { "Unexpected upstream JmDNS or private file dependency in aggregate runtime graph" }
+        val logging = bom.components.orEmpty().filter { it.group == "org.slf4j" && it.name == "slf4j-api" }
+        check(logging.size == 1 && logging.single().version == "2.0.7") {
+            "Expected the resolved LAN SLF4J API 2.0.7 dependency"
+        }
+        val loggingRef = requireNotNull(logging.single().bomRef) { "SLF4J component has no bom-ref" }
+        bom.components = bom.components.orEmpty().plus(embedded).sortedBy { it.bomRef }
         val rootRef = requireNotNull(bom.metadata?.component?.bomRef) {
             "Aggregate SBOM root component has no bom-ref"
         }
@@ -471,14 +616,24 @@ tasks.cyclonedxBom {
             requireNotNull(matches.single().bomRef) {
                 "Aggregate SBOM component $moduleName has no bom-ref"
             }
-        }.values.sorted()
+        }
 
         val rootDependency = Dependency(rootRef).apply {
-            dependencies = moduleRefs.map(::Dependency)
+            dependencies = moduleRefs.values.sorted().map(::Dependency)
+        }
+        val lanRef = moduleRefs.getValue("p2p-transport-lan")
+        val originalLan = bom.dependencies.orEmpty().filter { it.ref == lanRef }
+        check(originalLan.size <= 1) { "Duplicate LAN dependency entry" }
+        val lanTargets = originalLan.singleOrNull()?.dependencies.orEmpty().map { it.ref } + embeddedRef
+        val lanDependency = Dependency(lanRef).apply {
+            dependencies = lanTargets.distinct().sorted().map(::Dependency)
+        }
+        val embeddedDependency = Dependency(embeddedRef).apply {
+            dependencies = listOf(Dependency(loggingRef))
         }
         bom.dependencies = bom.dependencies.orEmpty()
-            .filterNot { it.ref == rootRef }
-            .plus(rootDependency)
+            .filterNot { it.ref == rootRef || it.ref == lanRef }
+            .plus(listOf(rootDependency, lanDependency, embeddedDependency))
             .sortedBy { it.ref }
         CyclonedxUtils.writeJsonBom(schemaVersion.get(), bom, jsonFile)
         CyclonedxUtils.writeXmlBom(schemaVersion.get(), bom, xmlFile)

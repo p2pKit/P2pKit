@@ -5,8 +5,8 @@ import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.transport.PeerEvent
+import dev.p2pkit.transport.lan.internal.jmdns.ServiceInfo
 import java.net.InetAddress
-import javax.jmdns.ServiceInfo
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.first

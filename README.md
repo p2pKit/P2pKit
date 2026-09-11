@@ -296,8 +296,9 @@ Current CI reports actual Kotlin test-task execution and skipped targets;
 slice cannot be natively tested on the default arm64 runner: a weekly/manual
 Intel simulator job is configured, but its passing run must be recorded for
 the tested commit. `iosArm64` device execution needs external hardware.
-No Android instrumented/device test suite is authored; Android host JVM
-tests (including Robolectric shadows) are not ART or physical-device evidence.
+One focused API37 permission/recreation/TCP instrumentation case is authored;
+its execution must be recorded separately, and it is not a general device suite.
+Android host JVM tests (including Robolectric shadows) are not ART or physical-device evidence.
 
 The [canonical six-area status table](docs/validation/README.md#current-status)
 records external campaign progress and links each execution handbook. In

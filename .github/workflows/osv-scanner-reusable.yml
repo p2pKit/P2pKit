@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       scan-args:
-        description: "One explicit --config or --lockfile argument per line"
+        description: "One explicit --config, admitted upstream --sbom or --lockfile argument per line"
         required: true
         type: string
 
@@ -24,7 +24,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Verify lockfile and exception coverage
+      - name: Verify lockfile, upstream inventory and exception coverage
         run: scripts/tests/check-osv-lockfile-coverage.sh
       - name: Admit pinned standalone OSV scanner
         id: prepare
@@ -43,7 +43,7 @@ jobs:
           )
           chmod 700 "$directory/osv-scanner"
           "$directory/osv-scanner" --version
-      - name: Scan every explicit lock and preserve scanner failure
+      - name: Scan every explicit lock and upstream inventory, preserving scanner failure
         id: scan
         shell: bash
         env:

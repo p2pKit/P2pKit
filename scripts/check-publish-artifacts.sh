@@ -13,6 +13,10 @@
 # there); on other hosts those rows are skipped with a warning.
 #
 # Usage: scripts/check-publish-artifacts.sh [existing-repo-dir]
+#        scripts/check-publish-artifacts.sh --embedded-jmdns-only <existing-repo-dir>
+#   Embedded only: checks the two LAN runtime/source sets and portable metadata;
+#                  requires the same-source embeddedJmdnsJar producer, never publishes,
+#                  and is not the complete publication/release gate.
 #   No argument:   runs `./gradlew publishToMavenLocal -Dmaven.repo.local=<tmp>`
 #                  and verifies the result (the temp repo is removed on exit).
 #   With argument: skips publishing and verifies the given repo directory
@@ -20,14 +24,27 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-command -v jq >/dev/null 2>&1 || { echo "FATAL: jq is required" >&2; exit 2; }
-command -v xmllint >/dev/null 2>&1 || { echo "FATAL: xmllint is required" >&2; exit 2; }
-command -v unzip >/dev/null 2>&1 || { echo "FATAL: unzip is required" >&2; exit 2; }
-command -v javap >/dev/null 2>&1 || { echo "FATAL: javap from JDK 17 is required" >&2; exit 2; }
+EMBEDDED_ONLY=0
+if [[ "${1:-}" == "--embedded-jmdns-only" ]]; then
+    [[ $# == 2 && -d "$2" ]] || {
+        echo "FATAL: --embedded-jmdns-only requires one existing repository directory" >&2
+        exit 2
+    }
+    EMBEDDED_ONLY=1
+    shift
+fi
+command -v python3 >/dev/null 2>&1 || { echo "FATAL: Python 3 is required" >&2; exit 2; }
+if [[ "$EMBEDDED_ONLY" == 0 ]]; then
+    command -v jq >/dev/null 2>&1 || { echo "FATAL: jq is required" >&2; exit 2; }
+    command -v xmllint >/dev/null 2>&1 || { echo "FATAL: xmllint is required" >&2; exit 2; }
+    command -v unzip >/dev/null 2>&1 || { echo "FATAL: unzip is required" >&2; exit 2; }
+    command -v javap >/dev/null 2>&1 || { echo "FATAL: javap from JDK 17 is required" >&2; exit 2; }
+fi
 VERSION="$(sed -n 's/^VERSION_NAME=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
 GROUP="$(sed -n 's/^GROUP=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
 KOTLIN_VERSION="$(sed -n 's/^kotlin = "\([^"]*\)"/\1/p' "$ROOT/gradle/libs.versions.toml")"
-if [[ -z "$VERSION" || -z "$GROUP" || -z "$KOTLIN_VERSION" ]]; then
+COROUTINES_VERSION="$(sed -n 's/^coroutines = "\([^"]*\)"/\1/p' "$ROOT/gradle/libs.versions.toml")"
+if [[ -z "$VERSION" || -z "$GROUP" || -z "$KOTLIN_VERSION" || -z "$COROUTINES_VERSION" ]]; then
     echo "FATAL: could not read publication/toolchain versions from repository sources" >&2
     exit 2
 fi
@@ -307,6 +324,381 @@ check_rc2_legacy_jvm_symbols() {
     fi
 }
 
+# Embedded-JmDNS policy: shared by the complete gate and its explicit LAN-only mode.
+check_embedded_jmdns() {
+    if ! python3 -B - "$ROOT" "$BASE" "$GROUP" "$VERSION" "$KOTLIN_VERSION" "$COROUTINES_VERSION" <<'PY'
+import hashlib
+import importlib.util
+import io
+import json
+from pathlib import Path
+import re
+import stat
+import struct
+import sys
+import xml.etree.ElementTree as ET
+import zipfile
+
+ROOT, BASE = map(Path, sys.argv[1:3])
+GROUP, VERSION = sys.argv[3:5]
+KOTLIN_VERSION, COROUTINES_VERSION = sys.argv[5:7]
+LAN_PREFIX = "dev/p2pkit/transport/lan/"
+PREFIX = "dev/p2pkit/transport/lan/internal/jmdns/"
+NOTICES = "META-INF/p2pkit/third-party/jmdns/"
+PATCH_ENTRY = NOTICES + "patches/410-lifecycle.patch"
+KOTLIN_MODULE = "META-INF/p2p-transport-lan.kotlin_module"
+VENDOR = ROOT / "library/p2p-transport-lan/vendor/jmdns"
+PRODUCER = ROOT / "library/p2p-transport-lan/build/embedded-jmdns/p2pkit-internal-jmdns.jar"
+MAX_ARCHIVE = 64 * 1024 * 1024
+MAX_MEMBER = 16 * 1024 * 1024
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def read_file(path):
+    require(path.is_file() and not path.is_symlink(), "missing/nonregular artifact or input: " + str(path))
+    with path.open("rb") as stream:
+        data = stream.read(MAX_ARCHIVE + 1)
+    require(0 < len(data) <= MAX_ARCHIVE, "empty/oversized input: " + str(path))
+    return data
+
+
+def archive(data, label):
+    result, seen, total = {}, set(), 0
+    with zipfile.ZipFile(io.BytesIO(data)) as source:
+        require(len(source.infolist()) <= 4096, label + ": too many ZIP entries")
+        for entry in source.infolist():
+            name = entry.filename
+            parts = name.rstrip("/").split("/")
+            require(name == entry.orig_filename and name not in seen and
+                    all(part not in ("", ".", "..") for part in parts) and
+                    "\\" not in name and "\0" not in name and not re.match(r"^[A-Za-z]:", name),
+                    label + ": duplicate/unsafe ZIP entry " + repr(name))
+            seen.add(name)
+            kind = stat.S_IFMT(entry.external_attr >> 16)
+            require(kind in (0, stat.S_IFDIR if entry.is_dir() else stat.S_IFREG) and not entry.flag_bits & 1,
+                    label + ": linked/nonregular/encrypted ZIP entry " + name)
+            total += entry.file_size
+            require(entry.file_size <= MAX_MEMBER and total <= MAX_ARCHIVE, label + ": ZIP content exceeds bound")
+            if not entry.is_dir():
+                with source.open(entry) as stream:
+                    content = stream.read(MAX_MEMBER + 1)
+                require(len(content) == entry.file_size, label + ": ZIP member size mismatch")
+                result[name] = content
+    return result
+
+
+def class_constants(name, data):
+    # Header/namespace inspection only; never load code or claim JVM verification.
+    require(len(data) >= 10 and data[:4] == b"\xca\xfe\xba\xbe", "invalid class file: " + name)
+    minor, major, count = struct.unpack_from(">HHH", data, 4)
+    if name.startswith(PREFIX):
+        require((minor, major) == (0, 52), "embedded class is not Java 8 bytecode: " + name)
+    position, index, strings, classes = 10, 1, {}, {}
+    while index < count:
+        require(position < len(data), "truncated constant pool: " + name)
+        tag = data[position]
+        position += 1
+        if tag == 1:
+            require(position + 2 <= len(data), "truncated UTF8 length: " + name)
+            size = struct.unpack_from(">H", data, position)[0]
+            position += 2
+            strings[index] = data[position:position + size]
+            position += size
+        elif tag == 7:
+            require(position + 2 <= len(data), "truncated class reference: " + name)
+            classes[index] = struct.unpack_from(">H", data, position)[0]
+            position += 2
+        elif tag in (3, 4, 9, 10, 11, 12, 18):
+            position += 4
+        elif tag in (5, 6):
+            position += 8
+            index += 1
+        elif tag in (8, 16):
+            position += 2
+        elif tag == 15:
+            position += 3
+        elif tag in (17, 19, 20) and major >= (55 if tag == 17 else 53):
+            position += 4 if tag == 17 else 2
+        else:
+            raise ValueError("unsupported constant-pool tag in " + name)
+        require(position <= len(data), "truncated constant pool payload: " + name)
+        index += 1
+    require(count > 1 and position + 6 <= len(data), "missing class identity: " + name)
+    this_class = struct.unpack_from(">H", data, position + 2)[0]
+    require(strings.get(classes.get(this_class)) == name[:-6].encode("utf-8"), "class entry/identity mismatch: " + name)
+    require(not any(b"javax/jmdns" in value or b"javax.jmdns" in value for value in strings.values()),
+            "unrelocated JmDNS class reference: " + name)
+    return set(strings.values())
+
+
+def inspect_entries(entries, label):
+    for name, data in entries.items():
+        require(not re.search(r"(?:^|/)javax/jmdns/", name) and not name.startswith("org/slf4j/") and
+                not name.startswith(("META-INF/maven/org.jmdns/", "META-INF/maven/javax.jmdns/")) and
+                name not in ("version.properties", "META-INF/INDEX.LIST") and
+                not name.startswith("META-INF/services/org.slf4j."), label + ": upstream/provider entry " + name)
+        if name.endswith(".class"):
+            require(name.startswith(LAN_PREFIX), label + ": bundled non-LAN class " + name)
+            class_constants(name, data)
+        if name.upper() == "META-INF/MANIFEST.MF":
+            manifest = data.decode("utf-8", errors="strict").replace("\r\n", "\n").replace("\r", "\n").replace("\n ", "")
+            require(not re.search(r"javax[./]jmdns|org[./]jmdns|^Main-Class:|^Bundle-|"
+                                  r"^(?:Implementation|Specification)-[^:]+:.*(?:\bjmdns\b|\b3\.6\.3\s*$)",
+                                  manifest, re.M | re.I),
+                    label + ": upstream executable/module manifest")
+
+
+def match_resources(entries, resources, label, required=True):
+    actual = {name for name in entries if name.startswith(NOTICES) or
+              (name.startswith(PREFIX) and not name.endswith((".class", ".java")))}
+    expected = set(resources) - {"META-INF/LICENSE"}
+    require(actual == expected if required else actual <= expected, label + ": private resource inventory differs")
+    for name in (resources if required else set(resources) & set(entries)):
+        require(entries.get(name) == resources[name], label + ": changed/missing resource " + name)
+
+
+def portable(value):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            portable(key)
+            portable(item)
+    elif isinstance(value, list):
+        for item in value:
+            portable(item)
+    elif isinstance(value, str):
+        require(not any(token in value for token in ("file:", "/root/", "/home/", "/Users/", "\\")) and
+                not re.match(r"^[A-Za-z]:[/\\]", value), "nonportable publication metadata")
+
+
+def metadata(directory, artifact, suffix, validator, artifacts):
+    allowed = {(GROUP, "p2p-core"): VERSION, (GROUP, "p2p-core-" + suffix): VERSION,
+               ("org.jetbrains.kotlinx", "kotlinx-coroutines-core"): COROUTINES_VERSION,
+               ("org.jetbrains.kotlinx", "kotlinx-coroutines-core-jvm"): COROUTINES_VERSION,
+               ("org.jetbrains.kotlin", "kotlin-stdlib"): KOTLIN_VERSION, ("org.slf4j", "slf4j-api"): "2.0.7"}
+    pom_coordinates = set(allowed) - {(GROUP, "p2p-core"), ("org.jetbrains.kotlinx", "kotlinx-coroutines-core")}
+
+    def dependency(group, module, version):
+        require((group, module) in allowed and isinstance(version, str) and
+                re.fullmatch(r"[A-Za-z0-9_.+-]+", version), "unexpected/unpublished dependency in " + artifact)
+        require(version == allowed[group, module], "wrong published dependency version in " + artifact + ": " + module)
+
+    ns = "{http://maven.apache.org/POM/4.0.0}"
+    pom = ET.fromstring(read_file(directory / (artifact + "-" + VERSION + ".pom")),
+                       parser=ET.XMLParser(target=validator.NoDtdBuilder()))
+    require(pom.tag == ns + "project", "invalid POM root in " + artifact)
+
+    def field(parent, key, default=None):
+        nodes = parent.findall(ns + key)
+        if not nodes and default is not None:
+            return default
+        require(len(nodes) == 1 and not list(nodes[0]), "missing/duplicate POM field " + key)
+        return (nodes[0].text or "").strip()
+
+    require([field(pom, key) for key in ("groupId", "artifactId", "version")] == [GROUP, artifact, VERSION],
+            "public POM identity changed: " + artifact)
+    require(field(pom, "packaging", "jar") == ("jar" if suffix == "jvm" else "aar"), "public POM packaging changed")
+    portable(ET.tostring(pom, encoding="unicode"))
+    require(not any(pom.findall(".//" + ns + name) for name in (
+        "systemPath", "parent", "profiles", "build", "dependencyManagement", "repositories", "pluginRepositories")),
+        "private repository/system or inherited dependency in " + artifact)
+    scopes = {}
+    containers = pom.findall(ns + "dependencies")
+    items = pom.findall(ns + "dependencies/" + ns + "dependency")
+    require(len(containers) == 1 and len(items) == len(list(containers[0])) and
+            len(items) == len(pom.findall(".//" + ns + "dependency")), "invalid POM dependencies container")
+    for item in items:
+        require({node.tag for node in item} <= {ns + key for key in (
+            "groupId", "artifactId", "version", "scope", "optional", "type")}, "unsupported POM dependency fields")
+        group, module, version = [field(item, key) for key in ("groupId", "artifactId", "version")]
+        dependency(group, module, version)
+        require((group, module) in pom_coordinates, "unexpected POM root dependency")
+        require(field(item, "optional", "false") == "false", "optional POM dependency")
+        allowed_types = {"jar", "aar"} if (group, module) == (GROUP, "p2p-core-android") else {"jar"}
+        require(field(item, "type", "jar") in allowed_types, "unexpected POM dependency type")
+        scope = field(item, "scope", "compile")
+        require((group, module) not in scopes and scope in ("compile", "runtime"), "invalid POM dependency scope")
+        scopes[group, module] = scope
+    require(scopes.get((GROUP, "p2p-core-" + suffix)) == "compile" and
+            scopes.get(("org.jetbrains.kotlinx", "kotlinx-coroutines-core-jvm")) == "compile" and
+            scopes.get(("org.slf4j", "slf4j-api")) == "runtime" and
+            scopes.get(("org.jetbrains.kotlin", "kotlin-stdlib"), "compile") == "compile",
+            "LAN POM API/runtime edges changed: " + artifact)
+
+    document = json.loads(read_file(directory / (artifact + "-" + VERSION + ".module")),
+                          object_pairs_hook=validator.no_duplicate_keys, parse_constant=validator.no_nonfinite)
+    require(type(document) is dict and document.get("formatVersion") == "1.1", "invalid Gradle module metadata")
+    portable(document)
+    component = document.get("component", {})
+    require([component.get(key) for key in ("group", "module", "version")] == [GROUP, "p2p-transport-lan", VERSION],
+            "public Gradle module identity changed: " + artifact)
+    root_module_url = "../../p2p-transport-lan/" + VERSION + "/p2p-transport-lan-" + VERSION + ".module"
+    require("url" not in component or component["url"] == root_module_url, "nonpublic Gradle component URL")
+    main_name = artifact + "-" + VERSION + (".jar" if suffix == "jvm" else ".aar")
+    source_name = artifact + "-" + VERSION + "-sources.jar"
+    allowed_files = {name: name for name in (main_name, source_name, artifact + "-" + VERSION + "-javadoc.jar")}
+    if suffix == "android":
+        # Existing LOGICAL_ARTIFACT_ALIASES in prepare-audit-consumer-metadata.py:
+        # AGP's logical name differs, but it still downloads the canonical AAR.
+        allowed_files["p2p-transport-lan.aar"] = main_name
+    variants, usages, names, source_variants = document.get("variants"), set(), set(), 0
+    require(isinstance(variants, list) and variants, "missing Gradle variants")
+    for variant in variants:
+        require(isinstance(variant, dict) and isinstance(variant.get("name"), str) and
+                variant["name"] not in names and "available-at" not in variant, "invalid/redirected Gradle variant")
+        names.add(variant["name"])
+        deps = set()
+        for collection in ("dependencies", "dependencyConstraints"):
+            items, seen = variant.get(collection, []), set()
+            require(isinstance(items, list), "invalid Gradle dependency list")
+            for item in items:
+                require(isinstance(item, dict) and set(item) == {"group", "module", "version"} and
+                        isinstance(item.get("version"), dict) and set(item["version"]) == {"requires"},
+                        "invalid Gradle dependency")
+                group, module = item.get("group"), item.get("module")
+                dependency(group, module, item["version"]["requires"])
+                require((group, module) not in seen, "duplicate Gradle dependency")
+                seen.add((group, module))
+            if collection == "dependencies":
+                deps = seen  # Constraints can restrict a version but cannot supply a runtime/API edge.
+        files = variant.get("files", [])
+        require(isinstance(files, list), "invalid Gradle variant files")
+        for item in files:
+            require(isinstance(item, dict) and item.get("name") in allowed_files and
+                    item.get("url") == allowed_files[item["name"]],
+                    "private/unpublished Gradle variant artifact")
+            if item["url"] in (main_name, source_name):
+                data = artifacts[item["url"]]
+                require(type(item.get("size")) is int and item["size"] == len(data) and
+                        item.get("sha256") == hashlib.sha256(data).hexdigest(), "stale Gradle artifact hash/size")
+        attributes = variant.get("attributes", {})
+        require(isinstance(attributes, dict), "invalid Gradle variant attributes")
+        if any(item["name"] == source_name for item in files):
+            require([item["name"] for item in files] == [source_name] and
+                    attributes.get("org.gradle.category") == "documentation" and
+                    attributes.get("org.gradle.docstype") == "sources", "invalid Gradle sources variant")
+            source_variants += 1
+        usage = attributes.get("org.gradle.usage")
+        if attributes.get("org.gradle.category") == "library" and usage in ("java-api", "java-runtime"):
+            usages.add(usage)
+            require([item["url"] for item in files] == [main_name], "runtime/API variant does not carry its public archive")
+            require(deps & {(GROUP, "p2p-core"), (GROUP, "p2p-core-" + suffix)} and
+                    deps & {("org.jetbrains.kotlinx", "kotlinx-coroutines-core"),
+                            ("org.jetbrains.kotlinx", "kotlinx-coroutines-core-jvm")}, "LAN Gradle API edges changed")
+            require((("org.slf4j", "slf4j-api") in deps) == (usage == "java-runtime"), "SLF4J Gradle runtime edge changed")
+    require(usages == {"java-api", "java-runtime"}, "missing LAN Gradle API/runtime variants")
+    require(source_variants == 1, "missing/duplicate LAN Gradle sources variant")
+
+
+def inspect():
+    spec = importlib.util.spec_from_file_location("publication_vendor_policy", ROOT / "scripts/validate-sbom.py")
+    validator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(validator)
+    manifest, manifest_hash = validator.load_vendor_manifest(VENDOR)
+
+    def bound_bytes(row):
+        data = read_file(VENDOR / row["path"])
+        require(hashlib.sha256(data).hexdigest() == row["sha256"], "vendor input changed during inspection: " + row["path"])
+        return data
+
+    resources = {row["entry"]: bound_bytes(row) for row in manifest["resources"]}
+    manifest_bytes = read_file(VENDOR / "PROVENANCE.json")
+    require(hashlib.sha256(manifest_bytes).hexdigest() == manifest_hash, "vendor manifest changed during inspection")
+    resources[manifest["manifestEntry"]] = manifest_bytes
+    resources[PATCH_ENTRY] = bound_bytes(manifest["lifecyclePatch"])
+    canonical = read_file(ROOT / "LICENSE")
+    require(resources["META-INF/LICENSE"] == canonical, "vendor/repository canonical licenses differ")
+    properties = validator.no_duplicate_keys(line.split("=", 1) for line in
+                                             resources[PREFIX + "version.properties"].decode().splitlines()
+                                             if line and not line.startswith("#"))
+    require(properties == {"jmdns.version": manifest["component"]["version"], "jmdns.upstream.version": "3.6.3"},
+            "private/upstream version resource differs")
+    source_entries = {row["path"].removeprefix("src/main/java/"): bound_bytes(row)
+                      for row in manifest["sources"]}
+    producer_bytes = read_file(PRODUCER)
+    producer = archive(producer_bytes, "private producer")
+    inspect_entries(producer, "private producer")
+    match_resources(producer, resources, "private producer")
+    classes = {name: data for name, data in producer.items() if name.endswith(".class")}
+    require(classes and set(producer) == set(classes) | set(resources) | {"META-INF/MANIFEST.MF"},
+            "private producer contains undeclared/missing entries")
+    # Source-roster coverage and exact archive joins do not attest compilation.
+    # The source-bound producer build and native tests remain separate gates.
+    owners = {name[:-5] for name in source_entries}
+    require(all(name.startswith(PREFIX) and name[:-6].split("$", 1)[0] in owners for name in classes),
+            "private producer class has no declared Java source")
+    require(all(name + ".class" in classes for name in owners if not name.endswith("/package-info")),
+            "private producer is missing a declared top-level class")
+    for name, resource in ((PREFIX + "JmDNS.class", PREFIX + "version.properties"),
+                           (PREFIX + "impl/JmDNSImpl.class", "/" + PREFIX + "version.properties")):
+        require(resource.encode() in class_constants(name, classes[name]), "private resource lookup missing: " + name)
+
+    for suffix, extension in (("jvm", ".jar"), ("android", ".aar")):
+        artifact = "p2p-transport-lan-" + suffix
+        directory = BASE / artifact / VERSION
+        main_name = artifact + "-" + VERSION + extension
+        source_name = artifact + "-" + VERSION + "-sources.jar"
+        runtime_bytes = read_file(directory / main_name)
+        runtime = archive(runtime_bytes, artifact)
+        inspect_entries(runtime, artifact)
+        require(runtime.get("META-INF/LICENSE") == canonical, artifact + ": missing/noncanonical outer license")
+        if suffix == "jvm":
+            require(not any(name.endswith(".jar") for name in runtime), "JVM private component must be flat, not a nested JAR")
+            require({name: data for name, data in runtime.items() if name.startswith(PREFIX) and name.endswith(".class")} == classes,
+                    "JVM embedded classes differ from the actual private producer")
+            match_resources(runtime, resources, artifact)
+            module_entries = runtime
+        else:
+            nested = {name for name in runtime if name.endswith(".jar")}
+            embedded = "libs/p2pkit-internal-jmdns.jar"
+            require(nested == {"classes.jar", embedded} and not any(name.endswith(".class") for name in runtime),
+                    "AAR must contain classes.jar and exactly the one declared private JAR")
+            require(runtime[embedded] == producer_bytes, "AAR embedded JAR differs from the actual private producer")
+            module_entries = archive(runtime["classes.jar"], "AAR classes.jar")
+            inspect_entries(module_entries, "AAR classes.jar")
+            require(not any(name.endswith(".jar") for name in module_entries), "AAR classes.jar contains a nested JAR")
+            require(not any(name.startswith(PREFIX) or name.startswith(NOTICES) for name in module_entries),
+                    "AAR classes.jar duplicates the private component")
+            require("META-INF/LICENSE" not in module_entries or module_entries["META-INF/LICENSE"] == canonical,
+                    "AAR classes.jar has a noncanonical license")
+            match_resources(runtime, resources, artifact, required=False)
+        require([name for name in module_entries if name.startswith("META-INF/") and name.endswith(".kotlin_module")] ==
+                [KOTLIN_MODULE], artifact + ": public Kotlin module identity changed")
+        source_bytes = read_file(directory / source_name)
+        sources = archive(source_bytes, artifact + " sources")
+        inspect_entries(sources, artifact + " sources")
+        require({name: data for name, data in sources.items() if name.endswith(".java")} == source_entries and
+                not any(name.endswith((".class", ".jar")) for name in sources), artifact + ": corrected Java sources differ")
+        require(any(name.endswith(".kt") for name in sources), artifact + ": existing Kotlin sources missing")
+        match_resources(sources, resources, artifact + " sources")
+        metadata(directory, artifact, suffix, validator, {main_name: runtime_bytes, source_name: source_bytes})
+        print("OK   " + artifact + " (exact embedded producer, corrected sources, notices/license, portable metadata)")
+    print("OK   embedded JmDNS (" + str(len(classes)) + " Java-8 classes; source/producer/archive joins, not native lifecycle proof)")
+
+
+try:
+    inspect()
+except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError,
+        ET.ParseError, zipfile.BadZipFile, struct.error) as error:
+    print("FAIL embedded JmDNS — " + str(error), file=sys.stderr)
+    raise SystemExit(1)
+PY
+    then
+        fail=1
+    fi
+}
+# End embedded-JmDNS policy.
+
+if [[ "$EMBEDDED_ONLY" == 1 ]]; then
+    check_embedded_jmdns
+    [[ "$fail" == 0 ]] || { echo "RESULT: FAIL — embedded JmDNS publication checks"; exit 1; }
+    echo "RESULT: PASS — LAN JVM/Android runtime/source and metadata checks only; full publication gate NOT_EXECUTED"
+    exit 0
+fi
+
 # All hosts: root KMP metadata publication, JVM, Android, plain-JVM sidecar.
 check p2p-core                                 .jar
 check p2p-core-jvm                             .jar
@@ -328,6 +720,7 @@ check_kotlin_module p2p-transport-lan-android                aar p2p-transport-l
 check_kotlin_module p2p-network-provisioning-android-android aar p2p-network-provisioning-android
 check_kotlin_module p2p-network-provisioning-desktop         jar p2p-network-provisioning-desktop
 check_rc2_legacy_jvm_symbols
+check_embedded_jmdns
 
 # iOS targets publish only from a macOS host.
 if [[ "$(uname -s)" == "Darwin" ]]; then

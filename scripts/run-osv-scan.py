@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run the admitted scanner once; reporting must never turn its failure green."""
 
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,12 @@ import subprocess
 import sys
 
 MAX_SARIF_BYTES = 16 * 1024 * 1024
+ROOT = Path(__file__).resolve().parents[1]
+SBOM_ARGUMENT = "--sbom=./library/p2p-transport-lan/vendor/jmdns/upstream.cdx.json"
+sys.dont_write_bytecode = True
+SBOM_SPEC = importlib.util.spec_from_file_location("p2pkit_sbom_validation", ROOT / "scripts/validate-sbom.py")
+SBOM = importlib.util.module_from_spec(SBOM_SPEC)
+SBOM_SPEC.loader.exec_module(SBOM)
 
 
 def set_output(name, value):
@@ -41,20 +48,26 @@ def require_sarif(path):
 def scan(scanner, directory, argument_text):
     arguments = [line.strip() for line in argument_text.splitlines() if line.strip()]
     config = "--config=./osv-scanner.toml"
-    if (arguments.count(config) != 1 or len(arguments) < 2 or len(set(arguments)) != len(arguments)
-            or any(arg != config and not arg.startswith("--lockfile=") for arg in arguments)):
-        raise ValueError("scan arguments must be one repository config and unique explicit lockfiles")
+    if (arguments.count(config) != 1 or arguments.count(SBOM_ARGUMENT) != 1 or len(arguments) < 3 or
+            len(set(arguments)) != len(arguments) or
+            any(arg not in (config, SBOM_ARGUMENT) and not arg.startswith("--lockfile=") for arg in arguments)):
+        raise ValueError("scan arguments must be one repository config, the exact upstream SBOM and unique lockfiles")
+    # This advisory inventory records true upstream ancestry, not a fake Maven
+    # identity for modified embedded bytes. Stale/missing provenance blocks scan.
+    SBOM.validate_upstream_inventory(ROOT / SBOM.VENDOR_RELATIVE / "upstream.cdx.json", ROOT / SBOM.VENDOR_RELATIVE)
     # Never admit an existing output directory: a stale report is not fresh scanning.
+    directory = directory.resolve()
     directory.mkdir(mode=0o700)
     set_output("report_dir", directory)
     sarif = directory / "results.sarif"
     log = directory / "scanner.log"
-    # --all-vulns preserves strict advisory handling for these dependency locks.
+    # --all-vulns preserves strict advisory handling for locks and upstream input.
     # The expiring repository exceptions are still applied by the scanner first.
     command = [scanner, "scan", "source", "--all-vulns", "--format=sarif", f"--output-file={sarif}", *arguments]
     (directory / "scan-command.json").write_text(json.dumps(command) + "\n", encoding="utf-8")
     with log.open("xb") as output:
-        result = subprocess.run(command, stdout=output, stderr=subprocess.STDOUT, check=False)
+        # Relative admitted inputs must resolve to the same checkout preflight validated.
+        result = subprocess.run(command, cwd=ROOT, stdout=output, stderr=subprocess.STDOUT, check=False)
     code = result.returncode if result.returncode >= 0 else 128 - result.returncode
     (directory / "scanner-exit-code.txt").write_text(f"{code}\n", encoding="utf-8")
     set_output("scan_exit", code)
