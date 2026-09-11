@@ -1,0 +1,6 @@
+--- a/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/constants/DNSResultCode.java
++++ b/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/constants/DNSResultCode.java
+@@ -152 +152,2 @@
+-        int maskedIndex = ((extendedRCode >> 28) & ExtendedRCode_MASK) | (flags & RCode_MASK);
++        // The whole OPT TTL supplies the high eight bits of the combined twelve-bit RCODE.
++        int maskedIndex = (((extendedRCode >>> 24) & ExtendedRCode_MASK) << 4) | (flags & RCode_MASK);

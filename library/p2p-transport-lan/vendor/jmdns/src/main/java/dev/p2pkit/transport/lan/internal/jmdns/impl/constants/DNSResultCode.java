@@ -149,7 +149,8 @@ public enum DNSResultCode {
     }
 
     public static DNSResultCode resultCodeForFlags(int flags, int extendedRCode) {
-        int maskedIndex = ((extendedRCode >> 28) & ExtendedRCode_MASK) | (flags & RCode_MASK);
+        // The whole OPT TTL supplies the high eight bits of the combined twelve-bit RCODE.
+        int maskedIndex = (((extendedRCode >>> 24) & ExtendedRCode_MASK) << 4) | (flags & RCode_MASK);
         for (DNSResultCode resultCode : DNSResultCode.values()) {
             if (resultCode.indexValue == maskedIndex) return resultCode;
         }

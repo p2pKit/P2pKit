@@ -54,13 +54,19 @@ def vendor_fixture(root: Path) -> tuple[dict, dict]:
     patch = vendor / VALIDATOR.PATCH_PATH
     patch.parent.mkdir(parents=True, exist_ok=True)
     patch.write_text("controlled fixture lifecycle patch\n")
+    followups = []
+    for relative in VALIDATOR.FOLLOWUP_PATCH_PATHS:
+        followup = vendor / relative
+        followup.write_text(f"controlled fixture followup patch: {relative}\n")
+        followups.append({"path": relative, "sha256": VALIDATOR.file_sha256(followup)})
     manifest = {
-        "schema": 1, "component": copy.deepcopy(VALIDATOR.EMBEDDED_IDENTITY),
+        "schema": 2, "component": copy.deepcopy(VALIDATOR.EMBEDDED_IDENTITY),
         "upstream": copy.deepcopy(VALIDATOR.UPSTREAM),
         "normalization": copy.deepcopy(VALIDATOR.NORMALIZATION),
         "relocation": {"from": "javax.jmdns", "to": VALIDATOR.PRIVATE_NAMESPACE},
         "sources": sources, "resources": resources,
         "lifecyclePatch": {"path": VALIDATOR.PATCH_PATH, "sha256": VALIDATOR.file_sha256(patch)},
+        "followupPatches": followups,
         "manifestEntry": f"{VALIDATOR.NOTICE_PATH}/PROVENANCE.json",
     }
     manifest_path = vendor / "PROVENANCE.json"
@@ -234,6 +240,13 @@ class SbomTest(unittest.TestCase):
             "duplicate provenance": lambda c: c["properties"].append(copy.deepcopy(c["properties"][0])),
             "wrong patch": lambda c: c["pedigree"]["patches"][0]["diff"].update(url="different.patch"),
             "explicit null patch text": lambda c: c["pedigree"]["patches"][0]["diff"].update(text=None),
+            "omitted followup patch": lambda c: c["pedigree"]["patches"].pop(),
+            "duplicate patch": lambda c: c["pedigree"]["patches"].__setitem__(
+                1, copy.deepcopy(c["pedigree"]["patches"][0])),
+            "reordered patches": lambda c: c["pedigree"]["patches"].reverse(),
+            "wrong followup hash": lambda c: next(
+                p for p in c["properties"] if "followup-patch-sha256:" in p["name"]).update(value="b" * 64),
+            "wrong followup URL": lambda c: c["pedigree"]["patches"][-1]["diff"].update(url="different.patch"),
         }
         for name, mutate in mutations.items():
             with self.subTest(name=name):
@@ -245,6 +258,12 @@ class SbomTest(unittest.TestCase):
                     self.validate()
 
     def test_embedded_xml_provenance_is_not_ignored(self):
+        patch_path = NS + "pedigree/" + NS + "patches"
+
+        def reverse_patches(component):
+            patches = component.find(patch_path)
+            patches[:] = list(reversed(patches))
+
         mutations = {
             "missing properties": lambda c: c.remove(c.find(NS + "properties")),
             "duplicate property": lambda c: c.find(NS + "properties").append(
@@ -256,6 +275,10 @@ class SbomTest(unittest.TestCase):
             "wrong patch URL": lambda c: setattr(
                 c.find(NS + "pedigree/" + NS + "patches/" + NS + "patch/" + NS + "diff/" + NS + "url"),
                 "text", "different.patch"),
+            "omitted followup patch": lambda c: c.find(patch_path).remove(c.find(patch_path)[-1]),
+            "duplicate patch": lambda c: c.find(patch_path).__setitem__(
+                1, copy.deepcopy(c.find(patch_path)[0])),
+            "reordered patches": reverse_patches,
             "duplicate pedigree": lambda c: c.append(copy.deepcopy(c.find(NS + "pedigree"))),
         }
         for name, mutate in mutations.items():
@@ -287,6 +310,11 @@ class SbomTest(unittest.TestCase):
             "false source hash": lambda m: m["sources"][0].update(sha256="a" * 64),
             "wrong resource entry": lambda m: m["resources"][0].update(entry="different/LICENSE"),
             "false patch hash": lambda m: m["lifecyclePatch"].update(sha256="a" * 64),
+            "missing followup roster": lambda m: m.pop("followupPatches"),
+            "omitted followup": lambda m: m["followupPatches"].clear(),
+            "duplicate followup": lambda m: m["followupPatches"].append(copy.deepcopy(m["followupPatches"][0])),
+            "unsafe followup path": lambda m: m["followupPatches"][0].update(path="../outside.patch"),
+            "false followup hash": lambda m: m["followupPatches"][0].update(sha256="a" * 64),
         }
         for name, mutate in mutations.items():
             with self.subTest(name=name):
@@ -298,13 +326,25 @@ class SbomTest(unittest.TestCase):
         self.manifest, self.embedded = vendor_fixture(self.directory)
         self.write()
         for path in (self.vendor_directory / self.manifest["sources"][0]["path"],
-                     self.vendor_directory / VALIDATOR.PATCH_PATH, self.producer_path):
+                     self.vendor_directory / VALIDATOR.PATCH_PATH,
+                     *(self.vendor_directory / path for path in VALIDATOR.FOLLOWUP_PATCH_PATHS),
+                     self.producer_path):
             with self.subTest(changed_input=path.name):
                 original = path.read_bytes()
                 path.write_bytes(original + b"changed\n")
                 with self.assertRaises(VALIDATOR.SbomError):
                     self.validate()
                 path.write_bytes(original)
+        followup = self.vendor_directory / VALIDATOR.FOLLOWUP_PATCH_PATHS[0]
+        original = followup.read_bytes()
+        followup.unlink()
+        with self.assertRaisesRegex(VALIDATOR.SbomError, "missing file"):
+            VALIDATOR.load_vendor_manifest(self.vendor_directory)
+        followup.write_bytes(original)
+        undeclared = self.vendor_directory / "patches/unlisted.patch"
+        undeclared.write_text("not part of the declared patch sequence\n")
+        with self.assertRaisesRegex(VALIDATOR.SbomError, "patch roster"):
+            VALIDATOR.load_vendor_manifest(self.vendor_directory)
 
     def test_upstream_inventory_is_not_a_modified_runtime_identity_or_stale_copy(self):
         path = self.vendor_directory / "upstream.cdx.json"

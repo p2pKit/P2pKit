@@ -345,7 +345,6 @@ KOTLIN_VERSION, COROUTINES_VERSION = sys.argv[5:7]
 LAN_PREFIX = "dev/p2pkit/transport/lan/"
 PREFIX = "dev/p2pkit/transport/lan/internal/jmdns/"
 NOTICES = "META-INF/p2pkit/third-party/jmdns/"
-PATCH_ENTRY = NOTICES + "patches/410-lifecycle.patch"
 KOTLIN_MODULE = "META-INF/p2p-transport-lan.kotlin_module"
 VENDOR = ROOT / "library/p2p-transport-lan/vendor/jmdns"
 PRODUCER = ROOT / "library/p2p-transport-lan/build/embedded-jmdns/p2pkit-internal-jmdns.jar"
@@ -608,7 +607,8 @@ def inspect():
     manifest_bytes = read_file(VENDOR / "PROVENANCE.json")
     require(hashlib.sha256(manifest_bytes).hexdigest() == manifest_hash, "vendor manifest changed during inspection")
     resources[manifest["manifestEntry"]] = manifest_bytes
-    resources[PATCH_ENTRY] = bound_bytes(manifest["lifecyclePatch"])
+    for patch in [manifest["lifecyclePatch"], *manifest["followupPatches"]]:
+        resources[NOTICES + patch["path"]] = bound_bytes(patch)
     canonical = read_file(ROOT / "LICENSE")
     require(resources["META-INF/LICENSE"] == canonical, "vendor/repository canonical licenses differ")
     properties = validator.no_duplicate_keys(line.split("=", 1) for line in

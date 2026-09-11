@@ -510,14 +510,24 @@ tasks.cyclonedxBom {
         }
         val manifestBytes = boundedBytes(vendorFile("PROVENANCE.json"))
         val manifest = ObjectMapper().enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION).readTree(manifestBytes)
-        check(manifest.path("schema").isIntegralNumber && manifest.path("schema").intValue() == 1) {
+        check(manifest.path("schema").isIntegralNumber && manifest.path("schema").intValue() == 2) {
             "Unsupported embedded JmDNS provenance schema"
         }
         check(manifest.path("sources").isArray && manifest.path("resources").isArray) {
             "Missing embedded JmDNS source/resource roster"
         }
         val patchRecord = manifest.path("lifecyclePatch")
-        val records = manifest.path("sources").toList() + manifest.path("resources").toList() + listOf(patchRecord)
+        check(requiredText(patchRecord, "path") == "patches/410-lifecycle.patch") {
+            "Unexpected embedded JmDNS lifecycle patch"
+        }
+        val followupPatchArray = manifest.path("followupPatches")
+        check(followupPatchArray.isArray) { "Missing embedded JmDNS followup patch roster" }
+        val followupPatchRecords = followupPatchArray.toList()
+        check(followupPatchRecords.map { requiredText(it, "path") } == listOf("patches/415-opt-rcode.patch")) {
+            "Unexpected embedded JmDNS followup patch order or membership"
+        }
+        val patchRecords = listOf(patchRecord) + followupPatchRecords
+        val records = manifest.path("sources").toList() + manifest.path("resources").toList() + patchRecords
         for (record in records) {
             val expected = requiredText(record, "sha256")
             check(expected.matches(Regex("[0-9a-f]{64}"))) { "Invalid embedded JmDNS source digest" }
@@ -553,7 +563,6 @@ tasks.cyclonedxBom {
             )
         }
         val embeddedRef = requiredText(identity, "bomRef")
-        val patchPath = requiredText(patchRecord, "path")
         val provenanceProperties = sortedMapOf(
             "hash-scope" to "private-producer-jar",
             "namespace" to requiredText(manifest.path("relocation"), "to"),
@@ -564,6 +573,10 @@ tasks.cyclonedxBom {
             "upstream-commit" to upstreamCommit,
             "upstream-tree" to requiredText(upstream, "tree"),
         )
+        for (patch in followupPatchRecords) {
+            val path = requiredText(patch, "path")
+            provenanceProperties["followup-patch-sha256:$path"] = requiredText(patch, "sha256")
+        }
         val embedded = Component().apply {
             type = Component.Type.LIBRARY
             bomRef = embeddedRef
@@ -576,10 +589,13 @@ tasks.cyclonedxBom {
             modified = true
             pedigree = Pedigree().apply {
                 ancestors = Ancestors().apply { components = listOf(ancestor) }
-                patches = listOf(Patch().apply {
-                    type = Patch.Type.UNOFFICIAL
-                    diff = ReferencedPatchDiff().apply { url = "$embeddedJmdnsVendorRelative/$patchPath" }
-                })
+                patches = patchRecords.map { patch ->
+                    val path = requiredText(patch, "path")
+                    Patch().apply {
+                        type = Patch.Type.UNOFFICIAL
+                        diff = ReferencedPatchDiff().apply { url = "$embeddedJmdnsVendorRelative/$path" }
+                    }
+                }
             }
             properties = provenanceProperties.map { (key, value) ->
                 CyclonedxProperty("p2pkit:embedded-jmdns:$key", value)

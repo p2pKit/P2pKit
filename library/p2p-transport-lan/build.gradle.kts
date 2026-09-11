@@ -23,6 +23,7 @@ plugins {
 // upstream coordinate. One Java8 producer supplies both JVM and Android; a
 // local file dependency alone would not embed it in the published JVM JAR.
 val embeddedJmdnsVendor = layout.projectDirectory.dir("vendor/jmdns")
+val embeddedJmdnsFollowupPatches = listOf("patches/415-opt-rcode.patch")
 val embeddedJmdnsSlf4j = "org.slf4j:slf4j-api:2.0.7"
 val embeddedJmdnsCompileClasspath = configurations.create("embeddedJmdnsCompileClasspath") {
     isCanBeConsumed = false
@@ -45,6 +46,7 @@ val embeddedJmdnsResources = copySpec {
     from(embeddedJmdnsVendor.dir("src/main/resources"))
     from(embeddedJmdnsVendor) {
         include("NOTICE.txt", "MODIFICATIONS.txt", "PROVENANCE.json", "patches/410-lifecycle.patch")
+        include(embeddedJmdnsFollowupPatches)
         into("META-INF/p2pkit/third-party/jmdns")
     }
 }
@@ -57,6 +59,10 @@ fun Jar.includeEmbeddedJmdnsResources() {
         .withPropertyName("embeddedJmdnsProvenance")
     inputs.file(embeddedJmdnsVendor.file("patches/410-lifecycle.patch"))
         .withPropertyName("embeddedJmdnsLifecyclePatch")
+    embeddedJmdnsFollowupPatches.forEachIndexed { index, path ->
+        inputs.file(embeddedJmdnsVendor.file(path))
+            .withPropertyName("embeddedJmdnsFollowupPatch$index")
+    }
 }
 
 val embeddedJmdnsJar = tasks.register<Jar>("embeddedJmdnsJar") {

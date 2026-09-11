@@ -1,11 +1,17 @@
 {
   "component": {
-    "bomRef": "urn:p2pkit:embedded:jmdns:3.6.3-p2pkit.410.1",
+    "bomRef": "urn:p2pkit:embedded:jmdns:3.6.3-p2pkit.410.2",
     "group": "dev.p2pkit.internal",
     "name": "jmdns",
-    "purl": "pkg:generic/p2pkit/jmdns@3.6.3-p2pkit.410.1",
-    "version": "3.6.3-p2pkit.410.1"
+    "purl": "pkg:generic/p2pkit/jmdns@3.6.3-p2pkit.410.2",
+    "version": "3.6.3-p2pkit.410.2"
   },
+  "followupPatches": [
+    {
+      "path": "patches/415-opt-rcode.patch",
+      "sha256": "5e026a252199abae1ec83c310890ca7bc9b6a3cad54b8f64e95adc7848dbafcc"
+    }
+  ],
   "lifecyclePatch": {
     "path": "patches/410-lifecycle.patch",
     "sha256": "73e4b3d2d8cecd5880cfe992fa225142d724933aac4ca17be4b6600d69c1dc92"
@@ -29,7 +35,7 @@
     {
       "entry": "META-INF/p2pkit/third-party/jmdns/MODIFICATIONS.txt",
       "path": "MODIFICATIONS.txt",
-      "sha256": "d9d0c20f055322be82ef68c57f1b83a81dac3a941e93c0a61d9f8ee86bf10b23"
+      "sha256": "638dd20825d6bb6809dcc66cfbd373eb21d3cd1f9569bc6444f82849c5a69e59"
     },
     {
       "entry": "META-INF/p2pkit/third-party/jmdns/NOTICE.txt",
@@ -39,10 +45,10 @@
     {
       "entry": "dev/p2pkit/transport/lan/internal/jmdns/version.properties",
       "path": "src/main/resources/dev/p2pkit/transport/lan/internal/jmdns/version.properties",
-      "sha256": "1b4b2167879a871d525a51a86cb94eb4468f35090331b1243c99e102c7655024"
+      "sha256": "827f04fd7056d5259f82361aee25451520a0dd6f1f41316101a435e6629ba94d"
     }
   ],
-  "schema": 1,
+  "schema": 2,
   "sources": [
     {
       "path": "src/main/java/dev/p2pkit/transport/lan/internal/jmdns/JmDNS.java",
@@ -306,7 +312,7 @@
     {
       "path": "src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/constants/DNSResultCode.java",
       "relocatedSha256": "bf760a297ec9a07ed06b00d4c5df865c05957ae61a090b6e3efef88fb1d04f5d",
-      "sha256": "bf760a297ec9a07ed06b00d4c5df865c05957ae61a090b6e3efef88fb1d04f5d",
+      "sha256": "895b10da0ff8ce69405107930f40ca1f7b7a548c217a63833295f2326521a5e3",
       "upstreamPath": "src/main/java/javax/jmdns/impl/constants/DNSResultCode.java",
       "upstreamSha256": "a6049aee4bb52ce717805cd3b5978b7abdf643c477b318a1f1029c57ab625f67"
     },

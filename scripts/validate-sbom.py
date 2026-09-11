@@ -32,10 +32,11 @@ PRIVATE_NAMESPACE = "dev.p2pkit.transport.lan.internal.jmdns"
 PRIVATE_PATH = PRIVATE_NAMESPACE.replace(".", "/")
 NOTICE_PATH = "META-INF/p2pkit/third-party/jmdns"
 PATCH_PATH = "patches/410-lifecycle.patch"
+FOLLOWUP_PATCH_PATHS = ("patches/415-opt-rcode.patch",)
 EMBEDDED_IDENTITY = {
-    "group": "dev.p2pkit.internal", "name": "jmdns", "version": "3.6.3-p2pkit.410.1",
-    "bomRef": "urn:p2pkit:embedded:jmdns:3.6.3-p2pkit.410.1",
-    "purl": "pkg:generic/p2pkit/jmdns@3.6.3-p2pkit.410.1",
+    "group": "dev.p2pkit.internal", "name": "jmdns", "version": "3.6.3-p2pkit.410.2",
+    "bomRef": "urn:p2pkit:embedded:jmdns:3.6.3-p2pkit.410.2",
+    "purl": "pkg:generic/p2pkit/jmdns@3.6.3-p2pkit.410.2",
 }
 UPSTREAM = {
     "mavenCoordinate": "org.jmdns:jmdns:3.6.3", "purl": "pkg:maven/org.jmdns/jmdns@3.6.3",
@@ -167,8 +168,8 @@ def load_vendor_manifest(directory: Path) -> tuple[dict, str]:
     raw = read_bounded(str(vendor_file(directory, "PROVENANCE.json")), "Vendor provenance")
     manifest = json_document(raw, "Vendor provenance")
     if (set(manifest) != {"schema", "component", "upstream", "relocation", "normalization", "sources", "resources",
-                         "lifecyclePatch", "manifestEntry"} or type(manifest.get("schema")) is not int or
-            manifest["schema"] != 1 or manifest.get("component") != EMBEDDED_IDENTITY or
+                         "lifecyclePatch", "followupPatches", "manifestEntry"} or type(manifest.get("schema")) is not int or
+            manifest["schema"] != 2 or manifest.get("component") != EMBEDDED_IDENTITY or
             manifest.get("upstream") != UPSTREAM or
             manifest.get("normalization") != NORMALIZATION or
             manifest.get("relocation") != {"from": "javax.jmdns", "to": PRIVATE_NAMESPACE} or
@@ -227,6 +228,18 @@ def load_vendor_manifest(directory: Path) -> tuple[dict, str]:
         invalid("Vendor provenance", "invalid lifecycle patch identity")
     if file_sha256(vendor_file(directory, patch["path"])) != sha256_text(patch["sha256"], "patch SHA-256"):
         invalid("Vendor provenance", "lifecycle patch hash differs")
+    followups = array(manifest.get("followupPatches"), "Vendor provenance", "followupPatches")
+    for followup in followups:
+        if (not isinstance(followup, dict) or set(followup) != {"path", "sha256"} or
+                followup["path"] not in FOLLOWUP_PATCH_PATHS):
+            invalid("Vendor provenance", "invalid followup patch identity")
+        if (file_sha256(vendor_file(directory, followup["path"])) !=
+                sha256_text(followup["sha256"], "followup patch SHA-256")):
+            invalid("Vendor provenance", "followup patch hash differs")
+    if [followup["path"] for followup in followups] != list(FOLLOWUP_PATCH_PATHS):
+        invalid("Vendor provenance", "wrong followup patch order or membership")
+    if source_roster(directory, "patches") != sorted((PATCH_PATH, *FOLLOWUP_PATCH_PATHS)):
+        invalid("Vendor provenance", "patch roster contains undeclared or missing files")
     return manifest, hashlib.sha256(raw).hexdigest()
 
 
@@ -250,12 +263,16 @@ def embedded_component(manifest: dict, manifest_sha256: str, producer_sha256: st
         "lifecycle-patch-sha256": manifest["lifecyclePatch"]["sha256"],
         "upstream-commit": UPSTREAM["commit"], "upstream-tree": UPSTREAM["tree"],
     }
+    properties.update({f"followup-patch-sha256:{patch['path']}": patch["sha256"]
+                       for patch in manifest["followupPatches"]})
+    patches = [manifest["lifecyclePatch"], *manifest["followupPatches"]]
     return {
         "bom-ref": EMBEDDED_IDENTITY["bomRef"], "type": "library",
         **{key: EMBEDDED_IDENTITY[key] for key in ("group", "name", "version", "purl")},
         "hashes": [{"alg": "SHA-256", "content": producer_sha256}], "modified": True,
         "pedigree": {"ancestors": [ancestor], "patches": [
-            {"type": "unofficial", "diff": {"url": f"{VENDOR_RELATIVE.as_posix()}/{PATCH_PATH}"}},
+            {"type": "unofficial", "diff": {"url": f"{VENDOR_RELATIVE.as_posix()}/{patch['path']}"}}
+            for patch in patches
         ]},
         "properties": [{"name": PROPERTY_PREFIX + key, "value": value} for key, value in sorted(properties.items())],
     }
@@ -313,8 +330,8 @@ def embedded_provenance(value: dict, kind: str) -> tuple:
         invalid(kind, "missing or invalid embedded pedigree")
     ancestors = array(pedigree["ancestors"], kind, "ancestors")
     patches = array(pedigree["patches"], kind, "patches")
-    if len(ancestors) != 1 or len(patches) != 1:
-        invalid(kind, "embedded pedigree must contain one upstream ancestor and one local patch")
+    if len(ancestors) != 1 or len(patches) != 1 + len(FOLLOWUP_PATCH_PATHS):
+        invalid(kind, "embedded pedigree must contain one upstream ancestor and every reviewed local patch")
     ancestor = ancestors[0]
     if not isinstance(ancestor, dict) or set(ancestor) - {
             "bom-ref", *IDENTITY_FIELDS, "hashes", "externalReferences"}:
@@ -329,14 +346,17 @@ def embedded_provenance(value: dict, kind: str) -> tuple:
                            hash_table(reference.get("hashes", []), kind)))
     if len(references) != len(set(references)):
         invalid(kind, "duplicate upstream external reference")
-    patch = patches[0]
-    if (not isinstance(patch, dict) or set(patch) != {"type", "diff"} or
-            patch.get("type") != "unofficial" or not isinstance(patch.get("diff"), dict) or
-            set(patch["diff"]) != {"url"}):
-        invalid(kind, "invalid local pedigree patch")
-    patch_url = text(patch["diff"]["url"], kind, "patch URL")
+    patch_urls = []
+    for patch in patches:
+        if (not isinstance(patch, dict) or set(patch) != {"type", "diff"} or
+                patch.get("type") != "unofficial" or not isinstance(patch.get("diff"), dict) or
+                set(patch["diff"]) != {"url"}):
+            invalid(kind, "invalid local pedigree patch")
+        patch_urls.append(text(patch["diff"]["url"], kind, "patch URL"))
+    if len(patch_urls) != len(set(patch_urls)):
+        invalid(kind, "duplicate local pedigree patch")
     return (property_table(value.get("properties"), kind), ancestor_identity,
-            tuple(sorted(references)), patch_url)
+            tuple(sorted(references)), tuple(patch_urls))
 
 
 def component(value: Any, kind: str, include_provenance: bool = True) -> tuple[str, tuple]:

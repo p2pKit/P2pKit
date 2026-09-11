@@ -2,7 +2,7 @@ P2pKit embedded JmDNS modifications
 
 Upstream: org.jmdns:jmdns:3.6.3, tag v3.6.3,
 commit 93b326381940f3fcd250d770a14a36de4c2dfcda.
-Private component revision: 3.6.3-p2pkit.410.1.
+Private component revision: 3.6.3-p2pkit.410.2.
 
 Mechanical integration relocates the complete javax.jmdns production package
 into dev.p2pkit.transport.lan.internal.jmdns. Java source uses LF line endings,
@@ -16,11 +16,22 @@ bytes, 772 distributed bytes). PROVENANCE.json records the original NOTICE
 digest separately from the normalized distributed resource.
 
 patches/410-lifecycle.patch records the separate native lifecycle correction
-against the mechanically relocated, normalized source baseline. It is a
-zero-context unified patch: replay from this vendor directory against the
-baseline with git apply --unidiff-zero and verify the baseline and final hashes
-recorded in PROVENANCE.json. That manifest identifies the original,
-relocated-baseline and final source bytes and the patch digest.
+against the mechanically relocated, normalized source baseline. Its bytes and
+digest are unchanged by subsequent fixes.
+
+patches/415-opt-rcode.patch corrects extended response-code extraction from the
+whole OPT TTL for the existing wrong-version diagnostic. It does not change
+the separate receive-header acceptance gate or the lifecycle correction.
+
+PROVENANCE.json schema 2 preserves lifecyclePatch and lists subsequent patches
+in followupPatches application order. All are zero-context unified patches:
+from this vendor directory, apply the lifecycle patch first, then each followup
+with git apply --unidiff-zero --whitespace=error-all. Verify the declared
+relocated-baseline hashes before applying patches and the final source hashes
+after the complete sequence. The manifest separately identifies original,
+relocated-baseline and final source bytes and every patch digest. Patch replay
+is a source-byte check, not build, runtime or release qualification.
+
 Neither the private package nor its Java-public types are supported P2pKit API.
 The upstream Maven identity is provenance, not a claim that these modified bytes
 are the original upstream artifact or an independently published fork.

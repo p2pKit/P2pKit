@@ -144,7 +144,8 @@ def embedded_fixture(work):
     manifest = json.loads((vendor / "PROVENANCE.json").read_bytes())
     resources = {row["entry"]: (vendor / row["path"]).read_bytes() for row in manifest["resources"]}
     resources[manifest["manifestEntry"]] = (vendor / "PROVENANCE.json").read_bytes()
-    resources[notices + "patches/410-lifecycle.patch"] = (vendor / manifest["lifecyclePatch"]["path"]).read_bytes()
+    for patch in [manifest["lifecyclePatch"], *manifest["followupPatches"]]:
+        resources[notices + patch["path"]] = (vendor / patch["path"]).read_bytes()
     sources = {row["path"].removeprefix("src/main/java/"): (vendor / row["path"]).read_bytes()
                for row in manifest["sources"]}
     classes = {}
@@ -183,7 +184,7 @@ def publication_metadata(model, suffix, main_bytes, source_bytes, damage):
     if damage == "pom-original-jmdns" and suffix == "jvm":
         deps.append(("org.jmdns", "jmdns", "3.6.3", "runtime"))
     if damage == "pom-private-dependency" and suffix == "android":
-        deps.append(("dev.p2pkit.internal", "jmdns", "3.6.3-p2pkit.410.1", "runtime"))
+        deps.append(("dev.p2pkit.internal", "jmdns", "3.6.3-p2pkit.410.2", "runtime"))
     if damage == "pom-slf4j-api-edge" and suffix == "jvm":
         deps[-1] = (*deps[-1][:3], "compile")
     if damage == "pom-slf4j-version" and suffix == "jvm":
@@ -235,7 +236,7 @@ def publication_metadata(model, suffix, main_bytes, source_bytes, damage):
                 variant["files"][0]["name"] = "p2p-transport-lan.aar"
         elif damage == "module-private-dependency":
             variants[1]["dependencies"].append({"group": "dev.p2pkit.internal", "module": "jmdns",
-                                                "version": {"requires": "3.6.3-p2pkit.410.1"}})
+                                                "version": {"requires": "3.6.3-p2pkit.410.2"}})
         elif damage == "module-original-jmdns":
             variants[1]["dependencies"].append({"group": "org.jmdns", "module": "jmdns", "version": {"requires": "3.6.3"}})
         elif damage == "module-file-path":
@@ -304,6 +305,8 @@ def write_fixture(model, damage):
         model["producer"][name] = class_bytes(name, extra=(b"version.properties",))
     elif damage == "producer-changed-notice":
         model["producer"][notices + "NOTICE.txt"] = b"invented attribution\n"
+    elif damage == "producer-changed-followup-patch":
+        model["producer"][notices + "patches/415-opt-rcode.patch"] += b"undeclared change\n"
     elif damage == "jvm-root-version":
         model["jvm"]["version.properties"] = b"jmdns.version=3.6.3\n"
     elif damage == "jvm-upstream-maven":
@@ -333,6 +336,8 @@ def write_fixture(model, damage):
         model["android_sources"]["javax/jmdns/JmDNS.java"] = model["android_sources"].pop(prefix + "JmDNS.java")
     elif damage == "source-missing-patch":
         model["android_sources"].pop(notices + "patches/410-lifecycle.patch")
+    elif damage == "source-missing-followup-patch":
+        model["android_sources"].pop(notices + "patches/415-opt-rcode.patch")
     elif damage == "source-stale-provenance":
         model["android_sources"][notices + "PROVENANCE.json"] = b"{}\n"
     elif damage == "source-binary-class":
@@ -395,6 +400,7 @@ embedded_cases = [
     ("producer-logger-provider", "upstream/provider entry"),
     ("producer-wrong-lookup", "private resource lookup missing"),
     ("producer-changed-notice", "changed/missing resource"),
+    ("producer-changed-followup-patch", "changed/missing resource"),
     ("producer-duplicate-entry", "duplicate/unsafe ZIP entry"),
     ("jvm-root-version", "upstream/provider entry"),
     ("jvm-upstream-maven", "upstream/provider entry"),
@@ -413,6 +419,7 @@ embedded_cases = [
     ("source-unpatched-java", "corrected Java sources differ"),
     ("source-unrelocated-java", "upstream/provider entry"),
     ("source-missing-patch", "private resource inventory differs"),
+    ("source-missing-followup-patch", "private resource inventory differs"),
     ("source-stale-provenance", "changed/missing resource"),
     ("source-binary-class", "corrected Java sources differ"),
     ("source-missing-license", "changed/missing resource"),
