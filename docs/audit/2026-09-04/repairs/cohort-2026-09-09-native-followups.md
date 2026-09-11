@@ -1931,3 +1931,104 @@ contents, R18bounded failure,383/202fences,393scope and R16FAIL/PARTIAL_SALVAGE/
 ART/narrowApple/Intel/current root-sample-consumer gates,physical/OEM/hostile,backup291,independent133,
 professional crypto and owner120/274/284 remain. Source0.7.0-SNAPSHOT/immutableRC3/0.8.0+restrictions
 stand; no merge/closure/tag/settings/release authority. Coverage rebinding remains separately owned.
+
+
+## Mac R2 failure and text-only approvals #411/#412/#418
+
+**11 September, after final #418 review17:42:21 UTC.** Current **200/232 repair-approved (86.2%);
+201resolved (86.6%);31unresolved (13.4%)** =7repairs+21external+3owner decisions120/274/284;
+99new findings. #287 is resolution without repair credit; approval complement32 (13.8%).
+The preceding1933lines are unchanged dated history, including former current/pending statements;
+pre-R2 administrative state is immutable `c9ac681abdc6a02637779191112be10bfa624b29`.
+
+### Guarded startup R2 — failure, not close/qualification success
+
+Run **34626373078/1**, job103352363876/artifact10273948480, executed clean `c9ac681abdc6a02637779191112be10bfa624b29`
+/ tree `e6f14f5dfd6e9f72d0d45bd53b882a60c6906e90`, unchanged. Ordinary-control **product**
+17:14:43.011365–17:14:53.452039 UTC; **executor envelope**17:14:42.957514–17:14:55.188548 UTC.
+**Product/stop/final1/0/1**, natural exit1, not watchdog/cancellation: `host_not_announced` before ready/
+ordinary-close assertions. Native first-send `NoRouteToHostException` at `DatagramChannelImpl.send0`,
+IPv4-mDNS destination, sendCalls2/returns0/recoveryCalls2/proberCalls1/announcerCalls0.
+Rescue preserved failure, not a natural-close pass. Four prerequisite envelopes0/0/0 cover91native
+executor controls (not product tests), pinned dependency and Java8vendor/Java17fixture compilation.
+Full suite/other7modes/lock generation NOT_RUN; all12locks unchanged. Local base09b+diff9b5passes and
+0e0source review remain separate from this actual c9run; source approval did not predict Mac success.
+
+Selected/host/socket NIC identities were known and matched BEFORE_WAIT. The fixed POST_FAILURE
+scoped IPv4-mDNS route query started/completed, exited0, bounded output, matched interface,
+UP/IFSCOPE true and REJECT/BLACKHOLE/GATEWAY false; processReaped=true. Raw interface/address/route
+output was intentionally not retained. This does not prove send-time policy, peer delivery, reachability
+or routing/privacy/provider/JDK cause: **UNPROVEN**. No override or route/permission change.
+Unknown/timeout/interrupt/forced-reap branches were not executed. Same-process reap and final ownership
+sweep support cleanup; no separate outer PID identity for this short-lived route process is claimed.
+
+Independent report `410-mac-route-runtime-independent-r1/REPORT.md`, SHA256
+`0bae5ee003ef67e886df1b820c7b93fb334089bad6154feb067ec9ff211b2935`, verdict
+**APPROVE_SCOPED_EXECUTION_EVIDENCE_AND_CLEANUP**, not final410. It authenticates1294ZIPmembers/
+1293nonself seal rows,69source/12lock/148compiled-runtime inputs. All five stops0/no owned survivors,
+39fixture teardown groups complete, three intentional failed-cleanup snapshots retained with recovery;
+exact build/isolated Gradle-home disposal, controlled-marker-inheriting-descendants only, not whole-host/
+VM/shared-cache cleanup. Archive1367946bytes SHA256
+`31309e29e456afb2b59ed4bade6f840ff0ecdb5f87a807b844209595c5ddc0df`.
+Lease receipt17:26:39.510898 UTC differs from release event17:26:39.514220 UTC; no freeze violation,
+scheduling release only. Terminal activeUnion[]17:23:43.182529–17:23:50.267972 is a dated point, not a
+continuing lease or idleness claim. Raw four-member aliases/hashes are in checkpoint.json
+`nativeFollowups.startupDiagnosticContinuation.macControlR2`; the administrative author read those
+members and the complete independent report, not the entire archive/source/seal anew.
+
+**#410 PARKED/PENDING_REMEDIATION; final WITHHELD**, no repair credit or external reclassification.
+Return requires new admission evidence; no unchanged full-graph retry, lock bypass, route/permission
+override or invented cause. Original fullMacR1/startup1/LinuxR2/R16/R18/Windows outcomes remain separate.
+
+### Three independent textual approvals, no Android runtime credit
+
+- **#411** source `8d121b70385964a7de298457cb5d3bcb359787a6` / tree
+  `df5c594344cc919b67398a8f2ab5ccc125ee35e7`, three-file14+/4- delta SHA256
+  `fafdb784faa2c50e1ecb5f0d13d6bc0b21eeb69ced0f5860db99db94993e2747`.
+  Approved secure out-of-band handoff replaces masked-host-password instructions; masking/#324lifecycle/
+  no-auto-submit safeguards unchanged. Missing approved LOHS handoff fixture stays BLOCKED; known-credential
+  AP covers join only. Static17:28:56.159894–17:28:57.201215:500relative links/83docs+whitespace,0/0/0.
+  Final `review_411_final` APPROVE17:29:29–17:30:29 UTC.
+- **#412** source `bffe72d4ea8cd58dfaa8e973b9e6695c56f8f261` / tree
+  `876ba8e33cc42520f50a9959f465d51ca5e536ab`, two-document77+/38- delta SHA256
+  `9278dc672a0e2d5c643f40e32fe02f3b2fad66d586c9c9a402cfdd5c6ce491f4`.
+  Same process/shared production arbiter; A joined and binding-owning before B competing callback.
+  Separate processes/LOHS-only A do not prove contention. Absent157fixture BLOCKED; shared in-flight
+  close barrier, valid-live versus terminal callback, fresh-manager reacquisition and N1/N2 ordering retained.
+  Static17:37:00.805864–17:37:01.845430:501relative links/83docs+whitespace,0/0/0.
+  Final `review_412_final` APPROVE_FINAL_41217:37:37–17:39:02 UTC explicitly excludes418's wrong Closing oracle.
+- Distinct **#418** filed17:36:17Z, POST17:36:16.846735–17:36:17.565055 and GET
+  17:36:17.566472–17:36:18.084095 UTC, OPEN/0comments, body SHA256
+  `3c79ce392b5d7917cacce4c92b772687416c20bef8e0f27f7e3c59d0f00d4dbe`.
+  Final source `b27cdd477b7a260981dec6920428cfd385215b9a` / tree
+  `388c713f373a74f486bb8f521df027bb8c5d0bf4`, one-row1+/1- delta SHA256
+  `b3eaa17bd847ce61e33a9f5199512afb48ca84335ea05cb097df694397024b8f`.
+  Manager is Closed before CleanupFailed; failed native unbind retains binding ownership until a later
+  successful close retry, whereas callback-only cleanup may fail after binding clears. Distinct from412
+  topology and148/157fixture/281token issues; no reopening of134decision or owner274/284.
+  Static17:40:32.967574–17:40:33.829161:whitespace0/0/0 only; unchanged-link evidence reuses501atbffe,
+  not a new test/render/link run. Final `review_418_final` APPROVE17:41:06–17:42:21 UTC.
+
+Each static receipt has clean unchanged source and no owned survivors/outputs. Final reviews above
+were delivered in conversation through root, not new report files/hashes. Administrative source reads
+are complete committed semantic deltas, not complete current source files. Exact receipts and scopes
+are in checkpoint.json `nativeFollowups.postMacR2AdministrativeRepairs`. No Android build/ART/device,
+owner API, full graph, consumer, native410 or release approval follows from these textual corrections.
+
+### Freshness and remaining sequence
+
+Sealed R8 report SHA256 `f6f8433f7184e8c8529e0bf280ab76d1e94790c1205ebbb8b0b5a7882bfa7d1b`:
+17GETs17:21:16.731170–17:21:28.046625 UTC; all-open list ended17:21:20.338282 with238unchanged
+objects(231issues/7PRs); empty item/conversation/inline delta since16:29. Fresh manual bodies410/411/412
+by R8reviewer; other reads/566comments/closed-linked histories reused. Nine fresh complete empty
+repair-comment feeds; no Actions/ref/lease/upstream requests. R8 captured197/231approved,198resolved,
+33unresolved before411approval. Later418individual addition and411/412/418final approvals produce
+current200/232approved,201resolved,31unresolved; effective339issues/79PRs is cumulative R8plus418,
+not a fresh all-open/all-state/history census or a retimestamped R8 capture.
+
+Root's sequence: **415 sole active/preparing →416→413→414→409**, conditional on meaningful admission,
+not executed/approved. 413native admission unknown;414needs real Kotlin caller boundary;409peer readiness
+gated. 410parked under new-evidence requirement;417unimplemented/existing restricted planning not
+retried/rephrased/delegated. These seven repairs exclude21external and owner120/274/284.207Windows19/
+408native scoped approvals stand without replay. AuditNOT_READY/#133NOT_STARTED, physical/hostile/ART/
+independent/crypto/final current gates, source0.7.0-SNAPSHOT, immutableRC3 and0.8.0+ restrictions remain.

@@ -1,80 +1,54 @@
 <!-- audit-current:start -->
-# Current audit continuation — #410 Mac startup failed; guarded diagnostic awaiting Mac
+# Current audit continuation — #410 parked; #411/#412/#418 approved
 
-**197/231 repair approvals (85.3%); 198/231 resolved (85.7%); 33 unresolved (14.3%).**
-Nine repairs: **#410 → #414 → #415 → #416 → #417 → #413 → #409 → #411 → #412**;
-21 external-validation rows and owner decisions #120/#274/#284. #287 adds resolution, not repair
-credit; approval complement 34 (14.7%); 98 new findings. Counts are rows, not effort/readiness.
-**#410 alone is active; final approval WITHHELD. Audit NOT_READY; formal #133 NOT_STARTED.**
+**200/232 repair approvals (86.2%); 201/232 resolved (86.6%); 31 unresolved (13.4%).**
+Seven repairs plus21 external-validation rows and owner decisions #120/#274/#284.
+#287 adds resolution, not repair credit; approval complement32 (13.8%);99 new findings.
+**#415 alone is active/preparing**, then **#416 → #413 → #414 → #409**, conditional on meaningful
+admission, not execution/approval. #413 native admission is unknown; #414 needs a distinct real Kotlin
+caller boundary; #409 peer readiness remains gated. **#410 is PARKED/PENDING_REMEDIATION, final
+approval WITHHELD**: return only with new admission evidence; no unchanged full-graph retry, lock
+bypass or route/permission override. #417 remains unimplemented under existing restricted planning,
+not retried/rephrased/delegated. **Audit NOT_READY; formal #133 NOT_STARTED.**
 
-Qualification-only source/admin commits `dcc5e339` / `464c9710` were published, not finally approved.
-Actual **Mac run34608117941/1 FAILED**, clean `464c9710bef645627e1373e432972bc3c1a1a007` /
-tree `440a8992b39573bf13f21047595f471b2f2ec29a`, source unchanged, product/stop/final **1/0/1**.
-All **338 product XML** were independently reconciled: **2,746 platform test instances = 2,744 passed
-+ 1 failed + 1 skipped**, zero errors—not 2,746 distinct cross-platform methods or a complete graph.
-The lifecycle **control child exited1, `host_not_announced`, before ready/close assertions**;
-rescue preserved that failure. The seven remaining lifecycle modes are **NOT_RUN**; Mac cause remains
-unproven. The one JUnit skip is the optional arm64 iOS advertising diagnostic; x64 task skips are separate.
+Guarded **Mac startupR2 run34626373078/1 FAILED1/0/1** at clean `c9ac681` / tree `e6f14f5`, unchanged.
+Product **17:14:43.011365–17:14:53.452039 UTC**; executor envelope
+**17:14:42.957514–17:14:55.188548 UTC**. `host_not_announced` preceded ready/ordinary-close;
+native `NoRouteToHostException`, IPv4-mDNS destination,2sends/0returns/0announcer calls.
+Rescue preserved failure, not a natural-close pass. Selected/host/socket NIC identities matched;
+post-failure scoped-route query exited0, matched the interface, UP/IFSCOPE true and
+REJECT/BLACKHOLE/GATEWAY false, processReaped=true. This is sanitized route-table evidence,
+not send-time policy, delivery or reachability; **cause UNPROVEN**. Unknown/timeout/forced-reap
+branches were not exercised.91native executor controls are not product tests; full suite/other7modes/
+lock generation **NOT_RUN**, all12locks unchanged. Independent scoped execution/cleanup approval
+is not repair approval. Five stops0/no owned survivors and exact build/isolated-home disposal;
+no whole-host cleanup claim. Lease receipt17:26:39.510898 differs from event17:26:39.514220 UTC.
 
-Embedded producer, LAN Android-host tests/Android ABI and three non-LAN Dokka tasks completed.
-**LAN Dokka, LAN Kotlin ABI, root/LAN check, resolveAndLockAll body and instrumentation compilation/
-test-APK assembly were not reached/completed.** All12 retained locks match source; patch empty:
-**no successful full lock refresh/import**. Five-publication consumer and final qualification remain pending.
-Linux R2's earlier **1,787 passing tests/229XML and aggregate Dokka/SBOM/instrumentation failure**
-stay at their original source; this incomplete Mac attempt does not retroactively pass that graph.
+**#411/#412/#418 finally APPROVED**, separately at `8d121b7` / `bffe72d` / `b27cdd4`:
+safe out-of-band masked-host credential instructions; same-process/shared-arbiter contention with
+A joined and binding-owning before B; and terminal Closed versus retained native-cleanup ownership.
+Missing approved LOHS/#157 fixtures stay BLOCKED. #412 excluded the wrong Closing oracle;
+#418 fixes that distinct row without reopening #134 or owner #274/#284. Static envelopes0/0/0:
+#411500links/83docs, #412501links/83docs; #418whitespace only reuses unchanged-link evidence.
+Final reviews were conversation-only; **no Android/ART/device execution or current full-graph credit**.
+Current source input is clean `b27cdd4` / tree `388c713` before this administrative delta.
 
-R3 passed **seven consumer control methods + one SBOM negative method**; workflow parsing was not
-workflow execution. Mac aggregate SBOM and authenticated paired validation passed **82 components**,
-not a full consumer/product gate. The consumer-test complete semantic-delta review gap is closed,
-source-only—not whole-file or runtime credit. Instrumentation correction compilation remains **NOT_RUN**.
+R8 **17:21:16.731170–17:21:28.046625 UTC**:17GETs,238unchanged open objects(231issues/7PRs),
+empty delta since16:29. Fresh manual body reads410/411/412 by its reviewer; other reads/566comments
+and closed/linked histories reused. Nine fresh empty repair comment feeds; no Actions/ref/lease/
+upstream requests. R8 captured197approved/198resolved/33unresolved **before** these approvals.
+Individual #418 POST/GET17:36:16.846735–17:36:18.084095 makes current232inventory rows;
+effective339issues/79PRs is **R8 plus addition**, not a new all-open/all-state/history census.
 
-The initial local Linux startup diagnostic passed Java8 vendor/Java17 fixture compilation and
-one ordinary control without rescue, all three envelopes **0/0/0**, at their earlier WIP bindings.
-Published fixture/workflow/admin `c4f34ea` / `b8a7437` / `09bfb9e` then produced the separate
-**native Mac startup run34619248796/1: FAIL, product/stop/final1/0/1**, clean `09bfb9e` /
-tree `f723f2478d90527c70b6e78608d65c7f74dc4bb2`. Stderr reports `host_not_announced`; stdout
-separately records first send failure `java.net.NoRouteToHostException` at `DatagramChannelImpl.send0`,
-**2 send calls / 0 returns / 0 announcer calls**. Ready/ordinary-close assertions were not reached;
-rescue preserved failure. Native executor **91 control methods** passed, not91 product tests.
-The full lifecycle suite, seven other modes and lock generation were **NOT_RUN**; all12locks unchanged.
-Routing/privacy/provider/JDK or source/environment cause remains **UNPROVEN**.
+Original fullMacR1 **2744pass+1failure+1skip/338XML**, startup1 failure, LinuxR2 aggregateFAIL despite
+1787passing tests, R16FAIL/PARTIAL_SALVAGE/remote-cleanupNOT_PROVEN and R18's bounded post-cancel
+failure remain separate. #207Windows19/#408scoped approvals stand without replay. Full locks/LAN
+Dokka/ABI/root/sample/consumer, ART, physical/hostile, narrow Apple/Intel, backup291 and independent/
+crypto acceptance remain. No R16/Android cause attribution. Source0.7.0-SNAPSHOT, immutableRC3 and
+existing0.8.0+ restrictions stand; no merge, closure, tag/settings or release authority.
 
-The later guarded passive NIC/scoped-route diagnostic is scoped-source-approved and locally committed
-at `0e0c1c9ebab9f89f73b15e46bfde4532f41953f3` / tree `549391c625e38420501777b099d1bdc6202ce178`,
-**COMMITTED_NOT_PUSHED**. Four local envelopes **0/0/0** passed Java8 vendor/Java17 fixture compilation,
-three synthetic parser/sanitization groups (**no OS query**) and one Linux ordinary control without
-rescue. Execution was **base09bfb9e + diff9b5d5dda**, not a clean0e0c1c9 invocation. Fresh final review
-approved scoped qualification publication only. Workflow revision2 is **source-approved; NOT_EXECUTED**,
-pending fresh hosted admission/lease and publication. Its guarded Mac-only route query is post-failure
-observation, not a permission/route change, guessed cause, full graph or final #410 approval.
+[Exact evidence and continuation](repairs/cohort-2026-09-09-native-followups.md#mac-r2-failure-and-text-only-approvals-411412418).
 
-Mac cleanup was independently verified: **17 exact owned roots removed**, three branches already
-absent, four Konan child symlinks unlink-only. The final semantic error was unchanged locks, not cleanup.
-R1's scheduling lease was actually released **14:59:20.836323 UTC**, no source-freeze violations;
-release itself is not cleanup/test approval. Later local control cleanup removed its **585,803-byte**
-owned build root; no blanket shared-cache/SDK/VM or remote-cleanup claim is inferred.
-
-Startup1's independent cleanup review separately verifies exact checkout build/isolated Gradle-home
-disposal. Its lease receipt records **16:16:22.188326 UTC**; the distinct operator-release event is
-**16:16:22.191307 UTC**, not cleanup/test/repair approval. The later local route-control envelope
-removed its **606,979-byte** owned build root with no owned survivors; no host-global cleanup claim.
-
-Sealed R7 **16:29:20–16:29:30 UTC**:17GETs,238 unchanged all-open objects/bodies (231issues/7PRs);
-since15:40 item/comment/inline delta empty. All nine repair rows remain **OPEN/0comments**, with complete
-fresh empty comment feeds. Only #417 received a new full manual body reread; the other unchanged
-repair-body reads and566historical comments were reused. **R7 Actions/ref/lease requests0**; effective
-338issues/79PRs is cumulative, not a new all-state/history census or fresh read of every body.
-
-#207 Windows19 and #408 native scoped approvals stand, without another scoped replay. Windows19's
-78 product cases remain separate from92 executor fixtures and are not full-host qualification.
-Windows17's four unretained suppressed-list contents remain unknown. Preserve R18's bounded post-cancel
-callback/no return within2s, #383/#202 fences, #393scope and R16FAIL/PARTIAL_SALVAGE/remote-cleanupNOT_PROVEN.
-#410 is not an established R16/Android cause. #413 is approved plan only; #414–#417 remain source-only
-findings, unimplemented/unapproved. Physical/OEM/hostile, ART, narrow Apple/Intel, final current gates,
-backup291, independent/crypto review and owner decisions remain separate. Source0.7.0-SNAPSHOT,
-immutable RC3 and existing0.8.0+ restrictions stand; no merge, closure, tag/settings or release authority.
-
-[Exact evidence and continuation](repairs/cohort-2026-09-09-native-followups.md#410-native-startup-failure-and-guarded-route-diagnostic).
 <!-- audit-current:end -->
 
 ## Earlier follow-up narratives — dated historical snapshots only
