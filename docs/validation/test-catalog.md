@@ -222,7 +222,9 @@ cannot prove.
 Required setup: one API-26, one API-30/32, and one API-33/37 Android device
 where possible; at least one physical device must support LocalOnlyHotspot.
 Use a USB cable for each device, an Android SDK host, a private Wi-Fi AP, and
-the Android sample. No account or secret is needed.
+the Android sample. No external account or production credential is needed;
+secured LOHS enrollment requires the
+[approved local handoff prerequisite](android-physical-device.md#instrumentation-and-fault-injection-prerequisites).
 
 Preparation and commands:
 

@@ -110,6 +110,13 @@ results, and test-APK assembly cannot substitute for that instrumentation eviden
 All physical-device, permission-UI, OEM callback, and radio requirements below
 remain mandatory after the harness is available.
 
+Secured LocalOnlyHotspot enrollment also requires an approved local credential
+handoff fixture using a secure out-of-band channel. The stock sample masks the
+host password and does not supply this handoff. Without that fixture, keep the
+affected LOHS enrollment cells **BLOCKED**. Keep the password out of screenshots,
+logs, and exported evidence. A known-credential AP can exercise join-only cases,
+but cannot substitute for the actual LocalOnlyHotspot-host route.
+
 ## Common in-app procedure
 
 1. Open the sample and the **Test diagnostics** screen.

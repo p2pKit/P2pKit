@@ -1438,9 +1438,10 @@ private fun JoinHotspotCard(vm: P2pKitViewModel) {
                 }
                 else -> {
                     Text(
-                        text = "Connect this device to a peer's LocalOnlyHotspot. Enter the SSID + " +
-                            "passphrase shown on the host phone's Hotspot card. The OS will prompt " +
-                            "you to approve the join.",
+                        text = "Connect this device to a peer's LocalOnlyHotspot. Enter the SSID and " +
+                            "passphrase obtained through an approved secure out-of-band channel. " +
+                            "The stock host card masks the password and does not provide it. " +
+                            "The OS will prompt you to approve the join.",
                         style = MaterialTheme.typography.bodySmall
                     )
                     Spacer(Modifier.height(Dimens.ItemGap))
