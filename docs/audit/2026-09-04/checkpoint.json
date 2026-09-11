@@ -5,11 +5,11 @@
   "branch": "audit/complete-2026-09-04",
   "lastInheritedReviewedSourceCommit": "32dc5c03658145741c6e23cdfec3c14cd2eba5e7",
   "lastInheritedReviewedSourceTree": "a6144952d3592b6e189114bc73822d0af1ab0853",
-  "sourceCheckpointCommit": "3d4fa914cc2e4e4b20e14ddee0ab4d71e5390a9b",
-  "sourceCheckpointTree": "c6d57b745966e96f920ffb2d1b1efe39c7f370c3",
+  "sourceCheckpointCommit": "464c9710bef645627e1373e432972bc3c1a1a007",
+  "sourceCheckpointTree": "440a8992b39573bf13f21047595f471b2f2ec29a",
   "preservedDraftPatchSha256": "2dc0dd26cb738d89d14136fb1fe5348afabd6f2a3de2fd47847be8f1d91ed1b4",
   "activeIssue": 410,
-  "activeIssueState": "WIP_LINUX_R2_AGGREGATE_FAILED_SOURCE_CORRECTIONS_NOT_RUN_MAC_QUALIFICATION_PENDING_NOT_APPROVED",
+  "activeIssueState": "410_MAC1_QUALIFICATION_FAILED_LOCAL_STARTUP_CONTROL_PASS_MAC_DIAGNOSTIC_PENDING_FINAL_WITHHELD",
   "issueCountDenominator": 231,
   "dispositions": {
     "EXTERNAL_VALIDATION_PENDING": 21,
@@ -21,9 +21,9 @@
   "completedIssueCount": 197,
   "remainingIssueCount": 33,
   "percentageMeaning": "197/231 current repair approvals (85.3%); 198/231 resolved (85.7%) including no-repair287; 33/231 unresolved (14.3%). Repair-approval complement34/231 (14.7%); 98 new findings. Counts are issue rows, not effort/readiness or GitHub closures.",
-  "githubIssueListRefreshedUtc": "2026-09-11T04:15:36.278218+00:00",
-  "githubTotalIssuesAtRefresh": 337,
-  "githubOpenIssuesAtRefresh": 230,
+  "githubIssueListRefreshedUtc": "2026-09-11T14:58:51.710997+00:00",
+  "githubTotalIssuesAtRefresh": 338,
+  "githubOpenIssuesAtRefresh": 231,
   "newAuditIssueCount": 98,
   "rawEvidenceIncludedInGit": false,
   "originalEvidenceContinuity": "Some original raw evidence and initial audit ledger were lost. Recovered summaries are not original logs. Later raw evidence remains private. Fresh corroboration and integrated verification required.",
@@ -1289,7 +1289,7 @@
     411,
     412
   ],
-  "continuationQueueScope": "410 is the sole active repair, WIP and not finally approved. Linux R2 retained1787 passing tests/229XML but aggregate failed Dokka, SBOM and instrumentation compilation. Minimal source corrections are approved source-only/NOT_RUN; the proposed local retry was canceled before launch. Successful full lock regeneration, supported-Mac qualification and the five-publication consumer/strict LAN Dokka remain pending. Queue410→414→415→416→417→413→409→411→412; 413 approved option-B plan only, implementationNOT_STARTED. Other queued repairs are NOT_STARTED. 207 Windows19 and408 R18 scoped approvals stand without redundant scoped replay. Preserve JVM/Android parity and no R16/Android cause attribution. Reviewed ART37→24→25, recreation/peer, narrow Apple/Intel and final current rootcheck/Android/Desktop/release checks remain. Reuse unaffected prior results only at original bindings; serialize builds/max2workers, fresh Actions/refs and exclusive lease before hosted work, retained logs/stops/exact-owned cleanup. AuditNOT_READY; 133independentNOT_STARTED; no closure/main/tag/settings/release authority.",
+  "continuationQueueScope": "410 remains the sole active repair; final approval WITHHELD. Actual Mac34608117941/1 at clean464c971/tree440a8992 FAILED1/0/1:338XML,2746platform test instances=2744pass+1failure+1skip,0errors. Lifecycle control exited1 host_not_announced before ready/close;7other modes NOT_RUN and Mac cause unproven. No complete locks persisted. R3seven consumer+oneSBOM control methods passed; Mac pairedSBOM82components passed, but LAN Dokka/KotlinABI/rootgraph/instrumentation compilation and five-publication consumer remain unqualified. Later source-approved startup diagnostics passed local Java8 vendor/Java17 fixture compilation and one ordinary Linux control only; one-control Mac workflow source-reviewed/imported NOT_EXECUTED; focused policy validation, fresh hosted admission/lease and qualification-only publication pending. Current source is base464c plus fixture/workflow/admin edits, not a new clean tested commit. Queue410→414→415→416→417→413→409→411→412; 413option-B plan only, all queued implementations NOT_STARTED.207/408scoped approvals stand; no redundant scoped replay. Retain original R2/R16/R18/Windows failures and source bindings. ART, narrow Apple/Intel, final current graph/sample/consumer checks, physical/hostile/independent/crypto evidence and owner decisions remain. AuditNOT_READY;133NOT_STARTED. Root owns fresh hosted admission, serial builds/max2workers and exact-owned cleanup; no closure/main/tag/settings/release authority.",
   "completedInvestigation145": {
     "issue": 145,
     "baselineCommit": "d823bb9cc0d187ec746714af67b08904a28331b6",
@@ -1303,7 +1303,7 @@
     "status": "OWNER_AUTHORIZED_TRIAL1_AND2_FAILED_PREINVOKE_TRIAL3_PENDING",
     "scope": "After final independent approval of the exact eleven administrative files and applied bytes, refresh live Actions and audit/main/PR refs, hold the one global local/hosted execution lease, freeze the exact approved source tree, and pause all local builds/tests BEFORE the audit-branch push that triggers the hosted workflow. With that lease and source freeze already held, push only the audit branch, verify its exact remote commit/tree and record the outcome separately, then inspect the controlled Windows -> ARM Mac -> Intel Mac trial under the same lease. Verify native controls, actual SDK admission, strict dependency/source/stop/ownership/full-artifact evidence before advancing. Both failed hosted trials remain unsafe/partial and remote cleanup/full-tree NOT_PROVEN; a local lease release is not remote cleanup. #268/#133 remain NOT_STARTED; continue all feasible sequential work. No new physical/hostile-network/independent/pro-crypto/main/settings/release authority."
   },
-  "lastDispositionUpdateUtc": "2026-09-11T13:46:04.917070+00:00",
+  "lastDispositionUpdateUtc": "2026-09-11T15:33:16.815445+00:00",
   "previousGithubRefreshEvidence145": {
     "startedUtc": "2026-09-08T09:17:23.275604+00:00",
     "endedUtc": "2026-09-08T09:28:07.480134+00:00",
@@ -2009,34 +2009,37 @@
   },
   "activeWorkItem": {
     "name": "410_JMDNS_FAILED_RECOVERY_DISPOSAL",
-    "status": "WIP_LINUX_R2_AGGREGATE_FAILED_SOURCE_CORRECTIONS_NOT_RUN_MAC_QUALIFICATION_PENDING_NOT_APPROVED",
+    "status": "410_MAC1_QUALIFICATION_FAILED_LOCAL_STARTUP_CONTROL_PASS_MAC_DIAGNOSTIC_PENDING_FINAL_WITHHELD",
     "owner": "primary agent",
-    "scope": "410 is the sole active repair, WIP and not finally approved. Linux R2 retained1787 passing tests/229XML but aggregate failed Dokka, SBOM and instrumentation compilation. Minimal source corrections are approved source-only/NOT_RUN; the proposed local retry was canceled before launch. Successful full lock regeneration, supported-Mac qualification and the five-publication consumer/strict LAN Dokka remain pending. Queue410→414→415→416→417→413→409→411→412; 413 approved option-B plan only, implementationNOT_STARTED. Other queued repairs are NOT_STARTED. 207 Windows19 and408 R18 scoped approvals stand without redundant scoped replay. Preserve JVM/Android parity and no R16/Android cause attribution. Reviewed ART37→24→25, recreation/peer, narrow Apple/Intel and final current rootcheck/Android/Desktop/release checks remain. Reuse unaffected prior results only at original bindings; serialize builds/max2workers, fresh Actions/refs and exclusive lease before hosted work, retained logs/stops/exact-owned cleanup. AuditNOT_READY; 133independentNOT_STARTED; no closure/main/tag/settings/release authority."
+    "scope": "410 remains the sole active repair; final approval WITHHELD. Actual Mac34608117941/1 at clean464c971/tree440a8992 FAILED1/0/1:338XML,2746platform test instances=2744pass+1failure+1skip,0errors. Lifecycle control exited1 host_not_announced before ready/close;7other modes NOT_RUN and Mac cause unproven. No complete locks persisted. R3seven consumer+oneSBOM control methods passed; Mac pairedSBOM82components passed, but LAN Dokka/KotlinABI/rootgraph/instrumentation compilation and five-publication consumer remain unqualified. Later source-approved startup diagnostics passed local Java8 vendor/Java17 fixture compilation and one ordinary Linux control only; one-control Mac workflow source-reviewed/imported NOT_EXECUTED; focused policy validation, fresh hosted admission/lease and qualification-only publication pending. Current source is base464c plus fixture/workflow/admin edits, not a new clean tested commit. Queue410→414→415→416→417→413→409→411→412; 413option-B plan only, all queued implementations NOT_STARTED.207/408scoped approvals stand; no redundant scoped replay. Retain original R2/R16/R18/Windows failures and source bindings. ART, narrow Apple/Intel, final current graph/sample/consumer checks, physical/hostile/independent/crypto evidence and owner decisions remain. AuditNOT_READY;133NOT_STARTED. Root owns fresh hosted admission, serial builds/max2workers and exact-owned cleanup; no closure/main/tag/settings/release authority."
   },
   "latestGithubListObservation": {
-    "reference": "checkpoint.json nativeFollowups.githubPre410Refresh",
+    "reference": "checkpoint.json nativeFollowups.github410R5Refresh",
     "apiWindowUtc": [
-      "2026-09-11T04:15:25.362793+00:00",
-      "2026-09-11T04:15:36.278218+00:00"
+      "2026-09-11T14:58:48.322537+00:00",
+      "2026-09-11T14:58:59.033282+00:00"
     ],
-    "fullCensusFinishedUtc": "2026-09-11T04:15:36.278218+00:00",
-    "totalIssues": 337,
-    "openIssues": 230,
+    "allOpenWindowUtc": [
+      "2026-09-11T14:58:48.322537+00:00",
+      "2026-09-11T14:58:51.710997+00:00"
+    ],
+    "issueListFinishedUtc": "2026-09-11T14:58:51.710997+00:00",
+    "openIssues": 231,
+    "openPullRequests": 7,
+    "freshLocalFullBodies": 238,
+    "freshBodyScope": "238unique all-open records; direct410GET is duplicate readback, not another unique issue.",
+    "totalIssues": 338,
     "closedIssues": 107,
     "pullRequests": 79,
-    "openPullRequests": 7,
     "closedPullRequests": 72,
-    "freshLocalFullBodies": 416,
-    "freshConversationComments": 566,
-    "openIssueComments": 390,
-    "inlineComments": 0,
-    "inventoryExactlyMatchesOpenIssues": false,
-    "scope": "Fresh own records/conversation census; only414–416new,413prior records/all566comments equal as parsedJSON.29linked PR details refreshed; dated reviews/timelines and79historical file/commit sets reused, not recrawled or a new complete human reread. Nontransactional capture; older visibility gaps persist. Later417individualGET adds one known row; current231inventory does not equal the230-open full-census snapshot.",
-    "finalDeltaReference": "checkpoint.json nativeFollowups.githubPre410Refresh.finalDelta",
-    "knownLaterIndividualAdditions": [
-      417
-    ],
-    "knownInventoryCountAfterIndividualAdditions": 231
+    "totalCountScope": "Effective cumulative417records/338issues/79PRs; not a new all-state census.Closed/linked histories remain dated.",
+    "freshConversationComments": 0,
+    "directCompleteEmptyCommentFeeds": 9,
+    "reusedConversationComments": 566,
+    "inlineDeltaRecords": 0,
+    "inventoryExactlyMatchesOpenIssues": true,
+    "scope": "Fresh all238open objects/bodies equal sealedr4.17GETs14:58:48–14:58:59; since14:01delta empty. Nine repair bodies manually read by reviewer and nine direct0/0comment feeds complete.7PR own/source unchanged; raw nested pushed_at only. No Actions/ref/lease requests, history recrawl or new all566comment capture.",
+    "finalDeltaReference": "checkpoint.json nativeFollowups.github410R5Refresh.delta"
   },
   "completedInvestigation223": {
     "issue": 223,
@@ -2425,7 +2428,7 @@
     "sealedUtc": "2026-09-08T19:50:01.960459+00:00",
     "scope": "Fresh complete local own histories and all returned local/first-hop PR collections, including closed decisions. Actual payload comparison, not equality inferred from counters. Eight upstream content gaps and omitted patches remain; no full textual patch reconstruction or semantic re-audit of every unchanged claim/current caller. Per-endpoint, not transactional/current indefinitely or an execution lease. Local freshness ends19:22:50; later upstream/analysis/sealing does not extend it. #369 not present in this capture; individually added later. Earlier10h/16h/18h records and historical row states remain unchanged."
   },
-  "sourceCheckpointScope": "Administrative base3d4/treec6d57 plus separately bound WIP410/ART/current edits, not a clean executed410 source. R2 ran this base with its own9f4adf source diff; later source corrections were not executed. Windows19 remains bound to clean5530872/treeb543; all older results retain original source/scope.",
+  "sourceCheckpointScope": "Published base464c971/tree440a8992 is the actual clean failed MacR1 source, preceded by qualification-only source dcc5e339. Current startup diagnostic fixture, imported workflow and this administrative delta are later uncommitted edits, not the Mac execution or a new clean commit. Local vendor compilation retains its earlier107ca4 diff; final fixture/control use22aef5 diff. Original LinuxR2/Windows/native results keep their own bindings.",
   "lastScopedVerificationRole": "Latest final scoped repair approval207Windows19;408native approval and historical failed baselines preserved.",
   "latestAffectedGateAttemptRole": "Actual clean553focusedWindows19, not all-sample/fullhost/rootcheck/release acceptance.",
   "hostedValidationFacility": {
@@ -3146,7 +3149,7 @@
     "sealedBytes": 19280452,
     "scope": "Narrow fresh371addition/directbacklinkcontext and start/end allstate list observation; NOT another full postwrite history refresh. Fresh lists do not refresh365other histories/79PRsets/117upstream. Filing and parent source approval remain separate; no closure, new runtime/native acceptance or implementation approval by metadata task."
   },
-  "lastIntegratedCheckRole": "Preserved1786Linux PASS at3995+reviewed207diff(later identical47d), not current410work. Latest Linux R2 aggregate FAILED despite1787passing tests/229XML; see currentQualificationAttempt. Full current qualification remains pending.",
+  "lastIntegratedCheckRole": "Historical1786Linux passing integration remains at its original source. Later LinuxR2 and MacR1 aggregates FAILED; current startup control is not rootcheck/sample/consumer qualification.",
   "previousGithubFullRefreshHosted1608": {
     "startedUtc": "2026-09-08T16:02:38.964754+00:00",
     "endedUtc": "2026-09-08T16:08:26.627459+00:00",
@@ -7934,12 +7937,15 @@
     "scope": "Separately approved operational request, locally committed, NOT_PUSHED; no extra repair approval. Actual complete committed source read may honestly bind d152. No hosted trial4/native Windows/Apple acceptance. Final administrative review plus live Actions/ref observation/global lease/source freeze/local-test pause required BEFORE triggering publication."
   },
   "currentAdministrativeInputSource": {
-    "commit": "3d4fa914cc2e4e4b20e14ddee0ab4d71e5390a9b",
-    "tree": "c6d57b745966e96f920ffb2d1b1efe39c7f370c3",
-    "preparedUtc": "2026-09-11T13:42:57.411709+00:00",
-    "preimageAdministrativeCommit": "3d4fa914cc2e4e4b20e14ddee0ab4d71e5390a9b",
-    "sourceDiffSha256BeforeAdministrativeWrite": "11e74aeb80e033a180d11e071d5108ed7d2e99d7f10f7af254f02d7010f939dc",
-    "scope": "Seven-file authored current-state update plus separately owned coverage ledger; captured HEAD-to-worktree diff is an input point, not a final publication/test binding. Administrative base3d4/treec6d57 plus separately bound WIP410/ART/current edits, not a clean executed410 source. R2 ran this base with its own9f4adf source diff; later source corrections were not executed. Windows19 remains bound to clean5530872/treeb543; all older results retain original source/scope."
+    "commit": "464c9710bef645627e1373e432972bc3c1a1a007",
+    "tree": "440a8992b39573bf13f21047595f471b2f2ec29a",
+    "preparedUtc": "2026-09-11T15:21:54.716657+00:00",
+    "preimageAdministrativeCommit": "464c9710bef645627e1373e432972bc3c1a1a007",
+    "sourceDiffSha256BeforeAdministrativeWrite": "22aef5d0cf5bbab29e35ff6ae266a29b64e74552829edbb51b11581da80963c3",
+    "fixtureSha256AtInput": "42e4f9b41a6a4a95ee30b1926c603affed9f77a331517de52631220979e40ea6",
+    "scope": "Seven-file current administrative delta only; actual input diff captured, not final publication/read or clean execution binding. Published base464c971/tree440a8992 is the actual clean failed MacR1 source, preceded by qualification-only source dcc5e339. Current startup diagnostic fixture and this administrative delta are later uncommitted edits, not the Mac execution or a new clean commit. Local vendor compilation retains its earlier107ca4 diff; final fixture/control use22aef5 diff. Original LinuxR2/Windows/native results keep their own bindings.",
+    "initialInputScopeRole": "Retains the15:21:54initial fixture/admin input and its22aef5source diff, before subsequent workflow import. Not a current combined-source diff or publication binding.",
+    "subsequentWorkflowReadinessReference": "nativeFollowups.startupDiagnosticContinuation.pendingMacControl"
   },
   "priorCanonicalAab8Product": {
     "lastIntegratedCheck": {
@@ -8597,7 +8603,7 @@
     "public373Outcome": "https://github.com/p2pKit/P2pKit/issues/373#issuecomment-5597019604",
     "scope": "Actual historical failed trial, independently inspected retained evidence; diagnostics-only d5d0c1e is not its cleanup repair. Older operational request/trial records remain historical."
   },
-  "corroborationProjectionRole": "Current prepublication candidate projection supplied by coverage owner, not a new complete human reread or final committed execution. Previous1153-path Windows19 projection remains at its original blob/source binding. Authored administrative delta is not a full historical read.",
+  "corroborationProjectionRole": "Historical1227-row corroborationProjection remains at its original sealed binding. Current receipt-established1228-row counts and read-kind limits are in currentCorroborationProjection; separate coverage-owner application/readback owns the output ledger. No ledger self-hash cycle or runtime/whole-file promotion.",
   "previousCorroborationProjectionBeforeCohort0909": {
     "latestApprovedNumberedSourceCommit": "128136ff8ab040f0b5c61dc5402d2b9736d63c86",
     "latestApprovedNumberedSourceTree": "747189670275c32b9ef67b3f1842cb3fad3cb381",
@@ -11225,9 +11231,9 @@
     "scope": "Fresh all-open full bodies, all-state changes and conversation comments since14:13; unchanged earlier full bodies/history/linked PR sets remain historically bound, not freshly reread. Not an Actions lease. The existing14:14 githubIssueListRefreshedUtc/latestGithubListObservation remain the historical complete all-state list; this later observation is the current bounded all-open/delta refresh, not an Actions lease or history recrawl."
   },
   "nativeFollowups": {
-    "recordedUtc": "2026-09-11T13:46:04.917070+00:00",
-    "observationCutoffUtc": "2026-09-11T13:38:39.129382+00:00",
-    "report": "repairs/cohort-2026-09-09-native-followups.md#410-wip-linux-r2-and-pending-mac-qualification",
+    "recordedUtc": "2026-09-11T15:33:16.815445+00:00",
+    "observationCutoffUtc": "2026-09-11T15:12:01.613675+00:00",
+    "report": "repairs/cohort-2026-09-09-native-followups.md#410-mac-qualification-failure-and-startup-diagnostic-continuation",
     "currentCounts": {
       "repairApproved": 197,
       "denominator": 231,
@@ -11289,7 +11295,8 @@
       "R18final408nativeapproval plus actual411/412/413filings:196repair/197resolved of227;30unresolved/31complement;94newfindings. Combined projection, not an approval/filing interleave or full227-open census.",
       "Windows19final207scopedapproval restores1repair:197repair/198resolved of227;29unresolved/30complement,94newfindings. No new issue or GitHub closure.",
       "Actual414/415/416source-only filings:197repair-approved/198resolved of230;32unresolved/33approvalcomplement;97newfindings.8repairs+21external+3owner;410remainsWIP/unapproved.",
-      "Later actual417Low/source-only POST/GET:197repair-approved/198resolved of231;33unresolved/34approvalcomplement;98newfindings.9repairs+21external+3owner; no repair credit or full231-open census."
+      "Later actual417Low/source-only POST/GET:197repair-approved/198resolved of231;33unresolved/34approvalcomplement;98newfindings.9repairs+21external+3owner; no repair credit or full231-open census.",
+      "MacR1qualificationFAIL and later bounded R3/SBOM/localordinarycontrol positives:197repair-approved/198resolved of231;33unresolved, no approval or inventory change.410stillsoleactive; nextMacdiagnosticpending."
     ],
     "newlyApprovedIssues": [
       172,
@@ -11334,8 +11341,8 @@
       236,
       408
     ],
-    "sourceCommit": "3d4fa914cc2e4e4b20e14ddee0ab4d71e5390a9b",
-    "sourceTree": "c6d57b745966e96f920ffb2d1b1efe39c7f370c3",
+    "sourceCommit": "464c9710bef645627e1373e432972bc3c1a1a007",
+    "sourceTree": "440a8992b39573bf13f21047595f471b2f2ec29a",
     "publicationBefore9ecd": {
       "status": "PUSHED_AUDIT_BRANCH_REF_TREE_VERIFIED",
       "commit": "165e4e9263cd6ddfe73a51ed401259d149b63731",
@@ -11432,13 +11439,13 @@
       "changedConversationComments": 0,
       "scope": "Bounded all-state issue/comment delta since15:27 then individual successful388 creation. Not a fresh202-row complete-history/linked-PR crawl, separate refetch, repair approval or closure. Existing14:14 list and15:27 open-body records retain their exact scope."
     },
-    "pendingBoundary": "410 is the sole active repair, WIP and not finally approved. Linux R2 retained1787 passing tests/229XML but aggregate failed Dokka, SBOM and instrumentation compilation. Minimal source corrections are approved source-only/NOT_RUN; the proposed local retry was canceled before launch. Successful full lock regeneration, supported-Mac qualification and the five-publication consumer/strict LAN Dokka remain pending. Queue410→414→415→416→417→413→409→411→412; 413 approved option-B plan only, implementationNOT_STARTED. Other queued repairs are NOT_STARTED. 207 Windows19 and408 R18 scoped approvals stand without redundant scoped replay. Preserve JVM/Android parity and no R16/Android cause attribution. Reviewed ART37→24→25, recreation/peer, narrow Apple/Intel and final current rootcheck/Android/Desktop/release checks remain. Reuse unaffected prior results only at original bindings; serialize builds/max2workers, fresh Actions/refs and exclusive lease before hosted work, retained logs/stops/exact-owned cleanup. AuditNOT_READY; 133independentNOT_STARTED; no closure/main/tag/settings/release authority.",
+    "pendingBoundary": "410 remains the sole active repair; final approval WITHHELD. Actual Mac34608117941/1 at clean464c971/tree440a8992 FAILED1/0/1:338XML,2746platform test instances=2744pass+1failure+1skip,0errors. Lifecycle control exited1 host_not_announced before ready/close;7other modes NOT_RUN and Mac cause unproven. No complete locks persisted. R3seven consumer+oneSBOM control methods passed; Mac pairedSBOM82components passed, but LAN Dokka/KotlinABI/rootgraph/instrumentation compilation and five-publication consumer remain unqualified. Later source-approved startup diagnostics passed local Java8 vendor/Java17 fixture compilation and one ordinary Linux control only; one-control Mac workflow source-reviewed/imported NOT_EXECUTED; focused policy validation, fresh hosted admission/lease and qualification-only publication pending. Current source is base464c plus fixture/workflow/admin edits, not a new clean tested commit. Queue410→414→415→416→417→413→409→411→412; 413option-B plan only, all queued implementations NOT_STARTED.207/408scoped approvals stand; no redundant scoped replay. Retain original R2/R16/R18/Windows failures and source bindings. ART, narrow Apple/Intel, final current graph/sample/consumer checks, physical/hostile/independent/crypto evidence and owner decisions remain. AuditNOT_READY;133NOT_STARTED. Root owns fresh hosted admission, serial builds/max2workers and exact-owned cleanup; no closure/main/tag/settings/release authority.",
     "deferredProjections": [
       "Current whole-source semantic corroboration beyond exact supplied read chains",
       "Older dated cohort reports/continuation narratives remain historical"
     ],
-    "scope": "197/231 current repair approvals (85.3%); 198/231 resolved (85.7%) including no-repair287; 33/231 unresolved (14.3%). Repair-approval complement34/231 (14.7%); 98 new findings. Counts are issue rows, not effort/readiness or GitHub closures. 410soleactive/WIP/unapproved; LinuxR2aggregateFAILED, source correctionsNOT_RUN, Mac/full locks pending;413plan-only. Later417individualfiling is not a new full census.",
-    "sourceBindingRole": "Administrative base3d4/treec6d57 plus separately bound WIP410/ART/current edits, not a clean executed410 source. R2 ran this base with its own9f4adf source diff; later source corrections were not executed. Windows19 remains bound to clean5530872/treeb543; all older results retain original source/scope.",
+    "scope": "197/231 current repair approvals (85.3%); 198/231 resolved (85.7%) including no-repair287; 33/231 unresolved (14.3%). Repair-approval complement34/231 (14.7%); 98 new findings. Counts are issue rows, not effort/readiness or GitHub closures. MacR1qualificationFAILED; bounded R3/SBOM/localordinarycontrol passes add no repair credit. Current base464cplusdiagnostic/workflow/admin edits; one-Mac-control workflow source-reviewed/imported NOT_EXECUTED, policy/admission/publication pending. R5freshopen-only; historical scopes preserved.",
+    "sourceBindingRole": "Published base464c971/tree440a8992 is the actual clean failed MacR1 source, preceded by qualification-only source dcc5e339. Current startup diagnostic fixture, imported workflow and this administrative delta are later uncommitted edits, not the Mac execution or a new clean commit. Local vendor compilation retains its earlier107ca4 diff; final fixture/control use22aef5 diff. Original LinuxR2/Windows/native results keep their own bindings.",
     "newIssues": [
       388,
       389,
@@ -12829,10 +12836,10 @@
       "scope": "Point-in-time global idle observation and administrative local lease release only; later policy2 UNKNOWN drain and full remote cleanupNOT_PROVEN remain. No standing lock/future idle/clean remote runner assertion."
     },
     "currentSourcePoint": {
-      "commit": "3d4fa914cc2e4e4b20e14ddee0ab4d71e5390a9b",
-      "tree": "c6d57b745966e96f920ffb2d1b1efe39c7f370c3",
-      "publicationStatus": "BASE_PUBLISHED_CURRENT_410_WIP_NOT_FINALLY_QUALIFIED",
-      "scope": "Administrative base3d4/treec6d57 plus separately bound WIP410/ART/current edits, not a clean executed410 source. R2 ran this base with its own9f4adf source diff; later source corrections were not executed. Windows19 remains bound to clean5530872/treeb543; all older results retain original source/scope."
+      "commit": "464c9710bef645627e1373e432972bc3c1a1a007",
+      "tree": "440a8992b39573bf13f21047595f471b2f2ec29a",
+      "publicationStatus": "BASE_PUBLISHED_MAC_R1_FAILED_LATER_DIAGNOSTIC_WORKFLOW_ADMIN_UNCOMMITTED",
+      "scope": "Published base464c971/tree440a8992 is the actual clean failed MacR1 source, preceded by qualification-only source dcc5e339. Current startup diagnostic fixture, imported workflow and this administrative delta are later uncommitted edits, not the Mac execution or a new clean commit. Local vendor compilation retains its earlier107ca4 diff; final fixture/control use22aef5 diff. Original LinuxR2/Windows/native results keep their own bindings."
     },
     "githubRefresh": {
       "apiWindowUtc": [
@@ -16518,7 +16525,7 @@
       "scope": "Only issue207 outcome comment; no closure/merge/release/settings action"
     },
     "active410Continuation": {
-      "status": "WIP_LINUX_R2_AGGREGATE_FAILED_SOURCE_CORRECTIONS_NOT_RUN_MAC_QUALIFICATION_PENDING_NOT_APPROVED",
+      "status": "410_MAC1_QUALIFICATION_FAILED_LOCAL_STARTUP_CONTROL_PASS_MAC_DIAGNOSTIC_PENDING_FINAL_WITHHELD",
       "countedNewApproval": false,
       "linuxR2": {
         "status": "FAIL",
@@ -16554,6 +16561,25 @@
         "scope": "Actual Linux aggregate failure despite1787passing tests/229XML. No successful complete lock refresh, current integration, final410orMac acceptance. Later corrections were not part of this invocation."
       },
       "sourceOnlyCorrections": {
+        "status": "SBOM_FOCUSED_AND_PAIRED_VALIDATION_PASS_INSTRUMENTATION_COMPILATION_NOT_RUN",
+        "sbom": "R3focused explicit-null negative passed; actual Mac cyclonedxBom completed and authenticated paired JSON/XML82component validation exited0. Not a full consumer/product graph pass.",
+        "sbomReport": "410-sbom-null-correction-r1/REPORT.md",
+        "sbomReportSha256": "42247f0f6fed46a332830e04a7df650286797737fa23cc57f9c6fbd59ec12b76",
+        "instrumentation": "Redundant non-null assertion source correction remains approved; MacR1did not reach instrumentation Kotlin compilation or test-APK assembly, so compile/ART execution NOT_RUN.",
+        "runtimeStatus": "BOUNDED_SBOM_VALIDATION_PASS_INSTRUMENTATION_ART_NOT_RUN",
+        "localRetry": "CANCELED_BEFORE_LAUNCH; intentionally stale JmDNS locks prevent useful narrow retry. No additional build/test ran.",
+        "laterEvidenceReference": "nativeFollowups.focused410ControlsR3 and nativeFollowups.macLockRefreshR1"
+      },
+      "sbomFailureBoundary": "Actual emitted error: Error whilst validating XML BOM. Shared wrapper uses that wording also for JSON writer; retained JSON has diff.text:null violating object schema. No richer nested emitted diagnostic claimed.",
+      "pendingMac": {
+        "status": "ATTEMPT1_FAILED_NEXT_DIAGNOSTIC_NOT_RUN",
+        "fullLockRefresh": "PENDING_NO_COMPLETE_LOCK_DELTA",
+        "qualification": "FINAL_410_WITHHELD",
+        "fivePublicationConsumer": "PENDING_REQUIRES_LAN_DOKKA_AND_VALID_LOCKS",
+        "reference": "nativeFollowups.macLockRefreshR1 and nativeFollowups.startupDiagnosticContinuation"
+      },
+      "scope": "410 remains the sole active repair; final approval WITHHELD. Actual Mac34608117941/1 at clean464c971/tree440a8992 FAILED1/0/1:338XML,2746platform test instances=2744pass+1failure+1skip,0errors. Lifecycle control exited1 host_not_announced before ready/close;7other modes NOT_RUN and Mac cause unproven. No complete locks persisted. R3seven consumer+oneSBOM control methods passed; Mac pairedSBOM82components passed, but LAN Dokka/KotlinABI/rootgraph/instrumentation compilation and five-publication consumer remain unqualified. Later source-approved startup diagnostics passed local Java8 vendor/Java17 fixture compilation and one ordinary Linux control only; one-control Mac workflow source-reviewed/imported NOT_EXECUTED; focused policy validation, fresh hosted admission/lease and qualification-only publication pending. Current source is base464c plus fixture/workflow/admin edits, not a new clean tested commit. Queue410→414→415→416→417→413→409→411→412; 413option-B plan only, all queued implementations NOT_STARTED.207/408scoped approvals stand; no redundant scoped replay. Retain original R2/R16/R18/Windows failures and source bindings. ART, narrow Apple/Intel, final current graph/sample/consumer checks, physical/hostile/independent/crypto evidence and owner decisions remain. AuditNOT_READY;133NOT_STARTED. Root owns fresh hosted admission, serial builds/max2workers and exact-owned cleanup; no closure/main/tag/settings/release authority.",
+      "sourceOnlyCorrectionsBeforeR3": {
         "status": "SOURCE_APPROVED_EXECUTION_NOT_RUN",
         "sbom": "ReferencedPatchDiff omits null text for URL-only patch references; explicit-null negative added. Serializer/schema/validator graph is not weakened; actual post-correction serialization pending.",
         "sbomReport": "410-sbom-null-correction-r1/REPORT.md",
@@ -16562,17 +16588,27 @@
         "runtimeStatus": "NOT_RUN",
         "localRetry": "CANCELED_BEFORE_LAUNCH; intentionally stale JmDNS locks prevent useful narrow retry. No additional build/test ran."
       },
-      "sbomFailureBoundary": "Actual emitted error: Error whilst validating XML BOM. Shared wrapper uses that wording also for JSON writer; retained JSON has diff.text:null violating object schema. No richer nested emitted diagnostic claimed.",
-      "pendingMac": {
+      "pendingMacBeforeAttempt1": {
         "status": "NOT_RUN",
         "fullLockRefresh": "PENDING",
         "qualification": "PENDING",
         "fivePublicationConsumer": "PENDING_REQUIRES_STRICT_LAN_DOKKA",
         "scope": "Supported-Mac full lock/publication graph and qualification required. Initial WIP source publication prepares validation; it is not final repair/platform/release approval."
       },
-      "scope": "410 is the sole active repair, WIP and not finally approved. Linux R2 retained1787 passing tests/229XML but aggregate failed Dokka, SBOM and instrumentation compilation. Minimal source corrections are approved source-only/NOT_RUN; the proposed local retry was canceled before launch. Successful full lock regeneration, supported-Mac qualification and the five-publication consumer/strict LAN Dokka remain pending. Queue410→414→415→416→417→413→409→411→412; 413 approved option-B plan only, implementationNOT_STARTED. Other queued repairs are NOT_STARTED. 207 Windows19 and408 R18 scoped approvals stand without redundant scoped replay. Preserve JVM/Android parity and no R16/Android cause attribution. Reviewed ART37→24→25, recreation/peer, narrow Apple/Intel and final current rootcheck/Android/Desktop/release checks remain. Reuse unaffected prior results only at original bindings; serialize builds/max2workers, fresh Actions/refs and exclusive lease before hosted work, retained logs/stops/exact-owned cleanup. AuditNOT_READY; 133independentNOT_STARTED; no closure/main/tag/settings/release authority."
+      "pairedSbomMacResult": {
+        "exitCode": 0,
+        "components": 82,
+        "fourModuleRoot": true,
+        "embeddedProvenanceVerified": true,
+        "noBuildSampleContamination": true,
+        "logSha256": "ac0b3bcdb09be26e70da0459553e9c69aa4a44ef0033aeb5b11cc35800aa58a7",
+        "reviewReference": "nativeFollowups.macLockRefreshR1Cleanup",
+        "scope": "Authenticated actual strict CycloneDX1.6 JSON/XML validator output, not a validator rerun by evidence reviewer or a full product/consumer/OSV gate."
+      },
+      "macAttemptReference": "nativeFollowups.macLockRefreshR1",
+      "startupDiagnosticReference": "nativeFollowups.startupDiagnosticContinuation"
     },
-    "observationCutoffScope": "Latest bound individual417publication receipt; full GitHub census remains04:15/final04:21delta. Local R2disposal13:24 is separately bound; no newer full capture inferred.",
+    "observationCutoffScope": "Latest retained local ordinary-control/cleanup receipt15:12:01; GitHubR5separately14:58:59, R1lease release14:59:20. Current source input captured at administrative preparation, not a new remote observation. Subsequent workflow import is separately time-bound source metadata, not fresh runtime/GitHub evidence.",
     "windows19AdministrationPublication": {
       "commit": "3d4fa914cc2e4e4b20e14ddee0ab4d71e5390a9b",
       "tree": "c6d57b745966e96f920ffb2d1b1efe39c7f370c3",
@@ -16705,6 +16741,451 @@
       "executionStatus": "SOURCE_CONFIRMED_RUNTIME_NOT_RUN_REPAIR_NOT_STARTED",
       "countedNewApproval": false,
       "scope": "Later actual individual filing, not a new full GitHub census.13:36empty delta is stated in retained filing body, not a fresh capture by this documentation author."
+    },
+    "macLockRefreshR1": {
+      "status": "FAIL_FINAL_410_WITHHELD",
+      "runId": 34608117941,
+      "attempt": 1,
+      "jobId": 103291498614,
+      "artifactId": 10268362910,
+      "sourceCommit": "464c9710bef645627e1373e432972bc3c1a1a007",
+      "sourceTree": "440a8992b39573bf13f21047595f471b2f2ec29a",
+      "executionWasCleanCommit": true,
+      "sourceUnchanged": true,
+      "receiptId": "f122a70491c54b9e8328c26acf286710",
+      "productStartedUtc": "2026-09-11T14:08:13.222008+00:00",
+      "productEndedUtc": "2026-09-11T14:37:12.535297+00:00",
+      "finishedUtc": "2026-09-11T14:37:17.302670+00:00",
+      "productExitCode": 1,
+      "stopExitCode": 0,
+      "finalExitCode": 1,
+      "counts": {
+        "tests": 2746,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 1,
+        "xmlFiles": 338,
+        "testcaseElements": 2746,
+        "passed": 2744
+      },
+      "testGroups": {
+        "library/p2p-core/iosSimulatorArm64Test": {
+          "tests": 780,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlFiles": 84,
+          "testcaseElements": 780,
+          "passed": 780
+        },
+        "library/p2p-core/jvmTest": {
+          "tests": 845,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlFiles": 95,
+          "testcaseElements": 845,
+          "passed": 845
+        },
+        "library/p2p-core/testAndroidHostTest": {
+          "tests": 82,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlFiles": 16,
+          "testcaseElements": 82,
+          "passed": 82
+        },
+        "library/p2p-network-provisioning-android/testAndroidHostTest": {
+          "tests": 162,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlFiles": 9,
+          "testcaseElements": 162,
+          "passed": 162
+        },
+        "library/p2p-network-provisioning-desktop/test": {
+          "tests": 20,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlFiles": 2,
+          "testcaseElements": 20,
+          "passed": 20
+        },
+        "library/p2p-transport-lan/iosSimulatorArm64Test": {
+          "tests": 185,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 1,
+          "xmlFiles": 29,
+          "testcaseElements": 185,
+          "passed": 184
+        },
+        "library/p2p-transport-lan/jvmTest": {
+          "tests": 210,
+          "failures": 1,
+          "errors": 0,
+          "skipped": 0,
+          "xmlFiles": 34,
+          "testcaseElements": 210,
+          "passed": 209
+        },
+        "library/p2p-transport-lan/testAndroidHostTest": {
+          "tests": 116,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlFiles": 16,
+          "testcaseElements": 116,
+          "passed": 116
+        },
+        "samples/p2p-sample-android/testDebugUnitTest": {
+          "tests": 122,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlFiles": 15,
+          "testcaseElements": 122,
+          "passed": 122
+        },
+        "samples/p2p-sample-desktop-ui/test": {
+          "tests": 39,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlFiles": 12,
+          "testcaseElements": 39,
+          "passed": 39
+        },
+        "samples/p2p-sample-desktop/test": {
+          "tests": 67,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlFiles": 13,
+          "testcaseElements": 67,
+          "passed": 67
+        },
+        "samples/p2p-sample-diagnostics/test": {
+          "tests": 118,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "xmlFiles": 13,
+          "testcaseElements": 118,
+          "passed": 118
+        }
+      },
+      "countScope": "Platform test instances, not unique cross-platform methods or complete requested graph.346raw markers are not346executed tasks; Gradle reports224actionable tasks.",
+      "lifecycleControl": {
+        "exitCode": 1,
+        "failure": "host_not_announced",
+        "phase": "BEFORE_READY_AND_CONTROL_CLOSE_ASSERTIONS",
+        "rescue": "Original failure preserved; not a natural-close pass.",
+        "remainingModesStatus": "NOT_RUN",
+        "remainingModes": [
+          "failed_recovery",
+          "shared_close",
+          "close_wins",
+          "recovery_wins",
+          "responder_close",
+          "callback_executor",
+          "cleanup_retry"
+        ],
+        "causeStatus": "UNPROVEN; precondition failure does not establish a close defect or its environmental/source cause."
+      },
+      "singleJunitSkip": "IosLanDiagnosticTest.advertiseForSixtySecondsForInteropCapture[iosSimulatorArm64]",
+      "separateTaskSkips": [
+        ":p2p-core:iosX64Test",
+        ":p2p-transport-lan:iosX64Test"
+      ],
+      "dokkaCompleted": [
+        ":p2p-core:dokkaGeneratePublicationHtml",
+        ":p2p-network-provisioning-android:dokkaGeneratePublicationHtml",
+        ":p2p-network-provisioning-desktop:dokkaGeneratePublicationHtml"
+      ],
+      "notReachedOrCompleted": [
+        "LAN Dokka",
+        "LAN Kotlin ABI",
+        "root/LAN check",
+        "resolveAndLockAll task body",
+        "Android instrumentation Kotlin compilation",
+        "test-APK assembly"
+      ],
+      "locks": {
+        "retainedFiles": 12,
+        "changedLocks": [],
+        "generatedPatchBytes": 0,
+        "fullRefreshPassed": false,
+        "imported": false
+      },
+      "review": {
+        "path": "410-macos-r1-execution-review-final/REPORT.md",
+        "sha256": "81febb63ad324fea1d91c1ee518a5f12e9a93d94521ac189a1651fb87c91c2b2"
+      },
+      "scopeBindings": {
+        "path": "410-macos-r1-execution-review-final/scope.json",
+        "sha256": "b52d2d267cf7c145ab1570f2245e9576924a7dd67387b75d46d41b2f9d62665b"
+      },
+      "artifactSha256": "0ef8307e8d30138af31fb7abc8e99630a3dbbf0c4eb293fe4bc51ddedacdda79",
+      "scope": "Actual MacR1failure retained. SBOM/cleanup have separately scoped evidence; no consumer, ART, physical, x64, full-lock/full-audit or410approval."
+    },
+    "macLockRefreshR1Cleanup": {
+      "review": {
+        "path": "410-mac-lock-cleanup-independent-r1/REPORT.md",
+        "sha256": "ac95050d6ea2aee64b178bb0e6c5cc9b345c23c7ce70cb675f8afd9caf160bf8"
+      },
+      "result": "EXPLICIT_OWNED_OUTPUT_DISPOSAL_COMPLETE",
+      "exactRemovedRoots": 17,
+      "alreadyAbsentBranches": 3,
+      "eligibleRoots": 20,
+      "konanChildSymlinks": 4,
+      "symlinkPolicy": "UNLINK_ENTRY_ONLY_DO_NOT_TRAVERSE_TARGET",
+      "productReceiptErrors": [],
+      "productOwnedSurvivors": [],
+      "discoveryErrors": [],
+      "finalSemanticError": "Lock semantics: AuditError: Expected exactly the six source-justified changed locks",
+      "all12LocksByteEqualAdmittedSource": true,
+      "cleanupError": false,
+      "retention": {
+        "authenticatedSameJobUpload": true,
+        "zipRegularMembersVerified": 3875,
+        "selfExcludingSealEntriesVerified": 3874
+      },
+      "scope": "Independent retained-evidence authentication/disposal review, not live OS inspection or blanket shared SDK/VM cleanup. Sole final error is unchanged-lock semantics, not cleanup or mutation125. Cleanup not inferred from1/0/1."
+    },
+    "macLockRefreshR1LeaseRelease": {
+      "receipt": {
+        "path": "hosted-leases/mac-lock-410-r1/released.json",
+        "sha256": "f2b88cfaf03142145ab10199d261e70f77cfd76cebf19a1d1d16eccddc25de29"
+      },
+      "releasedUtc": "2026-09-11T14:59:20.836323+00:00",
+      "sourceCommit": "464c9710bef645627e1373e432972bc3c1a1a007",
+      "sourceTree": "440a8992b39573bf13f21047595f471b2f2ec29a",
+      "sourceFreezeViolations": [],
+      "scope": "Actual root-operated scheduling lease release; separately corroborated cleanup is above. Release itself is not remote cleanup, test or repair approval."
+    },
+    "focused410ControlsR3": {
+      "receipt": {
+        "path": "runs/410-final-controls-r3/receipt.json",
+        "sha256": "83fd4c6984ba3dc46001cfe8c710d9c61ac0299d799e40f769cf1f0249ab5207"
+      },
+      "commandLog": {
+        "path": "runs/410-final-controls-r3/command.log",
+        "sha256": "5e20fb3d2801d4f6dc4d8e4d24f259b92e32d1eae1c3b7df96d4a08962cb09aa"
+      },
+      "startedUtc": "2026-09-11T13:59:19.675210+00:00",
+      "finishedUtc": "2026-09-11T13:59:54.552550+00:00",
+      "commandExitCode": 0,
+      "stopExitCode": 0,
+      "finalExitCode": 0,
+      "sourceCommit": "3d4fa914cc2e4e4b20e14ddee0ab4d71e5390a9b",
+      "sourceTree": "c6d57b745966e96f920ffb2d1b1efe39c7f370c3",
+      "sourceDiffSha256": "4d032fe26c5a3bb5083300275e09bc7f540a0317d7f18f6e88ac21db29fc6156",
+      "executionWasCleanCommit": false,
+      "sourceUnchanged": true,
+      "consumerUnittestMethodsPassed": 7,
+      "sbomUnittestMethodsPassed": 1,
+      "productXmlFiles": 0,
+      "otherBoundedChecks": {
+        "checkoutPolicyChecks": 19,
+        "androidSetupNegativeControls": 15,
+        "canonicalGradleProjects": 10,
+        "relativeLinks": 499,
+        "activeMarkdownFiles": 83,
+        "releaseMetadata": "PASS"
+      },
+      "workflowBodies": "PARSED_ONLY_NOT_EXECUTED",
+      "scope": "Eight focused unittest methods, not eight product/platform lifecycle modes. Product XML summary0does not mean no controls ran. Syntax/policy/docs checks retain this prior source binding."
+    },
+    "consumerControlSemanticReviewClosure": {
+      "verdict": "APPROVE_410_CONSUMER_CONTROLS_COMPLETE_SEMANTIC_DELTA_SOURCE_ONLY",
+      "reviewer": "review_408_native_final",
+      "receiptKind": "CONVERSATION_ONLY_NO_REPORT_FILE",
+      "path": "scripts/tests/audit-consumer-test.py",
+      "fromCommit": "3d4fa914cc2e4e4b20e14ddee0ab4d71e5390a9b",
+      "toCommit": "464c9710bef645627e1373e432972bc3c1a1a007",
+      "additions": 505,
+      "deletions": 23,
+      "fileSha256": "8c0ad43fa3ab27a7527f3643e1911fd7796bfd304c430fc2264da3f3569e4efd",
+      "diffSha256": "8fc0d2c70f88501b337addb25f059ee71c4127121c1e2ddffb7773c4738a3a15",
+      "readBookendsUtc": [
+        "2026-09-11T14:23:21Z",
+        "2026-09-11T14:26:28Z"
+      ],
+      "scope": "Complete current410semantic diff with necessary callers closes the prior scoped baseline gap. Not whole-file reading, retroactive earlier receipt promotion, runtime, consumer, packaging or drain evidence; coverage owner applies any ledger advance separately."
+    },
+    "qualification410Publications": {
+      "scope": "Root-authorized qualification-only source/admin publication, no final410repair approval or issue closure.",
+      "commits": [
+        {
+          "commit": "dcc5e33948f6cc714760b66782f8a8036bbeaf01",
+          "tree": "a796f29c21edbb06e20538b51332354b07582d72",
+          "role": "SOURCE_QUALIFICATION_ONLY"
+        },
+        {
+          "commit": "464c9710bef645627e1373e432972bc3c1a1a007",
+          "tree": "440a8992b39573bf13f21047595f471b2f2ec29a",
+          "role": "ADMINISTRATION_AND_ACTUAL_MAC_R1_SOURCE"
+        }
+      ],
+      "evidenceScope": "Published state supplied by root; local Git objects and actual authenticated Mac admitted-source receipt agree. No new publication/ref fetch or invented push timestamp by administrative author."
+    },
+    "startupDiagnosticContinuation": {
+      "status": "SOURCE_APPROVED_LOCAL_ORDINARY_CONTROL_PASS_MAC_DIAGNOSTIC_PENDING",
+      "fixturePath": "library/p2p-transport-lan/src/jvmTest/java/dev/p2pkit/transport/lan/internal/jmdns/impl/JmdnsCloseLifecycleFixture.java",
+      "fixtureSha256": "42e4f9b41a6a4a95ee30b1926c603affed9f77a331517de52631220979e40ea6",
+      "finalFixtureSourceDiffSha256": "22aef5d0cf5bbab29e35ff6ae266a29b64e74552829edbb51b11581da80963c3",
+      "sourceReview": "Root-confirmed diagnostic approval after C1sanitization correction; no new full-source read/repair approval claimed by administrative author.",
+      "localResults": {
+        "vendorJavaSources": 60,
+        "vendorRelease": 8,
+        "fixtureRelease": 17,
+        "ordinaryControl": "PASS_READY_AND_ORIGINAL_RESOURCES_DISPOSED_WITHOUT_RESCUE",
+        "envelopes": [
+          {
+            "name": "410-startup-local-vendor-r1",
+            "receipt": {
+              "path": "runs/410-startup-local-vendor-r1/receipt.json",
+              "sha256": "6971451e1ad40be4283197509258867d511edf6e68516e6fd12364c2a61ff06f"
+            },
+            "commandLog": {
+              "path": "runs/410-startup-local-vendor-r1/command.log",
+              "sha256": "48363610a332880c1aea269e9b7a6c9b988df1532a8bad38e6654104b1b4ff1d"
+            },
+            "startedUtc": "2026-09-11T15:09:16.552350+00:00",
+            "finishedUtc": "2026-09-11T15:09:19.342597+00:00",
+            "commandExitCode": 0,
+            "stopExitCode": 0,
+            "finalExitCode": 0,
+            "sourceCommit": "464c9710bef645627e1373e432972bc3c1a1a007",
+            "sourceTree": "440a8992b39573bf13f21047595f471b2f2ec29a",
+            "sourceDiffSha256": "107ca4bc43af954cdd96bb757ceb268e9e5557c3a2eb65e6827a71bfcdddfc29",
+            "sourceUnchanged": true,
+            "executionWasCleanCommit": false,
+            "removedOutputs": []
+          },
+          {
+            "name": "410-startup-local-fixture-r2",
+            "receipt": {
+              "path": "runs/410-startup-local-fixture-r2/receipt.json",
+              "sha256": "b51f29cb0718ccbb81515dcfcbdfb0587266aeb0dfc88d234cc0c41d72631144"
+            },
+            "commandLog": {
+              "path": "runs/410-startup-local-fixture-r2/command.log",
+              "sha256": "63f631119dc0a9b4d56d37a3bff4063a36e132f2108a4ad80b915b62598a9741"
+            },
+            "startedUtc": "2026-09-11T15:10:45.820867+00:00",
+            "finishedUtc": "2026-09-11T15:10:48.124988+00:00",
+            "commandExitCode": 0,
+            "stopExitCode": 0,
+            "finalExitCode": 0,
+            "sourceCommit": "464c9710bef645627e1373e432972bc3c1a1a007",
+            "sourceTree": "440a8992b39573bf13f21047595f471b2f2ec29a",
+            "sourceDiffSha256": "22aef5d0cf5bbab29e35ff6ae266a29b64e74552829edbb51b11581da80963c3",
+            "sourceUnchanged": true,
+            "executionWasCleanCommit": false,
+            "removedOutputs": []
+          },
+          {
+            "name": "410-startup-local-control-r2",
+            "receipt": {
+              "path": "runs/410-startup-local-control-r2/receipt.json",
+              "sha256": "44fcc1f797974d9da9546447b2e11e787ddf468026566db301d65d88f534854e"
+            },
+            "commandLog": {
+              "path": "runs/410-startup-local-control-r2/command.log",
+              "sha256": "306a4344e90ff70dafcbdc4846ac7ec2629c01bca929397a02fc432552f46554"
+            },
+            "startedUtc": "2026-09-11T15:11:50.862459+00:00",
+            "finishedUtc": "2026-09-11T15:12:01.613675+00:00",
+            "commandExitCode": 0,
+            "stopExitCode": 0,
+            "finalExitCode": 0,
+            "sourceCommit": "464c9710bef645627e1373e432972bc3c1a1a007",
+            "sourceTree": "440a8992b39573bf13f21047595f471b2f2ec29a",
+            "sourceDiffSha256": "22aef5d0cf5bbab29e35ff6ae266a29b64e74552829edbb51b11581da80963c3",
+            "sourceUnchanged": true,
+            "executionWasCleanCommit": false,
+            "removedOutputs": [
+              {
+                "path": "build",
+                "bytes": 585803
+              }
+            ]
+          }
+        ]
+      },
+      "localCleanup": {
+        "exactOwnedRoot": "build",
+        "removedBytes": 585803,
+        "reference": "runs/410-startup-local-control-r2/receipt.json"
+      },
+      "pendingMacControl": {
+        "workflowAtInput": "PRIVATE_NOT_IMPORTED_NOT_RUN",
+        "scope": "One ordinary Mac control only. Source-reviewed canonical workflow imported; focused policy validation, fresh hosted admission/lease and qualification-only publication pending. No new hosted run, lock refresh, host acceptance or final410approval.",
+        "inputCheckpointUtc": "2026-09-11T15:21:54.716657+00:00",
+        "currentStatus": "SOURCE_REVIEWED_IMPORTED_NOT_EXECUTED",
+        "workflowPath": ".github/workflows/audit-jmdns-startup.yml",
+        "workflowSha256": "267130e6472bf34604687f9d9b2263c7203e0e05a38e7f392245052dbbd26e93",
+        "sourceReadinessVerifiedUtc": "2026-09-11T15:33:16.815445+00:00",
+        "sourceReview": {
+          "reviewer": "art_r2_independent_review",
+          "scope": "Final source-only approval relayed by root; no fresh full-text source read or workflow execution by administrative author."
+        }
+      },
+      "macCause": "UNPROVEN",
+      "scope": "Local Linux direct compilation and one ordinary control only. Vendor pass predates final fixture sanitization and retains its own107ca4source diff; final fixture/control use22aef5. No Mac, remaining7modes, Gradle graph, complete lock/consumer, physical or final410approval."
+    },
+    "github410R5Refresh": {
+      "reference": "checkpoint.json nativeFollowups.github410R5Refresh",
+      "apiWindowUtc": [
+        "2026-09-11T14:58:48.322537+00:00",
+        "2026-09-11T14:58:59.033282+00:00"
+      ],
+      "allOpenWindowUtc": [
+        "2026-09-11T14:58:48.322537+00:00",
+        "2026-09-11T14:58:51.710997+00:00"
+      ],
+      "issueListFinishedUtc": "2026-09-11T14:58:51.710997+00:00",
+      "openIssues": 231,
+      "openPullRequests": 7,
+      "freshLocalFullBodies": 238,
+      "freshBodyScope": "238unique all-open records; direct410GET is duplicate readback, not another unique issue.",
+      "totalIssues": 338,
+      "closedIssues": 107,
+      "pullRequests": 79,
+      "closedPullRequests": 72,
+      "totalCountScope": "Effective cumulative417records/338issues/79PRs; not a new all-state census.Closed/linked histories remain dated.",
+      "freshConversationComments": 0,
+      "directCompleteEmptyCommentFeeds": 9,
+      "reusedConversationComments": 566,
+      "inlineDeltaRecords": 0,
+      "inventoryExactlyMatchesOpenIssues": true,
+      "scope": "Fresh all238open objects/bodies equal sealedr4.17GETs14:58:48–14:58:59; since14:01delta empty. Nine repair bodies manually read by reviewer and nine direct0/0comment feeds complete.7PR own/source unchanged; raw nested pushed_at only. No Actions/ref/lease requests, history recrawl or new all566comment capture.",
+      "finalDeltaReference": "checkpoint.json nativeFollowups.github410R5Refresh.delta",
+      "report": {
+        "path": "github-issue-delta-20260911-r5/REPORT.md",
+        "sha256": "5686f0c33f2d66fcbc47c2ccd49f029898a24b0132c61f5b034d67ee9716c787"
+      },
+      "reconciliation": {
+        "path": "github-issue-delta-20260911-r5/reconciliation.json",
+        "sha256": "04a2047716716ee69993ca30325fee45405cd2a8b08cf29a4d65e0ec5cb431ba"
+      },
+      "delta": {
+        "since": "2026-09-11T14:01:00Z",
+        "windowUtc": [
+          "2026-09-11T14:58:51.710997+00:00",
+          "2026-09-11T14:58:53.295488+00:00"
+        ],
+        "items": 0,
+        "conversationComments": 0,
+        "inlineComments": 0
+      },
+      "actionsRefLeaseRequests": 0,
+      "historyScope": "107closed issue bodies,29linkedPRdetails,79file/commit histories and earlier reviews/timelines reused at their original dates; hidden/deleted and omitted-history limits remain."
     }
   },
   "lastScopedVerification": {
@@ -16722,8 +17203,8 @@
   "unresolvedIssueCount": 33,
   "repairApprovalComplementIssueCount": 34,
   "currentCountMeanings": {
-    "denominator": "231inventory rows=133pre-existing+98new.04:15full census230open plus later individually GET-verified417; not a new full231-open census.",
-    "completedIssueCount": "197approved repair rows;207Windows19 scoped approval stands;410WIP adds no credit.",
+    "denominator": "231inventory rows=133pre-existing+98new; fresh R5all-open bodies match231issue IDs.338totalissues/107closed remain cumulative, not a new all-state census.",
+    "completedIssueCount": "197approved repair rows;207Windows19/408native approval stand. Mac410qualificationFAIL and later diagnostic/control add no repair credit.",
     "remainingIssueCount": "33unresolved=231-198; complement34 also includes no-repair287.",
     "resolvedIssueCount": "197repairs+1reviewed no-repair287; not GitHub closures.",
     "PENDING_REMEDIATION": "11members:9active/queued repairs plus owner274/284;120separate.",
@@ -16774,7 +17255,7 @@
       291,
       367
     ],
-    "supportedHostWork": "410 is the sole active repair, WIP and not finally approved. Linux R2 retained1787 passing tests/229XML but aggregate failed Dokka, SBOM and instrumentation compilation. Minimal source corrections are approved source-only/NOT_RUN; the proposed local retry was canceled before launch. Successful full lock regeneration, supported-Mac qualification and the five-publication consumer/strict LAN Dokka remain pending. Queue410→414→415→416→417→413→409→411→412; 413 approved option-B plan only, implementationNOT_STARTED. Other queued repairs are NOT_STARTED. 207 Windows19 and408 R18 scoped approvals stand without redundant scoped replay. Preserve JVM/Android parity and no R16/Android cause attribution. Reviewed ART37→24→25, recreation/peer, narrow Apple/Intel and final current rootcheck/Android/Desktop/release checks remain. Reuse unaffected prior results only at original bindings; serialize builds/max2workers, fresh Actions/refs and exclusive lease before hosted work, retained logs/stops/exact-owned cleanup. AuditNOT_READY; 133independentNOT_STARTED; no closure/main/tag/settings/release authority."
+    "supportedHostWork": "410 remains the sole active repair; final approval WITHHELD. Actual Mac34608117941/1 at clean464c971/tree440a8992 FAILED1/0/1:338XML,2746platform test instances=2744pass+1failure+1skip,0errors. Lifecycle control exited1 host_not_announced before ready/close;7other modes NOT_RUN and Mac cause unproven. No complete locks persisted. R3seven consumer+oneSBOM control methods passed; Mac pairedSBOM82components passed, but LAN Dokka/KotlinABI/rootgraph/instrumentation compilation and five-publication consumer remain unqualified. Later source-approved startup diagnostics passed local Java8 vendor/Java17 fixture compilation and one ordinary Linux control only; one-control Mac workflow source-reviewed/imported NOT_EXECUTED; focused policy validation, fresh hosted admission/lease and qualification-only publication pending. Current source is base464c plus fixture/workflow/admin edits, not a new clean tested commit. Queue410→414→415→416→417→413→409→411→412; 413option-B plan only, all queued implementations NOT_STARTED.207/408scoped approvals stand; no redundant scoped replay. Retain original R2/R16/R18/Windows failures and source bindings. ART, narrow Apple/Intel, final current graph/sample/consumer checks, physical/hostile/independent/crypto evidence and owner decisions remain. AuditNOT_READY;133NOT_STARTED. Root owns fresh hosted admission, serial builds/max2workers and exact-owned cleanup; no closure/main/tag/settings/release authority."
   },
   "reviewedNoRepairIssueNumbers": [
     287
@@ -16798,29 +17279,32 @@
     "githubOpenIssuesAtRefresh": 195
   },
   "latestGithubOpenIssueObservation": {
-    "reference": "checkpoint.json nativeFollowups.githubPre410Refresh",
+    "reference": "checkpoint.json nativeFollowups.github410R5Refresh",
     "apiWindowUtc": [
-      "2026-09-11T04:15:25.362793+00:00",
-      "2026-09-11T04:15:36.278218+00:00"
+      "2026-09-11T14:58:48.322537+00:00",
+      "2026-09-11T14:58:59.033282+00:00"
     ],
-    "fullCensusFinishedUtc": "2026-09-11T04:15:36.278218+00:00",
-    "totalIssues": 337,
-    "openIssues": 230,
+    "allOpenWindowUtc": [
+      "2026-09-11T14:58:48.322537+00:00",
+      "2026-09-11T14:58:51.710997+00:00"
+    ],
+    "issueListFinishedUtc": "2026-09-11T14:58:51.710997+00:00",
+    "openIssues": 231,
+    "openPullRequests": 7,
+    "freshLocalFullBodies": 238,
+    "freshBodyScope": "238unique all-open records; direct410GET is duplicate readback, not another unique issue.",
+    "totalIssues": 338,
     "closedIssues": 107,
     "pullRequests": 79,
-    "openPullRequests": 7,
     "closedPullRequests": 72,
-    "freshLocalFullBodies": 416,
-    "freshConversationComments": 566,
-    "openIssueComments": 390,
-    "inlineComments": 0,
-    "inventoryExactlyMatchesOpenIssues": false,
-    "scope": "Fresh own records/conversation census; only414–416new,413prior records/all566comments equal as parsedJSON.29linked PR details refreshed; dated reviews/timelines and79historical file/commit sets reused, not recrawled or a new complete human reread. Nontransactional capture; older visibility gaps persist. Later417individualGET adds one known row; current231inventory does not equal the230-open full-census snapshot.",
-    "finalDeltaReference": "checkpoint.json nativeFollowups.githubPre410Refresh.finalDelta",
-    "knownLaterIndividualAdditions": [
-      417
-    ],
-    "knownInventoryCountAfterIndividualAdditions": 231
+    "totalCountScope": "Effective cumulative417records/338issues/79PRs; not a new all-state census.Closed/linked histories remain dated.",
+    "freshConversationComments": 0,
+    "directCompleteEmptyCommentFeeds": 9,
+    "reusedConversationComments": 566,
+    "inlineDeltaRecords": 0,
+    "inventoryExactlyMatchesOpenIssues": true,
+    "scope": "Fresh all238open objects/bodies equal sealedr4.17GETs14:58:48–14:58:59; since14:01delta empty. Nine repair bodies manually read by reviewer and nine direct0/0comment feeds complete.7PR own/source unchanged; raw nested pushed_at only. No Actions/ref/lease requests, history recrawl or new all566comment capture.",
+    "finalDeltaReference": "checkpoint.json nativeFollowups.github410R5Refresh.delta"
   },
   "githubListingBeforePost394": {
     "githubIssueListRefreshedUtc": "2026-09-10T01:00:15.892733+00:00",
@@ -17592,15 +18076,60 @@
   },
   "pendingRepairSeveritiesScope": "Raw11-row PENDING_REMEDIATION bucket, including owner274/284; actual9 repairs are8Low+1Medium.",
   "currentCorroborationProjection": {
-    "status": "PREPUBLICATION_CANDIDATE_PROJECTION",
-    "reference": "checkpoint.json corroborationProjection; coverage.tsv",
-    "scope": "Coverage owner supplied exact in-memory1227-row projection; final row equality and application are separately verified by that owner. No final-commit or all-FULL_TEXT claim; avoid ledger/checkpoint hash recursion."
+    "status": "COVERAGE_OWNER_ESTABLISHED_CURRENT_RECEIPT_PROJECTION",
+    "reference": "coverage.tsv; nativeFollowups.consumerControlSemanticReviewClosure; nativeFollowups.startupDiagnosticContinuation.pendingMacControl",
+    "sourceCommit": "464c9710bef645627e1373e432972bc3c1a1a007",
+    "sourceTree": "440a8992b39573bf13f21047595f471b2f2ec29a",
+    "sourceRole": "Base464c plus uncommitted fixture/workflow/seven-administrative postimages; not a final committed or executed source tree.",
+    "projectionPaths": 1228,
+    "countsByReadStatus": {
+      "FULL_TEXT_CURRENT": 691,
+      "FULL_SEMANTIC_DELTA_CURRENT": 268,
+      "STRUCTURAL_ONLY_CURRENT": 260,
+      "REOPENED_HISTORICAL_TEXT_CURRENT_DELTA_BOUND": 6,
+      "COMPLETE_SEMANTIC_INVENTORY_CURRENT": 1,
+      "COMPLETE_BYTE_STRUCTURAL_MAPPING_CURRENT": 1,
+      "SELF_DESCRIBING_LEDGER_NO_CURRENT_SELF_BINDING": 1,
+      "SCOPED_SEMANTIC_DELTA_CURRENT": 0
+    },
+    "countsByReadLevel": {
+      "FULL_TEXT": 691,
+      "FULL_SEMANTIC_DELTA": 268,
+      "STRUCTURAL_ONLY": 260,
+      "SCOPED_ADMINISTRATIVE_DELTA": 6,
+      "COMPLETE_SEMANTIC_INVENTORY_WITH_FULL_BYTE_STRUCTURAL_INSPECTION": 1,
+      "COMPLETE_BYTE_STRUCTURAL_MAPPING": 1,
+      "INPUT_LEDGER_READ_ONLY_OUTPUT_REQUIRES_REVIEW": 1
+    },
+    "currentBatch": {
+      "inputRows": 1227,
+      "affectedRows": 11,
+      "affectedExistingRows": 10,
+      "newPaths": 1,
+      "unchangedExistingRows": 1217,
+      "existingHistoricalFiveColumnCellsPreserved": 6135,
+      "originalRowOrderPreserved": true
+    },
+    "cumulativeOriginalBaseline": {
+      "inputRows": 1153,
+      "affectedRows": 119,
+      "affectedOriginalRows": 44,
+      "newPaths": 75,
+      "unchangedOriginalRows": 1109,
+      "originalHistoricalFiveColumnCellsPreserved": 5765,
+      "originalRowOrderPreserved": true,
+      "affectedSourceRows": 111,
+      "affectedAdministrativeRows": 7,
+      "selfLedgerRows": 1
+    },
+    "sourceReadKinds": "Workflow and fixture retain cumulative FULL_SEMANTIC_DELTA, not final-file FULL_TEXT. Consumer complete505/23semantic diff closes the sole SCOPED_SEMANTIC_DELTA gap. Administrative authored-delta readbacks retain their existing bounded kinds.",
+    "scope": "Exact projection supplied by coverage_delta_corroboration from established receipts. Coverage owner separately guards/applies the output ledger and binds final administrative postimages. Historical1227-row corroborationProjection remains unchanged. No coverage.tsv output hash/current self-binding, fresh whole-file promotion, runtime expansion, final410approval or committed/executed-tree claim."
   },
-  "lastIntegratedAttemptRole": "Historical passing root-check/sample invocation retained unchanged at its original binding; the newer failed410LinuxR2 qualification attempt is separately recorded, not a new PASS.",
+  "lastIntegratedAttemptRole": "Historical passing integrated invocation retained unchanged. Current failed MacR1 qualification is separately recorded; local startup control cannot promote the integrated verdict.",
   "currentQualificationAttempt": {
-    "reference": "checkpoint.json nativeFollowups.active410Continuation.linuxR2",
+    "reference": "checkpoint.json nativeFollowups.macLockRefreshR1",
     "status": "FAIL",
-    "scope": "Actual Linux aggregate failure despite1787passing tests/229XML. No successful complete lock refresh, current integration, final410orMac acceptance. Later corrections were not part of this invocation."
+    "scope": "Latest actual supported-Mac lock graph failed:2746platform test instances/338XML,2744pass/1failure/1skip. No complete locks, final410orfullgraph approval; later single Linux control is separately scoped."
   },
   "latestGithubIndividualAddition": {
     "reference": "checkpoint.json nativeFollowups.filing417",
@@ -17622,5 +18151,13 @@
     "field": "corroborationProjection",
     "sourceCommit": "5530872ed4514b9498dc2547b5c66c22f99710a0",
     "scope": "Prior1153-path Windows19 projection preserved by exact checkpoint blob; no historical read promotion."
-  }
+  },
+  "currentStateBefore410MacQualification": {
+    "commit": "464c9710bef645627e1373e432972bc3c1a1a007",
+    "tree": "440a8992b39573bf13f21047595f471b2f2ec29a",
+    "checkpointGitBlob": "01262d68aa61677a3e7519f07ac5c9c964702461",
+    "issuesGitBlob": "597e37822829a544fe3cf129a7192928bedc6e14",
+    "scope": "Published pre-Mac current administration preserved by exact blobs; no copied historical snapshot. Later startup fixture/admin edits are not this clean Mac execution."
+  },
+  "githubTotalIssuesAtRefreshScope": "Effective cumulative total; current R5fresh query is all-open231issues, not a new338-issue all-state list."
 }

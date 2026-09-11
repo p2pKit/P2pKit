@@ -1722,3 +1722,124 @@ separately owned, with no full-file credit from hashes or authored deltas. Revie
 Apple/Intel follow-through, final current root-check/Android/Desktop/release gates, physical/OEM/
 hostile-network evidence, backup #291, formal independent #133, professional crypto and owner decisions
 remain separate. Source 0.7.0-SNAPSHOT, immutable RC3 and existing 0.8.0+ restrictions are unchanged.
+
+
+## 410 Mac qualification failure and startup diagnostic continuation
+
+Current continuation recorded11September2026 after R1lease release and the local startup-control receipts.
+**197/231 repair-approved;198/231 resolved;33unresolved** remain unchanged:9repairs+21external+3owner,
+98newfindings. #410 is the sole active repair; final approval **WITHHELD**, auditNOT_READY/#133NOT_STARTED.
+Queue410→414→415→416→417→413→409→411→412; no new repair or execution credit for queued findings.
+
+### Qualification-only publication and actual Mac attempt1
+
+Root published source`dcc5e33948f6cc714760b66782f8a8036bbeaf01` /
+tree`a796f29c21edbb06e20538b51332354b07582d72`, then administration
+`464c9710bef645627e1373e432972bc3c1a1a007` / tree`440a8992b39573bf13f21047595f471b2f2ec29a`.
+Publication was qualification-only, not final410approval. Mac run**34608117941/1**, job103291498614,
+artifact10268362910, actually used clean464c, unchanged before/after. Product receipt
+`f122a70491c54b9e8328c26acf286710` ran14:08:13–14:37:17UTC; **product/stop/final1/0/1**.
+
+Independent direct parsing reconciled **338XML/2746platform test instances =2744pass+1failure+1skip**,
+zero errors—not2746distinct cross-platform methods or a complete requested graph. The failure is
+`JmdnsCloseLifecycleTest.realResourceCloseRegressionsExitNaturally[jvm]`: the **control child exited1
+with `host_not_announced` before ready/control-close assertions**. Rescue preserved the failure and
+is not natural-close success. Seven modes remained **NOT_RUN**: failed_recovery, shared_close,
+close_wins, recovery_wins, responder_close, callback_executor, cleanup_retry. This does not establish
+a close defect or the source/environmental Mac cause. The sole JUnit skip is
+`IosLanDiagnosticTest.advertiseForSixtySecondsForInteropCapture[iosSimulatorArm64]`; core/LAN iosX64
+task skips are separate, not additional executed cases. Gradle reports224actionable tasks, not346.
+
+Bounded positives include LAN Android-host116/116, LAN JVM209/210, LAN arm64 iOS184pass+1skip,
+core arm64 iOS780pass, embedded producer/JVM/Android compilation, LAN Android ABI/public constants,
+and three Dokka tasks(core/provisioning-Android/provisioning-Desktop). **LAN Dokka, LAN Kotlin ABI,
+root/LAN check, resolveAndLockAll body and instrumentation Kotlin compilation/test-APK assembly
+were not reached/completed.** All12retained locks equal admitted source; generated patch empty.
+No successful full lock refresh/import, five-publication consumer, ART or final410qualification.
+Execution reviewSHA`81febb63ad324fea1d91c1ee518a5f12e9a93d94521ac189a1651fb87c91c2b2`;
+structured scopeSHA`b52d2d267cf7c145ab1570f2245e9576924a7dd67387b75d46d41b2f9d62665b`.
+
+### Narrow controls, SBOM and semantic-review closure
+
+R3(13:59:19–13:59:54UTC) passed **seven consumer unittest methods +one SBOM negative method**,
+command/stop/final0/0/0, unchanged3d4+bound diff—not clean464cexecution. Zero productXML is expected
+for these controls; it does not mean zero tests ran. Workflow bodies were parsed, not executed;
+other existing policy/layout/link/release checks retain their own scope and prior source binding.
+R3receiptSHA`83fd4c6984ba3dc46001cfe8c710d9c61ac0299d799e40f769cf1f0249ab5207`.
+Mac `cyclonedxBom` completed and authenticated paired validation exited0: strict CycloneDX1.6
+JSON/XML82release components, connected four-module root, verified embedded provenance and no
+build/sample contamination. This is actual bounded SBOM evidence, not a full product/consumer/OSV
+gate; evidence review did not rerun the content validator. The instrumentation correction remains
+source-approved but compilation/ARTNOT_RUN. Original LinuxR2failure and canceled local retry remain
+historical; neither is silently converted into a successful complete graph.
+
+The complete505-addition/23-deletion3d4→464cconsumer-test diff was source-reviewed14:23:21–14:26:28UTC.
+FinalfileSHA`8c0ad43fa3ab27a7527f3643e1911fd7796bfd304c430fc2264da3f3569e4efd`,
+diffSHA`8fc0d2c70f88501b337addb25f059ee71c4127121c1e2ddffb7773c4738a3a15`.
+The conversation-only verdict closes the incomplete semantic-delta baseline, not whole-file reading
+or earlier receipt timestamps, and adds no runtime/consumer/packaging/drain evidence. Coverage-owner
+ledger reconciliation remains separate; this administrative batch does not promote coverage rows.
+
+### Exact disposal and actual lease release
+
+Independent retention/cleanup reviewSHA`ac95050d6ea2aee64b178bb0e6c5cc9b345c23c7ce70cb675f8afd9caf160bf8`
+authenticates same-job upload,3875regular ZIP member hashes and3874self-excluding seal entries.
+It separately corroborates **17exact owned roots removed**, three eligible branches already absent,
+four Konan child symlinks unlink-only, and `EXPLICIT_OWNED_OUTPUT_DISPOSAL_COMPLETE`.
+The final semantic error is precisely the expected-six-changed-lock check, not cleanup or mutation125;
+all12locks remain unchanged. Cleanup is not inferred from1/0/1 and is not blanket shared SDK/VM deletion.
+R1's external scheduling lease was actually released **14:59:20.836323UTC**, source unchanged/clean
+and no source-freeze violations; release receiptSHA
+`f2b88cfaf03142145ab10199d261e70f77cfd76cebf19a1d1d16eccddc25de29`.
+Lease release itself is not remote cleanup, test or repair approval.
+
+### Later local startup diagnostic, Mac still pending
+
+The later diagnostic fixture is source-approved after the C1sanitization correction:
+fileSHA`42e4f9b41a6a4a95ee30b1926c603affed9f77a331517de52631220979e40ea6`,
+finalsource-diffSHA`22aef5d0cf5bbab29e35ff6ae266a29b64e74552829edbb51b11581da80963c3`.
+**Local Linux**15:09:16–15:12:01UTC:60vendorJava sources compiled for Java8; final fixture compiled
+for Java17; **one ordinary control reached ready and disposed original resources without rescue**.
+Each retained envelope is0/0/0. The vendor compile predates final fixture sanitization and retains
+its own107ca4source diff; final fixture/control retain22aef5. This is not a new clean commit,
+Mac result, remaining7modes, Gradle graph, lock refresh, consumer qualification or final410approval.
+The control receipt records removal of its exact585803-byte owned build root; no product-output
+reuse or broad cache/remote cleanup is inferred. Exact three receipt/log bindings are recorded in
+`checkpoint.json` → `nativeFollowups.startupDiagnosticContinuation`.
+
+Mac cause remains **UNPROVEN**. One ordinary Mac control is pending; its workflow is private,
+not imported or executed at this administrative input point. Root will consolidate the actual
+workflow/source/admission later. Current source is **base464c+fixture+administrative edits**, not
+MacR1's clean execution or an invented future commit/read binding.
+
+### GitHub and preserved continuation boundaries
+
+SealedR5fresh capture14:58:48.322537–14:58:59.033282UTC returns238all-open records(231issues+7PRs),
+all unchanged fromr4; since14:01item/conversation/inline delta empty. Nine repair bodies were freshly
+read by its reviewer and nine direct complete comment feeds returned0/0. Effective338issues(231open/
+107closed),79PRs(7open/72closed) and566comments are cumulative; closed/linked histories and older
+comments were reused, not an all-state/comment recrawl. **R5Actions/ref/lease requests0**.
+ReportSHA`5686f0c33f2d66fcbc47c2ccd49f029898a24b0132c61f5b034d67ee9716c787`,
+reconciliationSHA`04a2047716716ee69993ca30325fee45405cd2a8b08cf29a4d65e0ec5cb431ba`.
+
+#207Windows19/#408native scoped approvals stand without redundant replay. Keep Windows19's78product
+cases separate from92executorfixtures; no full-host acceptance. Windows17's four unretained suppressed
+contents remain unknown. Preserve R18's bounded post-cancel failure, #383/#202fences, #393scope and
+R16FAIL/PARTIAL_SALVAGE/remote-cleanupNOT_PROVEN. #410 is not an established R16/Android runtime cause.
+ART, narrow Apple/Intel, final current root/sample/consumer graph, physical/OEM/hostile, backup291,
+independent133, professional crypto and owner decisions remain separate. Source0.7.0-SNAPSHOT,
+immutableRC3 and existing0.8.0+ restrictions are unchanged; no merge/closure/tag/settings/release authority.
+
+
+### Startup workflow imported; execution and admission pending
+
+The private-workflow paragraph above preserves the15:21:54.716657UTC administrative input.
+Subsequent source-only readiness now advances: root imported the new canonical
+`.github/workflows/audit-jmdns-startup.yml` after independent source review, SHA256
+`267130e6472bf34604687f9d9b2263c7203e0e05a38e7f392245052dbbd26e93`.
+Administrative byte verification confirms the imported source, not a fresh full-text workflow review.
+The workflow is **source-reviewed/imported; NOT_EXECUTED**. Focused policy validation, fresh hosted
+admission/lease and qualification-only publication remain pending; this is not Mac control execution,
+lock refresh, host acceptance or final410approval. Current work is **base464c+fixture+workflow+admin**;
+the final fixture and earlier ordinary Linux control bindings remain unchanged. Exact source-readiness
+metadata is under `checkpoint.json` → `nativeFollowups.startupDiagnosticContinuation.pendingMacControl`.

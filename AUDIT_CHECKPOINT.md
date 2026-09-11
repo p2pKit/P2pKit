@@ -1,57 +1,62 @@
 <!-- audit-current:start -->
-# Current audit continuation — #410 WIP; Mac qualification pending
+# Current audit continuation — #410 Mac qualification failed; diagnostic pending
 
 **197/231 repair approvals (85.3%); 198/231 resolved (85.7%); 33 unresolved (14.3%).**
 Nine repairs: **#410 → #414 → #415 → #416 → #417 → #413 → #409 → #411 → #412**;
 21 external-validation rows and owner decisions #120/#274/#284. #287 adds resolution, not repair
-credit; approval complement 34 (14.7%); 98 new findings. These are row counts, not effort/readiness.
-**Audit NOT_READY; formal independent #133 NOT_STARTED.**
+credit; approval complement 34 (14.7%); 98 new findings. Counts are rows, not effort/readiness.
+**#410 alone is active; final approval WITHHELD. Audit NOT_READY; formal #133 NOT_STARTED.**
 
-**#410 is the sole active repair: WIP, final approval pending.** Linux R2 (04:24–04:36 UTC)
-retained **1,787 passing tests / 229 XML**, zero test failures/errors/skips, but the aggregate
-**FAILED**: strict LAN Dokka, SBOM generation/validation and Android instrumentation compilation.
-Command/stop/final exits were **1/0/1**. This is not a successful full lock refresh or integration gate.
-Approved minimal SBOM/null-serialization and instrumentation source corrections are **NOT_RUN**;
-the proposed local retry was canceled before launch, not executed or failed.
-Successful full lock regeneration and qualification on supported Mac remain pending, including the
-five-publication consumer because it requires strict LAN Dokka. Initial Mac publication is WIP
-qualification preparation, not #410 approval or platform/release acceptance.
+Qualification-only source/admin commits `dcc5e339` / `464c9710` were published, not finally approved.
+Actual **Mac run34608117941/1 FAILED**, clean `464c9710bef645627e1373e432972bc3c1a1a007` /
+tree `440a8992b39573bf13f21047595f471b2f2ec29a`, source unchanged, product/stop/final **1/0/1**.
+All **338 product XML** were independently reconciled: **2,746 platform test instances = 2,744 passed
++ 1 failed + 1 skipped**, zero errors—not 2,746 distinct cross-platform methods or a complete graph.
+The lifecycle **control child exited1, `host_not_announced`, before ready/close assertions**;
+rescue preserved that failure. The seven remaining lifecycle modes are **NOT_RUN**; Mac cause remains
+unproven. The one JUnit skip is the optional arm64 iOS advertising diagnostic; x64 task skips are separate.
 
-#414 (valid port-only resolved callbacks), #415 (extended RCODE warning value only), and #416
-(reverse-domain substrings in accepted explicit-legacy names) are filed source-confirmed Low
-findings; later #417 tracks lost destination/transaction ID in overflow response continuations.
-All four are **runtime NOT_RUN / unimplemented / unapproved**. No permanent outage, packet-acceptance,
-authentication or generated-secure-ID claim is implied. #413 has an approved option-B plan only,
-implementation NOT_STARTED; the remaining repairs stay queued.
+Embedded producer, LAN Android-host tests/Android ABI and three non-LAN Dokka tasks completed.
+**LAN Dokka, LAN Kotlin ABI, root/LAN check, resolveAndLockAll body and instrumentation compilation/
+test-APK assembly were not reached/completed.** All12 retained locks match source; patch empty:
+**no successful full lock refresh/import**. Five-publication consumer and final qualification remain pending.
+Linux R2's earlier **1,787 passing tests/229XML and aggregate Dokka/SBOM/instrumentation failure**
+stay at their original source; this incomplete Mac attempt does not retroactively pass that graph.
 
-#207's scoped Windows19 approval stands: clean `5530872ed4514b9498dc2547b5c66c22f99710a0`,
-**78/78 original product tests across seven suites**, zero failures/errors/skips, 11 tasks;
-**PASS / FULL_SEALED / PROVED**, full-host qualification `NOT_ESTABLISHED_BY_FOCUSED_SCOPE`.
-Its 92 executor fixtures are separate; Windows17's four unretained suppressed-list contents remain
-unknown. #408 remains native-approved. Neither scoped repair needs replay. R18 remains FAIL for
-#413's actual post-cancel callback/no return within two seconds, not indefinite/all-collector leakage.
-R16 remains FAIL/PARTIAL_SALVAGE, remote cleanup NOT_PROVEN; #393 and #383/#202 scopes stand.
-#410 is not an established R16/Android runtime cause. Earlier native/LAN/consumer/ABI/Dokka/SBOM
-results retain their original source bindings, not current #410 edits.
+R3 passed **seven consumer control methods + one SBOM negative method**; workflow parsing was not
+workflow execution. Mac aggregate SBOM and authenticated paired validation passed **82 components**,
+not a full consumer/product gate. The consumer-test complete semantic-delta review gap is closed,
+source-only—not whole-file or runtime credit. Instrumentation correction compilation remains **NOT_RUN**.
 
-Fresh GitHub census **04:15:25–04:15:36 UTC**: 337 issues (230 open/107 closed), 79 PRs (7 open),
-416 full records and 566 conversation comments. Only #414–#416 are new; the 413 prior records
-and all 566 comments match as parsed JSON. Final **04:21:32–04:21:34 delta is empty**.
-29 linked PR details were refreshed; dated reviews/timelines and historical file/commit sets were
-reused, not recrawled or freshly reread. The empty 04:18 Actions feeds are a point observation,
-not a current execution lease; older visibility limits remain. Later #417 was individually POST/GET-
-verified (server creation 13:38:38 UTC), bringing the known inventory to 231; this is **not a new full census**.
+Later startup diagnostics are source-approved with the sanitization correction. **Local Linux only**:
+60 vendor Java sources compiled for Java8, the final fixture compiled for Java17, and one ordinary
+control reached ready and disposed original resources without rescue; all three envelopes **0/0/0**.
+This is not Mac, the other seven modes, or the current Gradle graph. The one-control Mac workflow is
+**source-reviewed and imported; NOT_EXECUTED**. Focused policy validation, fresh hosted
+admission/lease and qualification-only publication remain pending; no Mac cause or repair is established.
+Current work is **base464c plus fixture/workflow/admin edits**, not a new clean executed commit.
 
-Administrative source is `3d4fa914cc2e4e4b20e14ddee0ab4d71e5390a9b` plus current WIP edits,
-not a clean executed #410 commit. Linux R2's 11 exact owned output roots (990,700,198 bytes) were
-disposed at 13:24:41 UTC after retaining failed evidence; this does not prove blanket cache/remote cleanup.
-Reviewed ART, narrow Apple/Intel, final current root-check/Android/Desktop/release checks,
-physical/OEM/hostile-network campaigns, backup #291, independent/crypto review and owner decisions
-remain separate. Source is 0.7.0-SNAPSHOT; immutable RC3 evidence and existing 0.8.0+ restrictions stand.
-Serialize builds with at most two workers and fresh hosted admission; no main merge, tag/settings
-change, issue closure or release authority.
+Mac cleanup was independently verified: **17 exact owned roots removed**, three branches already
+absent, four Konan child symlinks unlink-only. The final semantic error was unchanged locks, not cleanup.
+R1's scheduling lease was actually released **14:59:20.836323 UTC**, no source-freeze violations;
+release itself is not cleanup/test approval. Later local control cleanup removed its **585,803-byte**
+owned build root; no blanket shared-cache/SDK/VM or remote-cleanup claim is inferred.
 
-[Exact evidence and continuation](docs/audit/2026-09-04/repairs/cohort-2026-09-09-native-followups.md#410-wip-linux-r2-and-pending-mac-qualification).
+Fresh R5 **14:58:48–14:58:59 UTC**: 238 all-open bodies (231 issues/7PRs), unchanged; since14:01
+item/comment/inline delta empty. Nine repair bodies and complete empty comment feeds were refreshed;
+566 historical comments and closed/linked histories were reused, not freshly recrawled. **No R5 Actions/
+ref/lease requests.** Effective338 issues/79PRs is cumulative, not a new all-state census.
+
+#207 Windows19 and #408 native scoped approvals stand, without another scoped replay. Windows19's
+78 product cases remain separate from92 executor fixtures and are not full-host qualification.
+Windows17's four unretained suppressed-list contents remain unknown. Preserve R18's bounded post-cancel
+callback/no return within2s, #383/#202 fences, #393scope and R16FAIL/PARTIAL_SALVAGE/remote-cleanupNOT_PROVEN.
+#410 is not an established R16/Android cause. #413 is approved plan only; #414–#417 remain source-only
+findings, unimplemented/unapproved. Physical/OEM/hostile, ART, narrow Apple/Intel, final current gates,
+backup291, independent/crypto review and owner decisions remain separate. Source0.7.0-SNAPSHOT,
+immutable RC3 and existing0.8.0+ restrictions stand; no merge, closure, tag/settings or release authority.
+
+[Exact evidence and continuation](docs/audit/2026-09-04/repairs/cohort-2026-09-09-native-followups.md#410-mac-qualification-failure-and-startup-diagnostic-continuation).
 <!-- audit-current:end -->
 
 ## Preserved pre-native checkpoint narratives (dated historical evidence)

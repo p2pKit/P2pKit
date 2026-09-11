@@ -3,8 +3,8 @@
   "repository": "https://github.com/p2pKit/P2pKit",
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
-  "githubIssueListRefreshedUtc": "2026-09-11T04:15:36.278218+00:00",
-  "provenance": "197/231 current repair approvals (85.3%); 198/231 resolved (85.7%) including no-repair287; 33/231 unresolved (14.3%). Repair-approval complement34/231 (14.7%); 98 new findings. Counts are issue rows, not effort/readiness or GitHub closures. 207Windows19approval stands;410soleactive/WIP/unapproved. LinuxR2aggregateFAILED; source correctionsNOT_RUN and Mac/full locks pending.04:15full census230open/final04:21emptydelta, plus separately GET-verified417; not a fresh231-open full census. Historical evidence/visibility limits retained.",
+  "githubIssueListRefreshedUtc": "2026-09-11T14:58:51.710997+00:00",
+  "provenance": "197/231 current repair approvals (85.3%); 198/231 resolved (85.7%) including no-repair287; 33/231 unresolved (14.3%). Repair-approval complement34/231 (14.7%); 98 new findings. Counts are issue rows, not effort/readiness or GitHub closures. Actual clean464cMacR1FAILED1/0/1; no complete locks. R3eightfocusedcontrols/pairedSBOM/localordinarycontrol are bounded passes, not final410approval. Currentfixture/workflow/adminedits are later uncommitted source. Mac workflow source-reviewed/imported NOT_EXECUTED; policy/admission/publication pending. R5fresh231open bodies, cumulative338total/566comments; no all-state/history/Actions freshness inflation.",
   "issues": [
     {
       "number": 21,
@@ -10041,7 +10041,7 @@
       ],
       "status": "PENDING_REMEDIATION",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Sole active WIP repair, final approval pending. LinuxR2aggregateFAILED despite1787passing tests/229XML; approved minimal source correctionsNOT_RUN. Supported-Mac full lock refresh, qualification and five-publication consumer pending. Initial WIP publication is not approval; confirmed failed-recovery cause unchanged, no R16/Android runtime attribution.",
+      "assessmentAtCheckpoint": "Sole active repair, final approval WITHHELD. Clean464cMac34608117941/1FAILED1/0/1:338XML/2746instances=2744pass+1failure+1skip; control host_not_announced before ready/close, other7modesNOT_RUN; no complete lock refresh. R3/SBOM and later one ordinary Linux diagnostic control passed only their bounded scopes. Mac cause unproven; one-Mac-control workflow source-reviewed/imported NOT_EXECUTED; focused policy/fresh admission/lease/publication pending. Later fixture/workflow/admin source is not the clean Mac execution; no R16/Android cause attribution.",
       "recordedFixCommitsOrFinalRevision": [],
       "recordedIndependentReview": "APPROVE_FINAL_DEPENDENCY_PATH_OBSERVATIONS; reviewSHA256 54bf396ff2f129752c86427f1600725049edbfd951053f618df335e8d940f151; confirmed distinct defect, no repair approval.",
       "publicInvestigationAndOutcomeUrls": [
@@ -10062,7 +10062,7 @@
       "assessmentBeforeR18Continuation": "Actual real-dependency control/native-close failure independently corroborated and duplicate-reconciled; filed/GET-verified, no implementation. Queued after408/207 and before409; possible quit relevance is not attribution of R16.",
       "activeContinuation": {
         "reference": "checkpoint.json nativeFollowups.active410Continuation",
-        "status": "WIP_LINUX_R2_AGGREGATE_FAILED_SOURCE_CORRECTIONS_NOT_RUN_MAC_QUALIFICATION_PENDING_NOT_APPROVED",
+        "status": "410_MAC1_QUALIFICATION_FAILED_LOCAL_STARTUP_CONTROL_PASS_MAC_DIAGNOSTIC_PENDING_FINAL_WITHHELD",
         "countedNewApproval": false
       }
     },
@@ -10340,7 +10340,7 @@
       "evidenceReference": "checkpoint.json nativeFollowups.filing417"
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-11T13:46:04.917070+00:00",
+  "lastDispositionUpdateUtc": "2026-09-11T15:33:16.815445+00:00",
   "githubRefreshEvidence": {
     "startedUtc": "2026-09-08T10:24:33.734412+00:00",
     "endedUtc": "2026-09-08T10:30:05.205645+00:00",
@@ -10456,29 +10456,32 @@
   "previousDispositionUpdateUtc368": "2026-09-08T12:25:06.517016+00:00",
   "previousProvenance368": "Curated recovery/continuation record; original inventorySnapshotUtc stays historical. Full issue discussions and affected callers, not excerpts, govern repairs. Earlier assessments/outcomes are not fresh executions; raw private evidence is not inGit. Rows reconcile the exhaustive 10:24–10:30UTC fresh-history capture plus individually filed/refetched368 at10:50:42UTC. 367 and368 source approvals/pushes/outcomes are later scoped disposition/publication observations, not post-outcome complete GitHub refreshes, closure, merge or release. Current368approval/verification is bound to c221d54; earlier367/145 assessments/failures retain their original scope, and later223work is not approved here. Previous145 verification and refresh fields are preserved under explicit historical keys. Approved repository scope excludes unexecuted foreign-host/device/independent acceptance; whole audit NOT_READY.",
   "latestGithubListObservation": {
-    "reference": "checkpoint.json nativeFollowups.githubPre410Refresh",
+    "reference": "checkpoint.json nativeFollowups.github410R5Refresh",
     "apiWindowUtc": [
-      "2026-09-11T04:15:25.362793+00:00",
-      "2026-09-11T04:15:36.278218+00:00"
+      "2026-09-11T14:58:48.322537+00:00",
+      "2026-09-11T14:58:59.033282+00:00"
     ],
-    "fullCensusFinishedUtc": "2026-09-11T04:15:36.278218+00:00",
-    "totalIssues": 337,
-    "openIssues": 230,
+    "allOpenWindowUtc": [
+      "2026-09-11T14:58:48.322537+00:00",
+      "2026-09-11T14:58:51.710997+00:00"
+    ],
+    "issueListFinishedUtc": "2026-09-11T14:58:51.710997+00:00",
+    "openIssues": 231,
+    "openPullRequests": 7,
+    "freshLocalFullBodies": 238,
+    "freshBodyScope": "238unique all-open records; direct410GET is duplicate readback, not another unique issue.",
+    "totalIssues": 338,
     "closedIssues": 107,
     "pullRequests": 79,
-    "openPullRequests": 7,
     "closedPullRequests": 72,
-    "freshLocalFullBodies": 416,
-    "freshConversationComments": 566,
-    "openIssueComments": 390,
-    "inlineComments": 0,
-    "inventoryExactlyMatchesOpenIssues": false,
-    "scope": "Fresh own records/conversation census; only414–416new,413prior records/all566comments equal as parsedJSON.29linked PR details refreshed; dated reviews/timelines and79historical file/commit sets reused, not recrawled or a new complete human reread. Nontransactional capture; older visibility gaps persist. Later417individualGET adds one known row; current231inventory does not equal the230-open full-census snapshot.",
-    "finalDeltaReference": "checkpoint.json nativeFollowups.githubPre410Refresh.finalDelta",
-    "knownLaterIndividualAdditions": [
-      417
-    ],
-    "knownInventoryCountAfterIndividualAdditions": 231
+    "totalCountScope": "Effective cumulative417records/338issues/79PRs; not a new all-state census.Closed/linked histories remain dated.",
+    "freshConversationComments": 0,
+    "directCompleteEmptyCommentFeeds": 9,
+    "reusedConversationComments": 566,
+    "inlineDeltaRecords": 0,
+    "inventoryExactlyMatchesOpenIssues": true,
+    "scope": "Fresh all238open objects/bodies equal sealedr4.17GETs14:58:48–14:58:59; since14:01delta empty. Nine repair bodies manually read by reviewer and nine direct0/0comment feeds complete.7PR own/source unchanged; raw nested pushed_at only. No Actions/ref/lease requests, history recrawl or new all566comment capture.",
+    "finalDeltaReference": "checkpoint.json nativeFollowups.github410R5Refresh.delta"
   },
   "previousDispositionUpdateUtc223": "2026-09-08T13:18:49.492924+00:00",
   "previousGithubListObservation223": {
@@ -12202,8 +12205,8 @@
     "scope": "Allopenbody/link/ownmetadata and completecomment reconciliation; serial freshness/unchangedclosed/PRreuse limits explicit. Current approval arithmetic includes388after this GitHub report; no new row."
   },
   "nativeFollowups": {
-    "recordedUtc": "2026-09-11T13:46:04.917070+00:00",
-    "report": "repairs/cohort-2026-09-09-native-followups.md#410-wip-linux-r2-and-pending-mac-qualification",
+    "recordedUtc": "2026-09-11T15:33:16.815445+00:00",
+    "report": "repairs/cohort-2026-09-09-native-followups.md#410-mac-qualification-failure-and-startup-diagnostic-continuation",
     "currentCounts": {
       "repairApproved": 197,
       "denominator": 231,
@@ -12262,7 +12265,7 @@
     "evidenceReference": "checkpoint.json nativeFollowups",
     "previousCurrentProvenance": "156/201 independently approved repository-repair rows (77.6%); 45 remaining (22.4%): 23 repairs, 21 external-validation rows and architecture decision #120; 68 new audit findings. Five independently approved followup repairs382/384/385/386/387 are locally committed;383 remains source-confirmed/native NOT_RUN.151/201 filing-time and151/195 cohort snapshots stay historical. Latest15:27 bounded all-open/body/delta observation matches201 inventory IDs, not a fresh complete-history crawl. No closure/platform/release acceptance; whole audit NOT_READY;133 NOT_STARTED.",
     "previousDispositionUpdateUtc": "2026-09-09T15:31:07.028235+00:00",
-    "scope": "197/231 current repair approvals (85.3%); 198/231 resolved (85.7%) including no-repair287; 33/231 unresolved (14.3%). Repair-approval complement34/231 (14.7%); 98 new findings. Counts are issue rows, not effort/readiness or GitHub closures. 410soleactive/WIP/unapproved; LinuxR2aggregateFAILED, source correctionsNOT_RUN, Mac/full locks pending;413plan-only. Later417individualfiling is not a new full census.",
+    "scope": "197/231 current repair approvals (85.3%); 198/231 resolved (85.7%) including no-repair287; 33/231 unresolved (14.3%). Repair-approval complement34/231 (14.7%); 98 new findings. Counts are issue rows, not effort/readiness or GitHub closures. MacR1qualificationFAILED; bounded R3/SBOM/localordinarycontrol passes add no repair credit. Current base464cplusdiagnostic/workflow/admin edits; one-Mac-control workflow source-reviewed/imported NOT_EXECUTED, policy/admission/publication pending. R5freshopen-only; historical scopes preserved.",
     "newIssues": [
       388,
       389,
@@ -12430,7 +12433,16 @@
     "githubPre410RefreshReference": "checkpoint.json nativeFollowups.githubPre410Refresh",
     "windows19AdministrationPublicationReference": "checkpoint.json nativeFollowups.windows19AdministrationPublication",
     "linuxR2OutputDisposalReference": "checkpoint.json nativeFollowups.linuxR2OutputDisposal",
-    "filing417Reference": "checkpoint.json nativeFollowups.filing417"
+    "filing417Reference": "checkpoint.json nativeFollowups.filing417",
+    "macLockRefreshR1Reference": "checkpoint.json nativeFollowups.macLockRefreshR1",
+    "macLockRefreshR1CleanupReference": "checkpoint.json nativeFollowups.macLockRefreshR1Cleanup",
+    "macLockRefreshR1LeaseReleaseReference": "checkpoint.json nativeFollowups.macLockRefreshR1LeaseRelease",
+    "focused410ControlsR3Reference": "checkpoint.json nativeFollowups.focused410ControlsR3",
+    "consumerControlSemanticReviewClosureReference": "checkpoint.json nativeFollowups.consumerControlSemanticReviewClosure",
+    "qualification410PublicationsReference": "checkpoint.json nativeFollowups.qualification410Publications",
+    "startupDiagnosticContinuationReference": "checkpoint.json nativeFollowups.startupDiagnosticContinuation",
+    "github410R5RefreshReference": "checkpoint.json nativeFollowups.github410R5Refresh",
+    "startupWorkflowReadinessReference": "checkpoint.json nativeFollowups.startupDiagnosticContinuation.pendingMacControl"
   },
   "githubOpenObservationBeforeResumed1951": {
     "startedUtc": "2026-09-09T15:27:45.724357+00:00",
@@ -12469,29 +12481,32 @@
   "githubIssueListRefreshedUtcBeforeR10": "2026-09-09T20:18:04.544363+00:00",
   "postR10FollowupsReference": "checkpoint.json nativeFollowups.postR10Followups",
   "latestGithubOpenIssueObservation": {
-    "reference": "checkpoint.json nativeFollowups.githubPre410Refresh",
+    "reference": "checkpoint.json nativeFollowups.github410R5Refresh",
     "apiWindowUtc": [
-      "2026-09-11T04:15:25.362793+00:00",
-      "2026-09-11T04:15:36.278218+00:00"
+      "2026-09-11T14:58:48.322537+00:00",
+      "2026-09-11T14:58:59.033282+00:00"
     ],
-    "fullCensusFinishedUtc": "2026-09-11T04:15:36.278218+00:00",
-    "totalIssues": 337,
-    "openIssues": 230,
+    "allOpenWindowUtc": [
+      "2026-09-11T14:58:48.322537+00:00",
+      "2026-09-11T14:58:51.710997+00:00"
+    ],
+    "issueListFinishedUtc": "2026-09-11T14:58:51.710997+00:00",
+    "openIssues": 231,
+    "openPullRequests": 7,
+    "freshLocalFullBodies": 238,
+    "freshBodyScope": "238unique all-open records; direct410GET is duplicate readback, not another unique issue.",
+    "totalIssues": 338,
     "closedIssues": 107,
     "pullRequests": 79,
-    "openPullRequests": 7,
     "closedPullRequests": 72,
-    "freshLocalFullBodies": 416,
-    "freshConversationComments": 566,
-    "openIssueComments": 390,
-    "inlineComments": 0,
-    "inventoryExactlyMatchesOpenIssues": false,
-    "scope": "Fresh own records/conversation census; only414–416new,413prior records/all566comments equal as parsedJSON.29linked PR details refreshed; dated reviews/timelines and79historical file/commit sets reused, not recrawled or a new complete human reread. Nontransactional capture; older visibility gaps persist. Later417individualGET adds one known row; current231inventory does not equal the230-open full-census snapshot.",
-    "finalDeltaReference": "checkpoint.json nativeFollowups.githubPre410Refresh.finalDelta",
-    "knownLaterIndividualAdditions": [
-      417
-    ],
-    "knownInventoryCountAfterIndividualAdditions": 231
+    "totalCountScope": "Effective cumulative417records/338issues/79PRs; not a new all-state census.Closed/linked histories remain dated.",
+    "freshConversationComments": 0,
+    "directCompleteEmptyCommentFeeds": 9,
+    "reusedConversationComments": 566,
+    "inlineDeltaRecords": 0,
+    "inventoryExactlyMatchesOpenIssues": true,
+    "scope": "Fresh all238open objects/bodies equal sealedr4.17GETs14:58:48–14:58:59; since14:01delta empty. Nine repair bodies manually read by reviewer and nine direct0/0comment feeds complete.7PR own/source unchanged; raw nested pushed_at only. No Actions/ref/lease requests, history recrawl or new all566comment capture.",
+    "finalDeltaReference": "checkpoint.json nativeFollowups.github410R5Refresh.delta"
   },
   "githubIssueListRefreshedUtcBeforePost394": "2026-09-10T01:00:15.892733+00:00",
   "currentStateBeforeR11": {
@@ -12746,5 +12761,8 @@
     "issue": 371,
     "createdUtc": "2026-09-09T00:32:54Z",
     "scope": "Known counts at individual371 creation/refetch; later all-state list and selected histories are separately dated, not a post371full refresh."
+  },
+  "currentStateBefore410MacQualification": {
+    "reference": "checkpoint.json currentStateBefore410MacQualification"
   }
 }
