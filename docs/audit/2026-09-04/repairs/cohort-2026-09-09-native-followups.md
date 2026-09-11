@@ -1460,3 +1460,104 @@ Socket already closed; no unrescued timeout, Android runtime, losing-starter rac
 Outer observer/stop/final0/0/0, no survivors; two reviewed classes/13,071bytes removed, receipt
 `bad3df57a83952ed681ece0326035138845dc9edaea9f031d27e2b46b8669060`. Source/logs/shared dependency JARs retained. No implementation.
 Queue408→207→410→409; possible quit benefit remains a hypothesis, not a product diagnosis.
+
+
+## R18 terminal result and current continuation
+
+**11 September 2026. #408 APPROVE_408_REPAIR_NATIVE_PROVEN; R18 remains FAIL / FULL_SEALED.**
+196/227 currently repair-approved (86.3%); 197/227 resolved (86.8%) including no-repair287; 30/227 unresolved (13.2%). Repair-approval complement31/227 (13.7%). 94 new findings; counts are issue rows, not effort/readiness or GitHub closures.
+Queue **#207 → #410 → #413 → #409 → #411 → #412**, plus21 external rows and three owner decisions.
+Only **#207 is active**: source ready; focused checks/Windows78 pending, **NOT_NATIVE_RUN / not
+final-approved**. Other repairs remain NOT_STARTED/source plans. Earlier Windows17, R16 and all original failed records remain historical.
+
+### Actual #408 native proof
+
+Run34548459632/attempt1, job103106086350, native ARM/macOS26/Xcode26.5, executed the published
+clean `7f5752729166537d2379d4878545751eaf811d82` / tree `50ab82030544f4a16e1fd8d949a8c850df44061b`. Repair6f13f23 and
+routef3367f0 are now natively proven; earlier local60b+diff tests keep their original identities.
+Artifact10180665921 is57,611,638bytes; ZIP SHA256
+`77bc55b611ca26e92673c2fdba43163f752d2b414ed181c2a0d9cbf448ac8d99`.
+Independent reviewers checked exact2715state+4bootstrap manifest members (2721 regular ZIP members,
+61,984,395uncompressed bytes), with no missing/extra/duplicate members. No new raw Mach-O rehash is claimed.
+
+| Actual leaf | Invocation | Product/stop/final | Seconds | Evidence |
+| --- | --- | --- | --- | --- |
+| Fresh producer |58c9a40160bc4ec68215efce76bbb862|0/0/0|511.189|31tasks executed; forced-fresh defaults retained. |
+| Visible live verifier |762ddb8b57c742deb680156ae0716178|0/0/0|20.943|31tasks:3executed/28UP-TO-DATE; verifier executes, producers/writer/assembly do not rebuild. |
+| Real nested Xcode verifier |0b2a20b9ffaf4a4184cdc68f52dff400|0/0/0|54.718|Mandatory phase, same producer/source/four sidecars; quiet output gives no per-task outcome claim. |
+
+Producer receipt SHA256`16927a41ee24e28a3dd77821dce0e8d94270fc28b0c7b6c9409d4bfd482d6e65`;
+four-sidecar index SHA256`ebe3f69feebbb0df9545fcf20c7546edd2462ebc59fd0e00d72a03754776ba74`.
+MinimumOS14.0, devicearm64 and simulatorx86_64/arm64 inspections PASS; both404,857byte headers retained.
+Policies3/13 PASS with real nested leaves.91 executor fixtures PASS (33pure/19modeledDarwin/39nativeDarwin),
+not library cases. Final #408 outcome [5628212461](https://github.com/p2pKit/P2pKit/issues/408#issuecomment-5628212461) created01:50:13UTC and GET-verified;
+no closure, and **no further #408 replay is needed**.
+
+### Distinct cancellation finding #413
+
+The isolated method genuinely executed **1test/1failure/0skips**, XCTest2.627858s, original line72 return
+waiter timed out: `POST_CANCEL_CALLBACK_WITH_NO_RETURN_WITHIN_2S`; ready=true, Swift cancellation
+flag=true, post-cancel callback=true, collectReturned=false, flagAtReturn=NOT_RETURNED. Outer65/0/65
+in660.235s under the unchanged900s ceiling; not starvation, an outer timeout or another #408 failure.
+All1331raw xcresult files/55,742,529bytes are retained. Source/generated-header evidence supports missing
+owned Swift→Kotlin collection cancellation; only the diagnostic collector has this native trace.
+Not indefinite non-return, heap/leak volume, all collectors or a transport/physical-device claim.
+#383/#202 expressly deferred this boundary; preserve their accepted fences/lease controls. Real Kotlin
+collection disposal/completion must eventually be verified without weakening deadlines or the raw-export
+failure oracle. Successful isolated-host retirement is fallback cleanup, not cancellation success.
+
+### Terminal and coordination scope
+
+All11outer+7nested canonical leaves have stop0, errors[] and ownedSurvivors[]; native lifetime-token
+ownership/resource limits remain strict. One exhausted Darwin environment observation reconciles to
+that exact lifetime ending, not a silently dropped error. All39fixture bases have final disposal,
+including preserved injected failed-teardown records. The exact owned simulator was Shutdown, then
+Booted after the probe, then actually shut down and observed Shutdown; no blanket erase/deletion.
+Four cleaner pairs record17removal occurrences/7distinct roots. State/work deletion is corroborated by
+the bound finalizer, **not an independent deletion receipt**. Outer Gradle-home/all-cache/SDK/simulator
+data/VM deletion **NOT_PROVEN**. Job completedfailure01:26:50UTC; upload finalized01:26:35.972811UTC.
+SafeToContinue=true/FULL_SEALED/PROVED does not convert the host or probe to PASS.
+
+Original controller lastheartbeat00:55:10.584774UTC, observeddead00:58:23.815958 without release;
+resumed acquisition00:58:30.890389. Preserve the gap, not an exact death time or uninterrupted lease.
+Root's01:36:52–01:36:59 GET observed activeUnion=[] (point-in-time, not server-side lease).
+Resumed lease actually released01:41:03.056990UTC after terminal reconciliation, scope-limited as above.
+
+### Filed documentation findings and current inventory
+
+Fresh01:35:59–01:36:06 GET census:331issues/224open/107closed,79PRs/7open;410full bodies unchanged
+from00:52, empty conversation/inline deltas,564complete retained visible comments explicitly reused.
+Closed/PR decisions and prior visibility/patch gaps remain inherited, not newly complete history queries.
+Actual GET-verified creations #41101:48:25UTC/#41201:48:26UTC/#41301:51:55UTC and #408's outcome are
+separate own writes, **not a fresh227-open census**. #411 is a Low instruction correction: preserve
+host masking/#324 protections and require approved secure out-of-band credentials. #412 is a Low
+procedure correction: two managers in the same process/shared arbiter, A joined and owning the binding
+before B competes. Separate processes or hotspot-only A do not prove contention; #157 missing harness
+and blocked device cells remain. Neither issue is a new external-validation row or product failure.
+
+| Private evidence | SHA256 |
+| --- | --- |
+|408-r18-final-independent-review/REPORT.md|ec0304a7ece8b706695cd4038f064a07b4e76694d651c169a5a2bd40d55ec27e|
+|r18-terminal-independent-review/REPORT.md|f2a8cc848fa915c00baa17b3b763b49429ec91548d1898e0852236fd9a97a4cd|
+|r18-cancellation-cause-triage-20260911/REPORT.md|7d5c23132f573016dc0569924b2b3d2d09e7e86e395cd0eceeef8a93c1d9a9d3|
+|github-post-r18-20260911/c1-c2-duplicate-screen.md|4c655a134eba4492c11206ea3b6447e3aaae5ecf3a1107396c7d33a188e5972b|
+|post-r18-doc-filings-20260911/summary.json|84b67b33f796d61a0dc076be54a895b9c01ee474d579cc64cb163d2423196747|
+|post-r18-cancellation-filing-20260911/summary.json|62c46bf588e7873dba160e2bc262f1d0d9e84599527c3d85d2666145e3c0ff57|
+|408-native-outcome-20260911/summary.json|ed08ad3fa34fc332221c74adbfc7ef316d32342c957359f49bcd41fd600e8949|
+
+Next207 narrow source/focusedWindows verification must preserve40confirmed/4unretained failure semantics,
+strict logger/exception assertions and real-file coverage.410disposal,413cancellation,409readiness and411/412
+instructions remain separately queued. Reuse unaffected Windows and R16consumer/ABI/core/79Swift and
+priorR11Dokka/SBOM at their original bindings; R16FAIL/PARTIAL_SALVAGE/remote-cleanupNOT_PROVEN and #393
+scope remain intact. No ordinary79Swift/core/LAN/consumer/ABI matrix was rerun in R18. Reviewed ART,
+remaining narrow Apple/Intel work, final current rootcheck+Android/Desktop cycle and inspected release
+components remain. Physical/OEM/hostile-network, backup291, formal independent133NOT_STARTED,
+professional crypto and owner decisions are separate. **Audit NOT_READY.**
+
+The seven core and five routing source files are ready for the lead's bounded checks, not native
+acceptance. Root reports no independent source findings; final read-binding report remains pending.
+Core patch SHA256`d4a370265af21409281a80433d783d8bdccd71d2a3e1787bb7c03a5e6103dafb`; routing
+patch SHA256`6e10ed6ba596947e40932269cc494e282d9947edfa5639b592603d6537a4622e`. Source handoff
+`207-windows-route-r19/REPORT.md` SHA256`498051ecda24d8eed4586a3674dc2ae4a0a24ead32fc9de16584e9a9cb5595d9`.
+Require all78exact XML/listener identities (44prior failures+34passes), zero failures/errors/skips,
+unchanged four suppressed-list assertions and ordinary native executor admission; no78/92PASS inferred.

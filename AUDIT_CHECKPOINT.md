@@ -1,46 +1,52 @@
 <!-- audit-current:start -->
-# Current audit continuation — Windows17 reconciled; native follow-through pending
+# Current audit continuation — R18 reconciled; #408 approved; #207 active
 
-**195/224 current repair approvals (87.1%); 196/224 resolved (87.5%);
-28 unresolved (12.5%).** Remaining repairs: #408 → #207 → #410 → #409;21 external rows and
-owner decisions #120/#274/#284. #287 adds resolution, not repair credit; complement29(12.9%).
-91 new findings. Counts are rows, not effort/readiness. **Audit NOT_READY; #133 independent NOT_STARTED.**
+**196/227 repair approvals (86.3%); 197/227 resolved (86.8%); 30 unresolved (13.2%).**
+Six repairs: #207 → #410 → #413 → #409 → #411 → #412;21 external rows and owner decisions
+#120/#274/#284. #287 adds resolution, not repair credit; complement31(13.7%);94 new findings.
+Counts are rows, not effort/readiness. **Audit NOT_READY; #133 independent NOT_STARTED.**
 
-Windows17 ran clean60b4ed2: **FAIL / FULL_SEALED**. Core801PASS/44FAIL; LAN209,
-provisioning20, CLI67 and DesktopUI39PASS. Total1136PASS/44FAIL, not1180passes.
-Sample115-task graph includes packaging, strict Native distribution task and Android assembly,
-not headful UI, ART, installers, a fresh compiler-download/hash proof or full release acceptance.
-**#207 is reopened for current repair:**40 confirmed construction-time fsync diagnostic failures;
-four suppressed-list contents remain unknown. Earlier R15 scoped approval is preserved, not erased.
-Five isolated stops0/no owned survivors;39 fixture bases and17 output-removal occurrences/11 roots
-corroborated. State/work removal follows the bound finalizer; outer Gradle-home/all-cache deletion
-**NOT_PROVEN**. Lease released00:18:27UTC with zero source-freeze violations; not product approval.
+**#408 APPROVE_408_REPAIR_NATIVE_PROVEN.** Actual R18/run34548459632/attempt1 at published
+`7f5752729166537d2379d4878545751eaf811d82` / tree `50ab82030544f4a16e1fd8d949a8c850df44061b`
+proves repair6f13f23 with routef3367f0: fresh producer31tasks executed; visible live verifier
+3executed/28UP-TO-DATE, including actual provenance verification without rebuilding producers.
+The mandatory nested Xcode verifier binds the same producer/four sidecars; quiet output is not
+an individual-task oracle. Native policies3/13 and91 executor fixtures PASS, not library tests.
+#408 outcome [5628212461](https://github.com/p2pKit/P2pKit/issues/408#issuecomment-5628212461)
+is published/GET-verified. No further scoped #408 replay is required.
 
-Source: `f3367f040196b1ba0dc68d753b7f160fb4bd5f23` / tree `9d1cac740a20b7598147358e60af998cf865f194`; **locally committed, NOT_PUSHED at binding**.
-#408 R2 commit `6f13f23bfdc8acf02a368c24335bdac0efd0713e` has independent source/local approval and exact
-commit binding: original focused red1/0/1 retained; two policy/real-adapter selectorsPASS0/0/0
-and fixture cleanup corroborated. Final repair/native approval remains pending. R18 five-file
-operational source and seven selectorsPASS0/0/0 have independent committed readiness approval.
-Both actual local executions retain their60b+diff source identities. Native execution **NOT_RUN**. One ARM/Xcode26.5 route requests
-only policies3/13, one fresh producer/inspection, visible live verifier and isolated cancellation
-with unchanged900s bound/owned retirement. No speculative commit or successful native outcome.
+**R18 remains FAIL / FULL_SEALED.** The real isolated Swift cancellation method ran1/failed1,
+zero skips: `POST_CANCEL_CALLBACK_WITH_NO_RETURN_WITHIN_2S`; Swift flag=true, post-cancel
+callback=true, collectReturned=false. Outer65/0/65 in660.235s, not the900s deadline.
+Filed **#413** owns the source-supported missing upstream cancellation/disposal path; this is
+bounded2s non-return, not indefinite leakage or proof for every collector. #383/#202 explicitly
+deferred this scope; their accepted fencing/diagnostic-lease repairs are not reopened.
+All18 canonical stops0/no owned survivors;39 fixture bases and17 removals/7 roots corroborated.
+Exact owned simulator shutdown is proved; state/work deletion follows the bound finalizer,
+not an independent deletion receipt. Outer Gradle-home/all-cache/SDK/VM deletion NOT_PROVEN.
+Original-controller interruption is preserved; resumed lease released01:41:03UTC, not probe success.
 
-Fresh census 2026-09-11T00:32:33.846639+00:00:330issues/223open/107closed,
-79PRs/7open. #410created00:36:50UTC is a separately GET-verified
-addition:223open census plus one filing, **not a fresh224census**. #409 is filed;207comment is
-included in the refreshed delta. #410 confirms failed-recovery timer retention, not R16's cause
-or an Android runtime result. Unchanged visible histories/closed decisions and prior gaps remain.
-Next: safe audit-only publication of locally committed source after fresh Actions/refs and
-exclusive lease;408 native proof, then207focusedWindows,410dependency disposal and409real-peer
-readiness, reviewed ART and remaining narrow Apple work. Final current rootcheck+Android/Desktop cycle and inspected
-release checks remain. Reuse unaffected Windows successes and R16consumer/ABI/core/79Swift and priorR11Dokka/SBOM;
-R16 stillFAIL/PARTIAL_SALVAGE/remote-cleanupNOT_PROVEN. Physical/OEM/hostile-network, backup291,
-formal independent133, professional crypto and owner decisions remain separate.
-Serialize builds/max2workers; retain logs, isolated stops and exact-owned cleanup. No main merge,
-tag/settings changes, issue closure or release authority. Prior3–7engineering-day/2–6+week external
-forecast remains conditional, not a measured completion percentage or promise.
+**#207 alone is active: source ready, focused checks/Windows78 pending; NOT_NATIVE_RUN,
+not final-approved.** Current edits are not the clean R18 source. Windows17 staysFAIL:1136PASS/44FAIL;40 confirmed construction-time
+fsync diagnostic failures, four suppressed-list contents unretained. Preserve prior R15 scoped
+approval and strict diagnostics. Other repairs remain NOT_STARTED/source plans only.
+#410's real failed-recovery timer retention is not a proved R16/Android cause. #411 corrects join
+help without exposing the intentionally masked host password; #412 requires same-process managers
+and A owning a joined binding before B competes. Neither supplies physical/instrumentation credit.
 
-[Exact evidence and continuation](docs/audit/2026-09-04/repairs/cohort-2026-09-09-native-followups.md#windows17-results-and-pending-native-follow-through).
+Fresh GET census01:35:59–01:36:06UTC:331issues/224open/107closed;79PRs/7open. Actual later
+#411/#412 creations01:48:25/26, #408 outcome01:50:13 and #413 creation01:51:55 are separate
+GET-verified writes, **not a fresh227-open census**. Reused visible histories/closed decisions and
+prior visibility gaps remain; no new whole-history reread. Next: final207 source binding, focused routing/docs checks and
+Windows78-case execution, then the queue above. Reviewed ART, narrow Apple/Intel work and one
+current rootcheck+Android/Desktop cycle plus inspected release checks remain. Reuse unaffected
+Windows and R16consumer/ABI/core/79Swift and priorR11Dokka/SBOM at their original bindings;
+R16 remainsFAIL/PARTIAL_SALVAGE/remote-cleanupNOT_PROVEN. Physical/OEM/hostile-network, backup291,
+formal independent133, professional crypto and owner decisions remain separate. Serialize builds,
+max2workers, fresh Actions/refs/exclusive lease, retained logs/stops/exact-owned cleanup; no main
+merge, tag/settings changes, closure or release authority. Prior duration forecasts stay conditional.
+
+[Exact evidence and continuation](docs/audit/2026-09-04/repairs/cohort-2026-09-09-native-followups.md#r18-terminal-result-and-current-continuation).
 <!-- audit-current:end -->
 
 ## Preserved pre-native checkpoint narratives (dated historical evidence)
