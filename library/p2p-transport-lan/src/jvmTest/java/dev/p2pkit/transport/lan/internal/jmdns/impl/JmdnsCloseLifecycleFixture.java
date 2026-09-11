@@ -47,6 +47,9 @@ public final class JmdnsCloseLifecycleFixture {
     private static final List<String> MODES = List.of(
             "control", "failed_recovery", "shared_close", "close_wins",
             "recovery_wins", "responder_close", "callback_executor", "cleanup_retry");
+    // One fixture per child JVM. Initialize before constructor virtual dispatch
+    // so an early native send failure cannot precede diagnostic ownership.
+    private static final StartupTrace STARTUP = new StartupTrace();
 
     private JmdnsCloseLifecycleFixture() {
     }
@@ -54,6 +57,7 @@ public final class JmdnsCloseLifecycleFixture {
     public static void main(String[] args) throws Throwable {
         String mode = args.length == 1 ? args[0] : "invalid";
         Fixture fixture = null;
+        boolean ready = false;
         try {
             require(Runtime.version().feature() == 17, "jdk17_required");
             require(args.length == 1 && MODES.contains(mode), "unknown_fixture_mode");
@@ -63,6 +67,7 @@ public final class JmdnsCloseLifecycleFixture {
             fixture = new Fixture(mode, address, dns);
             fixture.captureOriginalResources();
             require(dns.waitForAnnounced(READY_MILLIS) && dns.isAnnounced(), "host_not_announced");
+            ready = true;
             fixture.phase("ready");
 
             switch (mode) {
@@ -105,6 +110,19 @@ public final class JmdnsCloseLifecycleFixture {
             // never change the outcome or award natural-close success.
             System.out.println("FAIL mode=" + mode);
             System.out.flush();
+            if (!ready) {
+                try {
+                    STARTUP.report();
+                    if (fixture != null) {
+                        fixture.reportStartupState();
+                    }
+                } catch (Throwable diagnosticFailure) {
+                    // Diagnostics must not replace the original readiness
+                    // failure or disclose native messages via suppressed errors.
+                    System.out.println("startup diagnosticFailureClass=" + diagnosticFailure.getClass().getName());
+                    StartupTrace.reportFrames("diagnostic_failure", diagnosticFailure.getStackTrace());
+                }
+            }
             if (fixture != null) {
                 try {
                     fixture.rescueAfterFailure(failure);
@@ -543,7 +561,7 @@ public final class JmdnsCloseLifecycleFixture {
         public void send(DNSOutgoing outgoing) throws IOException {
             Controls c = control;
             if (c == null) {
-                super.send(outgoing);
+                observedNativeSend(outgoing);
                 return;
             }
             if (c.failRecoverySend && Thread.currentThread() == c.stateTimer) {
@@ -581,11 +599,34 @@ public final class JmdnsCloseLifecycleFixture {
                     c.asyncFailure.compareAndSet(null, new AssertionError("goodbye_did_not_use_original_live_resources"));
                 }
             }
-            super.send(outgoing);
+            observedNativeSend(outgoing);
             // Count only records which actually reached the native send with a
             // usable socket/state timer, never inferred peer delivery.
             c.hostGoodbyes.addAndGet(hostGoodbyes);
             c.serviceGoodbyes.addAndGet(serviceGoodbyes);
+        }
+
+        private void observedNativeSend(DNSOutgoing outgoing) throws IOException {
+            STARTUP.sendCalls.incrementAndGet();
+            try {
+                super.send(outgoing);
+                STARTUP.sendReturns.incrementAndGet();
+            } catch (IOException | RuntimeException | Error failure) {
+                STARTUP.firstSendFailure.compareAndSet(null, failure);
+                throw failure;
+            }
+        }
+
+        @Override
+        public void recover() {
+            STARTUP.recoveryCalls.incrementAndGet();
+            super.recover();
+        }
+
+        @Override
+        public void startAnnouncer() {
+            STARTUP.announcerCalls.incrementAndGet();
+            super.startAnnouncer();
         }
 
         @Override
@@ -612,6 +653,7 @@ public final class JmdnsCloseLifecycleFixture {
 
         @Override
         public void startProber() {
+            STARTUP.proberCalls.incrementAndGet();
             Controls c = control;
             if (c != null && lifecycleSnapshot().recoveryWorker == Thread.currentThread()) {
                 c.recoveryProberCalls.incrementAndGet();
@@ -650,6 +692,47 @@ public final class JmdnsCloseLifecycleFixture {
             if (c != null && Thread.currentThread() == c.outcomeConsumer) {
                 c.outcomeAttemptId = attemptId;
                 c.enter(c.outcomePause);
+            }
+        }
+    }
+
+    private static final class StartupTrace {
+        final long started = System.nanoTime();
+        final AtomicInteger sendCalls = new AtomicInteger();
+        final AtomicInteger sendReturns = new AtomicInteger();
+        final AtomicInteger recoveryCalls = new AtomicInteger();
+        final AtomicInteger proberCalls = new AtomicInteger();
+        final AtomicInteger announcerCalls = new AtomicInteger();
+        final AtomicReference<Throwable> firstSendFailure = new AtomicReference<>();
+
+        void report() {
+            System.out.println("startup elapsedMillis="
+                    + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+                    + " sendCalls=" + sendCalls.get() + " sendReturns=" + sendReturns.get()
+                    + " recoveryCalls=" + recoveryCalls.get() + " proberCalls=" + proberCalls.get()
+                    + " announcerCalls=" + announcerCalls.get());
+            Throwable failure = firstSendFailure.get();
+            if (failure != null) {
+                System.out.println("startup firstSendFailureClass=" + failure.getClass().getName());
+                reportFrames("send_failure", failure.getStackTrace());
+            }
+        }
+
+        static void reportThread(String role, Thread thread) {
+            System.out.println("startup threadRole=" + role + " state="
+                    + (thread == null ? "NOT_CAPTURED" : thread.getState())
+                    + " alive=" + (thread != null && thread.isAlive()));
+            if (thread != null) {
+                reportFrames(role, thread.getStackTrace());
+            }
+        }
+
+        private static void reportFrames(String role, StackTraceElement[] frames) {
+            for (int index = 0; index < Math.min(frames.length, 8); index++) {
+                // No exception messages, thread names, file paths, addresses,
+                // host/service identities, or packet contents in diagnostics.
+                System.out.println("startup frameRole=" + role + " frame="
+                        + frames[index].getClassName() + "." + frames[index].getMethodName());
             }
         }
     }
@@ -884,6 +967,28 @@ public final class JmdnsCloseLifecycleFixture {
             // Deliberately omit addresses, interface names, host/service names,
             // packet contents, and private filesystem paths from fixture output.
             System.out.println("phase=" + phase + " mode=" + mode);
+        }
+
+        void reportStartupState() throws IOException {
+            JmDNSLifecycle.Snapshot current = dns.lifecycleSnapshot();
+            MulticastSocket socket = dns.getSocket();
+            System.out.println("startup probing=" + dns.isProbing() + " announcing=" + dns.isAnnouncing()
+                    + " announced=" + dns.isAnnounced() + " canceling=" + dns.isCanceling()
+                    + " canceled=" + dns.isCanceled() + " closing=" + dns.isClosing() + " closed=" + dns.isClosed());
+            System.out.println("startup terminal=" + current.terminalRequested + " attempt=" + current.attemptId
+                    + " mutations=" + current.activeMutations + " tasks=" + current.activeTasks
+                    + " recoveryMutation=" + current.recoveryMutationActive
+                    + " socketPublications=" + current.socketPublications
+                    + " originalSocketClosed=" + (originalSocket != null && originalSocket.isClosed())
+                    + " currentSocketAbsent=" + (socket == null)
+                    + " currentSocketClosed=" + (socket != null && socket.isClosed()));
+            StartupTrace.reportThread("general_timer", generalTimer);
+            StartupTrace.reportThread("state_timer", stateTimer);
+            NetworkInterface network = NetworkInterface.getByInetAddress(address);
+            System.out.println("startup explicitAddress=" + (System.getenv("P2PKIT_JMDNS_FIXTURE_IPV4") != null)
+                    + " linkLocal=" + address.isLinkLocalAddress()
+                    + " virtualInterface=" + (network != null && network.isVirtual())
+                    + " pointToPoint=" + (network != null && network.isPointToPoint()));
         }
 
         void rescueAfterFailure(Throwable originalFailure) {
