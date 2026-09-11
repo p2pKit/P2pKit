@@ -1392,3 +1392,71 @@ Currentpreimage remains immutable6849689ledgers; all dated earlierreport section
 and failures preserved. JSONnativeFollowups.r16Acceptance is the current scoped
 record. Countsbridge195/221→196/221 after236,then196/222 afterunapproved408.
 No completionpercent or liveGitHubclosure is inferred from repair counts.
+
+## Windows17 results and pending native follow-through
+
+195/224 currently repair-approved (87.1%); 196/224 resolved (87.5%) including no-repair287; 28/224 unresolved (12.5%). Repair-approval complement29/224 (12.9%). 91 new findings; counts are issue rows, not effort/readiness or GitHub closures. **Whole audit NOT_READY; independent133NOT_STARTED.**
+
+- Actual Windows17/run34543972034/attempt1/job103092483961, clean60b4ed2/tree46f3c35:
+  FAIL/FULL_SEALED; artifact10178724895, SHA256`173c6e8ce26fffdc2b34e40a0048cf7ef89a12ea7f6a208a6bdb568377c29fd2`.
+  Core845cases=801PASS/44FAIL; LAN209/provisioning20/CLI67/DesktopUI39PASS.
+ 1136/1180scoped passes;20library tasks fail1/0/1,115sample tasks pass0/0/0.
+  Native distribution task/Android assembly/package image are real; no fresh-download byte hash,
+  ART/headful/installer/release inference. Product review`b92904962649207a9c5d6d52ce1e6ae4c27751da8939009779e5a07b52b3c92f`.
+- Current207 reopened:40confirmed best-effort directory-fsync diagnostic failures from legacy
+  test construction;4suppressed-list assertions lack retained contents. Keep strict logging,
+  production warning and real persistence tests; narrow seven-class Windows follow-through.
+  Historical R15 approval/commits remain intact. [Published follow-up](https://github.com/p2pKit/P2pKit/issues/207#issuecomment-5627421954)
+  created2026-09-11T00:24:23Z, response/GETSHA256`e001304b8b2ca3d1e5a7901fdcead3f4553c3b37547d23456814eab4d73217a7`.
+- Terminal review`8d5826c520857ad0ebbda3055a3d9f9482ea228b6cdc38799aacec19ceafe228`: five stops0/no survivors;
+  39control bases disposed;17output removals/11roots; state/work removal via bound finalizer.
+  Outer Gradle-home/all-cache/VM deletionNOT_PROVEN. Scheduling release2026-09-11T00:18:27.795965+00:00,
+  zero freeze violations, receiptSHA256`e6c20332700603a00f066565d83b12c186dde2451b9c525b32ac3e948aa54595`; not productPASS.
+- #409 actual filing2026-09-11T00:06:28Z; responseSHA256
+  `7e07847274c449dc48000177e6c538131639c6f7d3ef550f8c6da91bdc9898bc`. Fix pre-dial readiness ordering,
+  preserve360s/120s/900s/30s limits and real pin/consent/byte/hash oracles; no approval credited.
+- #408 R2 patch`ea445cedcaff260ebfabc5fe4baf2353f65b03252ec80c3b148f1e981c2fb2c7`, source-only review
+  `04c87d18a16f201e42b6fa5daf7c5e164d096fe0981b6382177dfd6346844038`. Applied exact source, not finalrepair approval.
+  Red old-adapter run1/0/1, diff`be132abd3967a26edef1a617b4d52ed4f2f6eb696b6ab51008e83e5799ae2fd5`, logSHA
+  `53ecfaf9555350df000ba550a1059b1e89c95e70c3724b49961e4444c146c419`; green2selectorsPASS0/0/0, diff
+  `5f069a2595f0620ae2eda5efc1aba905418dad978022b292459dfa0d3f3cabc7`, logSHA`182c1c454f0894f881d03ef52605c52022f4679ad9eacb8b9eaaebceabdb9038`.
+  Source/stop/no-survivor observations and fixture cleanup independently approved; local review
+  `c51a48492d161f2aca5bde91e22aad813515435dbe1f57f2b5c32116102cc520`, finalcommit binding
+  `7f08d78d30ce3fa66048895bdc9ae6d54426d8197d565d2fe849eb96b094ad61`. Exact source/local evidence is in
+  checkpoint.nativeFollowups.repair408Continuation, not inferred from source approval.
+- R18 patch`0ec279550eb3e24adc651483b54b7bdd57a19f6fa69037b1ed69a966e1bcaa9e`, operational source review
+  `5b82e74a40f5621dc68a46c6dbe5a131fe42bf8d3ee0821f924987f45674e3e2`: APPROVE_EXECUTION_READINESS_FINAL_COMMITTED_OPERATIONAL_REVISION,
+  nativeNOT_RUN. Five operational paths compose after R2; seven actual selectorsPASS0/0/0.
+  Original source-only report0636bfe0 and execution addendum19fed563 remain dated history.
+  One native ARM/Xcode26.5 job: policies3/13, fresh producer+inspection, visible real verifier,
+  one isolated cancellation probe and owned retirement. Repeated unchanged suites are excluded.
+- R2commit`6f13f23bfdc8acf02a368c24335bdac0efd0713e`; operationalcommit`f3367f040196b1ba0dc68d753b7f160fb4bd5f23` / tree `9d1cac740a20b7598147358e60af998cf865f194`.
+  Source mappingSHA256`b31a13d413f337ef8ba900b32d629b20ca74c93ced377a296149a996d8df8ff0`; status`LOCALLY_COMMITTED_NOT_PUSHED_NATIVE_NOT_RUN`.
+  Both final source bindings are reviewed; actual local runs remain60bplus their exact diffs.
+  Private administrative postimages do not supply publication or native execution proof.
+- Census2026-09-11T00:32:27.249192+00:00–2026-09-11T00:32:33.846639+00:00:330issues/223open/107closed,
+  79PRs/7open; summarySHA256`a7636bb10b009a5caa23de92a13fae3b8a45549bb935b71ea08f61292763b3a3`. The207comment delta is included;
+  unchanged visible histories/closed decisions and earlier gaps remain historical. Later410filing
+  is separately evidenced below:223open census plus creation, not a fresh224census.
+
+Continuation: active408, queued207→410→409; further confirmed filings receive their own evidence
+and denominator adjustment. ART R2 remains source-approved/unapplied/runtimeNOT_RUN. Finish
+remaining bounded Apple/Windows/ART work and one current rootcheck/Android/Desktop cycle;
+reuse unchanged successful component evidence. R16FAIL/PARTIAL_SALVAGE remains. Preserve
+physical/hostile-network/backup/independent133/crypto/owner blockers, source/caches/guides,
+logs and isolated stops. No issue closure, main merge, tags/settings or release authority.
+
+Earlier sections and complete60bpreimage histories remain immutable;5765first-five coverage
+cells preserved. Current207reopening and409/410additions are subsequent events, not edited history.
+
+### Subsequent confirmed #410 filing
+
+Created2026-09-11T00:36:50Z; response/GETSHA256`7b118d9bbf75fca1493d6b203f20b664d076cd37ce4a9518408a44d8aaa995e1`,
+bodySHA256`023d1d8a7a3abe2abee8322bd0bab55bdeee14a58effd93a9bd84d5e9fd26336`; reproduction review
+`54bf396ff2f129752c86427f1600725049edbfd951053f618df335e8d940f151` approves observations, not a repair.
+Real JmDNS3.6.3 control closes both original timers/natural exit0; failed recovery leaves both
+timers alive after ordinary close, then exact fixture rescue and original FAIL/natural exit1.
+Socket already closed; no unrescued timeout, Android runtime, losing-starter race or R16 attribution.
+Outer observer/stop/final0/0/0, no survivors; two reviewed classes/13,071bytes removed, receipt
+`bad3df57a83952ed681ece0326035138845dc9edaea9f031d27e2b46b8669060`. Source/logs/shared dependency JARs retained. No implementation.
+Queue408→207→410→409; possible quit benefit remains a hypothesis, not a product diagnosis.
