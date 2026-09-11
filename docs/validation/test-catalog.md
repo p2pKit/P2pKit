@@ -311,34 +311,57 @@ passwords in public evidence.
 Purpose and risk: prove the process-wide binding arbiter against real Android
 ConnectivityManager state rather than host fakes.
 
-Required setup: one Android device that supports a local-only hotspot and a
-second Android device or AP to keep ordinary Wi-Fi available. Use two
-installed sample processes if the OEM permits work profiles; otherwise use the
-sample plus a small owner-approved instrumentation activity in the same APK.
+Required setup: one Android device supporting WifiNetworkSpecifier join
+(API 29+) and a second Android device or AP with valid test credentials. Use two
+distinct provisioning managers, A and B, with the production Android adapter in
+the same app process and sharing the same production arbiter instance. The
+owner-approved instrumentation fixture must establish this topology; being in
+the same APK alone is not sufficient. Record shared process-run attribution and
+distinct manager labels without personal device identifiers. Follow the
+[instrumentation and handoff prerequisites](android-physical-device.md#instrumentation-and-fault-injection-prerequisites);
+if the fixture cannot establish the required contention, keep the cell BLOCKED.
+
+Separate-process/work-profile checks are OS-coexistence observations only and
+receive no shared-arbiter credit. LOHS-only hosting by A, an unsupported request,
+consent failure, or a missing callback does not establish binding contention.
 
 Actions:
 
 1. Capture baseline `dumpsys connectivity` and the active network transport.
-2. Start manager A and join/host a local network; capture its network handle.
-3. Start manager B and request a second join while A is active.
-4. Close A, verify B does not inherit A's token, then close B.
-5. Repeat in reverse order and during a queued `onAvailable` callback.
-6. Invoke close concurrently from two callers while one native cleanup is
-   forced to fail. Verify one cleanup attempt, the same result for both
-   callers, retained ownership, and a successful later retry.
-7. Bind N1, rebind to N2, and then deliver N1's delayed `onLost`; N2 must
-   remain current. Race `onAvailable` against `onUnavailable`; only one
-   terminal result may be delivered and an unavailable request must not be
-   reported Joined.
+2. Have A successfully join a network. Confirm its Joined result and actual
+   process binding, and capture the network handle before starting B's join.
+3. While A still owns that binding, deliver B's competing `onAvailable` to the
+   production adapter. Require the shared-owner rejection, not an unrelated
+   join failure, and verify that A remains bound and B does not bind or unbind.
+4. Close B first and verify A remains bound, then close A and verify cleanup.
+5. With fresh managers, repeat the reverse close order. After A releases its
+   binding, deliver a queued `onAvailable` belonging to B's already rejected,
+   cancelled, or closed request: it must not acquire binding. A still-live
+   request receiving its first callback only after A releases may legitimately
+   acquire a fresh token; that is not forbidden token inheritance. After actual
+   cleanup, make a new join request to prove reacquisition; use fresh managers
+   after terminal close.
+6. Make two callers close the same binding-owning manager. Hold the first
+   native unbind attempt pending, establish that the second caller is awaiting
+   that same in-flight close attempt, then release the injected unbind failure.
+   Require one native cleanup attempt, the same failure for both callers, and
+   retained binding ownership until a later close retry actually clears it.
+   Merely launching two callers does not prove that they shared an attempt.
+7. Through controlled callbacks on one owned join, bind N1, rebind to N2, and
+   deliver N1's delayed `onLost`; N2 must remain current. Do not simulate this
+   with a second public join or a new leave API. Race `onAvailable` against
+   `onUnavailable`; only one terminal result may be delivered and an unavailable
+   request must not be reported Joined.
 
 Pass: only the current token owner can bind; closing one manager never unbinds
-the other; all callbacks after close are ignored/closed; the ordinary network
-is restored after both managers close. Fail: an unrelated manager loses
-connectivity or a late callback reclaims a released token.
+the other; callbacks for terminal requests cannot acquire binding; the ordinary
+network is restored after successful cleanup of both managers. Fail: an
+unrelated manager loses connectivity or a terminal-request callback changes
+binding after ownership was released.
 
-Collect the same logs/dumps as PS-T01 plus a sequence diagram with callback
-timestamps. Cleanup all local networks and reboot the device if OEM state does
-not return to baseline.
+Collect the same logs/dumps as PS-T01 plus shared-process/manager attribution
+and a sequence diagram with callback and close-attempt timestamps. Cleanup all
+local networks and reboot the device if OEM state does not return to baseline.
 
 ### LAN-T01 / PT-T20 — Android LAN callback, multicast, selected-network, IPv6, and file-provider matrix
 
@@ -1030,7 +1053,7 @@ the row's expected failure sequence.
 | Test ID | Required structured events and exported fields | UI indicators to record | Expected success / failure sequence | Evidence from each peer and external capture |
 | --- | --- | --- | --- | --- |
 | PROV-A12 / PS-T01 | `application.started`, `test.session.*`, `peer.local.initialized`, `discovery.started/stopped`, `network.path.changed`, `timeout.expired`, `diagnostics.failure`; device/target SDK, permission branch, callback generation, cleanup attempt/result, redacted validation outcome, safe manual identity fields, and exact terminal outcome | Start/Stop/Host/Join result, permission/location text, provisioning state, manual port/hosts, masked credential indicator, build identity | Success: one callback terminal result, secure manual identity, and cleanup; invalid credentials fail before platform consent and a valid retry works. Failure: `permission-required`/`unsupported`/timeout with no “started” claim, secret output, detached operation, or stale generation changing the new result | Android ZIP plus logcat, instrumentation result, `dumpsys wifi/connectivity/package`, permission screenshots, safely redacted device fingerprint; no PCAP required |
-| PROV-A12 / PS-T02 | Above plus connection/state transitions and process-binding details (`bind`, `unbind`, manager/session correlation), native network/generation token, close-attempt correlation, and cleanup retry | Two-manager owner, busy/closing/idle states and callback result | Success: one owner, concurrent closes share one attempt/result, failed cleanup remains Closing until a later retry, old N1 loss cannot remove N2, and `onAvailable`/`onUnavailable` has one winner. Failure: duplicate owner, false Joined, late callback, stale binding, or cross-manager release | ZIP from both managers/process runs, instrumentation result, logcat, `dumpsys connectivity`, callback/generation timestamps |
+| PROV-A12 / PS-T02 | Above plus connection/state transitions and process-binding details (`bind`, `unbind`, shared-process/manager/session correlation), native network/generation token, close-attempt correlation, and cleanup retry | Two-manager owner, busy/closing/idle states and callback result | Success: one owner, concurrent closes share one attempt/result, failed cleanup remains Closing until a later retry, old N1 loss cannot remove N2, and `onAvailable`/`onUnavailable` has one winner. Failure: duplicate owner, false Joined, terminal-request callback changing binding, stale binding, or cross-manager release | ZIP/fixture evidence for both managers in the same process run, instrumentation result, logcat, `dumpsys connectivity`, callback/generation timestamps |
 | LAN-T01 / PT-T20 | Discovery peer found/lost, connection attempt/state/auth, `protocol.secure_v2.negotiated`, packet sent/received/rejected, path changes, file offer/transfer/hash/commit/outcome | Advertise/discover switches, peer ID, connection ID/state, selected network/path chip, transfer ID/progress/hashes | Success: correct interface/address family and authenticated transfer. Failure: unsupported/oversized/malformed packet or path loss is explicit and terminal state agrees | Android ZIP(s), logcat, `dumpsys wifi/connectivity`, router/AP logs and PCAP when selected-network/IPv6/multicast is under test |
 | PS-T04 | Offer received/accepted/rejected, storage temporary created/cleaned, sender/receiver hash, durable committed, cancellation/failure, restart recovery | Pending offer remains until Accept/Reject; quota/free-space message; bytes/progress; final file/hash | Success: explicit consent, bounded destination, durable commit and matching peer hashes. Failure: quota/storage/permission/cancel deletes partial file and emits typed failure | Android ZIP(s), screenshots/video, filesystem listing/hash, `adb bugreport` or relevant dumpsys |
 | LAN-T07 | Apple `discovery.*`, `connection.*`, protocol negotiation, `network.path.changed`, background/foreground, recovery, packet reject/timeout; manual-manager operation/owner-stop/post-close outcomes and safe identity fields | Browser/listener readiness, peer/session state, path/port changes, reconnect result, manual port, AWDL/Wi-Fi indicators when exposed | Success: path rotation/rebind recovers without ghost peers; caller cancellation leaves no detached work; owner stop closes provisioning terminally; post-close methods fail typed. Failure: permission/AWDL/path loss is hidden, false Connected remains, secure identity is absent, a host address is fabricated, or work completes after owner stop | iOS ZIP(s), signed-harness result, Console/Xcode unified log, `dns-sd`, `log show`, path/AWDL screenshots, PCAP where lawful |

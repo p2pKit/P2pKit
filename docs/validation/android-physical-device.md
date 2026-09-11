@@ -208,22 +208,38 @@ they do not execute these hardware or radio-state cases.
 
 ### A2 — two-manager ownership
 
-Run `PROV-A12 / PS-T02` on a device/OS combination that exposes the real
-ConnectivityManager behavior. Start manager A and acquire a hotspot or joined
-network. While A is active, initiate the same operation as manager B from a
-second app process or the test harness specified by the catalog. Close B first,
-then A; repeat in reverse order.
+Run `PROV-A12 / PS-T02` on API 29+ with two distinct production-adapter managers
+in the same app process, sharing the same production arbiter instance. Use the
+catalog's approved fixture and record shared process-run and manager
+attribution; the same APK alone does not establish this. Manager A must first
+successfully join and own the actual process binding. While A remains bound,
+let B's competing join reach `onAvailable` and verify the shared-owner rejection
+without changing A's binding. LOHS-only hosting by A, an unsupported request,
+consent failure, or a missing callback is not this contention case.
+Separate-process/work-profile runs are OS-coexistence observations only, with
+no shared-arbiter credit. Missing fixture capability keeps this cell BLOCKED.
 
-Pass requires explicit ownership behavior, no release of A's network by B, no
-process-wide bind leak, and successful reacquisition after both managers close.
-Make two callers invoke close concurrently while one cleanup attempt is
-instrumented to fail. Both callers must observe the same failure and only one
-native cleanup attempt; a later close must retry and complete it. Rebind from
-network N1 to N2, then deliver N1's delayed `onLost`: N2 must remain owned and
-bound. Race `onAvailable` delivery with `onUnavailable`; exactly one terminal
-result may win, and an unavailable request must never be reported as Joined.
-Capture network handles, callback generations, and `dumpsys connectivity`
-before and after each close.
+Close B first, then A; repeat in reverse order with fresh managers. Deliver a
+queued callback for B's already rejected, cancelled, or closed request after
+A releases: it must not acquire binding. A still-live request receiving its
+first callback after A releases may legitimately acquire a fresh token. Pass
+requires no cross-manager unbind or process-wide bind leak and successful
+reacquisition through a new request after actual cleanup; do not reuse a
+terminally closed manager.
+
+For concurrent close, hold the first native unbind attempt pending and establish
+that caller two is awaiting that same in-flight attempt before releasing its
+injected failure. Require one native cleanup attempt and the same failure for
+both callers; binding ownership remains retained until a later close retry
+actually clears it. Merely launching two callers is insufficient.
+
+Through controlled callbacks on one owned join, rebind network N1 to N2, then
+deliver N1's delayed `onLost`: N2 must remain owned and bound. This is not a
+second public join or a leave operation. Race `onAvailable` delivery with
+`onUnavailable`; exactly one terminal result may win, and an unavailable
+request must never be reported as Joined. Capture shared-process/manager
+attribution, network handles, callback generations, close-attempt timestamps,
+and `dumpsys connectivity` before and after each close.
 
 ### A3 — LAN discovery, selected route, IPv4/IPv6, and secure transfer
 
