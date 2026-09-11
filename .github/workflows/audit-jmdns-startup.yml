@@ -1,0 +1,463 @@
+name: Audit 410 macOS JmDNS startup diagnostic
+
+# Diagnostic-only workflow; success grants no full-suite or release approval.
+# Run revision: 1. Only a reviewed change to this workflow requests one diagnostic.
+# The lead holds the separate global local/remote lease through terminal/upload reconciliation.
+on:
+  push:
+    branches: [audit/complete-2026-09-04]
+    paths: [.github/workflows/audit-jmdns-startup.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p2pkit-audit-host-validation
+  cancel-in-progress: false
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONUNBUFFERED: "1"
+  DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+
+jobs:
+  jmdns_startup:
+    name: Native macOS arm64 Java-only startup diagnostic (no release or full-suite credit)
+    if: ${{ github.repository == 'p2pKit/P2pKit' && github.event_name == 'push' }}
+    runs-on: macos-26
+    # Native-control ceiling plus bounded Java leaves, same-home stops and evidence/disposal headroom.
+    timeout-minutes: 100
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Allocate a new external physical state parent
+        id: allocate
+        timeout-minutes: 1
+        shell: python3 {0}
+        run: |
+          import json
+          import os
+          from pathlib import Path
+          import platform
+          import tempfile
+
+          assert os.environ["RUNNER_ENVIRONMENT"] == "github-hosted"
+          root = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
+          temporary = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
+          assert not temporary.is_relative_to(root)
+          parent = Path(tempfile.mkdtemp(prefix="p2pkit-jmdns-startup-410-", dir=temporary))
+          bootstrap = parent / "bootstrap"
+          bootstrap.mkdir(mode=0o700)
+          record = {"expectedCommit": os.environ["GITHUB_SHA"], "repository": os.environ["GITHUB_REPOSITORY"],
+                    "ref": os.environ["GITHUB_REF"], "runId": os.environ["GITHUB_RUN_ID"],
+                    "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"], "os": platform.platform(),
+                    "architecture": platform.machine(), "imageOS": os.environ.get("ImageOS"),
+                    "imageVersion": os.environ.get("ImageVersion"), "bootstrapIdentity":
+                    {"device": bootstrap.stat().st_dev, "inode": bootstrap.stat().st_ino}}
+          with (bootstrap / "workflow-start.json").open("x", encoding="utf-8") as stream:
+              json.dump(record, stream, indent=2)
+              stream.write("\n")
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as stream:
+              stream.write("P2PKIT_AUDIT_STATE_DIR=" + str(parent / "state") + "\n")
+              stream.write("P2PKIT_AUDIT_BOOTSTRAP_DIR=" + str(bootstrap) + "\n")
+              stream.write("KONAN_DATA_DIR=" + str(parent / "state/konan") + "\n")
+              stream.write("ANDROID_USER_HOME=" + str(parent / "state/android-user") + "\n")
+              stream.write("ANDROID_SDK_ROOT=\n")
+
+      - name: Check out the exact pushed source without persisted credentials
+        id: checkout
+        timeout-minutes: 5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Configure daemon prerequisite Java 21
+        timeout-minutes: 5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Keep the daemon toolchain path
+        timeout-minutes: 1
+        run: printf 'P2PKIT_AUDIT_JDK21=%s\n' "$JAVA_HOME" >> "$GITHUB_ENV"
+
+      - name: Configure launcher and library compiler Java 17
+        timeout-minutes: 5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Admit the clean source and retain ownership and tool prerequisites
+        id: init
+        timeout-minutes: 3
+        shell: python3 {0}
+        run: |
+          import argparse
+          import importlib.util
+          import os
+          from pathlib import Path
+          import stat
+          import subprocess
+          import sys
+
+          root = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
+          sys.path.insert(0, str(root / "scripts"))
+          spec = importlib.util.spec_from_file_location("startup_executor", root / "scripts/run-audit-command.py")
+          runner = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(runner)
+          state_path = os.environ["P2PKIT_AUDIT_STATE_DIR"]
+          runner.initialize(argparse.Namespace(root=str(root), state=state_path,
+              expected_commit=os.environ["GITHUB_SHA"], host="macos-arm64"))
+          state, context = runner.context_at(state_path)
+          bootstrap = runner.absolute_path(os.environ["P2PKIT_AUDIT_BOOTSTRAP_DIR"])
+          runner.write_new_json(bootstrap / "context.json", context)
+          cache_names = (".gradle", ".kotlin", "buildSrc/.gradle", "buildSrc/.kotlin")
+          absent = [*runner.disposable_roots(root), *[root / name for name in cache_names]]
+          runner.require(not context["preexistingOutputPaths"] and
+              all(runner.existing_lstat(path) is None for path in absent), "Fresh output/cache baseline required")
+          lockfiles = sorted(os.fsdecode(name) for name in
+              runner.git(root, "ls-files", "-z", "--", "*lockfile").split(b"\0") if name)
+          runner.require(len(lockfiles) == len(set(lockfiles)) == 12, "All twelve tracked locks are required")
+          locks = {}
+          for name in lockfiles:
+              path = root / name
+              runner.reject_symlinks(path)
+              runner.require(stat.S_ISREG(path.stat().st_mode), "Lock must be a regular source file")
+              locks[name] = {"bytes": path.stat().st_size, "sha256": runner.file_digest(path)}
+          home = Path(context["gradleHome"])
+          runner.write_new_json(bootstrap / "ownership-baseline.json", {
+              "jobId": context["id"], "contextSha256": runner.file_digest(state / "context.json"),
+              "stateIdentity": {"device": state.stat().st_dev, "inode": state.stat().st_ino},
+              "homeIdentity": {"device": home.stat().st_dev, "inode": home.stat().st_ino},
+              "absentPaths": [str(path) for path in absent], "locks": locks})
+          tools = {"java17": [str(Path(os.environ["JAVA_HOME"]) / "bin/java"), "-version"],
+                   "javac17": [str(Path(os.environ["JAVA_HOME"]) / "bin/javac"), "-version"],
+                   "java21": [str(Path(os.environ["P2PKIT_AUDIT_JDK21"]) / "bin/java"), "-version"],
+                   "xcode": ["xcodebuild", "-version"],
+                   "sdk": ["xcrun", "--show-sdk-version", "--sdk", "iphonesimulator"]}
+          versions = {}
+          for name, argv in tools.items():
+              result = subprocess.run(argv, capture_output=True, text=True, timeout=45)
+              versions[name] = {"argv": argv, "exitCode": result.returncode,
+                                "stdout": result.stdout, "stderr": result.stderr}
+          runner.write_new_json(bootstrap / "tools.json", versions)
+          runner.require(all(row["exitCode"] == 0 for row in versions.values()), "Required tool query failed")
+          runner.require('version "17.' in versions["java17"]["stderr"] + versions["java17"]["stdout"] and
+              "javac 17." in versions["javac17"]["stderr"] + versions["javac17"]["stdout"] and
+              'version "21.' in versions["java21"]["stderr"] + versions["java21"]["stdout"], "Wrong Java prerequisites")
+          runner.require(versions["xcode"]["stdout"].splitlines()[0] == "Xcode 26.5", "Wrong selected Xcode")
+
+      - name: Exercise the unchanged real native executor controls before diagnostic execution
+        id: controls
+        timeout-minutes: 35
+        run: |
+          set -euo pipefail
+          python3 scripts/run-audit-command.py --cwd "$GITHUB_WORKSPACE" \
+            --wrapper "$GITHUB_WORKSPACE/gradlew" --kind command --purpose startup-native-controls \
+            --timeout 1800 --receipt "$P2PKIT_AUDIT_BOOTSTRAP_DIR/native-controls-receipt.json" -- \
+            python3 scripts/tests/run-audit-command-test.py --expected-host macos-arm64 \
+            --evidence-dir "$P2PKIT_AUDIT_STATE_DIR/evidence/native-controls"
+
+      - name: Compile only Java inputs, run control once, and retain and dispose owned outputs
+        id: diagnostic
+        timeout-minutes: 20
+        if: ${{ always() && steps.init.outcome == 'success' }}
+        shell: python3 {0}
+        env:
+          PREREQUISITES_PASSED: ${{ steps.controls.outcome == 'success' }}
+        run: |
+          import argparse
+          import importlib.util
+          import os
+          from pathlib import Path
+          import re
+          import shutil
+          import stat
+          import sys
+          import xml.etree.ElementTree as ET
+
+          root = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
+          sys.path.insert(0, str(root / "scripts"))
+          def module(name, path):
+              spec = importlib.util.spec_from_file_location(name, path)
+              value = importlib.util.module_from_spec(spec)
+              spec.loader.exec_module(value)
+              return value
+          runner = module("startup_executor", root / "scripts/run-audit-command.py")
+          checker = module("startup_receipt_checker", root / "scripts/check-audit-receipt.py")
+          state, context = runner.context_at(os.environ["P2PKIT_AUDIT_STATE_DIR"])
+          bootstrap = runner.absolute_path(os.environ["P2PKIT_AUDIT_BOOTSTRAP_DIR"])
+          baseline = runner.read_json(bootstrap / "ownership-baseline.json")
+          wrapper, build = root / "gradlew", root / "build"
+          work = build / "jmdns-startup-410"
+          vendor = root / "library/p2p-transport-lan/vendor/jmdns/src/main"
+          fixture = root / ("library/p2p-transport-lan/src/jvmTest/java/"
+              "dev/p2pkit/transport/lan/internal/jmdns/impl/JmdnsCloseLifecycleFixture.java")
+          reviewed_fixture = "42e4f9b41a6a4a95ee30b1926c603affed9f77a331517de52631220979e40ea6"
+          dependency_hash = "5d6298b93a1905c32cda6478808ac14c2d4a47e91535e53c41f7feeb85d946f4"
+          dependency_url = "https://repo.maven.apache.org/maven2/org/slf4j/slf4j-api/2.0.7/slf4j-api-2.0.7.jar"
+          dependency = work / "slf4j-api-2.0.7.jar"
+          controls_argv = ["python3", "scripts/tests/run-audit-command-test.py", "--expected-host", "macos-arm64",
+                           "--evidence-dir", str(state / "evidence/native-controls")]
+          calls = [{"purpose": "startup-native-controls", "argv": controls_argv, "receipt": "native-controls-receipt.json",
+                    "rawExitCode": 0 if os.environ["PREREQUISITES_PASSED"] == "true" else None}]
+          result = {"scope": "JAVA_STARTUP_DIAGNOSTIC_ONLY", "result": "FAIL", "fullLifecycleSuite": "NOT_RUN",
+                    "lockGeneration": "NOT_RUN", "releaseCredit": False, "fixture": "NOT_RUN",
+                    "fixtureExitCode": None, "dependencyVerified": False, "commands": calls,
+                    "cleanup": "NOT_PROVEN", "removed": [], "errors": []}
+          source_inputs, runtime_inputs, build_identity = None, None, None
+          def file_record(path):
+              runner.reject_symlinks(path)
+              runner.require(stat.S_ISREG(path.stat().st_mode), "Input/evidence must be a regular file")
+              return {"bytes": path.stat().st_size, "sha256": runner.file_digest(path)}
+          def inventory(directory):
+              files = runner.regular_report_files(directory, [0])
+              runner.require(sum(path.stat().st_size for path in files) <= runner.MAX_ARCHIVE_BYTES,
+                  "Java diagnostic inputs exceed the existing retained-byte bound")
+              return {path.relative_to(directory).as_posix(): file_record(path) for path in sorted(files)}
+          def owned_source():
+              runner.require(baseline["jobId"] == context["id"] and baseline["contextSha256"] ==
+                  runner.file_digest(state / "context.json") and baseline["stateIdentity"] ==
+                  {"device": state.stat().st_dev, "inode": state.stat().st_ino} and
+                  runner.source_snapshot(root) == context["source"], "Owned source/context changed")
+              locks = {name: file_record(root / name) for name in baseline["locks"]}
+              runner.require(len(locks) == 12 and locks == baseline["locks"], "A tracked lock changed")
+              return locks
+          def bound(path, code, purpose, argv):
+              record = runner.read_json(path)
+              checker.validate(record, code, purpose, root, wrapper, argv)
+              runner.require(re.fullmatch(r"[0-9a-f]{32}", record["id"]) and record["jobId"] == context["id"] and
+                  record["host"] == "macos-arm64" and record["kind"] == "command" and
+                  record["gradleHome"] == context["gradleHome"] and record["sourceBefore"] == context["source"] and
+                  record["ancestorInvocationIds"] == [] and record["executedArgv"] == argv and
+                  record.get("ownership", {}).get("discoveryErrors") == [] and
+                  not record.get("cancelledSignals") and not record.get("cancelRequested"), "Wrong/unresolved receipt ownership")
+              canonical = state / "evidence" / record["id"] / "receipt.json"
+              runner.require(record == runner.read_json(canonical) and
+                  runner.file_digest(path, runner.MAX_JSON_BYTES) == runner.file_digest(canonical, runner.MAX_JSON_BYTES),
+                  "Canonical/alias receipt bytes differ")
+              return record
+          def invoke(purpose, argv, timeout):
+              row = {"purpose": purpose, "argv": argv, "timeoutSeconds": timeout,
+                     "receipt": purpose + ".json", "rawExitCode": None}
+              calls.append(row)
+              code = runner.main(["--cwd", str(root), "--wrapper", str(wrapper), "--kind", "command",
+                  "--purpose", purpose, "--timeout", str(timeout), "--receipt", str(bootstrap / row["receipt"]), "--", *argv])
+              row["rawExitCode"] = code
+              if purpose == "startup-control":
+                  result.update(fixtureExitCode=code, fixture="EXECUTED_PENDING_RECEIPT_ADMISSION")
+              record = bound(bootstrap / row["receipt"], code, purpose, argv)
+              row["invocationId"] = record["id"]
+              return code, record
+          try:
+              owned_source()
+              runner.require(os.environ["PREREQUISITES_PASSED"] == "true", "Native controls failed; diagnostic NOT_RUN")
+              bound(bootstrap / "native-controls-receipt.json", 0, "startup-native-controls", controls_argv)
+              runner.require("P2PKIT_JMDNS_FIXTURE_IPV4" not in os.environ, "Diagnostic must not override interface selection")
+              runner.require(runner.existing_lstat(build) is None, "Diagnostic needs a new owned root build directory")
+              sources = sorted(root / os.fsdecode(name) for name in runner.git(root, "ls-files", "-z", "--",
+                  "library/p2p-transport-lan/vendor/jmdns/src/main/java").split(b"\0") if name)
+              runner.require(len(sources) == 60 and all(path.suffix == ".java" for path in sources) and
+                  set(sources) == set(runner.regular_report_files(vendor / "java", [0])), "Expected the exact sixty vendor sources")
+              resources = runner.regular_report_files(vendor / "resources", [0])
+              runner.require(resources == [vendor / "resources/dev/p2pkit/transport/lan/internal/jmdns/version.properties"],
+                  "Unexpected vendor resource inputs")
+              runner.require(file_record(fixture)["sha256"] == reviewed_fixture, "Wrong reviewed startup diagnostic fixture")
+              verification = root / "gradle/verification-metadata.xml"
+              pins = ET.parse(verification).getroot().findall(
+                  "./v:components/v:component[@group='org.slf4j'][@name='slf4j-api'][@version='2.0.7']/"
+                  "v:artifact[@name='slf4j-api-2.0.7.jar']/v:sha256",
+                  {"v": "https://schema.gradle.org/dependency-verification"})
+              runner.require([pin.get("value") for pin in pins] == [dependency_hash], "Pinned dependency differs from source metadata")
+              inputs = [*sources, *resources, fixture, verification, root / "library/p2p-transport-lan/build.gradle.kts",
+                  root / ".github/workflows/audit-jmdns-startup.yml", root / "scripts/run-audit-command.py",
+                  root / "scripts/check-audit-receipt.py", root / "scripts/audit_processes.py",
+                  root / "library/p2p-transport-lan/src/jvmTest/kotlin/dev/p2pkit/transport/lan/JmdnsCloseLifecycleTest.kt"]
+              source_inputs = {path.relative_to(root).as_posix(): file_record(path) for path in inputs}
+              java = Path(os.environ["JAVA_HOME"]).resolve(strict=True) / "bin"
+              runner.require(str(java.parent) in context["javaHomes"], "Java compiler/launcher is outside admitted toolchains")
+              runner.write_new_json(bootstrap / "source-inputs.json", {"source": context["source"], "files": source_inputs,
+                  "javaBin": str(java), "dependency": {"coordinate": "org.slf4j:slf4j-api:2.0.7",
+                      "url": dependency_url, "sha256": dependency_hash}, "fixtureMode": "control", "childTimeoutSeconds": 45})
+              build.mkdir(mode=0o700)
+              build_identity = {"device": build.stat().st_dev, "inode": build.stat().st_ino}
+              runner.write_new_json(bootstrap / "diagnostic-work.json", {"jobId": context["id"],
+                  "build": str(build), "buildIdentity": build_identity, "work": str(work)})
+              work.mkdir(mode=0o700)
+              vendor_classes, fixture_classes = work / "vendor", work / "fixture"
+              vendor_classes.mkdir(mode=0o700)
+              fixture_classes.mkdir(mode=0o700)
+              # One bounded fixed-URL fetch; no redirects, retries, unpinned provider or metadata rewrite.
+              code, _ = invoke("startup-slf4j-download", ["/usr/bin/curl", "--disable", "--fail", "--silent", "--show-error",
+                  "--proto", "=https", "--tlsv1.2", "--connect-timeout", "15", "--max-time", "60",
+                  "--max-filesize", "1048576", "--output", str(dependency), dependency_url], 90)
+              runner.require(code == 0 and 0 < dependency.stat().st_size <= 1048576 and
+                  file_record(dependency)["sha256"] == dependency_hash, "Dependency download/hash admission failed")
+              result["dependencyVerified"] = True
+              compiler = [str(java / "javac"), "-J-Xmx256m", "-J-XX:ActiveProcessorCount=2"]
+              code, _ = invoke("startup-vendor-javac", [*compiler, "--release", "8", "-encoding", "UTF-8",
+                  "-classpath", str(dependency), "-d", str(vendor_classes), *[str(path) for path in sources]], 90)
+              runner.require(code == 0, "Vendor Java compilation failed; fixture NOT_RUN")
+              code, _ = invoke("startup-fixture-javac", [*compiler, "--release", "17", "-encoding", "UTF-8",
+                  "-classpath", os.pathsep.join([str(vendor_classes), str(dependency)]),
+                  "-d", str(fixture_classes), str(fixture)], 90)
+              runner.require(code == 0, "Fixture Java compilation failed; control NOT_RUN")
+              runtime_inputs = inventory(work)
+              runner.write_new_json(bootstrap / "compiled-inputs.json", {"files": runtime_inputs})
+              # Exactly one original control JVM, with the unchanged launcher's resource flags and 45s watchdog.
+              code, control = invoke("startup-control", [str(java / "java"), "-Xms16m", "-Xmx128m",
+                  "-XX:MaxMetaspaceSize=128m", "-XX:ActiveProcessorCount=2", "-XX:+UseSerialGC",
+                  "-Dorg.slf4j.simpleLogger.defaultLogLevel=off", "-cp",
+                  os.pathsep.join([str(fixture_classes), str(vendor_classes), str(vendor / "resources"), str(dependency)]),
+                  "dev.p2pkit.transport.lan.internal.jmdns.impl.JmdnsCloseLifecycleFixture", "control"], 45)
+              result["fixture"] = "FAIL"
+              after = inventory(work)
+              runner.write_new_json(bootstrap / "runtime-inputs-after.json", {"files": after})
+              runner.require(after == runtime_inputs, "Executed dependency/classes changed")
+              runner.require(code == 0, "Control fixture failed; original result retained")
+              evidence = state / "evidence" / control["id"]
+              output = [evidence / "product.stdout.log", evidence / "product.stderr.log"]
+              runner.require(sum(file_record(path)["bytes"] for path in output) <= 65536, "Excessive fixture output")
+              transcript = "\n".join(path.read_text(encoding="utf-8", errors="replace") for path in output)
+              runner.require(transcript.splitlines().count("PASS mode=control") == 1 and "FAIL mode=" not in transcript and
+                  "phase=fixture_rescue_begin" not in transcript, "Natural control success marker/rescue check failed")
+              result["fixture"] = "PASS"
+          except Exception as error:
+              result["errors"].append(type(error).__name__ + ": " + str(error))
+          finally:
+              try:
+                  locks = owned_source()
+                  runner.write_new_json(bootstrap / "locks-after.json", {"locks": locks, "allTwelveUnchanged": True})
+                  if source_inputs is not None:
+                      runner.require({name: file_record(root / name) for name in source_inputs} == source_inputs,
+                          "Exact diagnostic source input bytes changed")
+                  # Every attempted command needs its real canonical final receipt, including failed product leaves.
+                  admitted = {bound(bootstrap / row["receipt"], row["rawExitCode"], row["purpose"], row["argv"])["id"]
+                      for row in calls}
+                  started = {path.name for path in (state / "evidence").iterdir()
+                      if path.is_dir() and runner.existing_lstat(path / "start.json") is not None}
+                  runner.require(started == admitted, "Unexpected/unfinalized invocation blocks disposal")
+                  if build_identity is not None:
+                      runner.reject_symlinks(build)
+                      runner.require(build_identity == {"device": build.stat().st_dev, "inode": build.stat().st_ino},
+                          "Owned diagnostic output root changed")
+                      output_inventory = inventory(work)
+                      if runtime_inputs is not None:
+                          runner.require(output_inventory == runtime_inputs, "Runtime input bytes changed before retention")
+                      destination = state / "evidence/startup-outputs"
+                      destination.mkdir(mode=0o700)
+                      copied = {}
+                      for path in runner.regular_report_files(work, [0]):
+                          relative = path.relative_to(work)
+                          before = file_record(path)
+                          target = destination / relative
+                          target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                          with path.open("rb") as incoming, runner.new_file(target) as outgoing:
+                              shutil.copyfileobj(incoming, outgoing)
+                          runner.require(before == file_record(path) == file_record(target), "Evidence changed while copying")
+                          copied[relative.as_posix()] = before
+                      runner.require(copied == output_inventory and inventory(work) == output_inventory,
+                          "Diagnostic output inventory changed during retention")
+                      runner.write_new_json(bootstrap / "retained-java-outputs.json", {"files": copied,
+                          "limitation": "Direct-source Java diagnostic bytes, not a Gradle producer or publication gate"})
+                  retained = runner.regular_report_files(state / "evidence", [0])
+                  runner.require(sum(path.stat().st_size for path in retained) <= runner.MAX_ARCHIVE_BYTES,
+                      "Evidence exceeds existing retained-byte bound; preserve originals")
+                  present = [str(path) for path in runner.disposable_roots(root) if runner.existing_lstat(path) is not None]
+                  if present:
+                      runner.require(runner.cleanup(argparse.Namespace(state=str(state), path=present)) == 0,
+                          "Existing owned-output cleanup failed")
+                      result["removed"].extend(present)
+                  # Keep caches/home outside the executor allowlist; use the existing leaf-locked no-follow disposal.
+                  lease = runner.LeafLock(state)
+                  try:
+                      lease.acquire()
+                      owned_source()
+                      caches = [root / name for name in (".gradle", ".kotlin", "buildSrc/.gradle", "buildSrc/.kotlin")]
+                      runner.require(baseline["absentPaths"] == [str(path) for path in [*runner.disposable_roots(root), *caches]],
+                          "Absent-before disposal baseline changed")
+                      home = Path(context["gradleHome"])
+                      runner.require(baseline["homeIdentity"] == {"device": home.stat().st_dev, "inode": home.stat().st_ino},
+                          "Owned Gradle home was replaced")
+                      for index, path in enumerate([*caches, home, state / "konan", state / "android-user"]):
+                          if runner.existing_lstat(path) is None:
+                              continue
+                          runner.reject_symlinks(path)
+                          if runner.within(path, root):
+                              runner.require(not runner.git(root, "ls-files", "-z", "--", path.relative_to(root).as_posix()),
+                                  "Refuse tracked output/cache cleanup")
+                          inspection = runner.inspect_disposable_tree(path)
+                          runner.write_new_json(bootstrap / f"disposal-{index}-start.json", inspection)
+                          runner.require(inspection["rootIdentity"] == {"device": path.stat().st_dev, "inode": path.stat().st_ino},
+                              "Disposable root identity changed")
+                          shutil.rmtree(path)
+                          runner.require(runner.existing_lstat(path) is None, "Disposable output remained")
+                          result["removed"].append(str(path))
+                      owned_source()
+                      result["cleanup"] = "EXPLICIT_OWNED_OUTPUT_DISPOSAL_COMPLETE"
+                  finally:
+                      lease.close()
+              except Exception as error:
+                  result["errors"].append("Retention/disposal: " + type(error).__name__ + ": " + str(error))
+              if not result["errors"] and result["fixture"] == "PASS":
+                  result["result"] = "DIAGNOSTIC_CONTROL_PASS"
+              runner.write_new_json(bootstrap / "startup-final.json", result)
+          if result["result"] != "DIAGNOSTIC_CONTROL_PASS":
+              raise SystemExit(1)
+
+      - name: Seal only regular bounded evidence on success or failure
+        id: seal
+        timeout-minutes: 5
+        if: ${{ always() && steps.checkout.outcome == 'success' && steps.allocate.outcome == 'success' }}
+        shell: python3 {0}
+        run: |
+          import importlib.util
+          import os
+          from pathlib import Path
+          import sys
+
+          root = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
+          sys.path.insert(0, str(root / "scripts"))
+          spec = importlib.util.spec_from_file_location("startup_executor", root / "scripts/run-audit-command.py")
+          runner = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(runner)
+          bootstrap = runner.absolute_path(os.environ["P2PKIT_AUDIT_BOOTSTRAP_DIR"])
+          start = runner.read_json(bootstrap / "workflow-start.json")
+          runner.require(start["expectedCommit"] == os.environ["GITHUB_SHA"] and start["bootstrapIdentity"] ==
+              {"device": bootstrap.stat().st_dev, "inode": bootstrap.stat().st_ino}, "Bootstrap identity changed")
+          directories = [bootstrap]
+          evidence = Path(os.environ["P2PKIT_AUDIT_STATE_DIR"]) / "evidence"
+          if runner.physical_directory_present(evidence):
+              directories.append(evidence)
+          files = []
+          budget = [0]
+          for directory in directories:
+              files.extend(runner.regular_report_files(directory, budget))
+          runner.require(sum(path.stat().st_size for path in files) <= runner.MAX_ARCHIVE_BYTES,
+              "Evidence exceeds the existing bounded archive limit; upload is not proved")
+          runner.write_new_json(bootstrap / "evidence-sha256.json", [
+              {"path": path.relative_to(bootstrap.parent).as_posix(), "bytes": path.stat().st_size,
+               "sha256": runner.file_digest(path)} for path in sorted(files)])
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as stream:
+              stream.write("bootstrap=" + str(bootstrap) + "\n")
+              stream.write("evidence=" + (str(evidence) if len(directories) == 2 else "") + "\n")
+
+      - name: Upload failed-or-passed diagnostic evidence without full-suite or release credit
+        id: evidence
+        timeout-minutes: 5
+        if: ${{ always() && steps.seal.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: audit-jmdns-startup-410-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.seal.outputs.bootstrap }}
+            ${{ steps.seal.outputs.evidence }}
+          if-no-files-found: error
+          include-hidden-files: true
+          overwrite: false
+          retention-days: 14
