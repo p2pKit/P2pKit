@@ -1843,3 +1843,91 @@ admission/lease and qualification-only publication remain pending; this is not M
 lock refresh, host acceptance or final410approval. Current work is **base464c+fixture+workflow+admin**;
 the final fixture and earlier ordinary Linux control bindings remain unchanged. Exact source-readiness
 metadata is under `checkpoint.json` → `nativeFollowups.startupDiagnosticContinuation.pendingMacControl`.
+
+
+## 410 native startup failure and guarded route diagnostic
+
+Later11September continuation; **197/231approved,198resolved,33unresolved** remain unchanged.
+#410 alone is active, final approval **WITHHELD**; auditNOT_READY/#133NOT_STARTED.
+The preceding pending/private/imported paragraphs retain their dated input states, not current status.
+
+### Published startup revision1 and its actual native Mac failure
+
+Startup fixture`c4f34ea02105c222578877a7efe84fd969060fb1`, workflow
+`b8a74372e41c23d7d3eebb9c006ffdd0356ca70f` and administration
+`09bfb9e99d708b267b3230f8066edf636b2d33ef` were published. Separate Java-only Mac startup run
+**34619248796/1**, job103328799100/artifact10271696830, used clean09bfb9e /
+tree`f723f2478d90527c70b6e78608d65c7f74dc4bb2`, unchanged. Its ordinary control product ran
+16:00:46.566221–16:00:57.078284UTC, **product/stop/final1/0/1**. Stderr records
+`AssertionError: host_not_announced`; stdout separately captures the first send failure
+`java.net.NoRouteToHostException` at `DatagramChannelImpl.send0`: **2sendCalls/0returns/0announcerCalls**.
+Ready/ordinary-close assertions were not reached; rescue retained failure, not natural-close success.
+
+Native executor91control methods and prerequisite download/admission/Java8vendor/Java17fixture
+compilation passed only their bounded scopes, not91product tests. Direct Java produced no JUnitXML;
+full lifecycle suite, seven other modes and lock generation were **NOT_RUN**. All12locks unchanged.
+This is not a second full Mac qualification: original464cMacR1FAIL/2744pass+1failure+1skip and
+LinuxR2aggregateFAIL remain at their own source bindings. Routing/privacy/provider/JDK or
+source/environment cause is **UNPROVEN**; no retrospective MacR1/R16/Android causal attribution.
+ZIP SHA`a8fffb076b0c1de3ddfe3bb74aa12e2d4774d9ebaef4a0df556aa33f48c90fb0`;
+raw control/final/log bindings are in `checkpoint.json` →
+`nativeFollowups.startupDiagnosticContinuation.macControlR1`.
+
+### Separate startup cleanup and actual lease clocks
+
+Independent cleanup reportSHA`e942c521b4fb3fb59318876a89db8860cd2ee7ae9a5033b66d954edf5e905d95`
+authenticates1290regular ZIP members/1289self-excluding seal rows and all five primary aliases.
+The39fixture roots have42cleanup records:39completed disposals plus3deliberate failed attempts,
+each followed by recovery; initial failures stay visible. Exact checkout build/isolated Gradle-home
+disposal is **EXPLICIT_OWNED_OUTPUT_DISPOSAL_COMPLETE**; other12eligible outputs/four project caches/
+Konan/Android-user absent add no deletion credit. No blanket host/VM/shared-cache cleanup follows.
+The lease receipt records **16:16:22.188326UTC**; the distinct operator-release event is
+**16:16:22.191307UTC**, no source-freeze violations. Release is scheduling, not cleanup/test/repair
+approval. ReceiptSHA`29f8ad7a77d4b67c3b641679221a7adb0e252f5f7d2002de40825652c86a9710`.
+
+### Guarded passive diagnostic revision2: local qualification only
+
+The later fixture captures selected-NIC identity and guards a post-failure Mac scoped-route read;
+no route/permission/interface change, packet probe, guessed cause or weakened assertion/deadline.
+FixtureSHA`08c799e1c8a2aaf08fed5e36faa29a74c607ae7131d1c1ff447d86cf6afabd30`;
+workflowSHA`a7669839966881c8ea2d3dde8314bff9858f2fb95e3abb954786c0fdac666861`.
+Independent source review **APPROVE_SCOPED_SOURCE**, reportSHA
+`2233691f69fd3870def253dd688ebf309131538096689ff42971af28c28662a9`.
+The two-line workflow review16:40:47–16:40:58UTC is conversation-only, not a separate report.
+Source qualification commit`0e0c1c9ebab9f89f73b15e46bfde4532f41953f3` /
+tree`549391c625e38420501777b099d1bdc6202ce178` is **locally COMMITTED_NOT_PUSHED**.
+
+Four local envelopes16:40:52–16:43:24UTC are **0/0/0**:Java8vendor/Java17fixture compilation,
+**3synthetic parser/sanitization groups(noOSquery)**, and **oneLinuxordinarycontrolPASS/norescue**.
+All executed unchanged base09bfb9e+source-diff
+`9b5d5dda8a0ab2fb372edf73372f4312d461c2dc6f881dc1f68cd6367df9ac9c`, **not clean0e0c1c9**.
+Final control removed its606979-byte owned build root, no owned survivors; earlier deferred
+outputs are accounted for by that final disposal. Fresh independent review16:44:46–16:45:49UTC
+approved **scoped qualification publication**, delivered in conversation; the source report above
+is unchanged and no new review report/path/hash is invented. Exact four receipts/logs are under
+`checkpoint.json` → `nativeFollowups.startupDiagnosticContinuation.nextDiagnostic`.
+
+Revision2 workflow **NOT_EXECUTED** pending fresh hosted admission/lease and publication. Linux
+control/synthetic parsing did not execute the Mac route query or prove its process cleanup.
+No remaining7mode, full suite, complete locks, consumer, ART or final410credit. Environment reportSHA
+`db2286660c0e226d49a4d74e1263cedcaaa4d574925246f88fb09bf57f9b5052` supplies context only;
+its official-source research was not repeated by the administrative author and cause staysUNPROVEN.
+
+### Sealed R7 census and unchanged continuation boundaries
+
+R7**16:29:20.277725–16:29:30.603136UTC**,17GETs/noerrors/retries, freshly captures238unchanged
+all-open objects/bodies(231issues+7PRs); overlapping item/comment/inline delta since15:40 is empty.
+All nine repair rows409–417 remainOPEN/0comments with complete fresh empty comment feeds. Only417
+was manually reread anew by that reviewer; the other unchanged repair-body reads and566comments
+remain reused, not a full semantic/history recrawl.7PR own/source projections unchanged; nested
+repository pushed_at metadata is not a ref observation. Effective338issues/79PRs is cumulative;
+**Actions/ref/lease requests0**. ReportSHA
+`035b9b26b02075d346c034afff1a40d831ad41a0a90e5c5e28dd3f3501dd580e`;
+reconciliationSHA`2eee913f0c7bb0705b1ba35bb5cf9147a3b153b77b51dc89a94ccf6a2734f8f5`.
+
+Queue410→414→415→416→417→413→409→411→412;413option-Bplan only, queued implementationsNOT_STARTED.
+207Windows19/408native scoped approvals stand without replay; preserve Windows17unknown suppressed
+contents, R18bounded failure,383/202fences,393scope and R16FAIL/PARTIAL_SALVAGE/remote-cleanupNOT_PROVEN.
+ART/narrowApple/Intel/current root-sample-consumer gates,physical/OEM/hostile,backup291,independent133,
+professional crypto and owner120/274/284 remain. Source0.7.0-SNAPSHOT/immutableRC3/0.8.0+restrictions
+stand; no merge/closure/tag/settings/release authority. Coverage rebinding remains separately owned.

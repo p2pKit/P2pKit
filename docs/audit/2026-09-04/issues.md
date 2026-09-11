@@ -1,5 +1,5 @@
 <!-- audit-current:start -->
-# Current audit continuation — #410 Mac qualification failed; diagnostic pending
+# Current audit continuation — #410 Mac startup failed; guarded diagnostic awaiting Mac
 
 **197/231 repair approvals (85.3%); 198/231 resolved (85.7%); 33 unresolved (14.3%).**
 Nine repairs: **#410 → #414 → #415 → #416 → #417 → #413 → #409 → #411 → #412**;
@@ -28,13 +28,25 @@ workflow execution. Mac aggregate SBOM and authenticated paired validation passe
 not a full consumer/product gate. The consumer-test complete semantic-delta review gap is closed,
 source-only—not whole-file or runtime credit. Instrumentation correction compilation remains **NOT_RUN**.
 
-Later startup diagnostics are source-approved with the sanitization correction. **Local Linux only**:
-60 vendor Java sources compiled for Java8, the final fixture compiled for Java17, and one ordinary
-control reached ready and disposed original resources without rescue; all three envelopes **0/0/0**.
-This is not Mac, the other seven modes, or the current Gradle graph. The one-control Mac workflow is
-**source-reviewed and imported; NOT_EXECUTED**. Focused policy validation, fresh hosted
-admission/lease and qualification-only publication remain pending; no Mac cause or repair is established.
-Current work is **base464c plus fixture/workflow/admin edits**, not a new clean executed commit.
+The initial local Linux startup diagnostic passed Java8 vendor/Java17 fixture compilation and
+one ordinary control without rescue, all three envelopes **0/0/0**, at their earlier WIP bindings.
+Published fixture/workflow/admin `c4f34ea` / `b8a7437` / `09bfb9e` then produced the separate
+**native Mac startup run34619248796/1: FAIL, product/stop/final1/0/1**, clean `09bfb9e` /
+tree `f723f2478d90527c70b6e78608d65c7f74dc4bb2`. Stderr reports `host_not_announced`; stdout
+separately records first send failure `java.net.NoRouteToHostException` at `DatagramChannelImpl.send0`,
+**2 send calls / 0 returns / 0 announcer calls**. Ready/ordinary-close assertions were not reached;
+rescue preserved failure. Native executor **91 control methods** passed, not91 product tests.
+The full lifecycle suite, seven other modes and lock generation were **NOT_RUN**; all12locks unchanged.
+Routing/privacy/provider/JDK or source/environment cause remains **UNPROVEN**.
+
+The later guarded passive NIC/scoped-route diagnostic is scoped-source-approved and locally committed
+at `0e0c1c9ebab9f89f73b15e46bfde4532f41953f3` / tree `549391c625e38420501777b099d1bdc6202ce178`,
+**COMMITTED_NOT_PUSHED**. Four local envelopes **0/0/0** passed Java8 vendor/Java17 fixture compilation,
+three synthetic parser/sanitization groups (**no OS query**) and one Linux ordinary control without
+rescue. Execution was **base09bfb9e + diff9b5d5dda**, not a clean0e0c1c9 invocation. Fresh final review
+approved scoped qualification publication only. Workflow revision2 is **source-approved; NOT_EXECUTED**,
+pending fresh hosted admission/lease and publication. Its guarded Mac-only route query is post-failure
+observation, not a permission/route change, guessed cause, full graph or final #410 approval.
 
 Mac cleanup was independently verified: **17 exact owned roots removed**, three branches already
 absent, four Konan child symlinks unlink-only. The final semantic error was unchanged locks, not cleanup.
@@ -42,10 +54,16 @@ R1's scheduling lease was actually released **14:59:20.836323 UTC**, no source-f
 release itself is not cleanup/test approval. Later local control cleanup removed its **585,803-byte**
 owned build root; no blanket shared-cache/SDK/VM or remote-cleanup claim is inferred.
 
-Fresh R5 **14:58:48–14:58:59 UTC**: 238 all-open bodies (231 issues/7PRs), unchanged; since14:01
-item/comment/inline delta empty. Nine repair bodies and complete empty comment feeds were refreshed;
-566 historical comments and closed/linked histories were reused, not freshly recrawled. **No R5 Actions/
-ref/lease requests.** Effective338 issues/79PRs is cumulative, not a new all-state census.
+Startup1's independent cleanup review separately verifies exact checkout build/isolated Gradle-home
+disposal. Its lease receipt records **16:16:22.188326 UTC**; the distinct operator-release event is
+**16:16:22.191307 UTC**, not cleanup/test/repair approval. The later local route-control envelope
+removed its **606,979-byte** owned build root with no owned survivors; no host-global cleanup claim.
+
+Sealed R7 **16:29:20–16:29:30 UTC**:17GETs,238 unchanged all-open objects/bodies (231issues/7PRs);
+since15:40 item/comment/inline delta empty. All nine repair rows remain **OPEN/0comments**, with complete
+fresh empty comment feeds. Only #417 received a new full manual body reread; the other unchanged
+repair-body reads and566historical comments were reused. **R7 Actions/ref/lease requests0**; effective
+338issues/79PRs is cumulative, not a new all-state/history census or fresh read of every body.
 
 #207 Windows19 and #408 native scoped approvals stand, without another scoped replay. Windows19's
 78 product cases remain separate from92 executor fixtures and are not full-host qualification.
@@ -56,13 +74,13 @@ findings, unimplemented/unapproved. Physical/OEM/hostile, ART, narrow Apple/Inte
 backup291, independent/crypto review and owner decisions remain separate. Source0.7.0-SNAPSHOT,
 immutable RC3 and existing0.8.0+ restrictions stand; no merge, closure, tag/settings or release authority.
 
-[Exact evidence and continuation](repairs/cohort-2026-09-09-native-followups.md#410-mac-qualification-failure-and-startup-diagnostic-continuation).
+[Exact evidence and continuation](repairs/cohort-2026-09-09-native-followups.md#410-native-startup-failure-and-guarded-route-diagnostic).
 
 ## Pending repair (9)
 
 | Issue | Current disposition |
 | --- | --- |
-| [#410](https://github.com/p2pKit/P2pKit/issues/410) | Sole active repair; Mac qualification FAILED before control ready/close, other7modes NOT_RUN. Later ordinary Linux control passed; imported/source-reviewed Mac diagnostic NOT_EXECUTED. Policy/admission/publication/full locks/consumer/final approval pending. |
+| [#410](https://github.com/p2pKit/P2pKit/issues/410) | Sole active repair; full Mac qualification and separate startup1 control FAILED before ready/close. Startup1 captured native NoRouteToHostException, cause UNPROVEN. Guarded diagnostic local controls passed; source0e0c1c9 COMMITTED_NOT_PUSHED, workflow revision2 NOT_EXECUTED. Full locks/consumer/final approval pending. |
 | [#414](https://github.com/p2pKit/P2pKit/issues/414) | Queued, source-confirmed/runtime NOT_RUN: valid port-only resolved-service callback suppression. |
 | [#415](https://github.com/p2pKit/P2pKit/issues/415) | Queued, source-confirmed/runtime NOT_RUN: extended RCODE warning value only, not packet acceptance. |
 | [#416](https://github.com/p2pKit/P2pKit/issues/416) | Queued, source-confirmed/runtime NOT_RUN: reverse-domain substring parsing in accepted explicit-legacy names. |
