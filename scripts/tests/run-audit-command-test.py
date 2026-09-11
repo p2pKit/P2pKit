@@ -142,6 +142,10 @@ if "--stop" in arguments:
         while True: time.sleep(.05)
     raise SystemExit(int(os.environ.get("FIXTURE_STOP_EXIT", "0")))
 mode = arguments[0]
+if os.environ.get("FIXTURE_REATTEST_XCFRAMEWORK") == "yes":
+    sidecar = pathlib.Path("library/p2p-transport-lan/build/XCFrameworks/release/BUILD_ARTIFACTS_SHA256.txt")
+    sidecar.write_text("c" * 64 + "\n", encoding="ascii")
+    print("SYNTHETIC-XCFRAMEWORK-REATTEST", flush=True)
 if mode == "argv":
     print(json.dumps(arguments, ensure_ascii=True))
     raise SystemExit(0)
@@ -684,6 +688,22 @@ class PurePolicyTests(unittest.TestCase):
         self.assertIn("--no-parallel", result)
         self.assertIn("--max-workers=2", result)
         self.assertIn("strict", result)
+        self.assertIn("--rerun-tasks", result)
+        task = ":p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance"
+        for original in ([task, "-q", "--console=plain"], [task, "--console=plain"]):
+            with self.subTest(reuse=original):
+                snapshot = list(original)
+                fresh = runner.gradle_arguments(original)
+                self.assertEqual(runner.gradle_arguments(original, reuse_xcframework=True),
+                                 [argument for argument in fresh if argument != "--rerun-tasks"])
+                self.assertEqual(original, snapshot)
+        for original in ([task], [task, "-q", "--console=plain", "--rerun-tasks"],
+                         [task, "-q", "--console=plain", "check"], [task, "--console=plain", "-x", task],
+                         [task, "--console=plain", "--init-script", "/tmp/fixture.init.gradle.kts"]):
+            with self.subTest(no_reuse=original):
+                self.assertIn("--rerun-tasks", runner.gradle_arguments(original))
+                with self.assertRaisesRegex(runner.AuditError, "Only the exact XCFramework verifier"):
+                    runner.gradle_arguments(original, reuse_xcframework=True)
 
     def test_matching_singleton_options_are_not_appended_twice(self):
         cases = []
@@ -1497,10 +1517,11 @@ class ExecutorFixtureTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
         return result.stdout
 
-    def start(self, arguments, *, kind="gradle", env=None, timeout=20, stop_timeout=5, receipt=None, invocation=None):
+    def start(self, arguments, *, kind="gradle", purpose="executor-fixture", env=None, timeout=20, stop_timeout=5,
+              receipt=None, invocation=None):
         receipt = receipt or self.state / f"optional-{uuid.uuid4().hex}.json"
         command = [PYTHON, str(EXECUTOR), "--cwd", str(self.root), "--wrapper", str(self.wrapper),
-                   "--purpose", "executor-fixture", "--kind", kind, "--timeout", str(timeout),
+                   "--purpose", purpose, "--kind", kind, "--timeout", str(timeout),
                    "--stop-timeout", str(stop_timeout), "--receipt", str(receipt), "--", *arguments]
         if invocation:
             command[2:2] = ["--id", invocation]
@@ -1559,6 +1580,97 @@ class ExecutorFixtureTests(unittest.TestCase):
         directory = Path(receipt["evidenceDirectory"])
         self.assertEqual((directory / "stop.stdout.log").read_bytes(), b"STOP-ONLY-STDOUT\n")
         self.assertEqual((directory / "stop.stderr.log").read_bytes(), b"STOP-ONLY-STDERR\n")
+
+    def test_xcode_provenance_reuse_requires_bound_producer(self):
+        task = ":p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance"
+        arguments = [task, "-q", "--console=plain"]
+        code, _, err, standalone = self.run_leaf(arguments, purpose="xcode-provenance")
+        self.assertEqual(code, 0, err.decode(errors="replace"))
+        self.assertIn("--rerun-tasks", standalone["executedArgv"])
+        self.assertNotIn("xcframeworkReuse", standalone)
+
+        producer_path = self.state / "host-xcframework-build.json"
+        code, _, err, producer = self.run_leaf([task], purpose="xcframework-build", receipt=producer_path)
+        self.assertEqual(code, 0, err.decode(errors="replace"))
+        self.assertIn("--rerun-tasks", producer["executedArgv"])
+        # These bytes and this wrapper are explicitly synthetic adapter fixtures,
+        # not a real XCFramework, Gradle verifier execution or native acceptance.
+        release = self.root / "library/p2p-transport-lan/build/XCFrameworks/release"
+        release.mkdir(parents=True)
+        checksums = {}
+        for name, value in (("BUILD_COMMIT.txt", self.commit), ("BUILD_SOURCE_STATE.txt", "clean"),
+                            ("BUILD_INPUTS_SHA256.txt", "a" * 64), ("BUILD_ARTIFACTS_SHA256.txt", "b" * 64)):
+            raw = (value + "\n").encode("ascii")
+            (release / name).write_bytes(raw)
+            (self.state / "evidence" / name).write_bytes(raw)
+            checksums[name] = runner.digest(raw)
+        manifest_path = self.state / "evidence/xcframework-sidecars.json"
+        manifest = {"sourceInvocationId": producer["id"], "files": [
+            {"path": name, "sha256": checksum, "result": "RETAINED"} for name, checksum in checksums.items()]}
+        runner.write_new_json(manifest_path, manifest)
+        for requested in (arguments, [task, "--console=plain"]):
+            with self.subTest(reuse=requested):
+                code, _, err, receipt = self.run_leaf(requested, purpose="xcode-provenance")
+                self.assertEqual(code, 0, err.decode(errors="replace"))
+                self.assertEqual(receipt["requestedArgv"], requested)
+                expected = [argument for argument in runner.gradle_arguments(requested) if argument != "--rerun-tasks"]
+                self.assertEqual(receipt["executedArgv"], [str(self.wrapper), *expected])
+                self.assertEqual(receipt["xcframeworkReuse"], {
+                    "producerInvocationId": producer["id"], "producerReceiptSha256": runner.file_digest(producer_path),
+                    "sidecarsManifestSha256": runner.file_digest(manifest_path), "sidecars": checksums})
+                self.assertTrue(receipt["xcframeworkReuseUnchanged"])
+                self.assertTrue(receipt["sourceUnchanged"])
+                self.assertEqual([receipt[key] for key in ("productExitCode", "stopExitCode", "finalExitCode")], [0, 0, 0])
+                self.assertEqual(receipt["errors"], [])
+                self.assertEqual(receipt["ownedSurvivors"], [])
+                self.assertEqual(self.calls()[-1]["home"], self.context["gradleHome"])
+                self.assertIn("--stop", self.calls()[-1]["argv"])
+        code, _, err, ordinary = self.run_leaf(arguments)  # Exact argv alone does not authorize reuse.
+        self.assertEqual(code, 0, err.decode(errors="replace"))
+        self.assertIn("--rerun-tasks", ordinary["executedArgv"])
+        self.assertNotIn("xcframeworkReuse", ordinary)
+
+        controls = (
+            ("malformed", producer_path, b"{invalid", "JSONDecodeError"),
+            ("failed", producer_path, runner.json_bytes({**producer, "finalExitCode": 125}), "finalExitCode differs"),
+            ("foreign-context", producer_path, runner.json_bytes({**producer, "jobId": "0" * 32}),
+             "another source/context"),
+            ("not-fresh", producer_path, runner.json_bytes({**producer, "executedArgv": [
+                argument for argument in producer["executedArgv"] if argument != "--rerun-tasks"]}),
+             "did not execute the exact forced-fresh build"),
+            ("different-copy", Path(producer["evidenceDirectory"]) / "receipt.json", b"{}", "receipt copies differ"),
+            ("foreign-sidecars", manifest_path, runner.json_bytes({**manifest, "sourceInvocationId": "0" * 32}),
+             "another producer"),
+            ("missing-retained", self.state / "evidence/BUILD_INPUTS_SHA256.txt", None, "FileNotFoundError"),
+            ("changed-live", release / "BUILD_ARTIFACTS_SHA256.txt", b"c" * 64 + b"\n", "sidecar differs"),
+            ("changed-source", self.root / "source.txt", b"synthetic source change\n", "Source differs"),
+        )
+        for label, path, replacement, error in controls:
+            with self.subTest(rejected=label):
+                before, calls = path.read_bytes(), len(self.calls())
+                try:
+                    if replacement is None:
+                        path.unlink()
+                    else:
+                        path.write_bytes(replacement)
+                    code, _, _, receipt = self.run_leaf(arguments, purpose="xcode-provenance")
+                    self.assertEqual(code, 125)
+                    self.assertIsNone(receipt["productExitCode"])
+                    self.assertIsNone(receipt["stopExitCode"])
+                    self.assertTrue(any(error in item for item in receipt["errors"]), receipt["errors"])
+                    self.assertEqual(len(self.calls()), calls, "Rejected reuse must not launch a product or stop")
+                finally:
+                    path.write_bytes(before)  # Restore only this fixture's explicit synthetic negative input.
+
+        code, out, _, receipt = self.run_leaf(arguments, purpose="xcode-provenance",
+                                             env={**self.env, "FIXTURE_REATTEST_XCFRAMEWORK": "yes"})
+        self.assertIn(b"SYNTHETIC-XCFRAMEWORK-REATTEST", out)
+        self.assertEqual((code, receipt["productExitCode"], receipt["stopExitCode"]), (125, 0, 0))
+        self.assertFalse(receipt["xcframeworkReuseUnchanged"])
+        self.assertTrue(receipt["sourceUnchanged"], "The changed sidecar is not a source mutation")
+        self.assertEqual(receipt["ownedSurvivors"], [])
+        self.assertTrue(any("XCFramework reuse finalization failed" in item and "sidecar differs" in item
+                            for item in receipt["errors"]), receipt["errors"])
 
     def test_product_failure_is_distinct_from_infrastructure(self):
         code, _, _, receipt = self.run_leaf(["failure"])

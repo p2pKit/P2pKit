@@ -506,9 +506,19 @@ The [leaf executor](../../scripts/run-audit-command.py) uses an exclusive job-ow
 Gradle home and per-invocation lease. There is no cross-run cache action, build cache,
 configuration cache or parallel Gradle execution. Dependency/wrapper downloads may
 be reused within the exclusively owned job home. Direct product invocations keep
-strict dependency verification, rerun tasks, at most two workers, bounded heap and
+strict dependency verification, task rerun by default, at most two workers, bounded heap and
 metaspace, and an in-process Kotlin compiler. Intentional negative-control arguments
 such as `--configure-on-demand` are preserved, not masked by appended opposites.
+
+Only `kind=gradle`, purpose `xcode-provenance`, and the exact
+`:p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance` task with
+`-q --console=plain` or `--console=plain` may omit the appended `--rerun-tasks`.
+Reuse requires the same job's successful source-bound forced-fresh producer,
+matching canonical receipt, and all four retained/live sidecar bindings checked
+before and after the invocation. An absent producer keeps forced-fresh behavior;
+present invalid bindings fail closed. The real no-output Gradle verifier still
+executes against current source, inputs, binaries and headers. All other flags,
+source checks, resource limits, wrapper stops and ownership controls remain unchanged.
 
 ### Audited consumer and policy-fixture work
 

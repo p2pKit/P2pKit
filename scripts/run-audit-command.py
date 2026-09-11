@@ -11,6 +11,7 @@ import argparse
 from datetime import datetime, timezone
 import errno
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -41,6 +42,11 @@ MAX_ARCHIVE_FILES = 20000
 MAX_CLEANUP_ENTRIES = 250000
 MAX_REMOVAL_DETAIL_BYTES = 32768
 LOCK_NAME = "gradle.lock"
+XCFRAMEWORK_TASK = ":p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance"
+# The second exact spelling exposes task outcomes for the focused native reuse check.
+XCFRAMEWORK_ARGV = ([XCFRAMEWORK_TASK, "-q", "--console=plain"], [XCFRAMEWORK_TASK, "--console=plain"])
+XCFRAMEWORK_SIDECARS = ("BUILD_COMMIT.txt", "BUILD_SOURCE_STATE.txt", "BUILD_INPUTS_SHA256.txt",
+                       "BUILD_ARTIFACTS_SHA256.txt")
 
 
 class AuditError(RuntimeError):
@@ -311,8 +317,10 @@ def context_at(value: str) -> tuple[Path, dict[str, Any]]:
     return state, context
 
 
-def gradle_arguments(original: list[str]) -> list[str]:
+def gradle_arguments(original: list[str], *, reuse_xcframework: bool = False) -> list[str]:
     require(original and all(isinstance(arg, str) and "\0" not in arg for arg in original), "Missing Gradle argv")
+    require(not reuse_xcframework or original in XCFRAMEWORK_ARGV,
+            "Only the exact XCFramework verifier may reuse outputs")
     forbidden = {"daemon", "parallel", "build-cache", "configuration-cache", "continuous", "t",
                  "offline", "refresh-keys", "write-verification-metadata", "M", "F", "gradle-user-home", "g",
                  "include-build", "project-cache-dir"}
@@ -387,9 +395,60 @@ def gradle_arguments(original: list[str]) -> list[str]:
         tokens = [argument]
         if option in allowed_values and not separator:
             tokens.append(next(defaults))  # Keep a separate default value paired with its option.
-        if option not in supplied_policy_options:
+        if option not in supplied_policy_options and not (reuse_xcframework and argument == "--rerun-tasks"):
             enforced.extend(tokens)
     return [*original, *enforced]
+
+
+def xcframework_reuse_binding(state: Path, context: dict[str, Any], root: Path, wrapper: Path) -> dict[str, Any] | None:
+    """Admit only this job's finalized fresh producer and its already-retained sidecars."""
+    producer_path = state / "host-xcframework-build.json"
+    reject_symlinks(producer_path)
+    if existing_lstat(producer_path) is None:
+        return None  # Standalone provenance calls still build with the ordinary forced-fresh policy.
+
+    def bound_digest(path: Path) -> str:
+        reject_symlinks(path)
+        require(stat.S_ISREG(path.lstat().st_mode), "XCFramework reuse binding is not a regular file")
+        return file_digest(path, MAX_JSON_BYTES)
+
+    producer_hash = bound_digest(producer_path)
+    producer = read_json(producer_path)
+    spec = importlib.util.spec_from_file_location("audit_receipt_check", Path(__file__).with_name("check-audit-receipt.py"))
+    checker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checker)
+    checker.validate(producer, 0, "xcframework-build", root, wrapper, [XCFRAMEWORK_TASK])
+    require(re.fullmatch(r"[0-9a-f]{32}", producer["id"]), "Invalid XCFramework producer identity")
+    require(producer.get("kind") == "gradle" and producer.get("jobId") == context["id"] and
+            producer.get("host") == context["host"] and producer.get("gradleHome") == context["gradleHome"] and
+            producer["sourceBefore"] == context["source"], "XCFramework producer belongs to another source/context")
+    require(producer.get("executedArgv") == [str(wrapper), *gradle_arguments([XCFRAMEWORK_TASK])],
+            "XCFramework producer did not execute the exact forced-fresh build")
+    canonical = state / "evidence" / producer["id"] / "receipt.json"
+    require(producer.get("evidenceDirectory") == str(canonical.parent) and bound_digest(canonical) == producer_hash,
+            "XCFramework producer receipt copies differ")
+
+    manifest_path = state / "evidence/xcframework-sidecars.json"
+    manifest_hash = bound_digest(manifest_path)
+    manifest = read_json(manifest_path)
+    require(manifest.get("sourceInvocationId") == producer["id"], "XCFramework sidecars belong to another producer")
+    rows = manifest.get("files")
+    require(type(rows) is list and len(rows) == len(XCFRAMEWORK_SIDECARS), "Missing XCFramework sidecar bindings")
+    release = root / "library/p2p-transport-lan/build/XCFrameworks/release"
+    sidecars = {}
+    for row in rows:
+        require(type(row) is dict and row.get("path") in XCFRAMEWORK_SIDECARS and
+                row["path"] not in sidecars and row.get("result") == "RETAINED" and
+                type(row.get("sha256")) is str and re.fullmatch(r"[0-9a-f]{64}", row["sha256"]),
+                "Invalid XCFramework sidecar binding")
+        name, checksum = row["path"], row["sha256"]
+        require(bound_digest(state / "evidence" / name) == checksum == bound_digest(release / name),
+                "XCFramework sidecar differs from its retained producer: " + name)
+        sidecars[name] = checksum
+    require(bound_digest(producer_path) == producer_hash and bound_digest(manifest_path) == manifest_hash,
+            "XCFramework producer bindings changed during admission")
+    return {"producerInvocationId": producer["id"], "producerReceiptSha256": producer_hash,
+            "sidecarsManifestSha256": manifest_hash, "sidecars": sidecars}
 
 
 class LeafLock:
@@ -774,6 +833,7 @@ def execute(args: argparse.Namespace) -> int:
     handlers: dict[int, Any] = {}
     started = False
     baseline: dict[str, Any] = {}
+    xcframework_reuse = None
     report_arguments = original if args.kind == "gradle" else []
     context_hash = digest((state / "context.json").read_bytes())
     monotonic_start = time.monotonic()
@@ -801,6 +861,12 @@ def execute(args: argparse.Namespace) -> int:
             lock.acquire()
         receipt["sourceBefore"] = source_snapshot(root)
         require(receipt["sourceBefore"] == context["source"], "Source differs from the exact clean admitted revision")
+        if args.kind == "gradle" and args.purpose == "xcode-provenance" and original in XCFRAMEWORK_ARGV:
+            xcframework_reuse = xcframework_reuse_binding(state, context, root, wrapper)
+            if xcframework_reuse is not None:
+                receipt["xcframeworkReuse"] = xcframework_reuse
+                receipt["xcframeworkReuseUnchanged"] = False
+                actual = gradle_arguments(original, reuse_xcframework=True)
         baseline = report_snapshot(root, state, report_arguments)
         scope = make_scope(context["id"], invocation, str(state), context["gradleHome"])
         for number in (signal.SIGINT, signal.SIGTERM, *([signal.SIGBREAK] if hasattr(signal, "SIGBREAK") else [])):
@@ -893,6 +959,15 @@ def execute(args: argparse.Namespace) -> int:
                 receipt["reports"] = retain_reports(root, state, report_arguments, baseline, evidence)
         except Exception as error:
             errors.append(f"Source/evidence finalization failed: {error}")
+        if xcframework_reuse is not None:
+            try:
+                # Keep the no-output Gradle verifier running, but never let its writer
+                # re-attest different bytes under the original native inspection evidence.
+                require(xcframework_reuse_binding(state, context, root, wrapper) == xcframework_reuse,
+                        "XCFramework producer bindings changed during reuse")
+                receipt["xcframeworkReuseUnchanged"] = True
+            except Exception as error:
+                errors.append(f"XCFramework reuse finalization failed: {error}")
         if scope is not None:
             try:
                 scope.close()
