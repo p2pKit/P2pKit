@@ -1,5 +1,6 @@
 package dev.p2pkit.core
 
+import dev.p2pkit.core.internal.InMemoryPeerIdStorage
 import dev.p2pkit.core.testfixtures.FakeDataTransport
 import dev.p2pkit.core.testfixtures.createTestKit
 import dev.p2pkit.core.testfixtures.withTestKit
@@ -139,6 +140,7 @@ class PublicConfigurationValidationTest {
         withTestKit(create = { recorder ->
             createTestKit {
                 logger = recorder
+                peerIdStorage = InMemoryPeerIdStorage()
                 appId = AppId("repeated-configuration-test")
                 deviceName = "Device"
                 transports { register(ConfigurationTransportFactory) }

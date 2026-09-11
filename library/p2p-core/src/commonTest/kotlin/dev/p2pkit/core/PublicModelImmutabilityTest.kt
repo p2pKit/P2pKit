@@ -1,5 +1,6 @@
 package dev.p2pkit.core
 
+import dev.p2pkit.core.internal.InMemoryPeerIdStorage
 import dev.p2pkit.core.permission.P2pPermission
 import dev.p2pkit.core.provisioning.ManualConnectionInfo
 import dev.p2pkit.core.provisioning.NetworkState
@@ -335,6 +336,7 @@ class PublicModelImmutabilityTest {
         withTestKit(create = { recorder ->
             createTestKit {
                 logger = recorder
+                peerIdStorage = InMemoryPeerIdStorage()
                 appId = AppId("default-feature-state-test")
                 deviceName = "Default state"
                 transports { register(DefaultStateTransportFactory) }

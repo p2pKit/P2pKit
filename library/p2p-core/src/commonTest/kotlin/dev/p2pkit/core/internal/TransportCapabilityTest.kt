@@ -70,6 +70,7 @@ class TransportCapabilityTest {
         withTestKit(create = { recorder ->
             createTestKit {
                 logger = recorder
+                peerIdStorage = InMemoryPeerIdStorage()
                 appId = AppId("data-only-capability-test")
                 deviceName = "Data only"
                 this.permissionManager = permissionManager
@@ -105,6 +106,7 @@ class TransportCapabilityTest {
         withTestKit(create = { recorder ->
             createTestKit {
                 logger = recorder
+                peerIdStorage = InMemoryPeerIdStorage()
                 appId = AppId("discovery-only-capability-test")
                 deviceName = "Discovery only"
                 transports {

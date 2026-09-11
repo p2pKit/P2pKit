@@ -87,6 +87,7 @@ class KitLifecycleTest {
         withTestKit(create = { recording ->
             createTestKit {
                 logger = recording
+                peerIdStorage = InMemoryPeerIdStorage()
                 appId = AppId("stop-clears-peers-test")
                 deviceName = "Test"
                 transports { register(TrackingFactory(transport)) }
@@ -122,6 +123,7 @@ class KitLifecycleTest {
             withTestKit(create = { recording ->
                 createTestKit {
                     logger = recording
+                    peerIdStorage = InMemoryPeerIdStorage()
                     appId = AppId("lifecycle-test")
                     deviceName = "Test"
                     transports { register(TrackingFactory(transport)) }
@@ -148,6 +150,7 @@ class KitLifecycleTest {
         withTestKit(create = { recording ->
             createTestKit {
                 logger = recording
+                peerIdStorage = InMemoryPeerIdStorage()
                 appId = AppId("background-feature-stop-test")
                 deviceName = "Test"
                 transports { register(TrackingFactory(transport)) }
@@ -263,6 +266,7 @@ class KitLifecycleTest {
             withTestKit(create = { recording ->
                 createTestKit {
                     logger = recording
+                    peerIdStorage = InMemoryPeerIdStorage()
                     appId = AppId("indep-test")
                     deviceName = "First"
                     transports { register(TrackingFactory(first)) }
@@ -279,6 +283,7 @@ class KitLifecycleTest {
             withTestKit(create = { recording ->
                 createTestKit {
                     logger = recording
+                    peerIdStorage = InMemoryPeerIdStorage()
                     appId = AppId("indep-test")
                     deviceName = "Second"
                     transports { register(TrackingFactory(second)) }
@@ -317,6 +322,7 @@ class KitLifecycleTest {
                     create = { recorder ->
                         createTestKit {
                             logger = recorder
+                            peerIdStorage = InMemoryPeerIdStorage()
                             appId = AppId("stop-hang-test")
                             deviceName = "Test"
                             transports { register(HungStartFactory(transport)) }
@@ -382,6 +388,7 @@ class KitLifecycleTest {
                 create = { recorder ->
                     createTestKit {
                         logger = recorder
+                        peerIdStorage = InMemoryPeerIdStorage()
                         appId = AppId("state-machine-test")
                         deviceName = "Test"
                         transports { register(HungStartFactory(transport)) }
@@ -430,6 +437,7 @@ class KitLifecycleTest {
                 create = { recorder ->
                     createTestKit {
                         logger = recorder
+                        peerIdStorage = InMemoryPeerIdStorage()
                         appId = AppId("bind-failure-test")
                         deviceName = "Test"
                         transports { register(DataOnlyFactory(transport)) }
@@ -471,6 +479,7 @@ class KitLifecycleTest {
             create = { recorder ->
                 createTestKit {
                     logger = recorder
+                    peerIdStorage = InMemoryPeerIdStorage()
                     appId = AppId("lazy-connect-start-failure")
                     deviceName = "Test"
                     transports { register(DataOnlyFactory(transport)) }
@@ -500,6 +509,7 @@ class KitLifecycleTest {
             create = { recorder ->
                 createTestKit {
                     logger = recorder
+                    peerIdStorage = InMemoryPeerIdStorage()
                     appId = AppId("terminal-public-contract")
                     deviceName = "Test"
                     transports { register(TrackingFactory(transport)) }
@@ -537,6 +547,7 @@ class KitLifecycleTest {
             create = { recorder ->
                 createTestKit {
                     logger = recorder
+                    peerIdStorage = InMemoryPeerIdStorage()
                     appId = AppId("data-start-rollback-test")
                     deviceName = "Test"
                     transports {
@@ -642,6 +653,7 @@ class KitLifecycleTest {
                 create = { recorder ->
                     createTestKit {
                         logger = recorder
+                        peerIdStorage = InMemoryPeerIdStorage()
                         appId = AppId("readvertise-test")
                         deviceName = "Test"
                         transports { register(TrackingFactory(transport)) }
@@ -683,6 +695,7 @@ class KitLifecycleTest {
             create = { recorder ->
                 createTestKit {
                     logger = recorder
+                    peerIdStorage = InMemoryPeerIdStorage()
                     appId = AppId("cancel-feature-retry-cleanup-test")
                     deviceName = "Test"
                     transports { register(RetryCleanupCancellationFactory(transport)) }
@@ -738,6 +751,7 @@ class KitLifecycleTest {
             create = { recorder ->
                 createTestKit {
                     logger = recorder
+                    peerIdStorage = InMemoryPeerIdStorage()
                     appId = AppId("coalesced-advertising-test")
                     deviceName = "Test"
                     transports { register(GatedDiscoveryFactory(transport)) }
@@ -779,6 +793,7 @@ class KitLifecycleTest {
             create = { recorder ->
                 createTestKit {
                     logger = recorder
+                    peerIdStorage = InMemoryPeerIdStorage()
                     appId = AppId("stop-during-advertising-test")
                     deviceName = "Test"
                     transports { register(GatedDiscoveryFactory(transport)) }
@@ -820,6 +835,7 @@ class KitLifecycleTest {
             create = { recorder ->
                 createTestKit {
                     logger = recorder
+                    peerIdStorage = InMemoryPeerIdStorage()
                     appId = AppId("bounded-feature-stop-test")
                     deviceName = "Test"
                     featureOperationSettleTimeoutMillisForTest = 50
@@ -868,6 +884,7 @@ class KitLifecycleTest {
             create = { recorder ->
                 createTestKit {
                     logger = recorder
+                    peerIdStorage = InMemoryPeerIdStorage()
                     appId = AppId("concurrent-feature-stop-test")
                     deviceName = "Test"
                     featureOperationSettleTimeoutMillisForTest = 50
@@ -913,6 +930,7 @@ class KitLifecycleTest {
             create = { recorder ->
                 createTestKit {
                     logger = recorder
+                    peerIdStorage = InMemoryPeerIdStorage()
                     appId = AppId("advertising-rollback-test")
                     deviceName = "Test"
                     transports {
@@ -941,6 +959,7 @@ class KitLifecycleTest {
             create = { recorder ->
                 createTestKit {
                     logger = recorder
+                    peerIdStorage = InMemoryPeerIdStorage()
                     appId = AppId("discovery-cancellation-rollback-test")
                     deviceName = "Test"
                     transports {
@@ -992,6 +1011,7 @@ class KitLifecycleTest {
                 create = { recorder ->
                     createTestKit {
                         logger = recorder
+                        peerIdStorage = InMemoryPeerIdStorage()
                         appId = AppId("cancel-start-test")
                         deviceName = "Test"
                         transports { register(HungStartFactory(transport)) }
@@ -1051,6 +1071,7 @@ class KitLifecycleTest {
             create = { recorder ->
                 createTestKit {
                     logger = recorder
+                    peerIdStorage = InMemoryPeerIdStorage()
                     appId = AppId("cancel-return-data-start-test")
                     deviceName = "Test"
                     transports { register(DataOnlyFactory(transport)) }
@@ -1093,6 +1114,7 @@ class KitLifecycleTest {
             create = { recorder ->
                 createTestKit {
                     logger = recorder
+                    peerIdStorage = InMemoryPeerIdStorage()
                     appId = AppId("cancel-return-discovery-start-test")
                     deviceName = "Test"
                     transports { register(CancelThenReturnDiscoveryFactory(transport)) }
@@ -1136,6 +1158,7 @@ class KitLifecycleTest {
             create = { recorder ->
                 createTestKit {
                     logger = recorder
+                    peerIdStorage = InMemoryPeerIdStorage()
                     appId = AppId("cancel-return-observer-start-test")
                     deviceName = "Test"
                     lifecycle { networkPathObserver = observer }
@@ -1182,6 +1205,7 @@ class KitLifecycleTest {
                 create = { recorder ->
                     createTestKit {
                         logger = recorder
+                        peerIdStorage = InMemoryPeerIdStorage()
                         appId = AppId("cancel-observer-start-test")
                         deviceName = "Test"
                         lifecycle { networkPathObserver = observer }
@@ -1230,6 +1254,7 @@ class KitLifecycleTest {
             create = { recorder ->
                 createTestKit {
                     logger = recorder
+                    peerIdStorage = InMemoryPeerIdStorage()
                     appId = AppId("failed-observer-cleanup-test")
                     deviceName = "Test"
                     lifecycle { networkPathObserver = observer }
@@ -1270,6 +1295,7 @@ class KitLifecycleTest {
             create = { recorder ->
                 createTestKit {
                     logger = recorder
+                    peerIdStorage = InMemoryPeerIdStorage()
                     appId = AppId("cancel-observer-failure-cleanup-test")
                     deviceName = "Test"
                     lifecycle { networkPathObserver = observer }
@@ -1325,6 +1351,7 @@ class KitLifecycleTest {
             create = { recorder ->
                 createTestKit {
                     logger = recorder
+                    peerIdStorage = InMemoryPeerIdStorage()
                     appId = AppId("failed-observer-uncertain-cleanup-test")
                     deviceName = "Test"
                     lifecycle { networkPathObserver = observer }
@@ -1468,6 +1495,7 @@ class KitLifecycleTest {
             create = { recorder ->
                 createTestKit {
                     logger = recorder
+                    peerIdStorage = InMemoryPeerIdStorage()
                     appId = AppId("cancel-hung-rollback-test")
                     deviceName = "Test"
                     transports { register(DataOnlyFactory(transport)) }
@@ -1541,6 +1569,7 @@ class KitLifecycleTest {
                     create = { recorder ->
                         createTestKit {
                             logger = recorder
+                            peerIdStorage = InMemoryPeerIdStorage()
                             appId = AppId("bounded-stop-observer-test")
                             deviceName = "Test"
                             lifecycle { networkPathObserver = observer }
@@ -1610,6 +1639,7 @@ class KitLifecycleTest {
                 create = { recorder ->
                     createTestKit {
                         logger = recorder
+                        peerIdStorage = InMemoryPeerIdStorage()
                         appId = AppId("cancelled-stop-test")
                         deviceName = "Test"
                         lifecycle { networkPathObserver = observer }
@@ -1655,6 +1685,7 @@ class KitLifecycleTest {
             create = { recorder ->
                 createTestKit {
                     logger = recorder
+                    peerIdStorage = InMemoryPeerIdStorage()
                     appId = AppId("late-advertising-test")
                     deviceName = "Test"
                     transports { register(GatedDiscoveryFactory(transport)) }
@@ -1702,6 +1733,7 @@ class KitLifecycleTest {
             create = { recorder ->
                 createTestKit {
                     logger = recorder
+                    peerIdStorage = InMemoryPeerIdStorage()
                     appId = AppId("late-discovery-test")
                     deviceName = "Test"
                     transports { register(GatedDiscoveryFactory(transport)) }
@@ -1750,6 +1782,7 @@ class KitLifecycleTest {
                 create = { recorder ->
                     createTestKit {
                         logger = recorder
+                        peerIdStorage = InMemoryPeerIdStorage()
                         appId = AppId("late-observer-test")
                         deviceName = "Test"
                         lifecycle { networkPathObserver = observer }
@@ -1946,6 +1979,7 @@ class KitLifecycleTest {
             create = { recorder ->
                 createTestKit {
                     logger = recorder
+                    peerIdStorage = InMemoryPeerIdStorage()
                     appId = AppId("concurrent-stop-test")
                     deviceName = "Test"
                     transports { register(GatedCloseFactory(transport)) }
@@ -1990,6 +2024,7 @@ class KitLifecycleTest {
                 create = { recorder ->
                     createTestKit {
                         logger = recorder
+                        peerIdStorage = InMemoryPeerIdStorage()
                         appId = AppId("bounded-cleanup-test")
                         deviceName = "Test"
                         transports {
@@ -2133,6 +2168,7 @@ class KitLifecycleTest {
             create = { recorder ->
                 createTestKit {
                     logger = recorder
+                    peerIdStorage = InMemoryPeerIdStorage()
                     appId = AppId("feature-stop-cleanup-test")
                     deviceName = "Test"
                     transports {

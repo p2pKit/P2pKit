@@ -77,6 +77,7 @@ class PermissionGateTest {
             withTestKit(create = { recorder ->
                 createTestKit {
                     logger = recorder
+                    peerIdStorage = InMemoryPeerIdStorage()
                     appId = AppId("permission-gate-test")
                     deviceName = "Default"
                     transports { register(FixedTransportFactory(FakeDataTransport(), discovery)) }
@@ -106,6 +107,7 @@ class PermissionGateTest {
             withTestKit(create = { recorder ->
                 createTestKit {
                     logger = recorder
+                    peerIdStorage = InMemoryPeerIdStorage()
                     appId = AppId("permission-gate-test")
                     deviceName = "Gated"
                     // Mirrors the provisioning sidecar: a real runtime permission
@@ -145,6 +147,7 @@ class PermissionGateTest {
             withTestKit(create = { recorder ->
                 createTestKit {
                     logger = recorder
+                    peerIdStorage = InMemoryPeerIdStorage()
                     appId = AppId("permission-gate-test")
                     deviceName = "Granted"
                     permissionManager = FixedPermissionManager(

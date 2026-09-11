@@ -93,6 +93,7 @@ class NetworkProvisioningCloseTest {
         withTestKit(create = { recorder ->
             createTestKit {
                 logger = recorder
+                peerIdStorage = InMemoryPeerIdStorage()
                 appId = AppId("provisioning-close-order")
                 deviceName = "close-order"
                 transports { register(RecordingTransportFactory(data)) }
@@ -113,6 +114,7 @@ class NetworkProvisioningCloseTest {
         withTestKit(create = { recorder ->
             createTestKit {
                 logger = recorder
+                peerIdStorage = InMemoryPeerIdStorage()
                 appId = AppId("provisioning-repeated-block")
                 deviceName = "repeated-block"
                 transports { register(RecordingTransportFactory(data)) }
@@ -141,6 +143,7 @@ class NetworkProvisioningCloseTest {
         withTestKit(create = { recorder ->
             createTestKit {
                 logger = recorder
+                peerIdStorage = InMemoryPeerIdStorage()
                 appId = AppId("provisioning-explicit-replacement")
                 deviceName = "explicit-replacement"
                 transports { register(RecordingTransportFactory(data)) }

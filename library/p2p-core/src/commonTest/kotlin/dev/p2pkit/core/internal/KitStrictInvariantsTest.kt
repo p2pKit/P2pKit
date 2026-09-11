@@ -109,6 +109,7 @@ class KitStrictInvariantsTest {
             create = { recorder ->
                 createTestKit {
                     logger = recorder
+                    peerIdStorage = InMemoryPeerIdStorage()
                     appId = AppId("com.example.test")
                     deviceName = "StrictKit"
                     transports { register(KitFactoryFor(FakeDataTransport())) }
@@ -139,6 +140,7 @@ class KitStrictInvariantsTest {
                     appId = AppId("com.example.test")
                     deviceName = "DefaultKit"
                     this.logger = recorder
+                    peerIdStorage = InMemoryPeerIdStorage()
                     security { mode = SecurityMode.NoneForMvp }
                     transports { register(KitFactoryFor(FakeDataTransport())) }
                 }
