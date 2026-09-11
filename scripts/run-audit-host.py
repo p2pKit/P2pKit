@@ -27,7 +27,8 @@ REF = "refs/heads/audit/complete-2026-09-04"
 ROLES = {"windows-x64": ("Windows", "x64"), "macos-arm64": ("Darwin", "arm64"),
          "macos-x64": ("Darwin", "x64")}
 SCOPES = {"full": set(ROLES), "windows-followup": {"windows-x64"}, "windows-diagnostics": {"windows-x64"},
-          "apple-followup": {"macos-arm64"}, "apple-provenance": {"macos-arm64"}}
+          "apple-followup": {"macos-arm64"}, "apple-provenance": {"macos-arm64"},
+          "apple-native-compilation": {"macos-arm64"}}
 CANCELLATION_PROBE_ROUTES = {("macos-arm64", "apple-followup"), ("macos-arm64", "apple-provenance"),
                              ("macos-x64", "full")}
 WINDOWS_TASKS = {":p2p-core:jvmTest", ":p2p-transport-lan:jvmTest", ":p2p-network-provisioning-desktop:test"}
@@ -795,6 +796,10 @@ class Host:
                 "limits": "Inventory only, not boot, x86_64 execution or qualification; Apple execution revalidates its exact device."}
 
     def mac(self):
+        if self.scope == "apple-native-compilation":
+            self.invoke("413-native-compilation-admission",
+                        [":p2p-transport-lan:compileTestKotlinIosSimulatorArm64"])
+            return
         if self.scope == "full":
             self.check("apple-tcp-options-sdk", self.inspect_tcp_options_headers)
         self.install_xcodegen()

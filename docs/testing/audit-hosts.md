@@ -54,12 +54,55 @@ workflows or local builds, and GitHub can replace an older pending run even with
 `cancel-in-progress: false`. Do not queue another triggering push while a run is
 active or pending; preserve earlier failure/cancellation records.
 
-## Selected Windows core diagnostic caller follow-through
+## Selected Apple native-compilation admission
 
-Revision19 selects exactly one `windows-2025` job, `Audit native Windows core
+Revision20 selects one `macos-26` job, `Audit native Apple compilation admission`,
+using native ARM64 Python 3, Java 21 then 17, the checked-in `gradlew` and
+`DEVELOPER_DIR=/Applications/Xcode_26.5.app/Contents/Developer`. This focused #413
+prerequisite is **NOT_RUN** at selection time, not an owned-cancellation result.
+
+The unchanged native/non-Rosetta admission, resource and tool prerequisites,
+complete real `executor-native-controls` leaf, and SDK platforms **36 and 37.0**
+installation/metadata checks still precede the only requested product graph:
+
+```text
+:p2p-transport-lan:compileTestKotlinIosSimulatorArm64
+```
+
+The `413-native-compilation-admission` leaf compiles the selected source's native
+production and test classpaths with their normal prerequisites; it does not run
+tests or request test linking, frameworks, Swift, ABI, consumers, publication,
+policies or a JVM product graph. It returns before XcodeGen or simulator selection.
+No platform-test profile or test-count assessment is substituted for compilation.
+Retain and independently inspect actual native compilation task outcomes in the
+raw source-bound log; an aggregate PASS alone is not proof of fresh compilation.
+
+Strict dependency verification, forced freshness, resource limits and same-home
+wrapper stop/drain remain unchanged. The leaf keeps its default 3600-second bound;
+the workflow keeps 180-minute job, 150-minute step and 8400-second driver budgets.
+The unconditional finalizer validates receipts, performs proved-owned output/work
+cleanup and seals evidence. An ordinary compilation failure remains FAIL; an
+ownership, stop, source or cleanup failure cannot export safe continuation.
+
+Strict-lock admission remains unknown until actual execution: cross-target
+metadata resolution can still encounter stale JmDNS lock entries. This scope
+does not write locks, relax verification or request a producer fallback. Inspect
+actual prerequisites rather than infer native-only resolution from the task name.
+Compilation establishes no linking, simulator/runtime, Swift naming or cancellation
+behavior. The later #413 helper/runtime and ABI gates remain required; in particular,
+`checkKotlinAbi` also requires JVM compilation and is neither passed nor waived here.
+
+Admission, summary and handoff retain `requestedScope=apple-native-compilation`
+and `hostQualification=NOT_ESTABLISHED_BY_FOCUSED_SCOPE`, even on PASS. The release
+monolith and external acceptance remain unexecuted/unvalidated. Prior selections
+and retained outcomes below are not replayed, promoted or reset by this selection.
+
+## Unselected Windows core diagnostic caller follow-through
+
+Revision19 selected exactly one `windows-2025` job, `Audit native Windows core
 diagnostic caller follow-through`, using native Python, Java 21 then 17 and the
-checked-in `gradlew.bat`. The existing `windows-x64`/`windows-followup` route is
-narrowed to the seven core JVM classes below; it is **NOT_RUN** at selection time.
+checked-in `gradlew.bat`. The existing `windows-x64`/`windows-followup` route was
+narrowed to the seven core JVM classes below; it was **NOT_RUN** at selection time.
 This is the #207 caller follow-through, not a new full-host or release result.
 
 The unchanged native Windows x64, Git for Windows Bash, JDK and resource admission
@@ -113,7 +156,7 @@ release acceptance follows from this request.
 The retained `macos-arm64`/`apple-provenance` route uses `macos-26`, native Python 3,
 Java 21 then 17, the checked-in `gradlew` and
 `/Applications/Xcode_26.5.app/Contents/Developer`. Revision18 selected it as
-`Audit native Apple provenance reuse and isolated cancellation`; revision19 does
+`Audit native Apple provenance reuse and isolated cancellation`; revision20 does
 not select it. Its actual revision18 outcome is recorded below, not reset to
 NOT_RUN or promoted to a full-host, release or physical-device result.
 
@@ -496,8 +539,9 @@ None of these tests or packaging tasks is requested by revision19.
 For either focused Windows scope, `hostQualification` is always
 `NOT_ESTABLISHED_BY_FOCUSED_SCOPE`, including when the selected components pass.
 The CLI accepts `full` for the existing roles, `windows-followup` and
-`windows-diagnostics` only for Windows, and `apple-followup`/`apple-provenance` only for Apple Silicon,
-rejecting other pairs before state initialization. Full defaults remain
+`windows-diagnostics` only for Windows, and `apple-followup`, `apple-provenance`
+and `apple-native-compilation` only for Apple Silicon, rejecting other pairs
+before state initialization. Full defaults remain
 unchanged; `FULL_COMPONENT_SCOPE` describes their requested scope, not a successful
 qualification. Omitted Windows full-profile components are **NOT_EXECUTED by
 such a focused run**, not waived. The narrowed `windows-followup` graph does not
@@ -513,8 +557,8 @@ also succeed.
 
 These profiles describe each role's component graph, not equivalent whole-host
 qualification. All full profiles are unselected by this revision's focused
-Windows core request. Any later native selection requires a separately reviewed
-literal change and terminal-attempt reconciliation.
+request. Any later native selection requires a separately reviewed literal
+change and terminal-attempt reconciliation.
 
 | Role and fixed label | Selected tools | Components, not broader acceptance |
 | --- | --- | --- |
@@ -717,7 +761,7 @@ The workflow redirects stdout/stderr to separate fresh bootstrap logs and invoke
 the exact checked-out driver with `runpy` in the **same native Python process**.
 There is no extra unsupervised wrapper child, launcher replacement or product
 monkeypatch. The driver's own deadline, cancellation and ownership finalizers run.
-The selected focused Windows driver retains the explicit 8,400-second budget and
+The selected focused driver retains the explicit 8,400-second budget and
 150/180-minute step/job ceilings used by revision18; narrowing the route does not
 change these bounds. The unselected Apple probe's 900-second deadline is unchanged.
 Constructor defaults remain 8,400 seconds on Windows/Intel and19,200 on Apple Silicon. The unselected expanded Intel route's

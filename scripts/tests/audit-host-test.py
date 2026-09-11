@@ -666,7 +666,8 @@ class HostInvocationTest(unittest.TestCase):
                              ("macos-x64", "windows-followup"), ("macos-arm64", "windows-diagnostics"),
                              ("macos-x64", "windows-diagnostics"), ("windows-x64", "apple-followup"),
                              ("macos-x64", "apple-followup"), ("windows-x64", "apple-provenance"),
-                             ("macos-x64", "apple-provenance"), ("unknown", "full")):
+                             ("macos-x64", "apple-provenance"), ("windows-x64", "apple-native-compilation"),
+                             ("macos-x64", "apple-native-compilation"), ("unknown", "full")):
             state = self.work / (role + "-" + scope)
             with self.subTest(role=role, scope=scope), self.assertRaisesRegex(ValueError, "role/scope"):
                 HOST.Host(role, state, scope=scope)
@@ -1374,6 +1375,27 @@ class HostInvocationTest(unittest.TestCase):
                                   selected=lambda path: path.suffix == ".txt")
         self.assertEqual("outside the selected evidence", sentinel.read_text())
         self.assertFalse((destination / "cache-link").exists())
+
+    def test_apple_native_compilation_has_only_one_leaf_and_leaves_cleanup_to_the_finalizer(self):
+        host = HOST.Host("macos-arm64", self.state / "native-compilation-order", scope="apple-native-compilation")
+        self.assertNotIn((host.role, host.scope), HOST.CANCELLATION_PROBE_ROUTES)
+        for outcome in (True, False, HOST.InfrastructureFailure("synthetic ownership failure")):
+            with self.subTest(outcome=outcome), contextlib.ExitStack() as stack:
+                operations = [stack.enter_context(mock.patch.object(host, name)) for name in
+                              ("check", "install_xcodegen", "mac_policies", "isolated_consumers",
+                               "apple", "clean_outputs")]
+                invoked = stack.enter_context(mock.patch.object(host, "invoke", side_effect=[outcome]))
+                if isinstance(outcome, HOST.InfrastructureFailure):
+                    with self.assertRaises(HOST.InfrastructureFailure):
+                        host.mac()
+                else:
+                    host.mac()
+                invoked.assert_called_once_with("413-native-compilation-admission",
+                                                 [":p2p-transport-lan:compileTestKotlinIosSimulatorArm64"])
+                for operation in operations:
+                    operation.assert_not_called()
+                self.assertIsNone(host.simulator)
+        self.assertEqual([], self.calls, "Selection fixture must not invoke a product subprocess")
 
     def test_mac_batches_artifacts_and_reuses_the_consumer_publication_without_erasing_failed_dependencies(self):
         # Orchestration only: existing invocation/retention controls exercise
@@ -2651,7 +2673,8 @@ class SdkSetupTest(unittest.TestCase):
                     self.assert_manager_receipt(fixture, sdk, manager)
                     self.assertFalse((fixture.host.evidence / "android-platforms.json").exists())
 
-    def run_fixture(self, fixture, sdk, *, manager_status=0, scope="full", prepare_status=0, simulator_problem=None):
+    def run_fixture(self, fixture, sdk, *, manager_status=0, scope="full", prepare_status=0,
+                    compilation_status=0, simulator_problem=None):
         # Recreate only this owned temporary context through real initialize/run.
         role = fixture.host.role
         shutil.rmtree(fixture.state)
@@ -2665,6 +2688,7 @@ class SdkSetupTest(unittest.TestCase):
         event.write_text("{}", encoding="utf-8")
         order = []
         clean_outputs = host.clean_outputs
+        mac_products = host.mac
         initialize_boundary = fixture.initialize_boundary(host)
         runtime_id = "com.apple.CoreSimulator.SimRuntime.iOS-26-2"
         device_id = "11111111-1111-1111-1111-111111111111"
@@ -2689,10 +2713,16 @@ class SdkSetupTest(unittest.TestCase):
         def controller(command, **kwargs):
             purpose = command[command.index("--purpose") + 1]
             fixture.next_status = {"android-platforms": manager_status,
-                                   "swift-jvm-cli-prepare": prepare_status}.get(purpose, 0)
-            if purpose in ("intel-platform", "swift-jvm-cli-prepare"):
+                                   "swift-jvm-cli-prepare": prepare_status,
+                                   "413-native-compilation-admission": compilation_status}.get(purpose, 0)
+            if purpose in ("intel-platform", "swift-jvm-cli-prepare", "413-native-compilation-admission"):
                 self.assertTrue((host.evidence / "android-platforms.json").is_file())
                 order.append(purpose)
+            if purpose == "413-native-compilation-admission":
+                self.assertEqual([":p2p-transport-lan:compileTestKotlinIosSimulatorArm64"],
+                                 command[command.index("--") + 1:])
+                self.assertEqual("gradle", command[command.index("--kind") + 1])
+                self.assertEqual("3600", command[command.index("--timeout") + 1])
             if purpose == "swift-jvm-cli-prepare":
                 self.assertEqual([
                     ":p2p-core:checkKotlinAbi", ":p2p-transport-lan:checkKotlinAbi",
@@ -2707,6 +2737,8 @@ class SdkSetupTest(unittest.TestCase):
             self.assertTrue((host.evidence / "android-platforms.json").is_file())
             self.assertEqual(["executor-native-controls", "android-platforms"],
                              [row["component"] for row in host.rows])
+            if scope == "apple-native-compilation":
+                mac_products()
 
         def clean():
             order.append("clean_outputs")
@@ -2734,13 +2766,15 @@ class SdkSetupTest(unittest.TestCase):
         cases = [(role, "full", 0) for role in HOST.ROLES]
         cases.extend([("windows-x64", "windows-followup", 0), ("windows-x64", "windows-diagnostics", 0),
                       ("macos-arm64", "apple-followup", 0), ("macos-arm64", "apple-provenance", 0),
+                      ("macos-arm64", "apple-native-compilation", 0),
+                      ("macos-arm64", "apple-native-compilation", 7),
                       ("macos-x64", "full", 7)])
-        for role, scope, prepare_status in cases:
-            with self.subTest(role=role, scope=scope, prepare_status=prepare_status), self.fixture(role) as data:
+        for role, scope, product_status in cases:
+            with self.subTest(role=role, scope=scope, product_status=product_status), self.fixture(role) as data:
                 fixture, sdk, _, _ = data
                 result, windows, mac, followup, diagnostics, order = self.run_fixture(
-                    fixture, sdk, scope=scope, prepare_status=prepare_status)
-                self.assertEqual(int(prepare_status != 0), result)
+                    fixture, sdk, scope=scope, prepare_status=product_status, compilation_status=product_status)
+                self.assertEqual(int(product_status != 0), result)
                 self.assertEqual(int(role == "windows-x64" and scope == "full"), windows)
                 self.assertEqual(int(scope == "windows-followup"), followup)
                 self.assertEqual(int(scope == "windows-diagnostics"), diagnostics)
@@ -2748,7 +2782,7 @@ class SdkSetupTest(unittest.TestCase):
                 expected = ["executor-native-controls", "android-platforms"]
                 if role == "macos-x64":
                     expected.extend(["intel-simulator-prerequisites", "intel-platform", "swift-jvm-cli-prepare"])
-                    self.assertEqual(prepare_status,
+                    self.assertEqual(product_status,
                                      fixture.host.receipts["swift-jvm-cli-prepare"]["finalExitCode"])
                     self.assertEqual(["intel-simulator-runtimes", "intel-simulator-devices", "intel-platform",
                                       "clean_outputs", "install_xcodegen", "isolated_consumers", "clean_outputs",
@@ -2759,10 +2793,17 @@ class SdkSetupTest(unittest.TestCase):
                                        "udid": "11111111-1111-1111-1111-111111111111", "state": "Shutdown"}],
                                      inventory["details"]["availableCandidates"])
                     self.assertIsNone(fixture.host.simulator, "Read-only inventory must not acquire simulator ownership")
+                elif scope == "apple-native-compilation":
+                    expected.append("413-native-compilation-admission")
+                    self.assertEqual(["413-native-compilation-admission", "clean_outputs"], order)
+                    self.assertEqual(product_status,
+                                     fixture.host.receipts["413-native-compilation-admission"]["finalExitCode"])
+                    self.assertIsNone(fixture.summary()["simulator"])
+                    self.assertFalse((fixture.state / "work").exists())
                 else:
                     self.assertEqual(["clean_outputs"], order)
                 self.assertEqual(expected, [row["component"] for row in fixture.host.rows])
-                self.assertEqual("FAIL" if prepare_status else "PASS", fixture.summary()["result"])
+                self.assertEqual("FAIL" if product_status else "PASS", fixture.summary()["result"])
                 self.assertEqual(scope, fixture.summary()["requestedScope"])
                 self.assertEqual(scope, fixture.summary()["source"]["requestedScope"])
                 self.assertEqual("FULL_COMPONENT_SCOPE" if scope == "full" else
@@ -2795,7 +2836,8 @@ class SdkSetupTest(unittest.TestCase):
     def test_run_blocks_all_products_and_finalizes_invalid_metadata(self):
         for role, scope in [*((role, "full") for role in HOST.ROLES),
                              ("windows-x64", "windows-followup"), ("windows-x64", "windows-diagnostics"),
-                             ("macos-arm64", "apple-followup"), ("macos-arm64", "apple-provenance")]:
+                             ("macos-arm64", "apple-followup"), ("macos-arm64", "apple-provenance"),
+                             ("macos-arm64", "apple-native-compilation")]:
             with self.subTest(role=role, scope=scope), self.fixture(role) as data:
                 fixture, sdk, _, properties = data
                 properties["android-37.0"].write_text("AndroidVersion.ApiLevel=37.1\n", encoding="utf-8")
@@ -2813,7 +2855,8 @@ class SdkSetupTest(unittest.TestCase):
     def test_run_blocks_all_products_and_finalizes_failed_sdk_installation(self):
         for role, scope in [*((role, "full") for role in HOST.ROLES),
                              ("windows-x64", "windows-followup"), ("windows-x64", "windows-diagnostics"),
-                             ("macos-arm64", "apple-followup"), ("macos-arm64", "apple-provenance")]:
+                             ("macos-arm64", "apple-followup"), ("macos-arm64", "apple-provenance"),
+                             ("macos-arm64", "apple-native-compilation")]:
             with self.subTest(role=role, scope=scope), self.fixture(role) as data:
                 fixture, sdk, _, _ = data
                 result, windows, mac, followup, diagnostics, order = self.run_fixture(
