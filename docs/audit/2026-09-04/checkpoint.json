@@ -5,32 +5,32 @@
   "branch": "audit/complete-2026-09-04",
   "lastInheritedReviewedSourceCommit": "32dc5c03658145741c6e23cdfec3c14cd2eba5e7",
   "lastInheritedReviewedSourceTree": "a6144952d3592b6e189114bc73822d0af1ab0853",
-  "sourceCheckpointCommit": "b27cdd477b7a260981dec6920428cfd385215b9a",
-  "sourceCheckpointTree": "388c713f373a74f486bb8f521df027bb8c5d0bf4",
+  "sourceCheckpointCommit": "593175ff935d447907e2aa466f17072217ea5907",
+  "sourceCheckpointTree": "0056bd96b35e18a2c03dcc76d615a69ae5949439",
   "preservedDraftPatchSha256": "2dc0dd26cb738d89d14136fb1fe5348afabd6f2a3de2fd47847be8f1d91ed1b4",
-  "activeIssue": 415,
-  "activeIssueState": "415_PREPARING_SOLE_ACTIVE_410_PARKED_FINAL_WITHHELD",
+  "activeIssue": 413,
+  "activeIssueState": "413_PLANNING_ADMISSION_ONLY_IMPLEMENTATION_RUNTIME_NOT_STARTED",
   "issueCountDenominator": 232,
   "dispositions": {
     "EXTERNAL_VALIDATION_PENDING": 21,
     "PARTIAL_MITIGATION_ARCHITECTURE_DECISION_PENDING": 1,
-    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 200,
-    "PENDING_REMEDIATION": 9,
+    "FIXED_REVIEWED_IN_AUDIT_HISTORY": 202,
+    "PENDING_REMEDIATION": 7,
     "REVIEWED_NO_REPAIR_REQUIRED": 1
   },
-  "completedIssueCount": 200,
-  "remainingIssueCount": 31,
-  "percentageMeaning": "200/232 repair approvals (86.2%); 201/232 resolved (86.6%) including no-repair287; 31/232 unresolved (13.4%). Repair-approval complement32/232 (13.8%); 99 new findings. Counts are issue rows, not effort/readiness or GitHub closures.",
-  "githubIssueListRefreshedUtc": "2026-09-11T17:21:20.338282+00:00",
-  "githubTotalIssuesAtRefresh": 338,
-  "githubOpenIssuesAtRefresh": 231,
+  "completedIssueCount": 202,
+  "remainingIssueCount": 29,
+  "percentageMeaning": "202/232 repair approvals (87.1%); 203/232 resolved (87.5%) including no-repair287; 29/232 unresolved (12.5%). Repair-approval complement30/232 (12.9%);99new findings. Counts are issue rows, not effort/readiness or GitHub closures.",
+  "githubIssueListRefreshedUtc": "2026-09-11T18:47:44.796341+00:00",
+  "githubTotalIssuesAtRefresh": 339,
+  "githubOpenIssuesAtRefresh": 232,
   "newAuditIssueCount": 99,
   "rawEvidenceIncludedInGit": false,
   "originalEvidenceContinuity": "Some original raw evidence and initial audit ledger were lost. Recovered summaries are not original logs. Later raw evidence remains private. Fresh corroboration and integrated verification required.",
   "scope": "Branch continuation only; not a merge, release, independent crypto assurance, or physical-device completion.",
   "preservedDraftCommit": "eb564e9487f2887f83f519575c82d4e7657864cb",
   "preservedDraftTree": "69161ac65e02bbf33d390bde2575d3131a9d7996",
-  "lastReviewedIssue": 418,
+  "lastReviewedIssue": 416,
   "lastIntegratedCheck": {
     "reference": "nativeFollowups.r14PrepublicationLinux.passingAttempt",
     "status": "PASS",
@@ -1010,6 +1010,8 @@
     "scope": "Complete four-file failed-destination cleanup correction APPROVED/pushed. Three-test original repro2failures/1control;final-test original production JVM10/8failures/2controls,Android16/7failures/9controls;focused33passes;three restored mutations. Full2459passes/0failure/error/1manual skip;14static gates;1797sealed entries/28cleanup receipts. Two compilation failures and initial evidence-verifier failure retained. No API/ABI/wire/authentication/dependency/durability change. Physical/ART/OEM/independent gates pending."
   },
   "lastReviewedIssues": [
+    416,
+    415,
     418,
     412,
     411,
@@ -1120,7 +1122,7 @@
     "scope": "Historical transfer-device cleanup at the prior checkpoint. Every source invocation stopped its task-isolated wrapper/owned workers. Three ignored unused project caches were removed after separate stop and no-open-descriptor checks. Shared caches, private evidence, settings, source/stashes and unrelated projects were preserved. Later admin/push receipts are separate."
   },
   "pendingRepairSeverities": {
-    "low": 8,
+    "low": 6,
     "medium": 1
   },
   "githubRefreshEvidence": {
@@ -1282,15 +1284,13 @@
     "scope": "Every #145 build/test/failure finalized its task-isolated wrapper stop and owned-worker cleanup; dependent disposable outputs removed. Source,protected files,required evidence,shared caches and unrelated tasks preserved. This receipt does not cover later#367 work."
   },
   "continuationQueue": [
-    415,
-    416,
     413,
     414,
     409,
     410,
     417
   ],
-  "continuationQueueScope": "415 sole active/preparing, then416, then413->414->409 conditional on meaningful admission; ordering is not execution or approval. 413 native admission unknown;414 requires a distinct real Kotlin caller boundary;409 peer readiness remains gated. 410 parked;417 unimplemented under existing restricted planning, not retried/rephrased/delegated. 410 PARKED/PENDING_REMEDIATION, final approval WITHHELD; no repair credit or external reclassification. Full MacR1, startup1 and guarded startupR2 failed separately before ready/close. R2 at clean c9ac681 captured native NoRouteToHostException; sanitized post-failure route observation does not prove cause. Return only with new admission evidence; no unchanged full-graph retry, lock bypass or route/permission override. Current full locks/LAN Dokka/ABI/root/sample/consumer qualification, ART, physical/hostile, narrow Apple/Intel, independent/crypto and owner120/274/284 obligations remain. Audit NOT_READY;133 NOT_STARTED. Original LinuxR2/R16/R18/Windows failures and207/408scoped approvals retain their own bindings; no replay, R16/Android causal attribution or release credit.",
+  "continuationQueueScope": "413 active PLANNING/compilation-admission preparation; implementation/runtime NOT_STARTED, native admission unknown. Then414 requires a distinct real Kotlin caller boundary, then409 conditional peer readiness. Ordering is not execution or approval. 410 remains PARKED/PENDING_REMEDIATION, final WITHHELD; return only with new admission evidence, no unchanged full-graph retry, lock bypass or route/permission override. 417 remains unimplemented under existing restricted planning, not retried/rephrased/delegated.",
   "completedInvestigation145": {
     "issue": 145,
     "baselineCommit": "d823bb9cc0d187ec746714af67b08904a28331b6",
@@ -1304,7 +1304,7 @@
     "status": "OWNER_AUTHORIZED_TRIAL1_AND2_FAILED_PREINVOKE_TRIAL3_PENDING",
     "scope": "After final independent approval of the exact eleven administrative files and applied bytes, refresh live Actions and audit/main/PR refs, hold the one global local/hosted execution lease, freeze the exact approved source tree, and pause all local builds/tests BEFORE the audit-branch push that triggers the hosted workflow. With that lease and source freeze already held, push only the audit branch, verify its exact remote commit/tree and record the outcome separately, then inspect the controlled Windows -> ARM Mac -> Intel Mac trial under the same lease. Verify native controls, actual SDK admission, strict dependency/source/stop/ownership/full-artifact evidence before advancing. Both failed hosted trials remain unsafe/partial and remote cleanup/full-tree NOT_PROVEN; a local lease release is not remote cleanup. #268/#133 remain NOT_STARTED; continue all feasible sequential work. No new physical/hostile-network/independent/pro-crypto/main/settings/release authority."
   },
-  "lastDispositionUpdateUtc": "2026-09-11T17:42:21Z",
+  "lastDispositionUpdateUtc": "2026-09-11T18:42:39Z",
   "previousGithubRefreshEvidence145": {
     "startedUtc": "2026-09-08T09:17:23.275604+00:00",
     "endedUtc": "2026-09-08T09:28:07.480134+00:00",
@@ -2009,39 +2009,37 @@
     "tree": "db432eb14791d9637e812333305e811edceb834e"
   },
   "activeWorkItem": {
-    "name": "415_JMDNS_EXTENDED_RCODE_WARNING",
-    "status": "415_PREPARING_SOLE_ACTIVE_410_PARKED_FINAL_WITHHELD",
+    "name": "413_KOTLIN_NATIVE_COMPILATION_ADMISSION_PLAN",
+    "status": "413_PLANNING_ADMISSION_ONLY_IMPLEMENTATION_RUNTIME_NOT_STARTED",
     "owner": "primary agent",
-    "scope": "415 sole active/preparing, then416, then413->414->409 conditional on meaningful admission; ordering is not execution or approval. 413 native admission unknown;414 requires a distinct real Kotlin caller boundary;409 peer readiness remains gated. 410 parked;417 unimplemented under existing restricted planning, not retried/rephrased/delegated. 410 PARKED/PENDING_REMEDIATION, final approval WITHHELD; no repair credit or external reclassification. Full MacR1, startup1 and guarded startupR2 failed separately before ready/close. R2 at clean c9ac681 captured native NoRouteToHostException; sanitized post-failure route observation does not prove cause. Return only with new admission evidence; no unchanged full-graph retry, lock bypass or route/permission override. Current full locks/LAN Dokka/ABI/root/sample/consumer qualification, ART, physical/hostile, narrow Apple/Intel, independent/crypto and owner120/274/284 obligations remain. Audit NOT_READY;133 NOT_STARTED. Original LinuxR2/R16/R18/Windows failures and207/408scoped approvals retain their own bindings; no replay, R16/Android causal attribution or release credit."
+    "scope": "413 active PLANNING/compilation-admission preparation; implementation/runtime NOT_STARTED, native admission unknown. Then414 requires a distinct real Kotlin caller boundary, then409 conditional peer readiness. Ordering is not execution or approval. 410 remains PARKED/PENDING_REMEDIATION, final WITHHELD; return only with new admission evidence, no unchanged full-graph retry, lock bypass or route/permission override. 417 remains unimplemented under existing restricted planning, not retried/rephrased/delegated."
   },
   "latestGithubListObservation": {
-    "reference": "checkpoint.json nativeFollowups.github410R8Refresh",
+    "reference": "checkpoint.json nativeFollowups.github410R10Refresh",
     "apiWindowUtc": [
-      "2026-09-11T17:21:16.731170+00:00",
-      "2026-09-11T17:21:28.046625+00:00"
+      "2026-09-11T18:47:41.450906+00:00",
+      "2026-09-11T18:47:52.443298+00:00"
     ],
     "allOpenWindowUtc": [
-      "2026-09-11T17:21:16.731170+00:00",
-      "2026-09-11T17:21:20.338282+00:00"
+      "2026-09-11T18:47:41.450906+00:00",
+      "2026-09-11T18:47:44.796341+00:00"
     ],
-    "issueListFinishedUtc": "2026-09-11T17:21:20.338282+00:00",
-    "openIssues": 231,
+    "issueListFinishedUtc": "2026-09-11T18:47:44.796341+00:00",
+    "openIssues": 232,
     "openPullRequests": 7,
-    "freshLocalFullBodies": 238,
-    "freshBodyScope": "238unique all-open objects/bodies freshly captured; equality is not a fresh complete semantic reread of every body.",
-    "totalIssues": 338,
+    "freshLocalFullBodies": 239,
+    "totalIssues": 339,
     "closedIssues": 107,
     "pullRequests": 79,
     "closedPullRequests": 72,
-    "totalCountScope": "338issues/79PRs effective at R8, before418; closed/linked histories reused, not a new all-state census.",
+    "totalCountScope": "Effective cumulative339issues/79PRs; only232open issues/7openPRs freshly enumerated.",
     "freshConversationComments": 0,
-    "directCompleteEmptyCommentFeeds": 9,
+    "directCompleteEmptyCommentFeeds": 10,
     "reusedConversationComments": 566,
     "inlineDeltaRecords": 0,
     "inventoryExactlyMatchesOpenIssues": true,
-    "scope": "R8:17GETs,238unchanged open objects(231issues/7PRs), empty item/conversation/inline delta since16:29. Fresh manual bodies410/411/412 by R8 reviewer; other body reads and566comments reused. Nine fresh complete empty repair comment feeds. Seven PR own/source records unchanged; nested repository metadata is not a ref observation. No Actions/ref/lease/upstream requests.",
-    "finalDeltaReference": "checkpoint.json nativeFollowups.github410R8Refresh.delta",
-    "inventoryMatchScope": "231inventory rows at capture match231open issue IDs; current232inventory adds later individually filed418."
+    "scope": "R10 18:47:41.450906\u201318:47:52.443298UTC:18GETs,239open objects(232issues/7PRs), all unchanged sinceR9; empty item/comment/inline delta. Captured on-disk200/201/31 is a separate stale administrative snapshot, not the later202/203/29 projection. Fresh all-open objects, not a fresh manual reread/full-history or all-state census. 566comments and closed/linked histories reused;409\u2013418OPEN with10fresh complete empty comment feeds. Effective339issues/79PRs is cumulative. No Actions/ref/lease/upstream observation.",
+    "capturedDispositionReference": "checkpoint.json nativeFollowups.github410R10Refresh.capturedDisposition"
   },
   "completedInvestigation223": {
     "issue": 223,
@@ -2430,8 +2428,8 @@
     "sealedUtc": "2026-09-08T19:50:01.960459+00:00",
     "scope": "Fresh complete local own histories and all returned local/first-hop PR collections, including closed decisions. Actual payload comparison, not equality inferred from counters. Eight upstream content gaps and omitted patches remain; no full textual patch reconstruction or semantic re-audit of every unchanged claim/current caller. Per-endpoint, not transactional/current indefinitely or an execution lease. Local freshness ends19:22:50; later upstream/analysis/sealing does not extend it. #369 not present in this capture; individually added later. Earlier10h/16h/18h records and historical row states remain unchanged."
   },
-  "sourceCheckpointScope": "Clean b27cdd4/tree388c713 is the input to this seven-file administrative delta, after separately approved411/412/418 textual repairs. Guarded MacR2 failed at earlier clean c9ac681/e6f14f5, not this source. Existing Linux/full-Mac/startup1/local diagnostic results keep their original bindings; no clean executed-current-composition claim.",
-  "lastScopedVerificationRole": "Latest final scoped approval418 is source-only;411/412 textual approvals and207Windows19/408native approvals are separately bound. No native result is relabeled as Android execution.",
+  "sourceCheckpointScope": "Clean593175f/tree0056bd9 is the input to this eight-path administrative delta. 415/416 are separately finally approved, committed NOT_PUSHED at this boundary. 415 invocations used194da+staged37d0be;416 used628336b+staged87bde6, not clean 628/593 executions. Earlier failure/approval bindings remain unchanged.",
+  "lastScopedVerificationRole": "Latest final scoped approval416 and separate415 approval bind staged-source focused Java/JUnit and provenance evidence. Earlier411/412/418 textual and207/408 native approvals retain their own scopes.",
   "latestAffectedGateAttemptRole": "Actual clean553focusedWindows19, not all-sample/fullhost/rootcheck/release acceptance.",
   "hostedValidationFacility": {
     "name": "SERIALIZED_HOSTED_MAC_WINDOWS_APPLE_VALIDATION_FACILITY",
@@ -5948,7 +5946,7 @@
     "scope": "Initial separate pre-filing/individual addition observations. A later genuinely full capture and then narrower post371 addition are recorded separately without changing these inputs."
   },
   "latestKnownGithubCountsAfterIndividualAddition": {
-    "reference": "checkpoint.json nativeFollowups.github410R8Refresh and nativeFollowups.filing418",
+    "reference": "checkpoint.json nativeFollowups.github410R10Refresh",
     "lastFullCensusOpenIssues": 230,
     "laterIndividualIssueNumbers": [
       417,
@@ -5958,8 +5956,8 @@
     "derivedKnownOpenIssues": 232,
     "derivedKnownClosedIssues": 107,
     "pullRequestsAtLastFullCensus": 79,
-    "scope": "Original04:15full census plus individual417/418; R8 separately refreshed231open issues before418. Current effective339issues/232open/79PRs is R8 plus GET-verified418, not a new all-state/all-open census or all-history refresh.",
-    "latestAllOpenIssueCount": 231
+    "scope": "Original04:15all-state census plus later individual417/418; R9/R10separately enumerate232open issues. Effective339issues/79PRs is cumulative, not a new all-state/history census.",
+    "latestAllOpenIssueCount": 232
   },
   "latestGithubFullRefresh": {
     "status": "COMPLETE_METADATA_RECONCILIATION_WITH_DECLARED_LIMITS",
@@ -7941,14 +7939,14 @@
     "scope": "Separately approved operational request, locally committed, NOT_PUSHED; no extra repair approval. Actual complete committed source read may honestly bind d152. No hosted trial4/native Windows/Apple acceptance. Final administrative review plus live Actions/ref observation/global lease/source freeze/local-test pause required BEFORE triggering publication."
   },
   "currentAdministrativeInputSource": {
-    "commit": "b27cdd477b7a260981dec6920428cfd385215b9a",
-    "tree": "388c713f373a74f486bb8f521df027bb8c5d0bf4",
-    "preparedUtc": "2026-09-11T17:54:13.810022+00:00",
-    "preimageAdministrativeCommit": "c9ac681abdc6a02637779191112be10bfa624b29",
+    "commit": "593175ff935d447907e2aa466f17072217ea5907",
+    "tree": "0056bd96b35e18a2c03dcc76d615a69ae5949439",
+    "preparedUtc": "2026-09-11T18:50:10.950726+00:00",
+    "preimageAdministrativeCommit": "194da7f2bd11f7403f80009de1ee8e25ad521349",
     "sourceDiffSha256BeforeAdministrativeWrite": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "sourceWasCleanAtInput": true,
-    "publicationStatus": "SOURCE_COMMITS_LOCAL_ADMINISTRATIVE_DELTA_NOT_COMMITTED",
-    "scope": "Clean b27cdd4/tree388c713 is the input to this seven-file administrative delta, after separately approved411/412/418 textual repairs. Guarded MacR2 failed at earlier clean c9ac681/e6f14f5, not this source. Existing Linux/full-Mac/startup1/local diagnostic results keep their original bindings; no clean executed-current-composition claim."
+    "publicationStatus": "415_416_NOT_PUSHED_ADMINISTRATIVE_DELTA_NOT_COMMITTED",
+    "scope": "Clean593175f/tree0056bd9 is the input to this eight-path administrative delta. 415/416 are separately finally approved, committed NOT_PUSHED at this boundary. 415 invocations used194da+staged37d0be;416 used628336b+staged87bde6, not clean 628/593 executions. Earlier failure/approval bindings remain unchanged."
   },
   "priorCanonicalAab8Product": {
     "lastIntegratedCheck": {
@@ -8606,7 +8604,7 @@
     "public373Outcome": "https://github.com/p2pKit/P2pKit/issues/373#issuecomment-5597019604",
     "scope": "Actual historical failed trial, independently inspected retained evidence; diagnostics-only d5d0c1e is not its cleanup repair. Older operational request/trial records remain historical."
   },
-  "corroborationProjectionRole": "Historical corroborationProjection remains at its original binding. Current1228-row counts/read-kind limits are in currentCorroborationProjection; coverage-owner application and final authored-postimage binding are pending. No self-hash cycle or runtime/whole-file promotion.",
+  "corroborationProjectionRole": "Historical corroborationProjection remains dated. Current1233-row/read-kind projection is in currentCorroborationProjection; author-frozen readback is complete, with exact application/final binding owned externally, without self-hash or whole-file/runtime promotion.",
   "previousCorroborationProjectionBeforeCohort0909": {
     "latestApprovedNumberedSourceCommit": "128136ff8ab040f0b5c61dc5402d2b9736d63c86",
     "latestApprovedNumberedSourceTree": "747189670275c32b9ef67b3f1842cb3fad3cb381",
@@ -11234,17 +11232,17 @@
     "scope": "Fresh all-open full bodies, all-state changes and conversation comments since14:13; unchanged earlier full bodies/history/linked PR sets remain historically bound, not freshly reread. Not an Actions lease. The existing14:14 githubIssueListRefreshedUtc/latestGithubListObservation remain the historical complete all-state list; this later observation is the current bounded all-open/delta refresh, not an Actions lease or history recrawl."
   },
   "nativeFollowups": {
-    "recordedUtc": "2026-09-11T17:42:21Z",
-    "observationCutoffUtc": "2026-09-11T17:42:21Z",
-    "report": "repairs/cohort-2026-09-09-native-followups.md#410-mac-qualification-failure-and-startup-diagnostic-continuation",
+    "recordedUtc": "2026-09-11T18:42:39Z",
+    "observationCutoffUtc": "2026-09-11T18:42:39Z",
+    "report": "repairs/415-416.md",
     "currentCounts": {
-      "repairApproved": 200,
+      "repairApproved": 202,
       "denominator": 232,
       "reviewedNoRepair": 1,
-      "resolved": 201,
-      "unresolved": 31,
-      "repairApprovalComplement": 32,
-      "repairOrNativeValidation": 7,
+      "resolved": 203,
+      "unresolved": 29,
+      "repairApprovalComplement": 30,
+      "repairOrNativeValidation": 5,
       "externalValidation": 21,
       "ownerDecisions": 3,
       "newAuditFindings": 99
@@ -11299,7 +11297,8 @@
       "Windows19final207scopedapproval restores1repair:197repair/198resolved of227;29unresolved/30complement,94newfindings. No new issue or GitHub closure.",
       "Actual414/415/416source-only filings:197repair-approved/198resolved of230;32unresolved/33approvalcomplement;97newfindings.8repairs+21external+3owner;410remainsWIP/unapproved.",
       "Later actual417Low/source-only POST/GET:197repair-approved/198resolved of231;33unresolved/34approvalcomplement;98newfindings.9repairs+21external+3owner; no repair credit or full231-open census.",
-      "MacR1qualificationFAIL and later bounded R3/SBOM/localordinarycontrol positives:197repair-approved/198resolved of231;33unresolved, no approval or inventory change.410stillsoleactive; nextMacdiagnosticpending."
+      "MacR1qualificationFAIL and later bounded R3/SBOM/localordinarycontrol positives:197repair-approved/198resolved of231;33unresolved, no approval or inventory change.410stillsoleactive; nextMacdiagnosticpending.",
+      "After published194da200/232approved and201resolved, final415then416add2repairs:202approved/203resolved,29unresolved=5repairs+21external+3owner;99new findings.410staysparked/unapproved."
     ],
     "newlyApprovedIssues": [
       172,
@@ -11345,10 +11344,12 @@
       408,
       411,
       412,
-      418
+      418,
+      415,
+      416
     ],
-    "sourceCommit": "b27cdd477b7a260981dec6920428cfd385215b9a",
-    "sourceTree": "388c713f373a74f486bb8f521df027bb8c5d0bf4",
+    "sourceCommit": "593175ff935d447907e2aa466f17072217ea5907",
+    "sourceTree": "0056bd96b35e18a2c03dcc76d615a69ae5949439",
     "publicationBefore9ecd": {
       "status": "PUSHED_AUDIT_BRANCH_REF_TREE_VERIFIED",
       "commit": "165e4e9263cd6ddfe73a51ed401259d149b63731",
@@ -11445,13 +11446,13 @@
       "changedConversationComments": 0,
       "scope": "Bounded all-state issue/comment delta since15:27 then individual successful388 creation. Not a fresh202-row complete-history/linked-PR crawl, separate refetch, repair approval or closure. Existing14:14 list and15:27 open-body records retain their exact scope."
     },
-    "pendingBoundary": "415 sole active/preparing, then416, then413->414->409 conditional on meaningful admission; ordering is not execution or approval. 413 native admission unknown;414 requires a distinct real Kotlin caller boundary;409 peer readiness remains gated. 410 parked;417 unimplemented under existing restricted planning, not retried/rephrased/delegated. 410 PARKED/PENDING_REMEDIATION, final approval WITHHELD; no repair credit or external reclassification. Full MacR1, startup1 and guarded startupR2 failed separately before ready/close. R2 at clean c9ac681 captured native NoRouteToHostException; sanitized post-failure route observation does not prove cause. Return only with new admission evidence; no unchanged full-graph retry, lock bypass or route/permission override. Current full locks/LAN Dokka/ABI/root/sample/consumer qualification, ART, physical/hostile, narrow Apple/Intel, independent/crypto and owner120/274/284 obligations remain. Audit NOT_READY;133 NOT_STARTED. Original LinuxR2/R16/R18/Windows failures and207/408scoped approvals retain their own bindings; no replay, R16/Android causal attribution or release credit.",
+    "pendingBoundary": "413 active PLANNING/compilation-admission preparation; implementation/runtime NOT_STARTED, native admission unknown. Then414 requires a distinct real Kotlin caller boundary, then409 conditional peer readiness. Ordering is not execution or approval. 410 remains PARKED/PENDING_REMEDIATION, final WITHHELD; return only with new admission evidence, no unchanged full-graph retry, lock bypass or route/permission override. 417 remains unimplemented under existing restricted planning, not retried/rephrased/delegated.",
     "deferredProjections": [
       "Current whole-source semantic corroboration beyond exact supplied read chains",
       "Older dated cohort reports/continuation narratives remain historical"
     ],
-    "scope": "200/232 repair approvals (86.2%); 201/232 resolved (86.6%) including no-repair287; 31/232 unresolved (13.4%). Repair-approval complement32/232 (13.8%); 99 new findings. Counts are issue rows, not effort/readiness or GitHub closures. 415 sole active/preparing, then416, then413->414->409 conditional on meaningful admission; ordering is not execution or approval. 413 native admission unknown;414 requires a distinct real Kotlin caller boundary;409 peer readiness remains gated. 410 parked;417 unimplemented under existing restricted planning, not retried/rephrased/delegated. 410 PARKED/PENDING_REMEDIATION, final approval WITHHELD; no repair credit or external reclassification. Full MacR1, startup1 and guarded startupR2 failed separately before ready/close. R2 at clean c9ac681 captured native NoRouteToHostException; sanitized post-failure route observation does not prove cause. Return only with new admission evidence; no unchanged full-graph retry, lock bypass or route/permission override. Current full locks/LAN Dokka/ABI/root/sample/consumer qualification, ART, physical/hostile, narrow Apple/Intel, independent/crypto and owner120/274/284 obligations remain. Audit NOT_READY;133 NOT_STARTED. Original LinuxR2/R16/R18/Windows failures and207/408scoped approvals retain their own bindings; no replay, R16/Android causal attribution or release credit.",
-    "sourceBindingRole": "Clean b27cdd4/tree388c713 is the input to this seven-file administrative delta, after separately approved411/412/418 textual repairs. Guarded MacR2 failed at earlier clean c9ac681/e6f14f5, not this source. Existing Linux/full-Mac/startup1/local diagnostic results keep their original bindings; no clean executed-current-composition claim.",
+    "scope": "202/232 repair approvals (87.1%); 203/232 resolved (87.5%) including no-repair287; 29/232 unresolved (12.5%). Repair-approval complement30/232 (12.9%);99new findings. Counts are issue rows, not effort/readiness or GitHub closures. 413 active PLANNING/compilation-admission preparation; implementation/runtime NOT_STARTED, native admission unknown. Then414 requires a distinct real Kotlin caller boundary, then409 conditional peer readiness. Ordering is not execution or approval. 410 remains PARKED/PENDING_REMEDIATION, final WITHHELD; return only with new admission evidence, no unchanged full-graph retry, lock bypass or route/permission override. 417 remains unimplemented under existing restricted planning, not retried/rephrased/delegated. Remaining gates: repairs415416.remainingBoundary.",
+    "sourceBindingRole": "Clean593175f/tree0056bd9 is the input to this eight-path administrative delta. 415/416 are separately finally approved, committed NOT_PUSHED at this boundary. 415 invocations used194da+staged37d0be;416 used628336b+staged87bde6, not clean 628/593 executions. Earlier failure/approval bindings remain unchanged.",
     "newIssues": [
       388,
       389,
@@ -12848,10 +12849,10 @@
       "scope": "Point-in-time global idle observation and administrative local lease release only; later policy2 UNKNOWN drain and full remote cleanupNOT_PROVEN remain. No standing lock/future idle/clean remote runner assertion."
     },
     "currentSourcePoint": {
-      "commit": "b27cdd477b7a260981dec6920428cfd385215b9a",
-      "tree": "388c713f373a74f486bb8f521df027bb8c5d0bf4",
-      "publicationStatus": "LOCAL_SOURCE_COMMITS_ADMINISTRATIVE_DELTA_NOT_COMMITTED",
-      "scope": "Clean b27cdd4/tree388c713 is the input to this seven-file administrative delta, after separately approved411/412/418 textual repairs. Guarded MacR2 failed at earlier clean c9ac681/e6f14f5, not this source. Existing Linux/full-Mac/startup1/local diagnostic results keep their original bindings; no clean executed-current-composition claim."
+      "commit": "593175ff935d447907e2aa466f17072217ea5907",
+      "tree": "0056bd96b35e18a2c03dcc76d615a69ae5949439",
+      "publicationStatus": "415_416_COMMITTED_NOT_PUSHED_ADMINISTRATIVE_DELTA_NOT_COMMITTED",
+      "scope": "Clean593175f/tree0056bd9 is the input to this eight-path administrative delta. 415/416 are separately finally approved, committed NOT_PUSHED at this boundary. 415 invocations used194da+staged37d0be;416 used628336b+staged87bde6, not clean 628/593 executions. Earlier failure/approval bindings remain unchanged."
     },
     "githubRefresh": {
       "apiWindowUtc": [
@@ -16620,7 +16621,7 @@
       "macAttemptReference": "nativeFollowups.macLockRefreshR1",
       "startupDiagnosticReference": "nativeFollowups.startupDiagnosticContinuation"
     },
-    "observationCutoffScope": "Latest root-relayed final418source-only review ended17:42:21; runtimeR2, R8all-open,418filing and current clean input each retain their own clocks.",
+    "observationCutoffScope": "Current recorded/disposition timestamps use the disposition-evidence cutoff:416final evidence inspection observed18:42:39;415independent clean-source rebind observed18:23:10.770649031. APPROVE_FINAL_415/416 verdict completion/delivery is UN_CLOCKED/UNRECORDED. Execution, publication, GitHubR9/R10 and administrative input clocks remain separate; this cutoff is neither a verdict-delivery clock nor a fresh census clock.",
     "windows19AdministrationPublication": {
       "commit": "3d4fa914cc2e4e4b20e14ddee0ab4d71e5390a9b",
       "tree": "c6d57b745966e96f920ffb2d1b1efe39c7f370c3",
@@ -17855,34 +17856,303 @@
         "newAuditFindings": 99
       },
       "scope": "Three separate final source-only approvals, not Mac410credit or Android execution. Reviews delivered in conversation through root; no new report paths/hashes invented."
+    },
+    "github410R9Refresh": {
+      "report": "github-issue-delta-20260911-r9/REPORT.md",
+      "reportSha256": "6720827d45ebf6dd20d7d5aa37a08c6f8ce876f03823c03cffcbaf0192559323",
+      "apiWindowUtc": [
+        "2026-09-11T17:57:54.115740+00:00",
+        "2026-09-11T17:58:05.082285+00:00"
+      ],
+      "allOpenWindowUtc": [
+        "2026-09-11T17:57:54.115740+00:00",
+        "2026-09-11T17:57:57.395538+00:00"
+      ],
+      "deltaWindowUtc": [
+        "2026-09-11T17:57:57.395538+00:00",
+        "2026-09-11T17:57:58.956587+00:00"
+      ],
+      "since": "2026-09-11T17:21:00Z",
+      "getRequests": 18,
+      "errors": 0,
+      "retries": 0,
+      "openIssues": 232,
+      "openPullRequests": 7,
+      "freshOpenObjects": 239,
+      "delta": {
+        "items": 1,
+        "comments": 0,
+        "inline": 0,
+        "itemNumbers": [
+          418
+        ],
+        "commentIds": [],
+        "inlineIds": []
+      },
+      "capturedDisposition": {
+        "repairApproved": 200,
+        "denominator": 232,
+        "resolved": 201,
+        "unresolved": 31
+      },
+      "scope": "Actual fresh239openobjects=232issues+7PRs; only418addition sinceR8. Effective339issues/79PRs remains cumulative, not a new all-state census. No Actions/ref/lease/upstream freshness.",
+      "freshManualReadScope": "R9 reviewer manually read new418body;411/412manual reads reused fromR8; other238old bodies not freshly manually reread. Administrative author read completeR9report and selected capture fields, not rawallbodies/history.",
+      "historyReuse": "566conversation bodies;107closed issue bodies,29relevantPRdetails,79file/commit sets and prior reviews/timelines remain dated reuse. Ten fresh complete empty409-418comment feeds."
+    },
+    "github410R10Refresh": {
+      "report": "github-issue-delta-20260911-r10/REPORT.md",
+      "reportSha256": "cb2d7aefd7b5d4b7415968dce4fd73e88811f2f1c470682d3620002a2769c8f6",
+      "manifestSha256": "1928e85b8dd782e7390c7fad62687bf13f69d7c1135ea0fc612c0393dea5b15f",
+      "apiWindowUtc": [
+        "2026-09-11T18:47:41.450906+00:00",
+        "2026-09-11T18:47:52.443298+00:00"
+      ],
+      "allOpenWindowUtc": [
+        "2026-09-11T18:47:41.450906+00:00",
+        "2026-09-11T18:47:44.796341+00:00"
+      ],
+      "deltaWindowUtc": [
+        "2026-09-11T18:47:44.796341+00:00",
+        "2026-09-11T18:47:46.320134+00:00"
+      ],
+      "since": "2026-09-11T17:57:00Z",
+      "getRequests": 18,
+      "errors": 0,
+      "retries": 0,
+      "openIssues": 232,
+      "openPullRequests": 7,
+      "freshOpenObjects": 239,
+      "delta": {
+        "items": 0,
+        "comments": 0,
+        "inline": 0,
+        "itemNumbers": [],
+        "commentIds": [],
+        "inlineIds": []
+      },
+      "capturedDisposition": {
+        "repairApproved": 200,
+        "denominator": 232,
+        "resolved": 201,
+        "unresolved": 31,
+        "byteReadWindowUtc": [
+          "2026-09-11T18:47:41.454991+00:00",
+          "2026-09-11T18:47:41.455740+00:00"
+        ],
+        "scope": "Immutable on-disk projection still preceded administrative415/416update; root-declared202/203/29 is separate, not a rewrite of these captured bytes."
+      },
+      "laterAdministrativeObservation": {
+        "repairApproved": 200,
+        "denominator": 232,
+        "resolved": 201,
+        "unresolved": 31,
+        "byteReadWindowUtc": [
+          "2026-09-11T18:54:34.985862+00:00",
+          "2026-09-11T18:54:34.986148+00:00"
+        ],
+        "scope": "Separate later byte-read, not newer GitHub freshness or source approval; still before this administrative update."
+      },
+      "scope": "239all-open full objects identicalR9; empty item/conversation/inline deltas;409-418OPEN/0comments with10fresh complete empty feeds. Effective339issues/79PRs is cumulative, not new all-state census. No Actions/ref/lease/upstream requests.",
+      "freshManualReadScope": "Earlier complete415/416body semantics and other unchanged body reads reused, no new full manual reread. Administrative author read completeR10report and selected capture fields, not rawallbodies/history.",
+      "historyReuse": "566cached comments,107closed issue bodies,29relevantPRdetails,79file/commit sets and review/timeline histories retain dated reuse; no linked/closed-decision trigger.",
+      "pullRequestScope": "Seven openPR own/source records unchanged. Separate PR endpoint raw nested repository size7188->7258 and pushed_at17:12:27->18:16:04 metadata changes are not audit-ref/Actions observations.",
+      "limits": "No standing freshness; equality does not exclude timeline-only/unqueried/hidden/deleted/unreturned changes or inherited omitted-patch/visibility limits."
+    },
+    "repairs415416": {
+      "report": "repairs/415-416.md",
+      "approvedIssueNumbers": [
+        415,
+        416
+      ],
+      "repairs": {
+        "415": {
+          "sourceCommit": "628336b97afafcbbb0481e02e674b25a2ee4715f",
+          "sourceTree": "98a27ba71ca40c4040b262cf90eef5cd22e8f6d2",
+          "completeSourceDiffSha256": "37d0be841d02cd032e601aac6da803866972ae65111a8209eca51f42f6f30b1a",
+          "executionBinding": {
+            "commit": "194da7f2bd11f7403f80009de1ee8e25ad521349",
+            "tree": "2e6cd94d8f2576ae6f954db3bc8fc44452de85a4",
+            "stagedDiffSha256": "37d0be841d02cd032e601aac6da803866972ae65111a8209eca51f42f6f30b1a",
+            "cleanCommitExecution": false,
+            "sourceUnchanged": true
+          },
+          "runs": {
+            "415-junit-preimage-r1": {
+              "receipt": "runs/415-junit-preimage-r1/receipt.json",
+              "receiptSha256": "3448790b10b6b029c718f22e2a6926396098340ed1b4e03365366dc39535637a",
+              "commandLogSha256": "4323d3fb74c82c9e7c844736ac6e22e83aada6068861b13dd84be1d3b56daf3e",
+              "startedUtc": "2026-09-11T18:17:52.386188+00:00",
+              "commandEndedUtc": "2026-09-11T18:17:55.918521+00:00",
+              "finishedUtc": "2026-09-11T18:17:56.781884+00:00",
+              "commandExitCode": 1,
+              "stopExitCode": 0,
+              "finalExitCode": 1,
+              "result": "Actual Java/JUnitCore2tests/1failure: extendedCodesDoNotOverlapHeaderBits expected Unknown65535, got NoError0. Original failure retained."
+            },
+            "415-junit-postimage-r1": {
+              "receipt": "runs/415-junit-postimage-r1/receipt.json",
+              "receiptSha256": "16bbc2418f64816d5d074000103cdb3a7de319dff9bc4c7652ac209cfcac04bc",
+              "commandLogSha256": "f15908082703d36cae8fb4087631af646ca411102aef94ec388d1582beae1777",
+              "startedUtc": "2026-09-11T18:18:12.832190+00:00",
+              "commandEndedUtc": "2026-09-11T18:18:15.915772+00:00",
+              "finishedUtc": "2026-09-11T18:18:16.602878+00:00",
+              "commandExitCode": 0,
+              "stopExitCode": 0,
+              "finalExitCode": 0,
+              "result": "Same repository Java/JUnitCore2tests pass on corrected production."
+            },
+            "415-provenance-regressions-r1": {
+              "receipt": "runs/415-provenance-regressions-r1/receipt.json",
+              "receiptSha256": "b429b71834ac4c8d812830304797392c968fd77100801c9992d4f2d0bec0e42c",
+              "commandLogSha256": "b7eb66c678c4ea6b8e6a604fe35d221fb837293db13dc69217f5e94f3e696156",
+              "startedUtc": "2026-09-11T18:19:06.057418+00:00",
+              "commandEndedUtc": "2026-09-11T18:19:22.291323+00:00",
+              "finishedUtc": "2026-09-11T18:19:23.090624+00:00",
+              "commandExitCode": 0,
+              "stopExitCode": 0,
+              "finalExitCode": 0,
+              "result": "22SBOM methods (29XML mutation subcases),11licenseZIP/67embeddedZIP-metadata fixtures, actual upstream inventory/OSV-input coverage, forward/reverse patch equality and shell/whitespace pass."
+            },
+            "415-gradle-configuration-r1": {
+              "receipt": "runs/415-gradle-configuration-r1/receipt.json",
+              "receiptSha256": "36da94fefa698eb31bfe1d359d617767a6cf54932cfb55a4bbc24e2bc910f224",
+              "commandLogSha256": "e6f506051383af4d70cda936edd94c9c5f6a048b7a5bfecd1db84a700f937860",
+              "startedUtc": "2026-09-11T18:20:31.772381+00:00",
+              "commandEndedUtc": "2026-09-11T18:21:05.074176+00:00",
+              "finishedUtc": "2026-09-11T18:21:05.791850+00:00",
+              "commandExitCode": 0,
+              "stopExitCode": 0,
+              "finalExitCode": 0,
+              "result": "Strict Gradle help passes,3executed tasks. Configuration only; Linux Apple-cinterop warnings retained, no full/native graph."
+            }
+          },
+          "scope": "Whole-OPT-TTL extended RCODE uses (((ttl >>>24)&mask)<<4)|headerLowBits. The established caller is a wrong-version diagnostic, not receive acceptance; arithmetic executed, warning caller source-reviewed, no emitted-warning claim.",
+          "finalReview": {
+            "reviewer": "review_415_final",
+            "verdict": "APPROVE_FINAL_415",
+            "finalSourceReadbackUtc": "2026-09-11T18:23:10.770649031Z",
+            "delivery": "Root-relayed conversation only; verdict completion/delivery UN_CLOCKED/UNRECORDED. finalSourceReadbackUtc binds independently observed clean-source rebind only, not the verdict. No report path/hash."
+          }
+        },
+        "416": {
+          "sourceCommit": "593175ff935d447907e2aa466f17072217ea5907",
+          "sourceTree": "0056bd96b35e18a2c03dcc76d615a69ae5949439",
+          "completeSourceDiffSha256": "87bde6c327fd259d6ca6e69513c667b337ddbd6d36d405fff6df20352576b9af",
+          "executionBinding": {
+            "commit": "628336b97afafcbbb0481e02e674b25a2ee4715f",
+            "tree": "98a27ba71ca40c4040b262cf90eef5cd22e8f6d2",
+            "stagedDiffSha256": "87bde6c327fd259d6ca6e69513c667b337ddbd6d36d405fff6df20352576b9af",
+            "cleanCommitExecution": false,
+            "sourceUnchanged": true
+          },
+          "runs": {
+            "416-junit-preimage-r1": {
+              "receipt": "runs/416-junit-preimage-r1/receipt.json",
+              "receiptSha256": "530daabb37f71fb56709b6b0498221902c2bfb0b1bc91c9d54dc7aa40b1c702d",
+              "commandLogSha256": "cd0c50915c25d31f4bde4061161190d50f0dab35e6abb5d08b8b1cf4612e1d0b",
+              "startedUtc": "2026-09-11T18:39:08.344086+00:00",
+              "commandEndedUtc": "2026-09-11T18:39:12.081120+00:00",
+              "finishedUtc": "2026-09-11T18:39:12.940000+00:00",
+              "commandExitCode": 1,
+              "stopExitCode": 0,
+              "finalExitCode": 1,
+              "result": "Actual Java/JUnitCore5grouped tests/4failures. Grouped assertions short-circuit, including before Pointer; not every later variant independently failed."
+            },
+            "416-junit-postimage-r1": {
+              "receipt": "runs/416-junit-postimage-r1/receipt.json",
+              "receiptSha256": "81dc2306e8086c47dbfed2ea809b5f189c8a2bfbe75dc64a681966c292bce43c",
+              "commandLogSha256": "b1f46e46ca162d72fdfa2b7d6e948e09432107050919f80e2af5df4594d19b32",
+              "startedUtc": "2026-09-11T18:40:08.352081+00:00",
+              "commandEndedUtc": "2026-09-11T18:40:11.933634+00:00",
+              "finishedUtc": "2026-09-11T18:40:12.795248+00:00",
+              "commandExitCode": 0,
+              "stopExitCode": 0,
+              "finalExitCode": 0,
+              "result": "Same5grouped tests pass: actual DNSEntry maps and DNSRecord.Pointer.getServiceInfo, not listener dispatch/network."
+            },
+            "416-provenance-regressions-r1": {
+              "receipt": "runs/416-provenance-regressions-r1/receipt.json",
+              "receiptSha256": "20c14c929f767fd10a4dd4b34ae0ee8a14c19130dffb57dac149e02019b73521",
+              "commandLogSha256": "726f7bc2cd1958c9d49f5e4054caf8552b1b7225db772731ea8e1c30fd523d82",
+              "startedUtc": "2026-09-11T18:40:46.082783+00:00",
+              "commandEndedUtc": "2026-09-11T18:41:02.476853+00:00",
+              "finishedUtc": "2026-09-11T18:41:03.379424+00:00",
+              "commandExitCode": 0,
+              "stopExitCode": 0,
+              "finalExitCode": 0,
+              "result": "22SBOM methods,11licenseZIP/67embeddedZIP-metadata fixtures, actual upstream inventory/OSV-input coverage, forward/reverse patch equality and shell/whitespace pass."
+            }
+          },
+          "scope": "Case-insensitive terminal reverse-name boundary preserves original prefix/case and excludes ordinary instance substrings and unbounded/nonterminal markers. Five methods cover actual DNSEntry/Pointer, canonical type/subtype/unqualified names, reverse names and ordinary/secure service/host/meta cases; not network/listener execution.",
+          "finalReview": {
+            "reviewer": "review_416_final",
+            "verdict": "APPROVE_FINAL_416",
+            "finalEvidenceInspectionUtc": "2026-09-11T18:42:39Z",
+            "delivery": "Root-relayed conversation only; verdict completion/delivery UN_CLOCKED/UNRECORDED. finalEvidenceInspectionUtc binds final evidence inspection only, not the verdict. No report path/hash; no actionable findings."
+          }
+        }
+      },
+      "provenance": "Schema2 retains immutable410lifecycle patch; ordered415then416 followups bind private410.2then410.3 identity and source/resources/producer/package/SBOM/consumer expectations.410and415patch bytes unchanged by416. No published-consumer qualification or410repair credit.",
+      "configurationBoundary": "415strict Gradlehelp is configuration only.416's Gradle changes only update two patch rosters; those edits were source-reviewed. Reuse is mechanism-level415help evidence, not fresh416configuration execution. No lock/fullcheck/Dokka/ABI/native/ART/consumer qualification.",
+      "executionAndReadScope": "Seven unchanged staged-source envelopes; all stops0/no owned survivors, owned outputs removed. Receipt XML totals0 are distinct from actual Java/JUnitCore console tests2and5. Full committed semantic deltas and small receipts read; JUnit commands/complete results selected, not full large hash rosters. Administrative author ran no tests/builds/network.",
+      "cleanup": {
+        "extra415ProjectCaches": "415-source-implementation-r1/help-project-cache-cleanup.json",
+        "extra415ProjectCachesSha256": "d39f2a35a31613be99762d9f03f7aaf7b192e3a6c4cf72f78cc544f3899bae32",
+        "completedUtc": "2026-09-11T18:21:51.759198+00:00",
+        "scope": "Owned build outputs and newly created .gradle/buildSrc/.gradle removed; shared caches/source build package preserved. All12locks and protected instructions unchanged.416cleanup is bound in its three receipts; no whole-host cleanup claim."
+      },
+      "publicationStatus": "415_AND_416_COMMITTED_NOT_PUSHED_AT_ADMINISTRATIVE_INPUT",
+      "currentCounts": {
+        "repairApproved": 202,
+        "denominator": 232,
+        "reviewedNoRepair": 1,
+        "resolved": 203,
+        "unresolved": 29,
+        "repairApprovalComplement": 30,
+        "repairOrNativeValidation": 5,
+        "externalValidation": 21,
+        "ownerDecisions": 3,
+        "newAuditFindings": 99
+      },
+      "remainingBoundary": "413 active PLANNING/compilation-admission preparation; implementation/runtime NOT_STARTED, native admission unknown. Then414 requires a distinct real Kotlin caller boundary, then409 conditional peer readiness. Ordering is not execution or approval. 410 remains PARKED/PENDING_REMEDIATION, final WITHHELD; return only with new admission evidence, no unchanged full-graph retry, lock bypass or route/permission override. 417 remains unimplemented under existing restricted planning, not retried/rephrased/delegated. Audit NOT_READY;133 NOT_STARTED. FullMacR1/startup1/R2, LinuxR2, R16 and R18 failures retain their original bindings;410cause UNPROVEN and no R16/Android attribution.207Windows19/408 scoped approvals stand. Current full locks/LAN Dokka/ABI/root/sample/consumer, ART, physical/hostile, narrow Apple/Intel, backup291, independent/crypto/final-current gates and owner120/274/284 remain. Source0.7.0-SNAPSHOT, immutableRC3 and existing0.8.0+restrictions unchanged."
+    },
+    "publication194daBefore415416": {
+      "commit": "194da7f2bd11f7403f80009de1ee8e25ad521349",
+      "tree": "2e6cd94d8f2576ae6f954db3bc8fc44452de85a4",
+      "pushWindowUtc": [
+        "2026-09-11T18:16:01.993335+00:00",
+        "2026-09-11T18:16:04.503307+00:00"
+      ],
+      "getVerifiedUtc": "2026-09-11T18:16:05.706656+00:00",
+      "receipt": "hosted-operations/post-mac-r2-admin-publication-20260911/receipt.json",
+      "receiptSha256": "2e69159dcec6c7f5085d2d0656d17ff5969c61fc6437f8ba3a35747bc02a09dd",
+      "scope": "Published prior administration and411/412/418; not415/416publication or execution. Scoped audit-branch push, no dispatch/release/tag/closure/settings/main action."
     }
   },
   "lastScopedVerification": {
-    "reference": "nativeFollowups.postMacR2AdministrativeRepairs.repairs.418",
-    "status": "APPROVE_SOURCE_ONLY_418",
-    "scope": "Final textual oracle repair plus whitespace0/0/0; not Android runtime, product/native qualification or owner API approval."
+    "reference": "nativeFollowups.repairs415416.repairs.416",
+    "status": "APPROVE_FINAL_416_FOCUSED_VENDOR_JUNIT_AND_PROVENANCE",
+    "scope": "Five actual Java/JUnitCore methods pass and scoped provenance controls pass; no listener/network/fullgraph/native/ART/consumer qualification."
   },
   "hostedValidationAuthorization": {
     "status": "OWNER_AUTHORIZED_SERIAL_SUPPORTED_HOST_GATES",
-    "scope": "415 sole active/preparing, then416, then413->414->409 conditional on meaningful admission; ordering is not execution or approval. 413 native admission unknown;414 requires a distinct real Kotlin caller boundary;409 peer readiness remains gated. 410 parked;417 unimplemented under existing restricted planning, not retried/rephrased/delegated. 410 PARKED/PENDING_REMEDIATION, final approval WITHHELD; no repair credit or external reclassification. Full MacR1, startup1 and guarded startupR2 failed separately before ready/close. R2 at clean c9ac681 captured native NoRouteToHostException; sanitized post-failure route observation does not prove cause. Return only with new admission evidence; no unchanged full-graph retry, lock bypass or route/permission override. Current full locks/LAN Dokka/ABI/root/sample/consumer qualification, ART, physical/hostile, narrow Apple/Intel, independent/crypto and owner120/274/284 obligations remain. Audit NOT_READY;133 NOT_STARTED. Original LinuxR2/R16/R18/Windows failures and207/408scoped approvals retain their own bindings; no replay, R16/Android causal attribution or release credit. Existing serial supported-host authorization is unchanged; every hosted execution still needs fresh admission, exclusive task-owned lease and source freeze."
+    "scope": "413 active PLANNING/compilation-admission preparation; implementation/runtime NOT_STARTED, native admission unknown. Then414 requires a distinct real Kotlin caller boundary, then409 conditional peer readiness. Ordering is not execution or approval. 410 remains PARKED/PENDING_REMEDIATION, final WITHHELD; return only with new admission evidence, no unchanged full-graph retry, lock bypass or route/permission override. 417 remains unimplemented under existing restricted planning, not retried/rephrased/delegated. Audit NOT_READY;133 NOT_STARTED. FullMacR1/startup1/R2, LinuxR2, R16 and R18 failures retain their original bindings;410cause UNPROVEN and no R16/Android attribution.207Windows19/408 scoped approvals stand. Current full locks/LAN Dokka/ABI/root/sample/consumer, ART, physical/hostile, narrow Apple/Intel, backup291, independent/crypto/final-current gates and owner120/274/284 remain. Source0.7.0-SNAPSHOT, immutableRC3 and existing0.8.0+restrictions unchanged. Existing serial supported-host authorization unchanged; any execution still requires fresh admission, exclusive task-owned lease and source freeze."
   },
-  "repairApprovedIssueCount": 200,
+  "repairApprovedIssueCount": 202,
   "reviewedNoRepairIssueCount": 1,
-  "resolvedIssueCount": 201,
-  "unresolvedIssueCount": 31,
-  "repairApprovalComplementIssueCount": 32,
+  "resolvedIssueCount": 203,
+  "unresolvedIssueCount": 29,
+  "repairApprovalComplementIssueCount": 30,
   "currentCountMeanings": {
-    "denominator": "232inventory rows=133pre-existing+99new. R8 captured231open issue IDs before individual418addition; effective339issues/79PRs is cumulative, not a new all-state census.",
-    "completedIssueCount": "200approved repair rows; only411/412/418 add3sinceR8. Parked410 adds zero.",
-    "remainingIssueCount": "31unresolved=232-201; complement32 also includes no-repair287.",
-    "resolvedIssueCount": "200repairs+1reviewed no-repair287; not GitHub closures.",
-    "PENDING_REMEDIATION": "9members:7active/queued/parked/restricted repairs plus owner274/284;120separate.",
-    "unresolvedWork": "7repairs+21external+3owner; additional133/291/367 and supported-host/final gates remain."
+    "denominator": "232inventory rows=133pre-existing+99new; fresh R9/R10all-open count is distinct from cumulative339issues/79PRs.",
+    "completedIssueCount": "202approved repairs;415and416add2since194da. Parked410 adds zero.",
+    "remainingIssueCount": "29unresolved=232-203; approval complement30 also includes no-repair287.",
+    "resolvedIssueCount": "202repairs+1reviewed no-repair287; not GitHub closures.",
+    "PENDING_REMEDIATION": "7members:5active/queued/parked/restricted repairs plus owner274/284;120separate.",
+    "unresolvedWork": "5repairs+21external+3owner; additional133/291/367 and supported-host/final gates remain."
   },
   "currentUnresolvedWork": {
     "repairOrNativeIssueNumbers": [
-      415,
-      416,
       413,
       414,
       409,
@@ -17922,7 +18192,7 @@
       291,
       367
     ],
-    "supportedHostWork": "415 sole active/preparing, then416, then413->414->409 conditional on meaningful admission; ordering is not execution or approval. 413 native admission unknown;414 requires a distinct real Kotlin caller boundary;409 peer readiness remains gated. 410 parked;417 unimplemented under existing restricted planning, not retried/rephrased/delegated. 410 PARKED/PENDING_REMEDIATION, final approval WITHHELD; no repair credit or external reclassification. Full MacR1, startup1 and guarded startupR2 failed separately before ready/close. R2 at clean c9ac681 captured native NoRouteToHostException; sanitized post-failure route observation does not prove cause. Return only with new admission evidence; no unchanged full-graph retry, lock bypass or route/permission override. Current full locks/LAN Dokka/ABI/root/sample/consumer qualification, ART, physical/hostile, narrow Apple/Intel, independent/crypto and owner120/274/284 obligations remain. Audit NOT_READY;133 NOT_STARTED. Original LinuxR2/R16/R18/Windows failures and207/408scoped approvals retain their own bindings; no replay, R16/Android causal attribution or release credit."
+    "supportedHostWork": "413 active PLANNING/compilation-admission preparation; implementation/runtime NOT_STARTED, native admission unknown. Then414 requires a distinct real Kotlin caller boundary, then409 conditional peer readiness. Ordering is not execution or approval. 410 remains PARKED/PENDING_REMEDIATION, final WITHHELD; return only with new admission evidence, no unchanged full-graph retry, lock bypass or route/permission override. 417 remains unimplemented under existing restricted planning, not retried/rephrased/delegated. Audit NOT_READY;133 NOT_STARTED. FullMacR1/startup1/R2, LinuxR2, R16 and R18 failures retain their original bindings;410cause UNPROVEN and no R16/Android attribution.207Windows19/408 scoped approvals stand. Current full locks/LAN Dokka/ABI/root/sample/consumer, ART, physical/hostile, narrow Apple/Intel, backup291, independent/crypto/final-current gates and owner120/274/284 remain. Source0.7.0-SNAPSHOT, immutableRC3 and existing0.8.0+restrictions unchanged."
   },
   "reviewedNoRepairIssueNumbers": [
     287
@@ -17946,33 +18216,31 @@
     "githubOpenIssuesAtRefresh": 195
   },
   "latestGithubOpenIssueObservation": {
-    "reference": "checkpoint.json nativeFollowups.github410R8Refresh",
+    "reference": "checkpoint.json nativeFollowups.github410R10Refresh",
     "apiWindowUtc": [
-      "2026-09-11T17:21:16.731170+00:00",
-      "2026-09-11T17:21:28.046625+00:00"
+      "2026-09-11T18:47:41.450906+00:00",
+      "2026-09-11T18:47:52.443298+00:00"
     ],
     "allOpenWindowUtc": [
-      "2026-09-11T17:21:16.731170+00:00",
-      "2026-09-11T17:21:20.338282+00:00"
+      "2026-09-11T18:47:41.450906+00:00",
+      "2026-09-11T18:47:44.796341+00:00"
     ],
-    "issueListFinishedUtc": "2026-09-11T17:21:20.338282+00:00",
-    "openIssues": 231,
+    "issueListFinishedUtc": "2026-09-11T18:47:44.796341+00:00",
+    "openIssues": 232,
     "openPullRequests": 7,
-    "freshLocalFullBodies": 238,
-    "freshBodyScope": "238unique all-open objects/bodies freshly captured; equality is not a fresh complete semantic reread of every body.",
-    "totalIssues": 338,
+    "freshLocalFullBodies": 239,
+    "totalIssues": 339,
     "closedIssues": 107,
     "pullRequests": 79,
     "closedPullRequests": 72,
-    "totalCountScope": "338issues/79PRs effective at R8, before418; closed/linked histories reused, not a new all-state census.",
+    "totalCountScope": "Effective cumulative339issues/79PRs; only232open issues/7openPRs freshly enumerated.",
     "freshConversationComments": 0,
-    "directCompleteEmptyCommentFeeds": 9,
+    "directCompleteEmptyCommentFeeds": 10,
     "reusedConversationComments": 566,
     "inlineDeltaRecords": 0,
     "inventoryExactlyMatchesOpenIssues": true,
-    "scope": "R8:17GETs,238unchanged open objects(231issues/7PRs), empty item/conversation/inline delta since16:29. Fresh manual bodies410/411/412 by R8 reviewer; other body reads and566comments reused. Nine fresh complete empty repair comment feeds. Seven PR own/source records unchanged; nested repository metadata is not a ref observation. No Actions/ref/lease/upstream requests.",
-    "finalDeltaReference": "checkpoint.json nativeFollowups.github410R8Refresh.delta",
-    "inventoryMatchScope": "231inventory rows at capture match231open issue IDs; current232inventory adds later individually filed418."
+    "scope": "R10 18:47:41.450906\u201318:47:52.443298UTC:18GETs,239open objects(232issues/7PRs), all unchanged sinceR9; empty item/comment/inline delta. Captured on-disk200/201/31 is a separate stale administrative snapshot, not the later202/203/29 projection. Fresh all-open objects, not a fresh manual reread/full-history or all-state census. 566comments and closed/linked histories reused;409\u2013418OPEN with10fresh complete empty comment feeds. Effective339issues/79PRs is cumulative. No Actions/ref/lease/upstream observation.",
+    "capturedDispositionReference": "checkpoint.json nativeFollowups.github410R10Refresh.capturedDisposition"
   },
   "githubListingBeforePost394": {
     "githubIssueListRefreshedUtc": "2026-09-10T01:00:15.892733+00:00",
@@ -18742,16 +19010,16 @@
     "issuesGitBlob": "248a82bec6818e800addc12bc7170c62b4bd007d",
     "scope": "Compact preserved prior-current-state reference: Windows19 administration and227-row census. Dated evidence objects remain unchanged; no copied historical snapshot or clean410 execution claim."
   },
-  "pendingRepairSeveritiesScope": "Raw9-row PENDING_REMEDIATION includes owner274/284; seven actual repairs are6Low+1Medium. Parking410 changes neither bucket nor credit.",
+  "pendingRepairSeveritiesScope": "Raw7-row PENDING_REMEDIATION includes owner274/284; five actual repairs are4Low+1Medium. Parking410 changes neither bucket nor credit.",
   "currentCorroborationProjection": {
-    "status": "CURRENT_RECEIPT_PROJECTION_WITH_EXTERNAL_LEDGER_BINDING",
-    "reference": "coverage.tsv; nativeFollowups.postMacR2AdministrativeRepairs",
-    "sourceCommit": "b27cdd477b7a260981dec6920428cfd385215b9a",
-    "sourceTree": "388c713f373a74f486bb8f521df027bb8c5d0bf4",
-    "sourceRole": "Three approved source/documentation deltas plus these seven administrative postimages; coverage owner separately applies and binds final bytes. No runtime claim for this composed source.",
-    "projectionPaths": 1228,
+    "status": "AUTHOR_FROZEN_READBACK_COMPLETE_LEDGER_BINDING_OWNED_EXTERNALLY",
+    "reference": "coverage.tsv; nativeFollowups.repairs415416",
+    "sourceCommit": "593175ff935d447907e2aa466f17072217ea5907",
+    "sourceTree": "0056bd96b35e18a2c03dcc76d615a69ae5949439",
+    "sourceRole": "Two finally approved source deltas plus eight administrative postimages; coverage owner independently binds final ledger bytes. Not a clean593runtime claim.",
+    "projectionPaths": 1233,
     "countsByReadStatus": {
-      "FULL_TEXT_CURRENT": 691,
+      "FULL_TEXT_CURRENT": 696,
       "FULL_SEMANTIC_DELTA_CURRENT": 268,
       "STRUCTURAL_ONLY_CURRENT": 260,
       "REOPENED_HISTORICAL_TEXT_CURRENT_DELTA_BOUND": 6,
@@ -18761,7 +19029,7 @@
       "SCOPED_SEMANTIC_DELTA_CURRENT": 0
     },
     "countsByReadLevel": {
-      "FULL_TEXT": 691,
+      "FULL_TEXT": 696,
       "FULL_SEMANTIC_DELTA": 268,
       "STRUCTURAL_ONLY": 260,
       "SCOPED_ADMINISTRATIVE_DELTA": 6,
@@ -18771,43 +19039,46 @@
     },
     "currentBatch": {
       "inputRows": 1228,
-      "affectedRows": 11,
-      "affectedExistingRows": 11,
-      "newPaths": 0,
-      "unchangedExistingRows": 1217,
+      "affectedRows": 26,
+      "affectedExistingRows": 21,
+      "newPaths": 5,
+      "unchangedExistingRows": 1207,
       "existingHistoricalFiveColumnCellsPreserved": 6140,
-      "originalRowOrderPreserved": true
+      "originalRowOrderPreserved": true,
+      "affectedSourceRows": 17,
+      "affectedAdministrativeRows": 8,
+      "selfLedgerRows": 1
     },
     "cumulativeOriginalBaseline": {
       "inputRows": 1153,
-      "affectedRows": 120,
+      "affectedRows": 125,
       "affectedOriginalRows": 45,
-      "newPaths": 75,
+      "newPaths": 80,
       "unchangedOriginalRows": 1108,
       "originalHistoricalFiveColumnCellsPreserved": 5765,
       "originalRowOrderPreserved": true,
-      "affectedSourceRows": 112,
-      "affectedAdministrativeRows": 7,
+      "affectedSourceRows": 116,
+      "affectedAdministrativeRows": 8,
       "selfLedgerRows": 1
     },
-    "sourceReadKinds": "Complete411/412/418semantic deltas, not new whole-final-file reads; cumulative legacy read kinds remain unchanged. Seven administrative rows retain authored-delta scope.",
-    "scope": "Exact1228-row/current11-existing/cumulative120 projection; authored-delta readback established, exact output/source binding maintained by coverage owner and external application proof. Existing6140first-five cells/order/status/levels preserved; no output-ledger self-hash, whole-file promotion, runtime expansion or final410approval.",
-    "priorProjectionReference": "c9ac681abdc6a02637779191112be10bfa624b29:docs/audit/2026-09-04/checkpoint.json currentCorroborationProjection",
-    "authoredAdministrativeDeltaBinding": "Complete authored semantic-delta readback: current-docs-mac-r2-followthrough-plan-20260911-r1/FINAL-READBACK.json SHA256 911e112a163f7cc6983edfeb5f53e43e30607072c54221b893adbdee5ceef048, completed-by2026-09-11T18:00:24.981503Z. Final root-only projection transition has separate actual readback; exact final checkpoint and ledger hashes are maintained externally by coverage.tsv and coverage r6 application proof, not embedded here.",
+    "sourceReadKinds": "Complete415/416committed semantic deltas; four new source test/patch bodies FULL_TEXT. Existing legacy FULL_TEXT means preserved baseline plus complete deltas, not fresh whole-final-file rereads. Seven existing admin rows retain prior scoped levels; new report requires actual complete frozen read.",
+    "scope": "1233-row projection:26affected(21existing+5new),1207existing raw rows unchanged;6140prior first-five cells/order/status/levels preserved. No output-ledger self-hash, existing-row whole-file promotion or runtime expansion.",
+    "priorProjectionReference": "194da7f2bd11f7403f80009de1ee8e25ad521349:docs/audit/2026-09-04/checkpoint.json currentCorroborationProjection",
+    "authoredAdministrativeDeltaBinding": "Exact eight-path authored delta and complete new-report readback belong in external current-docs-415-416-plan-20260911-r1/FINAL-READBACK.json; coverage r7 independently binds final ledger/postimages after author freeze. No self-referential final checkpoint/coverage hash embedded.",
     "currentIssueCounts": {
-      "repairApproved": 200,
+      "repairApproved": 202,
       "denominator": 232,
       "reviewedNoRepair": 1,
-      "resolved": 201,
-      "unresolved": 31,
-      "repairApprovalComplement": 32,
-      "repairOrNativeValidation": 7,
+      "resolved": 203,
+      "unresolved": 29,
+      "repairApprovalComplement": 30,
+      "repairOrNativeValidation": 5,
       "externalValidation": 21,
       "ownerDecisions": 3,
       "newAuditFindings": 99
     }
   },
-  "lastIntegratedAttemptRole": "Historical integrated invocation is unchanged. FullMacR1 and both startup controls failed at their own sources; later textual approvals do not promote current integration.",
+  "lastIntegratedAttemptRole": "Historical integrated invocation unchanged. FullMacR1 and both startup controls failed at their own sources; later textual/focused-Java approvals do not promote current full integration.",
   "currentQualificationAttempt": {
     "reference": "checkpoint.json nativeFollowups.macLockRefreshR1",
     "status": "FAIL",
@@ -18841,7 +19112,7 @@
     "issuesGitBlob": "597e37822829a544fe3cf129a7192928bedc6e14",
     "scope": "Published pre-Mac current administration preserved by exact blobs; no copied historical snapshot. Later startup fixture/admin edits are not this clean Mac execution."
   },
-  "githubTotalIssuesAtRefreshScope": "338issues effective at R8 open-only refresh; actual list231open/7PRs. Later individually verified418 yields339issues/232open, recorded separately; no new all-state census.",
+  "githubTotalIssuesAtRefreshScope": "Effective cumulative339issues/79PRs; only232open issues/7openPRs freshly enumerated.",
   "currentStateBefore410StartupMacControl": {
     "commit": "09bfb9e99d708b267b3230f8066edf636b2d33ef",
     "tree": "f723f2478d90527c70b6e78608d65c7f74dc4bb2",
@@ -18863,5 +19134,9 @@
   "currentStateBeforeMacR2Followthrough": {
     "reference": "c9ac681abdc6a02637779191112be10bfa624b29:docs/audit/2026-09-04/checkpoint.json",
     "scope": "Immutable pre-R2 current projections/queue/source/coverage state. Existing historical failures and dated evidence objects below remain unchanged."
+  },
+  "currentStateBefore415416": {
+    "reference": "194da7f2bd11f7403f80009de1ee8e25ad521349:docs/audit/2026-09-04/checkpoint.json",
+    "scope": "Immutable published prior current projections. Historical failures/dated evidence objects preserved literally; no duplicated previous-current tree."
   }
 }

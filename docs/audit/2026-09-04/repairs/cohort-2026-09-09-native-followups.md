@@ -2032,3 +2032,13 @@ gated. 410parked under new-evidence requirement;417unimplemented/existing restri
 retried/rephrased/delegated. These seven repairs exclude21external and owner120/274/284.207Windows19/
 408native scoped approvals stand without replay. AuditNOT_READY/#133NOT_STARTED, physical/hostile/ART/
 independent/crypto/final current gates, source0.7.0-SNAPSHOT, immutableRC3 and0.8.0+ restrictions remain.
+
+
+## Focused #415/#416 approvals; #413 planning (2026-09-11)
+
+The [short415/416report](415-416.md) binds separate final approvals at628336b/593175f and actual
+staged-source Java/JUnit preimage failures→postimage passes, provenance/configuration and cleanup limits.
+Current202/232repair-approved,203resolved,29unresolved=5repairs+21external+3owner; #413 is planning/
+compilation-admission only, implementation/runtime NOT_STARTED and native admission unknown, then414→409
+conditionally. #410 remains parked/PENDING_REMEDIATION/finalWITHHELD and #417restricted scope unchanged;
+no prior failure, platform/consumer gate or auditNOT_READY/#133NOT_STARTED boundary is promoted.
