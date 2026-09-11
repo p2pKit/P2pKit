@@ -31,7 +31,7 @@ SCOPES = {"full": set(ROLES), "windows-followup": {"windows-x64"}, "windows-diag
 CANCELLATION_PROBE_ROUTES = {("macos-arm64", "apple-followup"), ("macos-arm64", "apple-provenance"),
                              ("macos-x64", "full")}
 WINDOWS_TASKS = {":p2p-core:jvmTest", ":p2p-transport-lan:jvmTest", ":p2p-network-provisioning-desktop:test"}
-WINDOWS_FOLLOWUP_TASKS = {":p2p-core:jvmTest", ":p2p-core:testAndroidHostTest", ":p2p-transport-lan:jvmTest"}
+WINDOWS_FOLLOWUP_TASKS = {":p2p-core:jvmTest"}
 WINDOWS_DIAGNOSTICS_TASKS = {":p2p-transport-lan:jvmTest"}
 DESKTOP_TASKS = [":p2p-sample-desktop:check", ":p2p-sample-desktop:installDist", ":p2p-sample-desktop-ui:test",
                  ":p2p-sample-desktop-ui:checkRuntime", ":p2p-sample-desktop-ui:hotRunArgfile",
@@ -623,23 +623,16 @@ class Host:
         self.clean_outputs()
 
     def windows_followup(self):
-        """One focused durability/publication/raw-I/O graph, not full Windows qualification."""
+        """Seven core diagnostic caller classes, not full Windows qualification."""
         token = uuid.uuid4().hex
         success = self.invoke("windows-followup", [
-            ":p2p-core:jvmTest", "--tests", "dev.p2pkit.core.transfer.FileTransferJvmTest",
-            "--tests", "dev.p2pkit.core.internal.PeerRegistryTest",
-            "--tests", "dev.p2pkit.core.internal.PeerSubscriptionHookTest",
-            "--tests", "dev.p2pkit.core.internal.PeerPublicationConcurrencyTest",
-            "--tests", "dev.p2pkit.core.internal.DiscoveryReemitContractTest",
-            ":p2p-core:testAndroidHostTest", "--tests",
-            "dev.p2pkit.core.transfer.AndroidDurableFileDestinationAndroidHostTest",
-            ":p2p-transport-lan:jvmTest", "--tests", "dev.p2pkit.transport.lan.JvmRawConnection*",
-            "--tests", "dev.p2pkit.transport.lan.KitTestDiagnosticsTest",
-            "--tests", "dev.p2pkit.transport.lan.JvmLanLoopbackTest",
-            "--tests", "dev.p2pkit.transport.lan.JvmLanAcceptLoopResilienceTest",
-            "--tests", "dev.p2pkit.transport.lan.JvmLanAdmissionControlTest",
-            "--tests", "dev.p2pkit.transport.lan.JvmLanDiscoveryHeartbeatTest",
-            ":p2p-sample-desktop-ui:checkRuntime", ":p2p-sample-desktop-ui:createDistributable",
+            ":p2p-core:jvmTest", "--tests", "dev.p2pkit.core.internal.KitLifecycleTest",
+            "--tests", "dev.p2pkit.core.internal.NetworkProvisioningCloseTest",
+            "--tests", "dev.p2pkit.core.internal.TransportCapabilityTest",
+            "--tests", "dev.p2pkit.core.internal.KitStrictInvariantsTest",
+            "--tests", "dev.p2pkit.core.internal.PermissionGateTest",
+            "--tests", "dev.p2pkit.core.PublicConfigurationValidationTest",
+            "--tests", "dev.p2pkit.core.PublicModelImmutabilityTest",
             "--continue", "--init-script", str(ROOT / "gradle/platform-test-coverage.init.gradle"),
             "-Pp2pkit.testCoverageRoot=" + str(ROOT), "-Pp2pkit.testCoverageToken=" + token,
         ])

@@ -54,13 +54,68 @@ workflows or local builds, and GitHub can replace an older pending run even with
 `cancel-in-progress: false`. Do not queue another triggering push while a run is
 active or pending; preserve earlier failure/cancellation records.
 
-## Selected Apple Silicon provenance and isolated cancellation scope
+## Selected Windows core diagnostic caller follow-through
 
-Revision18 selects exactly one `macos-26` job, `Audit native Apple provenance reuse
-and isolated cancellation`, using native Python 3, Java 21 then 17, the checked-in
-`gradlew` and `/Applications/Xcode_26.5.app/Contents/Developer`. The new
-`macos-arm64`/`apple-provenance` request is **NOT_RUN** at selection time. It is not
-a new full-host, release or physical-device result.
+Revision19 selects exactly one `windows-2025` job, `Audit native Windows core
+diagnostic caller follow-through`, using native Python, Java 21 then 17 and the
+checked-in `gradlew.bat`. The existing `windows-x64`/`windows-followup` route is
+narrowed to the seven core JVM classes below; it is **NOT_RUN** at selection time.
+This is the #207 caller follow-through, not a new full-host or release result.
+
+The unchanged native Windows x64, Git for Windows Bash, JDK and resource admission
+remains required; WSL is not a substitute. The full ordinary
+`executor-native-controls` invocation still precedes SDK setup and product work.
+The current default Windows loader source-enumerates 92 methods, including pure
+and modeled fixtures; this is neither a current 92-method PASS nor product-test
+coverage. No reduced control profile or historical PASS substitutes for that run.
+SDK platforms **36 and 37.0** and their literal metadata checks remain required
+for project configuration even though no Android test or assembly is requested.
+
+The only product graph is:
+
+```text
+:p2p-core:jvmTest
+  --tests dev.p2pkit.core.internal.KitLifecycleTest
+  --tests dev.p2pkit.core.internal.NetworkProvisioningCloseTest
+  --tests dev.p2pkit.core.internal.TransportCapabilityTest
+  --tests dev.p2pkit.core.internal.KitStrictInvariantsTest
+  --tests dev.p2pkit.core.internal.PermissionGateTest
+  --tests dev.p2pkit.core.PublicConfigurationValidationTest
+  --tests dev.p2pkit.core.PublicModelImmutabilityTest
+```
+
+It retains `--continue`, a fresh nonce, the source-bound platform-test init script,
+strict dependency verification, forced-fresh tasks and the existing resource
+limits. Normal core production/commonTest/JVM compilation prerequisites may run.
+The success-conditional `windows-followup-execution` assessor requires fresh,
+nonzero successful `:p2p-core:jvmTest` execution while still validating the complete
+configured task model. It does **not** establish exact class/method coverage alone.
+The graph retains its per-invocation same-home wrapper stop and one owned-output
+cleanup, plus the unchanged finalizer and sealed handoff.
+
+The expected product coverage is **78 actual core cases**: the 44 previously failed
+Windows17 cases plus 34 retained passes. Retain and independently compare original
+XML/listener identities; require all 78 to succeed with no failure, error or skip,
+including the four suppressed-list cases with their original assertions. Neither
+source selection nor an aggregate task PASS supplies this pending native evidence.
+
+Revision19 does not request LAN, Android-host tests, provisioning, samples,
+packaging, wrapper-checkout fixtures, isolated consumers or a separate
+Kotlin/Native distribution download. Earlier results keep their exact source/run
+bindings and original limits; omitted work is not newly passed or waived.
+Admission, summary and handoff retain `requestedScope=windows-followup` and
+`hostQualification=NOT_ESTABLISHED_BY_FOCUSED_SCOPE`, even if every selected
+component passes. No Apple, ART/device, hostile-network, interoperability or
+release acceptance follows from this request.
+
+## Unselected Apple Silicon provenance and isolated cancellation scope
+
+The retained `macos-arm64`/`apple-provenance` route uses `macos-26`, native Python 3,
+Java 21 then 17, the checked-in `gradlew` and
+`/Applications/Xcode_26.5.app/Contents/Developer`. Revision18 selected it as
+`Audit native Apple provenance reuse and isolated cancellation`; revision19 does
+not select it. Its actual revision18 outcome is recorded below, not reset to
+NOT_RUN or promoted to a full-host, release or physical-device result.
 
 After the unchanged native/non-Rosetta ownership controls, tool prerequisites,
 Android SDK admission and pinned XcodeGen installation, this scope runs only:
@@ -103,19 +158,45 @@ Admission, summary and workflow handoff bind `requestedScope=apple-provenance`.
 Even if all selected components pass, `hostQualification` remains
 `NOT_ESTABLISHED_BY_FOCUSED_SCOPE`. Review the actual producer, visible and nested
 verifier receipts/task outcomes, exact probe result and owned cleanup separately.
-The two policy commands are pending #395 corroborations, not another repair;
-this focused request supports #408 and does not resolve the separate live-peer
-fixture defect or establish independent interoperability (#133).
+The two policy commands were pending #395 corroborations in revision18, not
+another repair; this scope supplied #408 evidence and does not resolve the
+separate live-peer fixture defect or establish independent interoperability (#133).
+
+### Revision18 retained outcome
+
+Actual run **34548459632/1**, job **103106086350**, used clean source
+`7f5752729166537d2379d4878545751eaf811d82`. The independent final review approved
+**#408's repair as native-proven**, with no further #408 replay required. Both
+policy commands, the fresh framework producer, and the visible and nested live
+provenance verifiers passed. The visible Gradle log proved the verifier executed
+without rebuilding its producer prerequisites; receipt bindings and unchanged
+sidecars alone were not treated as that proof.
+
+The **run and host remain FAIL**. The isolated cancellation probe actually
+executed **one method and failed one**, with no skip. Its retained outcome was
+`POST_CANCEL_CALLBACK_WITH_NO_RETURN_WITHIN_2S`: ready callback, Swift cancel flag
+and post-cancel callback were true, while collection had not returned within the
+two-second waiter. Its product/stop/final exits were **65/0/65**, within the
+unchanged 900-second outer deadline. This is a bounded non-return observation,
+not an outer timeout, indefinite non-return proof or cancellation success.
+
+Evidence was **FULL_SEALED**, completeness **PROVED**, with a safe handoff. All 18
+stops succeeded with empty errors/survivors, and the exact owned simulator was
+retired. `state/work` removal is corroborated by the bound finalizer; deletion of
+the outer Gradle home or all caches is **NOT_PROVEN**. Cleanup does not turn the
+probe into a pass. No full-host, ordinary 79-case Swift, core/LAN/consumer/ABI matrix,
+ART/device or release approval follows from revision18.
 
 ## Unselected native Windows full components
 
 The retained `windows-x64`/`full` route uses `windows-2025`, native `python`, Java 21
 then 17 and the checked-in `gradlew.bat`. It selects the existing library and sample
 graphs, with Native-distribution and Android-assembly tasks added only to the
-Windows sample batch. It is unselected by revision18; no Windows host precedes or
-follows the selected ARM job automatically. The earlier literal request and its
-actual results retain their original source/run bindings. Record execution and
-independent evidence review separately; workflow text is not a passing result.
+Windows sample batch. It is unselected by revision19; no full Windows or Apple
+host precedes or follows the selected focused job automatically. The earlier
+literal request and its actual results retain their original source/run bindings.
+Record execution and independent evidence review separately; workflow text is not
+a passing result.
 
 The unchanged prerequisites require native Windows x64, real Job Object ownership
 controls, Java/tool versions, Git for Windows Bash and both Android SDK platforms.
@@ -147,7 +228,8 @@ wrapper fixture receive that Git installation's utility PATH prefix.
 Earlier focused Windows results retain their own source bindings. The full route
 covers the broader component scope rather than separately repeating the
 filtered follow-up/diagnostic graphs. Their JVM classes remain within the whole
-library suites; the focused Android-host task is not selected by this full route.
+library suites; the historical mixed follow-up's Android-host task is not selected
+by this full route.
 `FULL_COMPONENT_SCOPE` describes requested components,
 not a successful host/release verdict. Inspect actual tests, package cleanup and
 sealed stop/ownership/evidence outcomes. Desktop packaging is not headful UI or
@@ -363,11 +445,16 @@ Core durability, the broader LAN selection and Desktop packaging are not repeate
 reuse earlier successful evidence only with its original source and reviewed limits.
 This scope does not supply native discovery, whole-host or external qualification.
 
-## Unselected Windows follow-up scope retained by the driver
+## Historical mixed Windows follow-up scope
 
-The optional `windows-followup` scope also remains Windows-only and unselected.
-It retains the native ownership controls and SDK admission, then runs one broader
-product graph:
+At revision18's source, the unselected `windows-followup` route retained the mixed
+core/Android-host/LAN and Desktop-packaging graph below, after native ownership
+controls and SDK admission. This describes historical selection, not a run result
+or **another callable preserved variant**. Revision19 reuses the same scope name
+for only the
+[seven core JVM classes above](#selected-windows-core-diagnostic-caller-follow-through).
+Earlier results keep their original source/run bindings; they are not rewritten
+by this narrower selection.
 
 ```text
 :p2p-core:jvmTest
@@ -389,20 +476,22 @@ product graph:
 :p2p-sample-desktop-ui:createDistributable
 ```
 
-The graph uses `--continue`, the source-bound platform-test init script and a fresh
-nonce, plus the executor's strict verification/resource/fresh-task flags. Each
-`--tests` option belongs to its immediately preceding test task. The event assessor
-requires both core tasks and the filtered LAN JVM task to execute nonzero
-successful cases on native Windows; it still validates the complete configured
-task inventory and rejects any failed event. Retain and independently inspect
-all selected class XMLs and exact case names. The durability classes preserve
-close-only retry and non-POSIX/lazy-staging controls; registry classes cover
-subscription hooks, interrupted publication waiting, terminal/reentrant updates
-and retained StateFlow fusion. The raw-I/O classes cover real TCP half-close,
-cancellation and late worker completion. The selected LAN integration callers
-exercise the migrated post-stop diagnostic assertions using real Windows TCP
-sockets and deterministic test-discovery callbacks, not native JmDNS/multicast
-validation. None is inferred merely from a task's aggregate count.
+That graph used `--continue`, the source-bound platform-test init script and a
+fresh nonce, plus the executor's strict verification/resource/fresh-task flags.
+Each `--tests` option belonged to its immediately preceding test task. The
+historical event assessor required both core tasks and the filtered LAN JVM task
+to execute nonzero successful cases on native Windows while validating the
+complete configured task inventory and rejecting any failed event. Historical
+coverage still requires the original class XMLs and exact case names, not a task's
+aggregate count. The durability classes covered close-only retry and
+non-POSIX/lazy-staging controls; registry classes covered subscription hooks,
+interrupted publication waiting, terminal/reentrant updates and retained StateFlow
+fusion. The raw-I/O classes covered real TCP half-close, cancellation and late
+worker completion. Those LAN callers used real Windows TCP sockets and
+deterministic test-discovery callbacks, not native JmDNS/multicast validation.
+None of these tests or packaging tasks is requested by revision19.
+
+### Current focused-scope limits
 
 For either focused Windows scope, `hostQualification` is always
 `NOT_ESTABLISHED_BY_FOCUSED_SCOPE`, including when the selected components pass.
@@ -411,21 +500,20 @@ The CLI accepts `full` for the existing roles, `windows-followup` and
 rejecting other pairs before state initialization. Full defaults remain
 unchanged; `FULL_COMPONENT_SCOPE` describes their requested scope, not a successful
 qualification. Omitted Windows full-profile components are **NOT_EXECUTED by
-such a focused run**, not waived. The retained `windows-followup` graph does not
-repeat wrapper-checkout, whole library suites, provisioning, CLI/KMP consumers or
-Desktop UI tests. It adds only the
-newly affected registry/raw-I/O and selected diagnostic-network callers to the
-existing durable-transfer and packaged-output cleanup controls. Gradle exit zero
-or failure to reproduce an earlier cleanup error does not establish a repair.
-The mandatory native executor suite retains the actual Windows read-only-file
-recovery/hardlink refusal controls; when packaging is selected, packaged-image
-cleanup must also succeed.
+such a focused run**, not waived. The narrowed `windows-followup` graph does not
+repeat wrapper-checkout, whole library suites, provisioning, CLI/KMP consumers,
+Desktop UI tests or packaging. Gradle exit zero or failure to reproduce an earlier
+cleanup error does not establish a repair. The mandatory native executor suite
+retains the actual Windows read-only-file recovery/hardlink refusal controls;
+those fixtures are not a new product packaged-image cleanup result. When a
+separately selected route requests packaging, its packaged-image cleanup must
+also succeed.
 
 ### Full profiles supported by the driver
 
 These profiles describe each role's component graph, not equivalent whole-host
 qualification. All full profiles are unselected by this revision's focused
-Apple Silicon request. Any later native selection requires a separately reviewed
+Windows core request. Any later native selection requires a separately reviewed
 literal change and terminal-attempt reconciliation.
 
 | Role and fixed label | Selected tools | Components, not broader acceptance |
@@ -629,9 +717,9 @@ The workflow redirects stdout/stderr to separate fresh bootstrap logs and invoke
 the exact checked-out driver with `runpy` in the **same native Python process**.
 There is no extra unsupervised wrapper child, launcher replacement or product
 monkeypatch. The driver's own deadline, cancellation and ownership finalizers run.
-The selected focused Apple Silicon driver uses an explicit 8,400-second budget,
-with step/job ceilings of 150/180 minutes, below the earlier ARM request's
-19,200 seconds and330/360 minutes. The probe's900-second deadline is unchanged.
+The selected focused Windows driver retains the explicit 8,400-second budget and
+150/180-minute step/job ceilings used by revision18; narrowing the route does not
+change these bounds. The unselected Apple probe's 900-second deadline is unchanged.
 Constructor defaults remain 8,400 seconds on Windows/Intel and19,200 on Apple Silicon. The unselected expanded Intel route's
 prior literal request used an explicit 19,200 seconds and 330/360-minute ceilings
 for its consumer/archive/ABI/CLI/framework/Swift components, not the old two-suite budget.
@@ -773,8 +861,8 @@ Independent secure-v2 interoperability (#133), professional cryptographic review
 and owner architecture/product decisions (#120) require their own participants,
 inputs and evidence. This facility does not supply them or change their dispositions.
 Actual OSV results and successful dependency submission also remain separate from
-policy fixtures/lockfile coverage. Windows, Intel, Linux and full Apple Silicon
-corroboration are not supplied by this selected focused ARM request.
+policy fixtures/lockfile coverage. Full Windows, Intel, Linux and Apple Silicon
+corroboration are not supplied by this selected seven-class Windows request.
 
 Follow the [release checklist](../releasing/checklist.md) for any future release.
 The audit's 0.8.0+ compatibility decisions remain in force despite snapshot naming.

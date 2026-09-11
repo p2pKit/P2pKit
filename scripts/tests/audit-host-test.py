@@ -34,7 +34,7 @@ POLICY = json.loads((ROOT / "gradle/platform-test-policy.json").read_text(encodi
 TOKEN = "abcdef0123456789abcdef0123456789"
 WINDOWS_TASKS = {":p2p-core:jvmTest", ":p2p-transport-lan:jvmTest",
                  ":p2p-network-provisioning-desktop:test"}
-WINDOWS_FOLLOWUP_TASKS = {":p2p-core:jvmTest", ":p2p-core:testAndroidHostTest", ":p2p-transport-lan:jvmTest"}
+WINDOWS_FOLLOWUP_TASKS = {":p2p-core:jvmTest"}
 WINDOWS_DIAGNOSTICS_TASKS = {":p2p-transport-lan:jvmTest"}
 SWIFT_TARGETS = ("p2pkit-sample-tests", "p2pkit-sample-uitests")
 
@@ -382,7 +382,7 @@ class WindowsAssessmentTest(unittest.TestCase):
                     mutated["token"] = "stale"
                 with self.subTest(required=required, change=change), self.assertRaises(ValueError):
                     HOST.assess_windows(mutated, POLICY, TOKEN, required)
-        for required in (set(), {":p2p-core:jvmTest"}, {":unclassified:test"}):
+        for required in (set(), {":p2p-core:testAndroidHostTest"}, {":unclassified:test"}):
             with self.subTest(required=required), self.assertRaises(ValueError):
                 HOST.assess_windows(report, POLICY, TOKEN, required)
 
@@ -676,20 +676,13 @@ class HostInvocationTest(unittest.TestCase):
     def test_windows_followup_has_one_filtered_graph_assessment_and_cleanup(self):
         gate = HOST.load_gate()
         expected = [
-            ":p2p-core:jvmTest", "--tests", "dev.p2pkit.core.transfer.FileTransferJvmTest",
-            "--tests", "dev.p2pkit.core.internal.PeerRegistryTest",
-            "--tests", "dev.p2pkit.core.internal.PeerSubscriptionHookTest",
-            "--tests", "dev.p2pkit.core.internal.PeerPublicationConcurrencyTest",
-            "--tests", "dev.p2pkit.core.internal.DiscoveryReemitContractTest",
-            ":p2p-core:testAndroidHostTest", "--tests",
-            "dev.p2pkit.core.transfer.AndroidDurableFileDestinationAndroidHostTest",
-            ":p2p-transport-lan:jvmTest", "--tests", "dev.p2pkit.transport.lan.JvmRawConnection*",
-            "--tests", "dev.p2pkit.transport.lan.KitTestDiagnosticsTest",
-            "--tests", "dev.p2pkit.transport.lan.JvmLanLoopbackTest",
-            "--tests", "dev.p2pkit.transport.lan.JvmLanAcceptLoopResilienceTest",
-            "--tests", "dev.p2pkit.transport.lan.JvmLanAdmissionControlTest",
-            "--tests", "dev.p2pkit.transport.lan.JvmLanDiscoveryHeartbeatTest",
-            ":p2p-sample-desktop-ui:checkRuntime", ":p2p-sample-desktop-ui:createDistributable",
+            ":p2p-core:jvmTest", "--tests", "dev.p2pkit.core.internal.KitLifecycleTest",
+            "--tests", "dev.p2pkit.core.internal.NetworkProvisioningCloseTest",
+            "--tests", "dev.p2pkit.core.internal.TransportCapabilityTest",
+            "--tests", "dev.p2pkit.core.internal.KitStrictInvariantsTest",
+            "--tests", "dev.p2pkit.core.internal.PermissionGateTest",
+            "--tests", "dev.p2pkit.core.PublicConfigurationValidationTest",
+            "--tests", "dev.p2pkit.core.PublicModelImmutabilityTest",
             "--continue", "--init-script", str(self.repo / "gradle/platform-test-coverage.init.gradle"),
             "-Pp2pkit.testCoverageRoot=" + str(self.repo), "-Pp2pkit.testCoverageToken=" + TOKEN,
         ]
