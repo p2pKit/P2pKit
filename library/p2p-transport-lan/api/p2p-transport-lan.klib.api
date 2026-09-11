@@ -41,6 +41,7 @@ final object dev.p2pkit.transport.lan/IosManualProvisioningFactory : dev.p2pkit.
     final fun build(dev.p2pkit.core.provisioning/ProvisioningContext): dev.p2pkit.core.provisioning/NetworkProvisioningManager // dev.p2pkit.transport.lan/IosManualProvisioningFactory.build|build(dev.p2pkit.core.provisioning.ProvisioningContext){}[0]
 }
 
+final fun dev.p2pkit.transport.lan/createIosOwnedFlowCollection(kotlinx.coroutines.flow/Flow<kotlin/Any?>, kotlinx.coroutines.flow/FlowCollector<kotlin/Any?>): kotlinx.coroutines/Job // dev.p2pkit.transport.lan/createIosOwnedFlowCollection|createIosOwnedFlowCollection(kotlinx.coroutines.flow.Flow<kotlin.Any?>;kotlinx.coroutines.flow.FlowCollector<kotlin.Any?>){}[0]
 final fun (dev.p2pkit.core.dsl/NetworkProvisioningConfigBuilder).dev.p2pkit.transport.lan/iosManualIp() // dev.p2pkit.transport.lan/iosManualIp|iosManualIp@dev.p2pkit.core.dsl.NetworkProvisioningConfigBuilder(){}[0]
 final fun (dev.p2pkit.core.dsl/TransportsBuilder).dev.p2pkit.transport.lan/lan() // dev.p2pkit.transport.lan/lan|lan@dev.p2pkit.core.dsl.TransportsBuilder(){}[0]
 final fun (dev.p2pkit.core/P2pKit).dev.p2pkit.transport.lan/peersSnapshot(): kotlin.collections/List<dev.p2pkit.core/Peer> // dev.p2pkit.transport.lan/peersSnapshot|peersSnapshot@dev.p2pkit.core.P2pKit(){}[0]

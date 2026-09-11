@@ -24,6 +24,7 @@ targets:
       - LocalPairingView.swift
       - IosLanDiagnosticsLease.swift
       - SampleRunLifecycle.swift
+      - OwnedFlowCollection.swift
       - SampleConsole.swift
       - SampleP2pError.swift
       - SampleBackupPolicy.swift

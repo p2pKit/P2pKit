@@ -130,16 +130,10 @@ struct ContentView: View {
 
     @State private var kit: P2pKit?
     @State private var pollTask: Task<Void, Never>?
-    @State private var incomingSessionsTask: Task<Void, Never>?
     @State private var permissionCheckTask: Task<Void, Never>?
 
-    // AUDIT-2026-06 (A-G9-samples-desktop-ios-09): per-session and
-    // per-transfer collector Tasks are tracked by id so stop() and
-    // session-removal can cancel them. Previously they were fire-and-forget
-    // `Task {}` handles that leaked (suspended on a never-completing
-    // SharedFlow collect) across every Stop/Start cycle.
-    @State private var messageCollectorTasks: [String: Task<Void, Never>] = [:]
-    @State private var fileCollectorTasks: [String: Task<Void, Never>] = [:]
+    // Flow collectors belong to the exact Run, including removed-session
+    // retirees. Swift Task.cancel alone does not cancel an exported collect.
     @State private var fileOfferIdsBySession: [String: Set<String>] = [:]
     @State private var cleanedTransferDirectories: Set<String> = []
     @State private var transferWatchTasks: [TransferKey: Task<Void, Never>] = [:]
@@ -844,12 +838,8 @@ struct ContentView: View {
         }
 
         guard let run = runLifecycle.begin() else { return }
-        var startupCompleted = false
-        defer {
-            // Release even when create/start or the SDK's rollback fails.
-            // Retaining a kit for retry does not require global tracing.
-            if !startupCompleted { run.releaseTracing() }
-        }
+        // Each failure path below awaits its captured Run's cleanup. A stale
+        // startup must not release tracing while Stop still owns SDK cleanup.
         errorBanner = nil
         status = "Starting..."
         debug = ""
@@ -885,40 +875,34 @@ struct ContentView: View {
 
         // Subscribe to IosLanDebug BEFORE startAdvertising/Discovery so
         // we capture every browser-state and result-change from t=0.
-        let debugLogTask = Task {
-            guard self.runLifecycle.ownsTracing(run), !Task.isCancelled else { return }
-            let collector = StringCollector { line in
-                await MainActor.run {
-                    guard self.runLifecycle.ownsTracing(run) else { return }
-                    self.appendLog(line)
-                    self.diagnostics.recordTransport(line)
-                    if !self.probeEpochSeen {
-                        if line.contains(self.probeEpoch) {
-                            self.probeEpochSeen = true
-                        }
-                        return
-                    }
-                    // AUDIT-2026-06 (A-G9-samples-desktop-ios-06): match the
-                    // tagged NWBrowser line specifically. The TCP listener
-                    // logs "[data] listener state -> ready" even when Local
-                    // Network permission is denied, so the old bare
-                    // "state -> ready" substring always defeated the probe.
-                    if line.contains("[browse] state -> ready") {
-                        self.browserEverReady = true
-                        // AUDIT-2026-06 (D-G9-samples-desktop-ios-14): if the
-                        // browser reaches ready after the 6 s probe already
-                        // fired, retract the now-stale permission hint.
-                        if self.errorBanner == Self.localNetworkHint {
-                            self.errorBanner = nil
-                        }
-                    }
+        let debugCollection = OwnedFlowCollection(flow: IosLanDebug.shared.events, of: String.self) { line in
+            guard self.runLifecycle.ownsTracing(run) else { return }
+            self.appendLog(line)
+            self.diagnostics.recordTransport(line)
+            if !self.probeEpochSeen {
+                if line.contains(self.probeEpoch) {
+                    self.probeEpochSeen = true
+                }
+                return
+            }
+            // AUDIT-2026-06 (A-G9-samples-desktop-ios-06): match the
+            // tagged NWBrowser line specifically. The TCP listener
+            // logs "[data] listener state -> ready" even when Local
+            // Network permission is denied, so the old bare
+            // "state -> ready" substring always defeated the probe.
+            if line.contains("[browse] state -> ready") {
+                self.browserEverReady = true
+                // AUDIT-2026-06 (D-G9-samples-desktop-ios-14): if the
+                // browser reaches ready after the 6 s probe already
+                // fired, retract the now-stale permission hint.
+                if self.errorBanner == Self.localNetworkHint {
+                    self.errorBanner = nil
                 }
             }
-            _ = try? await IosLanDebug.shared.events.collect(collector: collector)
         }
+        ownCollection(debugCollection, role: .diagnostics, run: run)
         run.ownTracing {
             frameTraceLease.release()
-            debugLogTask.cancel()
             lanDiagnosticsLease.release()
         }
         diag("ui", probeEpoch)
@@ -951,12 +935,17 @@ struct ContentView: View {
                 }
             }
         } catch {
-            defer { runLifecycle.abandonUnbuilt(run) }
-            if Task.isCancelled || error is CancellationError { return }
-            let detail = SampleP2pError.userMessage(error)
-            status = "Create failed: \(detail)"
-            errorBanner = "Could not create P2pKit: \(detail)"
-            diag("kit", "create FAILED: \(SampleConsole.failure(error))")
+            if !Task.isCancelled && !(error is CancellationError) {
+                runLifecycle.withActiveRun(run) {
+                    let detail = SampleP2pError.userMessage(error)
+                    status = "Create failed: \(detail)"
+                    errorBanner = "Could not create P2pKit: \(detail)"
+                    diag("kit", "create FAILED: \(SampleConsole.failure(error))")
+                }
+            }
+            // Diagnostics was acquired before create. Do not enable another
+            // Start until its native collection and accepted callbacks retire.
+            await runLifecycle.abandonUnbuilt(run)
             return
         }
         self.kit = built
@@ -1006,7 +995,7 @@ struct ContentView: View {
         )
         switch outcome {
         case .started:
-            startupCompleted = true
+            return
         case .superseded:
             // Stop owns the captured kit's teardown. Never clear a successor.
             return
@@ -1036,22 +1025,36 @@ struct ContentView: View {
     }
 
     @MainActor
+    private func ownCollection(
+        _ collection: OwnedFlowCollection,
+        role: SampleRunLifecycle.Run.CollectionRole,
+        run: SampleRunLifecycle.Run
+    ) {
+        runLifecycle.ownCollection(collection, role: role, run: run) { failure in
+            guard self.runLifecycle.owns(run) else { return }
+            // Do not interpolate values or native Throwable messages here.
+            self.appendMessage("\(failure.role.label) observer failed; Stop and restart to retry", kind: .error)
+            self.diag("kit", "\(failure.role.label) observer failed; native collection retired")
+            if self.runLifecycle.acceptsWork(run) {
+                self.errorBanner = "\(failure.role.label) observer stopped. Stop and restart to retry."
+            }
+        }
+    }
+
+    @MainActor
     private func installRunObservers(for built: P2pKit, run: SampleRunLifecycle.Run) {
         runLifecycle.withActiveRun(run) {
-            self.incomingSessionsTask = Task { [weak built] in
-                guard self.runLifecycle.acceptsWork(run), !Task.isCancelled else { return }
-                let collector = SessionCollector { session in
-                    self.runLifecycle.withActiveRun(run) {
-                        IosLanDebug.shared.log(
-                            tag: "ui",
-                            message: "incomingSessions emitted: peer=\(SampleConsole.identifier("\(session.peer.id)")) " +
-                                "id=\(SampleConsole.identifier(session.id))"
-                        )
-                        self.attachCollectors(to: session, label: "incoming", run: run)
-                    }
+            let incoming = OwnedFlowCollection(flow: built.incomingSessions, of: P2pSession.self) { session in
+                self.runLifecycle.withActiveRun(run) {
+                    IosLanDebug.shared.log(
+                        tag: "ui",
+                        message: "incomingSessions emitted: peer=\(SampleConsole.identifier("\(session.peer.id)")) " +
+                            "id=\(SampleConsole.identifier(session.id))"
+                    )
+                    self.attachCollectors(to: session, label: "incoming", run: run)
                 }
-                _ = try? await built?.incomingSessions.collect(collector: collector)
             }
+            ownCollection(incoming, role: .incomingSessions, run: run)
 
             self.pollTask = Task { @MainActor in
                 var tick = 0
@@ -1202,13 +1205,10 @@ struct ContentView: View {
                 "removed id=\(SampleConsole.identifier(prev.id)) " +
                     "peer=\(SampleConsole.identifier(prev.peerId)) lastState=\(prev.state)"
             )
-            // AUDIT-2026-06 (A-G9-samples-desktop-ios-09): release the dead
-            // session's collector tasks and its dedup entry — they otherwise
-            // stay suspended on the never-completing SharedFlow forever.
-            messageCollectorTasks[prev.id]?.cancel()
-            messageCollectorTasks[prev.id] = nil
-            fileCollectorTasks[prev.id]?.cancel()
-            fileCollectorTasks[prev.id] = nil
+            // Close per-session admission immediately. The Run retains each
+            // actual native lease until completion AND callback-task drain.
+            run.retireCollection(for: .messages(sessionId: prev.id))
+            run.retireCollection(for: .pendingOffers(sessionId: prev.id))
             SessionTransferEntries.remove(
                 sessionId: prev.id,
                 transferIds: fileOfferIdsBySession.removeValue(forKey: prev.id) ?? [],
@@ -1266,21 +1266,9 @@ struct ContentView: View {
         }
     }
 
-    /// Subscribe to a session's `incoming` messages and authoritative retained
-    /// `pendingFileOffers` snapshots.
-    ///
-    /// AUDIT-2026-06 (B-G9-samples-desktop-ios-03): both flows are hot
-    /// SharedFlows whose `collect` NEVER completes, so this function spawns
-    /// each collect into a stored, cancellable Task and returns immediately.
-    /// The old version awaited `incoming.collect` inline, which wedged every
-    /// caller that awaited it: connect()'s and dialManual()'s `defer`
-    /// cleanups never ran (Connect button stuck on "Connecting…", manual
-    /// dial latched forever) and the incomingSessions collector stalled
-    /// after its first emission.
-    ///
-    /// AUDIT-2026-06 (A-G9-samples-desktop-ios-09): the spawned tasks are
-    /// tracked in dictionaries keyed by session id and cancelled in stop()
-    /// and on session removal.
+    /// Subscribe without awaiting the lifetime of either hot flow inline.
+    /// The Run owns their lazy native Jobs before start and includes replaced
+    /// or removed-session leases in its Stop barrier until actual retirement.
     @MainActor
     private func attachCollectors(to session: P2pSession, label: String, run: SampleRunLifecycle.Run) {
         runLifecycle.withActiveRun(run) {
@@ -1289,56 +1277,46 @@ struct ContentView: View {
             collectedSessionIds.insert(sid)
             appendMessage("[\(label)] session opened: \(session.peer.name)", kind: .info)
 
-            messageCollectorTasks[sid] = Task {
-                guard self.runLifecycle.acceptsWork(run), !Task.isCancelled else { return }
-                let collector = MessageCollector { msg in
-                    await MainActor.run {
-                        guard self.runLifecycle.acceptsWork(run) else { return }
-                        if let text = msg as? P2pMessage.Text {
-                            self.diagnostics.record(TestDiagnosticRecord(
-                                peerId: "\(session.peer.id)",
-                                connectionId: self.diagnostics.connectionId(for: "\(session.peer.id)"),
-                                category: "metadata",
-                                eventName: TestDiagnosticEventName.metadataReceived,
-                                direction: .received,
-                                payloadSizeBytes: Int64(text.value.utf8.count),
-                                details: ["metadataKeys": text.metadata.keys.sorted().joined(separator: ",")]
-                            ))
-                            self.diagnostics.record(TestDiagnosticRecord(
-                                peerId: "\(session.peer.id)",
-                                connectionId: self.diagnostics.connectionId(for: "\(session.peer.id)"),
-                                category: "metadata",
-                                eventName: TestDiagnosticEventName.metadataValidated,
-                                direction: .received,
-                                outcome: .success
-                            ))
-                            self.diag("ui", SampleConsole.received(
-                                peerId: "\(session.peer.id)", isText: true, sizeBytes: Int64(text.value.utf8.count)
-                            ))
-                            self.appendMessage("\(session.peer.name) -> \(text.value)", kind: .received)
-                        } else if let bin = msg as? P2pMessage.Binary {
-                            self.appendMessage(
-                                "\(session.peer.name) -> <binary \(bin.bytes.size) bytes>",
-                                kind: .received
-                            )
-                        } else if msg != nil {
-                            self.appendMessage("\(session.peer.name) -> <other message>", kind: .received)
-                        }
-                    }
+            let incoming = OwnedFlowCollection(flow: session.incoming, of: P2pMessage.self) { msg in
+                guard self.runLifecycle.acceptsWork(run) else { return }
+                if let text = msg as? P2pMessage.Text {
+                    self.diagnostics.record(TestDiagnosticRecord(
+                        peerId: "\(session.peer.id)",
+                        connectionId: self.diagnostics.connectionId(for: "\(session.peer.id)"),
+                        category: "metadata",
+                        eventName: TestDiagnosticEventName.metadataReceived,
+                        direction: .received,
+                        payloadSizeBytes: Int64(text.value.utf8.count),
+                        details: ["metadataKeys": text.metadata.keys.sorted().joined(separator: ",")]
+                    ))
+                    self.diagnostics.record(TestDiagnosticRecord(
+                        peerId: "\(session.peer.id)",
+                        connectionId: self.diagnostics.connectionId(for: "\(session.peer.id)"),
+                        category: "metadata",
+                        eventName: TestDiagnosticEventName.metadataValidated,
+                        direction: .received,
+                        outcome: .success
+                    ))
+                    self.diag("ui", SampleConsole.received(
+                        peerId: "\(session.peer.id)", isText: true, sizeBytes: Int64(text.value.utf8.count)
+                    ))
+                    self.appendMessage("\(session.peer.name) -> \(text.value)", kind: .received)
+                } else if let bin = msg as? P2pMessage.Binary {
+                    self.appendMessage(
+                        "\(session.peer.name) -> <binary \(bin.bytes.size) bytes>",
+                        kind: .received
+                    )
+                } else {
+                    self.appendMessage("\(session.peer.name) -> <other message>", kind: .received)
                 }
-                _ = try? await session.incoming.collect(collector: collector)
             }
+            ownCollection(incoming, role: .messages(sessionId: sid), run: run)
 
-            fileCollectorTasks[sid] = Task {
-                guard self.runLifecycle.acceptsWork(run), !Task.isCancelled else { return }
-                let collector = FileOfferSnapshotCollector { offers in
-                    await MainActor.run {
-                        guard self.runLifecycle.acceptsWork(run) else { return }
-                        self.reconcileIncomingOffers(offers, sessionId: sid)
-                    }
-                }
-                _ = try? await session.pendingFileOffers.collect(collector: collector)
+            let offers = OwnedFlowCollection(flow: session.pendingFileOffers, of: [P2pFileOffer].self) { offers in
+                guard self.runLifecycle.acceptsWork(run) else { return }
+                self.reconcileIncomingOffers(offers, sessionId: sid)
             }
+            ownCollection(offers, role: .pendingOffers(sessionId: sid), run: run)
         }
     }
 
@@ -2295,14 +2273,10 @@ struct ContentView: View {
     private func cancelRunObservers() {
         pollTask?.cancel()
         pollTask = nil
-        incomingSessionsTask?.cancel()
-        incomingSessionsTask = nil
         permissionCheckTask?.cancel()
         permissionCheckTask = nil
-        messageCollectorTasks.values.forEach { $0.cancel() }
-        fileCollectorTasks.values.forEach { $0.cancel() }
-        messageCollectorTasks = [:]
-        fileCollectorTasks = [:]
+        // SampleRunLifecycle closes/cancels native observers after this
+        // synchronous snapshot; their handles remain in the Run until drained.
         fileOfferIdsBySession = [:]
     }
 
@@ -2385,24 +2359,6 @@ private final class UIConsentFixtureOffer: NSObject, P2pFileOffer {
 }
 #endif
 
-/// Swift adapter for `kotlinx.coroutines.flow.FlowCollector<P2pSession>`.
-final class SessionCollector: NSObject, Kotlinx_coroutines_coreFlowCollector {
-    private let onSession: (P2pSession) async -> Void
-    init(_ onSession: @escaping (P2pSession) async -> Void) {
-        self.onSession = onSession
-    }
-    func emit(value: Any?, completionHandler: @escaping (Error?) -> Void) {
-        if let session = value as? P2pSession {
-            Task {
-                await onSession(session)
-                completionHandler(nil)
-            }
-        } else {
-            completionHandler(nil)
-        }
-    }
-}
-
 /// Swift adapter for `kotlinx.coroutines.flow.FlowCollector<P2pMessage>`.
 final class MessageCollector: NSObject, Kotlinx_coroutines_coreFlowCollector {
     private let onMessage: (Any?) async -> Void
@@ -2432,36 +2388,6 @@ final class StringCollector: NSObject, Kotlinx_coroutines_coreFlowCollector {
             }
         } else {
             completionHandler(nil)
-        }
-    }
-}
-
-/// Swift adapter for retained `List<P2pFileOffer>` StateFlow snapshots.
-final class FileOfferSnapshotCollector: NSObject, Kotlinx_coroutines_coreFlowCollector {
-    private let onOffers: ([P2pFileOffer]) async -> Void
-    init(_ onOffers: @escaping ([P2pFileOffer]) async -> Void) {
-        self.onOffers = onOffers
-    }
-    func emit(value: Any?, completionHandler: @escaping (Error?) -> Void) {
-        if let offers = value as? [P2pFileOffer] {
-            Task {
-                await onOffers(offers)
-                completionHandler(nil)
-            }
-        } else if let values = value as? NSArray {
-            let offers = values.compactMap { $0 as? P2pFileOffer }
-            Task {
-                await onOffers(offers)
-                completionHandler(nil)
-            }
-        } else {
-            completionHandler(
-                NSError(
-                    domain: "dev.p2pkit.sample.file",
-                    code: 4,
-                    userInfo: [NSLocalizedDescriptionKey: "pendingFileOffers emitted a non-list value"]
-                )
-            )
         }
     }
 }

@@ -147,7 +147,7 @@ final class SampleRunLifecycleTests: XCTestCase {
         )
         guard case .failed = outcome else {
             XCTFail("startup failure must reach the caller's rollback boundary")
-            lifecycle.abandonUnbuilt(run)
+            await lifecycle.abandonUnbuilt(run)
             return
         }
         await lifecycle.stop(
@@ -310,6 +310,361 @@ final class SampleRunLifecycleTests: XCTestCase {
         await lifecycle.afterDelay(second, delay: {}, perform: { hints += 1 })
         XCTAssertEqual(hints, 1, "an active successful probe must not be disabled")
         await stopSuccessfully(lifecycle, second)
+    }
+
+    @MainActor
+    func testUnbuiltCreateFailureWaitsForOwnedDiagnosticsBeforeAllowingAnotherRun() async throws {
+        let lifecycle = SampleRunLifecycle()
+        let run = try XCTUnwrap(lifecycle.begin())
+        var releases = 0
+        var deliveries = 0
+        run.ownTracing { releases += 1 }
+        let (collection, job) = makeControlledOwnedCollection(String.self, completesOnCancel: false) { _ in
+            if lifecycle.ownsTracing(run) { deliveries += 1 }
+        }
+        lifecycle.ownCollection(collection, role: .diagnostics, run: run)
+        defer { collection.cancel(); job.complete(.cancelled) }
+        let acknowledged = expectation(description: "diagnostics admitted before create failure")
+        job.emit("startup") { error in
+            XCTAssertNil(error)
+            acknowledged.fulfill()
+        }
+        guard await waitForOwnedExpectations([acknowledged]) else { return }
+        XCTAssertEqual(deliveries, 1)
+        let cancelling = expectation(description: "unbuilt cleanup requested native cancellation")
+        job.whenCancelling { cancelling.fulfill() }
+        let finished = expectation(description: "awaited unbuilt cleanup completed")
+        let abandoning = Task { @MainActor in
+            await lifecycle.abandonUnbuilt(run)
+            finished.fulfill()
+        }
+        defer { abandoning.cancel() }
+        guard await waitForOwnedExpectations([cancelling]) else { return }
+        XCTAssertEqual(lifecycle.phase, .stopping)
+        XCTAssertTrue(lifecycle.owns(run))
+        XCTAssertNil(lifecycle.begin())
+        XCTAssertEqual(releases, 1)
+        XCTAssertEqual(run.ownedCollectionCount, 1)
+        XCTAssertFalse(collection.snapshot.nativeCompleted)
+        XCTAssertFalse(collection.snapshot.finished)
+        job.complete(.cancelled)
+        guard await waitForOwnedExpectations([finished]) else { return }
+        XCTAssertEqual(run.ownedCollectionCount, 0)
+        XCTAssertTrue(collection.snapshot.finished)
+        XCTAssertEqual(collection.snapshot.callbackTaskCount, 0)
+        XCTAssertEqual(lifecycle.phase, .idle)
+        let replacement = try XCTUnwrap(lifecycle.begin())
+        XCTAssertFalse(lifecycle.ownsTracing(run))
+        await stopSuccessfully(lifecycle, replacement)
+    }
+
+    @MainActor
+    func testRemovedSessionRetireesAndLateCompletionCannotEraseReplacementLeases() async throws {
+        let lifecycle = SampleRunLifecycle()
+        let run = try XCTUnwrap(lifecycle.begin())
+        let messages = SampleRunLifecycle.Run.CollectionRole.messages(sessionId: "same-session")
+        let offers = SampleRunLifecycle.Run.CollectionRole.pendingOffers(sessionId: "same-session")
+        var publications: [String] = []
+        let oldMessages = makeControlledOwnedCollection(String.self, completesOnCancel: false) {
+            publications.append($0)
+        }
+        let oldOffers = makeControlledOwnedCollection(String.self, completesOnCancel: false) {
+            publications.append($0)
+        }
+        lifecycle.ownCollection(oldMessages.collection, role: messages, run: run)
+        lifecycle.ownCollection(oldOffers.collection, role: offers, run: run)
+        defer {
+            oldMessages.collection.cancel(); oldMessages.job.complete(.cancelled)
+            oldOffers.collection.cancel(); oldOffers.job.complete(.cancelled)
+        }
+        let messageRetirement = try XCTUnwrap(run.retireCollection(for: messages))
+        let offerRetirement = try XCTUnwrap(run.retireCollection(for: offers))
+        XCTAssertNil(run.collection(for: messages))
+        XCTAssertNil(run.collection(for: offers))
+        XCTAssertEqual(run.ownedCollectionCount, 2, "removal must not discard unretired native ownership")
+        var staleAcknowledgements = 0
+        oldMessages.job.emit("obsolete-message") { error in
+            XCTAssertNil(error)
+            staleAcknowledgements += 1
+        }
+        oldOffers.job.emit("obsolete-offers") { error in
+            XCTAssertNil(error)
+            staleAcknowledgements += 1
+        }
+        XCTAssertEqual(staleAcknowledgements, 2)
+        XCTAssertTrue(publications.isEmpty, "lease gating is required even though this Run is still active")
+
+        let nextMessages = makeControlledOwnedCollection(String.self) { publications.append($0) }
+        let nextOffers = makeControlledOwnedCollection(String.self, completesOnCancel: false) {
+            publications.append($0)
+        }
+        lifecycle.ownCollection(nextMessages.collection, role: messages, run: run)
+        lifecycle.ownCollection(nextOffers.collection, role: offers, run: run)
+        defer {
+            nextMessages.collection.cancel()
+            nextOffers.collection.cancel(); nextOffers.job.complete(.cancelled)
+        }
+        XCTAssertEqual(run.ownedCollectionCount, 4)
+        oldMessages.job.complete(.cancelled)
+        oldOffers.job.complete(.cancelled)
+        let retired = expectation(description: "removed-session monitors returned")
+        let waiting = Task { @MainActor in
+            assertOwnedCancelled(await messageRetirement.value)
+            assertOwnedCancelled(await offerRetirement.value)
+            retired.fulfill()
+        }
+        defer { waiting.cancel() }
+        guard await waitForOwnedExpectations([retired]) else { return }
+        XCTAssertTrue(run.collection(for: messages) === nextMessages.collection)
+        XCTAssertTrue(run.collection(for: offers) === nextOffers.collection)
+        XCTAssertEqual(run.ownedCollectionCount, 2)
+        let delivered = expectation(description: "replacement delivery acknowledged")
+        nextMessages.job.emit("replacement") { error in
+            XCTAssertNil(error)
+            delivered.fulfill()
+        }
+        guard await waitForOwnedExpectations([delivered]) else { return }
+        XCTAssertEqual(publications, ["replacement"])
+        // Remove one replacement while its real-lease native barrier is held.
+        // Stop must include that retiree even though its active role is absent.
+        run.retireCollection(for: offers)
+        let stopEntered = expectation(description: "Stop reached SDK operation with a removed-session retiree")
+        let stopFinished = expectation(description: "Stop includes removed-session native retirement")
+        let stopping = Task { @MainActor in
+            await lifecycle.stop(
+                run, cancelObservers: {}, operation: { stopEntered.fulfill() }, succeeded: {},
+                failed: { _ in XCTFail("inert SDK cleanup should succeed") }
+            )
+            stopFinished.fulfill()
+        }
+        defer { stopping.cancel() }
+        guard await waitForOwnedExpectations([stopEntered]) else { return }
+        XCTAssertNil(run.collection(for: offers))
+        XCTAssertFalse(nextOffers.collection.snapshot.nativeCompleted)
+        XCTAssertEqual(lifecycle.phase, .stopping)
+        XCTAssertNil(lifecycle.begin())
+        nextOffers.job.complete(.cancelled)
+        guard await waitForOwnedExpectations([stopFinished]) else { return }
+        XCTAssertEqual(run.ownedCollectionCount, 0)
+        XCTAssertTrue(nextOffers.collection.snapshot.finished)
+    }
+
+    @MainActor
+    func testStopDrainsAllFourOwnedRolesAfterSdkCleanupAndPreservesObserverFailure() async throws {
+        let lifecycle = SampleRunLifecycle()
+        let run = try XCTUnwrap(lifecycle.begin())
+        let roles: [SampleRunLifecycle.Run.CollectionRole] = [
+            .diagnostics, .incomingSessions, .messages(sessionId: "session"), .pendingOffers(sessionId: "session")
+        ]
+        var fixtures: [(OwnedFlowCollection, ControlledOwnedFlowJob)] = []
+        var reportedRoles: [SampleRunLifecycle.Run.CollectionRole] = []
+        for role in roles {
+            let fixture = makeControlledOwnedCollection(String.self, completesOnCancel: false)
+            fixtures.append(fixture)
+            lifecycle.ownCollection(fixture.collection, role: role, run: run) { failure in
+                reportedRoles.append(failure.role)
+            }
+        }
+        defer { fixtures.forEach { $0.0.cancel(); $0.1.complete(.cancelled) } }
+        XCTAssertEqual(fixtures.map { $0.1.snapshot.startCalls }, [1, 1, 1, 1])
+        let sdk = HeldRunOperation<Void>()
+        let sdkEntered = expectation(description: "SDK cleanup starts before native observer drain")
+        let tracingCancelled = expectation(description: "tracing cancellation after SDK cleanup attempt")
+        fixtures[0].1.whenCancelling { tracingCancelled.fulfill() }
+        var releases = 0
+        var successes = 0
+        run.ownTracing { releases += 1 }
+        let finished = expectation(description: "SDK plus all four role leases retired")
+        let stopping = Task { @MainActor in
+            await lifecycle.stop(
+                run,
+                cancelObservers: { XCTAssertFalse(lifecycle.acceptsWork(run)) },
+                operation: {
+                    sdkEntered.fulfill()
+                    try await sdk.wait()
+                },
+                succeeded: { successes += 1 },
+                failed: { _ in XCTFail("a drained observer failure is not an SDK Stop failure") }
+            )
+            finished.fulfill()
+        }
+        defer { sdk.resolve(.success(())); stopping.cancel() }
+        guard await waitForOwnedExpectations([sdkEntered]) else { return }
+        XCTAssertEqual(fixtures[0].1.snapshot.cancelCalls, 0, "keep diagnostics through SDK cleanup")
+        XCTAssertTrue(fixtures.dropFirst().allSatisfy { $0.1.snapshot.cancelCalls > 0 })
+        XCTAssertEqual(releases, 0)
+        XCTAssertNil(lifecycle.begin())
+        fixtures[1].1.complete(.cancelled)
+        fixtures[2].1.complete(.failed(ControlledOwnedFailure.source))
+        fixtures[3].1.complete(.cancelled)
+        sdk.resolve(.success(()))
+        guard await waitForOwnedExpectations([tracingCancelled]) else { return }
+        XCTAssertEqual(releases, 1)
+        XCTAssertEqual(lifecycle.phase, .stopping)
+        XCTAssertEqual(successes, 0)
+        fixtures[0].1.complete(.cancelled)
+        guard await waitForOwnedExpectations([finished]) else { return }
+        XCTAssertEqual(reportedRoles, [.messages(sessionId: "session")])
+        XCTAssertEqual(run.firstCollectionFailure?.error as? ControlledOwnedFailure, .source)
+        XCTAssertEqual(run.collectionFailureCount, 1)
+        XCTAssertEqual(run.ownedCollectionCount, 0)
+        XCTAssertTrue(fixtures.allSatisfy { $0.0.snapshot.finished && $0.0.snapshot.callbackTaskCount == 0 })
+        XCTAssertEqual(successes, 1)
+        XCTAssertEqual(lifecycle.phase, .idle)
+    }
+
+    @MainActor
+    func testFailedSdkStopDrainsObserversThenRetriesRealCleanupWithoutRecreatingThem() async throws {
+        let lifecycle = SampleRunLifecycle()
+        let run = try XCTUnwrap(lifecycle.begin())
+        let diagnostics = makeControlledOwnedCollection(String.self, completesOnCancel: false)
+        let incoming = makeControlledOwnedCollection(String.self, completesOnCancel: false)
+        lifecycle.ownCollection(diagnostics.collection, role: .diagnostics, run: run)
+        lifecycle.ownCollection(incoming.collection, role: .incomingSessions, run: run)
+        defer {
+            diagnostics.collection.cancel(); diagnostics.job.complete(.cancelled)
+            incoming.collection.cancel(); incoming.job.complete(.cancelled)
+        }
+        var attempts = 0
+        var failureReports = 0
+        var releases = 0
+        run.ownTracing { releases += 1 }
+        let cancelling = expectation(description: "failed SDK cleanup still cancels diagnostics")
+        diagnostics.job.whenCancelling { cancelling.fulfill() }
+        let finished = expectation(description: "failed SDK cleanup independently drains observers")
+        let stopping = Task { @MainActor in
+            await lifecycle.stop(
+                run, cancelObservers: {},
+                operation: { attempts += 1; throw SyntheticRunFailure.operation },
+                succeeded: { XCTFail("SDK failure cannot discard its owner") },
+                failed: { _ in failureReports += 1 }
+            )
+            finished.fulfill()
+        }
+        defer { stopping.cancel() }
+        guard await waitForOwnedExpectations([cancelling]) else { return }
+        XCTAssertEqual(attempts, 1)
+        XCTAssertEqual(failureReports, 0, "cleanup phase still owns unretired observers")
+        XCTAssertEqual(lifecycle.phase, .stopping)
+        XCTAssertNil(lifecycle.begin())
+        incoming.job.complete(.cancelled)
+        diagnostics.job.complete(.cancelled)
+        guard await waitForOwnedExpectations([finished]) else { return }
+        XCTAssertEqual(failureReports, 1)
+        XCTAssertEqual(lifecycle.phase, .cleanupPending)
+        XCTAssertTrue(lifecycle.owns(run))
+        XCTAssertEqual(run.ownedCollectionCount, 0)
+        XCTAssertTrue(diagnostics.collection.snapshot.finished)
+        XCTAssertTrue(incoming.collection.snapshot.finished)
+        XCTAssertEqual(releases, 1)
+        await lifecycle.stop(
+            run, cancelObservers: {},
+            operation: {
+                XCTAssertEqual(run.ownedCollectionCount, 0)
+                attempts += 1
+            },
+            succeeded: {},
+            failed: { _ in XCTFail("second real SDK cleanup should succeed") }
+        )
+        XCTAssertEqual(attempts, 2)
+        XCTAssertEqual(diagnostics.job.snapshot.startCalls, 1)
+        XCTAssertEqual(incoming.job.snapshot.startCalls, 1)
+        XCTAssertEqual(releases, 1)
+        XCTAssertEqual(lifecycle.phase, .idle)
+    }
+
+    @MainActor
+    func testCallerCancellationCannotPublishIdleBeforeOwnedNativeRetirement() async throws {
+        let lifecycle = SampleRunLifecycle()
+        let run = try XCTUnwrap(lifecycle.begin())
+        let (collection, job) = makeControlledOwnedCollection(String.self, completesOnCancel: false)
+        lifecycle.ownCollection(collection, role: .incomingSessions, run: run)
+        defer { collection.cancel(); job.complete(.cancelled) }
+        let entered = expectation(description: "cancelled caller still attempts real SDK Stop")
+        let finished = expectation(description: "cancelled caller waits for real observer retirement")
+        var attempts = 0
+        var successes = 0
+        let stopping = Task { @MainActor in
+            await lifecycle.stop(
+                run, cancelObservers: {},
+                operation: {
+                    XCTAssertTrue(Task.isCancelled)
+                    attempts += 1
+                    entered.fulfill()
+                },
+                succeeded: { successes += 1 },
+                failed: { _ in XCTFail("inert SDK operation should succeed") }
+            )
+            finished.fulfill()
+        }
+        stopping.cancel()
+        defer { stopping.cancel() }
+        guard await waitForOwnedExpectations([entered]) else { return }
+        XCTAssertEqual(attempts, 1)
+        XCTAssertEqual(successes, 0)
+        XCTAssertEqual(lifecycle.phase, .stopping)
+        XCTAssertNil(lifecycle.begin())
+        XCTAssertFalse(collection.snapshot.nativeCompleted)
+        job.complete(.cancelled)
+        guard await waitForOwnedExpectations([finished]) else { return }
+        XCTAssertEqual(successes, 1)
+        XCTAssertEqual(run.ownedCollectionCount, 0)
+        XCTAssertTrue(collection.snapshot.finished)
+        XCTAssertEqual(lifecycle.phase, .idle)
+    }
+
+    @MainActor
+    func testStopSkipsQueuedOwnedCallbackAndPublishesSuccessOnlyAfterItsAcknowledgement() async throws {
+        let lifecycle = SampleRunLifecycle()
+        let run = try XCTUnwrap(lifecycle.begin())
+        var publications: [String] = []
+        let (collection, job) = makeControlledOwnedCollection(String.self) { publications.append($0) }
+        lifecycle.ownCollection(collection, role: .messages(sessionId: "session"), run: run)
+        defer { collection.cancel(); job.complete(.cancelled) }
+        var acknowledgements = 0
+        let finished = expectation(description: "Stop waited for the already-admitted callback")
+        let stopping = Task { @MainActor in
+            await lifecycle.stop(
+                run,
+                cancelObservers: {
+                    XCTAssertFalse(lifecycle.acceptsWork(run), "invalidate before snapshot")
+                    // Synchronous snapshot seam: enqueue against the real lease
+                    // just before native cancellation, with no actor yield.
+                    job.emit("old") { error in
+                        XCTAssertNil(error)
+                        acknowledgements += 1
+                    }
+                    XCTAssertTrue(collection.snapshot.hasUnacknowledgedDelivery)
+                    XCTAssertEqual(acknowledgements, 0)
+                },
+                operation: {},
+                succeeded: {
+                    XCTAssertTrue(collection.snapshot.nativeCompleted)
+                    XCTAssertTrue(collection.snapshot.finished)
+                    XCTAssertEqual(collection.snapshot.callbackTaskCount, 0)
+                    XCTAssertEqual(acknowledgements, 1)
+                    XCTAssertTrue(publications.isEmpty)
+                },
+                failed: { _ in XCTFail("inert SDK cleanup should succeed") }
+            )
+            finished.fulfill()
+        }
+        defer { stopping.cancel() }
+        guard await waitForOwnedExpectations([finished]) else { return }
+        let replacement = try XCTUnwrap(lifecycle.begin())
+        let next = makeControlledOwnedCollection(String.self) { value in
+            lifecycle.withActiveRun(replacement) { publications.append(value) }
+        }
+        lifecycle.ownCollection(next.collection, role: .messages(sessionId: "session"), run: replacement)
+        defer { next.collection.cancel() }
+        let delivered = expectation(description: "replacement owned callback delivered")
+        next.job.emit("new") { error in
+            XCTAssertNil(error)
+            delivered.fulfill()
+        }
+        guard await waitForOwnedExpectations([delivered]) else { return }
+        XCTAssertEqual(publications, ["new"])
+        await stopSuccessfully(lifecycle, replacement)
     }
 
     @MainActor
