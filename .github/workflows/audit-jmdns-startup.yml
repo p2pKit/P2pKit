@@ -1,7 +1,7 @@
 name: Audit 410 macOS JmDNS startup diagnostic
 
 # Diagnostic-only workflow; success grants no full-suite or release approval.
-# Run revision: 1. Only a reviewed change to this workflow requests one diagnostic.
+# Run revision: 2. Only a reviewed change to this workflow requests one diagnostic.
 # The lead holds the separate global local/remote lease through terminal/upload reconciliation.
 on:
   push:
@@ -198,7 +198,7 @@ jobs:
           vendor = root / "library/p2p-transport-lan/vendor/jmdns/src/main"
           fixture = root / ("library/p2p-transport-lan/src/jvmTest/java/"
               "dev/p2pkit/transport/lan/internal/jmdns/impl/JmdnsCloseLifecycleFixture.java")
-          reviewed_fixture = "42e4f9b41a6a4a95ee30b1926c603affed9f77a331517de52631220979e40ea6"
+          reviewed_fixture = "08c799e1c8a2aaf08fed5e36faa29a74c607ae7131d1c1ff447d86cf6afabd30"
           dependency_hash = "5d6298b93a1905c32cda6478808ac14c2d4a47e91535e53c41f7feeb85d946f4"
           dependency_url = "https://repo.maven.apache.org/maven2/org/slf4j/slf4j-api/2.0.7/slf4j-api-2.0.7.jar"
           dependency = work / "slf4j-api-2.0.7.jar"

@@ -5,9 +5,12 @@ import java.lang.reflect.Field;
 import java.net.DatagramPacket;
 import java.net.Inet4Address;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.MulticastSocket;
 import java.net.NetworkInterface;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.IdentityHashMap;
@@ -24,6 +27,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import dev.p2pkit.transport.lan.internal.jmdns.ServiceEvent;
 import dev.p2pkit.transport.lan.internal.jmdns.ServiceInfo;
@@ -607,12 +612,28 @@ public final class JmdnsCloseLifecycleFixture {
         }
 
         private void observedNativeSend(DNSOutgoing outgoing) throws IOException {
+            Boolean ipv4Mdns = null;
+            try {
+                InetSocketAddress explicit = outgoing.getDestination();
+                InetAddress destination = explicit == null ? getGroup() : explicit.getAddress();
+                int port = explicit == null ? DNSConstants.MDNS_PORT : explicit.getPort();
+                if (destination != null) {
+                    ipv4Mdns = !outgoing.isEmpty() && port == DNSConstants.MDNS_PORT
+                            && Arrays.equals(destination.getAddress(), new byte[] {(byte) 224, 0, 0, (byte) 251});
+                }
+            } catch (Throwable ignored) {
+                // Observation failure must not change the real send operation.
+            }
             STARTUP.sendCalls.incrementAndGet();
             try {
                 super.send(outgoing);
                 STARTUP.sendReturns.incrementAndGet();
             } catch (IOException | RuntimeException | Error failure) {
-                STARTUP.firstSendFailure.compareAndSet(null, failure);
+                try {
+                    STARTUP.firstSendFailure.compareAndSet(null, new SendFailure(failure, ipv4Mdns));
+                } catch (Throwable ignored) {
+                    // Even failure-record allocation must not replace the send failure.
+                }
                 throw failure;
             }
         }
@@ -703,7 +724,7 @@ public final class JmdnsCloseLifecycleFixture {
         final AtomicInteger recoveryCalls = new AtomicInteger();
         final AtomicInteger proberCalls = new AtomicInteger();
         final AtomicInteger announcerCalls = new AtomicInteger();
-        final AtomicReference<Throwable> firstSendFailure = new AtomicReference<>();
+        final AtomicReference<SendFailure> firstSendFailure = new AtomicReference<>();
 
         void report() {
             System.out.println("startup elapsedMillis="
@@ -711,10 +732,11 @@ public final class JmdnsCloseLifecycleFixture {
                     + " sendCalls=" + sendCalls.get() + " sendReturns=" + sendReturns.get()
                     + " recoveryCalls=" + recoveryCalls.get() + " proberCalls=" + proberCalls.get()
                     + " announcerCalls=" + announcerCalls.get());
-            Throwable failure = firstSendFailure.get();
+            SendFailure failure = firstSendFailure.get();
             if (failure != null) {
-                System.out.println("startup firstSendFailureClass=" + failure.getClass().getName());
-                reportFrames("send_failure", failure.getStackTrace());
+                System.out.println("startup firstSendFailureClass=" + failure.cause.getClass().getName()
+                        + " firstSendDestinationIpv4Mdns=" + known(failure.ipv4Mdns));
+                reportFrames("send_failure", failure.cause.getStackTrace());
             }
         }
 
@@ -735,6 +757,140 @@ public final class JmdnsCloseLifecycleFixture {
                         + frames[index].getClassName() + "." + frames[index].getMethodName());
             }
         }
+    }
+
+    private record SendFailure(Throwable cause, Boolean ipv4Mdns) {
+    }
+
+    private record InterfaceIdentity(int index, String name) {
+        static InterfaceIdentity capture(InterfaceQuery query) {
+            try {
+                NetworkInterface network = query.get();
+                if (network != null && network.getIndex() > 0 && network.getName() != null) {
+                    return new InterfaceIdentity(network.getIndex(), network.getName());
+                }
+            } catch (Throwable ignored) {
+                // An unavailable accessor is UNKNOWN, not a readiness failure.
+            }
+            return null;
+        }
+    }
+
+    private interface InterfaceQuery {
+        NetworkInterface get() throws IOException;
+    }
+
+    private static final class StartupNetwork {
+        private static final int ROUTE_OUTPUT_LIMIT = 8_192;
+        private static final Pattern ROUTE_INTERFACE = Pattern.compile("^\\s*interface:\\s*(\\S+)\\s*$");
+        private static final Pattern ROUTE_FLAGS = Pattern.compile("^\\s*flags:\\s*<([A-Z0-9_,]+)>\\s*$");
+        InterfaceIdentity selected;
+        InterfaceIdentity host;
+        InterfaceIdentity socket;
+
+        void report() {
+            System.out.println("startup interfaceSnapshot=BEFORE_WAIT selectedKnown=" + (selected != null)
+                    + " hostKnown=" + (host != null) + " socketKnown=" + (socket != null)
+                    + " selectedHostMatch=" + same(selected, host)
+                    + " selectedSocketMatch=" + same(selected, socket)
+                    + " hostSocketMatch=" + same(host, socket));
+            if (!"Mac OS X".equals(System.getProperty("os.name"))) {
+                return;
+            }
+            SendFailure firstSend = STARTUP.firstSendFailure.get();
+            if (firstSend == null || !Boolean.TRUE.equals(firstSend.ipv4Mdns)) {
+                System.out.println("startup route queryStarted=false reason=FIRST_SEND_DESTINATION_NOT_MATCHED");
+                return;
+            }
+            // Read-only, selected-interface scope only: a differing default
+            // route would not disprove an explicitly configured multicast NIC.
+            // This observes POST-failure state, not packet delivery or policy
+            // at the original send. No route/interface/address text is emitted.
+            if (selected == null || !selected.name.matches("[A-Za-z0-9_.:-]{1,64}")) {
+                System.out.println("startup route queryStarted=false reason=SELECTED_INTERFACE_UNKNOWN");
+                return;
+            }
+            Process process = null;
+            boolean interrupted = false;
+            try {
+                ProcessBuilder builder = new ProcessBuilder("/sbin/route", "-n", "get", "-inet", "-ifscope",
+                        selected.name, "224.0.0.251").redirectErrorStream(true);
+                builder.environment().put("LC_ALL", "C");
+                process = builder.start();
+                process.getOutputStream().close();
+                boolean completed = process.waitFor(2, TimeUnit.SECONDS);
+                System.out.println("startup route observation=POST_FAILURE scope=SELECTED_IPV4_MDNS"
+                        + " queryStarted=true queryCompleted=" + completed
+                        + " exitZero=" + (completed ? process.exitValue() == 0 : "UNKNOWN"));
+                if (completed && process.exitValue() == 0) {
+                    byte[] output = process.getInputStream().readNBytes(ROUTE_OUTPUT_LIMIT + 1);
+                    System.out.println("startup route outputWithinBound=" + (output.length <= ROUTE_OUTPUT_LIMIT));
+                    if (output.length <= ROUTE_OUTPUT_LIMIT) {
+                        reportRouteDetails(new String(output, StandardCharsets.UTF_8));
+                    }
+                }
+            } catch (InterruptedException failure) {
+                interrupted = true;
+                System.out.println("startup route queryFailureClass=java.lang.InterruptedException");
+            } catch (Throwable failure) {
+                System.out.println("startup route queryFailureClass=" + failure.getClass().getName());
+            } finally {
+                if (process != null) {
+                    if (process.isAlive()) {
+                        process.destroyForcibly();
+                        try {
+                            process.waitFor(1, TimeUnit.SECONDS);
+                        } catch (InterruptedException failure) {
+                            interrupted = true;
+                        }
+                    }
+                    System.out.println("startup route processReaped=" + !process.isAlive());
+                    try {
+                        process.getInputStream().close();
+                        process.getErrorStream().close();
+                        process.getOutputStream().close();
+                    } catch (IOException ignored) {
+                        // Original readiness failure is preserved; no raw text.
+                    }
+                }
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
+
+        private void reportRouteDetails(String output) {
+            List<String> interfaces = new ArrayList<>();
+            List<String> flags = new ArrayList<>();
+            for (String line : output.split("\\R")) {
+                Matcher routeInterface = ROUTE_INTERFACE.matcher(line);
+                if (routeInterface.matches()) {
+                    interfaces.add(routeInterface.group(1));
+                }
+                Matcher routeFlags = ROUTE_FLAGS.matcher(line);
+                if (routeFlags.matches()) {
+                    flags.add(routeFlags.group(1));
+                }
+            }
+            System.out.println("startup route interfaceParsed=" + (interfaces.size() == 1)
+                    + " selectedInterfaceMatch="
+                    + (interfaces.size() == 1 ? selected.name.equals(interfaces.get(0)) : "UNKNOWN")
+                    + " flagsParsed=" + (flags.size() == 1));
+            if (flags.size() == 1) {
+                List<String> values = Arrays.asList(flags.get(0).split(","));
+                for (String flag : List.of("UP", "REJECT", "BLACKHOLE", "GATEWAY", "IFSCOPE")) {
+                    System.out.println("startup routeFlag=" + flag + " present=" + values.contains(flag));
+                }
+            }
+        }
+
+        private static String same(InterfaceIdentity first, InterfaceIdentity second) {
+            return first == null || second == null ? "UNKNOWN" : Boolean.toString(first.equals(second));
+        }
+    }
+
+    private static String known(Boolean value) {
+        return value == null ? "UNKNOWN" : value.toString();
     }
 
     private static final class Controls {
@@ -815,6 +971,7 @@ public final class JmdnsCloseLifecycleFixture {
         final Inet4Address address;
         final FixtureDns dns;
         final Controls control = new Controls();
+        final StartupNetwork startupNetwork = new StartupNetwork();
         final List<CloseCall> closeCalls = new ArrayList<>();
         final List<Thread> originalListeners = new ArrayList<>();
         final Set<Thread> observedThreads = Collections.newSetFromMap(new IdentityHashMap<>());
@@ -839,6 +996,10 @@ public final class JmdnsCloseLifecycleFixture {
             starter = initial.retainedStarter;
             executor = initial.executor;
             originalSocket = dns.getSocket();
+            startupNetwork.selected = InterfaceIdentity.capture(() -> NetworkInterface.getByInetAddress(address));
+            startupNetwork.host = InterfaceIdentity.capture(() -> dns.getLocalHost().getInterface());
+            startupNetwork.socket = InterfaceIdentity.capture(() -> originalSocket == null
+                    ? null : originalSocket.getNetworkInterface());
             factory = DNSTaskStarter.Factory.getInstance();
             Field entries = DNSTaskStarter.Factory.class.getDeclaredField("_instances");
             require(entries.trySetAccessible(), "factory_read_only_capture_unavailable");
@@ -984,6 +1145,7 @@ public final class JmdnsCloseLifecycleFixture {
                     + " currentSocketClosed=" + (socket != null && socket.isClosed()));
             StartupTrace.reportThread("general_timer", generalTimer);
             StartupTrace.reportThread("state_timer", stateTimer);
+            startupNetwork.report();
             NetworkInterface network = NetworkInterface.getByInetAddress(address);
             System.out.println("startup explicitAddress=" + (System.getenv("P2PKIT_JMDNS_FIXTURE_IPV4") != null)
                     + " linkLocal=" + address.isLinkLocalAddress()
