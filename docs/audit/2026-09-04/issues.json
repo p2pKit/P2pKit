@@ -10176,9 +10176,9 @@
       ],
       "status": "PENDING_REMEDIATION",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Actual POST/GET-verified filing; queued, implementationNOT_STARTED/source plans only. Not repair approval or a new external-validation row.",
+      "assessmentAtCheckpoint": "Candidate product source applied on4973859; exact10-file staged delta and source-only review are bound in checkpoint.json nativeFollowups.candidate413. No actionable source findings; final repair approval WITHHELD. R20 compiled the prior baseline without this candidate. R21 apple-owned-cancellation NOT_EXECUTED at a candidate commit; final source/runtime/cleanup binding pending. PENDING_REMEDIATION unchanged, no repair credit.",
       "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "Source-supported cause/duplicate triage with genuine bounded native baseline; reviewSHA256 7d5c23132f573016dc0569924b2b3d2d09e7e86e395cd0eceeef8a93c1d9a9d3; no repair approval.",
+      "recordedIndependentReview": "Source-supported cause/duplicate triage with genuine bounded native baseline; reviewSHA256 7d5c23132f573016dc0569924b2b3d2d09e7e86e395cd0eceeef8a93c1d9a9d3; no repair approval. Composed product source-only reviewSHA256 1ceae4f8a33dd3c22e26bfe0d6011a4cb05ae60b73920ee1dae52243fb2c7b4f: NO_ACTIONABLE_SOURCE_FINDINGS_FINAL_REPAIR_APPROVAL_WITHHELD; no candidate execution acceptance.",
       "publicInvestigationAndOutcomeUrls": [
         "https://github.com/p2pKit/P2pKit/issues/413"
       ],
@@ -10194,8 +10194,8 @@
         "scope": "Individual POST/GET after01:36census; not included in that224-open list or a fresh post-write census."
       },
       "repairReport": "repairs/cohort-2026-09-09-native-followups.md#r18-terminal-result-and-current-continuation",
-      "verificationRequired": "Own/cancel the real Kotlin collection and verify production-adapter completion/retirement. Preserve383queued-callback fences, real SDK cleanup, hot-flow/public semantics and deadlines; retain raw-export baseline. No arbitrary callback errors, timeout inflation, flag-only success or host-retirement cancellation credit.",
-      "evidenceReference": "checkpoint.json nativeFollowups.r18Acceptance.cancellation and postR18Filings"
+      "verificationRequired": "Own/cancel the real Kotlin collection and verify production-adapter completion/retirement. Preserve383queued-callback fences, real SDK cleanup, hot-flow/public semantics and deadlines; retain raw-export baseline. No arbitrary callback errors, timeout inflation, flag-only success or host-retirement cancellation credit. Candidate still requires actual native helper execution, generated Swift signature/additive ABI and producer provenance checks, Swift adapter/lifecycle and separate positive owned diagnostic execution, plus exact final source and owned cleanup binding.",
+      "evidenceReference": "checkpoint.json nativeFollowups.r18Acceptance.cancellation and postR18Filings; nativeFollowups.candidate413"
     },
     {
       "number": 414,

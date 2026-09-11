@@ -1,11 +1,13 @@
 <!-- audit-current:start -->
-# Current audit continuation — #415/#416 approved; #413 planning
+# Current audit continuation — #413 candidate; validation pending
 
 **202/232 repair approvals (87.1%);203/232 resolved (87.5%);29unresolved (12.5%).**
 Five repairs plus21external rows and owner decisions #120/#274/#284;99new findings.
 #287 adds resolution, not repair credit; approval complement30 (12.9%).
-**#413 active PLANNING/compilation-admission preparation; implementation/runtime NOT_STARTED,
-native admission unknown**. Then #414 real Kotlin caller boundary → #409 conditional readiness.
+**#413 candidate source APPLIED; candidate validation pending, final repair approval WITHHELD.**
+The composed source review found no actionable source findings; this is not runtime or repair approval.
+R21 `apple-owned-cancellation` is NOT_EXECUTED at a candidate commit; #383 fences/raw-export baseline remain.
+Then #414 real Kotlin caller boundary → #409 conditional readiness.
 **#410 PARKED/PENDING_REMEDIATION, final WITHHELD**: new admission evidence required; no unchanged
 full-graph retry, lock bypass or route/permission override. #417 remains unimplemented under existing
 restricted planning, not retried/rephrased/delegated. **Audit NOT_READY; #133 NOT_STARTED.**
@@ -13,12 +15,17 @@ restricted planning, not retried/rephrased/delegated. **Audit NOT_READY; #133 NO
 **#415/#416 finally APPROVED** at `628336b` / `593175f`: actual repository Java/JUnitCore preimage
 2tests/1failure→2pass and5tests/4failures→5pass, plus scoped provenance controls. Diagnostic-code
 extraction and terminal reverse-name parsing, not listener/network/ART/native/fullgraph acceptance.
-Execution binds194da+staged37d0be and628+staged87bde6, not clean628/593. Current clean source input
-`593175f` / tree `0056bd9`; both commits NOT_PUSHED at this boundary. Prior administration and
-#411/#412/#418 published194da18:16UTC; that is not415/416publication or execution.
+Execution binds194da+staged37d0be and628+staged87bde6, not clean628/593/497. Published baseline
+`4973859` / tree `2c8196d` includes415/416, prior administration and the R20 request: push finished
+19:37:19UTC, ref/tree verified19:37:21UTC on2026-09-11. This is publication, not candidate413 execution.
 
-R10 18:47:41.450906–18:47:52.443298UTC:18GETs,239open objects(232issues/7PRs), all unchanged sinceR9; empty item/comment/inline delta. Captured on-disk200/201/31 is a separate stale administrative snapshot, not the later202/203/29 projection.
-Fresh all-open objects, not a fresh manual reread/full-history or all-state census. 566comments and closed/linked histories reused;409–418OPEN with10fresh complete empty comment feeds. Effective339issues/79PRs is cumulative. No Actions/ref/lease/upstream observation.
+R20/run34639822412/1 admitted clean497 baseline LAN production/test `iosSimulatorArm64` compilation:
+12actionable/12executed tasks,3owned leaves0/0/0. #413 candidate absent: no helper runtime/Swift/ABI or410 qualification.
+Scoped cleanup:5build roots removed/39fixture bases disposed; state/work finalizer disposal inferred.
+Outer Gradle-home/.konan/shared-cache/SDK/VM deletion NOT_PROVED. Local lease release20:05:03UTC is not remote cleanup.
+
+R11 19:57:29.050677–19:57:39.917946UTC:18GETs,239open objects(232issues/7PRs), all unchanged sinceR10; empty item/comment/inline deltas. Captured on-disk202/203/29 matches232issue numbers, not new repair approval.
+Fresh all-open objects, not a fresh manual reread/full-history or all-state census. 566comments and closed/linked histories reused;409–418OPEN with10fresh complete empty comment feeds. Effective339issues/79PRs is cumulative. This issue refresh has no Actions/ref/lease/upstream observation or standing freshness.
 
 FullMacR1/startup1/guardedR2 failures remain; R2native NoRouteToHostException and sanitized post-failure
 route evidence do not prove cause or send-time reachability. LinuxR2/R16/R18/Windows failures retain
@@ -26,6 +33,7 @@ their own bindings; #207Windows19/#408scoped approvals stand. Current full locks
 sample/consumer, ART, physical/hostile, narrow Apple/Intel, backup291 and independent/crypto/final gates
 remain. Source0.7.0-SNAPSHOT, immutableRC3 and existing0.8.0+restrictions stand; no release authority.
 
+[Candidate and dated predecessor bindings](docs/audit/2026-09-04/checkpoint.json) (`nativeFollowups.candidate413`) ·
 [Focused415/416evidence](docs/audit/2026-09-04/repairs/415-416.md) ·
 [Preserved native failures](docs/audit/2026-09-04/repairs/cohort-2026-09-09-native-followups.md#mac-r2-failure-and-text-only-approvals-411412418).
 

@@ -5,11 +5,11 @@
   "branch": "audit/complete-2026-09-04",
   "lastInheritedReviewedSourceCommit": "32dc5c03658145741c6e23cdfec3c14cd2eba5e7",
   "lastInheritedReviewedSourceTree": "a6144952d3592b6e189114bc73822d0af1ab0853",
-  "sourceCheckpointCommit": "593175ff935d447907e2aa466f17072217ea5907",
-  "sourceCheckpointTree": "0056bd96b35e18a2c03dcc76d615a69ae5949439",
+  "sourceCheckpointCommit": "4973859d416c62246e303259bbaab21f4f854f0c",
+  "sourceCheckpointTree": "2c8196da4417376c9b39df14c8c49d1727f8f442",
   "preservedDraftPatchSha256": "2dc0dd26cb738d89d14136fb1fe5348afabd6f2a3de2fd47847be8f1d91ed1b4",
   "activeIssue": 413,
-  "activeIssueState": "413_PLANNING_ADMISSION_ONLY_IMPLEMENTATION_RUNTIME_NOT_STARTED",
+  "activeIssueState": "413_CANDIDATE_APPLIED_VALIDATION_PENDING_NO_FINAL_REPAIR_APPROVAL",
   "issueCountDenominator": 232,
   "dispositions": {
     "EXTERNAL_VALIDATION_PENDING": 21,
@@ -21,7 +21,7 @@
   "completedIssueCount": 202,
   "remainingIssueCount": 29,
   "percentageMeaning": "202/232 repair approvals (87.1%); 203/232 resolved (87.5%) including no-repair287; 29/232 unresolved (12.5%). Repair-approval complement30/232 (12.9%);99new findings. Counts are issue rows, not effort/readiness or GitHub closures.",
-  "githubIssueListRefreshedUtc": "2026-09-11T18:47:44.796341+00:00",
+  "githubIssueListRefreshedUtc": "2026-09-11T19:57:32.252892+00:00",
   "githubTotalIssuesAtRefresh": 339,
   "githubOpenIssuesAtRefresh": 232,
   "newAuditIssueCount": 99,
@@ -1290,7 +1290,7 @@
     410,
     417
   ],
-  "continuationQueueScope": "413 active PLANNING/compilation-admission preparation; implementation/runtime NOT_STARTED, native admission unknown. Then414 requires a distinct real Kotlin caller boundary, then409 conditional peer readiness. Ordering is not execution or approval. 410 remains PARKED/PENDING_REMEDIATION, final WITHHELD; return only with new admission evidence, no unchanged full-graph retry, lock bypass or route/permission override. 417 remains unimplemented under existing restricted planning, not retried/rephrased/delegated.",
+  "continuationQueueScope": "413 candidate product source applied; composed source review found no actionable source findings, final repair approval WITHHELD. R21 apple-owned-cancellation NOT_EXECUTED at a candidate commit; final selector/workflow composition and source/runtime binding pending. Preserve383fences and raw-export baseline. Then414 requires a distinct real Kotlin caller boundary, then409 conditional peer readiness. Ordering is not execution or approval. 410 remains PARKED/PENDING_REMEDIATION, final WITHHELD; return only with new admission evidence, no unchanged full-graph retry, lock bypass or route/permission override. 417 remains unimplemented under existing restricted planning, not retried/rephrased/delegated.",
   "completedInvestigation145": {
     "issue": 145,
     "baselineCommit": "d823bb9cc0d187ec746714af67b08904a28331b6",
@@ -2009,22 +2009,22 @@
     "tree": "db432eb14791d9637e812333305e811edceb834e"
   },
   "activeWorkItem": {
-    "name": "413_KOTLIN_NATIVE_COMPILATION_ADMISSION_PLAN",
-    "status": "413_PLANNING_ADMISSION_ONLY_IMPLEMENTATION_RUNTIME_NOT_STARTED",
+    "name": "413_OWNED_FLOW_CANDIDATE_VALIDATION",
+    "status": "413_CANDIDATE_APPLIED_VALIDATION_PENDING_NO_FINAL_REPAIR_APPROVAL",
     "owner": "primary agent",
-    "scope": "413 active PLANNING/compilation-admission preparation; implementation/runtime NOT_STARTED, native admission unknown. Then414 requires a distinct real Kotlin caller boundary, then409 conditional peer readiness. Ordering is not execution or approval. 410 remains PARKED/PENDING_REMEDIATION, final WITHHELD; return only with new admission evidence, no unchanged full-graph retry, lock bypass or route/permission override. 417 remains unimplemented under existing restricted planning, not retried/rephrased/delegated."
+    "scope": "413 candidate product source applied; composed source review found no actionable source findings, final repair approval WITHHELD. R21 apple-owned-cancellation NOT_EXECUTED at a candidate commit; final selector/workflow composition and source/runtime binding pending. Preserve383fences and raw-export baseline. Then414 requires a distinct real Kotlin caller boundary, then409 conditional peer readiness. Ordering is not execution or approval. 410 remains PARKED/PENDING_REMEDIATION, final WITHHELD; return only with new admission evidence, no unchanged full-graph retry, lock bypass or route/permission override. 417 remains unimplemented under existing restricted planning, not retried/rephrased/delegated."
   },
   "latestGithubListObservation": {
-    "reference": "checkpoint.json nativeFollowups.github410R10Refresh",
+    "reference": "checkpoint.json nativeFollowups.candidate413.githubR11",
     "apiWindowUtc": [
-      "2026-09-11T18:47:41.450906+00:00",
-      "2026-09-11T18:47:52.443298+00:00"
+      "2026-09-11T19:57:29.050677+00:00",
+      "2026-09-11T19:57:39.917946+00:00"
     ],
     "allOpenWindowUtc": [
-      "2026-09-11T18:47:41.450906+00:00",
-      "2026-09-11T18:47:44.796341+00:00"
+      "2026-09-11T19:57:29.050677+00:00",
+      "2026-09-11T19:57:32.252892+00:00"
     ],
-    "issueListFinishedUtc": "2026-09-11T18:47:44.796341+00:00",
+    "issueListFinishedUtc": "2026-09-11T19:57:32.252892+00:00",
     "openIssues": 232,
     "openPullRequests": 7,
     "freshLocalFullBodies": 239,
@@ -2038,8 +2038,8 @@
     "reusedConversationComments": 566,
     "inlineDeltaRecords": 0,
     "inventoryExactlyMatchesOpenIssues": true,
-    "scope": "R10 18:47:41.450906\u201318:47:52.443298UTC:18GETs,239open objects(232issues/7PRs), all unchanged sinceR9; empty item/comment/inline delta. Captured on-disk200/201/31 is a separate stale administrative snapshot, not the later202/203/29 projection. Fresh all-open objects, not a fresh manual reread/full-history or all-state census. 566comments and closed/linked histories reused;409\u2013418OPEN with10fresh complete empty comment feeds. Effective339issues/79PRs is cumulative. No Actions/ref/lease/upstream observation.",
-    "capturedDispositionReference": "checkpoint.json nativeFollowups.github410R10Refresh.capturedDisposition"
+    "scope": "R11 19:57:29.050677–19:57:39.917946UTC:18GETs,239open full objects(232issues/7PRs), all unchanged sinceR10; empty item/conversation/inline deltas. Immutable on-disk projection202/203/29 matches232open issue numbers; no new repair approval. No fresh complete manual reread/full-history or all-state census. 566comments and closed/linked histories reused;409–418OPEN/0comments with10fresh complete empty feeds. Effective339issues/79PRs is cumulative. This issue refresh has no Actions/ref/lease/upstream observation or standing freshness.",
+    "capturedDispositionReference": "checkpoint.json nativeFollowups.candidate413.githubR11.capturedDisposition"
   },
   "completedInvestigation223": {
     "issue": 223,
@@ -7939,14 +7939,14 @@
     "scope": "Separately approved operational request, locally committed, NOT_PUSHED; no extra repair approval. Actual complete committed source read may honestly bind d152. No hosted trial4/native Windows/Apple acceptance. Final administrative review plus live Actions/ref observation/global lease/source freeze/local-test pause required BEFORE triggering publication."
   },
   "currentAdministrativeInputSource": {
-    "commit": "593175ff935d447907e2aa466f17072217ea5907",
-    "tree": "0056bd96b35e18a2c03dcc76d615a69ae5949439",
-    "preparedUtc": "2026-09-11T18:50:10.950726+00:00",
-    "preimageAdministrativeCommit": "194da7f2bd11f7403f80009de1ee8e25ad521349",
-    "sourceDiffSha256BeforeAdministrativeWrite": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "sourceWasCleanAtInput": true,
-    "publicationStatus": "415_416_NOT_PUSHED_ADMINISTRATIVE_DELTA_NOT_COMMITTED",
-    "scope": "Clean593175f/tree0056bd9 is the input to this eight-path administrative delta. 415/416 are separately finally approved, committed NOT_PUSHED at this boundary. 415 invocations used194da+staged37d0be;416 used628336b+staged87bde6, not clean 628/593 executions. Earlier failure/approval bindings remain unchanged."
+    "commit": "4973859d416c62246e303259bbaab21f4f854f0c",
+    "tree": "2c8196da4417376c9b39df14c8c49d1727f8f442",
+    "preparedUtc": "2026-09-11T20:30:00.393770+00:00",
+    "preimageAdministrativeCommit": "4973859d416c62246e303259bbaab21f4f854f0c",
+    "candidateProductDiffReference": "nativeFollowups.candidate413.appliedSource",
+    "sourceWasCleanAtInput": false,
+    "publicationStatus": "BASELINE_497_PUSHED_413_CANDIDATE_STAGED_NOT_PUBLISHED",
+    "scope": "Published baseline4973859/tree2c8196d contains415/416, prior administration and the R20 request. 413 product10 staged delta is separately bound in nativeFollowups.candidate413; final candidate commit/tree and selector/workflow composition are not yet bound. Source review is not final repair/runtime approval. 415 execution stays194da+staged37d0be; 416 stays628336b+staged87bde6, not clean628/593/497 or candidate execution."
   },
   "priorCanonicalAab8Product": {
     "lastIntegratedCheck": {
@@ -11348,8 +11348,8 @@
       415,
       416
     ],
-    "sourceCommit": "593175ff935d447907e2aa466f17072217ea5907",
-    "sourceTree": "0056bd96b35e18a2c03dcc76d615a69ae5949439",
+    "sourceCommit": "4973859d416c62246e303259bbaab21f4f854f0c",
+    "sourceTree": "2c8196da4417376c9b39df14c8c49d1727f8f442",
     "publicationBefore9ecd": {
       "status": "PUSHED_AUDIT_BRANCH_REF_TREE_VERIFIED",
       "commit": "165e4e9263cd6ddfe73a51ed401259d149b63731",
@@ -11446,13 +11446,13 @@
       "changedConversationComments": 0,
       "scope": "Bounded all-state issue/comment delta since15:27 then individual successful388 creation. Not a fresh202-row complete-history/linked-PR crawl, separate refetch, repair approval or closure. Existing14:14 list and15:27 open-body records retain their exact scope."
     },
-    "pendingBoundary": "413 active PLANNING/compilation-admission preparation; implementation/runtime NOT_STARTED, native admission unknown. Then414 requires a distinct real Kotlin caller boundary, then409 conditional peer readiness. Ordering is not execution or approval. 410 remains PARKED/PENDING_REMEDIATION, final WITHHELD; return only with new admission evidence, no unchanged full-graph retry, lock bypass or route/permission override. 417 remains unimplemented under existing restricted planning, not retried/rephrased/delegated.",
+    "pendingBoundary": "413 candidate product source applied; composed source review found no actionable source findings, final repair approval WITHHELD. R21 apple-owned-cancellation NOT_EXECUTED at a candidate commit; final selector/workflow composition and source/runtime binding pending. Preserve383fences and raw-export baseline. Then414 requires a distinct real Kotlin caller boundary, then409 conditional peer readiness. Ordering is not execution or approval. 410 remains PARKED/PENDING_REMEDIATION, final WITHHELD; return only with new admission evidence, no unchanged full-graph retry, lock bypass or route/permission override. 417 remains unimplemented under existing restricted planning, not retried/rephrased/delegated.",
     "deferredProjections": [
       "Current whole-source semantic corroboration beyond exact supplied read chains",
       "Older dated cohort reports/continuation narratives remain historical"
     ],
-    "scope": "202/232 repair approvals (87.1%); 203/232 resolved (87.5%) including no-repair287; 29/232 unresolved (12.5%). Repair-approval complement30/232 (12.9%);99new findings. Counts are issue rows, not effort/readiness or GitHub closures. 413 active PLANNING/compilation-admission preparation; implementation/runtime NOT_STARTED, native admission unknown. Then414 requires a distinct real Kotlin caller boundary, then409 conditional peer readiness. Ordering is not execution or approval. 410 remains PARKED/PENDING_REMEDIATION, final WITHHELD; return only with new admission evidence, no unchanged full-graph retry, lock bypass or route/permission override. 417 remains unimplemented under existing restricted planning, not retried/rephrased/delegated. Remaining gates: repairs415416.remainingBoundary.",
-    "sourceBindingRole": "Clean593175f/tree0056bd9 is the input to this eight-path administrative delta. 415/416 are separately finally approved, committed NOT_PUSHED at this boundary. 415 invocations used194da+staged37d0be;416 used628336b+staged87bde6, not clean 628/593 executions. Earlier failure/approval bindings remain unchanged.",
+    "scope": "202/232 repair approvals (87.1%); 203/232 resolved (87.5%) including no-repair287; 29/232 unresolved (12.5%). Repair-approval complement30/232 (12.9%);99new findings. Counts are issue rows, not effort/readiness or GitHub closures. 413 candidate product source applied; composed source review found no actionable source findings, final repair approval WITHHELD. R21 apple-owned-cancellation NOT_EXECUTED at a candidate commit; final selector/workflow composition and source/runtime binding pending. Preserve383fences and raw-export baseline. Then414 requires a distinct real Kotlin caller boundary, then409 conditional peer readiness. Ordering is not execution or approval. 410 remains PARKED/PENDING_REMEDIATION, final WITHHELD; return only with new admission evidence, no unchanged full-graph retry, lock bypass or route/permission override. 417 remains unimplemented under existing restricted planning, not retried/rephrased/delegated. Remaining gates: currentUnresolvedWork; candidate evidence: nativeFollowups.candidate413.",
+    "sourceBindingRole": "Published baseline4973859/tree2c8196d contains415/416, prior administration and the R20 request. 413 product10 staged delta is separately bound in nativeFollowups.candidate413; final candidate commit/tree and selector/workflow composition are not yet bound. Source review is not final repair/runtime approval. 415 execution stays194da+staged37d0be; 416 stays628336b+staged87bde6, not clean628/593/497 or candidate execution.",
     "newIssues": [
       388,
       389,
@@ -12849,10 +12849,10 @@
       "scope": "Point-in-time global idle observation and administrative local lease release only; later policy2 UNKNOWN drain and full remote cleanupNOT_PROVEN remain. No standing lock/future idle/clean remote runner assertion."
     },
     "currentSourcePoint": {
-      "commit": "593175ff935d447907e2aa466f17072217ea5907",
-      "tree": "0056bd96b35e18a2c03dcc76d615a69ae5949439",
-      "publicationStatus": "415_416_COMMITTED_NOT_PUSHED_ADMINISTRATIVE_DELTA_NOT_COMMITTED",
-      "scope": "Clean593175f/tree0056bd9 is the input to this eight-path administrative delta. 415/416 are separately finally approved, committed NOT_PUSHED at this boundary. 415 invocations used194da+staged37d0be;416 used628336b+staged87bde6, not clean 628/593 executions. Earlier failure/approval bindings remain unchanged."
+      "commit": "4973859d416c62246e303259bbaab21f4f854f0c",
+      "tree": "2c8196da4417376c9b39df14c8c49d1727f8f442",
+      "publicationStatus": "BASELINE_497_PUSHED_413_CANDIDATE_STAGED_NOT_PUBLISHED",
+      "scope": "Published baseline4973859/tree2c8196d contains415/416, prior administration and the R20 request. 413 product10 staged delta is separately bound in nativeFollowups.candidate413; final candidate commit/tree and selector/workflow composition are not yet bound. Source review is not final repair/runtime approval. 415 execution stays194da+staged37d0be; 416 stays628336b+staged87bde6, not clean628/593/497 or candidate execution."
     },
     "githubRefresh": {
       "apiWindowUtc": [
@@ -16621,7 +16621,7 @@
       "macAttemptReference": "nativeFollowups.macLockRefreshR1",
       "startupDiagnosticReference": "nativeFollowups.startupDiagnosticContinuation"
     },
-    "observationCutoffScope": "Current recorded/disposition timestamps use the disposition-evidence cutoff:416final evidence inspection observed18:42:39;415independent clean-source rebind observed18:23:10.770649031. APPROVE_FINAL_415/416 verdict completion/delivery is UN_CLOCKED/UNRECORDED. Execution, publication, GitHubR9/R10 and administrative input clocks remain separate; this cutoff is neither a verdict-delivery clock nor a fresh census clock.",
+    "observationCutoffScope": "Current recorded/disposition timestamps use the disposition-evidence cutoff:416final evidence inspection observed18:42:39;415independent clean-source rebind observed18:23:10.770649031. APPROVE_FINAL_415/416 verdict completion/delivery is UN_CLOCKED/UNRECORDED. Execution, publication, GitHubR9/R10 and administrative input clocks remain separate; this cutoff is neither a verdict-delivery clock nor a fresh census clock. Later candidate/publication/R20/R11 records have their own clocks in candidate413; no new disposition changes this cutoff.",
     "windows19AdministrationPublication": {
       "commit": "3d4fa914cc2e4e4b20e14ddee0ab4d71e5390a9b",
       "tree": "c6d57b745966e96f920ffb2d1b1efe39c7f370c3",
@@ -18127,16 +18127,153 @@
       "receipt": "hosted-operations/post-mac-r2-admin-publication-20260911/receipt.json",
       "receiptSha256": "2e69159dcec6c7f5085d2d0656d17ff5969c61fc6437f8ba3a35747bc02a09dd",
       "scope": "Published prior administration and411/412/418; not415/416publication or execution. Scoped audit-branch push, no dispatch/release/tag/closure/settings/main action."
+    },
+    "candidate413": {
+      "state": "413_CANDIDATE_APPLIED_VALIDATION_PENDING_NO_FINAL_REPAIR_APPROVAL",
+      "predecessor": {
+        "date": "2026-09-11",
+        "commit": "4973859d416c62246e303259bbaab21f4f854f0c",
+        "scope": "Immutable prior six-path current fields/notices; no duplicated previous-current tree. issues.json outer provenance/refresh envelope retains that dated boundary; only issue413 changes in this delta. Historical failure objects remain unchanged."
+      },
+      "appliedSource": {
+        "appliedUtc": "2026-09-11T20:07:03.177368+00:00",
+        "parentCommit": "4973859d416c62246e303259bbaab21f4f854f0c",
+        "productPaths": 10,
+        "stagedProductDiffSha256": "b781fdee66237a6e3ce0ef7a3cc192e911f5dbb3db31bbe05cd3f6d6534ed565",
+        "record": "413-composition-r1/application.json",
+        "recordSha256": "30cb20c6abe526ab89336d31436affb7605bc5d9ac88d6052be6bd01cddb4b9d",
+        "scope": "Applied/staged product candidate only. Selector/workflow composition is separate; no final candidate commit/tree or candidate compilation/runtime result is bound here."
+      },
+      "sourceReview": {
+        "report": "413-independent-composed-review-r1/source-review.json",
+        "reportSha256": "1ceae4f8a33dd3c22e26bfe0d6011a4cb05ae60b73920ee1dae52243fb2c7b4f",
+        "recordedUtc": "2026-09-11T20:13:35.126165+00:00",
+        "reviewer": "review_413_composed",
+        "verdict": "NO_ACTIONABLE_SOURCE_FINDINGS_FINAL_REPAIR_APPROVAL_WITHHELD",
+        "scope": "Exact product10 delta above, source-only. No candidate native/Swift execution, generated signature/ABI comparison, final selector/workflow composition, final revision or owned cleanup acceptance. recordedUtc is the report clock, not a separately observed verdict-delivery clock."
+      },
+      "sourceBehavior": "Native factory returns the actual lazy collection Job with a private parent. Swift registers ownership/completion before start, explicitly cancels that Job, and finish awaits native completion plus accepted callback-task return. Run retains replaced/removed subscriptions through actual retirement; diagnostics/incomingSessions/messages/pendingOffers use this ownership. Raw exported Flow baseline is unchanged; no automatic Swift Task.cancel propagation claim.",
+      "r20BaselineAdmission": {
+        "runId": 34639822412,
+        "attempt": 1,
+        "sourceReference": "nativeFollowups.candidate413.publication497",
+        "sourceUnchanged": true,
+        "report": "hosted-run-34639822412-attempt-1/inspection-r1.json",
+        "reportSha256": "292a9fdcd007eb5f9704fe228fd6ca997c590a6138c26f726f1cafe816f106f3",
+        "recordedUtc": "2026-09-11T20:04:51.808014+00:00",
+        "reviewer": "review_413_admission",
+        "verdict": "APPROVE_SCOPED_NATIVE_COMPILATION_ADMISSION_AND_CLEANUP_EVIDENCE",
+        "verdictDeliveredUtc": "NOT_SEPARATELY_CLOCKED",
+        "actualNativeTasks": "12 actionable tasks:12 executed; includes LAN production/test iosSimulatorArm64 compilation.",
+        "directLeaves": 3,
+        "eachProductStopFinal": [
+          0,
+          0,
+          0
+        ],
+        "ownedBuildRootsRemoved": 5,
+        "nativeFixtureBasesDisposed": 39,
+        "preservedIntentionalFailedTeardowns": 3,
+        "scope": "Existing clean497 baseline only;413candidate absent. No helper runtime/Swift/ABI or410qualification. State/work finalizer disposal inferred from the bound successful branch. Outer Gradle-home/.konan/shared-cache/SDK/VM disposal NOT_PROVED.",
+        "leaseReleasedUtc": "2026-09-11T20:05:03.303480+00:00",
+        "leaseReleaseRecord": "hosted-leases/r20-native-compilation-4973859/released.json",
+        "leaseReleaseRecordSha256": "d0b8ee6e7f2637a64f52d5c1da34a993ba095ca06967c5ba7411136e3c70f309",
+        "leaseReleaseScope": "Local cooperative lease release only, not remote cleanup or test/repair promotion."
+      },
+      "publication497": {
+        "commit": "4973859d416c62246e303259bbaab21f4f854f0c",
+        "tree": "2c8196da4417376c9b39df14c8c49d1727f8f442",
+        "pushStartedUtc": "2026-09-11T19:37:16.667958+00:00",
+        "pushFinishedUtc": "2026-09-11T19:37:19.485443+00:00",
+        "pushExitCode": 0,
+        "refAndTreeVerifiedUtc": "2026-09-11T19:37:21.412744+00:00",
+        "receipt": "r20-publication/push-receipt.json",
+        "receiptSha256": "21c09a4f0b0636d56334cbbc12e77fc8dcc487c8b9815d6033f67d90caa9a3f7",
+        "scope": "Publishes415/416, prior administration and the R20 baseline request. Supersedes their old current NOT_PUSHED notice, without rebinding staged415/416execution to clean497 or to413."
+      },
+      "r21CandidateRequest": {
+        "selector": "apple-owned-cancellation",
+        "status": "NOT_EXECUTED_AT_CANDIDATE_COMMIT",
+        "finalCandidateCommit": "NOT_YET_BOUND",
+        "finalCandidateTree": "NOT_YET_BOUND",
+        "scope": "Product and execution request are independently source-reviewed and committed before this checkpoint. Actual execution must bind the final clean workflow GITHUB_SHA/tree including checkpoint, not the prepared source alone. Native4/Swift28+1, generated signature/additive ABI/provenance and owned-retirement evidence remain pending; final repair approval WITHHELD. Native tests select an exact originally-Shutdown UUID using supported --device and independently verify retirement before framework work; no shared CoreSimulator service termination claim.",
+        "preparedSourceCommit": "5fa75f8615554512c2dc27ffdf1caf3cd01b6691",
+        "preparedSourceTree": "bdb0f6b3844cfb6eaf264b270488e0a4762cc48c",
+        "productCommit": "9d69040a9af35a6409be9406695ba2dadface62a",
+        "sourceRequestDiffSha256": "2ee44305ca18fcc243d3856dee1c821b2c7ca25e522d8a4c970200dbf1d756e9",
+        "sourceRequestReview": "APPROVE_SOURCE_AND_EXECUTION_REQUEST",
+        "sourceRequestReviewRecord": "413-selector-source-execution-review-r3/REVIEW.json",
+        "sourceRequestReviewSha256": "30c7c98ab7d1d791a7250d593dd3c06b1e7cac08e80eafb4d9ba1f5b1f3dcc0a",
+        "preparedUtc": "2026-09-11T20:47:32.448458+00:00",
+        "publicationStatus": "LOCALLY_COMMITTED_NOT_PUSHED",
+        "knownPrerequisite": "Aggregate checkKotlinAbi also needs JVM compilation/public constants against stale lock memberships. Canonical full resolveAndLockAll remains blocked by separately parked410 Mac readiness qualification; no partial lock write or required-gate waiver. A finalized native/ABI product or assessment failure remains FAIL while safe independent Swift evidence may proceed.",
+        "localMaintenance": {
+          "methodsPassed": 23,
+          "runs": [
+            {
+              "record": "runs/413-launcher-focused-r1/receipt.json",
+              "recordSha256": "78a4ee60a7ec19a376a612693f5d8c24eae5d34a22be9991264d665e4b899f37",
+              "methodsPassed": 4,
+              "executedWorkingDiffSha256": "fcf893d7499c9c2159a2720c497c4a82f0a34da3f637824878852c34efe6f0f4"
+            },
+            {
+              "record": "runs/413-workflow-focused-r1/receipt.json",
+              "recordSha256": "96ba3c0e15483b12ab891e58151757a5e2e319abc284cfcbcee3ab60d4bb4ef0",
+              "methodsPassed": 2,
+              "executedWorkingDiffSha256": "fcf893d7499c9c2159a2720c497c4a82f0a34da3f637824878852c34efe6f0f4"
+            },
+            {
+              "record": "runs/413-host-focused-r1/receipt.json",
+              "recordSha256": "67905f2f312e78874f1078b16c5c44804f1d9f641bf372bca3181fa7631cc1ac",
+              "methodsPassed": 17,
+              "executedWorkingDiffSha256": "7b92c4a3b7b17a9f5697861cb36a923674afa411437381a0fb11588ec40c49af"
+            }
+          ],
+          "scope": "Actual Python maintenance fixtures only, not Kotlin or Swift product execution. All three invocations0/0/0, same-home wrapper stop successful, no owned survivors or disposable repository outputs. Final unchanged launcher/workflow bytes reuse their earlier checks; no native or final repair credit."
+        }
+      },
+      "githubR11": {
+        "report": "github-issue-delta-20260911-r11/REPORT.md",
+        "reportSha256": "d3a1793a189a6c8374524b421a1e78b306eeb6b39b7f24906240bfdc87eb8e66",
+        "captureWindowReference": "latestGithubListObservation.apiWindowUtc",
+        "since": "2026-09-11T18:47:00Z",
+        "getRequests": 18,
+        "errors": 0,
+        "retries": 0,
+        "itemConversationInlineDelta": [
+          0,
+          0,
+          0
+        ],
+        "capturedDisposition": {
+          "repairApproved": 202,
+          "denominator": 232,
+          "resolved": 203,
+          "unresolved": 29,
+          "inventorySha256": "eb34b7b7db78455570270ab9a47caf04d1ef1ed1d38cb7f204ee117ae8e0009b",
+          "byteReadWindowUtc": [
+            "2026-09-11T19:57:29.052952+00:00",
+            "2026-09-11T19:57:29.053346+00:00"
+          ],
+          "projectionSha256": "d6150693340fc9448fc7da5e912b3c712ac01841bd9ad7a1d08e60df2129f3b6",
+          "scope": "232rows/99new/133pre-existing; exact open issue membership. Local disposition projection, not new source approval or GitHub OPEN=unresolved."
+        },
+        "scope": "R11 19:57:29.050677–19:57:39.917946UTC:18GETs,239open full objects(232issues/7PRs), all unchanged sinceR10; empty item/conversation/inline deltas. Immutable on-disk projection202/203/29 matches232open issue numbers; no new repair approval. No fresh complete manual reread/full-history or all-state census. 566comments and closed/linked histories reused;409–418OPEN/0comments with10fresh complete empty feeds. Effective339issues/79PRs is cumulative. This issue refresh has no Actions/ref/lease/upstream observation or standing freshness.",
+        "historyReuse": "566cached conversation bodies,107closed issue bodies,29PRdetails,79file/commit sets and review/timeline histories reused; no fresh complete manual reread of239unchanged bodies or full-history/all-state census.",
+        "pullRequestScope": "Own/source records unchanged; separate PR endpoint nested repository size7258->7380 and pushed_at18:16:04->19:37:19 metadata are not ref/Actions observations."
+      },
+      "administrativeReadScope": "Author read the complete small application/source-review/R20 inspection/publication/release records, complete R11 report/projection and selected capture-summary fields. Underlying R20 archive members/logs and R11 raw responses/request roster were not reread by this author; reports retain their own inspection bindings. No tests/builds/network or runtime approval from this administrative delta.",
+      "coverageScope": "Prior currentCorroborationProjection remains separately dated; candidate final read/ledger binding is owned externally. No invented new row/read counts or whole-file promotion."
     }
   },
   "lastScopedVerification": {
-    "reference": "nativeFollowups.repairs415416.repairs.416",
-    "status": "APPROVE_FINAL_416_FOCUSED_VENDOR_JUNIT_AND_PROVENANCE",
-    "scope": "Five actual Java/JUnitCore methods pass and scoped provenance controls pass; no listener/network/fullgraph/native/ART/consumer qualification."
+    "reference": "nativeFollowups.candidate413.r20BaselineAdmission",
+    "status": "APPROVE_SCOPED_NATIVE_COMPILATION_ADMISSION_AND_CLEANUP_EVIDENCE",
+    "scope": "R20 clean497 baseline production/test native compilation only;413candidate absent. No candidate runtime/Swift/ABI,410qualification or new repair credit; cleanup inference and outer-disposal limits remain explicit."
   },
   "hostedValidationAuthorization": {
     "status": "OWNER_AUTHORIZED_SERIAL_SUPPORTED_HOST_GATES",
-    "scope": "413 active PLANNING/compilation-admission preparation; implementation/runtime NOT_STARTED, native admission unknown. Then414 requires a distinct real Kotlin caller boundary, then409 conditional peer readiness. Ordering is not execution or approval. 410 remains PARKED/PENDING_REMEDIATION, final WITHHELD; return only with new admission evidence, no unchanged full-graph retry, lock bypass or route/permission override. 417 remains unimplemented under existing restricted planning, not retried/rephrased/delegated. Audit NOT_READY;133 NOT_STARTED. FullMacR1/startup1/R2, LinuxR2, R16 and R18 failures retain their original bindings;410cause UNPROVEN and no R16/Android attribution.207Windows19/408 scoped approvals stand. Current full locks/LAN Dokka/ABI/root/sample/consumer, ART, physical/hostile, narrow Apple/Intel, backup291, independent/crypto/final-current gates and owner120/274/284 remain. Source0.7.0-SNAPSHOT, immutableRC3 and existing0.8.0+restrictions unchanged. Existing serial supported-host authorization unchanged; any execution still requires fresh admission, exclusive task-owned lease and source freeze."
+    "scope": "413 candidate product source applied; composed source review found no actionable source findings, final repair approval WITHHELD. R21 apple-owned-cancellation NOT_EXECUTED at a candidate commit; final selector/workflow composition and source/runtime binding pending. Preserve383fences and raw-export baseline. Then414 requires a distinct real Kotlin caller boundary, then409 conditional peer readiness. Ordering is not execution or approval. 410 remains PARKED/PENDING_REMEDIATION, final WITHHELD; return only with new admission evidence, no unchanged full-graph retry, lock bypass or route/permission override. 417 remains unimplemented under existing restricted planning, not retried/rephrased/delegated. Audit NOT_READY;133 NOT_STARTED. FullMacR1/startup1/R2, LinuxR2, R16 and R18 failures retain their original bindings;410cause UNPROVEN and no R16/Android attribution.207Windows19/408 scoped approvals stand. Current full locks/LAN Dokka/ABI/root/sample/consumer, ART, physical/hostile, narrow Apple/Intel, backup291, independent/crypto/final-current gates and owner120/274/284 remain. Source0.7.0-SNAPSHOT, immutableRC3 and existing0.8.0+restrictions unchanged. Existing serial supported-host authorization unchanged; any execution still requires fresh admission, exclusive task-owned lease and source freeze."
   },
   "repairApprovedIssueCount": 202,
   "reviewedNoRepairIssueCount": 1,
@@ -18192,7 +18329,7 @@
       291,
       367
     ],
-    "supportedHostWork": "413 active PLANNING/compilation-admission preparation; implementation/runtime NOT_STARTED, native admission unknown. Then414 requires a distinct real Kotlin caller boundary, then409 conditional peer readiness. Ordering is not execution or approval. 410 remains PARKED/PENDING_REMEDIATION, final WITHHELD; return only with new admission evidence, no unchanged full-graph retry, lock bypass or route/permission override. 417 remains unimplemented under existing restricted planning, not retried/rephrased/delegated. Audit NOT_READY;133 NOT_STARTED. FullMacR1/startup1/R2, LinuxR2, R16 and R18 failures retain their original bindings;410cause UNPROVEN and no R16/Android attribution.207Windows19/408 scoped approvals stand. Current full locks/LAN Dokka/ABI/root/sample/consumer, ART, physical/hostile, narrow Apple/Intel, backup291, independent/crypto/final-current gates and owner120/274/284 remain. Source0.7.0-SNAPSHOT, immutableRC3 and existing0.8.0+restrictions unchanged."
+    "supportedHostWork": "413 candidate product source applied; composed source review found no actionable source findings, final repair approval WITHHELD. R21 apple-owned-cancellation NOT_EXECUTED at a candidate commit; final selector/workflow composition and source/runtime binding pending. Preserve383fences and raw-export baseline. Then414 requires a distinct real Kotlin caller boundary, then409 conditional peer readiness. Ordering is not execution or approval. 410 remains PARKED/PENDING_REMEDIATION, final WITHHELD; return only with new admission evidence, no unchanged full-graph retry, lock bypass or route/permission override. 417 remains unimplemented under existing restricted planning, not retried/rephrased/delegated. Audit NOT_READY;133 NOT_STARTED. FullMacR1/startup1/R2, LinuxR2, R16 and R18 failures retain their original bindings;410cause UNPROVEN and no R16/Android attribution.207Windows19/408 scoped approvals stand. Current full locks/LAN Dokka/ABI/root/sample/consumer, ART, physical/hostile, narrow Apple/Intel, backup291, independent/crypto/final-current gates and owner120/274/284 remain. Source0.7.0-SNAPSHOT, immutableRC3 and existing0.8.0+restrictions unchanged."
   },
   "reviewedNoRepairIssueNumbers": [
     287
@@ -18216,16 +18353,16 @@
     "githubOpenIssuesAtRefresh": 195
   },
   "latestGithubOpenIssueObservation": {
-    "reference": "checkpoint.json nativeFollowups.github410R10Refresh",
+    "reference": "checkpoint.json nativeFollowups.candidate413.githubR11",
     "apiWindowUtc": [
-      "2026-09-11T18:47:41.450906+00:00",
-      "2026-09-11T18:47:52.443298+00:00"
+      "2026-09-11T19:57:29.050677+00:00",
+      "2026-09-11T19:57:39.917946+00:00"
     ],
     "allOpenWindowUtc": [
-      "2026-09-11T18:47:41.450906+00:00",
-      "2026-09-11T18:47:44.796341+00:00"
+      "2026-09-11T19:57:29.050677+00:00",
+      "2026-09-11T19:57:32.252892+00:00"
     ],
-    "issueListFinishedUtc": "2026-09-11T18:47:44.796341+00:00",
+    "issueListFinishedUtc": "2026-09-11T19:57:32.252892+00:00",
     "openIssues": 232,
     "openPullRequests": 7,
     "freshLocalFullBodies": 239,
@@ -18239,8 +18376,8 @@
     "reusedConversationComments": 566,
     "inlineDeltaRecords": 0,
     "inventoryExactlyMatchesOpenIssues": true,
-    "scope": "R10 18:47:41.450906\u201318:47:52.443298UTC:18GETs,239open objects(232issues/7PRs), all unchanged sinceR9; empty item/comment/inline delta. Captured on-disk200/201/31 is a separate stale administrative snapshot, not the later202/203/29 projection. Fresh all-open objects, not a fresh manual reread/full-history or all-state census. 566comments and closed/linked histories reused;409\u2013418OPEN with10fresh complete empty comment feeds. Effective339issues/79PRs is cumulative. No Actions/ref/lease/upstream observation.",
-    "capturedDispositionReference": "checkpoint.json nativeFollowups.github410R10Refresh.capturedDisposition"
+    "scope": "R11 19:57:29.050677–19:57:39.917946UTC:18GETs,239open full objects(232issues/7PRs), all unchanged sinceR10; empty item/conversation/inline deltas. Immutable on-disk projection202/203/29 matches232open issue numbers; no new repair approval. No fresh complete manual reread/full-history or all-state census. 566comments and closed/linked histories reused;409–418OPEN/0comments with10fresh complete empty feeds. Effective339issues/79PRs is cumulative. This issue refresh has no Actions/ref/lease/upstream observation or standing freshness.",
+    "capturedDispositionReference": "checkpoint.json nativeFollowups.candidate413.githubR11.capturedDisposition"
   },
   "githubListingBeforePost394": {
     "githubIssueListRefreshedUtc": "2026-09-10T01:00:15.892733+00:00",
@@ -19012,14 +19149,14 @@
   },
   "pendingRepairSeveritiesScope": "Raw7-row PENDING_REMEDIATION includes owner274/284; five actual repairs are4Low+1Medium. Parking410 changes neither bucket nor credit.",
   "currentCorroborationProjection": {
-    "status": "AUTHOR_FROZEN_READBACK_COMPLETE_LEDGER_BINDING_OWNED_EXTERNALLY",
-    "reference": "coverage.tsv; nativeFollowups.repairs415416",
-    "sourceCommit": "593175ff935d447907e2aa466f17072217ea5907",
-    "sourceTree": "0056bd96b35e18a2c03dcc76d615a69ae5949439",
-    "sourceRole": "Two finally approved source deltas plus eight administrative postimages; coverage owner independently binds final ledger bytes. Not a clean593runtime claim.",
-    "projectionPaths": 1233,
+    "status": "SOURCE_DELTAS_READ_FINAL_LEDGER_BINDING_PENDING",
+    "reference": "coverage.tsv; nativeFollowups.candidate413",
+    "sourceCommit": "5fa75f8615554512c2dc27ffdf1caf3cd01b6691",
+    "sourceTree": "bdb0f6b3844cfb6eaf264b270488e0a4762cc48c",
+    "sourceRole": "Locally committed product9d69040 and source-approved request5fa75f8 plus six administrative postimages. Maintenance executions retain4973859+their recorded working diffs, not clean5fa or native candidate execution.",
+    "projectionPaths": 1238,
     "countsByReadStatus": {
-      "FULL_TEXT_CURRENT": 696,
+      "FULL_TEXT_CURRENT": 701,
       "FULL_SEMANTIC_DELTA_CURRENT": 268,
       "STRUCTURAL_ONLY_CURRENT": 260,
       "REOPENED_HISTORICAL_TEXT_CURRENT_DELTA_BOUND": 6,
@@ -19029,7 +19166,7 @@
       "SCOPED_SEMANTIC_DELTA_CURRENT": 0
     },
     "countsByReadLevel": {
-      "FULL_TEXT": 696,
+      "FULL_TEXT": 701,
       "FULL_SEMANTIC_DELTA": 268,
       "STRUCTURAL_ONLY": 260,
       "SCOPED_ADMINISTRATIVE_DELTA": 6,
@@ -19038,33 +19175,33 @@
       "INPUT_LEDGER_READ_ONLY_OUTPUT_REQUIRES_REVIEW": 1
     },
     "currentBatch": {
-      "inputRows": 1228,
-      "affectedRows": 26,
-      "affectedExistingRows": 21,
+      "inputRows": 1233,
+      "affectedRows": 25,
+      "affectedExistingRows": 20,
       "newPaths": 5,
-      "unchangedExistingRows": 1207,
-      "existingHistoricalFiveColumnCellsPreserved": 6140,
+      "unchangedExistingRows": 1213,
+      "existingHistoricalFiveColumnCellsPreserved": 6165,
       "originalRowOrderPreserved": true,
-      "affectedSourceRows": 17,
-      "affectedAdministrativeRows": 8,
+      "affectedSourceRows": 18,
+      "affectedAdministrativeRows": 6,
       "selfLedgerRows": 1
     },
     "cumulativeOriginalBaseline": {
       "inputRows": 1153,
-      "affectedRows": 125,
-      "affectedOriginalRows": 45,
-      "newPaths": 80,
-      "unchangedOriginalRows": 1108,
+      "affectedRows": 143,
+      "affectedOriginalRows": 58,
+      "newPaths": 85,
+      "unchangedOriginalRows": 1095,
       "originalHistoricalFiveColumnCellsPreserved": 5765,
       "originalRowOrderPreserved": true,
-      "affectedSourceRows": 116,
+      "affectedSourceRows": 134,
       "affectedAdministrativeRows": 8,
       "selfLedgerRows": 1
     },
-    "sourceReadKinds": "Complete415/416committed semantic deltas; four new source test/patch bodies FULL_TEXT. Existing legacy FULL_TEXT means preserved baseline plus complete deltas, not fresh whole-final-file rereads. Seven existing admin rows retain prior scoped levels; new report requires actual complete frozen read.",
-    "scope": "1233-row projection:26affected(21existing+5new),1207existing raw rows unchanged;6140prior first-five cells/order/status/levels preserved. No output-ledger self-hash, existing-row whole-file promotion or runtime expansion.",
-    "priorProjectionReference": "194da7f2bd11f7403f80009de1ee8e25ad521349:docs/audit/2026-09-04/checkpoint.json currentCorroborationProjection",
-    "authoredAdministrativeDeltaBinding": "Exact eight-path authored delta and complete new-report readback belong in external current-docs-415-416-plan-20260911-r1/FINAL-READBACK.json; coverage r7 independently binds final ledger/postimages after author freeze. No self-referential final checkpoint/coverage hash embedded.",
+    "sourceReadKinds": "Complete R20 plus product10/selector7-r2/nativeR3/root-small semantic deltas actually read. Five new source bodies FULL_TEXT from complete addition hunks. Existing FULL_TEXT/semantic levels preserved, not fresh whole-final-file rereads; six admin rows remain scoped administrative deltas. Final checkpoint amendment separately read/bound before one ledger emission.",
+    "scope": "1238-row projection:25affected(20existing+5new),1213existing raw rows unchanged;6165prior first-five cells/order/status/levels preserved. Source/read binding only, no runtime/repair promotion, whole-history reread or output-ledger self-hash.",
+    "priorProjectionReference": "4973859d416c62246e303259bbaab21f4f854f0c:docs/audit/2026-09-04/checkpoint.json currentCorroborationProjection",
+    "authoredAdministrativeDeltaBinding": "Six-path candidate-state delta fa9a57c2 and subsequent checkpoint-only source/request/test/projection binding; exact read and final ledger bindings retained externally. No self-referential checkpoint or coverage hash embedded.",
     "currentIssueCounts": {
       "repairApproved": 202,
       "denominator": 232,
