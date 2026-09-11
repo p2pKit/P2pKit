@@ -1,45 +1,57 @@
 <!-- audit-current:start -->
-# Current audit continuation — #207 approved; #410 active
+# Current audit continuation — #410 WIP; Mac qualification pending
 
-**197/227 repair approvals (86.8%);198/227 resolved (87.2%);29 unresolved (12.8%).**
-Five repairs: #410 → #413 → #409 → #411 → #412;21 external rows and owner decisions
-#120/#274/#284. #287 adds resolution, not repair credit; complement30(13.2%);94 new findings.
-Counts are rows, not effort/readiness. **Audit NOT_READY; #133 independent NOT_STARTED.**
+**197/231 repair approvals (85.3%); 198/231 resolved (85.7%); 33 unresolved (14.3%).**
+Nine repairs: **#410 → #414 → #415 → #416 → #417 → #413 → #409 → #411 → #412**;
+21 external-validation rows and owner decisions #120/#274/#284. #287 adds resolution, not repair
+credit; approval complement 34 (14.7%); 98 new findings. These are row counts, not effort/readiness.
+**Audit NOT_READY; formal independent #133 NOT_STARTED.**
 
-**#207 APPROVE_FINAL_207_REPAIR_SCOPED_REPOSITORY.** Windows19/run34553591215/attempt1,
-clean `5530872ed4514b9498dc2547b5c66c22f99710a0` / tree `b543db841ed0e8fc9eae26f35f8494069cae66f2`:
-**78/78 PASS across7 suites**, same original identities/assertions, zero failures/errors/skips,
-11tasks executed. All44 former failures and34 passing neighbors pass. Windows17's40 explicit
-fsync failures and four unknown suppressed-list contents remain historical; no lost content recovered.
-The92 executor fixtures are separate (40Windows/33pure/19modeledDarwin), not product tests.
-Three canonical envelopes0/0/0; **PASS / FULL_SEALED / PROVED**, but full Windows qualification
-`NOT_ESTABLISHED_BY_FOCUSED_SCOPE`.40fixture bases and6owned output roots disposed; state/work
-removal follows the bound finalizer, not a standalone deletion receipt. Outer Gradle-home/all-state/
-cache/SDK/VM deletion NOT_PROVEN. Lease released02:38:26UTC without source-freeze violations;
-release is scheduling bookkeeping, not cleanup evidence. No further scoped #207 replay is required.
+**#410 is the sole active repair: WIP, final approval pending.** Linux R2 (04:24–04:36 UTC)
+retained **1,787 passing tests / 229 XML**, zero test failures/errors/skips, but the aggregate
+**FAILED**: strict LAN Dokka, SBOM generation/validation and Android instrumentation compilation.
+Command/stop/final exits were **1/0/1**. This is not a successful full lock refresh or integration gate.
+Approved minimal SBOM/null-serialization and instrumentation source corrections are **NOT_RUN**;
+the proposed local retry was canceled before launch, not executed or failed.
+Successful full lock regeneration and qualification on supported Mac remain pending, including the
+five-publication consumer because it requires strict LAN Dokka. Initial Mac publication is WIP
+qualification preparation, not #410 approval or platform/release acceptance.
 
-**#410 alone is active: implementation STARTING; validation NOT_RUN, no repair approval.**
-Current edits are not Windows19's clean source. #413 has an approved plan only, implementation
-NOT_STARTED; #409/#411/#412 remain queued. #410's failed-recovery retention is not a proved
-R16/Android runtime cause. #411/#412 correct safe instructions/contention prerequisites, not device passes.
-#408 remains native-approved; R18 remainsFAIL for #413's actual post-cancel callback/no return
-within2s, not indefinite/all-collector proof. Preserve #383/#202 accepted scope and R16FAIL/
-PARTIAL_SALVAGE/remote-cleanupNOT_PROVEN; #393's earlier accepted scope is unchanged.
+#414 (valid port-only resolved callbacks), #415 (extended RCODE warning value only), and #416
+(reverse-domain substrings in accepted explicit-legacy names) are filed source-confirmed Low
+findings; later #417 tracks lost destination/transaction ID in overflow response continuations.
+All four are **runtime NOT_RUN / unimplemented / unapproved**. No permanent outage, packet-acceptance,
+authentication or generated-secure-ID claim is implied. #413 has an approved option-B plan only,
+implementation NOT_STARTED; the remaining repairs stay queued.
 
-Fresh GET census02:39:51–02:40:02UTC:334issues/227open/107closed;79PRs/7open;
-413full own records and565conversation comments freshly fetched. This is not a fresh all-history
-human reread; prior unrefreshed history/visibility limits remain. #207 outcome
-[5628650933](https://github.com/p2pKit/P2pKit/issues/207#issuecomment-5628650933)
-was separately POST/GET-verified at02:42:13UTC. Final02:50:57–02:50:59 delta returns only that
-known outcome/#207metadata;566effective comments, not a new566-comment full capture. No closure.
-Next: #410, then the queue above; reviewed ART, narrow Apple/Intel work, final current rootcheck+
-Android/Desktop cycle and inspected release checks remain. Reuse unaffected prior native/LAN/
-sample/consumer/ABI/Dokka/SBOM results at original bindings. Physical/OEM/hostile-network, backup291,
-formal independent133, professional crypto and owner decisions remain separate. Serialize builds,
-max2workers, fresh Actions/refs/exclusive lease and retained logs/stops/exact-owned cleanup;
-no main merge, tag/settings changes, closure or release authority.
+#207's scoped Windows19 approval stands: clean `5530872ed4514b9498dc2547b5c66c22f99710a0`,
+**78/78 original product tests across seven suites**, zero failures/errors/skips, 11 tasks;
+**PASS / FULL_SEALED / PROVED**, full-host qualification `NOT_ESTABLISHED_BY_FOCUSED_SCOPE`.
+Its 92 executor fixtures are separate; Windows17's four unretained suppressed-list contents remain
+unknown. #408 remains native-approved. Neither scoped repair needs replay. R18 remains FAIL for
+#413's actual post-cancel callback/no return within two seconds, not indefinite/all-collector leakage.
+R16 remains FAIL/PARTIAL_SALVAGE, remote cleanup NOT_PROVEN; #393 and #383/#202 scopes stand.
+#410 is not an established R16/Android runtime cause. Earlier native/LAN/consumer/ABI/Dokka/SBOM
+results retain their original source bindings, not current #410 edits.
 
-[Exact evidence and continuation](docs/audit/2026-09-04/repairs/cohort-2026-09-09-native-followups.md#windows19-final-207-acceptance-and-current-continuation).
+Fresh GitHub census **04:15:25–04:15:36 UTC**: 337 issues (230 open/107 closed), 79 PRs (7 open),
+416 full records and 566 conversation comments. Only #414–#416 are new; the 413 prior records
+and all 566 comments match as parsed JSON. Final **04:21:32–04:21:34 delta is empty**.
+29 linked PR details were refreshed; dated reviews/timelines and historical file/commit sets were
+reused, not recrawled or freshly reread. The empty 04:18 Actions feeds are a point observation,
+not a current execution lease; older visibility limits remain. Later #417 was individually POST/GET-
+verified (server creation 13:38:38 UTC), bringing the known inventory to 231; this is **not a new full census**.
+
+Administrative source is `3d4fa914cc2e4e4b20e14ddee0ab4d71e5390a9b` plus current WIP edits,
+not a clean executed #410 commit. Linux R2's 11 exact owned output roots (990,700,198 bytes) were
+disposed at 13:24:41 UTC after retaining failed evidence; this does not prove blanket cache/remote cleanup.
+Reviewed ART, narrow Apple/Intel, final current root-check/Android/Desktop/release checks,
+physical/OEM/hostile-network campaigns, backup #291, independent/crypto review and owner decisions
+remain separate. Source is 0.7.0-SNAPSHOT; immutable RC3 evidence and existing 0.8.0+ restrictions stand.
+Serialize builds with at most two workers and fresh hosted admission; no main merge, tag/settings
+change, issue closure or release authority.
+
+[Exact evidence and continuation](docs/audit/2026-09-04/repairs/cohort-2026-09-09-native-followups.md#410-wip-linux-r2-and-pending-mac-qualification).
 <!-- audit-current:end -->
 
 ## Preserved pre-native checkpoint narratives (dated historical evidence)

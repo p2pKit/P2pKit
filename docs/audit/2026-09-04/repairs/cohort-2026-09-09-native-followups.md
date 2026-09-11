@@ -1613,3 +1613,112 @@ Final02:50:57–02:50:59UTC delta returns only known207metadata/outcome, no new 
 comments (390on openissues), not a fresh566-comment full capture. Compact final-summarySHA256
 `09118eb55ca09eeff7edcaa8409d77976adbd0b6d745066973bca641ff2039eb`. The retained initial offline raw-equality check
 failed only on an optional avatar query; exact difference reconciled without a retry, not an API failure.
+
+
+## 410 WIP, Linux R2 and pending Mac qualification
+
+Current continuation recorded 11 September 2026 after the retained Linux R2 output-disposal receipt.
+**197/231 repair-approved (85.3%); 198/231 resolved (85.7%); 33 unresolved (14.3%)**:
+9 repairs + 21 external-validation rows + 3 owner decisions. Approval complement 34 (14.7%);
+98 new findings. #287 contributes one resolution, no repair credit. **#410 remains the sole active
+repair and is not finally approved.** Queue: **410 → 414 → 415 → 416 → 417 → 413 → 409 → 411 → 412**.
+#413 is an approved option-B plan only, implementation NOT_STARTED. Audit NOT_READY; #133 NOT_STARTED.
+
+### Actual Linux R2, not a passing full lock refresh
+
+`runs/410-lock-refresh-r2` ran 04:24:01–04:36:10 UTC, final receipt 04:36:11, using JDK17 and the
+checked-in wrapper on base `3d4fa914cc2e4e4b20e14ddee0ab4d71e5390a9b` /
+`c6d57b745966e96f920ffb2d1b1efe39c7f370c3` **plus WIP diff**, not a clean committed repair.
+Diff SHA256 `9f4adf5580d5592593b98e454967e228dfc36535752850043000f066fc855bdd` was unchanged
+during that invocation. `resolveAndLockAll --write-locks check`, embedded-JmDNS/LAN tests and ABI,
+Android sample/instrumentation, Desktop install and UI assembly were requested serially with at most
+two workers and strict dependency verification. Requested tasks are not all successful task results.
+
+Retained XML contains **1,787 passed tests / 229 files, zero failures/errors/skips**. The aggregate
+failed three tasks: `:cyclonedxBom`, `:p2p-transport-lan:dokkaGeneratePublicationHtml`, and
+`:p2p-sample-android:compileDebugAndroidTestKotlin`. **Command/stop/final exits: 1/0/1.**
+Receipt SHA256 `fd43d3fed1a293939a656e4c984e9d5a6c5cb44ac952fde5002270897c344a3a`;
+command-log SHA256 `a46ef07d10adbe01dba7016df001a2107d129ad467527e018ef5b0a21a3e4f76`;
+test-summary SHA256 `fe9f720858383b2bdb265882c0733eb44c30c9d84b2ff2e21450398eae2e861b`.
+The old 1,786-test passing integration remains historical at its original source, not this attempt.
+
+SBOM's actual emitted error was `Error whilst validating XML BOM`; the shared wrapper also uses
+that wording for JSON generation. Retained JSON has `diff.text:null` against an object-only schema;
+no richer nested emitted diagnostic is invented. The reviewed minimal source correction omits null
+text only for URL-only patch references and adds an explicit-null negative. Instrumentation's
+redundant `!!` warnings-as-errors correction is also source-only. **Both corrections are NOT_RUN**;
+source approval does not prove actual serialization, paired validation, compilation or ART behavior.
+The proposed narrow local retry was **canceled before launch**, not run or failed, because current
+JmDNS locks intentionally remain stale pending full regeneration.
+
+Successful complete lock regeneration and qualification moved to a supported Mac and remain pending.
+The five-publication consumer also requires that host because strict LAN Dokka is in its graph.
+Initial Mac WIP publication prepares these checks; it is not repair, host, consumer or release approval.
+No current passing full-root/Android/Desktop claim is made from the partial successful tests.
+
+At **13:24:41.938717 UTC**, **11 exact R2-owned output roots / 990,700,198 bytes** were disposed;
+owned survivors were empty and protected hashes unchanged. Receipt SHA256
+`30463b8fc0a23e06ef329d5662a0839ec85f1940a266192355a2ab5c3cc6dec6` binds the original R2 receipt.
+Failed reports/receipts and required Dokka/producer triage remain retained. This is exact local output
+disposal, not blanket Gradle-cache, SDK, remote or all-state cleanup proof.
+
+### Actual new filings and GitHub boundary
+
+| Finding | Server creation UTC | Source-confirmed scope; all runtime NOT_RUN |
+| --- | --- | --- |
+| [#414](https://github.com/p2pKit/P2pKit/issues/414) | 03:38:15 | Port-aware SRV cache updates reach a port-blind resolved-listener comparator; valid-port changes are suppressed before JVM/Android hints. Not #332 delivered-invalid callbacks or TXT interpretation; no permanent-duration claim. |
+| [#415](https://github.com/p2pKit/P2pKit/issues/415) | 03:44:07 | Whole-OPT-TTL extended-RCODE arithmetic is wrong in the version-warning diagnostic only. No packet-acceptance, security, leak or #410-cause claim. |
+| [#416](https://github.com/p2pKit/P2pKit/issues/416) | 04:02:24 | Reverse-domain substrings in accepted explicit-legacy names yield the wrong PTR event type and miss listeners. Same cause for `ip6.arpa`; generated UUID/secure IDs and closed #127's intentional-legacy decision remain unchanged. |
+
+The three early actual POST/GET filings are Low, unimplemented and unapproved. Server creation clocks are distinct
+from local publication completion clocks. Exact body/GET/receipt bindings and verification boundaries
+are in `checkpoint.json` → `nativeFollowups.postWindows19Filings`; each issue row points here.
+The raw PENDING_REMEDIATION bucket after the later #417 filing is 11 rows (10 Low + 1 Medium),
+including owner #274/#284; the nine actual repairs are 8 Low + 1 Medium. No filing adds repair approval.
+
+The **04:15:25.362793–04:15:36.278218 UTC** fresh GitHub census contains **416 full records =
+337 issues (230 open/107 closed) + 79 PRs (7 open/72 closed)** and **566 conversation comments**
+(390 on open issues), zero inline. Only #414–#416 are new; 413 previous records and all 566 comments
+match as parsed JSON. The **04:21:32.796472–04:21:34.291311 delta is empty**. Report SHA256
+`a2a4a5696a407123d7f3a77093403dc0eee2ca6de17a430a62c6afe6acad8742`, reconciliation SHA256
+`35116ebf566c525a8089a5cecde1a8a7b6a31d4218e9e01045129c6d8c9580c5`.
+
+29 linked PR details and 107 closed own records were refreshed. The 79 historical file/commit sets
+were rehashed; dated review/timeline payloads were reused, not recrawled. This is not a fresh human
+reread of all historical JSON/comments. The 04:18:50–04:18:57 empty Actions feeds and audit ref
+`3d4fa91` are bounded observations, not current idleness or a lease. Historical upstream/visibility
+limitations remain. No newer GitHub freshness is claimed by this local documentation update.
+
+### Later individual #417 filing, not a new full census
+
+[#417](https://github.com/p2pKit/P2pKit/issues/417) was POST/GET-verified with server creation
+**13:38:38 UTC** and local operation completion **13:38:39.129382 UTC**. The source-confirmed
+Low defect is `DNSTask` overflow replacement losing the requester's destination and transaction ID.
+The real QU responder can split a supported response while its continuation defaults to multicast/ID0.
+The bounded plaintext-v1/OPT512 witness is source-derived, **not executed**; no default/secure-peer
+outage, permanent loss, security finding or #410 causality is claimed. Repair/runtime NOT_STARTED.
+A real-serialization split-response regression and non-overflow control remain required.
+
+Source report SHA256 `2d62414a1f4179136250cb76b1ca24c75612d9c492c14f2c419c33d0e42d9e0b`;
+duplicate-screen SHA256 `8c97e850c7fff5e0d7e344aaadc2e640bf820011a47eb533e409577e640e73c9`.
+The actual publication receipt/body/GET bindings are in `checkpoint.json` → `nativeFollowups.filing417`.
+Its retained filing body reports an empty 13:36 delta; this documentation update did not perform that
+capture or a new full-history read. The known inventory is now **231**, derived from the 230-open
+full census plus this individual addition, **not a new full 231-open capture**. No approval changed.
+
+### Preserved approval and continuation boundaries
+
+Windows19 #207 remains scoped-approved at clean `5530872`/tree `b543db8`: 78 original product
+cases/seven suites, separate from 92 executor fixtures; PASS/FULL_SEALED/PROVED, full Windows host
+NOT_ESTABLISHED_BY_FOCUSED_SCOPE. Its four previously unretained suppressed-list contents stay unknown.
+#408's native approval stands; neither repair needs another scoped replay. R18's real post-cancel
+callback/no return within two seconds stays FAIL, not indefinite/all-collector leakage; #413 owns the
+remaining disposal repair. #383/#202 fences, #393's scoped approval and R16 FAIL/PARTIAL_SALVAGE/
+remote-cleanup NOT_PROVEN remain unchanged. #410 is not established as the R16 or Android runtime cause.
+
+The administrative input is base `3d4fa91` plus current WIP, not all-current clean execution. Historical
+read scopes and the coverage ledger's first-five cells are preserved; its final current mapping is
+separately owned, with no full-file credit from hashes or authored deltas. Reviewed ART and narrow
+Apple/Intel follow-through, final current root-check/Android/Desktop/release gates, physical/OEM/
+hostile-network evidence, backup #291, formal independent #133, professional crypto and owner decisions
+remain separate. Source 0.7.0-SNAPSHOT, immutable RC3 and existing 0.8.0+ restrictions are unchanged.
