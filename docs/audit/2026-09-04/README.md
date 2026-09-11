@@ -1,52 +1,45 @@
 <!-- audit-current:start -->
-# Current audit continuation — R18 reconciled; #408 approved; #207 active
+# Current audit continuation — #207 approved; #410 active
 
-**196/227 repair approvals (86.3%); 197/227 resolved (86.8%); 30 unresolved (13.2%).**
-Six repairs: #207 → #410 → #413 → #409 → #411 → #412;21 external rows and owner decisions
-#120/#274/#284. #287 adds resolution, not repair credit; complement31(13.7%);94 new findings.
+**197/227 repair approvals (86.8%);198/227 resolved (87.2%);29 unresolved (12.8%).**
+Five repairs: #410 → #413 → #409 → #411 → #412;21 external rows and owner decisions
+#120/#274/#284. #287 adds resolution, not repair credit; complement30(13.2%);94 new findings.
 Counts are rows, not effort/readiness. **Audit NOT_READY; #133 independent NOT_STARTED.**
 
-**#408 APPROVE_408_REPAIR_NATIVE_PROVEN.** Actual R18/run34548459632/attempt1 at published
-`7f5752729166537d2379d4878545751eaf811d82` / tree `50ab82030544f4a16e1fd8d949a8c850df44061b`
-proves repair6f13f23 with routef3367f0: fresh producer31tasks executed; visible live verifier
-3executed/28UP-TO-DATE, including actual provenance verification without rebuilding producers.
-The mandatory nested Xcode verifier binds the same producer/four sidecars; quiet output is not
-an individual-task oracle. Native policies3/13 and91 executor fixtures PASS, not library tests.
-#408 outcome [5628212461](https://github.com/p2pKit/P2pKit/issues/408#issuecomment-5628212461)
-is published/GET-verified. No further scoped #408 replay is required.
+**#207 APPROVE_FINAL_207_REPAIR_SCOPED_REPOSITORY.** Windows19/run34553591215/attempt1,
+clean `5530872ed4514b9498dc2547b5c66c22f99710a0` / tree `b543db841ed0e8fc9eae26f35f8494069cae66f2`:
+**78/78 PASS across7 suites**, same original identities/assertions, zero failures/errors/skips,
+11tasks executed. All44 former failures and34 passing neighbors pass. Windows17's40 explicit
+fsync failures and four unknown suppressed-list contents remain historical; no lost content recovered.
+The92 executor fixtures are separate (40Windows/33pure/19modeledDarwin), not product tests.
+Three canonical envelopes0/0/0; **PASS / FULL_SEALED / PROVED**, but full Windows qualification
+`NOT_ESTABLISHED_BY_FOCUSED_SCOPE`.40fixture bases and6owned output roots disposed; state/work
+removal follows the bound finalizer, not a standalone deletion receipt. Outer Gradle-home/all-state/
+cache/SDK/VM deletion NOT_PROVEN. Lease released02:38:26UTC without source-freeze violations;
+release is scheduling bookkeeping, not cleanup evidence. No further scoped #207 replay is required.
 
-**R18 remains FAIL / FULL_SEALED.** The real isolated Swift cancellation method ran1/failed1,
-zero skips: `POST_CANCEL_CALLBACK_WITH_NO_RETURN_WITHIN_2S`; Swift flag=true, post-cancel
-callback=true, collectReturned=false. Outer65/0/65 in660.235s, not the900s deadline.
-Filed **#413** owns the source-supported missing upstream cancellation/disposal path; this is
-bounded2s non-return, not indefinite leakage or proof for every collector. #383/#202 explicitly
-deferred this scope; their accepted fencing/diagnostic-lease repairs are not reopened.
-All18 canonical stops0/no owned survivors;39 fixture bases and17 removals/7 roots corroborated.
-Exact owned simulator shutdown is proved; state/work deletion follows the bound finalizer,
-not an independent deletion receipt. Outer Gradle-home/all-cache/SDK/VM deletion NOT_PROVEN.
-Original-controller interruption is preserved; resumed lease released01:41:03UTC, not probe success.
+**#410 alone is active: implementation STARTING; validation NOT_RUN, no repair approval.**
+Current edits are not Windows19's clean source. #413 has an approved plan only, implementation
+NOT_STARTED; #409/#411/#412 remain queued. #410's failed-recovery retention is not a proved
+R16/Android runtime cause. #411/#412 correct safe instructions/contention prerequisites, not device passes.
+#408 remains native-approved; R18 remainsFAIL for #413's actual post-cancel callback/no return
+within2s, not indefinite/all-collector proof. Preserve #383/#202 accepted scope and R16FAIL/
+PARTIAL_SALVAGE/remote-cleanupNOT_PROVEN; #393's earlier accepted scope is unchanged.
 
-**#207 alone is active: source ready, focused checks/Windows78 pending; NOT_NATIVE_RUN,
-not final-approved.** Current edits are not the clean R18 source. Windows17 staysFAIL:1136PASS/44FAIL;40 confirmed construction-time
-fsync diagnostic failures, four suppressed-list contents unretained. Preserve prior R15 scoped
-approval and strict diagnostics. Other repairs remain NOT_STARTED/source plans only.
-#410's real failed-recovery timer retention is not a proved R16/Android cause. #411 corrects join
-help without exposing the intentionally masked host password; #412 requires same-process managers
-and A owning a joined binding before B competes. Neither supplies physical/instrumentation credit.
-
-Fresh GET census01:35:59–01:36:06UTC:331issues/224open/107closed;79PRs/7open. Actual later
-#411/#412 creations01:48:25/26, #408 outcome01:50:13 and #413 creation01:51:55 are separate
-GET-verified writes, **not a fresh227-open census**. Reused visible histories/closed decisions and
-prior visibility gaps remain; no new whole-history reread. Next: final207 source binding, focused routing/docs checks and
-Windows78-case execution, then the queue above. Reviewed ART, narrow Apple/Intel work and one
-current rootcheck+Android/Desktop cycle plus inspected release checks remain. Reuse unaffected
-Windows and R16consumer/ABI/core/79Swift and priorR11Dokka/SBOM at their original bindings;
-R16 remainsFAIL/PARTIAL_SALVAGE/remote-cleanupNOT_PROVEN. Physical/OEM/hostile-network, backup291,
+Fresh GET census02:39:51–02:40:02UTC:334issues/227open/107closed;79PRs/7open;
+413full own records and565conversation comments freshly fetched. This is not a fresh all-history
+human reread; prior unrefreshed history/visibility limits remain. #207 outcome
+[5628650933](https://github.com/p2pKit/P2pKit/issues/207#issuecomment-5628650933)
+was separately POST/GET-verified at02:42:13UTC. Final02:50:57–02:50:59 delta returns only that
+known outcome/#207metadata;566effective comments, not a new566-comment full capture. No closure.
+Next: #410, then the queue above; reviewed ART, narrow Apple/Intel work, final current rootcheck+
+Android/Desktop cycle and inspected release checks remain. Reuse unaffected prior native/LAN/
+sample/consumer/ABI/Dokka/SBOM results at original bindings. Physical/OEM/hostile-network, backup291,
 formal independent133, professional crypto and owner decisions remain separate. Serialize builds,
-max2workers, fresh Actions/refs/exclusive lease, retained logs/stops/exact-owned cleanup; no main
-merge, tag/settings changes, closure or release authority. Prior duration forecasts stay conditional.
+max2workers, fresh Actions/refs/exclusive lease and retained logs/stops/exact-owned cleanup;
+no main merge, tag/settings changes, closure or release authority.
 
-[Exact evidence and continuation](repairs/cohort-2026-09-09-native-followups.md#r18-terminal-result-and-current-continuation).
+[Exact evidence and continuation](repairs/cohort-2026-09-09-native-followups.md#windows19-final-207-acceptance-and-current-continuation).
 <!-- audit-current:end -->
 
 ## Preserved pre-native checkpoint narratives (dated historical evidence)

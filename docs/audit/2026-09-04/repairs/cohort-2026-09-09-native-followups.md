@@ -1561,3 +1561,55 @@ patch SHA256`6e10ed6ba596947e40932269cc494e282d9947edfa5639b592603d6537a4622e`. 
 `207-windows-route-r19/REPORT.md` SHA256`498051ecda24d8eed4586a3674dc2ae4a0a24ead32fc9de16584e9a9cb5595d9`.
 Require all78exact XML/listener identities (44prior failures+34passes), zero failures/errors/skips,
 unchanged four suppressed-list assertions and ordinary native executor admission; no78/92PASS inferred.
+
+
+## Windows19 final #207 acceptance and current continuation
+
+**11 September 2026: APPROVE_FINAL_207_REPAIR_SCOPED_REPOSITORY.** 197/227 current repair approvals (86.8%);198/227 resolved (87.2%) including no-repair287;29/227 unresolved (12.8%). Repair-approval complement30/227 (13.2%);94 new findings. Counts are issue rows, not effort/readiness or GitHub closures.
+Queue **#410 → #413 → #409 → #411 → #412**; #410alone active, implementationSTARTING/validationNOT_RUN.
+#413approved plan only, not implementation/repair approval. Earlier R15, Windows17 and R18 records above remain historical.
+
+Windows19/run34553591215/attempt1/job103121389441 executed clean `5530872ed4514b9498dc2547b5c66c22f99710a0`,
+tree `b543db841ed0e8fc9eae26f35f8494069cae66f2`; repaire642939 and routef5f3323 are exact independently reviewed postimages.
+**78/78PASS/7XML**, zero failures/errors/skips, exact original identities: lifecycle42, provisioning-close5,
+capability9, strict-invariants4, permission5, configuration7, model6. All44previous failures and34neighbors
+pass with unchanged assertions/deadlines; four prior suppressed-list inner contents remain historically unknown.
+Product invocation`f59e21df37244eef880244235423630a` executes11/11tasks,02:13:00–02:17:59UTC;
+XML proves method identities, listener/model agrees on aggregate78/0/0, other15model tasks NOT_REQUESTED.
+Ordinary controls **92PASS** (40nativeWindows/33pure/19modeledDarwin), not additional product/Darwin tests.
+The earlier three local routing selectors ran at7f+exact20-file diff, not clean553; their own0/0/0 evidence remains distinct.
+
+Artifact10181856102,860,027bytes; SHA256`bc1c59607892797d7233d6f4e0da5abc2fa973eea24ff75f1319fe8405e3cb2d`.
+Exact1010evidence+4bootstrap manifest entries/1016regular ZIP members/1,937,453uncompressed bytes checked.
+All3canonical envelopes0/0/0, empty errors/owned survivors, real Windows Job Object containment and serial
+same-home stops;40fixture bases fully disposed, including preserved injected failed teardown then recovery.
+One actual cleaner removes6owned output roots; no Windows19 outer readonly retry is inferred from Windows17.
+State/work deletion is corroborated by the bound finalizer, **not a standalone deletion receipt**; outer
+Gradle-home/all-state/cache/SDK/VM deletion **NOT_PROVEN**. Run/job/hostPASS, FULL_SEALED/PROVED/safe,
+`hostQualification=NOT_ESTABLISHED_BY_FOCUSED_SCOPE`. Job completed02:18:12UTC; upload02:18:06.8684168UTC.
+Lease released02:38:26.359191UTC, zero source-freeze violations; scheduling release is not cleanup evidence.
+
+| Exact private evidence | SHA256 |
+| --- | --- |
+|207-final-independent-review-r3/REPORT.md|d57d33a77eafe457b07efd9154625b0c49dc1602a4e715ef12a7c5072cab6ee1|
+|207-final-independent-review-r3/native-bindings.json|9e334fa68eb808b65834b28c312060422086af5a250575c3b636fac49d152be0|
+|windows19-terminal-independent-review/REPORT.md|1203ac3d6d3011448e53349bd114096df6258ed96c7653a7d7ddd8b6b75b3539|
+|windows19-terminal-independent-review/bindings.json|0a659e920330cc8b50f55c3cfe747141dab4888fb04d1c1351a05079ddfb8cd0|
+
+Fresh02:39:51–02:40:02UTC GETs:334issues/227open/107closed,79PRs/7open,413full own records,
+565fresh conversation comments. Full-history/manual-read completeness is not inferred; unrefreshed/hidden
+history limits remain. #207outcome[5628650933](https://github.com/p2pKit/P2pKit/issues/207#issuecomment-5628650933)
+was separately POST/GET-verified02:42:13UTC, bodySHA256`73259198dc8c8d831a6330f58d4fe57db05483c1c28b7afc20dbcec25acc2f7b`; no closure.
+Coverage advances only12exact reviewer-bound553source postimages, as semantic deltas—not blanket full-file
+rereads; all5765historical first-five cells remain unchanged. Other/current410edits are not this native run.
+
+No further scoped207/408replay required.410disposal,413cancellation,409readiness and411/412instructions
+remain separate. Reuse unaffected evidence at original bindings; R18FAIL/#413bounded2s observation,
+R16FAIL/PARTIAL_SALVAGE and #393scope are unchanged. Reviewed ART, remaining narrow Apple/Intel,
+final current rootcheck+Android/Desktop/release components, physical/OEM/hostile-network, backup291,
+independent133NOT_STARTED, professional crypto and owner decisions remain. **Audit NOT_READY.**
+
+Final02:50:57–02:50:59UTC delta returns only known207metadata/outcome, no new issue/inline;566effective
+comments (390on openissues), not a fresh566-comment full capture. Compact final-summarySHA256
+`09118eb55ca09eeff7edcaa8409d77976adbd0b6d745066973bca641ff2039eb`. The retained initial offline raw-equality check
+failed only on an optional avatar query; exact difference reconciled without a retry, not an API failure.
