@@ -23,7 +23,10 @@ plugins {
 // upstream coordinate. One Java8 producer supplies both JVM and Android; a
 // local file dependency alone would not embed it in the published JVM JAR.
 val embeddedJmdnsVendor = layout.projectDirectory.dir("vendor/jmdns")
-val embeddedJmdnsFollowupPatches = listOf("patches/415-opt-rcode.patch")
+val embeddedJmdnsFollowupPatches = listOf(
+    "patches/415-opt-rcode.patch",
+    "patches/416-reverse-domain.patch",
+)
 val embeddedJmdnsSlf4j = "org.slf4j:slf4j-api:2.0.7"
 val embeddedJmdnsCompileClasspath = configurations.create("embeddedJmdnsCompileClasspath") {
     isCanBeConsumed = false

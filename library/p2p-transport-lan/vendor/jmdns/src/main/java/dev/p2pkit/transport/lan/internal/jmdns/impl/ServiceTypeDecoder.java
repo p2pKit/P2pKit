@@ -31,6 +31,9 @@ class ServiceTypeDecoder {
 
     private static final Pattern TYPE_A_PATTERN = Pattern.compile("^([^.]*)\\.(.*)\\.?$");
 
+    private static final Pattern REVERSE_LOOKUP_PATTERN =
+        Pattern.compile("(?:^|\\.)(in-addr\\.arpa|ip6\\.arpa)\\.?\\z", Pattern.CASE_INSENSITIVE);
+
     private ServiceTypeDecoder() {
     }
 
@@ -55,8 +58,9 @@ class ServiceTypeDecoder {
         String name = "";
         String domain = "";
 
-        if (aType.contains("in-addr.arpa") || aType.contains("ip6.arpa")) {
-            index = (aType.contains("in-addr.arpa") ? aType.indexOf("in-addr.arpa") : aType.indexOf("ip6.arpa"));
+        Matcher reverseLookup = REVERSE_LOOKUP_PATTERN.matcher(casePreservedType);
+        if (reverseLookup.find()) {
+            index = reverseLookup.start(1);
             name = ServiceInfoImpl.removeSeparators(casePreservedType.substring(0, index));
             domain = casePreservedType.substring(index);
             application = "";

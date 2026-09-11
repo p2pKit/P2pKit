@@ -313,6 +313,7 @@ class SbomTest(unittest.TestCase):
             "missing followup roster": lambda m: m.pop("followupPatches"),
             "omitted followup": lambda m: m["followupPatches"].clear(),
             "duplicate followup": lambda m: m["followupPatches"].append(copy.deepcopy(m["followupPatches"][0])),
+            "reordered followups": lambda m: m["followupPatches"].reverse(),
             "unsafe followup path": lambda m: m["followupPatches"][0].update(path="../outside.patch"),
             "false followup hash": lambda m: m["followupPatches"][0].update(sha256="a" * 64),
         }

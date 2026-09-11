@@ -523,7 +523,12 @@ tasks.cyclonedxBom {
         val followupPatchArray = manifest.path("followupPatches")
         check(followupPatchArray.isArray) { "Missing embedded JmDNS followup patch roster" }
         val followupPatchRecords = followupPatchArray.toList()
-        check(followupPatchRecords.map { requiredText(it, "path") } == listOf("patches/415-opt-rcode.patch")) {
+        check(
+            followupPatchRecords.map { requiredText(it, "path") } == listOf(
+                "patches/415-opt-rcode.patch",
+                "patches/416-reverse-domain.patch",
+            )
+        ) {
             "Unexpected embedded JmDNS followup patch order or membership"
         }
         val patchRecords = listOf(patchRecord) + followupPatchRecords

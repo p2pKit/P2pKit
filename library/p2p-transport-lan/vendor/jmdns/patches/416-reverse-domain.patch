@@ -1,0 +1,12 @@
+--- a/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/ServiceTypeDecoder.java
++++ b/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/ServiceTypeDecoder.java
+@@ -33,0 +34,3 @@
++    private static final Pattern REVERSE_LOOKUP_PATTERN =
++        Pattern.compile("(?:^|\\.)(in-addr\\.arpa|ip6\\.arpa)\\.?\\z", Pattern.CASE_INSENSITIVE);
++
+@@ -58,2 +61,3 @@
+-        if (aType.contains("in-addr.arpa") || aType.contains("ip6.arpa")) {
+-            index = (aType.contains("in-addr.arpa") ? aType.indexOf("in-addr.arpa") : aType.indexOf("ip6.arpa"));
++        Matcher reverseLookup = REVERSE_LOOKUP_PATTERN.matcher(casePreservedType);
++        if (reverseLookup.find()) {
++            index = reverseLookup.start(1);

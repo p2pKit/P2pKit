@@ -1,15 +1,19 @@
 {
   "component": {
-    "bomRef": "urn:p2pkit:embedded:jmdns:3.6.3-p2pkit.410.2",
+    "bomRef": "urn:p2pkit:embedded:jmdns:3.6.3-p2pkit.410.3",
     "group": "dev.p2pkit.internal",
     "name": "jmdns",
-    "purl": "pkg:generic/p2pkit/jmdns@3.6.3-p2pkit.410.2",
-    "version": "3.6.3-p2pkit.410.2"
+    "purl": "pkg:generic/p2pkit/jmdns@3.6.3-p2pkit.410.3",
+    "version": "3.6.3-p2pkit.410.3"
   },
   "followupPatches": [
     {
       "path": "patches/415-opt-rcode.patch",
       "sha256": "5e026a252199abae1ec83c310890ca7bc9b6a3cad54b8f64e95adc7848dbafcc"
+    },
+    {
+      "path": "patches/416-reverse-domain.patch",
+      "sha256": "cf12f225b0f8ebbbe78c5f1fb782156f3d1af0d949e33a4fcc40a60ab5278a42"
     }
   ],
   "lifecyclePatch": {
@@ -35,7 +39,7 @@
     {
       "entry": "META-INF/p2pkit/third-party/jmdns/MODIFICATIONS.txt",
       "path": "MODIFICATIONS.txt",
-      "sha256": "638dd20825d6bb6809dcc66cfbd373eb21d3cd1f9569bc6444f82849c5a69e59"
+      "sha256": "cdbb5b94ee070bbf78bd548819b4bbbde950dc96f7c3088c6202917af465422f"
     },
     {
       "entry": "META-INF/p2pkit/third-party/jmdns/NOTICE.txt",
@@ -45,7 +49,7 @@
     {
       "entry": "dev/p2pkit/transport/lan/internal/jmdns/version.properties",
       "path": "src/main/resources/dev/p2pkit/transport/lan/internal/jmdns/version.properties",
-      "sha256": "827f04fd7056d5259f82361aee25451520a0dd6f1f41316101a435e6629ba94d"
+      "sha256": "bccfc40bfc3ba2020ca30d9e3938437e3ce740a261f09afa2a34c1054812faf2"
     }
   ],
   "schema": 2,
@@ -256,7 +260,7 @@
     {
       "path": "src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/ServiceTypeDecoder.java",
       "relocatedSha256": "7d460855a6b5f20b7084b133c1941002d3434642504088b052ecb3edc23f632b",
-      "sha256": "7d460855a6b5f20b7084b133c1941002d3434642504088b052ecb3edc23f632b",
+      "sha256": "0cd84fc0f715b6ed7e84cfb326eb8dc86397ecc98203d2949c08a921c7080cca",
       "upstreamPath": "src/main/java/javax/jmdns/impl/ServiceTypeDecoder.java",
       "upstreamSha256": "761559b1c561c6da5c0f2ad723d700ca9d20316cceb49db51342addf1c7450f2"
     },
