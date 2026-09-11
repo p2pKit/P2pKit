@@ -421,19 +421,22 @@ class WorkflowTestCase(unittest.TestCase):
 
 class HandoffTest(WorkflowTestCase):
     def test_focused_scope_cannot_be_relabelled_as_full_qualification(self):
-        for scope in ("full", "windows-followup", "windows-diagnostics"):
-            case = Fixture(self, scope=scope)
+        scopes = [("windows-x64", scope) for scope in ("full", "windows-followup", "windows-diagnostics")]
+        scopes.append(("macos-arm64", "apple-provenance"))
+        for role, scope in scopes:
+            case = Fixture(self, role=role, scope=scope)
             self.assert_safe(case, case.invoke())
-        for target, key, value in (("summary", "requestedScope", "full"),
-                                   ("source", "requestedScope", "full"),
-                                   ("summary", "hostQualification", "FULL_COMPONENT_SCOPE")):
-            with self.subTest(target=target, key=key):
-                case = Fixture(self)
-                destination = case.summary if target == "summary" else case.summary["source"]
-                destination[key] = value
-                case.save_summary()
-                case.seal()
-                self.assert_salvaged(case, case.invoke())
+        for role, scope in (("windows-x64", "windows-diagnostics"), ("macos-arm64", "apple-provenance")):
+            for target, key, value in (("summary", "requestedScope", "full"),
+                                       ("source", "requestedScope", "full"),
+                                       ("summary", "hostQualification", "FULL_COMPONENT_SCOPE")):
+                with self.subTest(role=role, scope=scope, target=target, key=key):
+                    case = Fixture(self, role=role, scope=scope)
+                    destination = case.summary if target == "summary" else case.summary["source"]
+                    destination[key] = value
+                    case.save_summary()
+                    case.seal()
+                    self.assert_salvaged(case, case.invoke())
 
     def test_full_walk_entry_limit_includes_empty_directories(self):
         case = Fixture(self)
@@ -1190,15 +1193,16 @@ class WorkflowOrchestrationTest(WorkflowTestCase):
         self.assertIn("cancel-in-progress: false", TEXT)
         self.assertNotIn("needs:", TEXT)
         block = job_block("selected_host")
-        self.assertEqual(yaml_value(block, "name", 4), "Audit native Windows full component follow-through")
-        self.assertEqual(yaml_value(block, "runs-on", 4), "windows-2025")
-        self.assertEqual(yaml_value(block, "shell", 8), "python {0}")
-        self.assertEqual(yaml_value(block, "P2PKIT_AUDIT_ROLE", 6), "windows-x64")
-        self.assertEqual(yaml_value(block, "P2PKIT_AUDIT_SCOPE", 6), "full")
+        self.assertIn("# Run revision: 18.", TEXT)
+        self.assertEqual(yaml_value(block, "name", 4), "Audit native Apple provenance reuse and isolated cancellation")
+        self.assertEqual(yaml_value(block, "runs-on", 4), "macos-26")
+        self.assertEqual(yaml_value(block, "shell", 8), "python3 {0}")
+        self.assertEqual(yaml_value(block, "P2PKIT_AUDIT_ROLE", 6), "macos-arm64")
+        self.assertEqual(yaml_value(block, "P2PKIT_AUDIT_SCOPE", 6), "apple-provenance")
         self.assertEqual(yaml_value(block, "P2PKIT_AUDIT_DRIVER_TIMEOUT_SECONDS", 6), '"8400"')
         self.assertEqual(yaml_value(block, "timeout-minutes", 4), "180")
         self.assertIn("        id: audit\n        timeout-minutes: 150\n        run: &run_host |", block)
-        self.assertNotIn("DEVELOPER_DIR:", block)
+        self.assertEqual(yaml_value(block, "DEVELOPER_DIR", 6), "/Applications/Xcode_26.5.app/Contents/Developer")
 
     def test_actual_artifact_output_requires_success_and_a_nonempty_upload_id(self):
         expression = yaml_value(job_block("selected_host"), "artifact_uploaded", 6)

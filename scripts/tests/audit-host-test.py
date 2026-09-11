@@ -665,7 +665,8 @@ class HostInvocationTest(unittest.TestCase):
         for role, scope in (("windows-x64", "invented"), ("macos-arm64", "windows-followup"),
                              ("macos-x64", "windows-followup"), ("macos-arm64", "windows-diagnostics"),
                              ("macos-x64", "windows-diagnostics"), ("windows-x64", "apple-followup"),
-                             ("macos-x64", "apple-followup"), ("unknown", "full")):
+                             ("macos-x64", "apple-followup"), ("windows-x64", "apple-provenance"),
+                             ("macos-x64", "apple-provenance"), ("unknown", "full")):
             state = self.work / (role + "-" + scope)
             with self.subTest(role=role, scope=scope), self.assertRaisesRegex(ValueError, "role/scope"):
                 HOST.Host(role, state, scope=scope)
@@ -1483,6 +1484,101 @@ class HostInvocationTest(unittest.TestCase):
                 self.assertFalse((host.state / "work/publication").exists())
         self.assertEqual([], self.calls, "Routing fixture must not invoke a product subprocess")
 
+    def test_apple_provenance_selects_only_pending_policies_and_cleanup_before_fresh_framework(self):
+        host = HOST.Host("macos-arm64", self.state / "apple-provenance-order", scope="apple-provenance")
+        events = []
+        def invoke(label, arguments, **kwargs):
+            events.append(label)
+            return False  # A clean policy failure must not erase independent Apple evidence.
+        with mock.patch.object(host, "install_xcodegen", side_effect=lambda: events.append("xcodegen")), \
+                mock.patch.object(host, "invoke", side_effect=invoke) as invoked, \
+                mock.patch.object(host, "clean_outputs", side_effect=lambda: events.append("cleanup")), \
+                mock.patch.object(host, "apple", side_effect=lambda: events.append("apple")):
+            host.mac()
+        self.assertEqual([
+            mock.call("policy-3-check-lock-write-policy-test", ["bash", "scripts/tests/check-lock-write-policy-test.sh"],
+                      kind="command", extra_env=None),
+            mock.call("policy-13-check-android-abi-guard", ["bash", "scripts/check-android-abi-guard.sh"],
+                      kind="command", extra_env=None),
+        ], invoked.call_args_list)
+        self.assertEqual(["xcodegen", "policy-3-check-lock-write-policy-test", "cleanup",
+                          "policy-13-check-android-abi-guard", "cleanup", "apple"], events)
+        self.assertEqual([], self.calls, "Selection fixture must not execute policy or product commands")
+
+    def test_apple_provenance_requires_visible_reuse_before_only_the_isolated_probe(self):
+        task = ":p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance"
+        udid = "11111111-1111-1111-1111-111111111111"
+        for outcome in ("bound", "missing-reuse", "minimum-os-failed"):
+            with self.subTest(outcome=outcome):
+                fixture = HostInvocationTest()
+                fixture.setUp()
+                self.addCleanup(fixture.doCleanups)
+                host = fixture.host
+                host.role, host.scope, host.wrapper = "macos-arm64", "apple-provenance", fixture.repo / "gradlew"
+                fixture.seed_apple_sidecars()
+                events = []
+                original_invoke = host.invoke
+                def invoke(label, arguments, **kwargs):
+                    events.append(label)
+                    fixture.next_status = 7 if label == "xcframework-inspect" and outcome == "minimum-os-failed" else 0
+                    return original_invoke(label, arguments, **kwargs)
+                def receipt(record, path, evidence, phase):
+                    if phase != "before-write" or record["purpose"] != "xcode-provenance":
+                        return
+                    record["executedArgv"] = [str(host.wrapper), *record["requestedArgv"], "--no-daemon"]
+                    if outcome == "missing-reuse":
+                        record["executedArgv"].append("--rerun-tasks")
+                        return
+                    sidecars = json.loads((host.evidence / "xcframework-sidecars.json").read_text())
+                    record["xcframeworkReuse"] = {
+                        "producerInvocationId": host.receipts["xcframework-build"]["id"],
+                        "producerReceiptSha256": HOST.digest(host.state / "host-xcframework-build.json"),
+                        "sidecarsManifestSha256": HOST.digest(host.evidence / "xcframework-sidecars.json"),
+                        "sidecars": {row["path"]: row["sha256"] for row in sidecars["files"]},
+                    }
+                    record["xcframeworkReuseUnchanged"] = True
+                fixture.next_mutation = receipt
+                def retained(label, *args):
+                    events.append(label)
+                    return {"fixtureOnly": True}  # Existing retention fixtures cover the real file inspections.
+                def inspect(label, arguments):
+                    self.assertEqual("simulators-before", label)
+                    self.assertEqual(["xcrun", "simctl", "list", "--json", "devices", "available"], arguments)
+                    events.append(label)
+                    path = host.evidence / (label + ".stdout.log")
+                    path.write_text(json.dumps({"devices": {"com.apple.CoreSimulator.SimRuntime.iOS-26-5": [
+                        {"name": "iPhone 17", "udid": "ffffffff-ffff-ffff-ffff-ffffffffffff", "state": "Booted"},
+                        {"name": "iPhone 17", "udid": udid, "state": "Shutdown"},
+                    ]}}))
+                    return path
+                with mock.patch.object(host, "invoke", side_effect=invoke), \
+                        mock.patch.object(host, "retain_xcframework_header", side_effect=retained), \
+                        mock.patch.object(host, "retain_native_binary", side_effect=retained), \
+                        mock.patch.object(host, "inspect_tool", side_effect=inspect), \
+                        mock.patch.object(host, "swift_cancellation_probe",
+                            side_effect=lambda *args: events.append("swift-cancellation-probe")) as probe:
+                    host.apple()
+                expected = ["xcframework-build", "xcframework-inspect", "xcframework-device-header",
+                            "xcframework-device", "xcframework-simulator-header", "xcframework-simulator"]
+                if outcome != "minimum-os-failed":
+                    expected += ["xcode-project", "xcode-provenance"]
+                    record = host.receipts["xcode-provenance"]
+                    self.assertEqual([task, "--console=plain"], record["requestedArgv"])
+                    self.assertEqual("gradle", record["kind"])
+                    command = fixture.calls[-1]["command"]
+                    self.assertEqual("900", command[command.index("--timeout") + 1])
+                    proof = json.loads((host.evidence / "xcframework-reuse-receipt.json").read_text())
+                    self.assertEqual("PASS" if outcome == "bound" else "FAIL", proof["result"])
+                if outcome == "bound":
+                    expected += ["simulators-before", "swift-cancellation-probe"]
+                    probe.assert_called_once_with(host.state / "work/swift-ui", udid)
+                    self.assertEqual("Shutdown", host.simulator["stateBefore"])
+                else:
+                    probe.assert_not_called()
+                self.assertEqual(expected, events)
+                self.assertEqual([task], host.receipts["xcframework-build"]["requestedArgv"])
+                self.assertEqual(4, len(json.loads((host.evidence / "xcframework-sidecars.json").read_text())["files"]))
+
     def test_consumer_archive_prerequisite_uses_the_exact_publisher_not_consumer_success_or_partial_files(self):
         cases = [(0, 0, None), (0, 7, None), (7, 7, None), (None, 7, "missing"),
                  (0, 7, "wrong-parent"), (0, 7, "wrong-repository"), (0, 7, "ambiguous"), (0, 7, "not-empty")]
@@ -2124,6 +2220,7 @@ class HostInvocationTest(unittest.TestCase):
         cases = [("macos-arm64", "apple-followup", outcome)
                  for outcome in (True, False, "interrupted", "retirement-failed", "unowned")]
         cases.extend(("macos-x64", "full", outcome) for outcome in (True, False, "unowned"))
+        cases.extend(("macos-arm64", "apple-provenance", outcome) for outcome in (True, "unowned"))
         for role, scope, outcome in cases:
             with self.subTest(role=role, scope=scope, outcome=outcome):
                 fixture = HostInvocationTest()
@@ -2643,7 +2740,8 @@ class SdkSetupTest(unittest.TestCase):
     def test_run_routes_all_roles_only_after_sdk_validation(self):
         cases = [(role, "full", 0) for role in HOST.ROLES]
         cases.extend([("windows-x64", "windows-followup", 0), ("windows-x64", "windows-diagnostics", 0),
-                      ("macos-arm64", "apple-followup", 0), ("macos-x64", "full", 7)])
+                      ("macos-arm64", "apple-followup", 0), ("macos-arm64", "apple-provenance", 0),
+                      ("macos-x64", "full", 7)])
         for role, scope, prepare_status in cases:
             with self.subTest(role=role, scope=scope, prepare_status=prepare_status), self.fixture(role) as data:
                 fixture, sdk, _, _ = data
@@ -2704,7 +2802,7 @@ class SdkSetupTest(unittest.TestCase):
     def test_run_blocks_all_products_and_finalizes_invalid_metadata(self):
         for role, scope in [*((role, "full") for role in HOST.ROLES),
                              ("windows-x64", "windows-followup"), ("windows-x64", "windows-diagnostics"),
-                             ("macos-arm64", "apple-followup")]:
+                             ("macos-arm64", "apple-followup"), ("macos-arm64", "apple-provenance")]:
             with self.subTest(role=role, scope=scope), self.fixture(role) as data:
                 fixture, sdk, _, properties = data
                 properties["android-37.0"].write_text("AndroidVersion.ApiLevel=37.1\n", encoding="utf-8")
@@ -2722,7 +2820,7 @@ class SdkSetupTest(unittest.TestCase):
     def test_run_blocks_all_products_and_finalizes_failed_sdk_installation(self):
         for role, scope in [*((role, "full") for role in HOST.ROLES),
                              ("windows-x64", "windows-followup"), ("windows-x64", "windows-diagnostics"),
-                             ("macos-arm64", "apple-followup")]:
+                             ("macos-arm64", "apple-followup"), ("macos-arm64", "apple-provenance")]:
             with self.subTest(role=role, scope=scope), self.fixture(role) as data:
                 fixture, sdk, _, _ = data
                 result, windows, mac, followup, diagnostics, order = self.run_fixture(

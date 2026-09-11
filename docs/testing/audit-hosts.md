@@ -54,15 +54,68 @@ workflows or local builds, and GitHub can replace an older pending run even with
 `cancel-in-progress: false`. Do not queue another triggering push while a run is
 active or pending; preserve earlier failure/cancellation records.
 
-## Selected native Windows full components
+## Selected Apple Silicon provenance and isolated cancellation scope
 
-The current literal job is `Audit native Windows full component follow-through`
-on `windows-2025`, using native `python`, Java 21 then 17 and the checked-in
-`gradlew.bat`. Its `windows-x64`/`full` route selects the existing library and
-sample graphs, with Native-distribution and Android-assembly tasks added only
-to the Windows sample batch. No Apple host precedes or follows it automatically. At selection time this new request is **NOT_RUN**, not PASS.
-Record actual execution and independent evidence review separately; workflow
-text is not a passing result.
+Revision18 selects exactly one `macos-26` job, `Audit native Apple provenance reuse
+and isolated cancellation`, using native Python 3, Java 21 then 17, the checked-in
+`gradlew` and `/Applications/Xcode_26.5.app/Contents/Developer`. The new
+`macos-arm64`/`apple-provenance` request is **NOT_RUN** at selection time. It is not
+a new full-host, release or physical-device result.
+
+After the unchanged native/non-Rosetta ownership controls, tool prerequisites,
+Android SDK admission and pinned XcodeGen installation, this scope runs only:
+
+1. The two pending real policy commands, preserving their original indexes/order:
+   `policy-3-check-lock-write-policy-test` runs
+   `scripts/tests/check-lock-write-policy-test.sh`; then
+   `policy-13-check-android-abi-guard` runs `scripts/check-android-abi-guard.sh`.
+   Their existing audit opt-ins, real expected-red/task-graph commands and receipt
+   checks remain active. Neither is replaced with a static-only check. Each
+   completes its existing owned output cleanup before the fresh framework build.
+2. One forced-fresh `xcframework-build`, all existing minimum-OS checks, four
+   retained sidecars, generated device/fat-simulator headers and native binary
+   inspections. These remain required prerequisites, not downloaded old artifacts.
+3. Existing Xcode project generation, then one visible, nonquiet `xcode-provenance`
+   leaf with exact arguments
+   `:p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance --console=plain`.
+   Its successful receipt must identify the same producer, prove unchanged reuse
+   bindings and omit forced rerun before the probe may proceed. The retained
+   `xcframework-reuse-receipt` inspection does not itself prove no compilation:
+   independently inspect actual verifier execution and producer task outcomes in
+   the visible Gradle log. Same hashes or a short runtime alone are insufficient.
+4. The existing exact available iPhone17 admission and **only** the existing
+   isolated Swift Task/Flow cancellation probe, under its unchanged **900-second**
+   deadline. Its required XCTest build and mandatory nested Xcode provenance phase
+   still execute; no provenance bypass or assertion change is permitted. The
+   originally Shutdown device is retired before and unconditionally after the
+   probe; an originally Booted/unowned device is not stopped. Raw xcresult and
+   exact shutdown observations remain required. Retirement is fallback cleanup,
+   never cancellation success.
+
+No core/LAN suites, full policy matrix, ABI comparison batch, consumers/publication,
+Dokka/SBOM, strict standalone Swift build,79 ordinary Swift cases or live-peer
+fixture are requested by this scope. Retained unaffected results keep their original
+source/run bindings; omitted work is not a new PASS. Policy failures remain failed
+while independently safe framework/probe work may proceed. Failed required
+framework inspections, reuse proof or simulator ownership do not become passes.
+
+Admission, summary and workflow handoff bind `requestedScope=apple-provenance`.
+Even if all selected components pass, `hostQualification` remains
+`NOT_ESTABLISHED_BY_FOCUSED_SCOPE`. Review the actual producer, visible and nested
+verifier receipts/task outcomes, exact probe result and owned cleanup separately.
+The two policy commands are pending #395 corroborations, not another repair;
+this focused request supports #408 and does not resolve the separate live-peer
+fixture defect or establish independent interoperability (#133).
+
+## Unselected native Windows full components
+
+The retained `windows-x64`/`full` route uses `windows-2025`, native `python`, Java 21
+then 17 and the checked-in `gradlew.bat`. It selects the existing library and sample
+graphs, with Native-distribution and Android-assembly tasks added only to the
+Windows sample batch. It is unselected by revision18; no Windows host precedes or
+follows the selected ARM job automatically. The earlier literal request and its
+actual results retain their original source/run bindings. Record execution and
+independent evidence review separately; workflow text is not a passing result.
 
 The unchanged prerequisites require native Windows x64, real Job Object ownership
 controls, Java/tool versions, Git for Windows Bash and both Android SDK platforms.
@@ -91,8 +144,8 @@ Do not infer those results from sample compilation or packaging. All native
 Gradle commands keep the original Windows PATH; only the admitted Bash probe and
 wrapper fixture receive that Git installation's utility PATH prefix.
 
-Earlier focused Windows results retain their own source bindings. This request
-fills the absent full component scope rather than separately repeating the
+Earlier focused Windows results retain their own source bindings. The full route
+covers the broader component scope rather than separately repeating the
 filtered follow-up/diagnostic graphs. Their JVM classes remain within the whole
 library suites; the focused Android-host task is not selected by this full route.
 `FULL_COMPONENT_SCOPE` describes requested components,
@@ -354,7 +407,7 @@ validation. None is inferred merely from a task's aggregate count.
 For either focused Windows scope, `hostQualification` is always
 `NOT_ESTABLISHED_BY_FOCUSED_SCOPE`, including when the selected components pass.
 The CLI accepts `full` for the existing roles, `windows-followup` and
-`windows-diagnostics` only for Windows, and `apple-followup` only for Apple Silicon,
+`windows-diagnostics` only for Windows, and `apple-followup`/`apple-provenance` only for Apple Silicon,
 rejecting other pairs before state initialization. Full defaults remain
 unchanged; `FULL_COMPONENT_SCOPE` describes their requested scope, not a successful
 qualification. Omitted Windows full-profile components are **NOT_EXECUTED by
@@ -371,9 +424,9 @@ cleanup must also succeed.
 ### Full profiles supported by the driver
 
 These profiles describe each role's component graph, not equivalent whole-host
-qualification. This revision selects the expanded Windows `full` route above;
-Intel and full Apple Silicon remain unselected. Any later native selection
-requires a separately reviewed literal change and terminal-attempt reconciliation.
+qualification. All full profiles are unselected by this revision's focused
+Apple Silicon request. Any later native selection requires a separately reviewed
+literal change and terminal-attempt reconciliation.
 
 | Role and fixed label | Selected tools | Components, not broader acceptance |
 | --- | --- | --- |
@@ -576,9 +629,10 @@ The workflow redirects stdout/stderr to separate fresh bootstrap logs and invoke
 the exact checked-out driver with `runpy` in the **same native Python process**.
 There is no extra unsupervised wrapper child, launcher replacement or product
 monkeypatch. The driver's own deadline, cancellation and ownership finalizers run.
-The selected Windows driver uses its existing 8,400-second budget, with step/job
-ceilings of 150/180 minutes. Constructor defaults remain 8,400 seconds on
-Windows/Intel and 19,200 on Apple Silicon. The unselected expanded Intel route's
+The selected focused Apple Silicon driver uses an explicit 8,400-second budget,
+with step/job ceilings of 150/180 minutes, below the earlier ARM request's
+19,200 seconds and330/360 minutes. The probe's900-second deadline is unchanged.
+Constructor defaults remain 8,400 seconds on Windows/Intel and19,200 on Apple Silicon. The unselected expanded Intel route's
 prior literal request used an explicit 19,200 seconds and 330/360-minute ceilings
 for its consumer/archive/ABI/CLI/framework/Swift components, not the old two-suite budget.
 A later selection must review its native tools and explicit budget.
@@ -719,8 +773,8 @@ Independent secure-v2 interoperability (#133), professional cryptographic review
 and owner architecture/product decisions (#120) require their own participants,
 inputs and evidence. This facility does not supply them or change their dispositions.
 Actual OSV results and successful dependency submission also remain separate from
-policy fixtures/lockfile coverage. Native Apple Silicon, Intel and Linux
-corroboration are not supplied by this selected Windows run.
+policy fixtures/lockfile coverage. Windows, Intel, Linux and full Apple Silicon
+corroboration are not supplied by this selected focused ARM request.
 
 Follow the [release checklist](../releasing/checklist.md) for any future release.
 The audit's 0.8.0+ compatibility decisions remain in force despite snapshot naming.

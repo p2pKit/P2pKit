@@ -27,7 +27,9 @@ REF = "refs/heads/audit/complete-2026-09-04"
 ROLES = {"windows-x64": ("Windows", "x64"), "macos-arm64": ("Darwin", "arm64"),
          "macos-x64": ("Darwin", "x64")}
 SCOPES = {"full": set(ROLES), "windows-followup": {"windows-x64"}, "windows-diagnostics": {"windows-x64"},
-          "apple-followup": {"macos-arm64"}}
+          "apple-followup": {"macos-arm64"}, "apple-provenance": {"macos-arm64"}}
+CANCELLATION_PROBE_ROUTES = {("macos-arm64", "apple-followup"), ("macos-arm64", "apple-provenance"),
+                             ("macos-x64", "full")}
 WINDOWS_TASKS = {":p2p-core:jvmTest", ":p2p-transport-lan:jvmTest", ":p2p-network-provisioning-desktop:test"}
 WINDOWS_FOLLOWUP_TASKS = {":p2p-core:jvmTest", ":p2p-core:testAndroidHostTest", ":p2p-transport-lan:jvmTest"}
 WINDOWS_DIAGNOSTICS_TASKS = {":p2p-transport-lan:jvmTest"}
@@ -687,12 +689,14 @@ class Host:
                    "scripts/tests/run-ios-app-test.sh", "scripts/tests/audit-leaf-hooks-test.py",
                    "scripts/tests/audit-consumer-test.py", "scripts/tests/audit-host-test.py",
                    "scripts/tests/audit-host-workflow-test.py", "scripts/tests/swift-jvm-transfer-test.py"]
+        native_policies = ("scripts/tests/check-lock-write-policy-test.sh", "scripts/check-android-abi-guard.sh")
         for number, path in enumerate(scripts):
+            if self.scope == "apple-provenance" and path not in native_policies:
+                continue  # Keep original labels/order for the two pending real graph probes.
             tool = sys.executable if path.endswith(".py") else "ruby" if path.endswith(".rb") else "bash"
             # Default fake-boundary suites must not inherit real opt-in leaves
             # against their fake source trees. Retain the outer ownership chain.
-            env = None if path in ("scripts/tests/check-lock-write-policy-test.sh",
-                                  "scripts/check-android-abi-guard.sh") else {key: None for key in ADAPTER_OPT_INS}
+            env = None if path in native_policies else {key: None for key in ADAPTER_OPT_INS}
             self.invoke("policy-" + str(number) + "-" + Path(path).stem, [tool, path], kind="command", extra_env=env)
             self.clean_outputs()
 
@@ -802,6 +806,10 @@ class Host:
             self.check("apple-tcp-options-sdk", self.inspect_tcp_options_headers)
         self.install_xcodegen()
         self.mac_policies()
+        if self.scope == "apple-provenance":
+            # All policy graphs/cleanup finish before the one retained fresh framework producer.
+            self.apple()
+            return
         profile = "ios-lan-arm64" if self.scope == "apple-followup" else "full"
         self.invoke("mac-platform-" + profile, [sys.executable, "scripts/run-platform-tests.py", profile],
                     kind="command", timeout=7200)
@@ -957,8 +965,8 @@ class Host:
 
     def apple(self):
         built = self.invoke("xcframework-build", [":p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance"], timeout=7200)
-        if built:
-            self.invoke("xcframework-inspect", ["bash", "scripts/check-xcframework-minimum-os.sh"], kind="command")
+        inspected = built and self.invoke("xcframework-inspect",
+                                          ["bash", "scripts/check-xcframework-minimum-os.sh"], kind="command")
         release = physical(ROOT / "library/p2p-transport-lan/build/XCFrameworks/release")
         sidecars = []
         for name in ("BUILD_COMMIT.txt", "BUILD_SOURCE_STATE.txt", "BUILD_INPUTS_SHA256.txt", "BUILD_ARTIFACTS_SHA256.txt"):
@@ -973,34 +981,52 @@ class Host:
             require(digest(self.evidence / name) == before == digest(path), "XCFramework sidecar changed during retention")
             sidecars.append({"path": name, "sha256": before, "result": "RETAINED"})
         self.write("xcframework-sidecars.json", {"files": sidecars, "sourceInvocationId": self.receipts["xcframework-build"]["id"]})
+        headers_ok = True
         for name, identifier in (("device", "ios-arm64"), ("simulator", "ios-arm64_x86_64-simulator")):
             binary = release / "P2pKitShared.xcframework" / identifier / "P2pKitShared.framework/P2pKitShared"
             label = "xcframework-" + name + "-header"
-            self.check(label, lambda: self.retain_xcframework_header(
-                label, binary.parent / "Headers/P2pKitShared.h", self.receipts["xcframework-build"]["id"]))
+            headers_ok = self.check(label, lambda: self.retain_xcframework_header(
+                label, binary.parent / "Headers/P2pKitShared.h", self.receipts["xcframework-build"]["id"])) and headers_ok
             self.retain_native_binary("xcframework-" + name, binary, self.receipts["xcframework-build"]["id"])
-        if not built:
+        if not built or (self.scope == "apple-provenance" and not (inspected and headers_ok)):
             return
         if not self.invoke("xcode-project", [":iosApp:regenerateXcodeProject"]):
             return
-        build_dir = self.state / "work/swift-build"
-        build_ok = self.invoke("swift-warnings-build", ["xcodebuild", "-jobs", "2", "-project",
-                               "samples/iosApp/p2pkit-sample.xcodeproj", "-scheme", "p2pkit-sample-ui", "-configuration",
-                               "Debug", "-sdk", "iphonesimulator", "-destination", "generic/platform=iOS Simulator",
-                               "-derivedDataPath", str(build_dir), "CODE_SIGNING_ALLOWED=NO",
-                               "SWIFT_TREAT_WARNINGS_AS_ERRORS=YES", "build"], kind="command", timeout=7200)
-        if not build_ok:
-            return
-        def require_marker():
-            directory = Path(self.receipts["swift-warnings-build"]["evidenceDirectory"])
-            found = False
-            for name in ("product.stdout.log", "product.stderr.log"):
-                with physical(directory / name).open("rb") as stream:
-                    found = found or any(b"** BUILD SUCCEEDED **" in line for line in stream)
-            require(found, "xcodebuild returned zero without the original required BUILD SUCCEEDED marker")
-            return {"leaf": self.receipts["swift-warnings-build"]["id"], "marker": "** BUILD SUCCEEDED **"}
-        if not self.check("swift-build-marker", require_marker):
-            return
+        if self.scope == "apple-provenance":
+            task = ":p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance"
+            if not self.invoke("xcode-provenance", [task, "--console=plain"], timeout=900):
+                return
+            def inspect_reuse():
+                record = self.receipts["xcode-provenance"]
+                reuse, executed = record.get("xcframeworkReuse"), record.get("executedArgv")
+                require(type(reuse) is dict and record.get("xcframeworkReuseUnchanged") is True and
+                        reuse.get("producerInvocationId") == self.receipts["xcframework-build"]["id"],
+                        "Visible verifier lacks unchanged same-producer reuse proof")
+                require(type(executed) is list and executed[:3] == [str(self.wrapper), task, "--console=plain"] and
+                        "--rerun-tasks" not in executed, "Visible verifier did not use the exact incremental lane")
+                return {"verifierInvocationId": record["id"], "reuse": reuse,
+                        "limits": "Receipt binding only; inspect retained Gradle task outcomes for actual incremental reuse."}
+            if not self.check("xcframework-reuse-receipt", inspect_reuse):
+                return
+        else:
+            build_dir = self.state / "work/swift-build"
+            build_ok = self.invoke("swift-warnings-build", ["xcodebuild", "-jobs", "2", "-project",
+                                   "samples/iosApp/p2pkit-sample.xcodeproj", "-scheme", "p2pkit-sample-ui", "-configuration",
+                                   "Debug", "-sdk", "iphonesimulator", "-destination", "generic/platform=iOS Simulator",
+                                   "-derivedDataPath", str(build_dir), "CODE_SIGNING_ALLOWED=NO",
+                                   "SWIFT_TREAT_WARNINGS_AS_ERRORS=YES", "build"], kind="command", timeout=7200)
+            if not build_ok:
+                return
+            def require_marker():
+                directory = Path(self.receipts["swift-warnings-build"]["evidenceDirectory"])
+                found = False
+                for name in ("product.stdout.log", "product.stderr.log"):
+                    with physical(directory / name).open("rb") as stream:
+                        found = found or any(b"** BUILD SUCCEEDED **" in line for line in stream)
+                require(found, "xcodebuild returned zero without the original required BUILD SUCCEEDED marker")
+                return {"leaf": self.receipts["swift-warnings-build"]["id"], "marker": "** BUILD SUCCEEDED **"}
+            if not self.check("swift-build-marker", require_marker):
+                return
         # The maintained launcher resolves the same exact available device and retains its mutation lock.
         devices = self.inspect_tool("simulators-before", ["xcrun", "simctl", "list", "--json", "devices", "available"])
         devices = load_gate().read_json(devices).get("devices", {})
@@ -1013,7 +1039,7 @@ class Host:
                     if device.get("name") == "iPhone 17" and device.get("isAvailable") is not False:
                         choices.append((tuple(map(int, match[1].split("-"))), device["udid"], device["state"]))
         require(choices, "No available exact iPhone17 simulator; required Swift tests are not skipped")
-        if (self.role, self.scope) in (("macos-arm64", "apple-followup"), ("macos-x64", "full")):
+        if (self.role, self.scope) in CANCELLATION_PROBE_ROUTES:
             # Prefer an already Shutdown available device for the terminal
             # isolated probe; a Booted newest choice is not a hardware blocker.
             choices = [choice for choice in choices if choice[2] == "Shutdown"] or choices
@@ -1022,6 +1048,9 @@ class Host:
                 state_before in ("Booted", "Shutdown"), "Invalid simulator metadata")
         self.simulator = {"udid": udid, "stateBefore": state_before, "scope": "Hosted simulator, not physical hardware"}
         ui_dir = self.state / "work/swift-ui"
+        if self.scope == "apple-provenance":
+            self.swift_cancellation_probe(ui_dir, udid)
+            return
         tested = self.invoke("swift-unit-ui", ["bash", "scripts/run-ios-ui-tests.sh"], kind="command", timeout=7200,
                              extra_env={"IOS_RUN_DIR": str(ui_dir), "KEEP_IOS_RUN_ARTIFACTS": "1", "SIM_UDID": udid})
         bundles = sorted(ui_dir.glob("DerivedData/Logs/Test/*.xcresult"))
@@ -1046,7 +1075,7 @@ class Host:
             self.swift_jvm_transfer(ui_dir, udid)
         # Investigation stays last and separate from both acceptance processes.
         # A cleaned integration/product failure must not erase independent evidence.
-        if (self.role, self.scope) in (("macos-arm64", "apple-followup"), ("macos-x64", "full")):
+        if (self.role, self.scope) in CANCELLATION_PROBE_ROUTES:
             self.swift_cancellation_probe(ui_dir, udid)
 
     def swift_jvm_transfer(self, ui_dir, udid):
@@ -1088,7 +1117,7 @@ class Host:
 
     def swift_cancellation_probe(self, ui_dir, udid):
         """One explicit investigative host; shutdown is cleanup, never cancellation success."""
-        require((self.role, self.scope) in (("macos-arm64", "apple-followup"), ("macos-x64", "full")),
+        require((self.role, self.scope) in CANCELLATION_PROBE_ROUTES,
                 "Cancellation investigation requires an explicit native Apple follow-through route")
         case = ("p2pkit-sample-cancellation-probe-tests/SwiftFlowCancellationProbeTests/"
                 "testSwiftTaskCancellationFinishesActualDiagnosticCollection")
