@@ -25,8 +25,9 @@ comment in a focused, reviewed push when a new exact source revision needs testi
 
 Before that push, the operator must:
 
-1. Finish the current repair and obtain fresh independent approval of its final
-   revision. Review the execution infrastructure before its first triggering push.
+1. Obtain independent source/execution-request approval before a verification
+   push. Final repair approval additionally requires the resulting evidence;
+   obtain it before starting the next repair. Review new execution infrastructure.
 2. Reconcile the preceding terminal attempt and retain its evidence; refresh
    queued/running Actions and hold the audit's **global build lease**. Require no
    competing queued/running work before starting another independently allocated host.
@@ -54,12 +55,18 @@ workflows or local builds, and GitHub can replace an older pending run even with
 `cancel-in-progress: false`. Do not queue another triggering push while a run is
 active or pending; preserve earlier failure/cancellation records.
 
-## Selected Apple native-compilation admission
+## Prior Apple native-compilation admission — revision20
 
 Revision20 selects one `macos-26` job, `Audit native Apple compilation admission`,
 using native ARM64 Python 3, Java 21 then 17, the checked-in `gradlew` and
 `DEVELOPER_DIR=/Applications/Xcode_26.5.app/Contents/Developer`. This focused #413
-prerequisite is **NOT_RUN** at selection time, not an owned-cancellation result.
+prerequisite was **NOT_RUN** at selection time. Its later
+[run34639822412/1](https://github.com/p2pKit/P2pKit/actions/runs/34639822412/attempts/1)
+succeeded on `4973859d416c62246e303259bbaab21f4f854f0c` /
+tree `2c8196da4417376c9b39df14c8c49d1727f8f442`: 91 ownership controls and
+12/12 executed compilation tasks, including LAN production and test compilation.
+The #413 candidate was absent. Independent review approved only baseline native
+compilation admission and retained owned cleanup, not cancellation or ABI.
 
 The unchanged native/non-Rosetta admission, resource and tool prerequisites,
 complete real `executor-native-controls` leaf, and SDK platforms **36 and 37.0**
@@ -84,8 +91,8 @@ The unconditional finalizer validates receipts, performs proved-owned output/wor
 cleanup and seals evidence. An ordinary compilation failure remains FAIL; an
 ownership, stop, source or cleanup failure cannot export safe continuation.
 
-Strict-lock admission remains unknown until actual execution: cross-target
-metadata resolution can still encounter stale JmDNS lock entries. This scope
+That compilation graph admitted strict locks; other graphs can still encounter
+stale JmDNS lock entries. This scope
 does not write locks, relax verification or request a producer fallback. Inspect
 actual prerequisites rather than infer native-only resolution from the task name.
 Compilation establishes no linking, simulator/runtime, Swift naming or cancellation
@@ -96,6 +103,93 @@ Admission, summary and handoff retain `requestedScope=apple-native-compilation`
 and `hostQualification=NOT_ESTABLISHED_BY_FOCUSED_SCOPE`, even on PASS. The release
 monolith and external acceptance remain unexecuted/unvalidated. Prior selections
 and retained outcomes below are not replayed, promoted or reset by this selection.
+
+## Selected Apple owned-flow cancellation — revision21
+
+Revision21 selects the ARM-only `apple-owned-cancellation` route and job
+`Audit native Apple owned Flow cancellation`, separate from revision20's
+compile-only admission and the failed raw revision18 probe. **NOT_RUN** at this
+selection: source approval is not product verification or final #413 approval.
+Its triggering push requires the exact-source freeze and global execution lease. Keep native
+`macos-26`, Java 21 then 17, Xcode26.5 and the existing 8400-second driver,
+150-minute step and 180-minute job ceilings. Do not silently select the larger
+unselected constructor default.
+
+After unchanged native ownership, SDK36/37.0, tool and resource admission:
+
+1. Install the pinned XcodeGen and run one focused real project-generation check
+   for the added app source, unchanged test containers, both ordinary test targets
+   and mandatory provenance/local-network declarations. Do not replay the full
+   policy suite or the two unrelated provenance-policy graphs.
+2. Run one `owned-flow-helper-abi` leaf with the exact selectors:
+
+   ```text
+   :p2p-transport-lan:iosSimulatorArm64Test --device <owned-shutdown-UUID>
+     --tests dev.p2pkit.transport.lan.IosOwnedFlowCollectionTest
+   :p2p-transport-lan:checkKotlinAbi
+   ```
+
+   Select one exact available originally-Shutdown iPhone17 and retain its native
+   pre-state. The KGP `--device` option binds this test leaf to that UUID without
+   changing standalone execution. Observe and, if necessary, shut down only that
+   owned device in `finally` before any framework work, also on failure or
+   interruption. Unknown or failed retirement blocks continuation. Later Swift
+   cleanup is not a substitute for this earlier native-leaf evidence.
+
+   The normal fresh coverage token/init-script, `--continue`, forced freshness,
+   strict verification and resource/finalization controls remain. The existing
+   ARM LAN platform assessor checks the complete model; the focused assessor also
+   requires exactly the helper's four unique successful methods, zero errors or
+   skips, matching retained XML/event counts and no other modeled test task in
+   the graph. It requires executed native-klibrary inputs for all three iOS targets
+   and the actual aggregate `internalDumpKotlinAbi`/`checkKotlinAbi` task lines.
+   Retain their full original logs; no per-target compare task names are invented.
+   `checkKotlinAbi` also has JVM compilation/public-constant prerequisites, not a
+   JVM test matrix. A finalized helper/ABI product or assessment failure remains
+   **FAIL**, including a distinct failed assessment; no helper or ABI completion is
+   awarded from that row. After proved owned stop/source/evidence finalization and
+   output cleanup, independent fresh-producer/Swift evidence may still proceed.
+   Ownership, stop, source or cleanup exceptions block continuation. Any required
+   failed leaf/assessment keeps the final host **FAIL**, even if Swift later passes.
+   Final #413 repair approval still requires actual successful additive Apple ABI
+   execution; a lock/prerequisite failure is not waived or repaired by this route.
+3. Retain those reports and clean their owned outputs **before** one fresh
+   `xcframework-build`. Keep its exact single original provenance task, existing
+   minimum-OS/header/binary inspections and four producer-bound sidecars, project
+   generation, visible `xcode-provenance` verification (`same task, --console=plain`) and mandatory
+   nested Xcode phase. Use unchanged #408 same-producer reuse checks; inspect the
+   actual verifier task outcomes, not only matching hashes. No borrowed framework,
+   rebuilding graph, cleanup or source mutation may intervene before consumers.
+4. On one exact **originally Shutdown** iPhone17 simulator, use
+   `run-owned-flow-lifecycle`, existing `p2pkit-sample-ui` scheme, selecting only
+   `OwnedFlowCollectionTests`, `SampleRunLifecycleTests` and
+   `IosLanDiagnosticsLeaseTests`: **9 + 12 + 7 = 28** source-inventoried methods.
+   `swift-owned-flow-lifecycle.xcresult` must show every method exactly once as
+   Success, without unknown/failed/skipped cases or another executed target.
+   This is not ordinary UI, presentation, live-peer or complete Swift acceptance.
+5. After lifecycle-host retirement, run `run-owned-cancellation` **alone and last**:
+   `p2pkit-sample-cancellation-probe-tests/SwiftOwnedFlowCancellationTests/testOwnedAdapterCancellationFinishesActualDiagnosticCollection`.
+   Its distinct `swift-owned-cancellation.xcresult` must contain exactly that one
+   successful native case. It checks normal live delivery, idle native Job and
+   accepted callback-task retirement in **one unchanged two-second window**, and
+   replacement/post-terminal controls. The outer case bound stays **900 seconds**.
+
+Both focused launch actions require audit state, explicit `IOS_RUN_DIR` and the
+outer owner's exact `SIM_UDID`; neither bootstraps/regenerates the prepared
+project/framework. Serial XCTest, warnings-as-errors, mutation-lock and source
+provenance checks remain. The exact owned simulator is retired on success,
+failure or interruption, and failed raw bundles survive before output disposal.
+A cleaned lifecycle assertion failure remains failed even if the independent
+isolated case later passes. Retirement or a printed marker never substitutes for
+native case success. Missing ownership/retirement proof blocks continuation.
+
+The raw `run-cancellation-probe` method, legacy collector, two-second oracle,
+`swift-cancellation-probe.xcresult`, names and observational verdict are unchanged;
+this route neither reruns nor relabels revision18. Default ordinary both-target
+assessment is unchanged. Even a fully green focused run keeps
+`hostQualification=NOT_ESTABLISHED_BY_FOCUSED_SCOPE`, release-monolith nonexecution
+and all physical/ART, hostile-network, independent interoperability and
+professional cryptographic validation limits.
 
 ## Unselected Windows core diagnostic caller follow-through
 
@@ -536,11 +630,11 @@ None of these tests or packaging tasks is requested by revision19.
 
 ### Current focused-scope limits
 
-For either focused Windows scope, `hostQualification` is always
+For every focused scope, `hostQualification` is always
 `NOT_ESTABLISHED_BY_FOCUSED_SCOPE`, including when the selected components pass.
 The CLI accepts `full` for the existing roles, `windows-followup` and
-`windows-diagnostics` only for Windows, and `apple-followup`, `apple-provenance`
-and `apple-native-compilation` only for Apple Silicon, rejecting other pairs
+`windows-diagnostics` only for Windows, and `apple-followup`, `apple-provenance`,
+`apple-native-compilation` and `apple-owned-cancellation` only for Apple Silicon, rejecting other pairs
 before state initialization. Full defaults remain
 unchanged; `FULL_COMPONENT_SCOPE` describes their requested scope, not a successful
 qualification. Omitted Windows full-profile components are **NOT_EXECUTED by
@@ -906,7 +1000,7 @@ and owner architecture/product decisions (#120) require their own participants,
 inputs and evidence. This facility does not supply them or change their dispositions.
 Actual OSV results and successful dependency submission also remain separate from
 policy fixtures/lockfile coverage. Full Windows, Intel, Linux and Apple Silicon
-corroboration are not supplied by this selected seven-class Windows request.
+corroboration are not supplied by a focused host request.
 
 Follow the [release checklist](../releasing/checklist.md) for any future release.
 The audit's 0.8.0+ compatibility decisions remain in force despite snapshot naming.

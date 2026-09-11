@@ -61,6 +61,20 @@ def windows_report(required_tasks=WINDOWS_TASKS):
     }
 
 
+def owned_native_report():
+    report = windows_report({HOST.OWNED_NATIVE_TASK})
+    report["host"] = {"os": "Mac OS X", "arch": "aarch64"}
+    report["tests"][HOST.OWNED_NATIVE_TASK]["passed"] = len(HOST.OWNED_NATIVE_METHODS)
+    return report
+
+
+def owned_native_xml():
+    name = "iosSimulatorArm64Test." + HOST.OWNED_NATIVE_CLASS
+    return ('<testsuite name="' + name + '" tests="4" skipped="0" failures="0" errors="0">' +
+            ''.join('<testcase classname="' + name + '" name="' + method + '[iosSimulatorArm64]"/>'
+                    for method in sorted(HOST.OWNED_NATIVE_METHODS)) + '</testsuite>').encode()
+
+
 def swift_case(identifier="SyntheticTests/testCase()", status="Success"):
     return {"_type": {"_name": "ActionTestMetadata"}, "identifier": {"_value": identifier},
             "testStatus": {"_value": status}}
@@ -452,7 +466,75 @@ class WindowsAssessmentTest(unittest.TestCase):
                 self.assess(report, invalid)
 
 
+class OwnedNativeAssessmentTest(unittest.TestCase):
+    def test_owned_helper_requires_exact_four_successes_and_no_other_modeled_test_task(self):
+        result = HOST.assess_owned_native(owned_native_report(), POLICY, TOKEN, owned_native_xml())
+        self.assertEqual(4, len(result["methods"]))
+        mutations = [
+            lambda r: r["tests"][HOST.OWNED_NATIVE_TASK].update(passed=3),
+            lambda r: r["tests"][HOST.OWNED_NATIVE_TASK].update(skipped=1),
+            lambda r: r["tests"][":p2p-core:iosSimulatorArm64Test"].update(inGraph=True),
+            lambda r: r["tests"][":p2p-transport-lan:jvmTest"].update(passed=1),
+        ]
+        for mutate in mutations:
+            report = owned_native_report()
+            mutate(report)
+            with self.subTest(report=report), self.assertRaises(ValueError):
+                HOST.assess_owned_native(report, POLICY, TOKEN, owned_native_xml())
+
+    def test_native_xml_cannot_hide_missing_duplicate_failed_skipped_or_wrong_class_methods(self):
+        xml = owned_native_xml()
+        first, second = [name.encode() for name in sorted(HOST.OWNED_NATIVE_METHODS)[:2]]
+        broken = [xml.replace(second, first), xml.replace(first, b"unknownMethod"),
+                  xml.replace(b'[iosSimulatorArm64]', b'[iosX64]'),
+                  xml.replace(b'errors="0"', b'errors="1"'), xml.replace(b'skipped="0"', b'skipped="1"'),
+                  xml.replace(b'/><testcase', b'><failure/></testcase><testcase', 1),
+                  xml.replace(b'classname="iosSimulatorArm64Test.', b'classname="other.', 1), b'<testsuite/>']
+        for data in broken:
+            with self.subTest(xml=data), self.assertRaises(ValueError):
+                HOST.assess_owned_native(owned_native_report(), POLICY, TOKEN, data)
+
+
 class SwiftAssessmentTest(unittest.TestCase):
+    def test_owned_focused_rosters_match_authored_sources_and_require_every_unique_success(self):
+        for name, methods in HOST.OWNED_SWIFT_METHODS.items():
+            source = (ROOT / "samples/iosApp/DiagnosticsTests" / (name + ".swift")).read_text()
+            self.assertEqual(methods, set(re.findall(r"func\s+(test\w+)\(", source)))
+        native_source = (ROOT / "library/p2p-transport-lan/src/appleTest/kotlin/dev/p2pkit/transport/lan/"
+                              "IosOwnedFlowCollectionTest.kt").read_text()
+        self.assertEqual(HOST.OWNED_NATIVE_METHODS, set(re.findall(r"@Test\s+fun\s+(\w+)\(", native_source)))
+        self.assertEqual({"OwnedFlowCollectionTests": 9, "SampleRunLifecycleTests": 12, "IosLanDiagnosticsLeaseTests": 7},
+                         {name: len(methods) for name, methods in HOST.OWNED_SWIFT_METHODS.items()})
+        probe_source = (ROOT / "samples/iosApp/CancellationProbeTests/SwiftOwnedFlowCancellationTests.swift").read_text()
+        self.assertEqual([HOST.OWNED_SWIFT_CASE.split("/", 1)[1].removesuffix("()")],
+                         re.findall(r"func\s+(test\w+)\(", probe_source))
+        for selection, targets in HOST.SWIFT_SELECTIONS.items():
+            objects = [swift_target(name, [swift_case(case) for case in sorted(cases)]) for name, cases in targets.items()]
+            self.assertEqual(set(targets), set(HOST.assess_swift(objects, selection=selection)))
+            selected = objects[0]["tests"]["_values"][0]["subtests"]["_values"]
+            for fault in ("missing", "duplicate", "unexpected", "failed", "skipped", "foreign-target"):
+                with self.subTest(selection=selection, fault=fault):
+                    broken = copy.deepcopy(objects)
+                    cases = broken[0]["tests"]["_values"][0]["subtests"]["_values"]
+                    if fault == "missing":
+                        cases.pop()
+                    elif fault == "duplicate":
+                        cases.append(copy.deepcopy(cases[0]))
+                    elif fault == "unexpected":
+                        cases[0] = swift_case("Unselected/testOther()")
+                    elif fault in ("failed", "skipped"):
+                        cases[0]["testStatus"]["_value"] = "Failure" if fault == "failed" else "Skipped"
+                    else:
+                        broken.append(swift_target("p2pkit-sample-uitests"))
+                    with self.assertRaises(ValueError):
+                        HOST.assess_swift(broken, selection=selection)
+            self.assertTrue(selected)
+            with self.assertRaises(ValueError):
+                HOST.assess_swift(objects)  # Focused cases never satisfy the ordinary BOTH-target requirement.
+        for selection in ("invented", [], True):
+            with self.subTest(selection=selection), self.assertRaises(ValueError):
+                HOST.assess_swift(swift_objects(), selection=selection)
+
     def test_nested_actual_metadata_requires_both_maintained_swift_targets(self):
         result = HOST.assess_swift(swift_objects())
         self.assertEqual(set(SWIFT_TARGETS), set(result))
@@ -667,7 +749,8 @@ class HostInvocationTest(unittest.TestCase):
                              ("macos-x64", "windows-diagnostics"), ("windows-x64", "apple-followup"),
                              ("macos-x64", "apple-followup"), ("windows-x64", "apple-provenance"),
                              ("macos-x64", "apple-provenance"), ("windows-x64", "apple-native-compilation"),
-                             ("macos-x64", "apple-native-compilation"), ("unknown", "full")):
+                             ("macos-x64", "apple-native-compilation"), ("windows-x64", "apple-owned-cancellation"),
+                             ("macos-x64", "apple-owned-cancellation"), ("unknown", "full")):
             state = self.work / (role + "-" + scope)
             with self.subTest(role=role, scope=scope), self.assertRaisesRegex(ValueError, "role/scope"):
                 HOST.Host(role, state, scope=scope)
@@ -1397,6 +1480,164 @@ class HostInvocationTest(unittest.TestCase):
                 self.assertIsNone(host.simulator)
         self.assertEqual([], self.calls, "Selection fixture must not invoke a product subprocess")
 
+    def test_owned_cancellation_mac_route_excludes_broad_graphs_and_cleans_before_its_producer(self):
+        host = self.host
+        host.role, host.scope, host.wrapper = "macos-arm64", "apple-owned-cancellation", self.repo / "gradlew"
+        self.next_status = 7  # Finalized helper/ABI product failure, not an infrastructure failure.
+        events = []
+        udid = "11111111-1111-1111-1111-111111111111"
+        simulator = self.simulator_inspection(["Shutdown", "Shutdown", "Shutdown"], available_udid=udid)
+        def inspect(label, arguments):
+            events.append(label)
+            return simulator(label, arguments)
+        def invoke(label, args, **kwargs):
+            events.append(label)
+            if label == "owned-flow-project-generation":
+                self.assertEqual([sys.executable, "scripts/tests/ios-project-generation-test.py",
+                    "IosProjectGenerationTest.test_owned_flow_sources_use_existing_test_containers",
+                    "IosProjectGenerationTest.test_ui_and_release_callers_preserve_both_test_targets",
+                    "IosProjectGenerationTest.test_cancellation_probe_is_excluded_from_both_acceptance_schemes",
+                    "IosProjectGenerationTest.test_generation_preserves_provenance_and_local_network_declarations"], args)
+                self.assertEqual({"kind": "command", "extra_env": {key: None for key in HOST.ADAPTER_OPT_INS}}, kwargs)
+                return True
+            # Reuse the existing receipt/controller boundary, including owned
+            # source/stop/finalization validation, instead of a bare False stub.
+            return HOST.Host.invoke(host, label, args, **kwargs)
+        def apple():
+            events.append("apple")
+            host.rows.append({"component": "synthetic-independent-apple", "result": "PASS"})
+        with contextlib.ExitStack() as stack:
+            invoked = stack.enter_context(mock.patch.object(host, "invoke", side_effect=invoke))
+            stack.enter_context(mock.patch.object(host, "inspect_tool", side_effect=inspect))
+            stack.enter_context(mock.patch.object(host, "apple", side_effect=apple))
+            for name in ("install_xcodegen", "clean_outputs"):
+                stack.enter_context(mock.patch.object(host, name, side_effect=lambda n=name: events.append(n)))
+            broad = stack.enter_context(mock.patch.object(host, "isolated_consumers"))
+            host.mac()
+            broad.assert_not_called()
+            self.assertEqual(2, invoked.call_count)
+        self.assertEqual(["install_xcodegen", "owned-flow-project-generation", "clean_outputs",
+                          "owned-flow-native-before", "owned-flow-helper-abi", "owned-flow-native-retire-before",
+                          "owned-flow-native-retire-after", "clean_outputs", "apple"], events)
+        self.assertEqual("Shutdown", host.simulator["stateAfter"])
+        self.assertEqual(1, len(self.calls), "Only the native leaf reaches the modeled controller")
+        self.assertEqual([("owned-flow-helper-abi", "FAIL"), ("owned-flow-helper-execution", "FAIL"),
+                          ("synthetic-independent-apple", "PASS")],
+                         [(row["component"], row["result"]) for row in host.rows])
+        assessment = json.loads((host.evidence / "owned-flow-helper-execution.json").read_text())
+        self.assertEqual("FAIL", assessment["result"])
+        self.assertIn("no helper or ABI completion is awarded", assessment["error"])
+        with mock.patch.object(host, "inspect_tool", side_effect=self.simulator_inspection(["Shutdown", "Shutdown"])):
+            self.assertEqual(1, self.finalize())
+        summary = self.summary()
+        self.assertEqual("FAIL", summary["result"])
+        self.assertTrue(summary["safeToContinue"])
+        self.assertEqual(7, summary["components"][0]["exitCode"])
+        self.assertEqual("NOT_ESTABLISHED_BY_FOCUSED_SCOPE", summary["hostQualification"])
+
+    def test_owned_helper_uses_exact_leaf_retained_reports_and_actual_native_abi_task_lines(self):
+        udid = "11111111-1111-1111-1111-111111111111"
+        prefix = "owned-flow-native"
+        for fault in (None, "missing-xml", "wrong-xml", "abi-not-executed", "product-failed",
+                      "interrupted", "retirement-unproved", "unowned"):
+            with self.subTest(fault=fault):
+                fixture = HostInvocationTest()
+                fixture.setUp()
+                self.addCleanup(fixture.doCleanups)
+                host = fixture.host
+                host.role, host.scope, host.wrapper = "macos-arm64", "apple-owned-cancellation", fixture.repo / "gradlew"
+                (fixture.repo / "gradle").mkdir()
+                (fixture.repo / "gradle/platform-test-policy.json").write_text(json.dumps(POLICY))
+                def receipt(record, path, evidence, phase):
+                    if phase != "before-write" or record["purpose"] != "owned-flow-helper-abi":
+                        return
+                    xml_name = ("library/p2p-transport-lan/build/test-results/iosSimulatorArm64Test/"
+                                "TEST-iosSimulatorArm64Test." + HOST.OWNED_NATIVE_CLASS + ".xml")
+                    entries = [("build/reports/platform-tests/" + TOKEN + "/execution.json",
+                                json.dumps(owned_native_report()).encode())]
+                    if fault != "missing-xml":
+                        entries.append((xml_name, owned_native_xml().replace(b"[iosSimulatorArm64]", b"[iosX64]")
+                                        if fault == "wrong-xml" else owned_native_xml()))
+                    for source, data in entries:
+                        target = evidence / "reports" / source
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(data)
+                        record["reports"].append({"source": source, "classification": "changed-since-admission",
+                            "retained": "reports/" + source, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
+                    (evidence / "report-manifest.json").write_text(json.dumps({"schema": 1, "records": record["reports"]}))
+                    tasks = ("iosArm64MainKlibrary", "iosSimulatorArm64MainKlibrary", "iosX64MainKlibrary",
+                             "internalDumpKotlinAbi", "checkKotlinAbi")
+                    (evidence / "product.stdout.log").write_text(''.join(
+                        "> Task :p2p-transport-lan:" + task + (" UP-TO-DATE" if fault == "abi-not-executed" else "") + "\n"
+                        for task in tasks))
+                fixture.next_mutation = receipt
+                fixture.next_status = 7 if fault == "product-failed" else 0
+                fixture.next_wait = "interrupt" if fault == "interrupted" else None
+                states = ["Booted"] if fault == "unowned" else ["Shutdown",
+                    "Shutdown" if fault == "product-failed" else "Booted",
+                    "Booted" if fault == "retirement-unproved" else "Shutdown"]
+                simulator = fixture.simulator_inspection(states, available_udid=udid)
+                events = []
+                original_invoke = host.invoke
+                def invoke(label, args, **kwargs):
+                    events.append(label)
+                    if label == prefix + "-retire-shutdown":
+                        self.assertTrue(host.finalizing, "native retirement uses the existing reserved interval")
+                        self.assertEqual(["xcrun", "simctl", "shutdown", udid], args)
+                        fixture.next_status, fixture.next_wait = 0, None
+                    return original_invoke(label, args, **kwargs)
+                def inspect(label, arguments):
+                    events.append(label)
+                    return simulator(label, arguments)
+                identifiers = iter((TOKEN, "d" * 32, "e" * 32))
+                with mock.patch.object(HOST.uuid, "uuid4", side_effect=lambda: types.SimpleNamespace(hex=next(identifiers))), \
+                        mock.patch.object(host, "invoke", side_effect=invoke), \
+                        mock.patch.object(host, "inspect_tool", side_effect=inspect):
+                    if fault in ("interrupted", "retirement-unproved", "unowned"):
+                        with self.assertRaises((HOST.InfrastructureFailure, ValueError)):
+                            host.owned_flow_native()
+                    else:
+                        self.assertIs(host.owned_flow_native(), fault is None)
+                self.assertFalse(host.finalizing)
+                if fault == "unowned":
+                    self.assertEqual([prefix + "-before"], events)
+                    self.assertEqual([], fixture.calls)
+                    self.assertFalse(host.safe)
+                    self.assertIsNone(host.simulator)
+                    continue
+                expected = [prefix + "-before", "owned-flow-helper-abi", prefix + "-retire-before"]
+                if fault != "product-failed":
+                    expected.append(prefix + "-retire-shutdown")
+                self.assertEqual(expected + [prefix + "-retire-after"], events)
+                self.assertEqual(1 if fault == "product-failed" else 2, len(fixture.calls))
+                admission = json.loads((host.evidence / (prefix + "-admission.json")).read_text())
+                self.assertEqual(udid, admission["udid"])
+                self.assertEqual("Shutdown", admission["stateBefore"])
+                self.assertEqual("host-owned-flow-helper-abi.json", admission["nativeInvocationReceipt"])
+                for name in [admission["initialStateObservation"], *admission["requiredRetirementObservations"]]:
+                    self.assertTrue((host.evidence / name).is_file())
+                native = json.loads((host.state / admission["nativeInvocationReceipt"]).read_text())
+                self.assertEqual([HOST.OWNED_NATIVE_TASK, "--device", udid, "--tests", HOST.OWNED_NATIVE_CLASS,
+                    ":p2p-transport-lan:checkKotlinAbi", "--continue", "--init-script",
+                    str(fixture.repo / "gradle/platform-test-coverage.init.gradle"),
+                    "-Pp2pkit.testCoverageRoot=" + str(fixture.repo), "-Pp2pkit.testCoverageToken=" + TOKEN],
+                    native["requestedArgv"])
+                self.assertTrue((Path(native["evidenceDirectory"]) / "product.stdout.log").is_file())
+                if fault in ("interrupted", "retirement-unproved"):
+                    self.assertFalse(host.safe)
+                    self.assertFalse((host.evidence / "owned-flow-helper-execution.json").exists())
+                    if fault == "interrupted":
+                        self.assertEqual("Shutdown", host.simulator["stateAfter"])
+                    else:
+                        self.assertNotIn("stateAfter", host.simulator)
+                    continue
+                self.assertTrue(host.safe, "A retained report/selection failure is not an ownership bypass")
+                self.assertEqual("Shutdown", host.simulator["stateAfter"])
+                assessment = json.loads((host.evidence / "owned-flow-helper-execution.json").read_text())
+                self.assertEqual("PASS" if fault is None else "FAIL", assessment["result"])
+                if fault is None:
+                    self.assertEqual(4, len(assessment["details"]["methods"]))
+
     def test_mac_batches_artifacts_and_reuses_the_consumer_publication_without_erasing_failed_dependencies(self):
         # Orchestration only: existing invocation/retention controls exercise
         # actual receipt validation, file copies and owned cleanup boundaries.
@@ -1523,13 +1764,14 @@ class HostInvocationTest(unittest.TestCase):
     def test_apple_provenance_requires_visible_reuse_before_only_the_isolated_probe(self):
         task = ":p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance"
         udid = "11111111-1111-1111-1111-111111111111"
-        for outcome in ("bound", "missing-reuse", "minimum-os-failed"):
-            with self.subTest(outcome=outcome):
+        for scope, outcome in [(scope, outcome) for scope in ("apple-provenance", "apple-owned-cancellation")
+                               for outcome in ("bound", "missing-reuse", "minimum-os-failed")]:
+            with self.subTest(scope=scope, outcome=outcome):
                 fixture = HostInvocationTest()
                 fixture.setUp()
                 self.addCleanup(fixture.doCleanups)
                 host = fixture.host
-                host.role, host.scope, host.wrapper = "macos-arm64", "apple-provenance", fixture.repo / "gradlew"
+                host.role, host.scope, host.wrapper = "macos-arm64", scope, fixture.repo / "gradlew"
                 fixture.seed_apple_sidecars()
                 events = []
                 original_invoke = host.invoke
@@ -1570,8 +1812,10 @@ class HostInvocationTest(unittest.TestCase):
                         mock.patch.object(host, "retain_xcframework_header", side_effect=retained), \
                         mock.patch.object(host, "retain_native_binary", side_effect=retained), \
                         mock.patch.object(host, "inspect_tool", side_effect=inspect), \
+                        mock.patch.object(host, "swift_owned_flow_lifecycle",
+                            side_effect=lambda *args: events.append("swift-owned-flow-lifecycle")) as lifecycle, \
                         mock.patch.object(host, "swift_cancellation_probe",
-                            side_effect=lambda *args: events.append("swift-cancellation-probe")) as probe:
+                            side_effect=lambda *args, **kwargs: events.append("swift-cancellation-probe")) as probe:
                     host.apple()
                 expected = ["xcframework-build", "xcframework-inspect", "xcframework-device-header",
                             "xcframework-device", "xcframework-simulator-header", "xcframework-simulator"]
@@ -1585,10 +1829,17 @@ class HostInvocationTest(unittest.TestCase):
                     proof = json.loads((host.evidence / "xcframework-reuse-receipt.json").read_text())
                     self.assertEqual("PASS" if outcome == "bound" else "FAIL", proof["result"])
                 if outcome == "bound":
-                    expected += ["simulators-before", "swift-cancellation-probe"]
-                    probe.assert_called_once_with(host.state / "work/swift-ui", udid)
+                    expected += ["simulators-before", *(["swift-owned-flow-lifecycle"]
+                                 if scope == "apple-owned-cancellation" else []), "swift-cancellation-probe"]
+                    if scope == "apple-owned-cancellation":
+                        lifecycle.assert_called_once_with(host.state / "work/swift-ui", udid)
+                        probe.assert_called_once_with(host.state / "work/swift-ui", udid, owned=True)
+                    else:
+                        lifecycle.assert_not_called()
+                        probe.assert_called_once_with(host.state / "work/swift-ui", udid)
                     self.assertEqual("Shutdown", host.simulator["stateBefore"])
                 else:
+                    lifecycle.assert_not_called()
                     probe.assert_not_called()
                 self.assertEqual(expected, events)
                 self.assertEqual([task], host.receipts["xcframework-build"]["requestedArgv"])
@@ -2196,14 +2447,17 @@ class HostInvocationTest(unittest.TestCase):
         self.assertFalse(self.summary()["safeToContinue"])
         self.assertNotIn("safe_to_continue=true", self.output.read_text())
 
-    def simulator_inspection(self, states):
+    def simulator_inspection(self, states, *, available_udid=None):
         values = iter(states)
 
         def inspect(label, command):
             self.assertEqual(["xcrun", "simctl", "list", "--json", "devices", "available"], command)
-            path = self.host.evidence / (label + ".json")
-            path.write_text(json.dumps({"devices": {"synthetic-runtime": [
-                {"udid": self.host.simulator["udid"], "state": next(values)},
+            path = self.host.evidence / (label + (".stdout.log" if available_udid else ".json"))
+            device = {"udid": available_udid or self.host.simulator["udid"], "state": next(values)}
+            if available_udid:
+                device.update(name="iPhone 17", isAvailable=True)
+            runtime = "com.apple.CoreSimulator.SimRuntime.iOS-26-5" if available_udid else "synthetic-runtime"
+            path.write_text(json.dumps({"devices": {runtime: [device,
                 {"udid": "22222222-2222-2222-2222-222222222222", "state": "Booted"}]}}), encoding="utf-8")
             return path
         return inspect
@@ -2236,8 +2490,13 @@ class HostInvocationTest(unittest.TestCase):
                  for outcome in (True, False, "interrupted", "retirement-failed", "unowned")]
         cases.extend(("macos-x64", "full", outcome) for outcome in (True, False, "unowned"))
         cases.extend(("macos-arm64", "apple-provenance", outcome) for outcome in (True, "unowned"))
+        cases.extend(("macos-arm64", "apple-owned-cancellation", outcome)
+                     for outcome in (True, False, "interrupted", "retirement-failed", "unowned"))
         for role, scope, outcome in cases:
             with self.subTest(role=role, scope=scope, outcome=outcome):
+                owned = scope == "apple-owned-cancellation"
+                prefix = "swift-owned-cancellation" if owned else "swift-cancellation-probe"
+                isolation = "swift-owned-cancellation" if owned else "swift-cancellation"
                 fixture = HostInvocationTest()
                 fixture.setUp()
                 self.addCleanup(fixture.doCleanups)
@@ -2245,18 +2504,19 @@ class HostInvocationTest(unittest.TestCase):
                 host.role, host.scope = role, scope
                 host.simulator = {"udid": udid, "stateBefore": "Booted" if outcome == "unowned" else "Shutdown"}
                 ui_dir = fixture.state / "work/swift-ui"
-                bundle = ui_dir / "DerivedData/Logs/Test/swift-cancellation-probe.xcresult"
+                bundle = ui_dir / ("DerivedData/Logs/Test/" + prefix + ".xcresult")
                 events = []
                 def invoke(label, arguments, **kwargs):
                     events.append(label)
                     if label.endswith("-shutdown"):
                         self.assertEqual(["xcrun", "simctl", "shutdown", udid], arguments)
-                        if label == "swift-cancellation-retire-shutdown":
+                        if label == isolation + "-retire-shutdown":
                             self.assertTrue(host.finalizing, "retirement can use the reserved cleanup interval")
                             return outcome != "retirement-failed"
                         return True
-                    self.assertEqual("swift-cancellation-probe-invocation", label)
-                    self.assertEqual(["bash", "scripts/run-ios-ui-tests.sh", "run-cancellation-probe"], arguments)
+                    self.assertEqual(prefix + "-invocation", label)
+                    self.assertEqual(["bash", "scripts/run-ios-ui-tests.sh",
+                                      "run-owned-cancellation" if owned else "run-cancellation-probe"], arguments)
                     self.assertEqual(udid, kwargs["extra_env"]["SIM_UDID"])
                     self.assertEqual(900, kwargs["timeout"])
                     self.assertNotIn("stateAfter", host.simulator, "pre-probe shutdown cannot masquerade as final retirement")
@@ -2268,43 +2528,113 @@ class HostInvocationTest(unittest.TestCase):
                     return outcome is not False
                 simulator = fixture.simulator_inspection(["Booted", "Shutdown", "Booted", "Shutdown"])
                 def inspect(label, arguments):
-                    if label.startswith("swift-cancellation-probe-"):
+                    if label in (prefix + "-actions", prefix + "-tests-0"):
                         expected = ["xcrun", "xcresulttool", "get", "object", "--legacy", "--format", "json",
                                     "--path", str(bundle)]
                         if label.endswith("tests-0"):
                             expected += ["--id", "synthetic-tests"]
                         self.assertEqual(expected, arguments)
                         path = host.evidence / (label + ".json")
-                        path.write_text(json.dumps({"actions": {"_values": [{"actionResult": {
-                            "testsRef": {"id": {"_value": "synthetic-tests"}}}}]}}))
+                        if owned and label.endswith("tests-0"):
+                            value = swift_target("p2pkit-sample-cancellation-probe-tests", [swift_case(HOST.OWNED_SWIFT_CASE)])
+                        else:
+                            value = {"actions": {"_values": [{"actionResult": {
+                                "testsRef": {"id": {"_value": "synthetic-tests"}}}}]}}
+                        path.write_text(json.dumps(value))
                         return path
                     return simulator(label, arguments)
                 with mock.patch.object(host, "invoke", side_effect=invoke), \
                         mock.patch.object(host, "inspect_tool", side_effect=inspect):
                     if outcome in ("interrupted", "retirement-failed"):
                         with self.assertRaises((HOST.InfrastructureFailure, ValueError)):
-                            host.swift_cancellation_probe(ui_dir, udid)
+                            host.swift_cancellation_probe(ui_dir, udid, **({"owned": True} if owned else {}))
                     else:
-                        host.swift_cancellation_probe(ui_dir, udid)
+                        host.swift_cancellation_probe(ui_dir, udid, **({"owned": True} if owned else {}))
                 if outcome == "unowned":
                     self.assertEqual([], events)
-                    self.assertEqual({"component": "swift-cancellation-probe-admission", "result": "FAIL",
-                                      "inspectionOnly": True, "investigationOnly": True,
+                    self.assertEqual({"component": prefix + "-admission", "result": "FAIL",
+                                      "inspectionOnly": True, "investigationOnly": not owned,
                                       "reason": "Owned initially Shutdown simulator unavailable"}, host.rows[-1])
-                    admission = json.loads((host.evidence / "swift-cancellation-probe-admission.json").read_text())
+                    admission = json.loads((host.evidence / (prefix + "-admission.json")).read_text())
                     self.assertEqual("NOT_EXECUTED", admission["result"])
-                    self.assertFalse((host.evidence / "swift-cancellation-probe-result.json").exists())
+                    self.assertFalse((host.evidence / (prefix + "-result.json")).exists())
                     continue
-                self.assertEqual(["swift-cancellation-isolate-shutdown", "swift-cancellation-probe-invocation",
-                                  "swift-cancellation-retire-shutdown"], events)
-                report = json.loads((host.evidence / "swift-cancellation-probe-result.json").read_text())
+                self.assertEqual([isolation + "-isolate-shutdown", prefix + "-invocation",
+                                  isolation + "-retire-shutdown"], events)
+                report = json.loads((host.evidence / (prefix + "-result.json")).read_text())
                 self.assertEqual(outcome != "retirement-failed", report["ownedSimulatorShutdownObserved"])
-                self.assertEqual("PENDING_NATIVE_EVIDENCE_REVIEW", report["cancellationVerdict"])
+                self.assertEqual("SEE_NATIVE_CASE_ASSESSMENT" if owned else "PENDING_NATIVE_EVIDENCE_REVIEW",
+                                 report["cancellationVerdict"])
+                if owned and type(outcome) is bool:
+                    assessment = json.loads((host.evidence / (prefix + "-case-execution.json")).read_text())
+                    self.assertEqual("PASS" if outcome else "FAIL", assessment["result"])
                 self.assertEqual(False if outcome is False else None if outcome == "interrupted" else True,
                                  report["invocationSucceeded"])
                 self.assertTrue((host.evidence / "swift-xcresult" / bundle.name / "retained-observation.txt").is_file())
                 self.assertFalse(host.finalizing)
                 if outcome in ("interrupted", "retirement-failed"):
+                    self.assertFalse(host.safe)
+
+    def test_owned_lifecycle_retires_and_retains_results_on_success_failure_and_interruption(self):
+        udid = "11111111-1111-1111-1111-111111111111"
+        prefix = "swift-owned-flow-lifecycle"
+        for outcome in (True, False, "interrupted", "retirement-failed"):
+            with self.subTest(outcome=outcome):
+                fixture = HostInvocationTest()
+                fixture.setUp()
+                self.addCleanup(fixture.doCleanups)
+                host = fixture.host
+                host.role, host.scope = "macos-arm64", "apple-owned-cancellation"
+                host.simulator = {"udid": udid, "stateBefore": "Shutdown"}
+                ui_dir = fixture.state / "work/swift-ui"
+                bundle = ui_dir / ("DerivedData/Logs/Test/" + prefix + ".xcresult")
+                events = []
+                def invoke(label, arguments, **kwargs):
+                    events.append(label)
+                    if label.endswith("-shutdown"):
+                        self.assertEqual(["xcrun", "simctl", "shutdown", udid], arguments)
+                        self.assertTrue(host.finalizing)
+                        return outcome != "retirement-failed"
+                    self.assertEqual(prefix + "-invocation", label)
+                    self.assertEqual(["bash", "scripts/run-ios-ui-tests.sh", "run-owned-flow-lifecycle"], arguments)
+                    self.assertEqual(udid, kwargs["extra_env"]["SIM_UDID"])
+                    bundle.mkdir(parents=True)
+                    (bundle / "raw.txt").write_text("synthetic lifecycle metadata, not native execution")
+                    if outcome == "interrupted":
+                        host.safe = False
+                        raise HOST.InfrastructureFailure("synthetic lifecycle interruption")
+                    return outcome is not False
+                simulator = fixture.simulator_inspection(["Booted", "Shutdown"])
+                def inspect(label, arguments):
+                    if label not in (prefix + "-actions", prefix + "-tests-0"):
+                        return simulator(label, arguments)
+                    self.assertTrue((host.evidence / "swift-xcresult" / bundle.name / "raw.txt").is_file())
+                    expected = ["xcrun", "xcresulttool", "get", "object", "--legacy", "--format", "json", "--path", str(bundle)]
+                    if label.endswith("tests-0"):
+                        expected += ["--id", "synthetic-lifecycle"]
+                        value = swift_target("p2pkit-sample-tests", [swift_case(case) for case in sorted(
+                            HOST.SWIFT_SELECTIONS["owned-flow-lifecycle"]["p2pkit-sample-tests"])])
+                    else:
+                        value = {"actions": {"_values": [{"actionResult": {
+                            "testsRef": {"id": {"_value": "synthetic-lifecycle"}}}}]}}
+                    self.assertEqual(expected, arguments)
+                    path = host.evidence / (label + ".json")
+                    path.write_text(json.dumps(value))
+                    return path
+                with mock.patch.object(host, "invoke", side_effect=invoke), \
+                        mock.patch.object(host, "inspect_tool", side_effect=inspect):
+                    if type(outcome) is bool:
+                        self.assertIs(outcome, host.swift_owned_flow_lifecycle(ui_dir, udid))
+                    else:
+                        with self.assertRaises((HOST.InfrastructureFailure, ValueError)):
+                            host.swift_owned_flow_lifecycle(ui_dir, udid)
+                self.assertEqual([prefix + "-invocation", prefix + "-retire-shutdown"], events)
+                self.assertTrue((host.evidence / "swift-xcresult" / bundle.name / "raw.txt").is_file())
+                self.assertFalse(host.finalizing)
+                if type(outcome) is bool:
+                    self.assertTrue(host.safe)
+                    self.assertEqual("Shutdown", host.simulator["stateAfter"])
+                else:
                     self.assertFalse(host.safe)
 
     def test_failed_simulator_shutdown_blocks_final_continuation(self):
@@ -2766,6 +3096,7 @@ class SdkSetupTest(unittest.TestCase):
         cases = [(role, "full", 0) for role in HOST.ROLES]
         cases.extend([("windows-x64", "windows-followup", 0), ("windows-x64", "windows-diagnostics", 0),
                       ("macos-arm64", "apple-followup", 0), ("macos-arm64", "apple-provenance", 0),
+                      ("macos-arm64", "apple-owned-cancellation", 0),
                       ("macos-arm64", "apple-native-compilation", 0),
                       ("macos-arm64", "apple-native-compilation", 7),
                       ("macos-x64", "full", 7)])

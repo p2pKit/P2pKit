@@ -13,16 +13,21 @@ RUN_DIR="${IOS_RUN_DIR:-}"
 action="${1:-}"
 case "$action" in
     "") [[ $# -eq 0 ]] ;;
-    prepare-jvm-transfer|run-jvm-transfer|run-cancellation-probe)
+    prepare-jvm-transfer|run-jvm-transfer|run-cancellation-probe|run-owned-flow-lifecycle|run-owned-cancellation)
         [[ $# -eq 1 && -n "$RUN_DIR" && -n "${P2PKIT_AUDIT_STATE_DIR:-}" ]] || {
             echo "[ios-run] Scoped XCTest requires an owned audit invocation and explicit IOS_RUN_DIR." >&2
             exit 2
         }
         ;;
-    *) echo "usage: $0 [prepare-jvm-transfer|run-jvm-transfer|run-cancellation-probe]" >&2; exit 2 ;;
+    *) echo "usage: $0 [prepare-jvm-transfer|run-jvm-transfer|run-cancellation-probe|run-owned-flow-lifecycle|run-owned-cancellation]" >&2; exit 2 ;;
 esac
 if [[ "$action" == "run-cancellation-probe" && -z "$SIM_UDID" ]]; then
     echo "[ios-run] Cancellation investigation requires the outer owner's exact simulator UDID." >&2
+    exit 2
+fi
+
+if [[ ( "$action" == "run-owned-flow-lifecycle" || "$action" == "run-owned-cancellation" ) && -z "$SIM_UDID" ]]; then
+    echo "[ios-run] Owned-flow checks require the outer owner's exact simulator UDID." >&2
     exit 2
 fi
 
@@ -45,9 +50,10 @@ DERIVED_DATA="$RUN_DIR/DerivedData"
 
 acquire_ios_run_lock "$IOS_LAUNCH_LOCK"
 IOS_LAUNCH_OWNS_LOCK=1
-# Neither terminal run action may bootstrap/regenerate its already prepared
+# Terminal/focused run actions never bootstrap/regenerate their already prepared
 # source-bound project/framework; the Xcode provenance phase remains mandatory.
-if [[ "$action" != "run-jvm-transfer" && "$action" != "run-cancellation-probe" ]]; then
+if [[ "$action" != "run-jvm-transfer" && "$action" != "run-cancellation-probe" &&
+      "$action" != "run-owned-flow-lifecycle" && "$action" != "run-owned-cancellation" ]]; then
     ensure_ios_xcframework_present "$REPO_ROOT"
     (cd "$PROJECT_DIR" && run_ios_mutation xcodegen generate) | tail -3
 fi
@@ -79,7 +85,7 @@ elif [[ "$action" == "prepare-jvm-transfer" ]]; then
 elif [[ "$action" == "run-jvm-transfer" ]]; then
     run_ios_mutation python3 "$SCRIPT_DIR/run-swift-jvm-transfer.py" \
         --derived-data "$DERIVED_DATA" --simulator "$udid"
-else
+elif [[ "$action" == "run-cancellation-probe" ]]; then
     # This one-method host is retired by Host.swift_cancellation_probe, including
     # when XCTest fails. Never append normal acceptance tests to this invocation.
     run_ios_xcodebuild \
@@ -93,6 +99,37 @@ else
         -parallel-testing-enabled NO \
         -maximum-concurrent-test-simulator-destinations 1 \
         -only-testing:p2pkit-sample-cancellation-probe-tests/SwiftFlowCancellationProbeTests/testSwiftTaskCancellationFinishesActualDiagnosticCollection \
+        SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
+        test
+elif [[ "$action" == "run-owned-flow-lifecycle" ]]; then
+    run_ios_xcodebuild \
+        -project "$PROJECT_DIR/p2pkit-sample.xcodeproj" \
+        -scheme p2pkit-sample-ui \
+        -configuration Debug \
+        -sdk iphonesimulator \
+        -destination "platform=iOS Simulator,id=$udid" \
+        -derivedDataPath "$DERIVED_DATA" \
+        -resultBundlePath "$DERIVED_DATA/Logs/Test/swift-owned-flow-lifecycle.xcresult" \
+        -parallel-testing-enabled NO \
+        -maximum-concurrent-test-simulator-destinations 1 \
+        -only-testing:p2pkit-sample-tests/OwnedFlowCollectionTests \
+        -only-testing:p2pkit-sample-tests/SampleRunLifecycleTests \
+        -only-testing:p2pkit-sample-tests/IosLanDiagnosticsLeaseTests \
+        SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
+        test
+elif [[ "$action" == "run-owned-cancellation" ]]; then
+    # Positive production-adapter case, alone and last; never rerun the raw probe here.
+    run_ios_xcodebuild \
+        -project "$PROJECT_DIR/p2pkit-sample.xcodeproj" \
+        -scheme p2pkit-sample-cancellation-probe \
+        -configuration Debug \
+        -sdk iphonesimulator \
+        -destination "platform=iOS Simulator,id=$udid" \
+        -derivedDataPath "$DERIVED_DATA" \
+        -resultBundlePath "$DERIVED_DATA/Logs/Test/swift-owned-cancellation.xcresult" \
+        -parallel-testing-enabled NO \
+        -maximum-concurrent-test-simulator-destinations 1 \
+        -only-testing:p2pkit-sample-cancellation-probe-tests/SwiftOwnedFlowCancellationTests/testOwnedAdapterCancellationFinishesActualDiagnosticCollection \
         SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
         test
 fi

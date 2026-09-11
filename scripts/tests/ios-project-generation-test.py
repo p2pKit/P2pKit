@@ -119,6 +119,16 @@ class IosProjectGenerationTest(unittest.TestCase):
                 }
                 self.assertTrue({"p2pkit-sample-tests", "p2pkit-sample-uitests"} <= enabled)
 
+    def test_owned_flow_sources_use_existing_test_containers(self):
+        project_text = (self.generated / "project.pbxproj").read_text()
+        for name in ("OwnedFlowCollection.swift", "OwnedFlowCollectionTests.swift",
+                     "SampleRunLifecycleTests.swift", "IosLanDiagnosticsLeaseTests.swift",
+                     "SwiftFlowCancellationProbeTests.swift", "SwiftOwnedFlowCancellationTests.swift"):
+            with self.subTest(source=name):
+                self.assertIn(name + " in Sources", project_text)
+        self.assertEqual({"p2pkit-sample", "p2pkit-sample-ui", "p2pkit-sample-jvm-transfer",
+                          "p2pkit-sample-cancellation-probe"}, set(self.schemes))
+
     def test_generation_preserves_provenance_and_local_network_declarations(self):
         project_text = (self.generated / "project.pbxproj").read_text()
         phases = [

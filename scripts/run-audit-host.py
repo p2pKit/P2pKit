@@ -19,6 +19,7 @@ import subprocess
 import sys
 import time
 import uuid
+import xml.etree.ElementTree as ET
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,9 +29,61 @@ ROLES = {"windows-x64": ("Windows", "x64"), "macos-arm64": ("Darwin", "arm64"),
          "macos-x64": ("Darwin", "x64")}
 SCOPES = {"full": set(ROLES), "windows-followup": {"windows-x64"}, "windows-diagnostics": {"windows-x64"},
           "apple-followup": {"macos-arm64"}, "apple-provenance": {"macos-arm64"},
-          "apple-native-compilation": {"macos-arm64"}}
+          "apple-native-compilation": {"macos-arm64"}, "apple-owned-cancellation": {"macos-arm64"}}
 CANCELLATION_PROBE_ROUTES = {("macos-arm64", "apple-followup"), ("macos-arm64", "apple-provenance"),
                              ("macos-x64", "full")}
+# Closed source inventories: native execution must contain every listed method,
+# never merely a nonzero class-prefix match. Update only with reviewed test changes.
+OWNED_NATIVE_TASK = ":p2p-transport-lan:iosSimulatorArm64Test"
+OWNED_NATIVE_CLASS = "dev.p2pkit.transport.lan.IosOwnedFlowCollectionTest"
+OWNED_NATIVE_METHODS = frozenset({
+    "cancellationBeforeStartNeverAdmitsSourceOrCallback",
+    "idleSharedFlowCancellationClosesSubscriptionAndPrivateParent",
+    "stateFlowReplayAndCancellationPreserveTheOtherSubscriber",
+    "normalCompletionAndFailuresRetainTheirOriginalTerminalCause",
+})
+OWNED_SWIFT_METHODS = {
+    "OwnedFlowCollectionTests": frozenset({
+        "testCancelBeforeStartClosesAdmissionAndCancelledWaitersStillWaitForNativeRetirement",
+        "testCancellationDuringImmediateCompletionRegistrationIsStickyAndDisposesTheReturnedHandle",
+        "testQueuedCallbackIsSkippedAndAcknowledgedBeforeCancelledDrainReturns",
+        "testSerialBackpressureAcknowledgesOnlyAfterDeliveryWithoutGrowingCallbackTaskOwnership",
+        "testNormalAndFailedNativeCompletionBothDrainAnAlreadyAcceptedCallback",
+        "testTypeMismatchCancelsNativeWithoutThrowingSwiftErrorAcrossKotlinAndPreservesFailure",
+        "testOverlappingEmitFailsClosedAndAcknowledgesBothWithoutAddingCallbackTasks",
+        "testBackgroundCallbacksAndCancellationUseTheSameThreadSafeAdmissionAndRetirement",
+        "testRetirementReleasesNativeJobRegistrationAndHandlerCapture",
+    }),
+    "SampleRunLifecycleTests": frozenset({
+        "testStopDuringManualInfoRejectsLateSuccessAndFailureBeforeObserverInstallation",
+        "testOldStartupFailureAndTracingReleaseCannotClearOrReleaseReplacement",
+        "testFailedRollbackRetainsOwnerRejectsAdmissionAndRetriesStopOperation",
+        "testCallerCancellationReachesRollbackInsteadOfAbandoningTheAcquiredKit",
+        "testActualCollectorQueuedCallbackCompletesWithoutPublishingIntoReplacement",
+        "testPermissionDelayRejectsCancellationAndStopEvenWhenTheDelayReturnsLate",
+        "testUnbuiltCreateFailureWaitsForOwnedDiagnosticsBeforeAllowingAnotherRun",
+        "testRemovedSessionRetireesAndLateCompletionCannotEraseReplacementLeases",
+        "testStopDrainsAllFourOwnedRolesAfterSdkCleanupAndPreservesObserverFailure",
+        "testFailedSdkStopDrainsObserversThenRetriesRealCleanupWithoutRecreatingThem",
+        "testCallerCancellationCannotPublishIdleBeforeOwnedNativeRetirement",
+        "testStopSkipsQueuedOwnedCallbackAndPublishesSuccessOnlyAfterItsAcknowledgement",
+    }),
+    "IosLanDiagnosticsLeaseTests": frozenset({
+        "testConsoleOptInMatchesBuildConfigurationAndDefaultSettingsAreRestored",
+        "testOverlappingOwnersAndStaleReleaseDoNotDisableTheActiveRun",
+        "testOutOfOrderReleasePreservesAllOtherOwners",
+        "testEachRunRestoresItsOwnHostConfiguration",
+        "testPreRetainingHostHistoryIsNotErasedOnRelease",
+        "testDeinitializationReleasesOnlyItsOwnLease",
+        "testReleaseBuildNeverTakesOwnershipOfExternalConsoleChanges",
+    }),
+}
+OWNED_SWIFT_CASE = "SwiftOwnedFlowCancellationTests/testOwnedAdapterCancellationFinishesActualDiagnosticCollection()"
+SWIFT_SELECTIONS = {
+    "owned-flow-lifecycle": {"p2pkit-sample-tests": {
+        name + "/" + method + "()" for name, methods in OWNED_SWIFT_METHODS.items() for method in methods}},
+    "owned-cancellation": {"p2pkit-sample-cancellation-probe-tests": {OWNED_SWIFT_CASE}},
+}
 WINDOWS_TASKS = {":p2p-core:jvmTest", ":p2p-transport-lan:jvmTest", ":p2p-network-provisioning-desktop:test"}
 WINDOWS_FOLLOWUP_TASKS = {":p2p-core:jvmTest"}
 WINDOWS_DIAGNOSTICS_TASKS = {":p2p-transport-lan:jvmTest"}
@@ -226,9 +279,13 @@ def assess_windows(report, policy, token, required_tasks=WINDOWS_TASKS):
     return {name: report["tests"][name] for name in sorted(required_tasks)}
 
 
-def assess_swift(objects):
-    """Inspect real xcresult testable summaries for BOTH maintained Swift targets."""
-    targets = {"p2pkit-sample-tests": [], "p2pkit-sample-uitests": []}
+def assess_swift(objects, selection=None):
+    """Require BOTH ordinary targets by default, or one explicit closed focused inventory."""
+    require(selection is None or type(selection) is str and selection in SWIFT_SELECTIONS,
+            "Unsupported focused Swift selection")
+    expected = SWIFT_SELECTIONS.get(selection)
+    targets = {name: [] for name in expected} if expected is not None else {
+        "p2pkit-sample-tests": [], "p2pkit-sample-uitests": []}
     def walk(value):
         if isinstance(value, dict):
             yield value
@@ -250,19 +307,54 @@ def assess_swift(objects):
             if kind.get("_name") != "ActionTestableSummary":
                 continue
             name = field(entry, "targetName")
-            if name not in targets:
+            if name not in targets and expected is None:
                 continue
             for test in walk(entry.get("tests", {})):
                 test_kind = test.get("_type", {})
                 require(type(test_kind) is dict, "Malformed Swift test type")
                 if test_kind.get("_name") == "ActionTestMetadata":
+                    require(name in targets, "Unexpected executed Swift target: " + name)
                     targets[name].append({"identifier": field(test, "identifier"), "status": field(test, "testStatus")})
     for name, cases in targets.items():
         require(cases and all(type(case["identifier"]) is str and case["identifier"] for case in cases),
                 "Missing actual Swift cases for " + name)
         require(len({case["identifier"] for case in cases}) == len(cases), "Duplicated Swift cases for " + name)
         require(all(case["status"] == "Success" for case in cases), "Failed/skipped/unknown Swift case in " + name)
+        if expected is not None:
+            require({case["identifier"] for case in cases} == expected[name],
+                    "Missing or unexpected selected Swift methods in " + name)
     return targets
+
+
+def assess_owned_native(report, policy, token, junit):
+    """Bind four real helper cases to fresh ARM events; no other test task may supply counts."""
+    required = load_gate().assess(report, policy, "ios-lan-arm64", "arm64", token)
+    require(required == {OWNED_NATIVE_TASK}, "Owned helper task differs from the maintained platform model")
+    for name, row in report["tests"].items():
+        if name == OWNED_NATIVE_TASK:
+            require(row["passed"] == len(OWNED_NATIVE_METHODS) and row["skipped"] == 0,
+                    "Owned native helper counts differ from the frozen method inventory")
+        else:
+            require(not row["inGraph"] and row["outcome"] == "NOT_REQUESTED" and
+                    row["passed"] == row["failed"] == row["skipped"] == 0,
+                    "Unexpected native test task in the focused graph: " + name)
+    require(type(junit) is bytes and 0 < len(junit) <= 1024 ** 2 and
+            b"<!DOCTYPE" not in junit and b"<!ENTITY" not in junit, "Invalid bounded native JUnit XML")
+    suite = ET.fromstring(junit)
+    native_class = "iosSimulatorArm64Test." + OWNED_NATIVE_CLASS
+    require(suite.tag == "testsuite" and suite.get("name") == native_class and
+            all(child.tag in ("properties", "testcase", "system-out", "system-err") for child in suite),
+            "Unexpected native helper JUnit suite")
+    cases = suite.findall("testcase")
+    expected = {method + "[iosSimulatorArm64]" for method in OWNED_NATIVE_METHODS}
+    require(suite.get("tests") == str(len(expected)) and all(suite.get(key) == "0"
+            for key in ("errors", "failures", "skipped")), "Failed/skipped or incomplete native JUnit suite")
+    require(len(cases) == len(expected) and {case.get("name") for case in cases} == expected and
+            all(case.get("classname") == native_class and
+                all(child.tag in ("system-out", "system-err") for child in case) for case in cases),
+            "Missing, duplicate, unexpected or unsuccessful native helper methods")
+    return {"task": OWNED_NATIVE_TASK, "class": native_class, "methods": sorted(expected),
+            "counts": report["tests"][OWNED_NATIVE_TASK]}
 
 
 class InfrastructureFailure(RuntimeError):
@@ -661,7 +753,7 @@ class Host:
         self.clean_outputs()
 
     def mac_policies(self):
-        if self.scope == "apple-followup":
+        if self.scope in ("apple-followup", "apple-owned-cancellation"):
             # Reuse unaffected source-bound policy results; native executor admission still runs above.
             return
         # Preserve release-gate ordering; no no-op replacement of real graph/native probes.
@@ -804,6 +896,23 @@ class Host:
             self.check("apple-tcp-options-sdk", self.inspect_tcp_options_headers)
         self.install_xcodegen()
         self.mac_policies()
+        if self.scope == "apple-owned-cancellation":
+            # One real generation setup checks the additive app source and retained test containers.
+            self.invoke("owned-flow-project-generation", [sys.executable,
+                        "scripts/tests/ios-project-generation-test.py",
+                        "IosProjectGenerationTest.test_owned_flow_sources_use_existing_test_containers",
+                        "IosProjectGenerationTest.test_ui_and_release_callers_preserve_both_test_targets",
+                        "IosProjectGenerationTest.test_cancellation_probe_is_excluded_from_both_acceptance_schemes",
+                        "IosProjectGenerationTest.test_generation_preserves_provenance_and_local_network_declarations"],
+                        kind="command", extra_env={key: None for key in ADAPTER_OPT_INS})
+            self.clean_outputs()
+            self.owned_flow_native()
+            self.clean_outputs()
+            # A finalized helper/ABI failure stays failed, but must not suppress
+            # independent fresh-producer/Swift evidence. Ownership, stop, source
+            # or cleanup exceptions still escape before reaching this chain.
+            self.apple()
+            return
         if self.scope == "apple-provenance":
             # All policy graphs/cleanup finish before the one retained fresh framework producer.
             self.apple()
@@ -831,6 +940,82 @@ class Host:
         self.invoke("swift-jvm-cli-prepare", [":p2p-sample-desktop:installDist"])
         # Receipt/helper manifests are copied by finalize(); preserve failed fixtures until that copy, too.
         self.apple()
+
+    def owned_flow_native(self):
+        """One fresh helper/ABI leaf; retain and assess its exact reports before cleanup."""
+        token = uuid.uuid4().hex
+        label, prefix = "owned-flow-helper-abi", "owned-flow-native"
+        try:
+            require(self.role == "macos-arm64" and self.scope == "apple-owned-cancellation",
+                    "Owned native helper requires its explicit ARM scope")
+            udid = self.select_simulator(prefix + "-before")
+            self.write(prefix + "-admission.json", {
+                "source": self.admission, "task": OWNED_NATIVE_TASK, "udid": udid,
+                "stateBefore": self.simulator["stateBefore"], "nativeInvocationReceipt": "host-" + label + ".json",
+                "initialStateObservation": prefix + "-before.stdout.log",
+                "requiredRetirementObservations": [prefix + "-retire-before.stdout.log", prefix + "-retire-after.stdout.log"],
+                "limits": "Exact device state only; not shared CoreSimulator service termination or native case success.",
+            })
+        except BaseException:
+            self.safe = False
+            raise
+        try:
+            tested = self.invoke(label, [OWNED_NATIVE_TASK, "--device", udid, "--tests", OWNED_NATIVE_CLASS,
+                                ":p2p-transport-lan:checkKotlinAbi", "--continue", "--init-script",
+                                str(ROOT / "gradle/platform-test-coverage.init.gradle"),
+                                "-Pp2pkit.testCoverageRoot=" + str(ROOT), "-Pp2pkit.testCoverageToken=" + token])
+        finally:
+            # KGP receives this exact owned device; even a failed/interrupted
+            # standalone spawn must be retired before any producer can begin.
+            finalizing = self.finalizing
+            self.finalizing = True
+            try:
+                self.shutdown_simulator(label=prefix + "-retire")
+                require(self.simulator.get("udid") == udid and self.simulator.get("stateAfter") == "Shutdown",
+                        "Owned native helper simulator retirement is not proven")
+            except BaseException:
+                self.safe = False
+                raise
+            finally:
+                self.finalizing = finalizing
+        def inspect():
+            require(tested is True, "Native helper/ABI invocation failed; no helper or ABI completion is awarded")
+            receipt = self.receipts[label]
+            directory = Path(receipt["evidenceDirectory"])
+            def retained(source):
+                rows = [row for row in receipt["reports"] if row["source"] == source]
+                require(len(rows) == 1 and rows[0]["classification"] == "changed-since-admission",
+                        "Missing fresh retained native helper report: " + source)
+                row = rows[0]
+                path = physical(directory / row["retained"])
+                require(path.is_relative_to(directory) and path.is_file() and
+                        path.stat().st_size == row["bytes"] and digest(path) == row["sha256"],
+                        "Native helper report differs from its finalized receipt")
+                return path
+            prefix = "library/p2p-transport-lan/build/test-results/iosSimulatorArm64Test/TEST-"
+            xml_source = prefix + "iosSimulatorArm64Test." + OWNED_NATIVE_CLASS + ".xml"
+            require([row["source"] for row in receipt["reports"]
+                    if row["source"].startswith(prefix) and row["source"].endswith(".xml")] == [xml_source],
+                    "Unexpected native test-class XML in the focused invocation")
+            execution = retained("build/reports/platform-tests/" + token + "/execution.json")
+            xml = retained(xml_source)
+            with xml.open("rb") as stream:
+                junit = stream.read(1024 ** 2 + 1)
+            result = assess_owned_native(read_json(execution),
+                                         read_json(ROOT / "gradle/platform-test-policy.json"), token, junit)
+            # These actual aggregate task names are observed in native Gradle logs,
+            # not invented per-target compares. Keep all compiler/compare log context.
+            abi = ["> Task :p2p-transport-lan:" + name for name in (
+                "iosArm64MainKlibrary", "iosSimulatorArm64MainKlibrary", "iosX64MainKlibrary",
+                "internalDumpKotlinAbi", "checkKotlinAbi")]
+            with physical(directory / "product.stdout.log").open(encoding="utf-8") as stream:
+                lines = [line.rstrip("\r\n") for line in stream if line.startswith("> Task :p2p-transport-lan:")]
+            require(all(lines.count(task) == 1 for task in abi), "Fresh native ABI dump/compare execution is missing")
+            return {**result, "token": token, "invocationId": receipt["id"], "source": self.admission,
+                    "executionSha256": digest(execution), "junitSha256": digest(xml), "abiTasks": abi,
+                    "productLogSha256": digest(directory / "product.stdout.log"),
+                    "limits": "Focused ARM helper and LAN ABI only; no whole-host or physical qualification."}
+        return self.check("owned-flow-helper-execution", inspect)
 
     def isolated_consumers(self):
         # One source-local publisher also supplies the independent archive gate.
@@ -986,11 +1171,12 @@ class Host:
             headers_ok = self.check(label, lambda: self.retain_xcframework_header(
                 label, binary.parent / "Headers/P2pKitShared.h", self.receipts["xcframework-build"]["id"])) and headers_ok
             self.retain_native_binary("xcframework-" + name, binary, self.receipts["xcframework-build"]["id"])
-        if not built or (self.scope == "apple-provenance" and not (inspected and headers_ok)):
+        strict_reuse = self.scope in ("apple-provenance", "apple-owned-cancellation")
+        if not built or (strict_reuse and not (inspected and headers_ok)):
             return
         if not self.invoke("xcode-project", [":iosApp:regenerateXcodeProject"]):
             return
-        if self.scope == "apple-provenance":
+        if strict_reuse:
             task = ":p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance"
             if not self.invoke("xcode-provenance", [task, "--console=plain"], timeout=900):
                 return
@@ -1025,27 +1211,14 @@ class Host:
                 return {"leaf": self.receipts["swift-warnings-build"]["id"], "marker": "** BUILD SUCCEEDED **"}
             if not self.check("swift-build-marker", require_marker):
                 return
-        # The maintained launcher resolves the same exact available device and retains its mutation lock.
-        devices = self.inspect_tool("simulators-before", ["xcrun", "simctl", "list", "--json", "devices", "available"])
-        devices = load_gate().read_json(devices).get("devices", {})
-        require(type(devices) is dict, "Missing actual simulator list")
-        choices = []
-        for runtime, candidates in devices.items():
-            match = re.search(r"\.SimRuntime\.iOS-([0-9-]+)$", runtime)
-            if match:
-                for device in candidates:
-                    if device.get("name") == "iPhone 17" and device.get("isAvailable") is not False:
-                        choices.append((tuple(map(int, match[1].split("-"))), device["udid"], device["state"]))
-        require(choices, "No available exact iPhone17 simulator; required Swift tests are not skipped")
-        if (self.role, self.scope) in CANCELLATION_PROBE_ROUTES:
-            # Prefer an already Shutdown available device for the terminal
-            # isolated probe; a Booted newest choice is not a hardware blocker.
-            choices = [choice for choice in choices if choice[2] == "Shutdown"] or choices
-        _, udid, state_before = sorted(choices)[-1]
-        require(re.fullmatch(r"[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}", udid) and
-                state_before in ("Booted", "Shutdown"), "Invalid simulator metadata")
-        self.simulator = {"udid": udid, "stateBefore": state_before, "scope": "Hosted simulator, not physical hardware"}
+        udid = self.select_simulator()
         ui_dir = self.state / "work/swift-ui"
+        if self.scope == "apple-owned-cancellation":
+            self.swift_owned_flow_lifecycle(ui_dir, udid)
+            # An ordinary lifecycle assertion failure stays failed; after proved
+            # retirement the independent actual-flow cancellation case may run last.
+            self.swift_cancellation_probe(ui_dir, udid, owned=True)
+            return
         if self.scope == "apple-provenance":
             self.swift_cancellation_probe(ui_dir, udid)
             return
@@ -1113,35 +1286,81 @@ class Host:
                 return result
             self.check("swift-jvm-case-integrity", inspect_result)
 
-    def swift_cancellation_probe(self, ui_dir, udid):
-        """One explicit investigative host; shutdown is cleanup, never cancellation success."""
-        require((self.role, self.scope) in CANCELLATION_PROBE_ROUTES,
+    def swift_owned_flow_lifecycle(self, ui_dir, udid):
+        """Only the three owned-flow/lifecycle classes, with failed raw evidence retained."""
+        require(self.role == "macos-arm64" and self.scope == "apple-owned-cancellation" and
+                self.simulator and self.simulator.get("udid") == udid and
+                self.simulator.get("stateBefore") == "Shutdown", "Owned lifecycle simulator is not admitted")
+        prefix = "swift-owned-flow-lifecycle"
+        bundle = ui_dir / ("DerivedData/Logs/Test/" + prefix + ".xcresult")
+        require(not bundle.exists(), "Owned lifecycle result path is not fresh")
+        tested = None
+        try:
+            tested = self.invoke(prefix + "-invocation", ["bash", "scripts/run-ios-ui-tests.sh", "run-owned-flow-lifecycle"],
+                                 kind="command", timeout=7200,
+                                 extra_env={"IOS_RUN_DIR": str(ui_dir), "KEEP_IOS_RUN_ARTIFACTS": "1", "SIM_UDID": udid})
+        finally:
+            # Also retire on interruption, when the outer safe flag cannot authorize
+            # generic finalizer cleanup. This exact device was originally Shutdown.
+            finalizing = self.finalizing
+            self.finalizing = True
+            try:
+                self.shutdown_simulator(label=prefix + "-retire")
+                require(self.simulator.get("stateAfter") == "Shutdown", "Owned lifecycle host retirement is not proven")
+            except BaseException:
+                self.safe = False
+                raise
+            finally:
+                self.finalizing = finalizing
+                if bundle.is_dir():
+                    files = self.retain_tree(bundle, self.evidence / "swift-xcresult" / bundle.name)
+                    self.write(prefix + "-bundle.json", {"path": str(bundle), "files": files})
+        def inspect():
+            require(bundle.is_dir(), "Owned lifecycle invocation has no raw xcresult")
+            arguments = ["xcrun", "xcresulttool", "get", "object", "--legacy", "--format", "json", "--path", str(bundle)]
+            actions = read_json(self.inspect_tool(prefix + "-actions", arguments))
+            identifiers = {item["actionResult"]["testsRef"]["id"]["_value"]
+                           for item in actions.get("actions", {}).get("_values", [])
+                           if "testsRef" in item.get("actionResult", {})}
+            objects = [read_json(self.inspect_tool(prefix + "-tests-" + str(index), arguments + ["--id", identifier]))
+                       for index, identifier in enumerate(sorted(identifiers))]
+            require(tested is True, "Owned lifecycle invocation failed")
+            return assess_swift(objects, selection="owned-flow-lifecycle")
+        return self.check(prefix + "-case-execution", inspect)
+
+    def swift_cancellation_probe(self, ui_dir, udid, *, owned=False):
+        """One explicit raw/owned host; shutdown is cleanup, never cancellation success."""
+        require(type(owned) is bool and ((self.role == "macos-arm64" and self.scope == "apple-owned-cancellation")
+                if owned else (self.role, self.scope) in CANCELLATION_PROBE_ROUTES),
                 "Cancellation investigation requires an explicit native Apple follow-through route")
-        case = ("p2pkit-sample-cancellation-probe-tests/SwiftFlowCancellationProbeTests/"
-                "testSwiftTaskCancellationFinishesActualDiagnosticCollection")
+        prefix = "swift-owned-cancellation" if owned else "swift-cancellation-probe"
+        isolation = "swift-owned-cancellation" if owned else "swift-cancellation"
+        action = "run-owned-cancellation" if owned else "run-cancellation-probe"
+        case = "p2pkit-sample-cancellation-probe-tests/" + (OWNED_SWIFT_CASE.removesuffix("()") if owned else
+                "SwiftFlowCancellationProbeTests/testSwiftTaskCancellationFinishesActualDiagnosticCollection")
         admitted = bool(self.simulator and self.simulator.get("udid") == udid and
                         self.simulator.get("stateBefore") == "Shutdown")
-        self.write("swift-cancellation-probe-admission.json", {
+        self.write(prefix + "-admission.json", {
             "source": self.admission, "case": case, "udid": udid,
             "initialStateObservation": "simulators-before.stdout.log",
             "result": "ADMITTED" if admitted else "NOT_EXECUTED",
             "reason": None if admitted else "No exact originally Shutdown simulator is owned; preserve originally Booted/unowned devices",
         })
         if not admitted:
-            self.rows.append({"component": "swift-cancellation-probe-admission", "result": "FAIL",
-                              "inspectionOnly": True, "investigationOnly": True,
+            self.rows.append({"component": prefix + "-admission", "result": "FAIL",
+                              "inspectionOnly": True, "investigationOnly": not owned,
                               "reason": "Owned initially Shutdown simulator unavailable"})
             return
-        bundle = ui_dir / "DerivedData/Logs/Test/swift-cancellation-probe.xcresult"
+        bundle = ui_dir / ("DerivedData/Logs/Test/" + prefix + ".xcresult")
         require(not bundle.exists(), "Cancellation probe result path is not fresh")
         tested, retired = None, False
         try:
             # Positively retire prior acceptance hosts before cold-booting this
             # otherwise reused simulator. No new runtime/device/cache is needed.
-            self.shutdown_simulator(label="swift-cancellation-isolate")
+            self.shutdown_simulator(label=isolation + "-isolate")
             self.simulator.pop("stateAfter", None)
-            tested = self.invoke("swift-cancellation-probe-invocation",
-                                 ["bash", "scripts/run-ios-ui-tests.sh", "run-cancellation-probe"],
+            tested = self.invoke(prefix + "-invocation",
+                                 ["bash", "scripts/run-ios-ui-tests.sh", action],
                                  kind="command", timeout=900,
                                  extra_env={"IOS_RUN_DIR": str(ui_dir), "KEEP_IOS_RUN_ARTIFACTS": "1", "SIM_UDID": udid})
         finally:
@@ -1151,7 +1370,7 @@ class Host:
             finalizing = self.finalizing
             self.finalizing = True
             try:
-                self.shutdown_simulator(label="swift-cancellation-retire")
+                self.shutdown_simulator(label=isolation + "-retire")
                 retired = self.simulator.get("stateAfter") == "Shutdown"
                 require(retired, "Isolated cancellation test-host retirement is not proven")
             except BaseException:
@@ -1162,24 +1381,32 @@ class Host:
                 files = None
                 if bundle.is_dir():
                     files = self.retain_tree(bundle, self.evidence / "swift-xcresult" / bundle.name)
-                self.write("swift-cancellation-probe-result.json", {
+                self.write(prefix + "-result.json", {
                     "source": self.admission, "case": case, "udid": udid,
                     "invocationSucceeded": tested, "ownedSimulatorShutdownObserved": retired,
-                    "cancellationVerdict": "PENDING_NATIVE_EVIDENCE_REVIEW",
+                    "cancellationVerdict": "SEE_NATIVE_CASE_ASSESSMENT" if owned else "PENDING_NATIVE_EVIDENCE_REVIEW",
                     "resultBundle": str(bundle), "retainedFiles": files,
                     "limits": "Retirement is fallback cleanup, not Flow cancellation or acceptance-suite success.",
                 })
+        objects = []
         if bundle.is_dir():
             # Retain the actual case tree for root's observation review. Do not
             # create a second acceptance assessor or invert a failing assertion.
             arguments = ["xcrun", "xcresulttool", "get", "object", "--legacy", "--format", "json", "--path", str(bundle)]
-            actions = read_json(self.inspect_tool("swift-cancellation-probe-actions", arguments))
+            actions = read_json(self.inspect_tool(prefix + "-actions", arguments))
             identifiers = {item["actionResult"]["testsRef"]["id"]["_value"]
                            for item in actions.get("actions", {}).get("_values", [])
                            if "testsRef" in item.get("actionResult", {})}
             for index, identifier in enumerate(sorted(identifiers)):
-                self.inspect_tool("swift-cancellation-probe-tests-" + str(index), arguments + ["--id", identifier])
+                details = self.inspect_tool(prefix + "-tests-" + str(index), arguments + ["--id", identifier])
+                if owned:
+                    objects.append(read_json(details))
         require(tested is not True or bundle.is_dir(), "Successful probe invocation has no raw xcresult")
+        if owned:
+            def inspect_owned():
+                require(tested is True and retired, "Owned cancellation invocation/retirement failed")
+                return assess_swift(objects, selection="owned-cancellation")
+            self.check(prefix + "-case-execution", inspect_owned)
 
     def inspect_tool(self, label, arguments):
         """Retain read-only native tool output; this never builds or runs tests."""
@@ -1191,6 +1418,32 @@ class Host:
                    "stdoutSha256": digest(stdout), "stderrSha256": digest(stderr), "inspectionOnly": True})
         require(result.returncode == 0, "Native evidence inspection failed: " + label)
         return stdout
+
+    def select_simulator(self, label="simulators-before"):
+        """Retain exact available-device selection; callers keep their own mutation/retirement boundary."""
+        devices = self.inspect_tool(label, ["xcrun", "simctl", "list", "--json", "devices", "available"])
+        devices = load_gate().read_json(devices).get("devices", {})
+        require(type(devices) is dict, "Missing actual simulator list")
+        choices = []
+        for runtime, candidates in devices.items():
+            match = re.search(r"\.SimRuntime\.iOS-([0-9-]+)$", runtime)
+            if match:
+                for device in candidates:
+                    if device.get("name") == "iPhone 17" and device.get("isAvailable") is not False:
+                        choices.append((tuple(map(int, match[1].split("-"))), device["udid"], device["state"]))
+        require(choices, "No available exact iPhone17 simulator; required Swift tests are not skipped")
+        if self.scope == "apple-owned-cancellation":
+            choices = [choice for choice in choices if choice[2] == "Shutdown"]
+            require(choices, "Owned cancellation requires an exact originally Shutdown simulator")
+        elif (self.role, self.scope) in CANCELLATION_PROBE_ROUTES:
+            # Prefer an already Shutdown available device for the terminal
+            # isolated probe; a Booted newest choice is not a hardware blocker.
+            choices = [choice for choice in choices if choice[2] == "Shutdown"] or choices
+        _, udid, state_before = sorted(choices)[-1]
+        require(re.fullmatch(r"[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}", udid) and
+                state_before in ("Booted", "Shutdown"), "Invalid simulator metadata")
+        self.simulator = {"udid": udid, "stateBefore": state_before, "scope": "Hosted simulator, not physical hardware"}
+        return udid
 
     def shutdown_simulator(self, label="simulator-cleanup"):
         if not self.simulator or self.simulator["stateBefore"] != "Shutdown":

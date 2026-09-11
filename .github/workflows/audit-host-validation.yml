@@ -1,6 +1,6 @@
 name: Audit host validation
 
-# Run revision: 20. Change this comment in a reviewed audit-branch push to
+# Run revision: 21. Change this comment in a reviewed audit-branch push to
 # request a new frozen-source run. Helpers/docs-only pushes do not trigger it.
 on:
   push:
@@ -22,7 +22,7 @@ env:
 
 jobs:
   selected_host:
-    name: Audit native Apple compilation admission
+    name: Audit native Apple owned Flow cancellation
     runs-on: macos-26
     timeout-minutes: 180
     defaults:
@@ -30,7 +30,7 @@ jobs:
         shell: python3 {0}
     env:
       P2PKIT_AUDIT_ROLE: macos-arm64
-      P2PKIT_AUDIT_SCOPE: apple-native-compilation
+      P2PKIT_AUDIT_SCOPE: apple-owned-cancellation
       P2PKIT_AUDIT_DRIVER_TIMEOUT_SECONDS: "8400"
       DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
     outputs: &host_outputs
@@ -116,7 +116,7 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Verify Apple native compilation admission then finalize ownership
+      - name: Verify owned Flow cancellation then finalize ownership
         id: audit
         timeout-minutes: 150
         run: &run_host |

@@ -177,6 +177,11 @@ printf 'invoked\\n' >> fake-gradle-invocations
         self.finish(self.start("run-ios-ui-tests.sh"))
         self.assertFalse(self.lock.exists())
         self.assertEqual([], self.run_dirs())
+        xcode = [call for call in (self.root / "tools.log").read_text().splitlines()
+                 if call.startswith("xcodebuild ")]
+        self.assertEqual(1, len(xcode))
+        self.assertIn("-scheme p2pkit-sample-ui", xcode[0])
+        self.assertNotIn("-only-testing:", xcode[0], "The ordinary both-target suite remains unfiltered")
 
     def test_cancellation_probe_selects_one_case_without_invalid_repetition_option(self):
         external = self.root / "owned-probe-output"
@@ -191,11 +196,60 @@ printf 'invoked\\n' >> fake-gradle-invocations
         self.assertIn("-only-testing:p2pkit-sample-cancellation-probe-tests/"
                       "SwiftFlowCancellationProbeTests/testSwiftTaskCancellationFinishesActualDiagnosticCollection",
                       xcode[0])
+        self.assertEqual(["-only-testing:p2pkit-sample-cancellation-probe-tests/SwiftFlowCancellationProbeTests/"
+                          "testSwiftTaskCancellationFinishesActualDiagnosticCollection"],
+                         [arg for arg in xcode[0].split() if arg.startswith("-only-testing:")])
+        self.assertIn("-resultBundlePath " + str(external / "DerivedData/Logs/Test/swift-cancellation-probe.xcresult"),
+                      xcode[0])
         self.assertIn("-scheme p2pkit-sample-cancellation-probe", xcode[0])
         self.assertIn("SWIFT_TREAT_WARNINGS_AS_ERRORS=YES", xcode[0])
         self.assertFalse(any(call.startswith("xcodegen ") for call in calls))
         self.assertFalse(self.lock.exists())
         self.assertTrue(external.is_dir())
+
+    def test_owned_actions_select_exact_cases_without_bootstrap_and_retain_failed_output(self):
+        shutil.rmtree(self.repo / "library")  # Any forbidden bootstrap now fails at its real boundary.
+        selections = {
+            "run-owned-flow-lifecycle": ("p2pkit-sample-ui", "swift-owned-flow-lifecycle", [
+                "p2pkit-sample-tests/OwnedFlowCollectionTests",
+                "p2pkit-sample-tests/SampleRunLifecycleTests",
+                "p2pkit-sample-tests/IosLanDiagnosticsLeaseTests"]),
+            "run-owned-cancellation": ("p2pkit-sample-cancellation-probe", "swift-owned-cancellation", [
+                "p2pkit-sample-cancellation-probe-tests/SwiftOwnedFlowCancellationTests/"
+                "testOwnedAdapterCancellationFinishesActualDiagnosticCollection"]),
+        }
+        for action, (scheme, bundle, selectors) in selections.items():
+            for failure in (False, True):
+                with self.subTest(action=action, failure=failure):
+                    external = self.root / (action + ("-failure" if failure else "-success"))
+                    before = (self.root / "tools.log").read_text().splitlines() if (self.root / "tools.log").exists() else []
+                    self.finish(self.start("run-ios-ui-tests.sh", arguments=(action,), IOS_RUN_DIR=str(external),
+                        P2PKIT_AUDIT_STATE_DIR=str(self.root / "audit-state"),
+                        FAKE_IOS_BUILD_FAILURE="1" if failure else "0"), expected=42 if failure else 0)
+                    calls = (self.root / "tools.log").read_text().splitlines()[len(before):]
+                    xcode = [call for call in calls if call.startswith("xcodebuild ")]
+                    self.assertEqual(1, len(xcode))
+                    self.assertEqual(["-only-testing:" + name for name in selectors],
+                                     [arg for arg in xcode[0].split() if arg.startswith("-only-testing:")])
+                    for fragment in ("-scheme " + scheme, "-destination platform=iOS Simulator,id=" + UDID,
+                                     "-resultBundlePath " + str(external / "DerivedData/Logs/Test" / (bundle + ".xcresult")),
+                                     "-parallel-testing-enabled NO", "-maximum-concurrent-test-simulator-destinations 1",
+                                     "SWIFT_TREAT_WARNINGS_AS_ERRORS=YES"):
+                        self.assertIn(fragment, xcode[0])
+                    self.assertNotIn("-test-iterations", xcode[0])
+                    self.assertFalse(any(call.startswith("xcodegen ") for call in calls))
+                    self.assertFalse(self.lock.exists())
+                    self.assertTrue(external.is_dir(), "Borrowed result/evidence belongs to the outer finalizer")
+
+    def test_focused_actions_require_audit_state_run_directory_and_exact_udid_before_tools(self):
+        for action in ("run-cancellation-probe", "run-owned-flow-lifecycle", "run-owned-cancellation"):
+            for missing in ("P2PKIT_AUDIT_STATE_DIR", "IOS_RUN_DIR", "SIM_UDID"):
+                with self.subTest(action=action, missing=missing):
+                    environment = {"P2PKIT_AUDIT_STATE_DIR": str(self.root / "audit-state"),
+                                   "IOS_RUN_DIR": str(self.root / action), "SIM_UDID": UDID, missing: ""}
+                    self.finish(self.start("run-ios-ui-tests.sh", arguments=(action,), **environment), expected=2)
+                    self.assertFalse((self.root / "tools.log").exists())
+                    self.assertFalse(self.build.exists())
 
     def test_external_run_directory_creates_missing_lock_parent_and_is_preserved(self):
         external = self.root / "external-owned-output"
