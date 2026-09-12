@@ -1,39 +1,45 @@
 <!-- audit-current:start -->
-# Current audit continuation — #413 candidate; validation pending
+# Current audit continuation — R21 evidence; #413 still pending
 
 **202/232 repair approvals (87.1%);203/232 resolved (87.5%);29unresolved (12.5%).**
 Five repairs plus21external rows and owner decisions #120/#274/#284;99new findings.
 #287 adds resolution, not repair credit; approval complement30 (12.9%).
-**#413 candidate source APPLIED; candidate validation pending, final repair approval WITHHELD.**
-The composed source review found no actionable source findings; this is not runtime or repair approval.
-R21 `apple-owned-cancellation` is NOT_EXECUTED at a candidate commit; #383 fences/raw-export baseline remain.
-Then #414 real Kotlin caller boundary → #409 conditional readiness.
+**R21 run34647991698/1 remains FAIL; #413 final repair approval WITHHELD.**
+Executed clean `43a6739` / tree `112c92b8`, normally published/ref-verified21:09:57UTC on2026-09-11.
+Independent review accepts **Swift28 (9adapter+12lifecycle+7lease) plus1isolated positive cancellation**,
+fresh framework/same-producer provenance and the actual generated Job factory signature. Not Klib ABI.
+Native helper tests **NOT_RUN**: three generic-inference compile errors at120/132/133; aggregate ABI
+separately blocked by stale JmDNS lock state. No native4/ABI or composite full-host pass.
+
+Three test-only `listOf<Any?>` corrections are source-approved and applied at the administrative read;
+values/assertions/lifecycle/cleanup are unchanged. R22 `apple-owned-helper` is **NOT_EXECUTED**;
+Test6b1deb0/request1020a12 are locally committed; review and maintenance10+2PASS, not native execution.
+Reuse R21's unchanged29Swift cases/provenance
+at their original source/run, not as a new execution or stale-framework permission. Corrected native4,
+actual additive ABI and final revision approval are still required. #383 fences/raw-export baseline remain.
+Then #414 real Kotlin caller boundary → #409 conditional readiness; ordering is not execution.
+
+Scoped cleanup review:15same-home stops0/no owned survivors;13removals/8roots and39fixture bases;
+exact simulator observed Shutdown. Work disposal is finalizer-corroborated, not a standalone receipt;
+outer Gradle-home/all-cache/SDK/VM deletion NOT_PROVEN. Controller loss time UNKNOWN after last
+heartbeat00:12:15UTC onSeptember12; terminal reconciliation00:22:56UTC observed no controller and
+reacquired the kernel lock. No normal release or uninterrupted lease is inferred.
+
+R13 GitHub00:18:46–00:18:51UTC onSeptember12:7GETs,239open full objects(232issues/7PRs),
+unchanged from sealedR12; empty item/comment/inline deltas. Frozen202/203/29inventory matches membership.
+566comments and earlier closed/linked histories are dated reuse; no new complete manual reread/full-history
+or closed census. Effective339issues/79PRs is cumulative; no Actions/ref/lease observation or standing freshness.
+
 **#410 PARKED/PENDING_REMEDIATION, final WITHHELD**: new admission evidence required; no unchanged
 full-graph retry, lock bypass or route/permission override. #417 remains unimplemented under existing
 restricted planning, not retried/rephrased/delegated. **Audit NOT_READY; #133 NOT_STARTED.**
+#415/#416 remain finally APPROVED at628336b/593175f; R20 was baseline-only compilation, not candidate413.
+FullMacR1/startup1/guardedR2, LinuxR2/R16/R18/Windows failures retain their original scopes and bindings;
+R2post-failure route evidence does not prove cause or send-time reachability. #207Windows19/#408 approvals stand.
+Current full locks/LAN Dokka/ABI/root/sample/consumer, ART, physical/hostile, narrow Apple/Intel, backup291
+and independent/crypto/final gates remain. Source0.7.0-SNAPSHOT, immutableRC3 and0.8.0+restrictions stand.
 
-**#415/#416 finally APPROVED** at `628336b` / `593175f`: actual repository Java/JUnitCore preimage
-2tests/1failure→2pass and5tests/4failures→5pass, plus scoped provenance controls. Diagnostic-code
-extraction and terminal reverse-name parsing, not listener/network/ART/native/fullgraph acceptance.
-Execution binds194da+staged37d0be and628+staged87bde6, not clean628/593/497. Published baseline
-`4973859` / tree `2c8196d` includes415/416, prior administration and the R20 request: push finished
-19:37:19UTC, ref/tree verified19:37:21UTC on2026-09-11. This is publication, not candidate413 execution.
-
-R20/run34639822412/1 admitted clean497 baseline LAN production/test `iosSimulatorArm64` compilation:
-12actionable/12executed tasks,3owned leaves0/0/0. #413 candidate absent: no helper runtime/Swift/ABI or410 qualification.
-Scoped cleanup:5build roots removed/39fixture bases disposed; state/work finalizer disposal inferred.
-Outer Gradle-home/.konan/shared-cache/SDK/VM deletion NOT_PROVED. Local lease release20:05:03UTC is not remote cleanup.
-
-R11 19:57:29.050677–19:57:39.917946UTC:18GETs,239open objects(232issues/7PRs), all unchanged sinceR10; empty item/comment/inline deltas. Captured on-disk202/203/29 matches232issue numbers, not new repair approval.
-Fresh all-open objects, not a fresh manual reread/full-history or all-state census. 566comments and closed/linked histories reused;409–418OPEN with10fresh complete empty comment feeds. Effective339issues/79PRs is cumulative. This issue refresh has no Actions/ref/lease/upstream observation or standing freshness.
-
-FullMacR1/startup1/guardedR2 failures remain; R2native NoRouteToHostException and sanitized post-failure
-route evidence do not prove cause or send-time reachability. LinuxR2/R16/R18/Windows failures retain
-their own bindings; #207Windows19/#408scoped approvals stand. Current full locks/LAN Dokka/ABI/root/
-sample/consumer, ART, physical/hostile, narrow Apple/Intel, backup291 and independent/crypto/final gates
-remain. Source0.7.0-SNAPSHOT, immutableRC3 and existing0.8.0+restrictions stand; no release authority.
-
-[Candidate and dated predecessor bindings](checkpoint.json) (`nativeFollowups.candidate413`) ·
+[R21 results and dated predecessor bindings](checkpoint.json) (`nativeFollowups.r21OwnedCancellation`) ·
 [Focused415/416evidence](repairs/415-416.md) ·
 [Preserved native failures](repairs/cohort-2026-09-09-native-followups.md#mac-r2-failure-and-text-only-approvals-411412418).
 
