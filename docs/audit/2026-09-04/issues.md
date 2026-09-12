@@ -1,95 +1,28 @@
 <!-- audit-current:start -->
-# Current audit continuation — prerequisite and external gates remain
+# Current issue dispositions — September 12
 
-**204/233 repair approvals (87.6%); 205/233 resolved (88.0%); 28 unresolved (12.0%).**
-Four repair/native rows #409/#410/#413/#417, 21 external rows and owner #120/#274/#284.
-#287 adds resolution only; approval complement29 (12.4%); 100new findings. These are issue-row,
-not effort/readiness percentages. **Audit NOT_READY; #133 NOT_STARTED.**
+**206/234 repair approvals (88.0%); 207 resolved (88.5%); 27 unresolved (11.5%).**
+101 new findings; #287 contributes resolution only. Approval complement 28 (12.0%).
+**NOT_READY; #133 NOT_STARTED.** Published source `7d21aef` / tree `36bed6d`.
+R21 observes 234 open issues/7 PRs; its frozen233/204administration is dated, not current counts.
+The [root handoff](../../../AUDIT_CHECKPOINT.md) and [exact packet](checkpoint.json)
+`nativeFollowups.postR23Continuation` distinguish both scoped repairs, failed native/ordinary
+graphs, partial ABI, accepted excepted OSV and remaining gates. No issue is closed here.
 
-Published source **`bb4084d` / tree `e7d6c705`**, ref/tree verified02:15:24.692475UTC onSeptember12.
-R23's six-file Intel request was independently source-approved; 17 modeled local methods passed
-(12host +3profile +2workflow), all command/stop/final0/0/0 at e16+stagedc00c4491, not cleanbb native.
-Initial in-checkoutTMPDIR caused44setup subtest failures in12methods,1/0/1; preserved. Only the
-run environment changed, not assertions/source/deadlines; owned temporary outputs were disposed.
-
-**R23 run34667152375/1 FAILED** on cleanbb4084d; Intel helper **NOT_RUN**, zero product/native tests.
-Job103481268042 ran02:15:33–02:21:55UTC. Source/admission/SDK checks and91native-executor fixture
-methods passed (165.283s), but `xcrun simctl list --json runtimes` hit its existing120s bound with
-empty stdout/stderr. Runtime availability/cause remain **UNKNOWN**, not missing/unsupported Intel
-or a product defect. No simulator was selected/booted. Do not retry unchanged or inflate the bound.
-ZIP10289563440 retained1,048,273bytes/1,092members: **PARTIAL_SALVAGE**,32omissions (31JSONL plus
-one nested fixture gradle.properties); full tree NOT_PROVEN. Both invoked outer commands0/0/0,
-same-home stops/no owned survivors;39fixture bases removed, historical fault receipts retained.
-Independent reviews accept **prerequisite-failure disposition and scoped cleanup only**; full cleanup
-WITHHELD_NOT_PROVEN. Unsafe driver skipped output/work cleanup; no selected simulator; full remote
-work/home/cache/SDK/VM or CoreSimulator-service retirement NOT_PROVEN. **Actual normal lease released
-02:34:49.544761UTC**, source unchanged; no override of safe=false or remote-cleanup/native approval.
-[413outcome](https://github.com/p2pKit/P2pKit/issues/413#issuecomment-5642905646) was POST/GET-verified02:35:52.619441UTC, afterR17 and included inR18; issue remains open.
-
-**#413 remains PARKED/PENDING_REMEDIATION, final WITHHELD**: actual additive aggregate Klib ABI
-comparison and final review are still required. R22ARM4 passed at e78a33e; R21Swift28+isolated1/
-framework/provenance stay at43a and **R21 remains FAIL**. Older R16Intel evidence is dated reuse,
-not today's execution. No count credit, native-only ABI substitution or stale-sidecar permission.
-**#409 remains source-only PARKED** atd6e8a84 (3files,+315/−5); three modeled controls passed at
-268a+staged99ee3161. Genuine current-source Swift/JVM RAW-clock/activity peer acceptance remains
-unexecuted after ordinary CLI/dependency/runtime admission; historical CLI/deadline bypass forbidden.
-#410 needs new ordinary admission evidence; #417 is unimplemented with its existing boundary unchanged.
-No active issue implementation is claimed. Required host prerequisites are not all hardware blockers.
-
-**#414 APPROVE_FINAL_414** at268a367: four intended preimage failures, corrected11joined/guard JVM
-passes and provenance controls; original prelaunch125 retained. Detached SRV→real wrapper→Kotlin
-consumer, not automatic live-cache/network/Android/ABI qualification. **#419 APPROVE_FINAL419** at
-e16d56e: corrected public security DSL/configuration names; source/caller review, no build warranted.
-Accepted current-input **OSV34666090981/1** stays ate16:10populated locks +upstreamJmDNS inventory,
-scanner0/serverSARIF1764940566zeroresults. GHSA-r937-wjx7-w2jp/alias exception expires2026-10-31:
-**known advisory NOT_FIXED; not vulnerability-free**. Scoped scanner cleanup and actual normal lease
-release01:58:03.428258UTC accepted; no Gradle, outerVM/action caches deletion NOT_PROVEN.
-
-R18 GitHub02:37:22.441576–02:37:27.938380UTC: **233open issues/7PRs**, all240bodies unchanged;
-only the expected #413 outcome comment changed. 570dated +1fresh =571bodies cover397advertised slots.
-PR source projections unchanged; closed/linked histories are dated reuse. Cumulative340issues/79PRs
-is not a fresh closed census. R18 captured the pre-application232-row/202-approved/203-resolved
-ledger, missing419; this inventory now applies the separately evidenced204/205/28 outcomes. Lead02:33:45–02:33:53operational
-observation was reused, not refetched byR18; no closures, standing freshness/idleness or cleanup proof.
-
-Final affected administrative checks onSeptember12 at02:52UTC passed: layout/15Android-setup controls,
-10-lock/upstream-inventory coverage,519relative links across87active Markdown files, release metadata
-and whitespace. Same-home wrapperstop0/no owned survivors; no disposable build roots remained.
-These checks used bb4084d plus the then-current documentation diff, not this final clean tree;
-later result/projection/coverage text is separately read and bound. No product/ABI/fullgraph rerun.
-
-## Remaining work and conditional timing
-
-This checkpoint incorporates the terminal reconciliation and current issue inventory. Its containing
-administrative commit records final source/coverage bindings and independent reviews; it is not a
-new product test run. Continue from the prerequisites below, not another copy of this administration.
-After **genuine ordinary strict-lock/runtime admission**, shared current ABI/peer/root/sample/consumer
-verification is roughly4–12engineering +3–10serial build/test hours, excluding queues, admission
-restoration, new defects, #417 and owner choices. Do not repeat unchanged known-blocked broad graphs.
-Current `./gradlew check --console=plain`, applicable samples/consumers, strictLAN Dokka/publication/
-SBOM/resolved graph, aggregate ABI and remaining native/release gates remain **unwaived**.
-Whole-audit ETA is unavailable until physical/topology inventory, independent peer, qualified auditor,
-owner decisions and release authorization are scheduled; #39 soak alone needs6–12continuous hours/run.
-Additional #291backup/#367foreign-host/#144default-branch/display/independent/crypto acceptance is not
-another set of unresolved issue rows. Preserve source0.7.0-SNAPSHOT, immutableRC3 and0.8.0+restrictions.
-
-[409source-only](repairs/409.md) · [419prose](repairs/419.md) · [414repair](repairs/414.md) ·
-[Exact evidence](checkpoint.json) (`nativeFollowups.r23IntelOwnedHelper` / `githubR18`;
-prior `postR22Source409419`, `r22OwnedHelper`, R21/R16 and all earlier failures remain dated).
-
-## Pending repair (4)
+## Pending repair (3)
 
 | Issue | Current disposition |
 | --- | --- |
-| [#409](https://github.com/p2pKit/P2pKit/issues/409) | PARKED; d6e8a84source-only approval,3modeled controls pass. Actual current-source Swift/JVM RAW-clock/activity case and final review remain, normal admission blocked; zero repair credit. |
-| [#413](https://github.com/p2pKit/P2pKit/issues/413) | PARKED/finalWITHHELD. R23runtime inventory120s timeout, Intel helperNOT_RUN; availability/causeUNKNOWN. R22ARM4 and R21Swift/provenance stay dated. Actual aggregate ABI/final review remain; no unchanged retry. |
-| [#410](https://github.com/p2pKit/P2pKit/issues/410) | PARKED/PENDING_REMEDIATION, final WITHHELD; prior full Mac/startup1/R2 failures retained, cause UNPROVEN. Return only with new admission evidence; no repair credit. |
-| [#417](https://github.com/p2pKit/P2pKit/issues/417) | Unimplemented; existing restricted planning not retried/rephrased/delegated. No runtime/repair approval. |
+| [#409](https://github.com/p2pKit/P2pKit/issues/409) | PARKED/source-only d6e8a84; current Swift/JVM RAW-clock/activity case still required after ordinary CLI/dependency/runtime admission. No final repair credit. |
+| [#413](https://github.com/p2pKit/P2pKit/issues/413) | PARKED/final WITHHELD; retained complete additive aggregate Klib ABI and final review remain. R23 inventory120s timeout/Intel helperNOT_RUN and older scoped positives stay dated. |
+| [#410](https://github.com/p2pKit/P2pKit/issues/410) | PARKED/final WITHHELD. Startup5 host_not_announced and Java/Python SEND failures preserved; seven modes NOT_RUN. #420 setup repair is not lifecycle/cause approval. Genuine ordinary-host admission required. |
 
-## Recent approvals (7; scopes differ)
+## Recent approvals (9; scopes differ)
 
 | Issue | Current disposition |
 | --- | --- |
+| [#420](https://github.com/p2pKit/P2pKit/issues/420) | APPROVED at7d21aef: actual corrected Darwin option/bind progression; both SENDs and overall startup5 still FAIL. No #410 credit. [Report](repairs/420.md). |
+| [#417](https://github.com/p2pKit/P2pKit/issues/417) | APPROVED atb17ea286: real serializer continuation context,3intended preimage failures/5postimage passes; not live network/native acceptance. [Report](repairs/417.md). |
 | [#419](https://github.com/p2pKit/P2pKit/issues/419) | APPROVE_FINAL419 ate16d56e: actual DSL/configuration symbols and caller match corrected handbook; prose-only source review, no build or cryptographic execution needed. |
 | [#414](https://github.com/p2pKit/P2pKit/issues/414) | APPROVE_FINAL_414 at268a367: original4intended failures, corrected11JVM passes and focused provenance. Actual Kotlin endpoint hints; not automatic live-cache/network/Android/ABI qualification. |
 | [#415](https://github.com/p2pKit/P2pKit/issues/415) | APPROVED at628336b: diagnostic-code arithmetic2JUnit methods pass; provenance/strict-help controls, no packet-acceptance/fullgraph claim. |
@@ -122,9 +55,9 @@ The runtime-only permission contract/finite selector refute the allegation. No f
 commit, build, hardware or owner decision is required; GitHub issue remains open.
 It adds one resolved row, **zero repair approvals**, and is not an implementation queue item.
 
-The PENDING_REMEDIATION bucket has **6 rows (5 Low + 1 Medium)**: four repairs
-(3 Low + 1 Medium) plus owner #274/#284; #120 is separate. #207 retains one scoped repair
-credit; historical Windows17 failures and prior approval events are not rewritten.
+The PENDING_REMEDIATION bucket has **5 rows (4 Low + 1 Medium)**: three repairs
+(2 Low + 1 Medium) plus owners #274/#284; #120 is separate. #207 keeps its one scoped
+repair credit; Windows17 and all earlier approval/failure events remain historical.
 <!-- audit-current:end -->
 
 ## Earlier issue narratives and tables — dated historical snapshots only

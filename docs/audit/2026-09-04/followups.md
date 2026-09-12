@@ -1,82 +1,45 @@
 <!-- audit-current:start -->
-# Current audit continuation — prerequisite and external gates remain
+# Current follow-ups — genuine admission and remaining qualification
 
-**204/233 repair approvals (87.6%); 205/233 resolved (88.0%); 28 unresolved (12.0%).**
-Four repair/native rows #409/#410/#413/#417, 21 external rows and owner #120/#274/#284.
-#287 adds resolution only; approval complement29 (12.4%); 100new findings. These are issue-row,
-not effort/readiness percentages. **Audit NOT_READY; #133 NOT_STARTED.**
+**206/234 approved; 207 resolved; 27 unresolved = 3 repairs + 21 external + 3 owner rows.**
+Whole audit **NOT_READY**, independent #133 **NOT_STARTED**. #417/#420 are scoped approvals,
+not new native/whole-release passes; see the [current root handoff](../../../AUDIT_CHECKPOINT.md).
 
-Published source **`bb4084d` / tree `e7d6c705`**, ref/tree verified02:15:24.692475UTC onSeptember12.
-R23's six-file Intel request was independently source-approved; 17 modeled local methods passed
-(12host +3profile +2workflow), all command/stop/final0/0/0 at e16+stagedc00c4491, not cleanbb native.
-Initial in-checkoutTMPDIR caused44setup subtest failures in12methods,1/0/1; preserved. Only the
-run environment changed, not assertions/source/deadlines; owned temporary outputs were disposed.
+1. Obtain a supported ordinary-user Mac with functioning multicast and applicable simulator
+   prerequisites, or evidence of a corrected hosted environment. The dated 06:18 repository
+   runner census returned zero; the owner access question remains unanswered, not authorized.
+   Do not retry unchanged readiness/runtime failures, inflate deadlines or use privacy overrides.
+2. Use maintained supported lock-generation/verification commands and public drivers. Complete
+   and authenticate the full supported graph before immutable strict requalification; do not
+   hand-edit six stale locks, relax verification, skip guards or promote partial writer output.
+   Kotlin 2.4.20 is available but not qualified; 2.4.10 stays affected/excepted through the unchanged
+   2026-10-31 expiry. The accepted current-input OSV pass does not fix that advisory or these locks.
+3. Finish #409's current-source Swift/JVM RAW-clock/activity case, #410's genuine lifecycle
+   acceptance, and #413's complete retained additive aggregate Klib ABI/final review. Startup5
+   FAIL and original R23/R21/R16/full-Mac/startup failures remain. Four logged Linux comparisons,
+   an empty Android-only built-in, cross-compiled Klibs and dry-run graph ownership do not replace
+   actual required native execution/eight-dump equality. Keep custom Android gates mandatory.
+4. Complete current whole check, applicable sample builds and isolated consumers, strict LAN
+   Dokka/publication/SBOM/resolved graph, Swift/XCFramework/Intel and authorized release gates.
+   The single current Linux batch failed stale locks; no LAN/application-package pass was earned.
+   The producer JAR and 1,207 host tests are bounded evidence only. No unchanged broad retry now.
+5. Schedule the [21 external campaigns and three owner decisions](issues.md), plus separately
+   required #133/#291/#367/#144, independent/cryptographic/display/release acceptance. Ordinary
+   host prerequisites are not hardware-only blockers. No defensible whole-audit date exists yet.
+   These remaining campaigns/decisions were intentionally not started in this continuation,
+   per the user's ordering; their earlier historical observations are not erased.
 
-**R23 run34667152375/1 FAILED** on cleanbb4084d; Intel helper **NOT_RUN**, zero product/native tests.
-Job103481268042 ran02:15:33–02:21:55UTC. Source/admission/SDK checks and91native-executor fixture
-methods passed (165.283s), but `xcrun simctl list --json runtimes` hit its existing120s bound with
-empty stdout/stderr. Runtime availability/cause remain **UNKNOWN**, not missing/unsupported Intel
-or a product defect. No simulator was selected/booted. Do not retry unchanged or inflate the bound.
-ZIP10289563440 retained1,048,273bytes/1,092members: **PARTIAL_SALVAGE**,32omissions (31JSONL plus
-one nested fixture gradle.properties); full tree NOT_PROVEN. Both invoked outer commands0/0/0,
-same-home stops/no owned survivors;39fixture bases removed, historical fault receipts retained.
-Independent reviews accept **prerequisite-failure disposition and scoped cleanup only**; full cleanup
-WITHHELD_NOT_PROVEN. Unsafe driver skipped output/work cleanup; no selected simulator; full remote
-work/home/cache/SDK/VM or CoreSimulator-service retirement NOT_PROVEN. **Actual normal lease released
-02:34:49.544761UTC**, source unchanged; no override of safe=false or remote-cleanup/native approval.
-[413outcome](https://github.com/p2pKit/P2pKit/issues/413#issuecomment-5642905646) was POST/GET-verified02:35:52.619441UTC, afterR17 and included inR18; issue remains open.
+[Supported-host guidance](../../testing/audit-hosts.md) and the
+[release checklist](../../releasing/checklist.md) remain authoritative. Dormant private native-full/
+Kotlin-writer alternatives are **NOT_APPLIED_NOT_RUN**, optional and require source review and
+admission if selected; fresh clones must not depend on them. Preserve source 0.7.0-SNAPSHOT,
+immutable RC3 and 0.8.0+ behavior restrictions. No issue closure, merge, tag or publication authority.
 
-**#413 remains PARKED/PENDING_REMEDIATION, final WITHHELD**: actual additive aggregate Klib ABI
-comparison and final review are still required. R22ARM4 passed at e78a33e; R21Swift28+isolated1/
-framework/provenance stay at43a and **R21 remains FAIL**. Older R16Intel evidence is dated reuse,
-not today's execution. No count credit, native-only ABI substitution or stale-sidecar permission.
-**#409 remains source-only PARKED** atd6e8a84 (3files,+315/−5); three modeled controls passed at
-268a+staged99ee3161. Genuine current-source Swift/JVM RAW-clock/activity peer acceptance remains
-unexecuted after ordinary CLI/dependency/runtime admission; historical CLI/deadline bypass forbidden.
-#410 needs new ordinary admission evidence; #417 is unimplemented with its existing boundary unchanged.
-No active issue implementation is claimed. Required host prerequisites are not all hardware blockers.
-
-**#414 APPROVE_FINAL_414** at268a367: four intended preimage failures, corrected11joined/guard JVM
-passes and provenance controls; original prelaunch125 retained. Detached SRV→real wrapper→Kotlin
-consumer, not automatic live-cache/network/Android/ABI qualification. **#419 APPROVE_FINAL419** at
-e16d56e: corrected public security DSL/configuration names; source/caller review, no build warranted.
-Accepted current-input **OSV34666090981/1** stays ate16:10populated locks +upstreamJmDNS inventory,
-scanner0/serverSARIF1764940566zeroresults. GHSA-r937-wjx7-w2jp/alias exception expires2026-10-31:
-**known advisory NOT_FIXED; not vulnerability-free**. Scoped scanner cleanup and actual normal lease
-release01:58:03.428258UTC accepted; no Gradle, outerVM/action caches deletion NOT_PROVEN.
-
-R18 GitHub02:37:22.441576–02:37:27.938380UTC: **233open issues/7PRs**, all240bodies unchanged;
-only the expected #413 outcome comment changed. 570dated +1fresh =571bodies cover397advertised slots.
-PR source projections unchanged; closed/linked histories are dated reuse. Cumulative340issues/79PRs
-is not a fresh closed census. R18 captured the pre-application232-row/202-approved/203-resolved
-ledger, missing419; this inventory now applies the separately evidenced204/205/28 outcomes. Lead02:33:45–02:33:53operational
-observation was reused, not refetched byR18; no closures, standing freshness/idleness or cleanup proof.
-
-Final affected administrative checks onSeptember12 at02:52UTC passed: layout/15Android-setup controls,
-10-lock/upstream-inventory coverage,519relative links across87active Markdown files, release metadata
-and whitespace. Same-home wrapperstop0/no owned survivors; no disposable build roots remained.
-These checks used bb4084d plus the then-current documentation diff, not this final clean tree;
-later result/projection/coverage text is separately read and bound. No product/ABI/fullgraph rerun.
-
-## Remaining work and conditional timing
-
-This checkpoint incorporates the terminal reconciliation and current issue inventory. Its containing
-administrative commit records final source/coverage bindings and independent reviews; it is not a
-new product test run. Continue from the prerequisites below, not another copy of this administration.
-After **genuine ordinary strict-lock/runtime admission**, shared current ABI/peer/root/sample/consumer
-verification is roughly4–12engineering +3–10serial build/test hours, excluding queues, admission
-restoration, new defects, #417 and owner choices. Do not repeat unchanged known-blocked broad graphs.
-Current `./gradlew check --console=plain`, applicable samples/consumers, strictLAN Dokka/publication/
-SBOM/resolved graph, aggregate ABI and remaining native/release gates remain **unwaived**.
-Whole-audit ETA is unavailable until physical/topology inventory, independent peer, qualified auditor,
-owner decisions and release authorization are scheduled; #39 soak alone needs6–12continuous hours/run.
-Additional #291backup/#367foreign-host/#144default-branch/display/independent/crypto acceptance is not
-another set of unresolved issue rows. Preserve source0.7.0-SNAPSHOT, immutableRC3 and0.8.0+restrictions.
-
-[409source-only](repairs/409.md) · [419prose](repairs/419.md) · [414repair](repairs/414.md) ·
-[Exact evidence](checkpoint.json) (`nativeFollowups.r23IntelOwnedHelper` / `githubR18`;
-prior `postR22Source409419`, `r22OwnedHelper`, R21/R16 and all earlier failures remain dated).
-
+The affected administrative batch passed at 07:05 UTC, as recorded in [checkpoint.json](checkpoint.json)
+`nativeFollowups.postR23Continuation.maintenance`. Later result/coverage-only edits receive final
+data/whitespace inspection and independent review, bound by the containing administrative commit.
+Do not rerun unchanged OSV or product gates merely to restate this administration.
+Earlier hypotheses/narratives below remain dated and do not reinstate completed repairs.
 <!-- audit-current:end -->
 
 ## Earlier follow-up narratives — dated historical snapshots only
