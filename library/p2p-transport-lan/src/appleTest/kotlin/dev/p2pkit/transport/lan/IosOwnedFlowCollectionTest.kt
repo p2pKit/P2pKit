@@ -117,7 +117,7 @@ class IosOwnedFlowCollectionTest {
             assertEquals(1, source.subscriptionCount.value)
             assertTrue(job.start())
             runCurrent()
-            assertEquals(listOf("initial"), ownedValues)
+            assertEquals(listOf<Any?>("initial"), ownedValues)
             assertEquals(2, source.subscriptionCount.value)
             job.cancel()
             runCurrent()
@@ -129,8 +129,8 @@ class IosOwnedFlowCollectionTest {
             // Only after actual idle retirement: this emission is not the cancellation mechanism.
             source.value = "after-retirement"
             runCurrent()
-            assertEquals(listOf("initial"), ownedValues)
-            assertEquals(listOf("initial", "after-retirement"), otherValues)
+            assertEquals(listOf<Any?>("initial"), ownedValues)
+            assertEquals(listOf<Any?>("initial", "after-retirement"), otherValues)
         } finally {
             job.cancelAndJoin()
             parent.join()
