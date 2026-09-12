@@ -17,6 +17,7 @@ import dev.p2pkit.sample.diagnostics.RollingJsonlFileSink
 import dev.p2pkit.sample.diagnostics.StructuredFrameTrace
 import dev.p2pkit.sample.diagnostics.StructuredSdkLogger
 import dev.p2pkit.sample.diagnostics.anonymizeIdentifier
+import dev.p2pkit.sample.diagnostics.secureV2ConnectionRecord
 import java.io.File
 import java.net.InetAddress
 
@@ -183,14 +184,10 @@ internal class DesktopDiagnosticHarness(
         )
         if (state == "Connected") {
             recorder.record(
-                DiagnosticRecord(
+                secureV2ConnectionRecord(
                     peerId = peerId,
                     connectionId = connection,
-                    sdkSessionId = sessionId,
-                    category = "protocol",
-                    eventName = DiagnosticEventNames.PROTOCOL_NEGOTIATED,
-                    currentState = "secure-v2",
-                    details = mapOf("feature" to "file-commit-sha256-v1")
+                    sdkSessionId = sessionId
                 )
             )
         }

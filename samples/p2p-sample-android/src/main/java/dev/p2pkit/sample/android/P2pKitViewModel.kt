@@ -57,6 +57,7 @@ import dev.p2pkit.sample.diagnostics.SessionTransferKey
 import dev.p2pkit.sample.diagnostics.SessionTransferList
 import dev.p2pkit.sample.diagnostics.cleanupStaleTransferPartsOnce
 import dev.p2pkit.sample.diagnostics.reservedFileDestination
+import dev.p2pkit.sample.diagnostics.secureV2ConnectionRecord
 import dev.p2pkit.sample.diagnostics.StructuredFrameTrace
 import dev.p2pkit.sample.diagnostics.StructuredSdkLogger
 import dev.p2pkit.sample.kmp.createP2pKit
@@ -2307,13 +2308,9 @@ class P2pKitViewModel internal constructor(
                             )
                         )
                         recordDiagnostic(
-                            DiagnosticRecord(
+                            secureV2ConnectionRecord(
                                 peerId = session.peer.id.value,
-                                connectionId = connectionIds[session.id],
-                                category = "protocol",
-                                eventName = DiagnosticEventNames.PROTOCOL_NEGOTIATED,
-                                currentState = "secure-v2",
-                                details = mapOf("feature" to "file-commit-sha256-v1")
+                                connectionId = connectionIds[session.id]
                             )
                         )
                     }

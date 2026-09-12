@@ -41,7 +41,7 @@ def diagnostic_rows(*, swift, receiver):
                  "previousState": None, "outcome": None if swift else "SUCCESS"}
     negotiated = {**owner, "eventName": "protocol.secure_v2.negotiated", "currentState": "secure-v2",
                   "outcome": "SUCCESS" if swift else None,
-                  "details": {} if swift else {"feature": "file-commit-sha256-v1"}}
+                  "details": {}}
     rows = [connected, negotiated]
     if not swift:
         # Real CLI: initial registerConnection, then initial StateFlow emission.
@@ -329,6 +329,16 @@ class SwiftJvmTransferControls(unittest.TestCase):
                         with self.assertRaises(ValueError):
                             TRANSFER.transfer_evidence(broken, "synthetic-transfer", "a" * 64,
                                                        swift=swift, receiver=receiver)
+
+    def test_connected_evidence_rejects_even_the_previously_inferred_optional_feature(self):
+        for swift in (False, True):
+            with self.subTest(swift=swift):
+                rows = diagnostic_rows(swift=swift, receiver=True)
+                TRANSFER.connected_owner(rows, swift=swift)
+                for row in TRANSFER.selected(rows, "protocol.secure_v2.negotiated"):
+                    row["details"]["feature"] = "file-commit-sha256-v1"
+                with self.assertRaises(ValueError):
+                    TRANSFER.connected_owner(rows, swift=swift)
 
     def test_quit_timeout_dump_binds_the_unreaped_child_and_bounds_only_one_diagnostic(self):
         for fault in (None, "reaped", "parent", "domain", "exec-version", "attach-failed", "attach-timeout"):
