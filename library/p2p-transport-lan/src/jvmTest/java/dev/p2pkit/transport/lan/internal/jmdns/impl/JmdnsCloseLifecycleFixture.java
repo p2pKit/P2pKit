@@ -9,6 +9,7 @@ import java.net.InetSocketAddress;
 import java.net.MulticastSocket;
 import java.net.NetworkInterface;
 import java.net.NoRouteToHostException;
+import java.net.StandardSocketOptions;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -924,6 +925,11 @@ public final class JmdnsCloseLifecycleFixture {
                     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                     stage = "REUSE"
                     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    # Darwin's JDK UDP reuse-address path also enables reuse-port before bind.
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                    if (not sock.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR)
+                            or not sock.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT)):
+                        raise ValueError()
                     stage = "BIND"
                     sock.bind(("", 5353))
                     stage = "INTERFACE"
@@ -1006,6 +1012,9 @@ public final class JmdnsCloseLifecycleFixture {
             try {
                 // Ordinary JDK multicast reuse/family defaults, matching the product's macOS bind/options.
                 socket = new MulticastSocket(null);
+                stage = "REUSE";
+                System.out.println("startup primitive=JDK_MULTICAST reuseAddress=" + socket.getReuseAddress()
+                        + " reusePort=" + socket.getOption(StandardSocketOptions.SO_REUSEPORT));
                 stage = "BIND";
                 socket.bind(new InetSocketAddress(DNSConstants.MDNS_PORT));
                 stage = "INTERFACE";
