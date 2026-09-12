@@ -750,7 +750,8 @@ class HostInvocationTest(unittest.TestCase):
                              ("macos-x64", "apple-followup"), ("windows-x64", "apple-provenance"),
                              ("macos-x64", "apple-provenance"), ("windows-x64", "apple-native-compilation"),
                              ("macos-x64", "apple-native-compilation"), ("windows-x64", "apple-owned-cancellation"),
-                             ("macos-x64", "apple-owned-cancellation"), ("unknown", "full")):
+                             ("macos-x64", "apple-owned-cancellation"), ("windows-x64", "apple-owned-helper"),
+                             ("macos-x64", "apple-owned-helper"), ("unknown", "full")):
             state = self.work / (role + "-" + scope)
             with self.subTest(role=role, scope=scope), self.assertRaisesRegex(ValueError, "role/scope"):
                 HOST.Host(role, state, scope=scope)
@@ -1480,6 +1481,46 @@ class HostInvocationTest(unittest.TestCase):
                 self.assertIsNone(host.simulator)
         self.assertEqual([], self.calls, "Selection fixture must not invoke a product subprocess")
 
+    def test_owned_helper_mac_route_runs_only_native_leaf_and_cleans_after_retirement(self):
+        host = HOST.Host("macos-arm64", self.state / "owned-helper-order", scope="apple-owned-helper")
+        self.assertNotIn((host.role, host.scope), HOST.CANCELLATION_PROBE_ROUTES)
+        for outcome in (True, False, HOST.InfrastructureFailure("synthetic ownership failure")):
+            with self.subTest(outcome=outcome), contextlib.ExitStack() as stack:
+                events = []
+                def helper(**kwargs):
+                    events.append("helper")
+                    if isinstance(outcome, HOST.InfrastructureFailure):
+                        raise outcome
+                    return outcome
+                invoked = stack.enter_context(mock.patch.object(host, "owned_flow_native", side_effect=helper))
+                stack.enter_context(mock.patch.object(host, "clean_outputs", side_effect=lambda: events.append("cleanup")))
+                operations = [stack.enter_context(mock.patch.object(host, name)) for name in
+                              ("invoke", "check", "install_xcodegen", "mac_policies", "isolated_consumers", "apple")]
+                if isinstance(outcome, HOST.InfrastructureFailure):
+                    with self.assertRaises(HOST.InfrastructureFailure):
+                        host.mac()
+                    self.assertEqual(["helper"], events)
+                else:
+                    host.mac()
+                    self.assertEqual(["helper", "cleanup"], events)
+                invoked.assert_called_once_with(aggregate_abi=False)
+                for operation in operations:
+                    operation.assert_not_called()
+        self.assertEqual([], self.calls, "Routing fixture must not execute native tools or product commands")
+
+    def test_owned_helper_scope_cannot_drop_abi_from_the_original_cancellation_route(self):
+        for scope, aggregate in (("apple-owned-cancellation", False), ("apple-owned-helper", True),
+                                 ("apple-owned-helper", 0), ("apple-owned-cancellation", 1), ("full", False)):
+            with self.subTest(scope=scope, aggregate=aggregate):
+                host = HOST.Host("macos-arm64", self.state / "invalid-owned-helper", scope=scope)
+                with mock.patch.object(host, "inspect_tool") as inspect, mock.patch.object(host, "invoke") as invoke:
+                    with self.assertRaisesRegex(ValueError, "scope and ABI selection"):
+                        host.owned_flow_native(aggregate_abi=aggregate)
+                    inspect.assert_not_called()
+                    invoke.assert_not_called()
+                self.assertFalse(host.safe)
+                self.assertIsNone(host.simulator)
+
     def test_owned_cancellation_mac_route_excludes_broad_graphs_and_cleans_before_its_producer(self):
         host = self.host
         host.role, host.scope, host.wrapper = "macos-arm64", "apple-owned-cancellation", self.repo / "gradlew"
@@ -1538,18 +1579,24 @@ class HostInvocationTest(unittest.TestCase):
     def test_owned_helper_uses_exact_leaf_retained_reports_and_actual_native_abi_task_lines(self):
         udid = "11111111-1111-1111-1111-111111111111"
         prefix = "owned-flow-native"
-        for fault in (None, "missing-xml", "wrong-xml", "abi-not-executed", "product-failed",
-                      "interrupted", "retirement-unproved", "unowned"):
-            with self.subTest(fault=fault):
+        faults = (None, "missing-xml", "wrong-xml", "abi-not-executed", "product-failed",
+                  "interrupted", "retirement-unproved", "unowned")
+        cases = [(scope, aggregate, fault) for scope, aggregate in (
+            ("apple-owned-cancellation", True), ("apple-owned-helper", False))
+            for fault in faults if aggregate or fault != "abi-not-executed"]
+        for scope, aggregate, fault in cases:
+            with self.subTest(scope=scope, fault=fault):
+                label = "owned-flow-helper-abi" if aggregate else "owned-flow-helper"
+                options = {} if aggregate else {"aggregate_abi": False}  # Preserve the original default-ABI caller.
                 fixture = HostInvocationTest()
                 fixture.setUp()
                 self.addCleanup(fixture.doCleanups)
                 host = fixture.host
-                host.role, host.scope, host.wrapper = "macos-arm64", "apple-owned-cancellation", fixture.repo / "gradlew"
+                host.role, host.scope, host.wrapper = "macos-arm64", scope, fixture.repo / "gradlew"
                 (fixture.repo / "gradle").mkdir()
                 (fixture.repo / "gradle/platform-test-policy.json").write_text(json.dumps(POLICY))
                 def receipt(record, path, evidence, phase):
-                    if phase != "before-write" or record["purpose"] != "owned-flow-helper-abi":
+                    if phase != "before-write" or record["purpose"] != label:
                         return
                     xml_name = ("library/p2p-transport-lan/build/test-results/iosSimulatorArm64Test/"
                                 "TEST-iosSimulatorArm64Test." + HOST.OWNED_NATIVE_CLASS + ".xml")
@@ -1565,8 +1612,8 @@ class HostInvocationTest(unittest.TestCase):
                         record["reports"].append({"source": source, "classification": "changed-since-admission",
                             "retained": "reports/" + source, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
                     (evidence / "report-manifest.json").write_text(json.dumps({"schema": 1, "records": record["reports"]}))
-                    tasks = ("iosArm64MainKlibrary", "iosSimulatorArm64MainKlibrary", "iosX64MainKlibrary",
-                             "internalDumpKotlinAbi", "checkKotlinAbi")
+                    tasks = (("iosArm64MainKlibrary", "iosSimulatorArm64MainKlibrary", "iosX64MainKlibrary",
+                              "internalDumpKotlinAbi", "checkKotlinAbi") if aggregate else ("iosSimulatorArm64Test",))
                     (evidence / "product.stdout.log").write_text(''.join(
                         "> Task :p2p-transport-lan:" + task + (" UP-TO-DATE" if fault == "abi-not-executed" else "") + "\n"
                         for task in tasks))
@@ -1595,9 +1642,9 @@ class HostInvocationTest(unittest.TestCase):
                         mock.patch.object(host, "inspect_tool", side_effect=inspect):
                     if fault in ("interrupted", "retirement-unproved", "unowned"):
                         with self.assertRaises((HOST.InfrastructureFailure, ValueError)):
-                            host.owned_flow_native()
+                            host.owned_flow_native(**options)
                     else:
-                        self.assertIs(host.owned_flow_native(), fault is None)
+                        self.assertIs(host.owned_flow_native(**options), fault is None)
                 self.assertFalse(host.finalizing)
                 if fault == "unowned":
                     self.assertEqual([prefix + "-before"], events)
@@ -1605,7 +1652,7 @@ class HostInvocationTest(unittest.TestCase):
                     self.assertFalse(host.safe)
                     self.assertIsNone(host.simulator)
                     continue
-                expected = [prefix + "-before", "owned-flow-helper-abi", prefix + "-retire-before"]
+                expected = [prefix + "-before", label, prefix + "-retire-before"]
                 if fault != "product-failed":
                     expected.append(prefix + "-retire-shutdown")
                 self.assertEqual(expected + [prefix + "-retire-after"], events)
@@ -1613,12 +1660,13 @@ class HostInvocationTest(unittest.TestCase):
                 admission = json.loads((host.evidence / (prefix + "-admission.json")).read_text())
                 self.assertEqual(udid, admission["udid"])
                 self.assertEqual("Shutdown", admission["stateBefore"])
-                self.assertEqual("host-owned-flow-helper-abi.json", admission["nativeInvocationReceipt"])
+                self.assertIs(aggregate, admission["aggregateAbiRequested"])
+                self.assertEqual("host-" + label + ".json", admission["nativeInvocationReceipt"])
                 for name in [admission["initialStateObservation"], *admission["requiredRetirementObservations"]]:
                     self.assertTrue((host.evidence / name).is_file())
                 native = json.loads((host.state / admission["nativeInvocationReceipt"]).read_text())
                 self.assertEqual([HOST.OWNED_NATIVE_TASK, "--device", udid, "--tests", HOST.OWNED_NATIVE_CLASS,
-                    ":p2p-transport-lan:checkKotlinAbi", "--continue", "--init-script",
+                    *([":p2p-transport-lan:checkKotlinAbi"] if aggregate else []), "--continue", "--init-script",
                     str(fixture.repo / "gradle/platform-test-coverage.init.gradle"),
                     "-Pp2pkit.testCoverageRoot=" + str(fixture.repo), "-Pp2pkit.testCoverageToken=" + TOKEN],
                     native["requestedArgv"])
@@ -1637,6 +1685,22 @@ class HostInvocationTest(unittest.TestCase):
                 self.assertEqual("PASS" if fault is None else "FAIL", assessment["result"])
                 if fault is None:
                     self.assertEqual(4, len(assessment["details"]["methods"]))
+                    self.assertIs(aggregate, assessment["details"]["aggregateAbiRequested"])
+                    self.assertEqual(5 if aggregate else 0, len(assessment["details"]["abiTasks"]))
+                    if not aggregate:
+                        self.assertIn("aggregate ABI NOT_EXECUTED and remains required", assessment["details"]["limits"])
+                if not aggregate and fault in (None, "product-failed"):
+                    with mock.patch.object(host, "inspect_tool", side_effect=fixture.simulator_inspection(
+                            ["Shutdown", "Shutdown"])):
+                        self.assertEqual(0 if fault is None else 1, fixture.finalize())
+                    summary = fixture.summary()
+                    self.assertEqual("PASS" if fault is None else "FAIL", summary["result"])
+                    self.assertTrue(summary["safeToContinue"])
+                    self.assertEqual("NOT_ESTABLISHED_BY_FOCUSED_SCOPE", summary["hostQualification"])
+                    self.assertFalse((host.state / "work").exists())
+                    self.assertTrue((Path(native["evidenceDirectory"]) / "product.stdout.log").is_file())
+                    self.assertTrue((Path(native["evidenceDirectory"]) / "stop.stdout.log").is_file())
+                    self.assertTrue((host.evidence / "owned-flow-helper-execution.json").is_file())
 
     def test_mac_batches_artifacts_and_reuses_the_consumer_publication_without_erasing_failed_dependencies(self):
         # Orchestration only: existing invocation/retention controls exercise
@@ -3096,7 +3160,7 @@ class SdkSetupTest(unittest.TestCase):
         cases = [(role, "full", 0) for role in HOST.ROLES]
         cases.extend([("windows-x64", "windows-followup", 0), ("windows-x64", "windows-diagnostics", 0),
                       ("macos-arm64", "apple-followup", 0), ("macos-arm64", "apple-provenance", 0),
-                      ("macos-arm64", "apple-owned-cancellation", 0),
+                      ("macos-arm64", "apple-owned-cancellation", 0), ("macos-arm64", "apple-owned-helper", 0),
                       ("macos-arm64", "apple-native-compilation", 0),
                       ("macos-arm64", "apple-native-compilation", 7),
                       ("macos-x64", "full", 7)])
@@ -3168,7 +3232,7 @@ class SdkSetupTest(unittest.TestCase):
         for role, scope in [*((role, "full") for role in HOST.ROLES),
                              ("windows-x64", "windows-followup"), ("windows-x64", "windows-diagnostics"),
                              ("macos-arm64", "apple-followup"), ("macos-arm64", "apple-provenance"),
-                             ("macos-arm64", "apple-native-compilation")]:
+                             ("macos-arm64", "apple-native-compilation"), ("macos-arm64", "apple-owned-helper")]:
             with self.subTest(role=role, scope=scope), self.fixture(role) as data:
                 fixture, sdk, _, properties = data
                 properties["android-37.0"].write_text("AndroidVersion.ApiLevel=37.1\n", encoding="utf-8")
@@ -3187,7 +3251,7 @@ class SdkSetupTest(unittest.TestCase):
         for role, scope in [*((role, "full") for role in HOST.ROLES),
                              ("windows-x64", "windows-followup"), ("windows-x64", "windows-diagnostics"),
                              ("macos-arm64", "apple-followup"), ("macos-arm64", "apple-provenance"),
-                             ("macos-arm64", "apple-native-compilation")]:
+                             ("macos-arm64", "apple-native-compilation"), ("macos-arm64", "apple-owned-helper")]:
             with self.subTest(role=role, scope=scope), self.fixture(role) as data:
                 fixture, sdk, _, _ = data
                 result, windows, mac, followup, diagnostics, order = self.run_fixture(

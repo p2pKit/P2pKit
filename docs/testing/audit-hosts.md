@@ -104,13 +104,68 @@ and `hostQualification=NOT_ESTABLISHED_BY_FOCUSED_SCOPE`, even on PASS. The rele
 monolith and external acceptance remain unexecuted/unvalidated. Prior selections
 and retained outcomes below are not replayed, promoted or reset by this selection.
 
-## Selected Apple owned-flow cancellation — revision21
+## Selected Apple owned-flow native helper — revision22
 
-Revision21 selects the ARM-only `apple-owned-cancellation` route and job
+Revision22 selects the ARM-only `apple-owned-helper` route and job
+`Audit native Apple owned Flow helper`. It is **NOT_RUN at selection time**;
+request approval is not native execution or final #413 repair approval.
+Keep `macos-26`, Java 21 then 17, Xcode26.5 and the unchanged 8400-second driver,
+150-minute step and 180-minute job ceilings. The exact-source freeze and global
+execution lease remain required before the triggering audit-branch push.
+
+After the unchanged native/non-Rosetta, tool/resource, complete native ownership
+controls and SDK36/37.0 admission, the only product leaf is `owned-flow-helper`:
+
+```text
+:p2p-transport-lan:iosSimulatorArm64Test --device <owned-shutdown-UUID>
+  --tests dev.p2pkit.transport.lan.IosOwnedFlowCollectionTest
+```
+
+The shared `owned_flow_native` implementation uses explicit `aggregate_abi=False`
+only for this scope. The original `apple-owned-cancellation` route still requires
+its default aggregate ABI graph and assessment; it cannot opt out under that scope.
+The fresh coverage token/init-script, `--continue`, strict dependency verification,
+forced-fresh tasks and at-most-two-worker/no-parallel budgets are unchanged.
+Exactly four unique successful helper methods, matching fresh retained XML/event
+counts, zero errors/skips and no other modeled test task remain mandatory.
+Compilation alone or a zero Gradle exit without those reports cannot pass.
+
+Select one exact available **originally Shutdown** iPhone17, pass its UUID through
+KGP's existing `--device` option and retain the pre-state. The shared `finally`
+retirement observes and, when necessary, shuts down only that device, including
+on failure/interruption; unknown retirement blocks continuation. Retain native
+reports and product/stop logs before immediate owned-output cleanup, followed by
+the unchanged unconditional finalizer and sealed handoff. A failed product or
+assessment remains failed; safe cleanup is not test success.
+
+This route returns before XcodeGen, project generation, framework/provenance,
+Swift or other product graphs. It does not replay revision21's independent
+framework/Swift28/isolated1 evidence, or request the known-failing aggregate ABI.
+Earlier results retain their original source/run bindings and require reviewed
+reuse; omitted work is not newly passed. Revision21's ABI failure remains failed,
+and a successful **actual additive Apple aggregate ABI** gate remains required
+for final #413 approval. No lock rewrite, relaxed dependency check or synthetic
+native-only ABI substitute is introduced. The helper result records
+`aggregateAbiRequested=false` and no `abiTasks`, explicitly leaving ABI required.
+
+Admission, summary and handoff retain `requestedScope=apple-owned-helper` and
+`hostQualification=NOT_ESTABLISHED_BY_FOCUSED_SCOPE`, even on PASS. This is not
+full-host, release-monolith, physical-device or independent acceptance.
+
+## Prior Apple owned-flow cancellation — revision21
+
+Revision21 selected the ARM-only `apple-owned-cancellation` route and job
 `Audit native Apple owned Flow cancellation`, separate from revision20's
-compile-only admission and the failed raw revision18 probe. **NOT_RUN** at this
-selection: source approval is not product verification or final #413 approval.
-Its triggering push requires the exact-source freeze and global execution lease. Keep native
+compile-only admission and the failed raw revision18 probe. It was **NOT_RUN at
+selection time**. Actual [run34647991698/1](https://github.com/p2pKit/P2pKit/actions/runs/34647991698/attempts/1)
+on `43a67394b66601e81156d5aead6257c939f0a8f4` / tree
+`112c92b8deb3e2dac32231473d4257abefd559e2` remained **FAIL**: native helper
+compilation failed at three generic assertions before its four cases could run,
+and aggregate ABI did not complete because of stale JmDNS lock membership.
+Independent downstream framework/provenance and Swift **28 + 1** cases recorded
+success with owned cleanup; they do not erase either earlier failure or supply
+final #413 approval. The original route below remains available and unchanged in
+scope; a new selection still requires exact-source and global-lease admission. Keep native
 `macos-26`, Java 21 then 17, Xcode26.5 and the existing 8400-second driver,
 150-minute step and 180-minute job ceilings. Do not silently select the larger
 unselected constructor default.
@@ -634,8 +689,8 @@ For every focused scope, `hostQualification` is always
 `NOT_ESTABLISHED_BY_FOCUSED_SCOPE`, including when the selected components pass.
 The CLI accepts `full` for the existing roles, `windows-followup` and
 `windows-diagnostics` only for Windows, and `apple-followup`, `apple-provenance`,
-`apple-native-compilation` and `apple-owned-cancellation` only for Apple Silicon, rejecting other pairs
-before state initialization. Full defaults remain
+`apple-native-compilation`, `apple-owned-cancellation` and `apple-owned-helper` only
+for Apple Silicon, rejecting other pairs before state initialization. Full defaults remain
 unchanged; `FULL_COMPONENT_SCOPE` describes their requested scope, not a successful
 qualification. Omitted Windows full-profile components are **NOT_EXECUTED by
 such a focused run**, not waived. The narrowed `windows-followup` graph does not

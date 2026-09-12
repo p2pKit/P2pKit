@@ -29,7 +29,8 @@ ROLES = {"windows-x64": ("Windows", "x64"), "macos-arm64": ("Darwin", "arm64"),
          "macos-x64": ("Darwin", "x64")}
 SCOPES = {"full": set(ROLES), "windows-followup": {"windows-x64"}, "windows-diagnostics": {"windows-x64"},
           "apple-followup": {"macos-arm64"}, "apple-provenance": {"macos-arm64"},
-          "apple-native-compilation": {"macos-arm64"}, "apple-owned-cancellation": {"macos-arm64"}}
+          "apple-native-compilation": {"macos-arm64"}, "apple-owned-cancellation": {"macos-arm64"},
+          "apple-owned-helper": {"macos-arm64"}}
 CANCELLATION_PROBE_ROUTES = {("macos-arm64", "apple-followup"), ("macos-arm64", "apple-provenance"),
                              ("macos-x64", "full")}
 # Closed source inventories: native execution must contain every listed method,
@@ -892,6 +893,12 @@ class Host:
             self.invoke("413-native-compilation-admission",
                         [":p2p-transport-lan:compileTestKotlinIosSimulatorArm64"])
             return
+        if self.scope == "apple-owned-helper":
+            # Native helper follow-through only: retain R21's independent Swift
+            # evidence and still-required failed aggregate ABI without replaying them.
+            self.owned_flow_native(aggregate_abi=False)
+            self.clean_outputs()
+            return
         if self.scope == "full":
             self.check("apple-tcp-options-sdk", self.inspect_tcp_options_headers)
         self.install_xcodegen()
@@ -941,16 +948,19 @@ class Host:
         # Receipt/helper manifests are copied by finalize(); preserve failed fixtures until that copy, too.
         self.apple()
 
-    def owned_flow_native(self):
-        """One fresh helper/ABI leaf; retain and assess its exact reports before cleanup."""
+    def owned_flow_native(self, *, aggregate_abi=True):
+        """One fresh helper leaf, optionally with aggregate ABI; assess before cleanup."""
         token = uuid.uuid4().hex
-        label, prefix = "owned-flow-helper-abi", "owned-flow-native"
+        label = "owned-flow-helper-abi" if aggregate_abi else "owned-flow-helper"
+        prefix = "owned-flow-native"
         try:
-            require(self.role == "macos-arm64" and self.scope == "apple-owned-cancellation",
-                    "Owned native helper requires its explicit ARM scope")
+            require(type(aggregate_abi) is bool and self.role == "macos-arm64" and self.scope ==
+                    ("apple-owned-cancellation" if aggregate_abi else "apple-owned-helper"),
+                    "Owned native helper requires its explicit ARM scope and ABI selection")
             udid = self.select_simulator(prefix + "-before")
             self.write(prefix + "-admission.json", {
                 "source": self.admission, "task": OWNED_NATIVE_TASK, "udid": udid,
+                "aggregateAbiRequested": aggregate_abi,
                 "stateBefore": self.simulator["stateBefore"], "nativeInvocationReceipt": "host-" + label + ".json",
                 "initialStateObservation": prefix + "-before.stdout.log",
                 "requiredRetirementObservations": [prefix + "-retire-before.stdout.log", prefix + "-retire-after.stdout.log"],
@@ -961,8 +971,8 @@ class Host:
             raise
         try:
             tested = self.invoke(label, [OWNED_NATIVE_TASK, "--device", udid, "--tests", OWNED_NATIVE_CLASS,
-                                ":p2p-transport-lan:checkKotlinAbi", "--continue", "--init-script",
-                                str(ROOT / "gradle/platform-test-coverage.init.gradle"),
+                                *([":p2p-transport-lan:checkKotlinAbi"] if aggregate_abi else []),
+                                "--continue", "--init-script", str(ROOT / "gradle/platform-test-coverage.init.gradle"),
                                 "-Pp2pkit.testCoverageRoot=" + str(ROOT), "-Pp2pkit.testCoverageToken=" + token])
         finally:
             # KGP receives this exact owned device; even a failed/interrupted
@@ -979,7 +989,8 @@ class Host:
             finally:
                 self.finalizing = finalizing
         def inspect():
-            require(tested is True, "Native helper/ABI invocation failed; no helper or ABI completion is awarded")
+            require(tested is True, "Native helper/ABI invocation failed; no helper or ABI completion is awarded"
+                    if aggregate_abi else "Native helper invocation failed; no helper completion is awarded")
             receipt = self.receipts[label]
             directory = Path(receipt["evidenceDirectory"])
             def retained(source):
@@ -1003,18 +1014,22 @@ class Host:
                 junit = stream.read(1024 ** 2 + 1)
             result = assess_owned_native(read_json(execution),
                                          read_json(ROOT / "gradle/platform-test-policy.json"), token, junit)
-            # These actual aggregate task names are observed in native Gradle logs,
-            # not invented per-target compares. Keep all compiler/compare log context.
-            abi = ["> Task :p2p-transport-lan:" + name for name in (
-                "iosArm64MainKlibrary", "iosSimulatorArm64MainKlibrary", "iosX64MainKlibrary",
-                "internalDumpKotlinAbi", "checkKotlinAbi")]
-            with physical(directory / "product.stdout.log").open(encoding="utf-8") as stream:
-                lines = [line.rstrip("\r\n") for line in stream if line.startswith("> Task :p2p-transport-lan:")]
-            require(all(lines.count(task) == 1 for task in abi), "Fresh native ABI dump/compare execution is missing")
+            abi = []
+            if aggregate_abi:
+                # Actual aggregate tasks, not invented per-target compares. The
+                # helper-only scope does not claim or waive this required gate.
+                abi = ["> Task :p2p-transport-lan:" + name for name in (
+                    "iosArm64MainKlibrary", "iosSimulatorArm64MainKlibrary", "iosX64MainKlibrary",
+                    "internalDumpKotlinAbi", "checkKotlinAbi")]
+                with physical(directory / "product.stdout.log").open(encoding="utf-8") as stream:
+                    lines = [line.rstrip("\r\n") for line in stream if line.startswith("> Task :p2p-transport-lan:")]
+                require(all(lines.count(task) == 1 for task in abi), "Fresh native ABI dump/compare execution is missing")
             return {**result, "token": token, "invocationId": receipt["id"], "source": self.admission,
                     "executionSha256": digest(execution), "junitSha256": digest(xml), "abiTasks": abi,
-                    "productLogSha256": digest(directory / "product.stdout.log"),
-                    "limits": "Focused ARM helper and LAN ABI only; no whole-host or physical qualification."}
+                    "aggregateAbiRequested": aggregate_abi, "productLogSha256": digest(directory / "product.stdout.log"),
+                    "limits": "Focused ARM helper and LAN ABI only; no whole-host or physical qualification."
+                    if aggregate_abi else "Focused ARM helper only; aggregate ABI NOT_EXECUTED and remains required; "
+                    "no whole-host or physical qualification."}
         return self.check("owned-flow-helper-execution", inspect)
 
     def isolated_consumers(self):
@@ -1432,7 +1447,7 @@ class Host:
                     if device.get("name") == "iPhone 17" and device.get("isAvailable") is not False:
                         choices.append((tuple(map(int, match[1].split("-"))), device["udid"], device["state"]))
         require(choices, "No available exact iPhone17 simulator; required Swift tests are not skipped")
-        if self.scope == "apple-owned-cancellation":
+        if self.scope in ("apple-owned-cancellation", "apple-owned-helper"):
             choices = [choice for choice in choices if choice[2] == "Shutdown"]
             require(choices, "Owned cancellation requires an exact originally Shutdown simulator")
         elif (self.role, self.scope) in CANCELLATION_PROBE_ROUTES:
