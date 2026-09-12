@@ -8,11 +8,16 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.MulticastSocket;
 import java.net.NetworkInterface;
+import java.net.NoRouteToHostException;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HexFormat;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
@@ -120,6 +125,7 @@ public final class JmdnsCloseLifecycleFixture {
                     STARTUP.report();
                     if (fixture != null) {
                         fixture.reportStartupState();
+                        StartupPrimitives.report(fixture);
                     }
                 } catch (Throwable diagnosticFailure) {
                     // Diagnostics must not replace the original readiness
@@ -891,6 +897,206 @@ public final class JmdnsCloseLifecycleFixture {
 
     private static String known(Boolean value) {
         return value == null ? "UNKNOWN" : value.toString();
+    }
+
+    private static final class StartupPrimitives {
+        // Fixed 42-byte, zero-ID A/IN query for p2pkit-audit-probe.local.; no real host/service data.
+        private static final String QUERY_HEX = "000000000001000000000000"
+                + "127032706b69742d61756469742d70726f6265056c6f63616c0000010001";
+        private static final Pattern NATIVE_REPORT = Pattern.compile(
+                "P2PKIT_PRIMITIVE_V1\\|(ADMISSION|IDENTITY|SOCKET|REUSE|BIND|INTERFACE|JOIN|TTL|SEND)"
+                        + "\\|(KERNEL_ACCEPTED|FAIL)\\|([A-Za-z][A-Za-z0-9_]{0,63})"
+                        + "\\|(UNKNOWN|-?[0-9]{1,10})\\|([0-9]{1,3})\\|(true|false|NOT_CREATED)"
+                        + "\\|([A-Za-z][A-Za-z0-9_]{0,63})\\n");
+        private static final String PYTHON = """
+                import socket, struct, sys
+                stage, result, failure, error, sent = "ADMISSION", "FAIL", "NONE", "UNKNOWN", 0
+                sock, closed, close_failure = None, "NOT_CREATED", "NONE"
+                try:
+                    frame = sys.stdin.buffer.read(74)
+                    if not 10 <= len(frame) <= 73 or len(frame) != 9 + frame[8]:
+                        raise ValueError()
+                    index, address, name = struct.unpack("!I", frame[:4])[0], frame[4:8], frame[9:].decode("ascii")
+                    stage = "IDENTITY"
+                    if socket.if_nametoindex(name) != index or socket.if_indextoname(index) != name:
+                        raise ValueError()
+                    stage = "SOCKET"
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    stage = "REUSE"
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    stage = "BIND"
+                    sock.bind(("", 5353))
+                    stage = "INTERFACE"
+                    sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, address)
+                    if sock.getsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, 4) != address:
+                        raise ValueError()
+                    stage = "JOIN"
+                    sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
+                                    socket.inet_aton("224.0.0.251") + address)
+                    stage = "TTL"
+                    sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
+                    stage = "SEND"
+                    sent = sock.sendto(bytes.fromhex("%s"), ("224.0.0.251", 5353))
+                    if sent != 42:
+                        raise ValueError()
+                    result = "KERNEL_ACCEPTED"
+                except BaseException as cause:
+                    failure = type(cause).__name__
+                    error = cause.errno if isinstance(cause, OSError) and cause.errno is not None else "UNKNOWN"
+                finally:
+                    if sock is not None:
+                        try:
+                            sock.close()
+                        except BaseException as cause:
+                            close_failure = type(cause).__name__
+                        closed = str(sock.fileno() == -1).lower()
+                print("|".join(map(str, ("P2PKIT_PRIMITIVE_V1", stage, result, failure, error,
+                                         sent, closed, close_failure))))
+                """.formatted(QUERY_HEX);
+
+        static void report(Fixture fixture) throws IOException {
+            // Only the audit workflow opts in. Normal JUnit/product operation needs no Python.
+            if (!"true".equals(System.getProperty("p2pkit.audit.jmdnsStartupPrimitives"))) {
+                return;
+            }
+            StartupNetwork snapshot = fixture.startupNetwork;
+            SendFailure first = STARTUP.firstSendFailure.get();
+            if (!"Mac OS X".equals(System.getProperty("os.name")) || !"control".equals(fixture.mode)
+                    || Thread.currentThread().isInterrupted() || first == null
+                    || !(first.cause instanceof NoRouteToHostException) || !Boolean.TRUE.equals(first.ipv4Mdns)
+                    || snapshot.selected == null || !snapshot.selected.equals(snapshot.host)
+                    || !snapshot.selected.equals(snapshot.socket)
+                    || !snapshot.selected.name.matches("[A-Za-z0-9_.:-]{1,64}")) {
+                System.out.println("startup primitivePair attempted=false reason=CONTEXT_OR_CAPTURE_NOT_MATCHED");
+                return;
+            }
+            Path python = Path.of(System.getProperty("p2pkit.audit.pythonExecutable", ""));
+            if (!python.isAbsolute() || !Files.isRegularFile(python) || !Files.isExecutable(python)
+                    || !python.equals(python.toRealPath())) {
+                System.out.println("startup primitivePair attempted=false reason=CANONICAL_INTERPRETER_REQUIRED");
+                return;
+            }
+            NetworkInterface network = matchedNetwork(fixture);
+            if (network == null) {
+                System.out.println("startup primitivePair attempted=false reason=CURRENT_INTERFACE_NOT_MATCHED");
+                return;
+            }
+            // Post-failure observations only. Kernel acceptance is not delivery, readiness,
+            // interoperability, a policy diagnosis, or a reason to change the original FAIL.
+            System.out.println("startup primitivePair observation=POST_FAILURE scope=CAPTURED_IPV4_MDNS"
+                    + " interpretation=KERNEL_ACCEPTANCE_ONLY");
+            jdkSend(network);
+            if (matchedNetwork(fixture) == null) {
+                System.out.println("startup primitive=PYTHON_IPV4 attempted=false reason=CURRENT_INTERFACE_NOT_MATCHED");
+                return;
+            }
+            nativeSend(python, snapshot.selected, fixture.address);
+        }
+
+        private static NetworkInterface matchedNetwork(Fixture fixture) throws IOException {
+            NetworkInterface network = NetworkInterface.getByInetAddress(fixture.address);
+            return usable(network, fixture.address) && fixture.startupNetwork.selected.equals(
+                    InterfaceIdentity.capture(() -> network)) ? network : null;
+        }
+
+        private static void jdkSend(NetworkInterface network) {
+            MulticastSocket socket = null;
+            String stage = "SOCKET", result = "FAIL", failureClass = "NONE", closeFailure = "NONE";
+            int sent = 0;
+            try {
+                // Ordinary JDK multicast reuse/family defaults, matching the product's macOS bind/options.
+                socket = new MulticastSocket(null);
+                stage = "BIND";
+                socket.bind(new InetSocketAddress(DNSConstants.MDNS_PORT));
+                stage = "INTERFACE";
+                socket.setNetworkInterface(network);
+                InetAddress group = InetAddress.getByAddress(new byte[] {(byte) 224, 0, 0, (byte) 251});
+                stage = "JOIN";
+                socket.joinGroup(new InetSocketAddress(group, DNSConstants.MDNS_PORT), network);
+                stage = "TTL";
+                socket.setTimeToLive(255);
+                byte[] query = HexFormat.of().parseHex(QUERY_HEX);
+                stage = "SEND";
+                socket.send(new DatagramPacket(query, query.length, group, DNSConstants.MDNS_PORT));
+                sent = query.length;
+                result = "KERNEL_ACCEPTED";
+            } catch (Throwable failure) {
+                failureClass = failure.getClass().getName();
+            } finally {
+                if (socket != null) {
+                    try {
+                        socket.close();
+                    } catch (Throwable failure) {
+                        closeFailure = failure.getClass().getName();
+                    }
+                }
+                System.out.println("startup primitive=JDK_MULTICAST stage=" + stage + " result=" + result
+                        + " failureClass=" + failureClass + " errno=UNKNOWN sentBytes=" + sent
+                        + " socketClosed=" + (socket == null ? "NOT_CREATED" : socket.isClosed())
+                        + " closeFailureClass=" + closeFailure);
+            }
+        }
+
+        private static void nativeSend(Path python, InterfaceIdentity network, Inet4Address address) {
+            Process process = null;
+            boolean interrupted = false;
+            try {
+                // No shell, PATH search, site packages, bytecode cache, address argv or raw stderr forwarding.
+                process = new ProcessBuilder(python.toString(), "-I", "-S", "-B", "-c", PYTHON)
+                        .redirectError(ProcessBuilder.Redirect.DISCARD).start();
+                byte[] name = network.name.getBytes(StandardCharsets.US_ASCII);
+                byte[] frame = ByteBuffer.allocate(9 + name.length).putInt(network.index)
+                        .put(address.getAddress()).put((byte) name.length).put(name).array();
+                process.getOutputStream().write(frame);
+                process.getOutputStream().close();
+                boolean completed = process.waitFor(2, TimeUnit.SECONDS);
+                System.out.println("startup primitive=PYTHON_IPV4 processCompleted=" + completed
+                        + " exitZero=" + (completed ? process.exitValue() == 0 : "UNKNOWN"));
+                if (completed && process.exitValue() == 0) {
+                    byte[] output = process.getInputStream().readNBytes(513);
+                    Matcher report = NATIVE_REPORT.matcher(new String(output, StandardCharsets.US_ASCII));
+                    boolean valid = output.length <= 512 && report.matches()
+                            && Integer.parseInt(report.group(5)) <= 42
+                            && (!"KERNEL_ACCEPTED".equals(report.group(2)) || ("SEND".equals(report.group(1))
+                            && "NONE".equals(report.group(3)) && "UNKNOWN".equals(report.group(4))
+                            && "42".equals(report.group(5))));
+                    System.out.println("startup primitive=PYTHON_IPV4 reportValid=" + valid);
+                    if (valid) {
+                        System.out.println("startup primitive=PYTHON_IPV4 stage=" + report.group(1)
+                                + " result=" + report.group(2) + " failureClass=" + report.group(3)
+                                + " errno=" + report.group(4) + " sentBytes=" + report.group(5)
+                                + " socketClosed=" + report.group(6) + " closeFailureClass=" + report.group(7));
+                    }
+                }
+            } catch (InterruptedException failure) {
+                interrupted = true;
+                System.out.println("startup primitive=PYTHON_IPV4 processFailureClass=java.lang.InterruptedException");
+            } catch (Throwable failure) {
+                System.out.println("startup primitive=PYTHON_IPV4 processFailureClass=" + failure.getClass().getName());
+            } finally {
+                if (process != null) {
+                    if (process.isAlive()) {
+                        process.destroyForcibly();
+                        try {
+                            process.waitFor(1, TimeUnit.SECONDS);
+                        } catch (InterruptedException failure) {
+                            interrupted = true;
+                        }
+                    }
+                    System.out.println("startup primitive=PYTHON_IPV4 processReaped=" + !process.isAlive());
+                    try {
+                        process.getInputStream().close();
+                        process.getErrorStream().close();
+                        process.getOutputStream().close();
+                    } catch (IOException ignored) {
+                        // Preserve the original readiness failure; never emit native text.
+                    }
+                }
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
     }
 
     private static final class Controls {

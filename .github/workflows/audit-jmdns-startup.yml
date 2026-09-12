@@ -1,7 +1,7 @@
 name: Audit 410 macOS JmDNS startup diagnostic
 
 # Diagnostic-only workflow; success grants no full-suite or release approval.
-# Run revision: 3. Native Intel admission; reuse compiled Java inputs for the eight existing modes.
+# Run revision: 4. Add one opt-in paired primitive observation only after matched control startup failure.
 # The lead holds the separate global local/remote lease through terminal/upload reconciliation.
 on:
   push:
@@ -198,7 +198,7 @@ jobs:
           vendor = root / "library/p2p-transport-lan/vendor/jmdns/src/main"
           fixture = root / ("library/p2p-transport-lan/src/jvmTest/java/"
               "dev/p2pkit/transport/lan/internal/jmdns/impl/JmdnsCloseLifecycleFixture.java")
-          reviewed_fixture = "08c799e1c8a2aaf08fed5e36faa29a74c607ae7131d1c1ff447d86cf6afabd30"
+          reviewed_fixture = "4b698f62732eb18e670aef5bc4149038e523385903ecfdf50113710399ae6e6d"
           dependency_hash = "5d6298b93a1905c32cda6478808ac14c2d4a47e91535e53c41f7feeb85d946f4"
           dependency_url = "https://repo.maven.apache.org/maven2/org/slf4j/slf4j-api/2.0.7/slf4j-api-2.0.7.jar"
           dependency = work / "slf4j-api-2.0.7.jar"
@@ -267,6 +267,7 @@ jobs:
               for name, argv in (
                   ("first-launch-status", ["xcodebuild", "-checkFirstLaunchStatus"]),
                   ("simctl-path", ["xcrun", "--find", "simctl"]),
+                  ("simctl-diagnostic-help", ["xcrun", "simctl", "help", "diagnose"]),
               ):
                   code, observation = invoke("intel-" + name, argv, 45)
                   result["intelReadiness"][name] = {"exitCode": code, "invocationId": observation["id"],
@@ -294,9 +295,13 @@ jobs:
               source_inputs = {path.relative_to(root).as_posix(): file_record(path) for path in inputs}
               java = Path(os.environ["JAVA_HOME"]).resolve(strict=True) / "bin"
               runner.require(str(java.parent) in context["javaHomes"], "Java compiler/launcher is outside admitted toolchains")
+              python = Path(sys.executable).resolve(strict=True)
+              runner.require(python.is_file() and os.access(python, os.X_OK), "Current Python interpreter is unavailable")
               runner.write_new_json(bootstrap / "source-inputs.json", {"source": context["source"], "files": source_inputs,
                   "javaBin": str(java), "dependency": {"coordinate": "org.slf4j:slf4j-api:2.0.7",
-                      "url": dependency_url, "sha256": dependency_hash}, "fixtureModes": modes, "childTimeoutSeconds": 45})
+                      "url": dependency_url, "sha256": dependency_hash}, "fixtureModes": modes, "childTimeoutSeconds": 45,
+                  "postFailurePrimitivePlan": {"enabledForMatchedControl": True, "pythonExecutable": str(python),
+                      "pythonVersion": sys.version.split()[0], "pythonWaitSeconds": 2, "pythonReapSeconds": 1}})
               build.mkdir(mode=0o700)
               build_identity = {"device": build.stat().st_dev, "inode": build.stat().st_ino}
               runner.write_new_json(bootstrap / "diagnostic-work.json", {"jobId": context["id"],
@@ -322,10 +327,12 @@ jobs:
               runner.require(code == 0, "Fixture Java compilation failed; control NOT_RUN")
               runtime_inputs = inventory(work)
               runner.write_new_json(bootstrap / "compiled-inputs.json", {"files": runtime_inputs})
-              # Exactly one original control JVM, with the unchanged launcher's resource flags and 45s watchdog.
+              # Exactly one original control JVM; original failure still aborts the suffix even if a probe sends.
+              # Audit-only opt-in, not a dependency of the normal JUnit launcher; keep its resources/45s watchdog.
               java_argv = [str(java / "java"), "-Xms16m", "-Xmx128m",
                   "-XX:MaxMetaspaceSize=128m", "-XX:ActiveProcessorCount=2", "-XX:+UseSerialGC",
-                  "-Dorg.slf4j.simpleLogger.defaultLogLevel=off", "-cp",
+                  "-Dorg.slf4j.simpleLogger.defaultLogLevel=off", "-Dp2pkit.audit.jmdnsStartupPrimitives=true",
+                  "-Dp2pkit.audit.pythonExecutable=" + str(python), "-cp",
                   os.pathsep.join([str(fixture_classes), str(vendor_classes), str(vendor / "resources"), str(dependency)]),
                   "dev.p2pkit.transport.lan.internal.jmdns.impl.JmdnsCloseLifecycleFixture"]
               for mode in modes:
