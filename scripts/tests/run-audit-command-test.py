@@ -1483,7 +1483,9 @@ class ExecutorFixtureTests(unittest.TestCase):
                     lambda: runner.write_new_json(destination / "cleanup-before-disposal.json", record))
         if hasattr(self, "temporary") and not errors:
             def dispose():
-                self.temporary.cleanup()
+                # cleanup() is a no-op after finalizer detachment on Python 3.9.
+                # Use its remover explicitly, retaining read-only-file handling.
+                self.temporary._rmtree(self.temporary.name)
                 runner.require(runner.existing_lstat(self.base) is None, "Generated fixture directory still exists")
                 record["fixtureDataRemoved"] = True
             attempt("Generated fixture disposal", dispose)
