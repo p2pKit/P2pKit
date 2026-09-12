@@ -23,6 +23,7 @@ env:
 jobs:
   selected_host:
     name: Audit native Intel owned Flow helper
+    if: ${{ github.event_name == 'push' && !github.event.deleted }}
     runs-on: macos-15-intel
     timeout-minutes: 180
     defaults:

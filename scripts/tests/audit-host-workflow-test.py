@@ -1134,6 +1134,11 @@ def expression_value(expression, values, cancelled=False):
                 return True
             if node.func.id == "cancelled":
                 return cancelled
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "contains"
+                and len(node.args) == 2 and not node.keywords):
+            haystack, needle = (value(argument) for argument in node.args)
+            if isinstance(haystack, str) and isinstance(needle, str):
+                return needle.casefold() in haystack.casefold()
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
             return not value(node.operand)
         if isinstance(node, ast.BoolOp):
@@ -1154,6 +1159,36 @@ def expression_value(expression, values, cancelled=False):
 
 
 class WorkflowOrchestrationTest(WorkflowTestCase):
+    def test_retired_audit_branch_deletion_cannot_allocate_any_optional_job(self):
+        workflows = {
+            "audit-host-validation.yml": "selected_host",
+            "audit-jmdns-startup.yml": "jmdns_startup",
+            "audit-lock-refresh.yml": "lock_refresh",
+            "audit-android-art.yml": "android_art",
+        }
+        for filename, job in workflows.items():
+            text = (WORKFLOW.parent / filename).read_text(encoding="utf-8")
+            with mock.patch.dict(globals(), {"TEXT": text}):
+                expression = yaml_value(job_block(job), "if", 4)
+            prefix = text.split("\njobs:\n", 1)[0]
+            self.assertIn("branches: [audit/complete-2026-09-04]", prefix)
+            self.assertIn("paths: [.github/workflows/" + filename + "]", prefix)
+            for deleted, event, marked, repository in (
+                    (False, "push", True, "p2pKit/P2pKit"),
+                    (True, "push", True, "p2pKit/P2pKit"),
+                    (False, "workflow_dispatch", True, "p2pKit/P2pKit"),
+                    (False, "push", False, "p2pKit/P2pKit"),
+                    (False, "push", True, "other/repository")):
+                with self.subTest(workflow=filename, deleted=deleted, event=event,
+                                  marked=marked, repository=repository):
+                    values = {"github": {"repository": repository, "event_name": event,
+                                         "event": {"deleted": deleted, "head_commit": {
+                                             "message": "[audit-art]" if marked else "ordinary push"}}}}
+                    expected = (not deleted and event == "push"
+                                and (job == "selected_host" or repository == "p2pKit/P2pKit")
+                                and (job != "android_art" or marked))
+                    self.assertEqual(expected, expression_value(expression, values))
+
     def test_handoff_job_output_requires_successful_step_and_literal_safe_value(self):
         expression = yaml_value(job_block("selected_host"), "safe_to_continue", 6)
         for outcome, safe in itertools.product(("success", "failure", "cancelled", "skipped", ""),

@@ -23,7 +23,7 @@ env:
 jobs:
   jmdns_startup:
     name: Native macOS Intel Java-only lifecycle diagnostic (no release or Gradle-suite credit)
-    if: ${{ github.repository == 'p2pKit/P2pKit' && github.event_name == 'push' }}
+    if: ${{ github.repository == 'p2pKit/P2pKit' && github.event_name == 'push' && !github.event.deleted }}
     runs-on: macos-15-intel
     # Native-control ceiling plus bounded Java leaves, same-home stops and evidence/disposal headroom.
     timeout-minutes: 100

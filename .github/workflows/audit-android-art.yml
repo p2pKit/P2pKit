@@ -24,7 +24,7 @@ env:
 jobs:
   android_art:
     name: API37 permission/lifecycle and API37/24/25 repeated export (emulator only)
-    if: ${{ github.repository == 'p2pKit/P2pKit' && github.event_name == 'push' && contains(github.event.head_commit.message, '[audit-art]') }}
+    if: ${{ github.repository == 'p2pKit/P2pKit' && github.event_name == 'push' && !github.event.deleted && contains(github.event.head_commit.message, '[audit-art]') }}
     runs-on: ubuntu-24.04
     # 20m setup + 135m owned command + 12m finalization/upload + 3m runner margin.
     timeout-minutes: 170

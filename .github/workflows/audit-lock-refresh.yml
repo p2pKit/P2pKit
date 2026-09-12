@@ -23,7 +23,7 @@ env:
 jobs:
   lock_refresh:
     name: Native macOS arm64 complete supported lock write (mutation is not an immutable PASS)
-    if: ${{ github.repository == 'p2pKit/P2pKit' && github.event_name == 'push' }}
+    if: ${{ github.repository == 'p2pKit/P2pKit' && github.event_name == 'push' && !github.event.deleted }}
     runs-on: macos-26
     # Includes native controls, SDK setup, a bounded 120m product leaf, and finalization/upload headroom.
     timeout-minutes: 210
