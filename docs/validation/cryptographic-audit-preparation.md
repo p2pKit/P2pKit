@@ -112,8 +112,9 @@ Provide an indexed source bundle and call graph for:
 - `SecurityManager.kt`, `SessionManager.kt`, `Handshake.kt`, and `HelloPayload`;
 - `protocol/Frame*`, `ProtocolConstants`, `AppMessageEnvelope`,
   `FileTransferWire`, sender/receiver/reassembler code;
-- public `SecurityConfig`, authorization policies, identity/fingerprint types,
-  errors, lifecycle, transport capabilities, and provisioning/manual pin APIs;
+- public `P2pKitBuilder.security`, `SecurityConfigBuilder`, and `SecurityMode`,
+  authorization policies, identity/fingerprint types, errors, lifecycle,
+  transport capabilities, and provisioning/manual pin APIs;
 - LAN discovery/data transports and selected-network/AWDL route controls;
 - diagnostic redaction/export and sample trust-policy configuration;
 - Gradle dependency catalogs, lockfiles, SBOM/provenance/signing workflows, ABI
