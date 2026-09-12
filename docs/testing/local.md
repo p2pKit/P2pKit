@@ -3,6 +3,9 @@
 Use JDK 17 and the checked-in Gradle wrapper. macOS with the configured Xcode
 toolchain is required for Apple targets and the complete release gate.
 
+Continuing the September audit on a new Mac? Start with the [Mac handoff](mac-handoff.md).
+`main` contains the consolidated work; no retired audit branch or private build products are required.
+
 The shell checks require Bash, Git, and Ruby with its standard library (`ruby --version`).
 Ruby is used by both the Markdown-link and repository-layout policy checks. Install it if absent on Linux/Windows;
 run `.sh` commands in Bash (for example, Git Bash on Windows), with Ruby available on `PATH`.
@@ -251,10 +254,12 @@ host stubs are not an Android runtime. JVM/native common-test passes do not
 substitute for unexecuted Android runtime/catalog cases. See
 [validation status](validation-status.md#kotlin-target-execution-and-structural-gaps).
 
-The optional `audit-android-art.yml` workflow runs only after a reviewed change to
+The historical optional `audit-android-art.yml` workflow runs only after a reviewed change to
 that workflow on `audit/complete-2026-09-04` with `[audit-art]` in the pushed head
 commit message. Hold the shared audit execution lease before requesting it.
 A skipped job is not runtime evidence and does not replace any required gate.
+This audit-branch trigger is dormant after main consolidation; do not recreate the branch
+or fabricate an Actions event to run it. A future hosted relocation requires separate review.
 
 ## iOS launcher cleanup and recovery
 

@@ -5,11 +5,13 @@ audits, trackers, and implementation evidence remain under `docs/archive/`.
 
 ## Unreleased
 
-`main` is the post-RC3 stabilization line for the eventual `0.7.0` release.
+`main` is the unreleased post-RC3 development line, including the consolidated
+audit work. The `0.7.0-SNAPSHOT` label does not authorize shipping the changes
+reserved below for **0.8.0+** in a 0.7 release without a new explicit owner decision.
 The six real-world, independent-interoperability, and professional-audit areas
 remain pending; no stable-release readiness claim is implied.
 
-### Audit-branch Android provisioning address snapshots — reserved for 0.8.0+
+### Audit-origin Android provisioning address snapshots — reserved for 0.8.0+
 
 - #282: Android manual connection information and hosted-network snapshots now
   share one IO-dispatched all-interface scanner. Usable IPv4 is retained and
@@ -19,11 +21,11 @@ remain pending; no stable-release readiness claim is implied.
   A snapshot is not proof of peer reachability: LAN-only route admission and
   fingerprint-pinned authentication are unchanged. Physical IPv6/OEM
   qualification remains pending.
-- This unmerged behavior expansion is **not approved for a 0.7 release** and
+- This integrated but unreleased behavior expansion is **not approved for a 0.7 release** and
   is not part of published RC3. Honor the 0.8.0+ target or obtain an explicit
   owner release decision; no version/tag/publication authorization is implied.
 
-### Audit-branch discovery tightening — reserved for 0.8.0+
+### Audit-origin discovery tightening — reserved for 0.8.0+
 
 - #229: JVM/Android decode original DNS-SD TXT bytes rather than JmDNS's
   normalized property map. Malformed UTF-8 in a consumed field rejects the
@@ -45,13 +47,13 @@ remain pending; no stable-release readiness claim is implied.
   delete replacement ownership. Repeated rejection is idempotent and valid
   recovery publishes a fresh Found lifecycle. Existing dial/session ownership,
   manual endpoints and independent advertising remain unaffected.
-- This is an unmerged audit-branch change, **not** part of published RC3 and
+- This integrated audit-origin change is unreleased, **not** part of published RC3 and
   **not approved for a 0.7 release**. The current snapshot version label does
   not override #229's 0.8.0+ requirement. A release must honor that target or
   obtain an explicit owner decision before changing it; no version/tag or
   publication authorization is implied here.
 
-### Audit-branch receive-backlog accounting — reserved for 0.8.0+
+### Audit-origin receive-backlog accounting — reserved for 0.8.0+
 
 - #145: receive admission no longer creates UTF-8 arrays just to measure text
   or metadata. The unchanged 64-message/8 MiB caps now use an approximate
@@ -62,7 +64,7 @@ remain pending; no stable-release readiness claim is implied.
 - This tightens admission, not the wire format or public ABI. A legal 4 MiB
   ASCII message alone exceeds the budget by 512 bytes and fails the receiving
   session. See [operational limits](docs/reference/limits.md). The estimate is
-  not an exact platform or whole-session heap bound. This unmerged change is
+  not an exact platform or whole-session heap bound. This integrated but unreleased change is
   **not approved for a 0.7 release**; honor the 0.8.0+ target or obtain a new
   explicit owner decision. No version/tag/publication is authorized here.
 

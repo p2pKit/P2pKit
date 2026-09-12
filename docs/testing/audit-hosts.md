@@ -1,5 +1,15 @@
 # Audit-branch hosted validation
 
+> **Main consolidation — 2026-09-12:** the four `audit-*.yml` push facilities below
+> are retained as historical, dormant helpers after retiring the audit branch.
+> Their exact-ref admission is unchanged; they are not local Terminal drivers or
+> main-dispatch entry points. Use the [Mac handoff](mac-handoff.md) and maintained
+> branch-agnostic leaves. Do not recreate the old branch, synthesize `GITHUB_*`
+> values or retarget filters without reviewing the full admission contract.
+> Normal CI, OSV, dependency submission and the separate Intel workflow remain active.
+> Job-level deletion guards prevent these optional jobs allocating runners for
+> a deletion event evaluated against the consolidated workflow definitions.
+
 The [audit host workflow](../../.github/workflows/audit-host-validation.yml) is an
 additive, read-only execution facility for one frozen audit-branch revision. It
 neither replaces normal CI/release checks nor records a successful execution by

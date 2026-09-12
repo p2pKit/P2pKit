@@ -18,6 +18,7 @@ remediation records. Start with the repository [README](../README.md).
 
 ## Test and release
 
+- [Mac continuation handoff](testing/mac-handoff.md) — current audit work on `main`
 - [Local testing](testing/local.md)
 - [Validation status](testing/validation-status.md)
 - [Real-world and independent validation handbook](validation/README.md)

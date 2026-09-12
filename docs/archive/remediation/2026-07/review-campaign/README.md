@@ -1,8 +1,10 @@
 # July 2026 review-campaign archive
 
-This directory is an intact historical snapshot of the formerly user-owned
+This directory preserves the historical snapshot of the formerly user-owned
 `.review-2026-07/` workspace. It was reviewed and archived during the final
 2026-08 consolidation; it is not current guidance or a current test result.
+The sole working-tree retirement on 2026-09-12 is the rejected provisional draft
+linked below; accepted findings, method notes and original test evidence remain.
 
 ## Contents and authority
 
@@ -13,8 +15,8 @@ This directory is an intact historical snapshot of the formerly user-owned
 - `impl-logs/` contains original generated logs and test-result snapshots. They
   are retained because they are unique historical evidence, not because build
   outputs normally belong in documentation.
-- `CODEBASE_FINDINGS_2026-07.OPUS-PROVISIONAL.md` is a rejected provisional
-  draft. The campaign explicitly records that it is non-authoritative and that
+- [The rejected provisional draft](https://github.com/p2pKit/P2pKit/blob/85c72e530d2881f8a7387c665d8331c553e5d26f/docs/archive/remediation/2026-07/review-campaign/CODEBASE_FINDINGS_2026-07.OPUS-PROVISIONAL.md)
+  is retained in reachable Git history, not this working tree. The campaign explicitly records that it is non-authoritative and that
   its content was not reused in the accepted findings register. Do not cite it
   as a project finding or decision.
 

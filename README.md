@@ -310,7 +310,8 @@ validated or independently audited.
 
 ## Contributing and support
 
-- [In-progress audit continuation checkpoint](AUDIT_CHECKPOINT.md) (audit branch; not a release approval)
+- [Mac continuation handoff](docs/testing/mac-handoff.md) (start from `main`)
+- [In-progress audit checkpoint](AUDIT_CHECKPOINT.md) (not a release approval)
 - [Documentation index](docs/README.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security reporting](SECURITY.md)
