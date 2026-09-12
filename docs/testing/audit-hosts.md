@@ -55,6 +55,34 @@ workflows or local builds, and GitHub can replace an older pending run even with
 `cancel-in-progress: false`. Do not queue another triggering push while a run is
 active or pending; preserve earlier failure/cancellation records.
 
+## Current Intel owned-flow native helper — revision23
+
+Revision23 selects one `macos-15-intel` job, `Audit native Intel owned Flow helper`,
+with Xcode26.3, role `macos-x64` and scope `apple-owned-helper`. The only requested
+product task is `:p2p-transport-lan:iosX64Test`, filtered to the same four
+`IosOwnedFlowCollectionTest` methods as revision22. Its shared accounting profile
+is `ios-lan-x64`; this is not the broader core-and-LAN `ios-x64` profile.
+Native-host, tool/runtime, exact-device ownership, strict dependency verification,
+bounded execution and retirement requirements remain unchanged. Intel explicitly
+requests no aggregate ABI; the original ARM cancellation scope still requires it.
+
+Actual [run34667152375/1](https://github.com/p2pKit/P2pKit/actions/runs/34667152375/attempts/1)
+at `bb4084d9d5ecd6ca996f0867d6d5d4744cf5a186` **FAILED before product execution**:
+`xcrun simctl list --json runtimes` timed out after the original 120 seconds with
+empty stdout/stderr. No runtime inventory or selected simulator was obtained;
+**Intel native4 NOT_EXECUTED**. The preceding 91 Python ownership controls are not
+product tests. This does not establish absent/unsupported runtime or a product,
+lock or network cause. A further attempt requires meaningful new admission
+evidence, not a wider deadline or an unchanged retry.
+
+Retention is **PARTIAL_SALVAGE**, `safeToContinue=false`; full outer work/cache/VM
+and CoreSimulator-service cleanup is **NOT_PROVEN**. Normal terminal-failure local
+lease reconciliation does not override that handoff. R22 ARM4 and R21 Swift28 plus
+isolated1/provenance keep their separately reviewed, dated scopes. Actual additive
+aggregate LAN ABI and final #413 approval remain pending; see the
+[current audit checkpoint](../audit/2026-09-04/README.md). No complete-host, release
+or physical/independent qualification follows.
+
 ## Prior Apple native-compilation admission — revision20
 
 Revision20 selects one `macos-26` job, `Audit native Apple compilation admission`,
@@ -104,9 +132,9 @@ and `hostQualification=NOT_ESTABLISHED_BY_FOCUSED_SCOPE`, even on PASS. The rele
 monolith and external acceptance remain unexecuted/unvalidated. Prior selections
 and retained outcomes below are not replayed, promoted or reset by this selection.
 
-## Selected Apple owned-flow native helper — revision22
+## Prior Apple owned-flow native helper — revision22
 
-Revision22 selects the ARM-only `apple-owned-helper` route and job
+Revision22 selected the ARM-only `apple-owned-helper` route and job
 `Audit native Apple owned Flow helper`. It is **NOT_RUN at selection time**;
 request approval is not native execution or final #413 repair approval.
 Keep `macos-26`, Java 21 then 17, Xcode26.5 and the unchanged 8400-second driver,

@@ -3,8 +3,8 @@
   "repository": "https://github.com/p2pKit/P2pKit",
   "branch": "audit/complete-2026-09-04",
   "inventorySnapshotUtc": "2026-09-06T21:19:17Z",
-  "githubIssueListRefreshedUtc": "2026-09-11T18:47:44.796341+00:00",
-  "provenance": "202/232 repair approvals (87.1%); 203/232 resolved (87.5%) including no-repair287; 29/232 unresolved (12.5%). Repair-approval complement30/232 (12.9%);99new findings. Counts are issue rows, not effort/readiness or GitHub closures. 413 active PLANNING/compilation-admission preparation; implementation/runtime NOT_STARTED, native admission unknown. Then414 requires a distinct real Kotlin caller boundary, then409 conditional peer readiness. Ordering is not execution or approval. 410 remains PARKED/PENDING_REMEDIATION, final WITHHELD; return only with new admission evidence, no unchanged full-graph retry, lock bypass or route/permission override. 417 remains unimplemented under existing restricted planning, not retried/rephrased/delegated. R10 18:47:41.450906–18:47:52.443298UTC:18GETs,239open objects(232issues/7PRs), all unchanged sinceR9; empty item/comment/inline delta. Captured on-disk200/201/31 is a separate stale administrative snapshot, not the later202/203/29 projection. Unchanged230issue objects retain dated assessments; current queue/gates and exact415/416evidence are in checkpoint.json nativeFollowups.repairs415416.",
+  "githubIssueListRefreshedUtc": "2026-09-12T02:37:25.741622+00:00",
+  "provenance": "204/233 approved repairs (87.6%);205/233 resolved (88.0%), including no-repair287;28/233 unresolved (12.0%). Approval complement29/233 (12.4%);100new findings. Issue rows, not effort/readiness percentages or issue closures. No active issue implementation. #409 source-only PARKED, final approvalWITHHELD pending a genuine current-source Swift/JVM RAW-clock/activity peer case after ordinary CLI/dependency/runtime admission; #410 remains parked requiring new admission evidence; #413 remains parked pending actual additive aggregate Klib ABI and final review. R23 Intel helperNOT_RUN after runtime inventory timed out at the existing120s bound with no output; runtime availability/cause remainUNKNOWN. No unchanged retry, timeout inflation or gate bypass. #417 remains unimplemented, existing boundary unchanged. R23native prerequisite-failure disposition and scoped cleanup are independently accepted with full cleanupWITHHELD_NOT_PROVEN; actual normal lease release02:34:49.544761UTC and public413outcome verified02:35:52.619441UTC are separately recorded. This checkpoint applies the R23 terminal reconciliation and current disposition inventory. Resume substantive work only after meaningful new ordinary admission evidence, or when external access/owner decisions become available; do not repeat completed administration or unchanged failed gates. R18fresh233open/7PRs/571effective comments remains distinct from captured232-row202approvedledger.414/419finalapproval produce204/205/28; R23adds no repair/resolution credit. Original229other issue objects and old failure/history nodes remain byte-preserved; see checkpoint.json nativeFollowups.r23IntelOwnedHelper.",
   "issues": [
     {
       "number": 21,
@@ -10003,11 +10003,12 @@
       ],
       "status": "PENDING_REMEDIATION",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Confirmed filing; no completed repair/review cycle.",
+      "assessmentAtCheckpoint": "PARKED/PENDING_REMEDIATION; source-only approval atd6e8a84/tree288ef5a, final repairWITHHELD. Three modeled Linux controls pass at268a+staged99ee3161; source/session-bound pre-Dial activity and producer RAW-clock deadline are source-reviewed. Genuine current-source Swift/JVM case remains unexecuted, normal CLI/dependency admission blocked. No repair credit or fullgraph bypass.",
       "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "Final repair approval pending.",
+      "recordedIndependentReview": "APPROVE_SOURCE_ONLY_FINAL_REPAIR_WITHHELD at2026-09-12T01:47:07.626959+00:00; independent reviewSHA256 5e40e31a593be9baf165b217311ab4b9c8a7dfcb12fa6159c905ff78c427e0cf; no actionable source findings. Exact3-file99ee3161diff,315insertions/5deletions. Modeled3pass/cleanup accepted; final native peer evidence and final repair review remain required.",
       "publicInvestigationAndOutcomeUrls": [
-        "https://github.com/p2pKit/P2pKit/issues/409"
+        "https://github.com/p2pKit/P2pKit/issues/409",
+        "https://github.com/p2pKit/P2pKit/issues/409#issuecomment-5642678377"
       ],
       "initialFilingObservation": {
         "createdUtc": "2026-09-11T00:06:28Z",
@@ -10018,8 +10019,12 @@
         "responseSha256": "7e07847274c449dc48000177e6c538131639c6f7d3ef550f8c6da91bdc9898bc",
         "scope": "Retained actual individual creation response; latest census is separately timestamped and may precede this creation."
       },
-      "repairReport": "repairs/cohort-2026-09-09-native-followups.md#windows17-results-and-pending-native-follow-through",
-      "verificationRequired": "Source/session-bound pre-dial readiness; unchanged360s integration/120s offer/900s outer/30s quit limits; focused ordering regression and one actual peer case after final review."
+      "repairReport": "repairs/409.md",
+      "verificationRequired": "One admitted SwiftJvmTransferUITests/testBidirectionalSecure204800ByteTransferWithJvmPeer() with actual producer/spawn/admission/acceptance clocks, original log and unique complete activity, bidirectional hashes/consent/Stop/quit, current-source artifacts and owned cleanup, followed by final independent evidence review. No historical CLI binary, modeled pass, deadline inflation or admission bypass substitutes. Preserve120s offer/360s absolute/900s outer/30s Stop-and-quit limits. This is same-codebase host/simulator integration, not independent133/physical/hostile/crypto/release acceptance.",
+      "evidenceReference": "checkpoint.json nativeFollowups.postR22Source409419.source409",
+      "sourceApprovedCandidateCommits": [
+        "d6e8a848c094ea397672704caddc4ee4c876e101"
+      ]
     },
     {
       "number": 410,
@@ -10176,11 +10181,13 @@
       ],
       "status": "PENDING_REMEDIATION",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "R21 run34647991698/1 at published clean43a6739/tree112c92b8 remains FAIL. Independent review accepts actual Swift28+isolated positive1 and fresh framework/generated factory/provenance evidence, not final repair approval. Native helper0executed after three generic test-inference errors; aggregate ABI stopped at stale JmDNS lock state. Reviewed three-line test-only correction is applied at the administrative read; focused R22 apple-owned-helper NOT_EXECUTED. Required native4/additive ABI/final revision review remain; PENDING_REMEDIATION unchanged, no repair credit.",
+      "assessmentAtCheckpoint": "PARKED/PENDING_REMEDIATION/finalWITHHELD. R22ARM4passed at e78a33e; R21Swift28+isolated1/framework/provenance retain43a/overallFAIL. Actual R23run34667152375/1 onbb4084d failed before native execution: runtime inventory timed out at original120s with empty output, availability/causeUNKNOWN; Intel helperNOT_RUN.17local modeled/91hosted executor fixture methods are not native tests. Required additive aggregate Klib ABI and final evidence/revision approval remain; no repair credit or unchanged retry. R23failure disposition and scoped cleanup accepted; fullcleanupNOT_PROVEN. Actual normal lease released02:34:49.544761UTC and413public outcomeverified02:35:52.619441UTC create no native/repair credit.",
       "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "Source-supported cause/duplicate triage with genuine bounded native baseline; reviewSHA256 7d5c23132f573016dc0569924b2b3d2d09e7e86e395cd0eceeef8a93c1d9a9d3; no repair approval. Composed product source-only reviewSHA256 1ceae4f8a33dd3c22e26bfe0d6011a4cb05ae60b73920ee1dae52243fb2c7b4f: NO_ACTIONABLE_SOURCE_FINDINGS_FINAL_REPAIR_APPROVAL_WITHHELD; no candidate execution acceptance. R21 independent evidence reviewSHA256 c1152eb91d6ef39469933e018bcf545c837df9dbeb35e85947f2273f922895e7: APPROVE_R21_SWIFT_AND_PROVENANCE_EVIDENCE_AND_TEST_ONLY_CORRECTION_SOURCE__FINAL_REPAIR_APPROVAL_WITHHELD. Scoped cleanup reviewSHA256 2019fefe6de2cb9cbd714a9f8388d2ae7b1f9cd0f62a83c0acf5ff9021815ea6 separately approves scoped cleanup/evidence supporting root’s later terminal/lease reconciliation; it did not independently approve that later controller event or the repair. Prior source-only review statement above retains its pre-execution date/scope.",
+      "recordedIndependentReview": "Source-supported cause/duplicate triage with genuine bounded native baseline; reviewSHA256 7d5c23132f573016dc0569924b2b3d2d09e7e86e395cd0eceeef8a93c1d9a9d3; no repair approval. Composed product source-only reviewSHA256 1ceae4f8a33dd3c22e26bfe0d6011a4cb05ae60b73920ee1dae52243fb2c7b4f: NO_ACTIONABLE_SOURCE_FINDINGS_FINAL_REPAIR_APPROVAL_WITHHELD; no candidate execution acceptance. R21 independent evidence reviewSHA256 c1152eb91d6ef39469933e018bcf545c837df9dbeb35e85947f2273f922895e7: APPROVE_R21_SWIFT_AND_PROVENANCE_EVIDENCE_AND_TEST_ONLY_CORRECTION_SOURCE__FINAL_REPAIR_APPROVAL_WITHHELD. Scoped cleanup reviewSHA256 2019fefe6de2cb9cbd714a9f8388d2ae7b1f9cd0f62a83c0acf5ff9021815ea6 separately approves scoped cleanup/evidence supporting root’s later terminal/lease reconciliation; it did not independently approve that later controller event or the repair. Prior source-only review statement above retains its pre-execution date/scope. Later R22native reviewSHA256 0c21d1e4a9aaf8916741b936140a3a06413fadb92824bde55c18c3e54cd5aec2: APPROVE_R22_NATIVE4_EVIDENCE_AND_SCOPED_R21_REUSE__PARK_413_PENDING_REMEDIATION_FINAL_REPAIR_APPROVAL_WITHHELD; cleanup reviewSHA256 efd47e0b8c4caac946fa68296691e15c52c6a71c9a949abb724adc8ddc05ab9b independently accepts scoped cleanup/evidence only. Normal operator release is a separate recorded event. Final413repair approval remainsWITHHELD. R23request/source-only approvalSHA256 7740eaa0da801270dcfc50ab620fa963d9d296440806d61a69d49fdcc80881b4; exactc00c4491six-file request/17modeled controls, not native evidence or repair approval. R23native reviewSHA256 fc202b4436cfc5c2cffede8fdc8f6162c44c4803230010452704b50dc13df753: APPROVE_R23_RETAINED_PREREQUISITE_FAILURE_DISPOSITION_ONLY__NATIVE_INTEL_NOT_EXECUTED__FINAL_413_WITHHELD. Cleanup reviewSHA256 377dabe3ad7d7b311c0e1095bd34a1eb50973615f187f46e76bb025e2a0bb083: APPROVE_SCOPED_FAILED_RUN_CLEANUP_EVIDENCE_AND_TERMINAL_LEASE_RECONCILIATION_WITH_LIMITS; fullcleanupWITHHELD_NOT_PROVEN. No repair credit; normal release is a separate operator event.",
       "publicInvestigationAndOutcomeUrls": [
-        "https://github.com/p2pKit/P2pKit/issues/413"
+        "https://github.com/p2pKit/P2pKit/issues/413",
+        "https://github.com/p2pKit/P2pKit/issues/413#issuecomment-5642531799",
+        "https://github.com/p2pKit/P2pKit/issues/413#issuecomment-5642905646"
       ],
       "initialFilingObservation": {
         "createdUtc": "2026-09-11T01:51:55Z",
@@ -10194,8 +10201,8 @@
         "scope": "Individual POST/GET after01:36census; not included in that224-open list or a fresh post-write census."
       },
       "repairReport": "repairs/cohort-2026-09-09-native-followups.md#r18-terminal-result-and-current-continuation",
-      "verificationRequired": "Preserve383queued-callback fences, actual Kotlin Job ownership and completion, real SDK cleanup, hot-flow/public semantics, deadlines and unchanged raw-export baseline. Execute corrected native helper4 with owned cleanup, obtain actual successful additive Klib ABI dump/compare after its lock prerequisite, then obtain final revision/evidence approval. R21 actual Swift28+isolated1/generated factory/fresh producer/provenance may be reused only for the exact independently reviewed test-only correction with unchanged relevant production/Swift/dependency/toolchain risks, at original43a source/FAIL binding; no stale framework sidecar reuse for a new-source build. No arbitrary callback errors, timeout inflation, flag-only success or host-retirement cancellation credit.",
-      "evidenceReference": "checkpoint.json nativeFollowups.r18Acceptance.cancellation and postR18Filings; nativeFollowups.candidate413 (dated preparation); nativeFollowups.r21OwnedCancellation (actual R21/current follow-through)"
+      "verificationRequired": "Preserve383queued-callback fences, actual Kotlin Job ownership/completion, SDK cleanup, hot-flow/public semantics, deadlines and unchanged raw-export baseline. R22native4obligation is fulfilled. After normal lock/prerequisite resolution, obtain successful actual additive aggregate Klib ABI dump/compare and final revision/evidence approval; no excluded JVM guard, fake native-only ABI or unchanged failed retry. Reuse accepted R21Swift28+isolated1/generated factory/framework/provenance at original43a/FAIL binding only while relevant production/Swift/dependency/toolchain inputs remain unchanged; no stale-sidecar substitution for a new-source build. Supplementary Intel helper remainsNOT_RUN after R23runtime inventory timeout; obtain new normal runtime admission evidence before any resumed attempt. Preserve120s and real role/source/runtime/cleanup controls; no unchanged retry or supported-runtime inference from absent output.",
+      "evidenceReference": "checkpoint.json nativeFollowups.r23IntelOwnedHelper (current R23prerequisiteFAIL/nativeNOT_RUN); checkpoint.json nativeFollowups.r22OwnedHelper (actual native4/parkedABI/current outcome); nativeFollowups.r21OwnedCancellation and candidate413 (dated history); nativeFollowups.r18Acceptance.cancellation (unchanged baseline)"
     },
     {
       "number": 414,
@@ -10213,13 +10220,16 @@
         39,
         410
       ],
-      "status": "PENDING_REMEDIATION",
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
       "githubStateAtListRefresh": "open",
-      "assessmentAtCheckpoint": "Source-confirmed/runtimeNOT_RUN; queued, implementationNOT_STARTED, no repair approval.410remains sole active repair.",
-      "recordedFixCommitsOrFinalRevision": [],
-      "recordedIndependentReview": "Source-finding/cause-based duplicate review only; retained publication verifies the scoped finding, not an executed regression or repair approval.",
+      "assessmentAtCheckpoint": "Finally APPROVED at268a367/tree80b55ae3: real listener equality now includes SRVport. Four joined JVM methods reproduce original port-B callback suppression; same4plus7existing guards pass after repair, reaching actual Kotlin endpoint-hint consumer. Focused provenance validates private .410.4ordered patch/source/metadata consistency. Executed e78+exact staged110e4da8, not clean268a rerun. Detached SRV updates are explicitly forwarded; no automatic live cache/executor/multicast/TCP/Android/ABI/fullgraph/release claim.",
+      "recordedFixCommitsOrFinalRevision": [
+        "268a367ae9d6f770183b6f40d5d3c3bdab25a190"
+      ],
+      "recordedIndependentReview": "APPROVE_FINAL_414; fresh414_independent_repair_review at 2026-09-12T01:22:16.978637+00:00; reviewSHA256 02b3bee9ef70dfc53fec4eb4227c77f7147063c961c5fd925b6f7e50b2daa11f; no actionable findings. Exact12-file diff110e4da85d6f217099b52491bc7c1a0c9b0f700e39d38d273b56af6ed04b84a4 and source-bound preimage/postimage/provenance/cleanup evidence inspected. Approval is414only; wider mandatory gates unwaived.",
       "publicInvestigationAndOutcomeUrls": [
-        "https://github.com/p2pKit/P2pKit/issues/414"
+        "https://github.com/p2pKit/P2pKit/issues/414",
+        "https://github.com/p2pKit/P2pKit/issues/414#issuecomment-5642531619"
       ],
       "initialFilingObservation": {
         "createdUtc": "2026-09-11T03:38:15Z",
@@ -10232,9 +10242,9 @@
         "localPublicationFinishedUtc": "2026-09-11T03:38:14.829041+00:00",
         "scope": "Actual POST/GET-verified source-only filing; GitHub server creation clock is separate from local operation completion. Included in04:15census; no runtime/repair approval."
       },
-      "repairReport": "repairs/cohort-2026-09-09-native-followups.md#410-wip-linux-r2-and-pending-mac-qualification",
-      "verificationRequired": "Cover real listener-wrapper valid-portA→valid-portB callbacks, ordinary SRV update, unchanged-record deduplication and first-party endpoint-hint refresh. No measured/permanent duration, Apple or security claim.",
-      "evidenceReference": "checkpoint.json nativeFollowups.postWindows19Filings"
+      "repairReport": "repairs/414.md",
+      "verificationRequired": "Scoped repair evidence is approved: real detached SRV A-to-B-to-A/listener-wrapper callbacks, unchanged-clone deduplication and actual Kotlin Found/Updated endpoint hints in secure/explicit-legacy profiles. Preserve this regression. Normal Gradle/lock/aggregate ABI/Android/current consumer/release obligations remain separate and unwaived; no unchanged general-suite replay solely for bookkeeping.",
+      "evidenceReference": "checkpoint.json nativeFollowups.postR22Followthrough.repair414"
     },
     {
       "number": 415,
@@ -10397,9 +10407,50 @@
       "repairReport": "repairs/cohort-2026-09-09-native-followups.md#mac-r2-failure-and-text-only-approvals-411412418",
       "verificationRequired": "Keep terminal manager state separate from retained binding and callback cleanup; preserve134retry/ownership decision, pending148/157fixture and281token hygiene; no owner274/284API decision or runtime credit.",
       "evidenceReference": "checkpoint.json nativeFollowups.postMacR2AdministrativeRepairs.repairs.418"
+    },
+    {
+      "number": 419,
+      "title": "[AUDIT][Low] Cryptographic audit handbook names a nonexistent public SecurityConfig type",
+      "url": "https://github.com/p2pKit/P2pKit/issues/419",
+      "origin": "NEW_AUDIT_FINDING",
+      "severityAtCheckpoint": "low",
+      "reportedProblemExcerpt": "The maintained cryptographic-audit source-entry list names public SecurityConfig, but no standalone type exists; actual configuration uses P2pKitBuilder.security, SecurityConfigBuilder and SecurityMode.",
+      "affectedComponentsExcerpt": "docs/validation/cryptographic-audit-preparation.md source-code entry points; current public DSL declarations and maintained caller.",
+      "relatedIssuesAndDependencies": [
+        215,
+        300,
+        309,
+        366
+      ],
+      "status": "FIXED_REVIEWED_IN_AUDIT_HISTORY",
+      "githubStateAtListRefresh": "open",
+      "githubStateAtListRefreshScope": "Individual POST/GET01:21:18-01:21:19UTC afterR15; not part of232-open crawl.",
+      "assessmentAtCheckpoint": "Finally approved419prose repair ate16d56e/treeb63a759: replace nonexistent SecurityConfig entry with actual P2pKitBuilder.security/SecurityConfigBuilder/SecurityMode. Existing declarations and maintained KMP caller inspected; all authorization/lifecycle/transport/pin and external-audit limitations preserved. No API/runtime or cryptographic defect; no build required.",
+      "recordedFixCommitsOrFinalRevision": [
+        "e16d56e7874796924ac5f552cfb6dd8dca6442ac"
+      ],
+      "recordedIndependentReview": "APPROVE_FINAL419 at2026-09-12T01:49:01.378569+00:00; fresh419_independent_review, reviewSHA256 ce26ee3b1d8c5db21cef211c34954c10a6dc75e3f805fa9730e0d15100d0884a; no actionable findings. Exact one-file diffd319e209; declaration/caller/prose inspection only, no compiler/build/test or professional cryptographic claim.",
+      "publicInvestigationAndOutcomeUrls": [
+        "https://github.com/p2pKit/P2pKit/issues/419",
+        "https://github.com/p2pKit/P2pKit/issues/419#issuecomment-5642678493"
+      ],
+      "initialFilingObservation": {
+        "createdUtc": "2026-09-12T01:21:18Z",
+        "updatedUtc": "2026-09-12T01:21:18Z",
+        "state": "open",
+        "comments": 0,
+        "bodySha256": "0bf66fb1df390b5ab141a0505a8e385a935c8c8b2ab2c52bc02c0b945dadad7c",
+        "getSha256": "722f3ebc3f8e55e3eb1e902ed9dca24026851cc281b6a238d6a4204afbb36744",
+        "getVerified": true,
+        "localPublicationFinishedUtc": "2026-09-12T01:21:19.181161+00:00",
+        "scope": "Actual individual POST/GET afterR15; later known233membership is derived, not a fresh full census. No repair approval or issue closure."
+      },
+      "repairReport": "repairs/419.md",
+      "verificationRequired": "Documentation-source correction is finally approved; actual public declarations/caller match and all external-validation limits remain. No new API, dedicated compile/test or cryptographic execution warranted for this wording alone.",
+      "evidenceReference": "checkpoint.json nativeFollowups.postR22Source409419.repair419; original filing remains nativeFollowups.postR22Followthrough.filing419"
     }
   ],
-  "lastDispositionUpdateUtc": "2026-09-11T18:42:39Z",
+  "lastDispositionUpdateUtc": "2026-09-12T01:49:01.378569+00:00",
   "githubRefreshEvidence": {
     "startedUtc": "2026-09-08T10:24:33.734412+00:00",
     "endedUtc": "2026-09-08T10:30:05.205645+00:00",
@@ -10515,31 +10566,36 @@
   "previousDispositionUpdateUtc368": "2026-09-08T12:25:06.517016+00:00",
   "previousProvenance368": "Curated recovery/continuation record; original inventorySnapshotUtc stays historical. Full issue discussions and affected callers, not excerpts, govern repairs. Earlier assessments/outcomes are not fresh executions; raw private evidence is not inGit. Rows reconcile the exhaustive 10:24–10:30UTC fresh-history capture plus individually filed/refetched368 at10:50:42UTC. 367 and368 source approvals/pushes/outcomes are later scoped disposition/publication observations, not post-outcome complete GitHub refreshes, closure, merge or release. Current368approval/verification is bound to c221d54; earlier367/145 assessments/failures retain their original scope, and later223work is not approved here. Previous145 verification and refresh fields are preserved under explicit historical keys. Approved repository scope excludes unexecuted foreign-host/device/independent acceptance; whole audit NOT_READY.",
   "latestGithubListObservation": {
-    "reference": "checkpoint.json nativeFollowups.github410R10Refresh",
+    "reference": "checkpoint.json nativeFollowups.githubR18",
     "apiWindowUtc": [
-      "2026-09-11T18:47:41.450906+00:00",
-      "2026-09-11T18:47:52.443298+00:00"
+      "2026-09-12T02:37:22.441576+00:00",
+      "2026-09-12T02:37:27.938380+00:00"
     ],
     "allOpenWindowUtc": [
-      "2026-09-11T18:47:41.450906+00:00",
-      "2026-09-11T18:47:44.796341+00:00"
+      "2026-09-12T02:37:22.441576+00:00",
+      "2026-09-12T02:37:25.741622+00:00"
     ],
-    "issueListFinishedUtc": "2026-09-11T18:47:44.796341+00:00",
-    "openIssues": 232,
+    "issueListFinishedUtc": "2026-09-12T02:37:25.741622+00:00",
+    "openIssues": 233,
     "openPullRequests": 7,
-    "freshLocalFullBodies": 239,
-    "totalIssues": 339,
+    "freshLocalFullBodies": 240,
+    "totalIssues": 340,
     "closedIssues": 107,
     "pullRequests": 79,
     "closedPullRequests": 72,
-    "totalCountScope": "Effective cumulative339issues/79PRs; only232open issues/7openPRs freshly enumerated.",
-    "freshConversationComments": 0,
-    "directCompleteEmptyCommentFeeds": 10,
-    "reusedConversationComments": 566,
+    "totalCountScope": "R18fresh233open/7PRs; cumulative340issues/79PRs includes dated inherited closed/history totals.",
+    "freshConversationComments": 1,
+    "directCompleteEmptyCommentFeeds": 0,
+    "reusedConversationComments": 570,
+    "effectiveConversationComments": 571,
     "inlineDeltaRecords": 0,
-    "inventoryExactlyMatchesOpenIssues": true,
-    "scope": "R10 18:47:41.450906–18:47:52.443298UTC:18GETs,239open objects(232issues/7PRs), all unchanged sinceR9; empty item/comment/inline delta. Captured on-disk200/201/31 is a separate stale administrative snapshot, not the later202/203/29 projection. Fresh all-open objects, not a fresh manual reread/full-history or all-state census. 566comments and closed/linked histories reused;409–418OPEN with10fresh complete empty comment feeds. Effective339issues/79PRs is cumulative. No Actions/ref/lease/upstream observation.",
-    "capturedDispositionReference": "checkpoint.json nativeFollowups.github410R10Refresh.capturedDisposition"
+    "capturedInventoryExactlyMatchesOpenIssues": false,
+    "capturedInventoryMissingIssueNumbers": [
+      419
+    ],
+    "candidateMembershipAfterAdding419MatchesOpenIssues": true,
+    "scope": "All240bodies unchanged fromR17; only expected413outcome comment5642905646 changed. Acquisition agent read that comment completely and reused unchanged complete issue context. All7PR head/base/own-source projections unchanged; only nested pushed_at changed.570prior conversation bodies and closed/linked histories are dated reuse, not a full-history/closed recrawl. No membership/owner/decision/source delta or new distinct defect returned; limitations cannot exclude hidden/deleted/unreturned content, unqueried reviews, timeline-only backlinks or inherited visibility/patch bounds. Actual captured232/202ledger differs from current204/233outcome projection.",
+    "capturedDispositionReference": "checkpoint.json nativeFollowups.githubR18.capturedDisposition"
   },
   "previousDispositionUpdateUtc223": "2026-09-08T13:18:49.492924+00:00",
   "previousGithubListObservation223": {
@@ -10971,18 +11027,15 @@
   },
   "previousLatestGithubIncrementalObservation369Reference": "issues[number=369].initialFilingObservation, unchanged",
   "latestKnownGithubCountsAfterIndividualAddition": {
-    "reference": "checkpoint.json nativeFollowups.github410R10Refresh",
-    "lastFullCensusOpenIssues": 230,
-    "laterIndividualIssueNumbers": [
-      417,
-      418
-    ],
-    "derivedKnownTotalIssues": 339,
-    "derivedKnownOpenIssues": 232,
+    "reference": "checkpoint.json nativeFollowups.githubR18",
+    "lastAllOpenIssueCount": 233,
+    "laterIndividualIssueNumbers": [],
+    "derivedKnownTotalIssues": 340,
+    "derivedKnownOpenIssues": 233,
     "derivedKnownClosedIssues": 107,
     "pullRequestsAtLastFullCensus": 79,
-    "scope": "Original04:15all-state census plus later individual417/418; R9/R10separately enumerate232open issues. Effective339issues/79PRs is cumulative, not a new all-state/history census.",
-    "latestAllOpenIssueCount": 232
+    "latestAllOpenIssueCount": 233,
+    "scope": "R18fresh233open/7PRs includes419and the413outcome delta; cumulative340issues/79PRs retains inherited closed/history counts. Individual outcomes/source/run/lease observations retain separate clocks."
   },
   "githubIncrementalObservation2133": {
     "kind": "INCREMENTAL_FRESH_LISTS_AND_SELECTED_FULL_HISTORIES_NOT_COMPLETE_REFRESH",
@@ -12265,19 +12318,19 @@
     "scope": "Allopenbody/link/ownmetadata and completecomment reconciliation; serial freshness/unchangedclosed/PRreuse limits explicit. Current approval arithmetic includes388after this GitHub report; no new row."
   },
   "nativeFollowups": {
-    "recordedUtc": "2026-09-11T18:42:39Z",
-    "report": "repairs/415-416.md",
+    "recordedUtc": "2026-09-12T02:43:03.788867+00:00",
+    "report": "repairs/419.md",
     "currentCounts": {
-      "repairApproved": 202,
-      "denominator": 232,
+      "repairApproved": 204,
+      "denominator": 233,
       "reviewedNoRepair": 1,
-      "resolved": 203,
-      "unresolved": 29,
-      "repairApprovalComplement": 30,
-      "repairOrNativeValidation": 5,
+      "resolved": 205,
+      "unresolved": 28,
+      "repairApprovalComplement": 29,
+      "repairOrNativeValidation": 4,
       "externalValidation": 21,
       "ownerDecisions": 3,
-      "newAuditFindings": 99
+      "newAuditFindings": 100
     },
     "newlyApprovedIssues": [
       172,
@@ -12325,12 +12378,14 @@
       412,
       418,
       415,
-      416
+      416,
+      414,
+      419
     ],
     "evidenceReference": "checkpoint.json nativeFollowups",
     "previousCurrentProvenance": "156/201 independently approved repository-repair rows (77.6%); 45 remaining (22.4%): 23 repairs, 21 external-validation rows and architecture decision #120; 68 new audit findings. Five independently approved followup repairs382/384/385/386/387 are locally committed;383 remains source-confirmed/native NOT_RUN.151/201 filing-time and151/195 cohort snapshots stay historical. Latest15:27 bounded all-open/body/delta observation matches201 inventory IDs, not a fresh complete-history crawl. No closure/platform/release acceptance; whole audit NOT_READY;133 NOT_STARTED.",
     "previousDispositionUpdateUtc": "2026-09-09T15:31:07.028235+00:00",
-    "scope": "202/232 repair approvals (87.1%); 203/232 resolved (87.5%) including no-repair287; 29/232 unresolved (12.5%). Repair-approval complement30/232 (12.9%);99new findings. Counts are issue rows, not effort/readiness or GitHub closures. 413 active PLANNING/compilation-admission preparation; implementation/runtime NOT_STARTED, native admission unknown. Then414 requires a distinct real Kotlin caller boundary, then409 conditional peer readiness. Ordering is not execution or approval. 410 remains PARKED/PENDING_REMEDIATION, final WITHHELD; return only with new admission evidence, no unchanged full-graph retry, lock bypass or route/permission override. 417 remains unimplemented under existing restricted planning, not retried/rephrased/delegated. Remaining gates: checkpoint.json nativeFollowups.repairs415416.remainingBoundary.",
+    "scope": "204/233 approved repairs (87.6%);205/233 resolved (88.0%), including no-repair287;28/233 unresolved (12.0%). Approval complement29/233 (12.4%);100new findings. Issue rows, not effort/readiness percentages or issue closures. No active issue implementation. #409 source-only PARKED, final approvalWITHHELD pending a genuine current-source Swift/JVM RAW-clock/activity peer case after ordinary CLI/dependency/runtime admission; #410 remains parked requiring new admission evidence; #413 remains parked pending actual additive aggregate Klib ABI and final review. R23 Intel helperNOT_RUN after runtime inventory timed out at the existing120s bound with no output; runtime availability/cause remainUNKNOWN. No unchanged retry, timeout inflation or gate bypass. #417 remains unimplemented, existing boundary unchanged. R23native prerequisite-failure disposition and scoped cleanup are independently accepted with full cleanupWITHHELD_NOT_PROVEN; actual normal lease release02:34:49.544761UTC and public413outcome verified02:35:52.619441UTC are separately recorded. This checkpoint applies the R23 terminal reconciliation and current disposition inventory. Resume substantive work only after meaningful new ordinary admission evidence, or when external access/owner decisions become available; do not repeat completed administration or unchanged failed gates. Evidence: checkpoint.json nativeFollowups.r23IntelOwnedHelper.",
     "newIssues": [
       388,
       389,
@@ -12407,7 +12462,13 @@
         "createdUtc": "2026-09-11T13:38:38Z",
         "scope": "Later individual POST/GET source-only filing;runtimeNOT_RUN, no repair approval or new full census."
       },
-      418
+      418,
+      {
+        "number": 419,
+        "url": "https://github.com/p2pKit/P2pKit/issues/419",
+        "createdUtc": "2026-09-12T01:21:18Z",
+        "scope": "Actual individual POST/GET documentation-only filing afterR15; repair/final approval pending. Not a fresh233-open census."
+      }
     ],
     "reviewedNoRepairIssues": [
       287
@@ -12521,7 +12582,13 @@
     "repairs415416Reference": "checkpoint.json nativeFollowups.repairs415416",
     "publication194daBefore415416Reference": "checkpoint.json nativeFollowups.publication194daBefore415416",
     "github410R9RefreshReference": "checkpoint.json nativeFollowups.github410R9Refresh",
-    "github410R10RefreshReference": "checkpoint.json nativeFollowups.github410R10Refresh"
+    "github410R10RefreshReference": "checkpoint.json nativeFollowups.github410R10Refresh",
+    "r22OwnedHelperReference": "checkpoint.json nativeFollowups.r22OwnedHelper",
+    "postR22FollowthroughReference": "checkpoint.json nativeFollowups.postR22Followthrough",
+    "postR22Source409419Reference": "checkpoint.json nativeFollowups.postR22Source409419",
+    "githubR17Reference": "checkpoint.json nativeFollowups.githubR17",
+    "githubR18Reference": "checkpoint.json nativeFollowups.githubR18",
+    "r23IntelOwnedHelperReference": "checkpoint.json nativeFollowups.r23IntelOwnedHelper"
   },
   "githubOpenObservationBeforeResumed1951": {
     "startedUtc": "2026-09-09T15:27:45.724357+00:00",
@@ -12560,31 +12627,36 @@
   "githubIssueListRefreshedUtcBeforeR10": "2026-09-09T20:18:04.544363+00:00",
   "postR10FollowupsReference": "checkpoint.json nativeFollowups.postR10Followups",
   "latestGithubOpenIssueObservation": {
-    "reference": "checkpoint.json nativeFollowups.github410R10Refresh",
+    "reference": "checkpoint.json nativeFollowups.githubR18",
     "apiWindowUtc": [
-      "2026-09-11T18:47:41.450906+00:00",
-      "2026-09-11T18:47:52.443298+00:00"
+      "2026-09-12T02:37:22.441576+00:00",
+      "2026-09-12T02:37:27.938380+00:00"
     ],
     "allOpenWindowUtc": [
-      "2026-09-11T18:47:41.450906+00:00",
-      "2026-09-11T18:47:44.796341+00:00"
+      "2026-09-12T02:37:22.441576+00:00",
+      "2026-09-12T02:37:25.741622+00:00"
     ],
-    "issueListFinishedUtc": "2026-09-11T18:47:44.796341+00:00",
-    "openIssues": 232,
+    "issueListFinishedUtc": "2026-09-12T02:37:25.741622+00:00",
+    "openIssues": 233,
     "openPullRequests": 7,
-    "freshLocalFullBodies": 239,
-    "totalIssues": 339,
+    "freshLocalFullBodies": 240,
+    "totalIssues": 340,
     "closedIssues": 107,
     "pullRequests": 79,
     "closedPullRequests": 72,
-    "totalCountScope": "Effective cumulative339issues/79PRs; only232open issues/7openPRs freshly enumerated.",
-    "freshConversationComments": 0,
-    "directCompleteEmptyCommentFeeds": 10,
-    "reusedConversationComments": 566,
+    "totalCountScope": "R18fresh233open/7PRs; cumulative340issues/79PRs includes dated inherited closed/history totals.",
+    "freshConversationComments": 1,
+    "directCompleteEmptyCommentFeeds": 0,
+    "reusedConversationComments": 570,
+    "effectiveConversationComments": 571,
     "inlineDeltaRecords": 0,
-    "inventoryExactlyMatchesOpenIssues": true,
-    "scope": "R10 18:47:41.450906–18:47:52.443298UTC:18GETs,239open objects(232issues/7PRs), all unchanged sinceR9; empty item/comment/inline delta. Captured on-disk200/201/31 is a separate stale administrative snapshot, not the later202/203/29 projection. Fresh all-open objects, not a fresh manual reread/full-history or all-state census. 566comments and closed/linked histories reused;409–418OPEN with10fresh complete empty comment feeds. Effective339issues/79PRs is cumulative. No Actions/ref/lease/upstream observation.",
-    "capturedDispositionReference": "checkpoint.json nativeFollowups.github410R10Refresh.capturedDisposition"
+    "capturedInventoryExactlyMatchesOpenIssues": false,
+    "capturedInventoryMissingIssueNumbers": [
+      419
+    ],
+    "candidateMembershipAfterAdding419MatchesOpenIssues": true,
+    "scope": "All240bodies unchanged fromR17; only expected413outcome comment5642905646 changed. Acquisition agent read that comment completely and reused unchanged complete issue context. All7PR head/base/own-source projections unchanged; only nested pushed_at changed.570prior conversation bodies and closed/linked histories are dated reuse, not a full-history/closed recrawl. No membership/owner/decision/source delta or new distinct defect returned; limitations cannot exclude hidden/deleted/unreturned content, unqueried reviews, timeline-only backlinks or inherited visibility/patch bounds. Actual captured232/202ledger differs from current204/233outcome projection.",
+    "capturedDispositionReference": "checkpoint.json nativeFollowups.githubR18.capturedDisposition"
   },
   "githubIssueListRefreshedUtcBeforePost394": "2026-09-10T01:00:15.892733+00:00",
   "currentStateBeforeR11": {
@@ -12826,11 +12898,11 @@
     "reference": "checkpoint.json currentStateBefore410Continuation"
   },
   "latestGithubIndividualAddition": {
-    "reference": "checkpoint.json nativeFollowups.filing418",
-    "number": 418,
-    "serverCreatedUtc": "2026-09-11T17:36:17Z",
-    "localPublicationFinishedUtc": "2026-09-11T17:36:18.084095+00:00",
-    "scope": "Actual later individual POST/GET. Not part of R8 all-open capture; filing and final repair approval have separate clocks."
+    "reference": "checkpoint.json nativeFollowups.postR22Followthrough.filing419",
+    "number": 419,
+    "serverCreatedUtc": "2026-09-12T01:21:18Z",
+    "localPublicationFinishedUtc": "2026-09-12T01:21:19.181161+00:00",
+    "scope": "419individual filing remains dated; member now included in R16/R17/R18open censuses. No new issue from R23prerequisite failure."
   },
   "knownGithubCountsBefore410Continuation": {
     "totalIssues": 292,
