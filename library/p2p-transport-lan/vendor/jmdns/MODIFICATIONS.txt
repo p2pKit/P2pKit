@@ -2,7 +2,7 @@ P2pKit embedded JmDNS modifications
 
 Upstream: org.jmdns:jmdns:3.6.3, tag v3.6.3,
 commit 93b326381940f3fcd250d770a14a36de4c2dfcda.
-Private component revision: 3.6.3-p2pkit.410.3.
+Private component revision: 3.6.3-p2pkit.410.4.
 
 Mechanical integration relocates the complete javax.jmdns production package
 into dev.p2pkit.transport.lan.internal.jmdns. Java source uses LF line endings,
@@ -27,6 +27,10 @@ patches/416-reverse-domain.patch recognizes reverse DNS namespaces only at
 terminal DNS-name boundaries, not as substrings in ordinary service instances.
 This preserves the DNS-SD event type for accepted legacy names containing
 in-addr.arpa or ip6.arpa. The lifecycle and OPT diagnostic patches are unchanged.
+
+patches/414-service-port.patch includes the service port in resolved-event
+deduplication so a port-only update reaches the listener. Unchanged records
+remain deduplicated; the lifecycle, OPT and reverse-domain patches are unchanged.
 
 PROVENANCE.json schema 2 preserves lifecyclePatch and lists subsequent patches
 in followupPatches application order. All are zero-context unified patches:

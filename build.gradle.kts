@@ -527,6 +527,7 @@ tasks.cyclonedxBom {
             followupPatchRecords.map { requiredText(it, "path") } == listOf(
                 "patches/415-opt-rcode.patch",
                 "patches/416-reverse-domain.patch",
+                "patches/414-service-port.patch",
             )
         ) {
             "Unexpected embedded JmDNS followup patch order or membership"

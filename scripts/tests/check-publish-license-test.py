@@ -184,7 +184,7 @@ def publication_metadata(model, suffix, main_bytes, source_bytes, damage):
     if damage == "pom-original-jmdns" and suffix == "jvm":
         deps.append(("org.jmdns", "jmdns", "3.6.3", "runtime"))
     if damage == "pom-private-dependency" and suffix == "android":
-        deps.append(("dev.p2pkit.internal", "jmdns", "3.6.3-p2pkit.410.3", "runtime"))
+        deps.append(("dev.p2pkit.internal", "jmdns", "3.6.3-p2pkit.410.4", "runtime"))
     if damage == "pom-slf4j-api-edge" and suffix == "jvm":
         deps[-1] = (*deps[-1][:3], "compile")
     if damage == "pom-slf4j-version" and suffix == "jvm":
@@ -236,7 +236,7 @@ def publication_metadata(model, suffix, main_bytes, source_bytes, damage):
                 variant["files"][0]["name"] = "p2p-transport-lan.aar"
         elif damage == "module-private-dependency":
             variants[1]["dependencies"].append({"group": "dev.p2pkit.internal", "module": "jmdns",
-                                                "version": {"requires": "3.6.3-p2pkit.410.3"}})
+                                                "version": {"requires": "3.6.3-p2pkit.410.4"}})
         elif damage == "module-original-jmdns":
             variants[1]["dependencies"].append({"group": "org.jmdns", "module": "jmdns", "version": {"requires": "3.6.3"}})
         elif damage == "module-file-path":

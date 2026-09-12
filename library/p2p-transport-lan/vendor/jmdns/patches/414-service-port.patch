@@ -1,0 +1,4 @@
+--- a/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/ListenerStatus.java
++++ b/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/ListenerStatus.java
+@@ -137,0 +138 @@
++            if (info.getPort() != lastInfo.getPort()) return false;

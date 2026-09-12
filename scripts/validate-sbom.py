@@ -32,11 +32,13 @@ PRIVATE_NAMESPACE = "dev.p2pkit.transport.lan.internal.jmdns"
 PRIVATE_PATH = PRIVATE_NAMESPACE.replace(".", "/")
 NOTICE_PATH = "META-INF/p2pkit/third-party/jmdns"
 PATCH_PATH = "patches/410-lifecycle.patch"
-FOLLOWUP_PATCH_PATHS = ("patches/415-opt-rcode.patch", "patches/416-reverse-domain.patch")
+FOLLOWUP_PATCH_PATHS = (
+    "patches/415-opt-rcode.patch", "patches/416-reverse-domain.patch", "patches/414-service-port.patch",
+)
 EMBEDDED_IDENTITY = {
-    "group": "dev.p2pkit.internal", "name": "jmdns", "version": "3.6.3-p2pkit.410.3",
-    "bomRef": "urn:p2pkit:embedded:jmdns:3.6.3-p2pkit.410.3",
-    "purl": "pkg:generic/p2pkit/jmdns@3.6.3-p2pkit.410.3",
+    "group": "dev.p2pkit.internal", "name": "jmdns", "version": "3.6.3-p2pkit.410.4",
+    "bomRef": "urn:p2pkit:embedded:jmdns:3.6.3-p2pkit.410.4",
+    "purl": "pkg:generic/p2pkit/jmdns@3.6.3-p2pkit.410.4",
 }
 UPSTREAM = {
     "mavenCoordinate": "org.jmdns:jmdns:3.6.3", "purl": "pkg:maven/org.jmdns/jmdns@3.6.3",

@@ -135,6 +135,7 @@ public class ListenerStatus<T extends EventListener> {
             if (info == null) return false;
             if (lastInfo == null) return false;
             if (!info.equals(lastInfo)) return false;
+            if (info.getPort() != lastInfo.getPort()) return false;
             byte[] text = info.getTextBytes();
             byte[] lastText = lastInfo.getTextBytes();
             if (text.length != lastText.length) return false;

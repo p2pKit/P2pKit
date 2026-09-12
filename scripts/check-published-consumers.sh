@@ -956,7 +956,7 @@ private fun requirePackaging(coexist: Boolean): Any? {
     val resource = "dev/p2pkit/transport/lan/internal/jmdns/version.properties"
     check(loader.getResources(resource).toList().size == 1) { "Missing/duplicate private version resource" }
     val properties = Properties().apply { checkNotNull(loader.getResourceAsStream(resource)).use { load(it) } }
-    check(properties.getProperty("jmdns.version") == "3.6.3-p2pkit.410.3")
+    check(properties.getProperty("jmdns.version") == "3.6.3-p2pkit.410.4")
     check(properties.getProperty("jmdns.upstream.version") == "3.6.3")
     check(JmDNS.VERSION == properties.getProperty("jmdns.version"))
     val privateJar = JmDNS::class.java.protectionDomain.codeSource.location
@@ -1266,7 +1266,7 @@ tasks.register("verifyEmbeddedJmdnsPackaging") {
                 val properties = Properties().apply {
                     zip.getInputStream(checkNotNull(zip.getEntry(privateVersion))).use { load(it) }
                 }
-                check(properties.getProperty("jmdns.version") == "3.6.3-p2pkit.410.3")
+                check(properties.getProperty("jmdns.version") == "3.6.3-p2pkit.410.4")
                 check(properties.getProperty("jmdns.upstream.version") == "3.6.3")
                 check(zip.getEntry("META-INF/services/org.slf4j.spi.SLF4JServiceProvider") == null)
                 val definitionNames = entries.filter { it.name.matches(Regex("classes[0-9]*\\.dex")) }
@@ -1353,9 +1353,9 @@ class EmbeddedLanActivity : Activity() {
         val loader = JmDNS::class.java.classLoader
         val path = "dev/p2pkit/transport/lan/internal/jmdns/version.properties"
         val properties = Properties().apply { checkNotNull(loader.getResourceAsStream(path)).use { load(it) } }
-        check(properties.getProperty("jmdns.version") == "3.6.3-p2pkit.410.3")
+        check(properties.getProperty("jmdns.version") == "3.6.3-p2pkit.410.4")
         check(properties.getProperty("jmdns.upstream.version") == "3.6.3")
-        check(JmDNS.VERSION == "3.6.3-p2pkit.410.3")
+        check(JmDNS.VERSION == "3.6.3-p2pkit.410.4")
         val service = ServiceInfo.create(
             "_p2pkit2._tcp.local.", "consumer", 4242, 0, 0, mapOf("fixture" to "android")
         )

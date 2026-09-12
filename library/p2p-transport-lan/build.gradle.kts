@@ -26,6 +26,7 @@ val embeddedJmdnsVendor = layout.projectDirectory.dir("vendor/jmdns")
 val embeddedJmdnsFollowupPatches = listOf(
     "patches/415-opt-rcode.patch",
     "patches/416-reverse-domain.patch",
+    "patches/414-service-port.patch",
 )
 val embeddedJmdnsSlf4j = "org.slf4j:slf4j-api:2.0.7"
 val embeddedJmdnsCompileClasspath = configurations.create("embeddedJmdnsCompileClasspath") {
