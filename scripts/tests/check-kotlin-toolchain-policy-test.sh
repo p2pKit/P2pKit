@@ -37,8 +37,8 @@ grep -Fqx 'IOS_MIN_VERSION=14.0' "$PROPERTIES" || fail "the iOS 14 floor is not 
 grep -Fqx 'kotlin.native.ignoreDisabledTargets=true' "$PROPERTIES" ||
     fail "Apple Silicon host-mismatch handling is not explicit"
 
-# Kotlin 2.4.10 is the latest stable toolchain but is below the first patched
-# 2.4.20 EAP for CVE-2026-53914. GitHub builds may keep dependency/wrapper
+# Pinned Kotlin 2.4.10 remains affected by CVE-2026-53914. Stable 2.4.20 is
+# available but not yet qualified here. GitHub builds may keep dependency/wrapper
 # caches, but no Gradle action may restore or persist caches/build-cache-1
 # across runs until a stable patched Kotlin toolchain is qualified.
 gradle_workflow_count=0

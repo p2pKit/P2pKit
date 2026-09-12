@@ -1,4 +1,4 @@
 [[IgnoredVulns]]
 id = "GHSA-r937-wjx7-w2jp"
 ignoreUntil = 2026-10-31
-reason = "Kotlin 2.4.10 is the latest stable release; KAPT is unused and CI excludes caches/build-cache-1 across trust boundaries. Remove when stable Kotlin 2.4.20 is qualified."
+reason = "Pinned Kotlin 2.4.10 remains affected; stable Kotlin 2.4.20 is available but not yet qualified. KAPT is unused and CI excludes caches/build-cache-1 across trust boundaries. Remove after Kotlin 2.4.20 qualification."
