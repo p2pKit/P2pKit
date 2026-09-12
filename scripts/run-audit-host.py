@@ -30,12 +30,14 @@ ROLES = {"windows-x64": ("Windows", "x64"), "macos-arm64": ("Darwin", "arm64"),
 SCOPES = {"full": set(ROLES), "windows-followup": {"windows-x64"}, "windows-diagnostics": {"windows-x64"},
           "apple-followup": {"macos-arm64"}, "apple-provenance": {"macos-arm64"},
           "apple-native-compilation": {"macos-arm64"}, "apple-owned-cancellation": {"macos-arm64"},
-          "apple-owned-helper": {"macos-arm64"}}
+          "apple-owned-helper": {"macos-arm64", "macos-x64"}}
 CANCELLATION_PROBE_ROUTES = {("macos-arm64", "apple-followup"), ("macos-arm64", "apple-provenance"),
                              ("macos-x64", "full")}
 # Closed source inventories: native execution must contain every listed method,
 # never merely a nonzero class-prefix match. Update only with reviewed test changes.
-OWNED_NATIVE_TASK = ":p2p-transport-lan:iosSimulatorArm64Test"
+# Admitted role -> native target, platform profile, observed host architecture.
+OWNED_NATIVE_TARGETS = {"macos-arm64": ("iosSimulatorArm64", "ios-lan-arm64", "arm64"),
+                        "macos-x64": ("iosX64", "ios-lan-x64", "x64")}
 OWNED_NATIVE_CLASS = "dev.p2pkit.transport.lan.IosOwnedFlowCollectionTest"
 OWNED_NATIVE_METHODS = frozenset({
     "cancellationBeforeStartNeverAdmitsSourceOrCallback",
@@ -327,12 +329,15 @@ def assess_swift(objects, selection=None):
     return targets
 
 
-def assess_owned_native(report, policy, token, junit):
-    """Bind four real helper cases to fresh ARM events; no other test task may supply counts."""
-    required = load_gate().assess(report, policy, "ios-lan-arm64", "arm64", token)
-    require(required == {OWNED_NATIVE_TASK}, "Owned helper task differs from the maintained platform model")
+def assess_owned_native(report, policy, token, junit, *, role):
+    """Bind four real helper cases to the admitted native host; no other task may supply counts."""
+    require(type(role) is str and role in OWNED_NATIVE_TARGETS, "Unsupported owned native helper role")
+    target, profile, arch = OWNED_NATIVE_TARGETS[role]
+    task = ":p2p-transport-lan:" + target + "Test"
+    required = load_gate().assess(report, policy, profile, arch, token)
+    require(required == {task}, "Owned helper task differs from the maintained platform model")
     for name, row in report["tests"].items():
-        if name == OWNED_NATIVE_TASK:
+        if name == task:
             require(row["passed"] == len(OWNED_NATIVE_METHODS) and row["skipped"] == 0,
                     "Owned native helper counts differ from the frozen method inventory")
         else:
@@ -342,20 +347,20 @@ def assess_owned_native(report, policy, token, junit):
     require(type(junit) is bytes and 0 < len(junit) <= 1024 ** 2 and
             b"<!DOCTYPE" not in junit and b"<!ENTITY" not in junit, "Invalid bounded native JUnit XML")
     suite = ET.fromstring(junit)
-    native_class = "iosSimulatorArm64Test." + OWNED_NATIVE_CLASS
+    native_class = target + "Test." + OWNED_NATIVE_CLASS
     require(suite.tag == "testsuite" and suite.get("name") == native_class and
             all(child.tag in ("properties", "testcase", "system-out", "system-err") for child in suite),
             "Unexpected native helper JUnit suite")
     cases = suite.findall("testcase")
-    expected = {method + "[iosSimulatorArm64]" for method in OWNED_NATIVE_METHODS}
+    expected = {method + "[" + target + "]" for method in OWNED_NATIVE_METHODS}
     require(suite.get("tests") == str(len(expected)) and all(suite.get(key) == "0"
             for key in ("errors", "failures", "skipped")), "Failed/skipped or incomplete native JUnit suite")
     require(len(cases) == len(expected) and {case.get("name") for case in cases} == expected and
             all(case.get("classname") == native_class and
                 all(child.tag in ("system-out", "system-err") for child in case) for case in cases),
             "Missing, duplicate, unexpected or unsuccessful native helper methods")
-    return {"task": OWNED_NATIVE_TASK, "class": native_class, "methods": sorted(expected),
-            "counts": report["tests"][OWNED_NATIVE_TASK]}
+    return {"task": task, "class": native_class, "methods": sorted(expected),
+            "counts": report["tests"][task]}
 
 
 class InfrastructureFailure(RuntimeError):
@@ -954,12 +959,15 @@ class Host:
         label = "owned-flow-helper-abi" if aggregate_abi else "owned-flow-helper"
         prefix = "owned-flow-native"
         try:
-            require(type(aggregate_abi) is bool and self.role == "macos-arm64" and self.scope ==
+            require(type(aggregate_abi) is bool and self.role in OWNED_NATIVE_TARGETS and
+                    (not aggregate_abi or self.role == "macos-arm64") and self.scope ==
                     ("apple-owned-cancellation" if aggregate_abi else "apple-owned-helper"),
-                    "Owned native helper requires its explicit ARM scope and ABI selection")
+                    "Owned native helper requires its explicit host scope and ABI selection")
+            target = OWNED_NATIVE_TARGETS[self.role][0]
+            task = ":p2p-transport-lan:" + target + "Test"
             udid = self.select_simulator(prefix + "-before")
             self.write(prefix + "-admission.json", {
-                "source": self.admission, "task": OWNED_NATIVE_TASK, "udid": udid,
+                "source": self.admission, "task": task, "udid": udid,
                 "aggregateAbiRequested": aggregate_abi,
                 "stateBefore": self.simulator["stateBefore"], "nativeInvocationReceipt": "host-" + label + ".json",
                 "initialStateObservation": prefix + "-before.stdout.log",
@@ -970,7 +978,7 @@ class Host:
             self.safe = False
             raise
         try:
-            tested = self.invoke(label, [OWNED_NATIVE_TASK, "--device", udid, "--tests", OWNED_NATIVE_CLASS,
+            tested = self.invoke(label, [task, "--device", udid, "--tests", OWNED_NATIVE_CLASS,
                                 *([":p2p-transport-lan:checkKotlinAbi"] if aggregate_abi else []),
                                 "--continue", "--init-script", str(ROOT / "gradle/platform-test-coverage.init.gradle"),
                                 "-Pp2pkit.testCoverageRoot=" + str(ROOT), "-Pp2pkit.testCoverageToken=" + token])
@@ -1003,8 +1011,8 @@ class Host:
                         path.stat().st_size == row["bytes"] and digest(path) == row["sha256"],
                         "Native helper report differs from its finalized receipt")
                 return path
-            prefix = "library/p2p-transport-lan/build/test-results/iosSimulatorArm64Test/TEST-"
-            xml_source = prefix + "iosSimulatorArm64Test." + OWNED_NATIVE_CLASS + ".xml"
+            prefix = "library/p2p-transport-lan/build/test-results/" + target + "Test/TEST-"
+            xml_source = prefix + target + "Test." + OWNED_NATIVE_CLASS + ".xml"
             require([row["source"] for row in receipt["reports"]
                     if row["source"].startswith(prefix) and row["source"].endswith(".xml")] == [xml_source],
                     "Unexpected native test-class XML in the focused invocation")
@@ -1013,7 +1021,7 @@ class Host:
             with xml.open("rb") as stream:
                 junit = stream.read(1024 ** 2 + 1)
             result = assess_owned_native(read_json(execution),
-                                         read_json(ROOT / "gradle/platform-test-policy.json"), token, junit)
+                                         read_json(ROOT / "gradle/platform-test-policy.json"), token, junit, role=self.role)
             abi = []
             if aggregate_abi:
                 # Actual aggregate tasks, not invented per-target compares. The
@@ -1028,8 +1036,9 @@ class Host:
                     "executionSha256": digest(execution), "junitSha256": digest(xml), "abiTasks": abi,
                     "aggregateAbiRequested": aggregate_abi, "productLogSha256": digest(directory / "product.stdout.log"),
                     "limits": "Focused ARM helper and LAN ABI only; no whole-host or physical qualification."
-                    if aggregate_abi else "Focused ARM helper only; aggregate ABI NOT_EXECUTED and remains required; "
-                    "no whole-host or physical qualification."}
+                    if aggregate_abi else (
+                        "Focused " + target + " helper only; aggregate ABI NOT_EXECUTED and remains required; "
+                        "no whole-host or physical qualification.")}
         return self.check("owned-flow-helper-execution", inspect)
 
     def isolated_consumers(self):
@@ -1661,17 +1670,18 @@ class Host:
                 raise InfrastructureFailure("Native executor controls failed; product execution is blocked")
             self.safe = True
             self.setup_sdk()
+            if self.role == "macos-x64":
+                require(self.check("intel-simulator-prerequisites", self.inspect_intel_simulators),
+                        "Intel simulator prerequisite failed; product builds are NOT_EXECUTED")
             if self.scope == "windows-diagnostics":
                 self.windows_diagnostics()
             elif self.scope == "windows-followup":
                 self.windows_followup()
             elif self.role == "windows-x64":
                 self.windows()
-            elif self.role == "macos-arm64":
+            elif self.role == "macos-arm64" or (self.role, self.scope) == ("macos-x64", "apple-owned-helper"):
                 self.mac()
             else:
-                require(self.check("intel-simulator-prerequisites", self.inspect_intel_simulators),
-                        "Intel simulator prerequisite failed; product builds are NOT_EXECUTED")
                 self.invoke("intel-platform", [sys.executable, "scripts/run-platform-tests.py", "ios-x64"], kind="command", timeout=7200)
                 self.clean_outputs()
                 self.install_xcodegen()

@@ -24,6 +24,7 @@ PROFILES = {
     "ios-x64": [":p2p-core:iosX64Test", ":p2p-transport-lan:iosX64Test"],
     "ios-arm64": [":p2p-core:iosSimulatorArm64Test", ":p2p-transport-lan:iosSimulatorArm64Test"],
     "ios-lan-arm64": [":p2p-transport-lan:iosSimulatorArm64Test"],
+    "ios-lan-x64": [":p2p-transport-lan:iosX64Test"],
 }
 FLAGS = ["--no-daemon", "--no-build-cache", "--no-configuration-cache", "--rerun-tasks",
          "--dependency-verification", "strict", "--max-workers=2", "--no-parallel", "--console=plain"]
@@ -79,8 +80,8 @@ def validate_policy(policy):
 def required_tasks(policy, profile, arch):
     validate_policy(policy)
     tasks = {task for project in policy["model"].values() for task in project["tests"]}
-    if profile == "ios-x64":
-        require(arch == "x64", "ios-x64 requires an Intel macOS host, not Apple Silicon")
+    if profile in ("ios-x64", "ios-lan-x64"):
+        require(arch == "x64", profile + " requires an Intel macOS host, not Apple Silicon")
         required = set(PROFILES[profile])
         require(required <= tasks, "Intel test targets are missing from the committed model")
         return required

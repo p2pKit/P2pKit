@@ -61,16 +61,18 @@ class CoveragePolicyTest(unittest.TestCase):
         self.assertEqual(set(native_arm), self.assess(arm_only, "ios-arm64", "arm64"))
         with self.assertRaises(ValueError):
             self.assess(arm_only, "full", "arm64")
-        lan_task = ":p2p-transport-lan:iosSimulatorArm64Test"
-        self.assertEqual([lan_task], GATE.PROFILES["ios-lan-arm64"])
-        lan_only = example_report("ios-lan-arm64", "arm64")
-        self.assertEqual({lan_task}, self.assess(lan_only, "ios-lan-arm64", "arm64"))
-        for broader in ("full", "ios-arm64"):
-            with self.assertRaises(ValueError):
-                self.assess(lan_only, broader, "arm64")
-        rows = {row["target"]: row for row in GATE.target_rows(lan_only)}
-        self.assertEqual("NOT_REQUESTED", rows[":p2p-core/iosSimulatorArm64"]["status"])
-        self.assertIn("did not request", rows[":p2p-core/iosSimulatorArm64"]["reason"])
+        for arch, target in (("arm64", "iosSimulatorArm64"), ("x64", "iosX64")):
+            profile = "ios-lan-" + arch
+            lan_task = ":p2p-transport-lan:" + target + "Test"
+            self.assertEqual([lan_task], GATE.PROFILES[profile])
+            lan_only = example_report(profile, arch)
+            self.assertEqual({lan_task}, self.assess(lan_only, profile, arch))
+            for broader in ("full", "ios-" + arch):
+                with self.subTest(profile=profile, broader=broader), self.assertRaises(ValueError):
+                    self.assess(lan_only, broader, arch)
+            rows = {row["target"]: row for row in GATE.target_rows(lan_only)}
+            self.assertEqual("NOT_REQUESTED", rows[":p2p-core/" + target]["status"])
+            self.assertIn("did not request", rows[":p2p-core/" + target]["reason"])
         self.assertIn(":sample-kmp-shared:testAndroidHostTest", arm)
         self.assertIn(":p2p-core:testAndroidHostTest", arm)
         self.assertIn(":p2p-core:iosSimulatorArm64Test", arm)
@@ -79,7 +81,7 @@ class CoveragePolicyTest(unittest.TestCase):
 
     def test_every_expected_task_must_execute_fresh_successful_cases(self):
         for profile, arch in (("full", "arm64"), ("full", "x64"), ("ios-x64", "x64"),
-                              ("ios-arm64", "arm64"), ("ios-lan-arm64", "arm64")):
+                              ("ios-arm64", "arm64"), ("ios-lan-arm64", "arm64"), ("ios-lan-x64", "x64")):
             baseline = example_report(profile, arch)
             for name in GATE.required_tasks(POLICY, profile, arch):
                 changes = [("outcome", outcome) for outcome in (
@@ -179,6 +181,7 @@ class CoveragePolicyTest(unittest.TestCase):
                 GATE.required_tasks(policy, "full", "arm64")
         for profile, arch in (("ios-x64", "arm64"), ("ios-arm64", "x64"), ("ios-arm64", "unknown"),
                               ("ios-lan-arm64", "x64"), ("ios-lan-arm64", "unknown"),
+                              ("ios-lan-x64", "arm64"), ("ios-lan-x64", "unknown"),
                               ("full", "unknown"), ("other", "x64")):
             with self.assertRaises(ValueError):
                 GATE.required_tasks(POLICY, profile, arch)

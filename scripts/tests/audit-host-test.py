@@ -37,6 +37,8 @@ WINDOWS_TASKS = {":p2p-core:jvmTest", ":p2p-transport-lan:jvmTest",
 WINDOWS_FOLLOWUP_TASKS = {":p2p-core:jvmTest"}
 WINDOWS_DIAGNOSTICS_TASKS = {":p2p-transport-lan:jvmTest"}
 SWIFT_TARGETS = ("p2pkit-sample-tests", "p2pkit-sample-uitests")
+OWNED_NATIVE_HOSTS = {"macos-arm64": ("iosSimulatorArm64", "aarch64"),
+                      "macos-x64": ("iosX64", "x86_64")}
 
 
 def temporary(test):
@@ -61,17 +63,20 @@ def windows_report(required_tasks=WINDOWS_TASKS):
     }
 
 
-def owned_native_report():
-    report = windows_report({HOST.OWNED_NATIVE_TASK})
-    report["host"] = {"os": "Mac OS X", "arch": "aarch64"}
-    report["tests"][HOST.OWNED_NATIVE_TASK]["passed"] = len(HOST.OWNED_NATIVE_METHODS)
+def owned_native_report(role="macos-arm64"):
+    target, arch = OWNED_NATIVE_HOSTS[role]
+    task = ":p2p-transport-lan:" + target + "Test"
+    report = windows_report({task})
+    report["host"] = {"os": "Mac OS X", "arch": arch}
+    report["tests"][task]["passed"] = len(HOST.OWNED_NATIVE_METHODS)
     return report
 
 
-def owned_native_xml():
-    name = "iosSimulatorArm64Test." + HOST.OWNED_NATIVE_CLASS
+def owned_native_xml(role="macos-arm64"):
+    target = OWNED_NATIVE_HOSTS[role][0]
+    name = target + "Test." + HOST.OWNED_NATIVE_CLASS
     return ('<testsuite name="' + name + '" tests="4" skipped="0" failures="0" errors="0">' +
-            ''.join('<testcase classname="' + name + '" name="' + method + '[iosSimulatorArm64]"/>'
+            ''.join('<testcase classname="' + name + '" name="' + method + '[' + target + ']"/>'
                     for method in sorted(HOST.OWNED_NATIVE_METHODS)) + '</testsuite>').encode()
 
 
@@ -468,31 +473,45 @@ class WindowsAssessmentTest(unittest.TestCase):
 
 class OwnedNativeAssessmentTest(unittest.TestCase):
     def test_owned_helper_requires_exact_four_successes_and_no_other_modeled_test_task(self):
-        result = HOST.assess_owned_native(owned_native_report(), POLICY, TOKEN, owned_native_xml())
-        self.assertEqual(4, len(result["methods"]))
-        mutations = [
-            lambda r: r["tests"][HOST.OWNED_NATIVE_TASK].update(passed=3),
-            lambda r: r["tests"][HOST.OWNED_NATIVE_TASK].update(skipped=1),
-            lambda r: r["tests"][":p2p-core:iosSimulatorArm64Test"].update(inGraph=True),
-            lambda r: r["tests"][":p2p-transport-lan:jvmTest"].update(passed=1),
-        ]
-        for mutate in mutations:
-            report = owned_native_report()
-            mutate(report)
-            with self.subTest(report=report), self.assertRaises(ValueError):
-                HOST.assess_owned_native(report, POLICY, TOKEN, owned_native_xml())
+        self.assertEqual(set(OWNED_NATIVE_HOSTS), set(HOST.OWNED_NATIVE_TARGETS))
+        for role, (target, _) in OWNED_NATIVE_HOSTS.items():
+            result = HOST.assess_owned_native(owned_native_report(role), POLICY, TOKEN, owned_native_xml(role), role=role)
+            task = ":p2p-transport-lan:" + target + "Test"
+            self.assertEqual(task, result["task"])
+            self.assertEqual(4, len(result["methods"]))
+            mutations = [
+                lambda r: r["tests"][task].update(passed=3),
+                lambda r: r["tests"][task].update(skipped=1),
+                lambda r: r["tests"][":p2p-core:" + target + "Test"].update(inGraph=True),
+                lambda r: r["tests"][":p2p-transport-lan:jvmTest"].update(passed=1),
+            ]
+            for mutate in mutations:
+                report = owned_native_report(role)
+                mutate(report)
+                with self.subTest(role=role, report=report), self.assertRaises(ValueError):
+                    HOST.assess_owned_native(report, POLICY, TOKEN, owned_native_xml(role), role=role)
+            other = next(candidate for candidate in OWNED_NATIVE_HOSTS if candidate != role)
+            with self.subTest(role=role, wrong_report=other), self.assertRaises(ValueError):
+                HOST.assess_owned_native(owned_native_report(other), POLICY, TOKEN, owned_native_xml(role), role=role)
+        for role in ("windows-x64", "invented", None, []):
+            with self.subTest(role=role), self.assertRaises(ValueError):
+                HOST.assess_owned_native(owned_native_report(), POLICY, TOKEN, owned_native_xml(), role=role)
 
     def test_native_xml_cannot_hide_missing_duplicate_failed_skipped_or_wrong_class_methods(self):
-        xml = owned_native_xml()
         first, second = [name.encode() for name in sorted(HOST.OWNED_NATIVE_METHODS)[:2]]
-        broken = [xml.replace(second, first), xml.replace(first, b"unknownMethod"),
-                  xml.replace(b'[iosSimulatorArm64]', b'[iosX64]'),
-                  xml.replace(b'errors="0"', b'errors="1"'), xml.replace(b'skipped="0"', b'skipped="1"'),
-                  xml.replace(b'/><testcase', b'><failure/></testcase><testcase', 1),
-                  xml.replace(b'classname="iosSimulatorArm64Test.', b'classname="other.', 1), b'<testsuite/>']
-        for data in broken:
-            with self.subTest(xml=data), self.assertRaises(ValueError):
-                HOST.assess_owned_native(owned_native_report(), POLICY, TOKEN, data)
+        for role, (target, _) in OWNED_NATIVE_HOSTS.items():
+            xml = owned_native_xml(role)
+            other = next(candidate for candidate in OWNED_NATIVE_HOSTS if candidate != role)
+            other_target = OWNED_NATIVE_HOSTS[other][0]
+            broken = [xml.replace(second, first), xml.replace(first, b"unknownMethod"),
+                      xml.replace(('[' + target + ']').encode(), ('[' + other_target + ']').encode()),
+                      owned_native_xml(other),
+                      xml.replace(b'errors="0"', b'errors="1"'), xml.replace(b'skipped="0"', b'skipped="1"'),
+                      xml.replace(b'/><testcase', b'><failure/></testcase><testcase', 1),
+                      xml.replace(('classname="' + target + 'Test.').encode(), b'classname="other.', 1), b'<testsuite/>']
+            for data in broken:
+                with self.subTest(role=role, xml=data), self.assertRaises(ValueError):
+                    HOST.assess_owned_native(owned_native_report(role), POLICY, TOKEN, data, role=role)
 
 
 class SwiftAssessmentTest(unittest.TestCase):
@@ -751,7 +770,7 @@ class HostInvocationTest(unittest.TestCase):
                              ("macos-x64", "apple-provenance"), ("windows-x64", "apple-native-compilation"),
                              ("macos-x64", "apple-native-compilation"), ("windows-x64", "apple-owned-cancellation"),
                              ("macos-x64", "apple-owned-cancellation"), ("windows-x64", "apple-owned-helper"),
-                             ("macos-x64", "apple-owned-helper"), ("unknown", "full")):
+                             ("unknown", "full")):
             state = self.work / (role + "-" + scope)
             with self.subTest(role=role, scope=scope), self.assertRaisesRegex(ValueError, "role/scope"):
                 HOST.Host(role, state, scope=scope)
@@ -1482,10 +1501,12 @@ class HostInvocationTest(unittest.TestCase):
         self.assertEqual([], self.calls, "Selection fixture must not invoke a product subprocess")
 
     def test_owned_helper_mac_route_runs_only_native_leaf_and_cleans_after_retirement(self):
-        host = HOST.Host("macos-arm64", self.state / "owned-helper-order", scope="apple-owned-helper")
-        self.assertNotIn((host.role, host.scope), HOST.CANCELLATION_PROBE_ROUTES)
-        for outcome in (True, False, HOST.InfrastructureFailure("synthetic ownership failure")):
-            with self.subTest(outcome=outcome), contextlib.ExitStack() as stack:
+        cases = [(role, outcome) for role in OWNED_NATIVE_HOSTS
+                 for outcome in (True, False, HOST.InfrastructureFailure("synthetic ownership failure"))]
+        for role, outcome in cases:
+            host = HOST.Host(role, self.state / ("owned-helper-order-" + role), scope="apple-owned-helper")
+            self.assertNotIn((host.role, host.scope), HOST.CANCELLATION_PROBE_ROUTES)
+            with self.subTest(role=role, outcome=outcome), contextlib.ExitStack() as stack:
                 events = []
                 def helper(**kwargs):
                     events.append("helper")
@@ -1509,10 +1530,14 @@ class HostInvocationTest(unittest.TestCase):
         self.assertEqual([], self.calls, "Routing fixture must not execute native tools or product commands")
 
     def test_owned_helper_scope_cannot_drop_abi_from_the_original_cancellation_route(self):
-        for scope, aggregate in (("apple-owned-cancellation", False), ("apple-owned-helper", True),
-                                 ("apple-owned-helper", 0), ("apple-owned-cancellation", 1), ("full", False)):
-            with self.subTest(scope=scope, aggregate=aggregate):
-                host = HOST.Host("macos-arm64", self.state / "invalid-owned-helper", scope=scope)
+        cases = [("macos-arm64", scope, aggregate) for scope, aggregate in (
+            ("apple-owned-cancellation", False), ("apple-owned-helper", True),
+            ("apple-owned-helper", 0), ("apple-owned-cancellation", 1), ("full", False))]
+        cases.extend(("macos-x64", scope, aggregate) for scope, aggregate in (
+            ("apple-owned-helper", True), ("apple-owned-helper", 0), ("full", False)))
+        for role, scope, aggregate in cases:
+            with self.subTest(role=role, scope=scope, aggregate=aggregate):
+                host = HOST.Host(role, self.state / "invalid-owned-helper", scope=scope)
                 with mock.patch.object(host, "inspect_tool") as inspect, mock.patch.object(host, "invoke") as invoke:
                     with self.assertRaisesRegex(ValueError, "scope and ABI selection"):
                         host.owned_flow_native(aggregate_abi=aggregate)
@@ -1579,41 +1604,44 @@ class HostInvocationTest(unittest.TestCase):
     def test_owned_helper_uses_exact_leaf_retained_reports_and_actual_native_abi_task_lines(self):
         udid = "11111111-1111-1111-1111-111111111111"
         prefix = "owned-flow-native"
-        faults = (None, "missing-xml", "wrong-xml", "abi-not-executed", "product-failed",
+        faults = (None, "missing-xml", "wrong-xml", "wrong-report", "abi-not-executed", "product-failed",
                   "interrupted", "retirement-unproved", "unowned")
-        cases = [(scope, aggregate, fault) for scope, aggregate in (
-            ("apple-owned-cancellation", True), ("apple-owned-helper", False))
+        cases = [(role, scope, aggregate, fault) for role, scope, aggregate in (
+            ("macos-arm64", "apple-owned-cancellation", True), ("macos-arm64", "apple-owned-helper", False),
+            ("macos-x64", "apple-owned-helper", False))
             for fault in faults if aggregate or fault != "abi-not-executed"]
-        for scope, aggregate, fault in cases:
-            with self.subTest(scope=scope, fault=fault):
+        for role, scope, aggregate, fault in cases:
+            with self.subTest(role=role, scope=scope, fault=fault):
+                target = OWNED_NATIVE_HOSTS[role][0]
+                task = ":p2p-transport-lan:" + target + "Test"
+                other = next(candidate for candidate in OWNED_NATIVE_HOSTS if candidate != role)
                 label = "owned-flow-helper-abi" if aggregate else "owned-flow-helper"
                 options = {} if aggregate else {"aggregate_abi": False}  # Preserve the original default-ABI caller.
                 fixture = HostInvocationTest()
                 fixture.setUp()
                 self.addCleanup(fixture.doCleanups)
                 host = fixture.host
-                host.role, host.scope, host.wrapper = "macos-arm64", scope, fixture.repo / "gradlew"
+                host.role, host.scope, host.wrapper = role, scope, fixture.repo / "gradlew"
                 (fixture.repo / "gradle").mkdir()
                 (fixture.repo / "gradle/platform-test-policy.json").write_text(json.dumps(POLICY))
                 def receipt(record, path, evidence, phase):
                     if phase != "before-write" or record["purpose"] != label:
                         return
-                    xml_name = ("library/p2p-transport-lan/build/test-results/iosSimulatorArm64Test/"
-                                "TEST-iosSimulatorArm64Test." + HOST.OWNED_NATIVE_CLASS + ".xml")
+                    xml_name = ("library/p2p-transport-lan/build/test-results/" + target + "Test/TEST-" +
+                                target + "Test." + HOST.OWNED_NATIVE_CLASS + ".xml")
                     entries = [("build/reports/platform-tests/" + TOKEN + "/execution.json",
-                                json.dumps(owned_native_report()).encode())]
+                                json.dumps(owned_native_report(other if fault == "wrong-report" else role)).encode())]
                     if fault != "missing-xml":
-                        entries.append((xml_name, owned_native_xml().replace(b"[iosSimulatorArm64]", b"[iosX64]")
-                                        if fault == "wrong-xml" else owned_native_xml()))
+                        entries.append((xml_name, owned_native_xml(other if fault == "wrong-xml" else role)))
                     for source, data in entries:
-                        target = evidence / "reports" / source
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        target.write_bytes(data)
+                        retained = evidence / "reports" / source
+                        retained.parent.mkdir(parents=True, exist_ok=True)
+                        retained.write_bytes(data)
                         record["reports"].append({"source": source, "classification": "changed-since-admission",
                             "retained": "reports/" + source, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
                     (evidence / "report-manifest.json").write_text(json.dumps({"schema": 1, "records": record["reports"]}))
                     tasks = (("iosArm64MainKlibrary", "iosSimulatorArm64MainKlibrary", "iosX64MainKlibrary",
-                              "internalDumpKotlinAbi", "checkKotlinAbi") if aggregate else ("iosSimulatorArm64Test",))
+                              "internalDumpKotlinAbi", "checkKotlinAbi") if aggregate else (target + "Test",))
                     (evidence / "product.stdout.log").write_text(''.join(
                         "> Task :p2p-transport-lan:" + task + (" UP-TO-DATE" if fault == "abi-not-executed" else "") + "\n"
                         for task in tasks))
@@ -1658,6 +1686,7 @@ class HostInvocationTest(unittest.TestCase):
                 self.assertEqual(expected + [prefix + "-retire-after"], events)
                 self.assertEqual(1 if fault == "product-failed" else 2, len(fixture.calls))
                 admission = json.loads((host.evidence / (prefix + "-admission.json")).read_text())
+                self.assertEqual(task, admission["task"])
                 self.assertEqual(udid, admission["udid"])
                 self.assertEqual("Shutdown", admission["stateBefore"])
                 self.assertIs(aggregate, admission["aggregateAbiRequested"])
@@ -1665,7 +1694,7 @@ class HostInvocationTest(unittest.TestCase):
                 for name in [admission["initialStateObservation"], *admission["requiredRetirementObservations"]]:
                     self.assertTrue((host.evidence / name).is_file())
                 native = json.loads((host.state / admission["nativeInvocationReceipt"]).read_text())
-                self.assertEqual([HOST.OWNED_NATIVE_TASK, "--device", udid, "--tests", HOST.OWNED_NATIVE_CLASS,
+                self.assertEqual([task, "--device", udid, "--tests", HOST.OWNED_NATIVE_CLASS,
                     *([":p2p-transport-lan:checkKotlinAbi"] if aggregate else []), "--continue", "--init-script",
                     str(fixture.repo / "gradle/platform-test-coverage.init.gradle"),
                     "-Pp2pkit.testCoverageRoot=" + str(fixture.repo), "-Pp2pkit.testCoverageToken=" + TOKEN],
@@ -1684,6 +1713,7 @@ class HostInvocationTest(unittest.TestCase):
                 assessment = json.loads((host.evidence / "owned-flow-helper-execution.json").read_text())
                 self.assertEqual("PASS" if fault is None else "FAIL", assessment["result"])
                 if fault is None:
+                    self.assertEqual(task, assessment["details"]["task"])
                     self.assertEqual(4, len(assessment["details"]["methods"]))
                     self.assertIs(aggregate, assessment["details"]["aggregateAbiRequested"])
                     self.assertEqual(5 if aggregate else 0, len(assessment["details"]["abiTasks"]))
@@ -3129,8 +3159,10 @@ class SdkSetupTest(unittest.TestCase):
 
         def products():
             self.assertTrue((host.evidence / "android-platforms.json").is_file())
-            self.assertEqual(["executor-native-controls", "android-platforms"],
-                             [row["component"] for row in host.rows])
+            expected = ["executor-native-controls", "android-platforms"]
+            if role == "macos-x64":
+                expected.append("intel-simulator-prerequisites")
+            self.assertEqual(expected, [row["component"] for row in host.rows])
             if scope == "apple-native-compilation":
                 mac_products()
 
@@ -3161,6 +3193,7 @@ class SdkSetupTest(unittest.TestCase):
         cases.extend([("windows-x64", "windows-followup", 0), ("windows-x64", "windows-diagnostics", 0),
                       ("macos-arm64", "apple-followup", 0), ("macos-arm64", "apple-provenance", 0),
                       ("macos-arm64", "apple-owned-cancellation", 0), ("macos-arm64", "apple-owned-helper", 0),
+                      ("macos-x64", "apple-owned-helper", 0),
                       ("macos-arm64", "apple-native-compilation", 0),
                       ("macos-arm64", "apple-native-compilation", 7),
                       ("macos-x64", "full", 7)])
@@ -3173,16 +3206,23 @@ class SdkSetupTest(unittest.TestCase):
                 self.assertEqual(int(role == "windows-x64" and scope == "full"), windows)
                 self.assertEqual(int(scope == "windows-followup"), followup)
                 self.assertEqual(int(scope == "windows-diagnostics"), diagnostics)
-                self.assertEqual(int(role == "macos-arm64"), mac)
+                self.assertEqual(int(role == "macos-arm64" or
+                                     (role, scope) == ("macos-x64", "apple-owned-helper")), mac)
                 expected = ["executor-native-controls", "android-platforms"]
                 if role == "macos-x64":
-                    expected.extend(["intel-simulator-prerequisites", "intel-platform", "swift-jvm-cli-prepare"])
-                    self.assertEqual(product_status,
-                                     fixture.host.receipts["swift-jvm-cli-prepare"]["finalExitCode"])
-                    self.assertEqual(["intel-simulator-runtimes", "intel-simulator-devices", "intel-platform",
-                                      "clean_outputs", "install_xcodegen", "isolated_consumers", "clean_outputs",
-                                      "swift-jvm-cli-prepare", "apple",
-                                      "clean_outputs"], order)
+                    expected.append("intel-simulator-prerequisites")
+                    if scope == "apple-owned-helper":
+                        self.assertEqual(["intel-simulator-runtimes", "intel-simulator-devices", "clean_outputs"], order)
+                        self.assertNotIn("intel-platform", fixture.host.receipts)
+                        self.assertNotIn("swift-jvm-cli-prepare", fixture.host.receipts)
+                    else:
+                        expected.extend(["intel-platform", "swift-jvm-cli-prepare"])
+                        self.assertEqual(product_status,
+                                         fixture.host.receipts["swift-jvm-cli-prepare"]["finalExitCode"])
+                        self.assertEqual(["intel-simulator-runtimes", "intel-simulator-devices", "intel-platform",
+                                          "clean_outputs", "install_xcodegen", "isolated_consumers", "clean_outputs",
+                                          "swift-jvm-cli-prepare", "apple",
+                                          "clean_outputs"], order)
                     inventory = json.loads((fixture.host.evidence / "intel-simulator-prerequisites.json").read_text())
                     self.assertEqual([{"runtime": "com.apple.CoreSimulator.SimRuntime.iOS-26-2",
                                        "udid": "11111111-1111-1111-1111-111111111111", "state": "Shutdown"}],
@@ -3206,11 +3246,13 @@ class SdkSetupTest(unittest.TestCase):
                 self.assertTrue(fixture.summary()["safeToContinue"])
 
     def test_intel_unavailable_or_failed_inventory_blocks_builds_and_preserves_read_only_evidence(self):
-        for problem in ("unavailable-runtime", "missing-device", "query"):
-            with self.subTest(problem=problem), self.fixture("macos-x64") as data:
+        cases = [(scope, problem) for scope in ("full", "apple-owned-helper")
+                 for problem in ("unavailable-runtime", "missing-device", "query")]
+        for scope, problem in cases:
+            with self.subTest(scope=scope, problem=problem), self.fixture("macos-x64") as data:
                 fixture, sdk, _, _ = data
                 result, windows, mac, followup, diagnostics, order = self.run_fixture(
-                    fixture, sdk, simulator_problem=problem)
+                    fixture, sdk, scope=scope, simulator_problem=problem)
                 self.assertEqual((1, 0, 0, 0, 0), (result, windows, mac, followup, diagnostics))
                 queries = ["intel-simulator-runtimes"] + ([] if problem == "query" else ["intel-simulator-devices"])
                 self.assertEqual(queries, order)
@@ -3232,7 +3274,8 @@ class SdkSetupTest(unittest.TestCase):
         for role, scope in [*((role, "full") for role in HOST.ROLES),
                              ("windows-x64", "windows-followup"), ("windows-x64", "windows-diagnostics"),
                              ("macos-arm64", "apple-followup"), ("macos-arm64", "apple-provenance"),
-                             ("macos-arm64", "apple-native-compilation"), ("macos-arm64", "apple-owned-helper")]:
+                             ("macos-arm64", "apple-native-compilation"), ("macos-arm64", "apple-owned-helper"),
+                             ("macos-x64", "apple-owned-helper")]:
             with self.subTest(role=role, scope=scope), self.fixture(role) as data:
                 fixture, sdk, _, properties = data
                 properties["android-37.0"].write_text("AndroidVersion.ApiLevel=37.1\n", encoding="utf-8")
@@ -3251,7 +3294,8 @@ class SdkSetupTest(unittest.TestCase):
         for role, scope in [*((role, "full") for role in HOST.ROLES),
                              ("windows-x64", "windows-followup"), ("windows-x64", "windows-diagnostics"),
                              ("macos-arm64", "apple-followup"), ("macos-arm64", "apple-provenance"),
-                             ("macos-arm64", "apple-native-compilation"), ("macos-arm64", "apple-owned-helper")]:
+                             ("macos-arm64", "apple-native-compilation"), ("macos-arm64", "apple-owned-helper"),
+                             ("macos-x64", "apple-owned-helper")]:
             with self.subTest(role=role, scope=scope), self.fixture(role) as data:
                 fixture, sdk, _, _ = data
                 result, windows, mac, followup, diagnostics, order = self.run_fixture(
