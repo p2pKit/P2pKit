@@ -1,3 +1,4 @@
+import Darwin
 import XCTest
 
 /// A real host JVM CLI is a fixture, not another SDK or simulated wire peer.
@@ -9,6 +10,7 @@ final class SwiftJvmTransferUITests: XCTestCase {
         let environment = ProcessInfo.processInfo.environment
         let nonce = try required("P2PKIT_JVM_NONCE", in: environment, matching: "[0-9a-f]{32}")
         let commit = try required("P2PKIT_JVM_SOURCE_COMMIT", in: environment, matching: "[0-9a-f]{40}")
+        let readyChallenge = try required("P2PKIT_JVM_READY_CHALLENGE", in: environment, matching: "[0-9a-f]{32}")
         let port = try required("P2PKIT_JVM_PORT", in: environment, matching: "[0-9]{1,5}")
         XCTAssertTrue((1...65_535).contains(try XCTUnwrap(Int(port))))
         let qr = try required(
@@ -86,7 +88,17 @@ final class SwiftJvmTransferUITests: XCTestCase {
         let dial = app.buttons["Dial manual peer"]
         reveal(dial, in: app)
         XCTAssertTrue(dial.isEnabled)
-        dial.tap()
+        // Runner-only scheduling evidence, not a Connected/offer or consent claim.
+        // The native host controller uses this same kernel's RAW clock, not log arrival time.
+        var readyTime = timespec()
+        XCTAssertEqual(clock_gettime(CLOCK_MONOTONIC_RAW, &readyTime), 0, "Native pre-Dial clock unavailable")
+        XCTAssertGreaterThanOrEqual(readyTime.tv_sec, 0)
+        XCTAssertTrue((0..<1_000_000_000).contains(readyTime.tv_nsec))
+        let readiness = "P2PKIT_SWIFT_JVM_PRE_DIAL_V1 source=\(commit) session=\(nonce) " +
+            "challenge=\(readyChallenge) raw=\(readyTime.tv_sec):\(readyTime.tv_nsec)"
+        XCTContext.runActivity(named: readiness) { _ in
+            dial.tap()
+        }
         let session = app.staticTexts["sample-session-state"]
         XCTAssertTrue(session.waitForExistence(timeout: 30))
         XCTAssertTrue(waitForLabel("JVM-\(nonce) — Connected", on: session, timeout: 30))

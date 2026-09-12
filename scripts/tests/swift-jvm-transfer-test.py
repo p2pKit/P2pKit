@@ -68,16 +68,41 @@ def diagnostic_rows(*, swift, receiver):
     return rows
 
 
+def pre_dial_line(*, source="a" * 40, session="1" * 32, challenge="2" * 32,
+                  raw="20:0", stage=TRANSFER.READY_STAGE):
+    # The actual R16 custom-activity envelope, with synthetic runner-only fields.
+    return (f"    t =    19.44s {stage} source={source} session={session} "
+            f"challenge={challenge} raw={raw}\n").encode("ascii")
+
+
+def readiness_experiment(directory):
+    experiment = object.__new__(TRANSFER.Experiment)
+    experiment.directory = directory
+    experiment.audit = types.SimpleNamespace(reject_symlinks=lambda path: None)
+    experiment.context = {"expectedCommit": "a" * 40}
+    experiment.nonce, experiment.ready_challenge = "1" * 32, "2" * 32
+    experiment.ready_activity = None
+    experiment.spawn_raw_ns = 10 * TRANSFER.NANOSECONDS
+    experiment.deadline, experiment.last_resource = 360, 0
+    experiment.cli, experiment.xcode = mock.Mock(), mock.Mock()
+    experiment.cli.poll.return_value = experiment.xcode.poll.return_value = None
+    experiment.record = {"result": "FAIL", "transfers": [], "resources": [], "readiness": {
+        "absoluteDeadlineMonotonicSeconds": 360, "spawnMonotonicSeconds": 0,
+        "spawnRawNanoseconds": experiment.spawn_raw_ns}}
+    return experiment
+
+
 class SwiftJvmTransferControls(unittest.TestCase):
     def test_fixture_targets_exact_ui_bundle_and_preserves_ownership_and_original_environment(self):
         environment = {name: "synthetic-" + name for name in TRANSFER.OWNERSHIP}
-        fixture = {"P2PKIT_JVM_NONCE": "1" * 32}
+        fixture = {"P2PKIT_JVM_NONCE": "1" * 32, "P2PKIT_JVM_SOURCE_COMMIT": "a" * 40,
+                   "P2PKIT_JVM_READY_CHALLENGE": "2" * 32}
         document = prepared()
         target = TRANSFER.inject_fixture(document, fixture, environment)
         self.assertEqual({**environment, **fixture, "UNCHANGED": "retain-original-target-environment"},
                          target["EnvironmentVariables"])
         self.assertIs(target, TRANSFER.peer_target({TRANSFER.TARGET: target, "__xctestrun_metadata__": {}}))
-        for mutation in ("ambiguous", "wrong-target", "disabled", "skip", "environment-conflict"):
+        for mutation in ("ambiguous", "wrong-target", "disabled", "skip", "environment-conflict", "challenge-conflict"):
             with self.subTest(mutation=mutation):
                 invalid = prepared()
                 config = invalid["TestConfigurations"][0]
@@ -90,10 +115,173 @@ class SwiftJvmTransferControls(unittest.TestCase):
                     config["IsEnabled"] = False
                 elif mutation == "skip":
                     target["SkipTestIdentifiers"] = [TRANSFER.CASE]
+                elif mutation == "challenge-conflict":
+                    target["EnvironmentVariables"]["P2PKIT_JVM_READY_CHALLENGE"] = "3" * 32
                 else:
                     target["EnvironmentVariables"][TRANSFER.OWNERSHIP[0]] = "foreign-job"
                 with self.assertRaises(ValueError):
                     TRANSFER.inject_fixture(invalid, fixture, environment)
+        self.assertNotIn("P2PKIT_JVM_READY_CHALLENGE", environment, "Do not publish the runner challenge to child env")
+        swift = (ROOT / "samples/iosApp/PeerIntegrationUITests/SwiftJvmTransferUITests.swift").read_text()
+        forwarded = swift[swift.index("for key in ["):swift.index("let monitor =")]
+        self.assertEqual(1, swift.count("app.launchEnvironment["))
+        self.assertNotIn("P2PKIT_JVM_READY_CHALLENGE", forwarded)
+        self.assertIn('required("P2PKIT_JVM_READY_CHALLENGE", in: environment, matching: "[0-9a-f]{32}")', swift)
+
+    def test_pre_dial_activity_binds_runner_source_session_and_unique_complete_record(self):
+        line = pre_dial_line()
+        unrelated = (b"    t =      nans Find the sample\n    t =    10.00s Type \"ordinary\n"
+                     b"multiline UI text\" into field\nApp diagnostic: " + line)
+        with tempfile.TemporaryDirectory(prefix="swift-jvm-readiness-") as temporary:
+            directory = Path(temporary).resolve()
+            log = directory / "xcodebuild.log"
+            with mock.patch.object(TRANSFER, "native_raw_ns", return_value=30 * TRANSFER.NANOSECONDS), \
+                    mock.patch.object(TRANSFER.time, "monotonic", return_value=150):
+                faults = {
+                    "source": pre_dial_line(source="b" * 40),
+                    "session": pre_dial_line(session="3" * 32),
+                    "challenge": pre_dial_line(challenge="4" * 32),
+                    "stage": pre_dial_line(stage="P2PKIT_SWIFT_JVM_POST_DIAL_V1"),
+                    "duplicate": line + line,
+                    "negative-clock": pre_dial_line(raw="-1:0"),
+                    "nanosecond-range": pre_dial_line(raw="20:1000000000"),
+                    "seconds-overflow": pre_dial_line(raw="9223372036854775808:0"),
+                    "malformed": line[:-1] + b" extra\n",
+                }
+                for fault, raw in faults.items():
+                    with self.subTest(fault=fault):
+                        log.write_bytes(unrelated + raw)
+                        experiment = readiness_experiment(directory)
+                        with self.assertRaises(ValueError):
+                            experiment.observe_pre_dial()
+                        self.assertIsNone(experiment.ready_activity)
+                        self.assertEqual("FAIL", experiment.record["result"])
+
+                # CLI/quoted endpoint text is not the admitted XCTest activity channel.
+                (directory / "cli.stdout.log").write_bytes(line)
+                experiment = readiness_experiment(directory)
+                log.write_bytes(unrelated)
+                self.assertIsNone(experiment.observe_pre_dial())
+                log.write_bytes(unrelated + line[:-1])
+                self.assertIsNone(experiment.observe_pre_dial(), "A live incomplete line is pending")
+                log.write_bytes(unrelated + line)
+                activity = experiment.observe_pre_dial()
+                self.assertEqual(20 * TRANSFER.NANOSECONDS, activity["producerRawNanoseconds"])
+                self.assertEqual("2" * 32, activity["challenge"])
+                self.assertEqual("FAIL", experiment.record["result"], "Readiness is not transfer success")
+                self.assertEqual([], experiment.record["transfers"])
+                self.assertEqual(150, experiment.record["readiness"]["admittedMonotonicSeconds"])
+                self.assertEqual(30 * TRANSFER.NANOSECONDS,
+                                 experiment.record["readiness"]["admittedHostRawNanoseconds"])
+
+                experiment.xcode.poll.return_value = 0
+                final_faults = {
+                    "missing": unrelated,
+                    "late-duplicate": unrelated + line + line,
+                    "changed": unrelated + pre_dial_line(raw="21:0"),
+                    "changed-envelope": unrelated + line.replace(b"19.44s", b"20.44s"),
+                    "partial-first": unrelated + line[:-1],
+                    "partial-second": unrelated + line + line[:-1],
+                    "partial-title": unrelated + line + b"    t =    20.44s P2PKIT_SWIFT_",
+                    "partial-envelope": unrelated + line + b"    t =    20.44s",
+                }
+                for fault, raw in final_faults.items():
+                    with self.subTest(final=fault):
+                        log.write_bytes(raw)
+                        with self.assertRaises(ValueError):
+                            experiment.observe_pre_dial(final=True)
+                        self.assertNotIn("finalUniqueActivityVerified", experiment.record["readiness"])
+                log.write_bytes(unrelated + line + b"unrelated terminal text without a newline")
+                with mock.patch.object(TRANSFER, "native_raw_ns", side_effect=AssertionError("No new phase clock")):
+                    self.assertEqual(activity, experiment.observe_pre_dial(final=True))
+                self.assertTrue(experiment.record["readiness"]["finalUniqueActivityVerified"])
+
+        swift = (ROOT / "samples/iosApp/PeerIntegrationUITests/SwiftJvmTransferUITests.swift").read_text()
+        anchors = ['XCTAssertTrue(waitForLabel("Status: Running"', 'replace(app.textFields["Host ',
+                   'replace(app.textFields["Port"]', 'replace(app.textFields["Peer pairing QR text ',
+                   "reveal(dial, in: app)", "XCTAssertTrue(dial.isEnabled)", "clock_gettime(CLOCK_MONOTONIC_RAW",
+                   "XCTContext.runActivity(named: readiness)", "dial.tap()", 'let session = app.staticTexts']
+        offsets = [swift.index(anchor) for anchor in anchors]
+        self.assertEqual(sorted(set(offsets)), offsets, "Readiness belongs after real preparation, before the one Dial")
+        self.assertEqual(1, swift.count("dial.tap()"))
+        self.assertIn(TRANSFER.READY_STAGE + " source=", swift)
+
+    def test_first_offer_uses_producer_clock_and_original_absolute_deadline(self):
+        cases = [
+            {"name": "setup-over120", "start": 0, "stage": False, "readyAfterSleep": True,
+             "sleepAdvance": 130, "producer": 140},
+            {"name": "buffered-with-budget", "start": 200},
+            {"name": "buffered-at-expiry", "start": 130, "producer": 20, "error": "120 seconds"},
+            {"name": "buffered-after-expiry", "start": 131, "producer": 20, "error": "120 seconds"},
+            {"name": "read-crosses-raw-deadline", "start": 249, "readAdvance": 1, "error": "120 seconds"},
+            {"name": "read-crosses-absolute-deadline", "start": 359, "producer": 355,
+             "readAdvance": 1, "error": "360 seconds"},
+            {"name": "absolute-equality", "start": 360, "producer": 355, "error": "360 seconds"},
+            {"name": "near-absolute-no-offer", "start": 359, "producer": 355,
+             "offers": False, "sleepAdvance": 1, "error": "360 seconds"},
+            {"name": "no-offer-phase-expired", "offers": False, "sleepAdvance": 100, "error": "120 seconds"},
+            {"name": "missing-readiness", "start": 350, "stage": False,
+             "sleepAdvance": 10, "error": "360 seconds"},
+            {"name": "xcode-zero-without-readiness", "stage": False, "exit": 0, "error": "ended without"},
+            {"name": "xcode-failed-without-readiness", "stage": False, "exit": 1, "error": "Native XCTest failed"},
+            {"name": "before-spawn", "producer": 9, "error": "outside this XCTest lifetime"},
+            {"name": "future-producer", "producer": 161, "error": "outside this XCTest lifetime"},
+            {"name": "unavailable-raw-clock", "clockFailure": True, "error": "synthetic RAW unavailable"},
+        ]
+        for case in cases:
+            with self.subTest(case=case["name"]), tempfile.TemporaryDirectory(prefix="swift-jvm-clock-") as temporary:
+                directory = Path(temporary).resolve()
+                experiment = readiness_experiment(directory)
+                experiment.xcode.poll.return_value = case.get("exit")
+                start = case.get("start", 150)
+                clock = {"monotonic": start, "raw": (start + 10) * TRANSFER.NANOSECONDS}
+                line = pre_dial_line(raw=str(case.get("producer", 140)) + ":0")
+                log = directory / "xcodebuild.log"
+                log.write_bytes(line if case.get("stage", True) else b"unrelated XCTest startup\n")
+                offer = {"eventName": "transfer.offer.received", "payloadSizeBytes": TRANSFER.SIZE,
+                         "transferId": "synthetic-real-event-path"}
+                def advance(seconds):
+                    clock["monotonic"] += seconds
+                    clock["raw"] += seconds * TRANSFER.NANOSECONDS
+                def sleep(seconds):
+                    self.assertEqual(0.1, seconds)
+                    advance(case.get("sleepAdvance", 1))
+                    if case.get("readyAfterSleep"):
+                        log.write_bytes(line)
+                def events():
+                    advance(case.get("readAdvance", 0))
+                    return [offer] if case.get("offers", True) else []
+                def raw_clock():
+                    if case.get("clockFailure"):
+                        raise OSError("synthetic RAW unavailable")
+                    return clock["raw"]
+                experiment.events = mock.Mock(side_effect=events)
+                with mock.patch.object(TRANSFER.time, "monotonic", side_effect=lambda: clock["monotonic"]), \
+                        mock.patch.object(TRANSFER.time, "sleep", side_effect=sleep), \
+                        mock.patch.object(TRANSFER, "native_raw_ns", side_effect=raw_clock), \
+                        mock.patch.object(TRANSFER.shutil, "disk_usage", return_value=types.SimpleNamespace(free=4 * 1024 ** 3)):
+                    if "error" in case:
+                        error = OSError if case.get("clockFailure") else ValueError
+                        with self.assertRaisesRegex(error, case["error"]):
+                            experiment.await_first_offer()
+                        self.assertNotIn("firstOfferAccepted", experiment.record["readiness"])
+                    else:
+                        self.assertEqual([offer], experiment.await_first_offer())
+                        timing = experiment.record["readiness"]
+                        self.assertEqual(360, timing["absoluteDeadlineMonotonicSeconds"])
+                        self.assertEqual(10 * TRANSFER.NANOSECONDS, timing["spawnRawNanoseconds"])
+                        self.assertEqual({"hostRawNanoseconds": clock["raw"], "monotonicSeconds": clock["monotonic"]},
+                                         timing["firstOfferAccepted"])
+                        self.assertEqual(clock["monotonic"], timing["admittedMonotonicSeconds"])
+                        self.assertGreater(timing["admittedMonotonicSeconds"], 120)
+                if case["name"].startswith("buffered-at") or case["name"].startswith("buffered-after"):
+                    experiment.events.assert_not_called()
+                if case["name"].startswith("read-crosses"):
+                    experiment.events.assert_called_once_with()
+                    self.assertEqual(clock["monotonic"],
+                                     experiment.record["readiness"]["lastFirstOfferObservation"]["monotonicSeconds"])
+                self.assertEqual("FAIL", experiment.record["result"], "Readiness alone never grants a native PASS")
+                self.assertEqual([], experiment.record["transfers"])
 
     def test_native_case_must_be_exact_nonempty_unique_and_successful(self):
         self.assertEqual("Success", TRANSFER.assess_case(xcresult())["status"])

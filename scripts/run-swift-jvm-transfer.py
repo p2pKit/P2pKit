@@ -32,6 +32,8 @@ SIZE = 204800
 MIB = 1024 * 1024
 OWNERSHIP = ("P2PKIT_AUDIT_JOB_ID", "P2PKIT_AUDIT_OWNERSHIP_CHAIN", "P2PKIT_AUDIT_OWNERSHIP_DOMAINS",
              "P2PKIT_AUDIT_STATE_DIR", "GRADLE_USER_HOME")
+READY_STAGE = "P2PKIT_SWIFT_JVM_PRE_DIAL_V1"
+NANOSECONDS = 1_000_000_000
 
 
 def require(condition, message):
@@ -84,6 +86,57 @@ def inject_fixture(document, fixture, environment):
             "Prepared XCTest environment conflicts with this invocation")
     previous.update(added)
     return target
+
+
+def native_raw_ns():
+    # The producer is an iOS Simulator process of this same Darwin kernel.
+    # Resolve these APIs only in the native path; host controls also import on Windows.
+    require(sys.platform == "darwin" and hasattr(time, "clock_gettime_ns") and
+            hasattr(time, "CLOCK_MONOTONIC_RAW"), "Native shared monotonic RAW clock is unavailable")
+    value = time.clock_gettime_ns(time.CLOCK_MONOTONIC_RAW)
+    require(type(value) is int and value >= 0, "Invalid native monotonic RAW clock")
+    return value
+
+
+def parse_pre_dial_activity(raw, *, source, session, challenge, final=False):
+    """Read only the reserved XCTest activity, never a marker substring in endpoint text."""
+    namespace = b"P2PKIT_SWIFT_JVM_"
+    def title(line):
+        # XCTest's rounded display time is not our clock (and can itself be nan).
+        match = re.fullmatch(rb"[ \t]*t = +(?:[0-9]+(?:\.[0-9]+)?|nan)s +([^\r\n]*)",
+                             line.removesuffix(b"\r"))
+        return match[1] if match else None
+
+    lines = raw.split(b"\n")
+    trailing = lines.pop()
+    if final and trailing:
+        partial = title(trailing)
+        start = trailing.lstrip(b" \t")
+        unfinished_envelope = partial is None and (b"t =".startswith(start) or start.startswith(b"t ="))
+        # A terminal fragment may end before its title; it cannot silently hide
+        # a second stage. Unrelated complete activities/text remain ignorable.
+        require(not unfinished_envelope and
+                (partial is None or not (partial.startswith(namespace) or namespace.startswith(partial))),
+                "Incomplete final pre-Dial activity")
+    record = None
+    for line in lines:
+        activity = title(line)
+        if activity is None or not activity.startswith(namespace):
+            continue
+        match = re.fullmatch(READY_STAGE.encode("ascii") +
+            rb" source=([0-9a-f]{40}) session=([0-9a-f]{32}) challenge=([0-9a-f]{32})"
+            rb" raw=(0|[1-9][0-9]{0,18}):(0|[1-9][0-9]{0,8})", activity)
+        require(match is not None, "Malformed pre-Dial activity")
+        require(tuple(value.decode("ascii") for value in match.groups()[:3]) == (source, session, challenge),
+                "Pre-Dial activity source/session/challenge differs")
+        seconds, nanoseconds = int(match[4]), int(match[5])
+        require(seconds <= 2 ** 63 - 1 and nanoseconds < NANOSECONDS, "Invalid pre-Dial RAW timestamp")
+        require(record is None, "Duplicate pre-Dial activity")
+        record = {"stage": READY_STAGE, "sourceCommit": source, "sessionNonce": session,
+                  "challenge": challenge, "producerRawNanoseconds": seconds * NANOSECONDS + nanoseconds,
+                  "activityRecord": line.decode("ascii")}
+    require(not final or record is not None, "Missing final pre-Dial activity")
+    return record
 
 
 def walk(value):
@@ -220,6 +273,8 @@ class Experiment:
         self.directory.mkdir(mode=0o700, exist_ok=False)
         self.identity = self.directory.stat().st_dev, self.directory.stat().st_ino
         self.nonce = uuid.uuid4().hex
+        self.ready_challenge = uuid.uuid4().hex  # Runner-only; never forwarded to the app or CLI.
+        self.ready_activity, self.spawn_raw_ns = None, None
         self.name = "jvm-" + self.nonce + ".bin"
         self.home = self.directory / "home"
         self.home.mkdir(mode=0o700)
@@ -230,6 +285,7 @@ class Experiment:
         self.record = {"schema": 1, "source": self.context["source"], "nonce": self.nonce, "result": "FAIL",
                        "case": TARGET + "/" + CASE, "bytesPerDirection": SIZE, "commands": [], "resources": [],
                        "transfers": [], "cleanupErrors": [], "unresolvedChildren": [],
+                       "readiness": {"absoluteDeadlineMonotonicSeconds": self.deadline},
                        "limits": "Same-codebase JVM/Swift host-simulator integration, not independent #133, physical, "
                                  "hostile-network, process-death durability or professional crypto validation. "
                                  "Swift pins the CLI; CLI incoming peers retain the authenticated same-AppId development policy."}
@@ -280,6 +336,56 @@ class Experiment:
                 return result
             require(time.monotonic() < end, "Timeout: " + description)
             time.sleep(0.1)
+
+    def observe_pre_dial(self, *, final=False):
+        if final:
+            require(self.xcode is not None and self.xcode.poll() == 0,
+                    "Final readiness inspection requires completed successful XCTest")
+        activity = parse_pre_dial_activity(self.read(self.directory / "xcodebuild.log", 16 * MIB),
+            source=self.context["expectedCommit"], session=self.nonce, challenge=self.ready_challenge, final=final)
+        if final or self.ready_activity is not None:
+            require(self.ready_activity is not None and activity == self.ready_activity,
+                    "Admitted pre-Dial activity changed")
+            if final:
+                self.record["readiness"]["finalUniqueActivityVerified"] = True
+            return activity
+        if activity is None:
+            require(self.xcode.poll() is None, "XCTest ended without pre-Dial readiness")
+            return None
+        raw, monotonic = native_raw_ns(), time.monotonic()
+        self.record["readiness"]["lastReadinessObservation"] = {
+            "activity": activity, "hostRawNanoseconds": raw, "monotonicSeconds": monotonic}
+        require(self.spawn_raw_ns <= activity["producerRawNanoseconds"] <= raw,
+                "Pre-Dial RAW timestamp is outside this XCTest lifetime")
+        require(monotonic < self.deadline, "Integration exceeded 360 seconds before readiness")
+        self.ready_activity = activity
+        self.record["readiness"].update({"activity": activity, "admittedHostRawNanoseconds": raw,
+                                       "admittedMonotonicSeconds": monotonic})
+        return activity
+
+    def first_offer_time(self):
+        raw, monotonic = native_raw_ns(), time.monotonic()
+        observation = {"hostRawNanoseconds": raw, "monotonicSeconds": monotonic}
+        self.record["readiness"]["lastFirstOfferObservation"] = observation
+        require(monotonic < self.deadline, "Integration exceeded 360 seconds before first offer")
+        require(raw >= self.record["readiness"]["admittedHostRawNanoseconds"], "Native RAW clock moved backwards")
+        require(raw < self.ready_activity["producerRawNanoseconds"] + 120 * NANOSECONDS,
+                "Timeout: first offer exceeded producer pre-Dial + 120 seconds")
+        return observation
+
+    def await_first_offer(self):
+        # Readiness receives only the remainder of the original absolute360 cap.
+        self.await_condition("source-bound Swift pre-Dial activity", self.observe_pre_dial, 360)
+        def offered():
+            self.first_offer_time()
+            rows = selected(self.events(), "transfer.offer.received", payloadSizeBytes=SIZE)
+            # events() can take time. Predicate-before-timeout in await_condition
+            # must not accept an offer after either clock expired during that read.
+            observation = self.first_offer_time()
+            if rows:
+                self.record["readiness"]["firstOfferAccepted"] = observation
+            return rows
+        return self.await_condition("one real Swift file offer", offered, 120)
 
     def output(self):
         return self.read(self.directory / "cli.stdout.log").decode("utf-8")
@@ -429,6 +535,7 @@ class Experiment:
         require(re.fullmatch(r"[0-9]{1,5}", fields["manual port"]) and 1 <= int(fields["manual port"]) <= 65535,
                 "Invalid real CLI listener port")
         inject_fixture(document, {"P2PKIT_JVM_NONCE": self.nonce, "P2PKIT_JVM_SOURCE_COMMIT": self.context["expectedCommit"],
+                                  "P2PKIT_JVM_READY_CHALLENGE": self.ready_challenge,
                                   "P2PKIT_JVM_PORT": fields["manual port"], "P2PKIT_JVM_QR": fields["pairing QR"],
                                   "P2PKIT_JVM_SHA256": checksum_b}, os.environ)
         # Keep it beside the original, preserving every __TESTROOT__ relative path.
@@ -441,12 +548,14 @@ class Experiment:
         jobs = os.environ.get("P2PKIT_XCODE_JOBS", "2")
         require(jobs in ("1", "2"), "Xcode job count exceeds the owned resource bound")
         with self.audit.new_file(self.directory / "xcodebuild.log") as output:
+            self.record["readiness"]["spawnMonotonicSeconds"] = time.monotonic()
+            self.spawn_raw_ns = native_raw_ns()
+            self.record["readiness"]["spawnRawNanoseconds"] = self.spawn_raw_ns
             self.xcode = subprocess.Popen(["xcodebuild", "-jobs", jobs, "-xctestrun", str(self.xctestrun),
                 "-destination", "platform=iOS Simulator,id=" + self.udid, "-parallel-testing-enabled", "NO",
                 "-only-testing:" + TARGET + "/" + CASE.removesuffix("()"), "-resultBundlePath", str(bundle),
                 "test-without-building"], stdout=output, stderr=subprocess.STDOUT, env=dict(os.environ))
-        offers = self.await_condition("one real Swift file offer", lambda:
-                                     selected(self.events(), "transfer.offer.received", payloadSizeBytes=SIZE), 120)
+        offers = self.await_first_offer()
         require(len(offers) == 1, "Expected one fresh Swift offer")
         first = offers[0]["transferId"]
         alias = "anon-" + hashlib.sha256(first.encode()).hexdigest()[:16]
@@ -509,6 +618,7 @@ class Experiment:
                 self.executable_hash(test_host) == self.record["prepared"]["testHost"] and
                 self.executable_hash(test_bundle) == self.record["prepared"]["testBundle"],
                 "Prepared runtime artifacts changed during execution")
+        self.observe_pre_dial(final=True)
         self.guard()
         self.record["result"] = "PASS"
 
