@@ -8,8 +8,9 @@ audits, trackers, and implementation evidence remain under `docs/archive/`.
 `main` is the unreleased post-RC3 development line, including the consolidated
 audit work. The `0.7.0-SNAPSHOT` label does not authorize shipping the changes
 reserved below for **0.8.0+** in a 0.7 release without a new explicit owner decision.
-The six real-world, independent-interoperability, and professional-audit areas
-remain pending; no stable-release readiness claim is implied.
+For progress across the six real-world, independent-interoperability, and
+professional-audit areas, see the [canonical campaign statuses](docs/validation/README.md#current-status).
+No stable-release readiness claim is implied.
 
 ### Audit-origin Android provisioning address snapshots — reserved for 0.8.0+
 
@@ -19,8 +20,9 @@ remain pending; no stable-release readiness claim is implied.
   consumers can see additional addresses and IPv6-only snapshots need not be
   empty. Sender-local IPv6 zones and deprecated site-local IPv6 are excluded.
   A snapshot is not proof of peer reachability: LAN-only route admission and
-  fingerprint-pinned authentication are unchanged. Physical IPv6/OEM
-  qualification remains pending.
+  fingerprint-pinned authentication are unchanged. This source correction is
+  not physical IPv6/OEM qualification; see the
+  [Android campaign status](docs/validation/README.md#android-physical).
 - This integrated but unreleased behavior expansion is **not approved for a 0.7 release** and
   is not part of published RC3. Honor the 0.8.0+ target or obtain an explicit
   owner release decision; no version/tag/publication authorization is implied.

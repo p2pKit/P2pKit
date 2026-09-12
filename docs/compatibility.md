@@ -42,7 +42,9 @@ kotlin {
 This changes only the deployment floor; it does not make simulator builds
 physical-device evidence. Exact toolchain versions are locked in the Gradle
 wrapper, version catalog, and CI workflows. Physical validation at the Android
-and Apple minimums remains pending until the evidence handbook is completed.
+and Apple minimums requires the handbook's retained device evidence; see the
+[Android](validation/README.md#android-physical) and
+[Apple](validation/README.md#apple-physical) campaign statuses.
 
 ## Public sealed hierarchies
 

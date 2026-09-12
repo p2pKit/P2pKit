@@ -1,8 +1,9 @@
 # Professional cryptographic-audit preparation
 
-[Current campaign status](README.md#professional-crypto). P2pKit is **not
-professionally cryptographically audited**. This document prepares a review
-package; it is not an audit report, certification, or security endorsement.
+[Current campaign status](README.md#professional-crypto). This document prepares
+a review package; it is **not an audit report**, certification, or security
+endorsement. Professional-review evidence requires the independent auditor's
+retained findings and final report.
 
 ## Purpose and auditor qualification
 

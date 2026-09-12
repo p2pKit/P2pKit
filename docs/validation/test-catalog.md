@@ -10,12 +10,10 @@ do not replace it with a branch name. A passing build or a code review is not
 external evidence. Do not change a blocked tracker row to `Verified` until
 the required evidence below has been collected and reviewed.
 
-The repository cleanup does not close any external validation. The following
-six areas remain pending until this plan is executed and its evidence reviewed:
-Android physical devices; Apple devices/AWDL/path rotation/background/restart;
-two-machine hostile networks; CLI fault injection and headful Desktop
-observation; independent secure-v2 interoperability; and a professional
-cryptographic audit. Every run must record the actual SHA used by the tester.
+Repository cleanup alone does not close external validation. Current progress
+for the six areas is recorded only in the [canonical status table](README.md#current-status);
+this catalog defines the required execution and evidence, not a second status
+record. Every run must record the actual SHA used by the tester.
 
 ## 1. Shared execution contract
 
@@ -1187,7 +1185,8 @@ iOS simulator UI, Android host/unit tests, publication dry-runs/local
 consumers, and the deterministic protocol/vector suites already recorded in
 the tracker.
 
-The following remain externally blocked until the evidence above exists:
+The applicable matrices require the following evidence. Consult the
+[canonical status table](README.md#current-status) for campaign progress:
 
 * Android physical provisioning, OEM callback, process-binding, hotspot,
   multicast, selected-network, and instrumentation evidence.

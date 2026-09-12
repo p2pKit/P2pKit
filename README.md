@@ -301,12 +301,12 @@ its execution must be recorded separately, and it is not a general device suite.
 Android host JVM tests (including Robolectric shadows) are not ART or physical-device evidence.
 
 The [canonical six-area status table](docs/validation/README.md#current-status)
-records external campaign progress and links each execution handbook. In
-particular, the CLI/Desktop row's partial automated coverage is not a completed
-fault-injection or real-display campaign. See
+records external campaign progress and links each execution handbook. Local
+builds and automated tests do not establish completed CLI fault-injection or
+real-display campaigns. See
 [automated scope and history](docs/testing/validation-status.md) for the distinct
-host/target evidence. Do not treat this release candidate as fully production
-validated or independently audited.
+host/target evidence. A release-candidate label and automated checks do not
+establish full production validation or an independent audit.
 
 ## Contributing and support
 

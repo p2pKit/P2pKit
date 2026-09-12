@@ -108,5 +108,6 @@ write/validation rules: symmetric round trips may still pass, but the fixed-byte
 These fixtures improve same-implementation **compatibility regression resistance**. They are not an independently
 authored encoder/state machine, a two-process cross-platform connection, LAN discovery, device/OEM behavior,
 file durability or cryptographic assurance. Existing Cacophony primitive vectors remain valuable but narrower.
-[Independent secure-v2 interoperability](../validation/secure-v2-interoperability.md) remains **NOT STARTED**,
-and the [external validation catalog](../validation/test-catalog.md) remains authoritative for device/network gates.
+Track [independent secure-v2 interoperability](../validation/secure-v2-interoperability.md) through the
+[canonical campaign status](../validation/README.md#independent-interop), not these fixtures.
+The [external validation catalog](../validation/test-catalog.md) remains authoritative for device/network gates.

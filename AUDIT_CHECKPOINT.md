@@ -10,7 +10,8 @@ Consolidation changes no product behavior or audit disposition.
 **206/234 repair approvals (88.0%); 207/234 resolved (88.5%); 27 unresolved (11.5%).**
 Three repair/native rows **#409/#410/#413**, 21 external rows and owners #120/#274/#284.
 #287 adds resolution only; approval complement 28 (12.0%); 101 new findings.
-These are issue-row percentages, not effort or readiness. **Audit NOT_READY; #133 NOT_STARTED.**
+These are issue-row percentages, not effort or readiness. **Audit NOT_READY.**
+[Independent #133 campaign status](docs/validation/README.md#independent-interop).
 **Required gates are not all complete.** The remaining 21 external campaigns and three owner
 decisions were intentionally not started in this continuation, per the user's ordering.
 

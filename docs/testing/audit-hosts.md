@@ -14,8 +14,9 @@ The [audit host workflow](../../.github/workflows/audit-host-validation.yml) is 
 additive, read-only execution facility for one frozen audit-branch revision. It
 neither replaces normal CI/release checks nor records a successful execution by
 being present. Inspect the actual run, retained evidence and independent review
-before claiming any host result. The overall audit and physical/independent
-acceptance remain pending.
+before claiming any host result. For overall audit status, see the
+[current audit checkpoint](../../AUDIT_CHECKPOINT.md); for physical/independent
+campaign progress, use the [canonical six-area table](../validation/README.md#current-status).
 
 The maintained [host driver](../../scripts/run-audit-host.py) runs **components**.
 Its `releaseGateMonolith` value is `NOT_EXECUTED_COMPONENT_REPLAY`: the unchanged

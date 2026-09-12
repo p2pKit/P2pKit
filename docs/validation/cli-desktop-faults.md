@@ -4,7 +4,7 @@
 diagnostics, transfer and build coverage is separate from the controlled
 process/network failures and real-display observation in `PS-T05` and `PS-T06`.
 Those procedures require their own complete evidence-bearing campaign; do not
-infer it from the table's partial automated-coverage status.
+infer their execution from automated coverage.
 
 ## Purpose and separation
 

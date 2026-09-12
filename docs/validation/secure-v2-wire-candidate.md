@@ -1,5 +1,8 @@
 # Authenticated-v2 wire contract — candidate and current continuation
 
+> Current #133 progress: [canonical campaign status](README.md#independent-interop).
+> The preparation/status prose below binds the dated §1 candidates, not current campaign state.
+
 **Status: candidate-bound preparation for #133, not an independent
 interoperability result or professional cryptographic assurance. External #133
 remains NOT_STARTED.** This describes the committed candidates in §1, including

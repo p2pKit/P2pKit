@@ -71,8 +71,8 @@ test procedure that has not yet been performed. See
 ## External campaign status
 
 The [canonical six-area table](../validation/README.md#current-status) is the
-sole current campaign-status record. Its CLI/Desktop partial status refers to
-automated coverage, not completed fault injection or headful observation.
+sole current campaign-status record. Local builds and automated checks alone
+do not establish CLI fault-injection or headful execution.
 Android instrumentation authoring/ART execution and the target gaps above are
 separate prerequisites, not evidence of physical-device campaign completion.
 

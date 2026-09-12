@@ -3,7 +3,8 @@
 
 **206/234 repair approvals (88.0%); 207 resolved (88.5%); 27 unresolved (11.5%).**
 101 new findings; #287 contributes resolution only. Approval complement 28 (12.0%).
-**NOT_READY; #133 NOT_STARTED.** Published source `7d21aef` / tree `36bed6d`.
+**NOT_READY.** [Independent #133 campaign status](../../validation/README.md#independent-interop).
+Published source `7d21aef` / tree `36bed6d`.
 R21 observes 234 open issues/7 PRs; its frozen233/204administration is dated, not current counts.
 The [root handoff](../../../AUDIT_CHECKPOINT.md) and [exact packet](checkpoint.json)
 `nativeFollowups.postR23Continuation` distinguish both scoped repairs, failed native/ordinary
@@ -33,7 +34,10 @@ graphs, partial ABI, accepted excepted OSV and remaining gates. No issue is clos
 
 ## External validation (21)
 
-| Campaign group | Issue rows | Remaining evidence |
+The [canonical six-area table](../../validation/README.md#current-status) owns
+campaign progress; these rows name required evidence, not additional status labels.
+
+| Campaign group | Issue rows | Required evidence |
 | --- | --- | --- |
 | Android OEM/network/background/soak | [#21](https://github.com/p2pKit/P2pKit/issues/21), [#26](https://github.com/p2pKit/P2pKit/issues/26), [#28](https://github.com/p2pKit/P2pKit/issues/28), [#29](https://github.com/p2pKit/P2pKit/issues/29), [#30](https://github.com/p2pKit/P2pKit/issues/30), [#33](https://github.com/p2pKit/P2pKit/issues/33), [#35](https://github.com/p2pKit/P2pKit/issues/35), [#36](https://github.com/p2pKit/P2pKit/issues/36), [#39](https://github.com/p2pKit/P2pKit/issues/39), [#43](https://github.com/p2pKit/P2pKit/issues/43) | Required physical/real-network repeat matrix and both-peer evidence; hosted compilation is not a substitute. |
 | Physical Apple restart/AWDL/path/write lifecycle | [#23](https://github.com/p2pKit/P2pKit/issues/23), [#27](https://github.com/p2pKit/P2pKit/issues/27), [#32](https://github.com/p2pKit/P2pKit/issues/32), [#34](https://github.com/p2pKit/P2pKit/issues/34), [#37](https://github.com/p2pKit/P2pKit/issues/37), [#38](https://github.com/p2pKit/P2pKit/issues/38), [#41](https://github.com/p2pKit/P2pKit/issues/41) | Required physical/real-network repeat matrix and both-peer evidence; hosted compilation is not a substitute. |

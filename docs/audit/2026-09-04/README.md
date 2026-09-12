@@ -5,7 +5,8 @@ The source of truth is now `main`; use the [Mac handoff](../../testing/mac-hando
 The audit date in this directory name identifies the continuing campaign, not a required branch.
 
 **206/234 approved (88.0%); 207 resolved (88.5%); 27 unresolved (11.5%).**
-101 new findings; #287 resolves without repair. **NOT_READY; #133 NOT_STARTED.**
+101 new findings; #287 resolves without repair. **NOT_READY.**
+[Independent #133 campaign status](../../validation/README.md#independent-interop).
 Published source `7d21aef` / tree `36bed6d`; administration does not rerun product gates.
 
 [#417](repairs/417.md) and [#420](repairs/420.md) have scoped independent approvals.

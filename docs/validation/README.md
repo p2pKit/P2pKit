@@ -19,6 +19,11 @@ Overviews and individual handbooks link here instead of maintaining separate
 status labels. Dated release/audit records describe their own tested source and
 remain historical evidence; they are not another current-status table.
 
+Protected [CLAUDE.md](../../CLAUDE.md) still contains a blanket restatement.
+The repository-wide single-edit criterion in [#216](https://github.com/p2pKit/P2pKit/issues/216)
+therefore requires owner permission to update that file or an explicit scope
+exception; this documentation cleanup does not claim it is satisfied.
+
 | Area | Status | Handbook | Principal tracker coverage |
 | --- | --- | --- | --- |
 | <a id="android-physical"></a>Android physical devices | **NOT STARTED** | [Android physical-device validation](android-physical-device.md) | `PROV-A12`, `PT-T20`, `LAN-T01`, `PS-T01`, `PS-T02`, `PS-T04`, Android portions of `ENV-01`, `PS-T08`, `PS-T09` |
@@ -28,10 +33,10 @@ remain historical evidence; they are not another current-status table.
 | <a id="independent-interop"></a>Independent secure-v2 interoperability | **NOT STARTED** | [Secure-v2 interoperability](secure-v2-interoperability.md) | `SECURE-V2-INTEROP-01` |
 | <a id="professional-crypto"></a>Professional cryptographic review | **EXTERNAL AUDIT REQUIRED** | [Cryptographic-audit preparation](cryptographic-audit-preparation.md) | `CRYPTO-AUDIT-01` |
 
-`PARTIALLY VALIDATED` for CLI/Desktop means local builds and automated tests
-exist. It does not mean the fault-injection and headful observation procedures
-have been executed. P2pKit has **not** received an independent professional
-cryptographic audit.
+Where the CLI/Desktop row is `PARTIALLY VALIDATED`, that label covers local
+builds and automated tests only, not execution of the fault-injection and
+headful observation procedures. Professional cryptographic review requires
+independent audit evidence; host/simulator results do not establish it.
 
 Repository-side lifecycle/resource prerequisites for Android and Apple manual
 provisioning were strengthened and host/simulator-tested in implementation
@@ -45,15 +50,16 @@ strengthened and simulator-tested in implementation commit
 `7af3a4bb85d6a9b6f688bfe7245fc5f28028c889`; the exact automated boundary is
 recorded in the [GitHub audit](../maintenance/github-audit-2026-08.md). Real
 AWDL, Personal Hotspot, path rotation, lifecycle, and timeout measurements
-remain `NOT STARTED` and are not inferred from host or simulator evidence.
+require their own [Apple campaign evidence](#apple-physical); they cannot be
+inferred from host or simulator tests.
 
 Repository-side secure-handshake result ownership, duplicate HELLO/legacy
 FILE_OFFER field rejection, cancellation-preserving rejection diagnostics, and
 monotonic reassembly expiry were strengthened in implementation commit
 `c867c90c82a1a7b675fb2d19a055911ee6f8e4cd`; exact automated evidence is
 recorded in the [GitHub audit](../maintenance/github-audit-2026-08.md). This
-does not change the `NOT STARTED` independent-interoperability status or the
-`EXTERNAL AUDIT REQUIRED` professional-review status.
+does not by itself qualify [independent interoperability](#independent-interop)
+or [professional review](#professional-crypto).
 
 ## Shared execution contract
 

@@ -2,7 +2,8 @@
 # Current follow-ups — genuine admission and remaining qualification
 
 **206/234 approved; 207 resolved; 27 unresolved = 3 repairs + 21 external + 3 owner rows.**
-Whole audit **NOT_READY**, independent #133 **NOT_STARTED**. #417/#420 are scoped approvals,
+Whole audit **NOT_READY**; see the [independent #133 campaign status](../../validation/README.md#independent-interop).
+#417/#420 are scoped approvals,
 not new native/whole-release passes; see the [current root handoff](../../../AUDIT_CHECKPOINT.md).
 
 1. Obtain a supported ordinary-user Mac with functioning multicast and applicable simulator
