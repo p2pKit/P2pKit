@@ -1,7 +1,7 @@
 name: Audit 410 macOS JmDNS startup diagnostic
 
 # Diagnostic-only workflow; success grants no full-suite or release approval.
-# Run revision: 2. Only a reviewed change to this workflow requests one diagnostic.
+# Run revision: 3. Native Intel admission; reuse compiled Java inputs for the eight existing modes.
 # The lead holds the separate global local/remote lease through terminal/upload reconciliation.
 on:
   push:
@@ -18,13 +18,13 @@ concurrency:
 env:
   PYTHONDONTWRITEBYTECODE: "1"
   PYTHONUNBUFFERED: "1"
-  DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+  DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
 
 jobs:
   jmdns_startup:
-    name: Native macOS arm64 Java-only startup diagnostic (no release or full-suite credit)
+    name: Native macOS Intel Java-only lifecycle diagnostic (no release or Gradle-suite credit)
     if: ${{ github.repository == 'p2pKit/P2pKit' && github.event_name == 'push' }}
-    runs-on: macos-26
+    runs-on: macos-15-intel
     # Native-control ceiling plus bounded Java leaves, same-home stops and evidence/disposal headroom.
     timeout-minutes: 100
     defaults:
@@ -112,7 +112,7 @@ jobs:
           spec.loader.exec_module(runner)
           state_path = os.environ["P2PKIT_AUDIT_STATE_DIR"]
           runner.initialize(argparse.Namespace(root=str(root), state=state_path,
-              expected_commit=os.environ["GITHUB_SHA"], host="macos-arm64"))
+              expected_commit=os.environ["GITHUB_SHA"], host="macos-x64"))
           state, context = runner.context_at(state_path)
           bootstrap = runner.absolute_path(os.environ["P2PKIT_AUDIT_BOOTSTRAP_DIR"])
           runner.write_new_json(bootstrap / "context.json", context)
@@ -150,7 +150,7 @@ jobs:
           runner.require('version "17.' in versions["java17"]["stderr"] + versions["java17"]["stdout"] and
               "javac 17." in versions["javac17"]["stderr"] + versions["javac17"]["stdout"] and
               'version "21.' in versions["java21"]["stderr"] + versions["java21"]["stdout"], "Wrong Java prerequisites")
-          runner.require(versions["xcode"]["stdout"].splitlines()[0] == "Xcode 26.5", "Wrong selected Xcode")
+          runner.require(versions["xcode"]["stdout"].splitlines()[0] == "Xcode 26.3", "Wrong selected Xcode")
 
       - name: Exercise the unchanged real native executor controls before diagnostic execution
         id: controls
@@ -160,10 +160,10 @@ jobs:
           python3 scripts/run-audit-command.py --cwd "$GITHUB_WORKSPACE" \
             --wrapper "$GITHUB_WORKSPACE/gradlew" --kind command --purpose startup-native-controls \
             --timeout 1800 --receipt "$P2PKIT_AUDIT_BOOTSTRAP_DIR/native-controls-receipt.json" -- \
-            python3 scripts/tests/run-audit-command-test.py --expected-host macos-arm64 \
+            python3 scripts/tests/run-audit-command-test.py --expected-host macos-x64 \
             --evidence-dir "$P2PKIT_AUDIT_STATE_DIR/evidence/native-controls"
 
-      - name: Compile only Java inputs, run control once, and retain and dispose owned outputs
+      - name: Observe Intel readiness, then compile Java once and run admitted lifecycle modes
         id: diagnostic
         timeout-minutes: 20
         if: ${{ always() && steps.init.outcome == 'success' }}
@@ -202,13 +202,16 @@ jobs:
           dependency_hash = "5d6298b93a1905c32cda6478808ac14c2d4a47e91535e53c41f7feeb85d946f4"
           dependency_url = "https://repo.maven.apache.org/maven2/org/slf4j/slf4j-api/2.0.7/slf4j-api-2.0.7.jar"
           dependency = work / "slf4j-api-2.0.7.jar"
-          controls_argv = ["python3", "scripts/tests/run-audit-command-test.py", "--expected-host", "macos-arm64",
+          controls_argv = ["python3", "scripts/tests/run-audit-command-test.py", "--expected-host", "macos-x64",
                            "--evidence-dir", str(state / "evidence/native-controls")]
           calls = [{"purpose": "startup-native-controls", "argv": controls_argv, "receipt": "native-controls-receipt.json",
                     "rawExitCode": 0 if os.environ["PREREQUISITES_PASSED"] == "true" else None}]
-          result = {"scope": "JAVA_STARTUP_DIAGNOSTIC_ONLY", "result": "FAIL", "fullLifecycleSuite": "NOT_RUN",
+          modes = ["control", "failed_recovery", "shared_close", "close_wins", "recovery_wins",
+                   "responder_close", "callback_executor", "cleanup_retry"]
+          result = {"scope": "DIRECT_JAVA_LIFECYCLE_DIAGNOSTIC_ONLY", "result": "FAIL", "fullLifecycleSuite": "NOT_RUN",
                     "lockGeneration": "NOT_RUN", "releaseCredit": False, "fixture": "NOT_RUN",
                     "fixtureExitCode": None, "dependencyVerified": False, "commands": calls,
+                    "modes": {mode: "NOT_RUN" for mode in modes}, "intelReadiness": {},
                     "cleanup": "NOT_PROVEN", "removed": [], "errors": []}
           source_inputs, runtime_inputs, build_identity = None, None, None
           def file_record(path):
@@ -232,7 +235,7 @@ jobs:
               record = runner.read_json(path)
               checker.validate(record, code, purpose, root, wrapper, argv)
               runner.require(re.fullmatch(r"[0-9a-f]{32}", record["id"]) and record["jobId"] == context["id"] and
-                  record["host"] == "macos-arm64" and record["kind"] == "command" and
+                  record["host"] == "macos-x64" and record["kind"] == "command" and
                   record["gradleHome"] == context["gradleHome"] and record["sourceBefore"] == context["source"] and
                   record["ancestorInvocationIds"] == [] and record["executedArgv"] == argv and
                   record.get("ownership", {}).get("discoveryErrors") == [] and
@@ -258,6 +261,16 @@ jobs:
               owned_source()
               runner.require(os.environ["PREREQUISITES_PASSED"] == "true", "Native controls failed; diagnostic NOT_RUN")
               bound(bootstrap / "native-controls-receipt.json", 0, "startup-native-controls", controls_argv)
+              # Passive observations only: no license acceptance, component installation, service reset,
+              # simulator inventory or boot. A normal nonzero readiness result must not suppress Java;
+              # unresolved command ownership/finalization still fails closed through invoke().
+              for name, argv in (
+                  ("first-launch-status", ["xcodebuild", "-checkFirstLaunchStatus"]),
+                  ("simctl-path", ["xcrun", "--find", "simctl"]),
+              ):
+                  code, observation = invoke("intel-" + name, argv, 45)
+                  result["intelReadiness"][name] = {"exitCode": code, "invocationId": observation["id"],
+                      "scope": "PASSIVE_OBSERVATION_NOT_RUNTIME_OR_PRODUCT_ACCEPTANCE"}
               runner.require("P2PKIT_JMDNS_FIXTURE_IPV4" not in os.environ, "Diagnostic must not override interface selection")
               runner.require(runner.existing_lstat(build) is None, "Diagnostic needs a new owned root build directory")
               sources = sorted(root / os.fsdecode(name) for name in runner.git(root, "ls-files", "-z", "--",
@@ -283,7 +296,7 @@ jobs:
               runner.require(str(java.parent) in context["javaHomes"], "Java compiler/launcher is outside admitted toolchains")
               runner.write_new_json(bootstrap / "source-inputs.json", {"source": context["source"], "files": source_inputs,
                   "javaBin": str(java), "dependency": {"coordinate": "org.slf4j:slf4j-api:2.0.7",
-                      "url": dependency_url, "sha256": dependency_hash}, "fixtureMode": "control", "childTimeoutSeconds": 45})
+                      "url": dependency_url, "sha256": dependency_hash}, "fixtureModes": modes, "childTimeoutSeconds": 45})
               build.mkdir(mode=0o700)
               build_identity = {"device": build.stat().st_dev, "inode": build.stat().st_ino}
               runner.write_new_json(bootstrap / "diagnostic-work.json", {"jobId": context["id"],
@@ -310,23 +323,32 @@ jobs:
               runtime_inputs = inventory(work)
               runner.write_new_json(bootstrap / "compiled-inputs.json", {"files": runtime_inputs})
               # Exactly one original control JVM, with the unchanged launcher's resource flags and 45s watchdog.
-              code, control = invoke("startup-control", [str(java / "java"), "-Xms16m", "-Xmx128m",
+              java_argv = [str(java / "java"), "-Xms16m", "-Xmx128m",
                   "-XX:MaxMetaspaceSize=128m", "-XX:ActiveProcessorCount=2", "-XX:+UseSerialGC",
                   "-Dorg.slf4j.simpleLogger.defaultLogLevel=off", "-cp",
                   os.pathsep.join([str(fixture_classes), str(vendor_classes), str(vendor / "resources"), str(dependency)]),
-                  "dev.p2pkit.transport.lan.internal.jmdns.impl.JmdnsCloseLifecycleFixture", "control"], 45)
-              result["fixture"] = "FAIL"
-              after = inventory(work)
-              runner.write_new_json(bootstrap / "runtime-inputs-after.json", {"files": after})
-              runner.require(after == runtime_inputs, "Executed dependency/classes changed")
-              runner.require(code == 0, "Control fixture failed; original result retained")
-              evidence = state / "evidence" / control["id"]
-              output = [evidence / "product.stdout.log", evidence / "product.stderr.log"]
-              runner.require(sum(file_record(path)["bytes"] for path in output) <= 65536, "Excessive fixture output")
-              transcript = "\n".join(path.read_text(encoding="utf-8", errors="replace") for path in output)
-              runner.require(transcript.splitlines().count("PASS mode=control") == 1 and "FAIL mode=" not in transcript and
-                  "phase=fixture_rescue_begin" not in transcript, "Natural control success marker/rescue check failed")
-              result["fixture"] = "PASS"
+                  "dev.p2pkit.transport.lan.internal.jmdns.impl.JmdnsCloseLifecycleFixture"]
+              for mode in modes:
+                  # No retry: the first failed mode leaves every later mode NOT_RUN.
+                  result["modes"][mode] = "ATTEMPTED_PENDING_RECEIPT_ADMISSION"
+                  code, observation = invoke("startup-" + mode, [*java_argv, mode], 45)
+                  result["modes"][mode] = "FAIL"
+                  if mode == "control":
+                      result["fixture"] = "FAIL"
+                  after = inventory(work)
+                  runner.write_new_json(bootstrap / ("runtime-inputs-after-" + mode + ".json"), {"files": after})
+                  runner.require(after == runtime_inputs, "Executed dependency/classes changed")
+                  runner.require(code == 0, mode + " fixture failed; original result retained")
+                  evidence = state / "evidence" / observation["id"]
+                  output = [evidence / "product.stdout.log", evidence / "product.stderr.log"]
+                  runner.require(sum(file_record(path)["bytes"] for path in output) <= 65536, "Excessive fixture output")
+                  transcript = "\n".join(path.read_text(encoding="utf-8", errors="replace") for path in output)
+                  runner.require(transcript.splitlines().count("PASS mode=" + mode) == 1 and
+                      "FAIL mode=" not in transcript and "phase=fixture_rescue_begin" not in transcript,
+                      "Natural " + mode + " success marker/rescue check failed")
+                  result["modes"][mode] = "PASS"
+                  if mode == "control":
+                      result["fixture"] = "PASS"
           except Exception as error:
               result["errors"].append(type(error).__name__ + ": " + str(error))
           finally:
@@ -404,10 +426,10 @@ jobs:
                       lease.close()
               except Exception as error:
                   result["errors"].append("Retention/disposal: " + type(error).__name__ + ": " + str(error))
-              if not result["errors"] and result["fixture"] == "PASS":
-                  result["result"] = "DIAGNOSTIC_CONTROL_PASS"
+              if not result["errors"] and all(result["modes"][mode] == "PASS" for mode in modes):
+                  result["result"] = "DIRECT_JAVA_LIFECYCLE_PASS"
               runner.write_new_json(bootstrap / "startup-final.json", result)
-          if result["result"] != "DIAGNOSTIC_CONTROL_PASS":
+          if result["result"] != "DIRECT_JAVA_LIFECYCLE_PASS":
               raise SystemExit(1)
 
       - name: Seal only regular bounded evidence on success or failure
