@@ -1,0 +1,22 @@
+--- a/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/tasks/DNSTask.java
++++ b/src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/tasks/DNSTask.java
+@@ -21,0 +22 @@
++import java.net.InetSocketAddress;
+@@ -132,0 +134 @@
++        InetSocketAddress destination = newOut.getDestination();
+@@ -134,0 +137,3 @@
++        send(newOut);
++
++        newOut = new DNSOutgoing(flags, multicast, maxUDPPayload);
+@@ -136,4 +141,7 @@
+-        jmDNS.send(newOut);
+-
+-        newOut = new DNSOutgoing(flags, multicast, maxUDPPayload);
+-        return newOut;
++        newOut.setDestination(destination);
++        return newOut;
++    }
++
++    /** Send a completed packet before continuing record assembly. */
++    protected void send(DNSOutgoing out) throws IOException {
++        jmDNS.send(out);

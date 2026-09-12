@@ -2,7 +2,7 @@ P2pKit embedded JmDNS modifications
 
 Upstream: org.jmdns:jmdns:3.6.3, tag v3.6.3,
 commit 93b326381940f3fcd250d770a14a36de4c2dfcda.
-Private component revision: 3.6.3-p2pkit.410.4.
+Private component revision: 3.6.3-p2pkit.410.5.
 
 Mechanical integration relocates the complete javax.jmdns production package
 into dev.p2pkit.transport.lan.internal.jmdns. Java source uses LF line endings,
@@ -31,6 +31,12 @@ in-addr.arpa or ip6.arpa. The lifecycle and OPT diagnostic patches are unchanged
 patches/414-service-port.patch includes the service port in resolved-event
 deduplication so a port-only update reaches the listener. Unchanged records
 remain deduplicated; the lifecycle, OPT and reverse-domain patches are unchanged.
+
+patches/417-response-continuation.patch preserves the requester destination and
+transaction ID on every overflow continuation. Existing flags, payload capacity,
+TC handling, record ordering and send failures remain unchanged. A protected
+send forwarding method isolates the side effect for socket-free serialization
+regressions; scheduled production tasks retain their original sender.
 
 PROVENANCE.json schema 2 preserves lifecyclePatch and lists subsequent patches
 in followupPatches application order. All are zero-context unified patches:
