@@ -11,6 +11,10 @@ on:
       - "gradle/wrapper/**"
       - "gradle/libs.versions.toml"
       - "gradle/verification-metadata.xml"
+      - "gradle/windows-directory-control.init.gradle"
+      - "scripts/run-windows-directory-control.py"
+      - "scripts/tests/run-windows-directory-control-test.py"
+      - "scripts/tests/check-windows-directory-control-policy-test.rb"
       - "gradle.lockfile"
       - "buildscript-gradle.lockfile"
       - "samples/p2p-sample-desktop/**"
@@ -20,17 +24,35 @@ on:
       - "library/p2p-transport-lan/**"
       - "library/p2p-network-provisioning-desktop/**"
   workflow_dispatch:
+    inputs:
+      operation:
+        description: Ordinary Desktop matrix, or the reviewed Windows directory-fsync witness only
+        type: choice
+        options: [desktop, windows-directory-fsync-control]
+        default: desktop
+        required: true
+      expected_sha:
+        description: Exact reviewed source commit (required only for the Windows control)
+        type: string
+        required: false
+        default: ""
+      expected_tree:
+        description: Exact reviewed source tree (required only for the Windows control)
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: read
 
 concurrency:
-  group: desktop-cross-host-${{ github.ref }}
-  cancel-in-progress: true
+  group: desktop-cross-host-${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'windows-directory-fsync-control' && format('control-{0}-{1}', github.run_id, github.run_attempt) || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' || inputs.operation != 'windows-directory-fsync-control' }}
 
 jobs:
   verify:
     name: ${{ matrix.os }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.operation != 'windows-directory-fsync-control' }}
     concurrency:
       group: p2pkit-nonphysical-heavy
       queue: max
@@ -43,6 +65,16 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
+      - name: Reject unknown Desktop dispatch operations
+        shell: bash
+        env:
+          P2PKIT_DESKTOP_OPERATION: ${{ inputs.operation }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$P2PKIT_DESKTOP_OPERATION" != desktop ]]; then
+            echo 'FATAL: unknown Desktop dispatch operation' >&2
+            exit 1
+          fi
+
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -70,3 +102,105 @@ jobs:
             :p2p-sample-desktop-ui:hotRunArgfile \
             :p2p-sample-desktop-ui:createDistributable \
             --console=plain
+
+  windows-directory-fsync-control:
+    name: windows-directory-fsync-control
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'windows-directory-fsync-control' }}
+    concurrency:
+      group: p2pkit-nonphysical-heavy
+      queue: max
+      cancel-in-progress: false
+    runs-on: windows-latest
+    timeout-minutes: 110
+    env:
+      P2PKIT_OPERATION: ${{ inputs.operation }}
+      P2PKIT_EXPECTED_SHA: ${{ inputs.expected_sha }}
+      P2PKIT_EXPECTED_TREE: ${{ inputs.expected_tree }}
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Check out exact reviewed control source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: "false"
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Admit genuine dispatch and exact clean source
+        shell: pwsh
+        run: |
+          python -B scripts/run-windows-directory-control.py admit
+          exit $LASTEXITCODE
+
+      - name: Configure native daemon Java 21
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          architecture: x64
+
+      - name: Retain daemon JDK path
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:JAVA_HOME) -or $env:JAVA_HOME.Contains("`n") -or $env:JAVA_HOME.Contains("`r")) {
+            throw 'Missing or invalid daemon JDK path'
+          }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Encoding utf8 -Value "P2PKIT_AUDIT_JDK21=$env:JAVA_HOME"
+
+      - name: Configure native wrapper and test Java 17
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          architecture: x64
+
+      # No setup-gradle/cache action, publisher environment or secret is used.
+      - name: Run current then method-preimage Windows witness
+        id: control
+        timeout-minutes: 92
+        shell: pwsh
+        run: |
+          python -B scripts/run-windows-directory-control.py run
+          exit $LASTEXITCODE
+
+      - name: Retain nonprivate admission evidence
+        if: ${{ always() && steps.control.outputs.artifacts_ready == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-directory-fsync-admission-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.control.outputs.public_root }}/admission
+          retention-days: 14
+          if-no-files-found: error
+          include-hidden-files: false
+          overwrite: false
+
+      - name: Retain nonprivate current-source evidence
+        if: ${{ always() && steps.control.outputs.artifacts_ready == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-directory-fsync-current-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.control.outputs.public_root }}/current
+          retention-days: 14
+          if-no-files-found: error
+          include-hidden-files: false
+          overwrite: false
+
+      - name: Retain nonprivate preimage evidence
+        if: ${{ always() && steps.control.outputs.artifacts_ready == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-directory-fsync-preimage-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.control.outputs.public_root }}/preimage
+          retention-days: 14
+          if-no-files-found: error
+          include-hidden-files: false
+          overwrite: false
+
+      - name: Fail if safe retained evidence is unavailable
+        if: ${{ always() && steps.control.outputs.artifacts_ready != 'true' }}
+        shell: pwsh
+        run: throw 'Windows control did not seal safe original evidence; no acceptance claim'

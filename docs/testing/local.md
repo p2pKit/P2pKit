@@ -201,14 +201,17 @@ report paths, and fail-closed dependency guard, with negative policy controls.
 
 ### Participating hosted job queue
 
-CI's `jvm-library-checks` and `complete-gate`, Desktop's `verify`, Intel's `ios-x64`,
-and dependency submission's `submit` share the **job-level** concurrency group
+CI's `jvm-library-checks` and `complete-gate`, Desktop's `verify` and opt-in
+`windows-directory-fsync-control`, Intel's `ios-x64`, and dependency submission's
+`submit` share the **job-level** concurrency group
 `p2pkit-nonphysical-heavy`, with `queue: max` and `cancel-in-progress: false`.
 Both matrices keep their existing hosts/tasks and `fail-fast: false`, with
 `max-parallel: 1`. The lease covers each whole job, including existing cleanup
 and evidence steps; no workflow holds the same group while waiting for its jobs.
 Existing workflow-level supersession remains independent: ordinary CI/Desktop
 runs can still be superseded, while CI schedules retain their separate group.
+The Windows control uses its own run/attempt workflow group, so an ordinary
+Desktop update does not supersede its two-case retention/cleanup obligation.
 
 [GitHub's queue policy](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)
 admits at most 100 pending jobs/runs; overflow is cancelled. This is not an
@@ -222,6 +225,21 @@ actionlint 1.7.12 rejects the new `queue` property: retain that incompatibility
 alongside other syntax/action-pin checks, rather than stripping the property or
 suppressing lint errors. Static checks do not establish actual GitHub parser or
 hosted queue acceptance; that remains a separate execution/review gate.
+
+### Scoped Windows directory-fsync witness
+
+The optional [Windows directory-control handbook](windows-directory-control.md)
+describes #141's exact current-positive / historical-method-preimage witness.
+It uses the existing unchanged durable-destination test on genuine hosted Windows,
+not an injected OS name, a full historical-revision build, or a whole-library pass.
+Normal Desktop PR/manual runs retain their three-host sample matrix by default.
+
+`ruby scripts/tests/check-windows-directory-control-policy-test.rb` and
+`python3 -B scripts/tests/run-windows-directory-control-test.py` check the dispatch,
+source, expected-red, receipt and retention policies without Gradle/native execution.
+The Python fixtures need full Git history for three read-only preimage queries;
+all wrapper/native/process operations are mocked. Native ownership controls and
+the selected product witness run only in the separately reviewed explicit dispatch.
 
 ## Platform execution evidence
 

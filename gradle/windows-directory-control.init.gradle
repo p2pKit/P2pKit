@@ -1,0 +1,199 @@
+// #141's one-method Windows witness. No product/test source or task is added.
+// Only run-windows-directory-control.py creates the fresh external request.
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.BasicFileAttributes
+import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
+import org.gradle.api.tasks.testing.AbstractTestTask
+import org.gradle.api.tasks.testing.Test
+import org.gradle.api.tasks.testing.TestDescriptor
+import org.gradle.api.tasks.testing.TestListener
+import org.gradle.api.tasks.testing.TestResult
+
+def checksum = { byte[] bytes -> MessageDigest.getInstance('SHA-256').digest(bytes).encodeHex().toString() }
+def physical = { File file ->
+    def path = file.toPath().toAbsolutePath().normalize()
+    def cursor = path
+    while (cursor != null) {
+        if (Files.isSymbolicLink(cursor) || !Files.exists(cursor, LinkOption.NOFOLLOW_LINKS)) {
+            throw new GradleException('Missing or linked Windows control path')
+        }
+        cursor = cursor.parent
+    }
+    if (path.toRealPath() != path) throw new GradleException('Nonphysical Windows control path')
+    path
+}
+def writeOnce = { File file, value ->
+    physical(file.parentFile)
+    def bytes = (JsonOutput.prettyPrint(JsonOutput.toJson(value)) + '\n').getBytes('UTF-8')
+    if (bytes.length > 1024 * 1024) throw new GradleException('Windows control report exceeds its bound')
+    Files.write(file.toPath(), bytes, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
+}
+
+gradle.projectsLoaded {
+    def properties = gradle.startParameter.projectProperties
+    def rootName = properties['p2pkit.windowsDirectoryRoot']
+    def requestName = properties['p2pkit.windowsDirectoryRequest']
+    def requestHash = properties['p2pkit.windowsDirectoryRequestSha256']
+    if (!rootName || !requestName || !(requestHash ==~ /[0-9a-f]{64}/)) {
+        throw new GradleException('Missing Windows directory-control request binding')
+    }
+    def sourceRoot = physical(new File(rootName))
+    def root = gradle.rootProject
+    def actualRoot = physical(root.rootDir)
+    def buildSrc = actualRoot == sourceRoot.resolve('buildSrc')
+    if (actualRoot != sourceRoot && !buildSrc) {
+        throw new GradleException('Unexpected included build in Windows directory control')
+    }
+    def requestPath = physical(new File(requestName))
+    if (!Files.isRegularFile(requestPath, LinkOption.NOFOLLOW_LINKS) || Files.size(requestPath) > 65536) {
+        throw new GradleException('Invalid bounded Windows control request')
+    }
+    def requestBytes = Files.readAllBytes(requestPath)
+    if (checksum(requestBytes) != requestHash) throw new GradleException('Windows control request changed')
+    def request = new JsonSlurper().parse(requestBytes, 'UTF-8')
+    def taskName = ':p2p-core:jvmTest'
+    def className = 'dev.p2pkit.core.transfer.FileTransferJvmTest'
+    def methodName = 'durableDestinationPublishesOnlyAfterCommitAndCommitIsIdempotent'
+    def selector = className + '.' + methodName
+    if (request.schema != 1 || request.root != sourceRoot.toString() ||
+        !(request.nonce ==~ /[0-9a-f]{32}/) || !(request.caseName in ['current', 'preimage']) ||
+        request.selector != selector || request.task != taskName) {
+        throw new GradleException('Wrong Windows directory-control request')
+    }
+    def state = physical(new File(request.state))
+    def output = physical(new File(request.outputDirectory))
+    def temporary = physical(new File(request.testTemporary))
+    if (output.parent != state.resolve('evidence') || temporary != state.resolve('fixtures/jvm-tmp') ||
+        state.startsWith(sourceRoot) || sourceRoot.startsWith(state)) {
+        throw new GradleException('Windows control paths escape their separate owned state')
+    }
+    def ownerPath = physical(new File(request.temporaryOwner))
+    if (ownerPath != temporary.parent.resolve('jvm-tmp-owner.json') ||
+        checksum(Files.readAllBytes(ownerPath)) != request.temporaryOwnerSha256) {
+        throw new GradleException('Windows test temporary-directory owner changed')
+    }
+    def host = [os: System.getProperty('os.name'), arch: System.getProperty('os.arch'),
+                javaVersion: System.getProperty('java.version'), javaHome: System.getProperty('java.home')]
+    if (!host.os.startsWith('Windows') || host.arch != 'amd64' || !host.javaVersion.startsWith('21.') ||
+        physical(new File(host.javaHome)) != physical(new File(request.java21))) {
+        throw new GradleException('Directory control requires the admitted native Windows JDK21 daemon')
+    }
+    def graph = []
+    def outcomes = new ConcurrentHashMap()
+    def events = Collections.synchronizedList([])
+    def testAdmission = [:]
+    def allowedCore = [
+        'kmpPartiallyResolvedDependenciesChecker', 'checkKotlinGradlePluginConfigurationErrors',
+        'generateBuildInfo', 'generateWireGoldens',
+        'compileKotlinJvm', 'compileJvmMainJava', 'jvmProcessResources', 'processJvmMainResources',
+        'jvmMainClasses', 'jvmJar', 'compileTestKotlinJvm', 'compileJvmTestJava',
+        'jvmTestProcessResources', 'processJvmTestResources', 'jvmTestClasses', 'jvmTest',
+    ].collect { ':p2p-core:' + it } as Set
+    def allowedBuildSrc = [':compileJava', ':compileGroovy', ':processResources', ':classes', ':jar'] as Set
+
+    if (!buildSrc) {
+        root.allprojects { project ->
+            project.tasks.withType(Test).configureEach { task ->
+                if (task.path != taskName) return
+                task.useJUnit()
+                task.maxParallelForks = 1
+                task.forkEvery = 0L
+                task.minHeapSize = '128m'
+                task.maxHeapSize = '512m'
+                task.jvmArgs('-XX:ActiveProcessorCount=2', '-XX:-UsePerfData')
+                // A daemon -D flag does NOT propagate into a forked Test JVM.
+                task.systemProperty('java.io.tmpdir', temporary.toString())
+                task.systemProperty('p2pkit.windowsDirectoryNonce', request.nonce)
+                task.filter.failOnNoMatchingTests = true
+                task.doFirst {
+                    if (checksum(Files.readAllBytes(requestPath)) != requestHash ||
+                        checksum(Files.readAllBytes(ownerPath)) != request.temporaryOwnerSha256 ||
+                        physical(new File(request.testTemporary)) != temporary) {
+                        throw new GradleException('Control request or temporary ownership changed before Test')
+                    }
+                    def attrs = Files.readAttributes(temporary, BasicFileAttributes, LinkOption.NOFOLLOW_LINKS)
+                    def listing = Files.newDirectoryStream(temporary)
+                    try {
+                        if (!attrs.isDirectory() || attrs.isOther() || attrs.fileKey() == null || listing.iterator().hasNext()) {
+                            throw new GradleException('Test temporary directory is not fresh/physical/identified')
+                        }
+                    } finally { listing.close() }
+                    def launcher = task.javaLauncher.get()
+                    def commandFilters = task.filter.commandLineIncludePatterns.toList().sort()
+                    def jvmArguments = task.allJvmArgs.collect { it.toString() }
+                    if (launcher.metadata.languageVersion.asInt() != 17 ||
+                        physical(launcher.metadata.installationPath.asFile) != physical(new File(request.java17)) ||
+                        commandFilters != [selector] || !task.filter.includePatterns.empty ||
+                        !task.filter.excludePatterns.empty || !task.filter.failOnNoMatchingTests ||
+                        task.maxParallelForks != 1 || task.forkEvery != 0L ||
+                        task.minHeapSize != '128m' || task.maxHeapSize != '512m' ||
+                        task.jvmArgs != ['-XX:ActiveProcessorCount=2', '-XX:-UsePerfData'] ||
+                        !task.jvmArgumentProviders.empty || !task.enabled || task.ignoreFailures ||
+                        jvmArguments.any { it.startsWith('-Dos.name=') || it.startsWith('-Dos.arch=') }) {
+                        throw new GradleException('Test selector, fork, launcher or native argument policy changed')
+                    }
+                    testAdmission.putAll([
+                        task: task.path, commandFilters: commandFilters, includePatterns: [], excludePatterns: [],
+                        failOnNoMatchingTests: true, enabled: task.enabled, ignoreFailures: task.ignoreFailures,
+                        maxParallelForks: task.maxParallelForks, forkEvery: task.forkEvery,
+                        launcher: [executable: launcher.executablePath.asFile.absolutePath,
+                                   home: launcher.metadata.installationPath.asFile.absolutePath,
+                                   version: launcher.metadata.languageVersion.asInt()],
+                        jvmArgs: jvmArguments, temporary: temporary.toString(),
+                        temporaryFileKey: attrs.fileKey().toString(), temporaryEmpty: true,
+                        observedMillis: System.currentTimeMillis(),
+                    ])
+                    writeOnce(output.resolve('test-admission.json').toFile(), [schema: 1, nonce: request.nonce,
+                        caseName: request.caseName, requestSha256: requestHash, admission: testAdmission])
+                }
+                task.addTestListener(new TestListener() {
+                    void beforeSuite(TestDescriptor descriptor) {}
+                    void afterSuite(TestDescriptor descriptor, TestResult result) {}
+                    void beforeTest(TestDescriptor descriptor) {}
+                    void afterTest(TestDescriptor descriptor, TestResult result) {
+                        if (events.size() >= 16) throw new GradleException('Extra Windows directory-control test events')
+                        events.add([className: descriptor.className, name: descriptor.name,
+                                    result: result.resultType.toString(), testCount: result.testCount,
+                                    passed: result.successfulTestCount, failed: result.failedTestCount,
+                                    skipped: result.skippedTestCount, startMillis: result.startTime,
+                                    endMillis: result.endTime])
+                    }
+                })
+            }
+        }
+    }
+    gradle.taskGraph.whenReady { taskGraph ->
+        graph.addAll(taskGraph.allTasks.collect { [path: it.path, type: it.class.name,
+                                                   test: it instanceof AbstractTestTask] })
+        if (gradle.startParameter.dryRun || !gradle.startParameter.excludedTaskNames.empty ||
+            (!buildSrc && gradle.startParameter.taskNames != [taskName]) ||
+            graph.any { row -> buildSrc ? (!allowedBuildSrc.contains(row.path) || row.test) :
+                (!allowedCore.contains(row.path) || (row.test && row.path != taskName)) }) {
+            throw new GradleException('Extra task, excluded task or dry run in Windows directory control')
+        }
+    }
+    gradle.taskGraph.afterTask { task, result ->
+        outcomes[task.path] = [outcome: result.failure != null ? 'FAILED' :
+            result.noSource ? 'NO_SOURCE' : result.skipped ? (result.skipMessage ?: 'SKIPPED') : 'EXECUTED',
+            didWork: result.didWork, failureType: result.failure?.class?.name]
+    }
+    gradle.buildFinished { result ->
+        if (checksum(Files.readAllBytes(requestPath)) != requestHash) {
+            throw new GradleException('Control request changed during execution')
+        }
+        writeOnce(output.resolve(buildSrc ? 'buildsrc-execution.json' : 'execution.json').toFile(), [
+            schema: 1, scope: buildSrc ? 'buildSrc' : 'root', nonce: request.nonce,
+            caseName: request.caseName, source: request.source, identity: request.identity,
+            requestSha256: requestHash, host: host, root: actualRoot.toString(),
+            requestedTasks: gradle.startParameter.taskNames, excludedTasks: gradle.startParameter.excludedTaskNames.toList(),
+            dryRun: gradle.startParameter.dryRun, graph: graph, tasks: outcomes,
+            admission: testAdmission, events: events, buildFailed: result.failure != null,
+            finishedMillis: System.currentTimeMillis(),
+        ])
+    }
+}

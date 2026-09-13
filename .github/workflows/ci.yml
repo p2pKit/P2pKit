@@ -114,6 +114,11 @@ jobs:
       - name: Verify participating heavy-job queue policy
         run: ruby scripts/tests/check-heavy-job-queue-policy-test.rb
 
+      - name: Verify Windows directory control policy
+        run: |
+          ruby scripts/tests/check-windows-directory-control-policy-test.rb
+          python3 -B scripts/tests/run-windows-directory-control-test.py
+
       - name: Classify required-check scope
         id: scope
         shell: bash

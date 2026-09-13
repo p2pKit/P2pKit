@@ -10,7 +10,7 @@ module HeavyJobQueuePolicy
     QUEUE = {"group" => GROUP, "queue" => "max", "cancel-in-progress" => false}.freeze
     JOBS = {
         "ci.yml" => {"jvm-library-checks" => "JVM libraries (${{ matrix.os }})", "complete-gate" => nil},
-        "desktop-cross-host.yml" => {"verify" => "${{ matrix.os }}"},
+        "desktop-cross-host.yml" => {"verify" => "${{ matrix.os }}", "windows-directory-fsync-control" => "windows-directory-fsync-control"},
         "ios-x64-tests.yml" => {"ios-x64" => nil},
         "dependency-submission.yml" => {"submit" => nil},
     }.freeze
@@ -21,7 +21,10 @@ module HeavyJobQueuePolicy
             "group" => "ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'schedule' && 'schedule' || 'change' }}",
             "cancel-in-progress" => "${{ github.event_name != 'schedule' }}",
         },
-        "desktop-cross-host.yml" => {"group" => "desktop-cross-host-${{ github.ref }}", "cancel-in-progress" => true},
+        "desktop-cross-host.yml" => {
+            "group" => "desktop-cross-host-${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'windows-directory-fsync-control' && format('control-{0}-{1}', github.run_id, github.run_attempt) || github.ref }}",
+            "cancel-in-progress" => "${{ github.event_name != 'workflow_dispatch' || inputs.operation != 'windows-directory-fsync-control' }}",
+        },
         "ios-x64-tests.yml" => {"group" => "ios-x64-tests-${{ github.ref }}", "cancel-in-progress" => false},
     }.freeze
     MATRICES = {
@@ -30,6 +33,11 @@ module HeavyJobQueuePolicy
             {"os" => "windows-latest", "wrapper" => '.\gradlew.bat'},
         ]},
         ["desktop-cross-host.yml", "verify"] => {"os" => %w[ubuntu-latest windows-latest macos-15]},
+    }.freeze
+    CONDITIONS = {
+        ["ci.yml", "complete-gate"] => "${{ always() }}",
+        ["desktop-cross-host.yml", "verify"] => "${{ github.event_name != 'workflow_dispatch' || inputs.operation != 'windows-directory-fsync-control' }}",
+        ["desktop-cross-host.yml", "windows-directory-fsync-control"] => "${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'windows-directory-fsync-control' }}",
     }.freeze
 
     def self.require_policy(condition, message)
@@ -84,7 +92,8 @@ module HeavyJobQueuePolicy
                 dependent = path == "ci.yml" && id == "complete-gate"
                 require_policy(dependent ? job["needs"] == "jvm-library-checks" : !job.key?("needs"),
                                "#{label}: preserve acyclic job dependencies")
-                require_policy(dependent ? job["if"] == "${{ always() }}" : !job.key?("if"),
+                condition = CONDITIONS[[path, id]]
+                require_policy(condition ? job["if"] == condition : !job.key?("if"),
                                "#{label}: preserve unconditional jobs/required-gate guard")
                 require_policy(!job.key?("continue-on-error"), "#{label}: failures must remain blocking")
                 matrix = MATRICES[[path, id]]
@@ -126,5 +135,5 @@ if $PROGRAM_NAME == __FILE__
     rescue HeavyJobQueuePolicy::Error, SystemCallError => error
         abort "FATAL: #{error.message}"
     end
-    puts "RESULT: PASS — five participating jobs share the bounded non-cancelling queue; workflow groups remain separate"
+    puts "RESULT: PASS — six participating jobs share the bounded non-cancelling queue; workflow groups remain separate"
 end
