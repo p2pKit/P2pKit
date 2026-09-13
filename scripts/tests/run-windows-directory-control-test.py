@@ -126,6 +126,115 @@ class PureWindowsControlTests(unittest.TestCase):
         with self.assertRaises(BAD):
             action()
 
+    def java_admission(self, captures, *, failed=None, error=C.audit.AuditError):
+        """Exercise the real admission caller; only native/process boundaries are fake."""
+        with tempfile.TemporaryDirectory(prefix="java-admission-", dir=self.base) as temporary:
+            directory = Path(temporary).resolve()
+            controller = C.Controller.__new__(C.Controller)
+            controller.root, controller.public = directory, directory / "public"
+            (controller.public / "admission").mkdir(parents=True)
+            controller.resources = mock.Mock(return_value={"scope": "MODEL_ONLY_NOT_NATIVE"})
+            controller.env = {}
+            originals, homes, outputs = {}, {}, {}
+            for label, variable in (("java17", "JAVA_HOME"), ("java21", "P2PKIT_AUDIT_JDK21")):
+                home = directory / label
+                (home / "bin").mkdir(parents=True)
+                for name in ("bin/java.exe", "bin/javac.exe", "release"):
+                    (home / name).write_bytes(b"MODEL_ONLY_NOT_AN_EXECUTABLE\n")
+                homes[label] = home
+                controller.env[variable] = str(home)
+                output = directory / (label + "-capture")
+                output.mkdir()
+                code, stdout, stderr = captures[label]
+                outputs[label] = (code, output)
+                for name, raw in (("stdout.log", stdout), ("stderr.log", stderr),
+                                  ("command.json", b'{"scope":"MODEL_ONLY_NOT_HOSTED"}\n')):
+                    path = output / name
+                    path.write_bytes(raw)
+                    originals[path] = (raw, C.digest(raw))
+
+            def command(argv, root, env, label):
+                self.assertEqual(argv, [str(homes[label] / "bin/java.exe"), "-XshowSettings:properties", "-version"])
+                self.assertEqual(root, controller.root)
+                self.assertIs(env, controller.env)
+                return outputs[label]
+
+            controller.command = mock.Mock(side_effect=command)
+            with mock.patch.object(C.processes, "host_role", return_value="windows-x64"), \
+                    mock.patch.object(C.sys, "platform", "win32"), \
+                    mock.patch.object(C.struct, "calcsize", return_value=8), \
+                    mock.patch.object(C, "pe_amd64") as pe:
+                if failed is None:
+                    controller.admit_tools()
+                else:
+                    with self.assertRaises(error):
+                        controller.admit_tools()
+                attempted = ["java17"] if failed == "java17" else ["java17", "java21"]
+                self.assertEqual([call.args[3] for call in controller.command.call_args_list], attempted)
+                self.assertEqual(pe.call_args_list, [mock.call(homes[label] / "bin" / name)
+                    for label in attempted for name in ("java.exe", "javac.exe")])
+
+            for path, (raw, sha256) in originals.items():
+                self.assertEqual(path.read_bytes(), raw)
+                self.assertEqual(C.digest(path.read_bytes()), sha256)
+                label = path.parent.name.removesuffix("-capture")
+                copied = controller.public / "admission" / label / path.name
+                accepted = failed is None or failed == "java21" and label == "java17"
+                self.assertEqual(copied.exists(), accepted)
+                if accepted:
+                    self.assertEqual(copied.read_bytes(), raw)
+                    self.assertEqual(C.digest(copied.read_bytes()), sha256)
+            tools = controller.public / "admission/tools.json"
+            self.assertEqual(tools.exists(), failed is None)
+            if failed is None:
+                evidence = C.read_json(tools)
+                self.assertEqual(set(evidence["java"]), {"java17", "java21"})
+                for label in homes:
+                    self.assertEqual(evidence["java"][label]["home"], str(homes[label]))
+                    self.assertEqual(evidence["java"][label]["javaSha256"], C.digest(b"MODEL_ONLY_NOT_AN_EXECUTABLE\n"))
+
+    @staticmethod
+    def java_properties(version, ending=b"\n"):
+        return ending.join((b"Property settings:", b"    java.version = " + version + b".0.1",
+                            b"    os.arch = amd64", b"    os.name = Windows Server 2025", b""))
+
+    def test_java_admission_accepts_lf_and_crlf_without_rewriting_evidence(self):
+        for ending in (b"\n", b"\r\n"):
+            for channel in ("stdout", "stderr"):
+                with self.subTest(ending=ending, channel=channel):
+                    captures = {"java" + version.decode(): (0,
+                        self.java_properties(version, ending) if channel == "stdout" else b"",
+                        self.java_properties(version, ending) if channel == "stderr" else b"")
+                        for version in (b"17", b"21")}
+                    self.java_admission(captures)
+
+    def test_java_admission_rejects_bad_fields_exits_and_encoding_in_each_jdk(self):
+        for label, version in (("java17", b"17"), ("java21", b"21")):
+            good = self.java_properties(version)
+            cases = {
+                "wrong-major": good.replace(version + b".0.1", b"11.0.1"),
+                "other-admitted-major": good.replace(version + b".0.1", (b"21" if version == b"17" else b"17") + b".0.1"),
+                "wrong-architecture": good.replace(b"amd64", b"aarch64"),
+                "wrong-os": good.replace(b"Windows Server 2025", b"Linux"),
+                "missing-version": good.replace(b"    java.version = " + version + b".0.1\n", b""),
+                "missing-architecture": good.replace(b"    os.arch = amd64\n", b""),
+                "missing-os": good.replace(b"    os.name = Windows Server 2025\n", b""),
+                "missing-dot": good.replace(version + b".0.1", version),
+                "empty-version-suffix": good.replace(version + b".0.1", version + b"."),
+                "embedded-version-cr": good.replace(version + b".0.1", version + b".0\r.1"),
+                "embedded-architecture-cr": good.replace(b"amd64", b"am\rd64"),
+                "embedded-os-cr": good.replace(b"Windows Server", b"Windows\rServer"),
+                "bare-cr-delimiters": good.replace(b"\n", b"\r"),
+                "invalid-utf8": good + b"\xff",
+                "nonzero-exit": good,
+            }
+            for name, raw in cases.items():
+                with self.subTest(jdk=label, case=name):
+                    captures = {"java" + major.decode(): (0, b"", self.java_properties(major)) for major in (b"17", b"21")}
+                    captures[label] = (1 if name == "nonzero-exit" else 0, b"", raw)
+                    self.java_admission(captures, failed=label,
+                                        error=UnicodeDecodeError if name == "invalid-utf8" else C.audit.AuditError)
+
     def test_exact_method_preimage_and_unchanged_historical_witness(self):
         changed = C.transform(self.current, self.historical, self.test, self.old_test)
         self.assertEqual(C.digest(changed), C.PREIMAGE_SHA)

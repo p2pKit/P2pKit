@@ -1131,6 +1131,8 @@ class Controller:
             code, output = self.command([str(home / "bin/java.exe"), "-XshowSettings:properties", "-version"],
                                         self.root, self.env, label)
             text = (regular(output / "stdout.log") + regular(output / "stderr.log")).decode("utf-8", errors="strict")
+            # Match Windows line endings without rewriting the original captured evidence.
+            text = text.replace("\r\n", "\n")
             require(code == 0 and re.search(r"^\s*os\.arch = amd64\s*$", text, re.M) and
                     re.search(r"^\s*os\.name = Windows[^\r\n]*$", text, re.M) and
                     re.search(r"^\s*java\.version = " + version + r"\.[^\r\n]+$", text, re.M),
