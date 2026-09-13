@@ -259,6 +259,152 @@ class PureWindowsControlTests(unittest.TestCase):
             mutate(changed)
             self.rejects(lambda: C.tree_delta(before, changed))
 
+    def materialization(self, inherited, failure=None):
+        """Real producer caller/consumer; Git configuration lookup is only modeled."""
+        with tempfile.TemporaryDirectory(prefix="materialize-", dir=self.base) as temporary:
+            directory = Path(temporary)
+            controller = C.Controller.__new__(C.Controller)
+            controller.root, controller.state = directory / "campaign", directory / "state"
+            controller.root.mkdir()
+            controller.state.mkdir()
+            controller.identity = {"sourceSha": "a" * 40, "scope": "MODEL_ONLY_NOT_HOSTED"}
+            controller.env = {"SCOPE": "MODEL_ONLY_NOT_HOSTED"}
+            parent = directory / "current"
+            root = parent / "source"
+            root.mkdir(parents=True)
+            case = {"parent": parent, "root": root, "public": directory / "public"}
+            case["public"].mkdir()
+            archive = parent / "source.tar"
+            receipt = case["public"] / "source-materialization.json"
+            value, name = b"source\n", "dir/source.kt"
+            blob = hashlib.sha1(b"blob 7\0" + value).hexdigest()
+            listing = ("100644 blob " + blob + " 7\t" + name + "\0").encode()
+            trace, captures, produced = [], {}, {}
+            command_failure = []
+            if failure == "existing":
+                archive.write_bytes(b"existing transport sentinel\n")
+            git_prefix = ["git", "--no-replace-objects", "-c", "core.autocrlf=false", "-c", "core.fsmonitor=false",
+                          "-c", "commit.gpgSign=false", "-c", "core.hooksPath=" + str(controller.state), "-C", str(root)]
+            git_commands = [["update-ref", "--no-deref", "HEAD", "a" * 40], ["read-tree", "a" * 40],
+                            ["ls-tree", "-rlz", "a" * 40]]
+
+            def command(argv, cwd, env, label, timeout, finalizing=False):
+                trace.append({"argv": argv, "cwd": str(cwd), "env": env, "label": label,
+                              "timeout": timeout, "finalizing": finalizing})
+                self.assertEqual(env, controller.env)
+                self.assertFalse(finalizing)
+                stdout, code = b"model stdout sentinel\n", 0
+                if label == "source-clone":
+                    self.assertEqual(argv, ["git", "-c", "core.autocrlf=false", "clone", "--no-local", "--no-hardlinks",
+                                          "--no-checkout", "--", str(controller.root), str(root)])
+                    self.assertEqual((cwd, timeout), (controller.root, 180))
+                    code = 17 if failure == "clone" else 0
+                elif label == "git":
+                    self.assertEqual(argv, git_prefix + git_commands[len(trace) - 2])
+                    self.assertEqual((cwd, timeout), (root, 120))
+                    stdout = listing if len(trace) == 4 else b""
+                elif label == "source-archive":
+                    self.assertEqual((cwd, timeout), (root, 120))
+                    index = argv.index("archive")
+                    self.assertEqual(argv[index:], ["archive", "--format=tar", "--output=" + str(archive), "a" * 40])
+                    options = [argv[i + 1].split("=", 1)[1] for i in range(index) if argv[i] == "-c"
+                               and argv[i + 1].startswith("core.autocrlf=")]
+                    effective = options[-1] if options else inherited
+                    trace[-1].update(modeledInheritedAutocrlf=inherited, archiveOverrides=options,
+                                     modeledEffectiveAutocrlf=effective)
+                    payload = value.replace(b"\n", b"\r\n") if effective == "true" or failure == "bytes" else value
+                    buffer = io.BytesIO()
+                    with tarfile.open(fileobj=buffer, mode="w") as stream:
+                        member = tarfile.TarInfo(name)
+                        member.size = len(payload)
+                        stream.addfile(member, io.BytesIO(payload))
+                    produced["raw"] = buffer.getvalue()
+                    archive.write_bytes(produced["raw"])
+                    code = 19 if failure in ("archive", "infrastructure") else 0
+                else:
+                    self.fail("Unexpected materialization command: " + label)
+                output = directory / ("capture-" + str(len(trace)))
+                output.mkdir()
+                trace[-1]["exitCode"] = code
+                for filename, raw in (("stdout.log", stdout), ("stderr.log", b"model stderr sentinel\n"),
+                                      ("command.json", json.dumps(trace[-1], sort_keys=True).encode())):
+                    path = output / filename
+                    path.write_bytes(raw)
+                    captures[path] = raw
+                if failure == "infrastructure" and label == "source-archive":
+                    error = C.CommandFailure("MODEL command infrastructure failed", output, code)
+                    command_failure.append(error)
+                    raise error
+                return code, output
+
+            controller.command = mock.Mock(side_effect=command)
+            expected_error = {"clone": "Fresh full-history source clone failed", "archive": "Source archive command failed",
+                              "infrastructure": "MODEL command infrastructure failed", "existing": "Source transport path already exists",
+                              "bytes": "Linked, missing, extra, duplicate or oversized archive member"}
+            try:
+                with mock.patch.object(C, "export_archive", wraps=C.export_archive) as export:
+                    if failure:
+                        with self.assertRaisesRegex(C.audit.AuditError, "^" + expected_error[failure] + "$") as raised:
+                            controller.materialize(case)
+                        if failure == "infrastructure":
+                            self.assertIs(raised.exception, command_failure[0])
+                            self.assertEqual(raised.exception.status, 19)
+                    else:
+                        controller.materialize(case)
+                    attempted = ["source-clone"] + ([] if failure == "clone" else ["git"] * 3)
+                    if failure not in ("clone", "existing"):
+                        attempted.append("source-archive")
+                    self.assertEqual([row["label"] for row in trace], attempted)
+                    if failure is None or failure == "bytes":
+                        export.assert_called_once()
+                        self.assertEqual(export.call_args.args, (produced["raw"], C.tree_entries(listing), root))
+                    else:
+                        export.assert_not_called()
+                for path, raw in captures.items():
+                    self.assertEqual(path.read_bytes(), raw, "Original command capture changed")
+                self.assertEqual(receipt.exists(), failure is None)
+                if failure is None:
+                    self.assertEqual((root / name).read_bytes(), value)
+                    self.assertEqual(trace[-1]["archiveOverrides"], ["false"])
+                    self.assertEqual(trace[-1]["argv"], ["git", "--no-replace-objects", "-c", "core.autocrlf=false",
+                        "-C", str(root), "archive", "--format=tar", "--output=" + str(archive), "a" * 40])
+                    self.assertEqual(C.read_json(receipt), {"schema": 1, "commit": "a" * 40,
+                        "archiveSha256": C.digest(produced["raw"]), "archiveBytes": len(produced["raw"]),
+                        "fileCount": 1, "sourceBytes": len(value), "everyBlobVerified": True})
+                    self.assertFalse(archive.exists())
+                elif failure == "existing":
+                    self.assertEqual(archive.read_bytes(), b"existing transport sentinel\n")
+                elif failure == "clone":
+                    self.assertFalse(archive.exists())
+                else:
+                    self.assertEqual(archive.read_bytes(), produced["raw"])
+            finally:
+                # Optional private retention never changes the production caller
+                # or turns these modeled Git boundaries into real host evidence.
+                destination = os.environ.get("P2PKIT_TEST_WINDOWS_MATERIALIZE_EVIDENCE")
+                if destination:
+                    retained = Path(destination) / directory.name
+                    retained.mkdir(parents=True)
+                    record = {"scope": "MODEL_ONLY_NOT_GIT_CONFIG_OR_HOSTED_EXECUTION", "test": self.id(),
+                              "inherited": inherited, "failure": failure, "commands": trace,
+                              "controllerSha256": C.digest(Path(C.__file__).read_bytes())}
+                    (retained / "trace.json").write_text(json.dumps(record, indent=2) + "\n")
+                    for path in (*captures, archive, receipt, root / name):
+                        if path.is_file():
+                            target = retained / path.relative_to(directory)
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            target.write_bytes(path.read_bytes())
+
+    def test_materialize_preserves_blobs_under_modeled_inherited_git_policy(self):
+        for inherited in ("true", "false"):
+            with self.subTest(inherited=inherited):
+                self.materialization(inherited)
+
+    def test_materialize_preserves_failures_and_original_transport(self):
+        for failure in ("clone", "archive", "infrastructure", "bytes", "existing"):
+            with self.subTest(failure=failure):
+                self.materialization("false", failure)
+
     def test_windows_tree_paths_and_archive_blob_bytes(self):
         def row(name, value=b"source\n", mode=b"100644"):
             blob = hashlib.sha1(b"blob " + str(len(value)).encode() + b"\0" + value).hexdigest().encode()
@@ -282,9 +428,18 @@ class PureWindowsControlTests(unittest.TestCase):
         for raw in (row("dir/A") + row("DIR/b"), row("a") + row("a/b"), row("A") + row("a"),
                     row("link", mode=b"120000"), row("a")[:-1]):
             self.rejects(lambda: C.tree_entries(raw))
-        for members in ([], [("dir/source.kt", b"source\r\n", tarfile.REGTYPE)],
-                        [("../source.kt", b"source\n", tarfile.REGTYPE)], [("dir/source.kt", b"", tarfile.SYMTYPE)]):
-            self.rejects(lambda: C.export_archive(archive(members), entries, self.base / "unused"))
+        valid = ("dir/source.kt", b"source\n", tarfile.REGTYPE)
+        guard = "Linked, missing, extra, duplicate or oversized archive member"
+        cases = [([], "Archive omitted a tracked source"),
+                 ([("dir/source.kt", b"source\r\n", tarfile.REGTYPE)], guard),
+                 ([("../source.kt", b"source\n", tarfile.REGTYPE)], "Unsafe or ambiguous Windows source pathname"),
+                 ([("dir/source.kt", b"", tarfile.SYMTYPE)], guard),
+                 ([valid, ("extra.kt", b"extra\n", tarfile.REGTYPE)], guard),
+                 ([valid, valid], guard),
+                 ([("dir/source.kt", b"wrong!\n", tarfile.REGTYPE)], "Archive bytes differ from Git blob")]
+        for index, (members, message) in enumerate(cases):
+            with self.subTest(archive_case=index), self.assertRaisesRegex(C.audit.AuditError, message):
+                C.export_archive(archive(members), entries, self.base / ("unused-" + str(index)))
 
     def test_dispatch_rejects_forged_or_incomplete_identity_models(self):
         env, event, source = dispatch()

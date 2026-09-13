@@ -959,8 +959,9 @@ class Controller:
         entries = tree_entries(self.git(root, "ls-tree", "-rlz", commit))
         archive = case["parent"] / "source.tar"
         require(audit.existing_lstat(archive) is None, "Source transport path already exists")
-        code, _ = self.command(["git", "--no-replace-objects", "-C", str(root), "archive", "--format=tar",
-                               "--output=" + str(archive), commit], root, self.env, "source-archive", timeout=120)
+        code, _ = self.command(["git", "--no-replace-objects", "-c", "core.autocrlf=false", "-C", str(root),
+                               "archive", "--format=tar", "--output=" + str(archive), commit],
+                              root, self.env, "source-archive", timeout=120)
         require(code == 0, "Source archive command failed")
         raw = regular(archive, MAX_BYTES)
         identity = archive.lstat()
