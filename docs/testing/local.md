@@ -519,6 +519,28 @@ an authenticated GitHub CLI (`gh`), and Python 3:
 scripts/prepare-dependency-update.sh origin/main
 ```
 
+The base must be an available, independently accepted ancestor, not an invented
+older ref chosen to manufacture new artifacts. The caller freezes its commit
+identity before the complete writer and strict post-write checks. For a
+lock-membership-only refresh, it may reuse that base's provenance **only** when
+valid, nonempty verification metadata is byte-identical and every other tracked
+input is unchanged, except existing regular project `gradle.lockfile` files.
+The root `buildscript-gradle.lockfile` and `settings-gradle.lockfile`, provenance
+policy, catalog, wrapper, scripts and source must remain unchanged; nonignored
+untracked inputs also prevent reuse. After independently reviewing source-only
+changes with unchanged dependency/provenance inputs, select that reviewed commit
+explicitly (for example `scripts/prepare-dependency-update.sh "$(git rev-parse HEAD)"`).
+
+This narrow `REUSE` result is **not fresh remote cryptographic verification** or
+proof that the operator selected an accepted base. Retain the base's acceptance,
+the emitted source/base/metadata identities, all before/after locks and metadata,
+and the complete original phase results for independent candidate review. Added
+artifacts still require the existing remote curator; deleted history, changed
+existing hashes/trust configuration, invalid metadata/base, and failed earlier
+phases cannot pass through reuse. The standalone curator still rejects empty
+new-artifact input. Never promote partial writer output or use this path to
+qualify an unrelated dependency proposal or an advisory exception.
+
 The artifact-review workspace follows `${TMPDIR:-/tmp}`; an unusable selected directory fails rather than silently
 moving downloads to another volume. Its small GPG home is separately created under `${P2PKIT_GPG_TMPDIR:-/tmp}`.
 Both parent directories must already exist. Choose a short GPG root: its physical path, random directory name and

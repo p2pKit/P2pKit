@@ -618,5 +618,6 @@ grep -Fq -- '- "gradle-wrapper"' "$ROOT/.github/dependabot.yml" ||
 "$PYTHON3" "$ROOT/scripts/tests/check-gradle-plugin-metadata-test.py"
 "$PYTHON3" "$ROOT/scripts/tests/check-gradle-variant-artifact-test.py"
 "$PYTHON3" "$ROOT/scripts/tests/review-dependency-temporary-directories-test.py"
+"$PYTHON3" "$ROOT/scripts/tests/prepare-dependency-update-test.py"
 
 echo "RESULT: PASS — incomplete updates, stale locks, broad trust, and malformed checksums fail before Gradle execution"

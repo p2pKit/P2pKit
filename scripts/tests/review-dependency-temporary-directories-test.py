@@ -321,6 +321,14 @@ class TemporaryDirectoryTest(unittest.TestCase):
         self.assertFalse(any(event["tool"] == "curl" or "path" in event for event in self.events()))
         self.assert_clean()
 
+    def test_standalone_unchanged_nonempty_metadata_still_rejects_empty_delta(self):
+        self.git("add", "gradle/verification-metadata.xml")
+        self.git("commit", "-qm", "synthetic accepted nonempty metadata")
+        self.base = self.git("rev-parse", "HEAD").strip()
+        self.assertEqual(self.curate("no new verified artifacts relative to"), 1)
+        self.assertFalse(any(event["tool"] in ("curl", "gh", "gpg") for event in self.events()))
+        self.assert_clean()
+
     def test_unavailable_gpg_root_cleans_workspace(self):
         self.environment["P2PKIT_GPG_TMPDIR"] = str(self.key_parent / "absent")
         self.curate("mktemp")
