@@ -83,7 +83,7 @@ class SecureConnectionDiagnosticTest {
     @Suppress("OVERRIDE_DEPRECATION")
     private class DiagnosticSession : P2pSession {
         override val id = "synthetic-session"
-        override val peer = Peer(PeerId("synthetic-peer"), "test", Platform.UNKNOWN, setOf(TransportKind.TCP))
+        override val peer = Peer(PeerId("synthetic-peer"), "test", Platform.UNKNOWN, setOf(TransportKind.LAN))
         override val state = MutableStateFlow<ConnectionState>(ConnectionState.Connected)
         override val incoming = MutableSharedFlow<P2pMessage>()
         override val incomingFiles = MutableSharedFlow<P2pFileOffer>()
