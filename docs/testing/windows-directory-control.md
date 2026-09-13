@@ -39,7 +39,11 @@ automatic hash regeneration.
 Each case receives a separate full-history, byte-verified source copy and fresh
 sibling executor state/home. Git archive membership and every Git blob are
 verified; links, filtering/substitution, omitted files and Windows path aliases
-are refused. The one-method derivative is committed **locally before** immutable
+are refused. Each newly owned clone receives repository-local `core.longpaths=true`,
+with its effective boolean read back before source preparation. Original config
+commands/results are retained; the immutable executor and later ordinary Git
+callers inherit this policy. No campaign, global Git or OS settings are changed.
+The one-method derivative is committed **locally before** immutable
 state initialization, with the exact candidate as its parent. It is never pushed.
 Generated BuildInfo must name the actual clean current/derivative commit.
 

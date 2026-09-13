@@ -953,6 +953,11 @@ class Controller:
                                 "--no-checkout", "--", str(self.root), str(root)], self.root, self.env,
                                "source-clone", timeout=180)
         require(code == 0, "Fresh full-history source clone failed")
+        # Persist only in this newly owned clone: immutable-executor and later
+        # ordinary Git callers must see the same long paths, not just this helper.
+        self.git(root, "config", "--local", "core.longpaths", "true")
+        require(self.git(root, "config", "--bool", "--get", "core.longpaths").strip() == b"true",
+                "Owned source Git long-path policy was not established")
         commit = self.identity["sourceSha"]
         self.git(root, "update-ref", "--no-deref", "HEAD", commit)
         self.git(root, "read-tree", commit)

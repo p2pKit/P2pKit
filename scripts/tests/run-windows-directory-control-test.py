@@ -259,7 +259,7 @@ class PureWindowsControlTests(unittest.TestCase):
             mutate(changed)
             self.rejects(lambda: C.tree_delta(before, changed))
 
-    def materialization(self, inherited, failure=None):
+    def materialization(self, inherited, failure=None, *, source_admission=False, case_name="current"):
         """Real producer caller/consumer; Git configuration lookup is only modeled."""
         with tempfile.TemporaryDirectory(prefix="materialize-", dir=self.base) as temporary:
             directory = Path(temporary)
@@ -269,24 +269,52 @@ class PureWindowsControlTests(unittest.TestCase):
             controller.state.mkdir()
             controller.identity = {"sourceSha": "a" * 40, "scope": "MODEL_ONLY_NOT_HOSTED"}
             controller.env = {"SCOPE": "MODEL_ONLY_NOT_HOSTED"}
-            parent = directory / "current"
+            parent = directory / case_name
             root = parent / "source"
             root.mkdir(parents=True)
             case = {"parent": parent, "root": root, "public": directory / "public"}
             case["public"].mkdir()
             archive = parent / "source.tar"
             receipt = case["public"] / "source-materialization.json"
-            value, name = b"source\n", "dir/source.kt"
+            value = b"source\n"
+            name = "/".join(["nested" * 10] * 4 + ["source.kt"]) if source_admission else "dir/source.kt"
+            if source_admission:
+                self.assertGreaterEqual(len(str(root / name)), 260)
             blob = hashlib.sha1(b"blob 7\0" + value).hexdigest()
             listing = ("100644 blob " + blob + " 7\t" + name + "\0").encode()
-            trace, captures, produced = [], {}, {}
+            trace, captures, produced, plain_queries = [], {}, {}, []
+            # Persisted repository-local policy is modeled separately from any
+            # command-local -c option. The campaign repository must stay unchanged.
+            policies = {str(controller.root): "false", str(root): "false"}
             command_failure = []
             if failure == "existing":
                 archive.write_bytes(b"existing transport sentinel\n")
             git_prefix = ["git", "--no-replace-objects", "-c", "core.autocrlf=false", "-c", "core.fsmonitor=false",
                           "-c", "commit.gpgSign=false", "-c", "core.hooksPath=" + str(controller.state), "-C", str(root)]
-            git_commands = [["update-ref", "--no-deref", "HEAD", "a" * 40], ["read-tree", "a" * 40],
+            git_commands = [["config", "--local", "core.longpaths", "true"],
+                            ["config", "--bool", "--get", "core.longpaths"],
+                            ["update-ref", "--no-deref", "HEAD", "a" * 40], ["read-tree", "a" * 40],
                             ["ls-tree", "-rlz", "a" * 40]]
+
+            def source_query(cwd, args):
+                self.assertEqual(cwd, root)
+                dirty = source_admission and policies[str(cwd)] != "true"
+                if args == ["rev-parse", "--show-toplevel"]:
+                    return os.fsencode(root) + b"\n"
+                if args == ["rev-parse", "HEAD"]:
+                    return b"a" * 40 + b"\n"
+                if args == ["rev-parse", "HEAD^{tree}"]:
+                    return b"b" * 40 + b"\n"
+                if args == ["rev-parse", "--is-shallow-repository"]:
+                    return b"false\n"
+                if args in (["status", "--porcelain=v1", "--untracked-files=all"],
+                            ["status", "--porcelain=v1", "--untracked-files=all", "--ignored"]):
+                    return (" M " + name + "\n").encode() if dirty else b""
+                if args == ["diff", "--binary", "--no-ext-diff", "--no-textconv", "HEAD"]:
+                    return b"MODEL long path inaccessible\n" if dirty else b""
+                if args in (["ls-tree", "-rlz", "a" * 40], ["ls-tree", "-rlz", "HEAD"]):
+                    return listing
+                self.fail("Unexpected modeled source query: " + repr(args))
 
             def command(argv, cwd, env, label, timeout, finalizing=False):
                 trace.append({"argv": argv, "cwd": str(cwd), "env": env, "label": label,
@@ -300,9 +328,22 @@ class PureWindowsControlTests(unittest.TestCase):
                     self.assertEqual((cwd, timeout), (controller.root, 180))
                     code = 17 if failure == "clone" else 0
                 elif label == "git":
-                    self.assertEqual(argv, git_prefix + git_commands[len(trace) - 2])
+                    self.assertEqual(argv[:len(git_prefix)], git_prefix)
                     self.assertEqual((cwd, timeout), (root, 120))
-                    stdout = listing if len(trace) == 4 else b""
+                    args = argv[len(git_prefix):]
+                    stdout = b""
+                    if args == git_commands[0]:
+                        code = 23 if failure == "config-write" else 0
+                        if code == 0 and failure != "config-not-persisted":
+                            policies[str(cwd)] = "true"
+                    elif args == git_commands[1]:
+                        code = 29 if failure == "config-read" else 0
+                        stdout = {"config-empty": b"", "config-false": b"false\n",
+                                  "config-multiple": b"true\nfalse\n"}.get(
+                                      failure, policies[str(cwd)].encode() + b"\n")
+                    elif args not in git_commands[2:4]:
+                        stdout = source_query(cwd, args)
+                    trace[-1]["modeledPersistedLongpaths"] = policies[str(cwd)]
                 elif label == "source-archive":
                     self.assertEqual((cwd, timeout), (root, 120))
                     index = argv.index("archive")
@@ -340,7 +381,11 @@ class PureWindowsControlTests(unittest.TestCase):
             controller.command = mock.Mock(side_effect=command)
             expected_error = {"clone": "Fresh full-history source clone failed", "archive": "Source archive command failed",
                               "infrastructure": "MODEL command infrastructure failed", "existing": "Source transport path already exists",
-                              "bytes": "Linked, missing, extra, duplicate or oversized archive member"}
+                              "bytes": "Linked, missing, extra, duplicate or oversized archive member",
+                              "config-write": "Source-binding Git command failed; retained original output",
+                              "config-read": "Source-binding Git command failed; retained original output",
+                              **{name: "Owned source Git long-path policy was not established" for name in
+                                 ("config-empty", "config-false", "config-multiple", "config-not-persisted")}}
             try:
                 with mock.patch.object(C, "export_archive", wraps=C.export_archive) as export:
                     if failure:
@@ -351,10 +396,31 @@ class PureWindowsControlTests(unittest.TestCase):
                             self.assertEqual(raised.exception.status, 19)
                     else:
                         controller.materialize(case)
-                    attempted = ["source-clone"] + ([] if failure == "clone" else ["git"] * 3)
-                    if failure not in ("clone", "existing"):
+                    preparation = list(trace)
+                    if source_admission and failure is None:
+                        # Reach the real clean-source guard before testing argv
+                        # structure, so the pre-repair red is not a mock error.
+                        admitted = controller.source(root, "a" * 40, initial=True)
+                        self.assertEqual(set(admitted["files"]), {name})
+
+                        def ordinary_git(cwd, *args):
+                            plain_queries.append({"root": str(cwd), "args": args})
+                            return source_query(cwd, list(args))
+
+                        # The immutable executor does not use Controller.git or
+                        # its -c overrides; it must inherit the persisted policy.
+                        with mock.patch.object(C.audit, "git", side_effect=ordinary_git):
+                            self.assertEqual(C.audit.source_snapshot(root), admitted["source"])
+                        self.assertEqual(len(plain_queries), 5)
+                    config_failure = failure is not None and failure.startswith("config-")
+                    count = 0 if failure == "clone" else 1 if failure == "config-write" else 2 if config_failure else 5
+                    attempted = ["source-clone"] + ["git"] * count
+                    if failure not in ("clone", "existing") and not config_failure:
                         attempted.append("source-archive")
-                    self.assertEqual([row["label"] for row in trace], attempted)
+                    self.assertEqual([row["label"] for row in preparation], attempted)
+                    self.assertEqual([row["argv"][len(git_prefix):] for row in preparation if row["label"] == "git"],
+                                     git_commands[:count])
+                    self.assertEqual(policies[str(controller.root)], "false")
                     if failure is None or failure == "bytes":
                         export.assert_called_once()
                         self.assertEqual(export.call_args.args, (produced["raw"], C.tree_entries(listing), root))
@@ -365,8 +431,8 @@ class PureWindowsControlTests(unittest.TestCase):
                 self.assertEqual(receipt.exists(), failure is None)
                 if failure is None:
                     self.assertEqual((root / name).read_bytes(), value)
-                    self.assertEqual(trace[-1]["archiveOverrides"], ["false"])
-                    self.assertEqual(trace[-1]["argv"], ["git", "--no-replace-objects", "-c", "core.autocrlf=false",
+                    self.assertEqual(preparation[-1]["archiveOverrides"], ["false"])
+                    self.assertEqual(preparation[-1]["argv"], ["git", "--no-replace-objects", "-c", "core.autocrlf=false",
                         "-C", str(root), "archive", "--format=tar", "--output=" + str(archive), "a" * 40])
                     self.assertEqual(C.read_json(receipt), {"schema": 1, "commit": "a" * 40,
                         "archiveSha256": C.digest(produced["raw"]), "archiveBytes": len(produced["raw"]),
@@ -374,7 +440,7 @@ class PureWindowsControlTests(unittest.TestCase):
                     self.assertFalse(archive.exists())
                 elif failure == "existing":
                     self.assertEqual(archive.read_bytes(), b"existing transport sentinel\n")
-                elif failure == "clone":
+                elif failure == "clone" or config_failure:
                     self.assertFalse(archive.exists())
                 else:
                     self.assertEqual(archive.read_bytes(), produced["raw"])
@@ -387,6 +453,8 @@ class PureWindowsControlTests(unittest.TestCase):
                     retained.mkdir(parents=True)
                     record = {"scope": "MODEL_ONLY_NOT_GIT_CONFIG_OR_HOSTED_EXECUTION", "test": self.id(),
                               "inherited": inherited, "failure": failure, "commands": trace,
+                              "plainGitQueries": plain_queries, "modeledPolicies": policies,
+                              "sourceAdmission": source_admission, "caseName": case_name,
                               "controllerSha256": C.digest(Path(C.__file__).read_bytes())}
                     (retained / "trace.json").write_text(json.dumps(record, indent=2) + "\n")
                     for path in (*captures, archive, receipt, root / name):
@@ -404,6 +472,17 @@ class PureWindowsControlTests(unittest.TestCase):
         for failure in ("clone", "archive", "infrastructure", "bytes", "existing"):
             with self.subTest(failure=failure):
                 self.materialization("false", failure)
+
+    def test_materialize_persists_longpaths_for_source_and_immutable_callers(self):
+        for case_name in ("current", "preimage"):
+            with self.subTest(case_name=case_name):
+                self.materialization("true", source_admission=True, case_name=case_name)
+
+    def test_materialize_rejects_failed_or_unestablished_owned_longpath_policy(self):
+        for failure in ("config-write", "config-read", "config-empty", "config-false", "config-multiple",
+                        "config-not-persisted"):
+            with self.subTest(failure=failure):
+                self.materialization("true", failure)
 
     def test_windows_tree_paths_and_archive_blob_bytes(self):
         def row(name, value=b"source\n", mode=b"100644"):
