@@ -199,6 +199,30 @@ a configured workflow or another OS's pass is not host-execution evidence.
 `scripts/tests/release-workflow-test.sh` checks the matrix, actual task command,
 report paths, and fail-closed dependency guard, with negative policy controls.
 
+### Participating hosted job queue
+
+CI's `jvm-library-checks` and `complete-gate`, Desktop's `verify`, Intel's `ios-x64`,
+and dependency submission's `submit` share the **job-level** concurrency group
+`p2pkit-nonphysical-heavy`, with `queue: max` and `cancel-in-progress: false`.
+Both matrices keep their existing hosts/tasks and `fail-fast: false`, with
+`max-parallel: 1`. The lease covers each whole job, including existing cleanup
+and evidence steps; no workflow holds the same group while waiting for its jobs.
+Existing workflow-level supersession remains independent: ordinary CI/Desktop
+runs can still be superseded, while CI schedules retain their separate group.
+
+[GitHub's queue policy](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)
+admits at most 100 pending jobs/runs; overflow is cancelled. This is not an
+unlimited or global execution lease: local builds, older workflow revisions and
+unparticipating workflows still need external coordination. Do not cancel
+unrelated work or infer host acceptance from this configuration.
+
+`ruby scripts/tests/check-heavy-job-queue-policy-test.rb` validates the focused
+YAML contract and mutations, reusing the existing CI guard policies. Released
+actionlint 1.7.12 rejects the new `queue` property: retain that incompatibility
+alongside other syntax/action-pin checks, rather than stripping the property or
+suppressing lint errors. Static checks do not establish actual GitHub parser or
+hosted queue acceptance; that remains a separate execution/review gate.
+
 ## Platform execution evidence
 
 On macOS with JDK 17, Xcode, and the configured Android SDKs, use:
