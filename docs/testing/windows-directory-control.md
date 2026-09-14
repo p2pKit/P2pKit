@@ -134,6 +134,23 @@ Test worker. JDK17 attribution separately requires the admitted native JDK17
 executable/version probe, its exact JavaLauncher path and the original info log's
 actually launched Test-worker command. Daemon metadata alone is insufficient.
 
+The parentless root consumes its own three explicit request properties. Only its
+exact direct `buildSrc` child may consume that root parent's complete triplet;
+Gradle's nested build does not reliably inherit the command-line properties.
+Foreign/deeper builds, a different physical authority root, and partial or
+conflicting child properties fail closed. Both scope reports retain the observed
+authority, parent root and locally present three-key subset, not all properties.
+The independent assessor checks these observations against the fresh request.
+
+After native admission, one small owned `binding-controls` Gradle leaf executes
+the complete production observer callback against 24 finite adverse **models**.
+It has no plugins/dependencies/product tasks and copies the checked-in daemon
+criteria. Its bounded report distinguishes precise binding/request rejections
+from wrong exceptions or later host refusal; canonical leaf retention is required
+for acceptance. An unbound failure copy cannot become a passing result. These
+models are not real Gradle parents. The subsequent current/preimage products must
+still supply actual root/buildSrc observations and all original native criteria.
+
 Accept current positive **before** attempting the preimage:
 
 - Current: product/stop/final `0/0/0`, exactly one selected passing test, no skip,

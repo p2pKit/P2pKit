@@ -8,6 +8,7 @@ import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
+import org.gradle.api.GradleException
 import org.gradle.api.tasks.testing.AbstractTestTask
 import org.gradle.api.tasks.testing.Test
 import org.gradle.api.tasks.testing.TestDescriptor
@@ -35,20 +36,46 @@ def writeOnce = { File file, value ->
 }
 
 gradle.projectsLoaded {
-    def properties = gradle.startParameter.projectProperties
+    // Gradle's nested buildSrc StartParameter does not reliably inherit -P
+    // values. Only the exact direct root parent may supply its authority.
+    def bindingKeys = ['p2pkit.windowsDirectoryRoot', 'p2pkit.windowsDirectoryRequest',
+                       'p2pkit.windowsDirectoryRequestSha256']
+    def snapshot = { instance ->
+        def values = instance.startParameter.projectProperties
+        bindingKeys.findAll { values.containsKey(it) }.collectEntries { [(it): values[it]] }
+    }
+    def localProperties = snapshot(gradle)
+    def parent = gradle.parent
+    def parentHasParent = parent != null && parent.parent != null
+    if (parentHasParent) {
+        throw new GradleException('Windows directory-control authority must be the direct root parent')
+    }
+    def authority = parent == null ? gradle : parent
+    def properties = parent == null ? localProperties : snapshot(authority)
     def rootName = properties['p2pkit.windowsDirectoryRoot']
     def requestName = properties['p2pkit.windowsDirectoryRequest']
     def requestHash = properties['p2pkit.windowsDirectoryRequestSha256']
-    if (!rootName || !requestName || !(requestHash ==~ /[0-9a-f]{64}/)) {
+    if (properties.size() != bindingKeys.size() ||
+        properties.values().any { !(it instanceof String) || it.empty } || !(requestHash ==~ /[0-9a-f]{64}/)) {
         throw new GradleException('Missing Windows directory-control request binding')
     }
+    if (parent != null && !localProperties.empty && localProperties != properties) {
+        throw new GradleException('Conflicting or partial child Windows directory-control binding')
+    }
     def sourceRoot = physical(new File(rootName))
+    def authorityRoot = physical(authority.rootProject.rootDir)
+    if (authorityRoot != sourceRoot) {
+        throw new GradleException('Windows directory-control authority root differs from its binding')
+    }
     def root = gradle.rootProject
     def actualRoot = physical(root.rootDir)
-    def buildSrc = actualRoot == sourceRoot.resolve('buildSrc')
-    if (actualRoot != sourceRoot && !buildSrc) {
+    def buildSrc = parent != null
+    if (actualRoot != (buildSrc ? sourceRoot.resolve('buildSrc') : sourceRoot)) {
         throw new GradleException('Unexpected included build in Windows directory control')
     }
+    def binding = [authority: buildSrc ? 'direct-root-parent' : 'self',
+                   parentRoot: buildSrc ? authorityRoot.toString() : null,
+                   parentHasParent: parentHasParent, localProperties: localProperties]
     def requestPath = physical(new File(requestName))
     if (!Files.isRegularFile(requestPath, LinkOption.NOFOLLOW_LINKS) || Files.size(requestPath) > 65536) {
         throw new GradleException('Invalid bounded Windows control request')
@@ -190,6 +217,7 @@ gradle.projectsLoaded {
             schema: 1, scope: buildSrc ? 'buildSrc' : 'root', nonce: request.nonce,
             caseName: request.caseName, source: request.source, identity: request.identity,
             requestSha256: requestHash, host: host, root: actualRoot.toString(),
+            binding: binding,
             requestedTasks: gradle.startParameter.taskNames, excludedTasks: gradle.startParameter.excludedTaskNames.toList(),
             dryRun: gradle.startParameter.dryRun, graph: graph, tasks: outcomes,
             admission: testAdmission, events: events, buildFailed: result.failure != null,

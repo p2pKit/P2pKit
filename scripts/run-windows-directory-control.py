@@ -54,6 +54,24 @@ WORKFLOW = ".github/workflows/desktop-cross-host.yml"
 SOURCE = "library/p2p-core/src/jvmMain/kotlin/dev/p2pkit/core/transfer/FileTransferDestinationJvm.kt"
 TEST_SOURCE = "library/p2p-core/src/jvmTest/kotlin/dev/p2pkit/core/transfer/FileTransferJvmTest.kt"
 OBSERVER = "gradle/windows-directory-control.init.gradle"
+BINDING_FIXTURE = "scripts/tests/fixtures/windows-directory-binding"
+BINDING_REPORT = "external/fixtures/directory-binding/build/reports/windows-directory-binding/result.json"
+BINDING_CASES = {
+    **dict.fromkeys(("root_missing", "root_one_key", "root_two_keys", "root_empty", "root_empty_request",
+                    "root_bad_hash", "root_nonstring"), "Missing Windows directory-control request binding"),
+    "authority_wrong_root": "Windows directory-control authority root differs from its binding",
+    "parentless_buildsrc": "Windows directory-control authority root differs from its binding",
+    "foreign_child": "Unexpected included build in Windows directory control",
+    "wrong_parent": "Windows directory-control authority root differs from its binding",
+    "nested_child": "Windows directory-control authority must be the direct root parent",
+    **dict.fromkeys(("child_one_key", "child_two_keys", "child_empty", "child_conflict_root",
+                    "child_conflict_request", "child_conflict_hash"),
+                   "Conflicting or partial child Windows directory-control binding"),
+    **dict.fromkeys(("changed_request_root", "changed_request_child", "child_copy_changed_request"),
+                   "Windows control request changed"),
+    **dict.fromkeys(("request_wrong_schema", "request_wrong_root", "request_bad_nonce"),
+                   "Wrong Windows directory-control request"),
+}
 CLASS = "dev.p2pkit.core.transfer.FileTransferJvmTest"
 METHOD = "durableDestinationPublishesOnlyAfterCommitAndCommitIsIdempotent"
 SELECTOR = CLASS + "." + METHOD
@@ -327,11 +345,43 @@ def assess_xml(raw, request):
     return failure_directory(failures[0], request["testTemporary"]) if negative else None
 
 
+def assess_binding_controls(report, hashes, *, require_pass):
+    require(type(report) is dict and set(report) == {"schema", "scope", "gradleVersion", "hashes", "cases"} and
+            integer(report.get("schema"), 1) and report.get("scope") == "MODELED_NEGATIVE_INPUTS_WHOLE_PRODUCTION_OBSERVER" and
+            report.get("gradleVersion") == "9.7.0" and report.get("hashes") == hashes and
+            type(report.get("cases")) is list and len(report["cases"]) == len(BINDING_CASES),
+            "Wrong or stale production-observer model report")
+    require([row.get("id") for row in report["cases"] if type(row) is dict] == list(BINDING_CASES),
+            "Missing, reordered or duplicate binding-control models")
+    for row in report["cases"]:
+        expected = BINDING_CASES[row["id"]]
+        require(set(row) == {"id", "passed", "expectedMessage", "exceptionType", "message"} and
+                row["expectedMessage"] == expected and type(row["passed"]) is bool and
+                all(row[key] is None or type(row[key]) is str and len(row[key]) <= 256
+                    for key in ("exceptionType", "message")) and
+                row["passed"] is (row["exceptionType"] == "org.gradle.api.GradleException" and row["message"] == expected),
+                "Binding model has a malformed or falsely passing result")
+    require(not require_pass or all(row["passed"] for row in report["cases"]),
+            "Actual production-observer negative controls failed")
+
+
 def assess_execution(report, request, request_hash, scope="root"):
     require(type(report) is dict and integer(report.get("schema"), 1) and report.get("scope") == scope and
             report.get("nonce") == request["nonce"] and report.get("caseName") == request["caseName"] and
             report.get("source") == request["source"] and report.get("identity") == request["identity"] and
             report.get("requestSha256") == request_hash, "Wrong/stale execution nonce, source, case or run")
+    binding = report.get("binding")
+    expected_properties = {"p2pkit.windowsDirectoryRoot": request["root"],
+        "p2pkit.windowsDirectoryRequest": str(window_path(request["outputDirectory"]) / "request.json"),
+        "p2pkit.windowsDirectoryRequestSha256": request_hash}
+    require(scope in ("root", "buildSrc") and type(binding) is dict and
+            set(binding) == {"authority", "parentRoot", "parentHasParent", "localProperties"} and
+            binding["authority"] == ("self" if scope == "root" else "direct-root-parent") and
+            binding["parentHasParent"] is False and
+            binding["parentRoot"] == (None if scope == "root" else request["root"]) and
+            type(binding["localProperties"]) is dict and
+            (binding["localProperties"] == expected_properties or scope == "buildSrc" and binding["localProperties"] == {}),
+            "Missing, partial, conflicting or foreign root/buildSrc request authority")
     host = report.get("host", {})
     require(host.get("os", "").startswith("Windows") and host.get("arch") == "amd64" and
             host.get("javaVersion", "").startswith("21.") and
@@ -506,6 +556,7 @@ def require_disposal_evidence(case):
     require(all(row["valid"] for row in case["leaves"]), "Unfinalized leaf prevents source/cache cleanup")
     require(all(row["retained"] for row in case["leaves"]) and not case["retentionErrors"] and
             (not case["productPrepared"] or case["productRetained"]) and
+            (not case.get("bindingPrepared") or case.get("bindingRetained")) and
             (not case["nativeStarted"] or case["nativeAccepted"]),
             "Required original retention failed; preserve sources, outputs and caches")
 
@@ -824,19 +875,20 @@ def public_path(name):
                         "temporary-after.json", "retirement-start.json", "retirement.json", "controller-error.txt",
                         "native-controls.json", "test-admission.json", "execution.json", "buildsrc-execution.json",
                         "native-temporary-before.json", "native-temporary-after.json",
+                        "binding-controls.json", "binding-controls-unbound.json",
                         "TEST-control.xml", "TEST-control-unbound.xml", "unbound-report.json",
                         "sdk.json", "sdk-tool-before.json", "sdk-tool-after.json", "allocation.json", "retained-before-disposal.json",
                         "source-materialization.json", "controller-retirement.json", "fallback-stop.json", "BuildInfo.kt"}
     if path.parts[0] == "native-controls":
         return native_public_path("/".join(path.parts[1:]))
     if len(path.parts) == 3 and path.parts[0] == "commands":
-        return bool(re.fullmatch(r"[1-9][0-9]*-(?:git|source-clone|source-archive|init|java17|java21|wrapper-version|sdk-install|executor-native-controls|product|fallback-stop)",
+        return bool(re.fullmatch(r"[1-9][0-9]*-(?:git|source-clone|source-archive|init|java17|java21|wrapper-version|sdk-install|executor-native-controls|binding-controls|product|fallback-stop)",
                                  path.parts[1])) and path.parts[2] in {"start.json", "command.json", "stdout.log", "stderr.log"}
     if len(path.parts) == 2 and path.parts[0] == "readonly-recovery":
         return bool(re.fullmatch(HEX32 + r"-(?:start|outcome)\.json", path.parts[1]))
     if len(path.parts) == 2 and path.parts[0] in {"java17", "java21", "init"}:
         return path.parts[1] in {"command.json", "stdout.log", "stderr.log"}
-    if len(path.parts) == 2 and path.parts[0] in {"wrapper-version", "sdk-install", "executor-native-controls", "product"}:
+    if len(path.parts) == 2 and path.parts[0] in {"wrapper-version", "sdk-install", "executor-native-controls", "binding-controls", "product"}:
         return path.parts[1] in LEAF_FILES | {"controller.json", "controller.stdout.log", "controller.stderr.log"}
     return False
 
@@ -1463,6 +1515,58 @@ class Controller:
             "scope": "actual current-host executor controls, not product/library acceptance"})
         case["nativeAccepted"] = True
 
+    def binding_controls(self, case):
+        require(case["name"] == "current" and case["nativeAccepted"], "Binding controls require actual native admission")
+        root, state = case["root"], case["state"]
+        fixture = state / "fixtures/directory-binding"
+        fixture.mkdir(mode=0o700)
+        (fixture / "gradle").mkdir(mode=0o700)
+        sources = {name: root / BINDING_FIXTURE / name for name in ("settings.gradle", "build.gradle")}
+        sources["gradle/gradle-daemon-jvm.properties"] = root / "gradle/gradle-daemon-jvm.properties"
+        hashes = {"observer": digest(regular(root / OBSERVER, 65536))}
+        for name, source in sources.items():
+            raw = regular(source, 65536)
+            write(fixture / name, raw)
+            hashes[name] = digest(raw)
+        case.update(bindingPrepared=True, bindingRetained=False)
+        arguments = ["--project-dir", str(fixture), "verifyWindowsDirectoryBinding", "--console=plain",
+                     "-Pp2pkit.windowsDirectoryObserver=" + str(root / OBSERVER)]
+
+        def retain_result():
+            leaf = next((row for row in case["leaves"] if row["purpose"] == "binding-controls"), None)
+            canonical = state / "evidence" / leaf["id"] / "reports" / BINDING_REPORT if leaf else None
+            original = fixture / "build/reports/windows-directory-binding/result.json"
+            if canonical is not None and audit.existing_lstat(canonical) is not None:
+                source, name = canonical, "binding-controls.json"
+            elif audit.existing_lstat(original) is not None:
+                source, name = original, "binding-controls-unbound.json"
+            else:
+                return  # A setup failure may not produce a report; original leaf logs remain mandatory.
+            require(len(regular(source, 65536)) <= 65536, "Unbounded binding-control report")
+            assess_binding_controls(read_json(source), hashes, require_pass=False)
+            retain_available(source, case["public"] / name)
+
+        try:
+            receipt = self.leaf(case, "binding-controls", arguments, timeout=300)
+            retain_result()
+            matches = [row for row in receipt["reports"] if row["source"] == BINDING_REPORT]
+            require(len(matches) == 1 and matches[0]["classification"] == "changed-since-admission" and
+                    matches[0].get("retained") == "reports/" + BINDING_REPORT,
+                    "Missing or stale canonical production-observer model result")
+            raw = regular(case["public"] / "binding-controls.json", 65536)
+            require(digest(raw) == matches[0]["sha256"] and len(raw) == matches[0]["bytes"],
+                    "Binding controls differ from original producer receipt")
+            assess_binding_controls(read_json(case["public"] / "binding-controls.json"), hashes, require_pass=True)
+        finally:
+            original_error = sys.exc_info()[1]
+            try:
+                retain_result()
+                case["bindingRetained"] = True
+            except Exception as error:
+                case["retentionErrors"].append("Binding model retention: " + type(error).__name__ + ": " + str(error))
+                if original_error is None:
+                    raise audit.AuditError("Binding model evidence retention failed; preserve disposable inputs") from error
+
     def product(self, case):
         state, root = case["state"], case["root"]
         require(all(audit.existing_lstat(root / path) is None for path in
@@ -1783,6 +1887,7 @@ class Controller:
                 try:
                     if name == "current":
                         self.sdk_and_native(case)
+                        self.binding_controls(case)
                     outcomes[name] = self.product(case)
                 except Exception:
                     try:

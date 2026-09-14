@@ -54,6 +54,7 @@ def dispatch():
 def request(negative=False):
     return {"caseName": "preimage" if negative else "current", "nonce": "c" * 32, "source": dispatch()[2],
         "identity": {"scope": "MODEL_ONLY_NOT_HOSTED"}, "root": r"C:\control\source", "state": r"C:\control\state",
+        "outputDirectory": r"C:\control\state\evidence\directory-control-model",
         "testTemporary": r"C:\control\state\fixtures\jvm-tmp", "java17": r"C:\jdk17", "java21": r"C:\jdk21"}
 
 
@@ -77,6 +78,11 @@ def execution(req, scope="root"):
         "tasks": {name: {"outcome": "FAILED" if negative and name == C.TASK else "EXECUTED", "didWork": True,
                          "failureType": "MODEL_FAILURE" if negative and name == C.TASK else None} for name in paths},
         "buildFailed": negative, "root": req["root"] + (r"\buildSrc" if scope == "buildSrc" else ""),
+        "binding": {"authority": "self" if scope == "root" else "direct-root-parent",
+            "parentRoot": None if scope == "root" else req["root"], "parentHasParent": False,
+            "localProperties": {"p2pkit.windowsDirectoryRoot": req["root"],
+                "p2pkit.windowsDirectoryRequest": req["outputDirectory"] + r"\request.json",
+                "p2pkit.windowsDirectoryRequestSha256": "d" * 64} if scope == "root" else {}},
         "requestedTasks": [C.TASK], "admission": admission, "finishedMillis": 30,
         "events": [] if scope == "buildSrc" else [{"className": C.CLASS, "name": C.METHOD,
             "result": "FAILURE" if negative else "SUCCESS", "testCount": 1, "passed": int(not negative),
@@ -925,6 +931,157 @@ class PureWindowsControlTests(unittest.TestCase):
                 mutate(changed)
                 self.rejects(lambda: C.assess_xml(raw_xml(changed), req))
         self.rejects(lambda: C.assess_xml(b'<!DOCTYPE fake [<!ENTITY x "y">]><testsuite/>', request()))
+
+    def test_execution_requires_exact_root_or_direct_parent_binding(self):
+        # Report/assessor models, not actual Gradle parent or hosted observations.
+        for scope in ("root", "buildSrc"):
+            req, original = request(), execution(request(), scope)
+            C.assess_execution(original, req, "d" * 64, scope)
+            complete = execution(req)["binding"]["localProperties"]
+            if scope == "buildSrc":
+                copied = copy.deepcopy(original)
+                copied["binding"]["localProperties"] = complete
+                C.assess_execution(copied, req, "d" * 64, scope)
+            mutations = [lambda v: v.pop("binding"), lambda v: v.update(binding=None),
+                lambda v: v["binding"].update(authority="ancestor"),
+                lambda v: v["binding"].update(parentHasParent=True),
+                lambda v: v["binding"].update(parentHasParent=0),
+                lambda v: v["binding"].update(parentRoot=r"C:\foreign\source"),
+                lambda v: v["binding"].update(extra="unrecorded authority"),
+                lambda v: v["binding"].update(localProperties=None),
+                lambda v: v["binding"].update(localProperties={"p2pkit.windowsDirectoryRoot": req["root"]}),
+                lambda v: v["binding"].update(localProperties={**complete, "p2pkit.windowsDirectoryRequestSha256": "e" * 64}),
+                lambda v: v["binding"].update(localProperties={**complete, "p2pkit.windowsDirectoryRequest": ""}),
+                lambda v: v["binding"].update(localProperties={**complete, "unrelated": "must not be dumped"}),
+                lambda v: v.update(nonce="e" * 32), lambda v: v.update(source={**req["source"], "commit": "f" * 40}),
+                lambda v: v.update(identity={"runId": "stale-valid-run"})]
+            if scope == "root":
+                mutations += [lambda v: v["binding"].update(localProperties={})]
+            else:
+                mutations += [lambda v: v["binding"].update(parentRoot=None),
+                    lambda v: v["binding"].update(authority="self")]
+            for index, mutate in enumerate(mutations):
+                with self.subTest(scope=scope, mutation=index):
+                    changed = copy.deepcopy(original)
+                    mutate(changed)
+                    self.rejects(lambda: C.assess_execution(changed, req, "d" * 64, scope))
+
+    def binding_report(self, hashes):
+        self.assertEqual(len(C.BINDING_CASES), 24)
+        return {"schema": 1, "scope": "MODELED_NEGATIVE_INPUTS_WHOLE_PRODUCTION_OBSERVER", "gradleVersion": "9.7.0",
+            "hashes": hashes, "cases": [{"id": name, "passed": True, "expectedMessage": message,
+                "exceptionType": "org.gradle.api.GradleException", "message": message}
+                for name, message in C.BINDING_CASES.items()]}
+
+    def test_binding_model_report_rejects_omitted_stale_and_wrong_failure_results(self):
+        hashes = {name: "e" * 64 for name in ("observer", "settings.gradle", "build.gradle", "gradle/gradle-daemon-jvm.properties")}
+        original = self.binding_report(hashes)
+        C.assess_binding_controls(original, hashes, require_pass=True)
+        mutations = [lambda v: v.update(schema=True), lambda v: v.update(scope="NATIVE_WINDOWS"),
+            lambda v: v.update(gradleVersion="9.8.0"), lambda v: v.update(hashes={}),
+            lambda v: v["cases"].pop(), lambda v: v["cases"].reverse(),
+            lambda v: v["cases"].__setitem__(1, v["cases"][0]), lambda v: v["cases"][0].update(passed=1),
+            lambda v: v["cases"][0].update(exceptionType="java.lang.NullPointerException"),
+            lambda v: v["cases"][0].update(message="Directory control requires the admitted native Windows JDK21 daemon"),
+            lambda v: v["cases"][0].update(expectedMessage="a different error"),
+            lambda v: v["cases"][0].update(unboundedRawData="not admitted")]
+        for index, mutate in enumerate(mutations):
+            with self.subTest(mutation=index):
+                changed = copy.deepcopy(original)
+                mutate(changed)
+                self.rejects(lambda: C.assess_binding_controls(changed, hashes, require_pass=True))
+        failed = copy.deepcopy(original)
+        failed["cases"][0].update(passed=False, exceptionType="java.lang.NullPointerException", message="MODEL wrong failure")
+        C.assess_binding_controls(failed, hashes, require_pass=False)  # Retain the original failed model, never a pass.
+        self.rejects(lambda: C.assess_binding_controls(failed, hashes, require_pass=True))
+
+    def binding_adapter(self, variant="pass"):
+        controller, case, _ = self.native_model()
+        case["nativeAccepted"] = True  # Explicit fake prerequisite; no native suite runs here.
+        primary = C.audit.AuditError("MODEL binding leaf failed")
+
+        def leaf(observed_case, purpose, argv, **options):
+            self.assertIs(observed_case, case)
+            self.assertEqual(purpose, "binding-controls")
+            self.assertEqual(options, {"timeout": 300})
+            fixture = case["state"] / "fixtures/directory-binding"
+            self.assertEqual(argv, ["--project-dir", str(fixture), "verifyWindowsDirectoryBinding", "--console=plain",
+                                   "-Pp2pkit.windowsDirectoryObserver=" + str(ROOT / C.OBSERVER)])
+            hashes = {"observer": C.digest(C.regular(ROOT / C.OBSERVER))}
+            for name in ("settings.gradle", "build.gradle", "gradle/gradle-daemon-jvm.properties"):
+                source = ROOT / name if name.startswith("gradle/") else ROOT / C.BINDING_FIXTURE / name
+                self.assertEqual((fixture / name).read_bytes(), source.read_bytes())
+                hashes[name] = C.digest(source.read_bytes())
+            case["leaves"].append({"id": "a" * 32, "purpose": purpose, "arguments": argv})
+            if variant == "missing":
+                return {"id": "a" * 32, "reports": []}
+            original = fixture / "build/reports/windows-directory-binding/result.json"
+            original.parent.mkdir(parents=True)
+            C.new_json(original, self.binding_report(hashes))
+            raw = C.regular(original)
+            if variant in ("leaf-failure", "retention-failure"):
+                raise primary
+            canonical = case["state"] / "evidence" / ("a" * 32) / "reports" / C.BINDING_REPORT
+            canonical.parent.mkdir(parents=True)
+            canonical.write_bytes(raw + (b"\n" if variant == "tampered" else b""))
+            return {"id": "a" * 32, "reports": [{"source": C.BINDING_REPORT, "retained": "reports/" + C.BINDING_REPORT,
+                "classification": "preexisting-unchanged" if variant == "stale" else "changed-since-admission",
+                "sha256": C.digest(raw), "bytes": len(raw)}]}
+
+        controller.leaf = mock.Mock(side_effect=leaf)
+        try:
+            if variant == "retention-failure":
+                with mock.patch.object(C, "retain_available", side_effect=OSError("MODEL original copy failed")):
+                    controller.binding_controls(case)
+            else:
+                controller.binding_controls(case)
+            error = None
+        except Exception as caught:
+            error = caught
+        controller.leaf.assert_called_once()
+        return case, primary, error
+
+    def test_binding_adapter_uses_exact_owned_fixture_and_original_canonical_report(self):
+        case, _, error = self.binding_adapter()
+        self.assertIsNone(error)
+        self.assertTrue(case["bindingPrepared"] and case["bindingRetained"])
+        self.assertEqual(case["retentionErrors"], [])
+        self.assertTrue((case["public"] / "binding-controls.json").is_file())
+        self.assertFalse((case["public"] / "binding-controls-unbound.json").exists())
+        for variant in ("missing", "stale", "tampered"):
+            with self.subTest(variant=variant):
+                case, _, error = self.binding_adapter(variant)
+                self.assertIsInstance(error, C.audit.AuditError)
+                self.assertTrue(case["bindingRetained"])
+                self.assertEqual(case["retentionErrors"], [])
+
+    def test_binding_adapter_retains_failed_originals_without_replacing_primary_error(self):
+        for variant in ("leaf-failure", "retention-failure"):
+            with self.subTest(variant=variant):
+                case, primary, error = self.binding_adapter(variant)
+                self.assertIs(error, primary)
+                self.assertFalse((case["public"] / "binding-controls.json").exists())
+                if variant == "leaf-failure":
+                    self.assertTrue(case["bindingRetained"])
+                    self.assertTrue((case["public"] / "binding-controls-unbound.json").is_file())
+                else:
+                    self.assertFalse(case["bindingRetained"])
+                    self.assertEqual(len(case["retentionErrors"]), 1)
+        controller, case, _ = self.native_model()
+        self.rejects(lambda: controller.binding_controls(case))
+        self.assertFalse((case["state"] / "fixtures/directory-binding").exists())
+        case["nativeAccepted"] = True
+        fixture = case["state"] / "fixtures/directory-binding"
+        fixture.mkdir()
+        (fixture / "preserve-me").write_bytes(b"MODEL preexisting content")
+        with self.assertRaises(FileExistsError):
+            controller.binding_controls(case)
+        self.assertEqual((fixture / "preserve-me").read_bytes(), b"MODEL preexisting content")
+        for name in ("binding-controls.json", "binding-controls-unbound.json", "binding-controls/receipt.json",
+                     "commands/17-binding-controls/stdout.log"):
+            self.assertTrue(C.public_path(name))
+        for name in ("binding-controls/unknown.json", "binding-controls/payload.bin", "binding-models/request.json"):
+            self.assertFalse(C.public_path(name))
 
     def test_actual_graph_filter_launcher_nonce_and_event_predicates(self):
         for negative in (False, True):

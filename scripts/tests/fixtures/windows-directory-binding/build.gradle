@@ -1,0 +1,121 @@
+// Executes the WHOLE production observer callback with finite adverse models.
+// These models are not actual Gradle parents or native Windows product evidence.
+import groovy.json.JsonOutput
+import java.nio.file.Files
+import java.nio.file.StandardOpenOption
+import java.security.MessageDigest
+import org.gradle.util.GradleVersion
+
+class BindingRegistration {
+    final List<Closure> callbacks = []
+    void projectsLoaded(Closure callback) { callbacks.add(callback) }
+}
+
+tasks.register('verifyWindowsDirectoryBinding') {
+    def observerName = providers.gradleProperty('p2pkit.windowsDirectoryObserver')
+    inputs.file(observerName)
+    outputs.file(layout.buildDirectory.file('reports/windows-directory-binding/result.json'))
+    outputs.upToDateWhen { false }
+    doLast {
+        if (GradleVersion.current().version != '9.7.0') throw new GradleException('Unreviewed Gradle fixture version')
+        def observer = new File(observerName.get())
+        if (!observer.isAbsolute() || !observer.isFile() || observer.length() > 65536) {
+            throw new GradleException('Missing bounded production observer')
+        }
+        def checksum = { byte[] bytes -> MessageDigest.getInstance('SHA-256').digest(bytes).encodeHex().toString() }
+        def observerBytes = Files.readAllBytes(observer.toPath())
+        def registration = new BindingRegistration()
+        def variables = new Binding([gradle: registration])
+        // No stripping, rewriting, copied resolver, OS override or native call.
+        new GroovyShell(getClass().classLoader, variables).evaluate(new String(observerBytes, 'UTF-8'), observer.name)
+        if (registration.callbacks.size() != 1) throw new GradleException('Expected one complete production callback')
+        def callback = registration.callbacks[0]
+        def base = layout.buildDirectory.dir('binding-models').get().asFile.toPath()
+        Files.createDirectories(base.parent)
+        Files.createDirectory(base)
+        def source = Files.createDirectory(base.resolve('source')).toFile()
+        def buildSrc = Files.createDirectory(source.toPath().resolve('buildSrc')).toFile()
+        def foreign = Files.createDirectory(base.resolve('foreign')).toFile()
+        def foreignBuildSrc = Files.createDirectory(foreign.toPath().resolve('buildSrc')).toFile()
+        def requestFile = base.resolve('request.json')
+        def rootKey = 'p2pkit.windowsDirectoryRoot'
+        def requestKey = 'p2pkit.windowsDirectoryRequest'
+        def hashKey = 'p2pkit.windowsDirectoryRequestSha256'
+        def properties = [(rootKey): source.absolutePath, (requestKey): requestFile.toString(), (hashKey): '0' * 64]
+        def model = { File root, Map values, parent = null ->
+            [rootProject: [rootDir: root], startParameter: [projectProperties: values], parent: parent]
+        }
+        def root = { Map values -> model(source, values) }
+        def child = { Map values -> model(buildSrc, values, root(properties)) }
+        def rows = []
+        def check = { String id, instance, String expected ->
+            variables.setVariable('gradle', instance)
+            String type = null
+            String message = null
+            boolean passed = false
+            try {
+                callback.call()
+            } catch (Throwable error) {
+                type = error.class.name
+                message = error.message
+                passed = error.class == GradleException && message == expected
+            }
+            rows.add([id: id, passed: passed, expectedMessage: expected,
+                      exceptionType: type?.take(256), message: message?.take(256)])
+        }
+        def missing = 'Missing Windows directory-control request binding'
+        def conflict = 'Conflicting or partial child Windows directory-control binding'
+        def authority = 'Windows directory-control authority root differs from its binding'
+        def changed = 'Windows control request changed'
+        def wrong = 'Wrong Windows directory-control request'
+        Files.write(requestFile, '{}'.getBytes('UTF-8'), StandardOpenOption.CREATE_NEW)
+        check('root_missing', root([:]), missing)
+        check('root_one_key', root([(rootKey): properties[rootKey]]), missing)
+        check('root_two_keys', root(properties.findAll { key, _ -> key != hashKey }), missing)
+        check('root_empty', root(properties + [(rootKey): '']), missing)
+        check('root_empty_request', root(properties + [(requestKey): '']), missing)
+        check('root_bad_hash', root(properties + [(hashKey): 'bad']), missing)
+        check('root_nonstring', root(properties + [(rootKey): 42]), missing)
+        check('authority_wrong_root', model(foreign, properties), authority)
+        check('parentless_buildsrc', model(buildSrc, properties), authority)
+        check('foreign_child', model(foreign, [:], root(properties)),
+              'Unexpected included build in Windows directory control')
+        check('wrong_parent', model(foreignBuildSrc, [:], model(foreign, properties)), authority)
+        check('nested_child', model(buildSrc, [:], model(source, properties, root(properties))),
+              'Windows directory-control authority must be the direct root parent')
+        check('child_one_key', child([(rootKey): properties[rootKey]]), conflict)
+        check('child_two_keys', child(properties.findAll { key, _ -> key != hashKey }), conflict)
+        check('child_empty', child(properties + [(rootKey): '']), conflict)
+        check('child_conflict_root', child(properties + [(rootKey): foreign.absolutePath]), conflict)
+        check('child_conflict_request', child(properties + [(requestKey): 'foreign-request']), conflict)
+        check('child_conflict_hash', child(properties + [(hashKey): '1' * 64]), conflict)
+        check('changed_request_root', root(properties), changed)
+        check('changed_request_child', child([:]), changed)
+        check('child_copy_changed_request', child(new LinkedHashMap(properties)), changed)
+        def request = [schema: 1, root: source.absolutePath, nonce: 'a' * 32, caseName: 'current',
+                       task: ':p2p-core:jvmTest', selector: 'dev.p2pkit.core.transfer.FileTransferJvmTest.' +
+                           'durableDestinationPublishesOnlyAfterCommitAndCommitIsIdempotent']
+        [[id: 'request_wrong_schema', delta: [schema: 2]],
+         [id: 'request_wrong_root', delta: [root: foreign.absolutePath]],
+         [id: 'request_bad_nonce', delta: [nonce: 'stale-invalid']]].each { item ->
+            def bytes = JsonOutput.toJson(request + item.delta).getBytes('UTF-8')
+            Files.write(requestFile, bytes, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)
+            check(item.id, root(properties + [(hashKey): checksum(bytes)]), wrong)
+        }
+        if (!Arrays.equals(observerBytes, Files.readAllBytes(observer.toPath()))) {
+            throw new GradleException('Production observer changed during fixture')
+        }
+        def hashes = [observer: checksum(observerBytes)]
+        ['settings.gradle', 'build.gradle', 'gradle/gradle-daemon-jvm.properties'].each { name ->
+            hashes[name] = checksum(Files.readAllBytes(project.file(name).toPath()))
+        }
+        def report = [schema: 1, scope: 'MODELED_NEGATIVE_INPUTS_WHOLE_PRODUCTION_OBSERVER',
+                      gradleVersion: GradleVersion.current().version, hashes: hashes, cases: rows]
+        def output = layout.buildDirectory.file('reports/windows-directory-binding/result.json').get().asFile.toPath()
+        Files.createDirectories(output.parent)
+        def bytes = (JsonOutput.prettyPrint(JsonOutput.toJson(report)) + '\n').getBytes('UTF-8')
+        if (bytes.length > 65536) throw new GradleException('Binding fixture report exceeds its bound')
+        Files.write(output, bytes, StandardOpenOption.CREATE_NEW)
+        if (rows.any { !it.passed }) throw new GradleException('Production binding controls failed; inspect original report')
+    }
+}

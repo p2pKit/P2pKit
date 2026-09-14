@@ -17,6 +17,7 @@ module WindowsDirectoryControlPolicy
         buildSrc/** gradle/wrapper/** gradle/libs.versions.toml gradle/verification-metadata.xml
         gradle/windows-directory-control.init.gradle scripts/run-windows-directory-control.py
         scripts/tests/run-windows-directory-control-test.py scripts/tests/check-windows-directory-control-policy-test.rb
+        scripts/tests/fixtures/windows-directory-binding/settings.gradle scripts/tests/fixtures/windows-directory-binding/build.gradle
         gradle.lockfile buildscript-gradle.lockfile samples/p2p-sample-desktop/** samples/p2p-sample-desktop-ui/**
         samples/p2p-sample-diagnostics/** library/p2p-core/** library/p2p-transport-lan/** library/p2p-network-provisioning-desktop/**].freeze
     TASKS = %w[:p2p-sample-desktop:check :p2p-sample-desktop:installDist :p2p-sample-desktop-ui:test
