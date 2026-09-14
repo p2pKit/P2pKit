@@ -3,6 +3,7 @@
 import groovy.json.JsonOutput
 import java.nio.file.Files
 import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 import org.gradle.StartParameter
 import org.gradle.util.GradleVersion
@@ -162,6 +163,47 @@ tasks.register('verifyWindowsDirectoryBinding') {
                 requestedTasks: parameters.taskNames.toList(), excludedTasks: parameters.excludedTaskNames.toList().sort(),
                 dryRun: parameters.dryRun, buildSrc: isChild])
         }
+        // Same production class, with modeled BasicFileAttributes. This proves
+        // the predicate, not a Windows provider result or native directory pin.
+        def temporaryPolicy = shell.classLoader.loadClass('WindowsDirectoryControlTemporaryPolicy')
+        if (temporaryPolicy.classLoader.parent != shell.classLoader) {
+            throw new GradleException('Temporary policy did not come from the current observer loader')
+        }
+        def temporaryRows = []
+        def keyMessage = 'Invalid optional Test temporary file-key diagnostic'
+        [
+            [id: 'null_key', accepted: true],
+            [id: 'non_null_key', fileKey: 'MODELED_KEY', accepted: true],
+            [id: 'not_directory', directory: false],
+            [id: 'other', other: true],
+            [id: 'symbolic_link', symbolicLink: true],
+            [id: 'nonempty', hasEntries: true],
+            [id: 'empty_key', fileKey: '', message: keyMessage],
+            [id: 'unbounded_key', fileKey: 'x' * 1025, message: keyMessage],
+        ].each { item ->
+            def fields = [directory: true, other: false, symbolicLink: false, hasEntries: false,
+                          fileKey: null, accepted: false] + item
+            def attributes = [isDirectory: { fields.directory }, isOther: { fields.other },
+                              isSymbolicLink: { fields.symbolicLink }, fileKey: { fields.fileKey }] as BasicFileAttributes
+            boolean accepted = false
+            String observed = null
+            String type = null
+            String message = null
+            try {
+                observed = temporaryPolicy.verify(attributes, fields.hasEntries)
+                accepted = true
+            } catch (Throwable error) {
+                type = error.class.name
+                message = error.message
+            }
+            boolean passed = accepted == fields.accepted && (accepted ? observed == fields.fileKey :
+                observed == null && type == GradleException.name &&
+                    message == (item.message ?: 'Test temporary directory is not fresh/physical'))
+            temporaryRows.add([id: item.id, passed: passed, accepted: accepted,
+                exceptionType: type?.take(256), message: message?.take(256), observedFileKey: observed,
+                directory: attributes.isDirectory(), other: attributes.isOther(), symbolicLink: attributes.isSymbolicLink(),
+                hasEntries: fields.hasEntries, fileKey: attributes.fileKey()])
+        }
         if (!Arrays.equals(observerBytes, Files.readAllBytes(observer.toPath()))) {
             throw new GradleException('Production observer changed during fixture')
         }
@@ -169,15 +211,16 @@ tasks.register('verifyWindowsDirectoryBinding') {
         ['settings.gradle', 'build.gradle', 'gradle/gradle-daemon-jvm.properties'].each { name ->
             hashes[name] = checksum(Files.readAllBytes(project.file(name).toPath()))
         }
-        def report = [schema: 2, scope: 'MODELED_BINDINGS_AND_CONSTRUCTED_STARTPARAMETER_POLICY_NOT_NATIVE',
-                      gradleVersion: GradleVersion.current().version, hashes: hashes, cases: rows, taskPolicyCases: policyRows]
+        def report = [schema: 3, scope: 'MODELED_BINDINGS_ATTRIBUTES_AND_CONSTRUCTED_STARTPARAMETERS_NOT_NATIVE',
+                      gradleVersion: GradleVersion.current().version, hashes: hashes, cases: rows,
+                      taskPolicyCases: policyRows, temporaryPolicyCases: temporaryRows]
         def output = layout.buildDirectory.file('reports/windows-directory-binding/result.json').get().asFile.toPath()
         Files.createDirectories(output.parent)
         def bytes = (JsonOutput.prettyPrint(JsonOutput.toJson(report)) + '\n').getBytes('UTF-8')
         if (bytes.length > 65536) throw new GradleException('Binding fixture report exceeds its bound')
         Files.write(output, bytes, StandardOpenOption.CREATE_NEW)
-        if (rows.any { !it.passed } || policyRows.any { !it.passed }) {
-            throw new GradleException('Production binding/task-policy controls failed; inspect original report')
+        if (rows.any { !it.passed } || policyRows.any { !it.passed } || temporaryRows.any { !it.passed }) {
+            throw new GradleException('Production binding/task/temporary-policy controls failed; inspect original report')
         }
     }
 }

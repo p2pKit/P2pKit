@@ -100,6 +100,18 @@ TASK_POLICY_INPUTS = {
     "buildsrc_dry_run": {"requestedTasks": [], "buildSrc": True, "dryRun": True},
     "buildsrc_excluded": {"requestedTasks": [], "buildSrc": True, "excludedTasks": [":compileJava"]},
 }
+TEMPORARY_POLICY_MESSAGE = "Test temporary directory is not fresh/physical"
+FILE_KEY_MESSAGE = "Invalid optional Test temporary file-key diagnostic"
+TEMPORARY_POLICY_INPUTS = {
+    "null_key": {"accepted": True},
+    "non_null_key": {"fileKey": "MODELED_KEY", "accepted": True},
+    "not_directory": {"directory": False},
+    "other": {"other": True},
+    "symbolic_link": {"symbolicLink": True},
+    "nonempty": {"hasEntries": True},
+    "empty_key": {"fileKey": "", "message": FILE_KEY_MESSAGE},
+    "unbounded_key": {"fileKey": "x" * 1025, "message": FILE_KEY_MESSAGE},
+}
 FIX = "1df5c0670c90b579de767b6ff568a4beac97ad05"
 PRE_FIX = "ba208af23b9ce8e8f6efe1e3f63b0b81b38a4c7a"
 CURRENT_METHOD = b"    private fun syncParentDirectory() {\n        if (isWindows(operatingSystemName)) return\n        syncDirectory(parent)\n    }"
@@ -370,9 +382,9 @@ def assess_xml(raw, request):
 
 
 def assess_binding_controls(report, hashes, *, require_pass):
-    require(type(report) is dict and set(report) == {"schema", "scope", "gradleVersion", "hashes", "cases", "taskPolicyCases"} and
-            integer(report.get("schema"), 2) and
-            report.get("scope") == "MODELED_BINDINGS_AND_CONSTRUCTED_STARTPARAMETER_POLICY_NOT_NATIVE" and
+    require(type(report) is dict and set(report) == {"schema", "scope", "gradleVersion", "hashes", "cases",
+            "taskPolicyCases", "temporaryPolicyCases"} and integer(report.get("schema"), 3) and
+            report.get("scope") == "MODELED_BINDINGS_ATTRIBUTES_AND_CONSTRUCTED_STARTPARAMETERS_NOT_NATIVE" and
             report.get("gradleVersion") == "9.7.0" and report.get("hashes") == hashes and
             type(report.get("cases")) is list and len(report["cases"]) == len(BINDING_CASES),
             "Wrong or stale production-observer model report")
@@ -407,6 +419,29 @@ def assess_binding_controls(report, hashes, *, require_pass):
             row["accepted"] or row["exceptionType"] == "org.gradle.api.GradleException" and row["message"] == TASK_POLICY_MESSAGE)
         require(row["passed"] is passed, "Falsely passing production task-policy control")
     require(not require_pass or all(row["passed"] for row in rows), "Actual production task-policy controls failed")
+    rows = report["temporaryPolicyCases"]
+    require(type(rows) is list and len(rows) == len(TEMPORARY_POLICY_INPUTS) and
+            [row.get("id") for row in rows if type(row) is dict] == list(TEMPORARY_POLICY_INPUTS),
+            "Missing, reordered or duplicate temporary-attribute controls")
+    for row in rows:
+        expected = {"directory": True, "other": False, "symbolicLink": False, "hasEntries": False,
+                    "fileKey": None, "accepted": False, "message": TEMPORARY_POLICY_MESSAGE,
+                    **TEMPORARY_POLICY_INPUTS[row["id"]]}
+        require(set(row) == {"id", "passed", "accepted", "exceptionType", "message", "directory", "other",
+                            "symbolicLink", "hasEntries", "fileKey", "observedFileKey"} and
+                all(type(row[key]) is bool for key in ("passed", "accepted", "directory", "other", "symbolicLink", "hasEntries")) and
+                all(row[key] == expected[key] for key in ("directory", "other", "symbolicLink", "hasEntries", "fileKey")) and
+                all(row[key] is None or type(row[key]) is str and len(row[key]) <= 256
+                    for key in ("exceptionType", "message")) and
+                (row["observedFileKey"] is None or type(row["observedFileKey"]) is str and len(row["observedFileKey"]) <= 1024) and
+                (not row["accepted"] or row["exceptionType"] is None and row["message"] is None),
+                "Wrong modeled temporary-attribute input or result shape")
+        passed = row["accepted"] is expected["accepted"] and (
+            row["observedFileKey"] == expected["fileKey"] if row["accepted"] else
+            row["observedFileKey"] is None and row["exceptionType"] == "org.gradle.api.GradleException" and
+            row["message"] == expected["message"])
+        require(row["passed"] is passed, "Falsely passing production temporary-policy control")
+    require(not require_pass or all(row["passed"] for row in rows), "Actual production temporary-policy controls failed")
 
 
 def assess_execution(report, request, request_hash, scope="root"):
@@ -470,7 +505,9 @@ def assess_execution(report, request, request_hash, scope="root"):
             admission.get("enabled") is True and admission.get("ignoreFailures") is False and
             admission.get("failOnNoMatchingTests") is True and integer(admission.get("maxParallelForks"), 1) and
             integer(admission.get("forkEvery"), 0) and admission.get("temporaryEmpty") is True and
-            type(admission.get("temporaryFileKey")) is str and bool(admission["temporaryFileKey"]) and
+            "temporaryFileKey" in admission and (admission["temporaryFileKey"] is None or
+                type(admission["temporaryFileKey"]) is str and 0 < len(admission["temporaryFileKey"]) <= 1024) and
+            admission.get("temporaryOwnerSha256") == request["temporaryOwnerSha256"] and
             integer(admission.get("observedMillis")) and integer(report.get("finishedMillis")) and
             window_path(admission.get("temporary")) == window_path(request["testTemporary"]),
             "Wrong test admission/filter/fork/temporary ownership")
@@ -600,7 +637,7 @@ def require_disposal_evidence(case):
     require(case["initialized"], "Partial allocation retained for inspection; no product/cleanup qualification")
     require(all(row["valid"] for row in case["leaves"]), "Unfinalized leaf prevents source/cache cleanup")
     require(all(row["retained"] for row in case["leaves"]) and not case["retentionErrors"] and
-            (not case["productPrepared"] or case["productRetained"]) and
+            (not case["productPrepared"] or case["productRetained"] and case.get("testTemporaryRetired") is True) and
             (not case.get("bindingPrepared") or case.get("bindingRetained")) and
             (not case["nativeStarted"] or case["nativeAccepted"]),
             "Required original retention failed; preserve sources, outputs and caches")
@@ -608,6 +645,26 @@ def require_disposal_evidence(case):
 
 def native_temporary_identity(info):
     return {"device": info.st_dev, "inode": info.st_ino, "birthNs": getattr(info, "st_birthtime_ns", None)}
+
+
+def require_positive_temporary_identity(value):
+    require(type(value) is dict and set(value) == {"device", "inode", "birthNs"} and
+            all(type(value[key]) is int and 0 < value[key] < 2 ** 128 for key in ("device", "inode")) and
+            (value["birthNs"] is None or type(value["birthNs"]) is int and -2 ** 127 <= value["birthNs"] < 2 ** 128),
+            "Test temporary directory lacks positive native identity")
+
+
+def identified_test_temporary(directory):
+    """Root-first full lstat, not cached DirEntry fields or Java fileKey."""
+    require(directory.is_absolute() and ".." not in directory.parts and len(directory.parts) <= 64 and
+            len(str(directory)) <= 1024, "Invalid test temporary path")
+    for path in (*reversed(directory.parents), directory):
+        info = path.lstat()
+        require(native_temporary_kind(info.st_mode, getattr(info, "st_file_attributes", None)) == "directory",
+                "Unsafe test temporary directory or ancestor")
+    identity = native_temporary_identity(info)
+    require_positive_temporary_identity(identity)
+    return identity
 
 
 def native_temporary_kind(mode, attributes):
@@ -710,22 +767,14 @@ def observe_native_temporary(directory, expected, deadline):
     return record
 
 
-def validate_native_temporary(value, identity, phase):
-    """Only this finite metadata schema may use the two new public filenames."""
-    require(type(value) is dict and set(value) == {"schema", "kind", "phase", "identity", "source", "caseName",
-        "jobId", "leaf", "directory", "expectedRootIdentity", "startedUtc", "endedUtc", "rootBefore", "rootAfter",
-        "entries", "errors", "complete", "empty"} and integer(value["schema"], 1) and
-        value["kind"] == "windows-native-temporary-metadata" and phase in ("before", "after") and value["phase"] == phase and
-        value["identity"] == identity and value["caseName"] == "current" and
-        re.fullmatch(HEX32, value["jobId"] if type(value["jobId"]) is str else ""), "Invalid native temporary binding/schema")
-    require(value["source"] == {"commit": identity["sourceSha"], "tree": identity["sourceTree"], "status": "",
-                                "diffSha256": digest(b"")}, "Native temporary source differs from reviewed current case")
+def validate_temporary_metadata(value, name):
+    """Shared finite observation body; callers separately bind schema/owner/leaf."""
     require(type(value["directory"]) is str and 0 < len(value["directory"]) <= 1024 and
             not any(char in value["directory"] for char in "\0\r\n") and all(type(value[key]) is str and
                 re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?\+00:00", value[key])
                 for key in ("startedUtc", "endedUtc")), "Invalid native temporary path/time metadata")
     directory = PureWindowsPath(value["directory"]) if PureWindowsPath(value["directory"]).drive else PurePosixPath(value["directory"])
-    require(directory.is_absolute() and ".." not in directory.parts and directory.parts[-2:] == ("fixtures", "native-tmp"),
+    require(directory.is_absolute() and ".." not in directory.parts and directory.parts[-2:] == ("fixtures", name),
             "Native temporary metadata names another root")
 
     def number(item, optional=False, signed=False):
@@ -770,6 +819,19 @@ def validate_native_temporary(value, identity, phase):
                 all(value[key] is not None and value[key]["kind"] == "directory" and
                     {field: value[key][field] for field in owner} == owner for key in ("rootBefore", "rootAfter")),
                 "Incomplete/replaced native temporary root cannot be accepted")
+
+
+def validate_native_temporary(value, identity, phase):
+    """The original native-suite metadata schema remains unchanged."""
+    require(type(value) is dict and set(value) == {"schema", "kind", "phase", "identity", "source", "caseName",
+        "jobId", "leaf", "directory", "expectedRootIdentity", "startedUtc", "endedUtc", "rootBefore", "rootAfter",
+        "entries", "errors", "complete", "empty"} and integer(value["schema"], 1) and
+        value["kind"] == "windows-native-temporary-metadata" and phase in ("before", "after") and value["phase"] == phase and
+        value["identity"] == identity and value["caseName"] == "current" and
+        re.fullmatch(HEX32, value["jobId"] if type(value["jobId"]) is str else ""), "Invalid native temporary binding/schema")
+    require(value["source"] == {"commit": identity["sourceSha"], "tree": identity["sourceTree"], "status": "",
+                                "diffSha256": digest(b"")}, "Native temporary source differs from reviewed current case")
+    validate_temporary_metadata(value, "native-tmp")
     leaf = value["leaf"]
     require(phase == "after" or leaf is None, "Before observation cannot claim a completed leaf")
     if leaf is not None:
@@ -778,6 +840,91 @@ def validate_native_temporary(value, identity, phase):
                 (leaf["status"] is None or type(leaf["status"]) is int) and
                 type(leaf["valid"]) is bool and type(leaf["retained"]) is bool, "Invalid native leaf observation binding")
     require(len(audit.json_bytes(value)) <= NATIVE_TEMP_BYTES, "Native temporary metadata exceeds its byte bound")
+
+
+def validate_test_temporary_owner(owner, identity, case_name):
+    require(type(owner) is dict and set(owner) == {"schema", "identity", "source", "caseName", "jobId", "nonce",
+            "directory", "createdUtc", "nativeIdentity"} and integer(owner["schema"], 2) and
+            owner["identity"] == identity and owner["caseName"] == case_name and case_name in ("current", "preimage") and
+            all(type(owner[key]) is str and re.fullmatch(HEX32, owner[key]) for key in ("nonce", "jobId")) and
+            type(owner["createdUtc"]) is str and
+            re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?\+00:00", owner["createdUtc"]),
+            "Wrong test temporary creation binding")
+    source = owner["source"]
+    require(type(source) is dict and set(source) == {"commit", "tree", "status", "diffSha256"} and
+            all(type(source[key]) is str and re.fullmatch(r"[0-9a-f]{40}", source[key]) for key in ("commit", "tree")) and
+            source["status"] == "" and source["diffSha256"] == digest(b""), "Unbound test temporary creation source")
+    if case_name == "current":
+        require(source["commit"] == identity["sourceSha"] and source["tree"] == identity["sourceTree"],
+                "Current test temporary creation names another source")
+    require(type(owner["directory"]) is str and 0 < len(owner["directory"]) <= 1024 and
+            not any(char in owner["directory"] for char in "\0\r\n"), "Invalid test temporary creation path")
+    path = PureWindowsPath(owner["directory"]) if PureWindowsPath(owner["directory"]).drive else PurePosixPath(owner["directory"])
+    require(path.is_absolute() and ".." not in path.parts and path.parts[-2:] == ("fixtures", "jvm-tmp"),
+            "Test temporary owner names another path")
+    require_positive_temporary_identity(owner["nativeIdentity"])
+
+
+def create_test_temporary(case, identity):
+    directory = case["state"] / "fixtures/jvm-tmp"
+    directory.mkdir(mode=0o700)  # Existing directories are never admitted as fresh.
+    owner = {"schema": 2, "identity": identity, "source": case["context"]["source"], "caseName": case["name"],
+             "jobId": case["context"]["id"], "nonce": uuid.uuid4().hex, "directory": str(directory),
+             "createdUtc": audit.utc(), "nativeIdentity": identified_test_temporary(directory)}
+    validate_test_temporary_owner(owner, identity, case["name"])
+    path = directory.parent / "jvm-tmp-owner.json"
+    new_json(path, owner)
+    case.update(testTemporaryOwner=owner, testTemporaryOwnerSha256=digest(regular(path, 65536)))
+    copy_public(path, case["public"] / "temporary-owner.json")
+
+
+def validate_test_temporary(value, owner, owner_hash, phase):
+    require(type(value) is dict and set(value) == {"schema", "kind", "phase", "identity", "source", "caseName",
+        "jobId", "nonce", "leaf", "directory", "expectedRootIdentity", "startedUtc", "endedUtc", "rootBefore", "rootAfter",
+        "entries", "errors", "complete", "empty", "temporaryOwnerSha256", "observedOwnerSha256", "ownerError", "ownerUnchanged"} and
+        integer(value["schema"], 2) and value["kind"] == "windows-test-temporary-metadata" and
+        phase in ("before", "after") and value["phase"] == phase and
+        all(value[key] == owner[key] for key in ("identity", "source", "caseName", "jobId", "nonce", "directory")) and
+        value["expectedRootIdentity"] == owner["nativeIdentity"] and value["temporaryOwnerSha256"] == owner_hash and
+        owner_hash == digest(audit.json_bytes(owner)), "Wrong test temporary observation binding")
+    require_positive_temporary_identity(value["expectedRootIdentity"])
+    validate_temporary_metadata(value, "jvm-tmp")
+    require((value["observedOwnerSha256"] is None or type(value["observedOwnerSha256"]) is str and
+                re.fullmatch(r"[0-9a-f]{64}", value["observedOwnerSha256"])) and
+            (value["ownerError"] is None or type(value["ownerError"]) is str and
+                re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", value["ownerError"])) and
+            (value["observedOwnerSha256"] is None) == (value["ownerError"] is not None) and
+            type(value["ownerUnchanged"]) is bool and value["ownerUnchanged"] == (value["observedOwnerSha256"] == owner_hash),
+            "Malformed test temporary owner observation")
+    leaf = value["leaf"]
+    require(phase == "after" or leaf is None, "Before observation cannot claim a completed Test leaf")
+    if leaf is not None:
+        require(type(leaf) is dict and set(leaf) == {"id", "purpose", "status", "valid", "retained"} and
+                type(leaf["id"]) is str and re.fullmatch(HEX32, leaf["id"]) and leaf["purpose"] == "product" and
+                (leaf["status"] is None or type(leaf["status"]) is int) and
+                type(leaf["valid"]) is bool and type(leaf["retained"]) is bool, "Invalid Test leaf observation")
+    require(len(audit.json_bytes(value)) <= NATIVE_TEMP_BYTES, "Test temporary metadata exceeds its byte bound")
+
+
+def test_temporary_ok(value):
+    return value["complete"] is True and value["empty"] is True and value["ownerUnchanged"] is True
+
+
+def validate_public_test_temporary(directory, identity, case_name, rows):
+    names = {row["path"] for row in rows} & {"temporary-owner.json", "temporary-before.json", "temporary-after.json"}
+    if not names:
+        return
+    require(case_name in ("current", "preimage") and "temporary-owner.json" in names,
+            "Test temporary observations lack their retained creation owner")
+    owner_raw = regular(directory / "temporary-owner.json", 65536)
+    owner = read_json(directory / "temporary-owner.json")
+    validate_test_temporary_owner(owner, identity, case_name)
+    require(owner_raw == audit.json_bytes(owner), "Noncanonical temporary creation owner")
+    for phase in ("before", "after"):
+        name = "temporary-" + phase + ".json"
+        if name in names:
+            require(len(regular(directory / name, NATIVE_TEMP_BYTES)) <= NATIVE_TEMP_BYTES, "Unbounded test temporary observation")
+            validate_test_temporary(read_json(directory / name), owner, digest(owner_raw), phase)
 
 
 def native_predicates(text, count, temporary):
@@ -916,7 +1063,7 @@ def public_path(name):
     if len(path.parts) == 1:
         return name in {"start.json", "outcome.json", "tools.json", "source-before.json", "source-after.json",
                         "source.kt", "test.kt", "transform.json", "transform.patch", "derivative-commit.txt",
-                        "context.json", "gradle.properties", "request.json", "temporary-before.json",
+                        "context.json", "gradle.properties", "request.json", "temporary-owner.json", "temporary-before.json",
                         "temporary-after.json", "retirement-start.json", "retirement.json", "controller-error.txt",
                         "native-controls.json", "test-admission.json", "execution.json", "buildsrc-execution.json",
                         "native-temporary-before.json", "native-temporary-after.json",
@@ -947,6 +1094,7 @@ def seal_public(directory, identity, case_name):
     rows = inventory(directory)
     require(rows and all(public_path(row["path"]) for row in rows), "Unaudited public evidence member")
     validate_public_native_temporary(directory, identity, case_name, rows)
+    validate_public_test_temporary(directory, identity, case_name, rows)
     manifest = public_manifest(identity, case_name, rows)
     new_json(directory / "manifest.json", manifest)
     require(inventory(directory) == sorted(rows + [{"path": "manifest.json",
@@ -962,6 +1110,7 @@ def verify_public(directory, identity, case_name):
             actual and all(public_path(row["path"]) for row in actual),
             "Missing, changed, extra or unsafe sealed public artifact member")
     validate_public_native_temporary(directory, identity, case_name, actual)
+    validate_public_test_temporary(directory, identity, case_name, actual)
 
 
 def copy_public(source, destination):
@@ -983,6 +1132,7 @@ def retain_before_disposal(directory, identity, case_name):
     rows = inventory(directory)
     require(rows and all(public_path(row["path"]) for row in rows), "Unsafe retention prevents disposable cleanup")
     validate_public_native_temporary(directory, identity, case_name, rows)
+    validate_public_test_temporary(directory, identity, case_name, rows)
     value = {"schema": 1, "identity": identity, "caseName": case_name, "files": rows}
     new_json(directory / "retained-before-disposal.json", value)
     return value
@@ -1357,7 +1507,8 @@ class Controller:
         fixtures.mkdir(mode=0o700)
         fixture_info = fixtures.lstat()
         case["roots"][str(fixtures)] = {"device": fixture_info.st_dev, "inode": fixture_info.st_ino}
-        for child in ("jvm-tmp", "native-tmp", "process-tmp"):
+        create_test_temporary(case, self.identity)
+        for child in ("native-tmp", "process-tmp"):
             (fixtures / child).mkdir(mode=0o700)
             if child == "native-tmp":
                 case["nativeTemporaryIdentity"] = native_temporary_identity((fixtures / child).lstat())
@@ -1612,26 +1763,45 @@ class Controller:
                 if original_error is None:
                     raise audit.AuditError("Binding model evidence retention failed; preserve disposable inputs") from error
 
+    def test_temporary(self, case, phase):
+        owner, owner_hash = case["testTemporaryOwner"], case["testTemporaryOwnerSha256"]
+        validate_test_temporary_owner(owner, self.identity, case["name"])
+        directory = case["state"] / "fixtures/jvm-tmp"
+        require(owner["directory"] == str(directory) and owner["source"] == case["context"]["source"] and
+                owner["jobId"] == case["context"]["id"], "Test temporary creation context changed")
+        deadline = self.final_deadline if phase == "after" else self.deadline
+        record = observe_native_temporary(directory, owner["nativeIdentity"], min(deadline, time.monotonic() + 5))
+        observed_hash, owner_error = None, None
+        try:
+            observed_hash = digest(regular(directory.parent / "jvm-tmp-owner.json", 65536))
+        except Exception as error:
+            name = type(error).__name__
+            owner_error = name if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", name) else "Exception"
+        leaf = next((row for row in case["leaves"] if row["purpose"] == "product"), None)
+        record.update(schema=2, kind="windows-test-temporary-metadata", phase=phase,
+            **{key: owner[key] for key in ("identity", "source", "caseName", "jobId", "nonce")},
+            temporaryOwnerSha256=owner_hash, observedOwnerSha256=observed_hash, ownerError=owner_error,
+            ownerUnchanged=observed_hash == owner_hash,
+            leaf={key: leaf[key] for key in ("id", "purpose", "status", "valid", "retained")} if leaf else None)
+        validate_test_temporary(record, owner, owner_hash, phase)
+        new_json(case["public"] / ("temporary-" + phase + ".json"), record)
+        return record
+
     def product(self, case):
         state, root = case["state"], case["root"]
         require(all(audit.existing_lstat(root / path) is None for path in
                     ("library/p2p-core/build", "buildSrc/build")), "Preexisting product outputs/classes are not admitted")
-        nonce = uuid.uuid4().hex
+        nonce = case["testTemporaryOwner"]["nonce"]
         output = state / "evidence" / ("directory-control-" + nonce)
         output.mkdir(mode=0o700)
         case["productPrepared"] = True
         temporary = state / "fixtures/jvm-tmp"
-        info = temporary.lstat()
-        require(not list(temporary.iterdir()), "Selected-test temporary root is not genuinely fresh")
         owner = state / "fixtures/jvm-tmp-owner.json"
-        new_json(owner, {"schema": 1, "nonce": nonce, "caseName": case["name"], "jobId": case["context"]["id"],
-                         "directory": str(temporary), "device": info.st_dev, "inode": info.st_ino})
         request = {"schema": 1, "caseName": case["name"], "nonce": nonce, "identity": self.identity,
             "source": case["context"]["source"], "root": str(root), "state": str(state), "task": TASK,
             "selector": SELECTOR, "outputDirectory": str(output), "testTemporary": str(temporary),
-            "temporaryOwner": str(owner), "temporaryOwnerSha256": digest(regular(owner)),
+            "temporaryOwner": str(owner), "temporaryOwnerSha256": case["testTemporaryOwnerSha256"],
             "java17": case["env"]["JAVA_HOME"], "java21": case["env"]["P2PKIT_AUDIT_JDK21"]}
-        new_json(case["public"] / "temporary-before.json", read_json(owner))
         new_json(output / "request.json", request)
         request_hash = digest(regular(output / "request.json"))
         copy_public(output / "request.json", case["public"] / "request.json")
@@ -1639,7 +1809,8 @@ class Controller:
                      "-Pp2pkit.windowsDirectoryRoot=" + str(root),
                      "-Pp2pkit.windowsDirectoryRequest=" + str(output / "request.json"),
                      "-Pp2pkit.windowsDirectoryRequestSha256=" + request_hash]
-        succeeded = False
+        before_ok = False
+        case["testTemporaryRetired"] = False
         receipt = None
         xml_name = "library/p2p-core/build/test-results/jvmTest/TEST-" + CLASS + ".xml"
         build_info = root / "library/p2p-core/build/generated/buildinfo/commonMain/kotlin/dev/p2pkit/core/BuildInfo.kt"
@@ -1663,6 +1834,9 @@ class Controller:
                         "reason": "No canonical leaf-retained selected XML; never assessed as fresh execution"})
 
         try:
+            before = self.test_temporary(case, "before")
+            before_ok = test_temporary_ok(before)
+            require(before_ok, "Test temporary creation identity/owner/freshness changed before product")
             receipt = self.leaf(case, "product", arguments, expected=int(case["name"] == "preimage"), timeout=1500)
             retain_selected()
             require(digest(regular(output / "request.json")) == request_hash, "Control request changed during product")
@@ -1687,8 +1861,9 @@ class Controller:
                     [case["context"]["expectedCommit"]] and
                     re.findall(r'^    public const val DIRTY: Boolean = (true|false)$', build_info_text, re.M) == ["false"],
                     "Generated BuildInfo does not name the actual clean current/derivative source")
-            require(not list(temporary.iterdir()), "Test teardown left fixture residue; not a clean acceptance")
-            succeeded = True
+            # The finally below still has to accept post-stop identity/owner and
+            # empty metadata before this return can succeed. Case/outer retirement
+            # remains a separate mandatory barrier in run(), never implied here.
             return {"verdict": "PASS_CURRENT" if case["name"] == "current" else "EXPECTED_PRODUCT_FAILURE",
                     "productExitCode": receipt["productExitCode"], "stopExitCode": receipt["stopExitCode"],
                     "finalExitCode": receipt["finalExitCode"], "testCount": 1, "failedDirectory": directory,
@@ -1703,12 +1878,11 @@ class Controller:
             except Exception as error:
                 retention_errors.append("Selected originals: " + type(error).__name__ + ": " + str(error))
             try:
-                after = temporary.lstat()
-                require((after.st_dev, after.st_ino) == (info.st_dev, info.st_ino), "Owned test temporary root was replaced")
-                rows = inventory(temporary)
-                new_json(case["public"] / "temporary-after.json", {"schema": 1, "directory": str(temporary),
-                    "device": after.st_dev, "inode": after.st_ino, "empty": not list(temporary.iterdir()),
-                    "residue": rows, "productAccepted": succeeded})
+                # Metadata is retained even on mismatch, before rejecting it.
+                # No scratch contents are opened/hashed and no residue is removed.
+                after = self.test_temporary(case, "after")
+                case["testTemporaryRetired"] = before_ok and test_temporary_ok(after)
+                require(case["testTemporaryRetired"], "Test temporary identity/owner/empty retirement is unproved")
             except Exception as error:
                 retention_errors.append("Temporary retirement evidence: " + type(error).__name__ + ": " + str(error))
             case["productRetained"] = not retention_errors

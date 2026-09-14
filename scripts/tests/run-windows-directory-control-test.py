@@ -55,6 +55,7 @@ def request(negative=False):
     return {"caseName": "preimage" if negative else "current", "nonce": "c" * 32, "source": dispatch()[2],
         "identity": {"scope": "MODEL_ONLY_NOT_HOSTED"}, "root": r"C:\control\source", "state": r"C:\control\state",
         "outputDirectory": r"C:\control\state\evidence\directory-control-model",
+        "temporaryOwnerSha256": "e" * 64,
         "testTemporary": r"C:\control\state\fixtures\jvm-tmp", "java17": r"C:\jdk17", "java21": r"C:\jdk21"}
 
 
@@ -68,7 +69,7 @@ def execution(req, scope="root"):
     paths = sorted(C.REQUIRED_TASKS) if scope == "root" else [":compileJava", ":jar"]
     admission = {"task": C.TASK, "commandFilters": [C.SELECTOR], "includePatterns": [], "excludePatterns": [],
         "enabled": True, "ignoreFailures": False, "failOnNoMatchingTests": True, "maxParallelForks": 1, "forkEvery": 0,
-        "temporaryEmpty": True, "temporaryFileKey": "MODEL_FILE_KEY", "observedMillis": 10,
+        "temporaryEmpty": True, "temporaryFileKey": None, "temporaryOwnerSha256": req["temporaryOwnerSha256"], "observedMillis": 10,
         "temporary": req["testTemporary"], "jvmArgs": arguments(req),
         "launcher": {"version": 17, "home": req["java17"], "executable": req["java17"] + r"\bin\java.exe"}}
     return {"schema": 1, "scope": scope, "nonce": req["nonce"], "caseName": req["caseName"], "source": req["source"],
@@ -896,7 +897,8 @@ class PureWindowsControlTests(unittest.TestCase):
     def test_context_reuse_and_incomplete_retention_block_disposal(self):
         case = {"root": self.base / "source", "state": self.base / "state", "before": {"source": dispatch()[2]},
             "initialized": True, "leaves": [{"valid": True, "retained": True}], "retentionErrors": [],
-            "productPrepared": True, "productRetained": True, "nativeStarted": True, "nativeAccepted": True}
+            "productPrepared": True, "productRetained": True, "testTemporaryRetired": True,
+            "nativeStarted": True, "nativeAccepted": True}
         env = {"JAVA_HOME": "jdk17", "P2PKIT_AUDIT_JDK21": "jdk21"}
         context = {"root": str(case["root"]), "gradleHome": str(case["state"] / "gradle-home"), "host": "windows-x64",
             "source": case["before"]["source"], "expectedCommit": "a" * 40, "tree": "b" * 40,
@@ -908,7 +910,7 @@ class PureWindowsControlTests(unittest.TestCase):
             self.rejects(lambda: C.prepared_context(case["state"], dict(context, **{key: value}), case, env))
         for key, value in (("initialized", False), ("leaves", [{"valid": False, "retained": True}]),
                 ("leaves", [{"valid": True, "retained": False}]), ("retentionErrors", ["lost XML"]),
-                ("productRetained", False), ("nativeAccepted", False)):
+                ("productRetained", False), ("testTemporaryRetired", False), ("testTemporaryRetired", None), ("nativeAccepted", False)):
             self.rejects(lambda: C.require_disposal_evidence(dict(case, **{key: value})))
 
     def test_exact_selected_junit_and_native_failure_path(self):
@@ -970,14 +972,24 @@ class PureWindowsControlTests(unittest.TestCase):
     def binding_report(self, hashes):
         self.assertEqual(len(C.BINDING_CASES), 24)
         self.assertEqual(len(C.TASK_POLICY_INPUTS), 21)
+        self.assertEqual(len(C.TEMPORARY_POLICY_INPUTS), 8)
         policy_rows = []
         for name, inputs in C.TASK_POLICY_INPUTS.items():
             fields = {"buildSrc": False, "dryRun": False, "excludedTasks": [], "accepted": False, **copy.deepcopy(inputs)}
             policy_rows.append({"id": name, "passed": True, **fields,
                 "exceptionType": None if fields["accepted"] else "org.gradle.api.GradleException",
                 "message": None if fields["accepted"] else C.TASK_POLICY_MESSAGE})
-        return {"schema": 2, "scope": "MODELED_BINDINGS_AND_CONSTRUCTED_STARTPARAMETER_POLICY_NOT_NATIVE",
-            "gradleVersion": "9.7.0", "taskPolicyCases": policy_rows,
+        temporary_rows = []
+        for name, inputs in C.TEMPORARY_POLICY_INPUTS.items():
+            fields = {"directory": True, "other": False, "symbolicLink": False, "hasEntries": False,
+                      "fileKey": None, "accepted": False, **copy.deepcopy(inputs)}
+            message = fields.pop("message", C.TEMPORARY_POLICY_MESSAGE)
+            temporary_rows.append({"id": name, "passed": True, **fields,
+                "observedFileKey": fields["fileKey"] if fields["accepted"] else None,
+                "exceptionType": None if fields["accepted"] else "org.gradle.api.GradleException",
+                "message": None if fields["accepted"] else message})
+        return {"schema": 3, "scope": "MODELED_BINDINGS_ATTRIBUTES_AND_CONSTRUCTED_STARTPARAMETERS_NOT_NATIVE",
+            "gradleVersion": "9.7.0", "taskPolicyCases": policy_rows, "temporaryPolicyCases": temporary_rows,
             "hashes": hashes, "cases": [{"id": name, "passed": True, "expectedMessage": message,
                 "exceptionType": "org.gradle.api.GradleException", "message": message}
                 for name, message in C.BINDING_CASES.items()]}
@@ -1034,6 +1046,200 @@ class PureWindowsControlTests(unittest.TestCase):
             changed["taskPolicyCases"][index].update(passed=False, **outcome)
             C.assess_binding_controls(changed, hashes, require_pass=False)
             self.rejects(lambda: C.assess_binding_controls(changed, hashes, require_pass=True))
+
+    def test_temporary_policy_report_requires_actual_inputs_complete_rows_and_precise_outcomes(self):
+        # This assesses modeled reports; the hosted Groovy fixture runs the shared predicate.
+        hashes = {"scope": "MODEL_ONLY"}
+        original = self.binding_report(hashes)
+        C.assess_binding_controls(original, hashes, require_pass=True)
+        mutations = [lambda v: v.update(schema=2), lambda v: v.pop("temporaryPolicyCases"),
+            lambda v: v["temporaryPolicyCases"].pop(), lambda v: v["temporaryPolicyCases"].reverse(),
+            lambda v: v["temporaryPolicyCases"].__setitem__(1, v["temporaryPolicyCases"][0]),
+            lambda v: v["temporaryPolicyCases"][0].update(directory=False),
+            lambda v: v["temporaryPolicyCases"][0].update(hasEntries=0),
+            lambda v: v["temporaryPolicyCases"][0].update(observedFileKey="null"),
+            lambda v: v["temporaryPolicyCases"][1].update(observedFileKey=None),
+            lambda v: v["temporaryPolicyCases"][2].update(message="different error"),
+            lambda v: v["temporaryPolicyCases"][2].update(exceptionType="java.lang.NullPointerException"),
+            lambda v: v["temporaryPolicyCases"][2].update(passed=1),
+            lambda v: v["temporaryPolicyCases"][2].update(raw="not allowed")]
+        for index, mutate in enumerate(mutations):
+            with self.subTest(mutation=index):
+                changed = copy.deepcopy(original)
+                mutate(changed)
+                self.rejects(lambda: C.assess_binding_controls(changed, hashes, require_pass=True))
+        failed = copy.deepcopy(original)
+        failed["temporaryPolicyCases"][0].update(passed=False, accepted=False,
+            exceptionType="org.gradle.api.GradleException", message=C.TEMPORARY_POLICY_MESSAGE)
+        C.assess_binding_controls(failed, hashes, require_pass=False)
+        self.rejects(lambda: C.assess_binding_controls(failed, hashes, require_pass=True))
+
+    def test_java_key_is_a_present_nullable_diagnostic_bound_to_exact_owner(self):
+        for negative in (False, True):
+            req = request(negative)
+            for key in (None, "MODEL_FILE_KEY", "k" * 1024):
+                value = execution(req)
+                value["admission"]["temporaryFileKey"] = key
+                C.assess_execution(value, req, "d" * 64)
+            mutations = [lambda v: v["admission"].pop("temporaryFileKey"),
+                lambda v: v["admission"].pop("temporaryOwnerSha256"),
+                lambda v: v["admission"].update(temporaryOwnerSha256="f" * 64),
+                lambda v: v["admission"].update(temporaryEmpty=False)]
+            mutations += [lambda v, key=key: v["admission"].update(temporaryFileKey=key)
+                          for key in ("", "k" * 1025, 1, True, [], {})]
+            for index, mutate in enumerate(mutations):
+                with self.subTest(negative=negative, mutation=index):
+                    value = execution(req)
+                    mutate(value)
+                    self.rejects(lambda: C.assess_execution(value, req, "d" * 64))
+
+    def jvm_temporary_model(self):
+        # Real tiny local directories/metadata, but explicitly fake context/leaf.
+        base = Path(tempfile.mkdtemp(prefix="test-temporary-", dir=self.base)).resolve()
+        state, root, public = base / "state", base / "source", base / "public"
+        for path in (state / "fixtures", state / "evidence", root, public):
+            path.mkdir(parents=True)
+        controller = C.Controller.__new__(C.Controller)
+        controller.identity = C.dispatch_identity(*dispatch())  # Pure model, not os.environ.
+        controller.deadline = controller.final_deadline = time.monotonic() + 30
+        case = {"name": "current", "state": state, "root": root, "public": public, "leaves": [],
+            "context": {"id": "b" * 32, "source": dispatch()[2]}, "env": {"JAVA_HOME": "MODEL_JDK17", "P2PKIT_AUDIT_JDK21": "MODEL_JDK21"},
+            "initialized": True, "retentionErrors": [], "productPrepared": False, "productRetained": False,
+            "nativeStarted": False, "nativeAccepted": False}
+        C.create_test_temporary(case, controller.identity)
+        return controller, case, state / "fixtures/jvm-tmp"
+
+    def test_temporary_creation_uses_positive_full_lstat_and_rejects_links_reparse_and_bad_ids(self):
+        _, case, temporary = self.jvm_temporary_model()
+        expected = C.identified_test_temporary(temporary)
+        self.assertEqual(expected, case["testTemporaryOwner"]["nativeIdentity"])
+        for key in ("device", "inode"):
+            for invalid in (None, 0, -1, True, "1", 1.0, 2 ** 128):
+                with self.subTest(key=key, value=invalid), mock.patch.object(C, "native_temporary_identity",
+                        return_value={**expected, key: invalid}):
+                    self.rejects(lambda: C.identified_test_temporary(temporary))
+        original_lstat = Path.lstat
+        for unsafe in ("file", "link", "ancestor-link", "reparse"):
+            with self.subTest(unsafe=unsafe):
+                candidate = self.base / unsafe
+                if unsafe == "file":
+                    candidate.write_bytes(b"OWNED_TEST_DATA")
+                elif unsafe in ("link", "ancestor-link"):
+                    candidate.symlink_to(temporary if unsafe == "link" else temporary.parent, target_is_directory=True)
+                    if unsafe == "ancestor-link":
+                        candidate = candidate / "jvm-tmp"
+                else:
+                    candidate = temporary
+                seen = []
+                def lstat(path):
+                    seen.append(path)
+                    info = original_lstat(path)
+                    if unsafe == "reparse" and path == temporary.parent:
+                        return SimpleNamespace(st_mode=info.st_mode, st_file_attributes=0x400)
+                    return info
+                with mock.patch.object(Path, "lstat", autospec=True, side_effect=lstat):
+                    self.rejects(lambda: C.identified_test_temporary(candidate))
+                if unsafe in ("ancestor-link", "reparse"):
+                    self.assertNotIn(candidate, seen)  # Reject parent before traversing it.
+        with self.assertRaises(FileExistsError):
+            C.create_test_temporary(case, {})
+
+    def test_temporary_snapshots_bind_creation_before_after_owner_and_public_schema(self):
+        controller, case, _ = self.jvm_temporary_model()
+        owner, owner_hash = case["testTemporaryOwner"], case["testTemporaryOwnerSha256"]
+        for phase in ("before", "after"):
+            value = controller.test_temporary(case, phase)
+            self.assertTrue(C.test_temporary_ok(value))
+            self.assertEqual(value["expectedRootIdentity"], owner["nativeIdentity"])
+            self.assertEqual(value["temporaryOwnerSha256"], C.digest((case["public"] / "temporary-owner.json").read_bytes()))
+            mutations = [lambda v: v.update(source={**v["source"], "commit": "f" * 40}),
+                lambda v: v.update(identity={"scope": "DIFFERENT_MODEL"}), lambda v: v.update(caseName="preimage"),
+                lambda v: v.update(nonce="f" * 32), lambda v: v.update(jobId="f" * 32),
+                lambda v: v.update(directory=v["directory"] + "-different"),
+                lambda v: v.update(temporaryOwnerSha256="f" * 64),
+                lambda v: v.update(observedOwnerSha256=None), lambda v: v.update(ownerUnchanged=1),
+                lambda v: v["expectedRootIdentity"].update(inode=0),
+                lambda v: v["rootBefore"].update(inode=v["rootBefore"]["inode"] + 1),
+                lambda v: v.update(unknown="PRIVATE_DATA"), lambda v: v.pop("ownerError")]
+            for index, mutate in enumerate(mutations):
+                with self.subTest(phase=phase, mutation=index):
+                    changed = copy.deepcopy(value)
+                    mutate(changed)
+                    self.rejects(lambda: C.validate_test_temporary(changed, owner, owner_hash, phase))
+        C.validate_public_test_temporary(case["public"], controller.identity, "current", C.inventory(case["public"]))
+        self.rejects(lambda: C.validate_public_test_temporary(case["public"], controller.identity, "admission", C.inventory(case["public"])))
+        (case["public"] / "temporary-owner.json").unlink()
+        self.rejects(lambda: C.validate_public_test_temporary(case["public"], controller.identity, "current", C.inventory(case["public"])))
+
+    def test_product_failure_preserves_primary_and_post_stop_metadata_before_blocking_disposal(self):
+        for failure in ("none", "owner", "owner-missing", "replaced", "residue", "metadata", "retention"):
+            with self.subTest(failure=failure):
+                controller, case, temporary = self.jvm_temporary_model()
+                primary = C.audit.AuditError("MODEL original product/stop failure")
+                original_lstat, original_write = Path.lstat, C.new_json
+                stopped = False
+                def leaf(observed, purpose, arguments, **options):
+                    nonlocal stopped
+                    self.assertIs(observed, case)
+                    self.assertEqual(purpose, "product")
+                    self.assertEqual(options, {"expected": 0, "timeout": 1500})
+                    self.assertTrue(C.test_temporary_ok(C.read_json(case["public"] / "temporary-before.json")))
+                    case["leaves"].append({"id": "a" * 32, "purpose": purpose, "status": 1, "valid": True, "retained": True})
+                    if failure == "owner":
+                        (temporary.parent / "jvm-tmp-owner.json").write_bytes(b"CHANGED_MODEL_OWNER")
+                    elif failure == "owner-missing":
+                        (temporary.parent / "jvm-tmp-owner.json").unlink()
+                    elif failure == "replaced":
+                        temporary.rename(temporary.with_name("displaced-owned-test"))
+                        temporary.mkdir()
+                    elif failure == "residue":
+                        (temporary / "private-test.bin").write_bytes(b"PRIVATE_TEST_PAYLOAD")
+                    stopped = True  # Only a modeled leaf completion, not a real wrapper stop.
+                    raise primary
+                def lstat(path):
+                    if stopped and failure == "metadata" and path == temporary:
+                        raise OSError(5, "MODEL metadata failure")
+                    return original_lstat(path)
+                def write(path, value):
+                    if failure == "retention" and path.name == "temporary-after.json":
+                        raise OSError("MODEL evidence write failure")
+                    return original_write(path, value)
+                controller.leaf = mock.Mock(side_effect=leaf)
+                with mock.patch.object(Path, "lstat", autospec=True, side_effect=lstat), \
+                        mock.patch.object(C, "new_json", side_effect=write):
+                    with self.assertRaises(C.audit.AuditError) as caught:
+                        controller.product(case)
+                self.assertIs(caught.exception, primary)
+                controller.leaf.assert_called_once()
+                self.assertEqual(case["testTemporaryRetired"], failure == "none")
+                self.assertEqual(case["productRetained"], failure == "none")
+                after_path = case["public"] / "temporary-after.json"
+                self.assertEqual(after_path.exists(), failure != "retention")
+                if failure != "retention":
+                    after = C.read_json(after_path)
+                    self.assertEqual(C.test_temporary_ok(after), failure == "none")
+                    self.assertEqual(after["leaf"]["status"], 1)
+                    self.assertNotIn("PRIVATE_TEST_PAYLOAD", json.dumps(after))
+                    if failure in ("replaced", "metadata"):
+                        self.assertFalse(after["complete"])
+                    if failure in ("owner", "owner-missing"):
+                        self.assertFalse(after["ownerUnchanged"])
+                if failure == "none":
+                    C.require_disposal_evidence(case)  # Policy only; no controller deletion runs.
+                else:
+                    self.rejects(lambda: C.require_disposal_evidence(case))
+
+    def test_changed_creation_owner_before_product_never_launches_and_still_retains_after(self):
+        controller, case, temporary = self.jvm_temporary_model()
+        (temporary.parent / "jvm-tmp-owner.json").write_bytes(b"CHANGED_MODEL_OWNER")
+        controller.leaf = mock.Mock(side_effect=AssertionError("Must not launch"))
+        self.rejects(lambda: controller.product(case))
+        controller.leaf.assert_not_called()
+        for phase in ("before", "after"):
+            value = C.read_json(case["public"] / ("temporary-" + phase + ".json"))
+            self.assertFalse(value["ownerUnchanged"])
+            self.assertIsNone(value["leaf"])
+        self.rejects(lambda: C.require_disposal_evidence(case))
 
     def binding_adapter(self, variant="pass"):
         controller, case, _ = self.native_model()

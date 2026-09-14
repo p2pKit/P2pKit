@@ -144,6 +144,34 @@ Test worker. JDK17 attribution separately requires the admitted native JDK17
 executable/version probe, its exact JavaLauncher path and the original info log's
 actually launched Test-worker command. Daemon metadata alone is insufficient.
 
+For [#434](https://github.com/p2pKit/P2pKit/issues/434), Java's actual
+`temporaryFileKey` is a **nullable diagnostic**, not native identity authority.
+The standard Windows JDK provider returns null; requiring a key rejects the
+supported host. Present JSON null is valid, but a missing field or a non-null
+empty/oversized/non-string value is not. Never synthesize a key or stringify null.
+The Java guard still verifies the physical, ordinary, non-other/nonlinked, empty
+directory, request/owner hashes and all original Test/launcher/argument rules.
+Its admission explicitly names the request's exact `temporaryOwnerSha256`.
+
+The controller instead records positive bounded native Python device/inode
+identity (and available birth time) **at its owned `mkdir`**. The canonical
+`temporary-owner.json` binds that creation to source/run/case/nonce/context job
+and path. Schema-2 `temporary-before.json` and `temporary-after.json` compare
+root-first full `lstat` observations to that identity and the exact owner hash,
+immediately before the selected leaf and after its same-home stop. They retain
+bounded direct-entry metadata only, also on failure: no payload reads, recursive
+scratch inventory, guessed cleanup or raw scratch upload. Missing/zero/replaced
+identity, symlink/reparse ancestry, changed/unreadable owner, observation errors,
+nonempty roots or missing retention block acceptance and disposal. Original
+product/stop errors remain authoritative when a later observation also fails.
+Metadata files do not claim product success; original selected-test/receipt and
+case/outer retirement must all pass separately before final acceptance.
+
+This is an invocation-owned, otherwise quiescent before/after snapshot contract,
+**not an atomic directory pin**. It cannot exclude hostile replace-and-restore,
+file-ID reuse or modification after the last observation. The former non-null
+Java key was never compared with another key and supplied no such guarantee.
+
 The parentless root consumes its own three explicit request properties. Only its
 exact direct `buildSrc` child may consume that root parent's complete triplet;
 Gradle's nested build does not reliably inherit the command-line properties.
@@ -158,9 +186,12 @@ The same fixture loads the production task-policy class from that fresh observer
 GroovyShell's classloader and exercises 21 **constructed real StartParameter**
 inputs: exact root and distinct buildSrc positives, missing/duplicate/broadened
 selectors, extra tasks/options, and root/child dry-run/exclusion negatives.
-These exercise the actual shared predicate, not actual command-line parsing or
-a complete successful observer invocation. The schema-2 report retains the exact
-observed parameter fields and precise exception outcomes for independent checking.
+Eight additional modeled `BasicFileAttributes` inputs execute the production
+temporary-policy class from the same loader: null/non-null-key positives and
+non-directory/other/link/nonempty/invalid-key negatives. These exercise the actual
+shared predicates, not actual command-line parsing, a Windows filesystem provider,
+or a complete successful observer invocation. The schema-3 report retains exact
+observed fields, nullable key diagnostics and precise exception outcomes for independent checking.
 It has no plugins/dependencies/product tasks and copies the checked-in daemon
 criteria. Its bounded report distinguishes precise binding/request rejections
 from wrong exceptions or later host refusal; canonical leaf retention is required

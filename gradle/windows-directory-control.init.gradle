@@ -28,6 +28,23 @@ class WindowsDirectoryControlTaskPolicy {
     }
 }
 
+// Windows' standard BasicFileAttributes provider legitimately returns null.
+// The controller binds native directory identity at creation/before/after stop;
+// Java's key is a bounded diagnostic, not a pin or an authority to compare to it.
+class WindowsDirectoryControlTemporaryPolicy {
+    static String verify(BasicFileAttributes attributes, boolean hasEntries) {
+        if (!attributes.isDirectory() || attributes.isOther() || attributes.isSymbolicLink() || hasEntries) {
+            throw new GradleException('Test temporary directory is not fresh/physical')
+        }
+        def key = attributes.fileKey()
+        String diagnostic = key == null ? null : key.toString()
+        if (diagnostic != null && (diagnostic.isEmpty() || diagnostic.length() > 1024)) {
+            throw new GradleException('Invalid optional Test temporary file-key diagnostic')
+        }
+        diagnostic
+    }
+}
+
 def checksum = { byte[] bytes -> MessageDigest.getInstance('SHA-256').digest(bytes).encodeHex().toString() }
 def physical = { File file ->
     def path = file.toPath().toAbsolutePath().normalize()
@@ -158,10 +175,9 @@ gradle.projectsLoaded {
                     }
                     def attrs = Files.readAttributes(temporary, BasicFileAttributes, LinkOption.NOFOLLOW_LINKS)
                     def listing = Files.newDirectoryStream(temporary)
+                    String fileKey
                     try {
-                        if (!attrs.isDirectory() || attrs.isOther() || attrs.fileKey() == null || listing.iterator().hasNext()) {
-                            throw new GradleException('Test temporary directory is not fresh/physical/identified')
-                        }
+                        fileKey = WindowsDirectoryControlTemporaryPolicy.verify(attrs, listing.iterator().hasNext())
                     } finally { listing.close() }
                     def launcher = task.javaLauncher.get()
                     def commandFilters = task.filter.commandLineIncludePatterns.toList().sort()
@@ -185,7 +201,8 @@ gradle.projectsLoaded {
                                    home: launcher.metadata.installationPath.asFile.absolutePath,
                                    version: launcher.metadata.languageVersion.asInt()],
                         jvmArgs: jvmArguments, temporary: temporary.toString(),
-                        temporaryFileKey: attrs.fileKey().toString(), temporaryEmpty: true,
+                        temporaryFileKey: fileKey, temporaryEmpty: true,
+                        temporaryOwnerSha256: request.temporaryOwnerSha256,
                         observedMillis: System.currentTimeMillis(),
                     ])
                     writeOnce(output.resolve('test-admission.json').toFile(), [schema: 1, nonce: request.nonce,
