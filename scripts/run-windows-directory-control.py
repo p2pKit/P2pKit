@@ -558,8 +558,9 @@ def assess_xml(raw, request):
 
 def assess_binding_controls(report, hashes, *, require_pass):
     require(type(report) is dict and set(report) == {"schema", "scope", "gradleVersion", "hashes", "cases",
-            "taskPolicyCases", "temporaryPolicyCases", "workerPolicyCases"} and integer(report.get("schema"), 4) and
-            report.get("scope") == "MODELED_BINDINGS_ATTRIBUTES_WORKER_POLICY_AND_CONSTRUCTED_STARTPARAMETERS_NOT_NATIVE" and
+            "taskPolicyCases", "temporaryPolicyCases", "workerPolicyCases", "workerServiceCases"} and
+            integer(report.get("schema"), 5) and
+            report.get("scope") == "MODELED_POLICIES_AND_LIVE_GRADLE_SERVICE_LOOKUPS_NOT_NATIVE_PRODUCT" and
             report.get("gradleVersion") == "9.7.0" and report.get("hashes") == hashes and
             type(report.get("cases")) is list and len(report["cases"]) == len(BINDING_CASES),
             "Wrong or stale production-observer model report")
@@ -630,6 +631,31 @@ def assess_binding_controls(report, hashes, *, require_pass):
                   row["exceptionType"] == ("org.gradle.api.GradleException" if message else None))
         require(row["passed"] is passed, "Falsely passing production worker-policy control")
     require(not require_pass or all(row["passed"] for row in rows), "Actual production worker-policy controls failed")
+    rows = report["workerServiceCases"]
+    require(type(rows) is list and len(rows) == 2 and
+            [row.get("id") for row in rows if type(row) is dict] ==
+            ["generic_registry_unknown", "concrete_provider_bootstrap"],
+            "Missing, reordered or duplicate live Gradle service controls")
+    for row in rows:
+        require(set(row) == {"id", "passed", "bootstrap", "exceptionType", "message"} and
+                type(row["passed"]) is bool and
+                all(row[key] is None or type(row[key]) is str and len(row[key]) <= 256
+                    for key in ("exceptionType", "message")), "Wrong live Gradle service result shape")
+        bootstrap = row["bootstrap"]
+        if bootstrap is not None:
+            require(row["id"] == "concrete_provider_bootstrap" and type(bootstrap) is dict and
+                    set(bootstrap) == {"relativePath", "bytes", "sha256"} and
+                    type(bootstrap["relativePath"]) is str and len(bootstrap["relativePath"]) <= 4096 and
+                    re.fullmatch(r"caches/(?:[A-Za-z0-9_.-]+/){1,60}gradle-worker[.]jar", bootstrap["relativePath"]) and
+                    not {".", ".."}.intersection(bootstrap["relativePath"].split("/")) and
+                    integer(bootstrap["bytes"]) and 0 < bootstrap["bytes"] <= 4 * 1024 ** 2 and
+                    type(bootstrap["sha256"]) is str and re.fullmatch(r"[0-9a-f]{64}", bootstrap["sha256"]),
+                    "Invalid real bootstrap observation in live service control")
+        passed = (bootstrap is None and row["exceptionType"] == "java.lang.IllegalArgumentException" and
+                  row["message"] == "unknown classpath 'WORKER_MAIN' requested.") if row["id"] == "generic_registry_unknown" else (
+                  bootstrap is not None and row["exceptionType"] is None and row["message"] is None)
+        require(row["passed"] is passed, "Falsely passing live Gradle service control")
+    require(not require_pass or all(row["passed"] for row in rows), "Actual live Gradle service controls failed")
 
 
 def assess_execution(report, request, request_hash, scope="root"):

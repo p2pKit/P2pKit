@@ -193,8 +193,16 @@ shared predicates, not actual command-line parsing, a Windows filesystem provide
 or a complete successful observer invocation. Another 25 worker-policy models
 exercise the same observer class's exact rendering, native-charset selection,
 bounded new-file selection and capture/write-error preservation. They do **not**
-execute an actual failed Test's `afterTask` callback. The schema-4 report retains exact
-observed fields, nullable key diagnostics and precise exception outcomes for independent checking.
+execute an actual failed Test's `afterTask` callback. Two separate **live Gradle
+service** controls use the fixture's real `GradleInternal`, not the modeled
+callback receiver: the build registry must reject `WORKER_MAIN` with the exact
+pinned exception; the production helper must resolve one ordinary, physical
+`gradle-worker.jar` below the invocation's owned Gradle cache. A second lookup
+must return the same path and bytes. Only Gradle's normal short-lived cache
+initialization is invoked, not a worker builder, process, messaging service or
+argument file. The schema-5 report separates these two controls from the 78
+modeled-policy/constructed-parameter cases and retains the observed relative
+bootstrap path, size/hash, nullable key diagnostics and precise exception outcomes.
 It has no plugins/dependencies/product tasks and copies the checked-in daemon
 criteria. Its bounded report distinguishes precise binding/request rejections
 from wrong exceptions or later host refusal; canonical leaf retention is required
@@ -240,11 +248,17 @@ is a prelaunch baseline member, never the selected Test file.
 
 Before Test launch, `workerExpansion` in `test-admission.json` records the actual
 Gradle version/home, nonmodular JUnit framework observation, `WORKER_MAIN`
-registry bootstrap path/size/hash, and ordered application classpath with file,
+provider bootstrap path/size/hash, and ordered application classpath with file,
 directory or missing-output kind. The actual module detector supplies this
 classpath; missing core build outputs are recorded and omitted just as the
-worker builder does. The bootstrap comes from Gradle's registry, not an argfile
-or cache search. Existing class/resource directories and JARs must belong to the
+worker builder does. The bootstrap comes from the concrete user-home
+`WorkerProcessClassPathProvider`, not an argfile or cache search. Gradle's
+[user-home registry](https://github.com/gradle/gradle/blob/3defbfc59d757b873d787b2261de5c7f8a00970a/subprojects/core/src/main/java/org/gradle/internal/service/scopes/GradleUserHomeScopeServices.java#L208-L214)
+includes this provider, but the
+[build-scoped registry](https://github.com/gradle/gradle/blob/3defbfc59d757b873d787b2261de5c7f8a00970a/subprojects/core/src/main/java/org/gradle/internal/service/scopes/BuildScopeServices.java#L416-L420)
+returned by a generic service lookup does not. The provider is
+[registered in user-home scope](https://github.com/gradle/gradle/blob/3defbfc59d757b873d787b2261de5c7f8a00970a/platforms/core-execution/worker-process-services/src/main/java/org/gradle/process/internal/worker/services/WorkerProcessServices.java#L43-L76),
+like the actual worker factory. Existing class/resource directories and JARs must belong to the
 current core build or case-owned strict dependency cache. Shared/sibling homes,
 module paths, wildcard/aliased paths and other producer shapes fail closed.
 
@@ -307,6 +321,14 @@ expansion-integrity pass. Closing [#436](https://github.com/p2pKit/P2pKit/issues
 still requires independent source/design review, genuine fresh Windows
 current/preimage original-byte and native-result acceptance, required checks,
 formal review and normal merge. Pure/model controls do not satisfy those gates.
+
+Historical [R12/attempt1](https://github.com/p2pKit/P2pKit/actions/runs/34884637288/attempts/1)
+also remains **FAILED**: native96 and compiled Groovy78 passed, but current
+product/stop/final was `1/0/1`. The generic build-registry lookup rejected
+`WORKER_MAIN` before Test admission, selected JUnit execution or worker capture.
+The compiler worker did launch; it is not the selected Test worker. The preimage
+was **NOT_EXECUTED**. This collector correction and live-service regression do
+not retroactively turn R12 or its 78 modeled cases into native product acceptance.
 
 ## Retention and cleanup
 

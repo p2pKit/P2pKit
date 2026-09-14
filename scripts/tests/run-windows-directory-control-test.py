@@ -1099,11 +1099,18 @@ class PureWindowsControlTests(unittest.TestCase):
                 "exceptionType": None if fields["accepted"] else "org.gradle.api.GradleException",
                 "message": None if fields["accepted"] else message})
         self.assertEqual(len(C.WORKER_POLICY_CASES), 25)
-        return {"schema": 4, "scope": "MODELED_BINDINGS_ATTRIBUTES_WORKER_POLICY_AND_CONSTRUCTED_STARTPARAMETERS_NOT_NATIVE",
+        return {"schema": 5, "scope": "MODELED_POLICIES_AND_LIVE_GRADLE_SERVICE_LOOKUPS_NOT_NATIVE_PRODUCT",
             "gradleVersion": "9.7.0", "taskPolicyCases": policy_rows, "temporaryPolicyCases": temporary_rows,
             "workerPolicyCases": [{"id": name, "passed": True, "value": value, "message": message,
                 "exceptionType": "org.gradle.api.GradleException" if message else None}
                 for name, (value, message) in C.WORKER_POLICY_CASES.items()],
+            # Report models only; no live Gradle service is called by Python.
+            "workerServiceCases": [
+                {"id": "generic_registry_unknown", "passed": True, "bootstrap": None,
+                 "exceptionType": "java.lang.IllegalArgumentException", "message": "unknown classpath 'WORKER_MAIN' requested."},
+                {"id": "concrete_provider_bootstrap", "passed": True,
+                 "bootstrap": {"relativePath": "caches/9.7.0/workerMain/gradle-worker.jar", "bytes": 123, "sha256": "f" * 64},
+                 "exceptionType": None, "message": None}],
             "hashes": hashes, "cases": [{"id": name, "passed": True, "expectedMessage": message,
                 "exceptionType": "org.gradle.api.GradleException", "message": message}
                 for name, message in C.BINDING_CASES.items()]}
@@ -1861,6 +1868,40 @@ class PureWindowsControlTests(unittest.TestCase):
         report["workerPolicyCases"][0].update(passed=False, value="ACTUAL_WRONG_MODEL_RESULT")
         C.assess_binding_controls(report, hashes, require_pass=False)
         self.rejects(lambda: C.assess_binding_controls(report, hashes, require_pass=True))
+
+    def test_live_service_report_rejects_modeled_stale_or_falsely_passing_results(self):
+        hashes = {"scope": "MODELED_REPORT_ONLY"}
+        original = self.binding_report(hashes)
+        C.assess_binding_controls(original, hashes, require_pass=True)
+        mutations = [lambda v: v.update(schema=4), lambda v: v.pop("workerServiceCases"),
+            lambda v: v.update(workerServiceCases=None), lambda v: v["workerServiceCases"].pop(),
+            lambda v: v["workerServiceCases"].reverse(),
+            lambda v: v["workerServiceCases"].__setitem__(1, copy.deepcopy(v["workerServiceCases"][0])),
+            lambda v: v["workerServiceCases"][0].update(exceptionType="org.gradle.api.GradleException"),
+            lambda v: v["workerServiceCases"][0].update(message="unknown classpath 'OTHER' requested."),
+            lambda v: v["workerServiceCases"][0].update(passed=1),
+            lambda v: v["workerServiceCases"][1].update(bootstrap=None),
+            lambda v: v["workerServiceCases"][1].update(exceptionType="java.lang.IllegalStateException"),
+            lambda v: v["workerServiceCases"][1].update(message="wrong failure"),
+            lambda v: v["workerServiceCases"][1].update(raw="UNAPPROVED")]
+        for field, value in (("relativePath", "../gradle-worker.jar"), ("relativePath", "caches/../gradle-worker.jar"),
+                             ("relativePath", "caches/./gradle-worker.jar"), ("relativePath", "caches//gradle-worker.jar"),
+                             ("relativePath", "C:/foreign/gradle-worker.jar"), ("relativePath", "caches/x/wrong.jar"),
+                             ("bytes", True), ("bytes", 0), ("bytes", 4 * 1024 ** 2 + 1),
+                             ("sha256", "INVALID"), ("extra", "UNAPPROVED")):
+            mutations.append(lambda v, field=field, value=value: v["workerServiceCases"][1]["bootstrap"].update({field: value}))
+        for index, mutate in enumerate(mutations):
+            with self.subTest(mutation=index):
+                changed = copy.deepcopy(original)
+                mutate(changed)
+                self.rejects(lambda: C.assess_binding_controls(changed, hashes, require_pass=True))
+        # Preserve real wrong outcomes with false verdicts; never call them a pass.
+        for index in (0, 1):
+            failed = copy.deepcopy(original)
+            failed["workerServiceCases"][index].update(passed=False, bootstrap=None,
+                exceptionType="java.lang.IllegalStateException", message="MODEL wrong live lookup outcome")
+            C.assess_binding_controls(failed, hashes, require_pass=False)
+            self.rejects(lambda: C.assess_binding_controls(failed, hashes, require_pass=True))
 
     def test_receipt_requires_original_status_stop_context_and_native_launches(self):
         root, state, identifier = self.base / "source", self.base / "state", "e" * 32

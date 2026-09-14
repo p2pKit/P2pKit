@@ -14,7 +14,6 @@ import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import org.gradle.StartParameter
 import org.gradle.api.GradleException
-import org.gradle.api.internal.ClassPathRegistry
 import org.gradle.api.internal.GradleInternal
 import org.gradle.api.internal.tasks.testing.junit.JUnitTestFramework
 import org.gradle.api.tasks.testing.AbstractTestTask
@@ -23,6 +22,7 @@ import org.gradle.api.tasks.testing.TestDescriptor
 import org.gradle.api.tasks.testing.TestListener
 import org.gradle.api.tasks.testing.TestResult
 import org.gradle.internal.jvm.JavaModuleDetector
+import org.gradle.process.internal.worker.child.WorkerProcessClassPathProvider
 
 // Shared with the bounded fixture through this script's own Groovy classloader.
 // Constructed StartParameters test this predicate, not command-line parsing.
@@ -54,10 +54,18 @@ class WindowsDirectoryControlTemporaryPolicy {
 }
 
 // #436: finite Gradle 9.7 nonmodular worker expansion. These helpers are also
-// executed by the bounded Groovy fixture; its models are not native evidence.
+// executed by the bounded Groovy fixture. Its service checks are real Gradle
+// lookups, separate from its finite models; neither is native product evidence.
 class WindowsDirectoryControlWorkerPolicy {
     static final int MAX_BYTES = 256 * 1024
     static final String NAME = /gradle-worker-classpath[0-9]{1,20}txt/
+
+    static List<File> bootstrap(GradleInternal instance) {
+        // The build-scoped ClassPathRegistry shadows the worker-aware user-home
+        // registry. Resolve the concrete user-home provider used by that worker
+        // registry, not the build registry and not a search through cache files.
+        instance.services.get(WorkerProcessClassPathProvider).findClassPath('WORKER_MAIN').asFiles
+    }
 
     static String path(String value, boolean logged = false) {
         if (value == null || value.length() > 4096 || !(value ==~ /[A-Za-z]:\\[ -~]+/) ||
@@ -312,7 +320,7 @@ gradle.projectsLoaded {
         boolean modular = detector.isModule(task.modularity.inferModulePath.get(), task.testClassesDirs)
         def modules = detector.inferModulePath(modular, task.classpath).files
         if (modular || !modules.empty) throw new GradleException('Unsupported modular Test worker')
-        def boot = services.get(ClassPathRegistry).getClassPath('WORKER_MAIN').asFiles
+        def boot = policy.bootstrap((GradleInternal) gradle)
         if (boot.size() != 1) throw new GradleException('Unexpected worker bootstrap classpath')
         def bootstrap = workerPhysical(boot[0])
         if (!policy.below(bootstrap.toString(), home + '\\caches') || bootstrap.fileName.toString() != 'gradle-worker.jar') {

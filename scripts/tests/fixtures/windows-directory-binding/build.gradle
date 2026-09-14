@@ -2,11 +2,14 @@
 // These models are not actual Gradle parents or native Windows product evidence.
 import groovy.json.JsonOutput
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import org.gradle.StartParameter
+import org.gradle.api.internal.ClassPathRegistry
+import org.gradle.api.internal.GradleInternal
 import org.gradle.util.GradleVersion
 
 class BindingRegistration {
@@ -281,6 +284,66 @@ tasks.register('verifyWindowsDirectoryBinding') {
             def written = worker.retainCapture(capture) { throw new IOException('MODELED_WRITE_FAILURE') }
             capture.status + ':' + written
         }
+        // Real build services, not the modeled `gradle` in the Groovy Binding.
+        // The negative reproduces R12. The positive calls the exact production
+        // helper twice without allocating a worker builder, process or argfile.
+        def actualGradle = (GradleInternal) project.gradle
+        def serviceRows = []
+        def serviceCheck = { String id, String expectedType, String expectedMessage, Closure action ->
+            Map found = null
+            String type = null
+            String message = null
+            try { found = action.call() } catch (Exception error) {
+                type = error.class.name
+                message = error.message
+            }
+            boolean passed = type == expectedType && message == expectedMessage &&
+                (expectedType == null ? found != null : found == null)
+            serviceRows.add([id: id, passed: passed, bootstrap: found,
+                             exceptionType: type?.take(256), message: message?.take(256)])
+        }
+        serviceCheck('generic_registry_unknown', IllegalArgumentException.name,
+                     "unknown classpath 'WORKER_MAIN' requested.") {
+            actualGradle.services.get(ClassPathRegistry).getClassPath('WORKER_MAIN')
+            null
+        }
+        serviceCheck('concrete_provider_bootstrap', null, null) {
+            def serviceHome = actualGradle.gradleUserHomeDir.toPath().toAbsolutePath().normalize()
+            def serviceClasspath = worker.bootstrap(actualGradle)
+            if (serviceClasspath.size() != 1) throw new GradleException('Expected one real worker bootstrap')
+            def serviceBootstrap = serviceClasspath[0].toPath().toAbsolutePath().normalize()
+            if (!serviceBootstrap.startsWith(serviceHome.resolve('caches')) ||
+                serviceBootstrap.fileName.toString() != 'gradle-worker.jar') {
+                throw new GradleException('Real worker bootstrap is outside its owned home')
+            }
+            def readBootstrap = {
+                def ancestors = []
+                def cursor = serviceBootstrap
+                while (cursor != null) { ancestors.add(cursor); cursor = cursor.parent }
+                ancestors.reverseEach { entry ->
+                    def attrs = Files.readAttributes(entry, BasicFileAttributes, LinkOption.NOFOLLOW_LINKS)
+                    if (attrs.isSymbolicLink() || attrs.isOther() || entry.toRealPath() != entry ||
+                        (entry != serviceBootstrap && !attrs.isDirectory())) {
+                        throw new GradleException('Nonphysical real worker bootstrap')
+                    }
+                }
+                def attrs = Files.readAttributes(serviceBootstrap, BasicFileAttributes, LinkOption.NOFOLLOW_LINKS)
+                if (!attrs.isRegularFile() || attrs.size() <= 0 || attrs.size() > 4 * 1024 * 1024) {
+                    throw new GradleException('Invalid real worker bootstrap size/type')
+                }
+                def stream = Files.newInputStream(serviceBootstrap, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)
+                byte[] content
+                try { content = stream.readNBytes(4 * 1024 * 1024 + 1) } finally { stream.close() }
+                if (content.length != attrs.size()) throw new GradleException('Real worker bootstrap changed')
+                content
+            }
+            def firstBytes = readBootstrap()
+            if (worker.bootstrap(actualGradle) != serviceClasspath || !Arrays.equals(firstBytes, readBootstrap())) {
+                throw new GradleException('Repeated real worker bootstrap lookup changed')
+            }
+            [relativePath: serviceHome.relativize(serviceBootstrap).collect { it.toString() }.join('/'),
+             bytes: firstBytes.length, sha256: checksum(firstBytes)]
+        }
         if (!Arrays.equals(observerBytes, Files.readAllBytes(observer.toPath()))) {
             throw new GradleException('Production observer changed during fixture')
         }
@@ -288,16 +351,18 @@ tasks.register('verifyWindowsDirectoryBinding') {
         ['settings.gradle', 'build.gradle', 'gradle/gradle-daemon-jvm.properties'].each { name ->
             hashes[name] = checksum(Files.readAllBytes(project.file(name).toPath()))
         }
-        def report = [schema: 4, scope: 'MODELED_BINDINGS_ATTRIBUTES_WORKER_POLICY_AND_CONSTRUCTED_STARTPARAMETERS_NOT_NATIVE',
+        def report = [schema: 5, scope: 'MODELED_POLICIES_AND_LIVE_GRADLE_SERVICE_LOOKUPS_NOT_NATIVE_PRODUCT',
                       gradleVersion: GradleVersion.current().version, hashes: hashes, cases: rows,
-                      taskPolicyCases: policyRows, temporaryPolicyCases: temporaryRows, workerPolicyCases: workerRows]
+                      taskPolicyCases: policyRows, temporaryPolicyCases: temporaryRows, workerPolicyCases: workerRows,
+                      workerServiceCases: serviceRows]
         def output = layout.buildDirectory.file('reports/windows-directory-binding/result.json').get().asFile.toPath()
         Files.createDirectories(output.parent)
         def bytes = (JsonOutput.prettyPrint(JsonOutput.toJson(report)) + '\n').getBytes('UTF-8')
         if (bytes.length > 65536) throw new GradleException('Binding fixture report exceeds its bound')
         Files.write(output, bytes, StandardOpenOption.CREATE_NEW)
-        if (rows.any { !it.passed } || policyRows.any { !it.passed } || temporaryRows.any { !it.passed } || workerRows.any { !it.passed }) {
-            throw new GradleException('Production binding/task/temporary/worker-policy controls failed; inspect original report')
+        if (rows.any { !it.passed } || policyRows.any { !it.passed } || temporaryRows.any { !it.passed } ||
+            workerRows.any { !it.passed } || serviceRows.any { !it.passed }) {
+            throw new GradleException('Production binding/task/temporary/worker/service controls failed; inspect original report')
         }
     }
 }
