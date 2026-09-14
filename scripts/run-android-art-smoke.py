@@ -36,6 +36,9 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = "dev.p2pkit.sample.android"
 TEST_PACKAGE = PACKAGE + ".test"
 INSTRUMENTATION = PACKAGE + ".runtime.LanPermissionRuntimeInstrumentation"
+INSTRUMENTATIONS = (INSTRUMENTATION, PACKAGE + ".runtime.UiAcceptanceInstrumentation",
+                    PACKAGE + ".runtime.CredentialUiInstrumentation")
+ANDROID_NAMESPACE = "{http://schemas.android.com/apk/res/android}"
 PERMISSION = "android.permission.ACCESS_LOCAL_NETWORK"
 IMAGE = "system-images;android-37.0;google_apis;x86_64"
 IMAGE_PIN = (6, 0, 0, 2234615040, "629e507fd5b737c2c836b12b52c81cd0e3b12399", "x86_64-37.0_r06.zip")
@@ -131,6 +134,91 @@ def xml(raw):
     need(0 < len(raw) <= LIMIT and b"<!DOCTYPE" not in raw.upper() and b"<!ENTITY" not in raw.upper(),
          "Invalid/oversized XML evidence")
     return ET.fromstring(raw)
+
+
+def manifest_identity(raw, role):
+    """Validate manifest-print/merged XML, not a source manifest or proof of its producer."""
+    need(role in ("app", "test"), "Unknown manifest role")
+    # NUL-bearing UTF16/32 must not evade the shared byte-level DTD/entity guard.
+    need(isinstance(raw, bytes) and b"\0" not in raw, "Invalid manifest XML encoding")
+    try:
+        parsed = xml(raw)
+    except ET.ParseError as error:
+        raise ValueError("Malformed Android manifest") from error
+    need(parsed.tag == "manifest", "Missing unqualified Android manifest root")
+    direct = set(parsed)
+    relevant = {"manifest", "uses-sdk", "application", "instrumentation", "uses-permission",
+                "uses-permission-sdk-23", "uses-permission-sdk-m"}
+    for node in parsed.iter():
+        name = tag(node)
+        if name in relevant:
+            need(node.tag == name and (node is parsed if name == "manifest" else node in direct),
+                 "Nested/namespaced manifest identity node: " + name)
+
+    def attribute(node, name, namespace=ANDROID_NAMESPACE):
+        expected = namespace + name
+        need(all(key == expected for key in node.attrib if key.rsplit("}", 1)[-1] == name),
+             "Wrong/ambiguous manifest attribute namespace: " + name)
+        return node.get(expected)
+
+    package = attribute(parsed, "package", "")
+    need(package == (PACKAGE if role == "app" else TEST_PACKAGE), "Wrong manifest package")
+
+    def class_name(name):
+        need(isinstance(name, str) and name, "Missing manifest component name")
+        normalized = package + name if name.startswith(".") else package + "." + name if "." not in name else name
+        need(re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+", normalized),
+             "Malformed manifest component name")
+        return normalized
+
+    sdks = parsed.findall("uses-sdk")
+    need(len(sdks) == 1, "Missing/ambiguous manifest SDK node")
+    sdk = {}
+    for field in ("minSdkVersion", "targetSdkVersion", "maxSdkVersion"):
+        value = attribute(sdks[0], field)
+        need(value is None or re.fullmatch(r"[1-9][0-9]*", value), "Malformed manifest SDK value: " + field)
+        sdk[field] = int(value) if value is not None else None
+    need(sdk["targetSdkVersion"] == 37, "Manifest target is not37")
+    applications = parsed.findall("application")
+    need(len(applications) <= 1 and (role == "test" or len(applications) == 1),
+         "Missing/ambiguous manifest application node")
+    application = None
+    if applications:
+        name = attribute(applications[0], "name")
+        debug = attribute(applications[0], "debuggable")
+        need(debug in (None, "true", "false"), "Malformed manifest debuggable value")
+        application = {"name": class_name(name) if name is not None else None, "debuggable": debug}
+    instruments = parsed.findall("instrumentation")
+    identity = {"package": package, "sdk": sdk, "application": application}
+    if role == "app":
+        need(sdk["minSdkVersion"] == 24 and application["debuggable"] == "true",
+             "APK must be the normal debuggable minSdk24 sample")
+        need(not instruments, "Sample APK unexpectedly declares test instrumentation")
+        permissions = [node for node in parsed if tag(node) in
+                       ("uses-permission", "uses-permission-sdk-23", "uses-permission-sdk-m") and
+                       attribute(node, "name") == PERMISSION]
+        need(len(permissions) == 1 and permissions[0].tag == "uses-permission" and
+             permissions[0].attrib == {ANDROID_NAMESPACE + "name": PERMISSION} and not len(permissions[0]),
+             "APK must declare one unconditional local-network permission")
+        identity["localNetworkPermission"] = PERMISSION
+    else:
+        need(len(instruments) == len(INSTRUMENTATIONS), "Test APK must declare exactly three instrumentation components")
+        names = []
+        for instrument in instruments:
+            name = class_name(attribute(instrument, "name"))
+            need(attribute(instrument, "targetPackage") == PACKAGE, "Wrong instrumentation target package")
+            names.append(name)
+        need(sorted(names) == sorted(INSTRUMENTATIONS), "Missing/duplicate/unexpected instrumentation component")
+        identity["instrumentations"] = [{"name": name, "targetPackage": PACKAGE} for name in sorted(names)]
+    return identity
+
+
+def matching_manifest_identities(generated_app, generated_test, packaged_app, packaged_test):
+    """Compare supplied XML identities only; actual generated-producer/path wiring is separate."""
+    generated = {"app": manifest_identity(generated_app, "app"), "test": manifest_identity(generated_test, "test")}
+    packaged = {"app": manifest_identity(packaged_app, "app"), "test": manifest_identity(packaged_test, "test")}
+    need(generated == packaged, "Generated/packaged manifest identities differ")
+    return packaged
 
 
 def package_pin(raw, package):
@@ -562,27 +650,19 @@ class Smoke:
         self.apk = apk[0]
         self.apk_hash = self.runner.file_digest(self.apk)
         manifest = self.command("apk-manifest", [str(sdk / "cmdline-tools/latest/bin/apkanalyzer"), "manifest", "print", str(self.apk)])
-        parsed = xml(manifest)
-        ns = "{http://schemas.android.com/apk/res/android}"
-        need(parsed.get("package") == PACKAGE and parsed.find("uses-sdk").get(ns + "minSdkVersion") == "24" and
-             parsed.find("application").get(ns + "debuggable") == "true", "APK must be the normal debuggable minSdk24 sample")
-        need(parsed.find("uses-sdk").get(ns + "targetSdkVersion") == "37", "APK target is not37")
-        need(any(p.get(ns + "name") == PERMISSION for p in parsed.findall("uses-permission")), "APK omits local-network permission")
+        app_identity = manifest_identity(manifest, "app")
         self.write("apk.json", {"sha256": self.apk_hash, "bytes": self.apk.stat().st_size,
                                 "relativePath": self.apk.relative_to(ROOT).as_posix(), "minSdk": 24, "targetSdk": 37,
-                                "debuggable": True, "source": self.context["source"]})
+                                "debuggable": True, "source": self.context["source"], "manifestIdentity": app_identity})
         tests = list((ROOT / "samples/p2p-sample-android/build/outputs/apk/androidTest/debug").glob("*.apk"))
         need(len(tests) == 1, "Missing/ambiguous test APK")
         test = tests[0]
-        test_manifest = xml(self.command("test-apk-manifest", [str(sdk / "cmdline-tools/latest/bin/apkanalyzer"),
-                            "manifest", "print", str(test)]))
-        instruments = test_manifest.findall("instrumentation")
-        need(test_manifest.get("package") == TEST_PACKAGE and len(instruments) == 1 and
-             instruments[0].get(ns + "name") == INSTRUMENTATION and
-             instruments[0].get(ns + "targetPackage") == PACKAGE and
-             test_manifest.find("uses-sdk").get(ns + "targetSdkVersion") == "37", "Wrong instrumentation APK")
+        test_manifest = self.command("test-apk-manifest", [str(sdk / "cmdline-tools/latest/bin/apkanalyzer"),
+                                    "manifest", "print", str(test)])
+        test_identity = manifest_identity(test_manifest, "test")
         self.write("test-apk.json", {"source": self.context["source"], "sha256": self.runner.file_digest(test),
-                   "relativePath": test.relative_to(ROOT).as_posix(), "bytes": test.stat().st_size})
+                   "relativePath": test.relative_to(ROOT).as_posix(), "bytes": test.stat().st_size,
+                   "manifestIdentity": test_identity})
         distribution = ROOT / "samples/p2p-sample-desktop/build/install/p2p-sample-desktop"
         need((distribution / "lib").is_dir(), "Missing maintained CLI distribution")
         files = []
