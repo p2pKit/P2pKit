@@ -5,4 +5,8 @@
     android:name="dev.p2pkit.sample.android.runtime.UiAcceptanceInstrumentation"
     android:targetPackage="dev.p2pkit.sample.android"
     android:label="P2pKit rendered diagnostics acceptance" />
+  <instrumentation
+    android:name="dev.p2pkit.sample.android.runtime.CredentialUiInstrumentation"
+    android:targetPackage="dev.p2pkit.sample.android"
+    android:label="P2pKit credential UI acceptance" />
 </manifest>
