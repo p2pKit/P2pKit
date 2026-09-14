@@ -413,7 +413,8 @@ def assess_execution(report, request, request_hash, scope="root"):
                 "buildSrc compiler/JAR did not freshly execute")
         return
     require(window_path(report.get("root")) == window_path(request["root"]) and
-            report.get("requestedTasks") == [TASK] and set(paths) <= CORE_TASKS and REQUIRED_TASKS <= set(paths) and
+            report.get("requestedTasks") == [TASK, "--tests", SELECTOR] and
+            set(paths) <= CORE_TASKS and REQUIRED_TASKS <= set(paths) and
             all(row.get("test") is (row["path"] == TASK) for row in graph),
             "Extra product/test task or wrong requested selector")
     for name in REQUIRED_TASKS:

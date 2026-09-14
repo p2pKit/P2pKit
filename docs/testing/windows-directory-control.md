@@ -125,6 +125,15 @@ same-home `--stop` with no unknown survivors. A separate fallback stop may recov
 resources after a broken finalizer; it never repairs a failed receipt into a pass.
 
 Only the exact core selector and normal buildSrc/core prerequisites are allowed.
+The root observer and independent assessor require the original Gradle
+`StartParameter.taskNames` triple `[TASK, "--tests", SELECTOR]`; that API retains
+task arguments, not just names. Missing/duplicate filters, other/glob selectors,
+abbreviations and extra tokens are rejected without filtering or rewriting the
+observed list. The separate buildSrc graph does not use the root's command tokens.
+Dry runs, excluded tasks and the exact Test filter/graph/worker checks remain
+independent rejection boundaries. Pure report models do not prove real Gradle
+parsing or execute the observer; the genuine current/preimage witness must supply
+those observations before [#433](https://github.com/p2pKit/P2pKit/issues/433) can close.
 The scoped init observer records the actual task graph/outcomes, selected filter,
 JDK17 launcher, worker JVM arguments and test events. It sets the Test JVM's
 `java.io.tmpdir` explicitly to the fresh owned directory; a daemon `-D` flag alone

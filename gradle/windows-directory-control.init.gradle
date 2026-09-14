@@ -198,7 +198,8 @@ gradle.projectsLoaded {
         graph.addAll(taskGraph.allTasks.collect { [path: it.path, type: it.class.name,
                                                    test: it instanceof AbstractTestTask] })
         if (gradle.startParameter.dryRun || !gradle.startParameter.excludedTaskNames.empty ||
-            (!buildSrc && gradle.startParameter.taskNames != [taskName]) ||
+            // StartParameter retains task arguments as well as task names.
+            (!buildSrc && gradle.startParameter.taskNames != [taskName, '--tests', selector]) ||
             graph.any { row -> buildSrc ? (!allowedBuildSrc.contains(row.path) || row.test) :
                 (!allowedCore.contains(row.path) || (row.test && row.path != taskName)) }) {
             throw new GradleException('Extra task, excluded task or dry run in Windows directory control')

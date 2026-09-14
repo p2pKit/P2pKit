@@ -83,7 +83,8 @@ def execution(req, scope="root"):
             "localProperties": {"p2pkit.windowsDirectoryRoot": req["root"],
                 "p2pkit.windowsDirectoryRequest": req["outputDirectory"] + r"\request.json",
                 "p2pkit.windowsDirectoryRequestSha256": "d" * 64} if scope == "root" else {}},
-        "requestedTasks": [C.TASK], "admission": admission, "finishedMillis": 30,
+        "requestedTasks": [C.TASK, "--tests", C.SELECTOR] if scope == "root" else [],
+        "admission": admission, "finishedMillis": 30,
         "events": [] if scope == "buildSrc" else [{"className": C.CLASS, "name": C.METHOD,
             "result": "FAILURE" if negative else "SUCCESS", "testCount": 1, "passed": int(not negative),
             "failed": int(negative), "skipped": 0, "startMillis": 11, "endMillis": 20}]}
@@ -1082,6 +1083,42 @@ class PureWindowsControlTests(unittest.TestCase):
             self.assertTrue(C.public_path(name))
         for name in ("binding-controls/unknown.json", "binding-controls/payload.bin", "binding-models/request.json"):
             self.assertFalse(C.public_path(name))
+
+    def test_root_requested_tasks_preserve_exact_tests_argument_triple(self):
+        # Report/assessor models only. Real Gradle parsing and the shared
+        # observer still require the genuine current/preimage Windows witness.
+        for negative in (False, True):
+            with self.subTest(negative=negative):
+                req = request(negative)
+                report = execution(req)
+                self.assertEqual(report["requestedTasks"], [C.TASK, "--tests", C.SELECTOR])
+                C.assess_execution(report, req, "d" * 64)
+                self.assertEqual(report["requestedTasks"], [C.TASK, "--tests", C.SELECTOR])
+
+    def test_root_requested_tasks_reject_incomplete_or_broadened_command(self):
+        exact = [C.TASK, "--tests", C.SELECTOR]
+        invalid = [[], [C.TASK], [C.TASK, C.SELECTOR], [C.TASK, "--tests"],
+            [C.TASK, "--tests", "other.Test.method"], [C.TASK, "--tests", C.CLASS + ".*"],
+            [C.TASK, "--tests", "*"], [C.TASK, "--tests=" + C.SELECTOR],
+            [C.TASK, "--tests", "--tests", C.SELECTOR], exact + ["--tests", C.SELECTOR],
+            [":p2p-core:jT", "--tests", C.SELECTOR], exact + [":p2p-core:jvmJar"],
+            exact + ["--info"], ["--tests", C.SELECTOR, C.TASK], None, " ".join(exact)]
+        for negative in (False, True):
+            req = request(negative)
+            for index, task_arguments in enumerate(invalid):
+                with self.subTest(negative=negative, mutation=index):
+                    changed = execution(req)
+                    changed["requestedTasks"] = task_arguments
+                    self.rejects(lambda: C.assess_execution(changed, req, "d" * 64))
+        # buildSrc is governed by its own graph, not the root command tokens.
+        req = request()
+        child = execution(req, "buildSrc")
+        C.assess_execution(child, req, "d" * 64, "buildSrc")
+        for scope in ("root", "buildSrc"):
+            for key, value in (("dryRun", True), ("excludedTasks", [":compileJava"])):
+                changed = execution(req, scope)
+                changed[key] = value
+                self.rejects(lambda: C.assess_execution(changed, req, "d" * 64, scope))
 
     def test_actual_graph_filter_launcher_nonce_and_event_predicates(self):
         for negative in (False, True):
