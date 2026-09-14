@@ -441,6 +441,12 @@ Compose/snapshot evidence, **not rendered Android UI, ART, physical-device behav
 or frame timing**. On a device, leave the viewer untouched while traffic arrives,
 then verify pause, filter changes, resume, clearing and reopening separately.
 
+The separate [rendered #317 harness](android-diagnostics-ui.md) uses an explicitly
+named framework instrumentation component on an admitted, owned emulator. It
+requires actual display/frame evidence, an untouched interval and an inert-bridge
+mutation control. Its source or APK assembly is not a rendered pass, and it does
+not replace the default API37 permission runner or any physical-device matrix.
+
 ## Android framework-adapter tests
 
 Run `./gradlew :p2p-network-provisioning-android:verifyAndroidAdapterTests --console=plain`

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- Explicit component only; the generated default #372 runner is unchanged. -->
+  <instrumentation
+    android:name="dev.p2pkit.sample.android.runtime.UiAcceptanceInstrumentation"
+    android:targetPackage="dev.p2pkit.sample.android"
+    android:label="P2pKit rendered diagnostics acceptance" />
+</manifest>
