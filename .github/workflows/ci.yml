@@ -119,6 +119,11 @@ jobs:
           ruby scripts/tests/check-windows-directory-control-policy-test.rb
           python3 -B scripts/tests/run-windows-directory-control-test.py
 
+      - name: Verify no-child Mac capacity policy
+        run: |
+          ruby scripts/tests/check-mac-host-admission-policy-test.rb
+          python3 -I -B -S scripts/tests/run-mac-host-admission-test.py
+
       - name: Classify required-check scope
         id: scope
         shell: bash
