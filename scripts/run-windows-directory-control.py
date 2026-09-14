@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import ast
 import ctypes
+from datetime import datetime
 import hashlib
 import importlib.util
 import io
@@ -145,6 +146,35 @@ NATIVE_TEMP_ENTRIES = 128
 NATIVE_TEMP_BYTES = 512 * 1024
 NATIVE_TEMP_STEPS = {"path", "root-before", "root-recheck", "entries", "entry-limit", "entry-name",
                      "entry-metadata", "root-after"}
+WORKER_NAME = r"gradle-worker-classpath[0-9]{1,20}txt"
+WORKER_MAIN = "worker.org.gradle.process.internal.worker.GradleWorkerMain"
+WORKER_BYTES = 256 * 1024
+WORKER_FILES = {"worker-classpath.json", "worker-classpath-retention.json", "worker-classpath.args"}
+WORKER_CAPTURE_REASONS = {"CAPTURE_FAILED", "BINDING_CHANGED", "FILE_SELECTION_FAILED",
+                          "FILE_CAPTURE_FAILED", "CONTENT_MISMATCH"}
+WORKER_RETENTION_REASONS = {"CAPTURE_INVALID", "CAPTURE_MISSING", "ADMISSION_MISSING", "CAPTURE_REFUSED",
+    "LEAF_UNFINALIZED", "EXECUTION_INVALID", "SNAPSHOT_INVALID", "EXPANSION_MISMATCH", "LAUNCH_MISMATCH",
+    "ORIGINAL_INVALID", "BOOTSTRAP_INVALID", "PUBLIC_COPY_FAILED"}
+WORKER_POLICY_CASES = {
+    "render_plain": ("-cp\r\nC:\\\\m\\\\gradle-worker.jar;C:\\\\m\\\\classes\r\n", None),
+    "render_space_hash": ('-cp\r\n"C:\\\\m\\\\gradle-worker.jar;C:\\\\m\\\\space #dir"\r\n', None),
+    "native_encoding_precedence": ("windows-1252", None),
+    "native_encoding_fallback": ("UTF-8", None),
+    "native_encoding_default": ("US-ASCII", None),
+    "render_full_utf16_refused": (None, "Unsupported worker encoding"),
+    "render_lf_refused": (None, "Unsupported worker expansion"),
+    "render_empty_refused": (None, "Unsupported worker expansion"),
+    **dict.fromkeys(("render_nonascii_refused", "path_semicolon", "path_quote", "path_apostrophe",
+                    "path_wildcard", "path_traversal", "logged_whitespace"), (None, "Unsupported worker path")),
+    "selected_compiler_decoy": ("gradle-worker-classpath2txt", None),
+    **dict.fromkeys(("selected_missing", "selected_stale", "selected_ambiguous"),
+                   (None, "Ambiguous or missing selected worker file")),
+    **dict.fromkeys(("selected_baseline_disappeared", "selected_wrong_suffix", "selected_duplicate"),
+                   (None, "Invalid worker file inventory")),
+    "capture_success": ("CAPTURED:null", None),
+    "capture_exception": ("REFUSED:CONTENT_MISMATCH", None),
+    "writer_exception": ("CAPTURED:false", None),
+}
 
 
 def integer(value, expected=None):
@@ -336,6 +366,148 @@ def window_path(value):
     return path
 
 
+def worker_path(value, *, logged=False):
+    """Finite, alias-free spelling; deliberately not a generic Java log parser."""
+    require(type(value) is str and len(value) <= 4096 and re.fullmatch(r"[A-Za-z]:\\[ -~]+", value) and
+            not any(char in value for char in ";\"'") and (not logged or not re.search(r"\s", value)),
+            "Unsupported worker path")
+    parts = value[3:].split("\\")
+    require(len(parts) <= 64 and all(part and part not in (".", "..") and not part.endswith((".", " ")) and
+                not re.search(r'[<>:|?*/]', part) and
+                not re.fullmatch(r"(?i:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?", part)
+                for part in parts), "Unsupported worker path")
+    return value
+
+
+def worker_inventory(value):
+    require(type(value) is dict and set(value) == {"exists", "names"} and type(value["exists"]) is bool and
+            type(value["names"]) is list and len(value["names"]) <= 64 and
+            all(type(name) is str and re.fullmatch(WORKER_NAME, name) for name in value["names"]) and
+            value["names"] == sorted(set(value["names"])) and (value["exists"] or not value["names"]),
+            "Invalid worker file inventory")
+    return value["names"]
+
+
+def worker_expected(value, request):
+    """Independent authority -> exact pinned ArgWriter bytes, never raw -> expected."""
+    for key in ("root", "state", "java17", "java21", "testTemporary", "outputDirectory"):
+        worker_path(request.get(key), logged=True)
+    home = request["state"] + r"\gradle-home"
+    require(type(value) is dict and set(value) == {"gradleVersion", "gradleHome", "testIsModule", "modulePath",
+            "nativeCharset", "nativeEncodedSha256", "bootstrap", "applicationClasspath", "beforeFiles"} and
+            value["gradleVersion"] == "9.7.0" and value["gradleHome"] == home and
+            value["testIsModule"] is False and value["modulePath"] == [], "Wrong worker producer/home/modularity")
+    worker_inventory(value["beforeFiles"])
+    bootstrap = value["bootstrap"]
+    require(type(bootstrap) is dict and set(bootstrap) == {"path", "bytes", "sha256"} and
+            worker_path(bootstrap["path"]).startswith(home + "\\caches\\") and
+            bootstrap["path"].endswith("\\gradle-worker.jar") and
+            integer(bootstrap["bytes"]) and 0 < bootstrap["bytes"] <= 4 * 1024 * 1024 and
+            type(bootstrap["sha256"]) is str and re.fullmatch(r"[0-9a-f]{64}", bootstrap["sha256"]),
+            "Wrong worker bootstrap authority")
+    entries = value["applicationClasspath"]
+    require(type(entries) is list and len(entries) <= 512, "Unbounded worker application classpath")
+    seen, paths = {bootstrap["path"].casefold()}, [bootstrap["path"]]
+    build = request["root"] + "\\library\\p2p-core\\build\\"
+    dependencies = home + "\\caches\\modules-2\\files-2.1\\"
+    for row in entries:
+        require(type(row) is dict and set(row) == {"path", "kind"}, "Invalid worker classpath record")
+        path, kind = worker_path(row["path"]), row["kind"]
+        require(path.casefold() not in seen and
+                (path.startswith(build) and (kind in ("directory", "missing") or kind == "file" and path.endswith(".jar")) or
+                 path.startswith(dependencies) and kind == "file" and path.endswith(".jar")),
+                "Foreign, duplicate or unsupported worker classpath entry")
+        seen.add(path.casefold())
+        if kind != "missing":
+            paths.append(path)
+    require(len(paths) <= 512, "Unbounded effective worker classpath")
+    # Gradle 9.7 ArgWriter.javaStyle: escape every backslash/quote, conditionally
+    # quote the WHOLE argument, and terminate each argument with Windows CRLF.
+    tokens = ["-cp", ";".join(paths)]
+    rendered = []
+    for token in tokens:
+        escaped = token.replace("\\", "\\\\").replace('"', '\\"')
+        rendered.append(('"' + escaped + '"' if not escaped or re.search(r"\s|#", escaped) else escaped) + "\r\n")
+    text = "".join(rendered)
+    expected = text.encode("ascii", errors="strict")
+    charset = value["nativeCharset"]
+    require(type(charset) is str and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:+-]{0,63}", charset) and
+            len(expected) <= WORKER_BYTES, "Unsupported worker encoding/size")
+    try:
+        encoded = text.encode(charset, errors="strict")
+    except (LookupError, UnicodeError) as error:
+        raise audit.AuditError("Unsupported worker native charset") from error
+    require(encoded == expected and value["nativeEncodedSha256"] == digest(expected),
+            "Entire native-encoded worker expansion differs from supported ASCII bytes")
+    return expected
+
+
+def worker_jvm_arguments(arguments, request):
+    # Preserve the caller-@/OS/agent checks in assess_execution as well. The
+    # expansion exception adds NO general launcher/agent/module option grammar.
+    required = {"-Dp2pkit.windowsDirectoryNonce=" + request["nonce"], "-Djava.io.tmpdir=" + request["testTemporary"],
+                "-XX:ActiveProcessorCount=2", "-XX:-UsePerfData", "-Xms128m", "-Xmx512m", "-Dfile.encoding=UTF-8", "-ea"}
+    locale = (r"-Duser.country(?:=(?:[A-Za-z]{2}|[0-9]{3}))?", r"-Duser.language(?:=[A-Za-z]{2,8})?",
+              r"-Duser.variant(?:=[A-Za-z0-9_-]{1,32})?")
+    require(type(arguments) is list and len(arguments) == len(required) + len(locale) and
+            all(type(item) is str for item in arguments) and
+            all(arguments.count(item) == 1 for item in required) and
+            all(sum(bool(re.fullmatch(pattern, item)) for item in arguments) == 1 for pattern in locale),
+            "Unsupported, duplicate or injected actual worker JVM options")
+    return arguments
+
+
+def assess_worker_capture(value, request, request_hash, admission_hash=None, expansion=None):
+    require(type(value) is dict and set(value) == {"schema", "requestSha256", "admissionSha256", "phase",
+            "observedMillis", "status", "reason", "afterFiles", "original"} and integer(value["schema"], 1) and
+            value["requestSha256"] == request_hash and value["phase"] == "selected-afterTask" and
+            integer(value["observedMillis"]) and 0 < value["observedMillis"] < 2 ** 63 and
+            (value["admissionSha256"] is None or type(value["admissionSha256"]) is str and
+             re.fullmatch(r"[0-9a-f]{64}", value["admissionSha256"])) and
+            (admission_hash is None or value["admissionSha256"] == admission_hash) and
+            (value["status"] == "CAPTURED" and value["reason"] is None and value["admissionSha256"] is not None or
+             value["status"] == "REFUSED" and type(value["reason"]) is str and value["reason"] in WORKER_CAPTURE_REASONS),
+            "Invalid worker before-stop capture metadata/binding")
+    after = worker_inventory(value["afterFiles"]) if value["afterFiles"] is not None else None
+    original = value["original"]
+    if original is not None:
+        require(type(original) is dict and set(original) == {"path", "bytes", "sha256"} and
+                worker_path(original["path"], logged=True).startswith(request["state"] + "\\gradle-home\\.tmp\\") and
+                re.fullmatch(WORKER_NAME, original["path"][len(request["state"] + "\\gradle-home\\.tmp\\"):]) and
+                integer(original["bytes"]) and 0 < original["bytes"] <= WORKER_BYTES and
+                type(original["sha256"]) is str and re.fullmatch(r"[0-9a-f]{64}", original["sha256"]) and
+                after is not None and original["path"].rsplit("\\", 1)[1] in after, "Invalid captured worker file metadata")
+    require(value["status"] != "CAPTURED" or original is not None and value["afterFiles"]["exists"],
+            "Successful capture lacks the selected original")
+    if expansion is not None and original is not None:
+        before = worker_inventory(expansion["beforeFiles"])
+        require(set(before) <= set(after) and
+                [name for name in after if name not in before] == [original["path"].rsplit("\\", 1)[1]],
+                "Captured worker is stale, missing, ambiguous or a compiler baseline file")
+
+
+def worker_observation(execution, envelope, capture, request, request_hash):
+    require(type(envelope) is dict and set(envelope) == {"schema", "nonce", "caseName", "requestSha256", "admission"} and
+            integer(envelope["schema"], 1) and envelope["nonce"] == request["nonce"] and
+            envelope["caseName"] == request["caseName"] and envelope["requestSha256"] == request_hash and
+            type(envelope["admission"]) is dict and type(execution) is dict and
+            execution.get("admission") == envelope["admission"] and execution.get("scope") == "root" and
+            all(execution.get(key) == request[key] for key in ("nonce", "caseName", "source", "identity", "root")) and
+            execution.get("requestSha256") == request_hash, "Worker admission/final source binding changed")
+    admission = envelope["admission"]
+    expected = worker_expected(admission.get("workerExpansion"), request)
+    worker_jvm_arguments(admission.get("jvmArgs"), request)
+    events = execution.get("events")
+    require(type(events) is list and len(events) == 1 and type(events[0]) is dict and
+            events[0].get("className") == CLASS and events[0].get("name") == METHOD and
+            all(integer(value) for value in (admission.get("observedMillis"), events[0].get("startMillis"),
+                events[0].get("endMillis"), execution.get("finishedMillis"))) and
+            0 < admission["observedMillis"] <= events[0]["startMillis"] <= events[0]["endMillis"] <=
+                capture["observedMillis"] <= execution["finishedMillis"],
+            "Worker capture was not between the selected event and root buildFinished")
+    return expected
+
+
 def failure_directory(failure, temporary):
     expected_type = "java.nio.file.AccessDeniedException"
     require(failure.get("type") == expected_type, "Negative control has the wrong exception type")
@@ -386,8 +558,8 @@ def assess_xml(raw, request):
 
 def assess_binding_controls(report, hashes, *, require_pass):
     require(type(report) is dict and set(report) == {"schema", "scope", "gradleVersion", "hashes", "cases",
-            "taskPolicyCases", "temporaryPolicyCases"} and integer(report.get("schema"), 3) and
-            report.get("scope") == "MODELED_BINDINGS_ATTRIBUTES_AND_CONSTRUCTED_STARTPARAMETERS_NOT_NATIVE" and
+            "taskPolicyCases", "temporaryPolicyCases", "workerPolicyCases"} and integer(report.get("schema"), 4) and
+            report.get("scope") == "MODELED_BINDINGS_ATTRIBUTES_WORKER_POLICY_AND_CONSTRUCTED_STARTPARAMETERS_NOT_NATIVE" and
             report.get("gradleVersion") == "9.7.0" and report.get("hashes") == hashes and
             type(report.get("cases")) is list and len(report["cases"]) == len(BINDING_CASES),
             "Wrong or stale production-observer model report")
@@ -445,6 +617,19 @@ def assess_binding_controls(report, hashes, *, require_pass):
             row["message"] == expected["message"])
         require(row["passed"] is passed, "Falsely passing production temporary-policy control")
     require(not require_pass or all(row["passed"] for row in rows), "Actual production temporary-policy controls failed")
+    rows = report["workerPolicyCases"]
+    require(type(rows) is list and len(rows) == len(WORKER_POLICY_CASES) and
+            [row.get("id") for row in rows if type(row) is dict] == list(WORKER_POLICY_CASES),
+            "Missing, reordered or duplicate worker-policy controls")
+    for row in rows:
+        value, message = WORKER_POLICY_CASES[row["id"]]
+        require(set(row) == {"id", "passed", "value", "exceptionType", "message"} and type(row["passed"]) is bool and
+                all(row[key] is None or type(row[key]) is str and len(row[key]) <= 256
+                    for key in ("value", "exceptionType", "message")), "Wrong worker-policy result shape")
+        passed = (row["value"] == value and row["message"] == message and
+                  row["exceptionType"] == ("org.gradle.api.GradleException" if message else None))
+        require(row["passed"] is passed, "Falsely passing production worker-policy control")
+    require(not require_pass or all(row["passed"] for row in rows), "Actual production worker-policy controls failed")
 
 
 def assess_execution(report, request, request_hash, scope="root"):
@@ -528,6 +713,8 @@ def assess_execution(report, request, request_hash, scope="root"):
                 ("-Djava.io.tmpdir=", "-Dp2pkit.windowsDirectoryNonce=", "-Xmx", "-Xms", "-XX:ActiveProcessorCount=")) and
             not any(item.startswith(("-Dos.name=", "-Dos.arch=", "-javaagent:", "@")) for item in arguments),
             "Missing, duplicate or injected worker JVM arguments")
+    worker_jvm_arguments(arguments, request)
+    worker_expected(admission.get("workerExpansion"), request)
     events = report.get("events")
     require(type(events) is list and len(events) == 1 and type(events[0]) is dict, "Empty or extra test events")
     event = events[0]
@@ -540,23 +727,31 @@ def assess_execution(report, request, request_hash, scope="root"):
             "Wrong, skipped, extra or stale selected-test events")
 
 
-def assess_worker_log(raw, request):
+def assess_worker_log(raw, request, admission, argfile):
     text = raw.decode("utf-8", errors="strict")
-    commands = re.findall(r"^Starting process 'Gradle Test Executor [0-9]+'.*? Command: ([^\r\n]+)", text, re.M)
-    require(len(commands) == 1 and len(re.findall(r"^Successfully started process 'Gradle Test Executor [0-9]+'", text, re.M)) == 1,
+    launches = re.findall(r"^Starting process 'Gradle Test Executor [^\r\n]+", text, re.M)
+    starts = re.findall(r"^Successfully started process 'Gradle Test Executor [^\r\n]+", text, re.M)
+    require(len(launches) == len(starts) == 1,
             "Original info log lacks the one actually launched Test worker")
-    java = str(PureWindowsPath(request["java17"]) / "bin/java.exe")
-    command = commands[0]
-    require(command.startswith(java + " ") or command.startswith('"' + java + '" '),
-            "Actual worker command uses another launcher")
-    for token in ("-Djava.io.tmpdir=" + request["testTemporary"],
-                  "-Dp2pkit.windowsDirectoryNonce=" + request["nonce"], "-Xmx512m", "-Xms128m",
-                  "-XX:ActiveProcessorCount=2", "-XX:-UsePerfData"):
-        require(len(re.findall(r'(?:^| )"?' + re.escape(token) + r'"?(?= |$)', command)) == 1,
-                "Actual worker command lacks its exact bounded temporary/nonce argument token")
-    for prefix in ("-Djava.io.tmpdir=", "-Dp2pkit.windowsDirectoryNonce=", "-Xmx", "-Xms", "-XX:ActiveProcessorCount="):
-        require(len(re.findall(r'(?:^| )"?' + re.escape(prefix), command)) == 1, "Duplicate actual worker critical option")
-    require(not re.search(r'(?:^| )"?(?:-Dos\.(?:name|arch)=|-javaagent:|@)', command), "Actual worker OS/agent was injected")
+    launch = re.fullmatch(r"Starting process 'Gradle Test Executor ([1-9][0-9]{0,5})'\. Working directory: (.+) Command: (.+)",
+                          launches[0])
+    require(launch is not None and starts[0] == "Successfully started process 'Gradle Test Executor " + launch[1] + "'",
+            "Malformed or mismatched selected worker/start ID")
+    worker_path(argfile, logged=True)
+    require(launch[2] == worker_path(request["root"], logged=True) + r"\library\p2p-core" and
+            argfile.startswith(request["state"] + "\\gradle-home\\.tmp\\") and
+            re.fullmatch(WORKER_NAME, argfile[len(request["state"] + "\\gradle-home\\.tmp\\"):]),
+            "Actual worker directory/argument file escaped its bound producer")
+    arguments = worker_jvm_arguments(admission.get("jvmArgs"), request)
+    # Pinned worker builder adds tmpdir to mutable system properties and the
+    # options file to extra JVM args, before the immutable heap/property suffix.
+    split = arguments.index("-Xms128m")
+    options = ["-Dorg.gradle.internal.worker.tmpdir=" + request["root"] + r"\library\p2p-core\build\tmp\jvmTest\work",
+               *arguments[:split], "@" + argfile, *arguments[split:]]
+    java = worker_path(request["java17"], logged=True) + r"\bin\java.exe"
+    expected = " ".join([java, *options, WORKER_MAIN, "'Gradle Test Executor " + launch[1] + "'"])
+    require(launch[3] == expected, "Actual worker command differs from its admitted options/one expansion/main")
+    return launch[1]
 
 
 def stop_arguments(root):
@@ -930,6 +1125,208 @@ def validate_public_test_temporary(directory, identity, case_name, rows):
             validate_test_temporary(read_json(directory / name), owner, digest(owner_raw), phase)
 
 
+def native_worker_file(path, limit):
+    """Post-stop ordinary-file snapshot, NOT a hostile replace/restore pin."""
+    audit.reject_symlinks(path)
+    before = path.lstat()
+    raw = regular(path, limit)
+    audit.reject_symlinks(path)
+    after = path.lstat()
+    require(os.path.samestat(before, after) and native_temporary_metadata(before) == native_temporary_metadata(after) and
+            native_temporary_kind(after.st_mode, getattr(after, "st_file_attributes", None)) == "file" and
+            after.st_nlink == 1 and len(raw) > 0, "Worker file changed during native retention")
+    return raw, {"path": str(path), "bytes": len(raw), "sha256": digest(raw), "stat": native_temporary_metadata(after)}
+
+
+def validate_worker_native_record(value, path, limit):
+    require(type(value) is dict and set(value) == {"path", "bytes", "sha256", "stat"} and value["path"] == path and
+            integer(value["bytes"]) and 0 < value["bytes"] <= limit and type(value["sha256"]) is str and
+            re.fullmatch(r"[0-9a-f]{64}", value["sha256"]), "Invalid native worker file binding")
+    info = value["stat"]
+    require(type(info) is dict and set(info) == {"device", "inode", "birthNs", "mode", "links", "bytes", "modifiedNs",
+            "changedNs", "fileAttributes", "reparseTag", "kind"} and
+            all(item is None and key in ("birthNs", "fileAttributes", "reparseTag") or
+                integer(item) and (-2 ** 127 if key in ("birthNs", "modifiedNs", "changedNs") else 0) <= item < 2 ** 128
+                for key, item in info.items() if key != "kind") and
+            info["device"] > 0 and info["inode"] > 0 and info["links"] == 1 and info["bytes"] == value["bytes"] and
+            info["kind"] == native_temporary_kind(info["mode"], info["fileAttributes"]) == "file" and
+            info["reparseTag"] in (None, 0), "Native worker file is linked, nonregular or lacks its identity")
+
+
+def validate_worker_retention(value, request, request_hash, capture, capture_hash, expansion):
+    require(type(value) is dict and set(value) == {"schema", "requestSha256", "captureSha256", "leafId", "phase",
+            "observedMillis", "status", "reason", "original", "snapshot", "bootstrap"} and integer(value["schema"], 1) and
+            value["requestSha256"] == request_hash and value["captureSha256"] == capture_hash and
+            (value["leafId"] is None or type(value["leafId"]) is str and re.fullmatch(HEX32, value["leafId"])) and
+            value["phase"] == "controller-after-stop" and integer(value["observedMillis"]) and
+            0 < value["observedMillis"] < 2 ** 63 and
+            (value["status"] == "QUALIFIED" and value["reason"] is None or
+             value["status"] == "REFUSED" and type(value["reason"]) is str and value["reason"] in WORKER_RETENTION_REASONS),
+            "Invalid worker post-stop retention witness")
+    paths = {"original": capture["original"]["path"] if capture and capture["original"] else None,
+             "snapshot": request["outputDirectory"] + "\\worker-classpath.raw",
+             "bootstrap": expansion["bootstrap"]["path"] if expansion else None}
+    for key, path in paths.items():
+        if value[key] is not None:
+            require(path is not None, "Native worker record has no admitted original path")
+            validate_worker_native_record(value[key], path, 4 * 1024 * 1024 if key == "bootstrap" else WORKER_BYTES)
+    if value["status"] == "QUALIFIED":
+        require(capture is not None and capture["status"] == "CAPTURED" and value["leafId"] is not None and
+                all(value[key] is not None for key in paths) and value["observedMillis"] >= capture["observedMillis"] and
+                all(value[key][field] == capture["original"][field] for key in ("original", "snapshot")
+                    for field in ("bytes", "sha256")) and
+                all(value["bootstrap"][field] == expansion["bootstrap"][field] for field in ("bytes", "sha256")),
+                "Qualified worker retention lacks unchanged original/snapshot/bootstrap evidence")
+
+
+def worker_receipt_time(value):
+    require(type(value) is str and re.fullmatch(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?\+00:00", value),
+        "Invalid worker leaf UTC boundary")
+    return int(datetime.fromisoformat(value).timestamp() * 1000)
+
+
+def worker_leaf_binding(receipt, request, retained, envelope, capture, execution):
+    require(receipt.get("id") == retained["leafId"] and receipt.get("purpose") == "product" and
+            receipt.get("host") == "windows-x64" and receipt.get("sourceBefore") == receipt.get("sourceAfter") == request["source"] and
+            receipt.get("sourceUnchanged") is True and integer(receipt.get("stopExitCode"), 0) and
+            receipt.get("ownedSurvivors") == receipt.get("errors") == [] and
+            worker_receipt_time(receipt.get("productStartedUtc")) <= envelope["admission"]["observedMillis"] <=
+            capture["observedMillis"] <= execution["finishedMillis"] <= worker_receipt_time(receipt.get("productEndedUtc")) <=
+            worker_receipt_time(receipt.get("stopStartedUtc")) <= worker_receipt_time(receipt.get("stopEndedUtc")) <=
+            worker_receipt_time(receipt.get("endedUtc")) <= retained["observedMillis"],
+            "Worker capture/native retention do not bracket the original product/stop leaf")
+
+
+def validate_public_worker_expansion(directory, identity, case_name, rows):
+    names = {row["path"] for row in rows}
+    envelope = read_json(directory / "test-admission.json") if "test-admission.json" in names else None
+    execution = read_json(directory / "execution.json") if "execution.json" in names else None
+    extended = any(type(report) is dict and type(report.get("admission")) is dict and
+                   "workerExpansion" in report["admission"] for report in (envelope, execution))
+    if not names & WORKER_FILES and not extended:
+        return
+    require(case_name in ("current", "preimage") and "request.json" in names, "Worker evidence lacks its case request")
+    request_raw = regular(directory / "request.json")
+    request, request_hash = read_json(directory / "request.json"), digest(request_raw)
+    require(request.get("identity") == identity and request.get("caseName") == case_name, "Foreign worker evidence request")
+    for key in ("root", "state", "java17", "java21", "testTemporary", "outputDirectory"):
+        worker_path(request.get(key), logged=True)
+    expansion, admission_hash = None, None
+    for report in (envelope, execution):
+        if type(report) is dict and type(report.get("admission")) is dict and "workerExpansion" in report["admission"]:
+            worker_expected(report["admission"]["workerExpansion"], request)  # Safe finite metadata, even on failure.
+    if envelope is not None:
+        require(type(envelope.get("admission")) is dict, "Malformed retained worker admission")
+        admission_hash = digest(regular(directory / "test-admission.json"))
+        expansion = envelope.get("admission", {}).get("workerExpansion")
+    capture, capture_hash = None, None
+    if "worker-classpath.json" in names:
+        capture = read_json(directory / "worker-classpath.json")
+        assess_worker_capture(capture, request, request_hash, admission_hash, expansion)
+        capture_hash = digest(regular(directory / "worker-classpath.json"))
+    retained = None
+    if "worker-classpath-retention.json" in names:
+        retained = read_json(directory / "worker-classpath-retention.json")
+        validate_worker_retention(retained, request, request_hash, capture, capture_hash, expansion)
+    if "worker-classpath.args" in names or retained is not None and retained["status"] == "QUALIFIED":
+        require("worker-classpath.args" in names and retained is not None and retained["status"] == "QUALIFIED" and
+                capture is not None and expansion is not None, "Public worker bytes lack qualified native retention")
+        expected = worker_observation(execution, envelope, capture, request, request_hash)
+        raw = regular(directory / "worker-classpath.args", WORKER_BYTES)
+        require(raw == expected and len(raw) == capture["original"]["bytes"] and digest(raw) == capture["original"]["sha256"],
+                "Public worker bytes differ from the authorized original expansion")
+        assess_worker_log(regular(directory / "product/product.stdout.log"), request, envelope["admission"], capture["original"]["path"])
+        receipt = read_json(directory / "product/receipt.json")
+        worker_leaf_binding(receipt, request, retained, envelope, capture, execution)
+
+
+def retain_worker_report(source, destination, request):
+    if audit.existing_lstat(source) is not None:
+        value = read_json(source)
+        admission = value.get("admission")
+        require(type(admission) is dict, "Malformed observer admission is not public evidence")
+        if "workerExpansion" in admission:
+            worker_expected(admission["workerExpansion"], request)
+        retain_available(source, destination)
+
+
+def retain_worker_expansion(output, public, request, request_hash, leaf):
+    """Retain safe originals on red/green paths; never upload an unknown raw file.
+
+    Refusal retains source/cache inputs through the existing retention barrier.
+    An ephemeral hosted job is not a promise of durable private acquisition.
+    """
+    envelope = read_json(public / "test-admission.json") if (public / "test-admission.json").exists() else None
+    require(envelope is None or type(envelope.get("admission")) is dict, "Malformed retained worker admission")
+    expansion = envelope.get("admission", {}).get("workerExpansion") if envelope else None
+    if expansion is None and not any(audit.existing_lstat(output / name) is not None for name in
+                                     ("worker-classpath.json", "worker-classpath.raw")):
+        return  # No admitted selected Test: do not fabricate a capture.
+    path = public / "worker-classpath-retention.json"
+    if audit.existing_lstat(path) is not None:
+        validate_public_worker_expansion(public, request["identity"], request["caseName"], inventory(public))
+        record = read_json(path)
+        require(record["status"] == "QUALIFIED", "Worker retention was refused; preserve original private inputs")
+        for key in ("original", "snapshot", "bootstrap"):
+            _, observed = native_worker_file(Path(record[key]["path"]), 4 * 1024 * 1024 if key == "bootstrap" else WORKER_BYTES)
+            require(observed == record[key], "Native worker inputs changed after retention")
+        return record
+    record = {"schema": 1, "requestSha256": request_hash, "captureSha256": None,
+              "leafId": leaf["id"] if leaf else None, "phase": "controller-after-stop",
+              "observedMillis": int(time.time() * 1000), "status": "REFUSED", "reason": "CAPTURE_MISSING",
+              "original": None, "snapshot": None, "bootstrap": None}
+    capture = None
+    try:
+        require(audit.existing_lstat(output / "worker-classpath.json") is not None, "Worker capture absent")
+        record["reason"] = "CAPTURE_INVALID"
+        candidate = read_json(output / "worker-classpath.json")
+        assess_worker_capture(candidate, request, request_hash,
+            digest(regular(public / "test-admission.json")) if envelope else None, expansion)
+        retain_available(output / "worker-classpath.json", public / "worker-classpath.json")
+        capture = candidate
+        record["captureSha256"] = digest(regular(public / "worker-classpath.json"))
+        record["reason"] = "ADMISSION_MISSING"
+        require(expansion is not None, "No worker admission")
+        worker_expected(expansion, request)
+        record["reason"] = "CAPTURE_REFUSED"
+        require(capture["status"] == "CAPTURED", "Worker before-stop capture refused")
+        record["reason"] = "LEAF_UNFINALIZED"
+        require(leaf is not None and leaf["valid"] and leaf["retained"], "No finalized original product/stop leaf")
+        record["reason"] = "EXECUTION_INVALID"
+        execution = read_json(public / "execution.json")
+        expected = worker_observation(execution, envelope, capture, request, request_hash)
+        worker_leaf_binding(read_json(public / "product/receipt.json"), request, record, envelope, capture, execution)
+        record["reason"] = "SNAPSHOT_INVALID"
+        raw, record["snapshot"] = native_worker_file(output / "worker-classpath.raw", WORKER_BYTES)
+        require(all(record["snapshot"][key] == capture["original"][key] for key in ("bytes", "sha256")),
+                "Captured snapshot changed")
+        record["reason"] = "EXPANSION_MISMATCH"
+        require(raw == expected, "Captured worker content differs")
+        record["reason"] = "LAUNCH_MISMATCH"
+        assess_worker_log(regular(public / "product/product.stdout.log"), request, envelope["admission"], capture["original"]["path"])
+        record["reason"] = "ORIGINAL_INVALID"
+        original, record["original"] = native_worker_file(Path(capture["original"]["path"]), WORKER_BYTES)
+        require(original == raw, "Original worker bytes changed after stop")
+        record["reason"] = "BOOTSTRAP_INVALID"
+        _, record["bootstrap"] = native_worker_file(Path(expansion["bootstrap"]["path"]), 4 * 1024 * 1024)
+        require(all(record["bootstrap"][key] == expansion["bootstrap"][key] for key in ("bytes", "sha256")),
+                "Worker bootstrap changed after stop")
+        record["reason"] = "PUBLIC_COPY_FAILED"
+        # Write the already-read, validated ORIGINAL bytes, not a second unvalidated
+        # read and not a rendering substituted for absent original evidence.
+        write(public / "worker-classpath.args", raw)
+        require(regular(public / "worker-classpath.args", WORKER_BYTES) == raw, "Worker public copy changed")
+        record.update(status="QUALIFIED", reason=None)
+    except Exception:
+        pass  # Finite stage only; original product failure remains primary in product.finally.
+    validate_worker_retention(record, request, request_hash, capture, record["captureSha256"], expansion)
+    new_json(path, record)
+    validate_public_worker_expansion(public, request["identity"], request["caseName"], inventory(public))
+    require(record["status"] == "QUALIFIED", "Worker retention refused; preserve original private inputs")
+    return record
+
+
 def native_predicates(text, count, temporary):
     return {"expected-test-count-and-OK": bool(re.search(r"\nRan " + str(count) + r" tests? in [0-9.]+s\r?\n\r?\nOK\r?\n", text)),
             "current-Windows-marker": "Running current-host real executor fixtures: windows-x64;" in text,
@@ -1069,6 +1466,7 @@ def public_path(name):
                         "context.json", "gradle.properties", "request.json", "temporary-owner.json", "temporary-before.json",
                         "temporary-after.json", "retirement-start.json", "retirement.json", "controller-error.txt",
                         "native-controls.json", "test-admission.json", "execution.json", "buildsrc-execution.json",
+                        "worker-classpath.json", "worker-classpath-retention.json", "worker-classpath.args",
                         "native-temporary-before.json", "native-temporary-after.json",
                         "binding-controls.json", "binding-controls-unbound.json",
                         "TEST-control.xml", "TEST-control-unbound.xml", "unbound-report.json",
@@ -1098,6 +1496,7 @@ def seal_public(directory, identity, case_name):
     require(rows and all(public_path(row["path"]) for row in rows), "Unaudited public evidence member")
     validate_public_native_temporary(directory, identity, case_name, rows)
     validate_public_test_temporary(directory, identity, case_name, rows)
+    validate_public_worker_expansion(directory, identity, case_name, rows)
     manifest = public_manifest(identity, case_name, rows)
     new_json(directory / "manifest.json", manifest)
     require(inventory(directory) == sorted(rows + [{"path": "manifest.json",
@@ -1114,6 +1513,7 @@ def verify_public(directory, identity, case_name):
             "Missing, changed, extra or unsafe sealed public artifact member")
     validate_public_native_temporary(directory, identity, case_name, actual)
     validate_public_test_temporary(directory, identity, case_name, actual)
+    validate_public_worker_expansion(directory, identity, case_name, actual)
 
 
 def copy_public(source, destination):
@@ -1136,6 +1536,7 @@ def retain_before_disposal(directory, identity, case_name):
     require(rows and all(public_path(row["path"]) for row in rows), "Unsafe retention prevents disposable cleanup")
     validate_public_native_temporary(directory, identity, case_name, rows)
     validate_public_test_temporary(directory, identity, case_name, rows)
+    validate_public_worker_expansion(directory, identity, case_name, rows)
     value = {"schema": 1, "identity": identity, "caseName": case_name, "files": rows}
     new_json(directory / "retained-before-disposal.json", value)
     return value
@@ -1144,11 +1545,13 @@ def retain_before_disposal(directory, identity, case_name):
 def verify_before_disposal(directory, expected):
     require(regular(directory / "retained-before-disposal.json") == audit.json_bytes(expected), "Pre-disposal manifest changed")
     rows = {row["path"]: row for row in inventory(directory)}
+    require(all(public_path(name) for name in rows), "Unsafe public retention member before disposal")
     require(all(rows.get(row["path"]) == row for row in expected["files"]),
             "Required retained original is missing/changed before disposal")
     admitted = {row["path"] for row in expected["files"]} | {"retained-before-disposal.json", "retirement-start.json"}
     require(all(name in admitted or name.startswith("readonly-recovery/") and public_path(name) for name in rows),
             "Unexpected evidence was inserted before disposal")
+    validate_public_worker_expansion(directory, expected["identity"], expected["caseName"], list(rows.values()))
 
 
 def readonly_handler(root, identity, directory, record):
@@ -1822,8 +2225,12 @@ class Controller:
             # Retain available originals before ANY result predicate, including
             # expected-red/setup/stop/cancellation failure. Never copy arbitrary
             # report members or synthetic payload files into public staging.
+            errors = []
             for file in ("test-admission.json", "execution.json", "buildsrc-execution.json"):
-                retain_available(output / file, case["public"] / file)
+                try:
+                    retain_worker_report(output / file, case["public"] / file, request)
+                except Exception as error:
+                    errors.append(type(error).__name__)  # Never publish unsupported classpath/exception strings.
             retain_available(build_info, case["public"] / "BuildInfo.kt")
             product = next((row for row in case["leaves"] if row["purpose"] == "product"), None)
             canonical = state / "evidence" / product["id"] / "reports" / xml_name if product else None
@@ -1835,6 +2242,11 @@ class Controller:
                     new_json(case["public"] / "unbound-report.json", {"schema": 1, "source": xml_name,
                         "sha256": digest(regular(root / xml_name)), "classification": "UNBOUND_FAILURE_EVIDENCE",
                         "reason": "No canonical leaf-retained selected XML; never assessed as fresh execution"})
+            try:
+                retain_worker_expansion(output, case["public"], request, request_hash, product)
+            except Exception as error:
+                errors.append(type(error).__name__)
+            require(not errors, "Selected observer/worker originals could not be safely retained")
 
         try:
             before = self.test_temporary(case, "before")
@@ -1858,7 +2270,9 @@ class Controller:
             require(digest(raw) == xmls[0]["sha256"], "Retained XML differs from its producer receipt")
             require(regular(case["public"] / "TEST-control.xml") == raw, "Public XML differs from retained producer XML")
             directory = assess_xml(raw, request)
-            assess_worker_log(regular(case["public"] / "product/product.stdout.log"), request)
+            capture = read_json(case["public"] / "worker-classpath.json")
+            assess_worker_log(regular(case["public"] / "product/product.stdout.log"), request,
+                              execution["admission"], capture["original"]["path"])
             build_info_text = regular(case["public"] / "BuildInfo.kt").decode("utf-8", errors="strict")
             require(re.findall(r'^    public const val COMMIT: String = "([0-9a-f]{40})"$', build_info_text, re.M) ==
                     [case["context"]["expectedCommit"]] and

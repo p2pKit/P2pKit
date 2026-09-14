@@ -2,6 +2,10 @@
 // Only run-windows-directory-control.py creates the fresh external request.
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
+import java.nio.CharBuffer
+import java.nio.charset.Charset
+import java.nio.charset.CodingErrorAction
+import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.StandardOpenOption
@@ -10,11 +14,15 @@ import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import org.gradle.StartParameter
 import org.gradle.api.GradleException
+import org.gradle.api.internal.ClassPathRegistry
+import org.gradle.api.internal.GradleInternal
+import org.gradle.api.internal.tasks.testing.junit.JUnitTestFramework
 import org.gradle.api.tasks.testing.AbstractTestTask
 import org.gradle.api.tasks.testing.Test
 import org.gradle.api.tasks.testing.TestDescriptor
 import org.gradle.api.tasks.testing.TestListener
 import org.gradle.api.tasks.testing.TestResult
+import org.gradle.internal.jvm.JavaModuleDetector
 
 // Shared with the bounded fixture through this script's own Groovy classloader.
 // Constructed StartParameters test this predicate, not command-line parsing.
@@ -45,6 +53,84 @@ class WindowsDirectoryControlTemporaryPolicy {
     }
 }
 
+// #436: finite Gradle 9.7 nonmodular worker expansion. These helpers are also
+// executed by the bounded Groovy fixture; its models are not native evidence.
+class WindowsDirectoryControlWorkerPolicy {
+    static final int MAX_BYTES = 256 * 1024
+    static final String NAME = /gradle-worker-classpath[0-9]{1,20}txt/
+
+    static String path(String value, boolean logged = false) {
+        if (value == null || value.length() > 4096 || !(value ==~ /[A-Za-z]:\\[ -~]+/) ||
+            value.contains(';') || value.contains('"') || value.contains("'") || (logged && (value =~ /\s/).find())) {
+            throw new GradleException('Unsupported worker path')
+        }
+        def parts = value.substring(3).split('\\\\', -1)
+        if (parts.length > 64 || parts.any { it.empty || it in ['.', '..'] || it.endsWith('.') || it.endsWith(' ') ||
+            (it =~ /[<>:|?*\/]/).find() || (it ==~ /(?i:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?/) }) {
+            throw new GradleException('Unsupported worker path')
+        }
+        value
+    }
+
+    static boolean below(String value, String parent) {
+        value.startsWith(parent + '\\')
+    }
+
+    static Charset nativeCharset(Properties properties, Charset fallback) {
+        for (String key : ['native.encoding', 'sun.jnu.encoding']) {
+            def value = properties.getProperty(key)
+            if (value != null && Charset.isSupported(value)) return Charset.forName(value)
+        }
+        fallback
+    }
+
+    static byte[] render(List<String> classpath, String charset, String separator) {
+        if (classpath.empty || classpath.size() > 512 || separator != '\r\n') {
+            throw new GradleException('Unsupported worker expansion')
+        }
+        classpath.each { path(it) }
+        // ArgWriter.javaStyle: escape before conditional whole-argument quotes.
+        def text = ['-cp', classpath.join(';')].collect { argument ->
+            def escaped = argument.replace('\\', '\\\\').replace('"', '\\"')
+            ((escaped.empty || (escaped =~ /\s|#/).find()) ? '"' + escaped + '"' : escaped) + separator
+        }.join('')
+        def ascii = text.getBytes(StandardCharsets.US_ASCII)
+        if (ascii.length > MAX_BYTES) throw new GradleException('Unsupported worker expansion')
+        def buffer = Charset.forName(charset).newEncoder().onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT).encode(CharBuffer.wrap(text))
+        byte[] nativeBytes = new byte[buffer.remaining()]
+        buffer.get(nativeBytes)
+        if (!Arrays.equals(ascii, nativeBytes)) throw new GradleException('Unsupported worker encoding')
+        nativeBytes
+    }
+
+    static String selected(List<String> before, List<String> after) {
+        if (before.size() > 64 || after.size() > 64 || before.toSet().size() != before.size() ||
+            after.toSet().size() != after.size() || (before + after).any { !(it ==~ NAME) } ||
+            !after.containsAll(before)) throw new GradleException('Invalid worker file inventory')
+        def added = after.findAll { !before.contains(it) }
+        if (added.size() != 1) throw new GradleException('Ambiguous or missing selected worker file')
+        added[0]
+    }
+
+    static Map completeCapture(Map binding, Closure attempt) {
+        def report = binding + [status: 'REFUSED', reason: 'CAPTURE_FAILED', afterFiles: null, original: null]
+        try {
+            attempt.call(report)
+            report.status = 'CAPTURED'
+            report.reason = null
+        } catch (Exception ignored) {
+            // Preserve the actual Test failure/exit. The controller rejects this
+            // finite refusal; arbitrary exception strings/bytes are not public.
+        }
+        report
+    }
+
+    static boolean retainCapture(Map report, Closure writer) {
+        try { writer.call(report); return true } catch (Exception ignored) { return false }
+    }
+}
+
 def checksum = { byte[] bytes -> MessageDigest.getInstance('SHA-256').digest(bytes).encodeHex().toString() }
 def physical = { File file ->
     def path = file.toPath().toAbsolutePath().normalize()
@@ -63,6 +149,72 @@ def writeOnce = { File file, value ->
     def bytes = (JsonOutput.prettyPrint(JsonOutput.toJson(value)) + '\n').getBytes('UTF-8')
     if (bytes.length > 1024 * 1024) throw new GradleException('Windows control report exceeds its bound')
     Files.write(file.toPath(), bytes, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
+}
+def workerPhysical = { File file, boolean allowMissing = false ->
+    def path = file.toPath().toAbsolutePath().normalize()
+    WindowsDirectoryControlWorkerPolicy.path(path.toString())
+    if (file.absolutePath != path.toString()) throw new GradleException('Noncanonical worker path')
+    def ancestors = []
+    def cursor = path
+    while (cursor != null) {
+        ancestors.add(cursor)
+        cursor = cursor.parent
+    }
+    // NOFOLLOW_LINKS only protects the final component. Check root-first so
+    // metadata/content lookup never crosses a preexisting linked ancestor.
+    ancestors.reverseEach { entry ->
+        if (!Files.exists(entry, LinkOption.NOFOLLOW_LINKS)) {
+            if (!allowMissing) throw new GradleException('Missing worker path')
+        } else {
+            def attrs = Files.readAttributes(entry, BasicFileAttributes, LinkOption.NOFOLLOW_LINKS)
+            if (attrs.isOther() || attrs.isSymbolicLink() || (entry != path && !attrs.isDirectory()) ||
+                entry.toRealPath().toString() != entry.toString()) {
+                throw new GradleException('Nonphysical worker path')
+            }
+        }
+    }
+    path
+}
+def workerRead = { path, int limit ->
+    workerPhysical(path.toFile())
+    def before = Files.readAttributes(path, BasicFileAttributes, LinkOption.NOFOLLOW_LINKS)
+    if (!before.isRegularFile() || before.size() <= 0 || before.size() > limit) {
+        throw new GradleException('Invalid bounded worker file')
+    }
+    def stream = Files.newInputStream(path, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)
+    byte[] bytes
+    try { bytes = stream.readNBytes(limit + 1) } finally { stream.close() }
+    workerPhysical(path.toFile())
+    def after = Files.readAttributes(path, BasicFileAttributes, LinkOption.NOFOLLOW_LINKS)
+    if (!after.isRegularFile() || bytes.length != before.size() || after.size() != before.size() ||
+        after.lastModifiedTime() != before.lastModifiedTime() ||
+        (before.fileKey() != null && before.fileKey() != after.fileKey())) {
+        throw new GradleException('Worker file changed during capture')
+    }
+    bytes
+}
+def workerInventory = { directory ->
+    workerPhysical(directory.toFile(), true)
+    boolean present = Files.exists(directory, LinkOption.NOFOLLOW_LINKS)
+    def names = []
+    if (present) {
+        if (!Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) throw new GradleException('Invalid worker directory')
+        def entries = Files.newDirectoryStream(directory)
+        int count = 0
+        try {
+            for (def entry : entries) {
+                if (++count > 4096) throw new GradleException('Unbounded worker file inventory')
+                def name = entry.fileName.toString()
+                if (name.startsWith('gradle-worker-classpath')) {
+                    if (!(name ==~ WindowsDirectoryControlWorkerPolicy.NAME) || names.size() >= 64) {
+                        throw new GradleException('Invalid worker file inventory')
+                    }
+                    names.add(name)
+                }
+            }
+        } finally { entries.close() }
+    }
+    [exists: present, names: names.sort()]
 }
 
 gradle.projectsLoaded {
@@ -144,6 +296,58 @@ gradle.projectsLoaded {
     def outcomes = new ConcurrentHashMap()
     def events = Collections.synchronizedList([])
     def testAdmission = [:]
+    String testAdmissionHash = null
+    def workerDirectory = state.resolve('gradle-home/.tmp')
+    def workerAuthority = { task ->
+        def policy = WindowsDirectoryControlWorkerPolicy
+        [request.root, request.state, request.java17, request.java21, request.testTemporary].each { policy.path(it, true) }
+        def home = workerPhysical(gradle.gradleUserHomeDir).toString()
+        if (home != state.resolve('gradle-home').toString() || gradle.gradleVersion != '9.7.0' ||
+            !(task.testFramework instanceof JUnitTestFramework) ||
+            workerPhysical(task.workingDir) != sourceRoot.resolve('library/p2p-core')) {
+            throw new GradleException('Wrong worker producer, home, framework or working directory')
+        }
+        def services = ((GradleInternal) gradle).getServices()
+        def detector = services.get(JavaModuleDetector)
+        boolean modular = detector.isModule(task.modularity.inferModulePath.get(), task.testClassesDirs)
+        def modules = detector.inferModulePath(modular, task.classpath).files
+        if (modular || !modules.empty) throw new GradleException('Unsupported modular Test worker')
+        def boot = services.get(ClassPathRegistry).getClassPath('WORKER_MAIN').asFiles
+        if (boot.size() != 1) throw new GradleException('Unexpected worker bootstrap classpath')
+        def bootstrap = workerPhysical(boot[0])
+        if (!policy.below(bootstrap.toString(), home + '\\caches') || bootstrap.fileName.toString() != 'gradle-worker.jar') {
+            throw new GradleException('Foreign worker bootstrap')
+        }
+        def bootstrapBytes = workerRead(bootstrap, 4 * 1024 * 1024)
+        def application = []
+        def seen = [bootstrap.toString().toLowerCase(Locale.ROOT)] as Set
+        def build = sourceRoot.resolve('library/p2p-core/build').toString()
+        def dependencies = home + '\\caches\\modules-2\\files-2.1'
+        detector.inferClasspath(modular, task.classpath).files.each { file ->
+            def path = workerPhysical(file, true)
+            def name = path.toString()
+            if (application.size() >= 512 || !seen.add(name.toLowerCase(Locale.ROOT))) {
+                throw new GradleException('Duplicate or unbounded worker classpath')
+            }
+            def kind = 'missing'
+            if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+                def attrs = Files.readAttributes(path, BasicFileAttributes, LinkOption.NOFOLLOW_LINKS)
+                kind = attrs.isDirectory() ? 'directory' : attrs.isRegularFile() ? 'file' : 'other'
+            }
+            if (!(policy.below(name, build) && (kind in ['directory', 'missing'] || kind == 'file' && name.endsWith('.jar'))) &&
+                !(policy.below(name, dependencies) && kind == 'file' && name.endsWith('.jar'))) {
+                throw new GradleException('Foreign or unsupported worker classpath entry')
+            }
+            application.add([path: name, kind: kind])
+        }
+        def charset = policy.nativeCharset(System.getProperties(), Charset.defaultCharset()).name()
+        def expected = policy.render([bootstrap.toString()] + application.findAll { it.kind != 'missing' }.collect { it.path },
+                                     charset, System.lineSeparator())
+        [gradleVersion: gradle.gradleVersion, gradleHome: home, testIsModule: false, modulePath: [],
+         nativeCharset: charset, nativeEncodedSha256: checksum(expected),
+         bootstrap: [path: bootstrap.toString(), bytes: bootstrapBytes.length, sha256: checksum(bootstrapBytes)],
+         applicationClasspath: application]
+    }
     def allowedCore = [
         'kmpPartiallyResolvedDependenciesChecker', 'checkKotlinGradlePluginConfigurationErrors',
         'generateBuildInfo', 'generateWireGoldens',
@@ -204,9 +408,11 @@ gradle.projectsLoaded {
                         temporaryFileKey: fileKey, temporaryEmpty: true,
                         temporaryOwnerSha256: request.temporaryOwnerSha256,
                         observedMillis: System.currentTimeMillis(),
+                        workerExpansion: workerAuthority(task) + [beforeFiles: workerInventory(workerDirectory)],
                     ])
                     writeOnce(output.resolve('test-admission.json').toFile(), [schema: 1, nonce: request.nonce,
                         caseName: request.caseName, requestSha256: requestHash, admission: testAdmission])
+                    testAdmissionHash = checksum(Files.readAllBytes(output.resolve('test-admission.json')))
                 }
                 task.addTestListener(new TestListener() {
                     void beforeSuite(TestDescriptor descriptor) {}
@@ -237,6 +443,46 @@ gradle.projectsLoaded {
         outcomes[task.path] = [outcome: result.failure != null ? 'FAILED' :
             result.noSource ? 'NO_SOURCE' : result.skipped ? (result.skipMessage ?: 'SKIPPED') : 'EXECUTED',
             didWork: result.didWork, failureType: result.failure?.class?.name]
+        if (!buildSrc && task.path == taskName && testAdmission.containsKey('workerExpansion')) {
+            // afterTask runs for an actual failed Test too; doLast does not.
+            // This capture completes before Gradle returns and the leaf --stop.
+            def report = WindowsDirectoryControlWorkerPolicy.completeCapture([
+                schema: 1, requestSha256: requestHash, admissionSha256: testAdmissionHash,
+                phase: 'selected-afterTask', observedMillis: System.currentTimeMillis(),
+            ]) { capture ->
+                capture.reason = 'BINDING_CHANGED'
+                if (checksum(Files.readAllBytes(requestPath)) != requestHash) throw new GradleException('Request changed')
+                if (testAdmissionHash == null ||
+                    checksum(Files.readAllBytes(output.resolve('test-admission.json'))) != testAdmissionHash) {
+                    throw new GradleException('Admission changed')
+                }
+                def admitted = testAdmission.workerExpansion
+                if (workerAuthority(task) != admitted.findAll { key, _ -> key != 'beforeFiles' }) {
+                    throw new GradleException('Worker authority changed')
+                }
+                capture.reason = 'FILE_SELECTION_FAILED'
+                capture.afterFiles = workerInventory(workerDirectory)
+                def selected = WindowsDirectoryControlWorkerPolicy.selected(admitted.beforeFiles.names,
+                    capture.afterFiles.names)
+                def original = workerDirectory.resolve(selected)
+                capture.reason = 'FILE_CAPTURE_FAILED'
+                def bytes = workerRead(original, WindowsDirectoryControlWorkerPolicy.MAX_BYTES)
+                capture.original = [path: original.toString(), bytes: bytes.length, sha256: checksum(bytes)]
+                // Exact raw bytes remain private unless the controller separately
+                // accepts content, launch association and native ordinary-file checks.
+                Files.write(output.resolve('worker-classpath.raw'), bytes, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
+                capture.reason = 'CONTENT_MISMATCH'
+                def expected = WindowsDirectoryControlWorkerPolicy.render([admitted.bootstrap.path] +
+                    admitted.applicationClasspath.findAll { it.kind != 'missing' }.collect { it.path },
+                    admitted.nativeCharset, System.lineSeparator())
+                if (!Arrays.equals(bytes, expected)) throw new GradleException('Worker expansion differs')
+            }
+            if (!WindowsDirectoryControlWorkerPolicy.retainCapture(report, { value ->
+                    writeOnce(output.resolve('worker-classpath.json').toFile(), value)
+                })) {
+                logger.error('Windows worker capture report unavailable; original Test result is unchanged')
+            }
+        }
     }
     gradle.buildFinished { result ->
         if (checksum(Files.readAllBytes(requestPath)) != requestHash) {

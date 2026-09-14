@@ -190,7 +190,10 @@ Eight additional modeled `BasicFileAttributes` inputs execute the production
 temporary-policy class from the same loader: null/non-null-key positives and
 non-directory/other/link/nonempty/invalid-key negatives. These exercise the actual
 shared predicates, not actual command-line parsing, a Windows filesystem provider,
-or a complete successful observer invocation. The schema-3 report retains exact
+or a complete successful observer invocation. Another 25 worker-policy models
+exercise the same observer class's exact rendering, native-charset selection,
+bounded new-file selection and capture/write-error preservation. They do **not**
+execute an actual failed Test's `afterTask` callback. The schema-4 report retains exact
 observed fields, nullable key diagnostics and precise exception outcomes for independent checking.
 It has no plugins/dependencies/product tasks and copies the checked-in daemon
 criteria. Its bounded report distinguishes precise binding/request rejections
@@ -224,6 +227,86 @@ Accept current positive **before** attempting the preimage:
 The outer assessor may return zero after detecting the expected red, but preserves
 the original producer exit1 and failed XML. The preimage stops before the second
 commit/final assertions; it is not a passing library suite or all of #141.
+
+### Selected worker argument file (#436)
+
+Gradle 9.7.0's pinned
+[worker producer](https://github.com/gradle/gradle/blob/3defbfc59d757b873d787b2261de5c7f8a00970a/platforms/core-execution/worker-process-services/src/main/java/org/gradle/process/internal/worker/child/ApplicationClassesInSystemClassLoaderWorkerImplementationFactory.java)
+uses one generated Java9+ classpath argument file. This is not permission for
+caller-supplied `@` options. The supported basename is
+`gradle-worker-classpath[0-9]{1,20}txt` (**no dot** before `txt`), a direct child
+of this case's fresh `state/gradle-home/.tmp`. The distinct compiler-worker file
+is a prelaunch baseline member, never the selected Test file.
+
+Before Test launch, `workerExpansion` in `test-admission.json` records the actual
+Gradle version/home, nonmodular JUnit framework observation, `WORKER_MAIN`
+registry bootstrap path/size/hash, and ordered application classpath with file,
+directory or missing-output kind. The actual module detector supplies this
+classpath; missing core build outputs are recorded and omitted just as the
+worker builder does. The bootstrap comes from Gradle's registry, not an argfile
+or cache search. Existing class/resource directories and JARs must belong to the
+current core build or case-owned strict dependency cache. Shared/sibling homes,
+module paths, wildcard/aliased paths and other producer shapes fail closed.
+
+This finite profile admits canonical printable ASCII Windows paths, excluding
+quotes (including apostrophes), semicolons, control characters, traversal, ADS,
+reserved names and wildcards. Logged paths must also be whitespace-free;
+classpath entries may contain spaces or `#`. Expected tokens are independently
+formed as `-cp` and one semicolon-joined bootstrap/application classpath. They use
+the pinned ArgWriter's doubled backslashes, conditional whole-argument quoting
+and CRLF after **each** token. The observed daemon native charset follows
+`native.encoding`, supported `sun.jnu.encoding`, then the default charset.
+Encoding the **entire** authorized string must equal strict ASCII bytes; neither
+JDK21's default nor worker `file.encoding=UTF-8` is treated as that proof. There
+are at most 64 path components, 512 effective entries and 256KiB of bytes. Unsupported encodings or
+paths require a separately reviewed profile, not normalization or extra options.
+
+The selected `afterTask` callback, including an actual failed Test, rechecks its
+authority and selects exactly one new file absent from the bounded prelaunch
+inventory. It retains exact original bytes as private `worker-classpath.raw`
+before Gradle returns and before same-home stop. NIO checks physical ancestors,
+ordinary type, size, modification time and any available file key; a null Java
+key remains valid and is **not** native identity. No unrelated temporary file
+contents are read. Write-once `worker-classpath.json` (schema 1) binds the request,
+admission hash, callback time, finite after-inventory, original path/size/hash and
+`CAPTURED` or a bounded `REFUSED` reason. Capture failures do not replace the
+original Test outcome, and missing capture is not synthesized.
+
+After the finalized product/stop leaf, the controller independently renders and
+checks the bytes and joins the one new file to exactly one original logged Test
+launch/start ID, admitted JDK17, working directory, full JVM options, exact
+`worker.org.gradle.process.internal.worker.GradleWorkerMain` and display-name
+argument. No other `@`, classpath/module override, OS override, agent or changed
+critical option is admitted. Native `regular()`/`lstat` checks then verify the
+original, private snapshot and bootstrap, including nonreparse ancestry,
+`nlink == 1`, stable identity/attributes and unchanged size/hash/content.
+
+The separate, small `worker-classpath-retention.json` (schema 1) records actual
+post-stop native identities/attributes and `QUALIFIED` or finite `REFUSED` status,
+transitively bound to the original request/capture/leaf. It never edits a
+`CAPTURED` observer report into a refusal. Public `worker-classpath.args` is an
+exact copy of the **read original snapshot bytes**, allowed only after content,
+launch association and native checks pass. A later XML/product failure does not
+erase safely retained originals or replace the primary failure. New classpath
+metadata is safety-checked before copying observer reports. All four existing
+seal/verify/pre-disposal entrypoints revalidate these three fixed public files;
+unknown raw files, malformed fields, stale hashes or changed bytes block them.
+
+These are source-bound, quiescent before/after snapshots, **not** creator-PID
+tracing, hostile atomic pinning or full product acceptance. If the original is
+missing after stop, retain the before-stop snapshot as private unqualified
+evidence, block disposal and never reconstruct it. Unsafe raw bytes are never
+uploaded; an ephemeral hosted machine is not a durable private evidence channel.
+The inspected producer does not establish that stop necessarily deletes files.
+
+Historical [R10/attempt1](https://github.com/p2pKit/P2pKit/actions/runs/34861390053/attempts/1)
+remains **FAILED**: current product/stop/final `0/0/0`, preimage **NOT_EXECUTED**.
+The XML label predicate failed first; the blanket `@` guard was **NOT REACHED**.
+R10 did not retain the argument-file contents, so its pathname is not an
+expansion-integrity pass. Closing [#436](https://github.com/p2pKit/P2pKit/issues/436)
+still requires independent source/design review, genuine fresh Windows
+current/preimage original-byte and native-result acceptance, required checks,
+formal review and normal merge. Pure/model controls do not satisfy those gates.
 
 ## Retention and cleanup
 

@@ -60,8 +60,57 @@ def request(negative=False):
 
 
 def arguments(req):
-    return ["-Djava.io.tmpdir=" + req["testTemporary"], "-Dp2pkit.windowsDirectoryNonce=" + req["nonce"],
-            "-Xmx512m", "-Xms128m", "-XX:ActiveProcessorCount=2", "-XX:-UsePerfData"]
+    return ["-Dp2pkit.windowsDirectoryNonce=" + req["nonce"], "-XX:ActiveProcessorCount=2", "-XX:-UsePerfData",
+            "-Xms128m", "-Xmx512m", "-Dfile.encoding=UTF-8", "-Djava.io.tmpdir=" + req["testTemporary"],
+            "-Duser.country=US", "-Duser.language=en", "-Duser.variant", "-ea"]
+
+
+# Independent literal expected bytes. No production renderer creates this fixture.
+WORKER_LITERAL = (b'-cp\r\nC:\\\\control\\\\state\\\\gradle-home\\\\caches\\\\9.7.0\\\\workerMain\\\\gradle-worker.jar;'
+    b'C:\\\\control\\\\source\\\\library\\\\p2p-core\\\\build\\\\classes\\\\kotlin\\\\jvm\\\\test;'
+    b'C:\\\\control\\\\state\\\\gradle-home\\\\caches\\\\modules-2\\\\files-2.1\\\\g\\\\a\\\\1\\\\hash\\\\a.jar\r\n')
+WORKER_BOOTSTRAP = b'MODEL_BOOTSTRAP_NOT_AN_EXECUTABLE\n'
+COMPILER_FILE = "gradle-worker-classpath7019133862698902102txt"
+SELECTED_FILE = "gradle-worker-classpath7481741643250717400txt"
+
+
+def worker_authority():
+    return {"gradleVersion": "9.7.0", "gradleHome": r"C:\control\state\gradle-home", "testIsModule": False,
+        "modulePath": [], "nativeCharset": "UTF-8", "nativeEncodedSha256": C.digest(WORKER_LITERAL),
+        "bootstrap": {"path": r"C:\control\state\gradle-home\caches\9.7.0\workerMain\gradle-worker.jar",
+                      "bytes": len(WORKER_BOOTSTRAP), "sha256": C.digest(WORKER_BOOTSTRAP)},
+        "applicationClasspath": [
+            {"path": r"C:\control\source\library\p2p-core\build\classes\kotlin\jvm\test", "kind": "directory"},
+            {"path": r"C:\control\state\gradle-home\caches\modules-2\files-2.1\g\a\1\hash\a.jar", "kind": "file"},
+            {"path": r"C:\control\source\library\p2p-core\build\resources\jvm\test", "kind": "missing"}],
+        "beforeFiles": {"exists": True, "names": [COMPILER_FILE]}}
+
+
+def worker_log(req):
+    # Actual pinned representation, including the DISTINCT compiler decoy. This
+    # is a synthetic model, not R10's absent original argument-file contents.
+    argfile = req["state"] + "\\gradle-home\\.tmp\\" + SELECTED_FILE
+    command = (req["java17"] + r"\bin\java.exe -Dorg.gradle.internal.worker.tmpdir=" + req["root"] +
+        r"\library\p2p-core\build\tmp\jvmTest\work -Dp2pkit.windowsDirectoryNonce=" + req["nonce"] +
+        " -XX:ActiveProcessorCount=2 -XX:-UsePerfData @" + argfile +
+        " -Xms128m -Xmx512m -Dfile.encoding=UTF-8 -Djava.io.tmpdir=" + req["testTemporary"] +
+        " -Duser.country=US -Duser.language=en -Duser.variant -ea " +
+        "worker.org.gradle.process.internal.worker.GradleWorkerMain 'Gradle Test Executor 2'")
+    return ("Starting process 'Gradle Worker Daemon 1'. Working directory: " + req["state"] +
+        "\\gradle-home\\workers Command: " + req["java17"] + "\\bin\\java.exe @" + req["state"] +
+        "\\gradle-home\\.tmp\\" + COMPILER_FILE +
+        " worker.org.gradle.process.internal.worker.GradleWorkerMain 'Gradle Worker Daemon 1'\r\n" +
+        "Successfully started process 'Gradle Worker Daemon 1'\r\n" +
+        "Starting process 'Gradle Test Executor 2'. Working directory: " + req["root"] +
+        "\\library\\p2p-core Command: " + command + "\r\nSuccessfully started process 'Gradle Test Executor 2'\r\n").encode()
+
+
+def worker_capture(req, admission_hash, request_hash="d" * 64):
+    return {"schema": 1, "requestSha256": request_hash, "admissionSha256": admission_hash,
+        "phase": "selected-afterTask", "observedMillis": 25, "status": "CAPTURED", "reason": None,
+        "afterFiles": {"exists": True, "names": [COMPILER_FILE, SELECTED_FILE]},
+        "original": {"path": req["state"] + "\\gradle-home\\.tmp\\" + SELECTED_FILE,
+                     "bytes": len(WORKER_LITERAL), "sha256": C.digest(WORKER_LITERAL)}}
 
 
 def execution(req, scope="root"):
@@ -70,7 +119,7 @@ def execution(req, scope="root"):
     admission = {"task": C.TASK, "commandFilters": [C.SELECTOR], "includePatterns": [], "excludePatterns": [],
         "enabled": True, "ignoreFailures": False, "failOnNoMatchingTests": True, "maxParallelForks": 1, "forkEvery": 0,
         "temporaryEmpty": True, "temporaryFileKey": None, "temporaryOwnerSha256": req["temporaryOwnerSha256"], "observedMillis": 10,
-        "temporary": req["testTemporary"], "jvmArgs": arguments(req),
+        "temporary": req["testTemporary"], "jvmArgs": arguments(req), "workerExpansion": worker_authority(),
         "launcher": {"version": 17, "home": req["java17"], "executable": req["java17"] + r"\bin\java.exe"}}
     return {"schema": 1, "scope": scope, "nonce": req["nonce"], "caseName": req["caseName"], "source": req["source"],
         "identity": req["identity"], "requestSha256": "d" * 64, "host": {"os": "Windows 2025", "arch": "amd64",
@@ -1049,8 +1098,12 @@ class PureWindowsControlTests(unittest.TestCase):
                 "observedFileKey": fields["fileKey"] if fields["accepted"] else None,
                 "exceptionType": None if fields["accepted"] else "org.gradle.api.GradleException",
                 "message": None if fields["accepted"] else message})
-        return {"schema": 3, "scope": "MODELED_BINDINGS_ATTRIBUTES_AND_CONSTRUCTED_STARTPARAMETERS_NOT_NATIVE",
+        self.assertEqual(len(C.WORKER_POLICY_CASES), 25)
+        return {"schema": 4, "scope": "MODELED_BINDINGS_ATTRIBUTES_WORKER_POLICY_AND_CONSTRUCTED_STARTPARAMETERS_NOT_NATIVE",
             "gradleVersion": "9.7.0", "taskPolicyCases": policy_rows, "temporaryPolicyCases": temporary_rows,
+            "workerPolicyCases": [{"id": name, "passed": True, "value": value, "message": message,
+                "exceptionType": "org.gradle.api.GradleException" if message else None}
+                for name, (value, message) in C.WORKER_POLICY_CASES.items()],
             "hashes": hashes, "cases": [{"id": name, "passed": True, "expectedMessage": message,
                 "exceptionType": "org.gradle.api.GradleException", "message": message}
                 for name, message in C.BINDING_CASES.items()]}
@@ -1445,13 +1498,369 @@ class PureWindowsControlTests(unittest.TestCase):
                 mutate(changed)
                 self.rejects(lambda: C.assess_execution(changed, req, "d" * 64))
         req = request()
-        command = req["java17"] + r"\bin\java.exe " + " ".join(arguments(req)) + " worker.Main"
-        log = ("Starting process 'Gradle Test Executor 1'. Command: " + command +
-               "\nSuccessfully started process 'Gradle Test Executor 1'\n").encode()
-        C.assess_worker_log(log, req)
+        log, admission = worker_log(req), execution(req)["admission"]
+        selected = req["state"] + "\\gradle-home\\.tmp\\" + SELECTED_FILE
+        C.assess_worker_log(log, req, admission, selected)
         for changed in (log + log, log.replace(b"jdk17", b"jdk21"), log.replace(b"-Xmx512m", b"-Xmx512m -Xmx2g"),
-                        log.replace(b" worker.Main", b" -Dos.name=Windows worker.Main")):
-            self.rejects(lambda: C.assess_worker_log(changed, req))
+                        log.replace(b" -ea ", b" -ea -Dos.name=Windows ")):
+            self.rejects(lambda: C.assess_worker_log(changed, req, admission, selected))
+
+    def test_worker_literal_encoding_order_and_missing_classpath_filter(self):
+        authority, req = worker_authority(), request()
+        for charset in ("UTF-8", "windows-1252", "US-ASCII"):
+            authority["nativeCharset"] = charset
+            self.assertEqual(C.worker_expected(authority, req), WORKER_LITERAL)
+        self.assertNotIn(b"resources", WORKER_LITERAL)  # Recorded absent output is filtered, not invented.
+        spaced = copy.deepcopy(authority)
+        spaced["applicationClasspath"][0]["path"] += " space#"
+        expected = b'-cp\r\n"' + WORKER_LITERAL[len(b"-cp\r\n"):-2].replace(b"test;", b"test space#;") + b'"\r\n'
+        spaced["nativeEncodedSha256"] = C.digest(expected)
+        self.assertEqual(C.worker_expected(spaced, req), expected)
+        for charset in ("UTF-16", "UTF-16LE", "utf-8-sig", "cp037", "unsupported-charset", ""):
+            changed = dict(authority, nativeCharset=charset)
+            self.rejects(lambda: C.worker_expected(changed, req))
+        for mutate in (lambda v: v["applicationClasspath"].reverse(),
+                       lambda v: v["applicationClasspath"][2].update(kind="directory"),
+                       lambda v: v.update(nativeEncodedSha256="f" * 64)):
+            changed = copy.deepcopy(authority)
+            mutate(changed)
+            self.rejects(lambda: C.worker_expected(changed, req))
+
+    def test_worker_authority_rejects_foreign_alias_modular_and_injected_paths(self):
+        original, req = worker_authority(), request()
+        mutations = [lambda v: v.update(gradleVersion="9.8.0"), lambda v: v.update(testIsModule=0),
+            lambda v: v.update(modulePath=["C:\\module.jar"]), lambda v: v.update(gradleHome=r"C:\other\gradle-home"),
+            lambda v: v["bootstrap"].update(bytes=True), lambda v: v["bootstrap"].update(sha256="unknown"),
+            lambda v: v["bootstrap"].update(path=r"C:\control\state\other\gradle-worker.jar"),
+            lambda v: v["bootstrap"].update(path=r"C:\control\state\gradle-home\caches\other.jar"),
+            lambda v: v["applicationClasspath"].append(copy.deepcopy(v["applicationClasspath"][0])),
+            lambda v: v["applicationClasspath"][1].update(kind="directory"),
+            lambda v: v["applicationClasspath"][1].update(kind="missing"),
+            lambda v: v["applicationClasspath"][0].update(path=r"C:\sibling\source\library\p2p-core\build\classes"),
+            lambda v: v["applicationClasspath"][1].update(path=r"C:\control\state\gradle-home\caches\unknown\a.jar"),
+            lambda v: v.update(applicationClasspath=v["applicationClasspath"] * 200),
+            lambda v: v.update(unbounded="UNKNOWN_PRIVATE_FIELD"), lambda v: v.pop("beforeFiles")]
+        for mutate in mutations:
+            changed = copy.deepcopy(original)
+            mutate(changed)
+            self.rejects(lambda: C.worker_expected(changed, req))
+        for suffix in (";C:\\x", '"', "'", "*", "?", ":stream", "\\..\\other", "\\.\\other", "\\nul.jar",
+                       "\\CON", "\\path.\\other", "\\path \\other", "\\\\other", "/other", "\n", "\0", "\u00e9"):
+            changed = copy.deepcopy(original)
+            changed["applicationClasspath"][0]["path"] += suffix
+            self.rejects(lambda: C.worker_expected(changed, req))
+        for path in (r"\\server\share\a", r"\\?\C:\a", "C:/a", r"C:relative", "C:\\x " + "a" * 4096,
+                     "C:\\" + "a\\" * 64 + "a"):
+            self.rejects(lambda: C.worker_path(path))
+
+    def test_worker_capture_requires_single_new_file_hashes_and_finite_refusals(self):
+        req, authority = request(), worker_authority()
+        original = worker_capture(req, "a" * 64)
+        check = lambda value: C.assess_worker_capture(value, req, "d" * 64, "a" * 64, authority)
+        check(original)
+        for mutate in (lambda v: v.update(schema=True), lambda v: v.update(requestSha256="a" * 64),
+            lambda v: v.update(admissionSha256=None), lambda v: v.update(phase="after-stop"),
+            lambda v: v.update(observedMillis=True), lambda v: v.update(original=None),
+            lambda v: v.update(afterFiles=None), lambda v: v["afterFiles"].update(exists=1),
+            lambda v: v["afterFiles"].update(exists=False), lambda v: v["afterFiles"]["names"].reverse(),
+            lambda v: v["afterFiles"]["names"].append(SELECTED_FILE),
+            lambda v: v["afterFiles"].update(names=[SELECTED_FILE]),
+            lambda v: v["afterFiles"]["names"].append("gradle-worker-classpath999txt"),
+            lambda v: v["original"].update(path=req["state"] + "\\gradle-home\\.tmp\\" + COMPILER_FILE),
+            lambda v: v["original"].update(path=v["original"]["path"] + ".txt"),
+            lambda v: v["original"].update(path=v["original"]["path"].replace("control", "other")),
+            lambda v: v["original"].update(bytes=0), lambda v: v["original"].update(bytes=True),
+            lambda v: v["original"].update(bytes=C.WORKER_BYTES + 1), lambda v: v["original"].update(sha256="unknown"),
+            lambda v: v.update(reason="FAILED_SECRET_BYTES"), lambda v: v.update(secret="UNKNOWN_PRIVATE_CONTENT")):
+            changed = copy.deepcopy(original)
+            mutate(changed)
+            self.rejects(lambda: check(changed))
+        for reason in sorted(C.WORKER_CAPTURE_REASONS):
+            check(dict(original, status="REFUSED", reason=reason, original=None, afterFiles=None))
+        C.assess_worker_capture(dict(original, admissionSha256=None, status="REFUSED", reason="BINDING_CHANGED",
+            original=None, afterFiles=None), req, "d" * 64)  # Honest absent-admission failure metadata.
+
+    def test_worker_launch_exact_main_start_id_options_and_only_generated_expansion(self):
+        for negative in (False, True):
+            req, report = request(negative), execution(request(negative))
+            log = worker_log(req)
+            path = req["state"] + "\\gradle-home\\.tmp\\" + SELECTED_FILE
+            check = lambda value: C.assess_worker_log(value, req, report["admission"], path)
+            self.assertEqual(check(log), "2")
+            replacements = [(b"Successfully started process 'Gradle Test Executor 2'", b"Successfully started process 'Gradle Test Executor 3'"),
+                (b"Gradle Test Executor 2'\r\nSuccessfully", b"Gradle Test Executor 3'\r\nSuccessfully"),
+                (C.WORKER_MAIN.encode(), b"worker.Main"), (b" -ea ", b" -ea -javaagent:C:\\inject.jar "),
+                (b" -ea ", b" -ea -agentlib:jdwp=transport=dt_socket "), (b" -ea ", b" -ea -Dos.arch=amd64 "),
+                (b" -ea ", b" -ea -cp C:\\other "), (b" -ea ", b" -ea --module-path C:\\other "),
+                (b" -ea ", b" -ea --class-path C:\\other "), (b" -ea ", b" -ea @C:\\caller "),
+                (SELECTED_FILE.encode(), COMPILER_FILE.encode()), (SELECTED_FILE.encode(), SELECTED_FILE.encode() + b".txt"),
+                (b"-XX:ActiveProcessorCount=2", b"-XX:ActiveProcessorCount=4"), (b"-Xmx512m", b"-Xmx512m -Xmx1g"),
+                (b" -Duser.variant ", b" -Duser.variant=bad option "),
+                (b"\\library\\p2p-core Command", b"\\other Command")]
+            for before, after in replacements:
+                self.rejects(lambda: check(log.replace(before, after)))
+            self.rejects(lambda: check(log + log))
+            for injected in ("@C:\\user", "-javaagent:C:\\agent.jar", "-Dos.name=Windows", "-Dos.arch=amd64",
+                             "-cp", "--class-path=C:\\foreign", "--module-path=C:\\foreign", "-Xmx2g"):
+                changed = copy.deepcopy(report)
+                changed["admission"]["jvmArgs"].append(injected)
+                self.rejects(lambda: C.assess_execution(changed, req, "d" * 64))
+
+    def worker_retention_model(self, negative=False):
+        """Tiny local files + fake Windows/leaf identity. No native or Gradle run."""
+        base = Path(tempfile.mkdtemp(prefix="worker-retention-model-", dir=self.base))
+        output, public = base / "output", base / "public"
+        output.mkdir()
+        (public / "product").mkdir(parents=True)
+        req = request(negative)
+        C.new_json(public / "request.json", req)
+        request_hash = C.digest(C.regular(public / "request.json"))
+        report = execution(req)
+        report["requestSha256"] = request_hash
+        report["binding"]["localProperties"]["p2pkit.windowsDirectoryRequestSha256"] = request_hash
+        envelope = {"schema": 1, "nonce": req["nonce"], "caseName": req["caseName"],
+                    "requestSha256": request_hash, "admission": report["admission"]}
+        for name, value in (("test-admission.json", envelope), ("execution.json", report)):
+            C.new_json(public / name, value)
+        capture = worker_capture(req, C.digest(C.regular(public / "test-admission.json")), request_hash)
+        C.new_json(output / "worker-classpath.json", capture)
+        (output / "worker-classpath.raw").write_bytes(WORKER_LITERAL)
+        original, boot = base / "original", base / "bootstrap"
+        original.write_bytes(WORKER_LITERAL)
+        boot.write_bytes(WORKER_BOOTSTRAP)
+        (public / "product/product.stdout.log").write_bytes(worker_log(req))
+        leaf = {"id": "f" * 32, "purpose": "product", "valid": True, "retained": True, "status": int(negative)}
+        receipt = {"id": leaf["id"], "purpose": "product", "host": "windows-x64", "sourceBefore": req["source"],
+            "sourceAfter": req["source"], "sourceUnchanged": True, "stopExitCode": 0, "errors": [], "ownedSurvivors": [],
+            "productStartedUtc": "1970-01-01T00:00:00.005000+00:00", "productEndedUtc": "1970-01-01T00:00:00.035000+00:00",
+            "stopStartedUtc": "1970-01-01T00:00:00.035000+00:00", "stopEndedUtc": "1970-01-01T00:00:00.040000+00:00",
+            "endedUtc": "1970-01-01T00:00:00.045000+00:00"}
+        C.new_json(public / "product/receipt.json", receipt)
+        snapshot_name = req["outputDirectory"] + "\\worker-classpath.raw"
+        files = {str(output / "worker-classpath.raw"): (output / "worker-classpath.raw", snapshot_name),
+            snapshot_name: (output / "worker-classpath.raw", snapshot_name),
+            capture["original"]["path"]: (original, capture["original"]["path"]),
+            report["admission"]["workerExpansion"]["bootstrap"]["path"]: (boot, report["admission"]["workerExpansion"]["bootstrap"]["path"])}
+        native_read = C.native_worker_file
+        def modeled_file(path, limit):
+            actual, spelling = files[str(path)]
+            raw, row = native_read(actual, limit)
+            row["path"] = spelling  # Explicit finite model mapping; not a Windows filesystem observation.
+            return raw, row
+        return SimpleNamespace(output=output, public=public, request=req, request_hash=request_hash, report=report,
+            envelope=envelope, capture=capture, original=original, boot=boot, leaf=leaf, native=modeled_file)
+
+    def retain_worker_model(self, model):
+        with mock.patch.object(C, "native_worker_file", side_effect=model.native):
+            return C.retain_worker_expansion(model.output, model.public, model.request, model.request_hash, model.leaf)
+
+    def test_worker_retention_keeps_exact_originals_and_red_green_ordering(self):
+        for negative in (False, True):
+            model = self.worker_retention_model(negative)
+            original_capture = C.regular(model.output / "worker-classpath.json")
+            result = self.retain_worker_model(model)
+            self.assertEqual(result["status"], "QUALIFIED")
+            self.assertEqual(C.regular(model.public / "worker-classpath.json"), original_capture)
+            self.assertEqual(C.regular(model.public / "worker-classpath.args"), WORKER_LITERAL)
+            self.assertEqual(result, self.retain_worker_model(model))  # Idempotent, not overwritten or retried.
+            for key in ("original", "snapshot"):
+                self.assertEqual(result[key]["sha256"], C.digest(WORKER_LITERAL))
+                self.assertEqual(result[key]["stat"]["links"], 1)
+            C.seal_public(model.public, model.request["identity"], model.request["caseName"])
+            C.verify_public(model.public, model.request["identity"], model.request["caseName"])
+
+    def test_worker_report_preflight_keeps_unsupported_classpath_metadata_private(self):
+        req = request()
+        for name in ("test-admission.json", "execution.json", "buildsrc-execution.json"):
+            for mutate in (None, lambda v: v["admission"]["workerExpansion"].update(unknown="PRIVATE_METADATA"),
+                           lambda v: v["admission"]["workerExpansion"]["applicationClasspath"][0].update(path=r"C:\private\data"),
+                           lambda v: v.update(admission=["PRIVATE_METADATA"])):
+                base = Path(tempfile.mkdtemp(prefix="worker-report-preflight-", dir=self.base))
+                source, destination = base / name, base / ("retained-" + name)
+                value = execution(req)
+                if mutate:
+                    mutate(value)
+                C.new_json(source, value)
+                original = source.read_bytes()
+                if mutate:
+                    self.rejects(lambda: C.retain_worker_report(source, destination, req))
+                    self.assertFalse(destination.exists())
+                else:
+                    C.retain_worker_report(source, destination, req)
+                    self.assertEqual(destination.read_bytes(), original)
+                self.assertEqual(source.read_bytes(), original)
+
+    def test_worker_observation_binds_event_capture_build_and_stop_times_to_original_leaf(self):
+        m = self.worker_retention_model()
+        check = lambda report, envelope, capture: C.worker_observation(report, envelope, capture, m.request, m.request_hash)
+        self.assertEqual(check(m.report, m.envelope, m.capture), WORKER_LITERAL)
+        for mutate in (lambda v: v.update(source={}), lambda v: v.update(identity={}),
+                       lambda v: v.update(caseName="preimage"), lambda v: v.update(events=[]),
+                       lambda v: v["events"][0].update(name="other"), lambda v: v["events"][0].update(endMillis=26),
+                       lambda v: v["events"][0].update(startMillis=True), lambda v: v.update(finishedMillis=24),
+                       lambda v: v["admission"].update(temporaryFileKey="changed")):
+            report = copy.deepcopy(m.report)
+            mutate(report)
+            self.rejects(lambda: check(report, m.envelope, m.capture))
+        for observed in (19, 31):
+            self.rejects(lambda: check(m.report, m.envelope, dict(m.capture, observedMillis=observed)))
+        receipt = C.read_json(m.public / "product/receipt.json")
+        retained = {"leafId": m.leaf["id"], "observedMillis": 50}
+        C.worker_leaf_binding(receipt, m.request, retained, m.envelope, m.capture, m.report)
+        for key, value in (("host", "linux-x64"), ("sourceAfter", {}), ("stopExitCode", True),
+            ("stopExitCode", 1), ("ownedSurvivors", ["MODEL_SURVIVOR"]), ("id", "e" * 32),
+            ("productStartedUtc", "1970-01-01T00:00:00.011000+00:00"),
+            ("productEndedUtc", "1970-01-01T00:00:00.029000+00:00"),
+            ("stopStartedUtc", "1970-01-01T00:00:00.001000+00:00"),
+            ("stopEndedUtc", "1970-01-01T00:00:00.034000+00:00"),
+            ("endedUtc", "1970-01-01T00:00:00.051000+00:00")):
+            self.rejects(lambda: C.worker_leaf_binding(dict(receipt, **{key: value}), m.request, retained,
+                                                       m.envelope, m.capture, m.report))
+
+    def test_worker_public_copy_failure_keeps_original_capture_and_native_refusal(self):
+        m = self.worker_retention_model()
+        original_capture = (m.output / "worker-classpath.json").read_bytes()
+        original_write = C.write
+        def fail(path, raw):
+            if path == m.public / "worker-classpath.args":
+                raise OSError("MODELED_PUBLIC_COPY_FAILURE")
+            return original_write(path, raw)
+        with mock.patch.object(C, "write", side_effect=fail):
+            self.rejects(lambda: self.retain_worker_model(m))
+        value = C.read_json(m.public / "worker-classpath-retention.json")
+        self.assertEqual((value["status"], value["reason"]), ("REFUSED", "PUBLIC_COPY_FAILED"))
+        self.assertEqual((m.public / "worker-classpath.json").read_bytes(), original_capture)
+        self.assertEqual(C.read_json(m.public / "worker-classpath.json")["status"], "CAPTURED")
+        self.assertFalse((m.public / "worker-classpath.args").exists())
+        self.assertIsNotNone(value["original"])
+        self.assertIsNotNone(value["snapshot"])
+        C.seal_public(m.public, m.request["identity"], "current")
+
+    def test_worker_retention_refuses_missing_changed_unbound_or_unsafe_raw_without_public_upload(self):
+        mutations = {
+            "missing-original": lambda m: m.original.unlink(),
+            "missing-snapshot": lambda m: (m.output / "worker-classpath.raw").unlink(),
+            "changed-original": lambda m: m.original.write_bytes(b"UNKNOWN_ORIGINAL"),
+            "changed-bootstrap": lambda m: m.boot.write_bytes(b"OTHER_MODEL_BOOTSTRAP"),
+            "unfinalized": lambda m: m.leaf.update(valid=False),
+            "missing-capture": lambda m: (m.output / "worker-classpath.json").unlink(),
+            "wrong-worker": lambda m: (m.public / "product/product.stdout.log").write_bytes(b"NOT_A_WORKER_LAUNCH"),
+        }
+        for label, change in mutations.items():
+            with self.subTest(label=label):
+                model = self.worker_retention_model()
+                change(model)
+                self.rejects(lambda: self.retain_worker_model(model))
+                self.assertFalse((model.public / "worker-classpath.args").exists())
+                self.assertEqual(C.read_json(model.public / "worker-classpath-retention.json")["status"], "REFUSED")
+                if (model.public / "worker-classpath.json").exists():
+                    self.assertEqual(C.regular(model.public / "worker-classpath.json"), C.regular(model.output / "worker-classpath.json"))
+                C.seal_public(model.public, model.request["identity"], "current")  # Safe failure metadata only.
+                C.verify_public(model.public, model.request["identity"], "current")
+        variants = [b"\xef\xbb\xbf" + WORKER_LITERAL, WORKER_LITERAL.replace(b"\r\n", b"\n"), WORKER_LITERAL + b"\0",
+            WORKER_LITERAL.replace(b"\\\\", b"\\"), WORKER_LITERAL + b"# comment\r\n", WORKER_LITERAL + b"-Dfoo=bar\r\n",
+            WORKER_LITERAL + b"-javaagent:C:\\injected.jar\r\n", WORKER_LITERAL + b"@C:\\nested\r\n",
+            WORKER_LITERAL + b"-cp\r\nC:\\other\r\n", WORKER_LITERAL + b"--module-path\r\nC:\\other\r\n"]
+        for raw in variants:
+            model = self.worker_retention_model()
+            (model.output / "worker-classpath.raw").write_bytes(raw)
+            model.original.write_bytes(raw)
+            model.capture["original"].update(bytes=len(raw), sha256=C.digest(raw))
+            (model.output / "worker-classpath.json").write_bytes(C.audit.json_bytes(model.capture))
+            self.rejects(lambda: self.retain_worker_model(model))
+            self.assertEqual(C.read_json(model.public / "worker-classpath-retention.json")["reason"], "EXPANSION_MISMATCH")
+            self.assertFalse((model.public / "worker-classpath.args").exists())
+            self.assertEqual((model.output / "worker-classpath.raw").read_bytes(), raw)
+            self.assertFalse(C.public_path("worker-classpath.raw"))
+
+    def test_worker_native_reader_rejects_links_reparse_changes_and_bounds(self):
+        path = self.base / "ordinary-worker-model"
+        path.write_bytes(WORKER_LITERAL)
+        self.assertEqual(C.native_worker_file(path, C.WORKER_BYTES)[0], WORKER_LITERAL)
+        self.rejects(lambda: C.native_worker_file(path, 1))
+        link = self.base / "worker-hardlink-model"
+        os.link(path, link)
+        self.rejects(lambda: C.native_worker_file(path, C.WORKER_BYTES))
+        link.unlink()
+        link.symlink_to(path)
+        self.rejects(lambda: C.native_worker_file(link, C.WORKER_BYTES))
+        with mock.patch.object(C, "regular", side_effect=lambda file, limit: (file.write_bytes(b"CHANGED"), WORKER_LITERAL)[1]):
+            self.rejects(lambda: C.native_worker_file(path, C.WORKER_BYTES))
+        with mock.patch.object(C.audit, "reject_symlinks", side_effect=C.audit.AuditError("MODELED_REPARSE")):
+            self.rejects(lambda: C.native_worker_file(path, C.WORKER_BYTES))
+
+    def test_worker_public_all_four_entrypoints_reject_malformed_rebound_and_mutated_evidence(self):
+        for entry in ("seal", "verify", "retain", "verify-before-disposal"):
+            for mutation in ("bytes", "capture", "native-links", "native-missing", "time", "worker", "foreign-classpath", "private-raw"):
+                with self.subTest(entry=entry, mutation=mutation):
+                    m = self.worker_retention_model()
+                    self.retain_worker_model(m)
+                    if mutation == "bytes":
+                        (m.public / "worker-classpath.args").write_bytes(WORKER_LITERAL + b"\n")
+                    elif mutation in ("capture", "native-links", "native-missing", "time"):
+                        name = "worker-classpath.json" if mutation == "capture" else "worker-classpath-retention.json"
+                        value = C.read_json(m.public / name)
+                        if mutation == "capture":
+                            value["unknown"] = "UNAPPROVED_RAW_FIELD"
+                        elif mutation == "native-links":
+                            value["original"]["stat"]["links"] = 2
+                        elif mutation == "native-missing":
+                            value["snapshot"] = None
+                        else:
+                            value["observedMillis"] = 24
+                        (m.public / name).write_bytes(C.audit.json_bytes(value))
+                    elif mutation == "worker":
+                        (m.public / "product/product.stdout.log").write_bytes(worker_log(m.request).replace(b"Test Executor 2", b"Test Executor 3", 1))
+                    elif mutation == "foreign-classpath":
+                        value = C.read_json(m.public / "test-admission.json")
+                        value["admission"]["workerExpansion"]["applicationClasspath"][0]["path"] = r"C:\other\private"
+                        (m.public / "test-admission.json").write_bytes(C.audit.json_bytes(value))
+                    else:
+                        (m.public / "worker-classpath.raw").write_bytes(b"UNKNOWN_PRIVATE_CONTENT")
+                    identity = m.request["identity"]
+                    rows = C.inventory(m.public)
+                    if entry == "seal":
+                        action = lambda: C.seal_public(m.public, identity, "current")
+                    elif entry == "verify":
+                        C.new_json(m.public / "manifest.json", C.public_manifest(identity, "current", rows))
+                        action = lambda: C.verify_public(m.public, identity, "current")
+                    elif entry == "retain":
+                        action = lambda: C.retain_before_disposal(m.public, identity, "current")
+                    else:
+                        # An expected retention ledger cannot authorize malformed worker evidence either.
+                        expected = {"schema": 1, "identity": identity, "caseName": "current", "files": rows}
+                        C.new_json(m.public / "retained-before-disposal.json", expected)
+                        action = lambda: C.verify_before_disposal(m.public, expected)
+                    self.rejects(action)
+
+    def test_worker_retention_failure_never_replaces_existing_product_failure(self):
+        controller, case, _ = self.jvm_temporary_model()
+        primary = C.audit.AuditError("MODEL_PRIMARY_PRODUCT_FAILURE")
+        with mock.patch.object(controller, "leaf", side_effect=primary), \
+                mock.patch.object(C, "retain_worker_expansion", side_effect=OSError("MODEL_CAPTURE_COPY_FAILURE")):
+            with self.assertRaises(C.audit.AuditError) as caught:
+                controller.product(case)
+        self.assertIs(caught.exception, primary)
+        self.assertFalse(case["productRetained"])
+        self.assertTrue(case["retentionErrors"])
+        self.assertTrue((case["public"] / "temporary-after.json").is_file())
+        self.rejects(lambda: C.require_disposal_evidence(case))
+
+    def test_worker_policy_report_requires_complete_actual_results_without_self_approval(self):
+        hashes = {"scope": "MODELED_REPORT_ONLY"}
+        report = self.binding_report(hashes)
+        C.assess_binding_controls(report, hashes, require_pass=True)
+        for mutate in (lambda v: v.update(schema=3), lambda v: v.pop("workerPolicyCases"),
+                       lambda v: v["workerPolicyCases"].pop(), lambda v: v["workerPolicyCases"].reverse(),
+                       lambda v: v["workerPolicyCases"][0].update(value="same-name-wrong-bytes"),
+                       lambda v: v["workerPolicyCases"][0].update(passed=1),
+                       lambda v: v["workerPolicyCases"][0].update(raw="UNAPPROVED")):
+            changed = copy.deepcopy(report)
+            mutate(changed)
+            self.rejects(lambda: C.assess_binding_controls(changed, hashes, require_pass=True))
+        report["workerPolicyCases"][0].update(passed=False, value="ACTUAL_WRONG_MODEL_RESULT")
+        C.assess_binding_controls(report, hashes, require_pass=False)
+        self.rejects(lambda: C.assess_binding_controls(report, hashes, require_pass=True))
 
     def test_receipt_requires_original_status_stop_context_and_native_launches(self):
         root, state, identifier = self.base / "source", self.base / "state", "e" * 32

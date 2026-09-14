@@ -4,6 +4,7 @@ import groovy.json.JsonOutput
 import java.nio.file.Files
 import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
+import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import org.gradle.StartParameter
 import org.gradle.util.GradleVersion
@@ -204,6 +205,82 @@ tasks.register('verifyWindowsDirectoryBinding') {
                 directory: attributes.isDirectory(), other: attributes.isOther(), symbolicLink: attributes.isSymbolicLink(),
                 hasEntries: fields.hasEntries, fileKey: attributes.fileKey()])
         }
+        // Real shared producer-policy methods; finite inputs only, NOT an
+        // actual Test/afterTask/Windows filesystem or launcher qualification.
+        def worker = shell.classLoader.loadClass('WindowsDirectoryControlWorkerPolicy')
+        if (worker.classLoader.parent != shell.classLoader) {
+            throw new GradleException('Worker policy did not come from the current observer loader')
+        }
+        def workerRows = []
+        def workerCheck = { String id, String expected, String expectedError, Closure action ->
+            String value = null
+            String type = null
+            String message = null
+            try { value = action.call().toString() } catch (Exception error) {
+                type = error.class.name
+                message = error.message
+            }
+            boolean passed = value == expected && message == expectedError &&
+                type == (expectedError == null ? null : GradleException.name)
+            workerRows.add([id: id, passed: passed, value: value?.take(256),
+                            exceptionType: type?.take(256), message: message?.take(256)])
+        }
+        def boot = 'C:\\m\\gradle-worker.jar'
+        def render = { List<String> cp, String encoding = 'UTF-8', String separator = '\r\n' ->
+            new String(worker.render(cp, encoding, separator), StandardCharsets.US_ASCII)
+        }
+        workerCheck('render_plain', '-cp\r\nC:\\\\m\\\\gradle-worker.jar;C:\\\\m\\\\classes\r\n', null) {
+            render([boot, 'C:\\m\\classes'])
+        }
+        workerCheck('render_space_hash', '-cp\r\n"C:\\\\m\\\\gradle-worker.jar;C:\\\\m\\\\space #dir"\r\n', null) {
+            render([boot, 'C:\\m\\space #dir'])
+        }
+        def charset = { Map values ->
+            def properties = new Properties()
+            properties.putAll(values)
+            worker.nativeCharset(properties, StandardCharsets.US_ASCII).name()
+        }
+        workerCheck('native_encoding_precedence', 'windows-1252', null) {
+            charset(['native.encoding': 'windows-1252', 'sun.jnu.encoding': 'UTF-16'])
+        }
+        workerCheck('native_encoding_fallback', 'UTF-8', null) {
+            charset(['native.encoding': 'unsupported-charset', 'sun.jnu.encoding': 'UTF-8'])
+        }
+        workerCheck('native_encoding_default', 'US-ASCII', null) { charset([:]) }
+        workerCheck('render_full_utf16_refused', null, 'Unsupported worker encoding') { render([boot], 'UTF-16') }
+        workerCheck('render_lf_refused', null, 'Unsupported worker expansion') { render([boot], 'UTF-8', '\n') }
+        workerCheck('render_empty_refused', null, 'Unsupported worker expansion') { render([]) }
+        workerCheck('render_nonascii_refused', null, 'Unsupported worker path') { render(['C:\\m\\caf\u00e9']) }
+        [path_semicolon: 'C:\\m\\x;y', path_quote: 'C:\\m\\x"y', path_apostrophe: "C:\\m\\x'y",
+         path_wildcard: 'C:\\m\\*', path_traversal: 'C:\\m\\..\\x'].each { id, path ->
+            workerCheck(id, null, 'Unsupported worker path') { worker.path(path) }
+        }
+        workerCheck('logged_whitespace', null, 'Unsupported worker path') { worker.path('C:\\m\\space dir', true) }
+        def compiler = 'gradle-worker-classpath1txt'
+        def selected = 'gradle-worker-classpath2txt'
+        workerCheck('selected_compiler_decoy', selected, null) { worker.selected([compiler], [compiler, selected]) }
+        workerCheck('selected_missing', null, 'Ambiguous or missing selected worker file') { worker.selected([], []) }
+        workerCheck('selected_stale', null, 'Ambiguous or missing selected worker file') { worker.selected([selected], [selected]) }
+        workerCheck('selected_ambiguous', null, 'Ambiguous or missing selected worker file') { worker.selected([], [compiler, selected]) }
+        workerCheck('selected_baseline_disappeared', null, 'Invalid worker file inventory') { worker.selected([compiler], [selected]) }
+        workerCheck('selected_wrong_suffix', null, 'Invalid worker file inventory') { worker.selected([], ['gradle-worker-classpath2.txt']) }
+        workerCheck('selected_duplicate', null, 'Invalid worker file inventory') { worker.selected([], [selected, selected]) }
+        workerCheck('capture_success', 'CAPTURED:null', null) {
+            def capture = worker.completeCapture([:]) { }
+            capture.status + ':' + capture.reason
+        }
+        workerCheck('capture_exception', 'REFUSED:CONTENT_MISMATCH', null) {
+            def capture = worker.completeCapture([:]) { value ->
+                value.reason = 'CONTENT_MISMATCH'
+                throw new GradleException('MODELED_CAPTURE_FAILURE_NOT_A_TEST_EXECUTION')
+            }
+            capture.status + ':' + capture.reason
+        }
+        workerCheck('writer_exception', 'CAPTURED:false', null) {
+            def capture = worker.completeCapture([:]) { }
+            def written = worker.retainCapture(capture) { throw new IOException('MODELED_WRITE_FAILURE') }
+            capture.status + ':' + written
+        }
         if (!Arrays.equals(observerBytes, Files.readAllBytes(observer.toPath()))) {
             throw new GradleException('Production observer changed during fixture')
         }
@@ -211,16 +288,16 @@ tasks.register('verifyWindowsDirectoryBinding') {
         ['settings.gradle', 'build.gradle', 'gradle/gradle-daemon-jvm.properties'].each { name ->
             hashes[name] = checksum(Files.readAllBytes(project.file(name).toPath()))
         }
-        def report = [schema: 3, scope: 'MODELED_BINDINGS_ATTRIBUTES_AND_CONSTRUCTED_STARTPARAMETERS_NOT_NATIVE',
+        def report = [schema: 4, scope: 'MODELED_BINDINGS_ATTRIBUTES_WORKER_POLICY_AND_CONSTRUCTED_STARTPARAMETERS_NOT_NATIVE',
                       gradleVersion: GradleVersion.current().version, hashes: hashes, cases: rows,
-                      taskPolicyCases: policyRows, temporaryPolicyCases: temporaryRows]
+                      taskPolicyCases: policyRows, temporaryPolicyCases: temporaryRows, workerPolicyCases: workerRows]
         def output = layout.buildDirectory.file('reports/windows-directory-binding/result.json').get().asFile.toPath()
         Files.createDirectories(output.parent)
         def bytes = (JsonOutput.prettyPrint(JsonOutput.toJson(report)) + '\n').getBytes('UTF-8')
         if (bytes.length > 65536) throw new GradleException('Binding fixture report exceeds its bound')
         Files.write(output, bytes, StandardOpenOption.CREATE_NEW)
-        if (rows.any { !it.passed } || policyRows.any { !it.passed } || temporaryRows.any { !it.passed }) {
-            throw new GradleException('Production binding/task/temporary-policy controls failed; inspect original report')
+        if (rows.any { !it.passed } || policyRows.any { !it.passed } || temporaryRows.any { !it.passed } || workerRows.any { !it.passed }) {
+            throw new GradleException('Production binding/task/temporary/worker-policy controls failed; inspect original report')
         }
     }
 }
