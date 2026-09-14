@@ -7,6 +7,7 @@ native fixture suite, SDK installer, host impersonation or network is executed.
 """
 from __future__ import annotations
 
+import ast
 import copy
 import hashlib
 import importlib.util
@@ -14,6 +15,7 @@ import io
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 import tarfile
@@ -30,6 +32,9 @@ SPEC = importlib.util.spec_from_file_location("windows_control_fixture", ROOT / 
 C = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(C)
 BAD = (C.audit.AuditError, ValueError)
+FIXTURE_SPEC = importlib.util.spec_from_file_location("native_fixture_definitions", ROOT / "scripts/tests/run-audit-command-test.py")
+F = importlib.util.module_from_spec(FIXTURE_SPEC)
+FIXTURE_SPEC.loader.exec_module(F)  # Definitions only; native suites are never run by these controls.
 
 
 def dispatch():
@@ -145,6 +150,173 @@ class PureWindowsControlTests(unittest.TestCase):
                 "nativeStarted": False, "nativeAccepted": False,
                 "nativeTemporaryIdentity": C.native_temporary_identity(temporary.lstat())}
         return controller, case, temporary
+
+    def fixture_parent_paths(self):
+        directory = Path(tempfile.mkdtemp(prefix="fixture-parent-model-", dir=self.base))
+        state = directory / "state"
+        parent = state / "fixtures/native-tmp"
+        parent.mkdir(parents=True)
+        process = state / "fixtures/process-tmp"
+        process.mkdir()
+        evidence = state / "evidence/native-controls"
+        evidence.parent.mkdir()
+        return state, parent, process, evidence
+
+    def test_fixture_parent_cli_routes_all_actual_allocations_without_environment_changes(self):
+        # Execute the eight actual allocation expressions, not any native test body.
+        # The CLI's suite loader/runner are mocked; only local directories are real.
+        tree = ast.parse((ROOT / "scripts/tests/run-audit-command-test.py").read_bytes())
+        allocations = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and
+                       isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name) and
+                       node.func.value.id == "tempfile" and node.func.attr == "TemporaryDirectory"]
+        self.assertEqual(len(allocations), 8)
+        for node in allocations:
+            self.assertEqual(node.args, [])
+            self.assertEqual([item.arg for item in node.keywords], ["prefix", "dir"])
+            self.assertIsInstance(node.keywords[0].value, ast.Constant)
+            self.assertIsInstance(node.keywords[0].value.value, str)
+            self.assertEqual(ast.dump(node.keywords[1].value), "Name(id='FIXTURE_PARENT', ctx=Load())")
+        for explicit in (False, True):
+            with self.subTest(explicit=explicit):
+                state, parent, process, evidence = self.fixture_parent_paths()
+                argv = ["run-audit-command-test.py", "--evidence-dir", str(evidence)]
+                if explicit:
+                    argv += ["--fixture-parent", str(parent)]
+                environment = {F.processes.STATE_ENV: str(state),
+                               **{name: str(process) for name in ("TEMP", "TMP", "TMPDIR")}}
+                with mock.patch.dict(os.environ, environment), mock.patch.object(sys, "argv", argv), \
+                        mock.patch.object(sys, "stdout", io.StringIO()), \
+                        mock.patch.object(F, "FIXTURE_PARENT", "must be replaced by CLI selection"), \
+                        mock.patch.object(F, "EVIDENCE_ROOT", None), \
+                        mock.patch.object(tempfile, "tempdir", str(process)), \
+                        mock.patch.object(F.unittest.defaultTestLoader, "loadTestsFromTestCase",
+                                          return_value=unittest.TestSuite()) as loader, \
+                        mock.patch.object(F.unittest, "TextTestRunner") as suite_runner:
+                    original_environment = dict(os.environ)
+                    suite_runner.return_value.run.return_value.wasSuccessful.return_value = True
+                    self.assertEqual(F.main(), 0)
+                    self.assertEqual(loader.call_count, 3)
+                    self.assertEqual(F.FIXTURE_PARENT, parent if explicit else None)
+                    self.assertEqual(F.EVIDENCE_ROOT, evidence)
+                    self.assertTrue(evidence.is_dir())
+                    for node in allocations:
+                        expression = compile(ast.Expression(body=node), "actual-fixture-allocation", "eval")
+                        with eval(expression, {"__builtins__": {}, "tempfile": tempfile,
+                                               "FIXTURE_PARENT": F.FIXTURE_PARENT}) as temporary:
+                            self.assertEqual(Path(temporary).parent, parent if explicit else process)
+                            self.assertTrue(Path(temporary).is_dir())
+                    self.assertEqual(list(parent.iterdir()), [])
+                    self.assertEqual(list(process.iterdir()), [])
+                    self.assertEqual(dict(os.environ), original_environment)
+                    self.assertEqual(tempfile.tempdir, str(process))
+        self.assertIsNone(F.validated_fixture_parent(None, None))
+
+    def test_fixture_parent_rejects_invalid_unowned_and_nonempty_roots(self):
+        for kind in ("relative", "dotdot", "missing", "file", "foreign", "no-state", "nonempty"):
+            with self.subTest(kind=kind):
+                state, parent, _, evidence = self.fixture_parent_paths()
+                value, state_value = str(parent), str(state)
+                if kind == "relative":
+                    value = "fixtures/native-tmp"
+                elif kind == "dotdot":
+                    value = str(parent / ".." / "native-tmp")
+                elif kind == "missing":
+                    value = str(parent.parent / "missing")
+                elif kind == "file":
+                    parent.rmdir()  # Only the empty directory this model just created.
+                    parent.write_bytes(b"MODEL must remain a regular file\n")
+                elif kind == "foreign":
+                    foreign = parent.parent / "foreign"
+                    foreign.mkdir()
+                    value = str(foreign)
+                elif kind == "no-state":
+                    state_value = ""
+                elif kind == "nonempty":
+                    (parent / "retain-me").write_bytes(b"MODEL unaccepted residue\n")
+                with mock.patch.dict(os.environ, {F.processes.STATE_ENV: state_value}), \
+                        self.assertRaises((F.runner.AuditError, FileNotFoundError, NotADirectoryError)):
+                    F.validated_fixture_parent(value, str(evidence))
+                self.assertFalse(evidence.exists())
+                if kind == "file":
+                    self.assertEqual(parent.read_bytes(), b"MODEL must remain a regular file\n")
+                if kind == "nonempty":
+                    self.assertEqual((parent / "retain-me").read_bytes(), b"MODEL unaccepted residue\n")
+
+    def test_fixture_parent_rejects_link_and_reparse_metadata_without_following(self):
+        # Portable no-follow metadata controls; not native link/junction creation.
+        for location, field in (("parent", "symlink"), ("parent", "reparse"),
+                                ("state", "reparse"), ("evidence", "symlink")):
+            with self.subTest(location=location, field=field):
+                state, parent, _, evidence = self.fixture_parent_paths()
+                target = {"parent": parent, "state": state, "evidence": evidence.parent}[location]
+                real_lstat = Path.lstat
+
+                def lstat(path, *args, **kwargs):
+                    actual = real_lstat(path, *args, **kwargs)
+                    if path != target:
+                        return actual
+                    fields = ({"st_mode": stat.S_IFLNK | 0o700} if field == "symlink" else
+                              {"st_file_attributes": getattr(actual, "st_file_attributes", 0) | 0x400})
+                    return F.StatFields(actual, **fields)
+
+                with mock.patch.dict(os.environ, {F.processes.STATE_ENV: str(state)}), \
+                        mock.patch.object(Path, "lstat", new=lstat), \
+                        self.assertRaisesRegex(F.runner.AuditError, "Symlink/reparse-point"):
+                    F.validated_fixture_parent(str(parent), str(evidence))
+                self.assertFalse(evidence.exists())
+                self.assertEqual(list(parent.iterdir()), [])
+
+    def test_fixture_parent_requires_separate_evidence_and_readable_empty_parent(self):
+        state, parent, _, evidence = self.fixture_parent_paths()
+        with mock.patch.dict(os.environ, {F.processes.STATE_ENV: str(state)}):
+            for destination in (None, str(parent), str(parent / "retained"), str(parent.parent), str(state)):
+                with self.subTest(destination=destination), self.assertRaises(F.runner.AuditError):
+                    F.validated_fixture_parent(str(parent), destination)
+            with mock.patch.object(os, "scandir", side_effect=PermissionError("MODEL unreadable parent")), \
+                    self.assertRaisesRegex(PermissionError, "MODEL unreadable parent"):
+                F.validated_fixture_parent(str(parent), str(evidence))
+        self.assertFalse(evidence.exists())
+        self.assertEqual(list(parent.iterdir()), [])
+
+    def test_native_leaf_keeps_outer_environment_and_passes_fixture_parent_only_in_product_argv(self):
+        controller, case, temporary = self.native_model()
+        process = case["state"] / "fixtures/process-tmp"
+        process.mkdir()
+        case["env"] = {C.processes.STATE_ENV: str(case["state"]),
+                       "GRADLE_USER_HOME": str(case["state"] / "gradle-home"),
+                       "MODEL_UNCHANGED": "outer environment", **{name: str(process) for name in ("TEMP", "TMP", "TMPDIR")}}
+        case["scope"] = object()
+        controller.resources = mock.Mock()
+        boundary = RuntimeError("MODEL stopped before launching the immutable executor")
+        arguments = [sys.executable, "-B", "scripts/tests/run-audit-command-test.py", "--expected-host", "windows-x64",
+                     "--evidence-dir", str(case["state"] / "evidence/native-controls"), "--fixture-parent", str(temporary)]
+        original_environment = dict(case["env"])
+
+        def command(argv, cwd, environment, purpose, **options):
+            identifier = case["leaves"][-1]["id"]
+            self.assertEqual(argv, [sys.executable, "-B", str(ROOT / "scripts/run-audit-command.py"),
+                "--cwd", str(ROOT), "--wrapper", str(ROOT / "gradlew.bat"), "--id", identifier,
+                "--purpose", "executor-native-controls", "--kind", "command", "--timeout", "1800",
+                "--stop-timeout", "120", "--receipt", str(case["state"] / "host-executor-native-controls.json"),
+                "--", *arguments])
+            self.assertEqual((cwd, purpose), (ROOT, "executor-native-controls"))
+            self.assertEqual(environment, original_environment)
+            self.assertIsNot(environment, case["env"])
+            self.assertEqual(options["timeout"], 1950)
+            self.assertIs(options["scope"], case["scope"])
+            self.assertTrue(callable(options["cancellation"]))
+            raise boundary
+
+        controller.command = mock.Mock(side_effect=command)
+        with self.assertRaises(RuntimeError) as raised:
+            controller.native_controls(case)
+        self.assertIs(raised.exception, boundary)
+        controller.command.assert_called_once()
+        controller.resources.assert_called_once_with(starting=True)
+        self.assertEqual(case["env"], original_environment)
+        self.assertFalse(case["nativeAccepted"])
+        with self.assertRaises(TypeError):
+            controller.leaf(case, "executor-native-controls", arguments, kind="command", extra_env={"TEMP": str(temporary)})
 
     def sdk_admission(self, *, install_fails=False, after="unchanged"):
         """Real caller/formatter and local file reads; Windows paths/processes are modeled."""
@@ -992,10 +1164,10 @@ class PureWindowsControlTests(unittest.TestCase):
 
         def leaf(actual_case, purpose, arguments, **options):
             self.assertIs(actual_case, case)
-            self.assertEqual((purpose, options), ("executor-native-controls", {"kind": "command", "timeout": 1800,
-                "extra_env": {key: str(temporary) for key in ("TEMP", "TMP", "TMPDIR")}}))
+            self.assertEqual((purpose, options), ("executor-native-controls", {"kind": "command", "timeout": 1800}))
             self.assertEqual(arguments, [sys.executable, "-B", "scripts/tests/run-audit-command-test.py",
-                                        "--expected-host", "windows-x64", "--evidence-dir", str(native)])
+                                        "--expected-host", "windows-x64", "--evidence-dir", str(native),
+                                        "--fixture-parent", str(temporary)])
             self.assertTrue((controller.public / "admission/native-temporary-before.json").is_file())
             record = {"id": "d" * 32, "purpose": purpose, "arguments": arguments,
                       "status": 1 if failed else 0, "valid": not failed, "retained": True}

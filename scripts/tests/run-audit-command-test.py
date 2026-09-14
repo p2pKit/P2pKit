@@ -41,6 +41,26 @@ EXECUTOR = SCRIPTS / "run-audit-command.py"
 PYTHON = str(Path(sys.executable).resolve())
 EVIDENCE_ROOT = None
 CASE_EVIDENCE = None
+FIXTURE_PARENT = None
+
+
+def validated_fixture_parent(value, evidence_root):
+    """Bind explicit fixture allocation without changing any process environment."""
+    if value is None:
+        return None
+    runner.require(evidence_root is not None, "--fixture-parent requires an explicit separate evidence directory")
+    state_value = os.environ.get(processes.STATE_ENV)
+    runner.require(state_value, "--fixture-parent requires the current owned audit state")
+    state = runner.absolute_path(state_value)
+    parent = runner.absolute_path(value)
+    runner.require(parent == state / "fixtures/native-tmp" and runner.physical_directory_present(parent),
+                   "Fixture parent must be the current state's physical fixtures/native-tmp directory")
+    evidence = runner.absolute_path(evidence_root, exists=False)
+    runner.require(not runner.within(evidence, parent) and not runner.within(parent, evidence),
+                   "Retained evidence and temporary fixture parent must not overlap")
+    with os.scandir(parent) as entries:
+        runner.require(next(entries, None) is None, "Fixture parent must start empty")
+    return parent
 
 
 def property_spellings(expression):
@@ -258,7 +278,7 @@ def cleanup_metadata(test, *, cached_device=0, full_device=47, child_fields=None
     path-stat device. Keep type/reparse classification independent of that full
     observation so the tests cannot hide a removed no-follow or device guard.
     """
-    with tempfile.TemporaryDirectory(prefix="audit cleanup metadata ") as temporary:
+    with tempfile.TemporaryDirectory(prefix="audit cleanup metadata ", dir=FIXTURE_PARENT) as temporary:
         root = Path(temporary).resolve() / "output"
         child, deeper = root / "nested", root / "nested/deeper"
         deeper.mkdir(parents=True)
@@ -607,7 +627,7 @@ class PurePolicyTests(unittest.TestCase):
                 super().flush()
                 delivered.set()
 
-        with tempfile.TemporaryDirectory(prefix="audit tee prefix ") as temporary, LiveOutput() as live:
+        with tempfile.TemporaryDirectory(prefix="audit tee prefix ", dir=FIXTURE_PARENT) as temporary, LiveOutput() as live:
             destination = Path(temporary).resolve() / "stderr.log"
             read_fd, write_fd = os.pipe()
             with os.fdopen(read_fd, "rb", buffering=0) as source, os.fdopen(write_fd, "wb", buffering=0) as writer:
@@ -628,7 +648,7 @@ class PurePolicyTests(unittest.TestCase):
                     self.assertFalse(tee.thread.is_alive(), "Fixture reader did not retire after EOF")
 
     def test_tee_reports_evidence_flush_failure_and_continues_draining(self):
-        with tempfile.TemporaryDirectory(prefix="audit tee flush ") as temporary:
+        with tempfile.TemporaryDirectory(prefix="audit tee flush ", dir=FIXTURE_PARENT) as temporary:
             destination = Path(temporary).resolve() / "stderr.log"
             with runner.new_file(destination) as output, io.BytesIO(b"\x00\xff" * 40000) as source, \
                     io.BytesIO() as live:
@@ -659,7 +679,7 @@ class PurePolicyTests(unittest.TestCase):
         for newline in ("\n", "\r\n"):
             for arguments, stop_status, expected_status, marker in cases:
                 with self.subTest(newline=repr(newline), arguments=arguments, stop_status=stop_status), \
-                        tempfile.TemporaryDirectory(prefix="audit fixture newline ") as temporary:
+                        tempfile.TemporaryDirectory(prefix="audit fixture newline ", dir=FIXTURE_PARENT) as temporary:
                     stdout_bytes, stderr_bytes = io.BytesIO(), io.BytesIO()
                     with io.TextIOWrapper(io.BufferedWriter(stdout_bytes), encoding="utf-8", newline=newline) as stdout, \
                             io.TextIOWrapper(io.BufferedWriter(stderr_bytes), encoding="utf-8", newline=newline) as stderr:
@@ -809,7 +829,7 @@ class PurePolicyTests(unittest.TestCase):
     def test_report_root_and_descendant_scan_errors_are_not_empty_success(self):
         # Deliberate function-level faults, not claims of native permissions or
         # a Gradle execution. PermissionError is injected even when running as root.
-        with tempfile.TemporaryDirectory(prefix="audit report scan fixture ") as temporary:
+        with tempfile.TemporaryDirectory(prefix="audit report scan fixture ", dir=FIXTURE_PARENT) as temporary:
             root = Path(temporary).resolve() / "source"
             state = Path(temporary).resolve() / "state"
             module = root / "library"
@@ -829,7 +849,7 @@ class PurePolicyTests(unittest.TestCase):
                         runner.report_snapshot(root, state, [])
 
     def test_source_and_evidence_lstat_failures_are_not_treated_as_absence(self):
-        with tempfile.TemporaryDirectory(prefix="audit report stat fixture ") as temporary:
+        with tempfile.TemporaryDirectory(prefix="audit report stat fixture ", dir=FIXTURE_PARENT) as temporary:
             root = Path(temporary).resolve() / "source"
             state = Path(temporary).resolve() / "state"
             (root / "library").mkdir(parents=True)
@@ -846,7 +866,7 @@ class PurePolicyTests(unittest.TestCase):
                         runner.report_snapshot(root, state, [])
 
     def test_report_entry_bound_counts_empty_directories_not_just_files(self):
-        with tempfile.TemporaryDirectory(prefix="audit report bound fixture ") as temporary:
+        with tempfile.TemporaryDirectory(prefix="audit report bound fixture ", dir=FIXTURE_PARENT) as temporary:
             root = Path(temporary).resolve() / "source"
             state = Path(temporary).resolve() / "state"
             for name in ("one", "two", "three", "four"):
@@ -1365,7 +1385,7 @@ class DarwinObservationTests(unittest.TestCase):
 class ExecutorFixtureTests(unittest.TestCase):
     def setUp(self):
         global CASE_EVIDENCE
-        self.temporary = tempfile.TemporaryDirectory(prefix="p2pkit audit fixture ")
+        self.temporary = tempfile.TemporaryDirectory(prefix="p2pkit audit fixture ", dir=FIXTURE_PARENT)
         # On an unexpected ownership/archive failure leave the private fixture for
         # inspection; only explicit successful cleanup may delete its generated data.
         self.temporary._finalizer.detach()
@@ -3277,13 +3297,15 @@ os._exit(0)
         self.assertNotIn(pid, {row["pid"] for row in self.scope.discover()}, "Kill-on-controller-close did not drain its job")
 
 def main():
-    global EVIDENCE_ROOT
+    global EVIDENCE_ROOT, FIXTURE_PARENT
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expected-host", choices=runner.HOSTS, default=processes.host_role())
     parser.add_argument("--evidence-root", "--evidence-dir", dest="evidence_root")
+    parser.add_argument("--fixture-parent", help="Existing empty owned state/fixtures/native-tmp; not process TEMP")
     args = parser.parse_args()
     if args.expected_host != processes.host_role():
         parser.error("Requested host does not match this native interpreter")
+    FIXTURE_PARENT = validated_fixture_parent(args.fixture_parent, args.evidence_root)
     if args.evidence_root:
         EVIDENCE_ROOT = runner.absolute_path(args.evidence_root, exists=False)
         EVIDENCE_ROOT.mkdir(mode=0o700)

@@ -105,6 +105,16 @@ actual test count and each fixture's cleanup history. Never substitute a Mac
 fixture count. Intentional negative nested receipts remain negative evidence;
 unexpected fixture failures or unknown retirement block the product witness.
 
+The controller passes the suite's optional `--fixture-parent` argument for its
+existing, empty `state/fixtures/native-tmp` directory. The suite validates the
+current-state binding and physical path, requires retained evidence outside that
+parent, and supplies explicit Python allocation parents without changing
+`TEMP`, `TMP`, `TMPDIR` or Python's default temporary directory. The outer
+executor and its mandatory real wrapper `--stop` retain the separate owned
+`process-tmp` environment. Callers without this option retain default allocation
+behavior. The same complete empty-before/empty-after metadata and fixture cleanup
+requirements still apply; no residual directory is whitelisted or guessed safe.
+
 ## Product and assessment
 
 The public immutable executor and receipt checker own every wrapper invocation,

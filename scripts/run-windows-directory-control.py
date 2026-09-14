@@ -1277,7 +1277,7 @@ class Controller:
         case["initialized"] = True
         return case
 
-    def leaf(self, case, purpose, arguments, *, kind="gradle", timeout=1200, expected=0, extra_env=None):
+    def leaf(self, case, purpose, arguments, *, kind="gradle", timeout=1200, expected=0):
         self.resources(starting=True)
         identifier = uuid.uuid4().hex
         state, root = case["state"], case["root"]
@@ -1291,10 +1291,7 @@ class Controller:
         case["leaves"].append(record)
         case["started"] = True
         try:
-            require(not extra_env or purpose == "executor-native-controls" and kind == "command" and
-                    extra_env == {name: str(state / "fixtures/native-tmp") for name in ("TEMP", "TMP", "TMPDIR")},
-                    "Only the native fixture's owned temporary bridge may augment leaf environment")
-            code, capture = self.command(command, root, dict(case["env"], **(extra_env or {})), purpose,
+            code, capture = self.command(command, root, dict(case["env"]), purpose,
                                          timeout=timeout + 150, scope=case["scope"],
                                          cancellation=lambda: audit.request_cancellation(state, case["context"]["id"], identifier))
             record["status"] = code
@@ -1432,8 +1429,8 @@ class Controller:
         rows, after = [], None
         try:
             self.leaf(case, "executor-native-controls", [sys.executable, "-B", "scripts/tests/run-audit-command-test.py",
-                "--expected-host", "windows-x64", "--evidence-dir", str(native)], kind="command", timeout=1800,
-                extra_env={name: str(temporary) for name in ("TEMP", "TMP", "TMPDIR")})
+                "--expected-host", "windows-x64", "--evidence-dir", str(native), "--fixture-parent", str(temporary)],
+                kind="command", timeout=1800)
         finally:
             # The leaf has attempted its original same-home stop/retention before
             # either independent boundary below. Never replace its original failure.
