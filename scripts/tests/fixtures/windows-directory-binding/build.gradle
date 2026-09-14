@@ -236,9 +236,9 @@ tasks.register('verifyWindowsDirectoryBinding') {
             render([boot, 'C:\\m\\space #dir'])
         }
         def charset = { Map values ->
-            def properties = new Properties()
-            properties.putAll(values)
-            worker.nativeCharset(properties, StandardCharsets.US_ASCII).name()
+            def charsetProperties = new Properties()
+            charsetProperties.putAll(values)
+            worker.nativeCharset(charsetProperties, StandardCharsets.US_ASCII).name()
         }
         workerCheck('native_encoding_precedence', 'windows-1252', null) {
             charset(['native.encoding': 'windows-1252', 'sun.jnu.encoding': 'UTF-16'])
