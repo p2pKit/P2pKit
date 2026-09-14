@@ -131,9 +131,10 @@ task arguments, not just names. Missing/duplicate filters, other/glob selectors,
 abbreviations and extra tokens are rejected without filtering or rewriting the
 observed list. The separate buildSrc graph does not use the root's command tokens.
 Dry runs, excluded tasks and the exact Test filter/graph/worker checks remain
-independent rejection boundaries. Pure report models do not prove real Gradle
-parsing or execute the observer; the genuine current/preimage witness must supply
-those observations before [#433](https://github.com/p2pKit/P2pKit/issues/433) can close.
+independent rejection boundaries. Global options such as the maintained `--info`
+are parsed separately, not part of this triple. Pure report models do not prove
+real Gradle parsing or execute the observer; the genuine current/preimage witness
+must supply those observations before [#433](https://github.com/p2pKit/P2pKit/issues/433) can close.
 The scoped init observer records the actual task graph/outcomes, selected filter,
 JDK17 launcher, worker JVM arguments and test events. It sets the Test JVM's
 `java.io.tmpdir` explicitly to the fresh owned directory; a daemon `-D` flag alone
@@ -153,6 +154,13 @@ The independent assessor checks these observations against the fresh request.
 
 After native admission, one small owned `binding-controls` Gradle leaf executes
 the complete production observer callback against 24 finite adverse **models**.
+The same fixture loads the production task-policy class from that fresh observer
+GroovyShell's classloader and exercises 21 **constructed real StartParameter**
+inputs: exact root and distinct buildSrc positives, missing/duplicate/broadened
+selectors, extra tasks/options, and root/child dry-run/exclusion negatives.
+These exercise the actual shared predicate, not actual command-line parsing or
+a complete successful observer invocation. The schema-2 report retains the exact
+observed parameter fields and precise exception outcomes for independent checking.
 It has no plugins/dependencies/product tasks and copies the checked-in daemon
 criteria. Its bounded report distinguishes precise binding/request rejections
 from wrong exceptions or later host refusal; canonical leaf retention is required

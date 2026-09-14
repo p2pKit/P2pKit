@@ -8,12 +8,25 @@ import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
+import org.gradle.StartParameter
 import org.gradle.api.GradleException
 import org.gradle.api.tasks.testing.AbstractTestTask
 import org.gradle.api.tasks.testing.Test
 import org.gradle.api.tasks.testing.TestDescriptor
 import org.gradle.api.tasks.testing.TestListener
 import org.gradle.api.tasks.testing.TestResult
+
+// Shared with the bounded fixture through this script's own Groovy classloader.
+// Constructed StartParameters test this predicate, not command-line parsing.
+class WindowsDirectoryControlTaskPolicy {
+    static void verify(StartParameter parameters, boolean buildSrc, String taskName, String selector) {
+        // StartParameter retains task arguments as well as task names.
+        if (parameters.dryRun || !parameters.excludedTaskNames.empty ||
+            (!buildSrc && parameters.taskNames != [taskName, '--tests', selector])) {
+            throw new GradleException('Extra task, excluded task or dry run in Windows directory control')
+        }
+    }
+}
 
 def checksum = { byte[] bytes -> MessageDigest.getInstance('SHA-256').digest(bytes).encodeHex().toString() }
 def physical = { File file ->
@@ -197,10 +210,8 @@ gradle.projectsLoaded {
     gradle.taskGraph.whenReady { taskGraph ->
         graph.addAll(taskGraph.allTasks.collect { [path: it.path, type: it.class.name,
                                                    test: it instanceof AbstractTestTask] })
-        if (gradle.startParameter.dryRun || !gradle.startParameter.excludedTaskNames.empty ||
-            // StartParameter retains task arguments as well as task names.
-            (!buildSrc && gradle.startParameter.taskNames != [taskName, '--tests', selector]) ||
-            graph.any { row -> buildSrc ? (!allowedBuildSrc.contains(row.path) || row.test) :
+        WindowsDirectoryControlTaskPolicy.verify(gradle.startParameter, buildSrc, taskName, selector)
+        if (graph.any { row -> buildSrc ? (!allowedBuildSrc.contains(row.path) || row.test) :
                 (!allowedCore.contains(row.path) || (row.test && row.path != taskName)) }) {
             throw new GradleException('Extra task, excluded task or dry run in Windows directory control')
         }

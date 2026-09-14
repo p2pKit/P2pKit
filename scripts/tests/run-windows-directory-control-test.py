@@ -969,7 +969,15 @@ class PureWindowsControlTests(unittest.TestCase):
 
     def binding_report(self, hashes):
         self.assertEqual(len(C.BINDING_CASES), 24)
-        return {"schema": 1, "scope": "MODELED_NEGATIVE_INPUTS_WHOLE_PRODUCTION_OBSERVER", "gradleVersion": "9.7.0",
+        self.assertEqual(len(C.TASK_POLICY_INPUTS), 21)
+        policy_rows = []
+        for name, inputs in C.TASK_POLICY_INPUTS.items():
+            fields = {"buildSrc": False, "dryRun": False, "excludedTasks": [], "accepted": False, **copy.deepcopy(inputs)}
+            policy_rows.append({"id": name, "passed": True, **fields,
+                "exceptionType": None if fields["accepted"] else "org.gradle.api.GradleException",
+                "message": None if fields["accepted"] else C.TASK_POLICY_MESSAGE})
+        return {"schema": 2, "scope": "MODELED_BINDINGS_AND_CONSTRUCTED_STARTPARAMETER_POLICY_NOT_NATIVE",
+            "gradleVersion": "9.7.0", "taskPolicyCases": policy_rows,
             "hashes": hashes, "cases": [{"id": name, "passed": True, "expectedMessage": message,
                 "exceptionType": "org.gradle.api.GradleException", "message": message}
                 for name, message in C.BINDING_CASES.items()]}
@@ -995,6 +1003,37 @@ class PureWindowsControlTests(unittest.TestCase):
         failed["cases"][0].update(passed=False, exceptionType="java.lang.NullPointerException", message="MODEL wrong failure")
         C.assess_binding_controls(failed, hashes, require_pass=False)  # Retain the original failed model, never a pass.
         self.rejects(lambda: C.assess_binding_controls(failed, hashes, require_pass=True))
+
+    def test_task_policy_report_requires_actual_inputs_precise_outcomes_and_complete_rows(self):
+        # Tampered-report models only, not execution of the Groovy predicate.
+        hashes = {name: "e" * 64 for name in ("observer", "settings.gradle", "build.gradle", "gradle/gradle-daemon-jvm.properties")}
+        original = self.binding_report(hashes)
+        C.assess_binding_controls(original, hashes, require_pass=True)
+        mutations = [lambda v: v.pop("taskPolicyCases"), lambda v: v.update(taskPolicyCases=None),
+            lambda v: v["taskPolicyCases"].pop(), lambda v: v["taskPolicyCases"].reverse(),
+            lambda v: v["taskPolicyCases"].__setitem__(1, v["taskPolicyCases"][0]),
+            lambda v: v["taskPolicyCases"][0].update(requestedTasks=[C.TASK]),
+            lambda v: v["taskPolicyCases"][0].update(excludedTasks=[":compileJava"]),
+            lambda v: v["taskPolicyCases"][0].update(dryRun=0),
+            lambda v: v["taskPolicyCases"][0].update(buildSrc=True),
+            lambda v: v["taskPolicyCases"][0].update(accepted=1),
+            lambda v: v["taskPolicyCases"][0].update(exceptionType="org.gradle.api.GradleException"),
+            lambda v: v["taskPolicyCases"][3].update(exceptionType="java.lang.NullPointerException"),
+            lambda v: v["taskPolicyCases"][3].update(message="a different failure"),
+            lambda v: v["taskPolicyCases"][3].update(accepted=True, exceptionType=None, message=None),
+            lambda v: v["taskPolicyCases"][3].update(passed=1),
+            lambda v: v["taskPolicyCases"][3].update(unknown="unbounded data")]
+        for index, mutate in enumerate(mutations):
+            with self.subTest(mutation=index):
+                changed = copy.deepcopy(original)
+                mutate(changed)
+                self.rejects(lambda: C.assess_binding_controls(changed, hashes, require_pass=True))
+        for index, outcome in ((0, {"accepted": False, "exceptionType": "java.lang.IllegalStateException", "message": "wrong failure"}),
+                               (3, {"accepted": True, "exceptionType": None, "message": None})):
+            changed = copy.deepcopy(original)
+            changed["taskPolicyCases"][index].update(passed=False, **outcome)
+            C.assess_binding_controls(changed, hashes, require_pass=False)
+            self.rejects(lambda: C.assess_binding_controls(changed, hashes, require_pass=True))
 
     def binding_adapter(self, variant="pass"):
         controller, case, _ = self.native_model()
@@ -1102,7 +1141,7 @@ class PureWindowsControlTests(unittest.TestCase):
             [C.TASK, "--tests", "*"], [C.TASK, "--tests=" + C.SELECTOR],
             [C.TASK, "--tests", "--tests", C.SELECTOR], exact + ["--tests", C.SELECTOR],
             [":p2p-core:jT", "--tests", C.SELECTOR], exact + [":p2p-core:jvmJar"],
-            exact + ["--info"], ["--tests", C.SELECTOR, C.TASK], None, " ".join(exact)]
+            exact + ["--fail-fast"], ["--tests", C.SELECTOR, C.TASK], None, " ".join(exact)]
         for negative in (False, True):
             req = request(negative)
             for index, task_arguments in enumerate(invalid):

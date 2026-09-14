@@ -76,6 +76,30 @@ CLASS = "dev.p2pkit.core.transfer.FileTransferJvmTest"
 METHOD = "durableDestinationPublishesOnlyAfterCommitAndCommitIsIdempotent"
 SELECTOR = CLASS + "." + METHOD
 TASK = ":p2p-core:jvmTest"
+TASK_POLICY_MESSAGE = "Extra task, excluded task or dry run in Windows directory control"
+TASK_POLICY_INPUTS = {
+    "root_exact": {"requestedTasks": [TASK, "--tests", SELECTOR], "accepted": True},
+    "buildsrc_empty": {"requestedTasks": [], "buildSrc": True, "accepted": True},
+    "buildsrc_internal": {"requestedTasks": ["build"], "buildSrc": True, "accepted": True},
+    "root_no_tasks": {"requestedTasks": []},
+    "root_task_only": {"requestedTasks": [TASK]},
+    "root_no_switch": {"requestedTasks": [TASK, SELECTOR]},
+    "root_no_selector": {"requestedTasks": [TASK, "--tests"]},
+    "root_other_selector": {"requestedTasks": [TASK, "--tests", "other.Test.method"]},
+    "root_class_glob": {"requestedTasks": [TASK, "--tests", CLASS + ".*"]},
+    "root_wildcard": {"requestedTasks": [TASK, "--tests", "*"]},
+    "root_equals_switch": {"requestedTasks": [TASK, "--tests=" + SELECTOR]},
+    "root_duplicate_switch": {"requestedTasks": [TASK, "--tests", "--tests", SELECTOR]},
+    "root_repeated_filter": {"requestedTasks": [TASK, "--tests", SELECTOR, "--tests", SELECTOR]},
+    "root_abbreviation": {"requestedTasks": [":p2p-core:jT", "--tests", SELECTOR]},
+    "root_extra_task": {"requestedTasks": [TASK, "--tests", SELECTOR, ":p2p-core:jvmJar"]},
+    "root_extra_task_option": {"requestedTasks": [TASK, "--tests", SELECTOR, "--fail-fast"]},
+    "root_reordered": {"requestedTasks": ["--tests", SELECTOR, TASK]},
+    "root_dry_run": {"requestedTasks": [TASK, "--tests", SELECTOR], "dryRun": True},
+    "root_excluded": {"requestedTasks": [TASK, "--tests", SELECTOR], "excludedTasks": [":p2p-core:compileKotlinJvm"]},
+    "buildsrc_dry_run": {"requestedTasks": [], "buildSrc": True, "dryRun": True},
+    "buildsrc_excluded": {"requestedTasks": [], "buildSrc": True, "excludedTasks": [":compileJava"]},
+}
 FIX = "1df5c0670c90b579de767b6ff568a4beac97ad05"
 PRE_FIX = "ba208af23b9ce8e8f6efe1e3f63b0b81b38a4c7a"
 CURRENT_METHOD = b"    private fun syncParentDirectory() {\n        if (isWindows(operatingSystemName)) return\n        syncDirectory(parent)\n    }"
@@ -346,8 +370,9 @@ def assess_xml(raw, request):
 
 
 def assess_binding_controls(report, hashes, *, require_pass):
-    require(type(report) is dict and set(report) == {"schema", "scope", "gradleVersion", "hashes", "cases"} and
-            integer(report.get("schema"), 1) and report.get("scope") == "MODELED_NEGATIVE_INPUTS_WHOLE_PRODUCTION_OBSERVER" and
+    require(type(report) is dict and set(report) == {"schema", "scope", "gradleVersion", "hashes", "cases", "taskPolicyCases"} and
+            integer(report.get("schema"), 2) and
+            report.get("scope") == "MODELED_BINDINGS_AND_CONSTRUCTED_STARTPARAMETER_POLICY_NOT_NATIVE" and
             report.get("gradleVersion") == "9.7.0" and report.get("hashes") == hashes and
             type(report.get("cases")) is list and len(report["cases"]) == len(BINDING_CASES),
             "Wrong or stale production-observer model report")
@@ -363,6 +388,25 @@ def assess_binding_controls(report, hashes, *, require_pass):
                 "Binding model has a malformed or falsely passing result")
     require(not require_pass or all(row["passed"] for row in report["cases"]),
             "Actual production-observer negative controls failed")
+    rows = report["taskPolicyCases"]
+    require(type(rows) is list and len(rows) == len(TASK_POLICY_INPUTS) and
+            [row.get("id") for row in rows if type(row) is dict] == list(TASK_POLICY_INPUTS),
+            "Missing, reordered or duplicate constructed-StartParameter controls")
+    for row in rows:
+        expected = {"buildSrc": False, "dryRun": False, "excludedTasks": [], "accepted": False,
+                    **TASK_POLICY_INPUTS[row["id"]]}
+        require(set(row) == {"id", "passed", "accepted", "exceptionType", "message", "requestedTasks",
+                            "excludedTasks", "dryRun", "buildSrc"} and
+                all(type(row[key]) is bool for key in ("passed", "accepted", "dryRun", "buildSrc")) and
+                all(row[key] == expected[key] for key in ("requestedTasks", "excludedTasks", "dryRun", "buildSrc")) and
+                all(row[key] is None or type(row[key]) is str and len(row[key]) <= 256
+                    for key in ("exceptionType", "message")) and
+                (not row["accepted"] or row["exceptionType"] is None and row["message"] is None),
+                "Wrong constructed-StartParameter input or result shape")
+        passed = row["accepted"] is expected["accepted"] and (
+            row["accepted"] or row["exceptionType"] == "org.gradle.api.GradleException" and row["message"] == TASK_POLICY_MESSAGE)
+        require(row["passed"] is passed, "Falsely passing production task-policy control")
+    require(not require_pass or all(row["passed"] for row in rows), "Actual production task-policy controls failed")
 
 
 def assess_execution(report, request, request_hash, scope="root"):

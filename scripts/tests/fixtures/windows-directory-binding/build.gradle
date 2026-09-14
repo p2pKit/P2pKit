@@ -4,6 +4,7 @@ import groovy.json.JsonOutput
 import java.nio.file.Files
 import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
+import org.gradle.StartParameter
 import org.gradle.util.GradleVersion
 
 class BindingRegistration {
@@ -27,7 +28,8 @@ tasks.register('verifyWindowsDirectoryBinding') {
         def registration = new BindingRegistration()
         def variables = new Binding([gradle: registration])
         // No stripping, rewriting, copied resolver, OS override or native call.
-        new GroovyShell(getClass().classLoader, variables).evaluate(new String(observerBytes, 'UTF-8'), observer.name)
+        def shell = new GroovyShell(getClass().classLoader, variables)
+        shell.evaluate(new String(observerBytes, 'UTF-8'), observer.name)
         if (registration.callbacks.size() != 1) throw new GradleException('Expected one complete production callback')
         def callback = registration.callbacks[0]
         def base = layout.buildDirectory.dir('binding-models').get().asFile.toPath()
@@ -102,6 +104,64 @@ tasks.register('verifyWindowsDirectoryBinding') {
             Files.write(requestFile, bytes, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)
             check(item.id, root(properties + [(hashKey): checksum(bytes)]), wrong)
         }
+        // Execute the exact production predicate compiled above, not a copied
+        // resolver or a class from the fixture's parent loader. These genuine
+        // StartParameter objects are constructed inputs, not CLI parser proof.
+        def policy = shell.classLoader.loadClass('WindowsDirectoryControlTaskPolicy')
+        if (policy.classLoader.parent != shell.classLoader) {
+            throw new GradleException('Task policy did not come from the current observer loader')
+        }
+        def task = request.task
+        def selector = request.selector
+        def exact = [task, '--tests', selector]
+        def policyCases = [
+            [id: 'root_exact', requestedTasks: exact, accepted: true],
+            [id: 'buildsrc_empty', requestedTasks: [], buildSrc: true, accepted: true],
+            [id: 'buildsrc_internal', requestedTasks: ['build'], buildSrc: true, accepted: true],
+            [id: 'root_no_tasks', requestedTasks: []],
+            [id: 'root_task_only', requestedTasks: [task]],
+            [id: 'root_no_switch', requestedTasks: [task, selector]],
+            [id: 'root_no_selector', requestedTasks: [task, '--tests']],
+            [id: 'root_other_selector', requestedTasks: [task, '--tests', 'other.Test.method']],
+            [id: 'root_class_glob', requestedTasks: [task, '--tests', 'dev.p2pkit.core.transfer.FileTransferJvmTest.*']],
+            [id: 'root_wildcard', requestedTasks: [task, '--tests', '*']],
+            [id: 'root_equals_switch', requestedTasks: [task, '--tests=' + selector]],
+            [id: 'root_duplicate_switch', requestedTasks: [task, '--tests', '--tests', selector]],
+            [id: 'root_repeated_filter', requestedTasks: exact + ['--tests', selector]],
+            [id: 'root_abbreviation', requestedTasks: [':p2p-core:jT', '--tests', selector]],
+            [id: 'root_extra_task', requestedTasks: exact + [':p2p-core:jvmJar']],
+            [id: 'root_extra_task_option', requestedTasks: exact + ['--fail-fast']],
+            [id: 'root_reordered', requestedTasks: ['--tests', selector, task]],
+            [id: 'root_dry_run', requestedTasks: exact, dryRun: true],
+            [id: 'root_excluded', requestedTasks: exact, excludedTasks: [':p2p-core:compileKotlinJvm']],
+            [id: 'buildsrc_dry_run', requestedTasks: [], buildSrc: true, dryRun: true],
+            [id: 'buildsrc_excluded', requestedTasks: [], buildSrc: true, excludedTasks: [':compileJava']],
+        ]
+        def policyRows = []
+        policyCases.each { item ->
+            def parameters = new StartParameter()
+            parameters.setTaskNames(item.requestedTasks)
+            parameters.setExcludedTaskNames(item.excludedTasks ?: [])
+            parameters.setDryRun(item.dryRun ?: false)
+            boolean isChild = item.buildSrc ?: false
+            boolean accepted = false
+            String type = null
+            String message = null
+            try {
+                policy.verify(parameters, isChild, task, selector)
+                accepted = true
+            } catch (Throwable error) {
+                type = error.class.name
+                message = error.message
+            }
+            boolean expectedAcceptance = item.accepted ?: false
+            boolean passed = accepted == expectedAcceptance && (accepted ||
+                type == GradleException.name && message == 'Extra task, excluded task or dry run in Windows directory control')
+            policyRows.add([id: item.id, passed: passed, accepted: accepted,
+                exceptionType: type?.take(256), message: message?.take(256),
+                requestedTasks: parameters.taskNames.toList(), excludedTasks: parameters.excludedTaskNames.toList().sort(),
+                dryRun: parameters.dryRun, buildSrc: isChild])
+        }
         if (!Arrays.equals(observerBytes, Files.readAllBytes(observer.toPath()))) {
             throw new GradleException('Production observer changed during fixture')
         }
@@ -109,13 +169,15 @@ tasks.register('verifyWindowsDirectoryBinding') {
         ['settings.gradle', 'build.gradle', 'gradle/gradle-daemon-jvm.properties'].each { name ->
             hashes[name] = checksum(Files.readAllBytes(project.file(name).toPath()))
         }
-        def report = [schema: 1, scope: 'MODELED_NEGATIVE_INPUTS_WHOLE_PRODUCTION_OBSERVER',
-                      gradleVersion: GradleVersion.current().version, hashes: hashes, cases: rows]
+        def report = [schema: 2, scope: 'MODELED_BINDINGS_AND_CONSTRUCTED_STARTPARAMETER_POLICY_NOT_NATIVE',
+                      gradleVersion: GradleVersion.current().version, hashes: hashes, cases: rows, taskPolicyCases: policyRows]
         def output = layout.buildDirectory.file('reports/windows-directory-binding/result.json').get().asFile.toPath()
         Files.createDirectories(output.parent)
         def bytes = (JsonOutput.prettyPrint(JsonOutput.toJson(report)) + '\n').getBytes('UTF-8')
         if (bytes.length > 65536) throw new GradleException('Binding fixture report exceeds its bound')
         Files.write(output, bytes, StandardOpenOption.CREATE_NEW)
-        if (rows.any { !it.passed }) throw new GradleException('Production binding controls failed; inspect original report')
+        if (rows.any { !it.passed } || policyRows.any { !it.passed }) {
+            throw new GradleException('Production binding/task-policy controls failed; inspect original report')
+        }
     }
 }
