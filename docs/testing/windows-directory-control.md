@@ -201,6 +201,12 @@ still supply actual root/buildSrc observations and all original native criteria.
 
 Accept current positive **before** attempting the preimage:
 
+- The pinned Kotlin JVM report uses suite `FileTransferJvmTest[jvm]` and testcase
+  `durableDestinationPublishesOnlyAfterCommitAndCommitIsIdempotent[jvm]`.
+  Its `classname` stays `dev.p2pkit.core.transfer.FileTransferJvmTest`; selectors
+  and listener events keep the canonical class and bare method. For
+  [#435](https://github.com/p2pKit/P2pKit/issues/435), require exactly those distinct
+  identities, not arbitrary suffixes or the old model-only report labels.
 - Current: product/stop/final `0/0/0`, exactly one selected passing test, no skip,
   error, extra test, cached required task or changed source.
 - Preimage: product/stop/final **`1/0/1`**, exactly one selected failure whose

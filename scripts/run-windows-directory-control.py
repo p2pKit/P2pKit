@@ -75,6 +75,9 @@ BINDING_CASES = {
 CLASS = "dev.p2pkit.core.transfer.FileTransferJvmTest"
 METHOD = "durableDestinationPublishesOnlyAfterCommitAndCommitIsIdempotent"
 SELECTOR = CLASS + "." + METHOD
+# KotlinJvmTest decorates report display labels, not canonical listener names.
+JUNIT_SUITE = CLASS.rsplit(".", 1)[-1] + "[jvm]"
+JUNIT_CASE = METHOD + "[jvm]"
 TASK = ":p2p-core:jvmTest"
 TASK_POLICY_MESSAGE = "Extra task, excluded task or dry run in Windows directory control"
 TASK_POLICY_INPUTS = {
@@ -366,13 +369,13 @@ def assess_xml(raw, request):
             not re.search(br"<!\s*(?:DOCTYPE|ENTITY)", raw, re.I), "Invalid bounded control JUnit XML")
     suite = ET.fromstring(raw)
     negative = request["caseName"] == "preimage"
-    require(suite.tag == "testsuite" and suite.get("name") == CLASS and suite.get("tests") == "1" and
+    require(suite.tag == "testsuite" and suite.get("name") == JUNIT_SUITE and suite.get("tests") == "1" and
             suite.get("failures") == str(int(negative)) and suite.get("errors") == suite.get("skipped") == "0",
             "Wrong, empty, skipped or extra control JUnit suite")
     require(all(child.tag in ("properties", "testcase", "system-out", "system-err") for child in suite),
             "Unexpected JUnit suite element")
     cases = suite.findall("testcase")
-    require(len(cases) == 1 and cases[0].get("classname") == CLASS and cases[0].get("name") == METHOD,
+    require(len(cases) == 1 and cases[0].get("classname") == CLASS and cases[0].get("name") == JUNIT_CASE,
             "Wrong or duplicate selected testcase")
     require(all(child.tag in ("failure", "system-out", "system-err") for child in cases[0]),
             "Skipped/error control testcase is not acceptance")

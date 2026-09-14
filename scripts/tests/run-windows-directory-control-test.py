@@ -93,8 +93,12 @@ def execution(req, scope="root"):
 
 def xml(req):
     negative = req["caseName"] == "preimage"
-    suite = ET.Element("testsuite", name=C.CLASS, tests="1", failures=str(int(negative)), errors="0", skipped="0")
-    case = ET.SubElement(suite, "testcase", classname=C.CLASS, name=C.METHOD)
+    # Pinned KotlinJvmTest report labels, not canonical selector/listener names.
+    # Keep these literals independent of the assessor's expected-label constants.
+    suite = ET.Element("testsuite", name="FileTransferJvmTest[jvm]", tests="1",
+                       failures=str(int(negative)), errors="0", skipped="0")
+    case = ET.SubElement(suite, "testcase", classname=C.CLASS,
+                        name="durableDestinationPublishesOnlyAfterCommitAndCommitIsIdempotent[jvm]")
     if negative:
         path = req["testTemporary"] + r"\p2pkit-durable-destination-1234"
         failure = ET.SubElement(case, "failure", type="java.nio.file.AccessDeniedException", message=path)
@@ -913,15 +917,72 @@ class PureWindowsControlTests(unittest.TestCase):
                 ("productRetained", False), ("testTemporaryRetired", False), ("testTemporaryRetired", None), ("nativeAccepted", False)):
             self.rejects(lambda: C.require_disposal_evidence(dict(case, **{key: value})))
 
+    def test_junit_accepts_pinned_kotlin_jvm_display_labels(self):
+        # Public literal counterpart of R10's actual report dialect, not a new
+        # native result or a fixture derived from implementation constants.
+        raw = b'''<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="FileTransferJvmTest[jvm]" tests="1" skipped="0" failures="0" errors="0" time="0.144">
+  <properties/>
+  <testcase name="durableDestinationPublishesOnlyAfterCommitAndCommitIsIdempotent[jvm]"
+            classname="dev.p2pkit.core.transfer.FileTransferJvmTest" time="0.144"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
+'''
+        self.assertIsNone(C.assess_xml(raw, request()))
+        self.assertIsNone(C.assess_xml(raw.replace(b"\n", b"\r\n"), request()))
+
+    def test_junit_rejects_wrong_display_labels_and_canonical_class(self):
+        invalid = [
+            (".", "name", "FileTransferJvmTest"),
+            (".", "name", C.CLASS),
+            (".", "name", C.CLASS + "[jvm]"),
+            (".", "name", "OtherTest[jvm]"),
+            (".", "name", "FileTransferJvmTest[android]"),
+            (".", "name", "FileTransferJvmTest[jvm][jvm]"),
+            (".", "name", "FileTransferJvmTest[jvm]extra"),
+            ("testcase", "name", C.METHOD),
+            ("testcase", "name", C.METHOD + "[android]"),
+            ("testcase", "name", C.METHOD + "[jvm][jvm]"),
+            ("testcase", "name", C.METHOD + "[jvm]extra"),
+            ("testcase", "name", "other[jvm]"),
+            ("testcase", "classname", "FileTransferJvmTest"),
+            ("testcase", "classname", "other.package.FileTransferJvmTest"),
+            ("testcase", "classname", C.CLASS + "[jvm]"),
+        ]
+        for negative in (False, True):
+            req = request(negative)
+            for path, attribute, value in invalid:
+                with self.subTest(negative=negative, path=path, attribute=attribute, value=value):
+                    suite = xml(req)
+                    suite.find(path).set(attribute, value)
+                    self.rejects(lambda: C.assess_xml(raw_xml(suite), req))
+
+    def test_listener_identity_remains_canonical_not_junit_display_labels(self):
+        for negative in (False, True):
+            req = request(negative)
+            C.assess_execution(execution(req), req, "d" * 64)
+            for field, value in (("className", "FileTransferJvmTest[jvm]"),
+                                 ("className", C.CLASS + "[jvm]"),
+                                 ("className", "other.package.FileTransferJvmTest"),
+                                 ("name", C.METHOD + "[jvm]"), ("name", "other")):
+                with self.subTest(negative=negative, field=field, value=value):
+                    report = execution(req)
+                    report["events"][0][field] = value
+                    self.rejects(lambda: C.assess_execution(report, req, "d" * 64))
+
     def test_exact_selected_junit_and_native_failure_path(self):
         for negative in (False, True):
             req = request(negative)
             original = xml(req)
             self.assertEqual(C.assess_xml(raw_xml(original), req),
                              req["testTemporary"] + r"\p2pkit-durable-destination-1234" if negative else None)
-            mutations = [lambda s: s.set("tests", "0"), lambda s: s.set("skipped", "1"),
+            mutations = [lambda s: s.set("tests", "0"), lambda s: s.set("tests", "2"),
+                lambda s: s.set("skipped", "1"), lambda s: s.set("errors", "1"),
+                lambda s: s.set("failures", str(int(not negative))),
                 lambda s: s.append(copy.deepcopy(s.find("testcase"))), lambda s: s.find("testcase").set("name", "other"),
-                lambda s: ET.SubElement(s.find("testcase"), "error")]
+                lambda s: s.remove(s.find("testcase")), lambda s: ET.SubElement(s.find("testcase"), "error"),
+                lambda s: ET.SubElement(s.find("testcase"), "skipped")]
             if negative:
                 mutations += [lambda s: s.find("testcase/failure").set("type", "java.io.IOException"),
                     lambda s: setattr(s.find("testcase/failure"), "text", "compilation failure"),
