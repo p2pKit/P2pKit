@@ -149,16 +149,98 @@ class ContextAndSchemaTests(unittest.TestCase):
     def test_ambient_hooks_rejected_without_normalization(self):
         env, _ = dispatch()
         app.check_environment(env)
-        for key in ("DYLD_INSERT_LIBRARIES", "LD_PRELOAD", "PYTHONPATH", "PYTHONHOME", "GIT_CONFIG_COUNT",
-                    "GITHUB_TOKEN", "GH_TOKEN", "SSH_AUTH_SOCK", "BASH_ENV", "JAVA_TOOL_OPTIONS",
-                    "SUDO_UID", "P2PKIT_EXTRA_OPTION"):
-            value = dict(env, **{key: ""})
-            original = dict(value)
-            with self.subTest(key=key), self.assertRaises(app.Failure):
+        groups = {
+            "ENVIRONMENT_PYTHON_HOOK": ("PYTHONPATH", "PYTHONHOME", "PYTHON_PRIVATE\nNAME"),
+            "ENVIRONMENT_LOADER_HOOK": ("DYLD_INSERT_LIBRARIES", "LD_PRELOAD", "DYLD_PRIVATE", "LD_PRIVATE"),
+            "ENVIRONMENT_GIT_HOOK": ("GIT_CONFIG_COUNT", "GIT_PAGER", "GIT_PRIVATE\nNAME"),
+            "ENVIRONMENT_SHELL_HOOK": ("BASH_ENV", "ENV", "ZDOTDIR", "CDPATH"),
+            "ENVIRONMENT_JVM_HOOK": ("JAVA_OPTS", "GRADLE_OPTS", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS"),
+            "ENVIRONMENT_BUILD_HOME": ("GRADLE_USER_HOME",),
+            "ENVIRONMENT_CREDENTIAL_HOOK": ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN",
+                                             "SSH_ASKPASS", "SSH_AUTH_SOCK", "GPG_AGENT_INFO"),
+            "ENVIRONMENT_ELEVATION": ("SUDO_UID", "SUDO_GID", "SUDO_USER", "SUDO_COMMAND"),
+            "ENVIRONMENT_CAMPAIGN_HOOK": ("P2PKIT_EXTRA_OPTION", "P2PKIT_PRIVATE\nNAME"),
+        }
+        for code, keys in groups.items():
+            for key in keys:
+                for content in ("", "private/value\n::notice::never-print"):
+                    value = dict(env, **{key: content})
+                    original = dict(value)
+                    with self.subTest(key=key, empty=not content), self.assertRaises(app.Failure) as failure:
+                        app.check_environment(value)
+                    self.assertEqual(failure.exception.code, code)
+                    self.assertEqual(str(failure.exception), code)
+                    self.assertEqual(value, original)
+
+    def test_environment_pinned_values_bounds_and_required_controls(self):
+        env, _ = dispatch()
+        # Optional Git prompt stays optional; ordinary hosted installations remain allowed.
+        allowed = dict(env, PATH="/private/path", HOME="/private/home", JAVA_HOME="/private/jdk",
+                       GIT_TERMINAL_PROMPT="0")
+        app.check_environment(allowed)
+        for key, expected in (("PYTHONDONTWRITEBYTECODE", "1"), ("PYTHONUNBUFFERED", "1"),
+                              ("GIT_TERMINAL_PROMPT", "0")):
+            for content in ("", expected + "\n", "private-value"):
+                value = dict(env, **{key: content})
+                original = dict(value)
+                with self.subTest(key=key), self.assertRaises(app.Failure) as failure:
+                    app.check_environment(value)
+                self.assertEqual(failure.exception.code, "ENVIRONMENT_PINNED_VALUE")
+                self.assertEqual(value, original)
+        for key in ("PYTHONDONTWRITEBYTECODE", "PYTHONUNBUFFERED"):
+            value = dict(env)
+            del value[key]
+            with self.subTest(key=key), self.assertRaises(app.Failure) as failure:
                 app.check_environment(value)
-            self.assertEqual(value, original)
-        with self.assertRaises(app.Failure):
-            app.check_environment(dict(env, PYTHONUNBUFFERED="0"))
+            self.assertEqual(failure.exception.code, "ENVIRONMENT_REQUIRED")
+        for key in (123, "x" * 257):
+            value = dict(env)
+            value[key] = "private-value"
+            with self.subTest(key=key), self.assertRaises(app.Failure) as failure:
+                app.check_environment(value)
+            self.assertEqual(failure.exception.code, "ENVIRONMENT_KEY")
+        app.check_environment(dict(env, **{"x" * 256: "private-value"}))
+        maximum = {"UNRELATED_" + str(i): "" for i in range(4096 - len(env))}
+        maximum.update(env)
+        app.check_environment(maximum)
+        with self.assertRaises(app.Failure) as failure:
+            app.check_environment(dict(maximum, extra="private-value"))
+        self.assertEqual(failure.exception.code, "ENVIRONMENT_COUNT")
+
+    def test_environment_cli_categories_stop_before_identity_source_or_observation(self):
+        env, _ = dispatch()
+        cases = (
+            (dict(env, GIT_PRIVATE_NAME="private\nvalue"), "ENVIRONMENT_GIT_HOOK"),
+            (dict(env, GH_TOKEN="private-token"), "ENVIRONMENT_CREDENTIAL_HOOK"),
+            (dict(env, PYTHONUNBUFFERED="private"), "ENVIRONMENT_PINNED_VALUE"),
+        )
+        for operation in ("run", "validate-public"):
+            for value, code in cases:
+                original = dict(value)
+                output = []
+                with self.subTest(operation=operation, code=code), \
+                        mock.patch.object(app.os, "environ", value), \
+                        mock.patch.object(app, "runtime_identity", return_value={}), \
+                        mock.patch.object(app, "read_external") as event, \
+                        mock.patch.object(app, "dispatch_identity") as identity, \
+                        mock.patch.object(app, "checked_source") as source, \
+                        mock.patch.object(app, "collect_host") as observe, \
+                        mock.patch.object(app, "retain_public") as retain, \
+                        mock.patch.object(app, "append_ready") as ready, \
+                        mock.patch.object(app.os, "write", side_effect=lambda fd, raw: output.append(raw) or len(raw)):
+                    self.assertEqual(app.main([operation]), 2)
+                self.assertEqual(output, [("MAC_HOST_CAPACITY_ERROR:" + code + "\n").encode("ascii")])
+                for dependent in (event, identity, source, observe, retain, ready):
+                    dependent.assert_not_called()
+                self.assertEqual(value, original)
+
+    def test_environment_reports_only_first_failed_predicate_in_existing_order(self):
+        env, _ = dispatch()
+        for values, code in (({"GH_TOKEN": "private", "GIT_PRIVATE": "private"}, "ENVIRONMENT_CREDENTIAL_HOOK"),
+                             ({"GIT_PRIVATE": "private", "GH_TOKEN": "private"}, "ENVIRONMENT_GIT_HOOK")):
+            with self.assertRaises(app.Failure) as failure:
+                app.check_environment(dict(env, **values))
+            self.assertEqual(failure.exception.code, code)
 
     def test_bounded_duplicate_free_json(self):
         _, event = dispatch()

@@ -306,6 +306,14 @@ a five-minute job limit. Between-call checks cannot preempt a hung kernel/filesy
 call. The genuine run/job/step/attempt terminal result is required in addition to
 the artifact; cancellation, timeout or missing completion cannot pass.
 
+Environment rejection reports only the first failed guard's fixed `ENVIRONMENT_*`
+category, never a caller variable name or value. The categories distinguish bounds,
+required/pinned controls, and prohibited Python, loader, Git, shell, JVM, build-home,
+credential, elevation or campaign hooks. A category is not the offending variable's
+identity or proof of its origin. Rejection remains exit 2 before event, source or host
+observation; reconcile the cause without removing guards or dumping the environment.
+Older undifferentiated `ENVIRONMENT` failures remain unattributed, not new passes.
+
 Only the closed `metadata.json` and `manifest.json` records are uploaded after
 `validate-public` rechecks their schema, identity, source and hashes. The pinned upload
 retains them for 14 days; obtain and verify them before expiry. No raw event/environment,

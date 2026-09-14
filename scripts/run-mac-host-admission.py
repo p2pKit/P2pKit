@@ -79,7 +79,11 @@ IMAGE_VERSION = r"[0-9]{8}\.[0-9]{1,6}(?:\.[0-9]{1,6})?"
 PUBLIC_NAMES = {b"metadata.json", b"manifest.json"}
 READINESS = b"artifacts_ready=true\n"
 ERRORS = frozenset({
-    "STARTUP", "ARGUMENTS", "RUNTIME", "ENVIRONMENT", "IDENTITY", "EVENT_JSON",
+    "STARTUP", "ARGUMENTS", "RUNTIME", "IDENTITY", "EVENT_JSON",
+    "ENVIRONMENT_COUNT", "ENVIRONMENT_KEY", "ENVIRONMENT_PINNED_VALUE", "ENVIRONMENT_REQUIRED",
+    "ENVIRONMENT_PYTHON_HOOK", "ENVIRONMENT_LOADER_HOOK", "ENVIRONMENT_GIT_HOOK",
+    "ENVIRONMENT_SHELL_HOOK", "ENVIRONMENT_JVM_HOOK", "ENVIRONMENT_BUILD_HOME",
+    "ENVIRONMENT_CREDENTIAL_HOOK", "ENVIRONMENT_ELEVATION", "ENVIRONMENT_CAMPAIGN_HOOK",
     "PATH", "FILESYSTEM", "SOURCE_UNSUPPORTED", "SOURCE_CHANGED", "SOURCE_LIMIT",
     "SOURCE_TREE_MISMATCH", "DEADLINE", "PUBLIC_SCHEMA", "PUBLIC_TREE", "PUBLIC_HASH",
     "PUBLIC_EXISTS", "OUTPUT", "INTERRUPTED", "INTERNAL",
@@ -160,23 +164,34 @@ def runtime_identity():
 def check_environment(env):
     # Reject, never remove/rewrite, caller configuration or loader/credential hooks.
     # Normal hosted PATH/HOME/tool installation variables are not toolchain evidence.
+    # Report only the first failed predicate's fixed category, never a caller key/value.
     allowed = {"PYTHONDONTWRITEBYTECODE": "1", "PYTHONUNBUFFERED": "1", "GIT_TERMINAL_PROMPT": "0"}
-    forbidden = {
-        "BASH_ENV", "ENV", "ZDOTDIR", "CDPATH", "JAVA_OPTS", "GRADLE_OPTS", "JAVA_TOOL_OPTIONS",
-        "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS", "GRADLE_USER_HOME", "GH_TOKEN", "GITHUB_TOKEN",
-        "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "SSH_ASKPASS", "SSH_AUTH_SOCK",
-        "GPG_AGENT_INFO", "SUDO_UID", "SUDO_GID", "SUDO_USER", "SUDO_COMMAND",
-    }
-    require(len(env) <= 4096, "ENVIRONMENT")
+    groups = (
+        ("ENVIRONMENT_SHELL_HOOK", ("BASH_ENV", "ENV", "ZDOTDIR", "CDPATH")),
+        ("ENVIRONMENT_JVM_HOOK", ("JAVA_OPTS", "GRADLE_OPTS", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS")),
+        ("ENVIRONMENT_BUILD_HOME", ("GRADLE_USER_HOME",)),
+        ("ENVIRONMENT_CREDENTIAL_HOOK", ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN",
+                                         "SSH_ASKPASS", "SSH_AUTH_SOCK", "GPG_AGENT_INFO")),
+        ("ENVIRONMENT_ELEVATION", ("SUDO_UID", "SUDO_GID", "SUDO_USER", "SUDO_COMMAND")),
+    )
+    forbidden = {key: code for code, keys in groups for key in keys}
+    require(len(env) <= 4096, "ENVIRONMENT_COUNT")
     for key in env:
-        require(type(key) is str and len(key) <= 256, "ENVIRONMENT")
+        require(type(key) is str and len(key) <= 256, "ENVIRONMENT_KEY")
         if key in allowed:
-            require(env[key] == allowed[key], "ENVIRONMENT")
-        elif key.startswith(("PYTHON", "DYLD_", "LD_", "GIT_")) or key in forbidden:
-            raise Failure("ENVIRONMENT")
+            require(env[key] == allowed[key], "ENVIRONMENT_PINNED_VALUE")
+        elif key.startswith("PYTHON"):
+            raise Failure("ENVIRONMENT_PYTHON_HOOK")
+        elif key.startswith(("DYLD_", "LD_")):
+            raise Failure("ENVIRONMENT_LOADER_HOOK")
+        elif key.startswith("GIT_"):
+            raise Failure("ENVIRONMENT_GIT_HOOK")
+        elif key in forbidden:
+            raise Failure(forbidden[key])
         elif key.startswith("P2PKIT_"):
-            require(key in {"P2PKIT_OPERATION", "P2PKIT_EXPECTED_SHA", "P2PKIT_EXPECTED_TREE"}, "ENVIRONMENT")
-    require(env.get("PYTHONDONTWRITEBYTECODE") == "1" and env.get("PYTHONUNBUFFERED") == "1", "ENVIRONMENT")
+            require(key in {"P2PKIT_OPERATION", "P2PKIT_EXPECTED_SHA", "P2PKIT_EXPECTED_TREE"},
+                    "ENVIRONMENT_CAMPAIGN_HOOK")
+    require(env.get("PYTHONDONTWRITEBYTECODE") == "1" and env.get("PYTHONUNBUFFERED") == "1", "ENVIRONMENT_REQUIRED")
 
 
 def branch_ref(value):
