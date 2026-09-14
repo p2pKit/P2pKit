@@ -19,6 +19,7 @@ import sys
 import tarfile
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 import xml.etree.ElementTree as ET
@@ -126,9 +127,29 @@ class PureWindowsControlTests(unittest.TestCase):
         with self.assertRaises(BAD):
             action()
 
+    def native_model(self):
+        """Owned local metadata fixtures, never a hosted/native execution receipt."""
+        directory = Path(tempfile.mkdtemp(prefix="native-metadata-model-", dir=self.base))
+        controller = C.Controller.__new__(C.Controller)
+        controller.public = directory / "public"
+        for name in ("admission", "current"):
+            (controller.public / name).mkdir(parents=True)
+        controller.identity = {"sourceSha": "a" * 40, "sourceTree": "b" * 40,
+                               "runId": "123", "runAttempt": "2", "scope": "MODEL_ONLY_NOT_HOSTED"}
+        controller.deadline = controller.final_deadline = time.monotonic() + 30
+        state = directory / "state"
+        temporary = state / "fixtures/native-tmp"
+        temporary.mkdir(parents=True)
+        case = {"name": "current", "root": ROOT, "state": state, "public": controller.public / "current",
+                "context": {"id": "c" * 32, "source": dispatch()[2]}, "leaves": [], "retentionErrors": [],
+                "nativeStarted": False, "nativeAccepted": False,
+                "nativeTemporaryIdentity": C.native_temporary_identity(temporary.lstat())}
+        return controller, case, temporary
+
     def sdk_admission(self, *, install_fails=False, after="unchanged"):
         """Real caller/formatter and local file reads; Windows paths/processes are modeled."""
-        directory = Path(tempfile.mkdtemp(prefix="sdk-model-", dir=self.base))
+        controller, case, _ = self.native_model()
+        directory = case["state"].parent
         local_sdk = directory / "sdk"
         raw = {"cmdline-tools/latest/bin/sdkmanager.bat": b"MODEL_ONLY_NOT_AN_EXECUTABLE\n",
                "cmdline-tools/latest/source.properties": b"Pkg.Revision=19.0\nPRIVATE_MODEL_VALUE=do-not-publish\n",
@@ -157,12 +178,7 @@ class PureWindowsControlTests(unittest.TestCase):
         def local(path):
             return local_sdk.joinpath(*path.relative_to(sdk).parts) if isinstance(path, SdkPath) else path
 
-        controller = C.Controller.__new__(C.Controller)
-        controller.public = directory / "public"
-        (controller.public / "admission").mkdir(parents=True)
-        state = directory / "state"
-        state.mkdir()
-        case = {"state": state, "env": {"ANDROID_HOME": str(sdk)}, "retentionErrors": [], "nativeStarted": False}
+        case["env"] = {"ANDROID_HOME": str(sdk)}
         calls, commands = [], []
         original_install = C.CommandFailure("MODEL SDK install failed", directory / "capture", 23)
         native_boundary = RuntimeError("MODEL native suite deliberately not executed")
@@ -832,6 +848,283 @@ class PureWindowsControlTests(unittest.TestCase):
             link = self.base / (kind + "-link")
             link.symlink_to(target) if kind == "symlink" else os.link(target, link)
             self.rejects(lambda: C.regular(link))
+
+    def test_native_temporary_observation_is_direct_metadata_only(self):
+        controller, case, temporary = self.native_model()
+        before = controller.native_temporary(case, "before")
+        self.assertTrue(before["complete"] and before["empty"])
+        (temporary / "directory").mkdir()
+        (temporary / "directory/private.bin").write_bytes(b"PRIVATE_NESTED_CONTENT")
+        (temporary / "file.bin").write_bytes(b"PRIVATE_DIRECT_CONTENT")
+        original_lstat = Path.lstat
+        visited = []
+
+        def lstat(path):
+            self.assertNotEqual(path, temporary / "directory/private.bin")
+            visited.append(path)
+            return original_lstat(path)
+
+        with mock.patch.object(Path, "lstat", autospec=True, side_effect=lstat), \
+                mock.patch.object(Path, "read_bytes", side_effect=AssertionError("No content reads")), \
+                mock.patch.object(Path, "readlink", side_effect=AssertionError("No target reads")), \
+                mock.patch.object(C, "regular", side_effect=AssertionError("No content inventory")):
+            after = C.observe_native_temporary(temporary, case["nativeTemporaryIdentity"], time.monotonic() + 5)
+        self.assertTrue(after["complete"])
+        self.assertFalse(after["empty"])
+        self.assertEqual([(row["name"], row["metadata"]["kind"]) for row in after["entries"]],
+                         [("directory", "directory"), ("file.bin", "file")])
+        self.assertEqual(after["rootBefore"]["inode"], before["expectedRootIdentity"]["inode"])
+        self.assertNotIn("PRIVATE_", json.dumps(after))
+        self.assertIn(temporary / "file.bin", visited)
+
+    def test_native_temporary_errors_bounds_and_replaced_root_fail_closed(self):
+        for failure in ("scandir", "lstat", "entry-lstat", "deadline", "count", "replaced", "path"):
+            with self.subTest(failure=failure):
+                _, case, temporary = self.native_model()
+                original_lstat = Path.lstat
+                visited = []
+                target = temporary
+                if failure == "count":
+                    for name in ("one", "two"):
+                        (temporary / name).mkdir()
+                elif failure == "entry-lstat":
+                    (temporary / "entry").mkdir()
+                elif failure == "replaced":
+                    temporary.rename(temporary.with_name("original-native-tmp"))
+                    temporary.mkdir()
+                elif failure == "path":
+                    target = temporary / ".." / "native-tmp"
+
+                def lstat(path):
+                    visited.append(path)
+                    if (failure == "lstat" and path == temporary or
+                            failure == "entry-lstat" and path == temporary / "entry"):
+                        raise PermissionError(13, "PRIVATE_ERROR_TEXT")
+                    if failure == "path":
+                        self.fail("Rejected lexical path must not be inspected, even in finally")
+                    return original_lstat(path)
+
+                with mock.patch.object(Path, "lstat", autospec=True, side_effect=lstat), \
+                        mock.patch.object(C.os, "scandir", side_effect=PermissionError(13, "PRIVATE_ERROR_TEXT")
+                                          if failure == "scandir" else C.os.scandir) as scan, \
+                        mock.patch.object(C, "NATIVE_TEMP_ENTRIES", 1):
+                    value = C.observe_native_temporary(target, case["nativeTemporaryIdentity"],
+                                                       0 if failure == "deadline" else time.monotonic() + 5)
+                self.assertFalse(value["complete"])
+                self.assertIsNone(value["empty"])
+                self.assertTrue(value["errors"])
+                self.assertNotIn("PRIVATE_ERROR_TEXT", json.dumps(value))
+                if failure in ("deadline", "replaced", "path", "lstat"):
+                    scan.assert_not_called()
+                if failure in ("deadline", "path"):
+                    self.assertEqual(visited, [])
+                if failure == "entry-lstat":
+                    self.assertIsNone(value["entries"][0]["metadata"])
+                    self.assertEqual(value["errors"][0]["step"], "entry-metadata")
+
+    def test_native_temporary_initial_nonempty_or_unknown_root_blocks_leaf(self):
+        for mode in ("nonempty", "deadline"):
+            controller, case, temporary = self.native_model()
+            controller.leaf = mock.Mock(side_effect=AssertionError("Rejected root cannot launch a leaf"))
+            if mode == "nonempty":
+                (temporary / "unexplained").mkdir()
+            else:
+                controller.deadline = controller.final_deadline = 0
+            self.rejects(lambda: controller.native_controls(case))
+            controller.leaf.assert_not_called()
+            self.assertFalse(case["nativeStarted"])
+            self.assertFalse(case["nativeAccepted"])
+            self.assertTrue(case["retentionErrors"])
+            value = C.read_json(controller.public / "admission/native-temporary-before.json")
+            self.assertFalse(value["empty"])
+            self.assertEqual(value["complete"], mode == "nonempty")
+
+    def test_native_temporary_unsafe_ancestors_roots_and_children_are_never_followed(self):
+        for location in ("ancestor", "root", "child"):
+            for kind in ("symlink", "reparse-point"):
+                with self.subTest(location=location, kind=kind):
+                    _, case, temporary = self.native_model()
+                    child = temporary / "entry"
+                    child.mkdir()
+                    unsafe = {"ancestor": temporary.parent, "root": temporary, "child": child}[location]
+                    original_lstat, original_scan = Path.lstat, C.os.scandir
+                    info = original_lstat(unsafe)
+                    fields = {name: getattr(info, name, None) for name in ("st_dev", "st_ino", "st_birthtime_ns",
+                        "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns", "st_file_attributes", "st_reparse_tag")}
+                    fields.update(st_mode=C.stat.S_IFLNK | 0o700 if kind == "symlink" else C.stat.S_IFDIR | 0o700,
+                                  st_file_attributes=0x400 if kind == "reparse-point" else None)
+                    visited = []
+
+                    def lstat(path):
+                        visited.append(path)
+                        return SimpleNamespace(**fields) if path == unsafe else original_lstat(path)
+
+                    with mock.patch.object(Path, "lstat", autospec=True, side_effect=lstat), \
+                            mock.patch.object(C.os, "scandir", side_effect=original_scan) as scan, \
+                            mock.patch.object(Path, "readlink", side_effect=AssertionError("No link target observation")):
+                        value = C.observe_native_temporary(temporary, case["nativeTemporaryIdentity"], time.monotonic() + 5)
+                    if location == "child":
+                        self.assertTrue(value["complete"])
+                        self.assertFalse(value["empty"])
+                        self.assertEqual(value["entries"][0]["metadata"]["kind"], kind)
+                        scan.assert_called_once_with(temporary)
+                    else:
+                        self.assertFalse(value["complete"])
+                        self.assertIsNone(value["empty"])
+                        scan.assert_not_called()
+                        self.assertNotIn(child, visited)
+                        if location == "ancestor":
+                            self.assertNotIn(temporary, visited)
+
+    def native_admission(self, *, failed=False, residue=False, write_failed=False, inventory_failed=False, cleanup_failed=False):
+        controller, case, temporary = self.native_model()
+        original = RuntimeError("MODEL original native failure")
+        native = case["state"] / "evidence/native-controls"
+        (native / "test_model").mkdir(parents=True)
+        C.new_json(native / "test_model/case.json", {"scope": "MODEL_ONLY_NOT_NATIVE"})
+        source = (ROOT / "scripts/tests/run-audit-command-test.py").read_bytes()
+        text = "Running current-host real executor fixtures: windows-x64; MODEL_ONLY\n\nRan " + str(
+            C.expected_native_count(source)) + " tests in 0.1s\n\nOK\n"
+        logs = case["public"] / "executor-native-controls"
+        logs.mkdir()
+        (logs / "product.stdout.log").write_bytes(b"")
+        (logs / "product.stderr.log").write_text(text)
+
+        def leaf(actual_case, purpose, arguments, **options):
+            self.assertIs(actual_case, case)
+            self.assertEqual((purpose, options), ("executor-native-controls", {"kind": "command", "timeout": 1800,
+                "extra_env": {key: str(temporary) for key in ("TEMP", "TMP", "TMPDIR")}}))
+            self.assertEqual(arguments, [sys.executable, "-B", "scripts/tests/run-audit-command-test.py",
+                                        "--expected-host", "windows-x64", "--evidence-dir", str(native)])
+            self.assertTrue((controller.public / "admission/native-temporary-before.json").is_file())
+            record = {"id": "d" * 32, "purpose": purpose, "arguments": arguments,
+                      "status": 1 if failed else 0, "valid": not failed, "retained": True}
+            case["leaves"].append(record)
+            try:
+                if failed:
+                    raise original
+            finally:
+                # Models the leaf's stop boundary, not execution/retirement proof.
+                if residue:
+                    (temporary / "model-stop-residue").mkdir()
+
+        original_json, original_inventory = C.new_json, C.inventory
+
+        def write_json(path, value):
+            if write_failed and path.name == "native-temporary-after.json":
+                raise OSError("MODEL post retention failure")
+            return original_json(path, value)
+
+        def inventory(path, **options):
+            if inventory_failed and path == native:
+                raise OSError("MODEL fixture retention failure")
+            return original_inventory(path, **options)
+
+        controller.leaf = mock.Mock(side_effect=leaf)
+        with mock.patch.object(C, "new_json", side_effect=write_json), \
+                mock.patch.object(C, "inventory", side_effect=inventory), \
+                mock.patch.object(C, "assess_native_cleanup", return_value=[{"scope": "MODEL_ONLY"}],
+                    side_effect=C.audit.AuditError("MODEL unresolved cleanup") if cleanup_failed else None) as cleanup:
+            error = None
+            try:
+                controller.native_controls(case)
+            except Exception as caught:
+                error = caught
+        return controller, case, error, original, cleanup
+
+    def test_native_caller_retains_before_and_after_original_leaf_failure(self):
+        controller, case, error, original, cleanup = self.native_admission(failed=True, residue=True)
+        self.assertIs(error, original)
+        before = C.read_json(controller.public / "admission/native-temporary-before.json")
+        after = C.read_json(controller.public / "admission/native-temporary-after.json")
+        self.assertTrue(before["empty"])
+        self.assertIsNone(before["leaf"])
+        self.assertEqual(after["leaf"]["id"], "d" * 32)
+        self.assertEqual(after["leaf"]["status"], 1)
+        self.assertEqual(after["entries"][0]["name"], "model-stop-residue")
+        self.assertFalse(case["nativeAccepted"])
+        self.assertTrue((controller.public / "admission/native-controls/test_model/case.json").is_file())
+        cleanup.assert_not_called()
+
+    def test_native_diagnostic_failures_never_replace_original_or_allow_acceptance(self):
+        for failed in (False, True):
+            controller, case, error, original, cleanup = self.native_admission(
+                failed=failed, write_failed=True, inventory_failed=True)
+            if failed:
+                self.assertIs(error, original)
+            else:
+                self.assertIsInstance(error, C.audit.AuditError)
+            self.assertEqual(len(case["retentionErrors"]), 2)
+            self.assertFalse(case["nativeAccepted"])
+            self.assertTrue((controller.public / "admission/native-temporary-before.json").is_file())
+            self.assertFalse((controller.public / "admission/native-temporary-after.json").exists())
+            cleanup.assert_not_called()
+
+    def test_native_four_predicates_and_cleanup_assessment_remain_required(self):
+        text = "Running current-host real executor fixtures: windows-x64;\n\nRan 96 tests in 1.0s\n\nOK\n"
+        empty = {"complete": True, "empty": True}
+        self.assertTrue(all(C.native_predicates(text, 96, empty).values()))
+        for name, actual, root in (("expected-test-count-and-OK", text.replace("96", "95"), empty),
+                ("expected-test-count-and-OK", text.replace("OK", "FAILED"), empty),
+                ("current-Windows-marker", text.replace("windows-x64", "linux-x64"), empty),
+                ("no-skipped-marker", text + "skipped=1", empty),
+                ("native-temporary-root-empty", text, {"complete": True, "empty": False}),
+                ("native-temporary-root-empty", text, {"complete": False, "empty": None})):
+            self.assertEqual([key for key, passed in C.native_predicates(actual, 96, root).items() if not passed], [name])
+        for residue, cleanup_failed in ((False, False), (True, False), (False, True)):
+            controller, case, error, _, cleanup = self.native_admission(residue=residue, cleanup_failed=cleanup_failed)
+            self.assertEqual(case["nativeAccepted"], not residue and not cleanup_failed)
+            if residue:
+                self.assertIn("native-temporary-root-empty", str(error))
+                cleanup.assert_not_called()
+            else:
+                cleanup.assert_called_once_with(case["state"] / "evidence/native-controls",
+                                               (ROOT / "scripts/tests/run-audit-command-test.py").read_bytes())
+                if not cleanup_failed:
+                    self.assertIsNone(error)
+                    self.assertTrue(all(C.read_json(controller.public / "admission/native-controls.json")["predicates"].values()))
+
+    def test_native_temporary_public_schema_is_finite_and_pair_bound(self):
+        controller, case, temporary = self.native_model()
+        before = controller.native_temporary(case, "before")
+        (temporary / "entry").mkdir()
+        after = controller.native_temporary(case, "after")
+        directory, identity = controller.public / "admission", controller.identity
+        C.seal_public(directory, identity, "admission")
+        C.verify_public(directory, identity, "admission")
+        for mutate in (lambda v: v.update(raw="PRIVATE_CONTENT"),
+                       lambda v: v["entries"][0].update(contents="PRIVATE_CONTENT"),
+                       lambda v: v["rootBefore"].update(target="PRIVATE_TARGET"),
+                       lambda v: v["expectedRootIdentity"].update(device=-1),
+                       lambda v: v.update(source={**v["source"], "tree": "f" * 40}),
+                       lambda v: v.update(complete=False),
+                       lambda v: v.update(errors=[{"step": "entries", "entry": None, "exceptionType": "OSError",
+                                                   "errno": 13, "winerror": None, "raw": "PRIVATE_ERROR"}])):
+            value = copy.deepcopy(after)
+            mutate(value)
+            self.rejects(lambda: C.validate_native_temporary(value, identity, "after"))
+        # Even a self-consistent forged manifest cannot admit a raw extra key.
+        after["raw"] = "PRIVATE_CONTENT"
+        (directory / "native-temporary-after.json").write_bytes(C.audit.json_bytes(after))
+        rows = [row for row in C.inventory(directory) if row["path"] != "manifest.json"]
+        (directory / "manifest.json").write_bytes(C.audit.json_bytes(C.public_manifest(identity, "admission", rows)))
+        self.rejects(lambda: C.verify_public(directory, identity, "admission"))
+        for name in ("native-temporary-before.json", "native-temporary-after.json"):
+            self.assertTrue(C.public_path(name))
+        for name in ("native-temporary-raw.json", "native-tmp/raw.bin", "arbitrary.json"):
+            self.assertFalse(C.public_path(name))
+        for bad in ("raw-key", "wrong-owner", "wrong-case"):
+            stage = self.base / bad
+            stage.mkdir()
+            C.new_json(stage / "native-temporary-before.json", before)
+            value = copy.deepcopy(after)
+            value.pop("raw")
+            if bad == "raw-key":
+                value["raw"] = "PRIVATE_CONTENT"
+            elif bad == "wrong-owner":
+                value["jobId"] = "e" * 32
+            C.new_json(stage / "native-temporary-after.json", value)
+            self.rejects(lambda: C.seal_public(stage, identity, "current" if bad == "wrong-case" else "admission"))
 
     def test_native_count_and_failed_then_recovered_cleanup_history(self):
         recovery = "test_cleanup_failures_still_archive_authentic_receipts_and_preserve_unresolved_fixture"

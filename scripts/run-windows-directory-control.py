@@ -83,6 +83,11 @@ HEX32 = r"[0-9a-f]{32}"
 MAX_FILE = 32 * 1024 ** 2
 MAX_FILES = 25000
 MAX_BYTES = 256 * 1024 ** 2
+NATIVE_TEMP_FILES = {"native-temporary-before.json": "before", "native-temporary-after.json": "after"}
+NATIVE_TEMP_ENTRIES = 128
+NATIVE_TEMP_BYTES = 512 * 1024
+NATIVE_TEMP_STEPS = {"path", "root-before", "root-recheck", "entries", "entry-limit", "entry-name",
+                     "entry-metadata", "root-after"}
 
 
 def integer(value, expected=None):
@@ -505,6 +510,202 @@ def require_disposal_evidence(case):
             "Required original retention failed; preserve sources, outputs and caches")
 
 
+def native_temporary_identity(info):
+    return {"device": info.st_dev, "inode": info.st_ino, "birthNs": getattr(info, "st_birthtime_ns", None)}
+
+
+def native_temporary_kind(mode, attributes):
+    if (attributes or 0) & 0x400:
+        return "reparse-point"
+    if stat.S_ISLNK(mode):
+        return "symlink"
+    return "directory" if stat.S_ISDIR(mode) else "file" if stat.S_ISREG(mode) else "other"
+
+
+def native_temporary_metadata(info):
+    attributes = getattr(info, "st_file_attributes", None)
+    return {**native_temporary_identity(info), "mode": info.st_mode, "links": info.st_nlink,
+            "bytes": info.st_size, "modifiedNs": info.st_mtime_ns, "changedNs": info.st_ctime_ns,
+            "fileAttributes": attributes, "reparseTag": getattr(info, "st_reparse_tag", None),
+            "kind": native_temporary_kind(info.st_mode, attributes)}
+
+
+def native_temporary_name(name):
+    return type(name) is str and 0 < len(name) <= 255 and name not in (".", "..") and not name.endswith((".", " ")) and \
+        not re.search(r'[/\\\x00-\x1f<>:"|?*]', name) and \
+        not re.fullmatch(r"(?i:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\..*)?", name)
+
+
+def observe_native_temporary(directory, expected, deadline):
+    """Direct-entry metadata only: no contents, readlink, recursion, retry or removal.
+
+    Observe a quiescent controller-owned root before/after the leaf and its stop.
+    Top-down lstat guards do not claim atomic containment against a malicious
+    concurrent filesystem actor. Count/time bounds share the controller deadline;
+    they cannot interrupt a blocking kernel metadata call.
+    """
+    record = {"directory": str(directory), "expectedRootIdentity": expected, "startedUtc": audit.utc(),
+              "rootBefore": None, "rootAfter": None, "entries": [], "errors": [], "complete": False, "empty": None}
+
+    def check_time():
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Native temporary metadata deadline")
+
+    def root(slot=None):
+        check_time()
+        require(directory.is_absolute() and ".." not in directory.parts and len(directory.parts) <= 64 and
+                len(str(directory)) <= 1024, "Invalid native temporary observation path")
+        # lstat itself follows intermediate links: reject ancestors root-first.
+        for parent in reversed(directory.parents):
+            check_time()
+            info = parent.lstat()
+            require(native_temporary_kind(info.st_mode, getattr(info, "st_file_attributes", None)) == "directory",
+                    "Unsafe native temporary ancestor")
+        info = directory.lstat()
+        if slot:
+            record[slot] = native_temporary_metadata(info)
+        require(native_temporary_kind(info.st_mode, getattr(info, "st_file_attributes", None)) == "directory" and
+                native_temporary_identity(info) == expected, "Native temporary root is unsafe or replaced")
+        check_time()
+
+    def failed(step, error, entry=None):
+        def number(value):
+            return value if type(value) is int and -(2 ** 31) <= value < 2 ** 32 else None
+        name = type(error).__name__
+        record["errors"].append({"step": step, "entry": entry,
+            "exceptionType": name if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", name) else "Exception",
+            "errno": number(getattr(error, "errno", None)), "winerror": number(getattr(error, "winerror", None))})
+
+    step = "path"
+    try:
+        require(directory.is_absolute() and ".." not in directory.parts and len(directory.parts) <= 64 and
+                len(str(directory)) <= 1024, "Invalid native temporary observation path")
+        step = "root-before"
+        root("rootBefore")
+        step = "entries"
+        with os.scandir(directory) as iterator:
+            for entry in iterator:
+                check_time()
+                step = "entry-limit"
+                require(len(record["entries"]) < NATIVE_TEMP_ENTRIES, "Native temporary entry bound exceeded")
+                step = "entry-name"
+                require(native_temporary_name(entry.name), "Unsafe native temporary direct-entry name")
+                step = "root-recheck"
+                root()
+                row = {"name": entry.name, "metadata": None}
+                record["entries"].append(row)
+                try:
+                    # Windows DirEntry inode/device caches are not authoritative.
+                    row["metadata"] = native_temporary_metadata((directory / entry.name).lstat())
+                    check_time()
+                except Exception as error:
+                    failed("entry-metadata", error, entry.name)
+                step = "entries"
+    except Exception as error:
+        failed(step, error)
+    finally:
+        try:
+            root("rootAfter")
+        except Exception as error:
+            failed("root-after", error)
+    record["entries"].sort(key=lambda row: row["name"])
+    record.update(endedUtc=audit.utc(), complete=not record["errors"])
+    record["empty"] = not record["entries"] if record["complete"] else None
+    return record
+
+
+def validate_native_temporary(value, identity, phase):
+    """Only this finite metadata schema may use the two new public filenames."""
+    require(type(value) is dict and set(value) == {"schema", "kind", "phase", "identity", "source", "caseName",
+        "jobId", "leaf", "directory", "expectedRootIdentity", "startedUtc", "endedUtc", "rootBefore", "rootAfter",
+        "entries", "errors", "complete", "empty"} and integer(value["schema"], 1) and
+        value["kind"] == "windows-native-temporary-metadata" and phase in ("before", "after") and value["phase"] == phase and
+        value["identity"] == identity and value["caseName"] == "current" and
+        re.fullmatch(HEX32, value["jobId"] if type(value["jobId"]) is str else ""), "Invalid native temporary binding/schema")
+    require(value["source"] == {"commit": identity["sourceSha"], "tree": identity["sourceTree"], "status": "",
+                                "diffSha256": digest(b"")}, "Native temporary source differs from reviewed current case")
+    require(type(value["directory"]) is str and 0 < len(value["directory"]) <= 1024 and
+            not any(char in value["directory"] for char in "\0\r\n") and all(type(value[key]) is str and
+                re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?\+00:00", value[key])
+                for key in ("startedUtc", "endedUtc")), "Invalid native temporary path/time metadata")
+    directory = PureWindowsPath(value["directory"]) if PureWindowsPath(value["directory"]).drive else PurePosixPath(value["directory"])
+    require(directory.is_absolute() and ".." not in directory.parts and directory.parts[-2:] == ("fixtures", "native-tmp"),
+            "Native temporary metadata names another root")
+
+    def number(item, optional=False, signed=False):
+        return optional and item is None or type(item) is int and (-2 ** 127 if signed else 0) <= item < 2 ** 128
+
+    owner = value["expectedRootIdentity"]
+    require(type(owner) is dict and set(owner) == {"device", "inode", "birthNs"} and
+            all(number(item, key == "birthNs", key == "birthNs") for key, item in owner.items()),
+            "Invalid native temporary identity")
+    def metadata(item):
+        require(type(item) is dict and set(item) == {"device", "inode", "birthNs", "mode", "links", "bytes",
+            "modifiedNs", "changedNs", "fileAttributes", "reparseTag", "kind"} and
+            all(number(item[key], key in ("birthNs", "fileAttributes", "reparseTag"),
+                       key in ("birthNs", "modifiedNs", "changedNs")) for key in item if key != "kind") and
+            item["kind"] == native_temporary_kind(item["mode"], item["fileAttributes"]), "Invalid native entry metadata")
+    for key in ("rootBefore", "rootAfter"):
+        if value[key] is not None:
+            metadata(value[key])
+    entries, errors = value["entries"], value["errors"]
+    require(type(entries) is list and len(entries) <= NATIVE_TEMP_ENTRIES and type(errors) is list and
+            len(errors) <= NATIVE_TEMP_ENTRIES + 2, "Native temporary metadata exceeds its entry/error bound")
+    names = []
+    for row in entries:
+        require(type(row) is dict and set(row) == {"name", "metadata"} and native_temporary_name(row["name"]),
+                "Invalid native temporary direct entry")
+        names.append(row["name"])
+        if row["metadata"] is not None:
+            metadata(row["metadata"])
+    require(names == sorted(set(names)), "Duplicate/unsorted native temporary direct entries")
+    for error in errors:
+        require(type(error) is dict and set(error) == {"step", "entry", "exceptionType", "errno", "winerror"} and
+                type(error["step"]) is str and error["step"] in NATIVE_TEMP_STEPS and
+                (error["entry"] is None or native_temporary_name(error["entry"])) and
+                type(error["exceptionType"]) is str and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", error["exceptionType"]) and
+                all(item is None or type(item) is int and -(2 ** 31) <= item < 2 ** 32
+                    for item in (error["errno"], error["winerror"])), "Invalid native metadata observation error")
+    require(type(value["complete"]) is bool and value["complete"] == (not errors) and
+            (type(value["empty"]) is bool if value["complete"] else value["empty"] is None),
+            "Unknown native temporary observation cannot establish emptiness")
+    if value["complete"]:
+        require(value["empty"] == (not entries) and all(row["metadata"] is not None for row in entries) and
+                all(value[key] is not None and value[key]["kind"] == "directory" and
+                    {field: value[key][field] for field in owner} == owner for key in ("rootBefore", "rootAfter")),
+                "Incomplete/replaced native temporary root cannot be accepted")
+    leaf = value["leaf"]
+    require(phase == "after" or leaf is None, "Before observation cannot claim a completed leaf")
+    if leaf is not None:
+        require(type(leaf) is dict and set(leaf) == {"id", "purpose", "status", "valid", "retained"} and
+                type(leaf["id"]) is str and re.fullmatch(HEX32, leaf["id"]) and leaf["purpose"] == "executor-native-controls" and
+                (leaf["status"] is None or type(leaf["status"]) is int) and
+                type(leaf["valid"]) is bool and type(leaf["retained"]) is bool, "Invalid native leaf observation binding")
+    require(len(audit.json_bytes(value)) <= NATIVE_TEMP_BYTES, "Native temporary metadata exceeds its byte bound")
+
+
+def native_predicates(text, count, temporary):
+    return {"expected-test-count-and-OK": bool(re.search(r"\nRan " + str(count) + r" tests? in [0-9.]+s\r?\n\r?\nOK\r?\n", text)),
+            "current-Windows-marker": "Running current-host real executor fixtures: windows-x64;" in text,
+            "no-skipped-marker": "skipped=" not in text,
+            "native-temporary-root-empty": temporary["complete"] is True and temporary["empty"] is True}
+
+
+def validate_public_native_temporary(directory, identity, case_name, rows):
+    observed = []
+    for row in rows:
+        phase = NATIVE_TEMP_FILES.get(row["path"])
+        if phase is not None:
+            require(case_name == "admission" and row["bytes"] <= NATIVE_TEMP_BYTES,
+                    "Native temporary metadata is outside its bounded admission location")
+            value = read_json(directory / row["path"])
+            validate_native_temporary(value, identity, phase)
+            observed.append(value)
+    if len(observed) == 2:
+        require(all(observed[0][key] == observed[1][key] for key in
+                    ("jobId", "source", "directory", "expectedRootIdentity")), "Native temporary observations differ in owner/source")
+
+
 def expected_native_count(raw):
     tree = ast.parse(raw)
     classes = {node.name: {child.name for child in node.body if isinstance(child, ast.FunctionDef) and
@@ -622,6 +823,7 @@ def public_path(name):
                         "context.json", "gradle.properties", "request.json", "temporary-before.json",
                         "temporary-after.json", "retirement-start.json", "retirement.json", "controller-error.txt",
                         "native-controls.json", "test-admission.json", "execution.json", "buildsrc-execution.json",
+                        "native-temporary-before.json", "native-temporary-after.json",
                         "TEST-control.xml", "TEST-control-unbound.xml", "unbound-report.json",
                         "sdk.json", "sdk-tool-before.json", "sdk-tool-after.json", "allocation.json", "retained-before-disposal.json",
                         "source-materialization.json", "controller-retirement.json", "fallback-stop.json", "BuildInfo.kt"}
@@ -647,6 +849,7 @@ def public_manifest(identity, case_name, rows):
 def seal_public(directory, identity, case_name):
     rows = inventory(directory)
     require(rows and all(public_path(row["path"]) for row in rows), "Unaudited public evidence member")
+    validate_public_native_temporary(directory, identity, case_name, rows)
     manifest = public_manifest(identity, case_name, rows)
     new_json(directory / "manifest.json", manifest)
     require(inventory(directory) == sorted(rows + [{"path": "manifest.json",
@@ -661,6 +864,7 @@ def verify_public(directory, identity, case_name):
     require(regular(directory / "manifest.json") == audit.json_bytes(public_manifest(identity, case_name, actual)) and
             actual and all(public_path(row["path"]) for row in actual),
             "Missing, changed, extra or unsafe sealed public artifact member")
+    validate_public_native_temporary(directory, identity, case_name, actual)
 
 
 def copy_public(source, destination):
@@ -681,6 +885,7 @@ def retain_available(source, destination):
 def retain_before_disposal(directory, identity, case_name):
     rows = inventory(directory)
     require(rows and all(public_path(row["path"]) for row in rows), "Unsafe retention prevents disposable cleanup")
+    validate_public_native_temporary(directory, identity, case_name, rows)
     value = {"schema": 1, "identity": identity, "caseName": case_name, "files": rows}
     new_json(directory / "retained-before-disposal.json", value)
     return value
@@ -1057,6 +1262,8 @@ class Controller:
         case["roots"][str(fixtures)] = {"device": fixture_info.st_dev, "inode": fixture_info.st_ino}
         for child in ("jvm-tmp", "native-tmp", "process-tmp"):
             (fixtures / child).mkdir(mode=0o700)
+            if child == "native-tmp":
+                case["nativeTemporaryIdentity"] = native_temporary_identity((fixtures / child).lstat())
         env.update(TEMP=str(fixtures / "process-tmp"), TMP=str(fixtures / "process-tmp"), TMPDIR=str(fixtures / "process-tmp"),
                    KONAN_DATA_DIR=str(state / "konan"), ANDROID_USER_HOME=str(state / "android-user"))
         for path in (state / "konan", state / "android-user"):
@@ -1197,30 +1404,65 @@ class Controller:
             require(matches == [api], "Compile SDK metadata is not literally the supported platform")
             platforms[name] = {"api": api, "sourcePropertiesSha256": digest(raw), "content": raw.decode()}
         new_json(self.public / "admission/sdk.json", platforms)
+        self.native_controls(case)
+
+    def native_temporary(self, case, phase):
+        require(case["name"] == "current" and phase in ("before", "after"), "Unexpected native temporary observation case")
+        leaf = next((row for row in case["leaves"] if row["purpose"] == "executor-native-controls"), None)
+        deadline = self.final_deadline if phase == "after" else self.deadline
+        record = observe_native_temporary(case["state"] / "fixtures/native-tmp", case["nativeTemporaryIdentity"],
+                                           min(deadline, time.monotonic() + 5))
+        record.update(schema=1, kind="windows-native-temporary-metadata", phase=phase, identity=self.identity,
+                      source=case["context"]["source"], caseName=case["name"], jobId=case["context"]["id"],
+                      leaf={key: leaf[key] for key in ("id", "purpose", "status", "valid", "retained")} if leaf else None)
+        validate_native_temporary(record, self.identity, phase)
+        new_json(self.public / "admission" / ("native-temporary-" + phase + ".json"), record)
+        return record
+
+    def native_controls(self, case):
         native = case["state"] / "evidence/native-controls"
         temporary = case["state"] / "fixtures/native-tmp"
+        try:
+            before = self.native_temporary(case, "before")
+            require(before["complete"] and before["empty"], "Native temporary precondition failed; preserve the metadata observation")
+        except Exception as error:
+            case["retentionErrors"].append("Native temporary precondition: " + type(error).__name__)
+            raise
         case["nativeStarted"] = True
+        rows, after = [], None
         try:
             self.leaf(case, "executor-native-controls", [sys.executable, "-B", "scripts/tests/run-audit-command-test.py",
                 "--expected-host", "windows-x64", "--evidence-dir", str(native)], kind="command", timeout=1800,
                 extra_env={name: str(temporary) for name in ("TEMP", "TMP", "TMPDIR")})
         finally:
-            if audit.existing_lstat(native) is not None:
-                rows = inventory(native)
-                require(all(native_public_path(row["path"]) for row in rows),
-                        "Native fixture evidence contains an unaudited public member; retain originals and stop")
-                for row in rows:
-                    copy_public(native / row["path"], self.public / "admission/native-controls" / row["path"])
+            # The leaf has attempted its original same-home stop/retention before
+            # either independent boundary below. Never replace its original failure.
+            original_error = sys.exc_info()[1]
+            retention_errors = []
+            try:
+                after = self.native_temporary(case, "after")
+            except Exception as error:
+                retention_errors.append("Native temporary post-observation retention: " + type(error).__name__)
+            try:
+                if audit.existing_lstat(native) is not None:
+                    rows = inventory(native)
+                    require(all(native_public_path(row["path"]) for row in rows),
+                            "Native fixture evidence contains an unaudited public member; retain originals and stop")
+                    for row in rows:
+                        copy_public(native / row["path"], self.public / "admission/native-controls" / row["path"])
+            except Exception as error:
+                retention_errors.append("Native fixture evidence retention: " + type(error).__name__)
+            case["retentionErrors"].extend(retention_errors)
+            if retention_errors and original_error is None:
+                raise audit.AuditError("Native diagnostic/original retention failed; preserve disposable inputs: " + retention_errors[0])
         logs = case["public"] / "executor-native-controls"
         text = (regular(logs / "product.stdout.log") + regular(logs / "product.stderr.log")).decode("utf-8", errors="strict")
         count = expected_native_count(regular(case["root"] / "scripts/tests/run-audit-command-test.py"))
-        require(re.search(r"\nRan " + str(count) + r" tests? in [0-9.]+s\r?\n\r?\nOK\r?\n", text) and
-                "Running current-host real executor fixtures: windows-x64;" in text and
-                "skipped=" not in text and not list(temporary.iterdir()),
-                "Complete native suite did not pass without skips/temporary survivors")
+        predicates = native_predicates(text, count, after)
+        require(all(predicates.values()), "Native acceptance failed: " + ", ".join(name for name, passed in predicates.items() if not passed))
         cleanups = assess_native_cleanup(native, regular(case["root"] / "scripts/tests/run-audit-command-test.py"))
         new_json(self.public / "admission/native-controls.json", {"schema": 1, "count": count, "exitCode": 0,
-            "command": case["leaves"][-1]["arguments"], "files": rows, "fixtureCleanup": cleanups,
+            "command": case["leaves"][-1]["arguments"], "files": rows, "fixtureCleanup": cleanups, "predicates": predicates,
             "scope": "actual current-host executor controls, not product/library acceptance"})
         case["nativeAccepted"] = True
 
