@@ -781,10 +781,12 @@ def batch_command_line(cmd: str, argv: list[str]) -> str:
 
     %* in the checked-in Gradle batch file ultimately reaches the Java CRT.
     Doubling trailing backslashes prevents the closing quote becoming an escaped
-    quote there. Reject embedded quotes and every expansion/control metacharacter.
+    quote there. Parentheses are literal only inside the quotes emitted for every
+    argv element. Keep them forbidden in the separately framed cmd executable;
+    reject embedded quotes and all other expansion/control metacharacters in both.
     """
-    forbidden = re.compile(r'[\x00-\x1f"%!&|<>^()]')
-    if not argv or any(forbidden.search(arg) for arg in [cmd, *argv]):
+    forbidden = re.compile(r'[\x00-\x1f"%!&|<>^]')
+    if not argv or any(char in cmd for char in "()") or any(forbidden.search(arg) for arg in [cmd, *argv]):
         raise OwnershipError("Unsupported batch argument expansion/control character")
 
     def quote(arg: str) -> str:

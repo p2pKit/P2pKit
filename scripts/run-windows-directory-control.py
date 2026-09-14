@@ -185,6 +185,15 @@ def regular(path, limit=MAX_FILE):
     return value
 
 
+def sdk_tool_snapshot(sdk):
+    """Hash only: installed launcher bytes are not approved public evidence."""
+    files = {}
+    for name in ("cmdline-tools/latest/bin/sdkmanager.bat", "cmdline-tools/latest/source.properties"):
+        raw = regular(sdk / name, limit=256 * 1024)
+        files[name] = {"bytes": len(raw), "sha256": digest(raw)}
+    return {"schema": 1, "files": files}
+
+
 def read_json(path):
     value = json.loads(regular(path, audit.MAX_JSON_BYTES), object_pairs_hook=audit.unique_object,
                        parse_constant=lambda _: (_ for _ in ()).throw(audit.AuditError("Nonfinite control JSON")))
@@ -614,7 +623,7 @@ def public_path(name):
                         "temporary-after.json", "retirement-start.json", "retirement.json", "controller-error.txt",
                         "native-controls.json", "test-admission.json", "execution.json", "buildsrc-execution.json",
                         "TEST-control.xml", "TEST-control-unbound.xml", "unbound-report.json",
-                        "sdk.json", "allocation.json", "retained-before-disposal.json",
+                        "sdk.json", "sdk-tool-before.json", "sdk-tool-after.json", "allocation.json", "retained-before-disposal.json",
                         "source-materialization.json", "controller-retirement.json", "fallback-stop.json", "BuildInfo.kt"}
     if path.parts[0] == "native-controls":
         return native_public_path("/".join(path.parts[1:]))
@@ -1158,10 +1167,29 @@ class Controller:
         require(not obsolete or Path(obsolete).resolve(strict=True) == sdk, "Conflicting Android SDK roots")
         manager = sdk / "cmdline-tools/latest/bin/sdkmanager.bat"
         require(manager.is_file(), "Actual sdkmanager is unavailable")
+        before = sdk_tool_snapshot(sdk)
+        new_json(self.public / "admission/sdk-tool-before.json", before)
         # NUL stdin: this never accepts a license prompt. A missing owner-approved
         # SDK/license is a setup blocker, not permission to manufacture metadata.
-        self.leaf(case, "sdk-install", [str(manager), "--sdk_root=" + str(sdk),
-                                        "platforms;android-36", "platforms;android-37.0"], kind="command", timeout=900)
+        try:
+            self.leaf(case, "sdk-install", [str(manager), "--sdk_root=" + str(sdk),
+                                            "platforms;android-36", "platforms;android-37.0"], kind="command", timeout=900)
+        finally:
+            original_error = sys.exc_info()[1]
+            after = {"schema": 1, "files": None, "unchanged": False, "errors": []}
+            try:
+                after.update(sdk_tool_snapshot(sdk))
+                after["unchanged"] = after["files"] == before["files"]
+                require(after["unchanged"], "SDK launcher/package metadata changed during installation")
+            except Exception as error:
+                after["errors"].append(type(error).__name__)
+            try:
+                new_json(self.public / "admission/sdk-tool-after.json", after)
+            except Exception as error:
+                after["errors"].append("Snapshot retention: " + type(error).__name__)
+            case["retentionErrors"].extend("SDK tool binding: " + error for error in after["errors"])
+            if after["errors"] and original_error is None:
+                raise audit.AuditError("SDK tool binding/retention failed; preserve disposable inputs")
         platforms = {}
         for name, api in (("android-36", "36"), ("android-37.0", "37.0")):
             raw = regular(sdk / "platforms" / name / "source.properties")

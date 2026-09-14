@@ -81,6 +81,25 @@ licenses/platforms are blockers. Initial resource admission requires 6GiB RAM
 The controller is bounded to 80 minutes plus a 10-minute finalization allowance,
 inside the workflow's separate step/job bounds.
 
+For [#428](https://github.com/p2pKit/P2pKit/issues/428), the Windows batch boundary
+quotes every argument in full, including the SDK executable and `--sdk_root`
+under `Program Files (x86)`. Parentheses are literal only inside those quotes;
+embedded quotes, expansion/control characters and the interpreter's original
+restricted grammar remain rejected. `/d /s /v:off /c`, trailing-backslash handling
+and before-resume Job ownership are unchanged. Synthetic SDK-shaped native
+fixtures test argument forwarding, not the installed SDK or Java itself.
+
+`sdk-tool-before.json` and `sdk-tool-after.json` retain only SHA-256/byte counts for
+the actual `cmdline-tools/latest/bin/sdkmanager.bat` and command-tools
+`source.properties` (each bounded to 256KiB). No raw installed launcher or
+command-tools metadata is uploaded. Post-install drift, unreadable inputs or
+missing snapshot retention block native continuation/disposal without replacing
+an original SDK-leaf failure. Matching snapshots are not provenance approval or
+proof against transient modification: native acceptance must also match them to
+separately reviewed exact official Windows SDK package bytes and inspect the
+launcher's Java/argument forwarding. Missing or mismatched counterparts remain a
+hold; never substitute another package, a Unix launcher or an 8.3 path guess.
+
 Run the **complete maintained Windows executor fixture suite**, retaining its
 actual test count and each fixture's cleanup history. Never substitute a Mac
 fixture count. Intentional negative nested receipts remain negative evidence;

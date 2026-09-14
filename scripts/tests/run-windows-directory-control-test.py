@@ -126,6 +126,159 @@ class PureWindowsControlTests(unittest.TestCase):
         with self.assertRaises(BAD):
             action()
 
+    def sdk_admission(self, *, install_fails=False, after="unchanged"):
+        """Real caller/formatter and local file reads; Windows paths/processes are modeled."""
+        directory = Path(tempfile.mkdtemp(prefix="sdk-model-", dir=self.base))
+        local_sdk = directory / "sdk"
+        raw = {"cmdline-tools/latest/bin/sdkmanager.bat": b"MODEL_ONLY_NOT_AN_EXECUTABLE\n",
+               "cmdline-tools/latest/source.properties": b"Pkg.Revision=19.0\nPRIVATE_MODEL_VALUE=do-not-publish\n",
+               "platforms/android-36/source.properties": b"AndroidVersion.ApiLevel=36\n",
+               "platforms/android-37.0/source.properties": b"AndroidVersion.ApiLevel=37.0\n"}
+        for name, value in raw.items():
+            path = local_sdk / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(value)
+
+        class SdkPath(C.PureWindowsPath):
+            def resolve(self, *, strict):
+                self_test.assertTrue(strict)
+                self_test.assertTrue(local(self).exists())
+                return self
+
+            def is_dir(self):
+                return local(self).is_dir()
+
+            def is_file(self):
+                return local(self).is_file()
+
+        self_test = self
+        sdk = SdkPath(r"C:\Program Files (x86)\Android\android-sdk")
+
+        def local(path):
+            return local_sdk.joinpath(*path.relative_to(sdk).parts) if isinstance(path, SdkPath) else path
+
+        controller = C.Controller.__new__(C.Controller)
+        controller.public = directory / "public"
+        (controller.public / "admission").mkdir(parents=True)
+        state = directory / "state"
+        state.mkdir()
+        case = {"state": state, "env": {"ANDROID_HOME": str(sdk)}, "retentionErrors": [], "nativeStarted": False}
+        calls, commands = [], []
+        original_install = C.CommandFailure("MODEL SDK install failed", directory / "capture", 23)
+        native_boundary = RuntimeError("MODEL native suite deliberately not executed")
+        expected = [r"C:\Program Files (x86)\Android\android-sdk\cmdline-tools\latest\bin\sdkmanager.bat",
+                    r"--sdk_root=C:\Program Files (x86)\Android\android-sdk",
+                    "platforms;android-36", "platforms;android-37.0"]
+
+        def leaf(actual_case, purpose, arguments, **options):
+            self.assertIs(actual_case, case)
+            calls.append((purpose, arguments, options))
+            if purpose == "wrapper-version":
+                self.assertEqual((arguments, options), (["--version"], {"timeout": 600}))
+            elif purpose == "sdk-install":
+                self.assertEqual((arguments, options), (expected, {"kind": "command", "timeout": 900}))
+                command = C.processes.batch_command_line(r"C:\Windows\System32\cmd.exe", arguments)
+                commands.append(command)
+                self.assertEqual(command, 'C:\\Windows\\System32\\cmd.exe /d /s /v:off /c "'
+                    '"C:\\Program Files (x86)\\Android\\android-sdk\\cmdline-tools\\latest\\bin\\sdkmanager.bat" '
+                    '"--sdk_root=C:\\Program Files (x86)\\Android\\android-sdk" '
+                    '"platforms;android-36" "platforms;android-37.0""')
+                properties = local_sdk / "cmdline-tools/latest/source.properties"
+                if after == "drift":
+                    properties.write_bytes(b"MODEL changed package bytes\n")
+                elif after == "missing":
+                    properties.unlink()
+                if install_fails:
+                    raise original_install
+            else:
+                self.assertEqual(purpose, "executor-native-controls")
+                raise native_boundary
+
+        controller.leaf = mock.Mock(side_effect=leaf)
+        original_regular, original_json = C.regular, C.new_json
+
+        def write_json(path, value):
+            if after == "write-failed" and path.name == "sdk-tool-after.json":
+                raise OSError("MODEL snapshot storage failure")
+            return original_json(path, value)
+
+        with mock.patch.object(C, "Path", side_effect=SdkPath), \
+                mock.patch.dict(os.environ, {"ANDROID_SDK_ROOT": ""}), \
+                mock.patch.object(C, "regular", side_effect=lambda path, limit=C.MAX_FILE: original_regular(local(path), limit)), \
+                mock.patch.object(C, "new_json", side_effect=write_json):
+            try:
+                controller.sdk_and_native(case)
+            except Exception as error:
+                outcome = error
+            else:
+                self.fail("Modeled SDK caller unexpectedly ran past its native boundary")
+        return {"error": outcome, "installError": original_install, "nativeBoundary": native_boundary,
+                "public": controller.public / "admission", "case": case, "calls": calls, "commands": commands,
+                "expectedBefore": {"schema": 1, "files": {name: {"bytes": len(raw[name]), "sha256": C.digest(raw[name])}
+                    for name in raw if name.startswith("cmdline-tools/")}}}
+
+    def test_sdk_caller_formats_actual_parenthesized_location_before_native_boundary(self):
+        result = self.sdk_admission()
+        self.assertIs(result["error"], result["nativeBoundary"])
+        self.assertEqual([call[0] for call in result["calls"]], ["wrapper-version", "sdk-install", "executor-native-controls"])
+        self.assertEqual(len(result["commands"]), 1)
+        before = C.read_json(result["public"] / "sdk-tool-before.json")
+        after = C.read_json(result["public"] / "sdk-tool-after.json")
+        self.assertEqual(before, result["expectedBefore"])
+        self.assertEqual(after, {**before, "unchanged": True, "errors": []})
+        self.assertNotIn("PRIVATE_MODEL_VALUE", json.dumps([before, after]))
+        self.assertEqual(C.read_json(result["public"] / "sdk.json")["android-37.0"]["api"], "37.0")
+        self.assertEqual(result["case"]["retentionErrors"], [])
+
+    def test_sdk_post_binding_failure_blocks_native_and_keeps_original_install_error(self):
+        for install_fails in (False, True):
+            for after in ("drift", "missing", "write-failed"):
+                with self.subTest(install_fails=install_fails, after=after):
+                    result = self.sdk_admission(install_fails=install_fails, after=after)
+                    if install_fails:
+                        self.assertIs(result["error"], result["installError"])
+                        self.assertEqual(result["error"].status, 23)
+                    else:
+                        self.assertIsInstance(result["error"], C.audit.AuditError)
+                        self.assertIn("SDK tool binding/retention failed", str(result["error"]))
+                    self.assertEqual([call[0] for call in result["calls"]], ["wrapper-version", "sdk-install"])
+                    self.assertFalse(result["case"]["nativeStarted"])
+                    self.assertTrue(result["case"]["retentionErrors"])
+                    self.assertEqual(C.read_json(result["public"] / "sdk-tool-before.json"), result["expectedBefore"])
+                    if after != "write-failed":
+                        record = C.read_json(result["public"] / "sdk-tool-after.json")
+                        self.assertFalse(record["unchanged"])
+                        self.assertEqual(record["errors"], ["AuditError" if after == "drift" else "FileNotFoundError"])
+                    else:
+                        self.assertFalse((result["public"] / "sdk-tool-after.json").exists())
+
+    def test_sdk_install_failure_retains_hash_snapshots_without_becoming_success(self):
+        result = self.sdk_admission(install_fails=True)
+        self.assertIs(result["error"], result["installError"])
+        self.assertEqual(result["error"].status, 23)
+        self.assertEqual([call[0] for call in result["calls"]], ["wrapper-version", "sdk-install"])
+        self.assertFalse(result["case"]["nativeStarted"])
+        self.assertEqual(C.read_json(result["public"] / "sdk-tool-after.json"),
+                         {**result["expectedBefore"], "unchanged": True, "errors": []})
+
+    def test_sdk_tool_fingerprint_is_bounded_and_never_copies_raw_launcher(self):
+        sdk = self.base / "sdk"
+        values = {"cmdline-tools/latest/bin/sdkmanager.bat": b"PRIVATE_MODEL_LAUNCHER\x00\xff\n",
+                  "cmdline-tools/latest/source.properties": b"Pkg.Revision=19.0\n"}
+        for name, value in values.items():
+            path = sdk / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(value)
+        self.assertEqual(C.sdk_tool_snapshot(sdk), {"schema": 1, "files": {
+            name: {"bytes": len(value), "sha256": C.digest(value)} for name, value in values.items()}})
+        launcher = sdk / "cmdline-tools/latest/bin/sdkmanager.bat"
+        launcher.write_bytes(b"x" * (256 * 1024 + 1))
+        self.rejects(lambda: C.sdk_tool_snapshot(sdk))
+        self.assertTrue(C.public_path("sdk-tool-before.json"))
+        self.assertTrue(C.public_path("sdk-tool-after.json"))
+        self.assertFalse(C.public_path("sdkmanager.bat"))
+        self.assertFalse(C.public_path("source.properties"))
+
     def java_admission(self, captures, *, failed=None, error=C.audit.AuditError):
         """Exercise the real admission caller; only native/process boundaries are fake."""
         with tempfile.TemporaryDirectory(prefix="java-admission-", dir=self.base) as temporary:
