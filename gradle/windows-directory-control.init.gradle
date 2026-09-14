@@ -59,7 +59,7 @@ gradle.projectsLoaded {
         properties.values().any { !(it instanceof String) || it.empty } || !(requestHash ==~ /[0-9a-f]{64}/)) {
         throw new GradleException('Missing Windows directory-control request binding')
     }
-    if (parent != null && !localProperties.empty && localProperties != properties) {
+    if (parent != null && !localProperties.isEmpty() && localProperties != properties) {
         throw new GradleException('Conflicting or partial child Windows directory-control binding')
     }
     def sourceRoot = physical(new File(rootName))
