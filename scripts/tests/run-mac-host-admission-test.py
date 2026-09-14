@@ -156,8 +156,10 @@ class ContextAndSchemaTests(unittest.TestCase):
             "ENVIRONMENT_SHELL_HOOK": ("BASH_ENV", "ENV", "ZDOTDIR", "CDPATH"),
             "ENVIRONMENT_JVM_HOOK": ("JAVA_OPTS", "GRADLE_OPTS", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS"),
             "ENVIRONMENT_BUILD_HOME": ("GRADLE_USER_HOME",),
-            "ENVIRONMENT_CREDENTIAL_HOOK": ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN",
-                                             "SSH_ASKPASS", "SSH_AUTH_SOCK", "GPG_AGENT_INFO"),
+            "ENVIRONMENT_CREDENTIAL_TOKEN": ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"),
+            "ENVIRONMENT_CREDENTIAL_PROMPT": ("SSH_ASKPASS",),
+            "ENVIRONMENT_CREDENTIAL_SSH_AGENT": ("SSH_AUTH_SOCK",),
+            "ENVIRONMENT_CREDENTIAL_GPG_AGENT": ("GPG_AGENT_INFO",),
             "ENVIRONMENT_ELEVATION": ("SUDO_UID", "SUDO_GID", "SUDO_USER", "SUDO_COMMAND"),
             "ENVIRONMENT_CAMPAIGN_HOOK": ("P2PKIT_EXTRA_OPTION", "P2PKIT_PRIVATE\nNAME"),
         }
@@ -209,11 +211,19 @@ class ContextAndSchemaTests(unittest.TestCase):
 
     def test_environment_cli_categories_stop_before_identity_source_or_observation(self):
         env, _ = dispatch()
-        cases = (
+        cases = [
             (dict(env, GIT_PRIVATE_NAME="private\nvalue"), "ENVIRONMENT_GIT_HOOK"),
-            (dict(env, GH_TOKEN="private-token"), "ENVIRONMENT_CREDENTIAL_HOOK"),
             (dict(env, PYTHONUNBUFFERED="private"), "ENVIRONMENT_PINNED_VALUE"),
-        )
+        ]
+        for code, keys in (
+            ("ENVIRONMENT_CREDENTIAL_TOKEN", ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")),
+            ("ENVIRONMENT_CREDENTIAL_PROMPT", ("SSH_ASKPASS",)),
+            ("ENVIRONMENT_CREDENTIAL_SSH_AGENT", ("SSH_AUTH_SOCK",)),
+            ("ENVIRONMENT_CREDENTIAL_GPG_AGENT", ("GPG_AGENT_INFO",)),
+        ):
+            for key in keys:
+                for content in ("", "private/value\n::notice::never-print"):
+                    cases.append((dict(env, **{key: content}), code))
         for operation in ("run", "validate-public"):
             for value, code in cases:
                 original = dict(value)
@@ -221,26 +231,43 @@ class ContextAndSchemaTests(unittest.TestCase):
                 with self.subTest(operation=operation, code=code), \
                         mock.patch.object(app.os, "environ", value), \
                         mock.patch.object(app, "runtime_identity", return_value={}), \
+                        mock.patch.object(app, "physical_parts") as paths, \
                         mock.patch.object(app, "read_external") as event, \
+                        mock.patch.object(app, "parse_json") as parse, \
                         mock.patch.object(app, "dispatch_identity") as identity, \
                         mock.patch.object(app, "checked_source") as source, \
                         mock.patch.object(app, "collect_host") as observe, \
                         mock.patch.object(app, "retain_public") as retain, \
+                        mock.patch.object(app, "public_tree") as public, \
                         mock.patch.object(app, "append_ready") as ready, \
-                        mock.patch.object(app.os, "write", side_effect=lambda fd, raw: output.append(raw) or len(raw)):
+                        mock.patch.object(app.os, "write", side_effect=lambda fd, raw: output.append(raw) or len(raw)) as write:
                     self.assertEqual(app.main([operation]), 2)
-                self.assertEqual(output, [("MAC_HOST_CAPACITY_ERROR:" + code + "\n").encode("ascii")])
-                for dependent in (event, identity, source, observe, retain, ready):
+                expected = ("MAC_HOST_CAPACITY_ERROR:" + code + "\n").encode("ascii")
+                self.assertEqual(output, [expected])
+                write.assert_called_once_with(2, expected)
+                for dependent in (paths, event, parse, identity, source, observe, retain, public, ready):
                     dependent.assert_not_called()
                 self.assertEqual(value, original)
 
     def test_environment_reports_only_first_failed_predicate_in_existing_order(self):
         env, _ = dispatch()
-        for values, code in (({"GH_TOKEN": "private", "GIT_PRIVATE": "private"}, "ENVIRONMENT_CREDENTIAL_HOOK"),
-                             ({"GIT_PRIVATE": "private", "GH_TOKEN": "private"}, "ENVIRONMENT_GIT_HOOK")):
-            with self.assertRaises(app.Failure) as failure:
-                app.check_environment(dict(env, **values))
-            self.assertEqual(failure.exception.code, code)
+        failures = (
+            ("GH_TOKEN", "ENVIRONMENT_CREDENTIAL_TOKEN"),
+            ("SSH_ASKPASS", "ENVIRONMENT_CREDENTIAL_PROMPT"),
+            ("SSH_AUTH_SOCK", "ENVIRONMENT_CREDENTIAL_SSH_AGENT"),
+            ("GPG_AGENT_INFO", "ENVIRONMENT_CREDENTIAL_GPG_AGENT"),
+            ("GIT_PRIVATE", "ENVIRONMENT_GIT_HOOK"),
+        )
+        for first, code in failures:
+            for second, _ in failures:
+                if first == second:
+                    continue
+                value = dict(env, **{first: "", second: "private\nvalue"})
+                original = dict(value)
+                with self.subTest(first=first, second=second), self.assertRaises(app.Failure) as failure:
+                    app.check_environment(value)
+                self.assertEqual(failure.exception.code, code)
+                self.assertEqual(value, original)
 
     def test_bounded_duplicate_free_json(self):
         _, event = dispatch()
