@@ -441,6 +441,129 @@ Compose/snapshot evidence, **not rendered Android UI, ART, physical-device behav
 or frame timing**. On a device, leave the viewer untouched while traffic arrives,
 then verify pause, filter changes, resume, clearing and reopening separately.
 
+The separate [rendered #317 harness](android-diagnostics-ui.md) uses an explicitly
+named framework instrumentation component on an admitted, owned emulator. It
+requires actual display/frame evidence, an untouched interval and an inert-bridge
+mutation control. Its source or APK assembly is not a rendered pass, and it does
+not replace the default API37 permission runner or any physical-device matrix.
+
+## Shared Android acceptance artifacts
+
+The debug app/test APK pair can serve compatible #317/#324/#372 cases without
+rebuilding the whole repository per issue. First admit the actual SDK and host,
+freeze a reviewed clean candidate, and initialize a new
+[immutable executor state and `leaf` helper](mac-handoff.md#4-branch-agnostic-immutable-execution).
+The Android sample's `build` directory must be absent when that state is initialized.
+Then run one producer and inspect its exact outputs in the same owned state:
+
+```bash
+leaf gradle android-acceptance-build 2400 \
+  :p2p-sample-android:assembleDebug :p2p-sample-android:assembleDebugAndroidTest \
+  :p2p-sample-android:retainDebugAcceptanceArtifacts --console=plain
+# Continue only after the producer and its checked receipt both succeed.
+leaf command android-acceptance-inspect 240 python3 scripts/verify-android-acceptance-artifacts.py \
+  --build-receipt "$P2PKIT_AUDIT_STATE_DIR/host-android-acceptance-build.json" \
+  --build-purpose android-acceptance-build
+```
+
+The explicit, uncached producer consumes public AGP artifact providers for both
+merged manifests and the sole unfiltered `SINGLE` APK per component. It retains
+manifests plus `artifacts.json` under the sample's
+`build/reports/android-acceptance/debug/`; task paths are actual provider
+dependencies, not guessed names or claims that every task ran. The map is an
+**AGP API metadata projection**, not original AGP metadata or source/run authority.
+It refuses existing/partial captures and requires a POSIX-permission filesystem.
+Maps/manifests are bounded to 1 MiB each and APK reads to 512 MiB each; version
+names are limited to 4096 UTF-16 code units without characters below U+0020.
+
+The read-only inspector requires the successful canonical same-state Gradle
+receipt, newly retained hash-matching reports, and unchanged live outputs. It
+runs the selected SDK's actual `apkanalyzer manifest print` against both APKs
+and compares generated and packaged identities with the maintained manifest
+comparator. Keep `ANDROID_HOME` unchanged from the admitted build. Windows
+analyzer launch is not admitted here. Results live at
+`$P2PKIT_AUDIT_STATE_DIR/evidence/android-acceptance-artifacts/`; success remains
+provisional until the inspector's outer receipt confirms source and worker cleanup.
+
+Retain both APKs, maps, generated/packaged XML, original logs and receipts before
+scoped cleanup; the executor does not automatically retain the APKs. Keep these
+bytes while dependent UI cases need them. This artifact check neither runs nor
+admits a guest: rendered untouched updates, actual save/restore and secret-display
+cases, API37 compat/permission/LAN/revocation behavior, and distinct mutation
+controls still need their own applicable runtime evidence. It does not replace
+the guarded Linux smoke profile or any physical-phone criterion.
+
+`python3 scripts/tests/verify-android-acceptance-artifacts-test.py` exercises only
+map/receipt guards and small file fixtures, not AGP compilation, real APK inspection
+or Android behavior. The producer is not added to ordinary `check`, assembly or
+publication tasks.
+
+## Retained Android UI content checks
+
+`scripts/verify-android-ui-evidence.py` passively checks already-retained #317 or
+#324 originals. It does not collect files, install APKs, run instrumentation,
+import input-supplied code, or admit a guest. Keep the complete private originals
+in an exclusively owned `ui-317-<token>` or `ui-324-<token>` directory, with the
+original instrumentation stdout **outside** that directory. Use physical paths
+without symlinks/reparse points or hard-linked aliases. Supplied source/token
+expectations are declarations, not source/install provenance.
+
+With the reviewed clean-source executor and `leaf` helper initialized, for example:
+
+```bash
+leaf command android-ui-317-content 120 python3 scripts/verify-android-ui-evidence.py \
+  --case 317 --token "$UI_TOKEN" --source-commit "$SOURCE_COMMIT" --source-tree "$SOURCE_TREE" \
+  --evidence-dir "$RETAINED_UI_DIR" --instrumentation-stdout "$RAW_INSTRUMENTATION_STDOUT"
+```
+
+Use case `324` and a unique purpose for the credential case. Both exact named
+components emit one terminal status bundle and an identical result bundle; the
+LAN runner's multi-frame parser is not their contract. #317 emits a terminal
+cleanup field and report schema/token/UID fields; #324 does not. No invented
+collector/install receipt or caller-set `trusted`/`passed` flag grants acceptance.
+
+The JSON result distinguishes:
+
+| `contentStatus` | Exit | Meaning |
+| --- | --- | --- |
+| `CONSISTENT` | 0 | Positive harness claims and checked retained bytes agree; still pending review. |
+| `HARNESS_FAILED` | 1 | The retained terminal/report describe a failure, not a passing mutation control. |
+| `INCOMPLETE` | 2 | A required terminal, field or companion is absent/truncated. |
+| `REJECTED` | 3 | Malformed, contradictory, unsupported or out-of-bounds input. |
+
+Every result keeps `provenance=UNPROVEN`, `runtimeAcceptance=NOT_ACCEPTED` and
+visual/mutation review `NOT_PERFORMED`. Inputs are never rewritten or removed;
+a rejected packet may have only a partial output file manifest. Preserve its
+whole original directory independently, including failed/partial evidence.
+
+The checker enumerates/hashes admitted files and checks case-specific claims:
+#317's six positive files, active-session recorder prefix, single revision/event
+addition, untouched interval and displayed-tree/count/frame references; #324's
+32 PNG/tree pairs, original Parcel/report, 13 cells, eight cleanup steps, modeled
+permission/join claims, reveal timing and layout hashes. Retain the entire #324
+`fixture` subtree, including the empty hidden diagnostic `.lock`. Raw editable
+text containing the synthetic secret is not by itself a pixel-exposure finding.
+PNG checking covers the signature/IHDR/CRC, byte hash and dimensions, **not**
+complete image decoding or visual review. Parcel checking compares original
+length/hash and reported inspection/order; it does not deserialize Android state.
+
+Existing writer limits remain PNG16 MiB/16,777,216 pixels, Parcel1 MiB and
+result/events/#317 trees/each rolling diagnostic generation2 MiB. Additional
+**passive-host** guards are: #324 tree/saved-state JSON2 MiB (those writers have
+no explicit byte cap), stdout8 MiB, signed-64-bit JSON integers, 256 files,
+64 directories, depth6, aggregate64 MiB for #317/1 GiB for #324, 64 KiB read
+chunks and a 60-second internally checked deadline. Keep an outer command bound;
+these snapshot/change checks are not hostile-filesystem atomicity. Never truncate
+an original or enlarge a limit mid-run to make it pass.
+
+`python3 scripts/tests/verify-android-ui-evidence-test.py -v` exercises this policy
+using tiny synthetic files, not ART, real UI pixels or a decoded Android Parcel.
+Actual runtime admission still needs the reviewed collector, current source and
+installed-APK bindings, raw EOF/exit/deadline records, complete retention, exact
+ART/guest retirement, positive and distinct mutation runs, and independent
+full-resolution review. The shared artifact producer above still requires its
+exact three-task argument list; do not append a Desktop CLI build to that leaf.
+
 ## Android framework-adapter tests
 
 Run `./gradlew :p2p-network-provisioning-android:verifyAndroidAdapterTests --console=plain`

@@ -22,6 +22,30 @@ art = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(art)
 
 
+MANIFEST_RUNNERS = (
+    "dev.p2pkit.sample.android.runtime.LanPermissionRuntimeInstrumentation",
+    "dev.p2pkit.sample.android.runtime.UiAcceptanceInstrumentation",
+    "dev.p2pkit.sample.android.runtime.CredentialUiInstrumentation")
+MANIFEST_HEADER = ('<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
+                   'xmlns:other="urn:fixture" package="')
+MANIFEST_SDK = b'<uses-sdk android:minSdkVersion="24" android:targetSdkVersion="37"/>'
+APP_APPLICATION = b'<application android:name=".P2pKitSampleApplication" android:debuggable="true"/>'
+TEST_APPLICATION = b'<application android:debuggable="true"/>'
+LAN_PERMISSION = b'<uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK"/>'
+
+
+def app_manifest():
+    return ((MANIFEST_HEADER + 'dev.p2pkit.sample.android">').encode() + MANIFEST_SDK +
+            LAN_PERMISSION + APP_APPLICATION + b'</manifest>')
+
+
+def test_manifest(names=MANIFEST_RUNNERS):
+    runners = ''.join(f'<instrumentation android:name="{name}" '
+                      'android:targetPackage="dev.p2pkit.sample.android"/>' for name in names).encode()
+    return ((MANIFEST_HEADER + 'dev.p2pkit.sample.android.test">').encode() + MANIFEST_SDK +
+            TEST_APPLICATION + runners + b'</manifest>')
+
+
 def image_manifest():
     return (f'<repository><remotePackage path="{art.IMAGE}"><type-details><api-level>37.0</api-level>'
             '<extension-level>22</extension-level><abi>x86_64</abi></type-details><revision><major>6</major></revision>'
@@ -115,6 +139,171 @@ def instrumentation_output(changes=None):
 
 
 class AndroidArtAdmissionTest(unittest.TestCase):
+    def test_manifest_exact_three_runners_and_normalized_identity_not_xml_order(self):
+        self.assertEqual(set(art.INSTRUMENTATIONS), set(MANIFEST_RUNNERS))
+        app = art.manifest_identity(app_manifest(), "app")
+        self.assertEqual(app, {"package": "dev.p2pkit.sample.android",
+                              "sdk": {"minSdkVersion": 24, "targetSdkVersion": 37, "maxSdkVersion": None},
+                              "application": {"name": "dev.p2pkit.sample.android.P2pKitSampleApplication",
+                                              "debuggable": "true"},
+                              "localNetworkPermission": "android.permission.ACCESS_LOCAL_NETWORK"})
+        tests = art.manifest_identity(test_manifest(), "test")
+        self.assertEqual(tests["package"], "dev.p2pkit.sample.android.test")
+        self.assertEqual(tests["instrumentations"], [
+            {"name": name, "targetPackage": "dev.p2pkit.sample.android"} for name in sorted(MANIFEST_RUNNERS)])
+        self.assertEqual(tests, art.manifest_identity(test_manifest(tuple(reversed(MANIFEST_RUNNERS))), "test"))
+        for name in (b"P2pKitSampleApplication", b"dev.p2pkit.sample.android.P2pKitSampleApplication"):
+            with self.subTest(application=name):
+                self.assertEqual(app, art.manifest_identity(
+                    app_manifest().replace(b".P2pKitSampleApplication", name), "app"))
+        # Namespace URI, not the XML prefix spelling, owns Android attributes.
+        self.assertEqual(tests, art.manifest_identity(
+            test_manifest().replace(b"xmlns:android=", b"xmlns:a=").replace(b"android:", b"a:"), "test"))
+
+    def test_manifest_rejects_missing_duplicate_extra_or_wrong_component_and_target(self):
+        for index, name in enumerate(MANIFEST_RUNNERS):
+            alternatives = [MANIFEST_RUNNERS[:index] + MANIFEST_RUNNERS[index + 1:],
+                            MANIFEST_RUNNERS[:index] + (MANIFEST_RUNNERS[(index + 1) % 3],) + MANIFEST_RUNNERS[index + 1:]]
+            for names in alternatives:
+                with self.subTest(names=names), self.assertRaises(ValueError):
+                    art.manifest_identity(test_manifest(names), "test")
+            for replacement in ("unrelated.Runner", ".runtime." + name.rsplit(".", 1)[1],
+                                name.rsplit(".", 1)[1], "runtime." + name.rsplit(".", 1)[1], "", name + " "):
+                # Relative names resolve against .android.test, never the target .android package.
+                names = MANIFEST_RUNNERS[:index] + (replacement,) + MANIFEST_RUNNERS[index + 1:]
+                with self.subTest(replacement=replacement), self.assertRaises(ValueError):
+                    art.manifest_identity(test_manifest(names), "test")
+            component = f'android:name="{name}" android:targetPackage="dev.p2pkit.sample.android"'.encode()
+            bad = test_manifest().replace(component, component.replace(b'android:targetPackage="dev.p2pkit.sample.android"',
+                                                                       b'android:targetPackage="unrelated.app"'))
+            with self.subTest(target=name), self.assertRaises(ValueError):
+                art.manifest_identity(bad, "test")
+        for names in ((), MANIFEST_RUNNERS + ("unrelated.Runner",), MANIFEST_RUNNERS + (MANIFEST_RUNNERS[0],)):
+            with self.subTest(names=names), self.assertRaises(ValueError):
+                art.manifest_identity(test_manifest(names), "test")
+        for bad in (test_manifest().replace(b'package="dev.p2pkit.sample.android.test"', b'package="dev.p2pkit.sample.android"'),
+                    test_manifest().replace(b'android:targetPackage="dev.p2pkit.sample.android"', b'', 1)):
+            with self.subTest(malformed=bad), self.assertRaises(ValueError):
+                art.manifest_identity(bad, "test")
+
+    def test_app_manifest_requires_exact_min_target_debug_and_unconditional_lan(self):
+        good = app_manifest()
+        variants = [good.replace(b'package="dev.p2pkit.sample.android"', b'package="unrelated.app"'),
+                    good.replace(b'minSdkVersion="24"', b'minSdkVersion="25"'),
+                    good.replace(b'android:minSdkVersion="24"', b''),
+                    good.replace(b'targetSdkVersion="37"', b'targetSdkVersion="36"'),
+                    good.replace(b'android:debuggable="true"', b''),
+                    good.replace(b'debuggable="true"', b'debuggable="false"'),
+                    good.replace(LAN_PERMISSION, b''), good.replace(LAN_PERMISSION, LAN_PERMISSION * 2),
+                    good.replace(b'ACCESS_LOCAL_NETWORK', b'NEARBY_WIFI_DEVICES'),
+                    good.replace(b'<uses-permission ', b'<uses-permission-sdk-23 '),
+                    good.replace(b'</manifest>', b'<instrumentation android:name="unrelated.Runner"/></manifest>')]
+        for qualifier in (b'android:maxSdkVersion="36"', b'android:maxSdkVersion="37"',
+                          b'android:usesPermissionFlags="neverForLocation"', b'android:requiredFeature="feature"',
+                          b'android:requiredNotFeature="feature"', b'other:maxSdkVersion="36"'):
+            variants.append(good.replace(LAN_PERMISSION, LAN_PERMISSION[:-2] + b' ' + qualifier + b'/>'))
+        variants.append(good.replace(LAN_PERMISSION, LAN_PERMISSION + LAN_PERMISSION.replace(
+            b'<uses-permission ', b'<uses-permission-sdk-23 ')))
+        for bad in variants:
+            with self.subTest(malformed=bad), self.assertRaises(ValueError):
+                art.manifest_identity(bad, "app")
+
+    def test_manifest_rejects_missing_duplicate_nested_or_namespaced_identity_nodes(self):
+        for role, good, application in (("app", app_manifest(), APP_APPLICATION),
+                                        ("test", test_manifest(), TEST_APPLICATION)):
+            variants = [good.replace(MANIFEST_SDK, b''), good.replace(MANIFEST_SDK, MANIFEST_SDK * 2),
+                        good.replace(application, application * 2)]
+            if role == "app":
+                variants.append(good.replace(application, b''))
+            for node in (MANIFEST_SDK, application):
+                variants.extend([good.replace(node, b'<wrapper>' + node + b'</wrapper>'),
+                                 good.replace(b'</manifest>', b'<wrapper>' + node + b'</wrapper></manifest>'),
+                                 good.replace(node, node.replace(b'<', b'<other:', 1))])
+            variants.append(good.replace(b'<manifest ', b'<other:manifest ').replace(b'</manifest>', b'</other:manifest>'))
+            variants.append(good.replace(b'</manifest>', b'<manifest/></manifest>'))
+            for bad in variants:
+                with self.subTest(role=role, malformed=bad), self.assertRaises(ValueError):
+                    art.manifest_identity(bad, role)
+        for node, role, good in ((LAN_PERMISSION, "app", app_manifest()),
+                                 (f'<instrumentation android:name="{MANIFEST_RUNNERS[0]}" '
+                                  'android:targetPackage="dev.p2pkit.sample.android"/>'.encode(), "test", test_manifest())):
+            for replacement in (b'<wrapper>' + node + b'</wrapper>', node.replace(b'<', b'<other:', 1)):
+                with self.subTest(role=role, replacement=replacement), self.assertRaises(ValueError):
+                    art.manifest_identity(good.replace(node, replacement), role)
+
+    def test_manifest_rejects_attribute_aliases_even_beside_a_correct_attribute(self):
+        for role, good in (("app", app_manifest()), ("test", test_manifest())):
+            attributes = [b'package=', b'android:minSdkVersion=', b'android:targetSdkVersion=', b'android:debuggable=']
+            attributes.append(b'android:name=')
+            if role == "test":
+                attributes.append(b'android:targetPackage=')
+            for attribute in attributes:
+                bare = attribute.split(b':')[-1]
+                alternatives = [b'other:' + bare, b'android:' + bare if attribute == b'package=' else bare]
+                for alias in alternatives:
+                    aliased = good.replace(attribute, alias, 1)
+                    # An ignored alias is also rejected when a valid attribute is present.
+                    start = good.index(attribute)
+                    end = good.index(b'"', start + len(attribute) + 1) + 1
+                    duplicate = good[:end] + b' ' + good[start:end].replace(attribute, alias, 1) + good[end:]
+                    for bad in (aliased, duplicate):
+                        with self.subTest(role=role, attribute=attribute, alias=alias), self.assertRaises(ValueError):
+                            art.manifest_identity(bad, role)
+
+    def test_manifest_rejects_sdk_m_permission_alias_and_generated_packaged_drift(self):
+        good, tests = app_manifest(), test_manifest()
+        alias = LAN_PERMISSION.replace(b'<uses-permission ', b'<uses-permission-sdk-m ')
+        conflicting = alias[:-2] + b' android:usesPermissionFlags="neverForLocation"/>'
+        variants = [good.replace(LAN_PERMISSION, alias), good.replace(LAN_PERMISSION, LAN_PERMISSION + alias),
+                    good.replace(LAN_PERMISSION, LAN_PERMISSION + conflicting)]
+        for extra in (alias, conflicting):
+            variants.extend([
+                good.replace(b'</manifest>', b'<wrapper>' + extra + b'</wrapper></manifest>'),
+                good.replace(b'</manifest>', extra.replace(b'<', b'<other:', 1) + b'</manifest>')])
+        for bad in variants:
+            with self.subTest(malformed=bad), self.assertRaises(ValueError):
+                art.manifest_identity(bad, "app")
+            for generated, packaged in ((good, bad), (bad, good)):
+                with self.subTest(generated=generated, packaged=packaged), self.assertRaises(ValueError):
+                    art.matching_manifest_identities(generated, tests, packaged, tests)
+
+    def test_manifest_xml_guards_reject_malformed_dtd_entity_and_oversized_inputs(self):
+        good = app_manifest()
+        for raw in (b'', b'<manifest', good[:-1], b'<!DOCTYPE manifest>' + good,
+                    b'<!DOCTYPE manifest [<!ENTITY fixture "value">]>' + good, b'<!ENTITY fixture "value">' + good,
+                    good.decode().encode('utf-16'), good.decode().encode('utf-32'), b' ' * (art.LIMIT + 1), None):
+            with self.subTest(size=len(raw) if raw is not None else None), self.assertRaises(ValueError):
+                art.manifest_identity(raw, "app")
+        with self.assertRaises(ValueError):
+            art.manifest_identity(good, "unknown")
+        for before, after in ((b'minSdkVersion="24"', b'minSdkVersion="preview"'),
+                              (b'targetSdkVersion="37"', b'targetSdkVersion="037"'),
+                              (b'debuggable="true"', b'debuggable="TRUE"')):
+            with self.subTest(change=(before, after)), self.assertRaises(ValueError):
+                art.manifest_identity(good.replace(before, after), "app")
+
+    def test_generated_packaged_comparison_is_pure_and_rejects_identity_disagreement(self):
+        app, tests = app_manifest(), test_manifest()
+        pair = art.matching_manifest_identities(app, tests, app, test_manifest(tuple(reversed(MANIFEST_RUNNERS))))
+        self.assertEqual(pair, {"app": art.manifest_identity(app, "app"), "test": art.manifest_identity(tests, "test")})
+        # No new fixed test-minSdk/application policy: retain optional identity values for comparison.
+        variants = [(app.replace(b'.P2pKitSampleApplication', b'.OtherApplication'), tests),
+                    (app, tests.replace(b'minSdkVersion="24"', b'minSdkVersion="25"')),
+                    (app, tests.replace(b'android:minSdkVersion="24"', b'')),
+                    (app, tests.replace(TEST_APPLICATION, b'')),
+                    (app, tests.replace(b'debuggable="true"', b'debuggable="false"'))]
+        for other_app, other_test in variants:
+            art.manifest_identity(other_app, "app")
+            art.manifest_identity(other_test, "test")
+            with self.subTest(app=other_app, tests=other_test), self.assertRaisesRegex(ValueError, "identities differ"):
+                art.matching_manifest_identities(app, tests, other_app, other_test)
+        # Validation is applied independently to all four inputs, not only the packaged pair.
+        for index in range(4):
+            inputs = [app, tests, app, tests]
+            inputs[index] = inputs[index].replace(b'targetSdkVersion="37"', b'targetSdkVersion="36"')
+            with self.subTest(input=index), self.assertRaises(ValueError):
+                art.matching_manifest_identities(*inputs)
+
     def test_instrumentation_requires_completed_real_scopes_and_matching_delivery(self):
         raw, token, pin = instrumentation_output()
         self.assertEqual(art.instrumentation_result(raw, token, pin)["p2pkitOutcome"], "PASS")

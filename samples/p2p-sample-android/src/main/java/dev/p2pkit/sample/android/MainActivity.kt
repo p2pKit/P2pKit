@@ -60,6 +60,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -1263,7 +1264,10 @@ private fun HotspotCard(vm: P2pKitViewModel) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun JoinHotspotCard(vm: P2pKitViewModel) {
+internal fun JoinHotspotCard(
+    vm: P2pKitViewModel,
+    observeCredential: ((JoinCredentialInputState) -> Unit)? = null
+) {
     val joinResult by vm.joinResult.collectAsState()
     val joinSuccessCount by vm.joinSuccessCount.collectAsState()
     val missing by vm.missingPermissions.collectAsState()
@@ -1274,6 +1278,8 @@ private fun JoinHotspotCard(vm: P2pKitViewModel) {
     // cleared when the card leaves the UI or the join succeeds.
     var ssidInput by rememberSaveable { mutableStateOf("") }
     val credentialInput = remember { JoinCredentialInputState() }
+    // Instrumentation may observe this exact owner, never supply or replace its state.
+    if (observeCredential != null) SideEffect { observeCredential(credentialInput) }
     // AUDIT-2026-06: A-G8-samples-android-11 — WPA2/WPA3 selectable so
     // WPA3-SAE-only hotspots can be joined.
     var useWpa3 by rememberSaveable { mutableStateOf(false) }
