@@ -18,6 +18,8 @@ SPEC = importlib.util.spec_from_file_location("releases", ROOT / "scripts/publis
 R = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(R)
 SOURCE, TREE, HEAD = "1" * 40, "2" * 40, "3" * 40
+PR_CONTEXTS = {"complete-gate", "review", "scan / osv-scan", "osv-scanner"}
+MAIN_CONTEXTS = {"complete-gate", "scan / osv-scan"}
 
 
 def run(identifier, path, sha, event="push"):
@@ -34,7 +36,7 @@ class FakeApi:
         self.release, self.ref, self.assets, self.fail_upload_after = None, None, [], None
         self.release_history, self.release_list_queries = [], []
         self.data["/rules/branches/main"] = [{"type": "pull_request"}, {"type": "required_status_checks",
-            "parameters": {"required_status_checks": [{"context": x} for x in sorted(R.REQUIRED)]}}]
+            "parameters": {"required_status_checks": [{"context": x} for x in sorted(PR_CONTEXTS)]}}]
         self.data["/commits/" + SOURCE] = {"sha": SOURCE, "commit": {"tree": {"sha": TREE}},
                                         "parents": [{"sha": "4" * 40}, {"sha": HEAD}]}
         self.data["/git/ref/heads/main"] = {"object": {"sha": SOURCE}}
@@ -47,7 +49,7 @@ class FakeApi:
         self.collections["/pulls/99/reviews"] = [{"id": 1, "state": "APPROVED", "commit_id": HEAD,
             "submitted_at": "2026-09-15T09:00:00Z", "author_association": "MEMBER",
             "user": {"login": "independent-reviewer", "type": "User"}}]
-        for sha, contexts, event in ((HEAD, R.REQUIRED, "pull_request"), (SOURCE, R.REQUIRED - {"review"}, "push")):
+        for sha, contexts, event in ((HEAD, PR_CONTEXTS, "pull_request"), (SOURCE, MAIN_CONTEXTS, "push")):
             rows = []
             for i, name in enumerate(sorted(contexts), start=100 if sha == HEAD else 200):
                 rows.append({"id": i, "name": name, "head_sha": sha, "status": "completed", "conclusion": "success",
@@ -171,6 +173,35 @@ class ReleaseTest(unittest.TestCase):
         plan = self.plan()
         self.assertEqual(4, len(plan["artifacts"]))
         self.assertEqual("samples-" + SOURCE, plan["tag"])
+        self.assertEqual([], self.api.mutations)
+
+    def test_pr_only_results_are_not_required_again_on_main(self):
+        plan = self.plan()
+        self.assertEqual(PR_CONTEXTS, {x["name"] for x in plan["pullRequest"]["checks"]})
+        self.assertEqual(MAIN_CONTEXTS, {x["name"] for x in plan["mainChecks"]})
+        self.assertEqual([], self.api.mutations)
+
+    def test_each_pr_check_still_blocks_when_missing_failed_or_wrong_source(self):
+        path = f"/commits/{HEAD}/check-runs?filter=all"
+        original = copy.deepcopy(self.api.collections[path])
+        for name in sorted(PR_CONTEXTS):
+            for change in (None, {"conclusion": "failure"}, {"head_sha": SOURCE}):
+                self.api.collections[path] = copy.deepcopy(original)
+                if change is None:
+                    self.api.collections[path] = [x for x in self.api.collections[path] if x["name"] != name]
+                else:
+                    next(x for x in self.api.collections[path] if x["name"] == name).update(change)
+                with self.subTest(name=name, change=change), self.assertRaises(R.Hold):
+                    self.plan()
+        self.assertEqual([], self.api.mutations)
+
+    def test_each_main_workflow_check_is_required_despite_successful_pr_checks(self):
+        path = f"/commits/{SOURCE}/check-runs?filter=all"
+        original = copy.deepcopy(self.api.collections[path])
+        for name in sorted(MAIN_CONTEXTS):
+            self.api.collections[path] = [x for x in original if x["name"] != name]
+            with self.subTest(name=name), self.assertRaises(R.Hold):
+                self.plan()
         self.assertEqual([], self.api.mutations)
 
     def test_cli_string_producer_identity_is_normalized_once(self):

@@ -35,6 +35,10 @@ MAIN_EVENTS = {PRODUCER: ("push",),
                ".github/workflows/ci.yml": ("push", "schedule", "workflow_dispatch"),
                ".github/workflows/osv-scanner.yml": ("push", "schedule", "workflow_dispatch")}
 REQUIRED = {"complete-gate", "review", "scan / osv-scan", "osv-scanner"}
+# All protected contexts remain mandatory on the reviewed PR head. Dependency
+# review and Code Scanning's PR result are not duplicate postmerge checks;
+# main must pass the real CI and fail-closed OSV workflow jobs for its exact SHA.
+MAIN_REQUIRED = {"complete-gate", "scan / osv-scan"}
 CHECK_WORKFLOWS = {"complete-gate": ".github/workflows/ci.yml",
                    "review": ".github/workflows/dependency-review.yml",
                    "scan / osv-scan": ".github/workflows/osv-scanner.yml"}
@@ -274,7 +278,7 @@ def admit(api, sha, producer_id=None, attempt=None):
     need(comparison.get("status") in ("identical", "ahead") and
          comparison.get("merge_base_commit", {}).get("sha") == sha, "Candidate is not preserved in main")
     pull = approved_pull(api, sha, commit)
-    main_checks = checks(api, sha, REQUIRED - {"review"}, "main")
+    main_checks = checks(api, sha, MAIN_REQUIRED, "main")
     if producer_id is None:
         run = latest(api.pages("/actions/workflows/desktop-cross-host.yml/runs?event=push&branch=main&head_sha=" + sha,
                                "workflow_runs"), "No main sample producer")

@@ -289,8 +289,11 @@ requires a separate authorized signing/notarization process.
 The publisher executes no artifact contents, compiler, Gradle, signing or app
 launch. Its read-only admission requires the normal merged PR's preserved final
 head, independent formal approval, all applicable PR checks, and genuine main
-CI/OSV plus one complete three-host producer attempt. The PR-only `review` check
-is required on that PR head, not invented on main. Missing/failed/ambiguous checks
+CI/OSV plus one complete three-host producer attempt. All four protected PR checks,
+including `review` and Code Scanning's `osv-scanner` result, are required on that
+reviewed PR head. Main separately requires its exact-source `complete-gate` and
+`scan / osv-scan` workflow checks, not a second copy of PR-only results.
+Missing/failed/ambiguous checks
 or expired artifacts leave **HOLD**, not a partial release. Squash/rebase merges
 need separately reviewed equivalence support; this lane currently admits the
 normal history-preserving merge only.
