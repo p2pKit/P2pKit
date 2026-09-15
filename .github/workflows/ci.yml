@@ -127,6 +127,11 @@ jobs:
       - name: Verify private test-transcript custody controls
         run: python3 -I -B -S scripts/tests/test-transcript-custody-test.py
 
+      - name: Verify development sample release policy
+        run: |
+          ruby scripts/tests/sample-release-workflow-test.rb
+          python3 -I -B -S scripts/tests/publish-sample-release-test.py
+
       - name: Verify no-child Mac capacity policy
         run: |
           ruby scripts/tests/check-mac-host-admission-policy-test.rb

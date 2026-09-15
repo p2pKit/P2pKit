@@ -254,6 +254,73 @@ from `samples/iosApp/project.yml`; do not hand-edit the ignored `.xcodeproj`.
 For XcodeGen, signing prerequisites, and the generated provenance phase, see the
 [iOS sample scripts guide](../../samples/iosApp/scripts/README.md).
 
+### Download development apps from Releases
+
+The separate [Development sample Releases workflow](../../.github/workflows/sample-development-releases.yml)
+promotes successful, reviewed **main** builds to the repository's
+[Releases page](https://github.com/p2pKit/P2pKit/releases). Its introduction is
+source work, not evidence that a sample prerelease has already been published.
+The current strict-lock, custody, build and review prerequisites still apply.
+
+Development prereleases use **`samples-<full-source-SHA>`**, never `v*` library
+tags. They do not change the snapshot version, published RC history or Maven/Store
+publication. They are not marked as the latest stable release. Only complete
+Android, Windows, macOS and Linux sets may be published:
+
+| Release asset | Contents |
+| --- | --- |
+| `P2pKit-samples-android-<sha12>.zip` | Android debug APK, original manifest/checksums and notices. |
+| `P2pKit-samples-windows-<arch>-<sha12>.zip` | Original Windows UI/CLI archives and metadata. |
+| `P2pKit-samples-macos-<arch>-<sha12>.zip` | Original macOS UI/CLI archives and metadata. |
+| `P2pKit-samples-linux-<arch>-<sha12>.zip` | Original Linux UI/CLI archives and metadata. |
+| `sample-release.json`, `SHA256SUMS` | Exact source/tree, producer run/attempt/artifact IDs, formal PR/check identities and SHA-256/size bindings. |
+
+These four ZIPs are the **unchanged Actions download bundles**. Verify the outer
+`SHA256SUMS`, unzip your platform bundle, verify its `checksums.sha256`, then
+extract the inner Desktop archive. The APK is inside the Android bundle. Keep
+notices and complete runtime directories together. Use the recorded architecture;
+this is not an all-architecture or genuine-Intel qualification claim. The CLI
+requires a separate Java 17+ installation.
+
+The publisher executes no artifact contents, compiler, Gradle, signing or app
+launch. Its read-only admission requires the normal merged PR's preserved final
+head, independent formal approval, all applicable PR checks, and genuine main
+CI/OSV plus one complete three-host producer attempt. The PR-only `review` check
+is required on that PR head, not invented on main. Missing/failed/ambiguous checks
+or expired artifacts leave **HOLD**, not a partial release. Squash/rebase merges
+need separately reviewed equivalence support; this lane currently admits the
+normal history-preserving merge only.
+
+Main Desktop push and CI/OSV push, scheduled or manual completions re-evaluate
+readiness without occupying the build queue or dispatching another build. A newer
+failed check is never hidden by an older success. A failed readiness run can precede the remaining
+checks; later completion or exact manual resumption rechecks them. No old result
+is relabeled as proof for a changed source. Publisher-only/documentation changes
+do not request another sample build; select an existing accepted producer instead.
+For a **no-publication** rehearsal, after the workflow is merged and prerequisites
+are satisfied:
+
+```bash
+gh workflow run sample-development-releases.yml --repo p2pKit/P2pKit --ref main \
+  -f operation=verify -f source_sha=FULL_SOURCE_SHA \
+  -f producer_run=EXACT_RUN_ID -f producer_attempt=EXACT_ATTEMPT
+```
+
+`verify` has no repository-write permission. The separately isolated `publish`
+operation, also used by eligible main completions, uploads only verified existing
+bytes to a draft prerelease and checks the complete remote asset digests before
+publication/read-back. A same-source tag freezes its first accepted producer and
+manifest. Matching partial drafts can resume missing assets; wrong hashes,
+unknown assets, collisions and incomplete published releases fail closed. No
+overwrite, deletion or tag movement is performed. Do not use reruns to replace
+expired output with a rebuilt artifact under an existing release identity.
+
+Read-only implementation tests are not a real no-publication rehearsal or
+publication result. The [source milestone](../maintenance/sample-app-workflows-2026-09-15.md)
+and [#437](https://github.com/p2pKit/P2pKit/issues/437) retain execution/review holds.
+Private test transcripts are excluded from both app bundles and publisher evidence;
+the Releases request does not authorize their upload.
+
 ### Download development apps from Actions
 
 The **Desktop cross-host** workflow covers relevant sample/library/build changes
@@ -298,7 +365,8 @@ These are **development test harnesses**, not EXE/MSI/DMG/DEB installers or a
 production release. Android uses the debug build task, not a Store signing key.
 Desktop has no production signing/notarization step; OS trust checks may reject
 it. Do not disable OS security controls to make an unqualified download appear
-trusted. No signing credentials, tags, releases or Store uploads are involved.
+trusted. This build stage uses no signing credentials, tags, releases or Store
+uploads; the separate development-prerelease promotion above consumes its bytes.
 
 The packager checks source/run consistency, native launcher/VM architectures,
 application/CLI layout and archive bytes/modes/links. Android inspection checks

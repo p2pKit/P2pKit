@@ -1,0 +1,141 @@
+name: Development sample Releases
+
+on:
+  workflow_run:
+    workflows: [Desktop cross-host, CI, OSV Advisory Scan]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact already-built and reviewed main commit (40 hex characters)
+        type: string
+        required: true
+      producer_run:
+        description: Exact successful Desktop cross-host run ID
+        type: string
+        required: true
+      producer_attempt:
+        description: Exact complete three-host producer attempt
+        type: string
+        required: true
+      operation:
+        description: Verify without publication, or publish the verified development samples
+        type: choice
+        options: [verify, publish]
+        default: verify
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+  checks: read
+  pull-requests: read
+
+# This is not a Gradle/build job; it never occupies the shared heavy-job lease
+# while waiting for other gates. Each completion rechecks readiness, without a build.
+concurrency:
+  group: development-samples-${{ github.event.workflow_run.head_sha || inputs.source_sha }}
+  cancel-in-progress: false
+
+jobs:
+  admit:
+    # Admission independently pins each workflow's allowed main events. CI/OSV
+    # schedule/manual results qualify; the application producer stays push-only.
+    if: ${{ github.repository == 'p2pKit/P2pKit' && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || (contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event.workflow_run.event) && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      source: ${{ steps.admit.outputs.source }}
+      producer: ${{ steps.admit.outputs.producer }}
+      attempt: ${{ steps.admit.outputs.attempt }}
+    steps:
+      - name: Check out trusted main publisher code, never producer-supplied code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Require reviewed main source, exact producer and required checks
+        id: admit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE: ${{ inputs.source_sha }}
+          PRODUCER: ${{ inputs.producer_run }}
+          ATTEMPT: ${{ inputs.producer_attempt }}
+        run: python3 -I -B -S scripts/publish-sample-release.py admit --source "$SOURCE" --producer "$PRODUCER" --attempt "$ATTEMPT"
+
+  verify-only:
+    needs: admit
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'verify' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out trusted main verifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Inspect the exact four ZIPs without any publication permission
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE: ${{ needs.admit.outputs.source }}
+          PRODUCER: ${{ needs.admit.outputs.producer }}
+          ATTEMPT: ${{ needs.admit.outputs.attempt }}
+        run: python3 -I -B -S scripts/publish-sample-release.py verify --source "$SOURCE" --producer "$PRODUCER" --attempt "$ATTEMPT"
+      - name: Retain only public provenance, never private test transcripts
+        id: evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sample-release-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/p2pkit-sample-release/receipt.json
+            ${{ runner.temp }}/p2pkit-sample-release/sample-release.json
+            ${{ runner.temp }}/p2pkit-sample-release/SHA256SUMS
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: false
+      - name: Retire only owned temporary metadata after retention
+        if: ${{ always() && steps.evidence.outcome == 'success' }}
+        run: python3 -I -B -S scripts/publish-sample-release.py cleanup
+
+  publish:
+    needs: admit
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.operation == 'publish' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+      checks: read
+      pull-requests: read
+    steps:
+      - name: Check out trusted main publisher
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      # No producer code, dependencies, caches, credentials or Gradle are executed.
+      - name: Verify frozen bytes, publish development prerelease and read it back
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE: ${{ needs.admit.outputs.source }}
+          PRODUCER: ${{ needs.admit.outputs.producer }}
+          ATTEMPT: ${{ needs.admit.outputs.attempt }}
+        run: python3 -I -B -S scripts/publish-sample-release.py publish --source "$SOURCE" --producer "$PRODUCER" --attempt "$ATTEMPT"
+      - name: Retain only public publication provenance
+        id: evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sample-release-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/p2pkit-sample-release/receipt.json
+            ${{ runner.temp }}/p2pkit-sample-release/sample-release.json
+            ${{ runner.temp }}/p2pkit-sample-release/SHA256SUMS
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: false
+      - name: Retire only owned temporary metadata after retention
+        if: ${{ always() && steps.evidence.outcome == 'success' }}
+        run: python3 -I -B -S scripts/publish-sample-release.py cleanup
