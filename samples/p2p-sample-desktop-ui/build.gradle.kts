@@ -122,6 +122,10 @@ compose.desktop {
             targetFormats(TargetFormat.Exe, TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb)
             packageName = "P2pKit Sample"
             packageVersion = "1.0.0" // installer version; jpackage requires MAJOR > 0
+            linux {
+                // Debian package identifiers cannot contain spaces or uppercase letters.
+                packageName = "p2pkit-sample"
+            }
             // AUDIT-2026-06 (BUILD-G10-12): derive from the project version
             // (gradle.properties VERSION_NAME) instead of a stale literal.
             description = "P2pKit ${project.version} desktop sample (room broadcast + file transfer)"

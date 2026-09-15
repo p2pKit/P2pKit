@@ -4,6 +4,7 @@
 import copy
 import hashlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -133,12 +134,14 @@ class ReleaseTest(unittest.TestCase):
         payload = {"sample-debug.apk": b"synthetic APK, not executable"} if platform == "android" else {
             f"{kind}-{platform}-{arch}-{SOURCE[:12]}" + (".zip" if platform == "windows" else ".tar.gz"):
             b"synthetic archive, not an application" for kind in ("desktop-ui", "desktop-cli")}
+        if platform != "android":
+            payload[f"desktop-installer-{platform}-{arch}-{SOURCE[:12]}.{R.PACK.INSTALLER_FORMATS[platform]}"] = b"synthetic installer, not executable"
         artifacts = [{"file": name, "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()} for name, raw in payload.items()]
         context = {"repository": R.REPO, "commit": SOURCE, "tree": TREE, "event_name": "push", "ref": "refs/heads/main",
             "run_id": "300", "run_attempt": "1", "job": "verify", "workflow_ref": R.REPO + "/" + R.PRODUCER + "@refs/heads/main",
             "workflow_sha": SOURCE, "platform": "linux" if platform == "android" else platform, "architecture": arch}
         context.update(context_change or {})
-        manifest = {"schema": 1, "sourceAndRun": context, "scope": R.PACK.SCOPE}
+        manifest = {"schema": 2, "sourceAndRun": context, "scope": R.PACK.SCOPE}
         if platform == "android":
             manifest.update(artifact=artifacts[0], agpMetadata={"applicationId": "dev.p2pkit.sample.android", "variant": "debug",
                 "versionCode": 1, "versionName": "0.1.0"})
@@ -314,7 +317,30 @@ class ReleaseTest(unittest.TestCase):
     def test_verify_inspects_all_original_bundles_and_never_mutates(self):
         result = R.publish(self.api, self.plan(), self.output(), False)
         self.assertEqual("VERIFIED_NOT_PUBLISHED", result["result"])
-        self.assertEqual(6, len(result["assets"]))
+        self.assertEqual(7, len(result["assets"]))
+        self.assertEqual([".apk", ".deb", ".msi", ".dmg"], [Path(x["file"]).suffix for x in result["assets"][:4]])
+        self.assertEqual([], self.api.mutations)
+
+    def test_direct_installers_and_notices_preserve_the_original_producer_members(self):
+        plan, destination = self.plan(), self.output()
+        result = R.publish(self.api, plan, destination, False)
+        for asset in result["assets"][:4]:
+            with zipfile.ZipFile(io.BytesIO(self.api.files[asset["artifactId"]])) as source:
+                self.assertEqual(source.read(asset["member"]), (destination / asset["file"]).read_bytes())
+            self.assertEqual(asset["sha256"], hashlib.sha256((destination / asset["file"]).read_bytes()).hexdigest())
+        with zipfile.ZipFile(destination / "sample-notices.zip") as notices:
+            self.assertEqual(sorted(R.PACK.LICENSES), sorted(notices.namelist()))
+            self.assertTrue(all(notices.read(name) == b"synthetic public license" for name in R.PACK.LICENSES))
+        manifest = json.loads((destination / "sample-release.json").read_bytes())
+        self.assertEqual(result["assets"][:5], manifest["releaseAssets"])
+
+    def test_differing_cross_platform_notices_prevent_publication(self):
+        raw = self.bundle("linux", "x64", extra={"licenses/P2pKit-LICENSE": b"different public notice"})
+        self.api.files[2] = raw
+        self.api.collections["/actions/runs/300/artifacts"][1].update(
+            size_in_bytes=len(raw), digest="sha256:" + hashlib.sha256(raw).hexdigest())
+        with self.assertRaisesRegex(R.Hold, "notices differ"):
+            R.publish(self.api, self.plan(), self.output(), True)
         self.assertEqual([], self.api.mutations)
 
     def test_unsafe_path_private_extra_and_wrong_manifest_source_reject(self):
@@ -340,7 +366,7 @@ class ReleaseTest(unittest.TestCase):
         self.assertEqual("PUBLISHED_DEVELOPMENT_PRERELEASE", result["result"])
         self.assertEqual(("POST", "/releases"), self.api.mutations[0])
         self.assertEqual(("PATCH", "/releases/500"), self.api.mutations[-1])
-        self.assertEqual(6, len(self.api.assets))
+        self.assertEqual(7, len(self.api.assets))
         self.assertFalse(self.api.release["draft"])
         self.assertTrue(self.api.release["prerelease"])
         self.assertEqual("false", self.api.release["make_latest"])
@@ -363,7 +389,7 @@ class ReleaseTest(unittest.TestCase):
         self.api.fail_upload_after = None
         self.api.mutations.clear()
         R.publish(self.api, plan, self.output("resume"), True)
-        self.assertEqual(4, sum(x[0] == "UPLOAD" for x in self.api.mutations))
+        self.assertEqual(5, sum(x[0] == "UPLOAD" for x in self.api.mutations))
         self.assertEqual(0, sum(x[0] == "POST" for x in self.api.mutations))
         self.assertEqual(("PATCH", "/releases/500"), self.api.mutations[-1])
 
@@ -379,7 +405,7 @@ class ReleaseTest(unittest.TestCase):
         R.publish(self.api, plan, self.output("resume"), True)
         self.assertEqual(["/releases?per_page=100&page=1", "/releases?per_page=100&page=2"], self.api.release_list_queries)
         self.assertFalse(any(x[0] == "POST" for x in self.api.mutations))
-        self.assertEqual(4, sum(x[0] == "UPLOAD" for x in self.api.mutations))
+        self.assertEqual(5, sum(x[0] == "UPLOAD" for x in self.api.mutations))
 
     def test_ambiguous_same_tag_drafts_prevent_all_mutation(self):
         plan = self.plan()

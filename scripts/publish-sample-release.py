@@ -20,6 +20,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -319,7 +320,7 @@ def admit(api, sha, producer_id=None, attempt=None):
 
 
 def inspect_bundle(path, artifact, plan):
-    """Read allowlisted metadata; no extraction or execution of downloaded input."""
+    """Read allowlisted metadata; no execution or general archive extraction."""
     need(PACK.file_hash(path, ARCHIVE_LIMIT) == {"bytes": artifact["size_in_bytes"],
          "sha256": artifact["digest"].removeprefix("sha256:")}, "Bundle bytes differ")
     platform, arch, sha = artifact["platform"], artifact["architecture"], plan["source"]["commit"]
@@ -347,7 +348,7 @@ def inspect_bundle(path, artifact, plan):
         if platform != "android":
             expected["architecture"] = arch
         need(all(context.get(k) == v for k, v in expected.items()) and context.get("architecture") in ("x64", "arm64") and
-             manifest.get("schema") == 1 and manifest.get("scope") == PACK.SCOPE, "Bundle manifest source/run/scope differs")
+             manifest.get("schema") == 2 and manifest.get("scope") == PACK.SCOPE, "Bundle manifest source/run/scope differs")
         if platform == "android":
             payload = [manifest["artifact"]]
             need(manifest.get("agpMetadata") == {"applicationId": "dev.p2pkit.sample.android", "variant": "debug",
@@ -356,7 +357,9 @@ def inspect_bundle(path, artifact, plan):
             payload = manifest["artifacts"]
             suffix = ".zip" if platform == "windows" else ".tar.gz"
             need([x["file"] for x in payload] == [f"{kind}-{platform}-{arch}-{sha[:12]}{suffix}"
-                 for kind in ("desktop-ui", "desktop-cli")], "Missing complete native UI/CLI archives")
+                 for kind in ("desktop-ui", "desktop-cli")] + [
+                     f"desktop-installer-{platform}-{arch}-{sha[:12]}.{PACK.INSTALLER_FORMATS[platform]}"],
+                 "Missing complete native UI/CLI archives or installer")
         expected_files = {"manifest.json", "checksums.sha256", *("licenses/" + x for x in PACK.LICENSES),
                           *(x["file"] for x in payload)}
         need(set(entries) - {"licenses"} == expected_files, "Unapproved bundle file; no logs/private evidence allowed")
@@ -371,14 +374,36 @@ def inspect_bundle(path, artifact, plan):
                 need(PACK.hash_stream(stream, entries[name].file_size) == digest, "Bundle member checksum differs")
         need(all(x.get("bytes") == entries[x["file"]].file_size and x.get("sha256") == sums[x["file"]] for x in payload),
              "Payload manifest size/hash differs")
+        return payload[-1]
+
+
+def copy_installable(bundle, artifact, plan, directory):
+    selected = inspect_bundle(bundle, artifact, plan)
+    platform, arch = artifact["platform"], artifact["architecture"]
+    label = platform + ("-" + arch if platform != "android" else "")
+    extension = "apk" if platform == "android" else PACK.INSTALLER_FORMATS[platform]
+    path = directory / f"P2pKit-samples-{label}-{plan['source']['commit'][:12]}.{extension}"
+    with PACK.zip_input(bundle) as archive:
+        # Fixed destination, one validated member; never extractall or execute it.
+        with archive.open(selected["file"]) as reader, path.open("xb") as writer:
+            PACK.copy_stream(reader, writer, selected["bytes"])
+        notices = {}
+        for name in PACK.LICENSES:
+            member = archive.getinfo("licenses/" + name)
+            need(member.file_size <= MIB, "Oversized public notice")
+            notices[name] = archive.read(member)
+    need(PACK.file_hash(path) == {k: selected[k] for k in ("bytes", "sha256")}, "Promoted installer bytes differ")
+    return {"file": path.name, "bytes": selected["bytes"], "sha256": selected["sha256"],
+            "artifactId": artifact["id"], "member": selected["file"]}, notices
 
 
 def release_body(plan, manifest_hash):
     return ("Development sample apps — not a library or production release.\n\n"
-            "Android debug APK; complete Windows, macOS and Linux UI/CLI bundles. "
-            "Download and unzip the platform bundle, verify its checksums, then extract the inner application archive.\n\n"
-            "No production signing/notarization, installer, app-launch, LAN or physical-device qualification is claimed. "
-            "Do not disable OS security controls. The CLI requires Java 17+. "
+            "Download the Android .apk, Windows .msi, macOS .dmg or Linux .deb for your platform. "
+            "Verify SHA256SUMS before opening the package. License/notice material is in sample-notices.zip.\n\n"
+            "These are development packages: no production signing/notarization, installation test, app-launch, "
+            "LAN or physical-device qualification is claimed. Do not disable OS security controls. "
+            "The Desktop UI includes its Java runtime; separate CLI archives remain in the producer's Actions artifacts. "
             "The ongoing audit is NOT_READY; advisory exceptions are not vulnerability fixes.\n\n"
             f"Source: `{plan['source']['commit']}` / tree `{plan['source']['tree']}`.\n"
             f"Producer: https://github.com/{REPO}/actions/runs/{plan['producer']['id']} "
@@ -390,14 +415,20 @@ def release_body(plan, manifest_hash):
 def publish(api, plan, directory, mutate):
     need(directory.is_dir() and {p.name for p in directory.iterdir()} <= {".owner.json"},
          "Publisher workspace must be exclusively allocated and empty")
-    assets = []
+    assets, notices = [], None
     for artifact in plan["artifacts"]:
         label = artifact["platform"] + ("-" + artifact["architecture"] if artifact["platform"] != "android" else "")
-        path = directory / f"P2pKit-samples-{label}-{plan['source']['commit'][:12]}.zip"
+        path = directory / f"P2pKit-samples-producer-{label}-{plan['source']['commit'][:12]}.zip"
         api.download(artifact, path)
-        inspect_bundle(path, artifact, plan)
-        assets.append({"file": path.name, "bytes": artifact["size_in_bytes"],
-                       "sha256": artifact["digest"].removeprefix("sha256:"), "artifactId": artifact["id"]})
+        asset, current_notices = copy_installable(path, artifact, plan, directory)
+        need(notices is None or notices == current_notices, "Producer notices differ across platform bundles")
+        notices = current_notices
+        assets.append(asset)
+    notices_path = directory / "sample-notices.zip"
+    with zipfile.ZipFile(notices_path, "x", compression=zipfile.ZIP_STORED) as archive:
+        for name, raw in sorted(notices.items()):
+            archive.writestr(zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0)), raw)
+    assets.append({"file": notices_path.name, **PACK.file_hash(notices_path, JSON_LIMIT)})
     manifest = {**plan, "releaseAssets": assets}
     raw = encoded(manifest)
     (directory / "sample-release.json").write_bytes(raw)
@@ -528,7 +559,7 @@ def main():
             # Keep small public provenance/receipt for the always-run uploader;
             # producer ZIP originals remain under their recorded Actions IDs.
             (directory / "receipt.json").write_bytes(encoded(result))
-            for path in directory.glob("P2pKit-samples-*.zip"):
+            for path in [*directory.glob("P2pKit-samples-*"), directory / "sample-notices.zip"]:
                 if path.is_file() and not path.is_symlink():
                     path.unlink()
     return code

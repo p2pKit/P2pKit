@@ -97,6 +97,12 @@ class PackageFixtures(unittest.TestCase):
         with zipfile.ZipFile(path, "w") as archive:
             archive.writestr(main, b"\xca\xfe\xba\xbeNOT_A_REAL_CLASS")
 
+    def installer_fixture(self, system):
+        kind = subject.INSTALLER_FORMATS[system]
+        header = {"deb": b"!<arch>\n", "msi": b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1", "dmg": b"koly\x00\x00\x00\x04"}[kind]
+        # Header fixture only, never a real installable package.
+        return self.write(self.root / subject.INSTALLER_ROOT / kind / ("Synthetic Sample." + kind), header.ljust(512, b"\0"))
+
     def application_fixture(self, system):
         image = self.root / subject.IMAGE / ("P2pKit Sample.app" if system == "macos" else "P2pKit Sample")
         app, runtime, launcher, vm = {
@@ -116,6 +122,7 @@ class PackageFixtures(unittest.TestCase):
         self.jar(cli / "lib" / "sample.jar", "dev/p2pkit/sample/desktop/MainKt.class")
         for relative in subject.LICENSES.values():
             self.write(self.root / relative, b"synthetic public license/notice")
+        self.installer_fixture(system)
         return image, cli
 
     def android_fixture(self):
@@ -435,6 +442,34 @@ class PackageFixtures(unittest.TestCase):
         with self.assertRaises((ValueError, zipfile.BadZipFile)):
             subject.android_artifact(self.root, destination)
 
+    def test_installer_requires_one_fresh_expected_container_and_preserves_exact_bytes(self):
+        for system in subject.INSTALLER_FORMATS:
+            identity = {**self.identity, "platform": system}
+            source = self.installer_fixture(system)
+            destination = self.base / ("installer-" + system)
+            destination.mkdir()
+            result = subject.desktop_installer(self.root, destination, identity)
+            self.assertEqual(source.read_bytes(), (destination / result["file"]).read_bytes())
+            self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(), result["sha256"])
+            (destination / result["file"]).unlink()
+            source.write_bytes(b"wrong header".ljust(512, b"\0"))
+            with self.subTest(system=system), self.assertRaisesRegex(ValueError, "header"):
+                subject.desktop_installer(self.root, destination, identity)
+            (destination / result["file"]).unlink()
+            self.write(source.with_name("duplicate" + source.suffix), b"not a package")
+            with self.subTest(system=system), self.assertRaisesRegex(ValueError, "ambiguous"):
+                subject.desktop_installer(self.root, destination, identity)
+            source.unlink()
+            source.with_name("duplicate" + source.suffix).unlink()
+            with self.subTest(system=system), self.assertRaisesRegex(ValueError, "Missing"):
+                subject.desktop_installer(self.root, destination, identity)
+
+    def test_prepare_rejects_preexisting_installer_directory(self):
+        self.installer_fixture("linux")
+        with mock.patch.object(subject, "context", return_value=self.identity), self.assertRaisesRegex(ValueError, "already exists"):
+            subject.prepare(self.root, self.output)
+        self.assertFalse(self.output.exists())
+
     def test_full_synthetic_package_has_separate_scoped_delivery_and_checksums(self):
         for system in ("linux", "windows", "macos"):
             with self.subTest(system=system):
@@ -451,7 +486,10 @@ class PackageFixtures(unittest.TestCase):
                     manifest = subject.read_json(self.output / "desktop/manifest.json")
                     self.assertEqual("NOT_PERFORMED", manifest["scope"]["appLaunch"])
                     self.assertEqual(TREE, manifest["sourceAndRun"]["tree"])
-                    self.assertEqual(2, len(manifest["artifacts"]))
+                    self.assertEqual(2, manifest["schema"])
+                    self.assertTrue(manifest["scope"]["desktopInstaller"])
+                    self.assertEqual("NOT_PERFORMED", manifest["scope"]["installationTest"])
+                    self.assertEqual(3, len(manifest["artifacts"]))
                     for line in (self.output / "desktop/checksums.sha256").read_text("utf-8").splitlines():
                         digest, relative = line.split("  ", 1)
                         self.assertEqual(digest, hashlib.sha256((self.output / "desktop" / relative).read_bytes()).hexdigest())

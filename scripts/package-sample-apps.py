@@ -4,7 +4,7 @@
 prepare runs before any build; package runs only after successful build AND
 same-home Gradle stop steps. The workflow, not this helper, proves those outcomes.
 Environment checks are consistency checks, not independent hosted attestation.
-No builds, downloads, signing, app launches, installers or device tests occur here.
+No builds, downloads, signing, app launches, installation or device tests occur here.
 Use Python 3.9+ with -I -B -S. Inputs must remain exclusively owned during packaging.
 """
 
@@ -28,6 +28,8 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = "p2pKit/P2pKit"
 IMAGE = "samples/p2p-sample-desktop-ui/build/compose/binaries/main/app"
+INSTALLER_ROOT = "samples/p2p-sample-desktop-ui/build/compose/binaries/main"
+INSTALLER_FORMATS = {"linux": "deb", "windows": "msi", "macos": "dmg"}
 CLI = "samples/p2p-sample-desktop/build/install/p2p-sample-desktop"
 APK = "samples/p2p-sample-android/build/outputs/apk/debug"
 LICENSES = {"P2pKit-LICENSE": "LICENSE", "JmDNS-LICENSE": "library/p2p-transport-lan/vendor/jmdns/LICENSE",
@@ -35,7 +37,7 @@ LICENSES = {"P2pKit-LICENSE": "LICENSE", "JmDNS-LICENSE": "library/p2p-transport
 MAX_FILES, MAX_FILE, MAX_TOTAL = 20000, 512 * 1024**2, 1024**3
 CHUNK = 1024**2
 SCOPE = {"kind": "DEVELOPMENT_SAMPLE_BUILD_ARTIFACTS", "productionSigning": "NOT_REQUESTED_OR_VERIFIED",
-         "desktopInstaller": False, "signatureVerification": "NOT_PERFORMED",
+         "desktopInstaller": True, "installationTest": "NOT_PERFORMED", "signatureVerification": "NOT_PERFORMED",
          "appLaunch": "NOT_PERFORMED", "networkRuntime": "NOT_PERFORMED",
          "physicalDeviceQualification": "NOT_PERFORMED"}
 
@@ -188,9 +190,14 @@ def output_path(value, environment=None):
     return output
 
 
+def generated_roots(identity):
+    return [IMAGE, CLI, INSTALLER_ROOT + "/" + INSTALLER_FORMATS[identity["platform"]]] + (
+        [APK] if identity["platform"] == "linux" else [])
+
+
 def prepare(root, output):
     identity = context(root)
-    roots = [IMAGE, CLI] + ([APK] if identity["platform"] == "linux" else [])
+    roots = generated_roots(identity)
     for relative in roots:
         require(not os.path.lexists(root / relative), "Intended generated application output already exists")
         for parent in (root / relative).parents:
@@ -468,6 +475,25 @@ def copy_checked(source, destination, limit=MAX_FILE):
     return {"file": destination.name, **before}
 
 
+def desktop_installer(root, destination, identity):
+    kind = INSTALLER_FORMATS[identity["platform"]]
+    directory = root / INSTALLER_ROOT / kind
+    physical_directory(directory)
+    files = list(directory.glob("*." + kind))
+    require(len(files) == 1, "Missing or ambiguous native installer")
+    name = "desktop-installer-" + identity["platform"] + "-" + identity["architecture"] + "-" + identity["commit"][:12] + "." + kind
+    artifact = copy_checked(files[0], destination / name)
+    require(artifact["bytes"] >= 512, "Truncated native installer")
+    with (destination / name).open("rb") as stream:
+        if kind == "dmg":
+            stream.seek(-512, 2)
+            valid = stream.read(8) == b"koly\x00\x00\x00\x04"
+        else:
+            valid = stream.read(8) == {"msi": b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1", "deb": b"!<arch>\n"}[kind]
+    require(valid, "Native installer container header differs")
+    return artifact
+
+
 def android_artifact(root, destination):
     directory = root / APK
     physical_directory(directory)
@@ -510,7 +536,7 @@ def finish_manifest(root, directory, identity, payload):
     notices.mkdir()
     for name, relative in LICENSES.items():
         copy_checked(root / relative, notices / name, CHUNK)
-    write_new(directory / "manifest.json", {"schema": 1, "sourceAndRun": identity, "scope": SCOPE, **payload})
+    write_new(directory / "manifest.json", {"schema": 2, "sourceAndRun": identity, "scope": SCOPE, **payload})
     lines = []
     for path in sorted(directory.rglob("*")):
         if path.is_file():
@@ -524,7 +550,7 @@ def package(root, output):
     prepared = read_json(output / ".prepare.json")
     identity = context(root)
     require(prepared == {"schema": 1, "context": identity, "root": str(root), "outputIdentity": signature(output)[:2],
-                         "generatedRoots": [IMAGE, CLI] + ([APK] if identity["platform"] == "linux" else [])},
+                         "generatedRoots": generated_roots(identity)},
             "Prepare identity differs from current source/run/output")
     require(set(path.name for path in output.iterdir()) == {".prepare.json"}, "Output is not an unused prepared directory")
     images = root / IMAGE
@@ -543,7 +569,9 @@ def package(root, output):
         label = identity["platform"] + "-" + identity["architecture"] + "-" + identity["commit"][:12]
         artifacts = [archive_image(source, desktop / (kind + "-" + label + suffix), entries) for source, kind, entries in
                      ((image, "desktop-ui", image_entries), (cli, "desktop-cli", cli_entries))]
-        finish_manifest(root, desktop, identity, {"artifacts": artifacts, "layoutInspection": inspected})
+        artifacts.append(desktop_installer(root, desktop, identity))
+        finish_manifest(root, desktop, identity, {"artifacts": artifacts, "layoutInspection": inspected,
+                        "installerInspection": "Container header and byte hashes only; not installed or signature-verified"})
         if identity["platform"] == "linux":
             android = stage / "android"
             android.mkdir()

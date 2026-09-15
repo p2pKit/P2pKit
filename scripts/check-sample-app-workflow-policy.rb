@@ -47,6 +47,12 @@ module SampleAppWorkflowPolicy
         if [[ "$RUNNER_OS" == Linux ]]; then
           tasks+=(:p2p-sample-android:assembleDebug)
         fi
+        case "$RUNNER_OS" in
+          Linux) tasks+=(:p2p-sample-desktop-ui:packageDeb) ;;
+          Windows) tasks+=(:p2p-sample-desktop-ui:packageMsi) ;;
+          macOS) tasks+=(:p2p-sample-desktop-ui:packageDmg) ;;
+          *) echo 'FATAL: unsupported installer host' >&2; exit 1 ;;
+        esac
         ./gradlew --no-daemon "${tasks[@]}" \
           --dependency-verification strict --no-build-cache --max-workers=2 --no-parallel --console=plain \
           -Dorg.gradle.java.installations.auto-download=false \

@@ -269,18 +269,22 @@ Android, Windows, macOS and Linux sets may be published:
 
 | Release asset | Contents |
 | --- | --- |
-| `P2pKit-samples-android-<sha12>.zip` | Android debug APK, original manifest/checksums and notices. |
-| `P2pKit-samples-windows-<arch>-<sha12>.zip` | Original Windows UI/CLI archives and metadata. |
-| `P2pKit-samples-macos-<arch>-<sha12>.zip` | Original macOS UI/CLI archives and metadata. |
-| `P2pKit-samples-linux-<arch>-<sha12>.zip` | Original Linux UI/CLI archives and metadata. |
+| `P2pKit-samples-android-<sha12>.apk` | Android debug sample; download the APK directly. |
+| `P2pKit-samples-windows-<arch>-<sha12>.msi` | Windows Desktop UI installer, including its Java runtime. |
+| `P2pKit-samples-macos-<arch>-<sha12>.dmg` | macOS Desktop UI disk image, including its Java runtime. |
+| `P2pKit-samples-linux-<arch>-<sha12>.deb` | Desktop UI package for compatible Debian/Ubuntu systems, including its Java runtime. |
+| `sample-notices.zip` | Source-bound P2pKit/JmDNS license and notice files. |
 | `sample-release.json`, `SHA256SUMS` | Exact source/tree, producer run/attempt/artifact IDs, formal PR/check identities and SHA-256/size bindings. |
 
-These four ZIPs are the **unchanged Actions download bundles**. Verify the outer
-`SHA256SUMS`, unzip your platform bundle, verify its `checksums.sha256`, then
-extract the inner Desktop archive. The APK is inside the Android bundle. Keep
-notices and complete runtime directories together. Use the recorded architecture;
-this is not an all-architecture or genuine-Intel qualification claim. The CLI
-requires a separate Java 17+ installation.
+Choose your platform's package from **Releases → Assets**, verify `SHA256SUMS`,
+then open it using the operating system's normal installation process. Keep the
+notices when redistributing. These are **unchanged files from the inspected Actions
+bundles**, not recompilations or re-signed copies. Use the recorded architecture;
+this is not an all-architecture or genuine-Intel qualification claim. Complete
+UI images and separate CLI distributions remain in Actions; the CLI requires Java 17+.
+Development packages are not production-signed/notarized and may be rejected by
+OS trust policy. Do not disable security controls; trusted production distribution
+requires a separate authorized signing/notarization process.
 
 The publisher executes no artifact contents, compiler, Gradle, signing or app
 launch. Its read-only admission requires the normal merged PR's preserved final
@@ -307,8 +311,10 @@ gh workflow run sample-development-releases.yml --repo p2pKit/P2pKit --ref main 
 ```
 
 `verify` has no repository-write permission. The separately isolated `publish`
-operation, also used by eligible main completions, uploads only verified existing
-bytes to a draft prerelease and checks the complete remote asset digests before
+operation, also used by eligible main completions, copies only the four explicitly
+validated package members (never a general archive extraction), verifies their
+original hashes, and uploads those existing bytes plus notices/provenance to a draft
+prerelease. It checks the complete remote asset digests before
 publication/read-back. A same-source tag freezes its first accepted producer and
 manifest. Matching partial drafts can resume missing assets; wrong hashes,
 unknown assets, collisions and incomplete published releases fail closed. No
@@ -361,15 +367,19 @@ Inside the downloaded directory, verify `checksums.sha256` with `sha256sum -c`
 Keep the full extracted directory together. Unix tar archives preserve executable
 permissions and internal links that a raw Actions directory upload would lose.
 
-These are **development test harnesses**, not EXE/MSI/DMG/DEB installers or a
-production release. Android uses the debug build task, not a Store signing key.
+These are **development test harnesses**, not a production release. Each native
+host builds one existing installer format in the same Gradle batch: Linux DEB,
+Windows MSI or macOS DMG. UI runtime images and CLI archives are retained too.
+Android uses the debug build task, not a Store signing key.
 Desktop has no production signing/notarization step; OS trust checks may reject
 it. Do not disable OS security controls to make an unqualified download appear
 trusted. This build stage uses no signing credentials, tags, releases or Store
 uploads; the separate development-prerelease promotion above consumes its bytes.
 
 The packager checks source/run consistency, native launcher/VM architectures,
-application/CLI layout and archive bytes/modes/links. Android inspection checks
+application/CLI layout and archive bytes/modes/links. Installer inspection covers
+the expected container header and exact byte hashes, **not installation or signer
+qualification**. Android inspection checks
 AGP output metadata and APK ZIP structure/CRC, **not** the binary manifest or
 signer identity. None of these checks launches an app or proves LAN, UI, phone,
 independent-interoperability or release acceptance. The existing sample warnings
