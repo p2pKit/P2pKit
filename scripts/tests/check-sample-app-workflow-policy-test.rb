@@ -19,9 +19,10 @@ end
 mutations = {
     "missing main trigger" => ->(v) { (v["on"] || v[true]).delete("push") },
     "wrong main branch" => ->(v) { (v["on"] || v[true])["push"]["branches"] = ["work/candidate"] },
-    "extra doc-only build" => ->(v) { (v["on"] || v[true])["push"].delete("paths") },
+    "main path filter suppresses ordinary pushes" => ->(v) { (v["on"] || v[true])["push"]["paths"] = P::PATHS },
     "omitted Android PR coverage" => ->(v) { (v["on"] || v[true])["pull_request"]["paths"].delete("samples/p2p-sample-android/**") },
-    "omitted shared KMP main coverage" => ->(v) { (v["on"] || v[true])["push"]["paths"].delete("samples/sample-kmp-shared/**") },
+    "main ignored-path filter suppresses ordinary pushes" => ->(v) { (v["on"] || v[true])["push"]["paths-ignore"] = ["docs/**"] },
+    "omitted shared KMP PR coverage" => ->(v) { (v["on"] || v[true])["pull_request"]["paths"].delete("samples/sample-kmp-shared/**") },
     "publisher permissions" => ->(v) { v["permissions"]["contents"] = "write" },
     "publisher environment" => ->(v) { ordinary(v)["environment"] = "release" },
     "secret scope" => ->(v) { ordinary(v)["env"] = {"TOKEN" => "${{ secrets.PUBLISH }}"} },
@@ -63,7 +64,7 @@ mutations = {
     "overlapping heavy matrix" => ->(v) { ordinary(v)["strategy"]["max-parallel"] = 3 },
     "queue bypass" => ->(v) { ordinary(v).delete("concurrency") },
 }
-%w[push pull_request].each do |event|
+%w[pull_request].each do |event|
     %w[gradlew gradlew.bat .gitattributes .gitignore LICENSE].each do |path|
         mutations["omitted #{event} input #{path}"] = ->(v) { (v["on"] || v[true])[event]["paths"].delete(path) }
     end

@@ -299,8 +299,9 @@ Main Desktop push and CI/OSV push, scheduled or manual completions re-evaluate
 readiness without occupying the build queue or dispatching another build. A newer
 failed check is never hidden by an older success. A failed readiness run can precede the remaining
 checks; later completion or exact manual resumption rechecks them. No old result
-is relabeled as proof for a changed source. Publisher-only/documentation changes
-do not request another sample build; select an existing accepted producer instead.
+is relabeled as proof for a changed source. Every ordinary push to `main`, including
+publisher-only/documentation changes, starts the sample build automatically; no tag
+or manual dispatch is needed.
 For a **no-publication** rehearsal, after the workflow is merged and prerequisites
 are satisfied:
 
@@ -329,9 +330,9 @@ the Releases request does not authorize their upload.
 
 ### Download development apps from Actions
 
-The **Desktop cross-host** workflow covers relevant sample/library/build changes
-on `main` and pull requests. Its ordinary manual operation remains `desktop`.
-Documentation-only changes do not start another sample build. The existing native
+The **Desktop cross-host** workflow runs on **every push to `main`** and on
+relevant sample/library/build pull-request changes. Its ordinary manual operation
+remains `desktop`, but normal main pushes need no manual action. The existing native
 Ubuntu, Windows and macOS jobs run serially; the Ubuntu job also assembles the
 Android sample APK in the same Gradle invocation. Required library/full CI gates
 remain separate and are not replaced by these downloadable samples.

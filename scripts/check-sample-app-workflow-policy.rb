@@ -134,8 +134,8 @@ module SampleAppWorkflowPolicy
              !JSON.generate(workflow).match?(/secrets\.|id-token|pull_request_target/), "sample delivery must remain secret-free and contents-read")
         triggers = workflow.fetch("on") { workflow.fetch(true) }
         need(triggers.keys.sort == %w[pull_request push workflow_dispatch] &&
-             triggers["push"] == {"branches" => ["main"], "paths" => PATHS} &&
-             triggers["pull_request"] == {"paths" => PATHS}, "exact main/PR sample-input coverage required; no new doc-only builds")
+             triggers["push"] == {"branches" => ["main"]} &&
+             triggers["pull_request"] == {"paths" => PATHS}, "every main push and exact PR sample-input coverage required")
         job = workflow.fetch("jobs").fetch("verify")
         need(job.keys.sort == %w[concurrency if name runs-on steps strategy timeout-minutes] &&
              job["name"] == "${{ matrix.os }}" && job["timeout-minutes"] == 30 &&
