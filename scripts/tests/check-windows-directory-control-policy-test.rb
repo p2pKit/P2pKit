@@ -17,6 +17,7 @@ module WindowsDirectoryControlPolicy
         buildSrc/** gradle/wrapper/** gradle/libs.versions.toml gradle/verification-metadata.xml
         gradle/windows-directory-control.init.gradle scripts/run-windows-directory-control.py
         scripts/tests/run-windows-directory-control-test.py scripts/tests/check-windows-directory-control-policy-test.rb
+        scripts/tests/fixtures/windows-directory-binding/settings.gradle scripts/tests/fixtures/windows-directory-binding/build.gradle
         gradle.lockfile buildscript-gradle.lockfile samples/p2p-sample-desktop/** samples/p2p-sample-desktop-ui/**
         samples/p2p-sample-diagnostics/** library/p2p-core/** library/p2p-transport-lan/** library/p2p-network-provisioning-desktop/**].freeze
     TASKS = %w[:p2p-sample-desktop:check :p2p-sample-desktop:installDist :p2p-sample-desktop-ui:test
@@ -50,7 +51,7 @@ module WindowsDirectoryControlPolicy
              triggers["pull_request"] == {"paths" => PR_PATHS}, "ordinary PR trigger/path coverage changed")
         inputs = triggers.fetch("workflow_dispatch").fetch("inputs")
         need(inputs.keys.sort == %w[expected_sha expected_tree operation], "no arbitrary control inputs")
-        expected = {"operation" => {"type" => "choice", "options" => ["desktop", OPERATION], "default" => "desktop", "required" => true},
+        expected = {"operation" => {"type" => "choice", "options" => ["desktop", OPERATION, "macos-arm64-admission", "macos-x64-admission"], "default" => "desktop", "required" => true},
             "expected_sha" => {"type" => "string", "required" => false, "default" => ""},
             "expected_tree" => {"type" => "string", "required" => false, "default" => ""}}
         inputs.each do |name, value|
@@ -60,7 +61,7 @@ module WindowsDirectoryControlPolicy
         need(workflow["concurrency"] == HeavyJobQueuePolicy::WORKFLOW_CONCURRENCY["desktop-cross-host.yml"],
              "control reruns cannot share ordinary cancelling workflow group")
         jobs = workflow.fetch("jobs")
-        need(jobs.keys.sort == ["verify", OPERATION].sort, "unexpected or missing Desktop/control job")
+        need(jobs.keys.sort == ["verify", OPERATION, "mac-host-admission-probe"].sort, "unexpected or missing Desktop/control job")
         ordinary = jobs.fetch("verify")
         need(ordinary["if"] == HeavyJobQueuePolicy::CONDITIONS[["desktop-cross-host.yml", "verify"]] &&
              ordinary["timeout-minutes"] == 30 && !ordinary.key?("env") && !ordinary.key?("environment"),

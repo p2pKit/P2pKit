@@ -41,6 +41,26 @@ EXECUTOR = SCRIPTS / "run-audit-command.py"
 PYTHON = str(Path(sys.executable).resolve())
 EVIDENCE_ROOT = None
 CASE_EVIDENCE = None
+FIXTURE_PARENT = None
+
+
+def validated_fixture_parent(value, evidence_root):
+    """Bind explicit fixture allocation without changing any process environment."""
+    if value is None:
+        return None
+    runner.require(evidence_root is not None, "--fixture-parent requires an explicit separate evidence directory")
+    state_value = os.environ.get(processes.STATE_ENV)
+    runner.require(state_value, "--fixture-parent requires the current owned audit state")
+    state = runner.absolute_path(state_value)
+    parent = runner.absolute_path(value)
+    runner.require(parent == state / "fixtures/native-tmp" and runner.physical_directory_present(parent),
+                   "Fixture parent must be the current state's physical fixtures/native-tmp directory")
+    evidence = runner.absolute_path(evidence_root, exists=False)
+    runner.require(not runner.within(evidence, parent) and not runner.within(parent, evidence),
+                   "Retained evidence and temporary fixture parent must not overlap")
+    with os.scandir(parent) as entries:
+        runner.require(next(entries, None) is None, "Fixture parent must start empty")
+    return parent
 
 
 def property_spellings(expression):
@@ -258,7 +278,7 @@ def cleanup_metadata(test, *, cached_device=0, full_device=47, child_fields=None
     path-stat device. Keep type/reparse classification independent of that full
     observation so the tests cannot hide a removed no-follow or device guard.
     """
-    with tempfile.TemporaryDirectory(prefix="audit cleanup metadata ") as temporary:
+    with tempfile.TemporaryDirectory(prefix="audit cleanup metadata ", dir=FIXTURE_PARENT) as temporary:
         root = Path(temporary).resolve() / "output"
         child, deeper = root / "nested", root / "nested/deeper"
         deeper.mkdir(parents=True)
@@ -607,7 +627,7 @@ class PurePolicyTests(unittest.TestCase):
                 super().flush()
                 delivered.set()
 
-        with tempfile.TemporaryDirectory(prefix="audit tee prefix ") as temporary, LiveOutput() as live:
+        with tempfile.TemporaryDirectory(prefix="audit tee prefix ", dir=FIXTURE_PARENT) as temporary, LiveOutput() as live:
             destination = Path(temporary).resolve() / "stderr.log"
             read_fd, write_fd = os.pipe()
             with os.fdopen(read_fd, "rb", buffering=0) as source, os.fdopen(write_fd, "wb", buffering=0) as writer:
@@ -628,7 +648,7 @@ class PurePolicyTests(unittest.TestCase):
                     self.assertFalse(tee.thread.is_alive(), "Fixture reader did not retire after EOF")
 
     def test_tee_reports_evidence_flush_failure_and_continues_draining(self):
-        with tempfile.TemporaryDirectory(prefix="audit tee flush ") as temporary:
+        with tempfile.TemporaryDirectory(prefix="audit tee flush ", dir=FIXTURE_PARENT) as temporary:
             destination = Path(temporary).resolve() / "stderr.log"
             with runner.new_file(destination) as output, io.BytesIO(b"\x00\xff" * 40000) as source, \
                     io.BytesIO() as live:
@@ -659,7 +679,7 @@ class PurePolicyTests(unittest.TestCase):
         for newline in ("\n", "\r\n"):
             for arguments, stop_status, expected_status, marker in cases:
                 with self.subTest(newline=repr(newline), arguments=arguments, stop_status=stop_status), \
-                        tempfile.TemporaryDirectory(prefix="audit fixture newline ") as temporary:
+                        tempfile.TemporaryDirectory(prefix="audit fixture newline ", dir=FIXTURE_PARENT) as temporary:
                     stdout_bytes, stderr_bytes = io.BytesIO(), io.BytesIO()
                     with io.TextIOWrapper(io.BufferedWriter(stdout_bytes), encoding="utf-8", newline=newline) as stdout, \
                             io.TextIOWrapper(io.BufferedWriter(stderr_bytes), encoding="utf-8", newline=newline) as stderr:
@@ -809,7 +829,7 @@ class PurePolicyTests(unittest.TestCase):
     def test_report_root_and_descendant_scan_errors_are_not_empty_success(self):
         # Deliberate function-level faults, not claims of native permissions or
         # a Gradle execution. PermissionError is injected even when running as root.
-        with tempfile.TemporaryDirectory(prefix="audit report scan fixture ") as temporary:
+        with tempfile.TemporaryDirectory(prefix="audit report scan fixture ", dir=FIXTURE_PARENT) as temporary:
             root = Path(temporary).resolve() / "source"
             state = Path(temporary).resolve() / "state"
             module = root / "library"
@@ -829,7 +849,7 @@ class PurePolicyTests(unittest.TestCase):
                         runner.report_snapshot(root, state, [])
 
     def test_source_and_evidence_lstat_failures_are_not_treated_as_absence(self):
-        with tempfile.TemporaryDirectory(prefix="audit report stat fixture ") as temporary:
+        with tempfile.TemporaryDirectory(prefix="audit report stat fixture ", dir=FIXTURE_PARENT) as temporary:
             root = Path(temporary).resolve() / "source"
             state = Path(temporary).resolve() / "state"
             (root / "library").mkdir(parents=True)
@@ -846,7 +866,7 @@ class PurePolicyTests(unittest.TestCase):
                         runner.report_snapshot(root, state, [])
 
     def test_report_entry_bound_counts_empty_directories_not_just_files(self):
-        with tempfile.TemporaryDirectory(prefix="audit report bound fixture ") as temporary:
+        with tempfile.TemporaryDirectory(prefix="audit report bound fixture ", dir=FIXTURE_PARENT) as temporary:
             root = Path(temporary).resolve() / "source"
             state = Path(temporary).resolve() / "state"
             for name in ("one", "two", "three", "four"):
@@ -890,13 +910,36 @@ class PurePolicyTests(unittest.TestCase):
                 processes.parse_procargs2(malformed)
 
     def test_restricted_batch_grammar_rejects_expansion_and_control(self):
-        for value in ("%PATH%", "bang!", 'quote"', "pipe|", "and&", "lt<", "gt>", "caret^", "paren(", "line\n"):
-            with self.subTest(value=value), self.assertRaises(processes.OwnershipError):
-                processes.batch_command_line(r"C:\Windows\System32\cmd.exe", [r"C:\root\gradlew.bat", value])
-        command = processes.batch_command_line(r"C:\Windows\System32\cmd.exe",
-                                               [r"C:\space root\gradlew.bat", "two words", "Ω", "", "tail\\"])
-        self.assertIn('/d /s /v:off /c ""', command)
-        self.assertIn('""', command)
+        cmd, wrapper = r"C:\Windows\System32\cmd.exe", r"C:\root\gradlew.bat"
+        rejected = [*(chr(value) for value in range(32)), "%PATH%", "%1", "%*", "!PATH!", 'quote"',
+                    "pipe|", "and&", "lt<", "gt>", "caret^", ") & echo injected (", 'paren(")', "paren(^)"]
+        for value in rejected:
+            for position in ("cmd", "executable", "argument"):
+                with self.subTest(value=value, position=position), self.assertRaises(processes.OwnershipError):
+                    processes.batch_command_line(cmd + value if position == "cmd" else cmd,
+                        [wrapper + value, "ordinary"] if position == "executable" else
+                        [wrapper, value if position == "argument" else "ordinary"])
+        # The interpreter is not force-quoted by the argv formatter. Keep its
+        # original grammar, even though parentheses in argv are now literals.
+        for interpreter in (r"C:\Win(dows)\cmd.exe", r"C:\Win(dows\cmd.exe", r"C:\Windows)\cmd.exe"):
+            with self.subTest(interpreter=interpreter), self.assertRaises(processes.OwnershipError):
+                processes.batch_command_line(interpreter, [wrapper])
+        with self.assertRaises(processes.OwnershipError):
+            processes.batch_command_line(cmd, [])
+
+    def test_batch_sdk_parentheses_have_exact_fully_quoted_framing(self):
+        command = processes.batch_command_line(r"C:\Windows\System32\cmd.exe", [
+            r"C:\Program Files (x86)\Android\android-sdk\cmdline-tools\latest\bin\sdkmanager.bat",
+            r"--sdk_root=C:\Program Files (x86)\Android\android-sdk", "platforms;android-36", "platforms;android-37.0"])
+        self.assertEqual(command, 'C:\\Windows\\System32\\cmd.exe /d /s /v:off /c "'
+            '"C:\\Program Files (x86)\\Android\\android-sdk\\cmdline-tools\\latest\\bin\\sdkmanager.bat" '
+            '"--sdk_root=C:\\Program Files (x86)\\Android\\android-sdk" "platforms;android-36" "platforms;android-37.0""')
+
+    def test_batch_literal_parentheses_preserve_empty_unicode_and_backslash_arguments(self):
+        command = processes.batch_command_line(r"C:\Windows\System32\cmd.exe", [
+            r"C:\space root\gradlew.bat", "two words", "Ω(x)", "", "(", ")", "paren(", "paren)", "tail(\\", "tail)\\\\"])
+        self.assertEqual(command, 'C:\\Windows\\System32\\cmd.exe /d /s /v:off /c "'
+            '"C:\\space root\\gradlew.bat" "two words" "Ω(x)" "" "(" ")" "paren(" "paren)" "tail(\\\\" "tail)\\\\\\\\""')
 
     def test_structure_layouts_are_explicit_not_native_acceptance(self):
         self.assertEqual(tuple(ctypes.sizeof(kind) for kind in (processes.DarwinBsdInfo, processes.DarwinUniqueInfo,
@@ -1342,7 +1385,7 @@ class DarwinObservationTests(unittest.TestCase):
 class ExecutorFixtureTests(unittest.TestCase):
     def setUp(self):
         global CASE_EVIDENCE
-        self.temporary = tempfile.TemporaryDirectory(prefix="p2pkit audit fixture ")
+        self.temporary = tempfile.TemporaryDirectory(prefix="p2pkit audit fixture ", dir=FIXTURE_PARENT)
         # On an unexpected ownership/archive failure leave the private fixture for
         # inspection; only explicit successful cleanup may delete its generated data.
         self.temporary._finalizer.detach()
@@ -1371,6 +1414,7 @@ class ExecutorFixtureTests(unittest.TestCase):
         source_build = self.root / "buildSrc/src/main/java/dev/p2pkit/build"
         source_build.mkdir(parents=True)
         (source_build / "Source.java").write_text("// source, never disposable\n", encoding="utf-8")
+        self.additional_fixture_sources()
         for command in (["init", "-q"], ["config", "user.email", "fixture@example.invalid"],
                         ["config", "user.name", "Audit Fixture"], ["config", "core.autocrlf", "false"],
                         ["add", "."], ["commit", "-qm", "Fixture baseline"]):
@@ -1397,6 +1441,9 @@ class ExecutorFixtureTests(unittest.TestCase):
         self.env = processes.ownership_environment(self.env, self.context["id"], self.guard_id,
                                                   str(self.state), self.context["gradleHome"], allow_new_context=True)
         self.wrapper = self.root / ("gradlew.bat" if os.name == "nt" else "gradlew")
+
+    def additional_fixture_sources(self):
+        """Native-specific fixtures must be written before immutable initialization."""
 
     def _cleanup_fixture(self):
         errors = list(getattr(self, "fixture_retention_errors", []))
@@ -2990,6 +3037,63 @@ class DarwinNativeTests(PosixNativeTests):
 
 
 class WindowsNativeTests(ExecutorFixtureTests):
+    def additional_fixture_sources(self):
+        if self._testMethodName not in {"test_windows_sdk_style_batch_parentheses_roundtrip",
+                                       "test_windows_sdk_style_batch_rejects_expansion_before_launch"}:
+            return
+        self.sdk_fixture = self.root / "Program Files (x86)/Android/android-sdk"
+        self.sdk_manager_fixture = self.sdk_fixture / "cmdline-tools/latest/bin/sdkmanager.bat"
+        self.sdk_manager_fixture.parent.mkdir(parents=True)
+        # Synthetic SDK-shaped caller only, not a copy of the installed SDK.
+        # Six parents lead back to the committed argv reporter without embedding
+        # the Unicode fixture path in the batch file's console-codepage text.
+        self.sdk_manager_fixture.write_bytes(('@echo off\r\n"' + PYTHON +
+            '" "%~dp0..\\..\\..\\..\\..\\..\\fixture.py" argv %*\r\nexit /b %errorlevel%\r\n').encode("utf-8"))
+
+    def test_windows_sdk_style_batch_parentheses_roundtrip(self):
+        arguments = [str(self.sdk_manager_fixture), "--sdk_root=" + str(self.sdk_fixture),
+                     "platforms;android-36", "platforms;android-37.0", "Ω(x)", "", "(", ")", "paren(", "paren)",
+                     "tail(\\", "tail)\\\\"]
+        before = self.sdk_manager_fixture.read_bytes()
+        code, out, err, receipt = self.run_leaf(arguments, kind="command")
+        self.assertEqual(code, 0, err.decode(errors="replace"))
+        self.assertEqual(json.loads(out), ["argv", *arguments[1:]])
+        self.assertEqual(receipt["requestedArgv"], arguments)
+        self.assertEqual(receipt["executedArgv"], arguments)
+        self.assertEqual([receipt[key] for key in ("productExitCode", "stopExitCode", "finalExitCode")], [0, 0, 0])
+        self.assertTrue(receipt["sourceUnchanged"])
+        self.assertEqual(self.sdk_manager_fixture.read_bytes(), before)
+        self.assertEqual(receipt["errors"], [])
+        self.assertEqual(receipt["ownedSurvivors"], [])
+        launches = receipt["ownership"]["launches"]
+        self.assertEqual(len(launches), 2)
+        product = launches[receipt["productLaunchIndex"]]
+        self.assertEqual(product["applicationName"], self.scope.api.cmd())
+        self.assertTrue(product["batch"] and product["created"] and product["resumed"])
+        self.assertTrue(product["jobAssignedBeforeResume"])
+        self.assertEqual(product["requestedArgv"], arguments)
+        self.assertEqual(product["resolvedArgv"], arguments)
+        self.assertEqual(self.calls()[0]["argv"], ["argv", *arguments[1:]])
+        self.assertIn("--stop", self.calls()[1]["argv"])
+        self.assertEqual({call["home"] for call in self.calls()}, {self.context["gradleHome"]})
+
+    def test_windows_sdk_style_batch_rejects_expansion_before_launch(self):
+        sentinel = self.state / "must-not-be-created"
+        for value in ("paren(%PATH%)", "paren(!PATH!)", ") & echo injected>" + str(sentinel), 'paren(")'):
+            with self.subTest(value=value):
+                count = len(self.calls())
+                code, _, _, receipt = self.run_leaf([str(self.sdk_manager_fixture), value], kind="command")
+                self.assertEqual(code, 125)
+                self.assertIsNone(receipt["productExitCode"])
+                self.assertEqual(receipt["stopExitCode"], 0)
+                self.assertEqual(receipt["ownedSurvivors"], [])
+                self.assertIn("OwnershipError: Unsupported batch argument expansion/control character", receipt["errors"])
+                product = receipt["ownership"]["launches"][receipt["productLaunchIndex"]]
+                self.assertFalse(product["created"] or product["resumed"])
+                self.assertEqual(len(self.calls()), count + 1)
+                self.assertIn("--stop", self.calls()[-1]["argv"])
+                self.assertFalse(sentinel.exists())
+
     def test_windows_readonly_nested_launcher_cleanup_preserves_source_and_outside_sentinel(self):
         code, _, err, receipt = self.run_leaf(["report"])
         self.assertEqual(0, code, err.decode(errors="replace"))
@@ -3193,13 +3297,15 @@ os._exit(0)
         self.assertNotIn(pid, {row["pid"] for row in self.scope.discover()}, "Kill-on-controller-close did not drain its job")
 
 def main():
-    global EVIDENCE_ROOT
+    global EVIDENCE_ROOT, FIXTURE_PARENT
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expected-host", choices=runner.HOSTS, default=processes.host_role())
     parser.add_argument("--evidence-root", "--evidence-dir", dest="evidence_root")
+    parser.add_argument("--fixture-parent", help="Existing empty owned state/fixtures/native-tmp; not process TEMP")
     args = parser.parse_args()
     if args.expected_host != processes.host_role():
         parser.error("Requested host does not match this native interpreter")
+    FIXTURE_PARENT = validated_fixture_parent(args.fixture_parent, args.evidence_root)
     if args.evidence_root:
         EVIDENCE_ROOT = runner.absolute_path(args.evidence_root, exists=False)
         EVIDENCE_ROOT.mkdir(mode=0o700)

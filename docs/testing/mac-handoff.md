@@ -276,3 +276,54 @@ Changed locks require a current scan/submission. Do not extend the exception or
 call a zero-unignored-result scan vulnerability-free. No whole-audit completion
 date is defensible until ordinary-host admission, remaining gates and external
 requirements are satisfied.
+
+## 7. Hosted OS/capacity snapshot, not native admission
+
+The existing `Desktop cross-host` workflow has two narrowly scoped manual operations:
+`macos-arm64-admission` selects `macos-26`; `macos-x64-admission` selects
+`macos-15-intel`. Each runs only `mac-host-admission-probe`, not the ordinary Desktop
+matrix or Windows witness. Its three inputs remain `operation`, `expected_sha`,
+and `expected_tree`. Unknown operations still reach the ordinary rejecting guard.
+
+Before dispatch, independently verify through GitHub that the reviewed full commit
+maps to the supplied tree and intended workflow/ref. Reconcile active local/hosted
+work, admission holds and the shared execution lease. The non-cancelling job queue
+does not perform that reconciliation. Never forge hosted environment variables or
+run the collector locally as though it were Actions.
+
+`scripts/run-mac-host-admission.py` is a closed **no-child OS/capacity snapshot**:
+fixed in-process OS/native-role/ordinary-user, physical-RAM, disk and instantaneous
+pressure observations only. It runs no Git, Java, Xcode, SDK, simulator, Gradle,
+network, process census or ownership helper. Complete recursive source-byte/Git-mode
+hashes before and after observation must equal the trusted tree; only the physical
+root `.git` directory is excluded. Links, empty/extra/changing entries, unsupported
+representations and malformed identity fail closed. This is two stable observations,
+not an atomic snapshot, local HEAD/history proof or protection from a compromised runner.
+
+The collector starts with `-I -B -S`: isolated, bytecode-free and without system-site
+startup hooks. It has a 30-second cooperative budget, a two-minute runner step limit and
+a five-minute job limit. Between-call checks cannot preempt a hung kernel/filesystem
+call. The genuine run/job/step/attempt terminal result is required in addition to
+the artifact; cancellation, timeout or missing completion cannot pass.
+
+Environment rejection reports only the first failed guard's fixed `ENVIRONMENT_*`
+category, never a caller variable name or value. The categories distinguish bounds,
+required/pinned controls, and prohibited Python, loader, Git, shell, JVM, build-home,
+credential, elevation or campaign hooks. A category is not the offending variable's
+identity or proof of its origin. Rejection remains exit 2 before event, source or host
+observation; reconcile the cause without removing guards or dumping the environment.
+Older undifferentiated `ENVIRONMENT` failures remain unattributed, not new passes.
+
+Only the closed `metadata.json` and `manifest.json` records are uploaded after
+`validate-public` rechecks their schema, identity, source and hashes. The pinned upload
+retains them for 14 days; obtain and verify them before expiry. No raw event/environment,
+paths, OS usernames, hostnames, private receipts, device identifiers or payloads belong
+in that artifact. A correctly retained failed observation does not make the job green.
+Runner-managed checkout/upload infrastructure is outside the collector's no-child claim.
+
+A NORMAL snapshot is not available-RAM evidence, sustained writer capacity, release
+of an existing WARN hold, native ownership, toolchain/simulator/multicast admission,
+or a successful dependency writer. All those gates and resource/finalizer limits remain.
+Later native fixtures, subprocess probes and builds additionally require an approved
+private evidence route and genuine native controls; public counts/hashes cannot
+replace their original private lifetime, failure and cleanup evidence.

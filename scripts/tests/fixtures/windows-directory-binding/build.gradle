@@ -1,0 +1,368 @@
+// Executes the WHOLE production observer callback with finite adverse models.
+// These models are not actual Gradle parents or native Windows product evidence.
+import groovy.json.JsonOutput
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.BasicFileAttributes
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import org.gradle.StartParameter
+import org.gradle.api.internal.ClassPathRegistry
+import org.gradle.api.internal.GradleInternal
+import org.gradle.util.GradleVersion
+
+class BindingRegistration {
+    final List<Closure> callbacks = []
+    void projectsLoaded(Closure callback) { callbacks.add(callback) }
+}
+
+tasks.register('verifyWindowsDirectoryBinding') {
+    def observerName = providers.gradleProperty('p2pkit.windowsDirectoryObserver')
+    inputs.file(observerName)
+    outputs.file(layout.buildDirectory.file('reports/windows-directory-binding/result.json'))
+    outputs.upToDateWhen { false }
+    doLast {
+        if (GradleVersion.current().version != '9.7.0') throw new GradleException('Unreviewed Gradle fixture version')
+        def observer = new File(observerName.get())
+        if (!observer.isAbsolute() || !observer.isFile() || observer.length() > 65536) {
+            throw new GradleException('Missing bounded production observer')
+        }
+        def checksum = { byte[] bytes -> MessageDigest.getInstance('SHA-256').digest(bytes).encodeHex().toString() }
+        def observerBytes = Files.readAllBytes(observer.toPath())
+        def registration = new BindingRegistration()
+        def variables = new Binding([gradle: registration])
+        // No stripping, rewriting, copied resolver, OS override or native call.
+        def shell = new GroovyShell(getClass().classLoader, variables)
+        shell.evaluate(new String(observerBytes, 'UTF-8'), observer.name)
+        if (registration.callbacks.size() != 1) throw new GradleException('Expected one complete production callback')
+        def callback = registration.callbacks[0]
+        def base = layout.buildDirectory.dir('binding-models').get().asFile.toPath()
+        Files.createDirectories(base.parent)
+        Files.createDirectory(base)
+        def source = Files.createDirectory(base.resolve('source')).toFile()
+        def buildSrc = Files.createDirectory(source.toPath().resolve('buildSrc')).toFile()
+        def foreign = Files.createDirectory(base.resolve('foreign')).toFile()
+        def foreignBuildSrc = Files.createDirectory(foreign.toPath().resolve('buildSrc')).toFile()
+        def requestFile = base.resolve('request.json')
+        def rootKey = 'p2pkit.windowsDirectoryRoot'
+        def requestKey = 'p2pkit.windowsDirectoryRequest'
+        def hashKey = 'p2pkit.windowsDirectoryRequestSha256'
+        def properties = [(rootKey): source.absolutePath, (requestKey): requestFile.toString(), (hashKey): '0' * 64]
+        def model = { File root, Map values, parent = null ->
+            [rootProject: [rootDir: root], startParameter: [projectProperties: values], parent: parent]
+        }
+        def root = { Map values -> model(source, values) }
+        def child = { Map values -> model(buildSrc, values, root(properties)) }
+        def rows = []
+        def check = { String id, instance, String expected ->
+            variables.setVariable('gradle', instance)
+            String type = null
+            String message = null
+            boolean passed = false
+            try {
+                callback.call()
+            } catch (Throwable error) {
+                type = error.class.name
+                message = error.message
+                passed = error.class == GradleException && message == expected
+            }
+            rows.add([id: id, passed: passed, expectedMessage: expected,
+                      exceptionType: type?.take(256), message: message?.take(256)])
+        }
+        def missing = 'Missing Windows directory-control request binding'
+        def conflict = 'Conflicting or partial child Windows directory-control binding'
+        def authority = 'Windows directory-control authority root differs from its binding'
+        def changed = 'Windows control request changed'
+        def wrong = 'Wrong Windows directory-control request'
+        Files.write(requestFile, '{}'.getBytes('UTF-8'), StandardOpenOption.CREATE_NEW)
+        check('root_missing', root([:]), missing)
+        check('root_one_key', root([(rootKey): properties[rootKey]]), missing)
+        check('root_two_keys', root(properties.findAll { key, _ -> key != hashKey }), missing)
+        check('root_empty', root(properties + [(rootKey): '']), missing)
+        check('root_empty_request', root(properties + [(requestKey): '']), missing)
+        check('root_bad_hash', root(properties + [(hashKey): 'bad']), missing)
+        check('root_nonstring', root(properties + [(rootKey): 42]), missing)
+        check('authority_wrong_root', model(foreign, properties), authority)
+        check('parentless_buildsrc', model(buildSrc, properties), authority)
+        check('foreign_child', model(foreign, [:], root(properties)),
+              'Unexpected included build in Windows directory control')
+        check('wrong_parent', model(foreignBuildSrc, [:], model(foreign, properties)), authority)
+        check('nested_child', model(buildSrc, [:], model(source, properties, root(properties))),
+              'Windows directory-control authority must be the direct root parent')
+        check('child_one_key', child([(rootKey): properties[rootKey]]), conflict)
+        check('child_two_keys', child(properties.findAll { key, _ -> key != hashKey }), conflict)
+        check('child_empty', child(properties + [(rootKey): '']), conflict)
+        check('child_conflict_root', child(properties + [(rootKey): foreign.absolutePath]), conflict)
+        check('child_conflict_request', child(properties + [(requestKey): 'foreign-request']), conflict)
+        check('child_conflict_hash', child(properties + [(hashKey): '1' * 64]), conflict)
+        check('changed_request_root', root(properties), changed)
+        check('changed_request_child', child([:]), changed)
+        check('child_copy_changed_request', child(new LinkedHashMap(properties)), changed)
+        def request = [schema: 1, root: source.absolutePath, nonce: 'a' * 32, caseName: 'current',
+                       task: ':p2p-core:jvmTest', selector: 'dev.p2pkit.core.transfer.FileTransferJvmTest.' +
+                           'durableDestinationPublishesOnlyAfterCommitAndCommitIsIdempotent']
+        [[id: 'request_wrong_schema', delta: [schema: 2]],
+         [id: 'request_wrong_root', delta: [root: foreign.absolutePath]],
+         [id: 'request_bad_nonce', delta: [nonce: 'stale-invalid']]].each { item ->
+            def bytes = JsonOutput.toJson(request + item.delta).getBytes('UTF-8')
+            Files.write(requestFile, bytes, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)
+            check(item.id, root(properties + [(hashKey): checksum(bytes)]), wrong)
+        }
+        // Execute the exact production predicate compiled above, not a copied
+        // resolver or a class from the fixture's parent loader. These genuine
+        // StartParameter objects are constructed inputs, not CLI parser proof.
+        def policy = shell.classLoader.loadClass('WindowsDirectoryControlTaskPolicy')
+        if (policy.classLoader.parent != shell.classLoader) {
+            throw new GradleException('Task policy did not come from the current observer loader')
+        }
+        def task = request.task
+        def selector = request.selector
+        def exact = [task, '--tests', selector]
+        def policyCases = [
+            [id: 'root_exact', requestedTasks: exact, accepted: true],
+            [id: 'buildsrc_empty', requestedTasks: [], buildSrc: true, accepted: true],
+            [id: 'buildsrc_internal', requestedTasks: ['build'], buildSrc: true, accepted: true],
+            [id: 'root_no_tasks', requestedTasks: []],
+            [id: 'root_task_only', requestedTasks: [task]],
+            [id: 'root_no_switch', requestedTasks: [task, selector]],
+            [id: 'root_no_selector', requestedTasks: [task, '--tests']],
+            [id: 'root_other_selector', requestedTasks: [task, '--tests', 'other.Test.method']],
+            [id: 'root_class_glob', requestedTasks: [task, '--tests', 'dev.p2pkit.core.transfer.FileTransferJvmTest.*']],
+            [id: 'root_wildcard', requestedTasks: [task, '--tests', '*']],
+            [id: 'root_equals_switch', requestedTasks: [task, '--tests=' + selector]],
+            [id: 'root_duplicate_switch', requestedTasks: [task, '--tests', '--tests', selector]],
+            [id: 'root_repeated_filter', requestedTasks: exact + ['--tests', selector]],
+            [id: 'root_abbreviation', requestedTasks: [':p2p-core:jT', '--tests', selector]],
+            [id: 'root_extra_task', requestedTasks: exact + [':p2p-core:jvmJar']],
+            [id: 'root_extra_task_option', requestedTasks: exact + ['--fail-fast']],
+            [id: 'root_reordered', requestedTasks: ['--tests', selector, task]],
+            [id: 'root_dry_run', requestedTasks: exact, dryRun: true],
+            [id: 'root_excluded', requestedTasks: exact, excludedTasks: [':p2p-core:compileKotlinJvm']],
+            [id: 'buildsrc_dry_run', requestedTasks: [], buildSrc: true, dryRun: true],
+            [id: 'buildsrc_excluded', requestedTasks: [], buildSrc: true, excludedTasks: [':compileJava']],
+        ]
+        def policyRows = []
+        policyCases.each { item ->
+            def parameters = new StartParameter()
+            parameters.setTaskNames(item.requestedTasks)
+            parameters.setExcludedTaskNames(item.excludedTasks ?: [])
+            parameters.setDryRun(item.dryRun ?: false)
+            boolean isChild = item.buildSrc ?: false
+            boolean accepted = false
+            String type = null
+            String message = null
+            try {
+                policy.verify(parameters, isChild, task, selector)
+                accepted = true
+            } catch (Throwable error) {
+                type = error.class.name
+                message = error.message
+            }
+            boolean expectedAcceptance = item.accepted ?: false
+            boolean passed = accepted == expectedAcceptance && (accepted ||
+                type == GradleException.name && message == 'Extra task, excluded task or dry run in Windows directory control')
+            policyRows.add([id: item.id, passed: passed, accepted: accepted,
+                exceptionType: type?.take(256), message: message?.take(256),
+                requestedTasks: parameters.taskNames.toList(), excludedTasks: parameters.excludedTaskNames.toList().sort(),
+                dryRun: parameters.dryRun, buildSrc: isChild])
+        }
+        // Same production class, with modeled BasicFileAttributes. This proves
+        // the predicate, not a Windows provider result or native directory pin.
+        def temporaryPolicy = shell.classLoader.loadClass('WindowsDirectoryControlTemporaryPolicy')
+        if (temporaryPolicy.classLoader.parent != shell.classLoader) {
+            throw new GradleException('Temporary policy did not come from the current observer loader')
+        }
+        def temporaryRows = []
+        def keyMessage = 'Invalid optional Test temporary file-key diagnostic'
+        [
+            [id: 'null_key', accepted: true],
+            [id: 'non_null_key', fileKey: 'MODELED_KEY', accepted: true],
+            [id: 'not_directory', directory: false],
+            [id: 'other', other: true],
+            [id: 'symbolic_link', symbolicLink: true],
+            [id: 'nonempty', hasEntries: true],
+            [id: 'empty_key', fileKey: '', message: keyMessage],
+            [id: 'unbounded_key', fileKey: 'x' * 1025, message: keyMessage],
+        ].each { item ->
+            def fields = [directory: true, other: false, symbolicLink: false, hasEntries: false,
+                          fileKey: null, accepted: false] + item
+            def attributes = [isDirectory: { fields.directory }, isOther: { fields.other },
+                              isSymbolicLink: { fields.symbolicLink }, fileKey: { fields.fileKey }] as BasicFileAttributes
+            boolean accepted = false
+            String observed = null
+            String type = null
+            String message = null
+            try {
+                observed = temporaryPolicy.verify(attributes, fields.hasEntries)
+                accepted = true
+            } catch (Throwable error) {
+                type = error.class.name
+                message = error.message
+            }
+            boolean passed = accepted == fields.accepted && (accepted ? observed == fields.fileKey :
+                observed == null && type == GradleException.name &&
+                    message == (item.message ?: 'Test temporary directory is not fresh/physical'))
+            temporaryRows.add([id: item.id, passed: passed, accepted: accepted,
+                exceptionType: type?.take(256), message: message?.take(256), observedFileKey: observed,
+                directory: attributes.isDirectory(), other: attributes.isOther(), symbolicLink: attributes.isSymbolicLink(),
+                hasEntries: fields.hasEntries, fileKey: attributes.fileKey()])
+        }
+        // Real shared producer-policy methods; finite inputs only, NOT an
+        // actual Test/afterTask/Windows filesystem or launcher qualification.
+        def worker = shell.classLoader.loadClass('WindowsDirectoryControlWorkerPolicy')
+        if (worker.classLoader.parent != shell.classLoader) {
+            throw new GradleException('Worker policy did not come from the current observer loader')
+        }
+        def workerRows = []
+        def workerCheck = { String id, String expected, String expectedError, Closure action ->
+            String value = null
+            String type = null
+            String message = null
+            try { value = action.call().toString() } catch (Exception error) {
+                type = error.class.name
+                message = error.message
+            }
+            boolean passed = value == expected && message == expectedError &&
+                type == (expectedError == null ? null : GradleException.name)
+            workerRows.add([id: id, passed: passed, value: value?.take(256),
+                            exceptionType: type?.take(256), message: message?.take(256)])
+        }
+        def boot = 'C:\\m\\gradle-worker.jar'
+        def render = { List<String> cp, String encoding = 'UTF-8', String separator = '\r\n' ->
+            new String(worker.render(cp, encoding, separator), StandardCharsets.US_ASCII)
+        }
+        workerCheck('render_plain', '-cp\r\nC:\\\\m\\\\gradle-worker.jar;C:\\\\m\\\\classes\r\n', null) {
+            render([boot, 'C:\\m\\classes'])
+        }
+        workerCheck('render_space_hash', '-cp\r\n"C:\\\\m\\\\gradle-worker.jar;C:\\\\m\\\\space #dir"\r\n', null) {
+            render([boot, 'C:\\m\\space #dir'])
+        }
+        def charset = { Map values ->
+            def charsetProperties = new Properties()
+            charsetProperties.putAll(values)
+            worker.nativeCharset(charsetProperties, StandardCharsets.US_ASCII).name()
+        }
+        workerCheck('native_encoding_precedence', 'windows-1252', null) {
+            charset(['native.encoding': 'windows-1252', 'sun.jnu.encoding': 'UTF-16'])
+        }
+        workerCheck('native_encoding_fallback', 'UTF-8', null) {
+            charset(['native.encoding': 'unsupported-charset', 'sun.jnu.encoding': 'UTF-8'])
+        }
+        workerCheck('native_encoding_default', 'US-ASCII', null) { charset([:]) }
+        workerCheck('render_full_utf16_refused', null, 'Unsupported worker encoding') { render([boot], 'UTF-16') }
+        workerCheck('render_lf_refused', null, 'Unsupported worker expansion') { render([boot], 'UTF-8', '\n') }
+        workerCheck('render_empty_refused', null, 'Unsupported worker expansion') { render([]) }
+        workerCheck('render_nonascii_refused', null, 'Unsupported worker path') { render(['C:\\m\\caf\u00e9']) }
+        [path_semicolon: 'C:\\m\\x;y', path_quote: 'C:\\m\\x"y', path_apostrophe: "C:\\m\\x'y",
+         path_wildcard: 'C:\\m\\*', path_traversal: 'C:\\m\\..\\x'].each { id, path ->
+            workerCheck(id, null, 'Unsupported worker path') { worker.path(path) }
+        }
+        workerCheck('logged_whitespace', null, 'Unsupported worker path') { worker.path('C:\\m\\space dir', true) }
+        def compiler = 'gradle-worker-classpath1txt'
+        def selected = 'gradle-worker-classpath2txt'
+        workerCheck('selected_compiler_decoy', selected, null) { worker.selected([compiler], [compiler, selected]) }
+        workerCheck('selected_missing', null, 'Ambiguous or missing selected worker file') { worker.selected([], []) }
+        workerCheck('selected_stale', null, 'Ambiguous or missing selected worker file') { worker.selected([selected], [selected]) }
+        workerCheck('selected_ambiguous', null, 'Ambiguous or missing selected worker file') { worker.selected([], [compiler, selected]) }
+        workerCheck('selected_baseline_disappeared', null, 'Invalid worker file inventory') { worker.selected([compiler], [selected]) }
+        workerCheck('selected_wrong_suffix', null, 'Invalid worker file inventory') { worker.selected([], ['gradle-worker-classpath2.txt']) }
+        workerCheck('selected_duplicate', null, 'Invalid worker file inventory') { worker.selected([], [selected, selected]) }
+        workerCheck('capture_success', 'CAPTURED:null', null) {
+            def capture = worker.completeCapture([:]) { }
+            capture.status + ':' + capture.reason
+        }
+        workerCheck('capture_exception', 'REFUSED:CONTENT_MISMATCH', null) {
+            def capture = worker.completeCapture([:]) { value ->
+                value.reason = 'CONTENT_MISMATCH'
+                throw new GradleException('MODELED_CAPTURE_FAILURE_NOT_A_TEST_EXECUTION')
+            }
+            capture.status + ':' + capture.reason
+        }
+        workerCheck('writer_exception', 'CAPTURED:false', null) {
+            def capture = worker.completeCapture([:]) { }
+            def written = worker.retainCapture(capture) { throw new IOException('MODELED_WRITE_FAILURE') }
+            capture.status + ':' + written
+        }
+        // Real build services, not the modeled `gradle` in the Groovy Binding.
+        // The negative reproduces R12. The positive calls the exact production
+        // helper twice without allocating a worker builder, process or argfile.
+        def actualGradle = (GradleInternal) project.gradle
+        def serviceRows = []
+        def serviceCheck = { String id, String expectedType, String expectedMessage, Closure action ->
+            Map found = null
+            String type = null
+            String message = null
+            try { found = action.call() } catch (Exception error) {
+                type = error.class.name
+                message = error.message
+            }
+            boolean passed = type == expectedType && message == expectedMessage &&
+                (expectedType == null ? found != null : found == null)
+            serviceRows.add([id: id, passed: passed, bootstrap: found,
+                             exceptionType: type?.take(256), message: message?.take(256)])
+        }
+        serviceCheck('generic_registry_unknown', IllegalArgumentException.name,
+                     "unknown classpath 'WORKER_MAIN' requested.") {
+            actualGradle.services.get(ClassPathRegistry).getClassPath('WORKER_MAIN')
+            null
+        }
+        serviceCheck('concrete_provider_bootstrap', null, null) {
+            def serviceHome = actualGradle.gradleUserHomeDir.toPath().toAbsolutePath().normalize()
+            def serviceClasspath = worker.bootstrap(actualGradle)
+            if (serviceClasspath.size() != 1) throw new GradleException('Expected one real worker bootstrap')
+            def serviceBootstrap = serviceClasspath[0].toPath().toAbsolutePath().normalize()
+            if (!serviceBootstrap.startsWith(serviceHome.resolve('caches')) ||
+                serviceBootstrap.fileName.toString() != 'gradle-worker.jar') {
+                throw new GradleException('Real worker bootstrap is outside its owned home')
+            }
+            def readBootstrap = {
+                def ancestors = []
+                def cursor = serviceBootstrap
+                while (cursor != null) { ancestors.add(cursor); cursor = cursor.parent }
+                ancestors.reverseEach { entry ->
+                    def attrs = Files.readAttributes(entry, BasicFileAttributes, LinkOption.NOFOLLOW_LINKS)
+                    if (attrs.isSymbolicLink() || attrs.isOther() || entry.toRealPath() != entry ||
+                        (entry != serviceBootstrap && !attrs.isDirectory())) {
+                        throw new GradleException('Nonphysical real worker bootstrap')
+                    }
+                }
+                def attrs = Files.readAttributes(serviceBootstrap, BasicFileAttributes, LinkOption.NOFOLLOW_LINKS)
+                if (!attrs.isRegularFile() || attrs.size() <= 0 || attrs.size() > 4 * 1024 * 1024) {
+                    throw new GradleException('Invalid real worker bootstrap size/type')
+                }
+                def stream = Files.newInputStream(serviceBootstrap, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)
+                byte[] content
+                try { content = stream.readNBytes(4 * 1024 * 1024 + 1) } finally { stream.close() }
+                if (content.length != attrs.size()) throw new GradleException('Real worker bootstrap changed')
+                content
+            }
+            def firstBytes = readBootstrap()
+            if (worker.bootstrap(actualGradle) != serviceClasspath || !Arrays.equals(firstBytes, readBootstrap())) {
+                throw new GradleException('Repeated real worker bootstrap lookup changed')
+            }
+            [relativePath: serviceHome.relativize(serviceBootstrap).collect { it.toString() }.join('/'),
+             bytes: firstBytes.length, sha256: checksum(firstBytes)]
+        }
+        if (!Arrays.equals(observerBytes, Files.readAllBytes(observer.toPath()))) {
+            throw new GradleException('Production observer changed during fixture')
+        }
+        def hashes = [observer: checksum(observerBytes)]
+        ['settings.gradle', 'build.gradle', 'gradle/gradle-daemon-jvm.properties'].each { name ->
+            hashes[name] = checksum(Files.readAllBytes(project.file(name).toPath()))
+        }
+        def report = [schema: 5, scope: 'MODELED_POLICIES_AND_LIVE_GRADLE_SERVICE_LOOKUPS_NOT_NATIVE_PRODUCT',
+                      gradleVersion: GradleVersion.current().version, hashes: hashes, cases: rows,
+                      taskPolicyCases: policyRows, temporaryPolicyCases: temporaryRows, workerPolicyCases: workerRows,
+                      workerServiceCases: serviceRows]
+        def output = layout.buildDirectory.file('reports/windows-directory-binding/result.json').get().asFile.toPath()
+        Files.createDirectories(output.parent)
+        def bytes = (JsonOutput.prettyPrint(JsonOutput.toJson(report)) + '\n').getBytes('UTF-8')
+        if (bytes.length > 65536) throw new GradleException('Binding fixture report exceeds its bound')
+        Files.write(output, bytes, StandardOpenOption.CREATE_NEW)
+        if (rows.any { !it.passed } || policyRows.any { !it.passed } || temporaryRows.any { !it.passed } ||
+            workerRows.any { !it.passed } || serviceRows.any { !it.passed }) {
+            throw new GradleException('Production binding/task/temporary/worker/service controls failed; inspect original report')
+        }
+    }
+}

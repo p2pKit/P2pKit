@@ -15,6 +15,8 @@ on:
       - "scripts/run-windows-directory-control.py"
       - "scripts/tests/run-windows-directory-control-test.py"
       - "scripts/tests/check-windows-directory-control-policy-test.rb"
+      - "scripts/tests/fixtures/windows-directory-binding/settings.gradle"
+      - "scripts/tests/fixtures/windows-directory-binding/build.gradle"
       - "gradle.lockfile"
       - "buildscript-gradle.lockfile"
       - "samples/p2p-sample-desktop/**"
@@ -26,18 +28,18 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Ordinary Desktop matrix, or the reviewed Windows directory-fsync witness only
+        description: Ordinary Desktop matrix, reviewed Windows witness, or no-child Mac capacity snapshot
         type: choice
-        options: [desktop, windows-directory-fsync-control]
+        options: [desktop, windows-directory-fsync-control, macos-arm64-admission, macos-x64-admission]
         default: desktop
         required: true
       expected_sha:
-        description: Exact reviewed source commit (required only for the Windows control)
+        description: Exact reviewed source commit (required for witness or capacity operations)
         type: string
         required: false
         default: ""
       expected_tree:
-        description: Exact reviewed source tree (required only for the Windows control)
+        description: Exact reviewed source tree (required for witness or capacity operations)
         type: string
         required: false
         default: ""
@@ -46,13 +48,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: desktop-cross-host-${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'windows-directory-fsync-control' && format('control-{0}-{1}', github.run_id, github.run_attempt) || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' || inputs.operation != 'windows-directory-fsync-control' }}
+  group: desktop-cross-host-${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'windows-directory-fsync-control' || inputs.operation == 'macos-arm64-admission' || inputs.operation == 'macos-x64-admission') && format('control-{0}-{1}', github.run_id, github.run_attempt) || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' || (inputs.operation != 'windows-directory-fsync-control' && inputs.operation != 'macos-arm64-admission' && inputs.operation != 'macos-x64-admission') }}
 
 jobs:
   verify:
     name: ${{ matrix.os }}
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.operation != 'windows-directory-fsync-control' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.operation != 'windows-directory-fsync-control' && inputs.operation != 'macos-arm64-admission' && inputs.operation != 'macos-x64-admission') }}
     concurrency:
       group: p2pkit-nonphysical-heavy
       queue: max
@@ -204,3 +206,59 @@ jobs:
         if: ${{ always() && steps.control.outputs.artifacts_ready != 'true' }}
         shell: pwsh
         run: throw 'Windows control did not seal safe original evidence; no acceptance claim'
+
+  mac-host-admission-probe:
+    name: mac-host-admission-probe
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'macos-arm64-admission' || inputs.operation == 'macos-x64-admission') }}
+    concurrency:
+      group: p2pkit-nonphysical-heavy
+      queue: max
+      cancel-in-progress: false
+    runs-on: ${{ inputs.operation == 'macos-arm64-admission' && 'macos-26' || 'macos-15-intel' }}
+    timeout-minutes: 5
+    env:
+      P2PKIT_OPERATION: ${{ inputs.operation }}
+      P2PKIT_EXPECTED_SHA: ${{ inputs.expected_sha }}
+      P2PKIT_EXPECTED_TREE: ${{ inputs.expected_tree }}
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Check out exact reviewed capacity source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # This collector creates no children and does not admit native ownership,
+      # toolchains, simulators or the dependency writer. No cache or secret scope.
+      - name: Observe no-child Mac OS and capacity metadata
+        id: snapshot
+        timeout-minutes: 2
+        shell: bash
+        run: exec python3 -I -B -S scripts/run-mac-host-admission.py run
+
+      - name: Validate exact public capacity evidence
+        id: public
+        if: ${{ always() }}
+        timeout-minutes: 2
+        shell: bash
+        run: exec python3 -I -B -S scripts/run-mac-host-admission.py validate-public
+
+      - name: Retain nonprivate capacity metadata
+        if: ${{ always() && steps.public.outputs.artifacts_ready == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mac-host-capacity-${{ inputs.operation }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/p2pkit-mac-host-capacity-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: error
+          include-hidden-files: false
+          overwrite: false
+
+      - name: Fail if safe capacity evidence is unavailable
+        if: ${{ always() && steps.public.outputs.artifacts_ready != 'true' }}
+        shell: bash
+        run: |
+          echo 'FATAL: no safe complete capacity evidence; no host admission claim' >&2
+          exit 1

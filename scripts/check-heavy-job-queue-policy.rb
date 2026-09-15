@@ -10,7 +10,8 @@ module HeavyJobQueuePolicy
     QUEUE = {"group" => GROUP, "queue" => "max", "cancel-in-progress" => false}.freeze
     JOBS = {
         "ci.yml" => {"jvm-library-checks" => "JVM libraries (${{ matrix.os }})", "complete-gate" => nil},
-        "desktop-cross-host.yml" => {"verify" => "${{ matrix.os }}", "windows-directory-fsync-control" => "windows-directory-fsync-control"},
+        "desktop-cross-host.yml" => {"verify" => "${{ matrix.os }}", "windows-directory-fsync-control" => "windows-directory-fsync-control",
+            "mac-host-admission-probe" => "mac-host-admission-probe"},
         "ios-x64-tests.yml" => {"ios-x64" => nil},
         "dependency-submission.yml" => {"submit" => nil},
     }.freeze
@@ -22,8 +23,8 @@ module HeavyJobQueuePolicy
             "cancel-in-progress" => "${{ github.event_name != 'schedule' }}",
         },
         "desktop-cross-host.yml" => {
-            "group" => "desktop-cross-host-${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'windows-directory-fsync-control' && format('control-{0}-{1}', github.run_id, github.run_attempt) || github.ref }}",
-            "cancel-in-progress" => "${{ github.event_name != 'workflow_dispatch' || inputs.operation != 'windows-directory-fsync-control' }}",
+            "group" => "desktop-cross-host-${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'windows-directory-fsync-control' || inputs.operation == 'macos-arm64-admission' || inputs.operation == 'macos-x64-admission') && format('control-{0}-{1}', github.run_id, github.run_attempt) || github.ref }}",
+            "cancel-in-progress" => "${{ github.event_name != 'workflow_dispatch' || (inputs.operation != 'windows-directory-fsync-control' && inputs.operation != 'macos-arm64-admission' && inputs.operation != 'macos-x64-admission') }}",
         },
         "ios-x64-tests.yml" => {"group" => "ios-x64-tests-${{ github.ref }}", "cancel-in-progress" => false},
     }.freeze
@@ -36,8 +37,9 @@ module HeavyJobQueuePolicy
     }.freeze
     CONDITIONS = {
         ["ci.yml", "complete-gate"] => "${{ always() }}",
-        ["desktop-cross-host.yml", "verify"] => "${{ github.event_name != 'workflow_dispatch' || inputs.operation != 'windows-directory-fsync-control' }}",
+        ["desktop-cross-host.yml", "verify"] => "${{ github.event_name != 'workflow_dispatch' || (inputs.operation != 'windows-directory-fsync-control' && inputs.operation != 'macos-arm64-admission' && inputs.operation != 'macos-x64-admission') }}",
         ["desktop-cross-host.yml", "windows-directory-fsync-control"] => "${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'windows-directory-fsync-control' }}",
+        ["desktop-cross-host.yml", "mac-host-admission-probe"] => "${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'macos-arm64-admission' || inputs.operation == 'macos-x64-admission') }}",
     }.freeze
 
     def self.require_policy(condition, message)
@@ -135,5 +137,5 @@ if $PROGRAM_NAME == __FILE__
     rescue HeavyJobQueuePolicy::Error, SystemCallError => error
         abort "FATAL: #{error.message}"
     end
-    puts "RESULT: PASS — six participating jobs share the bounded non-cancelling queue; workflow groups remain separate"
+    puts "RESULT: PASS — seven participating jobs share the bounded non-cancelling queue; workflow groups remain separate"
 end

@@ -20,6 +20,8 @@ ruby scripts/tests/check-ci-scope-policy-test.rb
 ruby scripts/tests/check-heavy-job-queue-policy-test.rb
 ruby scripts/tests/check-windows-directory-control-policy-test.rb
 python3 -B scripts/tests/run-windows-directory-control-test.py
+ruby scripts/tests/check-mac-host-admission-policy-test.rb
+python3 -I -B -S scripts/tests/run-mac-host-admission-test.py
 scripts/tests/check-git-whitespace-test.sh
 scripts/tests/check-release-identity-test.sh
 python3 scripts/tests/check-publish-license-test.py

@@ -39,7 +39,11 @@ automatic hash regeneration.
 Each case receives a separate full-history, byte-verified source copy and fresh
 sibling executor state/home. Git archive membership and every Git blob are
 verified; links, filtering/substitution, omitted files and Windows path aliases
-are refused. The one-method derivative is committed **locally before** immutable
+are refused. Each newly owned clone receives repository-local `core.longpaths=true`,
+with its effective boolean read back before source preparation. Original config
+commands/results are retained; the immutable executor and later ordinary Git
+callers inherit this policy. No campaign, global Git or OS settings are changed.
+The one-method derivative is committed **locally before** immutable
 state initialization, with the exact candidate as its parent. It is never pushed.
 Generated BuildInfo must name the actual clean current/derivative commit.
 
@@ -77,10 +81,39 @@ licenses/platforms are blockers. Initial resource admission requires 6GiB RAM
 The controller is bounded to 80 minutes plus a 10-minute finalization allowance,
 inside the workflow's separate step/job bounds.
 
+For [#428](https://github.com/p2pKit/P2pKit/issues/428), the Windows batch boundary
+quotes every argument in full, including the SDK executable and `--sdk_root`
+under `Program Files (x86)`. Parentheses are literal only inside those quotes;
+embedded quotes, expansion/control characters and the interpreter's original
+restricted grammar remain rejected. `/d /s /v:off /c`, trailing-backslash handling
+and before-resume Job ownership are unchanged. Synthetic SDK-shaped native
+fixtures test argument forwarding, not the installed SDK or Java itself.
+
+`sdk-tool-before.json` and `sdk-tool-after.json` retain only SHA-256/byte counts for
+the actual `cmdline-tools/latest/bin/sdkmanager.bat` and command-tools
+`source.properties` (each bounded to 256KiB). No raw installed launcher or
+command-tools metadata is uploaded. Post-install drift, unreadable inputs or
+missing snapshot retention block native continuation/disposal without replacing
+an original SDK-leaf failure. Matching snapshots are not provenance approval or
+proof against transient modification: native acceptance must also match them to
+separately reviewed exact official Windows SDK package bytes and inspect the
+launcher's Java/argument forwarding. Missing or mismatched counterparts remain a
+hold; never substitute another package, a Unix launcher or an 8.3 path guess.
+
 Run the **complete maintained Windows executor fixture suite**, retaining its
 actual test count and each fixture's cleanup history. Never substitute a Mac
 fixture count. Intentional negative nested receipts remain negative evidence;
 unexpected fixture failures or unknown retirement block the product witness.
+
+The controller passes the suite's optional `--fixture-parent` argument for its
+existing, empty `state/fixtures/native-tmp` directory. The suite validates the
+current-state binding and physical path, requires retained evidence outside that
+parent, and supplies explicit Python allocation parents without changing
+`TEMP`, `TMP`, `TMPDIR` or Python's default temporary directory. The outer
+executor and its mandatory real wrapper `--stop` retain the separate owned
+`process-tmp` environment. Callers without this option retain default allocation
+behavior. The same complete empty-before/empty-after metadata and fixture cleanup
+requirements still apply; no residual directory is whitelisted or guessed safe.
 
 ## Product and assessment
 
@@ -92,6 +125,16 @@ same-home `--stop` with no unknown survivors. A separate fallback stop may recov
 resources after a broken finalizer; it never repairs a failed receipt into a pass.
 
 Only the exact core selector and normal buildSrc/core prerequisites are allowed.
+The root observer and independent assessor require the original Gradle
+`StartParameter.taskNames` triple `[TASK, "--tests", SELECTOR]`; that API retains
+task arguments, not just names. Missing/duplicate filters, other/glob selectors,
+abbreviations and extra tokens are rejected without filtering or rewriting the
+observed list. The separate buildSrc graph does not use the root's command tokens.
+Dry runs, excluded tasks and the exact Test filter/graph/worker checks remain
+independent rejection boundaries. Global options such as the maintained `--info`
+are parsed separately, not part of this triple. Pure report models do not prove
+real Gradle parsing or execute the observer; the genuine current/preimage witness
+must supply those observations before [#433](https://github.com/p2pKit/P2pKit/issues/433) can close.
 The scoped init observer records the actual task graph/outcomes, selected filter,
 JDK17 launcher, worker JVM arguments and test events. It sets the Test JVM's
 `java.io.tmpdir` explicitly to the fresh owned directory; a daemon `-D` flag alone
@@ -101,8 +144,80 @@ Test worker. JDK17 attribution separately requires the admitted native JDK17
 executable/version probe, its exact JavaLauncher path and the original info log's
 actually launched Test-worker command. Daemon metadata alone is insufficient.
 
+For [#434](https://github.com/p2pKit/P2pKit/issues/434), Java's actual
+`temporaryFileKey` is a **nullable diagnostic**, not native identity authority.
+The standard Windows JDK provider returns null; requiring a key rejects the
+supported host. Present JSON null is valid, but a missing field or a non-null
+empty/oversized/non-string value is not. Never synthesize a key or stringify null.
+The Java guard still verifies the physical, ordinary, non-other/nonlinked, empty
+directory, request/owner hashes and all original Test/launcher/argument rules.
+Its admission explicitly names the request's exact `temporaryOwnerSha256`.
+
+The controller instead records positive bounded native Python device/inode
+identity (and available birth time) **at its owned `mkdir`**. The canonical
+`temporary-owner.json` binds that creation to source/run/case/nonce/context job
+and path. Schema-2 `temporary-before.json` and `temporary-after.json` compare
+root-first full `lstat` observations to that identity and the exact owner hash,
+immediately before the selected leaf and after its same-home stop. They retain
+bounded direct-entry metadata only, also on failure: no payload reads, recursive
+scratch inventory, guessed cleanup or raw scratch upload. Missing/zero/replaced
+identity, symlink/reparse ancestry, changed/unreadable owner, observation errors,
+nonempty roots or missing retention block acceptance and disposal. Original
+product/stop errors remain authoritative when a later observation also fails.
+Metadata files do not claim product success; original selected-test/receipt and
+case/outer retirement must all pass separately before final acceptance.
+
+This is an invocation-owned, otherwise quiescent before/after snapshot contract,
+**not an atomic directory pin**. It cannot exclude hostile replace-and-restore,
+file-ID reuse or modification after the last observation. The former non-null
+Java key was never compared with another key and supplied no such guarantee.
+
+The parentless root consumes its own three explicit request properties. Only its
+exact direct `buildSrc` child may consume that root parent's complete triplet;
+Gradle's nested build does not reliably inherit the command-line properties.
+Foreign/deeper builds, a different physical authority root, and partial or
+conflicting child properties fail closed. Both scope reports retain the observed
+authority, parent root and locally present three-key subset, not all properties.
+The independent assessor checks these observations against the fresh request.
+
+After native admission, one small owned `binding-controls` Gradle leaf executes
+the complete production observer callback against 24 finite adverse **models**.
+The same fixture loads the production task-policy class from that fresh observer
+GroovyShell's classloader and exercises 21 **constructed real StartParameter**
+inputs: exact root and distinct buildSrc positives, missing/duplicate/broadened
+selectors, extra tasks/options, and root/child dry-run/exclusion negatives.
+Eight additional modeled `BasicFileAttributes` inputs execute the production
+temporary-policy class from the same loader: null/non-null-key positives and
+non-directory/other/link/nonempty/invalid-key negatives. These exercise the actual
+shared predicates, not actual command-line parsing, a Windows filesystem provider,
+or a complete successful observer invocation. Another 25 worker-policy models
+exercise the same observer class's exact rendering, native-charset selection,
+bounded new-file selection and capture/write-error preservation. They do **not**
+execute an actual failed Test's `afterTask` callback. Two separate **live Gradle
+service** controls use the fixture's real `GradleInternal`, not the modeled
+callback receiver: the build registry must reject `WORKER_MAIN` with the exact
+pinned exception; the production helper must resolve one ordinary, physical
+`gradle-worker.jar` below the invocation's owned Gradle cache. A second lookup
+must return the same path and bytes. Only Gradle's normal short-lived cache
+initialization is invoked, not a worker builder, process, messaging service or
+argument file. The schema-5 report separates these two controls from the 78
+modeled-policy/constructed-parameter cases and retains the observed relative
+bootstrap path, size/hash, nullable key diagnostics and precise exception outcomes.
+It has no plugins/dependencies/product tasks and copies the checked-in daemon
+criteria. Its bounded report distinguishes precise binding/request rejections
+from wrong exceptions or later host refusal; canonical leaf retention is required
+for acceptance. An unbound failure copy cannot become a passing result. These
+models are not real Gradle parents. The subsequent current/preimage products must
+still supply actual root/buildSrc observations and all original native criteria.
+
 Accept current positive **before** attempting the preimage:
 
+- The pinned Kotlin JVM report uses suite `FileTransferJvmTest[jvm]` and testcase
+  `durableDestinationPublishesOnlyAfterCommitAndCommitIsIdempotent[jvm]`.
+  Its `classname` stays `dev.p2pkit.core.transfer.FileTransferJvmTest`; selectors
+  and listener events keep the canonical class and bare method. For
+  [#435](https://github.com/p2pKit/P2pKit/issues/435), require exactly those distinct
+  identities, not arbitrary suffixes or the old model-only report labels.
 - Current: product/stop/final `0/0/0`, exactly one selected passing test, no skip,
   error, extra test, cached required task or changed source.
 - Preimage: product/stop/final **`1/0/1`**, exactly one selected failure whose
@@ -120,6 +235,100 @@ Accept current positive **before** attempting the preimage:
 The outer assessor may return zero after detecting the expected red, but preserves
 the original producer exit1 and failed XML. The preimage stops before the second
 commit/final assertions; it is not a passing library suite or all of #141.
+
+### Selected worker argument file (#436)
+
+Gradle 9.7.0's pinned
+[worker producer](https://github.com/gradle/gradle/blob/3defbfc59d757b873d787b2261de5c7f8a00970a/platforms/core-execution/worker-process-services/src/main/java/org/gradle/process/internal/worker/child/ApplicationClassesInSystemClassLoaderWorkerImplementationFactory.java)
+uses one generated Java9+ classpath argument file. This is not permission for
+caller-supplied `@` options. The supported basename is
+`gradle-worker-classpath[0-9]{1,20}txt` (**no dot** before `txt`), a direct child
+of this case's fresh `state/gradle-home/.tmp`. The distinct compiler-worker file
+is a prelaunch baseline member, never the selected Test file.
+
+Before Test launch, `workerExpansion` in `test-admission.json` records the actual
+Gradle version/home, nonmodular JUnit framework observation, `WORKER_MAIN`
+provider bootstrap path/size/hash, and ordered application classpath with file,
+directory or missing-output kind. The actual module detector supplies this
+classpath; missing core build outputs are recorded and omitted just as the
+worker builder does. The bootstrap comes from the concrete user-home
+`WorkerProcessClassPathProvider`, not an argfile or cache search. Gradle's
+[user-home registry](https://github.com/gradle/gradle/blob/3defbfc59d757b873d787b2261de5c7f8a00970a/subprojects/core/src/main/java/org/gradle/internal/service/scopes/GradleUserHomeScopeServices.java#L208-L214)
+includes this provider, but the
+[build-scoped registry](https://github.com/gradle/gradle/blob/3defbfc59d757b873d787b2261de5c7f8a00970a/subprojects/core/src/main/java/org/gradle/internal/service/scopes/BuildScopeServices.java#L416-L420)
+returned by a generic service lookup does not. The provider is
+[registered in user-home scope](https://github.com/gradle/gradle/blob/3defbfc59d757b873d787b2261de5c7f8a00970a/platforms/core-execution/worker-process-services/src/main/java/org/gradle/process/internal/worker/services/WorkerProcessServices.java#L43-L76),
+like the actual worker factory. Existing class/resource directories and JARs must belong to the
+current core build or case-owned strict dependency cache. Shared/sibling homes,
+module paths, wildcard/aliased paths and other producer shapes fail closed.
+
+This finite profile admits canonical printable ASCII Windows paths, excluding
+quotes (including apostrophes), semicolons, control characters, traversal, ADS,
+reserved names and wildcards. Logged paths must also be whitespace-free;
+classpath entries may contain spaces or `#`. Expected tokens are independently
+formed as `-cp` and one semicolon-joined bootstrap/application classpath. They use
+the pinned ArgWriter's doubled backslashes, conditional whole-argument quoting
+and CRLF after **each** token. The observed daemon native charset follows
+`native.encoding`, supported `sun.jnu.encoding`, then the default charset.
+Encoding the **entire** authorized string must equal strict ASCII bytes; neither
+JDK21's default nor worker `file.encoding=UTF-8` is treated as that proof. There
+are at most 64 path components, 512 effective entries and 256KiB of bytes. Unsupported encodings or
+paths require a separately reviewed profile, not normalization or extra options.
+
+The selected `afterTask` callback, including an actual failed Test, rechecks its
+authority and selects exactly one new file absent from the bounded prelaunch
+inventory. It retains exact original bytes as private `worker-classpath.raw`
+before Gradle returns and before same-home stop. NIO checks physical ancestors,
+ordinary type, size, modification time and any available file key; a null Java
+key remains valid and is **not** native identity. No unrelated temporary file
+contents are read. Write-once `worker-classpath.json` (schema 1) binds the request,
+admission hash, callback time, finite after-inventory, original path/size/hash and
+`CAPTURED` or a bounded `REFUSED` reason. Capture failures do not replace the
+original Test outcome, and missing capture is not synthesized.
+
+After the finalized product/stop leaf, the controller independently renders and
+checks the bytes and joins the one new file to exactly one original logged Test
+launch/start ID, admitted JDK17, working directory, full JVM options, exact
+`worker.org.gradle.process.internal.worker.GradleWorkerMain` and display-name
+argument. No other `@`, classpath/module override, OS override, agent or changed
+critical option is admitted. Native `regular()`/`lstat` checks then verify the
+original, private snapshot and bootstrap, including nonreparse ancestry,
+`nlink == 1`, stable identity/attributes and unchanged size/hash/content.
+
+The separate, small `worker-classpath-retention.json` (schema 1) records actual
+post-stop native identities/attributes and `QUALIFIED` or finite `REFUSED` status,
+transitively bound to the original request/capture/leaf. It never edits a
+`CAPTURED` observer report into a refusal. Public `worker-classpath.args` is an
+exact copy of the **read original snapshot bytes**, allowed only after content,
+launch association and native checks pass. A later XML/product failure does not
+erase safely retained originals or replace the primary failure. New classpath
+metadata is safety-checked before copying observer reports. All four existing
+seal/verify/pre-disposal entrypoints revalidate these three fixed public files;
+unknown raw files, malformed fields, stale hashes or changed bytes block them.
+
+These are source-bound, quiescent before/after snapshots, **not** creator-PID
+tracing, hostile atomic pinning or full product acceptance. If the original is
+missing after stop, retain the before-stop snapshot as private unqualified
+evidence, block disposal and never reconstruct it. Unsafe raw bytes are never
+uploaded; an ephemeral hosted machine is not a durable private evidence channel.
+The inspected producer does not establish that stop necessarily deletes files.
+
+Historical [R10/attempt1](https://github.com/p2pKit/P2pKit/actions/runs/34861390053/attempts/1)
+remains **FAILED**: current product/stop/final `0/0/0`, preimage **NOT_EXECUTED**.
+The XML label predicate failed first; the blanket `@` guard was **NOT REACHED**.
+R10 did not retain the argument-file contents, so its pathname is not an
+expansion-integrity pass. Closing [#436](https://github.com/p2pKit/P2pKit/issues/436)
+still requires independent source/design review, genuine fresh Windows
+current/preimage original-byte and native-result acceptance, required checks,
+formal review and normal merge. Pure/model controls do not satisfy those gates.
+
+Historical [R12/attempt1](https://github.com/p2pKit/P2pKit/actions/runs/34884637288/attempts/1)
+also remains **FAILED**: native96 and compiled Groovy78 passed, but current
+product/stop/final was `1/0/1`. The generic build-registry lookup rejected
+`WORKER_MAIN` before Test admission, selected JUnit execution or worker capture.
+The compiler worker did launch; it is not the selected Test worker. The preimage
+was **NOT_EXECUTED**. This collector correction and live-service regression do
+not retroactively turn R12 or its 78 modeled cases into native product acceptance.
 
 ## Retention and cleanup
 
