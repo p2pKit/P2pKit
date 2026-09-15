@@ -1,0 +1,127 @@
+// Opt-in only, installed by scripts/test-transcript-custody.py in an owned home.
+// Configure forked Test JVMs, not the daemon. Never change tasks/filters/deadlines.
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.StandardOpenOption
+import java.security.MessageDigest
+import org.gradle.api.tasks.testing.Test
+
+def demand = { condition, message ->
+    if (!condition) throw new GradleException("Transcript custody: " + message)
+}
+def physical = { File file ->
+    def path = file.toPath().toAbsolutePath().normalize()
+    demand(path.toRealPath().equals(path), "nonphysical path")
+    for (def part = path; part != null; part = part.parent) {
+        demand(!Files.isSymbolicLink(part), "linked path")
+    }
+    path
+}
+def readBounded = { File file ->
+    physical(file)
+    demand(file.isFile() && file.length() <= 1024 * 1024, "unbounded request/input")
+    file.bytes
+}
+def sha = { byte[] bytes -> MessageDigest.getInstance("SHA-256").digest(bytes).encodeHex().toString() }
+demand(gradle.ext.has("p2pkitCustodyRequest") && gradle.ext.has("p2pkitCustodyRequestSha256"), "missing request")
+def requestFile = new File(gradle.ext.p2pkitCustodyRequest as String)
+def requestHash = gradle.ext.p2pkitCustodyRequestSha256 as String
+def raw = readBounded(requestFile)
+demand(sha(raw) == requestHash, "request changed")
+def request = new JsonSlurper().parse(raw)
+demand(request.schema == 1 && request.token ==~ /[0-9a-f]{32}/, "invalid request identity")
+def root = new File(request.root as String)
+def directory = new File(request.directory as String)
+def home = new File(request.home as String)
+def projects = [cli: ":p2p-sample-desktop:test", diagnostics: ":p2p-sample-diagnostics:test"]
+demand(request.roots.keySet() == (["cli"] as Set) || request.roots.keySet() == (["cli", "diagnostics"] as Set),
+       "unknown test scope")
+def ownerDomain = {
+    def chain = System.getenv("P2PKIT_AUDIT_OWNERSHIP_CHAIN")
+    def encoded = System.getenv("P2PKIT_AUDIT_OWNERSHIP_DOMAINS")
+    demand(chain != null && chain ==~ /[0-9a-f]{32}(?::[0-9a-f]{32}){0,31}/ &&
+           encoded != null && encoded.length() <= 512 * 1024, "missing or unbounded native ownership")
+    def ids = chain.split(":") as List
+    def domains = new JsonSlurper().parseText(encoded)
+    demand(domains instanceof List && domains.size() == ids.size() && ids.toSet().size() == ids.size(),
+           "invalid native ownership chain")
+    domains.eachWithIndex { domain, index ->
+        demand(domain instanceof Map && domain.keySet() == (["id", "job", "state", "home"] as Set) &&
+               domain.id == ids[index] && domain.job instanceof String && domain.job ==~ /[0-9a-f]{32}/ &&
+               [domain.state, domain.home].every { it instanceof String && it.length() > 0 && !it.contains("\u0000") },
+               "invalid native ownership domain")
+    }
+    def expected = [id: request.owner.productInvocation, job: request.owner.job,
+                    state: request.ownerState, home: request.home]
+    def actual = domains.last()
+    demand(actual == expected && System.getenv("P2PKIT_AUDIT_JOB_ID") == actual.job &&
+           System.getenv("P2PKIT_AUDIT_STATE_DIR") == actual.state &&
+           System.getenv("GRADLE_USER_HOME") == actual.home, "wrong native product domain")
+    // Only the direct reserved product domain is admitted. A nested leaf needs
+    // its own prepared request; an ancestor receipt is not its retirement proof.
+    actual
+}
+def validate = {
+    demand(sha(readBounded(requestFile)) == requestHash, "request changed")
+    demand(physical(home) == physical(gradle.gradleUserHomeDir), "wrong Gradle home")
+    physical(directory)
+    request.inputs.each { name, hash ->
+        demand(!name.startsWith("/") && !name.contains(".."), "invalid source input")
+        demand(sha(readBounded(new File(root, name as String))) == hash, "bound input changed")
+    }
+    request.roots.each { scope, entry ->
+        def temp = new File(entry.path as String)
+        demand(physical(temp).startsWith(physical(directory)), "temporary path escaped custody")
+        demand(new String(readBounded(new File(temp, "owner.token")), "UTF-8") == request.token + "\n",
+               "temporary ownership changed")
+        if (Files.getFileStore(temp.toPath()).supportsFileAttributeView("unix")) {
+            def ids = Files.readAttributes(temp.toPath(), "unix:dev,ino", LinkOption.NOFOLLOW_LINKS)
+            demand(ids.dev == entry.identity.device && ids.ino == entry.identity.inode, "temporary root replaced")
+        }
+        // fileKey() is diagnostic only; Windows may legitimately return null.
+    }
+    demand(System.getenv("_JAVA_OPTIONS") == null, "late JVM-option override is not admitted")
+    ownerDomain()
+}
+def event = { scope, suffix, fields ->
+    validate()
+    def data = [schema: 1, token: request.token, requestSha256: requestHash, task: projects[scope],
+                ownerDomain: ownerDomain()] + fields
+    def path = new File(directory, "events/${scope}-${suffix}.json").toPath()
+    physical(path.parent.toFile())
+    def bytes = (JsonOutput.toJson(data) + "\n").getBytes("UTF-8")
+    Files.write(path, bytes, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
+}
+
+// Included builds (including buildSrc) share init.d. Do not impose this root's tasks on them.
+gradle.projectsEvaluated {
+    if (gradle.rootProject.projectDir.canonicalFile != root.canonicalFile) return
+    validate()
+    request.roots.each { scope, entry ->
+        def task = gradle.rootProject.tasks.getByPath(projects[scope])
+        demand(task instanceof Test, "expected an actual Test task")
+        def temp = entry.path as String
+        demand(!task.systemProperties.containsKey("java.io.tmpdir") || task.systemProperties["java.io.tmpdir"] == temp,
+               "conflicting test temporary property")
+        demand(!task.jvmArgs.any { it.startsWith("-Djava.io.tmpdir") }, "conflicting test JVM argument")
+        task.systemProperty("java.io.tmpdir", temp)
+        task.doFirst {
+            validate()
+            demand(task.systemProperties["java.io.tmpdir"] == temp, "test temporary property changed")
+            def args = task.allJvmArgs.findAll { it.startsWith("-Djava.io.tmpdir=") }
+            demand(args == ["-Djava.io.tmpdir=" + temp], "effective test temporary argument changed")
+            def key = Files.readAttributes(new File(temp).toPath(), "basic:fileKey", LinkOption.NOFOLLOW_LINKS).fileKey
+            event(scope, "start", [temporary: temp, fileKey: key == null ? null : key.toString()])
+        }
+    }
+}
+gradle.taskGraph.afterTask { task, state ->
+    if (task.project.rootProject.projectDir.canonicalFile != root.canonicalFile) return
+    def scope = projects.find { key, value -> value == task.path }?.key
+    if (scope != null && request.roots.containsKey(scope)) {
+        event(scope, "finish", [executed: state.executed && !state.skipped && !state.noSource,
+                               failed: state.failure != null])
+    }
+}

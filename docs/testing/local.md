@@ -145,6 +145,74 @@ retain and decode the Base64 records from the original reports before outer clea
 Only the tiny finalizer-control fixtures dispose of their source-defined synthetic bytes
 directly; they are not child-process observations or substitute runtime evidence.
 
+The opt-in [custody allocator/collector](../../scripts/test-transcript-custody.py) and
+[Test initializer](../../gradle/test-transcript-custody.init.gradle) preserve this boundary
+without changing the executor, test filters, framework, deadlines or production code.
+They do not launch Gradle, observe/kill processes, acquire dependencies, encrypt or upload
+anything. **Source/offline controls alone do not qualify the initializer on a real Test JVM.**
+Run its offline, synthetic-owner/report controls with
+`python3 -I -B -S scripts/tests/test-transcript-custody-test.py`.
+The full current classes require 9 CLI methods/two original exports and 23 diagnostics
+methods/four exports; these are expected counts, not an execution result.
+
+For a new clean immutable state, install after any admitted cache restoration and before
+the normal leaf. Use `--scope both` for `full`/whole-check; Desktop's six-task batch needs
+`--scope cli` because it does not execute diagnostics tests. Bind the exact leaf's original
+argv after `--`, not an approximate task label. For example, the following is a recipe,
+not evidence that the full gate ran:
+
+```bash
+CUSTODY="$P2PKIT_AUDIT_STATE_DIR/custody"
+python3 scripts/test-transcript-custody.py prepare --root "$ROOT" \
+  --directory "$CUSTODY" --home "$GRADLE_USER_HOME" \
+  --owner-state "$P2PKIT_AUDIT_STATE_DIR" --owner-kind audit --scope both \
+  -- python3 scripts/run-platform-tests.py full
+INVOCATION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["owner"]["productInvocation"])' \
+  "$CUSTODY/request.json")"
+# Pass --id "$INVOCATION" to the normal run-audit-command.py leaf. Preserve its
+# original status even on failure; no other leaf may use this reservation.
+# After its finally/stop/native-worker drain, collect UNCONDITIONALLY:
+python3 scripts/test-transcript-custody.py collect --directory "$CUSTODY" \
+  --owner-result "$P2PKIT_AUDIT_STATE_DIR/host-mac-platform-full.json"
+```
+
+The allocator reserves fresh native invocation IDs; an audit job comes from the
+actual context. The existing executor consumes the product ID with `--id`. A
+preexisting invocation is rejected. Task events validate and record the inherited
+native job/ownership-chain/domain and selected state/home, not just the request's
+token. The direct last domain must match; a genuinely nested leaf needs a new
+request bound to that leaf. The unchanged full-profile runner uses direct Gradle
+children and retains its outer leaf's domain.
+
+The collector cross-checks those reserved IDs, the original canonical receipt/context, source/home/argv,
+task start/outcome records, current class XML and exact Base64 record identities/lengths.
+It independently attempts report retention and remaining-log inventory. Missing/stale
+reports, failed execution, unverified originals, or unknown retirement remain **HOLD**;
+the absence of a marker never makes them green. `RETAINED` is only custody, not native
+acceptance, the complete gate, independent review or permission to merge/close an issue.
+Its 64-MiB aggregate/16-MiB individual evidence bounds fail closed with originals left in
+place. It does not defend against a malicious same-user process replacing the controller
+and its records. Windows Java `fileKey()` may be null; the controller's physical directory
+identities remain required. Inspect retained originals independently before acceptance.
+
+Keep the private root outside the checkout and outside the executor's disposable-root
+allowlist (`state/custody`, **not** `state/fixtures`). The collector never deletes originals.
+After known retirement, `uninstall --directory "$CUSTODY"` removes only that request's
+exact `init.d` loader, preserving other initialization and all custody evidence. Do this
+before cache save or a later leaf; allocate a new request for the later command rather
+than reusing task events. Dependency inputs can remain in the same admitted home.
+
+The mutable writer needs its separately reviewed outer controller to install with
+`--owner-kind writer --writer-job <actual-controller-job>`, consume the request's
+distinct product/stop IDs when constructing its existing native command scopes,
+retain its actual post-stop/drain owner snapshot, call collection
+before outer cleanup, and bind the custody result into its final result. Lock/metadata
+mutation is allowed only for that owner; the helper does not promote a writer candidate
+or replace the complete dependency procedure. Do not run a retired private controller
+unchanged. Ordinary hosted Desktop has no canonical native-retirement receipt yet:
+its adapter and approved private/encrypted evidence delivery are still prerequisites.
+Do not upload raw XML, child logs or Gradle failure output as public app artifacts.
+
 ## Android ABI graph verification
 
 `scripts/check-android-abi-guard.sh` runs a strict Gradle dry-run of the three Android modules' `check` tasks and

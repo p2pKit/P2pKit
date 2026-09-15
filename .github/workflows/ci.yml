@@ -124,6 +124,9 @@ jobs:
           ruby scripts/tests/check-sample-app-workflow-policy-test.rb
           python3 -I -B -S scripts/tests/package-sample-apps-test.py
 
+      - name: Verify private test-transcript custody controls
+        run: python3 -I -B -S scripts/tests/test-transcript-custody-test.py
+
       - name: Verify no-child Mac capacity policy
         run: |
           ruby scripts/tests/check-mac-host-admission-policy-test.rb

@@ -22,6 +22,7 @@ ruby scripts/tests/check-windows-directory-control-policy-test.rb
 python3 -B scripts/tests/run-windows-directory-control-test.py
 ruby scripts/tests/check-sample-app-workflow-policy-test.rb
 python3 -I -B -S scripts/tests/package-sample-apps-test.py
+python3 -I -B -S scripts/tests/test-transcript-custody-test.py
 ruby scripts/tests/check-consumer-gradle-policy-test.rb
 ruby scripts/tests/check-mac-host-admission-policy-test.rb
 python3 -I -B -S scripts/tests/run-mac-host-admission-test.py
