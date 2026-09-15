@@ -160,6 +160,35 @@ bypass executor rejections. The public leaf creates real local ownership IDs,
 uses strict verification/two workers/no parallelism and always stops its own
 Gradle home and drains owned descendants. It is not the hosted `Host.run()`.
 
+### Avoid repeated dependency downloads
+
+Fresh task execution does **not** require redownloading unchanged dependencies.
+For sequential checks of the **same clean source and immutable state**, keep its
+owned dependency inputs while later checks still need them. Stop that same home's
+Gradle daemons and retire owned workers after every run; stopping is not deleting
+the dependency home. Keep generated artifacts until their required consumers and
+evidence retention finish, then dispose only proved-owned, unneeded outputs.
+Do not use old project outputs as fresh test, ABI or publication evidence.
+
+Before a cold writer, new state or large SDK/archive acquisition, inventory the
+admitted inputs already available and the still-missing downloads. Record known
+sizes, unknown costs and a finite acquisition budget before deciding to run.
+The current Gradle/executor path does **not** enforce a network-byte budget;
+a written estimate is not a download cap. If the remaining cost cannot be bounded
+within the agreed budget, hold that acquisition and continue independent work.
+Do not run the full writer merely to discover its download cost, automatically
+retry an unchanged failure or repeat checks already covered by usable evidence.
+
+A source change still requires a new immutable state. There is currently **no
+maintained cross-state dependency-store adoption contract**: do not copy an old
+Gradle/Konan home, import the default user cache, resume an unverified partial
+archive, set an unadmitted read-only cache or bypass the executor's `--offline`
+rejection. Such reuse needs a separately reviewed ownership/provenance and
+bounded-acquisition procedure; it is not enabled by this guidance. Keep the
+strict verification, fresh-output, resource and cleanup requirements unchanged.
+
+### Initialize and execute one frozen state
+
 ```bash
 umask 077
 export ROOT="$(pwd -P)" PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
