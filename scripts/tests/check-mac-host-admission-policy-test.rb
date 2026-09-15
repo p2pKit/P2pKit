@@ -49,7 +49,7 @@ module MacHostAdmissionPolicy
         triggers = workflow.fetch("on") { workflow.fetch(true) }
         inputs = triggers.fetch("workflow_dispatch").fetch("inputs")
         need(inputs.keys.sort == %w[expected_sha expected_tree operation], "capacity has exactly the existing three inputs")
-        need(inputs.fetch("operation").fetch("options") == ["desktop", "windows-directory-fsync-control", *OPERATIONS],
+        need(inputs.fetch("operation").fetch("options") == ["desktop", "sample-apps", "windows-directory-fsync-control", *OPERATIONS],
             "capacity operation set changed")
         job = workflow.fetch("jobs").fetch(JOB)
         need(job.keys.sort == %w[concurrency env if name runs-on steps timeout-minutes], "unexpected Mac job authority")

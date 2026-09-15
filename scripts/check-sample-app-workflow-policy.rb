@@ -25,7 +25,7 @@ module SampleAppWorkflowPolicy
     PYTHON_CHECK = "python3 -I -B -S scripts/tests/package-sample-apps-test.py"
     STEP_NAME = "Verify development sample artifact policy"
     REJECT_UNKNOWN = <<~'SH'
-        if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$P2PKIT_DESKTOP_OPERATION" != desktop ]]; then
+        if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$P2PKIT_DESKTOP_OPERATION" != desktop && "$P2PKIT_DESKTOP_OPERATION" != sample-apps ]]; then
           echo 'FATAL: unknown Desktop dispatch operation' >&2
           exit 1
         fi
@@ -44,6 +44,16 @@ module SampleAppWorkflowPolicy
           :p2p-sample-desktop-ui:hotRunArgfile
           :p2p-sample-desktop-ui:createDistributable
         )
+        # The explicit build-only operation does not execute the CLI/UI test suites.
+        # The ordinary Desktop and PR/main verification task set is unchanged.
+        if [[ "$P2PKIT_SAMPLE_ONLY" == true ]]; then
+          tasks=(
+            :p2p-sample-desktop:installDist
+            :p2p-sample-desktop-ui:checkRuntime
+            :p2p-sample-desktop-ui:hotRunArgfile
+            :p2p-sample-desktop-ui:createDistributable
+          )
+        fi
         if [[ "$RUNNER_OS" == Linux ]]; then
           tasks+=(:p2p-sample-android:assembleDebug)
         fi
@@ -120,7 +130,9 @@ module SampleAppWorkflowPolicy
             {"name" => "Install Android compile platforms for the Linux APK producer", "if" => "runner.os == 'Linux'",
              "shell" => "bash", "run" => SDK},
             {"name" => "Verify CLI, Desktop runtime, tests, Hot Reload tooling, and application images",
-             "id" => "sample-build", "shell" => "bash", "run" => BUILD},
+             "id" => "sample-build", "shell" => "bash",
+             "env" => {"P2PKIT_SAMPLE_ONLY" => "${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'sample-apps' }}"},
+             "run" => BUILD},
             {"name" => "Stop the sample job's Gradle home on every attempted build", "id" => "stop-sample-gradle",
              "if" => STOP_IF, "shell" => "bash", "run" => STOP},
             {"name" => "Inspect and archive successful development sample apps", "id" => "sample-packaging",

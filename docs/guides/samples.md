@@ -337,6 +337,12 @@ Ubuntu, Windows and macOS jobs run serially; the Ubuntu job also assembles the
 Android sample APK in the same Gradle invocation. Required library/full CI gates
 remain separate and are not replaced by these downloadable samples.
 
+For an explicit build-only preview, select the manual **`sample-apps`** operation.
+It compiles/packages the same Android and Desktop outputs but does not run the
+CLI/UI test suites. Ordinary `desktop`, PR and main verification retain their
+existing tests. A preview is not a required-check or runtime pass, and a work-branch
+preview is retained in Actions rather than published as a main development Release.
+
 After a **successful** run, its Actions page provides these 14-day artifacts:
 
 | Artifact name prefix | Contents |

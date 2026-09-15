@@ -39,6 +39,13 @@ mutations = {
     "nonliteral SDK37 admission" => ->(v) { ordinary(v)["steps"][5]["run"].gsub!("grep -Fxq", "grep -xq") },
     "Android SDK on every host" => ->(v) { ordinary(v)["steps"][5].delete("if") },
     "Android on every host" => ->(v) { step(v, "sample-build")["run"].sub!('[[ "$RUNNER_OS" == Linux ]]', "true") },
+    "build-only enabled for required verification" => ->(v) { step(v, "sample-build")["env"]["P2PKIT_SAMPLE_ONLY"] = "true" },
+    "build-only outside explicit operation" => ->(v) { step(v, "sample-build")["env"]["P2PKIT_SAMPLE_ONLY"] = "${{ github.event_name == 'push' }}" },
+    "build-only retains test task" => ->(v) {
+        body = step(v, "sample-build")["run"]
+        key = ":p2p-sample-desktop:installDist"
+        body[body.rindex(key), key.length] = ":p2p-sample-desktop:check"
+    },
     "missing APK task" => ->(v) { step(v, "sample-build")["run"].sub!(":p2p-sample-android:assembleDebug", ":p2p-sample-android:check") },
     "missing original CLI tests" => ->(v) { step(v, "sample-build")["run"].sub!(":p2p-sample-desktop:check", ":p2p-sample-desktop:classes") },
     "missing original UI tests" => ->(v) { step(v, "sample-build")["run"].sub!(":p2p-sample-desktop-ui:test", ":p2p-sample-desktop-ui:classes") },

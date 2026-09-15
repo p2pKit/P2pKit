@@ -38,7 +38,7 @@ module WindowsDirectoryControlPolicy
         triggers = workflow.fetch("on") { workflow.fetch(true) }
         inputs = triggers.fetch("workflow_dispatch").fetch("inputs")
         need(inputs.keys.sort == %w[expected_sha expected_tree operation], "no arbitrary control inputs")
-        expected = {"operation" => {"type" => "choice", "options" => ["desktop", OPERATION, "macos-arm64-admission", "macos-x64-admission"], "default" => "desktop", "required" => true},
+        expected = {"operation" => {"type" => "choice", "options" => ["desktop", "sample-apps", OPERATION, "macos-arm64-admission", "macos-x64-admission"], "default" => "desktop", "required" => true},
             "expected_sha" => {"type" => "string", "required" => false, "default" => ""},
             "expected_tree" => {"type" => "string", "required" => false, "default" => ""}}
         inputs.each do |name, value|

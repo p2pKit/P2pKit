@@ -45,7 +45,7 @@ on:
       operation:
         description: Desktop apps plus Android APK on Linux, reviewed Windows witness, or no-child Mac capacity snapshot
         type: choice
-        options: [desktop, windows-directory-fsync-control, macos-arm64-admission, macos-x64-admission]
+        options: [desktop, sample-apps, windows-directory-fsync-control, macos-arm64-admission, macos-x64-admission]
         default: desktop
         required: true
       expected_sha:
@@ -87,7 +87,7 @@ jobs:
         env:
           P2PKIT_DESKTOP_OPERATION: ${{ inputs.operation }}
         run: |
-          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$P2PKIT_DESKTOP_OPERATION" != desktop ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$P2PKIT_DESKTOP_OPERATION" != desktop && "$P2PKIT_DESKTOP_OPERATION" != sample-apps ]]; then
             echo 'FATAL: unknown Desktop dispatch operation' >&2
             exit 1
           fi
@@ -137,6 +137,8 @@ jobs:
       - name: Verify CLI, Desktop runtime, tests, Hot Reload tooling, and application images
         id: sample-build
         shell: bash
+        env:
+          P2PKIT_SAMPLE_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'sample-apps' }}
         run: |
           tasks=(
             :p2p-sample-desktop:check
@@ -146,6 +148,16 @@ jobs:
             :p2p-sample-desktop-ui:hotRunArgfile
             :p2p-sample-desktop-ui:createDistributable
           )
+          # The explicit build-only operation does not execute the CLI/UI test suites.
+          # The ordinary Desktop and PR/main verification task set is unchanged.
+          if [[ "$P2PKIT_SAMPLE_ONLY" == true ]]; then
+            tasks=(
+              :p2p-sample-desktop:installDist
+              :p2p-sample-desktop-ui:checkRuntime
+              :p2p-sample-desktop-ui:hotRunArgfile
+              :p2p-sample-desktop-ui:createDistributable
+            )
+          fi
           if [[ "$RUNNER_OS" == Linux ]]; then
             tasks+=(:p2p-sample-android:assembleDebug)
           fi
