@@ -553,6 +553,12 @@ class Runtime:
             time.sleep(.05)
 
     def multicast(self):
+        # Xcode's launcher may be a symlink. The paired Java/Python diagnostic
+        # requires the canonical executable; do not relax its admission guard.
+        python = Path(sys.executable)
+        require(python.is_absolute(), "absolute running Python interpreter required")
+        python = python.resolve(strict=True)
+        require(python.is_file() and os.access(python, os.X_OK), "regular executable Python interpreter required")
         vendor = self.root / "library/p2p-transport-lan/vendor/jmdns/src/main"
         fixture = self.root / "library/p2p-transport-lan/src/jvmTest/java/dev/p2pkit/transport/lan/internal/jmdns/impl/JmdnsCloseLifecycleFixture.java"
         sources = sorted(vendor.glob("java/**/*.java"))
@@ -582,7 +588,7 @@ class Runtime:
         command = self.command("multicast-control", [self.env["JAVA_HOME"] + "/bin/java", "-Xms16m", "-Xmx128m",
             "-XX:MaxMetaspaceSize=128m", "-XX:ActiveProcessorCount=2", "-XX:+UseSerialGC",
             "-Dorg.slf4j.simpleLogger.defaultLogLevel=off", "-Dp2pkit.audit.jmdnsStartupPrimitives=true",
-            "-Dp2pkit.audit.pythonExecutable=" + sys.executable, "-cp",
+            "-Dp2pkit.audit.pythonExecutable=" + str(python), "-cp",
             os.pathsep.join(map(str, (work / "fixture", work / "vendor", vendor / "resources", jar))),
             "dev.p2pkit.transport.lan.internal.jmdns.impl.JmdnsCloseLifecycleFixture", "control"], 45)
         transcript = read(command.directory / "stdout.log", 65536) + read(command.directory / "stderr.log", 65536)

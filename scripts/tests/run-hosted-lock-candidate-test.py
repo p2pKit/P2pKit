@@ -484,6 +484,97 @@ class FileAndAdmissionTests(Fixture):
         self.assertTrue((fresh / "evidence/bootstrap-failure.json").is_file())
 
 
+class MulticastInterpreterTests(Fixture):
+    """Exercise real argv construction; every compiler/network/child is fake."""
+    def setUp(self):
+        super().setUp()
+        vendor = self.root / "library/p2p-transport-lan/vendor/jmdns/src/main"
+        (vendor / "java").mkdir(parents=True)
+        for number in range(60):
+            (vendor / "java" / ("Synthetic%d.java" % number)).write_text("synthetic, never compiled\n")
+        resource = vendor / "resources/dev/p2pkit/transport/lan/internal/jmdns/version.properties"
+        resource.parent.mkdir(parents=True)
+        resource.write_text("synthetic=only\n")
+        fixture = self.root / ("library/p2p-transport-lan/src/jvmTest/java/dev/p2pkit/transport/lan/internal/"
+                               "jmdns/impl/JmdnsCloseLifecycleFixture.java")
+        fixture.parent.mkdir(parents=True)
+        fixture.write_text("synthetic fixture, never compiled\n")
+        self.pin = "5d6298b93a1905c32cda6478808ac14c2d4a47e91535e53c41f7feeb85d946f4"
+        metadata = self.root / "gradle/verification-metadata.xml"
+        metadata.parent.mkdir()
+        metadata.write_text('<verification-metadata xmlns="https://schema.gradle.org/dependency-verification">'
+                            '<components><component group="org.slf4j" name="slf4j-api" version="2.0.7">'
+                            '<artifact name="slf4j-api-2.0.7.jar"><sha256 value="' + self.pin + '"/>'
+                            '</artifact></component></components></verification-metadata>')
+        self.python = self.base / "interpreter" / "python3"
+        self.python.parent.mkdir()
+        self.python.write_text("synthetic executable, never launched\n")
+        self.python.chmod(0o700)
+        self.rt.env["JAVA_HOME"] = str(self.base / "synthetic-jdk")
+        self.calls = []
+        real_digest = app.digest
+        self.use_patch(mock.patch.object(app, "digest", side_effect=lambda p:
+            self.pin if Path(p).name == "slf4j-api-2.0.7.jar" else real_digest(p)))
+        self.command = self.use_patch(mock.patch.object(self.rt, "command", side_effect=self.fake_command))
+
+    def fake_command(self, label, argv, *unused, **kwargs):
+        self.calls.append((label, argv))
+        directory = self.rt.commands / label
+        directory.mkdir()
+        (directory / "stdout.log").write_bytes(b"PASS mode=control\n" if label == "multicast-control" else b"")
+        (directory / "stderr.log").write_bytes(b"")
+        if label == "multicast-dependency":
+            Path(argv[argv.index("--output") + 1]).write_bytes(b"SYNTHETIC, NOT A JAR")
+        return SimpleNamespace(directory=directory)
+
+    def assert_interpreter(self, supplied):
+        with mock.patch.object(app.sys, "executable", str(supplied)):
+            self.rt.multicast()
+        controls = [argv for label, argv in self.calls if label == "multicast-control"]
+        self.assertEqual(len(controls), 1)
+        properties = [arg for arg in controls[0] if arg.startswith("-Dp2pkit.audit.pythonExecutable=")]
+        self.assertEqual(properties, ["-Dp2pkit.audit.pythonExecutable=" + str(self.python)])
+        self.assertEqual([label for label, _ in self.calls], ["multicast-dependency", "multicast-vendor-compile",
+                                                           "multicast-fixture-compile", "multicast-control"])
+
+    def assert_rejected_before_acquisition(self, supplied):
+        with mock.patch.object(app.sys, "executable", str(supplied)), self.assertRaises((ValueError, OSError, RuntimeError)):
+            self.rt.multicast()
+        self.command.assert_not_called()
+        self.assertFalse((self.state / "work/jmdns").exists())
+
+    def test_canonical_interpreter_is_preserved_in_actual_probe_argv(self):
+        self.assert_interpreter(self.python)
+
+    def test_launcher_symlink_is_canonicalized_in_actual_probe_argv(self):
+        alias = self.base / "python-launcher"
+        alias.symlink_to(self.python)
+        self.assert_interpreter(alias)
+
+    def test_ancestor_symlink_is_canonicalized_in_actual_probe_argv(self):
+        alias = self.base / "toolchain-alias"
+        alias.symlink_to(self.python.parent, target_is_directory=True)
+        self.assert_interpreter(alias / self.python.name)
+
+    def test_missing_interpreter_fails_before_probe_acquisition(self):
+        self.assert_rejected_before_acquisition(self.base / "missing-python")
+
+    def test_relative_interpreter_fails_before_probe_acquisition(self):
+        self.assert_rejected_before_acquisition("relative-python")
+
+    def test_nonexecutable_interpreter_fails_before_probe_acquisition(self):
+        self.python.chmod(0o600)
+        self.assert_rejected_before_acquisition(self.python)
+
+    def test_directory_interpreter_fails_before_probe_acquisition(self):
+        self.assert_rejected_before_acquisition(self.python.parent)
+
+    def test_broken_launcher_symlink_fails_before_probe_acquisition(self):
+        alias = self.base / "broken-launcher"
+        alias.symlink_to(self.base / "absent-python")
+        self.assert_rejected_before_acquisition(alias)
+
+
 class BoundedStreamTests(unittest.TestCase):
     def test_exact_stream_limit_is_complete_not_truncated(self):
         source, result, errors = io.BytesIO(b"12345678"), {}, []
