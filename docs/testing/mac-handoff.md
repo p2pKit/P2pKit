@@ -309,10 +309,17 @@ the artifact; cancellation, timeout or missing completion cannot pass.
 Environment rejection reports only the first failed guard's fixed `ENVIRONMENT_*`
 category, never a caller variable name or value. The categories distinguish bounds,
 required/pinned controls, and prohibited Python, loader, Git, shell, JVM, build-home,
-credential, elevation or campaign hooks. A category is not the offending variable's
-identity or proof of its origin. Rejection remains exit 2 before event, source or host
-observation; reconcile the cause without removing guards or dumping the environment.
-Older undifferentiated `ENVIRONMENT` failures remain unattributed, not new passes.
+credential, elevation or campaign hooks. Credential rejection is subdivided into
+fixed `ENVIRONMENT_CREDENTIAL_TOKEN`, `ENVIRONMENT_CREDENTIAL_PROMPT`,
+`ENVIRONMENT_CREDENTIAL_SSH_AGENT` and `ENVIRONMENT_CREDENTIAL_GPG_AGENT` codes.
+These preserve the same forbidden members, including empty values, and the original
+first-failure order; they do not inspect or normalize credential values. A token
+family does not identify which token variable matched. Even a single-member family
+does not establish a nonempty/usable credential, the only failing input or its
+injector. Rejection remains exit 2 before event, source or host observation;
+reconcile the producer without removing guards or dumping the environment. Older
+`ENVIRONMENT` and `ENVIRONMENT_CREDENTIAL_HOOK` failures retain their original
+unresolved attribution, not the narrower category or a new pass.
 
 Only the closed `metadata.json` and `manifest.json` records are uploaded after
 `validate-public` rechecks their schema, identity, source and hashes. The pinned upload
