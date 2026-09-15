@@ -498,6 +498,83 @@ map/receipt guards and small file fixtures, not AGP compilation, real APK inspec
 or Android behavior. The producer is not added to ordinary `check`, assembly or
 publication tasks.
 
+## Android UI controller primitives (not a launcher)
+
+`scripts/android_ui_controller.py` contains reusable #317/#324 controller
+boundaries, **not an admitted runtime entrypoint**. It has no SDK/image allowlist,
+guest allocator/booter, host resource sampler or ART-lifetime observer. There is
+no runtime CLI or `trusted`/`passed` bypass. The missing native Mac adapter and its
+exact tool/image qualification are actionable prerequisites, not evidence that a
+phone or another computer is intrinsically required. Do not instantiate the
+Linux-only `Smoke`, adopt an owner's AVD, or treat installed SDK metadata as a
+reviewed native profile.
+
+The core composes the existing producer map/file checks and generated/packaged
+manifest comparator with successful **canonical same-state** build and inspection
+receipts. It requires the producer's exact three-task request, strict fresh
+executed arguments, original inspector arguments, source/job/host/home identity,
+stop0 and no unresolved workers/errors. The inspector's provisional result is
+insufficient without its finalized outer receipt and agreeing original
+stdout/map/manifests/APK bindings. The new core neither generates another map nor
+runs another inspector. `installed_pair` separately reads back both complete
+installed base APKs and compares their actual hashes with that producer; it also
+requires actual User0, distinct package UIDs and target37 observations.
+
+Command retention keeps original stdout/stderr, argv, deadlines, exit and both
+EOF observations. Exit0 without EOF is incomplete. Bounds/timeout failures keep
+their real prefix and original failure; only the maintained outer Darwin ownership
+adapter may drain unresolved descendants. There is no process-name killing.
+The exact UI selector accepts only case317 or324 with the four existing guest
+arguments and fixed180s/240s instrumentation deadlines.
+
+Whole-tree collection uses narrowly quoted `adb exec-out run-as` `toybox stat`,
+`ls -1a` and `cat` against only `no_backup/ui-<case>-<token>`, with an immediate
+`no_backup` parent identity check. It retains hidden zero-byte locks and empty
+directories, rejects links/aliases/foreign UIDs/unsafe names, and preserves unknown
+safe entries rather than filtering them to make the content checker pass.
+Listings/stat/read outcomes, hashes, incomplete originals and before/after graph
+observations remain private. A new-only `before-retirement-partial` snapshot is
+never relabeled as an `after-retirement` capture. Stable metadata and complete
+reads are not proof that ART retired, nor hostile-filesystem atomicity.
+
+Collection reuses the passive verifier's256-file/64-directory/depth6, PNG16MiB,
+Parcel1MiB, text2MiB and aggregate64MiB/1GiB bounds. Each collection has a separate
+120s cap; each ordinary metadata command at most40s. Unknown oversized entries
+remain in the owned guest with a failed capture, not a truncated accepted packet.
+`attempt_all` attempts every source-owned finally action despite earlier failures
+or interruption, but labels a returned action only `RETURNED`, **not `RETIRED`**.
+The separate exact handle waits retain original statuses and stay20s for the
+emulator and10s for adb. The content verifier's raw result is written unchanged;
+its `UNPROVEN`/`NOT_ACCEPTED` and missing visual/mutation reviews remain intact.
+
+Before wiring these primitives into any native execution, the missing adapter must:
+
+1. Admit exact native Mac SDK/emulator/image provenance and actual command formats,
+   read-only shared dependencies, rendering/display/interactive eligibility and
+   fresh disk/RAM observations. Hold the shared serial execution lease and the
+   same-state Gradle lease; do not overlap a build with the guest.
+2. Enter the maintained immutable command ownership domain and create one wholly
+   new `state/fixtures` tree, private homes/keys/tmp/AVD/userdata and foreground adb
+   server. Refuse existing state/devices, bind actual handles/ports/AVD identity,
+   and install the unchanged APK pair without `-g`. No snapshot or account sign-in.
+3. Observe actual package PID/start/UID and Activity/ART lifetime with supported
+   guest mechanisms. Preserve failure/partial evidence before destructive actions,
+   prove exact target retirement before stable final capture, explicitly shut down
+   the owned emulator/server, attempt both handle waits, and require the terminal
+   outer receipt's same-home stop and Darwin worker retirement. Unknown retirement
+   blocks another conflicting run; a successful query is not absence by itself.
+4. Review the bounded whole-host envelope and every failure/cancellation path,
+   retaining required originals before guarded exact-root cleanup. Only then run
+   the positive and separate mutation cases and obtain independent actual-result
+   review. No whole-issue, #372 LAN/compat, physical-phone or release credit follows
+   from this controller preparation.
+
+Focused modeled controls (no Gradle, SDK, real child or guest):
+
+```bash
+/usr/bin/python3 -I -B -S scripts/tests/android-ui-controller-test.py -v
+```
+
 ## Retained Android UI content checks
 
 `scripts/verify-android-ui-evidence.py` passively checks already-retained #317 or
