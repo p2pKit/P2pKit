@@ -117,6 +117,34 @@ relevant module/platform cycle; investigate unexpected logs rather than broadeni
 Common-test JVM/Native results remain separate from filtered Android-host execution,
 physical-device, hostile-network, independent interoperability and cryptographic validation.
 
+### Subprocess transcript custody on failure
+
+The CLI shutdown and diagnostic native-lock fixtures export original merged-output bytes
+as `CLI_SHUTDOWN_RAW` / `NATIVE_LOCK_PROBE_RAW` Base64 records, including exact inherited
+Java startup notes. Raw files are disposable only after successful export/error checking
+and known child retirement/input closure. A failed step must not prevent the other
+finalizers, replace the primary failure, or delete the unretained original. Diagnostics'
+enclosing directory also stays intact on body failure, a remaining probe log or an
+unknown listing. These are test-fixture safeguards, not universal stdout/disk fault tolerance.
+
+Before running these suites, give the test JVM an explicitly owned `java.io.tmpdir`
+through the maintained reviewed initializer (not ambient JVM-option admission overrides).
+The outer run owner must preserve a **custody HOLD** on that root after a failed/incomplete
+run, `PROBE_EVIDENCE_HOLD`, or missing/unverified export. Absence of a marker is not proof
+of retention: stdout, the test worker or the report writer may have failed. Stop the same
+wrapper/home and drain only owned workers first; unknown retirement remains a HOLD.
+
+Before any outer temporary-root cleanup, inspect the owned CLI/rolling-fixture directories
+and retain/hash any remaining `child.log` / `native-lock-probe-*.log` originals in private
+evidence with the source identity, exit statuses and original reports. Verify the copies
+against the originals after known retirement. Preserve the root when that cannot be done;
+record incomplete custody, not a pass. Do not read/copy another invocation's temporary files.
+The immutable executor automatically retains build reports/test-results, **not arbitrary
+Java temporary logs**; its normal cleanup is not this extra custody proof. On success,
+retain and decode the Base64 records from the original reports before outer cleanup.
+Only the tiny finalizer-control fixtures dispose of their source-defined synthetic bytes
+directly; they are not child-process observations or substitute runtime evidence.
+
 ## Android ABI graph verification
 
 `scripts/check-android-abi-guard.sh` runs a strict Gradle dry-run of the three Android modules' `check` tasks and
