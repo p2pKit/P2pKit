@@ -447,6 +447,57 @@ requires actual display/frame evidence, an untouched interval and an inert-bridg
 mutation control. Its source or APK assembly is not a rendered pass, and it does
 not replace the default API37 permission runner or any physical-device matrix.
 
+## Shared Android acceptance artifacts
+
+The debug app/test APK pair can serve compatible #317/#324/#372 cases without
+rebuilding the whole repository per issue. First admit the actual SDK and host,
+freeze a reviewed clean candidate, and initialize a new
+[immutable executor state and `leaf` helper](mac-handoff.md#4-branch-agnostic-immutable-execution).
+The Android sample's `build` directory must be absent when that state is initialized.
+Then run one producer and inspect its exact outputs in the same owned state:
+
+```bash
+leaf gradle android-acceptance-build 2400 \
+  :p2p-sample-android:assembleDebug :p2p-sample-android:assembleDebugAndroidTest \
+  :p2p-sample-android:retainDebugAcceptanceArtifacts --console=plain
+# Continue only after the producer and its checked receipt both succeed.
+leaf command android-acceptance-inspect 240 python3 scripts/verify-android-acceptance-artifacts.py \
+  --build-receipt "$P2PKIT_AUDIT_STATE_DIR/host-android-acceptance-build.json" \
+  --build-purpose android-acceptance-build
+```
+
+The explicit, uncached producer consumes public AGP artifact providers for both
+merged manifests and the sole unfiltered `SINGLE` APK per component. It retains
+manifests plus `artifacts.json` under the sample's
+`build/reports/android-acceptance/debug/`; task paths are actual provider
+dependencies, not guessed names or claims that every task ran. The map is an
+**AGP API metadata projection**, not original AGP metadata or source/run authority.
+It refuses existing/partial captures and requires a POSIX-permission filesystem.
+Maps/manifests are bounded to 1 MiB each and APK reads to 512 MiB each; version
+names are limited to 4096 UTF-16 code units without characters below U+0020.
+
+The read-only inspector requires the successful canonical same-state Gradle
+receipt, newly retained hash-matching reports, and unchanged live outputs. It
+runs the selected SDK's actual `apkanalyzer manifest print` against both APKs
+and compares generated and packaged identities with the maintained manifest
+comparator. Keep `ANDROID_HOME` unchanged from the admitted build. Windows
+analyzer launch is not admitted here. Results live at
+`$P2PKIT_AUDIT_STATE_DIR/evidence/android-acceptance-artifacts/`; success remains
+provisional until the inspector's outer receipt confirms source and worker cleanup.
+
+Retain both APKs, maps, generated/packaged XML, original logs and receipts before
+scoped cleanup; the executor does not automatically retain the APKs. Keep these
+bytes while dependent UI cases need them. This artifact check neither runs nor
+admits a guest: rendered untouched updates, actual save/restore and secret-display
+cases, API37 compat/permission/LAN/revocation behavior, and distinct mutation
+controls still need their own applicable runtime evidence. It does not replace
+the guarded Linux smoke profile or any physical-phone criterion.
+
+`python3 scripts/tests/verify-android-acceptance-artifacts-test.py` exercises only
+map/receipt guards and small file fixtures, not AGP compilation, real APK inspection
+or Android behavior. The producer is not added to ordinary `check`, assembly or
+publication tasks.
+
 ## Android framework-adapter tests
 
 Run `./gradlew :p2p-network-provisioning-android:verifyAndroidAdapterTests --console=plain`
