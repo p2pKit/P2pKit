@@ -11,7 +11,7 @@ or exercise #324 restoration or #372 permission/network enforcement.
 
 ## Component and admission
 
-`UiAcceptanceInstrumentation` is a second, explicitly selected Android framework
+`UiAcceptanceInstrumentation` is an explicitly selected Android framework
 `Instrumentation`, in the ordinary sample's `androidTest` source set. It accepts
 **only** `case=317`, a fresh 32-lowercase-hex `token`, and 40-lowercase-hex
 `sourceCommit`/`sourceTree`. Unknown/missing arguments fail. There is no default
@@ -20,10 +20,12 @@ test selection and no third-party runner or new dependency.
 The existing `testInstrumentationRunner` in the Gradle file remains
 `dev.p2pkit.sample.android.runtime.LanPermissionRuntimeInstrumentation`. Before
 execution, inspect the **freshly generated merged test manifest and packaged
-APK manifest**: both complete component names must exist exactly once, target
+APK manifest**: all three complete component names must exist exactly once, target
 `dev.p2pkit.sample.android`, and the default #372 component/runner must remain
 unchanged. Manifest source inspection alone does not prove the merge result.
-If AGP does not preserve both, stop and review that admission failure; do not
+The exact names beneath `dev.p2pkit.sample.android.runtime` are
+`LanPermissionRuntimeInstrumentation`, `UiAcceptanceInstrumentation`, and
+`CredentialUiInstrumentation`. If AGP does not preserve all three, stop and review that admission failure; do not
 silently redirect the default runner.
 
 Use one newly created, invocation-owned **API35+ emulator**, a fresh sample
