@@ -503,9 +503,10 @@ publication tasks.
 `scripts/android_ui_controller.py` contains reusable #317/#324 controller
 boundaries, **not an admitted runtime entrypoint**. It has no SDK/image allowlist,
 guest allocator/booter, host resource sampler or ART-lifetime observer. There is
-no runtime CLI or `trusted`/`passed` bypass. The missing native Mac adapter and its
-exact tool/image qualification are actionable prerequisites, not evidence that a
-phone or another computer is intrinsically required. Do not instantiate the
+no runtime CLI or `trusted`/`passed` bypass in that module. The separate
+[native adapter](#owned-mac-android-ui-adapter) composes these primitives; its
+source review, exact tool/image and real command-format admission remain required,
+not evidence that a phone or another computer is intrinsically required. Do not instantiate the
 Linux-only `Smoke`, adopt an owner's AVD, or treat installed SDK metadata as a
 reviewed native profile.
 
@@ -547,7 +548,7 @@ The separate exact handle waits retain original statuses and stay20s for the
 emulator and10s for adb. The content verifier's raw result is written unchanged;
 its `UNPROVEN`/`NOT_ACCEPTED` and missing visual/mutation reviews remain intact.
 
-Before wiring these primitives into any native execution, the missing adapter must:
+Before native execution, the adapter and its operator must:
 
 1. Admit exact native Mac SDK/emulator/image provenance and actual command formats,
    read-only shared dependencies, rendering/display/interactive eligibility and
@@ -574,6 +575,81 @@ Focused modeled controls (no Gradle, SDK, real child or guest):
 ```bash
 /usr/bin/python3 -I -B -S scripts/tests/android-ui-controller-test.py -v
 ```
+
+## Owned Mac Android UI adapter
+
+`scripts/run-android-ui-tests.py` is the explicit local #317/#324 execution adapter,
+not a recorded runtime pass. After independent source review, use the ordinary
+admitted Mac ARM session, shared host/Actions lease and clean immutable state.
+Its same-state `LeafLock` prevents a concurrent Gradle leaf during the guest.
+The successful canonical APK producer, manifest inspector and **archive capture**
+receipts must all belong to that same source/state/home. The adapter rechecks the
+archive originals and installed members itself; a separate `admit` receipt is not
+a substitute for the genuine capture receipt. Shared SDK tools/images stay read-only.
+
+After those prerequisites and current resource admission, retain the **exact root
+launch below**, including the 2100-second outer timeout, then check its terminal
+receipt with the [maintained `leaf` helper](mac-handoff.md#4-branch-agnostic-immutable-execution):
+
+```bash
+leaf command android-ui-positive 2100 /usr/bin/python3 -I -B -S scripts/run-android-ui-tests.py \
+  --cases 317+324 \
+  --build-receipt "$P2PKIT_AUDIT_STATE_DIR/host-android-acceptance-build.json" \
+  --build-purpose android-acceptance-build \
+  --inspection-receipt "$P2PKIT_AUDIT_STATE_DIR/host-android-acceptance-inspect.json" \
+  --inspection-purpose android-acceptance-inspect \
+  --archive-receipt "$P2PKIT_AUDIT_STATE_DIR/host-android-archives-capture.json" \
+  --archive-purpose android-archives-capture
+```
+
+Only `317`, `324` and ordered `317+324` selections are admitted. There is no
+caller-supplied serial, AVD, command, component, token, source, profile or timeout.
+The adapter binds the active owner to this isolated product request. Maintained
+`start.json`/receipts do **not** record the outer timeout; neither their presence
+nor the adapter's declared bounds certifies it. The root's original launch is a
+separate required review input. The product has one 1800-second monotonic budget
+with a 420-second finalization reserve, not a fresh deadline for each case.
+Instrumentation stays at 180s/240s; boot at 180s, each collection at 120s, the
+whole ART-retirement phase at 20s, and emulator/server handle waits at 20s/10s.
+
+The single fresh fixture owns private homes/adb keys/tmp/AVD/userdata and foreground
+adb/emulator handles. It refuses preexisting `state/fixtures`, busy fixed console
+ports, unowned listeners, additional devices and unsupported command formats.
+It selects the archive gate's exact ARM image/emulator, with pre-boot portrait
+1600×2560 at 200dpi, two cores, 2048MiB RAM, host GPU and no snapshots. Version text
+and tool hashes are identity observations, **not independent SDK authenticity or
+native-architecture admission**. Real listener, adb/AVD, property, numeric process,
+`/proc` and Activity dump formats still require actual retained native review;
+unknown formats HOLD rather than becoming successful absence. Archive recheck
+retains its 8GiB free-space floor; guest checks require 5GiB free disk, normal Mac
+memory pressure and 4GiB free-plus-inactive pages (not Linux `MemAvailable`).
+
+Each case installs the unchanged APK pair without `-g`, reads both installed APKs
+back, then runs its exact component with a fresh token. The observer does not
+inject input during the harness. Actual PID/UID/kernel start ticks remain distinct
+from the harness's Java elapsed-start milliseconds. It preserves partial originals,
+explicitly force-stops only the fresh packages, proves ART/Activity absence, captures
+stable final originals and runs the unchanged passive verifier. A two-case episode
+requires successful retention and retirement, exact uninstall/absence, then a new
+install/token; any failure stops before the next case. Explicit teardown is not a
+claim that ART exited naturally, nor a rescue of a failed harness.
+
+Finally attempts both foreground shutdowns, both handle waits and both original
+stream retirements even after earlier failure. The outer executor alone performs
+fallback Darwin-domain drain and same-home wrapper stop. Keep
+`state/evidence/<owner>/android-ui/`, all APKs/archive originals and required private
+screenshots/Parcels through terminal receipt and independent review; then hash and
+clean only proved-owned disposable fixture/output paths. Unknown retirement blocks
+the next conflicting operation. No automatic deletion, global adb stop or owner AVD
+adoption occurs. `CAPTURED_PENDING_OUTER_RECEIPT_AND_REVIEW` and the passive verifier's
+unchanged `UNPROVEN`/`NOT_ACCEPTED` fields are not visual or whole-issue acceptance.
+Both positives still need their separate source-bound mutation controls and pixel/
+Parcel/lifecycle review. This lane does not execute #372, LAN permission enforcement,
+physical phones or publication. Use one case for each separately reviewed mutant.
+
+`/usr/bin/python3 -I -B -S scripts/tests/run-android-ui-tests-test.py -v` checks only
+modeled parser, budget, ownership, ordering and failure-finalization boundaries;
+it does not admit the real command formats, launch a guest or review rendered UI.
 
 ## Android archive-input capture (not runtime qualification)
 
