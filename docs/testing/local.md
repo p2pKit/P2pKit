@@ -498,6 +498,72 @@ map/receipt guards and small file fixtures, not AGP compilation, real APK inspec
 or Android behavior. The producer is not added to ordinary `check`, assembly or
 publication tasks.
 
+## Retained Android UI content checks
+
+`scripts/verify-android-ui-evidence.py` passively checks already-retained #317 or
+#324 originals. It does not collect files, install APKs, run instrumentation,
+import input-supplied code, or admit a guest. Keep the complete private originals
+in an exclusively owned `ui-317-<token>` or `ui-324-<token>` directory, with the
+original instrumentation stdout **outside** that directory. Use physical paths
+without symlinks/reparse points or hard-linked aliases. Supplied source/token
+expectations are declarations, not source/install provenance.
+
+With the reviewed clean-source executor and `leaf` helper initialized, for example:
+
+```bash
+leaf command android-ui-317-content 120 python3 scripts/verify-android-ui-evidence.py \
+  --case 317 --token "$UI_TOKEN" --source-commit "$SOURCE_COMMIT" --source-tree "$SOURCE_TREE" \
+  --evidence-dir "$RETAINED_UI_DIR" --instrumentation-stdout "$RAW_INSTRUMENTATION_STDOUT"
+```
+
+Use case `324` and a unique purpose for the credential case. Both exact named
+components emit one terminal status bundle and an identical result bundle; the
+LAN runner's multi-frame parser is not their contract. #317 emits a terminal
+cleanup field and report schema/token/UID fields; #324 does not. No invented
+collector/install receipt or caller-set `trusted`/`passed` flag grants acceptance.
+
+The JSON result distinguishes:
+
+| `contentStatus` | Exit | Meaning |
+| --- | --- | --- |
+| `CONSISTENT` | 0 | Positive harness claims and checked retained bytes agree; still pending review. |
+| `HARNESS_FAILED` | 1 | The retained terminal/report describe a failure, not a passing mutation control. |
+| `INCOMPLETE` | 2 | A required terminal, field or companion is absent/truncated. |
+| `REJECTED` | 3 | Malformed, contradictory, unsupported or out-of-bounds input. |
+
+Every result keeps `provenance=UNPROVEN`, `runtimeAcceptance=NOT_ACCEPTED` and
+visual/mutation review `NOT_PERFORMED`. Inputs are never rewritten or removed;
+a rejected packet may have only a partial output file manifest. Preserve its
+whole original directory independently, including failed/partial evidence.
+
+The checker enumerates/hashes admitted files and checks case-specific claims:
+#317's six positive files, active-session recorder prefix, single revision/event
+addition, untouched interval and displayed-tree/count/frame references; #324's
+32 PNG/tree pairs, original Parcel/report, 13 cells, eight cleanup steps, modeled
+permission/join claims, reveal timing and layout hashes. Retain the entire #324
+`fixture` subtree, including the empty hidden diagnostic `.lock`. Raw editable
+text containing the synthetic secret is not by itself a pixel-exposure finding.
+PNG checking covers the signature/IHDR/CRC, byte hash and dimensions, **not**
+complete image decoding or visual review. Parcel checking compares original
+length/hash and reported inspection/order; it does not deserialize Android state.
+
+Existing writer limits remain PNG16 MiB/16,777,216 pixels, Parcel1 MiB and
+result/events/#317 trees/each rolling diagnostic generation2 MiB. Additional
+**passive-host** guards are: #324 tree/saved-state JSON2 MiB (those writers have
+no explicit byte cap), stdout8 MiB, signed-64-bit JSON integers, 256 files,
+64 directories, depth6, aggregate64 MiB for #317/1 GiB for #324, 64 KiB read
+chunks and a 60-second internally checked deadline. Keep an outer command bound;
+these snapshot/change checks are not hostile-filesystem atomicity. Never truncate
+an original or enlarge a limit mid-run to make it pass.
+
+`python3 scripts/tests/verify-android-ui-evidence-test.py -v` exercises this policy
+using tiny synthetic files, not ART, real UI pixels or a decoded Android Parcel.
+Actual runtime admission still needs the reviewed collector, current source and
+installed-APK bindings, raw EOF/exit/deadline records, complete retention, exact
+ART/guest retirement, positive and distinct mutation runs, and independent
+full-resolution review. The shared artifact producer above still requires its
+exact three-task argument list; do not append a Desktop CLI build to that leaf.
+
 ## Android framework-adapter tests
 
 Run `./gradlew :p2p-network-provisioning-android:verifyAndroidAdapterTests --console=plain`
