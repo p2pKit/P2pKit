@@ -575,6 +575,92 @@ Focused modeled controls (no Gradle, SDK, real child or guest):
 /usr/bin/python3 -I -B -S scripts/tests/android-ui-controller-test.py -v
 ```
 
+## Android archive-input capture (not runtime qualification)
+
+`scripts/android_archive_admission.py` is a separate read-only archive/installed-byte
+gate for the exact Mac ARM emulator36.6.11 build15507667 and Android37.0
+`google_apis_playstore_ps16k;arm64-v8a` r05 image. It does not extract, install,
+accept licenses, run SDK tools, boot a guest, alter the shared SDK or admit a native
+runtime profile. The native controller adapter and its host/guest acceptance
+remain separate prerequisites; this is not a replacement Linux smoke profile.
+
+The operator must first hold the campaign's shared local/remote execution lease,
+check actual Actions queues and current resources, and use the ordinary admitted
+native Mac session and existing owner-accepted SDK. That shared coordination is
+**not** a repository lock or a caller `trusted` flag. Inside an active immutable
+`kind=command` leaf, this helper separately acquires the maintained same-state
+`LeafLock`; it releases that lock before the outer executor's same-home wrapper
+stop and worker drain. No concurrent SDK writer/build/guest is permitted. An
+unknown or failed retirement blocks the next conflicting operation.
+
+With a clean reviewed source, the [Mac handoff's executor and `leaf`](mac-handoff.md)
+initialized, and literal `ANDROID_HOME` consistent with any `sdk.dir`, the commands are:
+
+```bash
+leaf command android-archives-capture 2100 python3 -I -B -S scripts/android_archive_admission.py capture
+# Inspect originals and the canonical terminal capture receipt before reuse.
+leaf command android-archives-recheck 2100 python3 -I -B -S scripts/android_archive_admission.py admit \
+  --producer-receipt "$P2PKIT_AUDIT_STATE_DIR/host-android-archives-capture.json" \
+  --producer-purpose android-archives-capture
+```
+
+Capture starts new private originals from the fixed official URLs with system
+`/usr/bin/curl`, normal certificate/hostname validation and controlled credential-free
+configuration. Proxy/CA/loader overrides reject; no insecure option, retries, ranges,
+resume or GET redirects are allowed. Curl globbing is disabled: admitted query text
+remains one literal URL for both HEAD and GET. The emulator's published redirector
+may use at most three HTTPS HEAD redirects to the exact archive path on `dl.google.com` or
+the constrained Google `r<number>---sn-<route>.gvt1.com` CDN host form. Unknown
+origins/paths and HTTP framing reject. Each archive gets exactly one whole GET;
+HEAD is not download evidence. Original argv, headers, bytes, curl TLS/status fields,
+EOF/exit observations, times and binary identity remain private.
+
+The image must be exactly2,216,674,212 bytes and all32 expected regular members;
+its label means **the content supplied by the authenticated official origin at
+capture time**, not publisher build/signing/history attestation. Its
+`publisherWholeArchiveChecksum.image` stays `null`; the computed capture SHA256
+is not renamed a Google-published digest. The separate383,903,546-byte emulator
+must match its source-pinned Google-published SHA256. Both complete ZIP32 graphs,
+local/central headers, extents, descriptors, decompressor EOF, lengths/CRC and
+every installed member's bytes/mode are checked without extraction. Inferred
+directories count too. Links require identical safe in-root text and cycle-free
+targets. Only exact, identity-checked, hash-retained `package.xml` installer records
+may be extra; they cannot redirect the package or confer code/license authority.
+Unknown/missing/aliased/changing entries reject before unknown file content is read.
+These are coordinated stable-input checks, not hostile-filesystem atomicity.
+
+The archive-only policy requires a continuous 8 GiB free-space floor on the same
+filesystem as the state/evidence. Before capture, free bytes must be at least
+8 GiB + 3 GiB spare reserve + the sum of both exact compressed archive byte pins:
+**14,411,737,822 bytes** for this pair. The 3 GiB is additional spare capacity, not
+the archive allocation. No extraction, SDK mutation, build or guest may consume
+this phase's margin. The dependency writer's separate **16 GiB floor is unchanged**
+and requires fresh resource/lease admission afterward; archive success never
+admits the writer.
+
+Other bounds include 64KiB stream chunks/HTTP headers,4MiB JSON,16MiB total metadata,
+4,096 ZIP members,
+8,192 installed graph nodes,3GiB/member and4GiB expansion/archive. Image/emulator
+GET caps are900s/300s, each HEAD/connect/stall cap30s, each comparison300s and the
+complete helper1800s. Unsupported structure or a bound failure is HOLD, not
+permission to expand the profile silently. Failure prefixes and partial reports
+remain incomplete; the outer owner alone drains unresolved curl children.
+
+Each command prints the path/size/SHA256 binding of its new result beneath its
+canonical invocation evidence directory. Recheck requires the exact isolated
+capture request, successful canonical same-source/state/host receipt, stop0/no
+survivors, agreeing original stdout, all retained bindings and a fresh whole
+installed comparison. Neither result is accepted without its own terminal receipt
+and independent actual-result review. Preserve both whole archives, metadata,
+partial failures and review evidence until reviewed retention/owned cleanup.
+No automatic cleanup deletes mismatches or shared dependencies.
+
+`python3 -I -B -S scripts/tests/android-archive-admission-test.py -v` uses only tiny
+synthetic archives/files and modeled curl/receipt observations, never network or
+native tools. Even genuine archive equality proves neither #317/#324 rendering
+and lifetime behavior nor #372 loaded APEX/system-flag/cache/grant/LAN semantics.
+It is not physical-phone, independent-interoperability or release qualification.
+
 ## Retained Android UI content checks
 
 `scripts/verify-android-ui-evidence.py` passively checks already-retained #317 or
