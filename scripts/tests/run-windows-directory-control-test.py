@@ -922,6 +922,29 @@ class PureWindowsControlTests(unittest.TestCase):
             with self.subTest(archive_case=index), self.assertRaisesRegex(C.audit.AuditError, message):
                 C.export_archive(archive(members), entries, self.base / ("unused-" + str(index)))
 
+    def test_shared_writer_inputs_are_only_empty_defaults_for_windows_witness(self):
+        names = ("reviewed_base", "evidence_public_key", "evidence_fingerprint")
+        env, original, source = dispatch()
+        expected = C.dispatch_identity(env, original, source)
+        for bits in range(1 << len(names)):
+            event = copy.deepcopy(original)
+            event["inputs"].update({name: "" for index, name in enumerate(names) if bits & (1 << index)})
+            with self.subTest(empty_defaults=bits):
+                self.assertEqual(C.dispatch_identity(env, event, source), expected)
+        for name in names:
+            for value in ("a" * 40, " ", "\n", None, False, 0, [], {}):
+                event = copy.deepcopy(original)
+                event["inputs"][name] = value
+                with self.subTest(name=name, value=value):
+                    self.rejects(lambda: C.dispatch_identity(env, event, source))
+        for name in original["inputs"]:
+            event = copy.deepcopy(original)
+            event["inputs"].update(dict.fromkeys(names, ""))
+            del event["inputs"][name]
+            with self.subTest(missing=name):
+                self.rejects(lambda: C.dispatch_identity(env, event, source))
+        self.assertEqual(original, dispatch()[1])
+
     def test_dispatch_rejects_forged_or_incomplete_identity_models(self):
         env, event, source = dispatch()
         self.assertEqual(C.dispatch_identity(env, event, source)["runAttempt"], "2")

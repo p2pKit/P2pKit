@@ -119,6 +119,12 @@ POLICY::WORKFLOW_CONCURRENCY.each_key do |path|
         w[path]["concurrency"]["cancel-in-progress"] = !w[path]["concurrency"]["cancel-in-progress"]
     }]
 end
+mutations["lock operation falls through into ordinary sample matrix"] = ["required-gate guard", ->(w) {
+    w["desktop-cross-host.yml"]["jobs"]["verify"]["if"].sub!(" && inputs.operation != 'dependency-lock-candidate'", "")
+}]
+mutations["lock workflow can supersede other work"] = ["separate workflow concurrency", ->(w) {
+    w["desktop-cross-host.yml"]["concurrency"]["group"] = "desktop-cross-host-${{ github.ref }}"
+}]
 [POLICY::GROUP, POLICY::GROUP.upcase, "${{ '#{POLICY::GROUP}' }}", POLICY::QUEUE].each do |concurrency|
     ["workflow", "job"].each do |scope|
         mutations["unreviewed #{scope} group #{concurrency}"] = ["reserved participating-job group", ->(w) {

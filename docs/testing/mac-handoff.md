@@ -317,8 +317,10 @@ requirements are satisfied.
 The existing `Desktop cross-host` workflow has two narrowly scoped manual operations:
 `macos-arm64-admission` selects `macos-26`; `macos-x64-admission` selects
 `macos-15-intel`. Each runs only `mac-host-admission-probe`, not the ordinary Desktop
-matrix or Windows witness. Its three inputs remain `operation`, `expected_sha`,
-and `expected_tree`. Unknown operations still reach the ordinary rejecting guard.
+matrix or Windows witness. Capacity operations use `operation`, `expected_sha`,
+and `expected_tree`. The shared workflow's later `reviewed_base`,
+`evidence_public_key` and `evidence_fingerprint` defaults must remain empty for
+these no-child operations. Unknown operations still reach the ordinary rejecting guard.
 
 Before dispatch, independently verify through GitHub that the reviewed full commit
 maps to the supplied tree and intended workflow/ref. Reconcile active local/hosted
@@ -369,3 +371,12 @@ or a successful dependency writer. All those gates and resource/finalizer limits
 Later native fixtures, subprocess probes and builds additionally require an approved
 private evidence route and genuine native controls; public counts/hashes cannot
 replace their original private lifetime, failure and cleanup evidence.
+
+## 8. Separate encrypted hosted writer
+
+The [hosted lock-candidate contract](../maintenance/hosted-lock-candidate-2026-09-15.md)
+documents the owner-authorized encrypted evidence route and its isolated manual
+operation. It is a new child-only credential boundary, not a repair/waiver of the
+no-child snapshot's earlier rejection. Read its exact-source, resource, native
+ownership and failure-custody requirements before dispatch. Do not restart held
+local writers or infer accepted locks/apps from source/offline controls.

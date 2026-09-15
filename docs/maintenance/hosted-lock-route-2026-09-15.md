@@ -6,6 +6,11 @@ GitHub-side solution instead of further local writer attempts. No local build,
 dependency acquisition, emulator, CI dispatch, merge or release was started for
 this research. Private evidence remains outside Git and public Actions artifacts.
 
+**Later continuation:** the owner-approved encrypted
+[hosted lock-candidate implementation](hosted-lock-candidate-2026-09-15.md) is
+recorded separately. Permission/proposal statements below describe this earlier
+research checkpoint, not the later implementation or a successful hosted run.
+
 ## Exact source and remaining defects
 
 At the 17:11 UTC fetch, main remained

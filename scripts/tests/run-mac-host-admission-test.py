@@ -107,6 +107,30 @@ class FakeSysctl:
 
 
 class ContextAndSchemaTests(unittest.TestCase):
+    def test_shared_writer_inputs_are_only_empty_defaults_for_capacity_operations(self):
+        names = ("reviewed_base", "evidence_public_key", "evidence_fingerprint")
+        for operation in app.OPERATIONS:
+            env, original = dispatch(operation)
+            expected = app.dispatch_identity(env, original)
+            for bits in range(1 << len(names)):
+                event = copy.deepcopy(original)
+                event["inputs"].update({name: "" for index, name in enumerate(names) if bits & (1 << index)})
+                with self.subTest(operation=operation, empty_defaults=bits):
+                    self.assertEqual(app.dispatch_identity(env, event), expected)
+            for name in names:
+                for value in ("a" * 40, " ", "\n", None, False, 0, [], {}):
+                    event = copy.deepcopy(original)
+                    event["inputs"][name] = value
+                    with self.subTest(operation=operation, name=name, value=value), self.assertRaises(app.Failure):
+                        app.dispatch_identity(env, event)
+            for name in original["inputs"]:
+                event = copy.deepcopy(original)
+                event["inputs"].update(dict.fromkeys(names, ""))
+                del event["inputs"][name]
+                with self.subTest(operation=operation, missing=name), self.assertRaises(app.Failure):
+                    app.dispatch_identity(env, event)
+            self.assertEqual(original, dispatch(operation)[1])
+
     def test_exact_operations_and_complete_dispatch_identity(self):
         for operation in app.OPERATIONS:
             env, event = dispatch(operation)

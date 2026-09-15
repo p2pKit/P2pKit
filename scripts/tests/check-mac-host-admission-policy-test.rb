@@ -48,9 +48,18 @@ module MacHostAdmissionPolicy
             "capacity scope must remain secret-free and contents-read")
         triggers = workflow.fetch("on") { workflow.fetch(true) }
         inputs = triggers.fetch("workflow_dispatch").fetch("inputs")
-        need(inputs.keys.sort == %w[expected_sha expected_tree operation], "capacity has exactly the existing three inputs")
-        need(inputs.fetch("operation").fetch("options") == ["desktop", "sample-apps", "windows-directory-fsync-control", *OPERATIONS],
-            "capacity operation set changed")
+        need(inputs.keys.sort == %w[evidence_fingerprint evidence_public_key expected_sha expected_tree operation reviewed_base],
+            "capacity permits only the fixed shared dispatch inputs")
+        expected = {"operation" => {"type" => "choice", "options" => ["desktop", "sample-apps", "windows-directory-fsync-control",
+            *OPERATIONS, "dependency-lock-candidate"], "default" => "desktop", "required" => true}}
+        %w[expected_sha expected_tree reviewed_base evidence_public_key evidence_fingerprint].each do |name|
+            expected[name] = {"type" => "string", "required" => false, "default" => ""}
+        end
+        inputs.each do |name, value|
+            need(value.is_a?(Hash) && value["description"].is_a?(String) &&
+                 value.reject { |key, _| key == "description" } == expected[name],
+                 "capacity shared operation/source/default inputs changed")
+        end
         job = workflow.fetch("jobs").fetch(JOB)
         need(job.keys.sort == %w[concurrency env if name runs-on steps timeout-minutes], "unexpected Mac job authority")
         need(job["name"] == JOB && job["if"] == HeavyJobQueuePolicy::CONDITIONS[["desktop-cross-host.yml", JOB]] &&

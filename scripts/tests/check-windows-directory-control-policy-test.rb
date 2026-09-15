@@ -37,10 +37,13 @@ module WindowsDirectoryControlPolicy
              !JSON.generate(workflow).match?(/secrets\.|id-token|pull_request_target/), "control must remain secret-free and contents-read")
         triggers = workflow.fetch("on") { workflow.fetch(true) }
         inputs = triggers.fetch("workflow_dispatch").fetch("inputs")
-        need(inputs.keys.sort == %w[expected_sha expected_tree operation], "no arbitrary control inputs")
-        expected = {"operation" => {"type" => "choice", "options" => ["desktop", "sample-apps", OPERATION, "macos-arm64-admission", "macos-x64-admission"], "default" => "desktop", "required" => true},
-            "expected_sha" => {"type" => "string", "required" => false, "default" => ""},
-            "expected_tree" => {"type" => "string", "required" => false, "default" => ""}}
+        need(inputs.keys.sort == %w[evidence_fingerprint evidence_public_key expected_sha expected_tree operation reviewed_base],
+             "no arbitrary control inputs")
+        expected = {"operation" => {"type" => "choice", "options" => ["desktop", "sample-apps", OPERATION,
+            "macos-arm64-admission", "macos-x64-admission", "dependency-lock-candidate"], "default" => "desktop", "required" => true}}
+        %w[expected_sha expected_tree reviewed_base evidence_public_key evidence_fingerprint].each do |name|
+            expected[name] = {"type" => "string", "required" => false, "default" => ""}
+        end
         inputs.each do |name, value|
             need(value.is_a?(Hash) && value["description"].is_a?(String) &&
                  value.reject { |key, _| key == "description" } == expected[name], "exact operation/default/source inputs required")
@@ -48,7 +51,8 @@ module WindowsDirectoryControlPolicy
         need(workflow["concurrency"] == HeavyJobQueuePolicy::WORKFLOW_CONCURRENCY["desktop-cross-host.yml"],
              "control reruns cannot share ordinary cancelling workflow group")
         jobs = workflow.fetch("jobs")
-        need(jobs.keys.sort == ["verify", OPERATION, "mac-host-admission-probe"].sort, "unexpected or missing Desktop/control job")
+        need(jobs.keys.sort == ["verify", OPERATION, "mac-host-admission-probe", "dependency-lock-candidate"].sort,
+             "unexpected or missing Desktop/control job")
         job = jobs.fetch(OPERATION)
         need(job.keys.sort == %w[concurrency env if name runs-on steps timeout-minutes] &&
              job["name"] == OPERATION && job["runs-on"] == "windows-latest" && job["timeout-minutes"] == 110 &&

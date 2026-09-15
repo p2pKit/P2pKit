@@ -321,8 +321,16 @@ def dispatch_identity(env, event, source):
     for key in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"):
         require(re.fullmatch(r"[1-9][0-9]{0,19}", env.get(key, "")), "Missing real run/attempt identity")
     require(type(event) is dict and event.get("repository", {}).get("full_name") == REPOSITORY and
-            event.get("ref") in (ref, ref[len("refs/heads/"):]) and event.get("inputs") == {
-                "operation": OPERATION, "expected_sha": expected, "expected_tree": tree},
+            event.get("ref") in (ref, ref[len("refs/heads/"):]),
+            "Original workflow_dispatch event disagrees with controller inputs")
+    # GitHub may include the shared workflow's new writer defaults. This
+    # witness accepts only empty strings; its source/command authority is intact.
+    writer_defaults = {"reviewed_base", "evidence_public_key", "evidence_fingerprint"}
+    inputs = {"operation": OPERATION, "expected_sha": expected, "expected_tree": tree}
+    provided = event.get("inputs")
+    require(type(provided) is dict and
+            {key: value for key, value in provided.items() if key not in writer_defaults} == inputs and
+            all(type(provided[key]) is str and provided[key] == "" for key in writer_defaults & provided.keys()),
             "Original workflow_dispatch event disagrees with controller inputs")
     require(source == {"commit": expected, "tree": tree, "status": "", "diffSha256": digest(b"")},
             "Control source is wrong, dirty or not the complete reviewed tree")

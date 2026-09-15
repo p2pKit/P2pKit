@@ -246,7 +246,14 @@ def dispatch_identity(env, event):
         require(integer(value, 1, 10 ** 20 - 1) and str(value) == env[name], "IDENTITY")
     require(sender.get("login") == actor and event.get("ref") in (ref, ref[len("refs/heads/"):]), "IDENTITY")
     inputs = {"operation": operation, "expected_sha": sha, "expected_tree": tree}
-    require(type(event.get("inputs")) is dict and event["inputs"] == inputs, "IDENTITY")
+    # The shared workflow adds optional writer fields to old dispatch events.
+    # They grant this no-child collector no new authority and must be empty.
+    writer_defaults = {"reviewed_base", "evidence_public_key", "evidence_fingerprint"}
+    provided = event.get("inputs")
+    require(type(provided) is dict and
+            {key: value for key, value in provided.items() if key not in writer_defaults} == inputs and
+            all(type(provided[key]) is str and provided[key] == "" for key in writer_defaults & provided.keys()),
+            "IDENTITY")
     image_os, image_version = env.get("ImageOS"), env.get("ImageVersion")
     require(image_os in selected["images"] and matches(IMAGE_VERSION, image_version), "IDENTITY")
     return {

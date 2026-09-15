@@ -1,0 +1,170 @@
+// Opt-in hosted mutable writer: owned simulator and original task/output observations.
+// Installed only into its fresh owned home. No tasks/targets/deadlines are changed.
+import groovy.json.JsonOutput
+import org.gradle.api.provider.Provider
+import java.nio.file.Files
+
+import org.gradle.api.Plugin
+import org.gradle.api.invocation.Gradle
+import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.provider.Property
+import org.gradle.api.services.BuildService
+import org.gradle.api.services.BuildServiceParameters
+import org.gradle.build.event.BuildEventsListenerRegistry
+import org.gradle.tooling.events.OperationCompletionListener
+import org.gradle.tooling.events.FinishEvent
+import org.gradle.tooling.events.task.TaskFinishEvent
+import org.gradle.tooling.events.task.TaskSuccessResult
+import org.gradle.tooling.events.task.TaskSkippedResult
+import org.gradle.tooling.events.task.TaskFailureResult
+import javax.inject.Inject
+
+interface WriterEventParameters extends BuildServiceParameters {
+    RegularFileProperty getDestination()
+}
+abstract class WriterTaskEvents implements BuildService<WriterEventParameters>, OperationCompletionListener, AutoCloseable {
+    private boolean created = false
+    private synchronized void emit(Map row) {
+        def path = parameters.destination.get().asFile
+        if (!created) {
+            Files.createFile(path.toPath())
+            created = true
+        }
+        new FileOutputStream(path, true).withCloseable { stream ->
+            stream.write((JsonOutput.toJson(row) + "\n").getBytes("UTF-8"))
+            stream.flush()
+            stream.getFD().sync()
+        }
+    }
+    void onFinish(FinishEvent event) {
+        if (!(event instanceof TaskFinishEvent)) return
+        def result = event.result
+        def row = [event: "task-end", task: [path: event.descriptor.taskPath],
+                   startedMillis: result.startTime, endedMillis: result.endTime,
+                   resultType: result.class.name]
+        if (result instanceof TaskSuccessResult) {
+            row.upToDate = result.upToDate
+            row.fromCache = result.fromCache
+        } else if (result instanceof TaskSkippedResult) {
+            row.skipMessage = result.skipMessage
+        } else if (result instanceof TaskFailureResult) {
+            row.failureTypes = result.failures.collect { it.class.name }
+        }
+        emit(row)
+    }
+    void close() {
+        emit([event: "observer-service-closed", observedMillis: System.currentTimeMillis()])
+    }
+}
+abstract class WriterEventPlugin implements Plugin<Gradle> {
+    @Inject abstract BuildEventsListenerRegistry getEvents()
+    void apply(Gradle target) {
+        def directory = new File(System.getenv("P2PKIT_WRITER_TASK_MAP"))
+        if (!directory.isDirectory()) throw new GradleException("Missing owned event directory")
+        def id = UUID.randomUUID().toString()
+        def service = target.sharedServices.registerIfAbsent("private-writer-events-" + id, WriterTaskEvents) {
+            parameters.destination.fileValue(new File(directory, "events-" + id + ".jsonl"))
+        }
+        events.onTaskCompletion(service)
+    }
+}
+apply plugin: WriterEventPlugin
+
+def ownedUuid = System.getenv("P2PKIT_WRITER_SIMULATOR")
+def evidencePath = System.getenv("P2PKIT_WRITER_TASK_MAP")
+def sourceRoot = System.getenv("P2PKIT_WRITER_SOURCE")
+if (!(ownedUuid ==~ /[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}/) || !evidencePath || !sourceRoot) {
+    throw new GradleException("Private writer simulator binding is incomplete")
+}
+def directory = new File(evidencePath)
+if (!directory.isDirectory()) throw new GradleException("Private task-map directory must already exist")
+def mapPath = directory.toPath().resolve("build-" + UUID.randomUUID().toString() + ".jsonl")
+Files.createFile(mapPath)
+def mapLock = new Object()
+def emit = { Map record ->
+    byte[] bytes = (JsonOutput.toJson(record + [observedMillis: System.currentTimeMillis()]) + "\n").getBytes("UTF-8")
+    synchronized (mapLock) {
+        new FileOutputStream(mapPath.toFile(), true).withCloseable { stream ->
+            stream.write(bytes)
+            stream.flush()
+            stream.getFD().sync()
+        }
+    }
+}
+def selected = [:]
+def simulatorType = "org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeSimulatorTest"
+def observedProperty = { task, name ->
+    if (!task.hasProperty(name)) return [available: false]
+    def value = task.property(name)
+    if (value instanceof Provider) value = value.orNull
+    return [available: true, value: value == null ? null : value.toString()]
+}
+def simulatorRecord = { task ->
+    [
+        path: task.path, type: task.class.name, device: task.device.get(), enabled: task.enabled,
+        targetName: observedProperty(task, "targetName"),
+        standalone: observedProperty(task, "standalone"),
+        debugMode: observedProperty(task, "debugMode"),
+        timeout: observedProperty(task, "timeout"),
+        executable: observedProperty(task, "executable"),
+        filter: task.hasProperty("filter") ? [
+            includes: task.filter.includePatterns.toList().sort(),
+            excludes: task.filter.excludePatterns.toList().sort()
+        ] : [available: false]
+    ]
+}
+def outputRecord = { task ->
+    [path: task.path, type: task.class.name, enabled: task.enabled,
+     outputs: task.outputs.files.files.collect { it.absolutePath }.sort()]
+}
+gradle.beforeProject { project ->
+    project.tasks.configureEach { task ->
+        emit([event: "configured", path: task.path, type: task.class.name, projectDir: project.projectDir.absolutePath])
+    }
+    project.plugins.withId("org.jetbrains.kotlin.multiplatform") { plugin ->
+        // Load the real pinned project's task class, not an init-script dependency.
+        Class actualType = plugin.class.classLoader.loadClass(simulatorType)
+        if (!org.gradle.api.provider.Property.isAssignableFrom(actualType.getMethod("getDevice").returnType)) {
+            throw new GradleException("Pinned simulator getDevice is not a Property")
+        }
+        emit([event: "plugin-task-class", project: project.path, taskType: actualType.name,
+              origin: actualType.protectionDomain.codeSource?.location?.toString()])
+        project.tasks.withType(actualType).configureEach { task ->
+            task.device.set(ownedUuid)
+            selected[task.path] = task
+        }
+        project.afterEvaluate {
+            // Realize only simulator task models so every applicable task is bound.
+            // This never enables a mismatched target or changes standalone/default filters.
+            project.tasks.withType(actualType).each { task ->
+                if (task.device.get() != ownedUuid) throw new GradleException("Simulator binding overwritten")
+            }
+        }
+    }
+}
+gradle.projectsEvaluated {
+    gradle.rootProject.allprojects.each { project ->
+        emit([event: "registered-model", project: project.path, tasks: project.tasks.names.toList().sort()])
+    }
+    selected.values().each { task ->
+        if (task.device.get() != ownedUuid) throw new GradleException("Simulator binding changed")
+        task.device.disallowChanges()
+        emit([event: "simulator-configured", task: simulatorRecord(task)])
+    }
+    if (gradle.rootProject.projectDir.canonicalPath == new File(sourceRoot).canonicalPath) {
+        def expected = [":p2p-core:iosSimulatorArm64Test", ":p2p-core:iosX64Test",
+                        ":p2p-transport-lan:iosSimulatorArm64Test", ":p2p-transport-lan:iosX64Test"] as Set
+        if (selected.keySet() != expected) throw new GradleException("Review changed simulator task model")
+    }
+}
+gradle.taskGraph.whenReady { graph ->
+    graph.allTasks.each { task ->
+        if (selected.containsKey(task.path) && task.device.get() != ownedUuid) {
+            throw new GradleException("In-graph simulator binding differs")
+        }
+        emit([event: "graph", task: outputRecord(task),
+              simulator: selected.containsKey(task.path) ? simulatorRecord(task) : null])
+    }
+}
+// Task execution outcomes use the public completion service above. No deprecated
+// beforeTask/afterTask/buildFinished listeners and no warning-mode overrides.

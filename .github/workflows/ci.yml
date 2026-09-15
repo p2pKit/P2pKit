@@ -127,6 +127,13 @@ jobs:
       - name: Verify private test-transcript custody controls
         run: python3 -I -B -S scripts/tests/test-transcript-custody-test.py
 
+      - name: Verify isolated hosted lock-candidate controls
+        run: |
+          ruby scripts/tests/check-hosted-lock-candidate-policy-test.rb
+          python3 -I -B -S scripts/tests/run-hosted-lock-candidate-test.py
+          python3 -I -B -S scripts/tests/hosted-lock-resources-test.py
+          python3 -I -B -S scripts/tests/encrypt-hosted-evidence-test.py
+
       - name: Verify development sample release policy
         run: |
           ruby scripts/tests/sample-release-workflow-test.rb

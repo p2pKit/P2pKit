@@ -43,18 +43,33 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Desktop apps plus Android APK on Linux, reviewed Windows witness, or no-child Mac capacity snapshot
+        description: Sample apps, Windows witness, no-child Mac capacity, or encrypted full-lock candidate
         type: choice
-        options: [desktop, sample-apps, windows-directory-fsync-control, macos-arm64-admission, macos-x64-admission]
+        options: [desktop, sample-apps, windows-directory-fsync-control, macos-arm64-admission, macos-x64-admission, dependency-lock-candidate]
         default: desktop
         required: true
       expected_sha:
-        description: Exact reviewed source commit (required for witness or capacity operations)
+        description: Exact reviewed source commit (required for witness, capacity, or lock-candidate operations)
         type: string
         required: false
         default: ""
       expected_tree:
-        description: Exact reviewed source tree (required for witness or capacity operations)
+        description: Exact reviewed source tree (required for witness, capacity, or lock-candidate operations)
+        type: string
+        required: false
+        default: ""
+      reviewed_base:
+        description: Full independently reviewed base SHA; must equal expected_sha for this lock-only candidate
+        type: string
+        required: false
+        default: ""
+      evidence_public_key:
+        description: ASCII-armored PUBLIC recipient key only; never submit a private key (lock candidate only)
+        type: string
+        required: false
+        default: ""
+      evidence_fingerprint:
+        description: Exact full recipient public-key fingerprint (lock candidate only)
         type: string
         required: false
         default: ""
@@ -63,13 +78,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: desktop-cross-host-${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'windows-directory-fsync-control' || inputs.operation == 'macos-arm64-admission' || inputs.operation == 'macos-x64-admission') && format('control-{0}-{1}', github.run_id, github.run_attempt) || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' || (inputs.operation != 'windows-directory-fsync-control' && inputs.operation != 'macos-arm64-admission' && inputs.operation != 'macos-x64-admission') }}
+  group: desktop-cross-host-${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'dependency-lock-candidate' && format('lock-{0}-{1}', github.run_id, github.run_attempt) || github.event_name == 'workflow_dispatch' && (inputs.operation == 'windows-directory-fsync-control' || inputs.operation == 'macos-arm64-admission' || inputs.operation == 'macos-x64-admission') && format('control-{0}-{1}', github.run_id, github.run_attempt) || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' || (inputs.operation != 'windows-directory-fsync-control' && inputs.operation != 'macos-arm64-admission' && inputs.operation != 'macos-x64-admission' && inputs.operation != 'dependency-lock-candidate') }}
 
 jobs:
   verify:
     name: ${{ matrix.os }}
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.operation != 'windows-directory-fsync-control' && inputs.operation != 'macos-arm64-admission' && inputs.operation != 'macos-x64-admission') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.operation != 'windows-directory-fsync-control' && inputs.operation != 'macos-arm64-admission' && inputs.operation != 'macos-x64-admission' && inputs.operation != 'dependency-lock-candidate') }}
     concurrency:
       group: p2pkit-nonphysical-heavy
       queue: max
@@ -373,4 +388,74 @@ jobs:
         shell: bash
         run: |
           echo 'FATAL: no safe complete capacity evidence; no host admission claim' >&2
+          exit 1
+
+  dependency-lock-candidate:
+    name: dependency-lock-candidate
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'dependency-lock-candidate' }}
+    concurrency:
+      group: p2pkit-nonphysical-heavy
+      queue: max
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    runs-on: macos-26
+    timeout-minutes: 195
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+      P2PKIT_OPERATION: ${{ inputs.operation }}
+      P2PKIT_EXPECTED_SHA: ${{ inputs.expected_sha }}
+      P2PKIT_EXPECTED_TREE: ${{ inputs.expected_tree }}
+      P2PKIT_REVIEWED_BASE: ${{ inputs.reviewed_base }}
+      P2PKIT_EVIDENCE_PUBLIC_KEY: ${{ inputs.evidence_public_key }}
+      P2PKIT_EVIDENCE_FINGERPRINT: ${{ inputs.evidence_fingerprint }}
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Check out exact reviewed lock-candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # No tool installers, cache restores, publisher credentials or raw-log
+      # uploads. The mutable controller admits the real host before the writer.
+      - name: Admit host and generate private full-lock candidate
+        id: candidate
+        timeout-minutes: 170
+        shell: bash
+        run: exec /Applications/Xcode_26.5.app/Contents/Developer/usr/bin/python3 -I -B -S scripts/run-hosted-lock-candidate.py run
+
+      - name: Seal private original evidence after controller exit
+        id: seal
+        if: ${{ always() }}
+        timeout-minutes: 15
+        shell: bash
+        run: exec /Applications/Xcode_26.5.app/Contents/Developer/usr/bin/python3 -I -B -S scripts/run-hosted-lock-candidate.py seal
+
+      - name: Validate exact encrypted public evidence
+        id: public
+        if: ${{ always() }}
+        timeout-minutes: 2
+        shell: bash
+        run: exec /Applications/Xcode_26.5.app/Contents/Developer/usr/bin/python3 -I -B -S scripts/run-hosted-lock-candidate.py validate-public
+
+      - name: Retain encrypted lock-candidate evidence
+        if: ${{ always() && steps.public.outputs.artifacts_ready == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: encrypted-lock-candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/p2pkit-lock-export-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          include-hidden-files: false
+          overwrite: false
+
+      - name: Fail if encrypted retained evidence is unavailable
+        if: ${{ always() && steps.public.outputs.artifacts_ready != 'true' }}
+        shell: bash
+        run: |
+          echo 'FATAL: no safe encrypted lock-candidate evidence; no acceptance claim' >&2
           exit 1
