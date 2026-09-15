@@ -84,7 +84,8 @@ module SampleAppWorkflowPolicy
           echo 'FATAL: sample Gradle home already exists' >&2
           exit 1
         fi
-        mkdir -m 700 "$gradle_home"
+        # Use the native API: Git Bash's mkdir -m can fail changing Windows ACLs.
+        "$python_bin" -I -B -S -c 'from pathlib import Path; import sys; Path(sys.argv[1]).mkdir(mode=0o700)' "$gradle_home"
         printf 'GRADLE_USER_HOME=%s\n' "$gradle_home" >> "$GITHUB_ENV"
     SH
 
