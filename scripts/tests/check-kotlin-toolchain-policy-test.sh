@@ -89,10 +89,9 @@ grep -Fq 'AGP_VERSION="$(sed ' "$CONSUMER_GATE" ||
     fail "the isolated consumer does not derive AGP from the catalog"
 grep -Fq -- '-Xoverride-konan-properties=minVersion.ios=$IOS_MIN_VERSION' "$CONSUMER_GATE" ||
     fail "the isolated KMP consumer does not link at the canonical iOS floor"
-grep -Fq './gradlew --no-daemon --console=plain publishToMavenLocal' "$CONSUMER_GATE" ||
-    fail "the isolated publication fixture may leave a Gradle daemon racing cleanup"
-grep -Fq './gradlew --no-daemon --console=plain -p "$FIXTURE_DIR"' "$CONSUMER_GATE" ||
-    fail "the isolated consumer fixture may leave a Gradle daemon racing cleanup"
+# The caller selects fixed publication tasks through an array. Guard the actual
+# ordinary/executor publication AND consumer calls, not an obsolete literal task.
+ruby "$ROOT/scripts/check-consumer-gradle-policy.rb" "$CONSUMER_GATE"
 # Consumer versions are inputs, unlike the catalog tripwires above. Enforce
 # the variable-based recipe rather than banning one historical Kotlin pin.
 ruby "$ROOT/scripts/check-version-input-policy.rb" consumer "$CONSUMER_GATE"
