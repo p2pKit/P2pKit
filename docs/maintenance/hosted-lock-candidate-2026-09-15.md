@@ -5,6 +5,11 @@ The owner subsequently authorized encrypted evidence delivery, with the private
 key kept only on the Mac. That permission does not authorize raw-log publication,
 production releases, bypassed reviews/checks or physical-phone work.
 
+**Subsequent execution:** the one authorized dispatch has now completed:
+[run 35007680254 failed before Gradle; encrypted failure evidence was retained](hosted-lock-result-2026-09-15.md).
+The source/offline checkpoint below predates that run. Its dispatch recipe is not
+permission for another attempt; no automatic retry is authorized.
+
 **Source/offline implementation is not a successful hosted writer.** At this
 checkpoint all twelve locks and verification metadata are unchanged; six locks
 still contain removed upstream JmDNS membership. The failed/cancelled sample run
