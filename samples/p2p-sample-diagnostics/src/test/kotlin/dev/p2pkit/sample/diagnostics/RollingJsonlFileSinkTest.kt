@@ -1,16 +1,22 @@
 package dev.p2pkit.sample.diagnostics
 
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.io.OutputStream
+import java.io.PrintStream
 import java.nio.file.Files
 import java.util.Base64
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class RollingJsonlFileSinkTest {
@@ -261,6 +267,7 @@ class RollingJsonlFileSinkTest {
         val owner = RollingJsonlFileSink(directory, 4_096, 2, operations)
         val contender = RollingJsonlFileSink.forFile(File(directory, "diagnostic-events.jsonl"), 4_096, 2)
         val worker = Executors.newSingleThreadExecutor()
+        var failure: Throwable? = null
         try {
             val writing = worker.submit { owner("first") }
             assertTrue(entered.await(5, TimeUnit.SECONDS))
@@ -277,10 +284,14 @@ class RollingJsonlFileSinkTest {
             contender("after")
             assertEquals("first\nafter\n", File(directory, "diagnostic-events.jsonl").readText())
             nativeLockProbe(directory, "ACQUIRED", withBenignOption)
+        } catch (error: Throwable) {
+            failure = error
         } finally {
-            release.countDown()
-            worker.shutdownNow()
-            assertTrue(worker.awaitTermination(5, TimeUnit.SECONDS))
+            val failures = ProbeFailures(failure)
+            failures.attempt { release.countDown() }
+            failures.attempt { worker.shutdownNow() }
+            failures.attempt { assertTrue(worker.awaitTermination(5, TimeUnit.SECONDS)) }
+            failures.rethrow()
         }
     }
 
@@ -347,32 +358,244 @@ class RollingJsonlFileSinkTest {
         }
         val inheritedOptions = builder.environment()["JDK_JAVA_OPTIONS"]
         var process: Process? = null
+        var failure: Throwable? = null
         try {
             process = builder.start()
             assertTrue(process.waitFor(5, TimeUnit.SECONDS), "native lock probe did not finish")
             assertEquals(0, process.exitValue(), output.readText())
             assertNativeLockTranscript(output.readLines(), expected, inheritedOptions)
+        } catch (error: Throwable) {
+            failure = error
         } finally {
-            if (process?.isAlive == true) {
-                process.destroyForcibly()
-                check(process.waitFor(5, TimeUnit.SECONDS)) { "Owned native lock probe survived forced cleanup" }
-            }
-            try {
-                process?.outputStream?.close()
-            } finally {
-                try {
-                    // Retain original bytes independently of text/XML newline processing.
-                    val bytes = output.readBytes()
-                    val encoded = Base64.getEncoder().encodeToString(bytes)
-                    println(
-                        "NATIVE_LOCK_PROBE_RAW expected=$expected benignOption=$withBenignOption " +
-                            "bytes=${bytes.size} base64=$encoded"
+            finishProbe(
+                directory, failure,
+                retire = {
+                    val owned = process
+                    if (owned?.isAlive == true) {
+                        owned.destroyForcibly()
+                        check(owned.waitFor(5, TimeUnit.SECONDS)) { "Owned native lock probe survived forced cleanup" }
+                    }
+                },
+                closeInput = { process?.outputStream?.close() },
+                retain = {
+                    retainProbeLog(output, "NATIVE_LOCK_PROBE_RAW expected=$expected benignOption=$withBenignOption")
+                },
+                dispose = { check(output.delete()) { "Could not remove owned native lock probe output" } }
+            )
+        }
+    }
+
+    private fun retainProbeLog(
+        output: File,
+        prefix: String,
+        stream: PrintStream = System.out,
+        read: (File) -> ByteArray = { it.readBytes() }
+    ) {
+        // Retain original bytes independently of text/XML newline processing.
+        val bytes = read(output)
+        val encoded = Base64.getEncoder().encodeToString(bytes)
+        stream.println("$prefix bytes=${bytes.size} base64=$encoded")
+        check(!stream.checkError()) { "Could not retain the native lock probe transcript" }
+    }
+
+    private fun finishProbe(
+        directory: File,
+        primaryFailure: Throwable?,
+        retire: () -> Unit,
+        closeInput: () -> Unit,
+        retain: () -> Unit,
+        dispose: () -> Unit
+    ) {
+        val failures = ProbeFailures(primaryFailure)
+        // Every attempt is independent; a live/unknown child never authorizes raw-output disposal.
+        val retired = failures.attempt(retire)
+        val inputClosed = failures.attempt(closeInput)
+        val retained = failures.attempt(retain)
+        val disposed = retired && inputClosed && retained && failures.attempt(dispose)
+        if (!disposed) failures.attempt {
+            error("PROBE_EVIDENCE_HOLD: preserve ${directory.absolutePath} before outer cleanup")
+        }
+        failures.rethrow()
+    }
+
+    @Test
+    fun probeFinalizerRetainsOriginalBytesBeforeDisposal() = withControlLog { directory, output ->
+        val calls = mutableListOf<String>()
+        val captured = ByteArrayOutputStream()
+        PrintStream(captured).use { stream ->
+            finishProbe(
+                directory, null,
+                retire = { calls += "retire" },
+                closeInput = { calls += "close" },
+                retain = { retainProbeLog(output, "CONTROL", stream); calls += "retain" },
+                dispose = {
+                    assertEquals(listOf("retire", "close", "retain"), calls)
+                    assertEquals(
+                        "CONTROL bytes=7 base64=cmF3DQoA/w==" + System.lineSeparator(), captured.toString("US-ASCII")
                     )
-                    check(!System.out.checkError()) { "Could not retain the native lock probe transcript" }
-                } finally {
-                    check(output.delete()) { "Could not remove owned native lock probe output" }
+                    check(output.delete())
+                    calls += "dispose"
+                }
+            )
+        }
+        assertEquals(listOf("retire", "close", "retain", "dispose"), calls)
+        assertFalse(output.exists())
+    }
+
+    @Test
+    fun probeFinalizerHoldsOriginalsWhenReadExportOrPrintStreamFails() {
+        for (stage in listOf("read", "export", "stream")) withControlLog { directory, output ->
+            val original = output.readBytes()
+            val injected = IOException("synthetic $stage failure")
+            val stream = when (stage) {
+                "export" -> object : PrintStream(ByteArrayOutputStream()) {
+                    override fun println(value: String?) = throw injected
+                }
+                "stream" -> PrintStream(object : OutputStream() {
+                    override fun write(value: Int) = throw injected
+                })
+                else -> PrintStream(ByteArrayOutputStream())
+            }
+            val calls = mutableListOf<String>()
+            stream.use {
+                val failure = assertFailsWith<Exception> {
+                    finishProbe(
+                        directory, null,
+                        retire = { calls += "retire" },
+                        closeInput = { calls += "close" },
+                        retain = {
+                            calls += "retain"
+                            retainProbeLog(output, "CONTROL", stream) { file ->
+                                if (stage == "read") throw injected
+                                file.readBytes()
+                            }
+                        },
+                        dispose = { calls += "dispose"; output.delete() }
+                    )
+                }
+                if (stage == "stream") {
+                    assertTrue(stream.checkError())
+                    assertEquals("Could not retain the native lock probe transcript", failure.message)
+                } else assertSame(injected, failure)
+                assertTrue(failure.suppressed.single().message!!.startsWith("PROBE_EVIDENCE_HOLD:"))
+            }
+            assertEquals(listOf("retire", "close", "retain"), calls)
+            assertContentEquals(original, output.readBytes())
+        }
+    }
+
+    @Test
+    fun probeFinalizerPreservesPrimaryFailureAndAttemptsEveryFinalizer() {
+        val primary = AssertionError("synthetic body failure")
+        val retirement = IOException("synthetic retirement failure")
+        val input = IOException("synthetic input closure failure")
+        val retention = IOException("synthetic retention failure")
+        val calls = mutableListOf<String>()
+        val actual = assertFailsWith<AssertionError> {
+            finishProbe(
+                File("synthetic-not-created"), primary,
+                retire = { calls += "retire"; throw retirement },
+                closeInput = { calls += "close"; throw input },
+                retain = { calls += "retain"; throw retention },
+                dispose = { calls += "dispose" }
+            )
+        }
+        assertSame(primary, actual)
+        assertEquals(listOf(retirement, input, retention), actual.suppressed.take(3))
+        assertTrue(actual.suppressed.last().message!!.startsWith("PROBE_EVIDENCE_HOLD:"))
+        assertEquals(listOf("retire", "close", "retain"), calls)
+    }
+
+    @Test
+    fun probeFinalizerHoldsOriginalWhenRetirementOrInputClosureFails() {
+        for (stage in listOf("retire", "close")) withControlLog { directory, output ->
+            val original = output.readBytes()
+            val injected = IOException("synthetic $stage failure")
+            val calls = mutableListOf<String>()
+            val captured = ByteArrayOutputStream()
+            PrintStream(captured).use { stream ->
+                val failure = assertFailsWith<IOException> {
+                    finishProbe(
+                        directory, null,
+                        retire = { calls += "retire"; if (stage == "retire") throw injected },
+                        closeInput = { calls += "close"; if (stage == "close") throw injected },
+                        retain = { retainProbeLog(output, "CONTROL", stream); calls += "retain" },
+                        dispose = { calls += "dispose"; output.delete() }
+                    )
+                }
+                assertSame(injected, failure)
+                assertTrue(failure.suppressed.single().message!!.startsWith("PROBE_EVIDENCE_HOLD:"))
+            }
+            assertEquals(listOf("retire", "close", "retain"), calls)
+            assertEquals("CONTROL bytes=7 base64=cmF3DQoA/w==" + System.lineSeparator(), captured.toString("US-ASCII"))
+            assertContentEquals(original, output.readBytes())
+        }
+    }
+
+    @Test
+    fun probeFinalizerDoesNotReplaceBodyFailureWhenDisposalFails() {
+        val primary = AssertionError("synthetic body failure")
+        val disposal = IOException("synthetic disposal failure")
+        val failure = assertFailsWith<AssertionError> {
+            finishProbe(File("synthetic-not-created"), primary, {}, {}, {}, { throw disposal })
+        }
+        assertSame(primary, failure)
+        assertSame(disposal, failure.suppressed.first())
+        assertEquals(2, failure.suppressed.size)
+        assertTrue(failure.suppressed.last().message!!.startsWith("PROBE_EVIDENCE_HOLD:"))
+    }
+
+    @Test
+    fun enclosingDirectoryHoldsRawLogsAndUnknownListingsWithoutMaskingBodyFailure() {
+        for (stage in listOf("raw", "body", "listing")) withControlLog { directory, output ->
+            val original = output.readBytes()
+            val primary = IOException("synthetic body failure")
+            val failure = assertFailsWith<Exception> {
+                withDirectory(directory, list = { if (stage == "listing") null else it.listFiles() }) {
+                    if (stage == "body") throw primary
                 }
             }
+            if (stage == "body") assertSame(primary, failure)
+            else assertEquals(
+                if (stage == "raw") "Unretained native lock probe output" else "Cannot inspect owned test directory",
+                failure.message
+            )
+            assertTrue(failure.suppressed.single().message!!.startsWith("PROBE_EVIDENCE_HOLD:"))
+            assertContentEquals(original, output.readBytes())
+        }
+    }
+
+    private fun withControlLog(action: (File, File) -> Unit) {
+        val directory = Files.createTempDirectory("p2pkit-lock-finalizer-control-").toFile()
+        val failures = ProbeFailures(null)
+        try {
+            val output = File(directory, "native-lock-probe-control.log").apply {
+                writeBytes("raw\r\n".toByteArray(Charsets.US_ASCII) + byteArrayOf(0, -1))
+            }
+            action(directory, output)
+        } catch (error: Throwable) {
+            failures.attempt { throw error }
+        } finally {
+            // Only source-defined control bytes, never a real subprocess/lock fixture's evidence.
+            failures.attempt { check(directory.deleteRecursively()) { "Could not remove control directory" } }
+            failures.rethrow()
+        }
+    }
+
+    private class ProbeFailures(primaryFailure: Throwable?) {
+        private var first = primaryFailure
+
+        fun attempt(action: () -> Unit): Boolean = try {
+            action()
+            true
+        } catch (error: Throwable) {
+            val primary = first
+            if (primary == null) first = error else if (primary !== error) primary.addSuppressed(error)
+            false
+        }
+
+        fun rethrow() {
+            first?.let { throw it }
         }
     }
 
@@ -415,12 +638,30 @@ class RollingJsonlFileSinkTest {
         .filter { it.isFile && it.name.startsWith("diagnostic-events.jsonl") }
         .sortedBy { it.name }
 
-    private fun withDirectory(action: (File) -> Unit) {
-        val directory = Files.createTempDirectory("p2pkit-rolling-failure").toFile()
+    private fun withDirectory(
+        directory: File = Files.createTempDirectory("p2pkit-rolling-failure").toFile(),
+        list: (File) -> Array<File>? = { it.listFiles() },
+        action: (File) -> Unit
+    ) {
+        var failure: Throwable? = null
         try {
             action(directory)
+        } catch (error: Throwable) {
+            failure = error
         } finally {
-            assertTrue(directory.deleteRecursively())
+            val failures = ProbeFailures(failure)
+            // A failed body may still have an unretired worker. Never delete through that uncertainty.
+            val disposed = failure == null && failures.attempt {
+                val entries = checkNotNull(list(directory)) { "Cannot inspect owned test directory" }
+                check(entries.none { it.name.startsWith("native-lock-probe-") && it.name.endsWith(".log") }) {
+                    "Unretained native lock probe output"
+                }
+                check(directory.deleteRecursively()) { "Could not remove owned test directory" }
+            }
+            if (!disposed) failures.attempt {
+                error("PROBE_EVIDENCE_HOLD: preserve ${directory.absolutePath} before outer cleanup")
+            }
+            failures.rethrow()
         }
     }
 }
