@@ -2,6 +2,7 @@
 # Pure workflow/adverse policy checks. No dispatch, native execution or publication.
 require "json"
 require_relative "../check-heavy-job-queue-policy"
+require_relative "../check-sample-app-workflow-policy"
 
 module WindowsDirectoryControlPolicy
     Error = HeavyJobQueuePolicy::Error
@@ -13,21 +14,6 @@ module WindowsDirectoryControlPolicy
     JAVA = "actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961"
     UPLOAD = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
     STEPNAME = "Verify Windows directory control policy"
-    PR_PATHS = %w[.github/workflows/desktop-cross-host.yml build.gradle.kts settings.gradle.kts gradle.properties
-        buildSrc/** gradle/wrapper/** gradle/libs.versions.toml gradle/verification-metadata.xml
-        gradle/windows-directory-control.init.gradle scripts/run-windows-directory-control.py
-        scripts/tests/run-windows-directory-control-test.py scripts/tests/check-windows-directory-control-policy-test.rb
-        scripts/tests/fixtures/windows-directory-binding/settings.gradle scripts/tests/fixtures/windows-directory-binding/build.gradle
-        gradle.lockfile buildscript-gradle.lockfile samples/p2p-sample-desktop/** samples/p2p-sample-desktop-ui/**
-        samples/p2p-sample-diagnostics/** library/p2p-core/** library/p2p-transport-lan/** library/p2p-network-provisioning-desktop/**].freeze
-    TASKS = %w[:p2p-sample-desktop:check :p2p-sample-desktop:installDist :p2p-sample-desktop-ui:test
-        :p2p-sample-desktop-ui:checkRuntime :p2p-sample-desktop-ui:hotRunArgfile :p2p-sample-desktop-ui:createDistributable].freeze
-    REJECT_UNKNOWN = <<~'SH'
-        if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$P2PKIT_DESKTOP_OPERATION" != desktop ]]; then
-          echo 'FATAL: unknown Desktop dispatch operation' >&2
-          exit 1
-        fi
-    SH
     SAVE_JDK = <<~'PS'
         if ([string]::IsNullOrWhiteSpace($env:JAVA_HOME) -or $env:JAVA_HOME.Contains("`n") -or $env:JAVA_HOME.Contains("`r")) {
           throw 'Missing or invalid daemon JDK path'
@@ -44,11 +30,12 @@ module WindowsDirectoryControlPolicy
     end
 
     def self.check(workflow)
+        # The ordinary job now delivers main sample apps. Its narrow reviewed
+        # contract is shared, not relaxed; witness authority below is unchanged.
+        SampleAppWorkflowPolicy.check(workflow)
         need(workflow["permissions"] == {"contents" => "read"} && !workflow.key?("env") && !workflow.key?("defaults") &&
              !JSON.generate(workflow).match?(/secrets\.|id-token|pull_request_target/), "control must remain secret-free and contents-read")
         triggers = workflow.fetch("on") { workflow.fetch(true) }
-        need(triggers.keys.sort == %w[pull_request workflow_dispatch] &&
-             triggers["pull_request"] == {"paths" => PR_PATHS}, "ordinary PR trigger/path coverage changed")
         inputs = triggers.fetch("workflow_dispatch").fetch("inputs")
         need(inputs.keys.sort == %w[expected_sha expected_tree operation], "no arbitrary control inputs")
         expected = {"operation" => {"type" => "choice", "options" => ["desktop", OPERATION, "macos-arm64-admission", "macos-x64-admission"], "default" => "desktop", "required" => true},
@@ -62,25 +49,6 @@ module WindowsDirectoryControlPolicy
              "control reruns cannot share ordinary cancelling workflow group")
         jobs = workflow.fetch("jobs")
         need(jobs.keys.sort == ["verify", OPERATION, "mac-host-admission-probe"].sort, "unexpected or missing Desktop/control job")
-        ordinary = jobs.fetch("verify")
-        need(ordinary["if"] == HeavyJobQueuePolicy::CONDITIONS[["desktop-cross-host.yml", "verify"]] &&
-             ordinary["timeout-minutes"] == 30 && !ordinary.key?("env") && !ordinary.key?("environment"),
-             "ordinary Desktop behavior cannot be waived")
-        steps = ordinary.fetch("steps")
-        need(steps.length == 5, "ordinary Desktop setup/task count changed")
-        step(steps, 0, {"name" => "Reject unknown Desktop dispatch operations", "shell" => "bash",
-            "env" => {"P2PKIT_DESKTOP_OPERATION" => "${{ inputs.operation }}"}, "run" => REJECT_UNKNOWN})
-        step(steps, 1, {"name" => "Check out repository", "uses" => CHECKOUT, "with" => {"persist-credentials" => false}})
-        step(steps, 2, {"name" => "Configure Java 17", "uses" => JAVA,
-            "with" => {"distribution" => "temurin", "java-version" => "17"}})
-        step(steps, 3, {"name" => "Validate wrapper and configure Gradle",
-            "uses" => "gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb",
-            "with" => {"gradle-home-cache-excludes" => "caches/build-cache-1"}})
-        product = steps[4]
-        need(product.keys.sort == %w[name run shell] && product["shell"] == "bash" &&
-             product["run"].gsub(/\\\n/, "").split == ["./gradlew", "--no-daemon", *TASKS, "--console=plain"],
-             "ordinary Desktop tasks or failure policy changed")
-
         job = jobs.fetch(OPERATION)
         need(job.keys.sort == %w[concurrency env if name runs-on steps timeout-minutes] &&
              job["name"] == OPERATION && job["runs-on"] == "windows-latest" && job["timeout-minutes"] == 110 &&
@@ -146,7 +114,7 @@ mutations = {
     "missing PR coverage" => ->(v) { (v["on"] || v[true])["pull_request"]["paths"].pop },
     "ordinary skipped green" => ->(v) { v["jobs"]["verify"]["if"] = false },
     "missing unknown guard" => ->(v) { v["jobs"]["verify"]["steps"].shift },
-    "ordinary tasks omitted" => ->(v) { v["jobs"]["verify"]["steps"].last["run"] = "echo pass" },
+    "ordinary tasks omitted" => ->(v) { v["jobs"]["verify"]["steps"].find { |s| s["id"] == "sample-build" }["run"] = "echo pass" },
     "wrong native host" => ->(v) { v["jobs"][P::OPERATION]["runs-on"] = "ubuntu-latest" },
     "control cancellation" => ->(v) { v["concurrency"]["cancel-in-progress"] = true },
     "missing queue" => ->(v) { v["jobs"][P::OPERATION].delete("concurrency") },

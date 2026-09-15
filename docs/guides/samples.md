@@ -254,6 +254,68 @@ from `samples/iosApp/project.yml`; do not hand-edit the ignored `.xcodeproj`.
 For XcodeGen, signing prerequisites, and the generated provenance phase, see the
 [iOS sample scripts guide](../../samples/iosApp/scripts/README.md).
 
+### Download development apps from Actions
+
+The **Desktop cross-host** workflow covers relevant sample/library/build changes
+on `main` and pull requests. Its ordinary manual operation remains `desktop`.
+Documentation-only changes do not start another sample build. The existing native
+Ubuntu, Windows and macOS jobs run serially; the Ubuntu job also assembles the
+Android sample APK in the same Gradle invocation. Required library/full CI gates
+remain separate and are not replaced by these downloadable samples.
+
+After a **successful** run, its Actions page provides these 14-day artifacts:
+
+| Artifact name prefix | Contents |
+| --- | --- |
+| `sample-android-` | Android debug APK, manifest, checksums and notices. No emulator is needed to build it. |
+| `sample-desktop-Linux-` | Desktop UI runtime image and JVM CLI distribution, each as `.tar.gz`. |
+| `sample-desktop-Windows-` | Desktop UI runtime image and JVM CLI distribution, each as `.zip`. |
+| `sample-desktop-macOS-` | Desktop `.app` runtime image and JVM CLI distribution, each as `.tar.gz`. |
+
+Names include the full source SHA, run ID and attempt, plus the observed runner
+architecture for Desktop. A `macos-15` runner label alone is **not** Intel evidence.
+Use the architecture in `manifest.json`; the workflow does not build every possible
+CPU architecture. Downloads contain the complete application/runtime, not only a
+launcher. The CLI distribution separately requires Java 17 or newer.
+
+To find a main run without starting another build:
+
+```bash
+gh run list --repo p2pKit/P2pKit --workflow desktop-cross-host.yml --branch main --status success --limit 5
+gh run view RUN_ID --repo p2pKit/P2pKit
+gh run download RUN_ID --repo p2pKit/P2pKit --name EXACT_ARTIFACT_NAME --dir NEW_DOWNLOAD_DIRECTORY
+```
+
+Replace the uppercase placeholders with the inspected run/artifact values. Check
+the manifest's repository, commit/tree, event/ref and run/attempt against that run;
+do not mistake a PR-merge or manual candidate artifact for accepted main output.
+Inside the downloaded directory, verify `checksums.sha256` with `sha256sum -c`
+(Linux or Git Bash) or `shasum -a 256 -c` (macOS), then extract the inner archive.
+Keep the full extracted directory together. Unix tar archives preserve executable
+permissions and internal links that a raw Actions directory upload would lose.
+
+These are **development test harnesses**, not EXE/MSI/DMG/DEB installers or a
+production release. Android uses the debug build task, not a Store signing key.
+Desktop has no production signing/notarization step; OS trust checks may reject
+it. Do not disable OS security controls to make an unqualified download appear
+trusted. No signing credentials, tags, releases or Store uploads are involved.
+
+The packager checks source/run consistency, native launcher/VM architectures,
+application/CLI layout and archive bytes/modes/links. Android inspection checks
+AGP output metadata and APK ZIP structure/CRC, **not** the binary manifest or
+signer identity. None of these checks launches an app or proves LAN, UI, phone,
+independent-interoperability or release acceptance. The existing sample warnings
+and permission/consent requirements still apply.
+
+Dependency/wrapper caches are retained through the pinned Gradle setup action;
+the affected Kotlin build cache remains excluded. Each host uses its own job-owned
+home, two workers, no parallel Gradle and strict verification. Both Java 17 and 21
+are installed explicitly. Cache hits reduce downloads; they do not guarantee zero
+transfer or excuse stale dependency locks. Failed builds/stops/packaging do not
+publish application artifacts. The existing CLI test execution additionally needs
+the [subprocess custody prerequisites](../testing/local.md#subprocess-transcript-custody-on-failure);
+app artifact retention is not a replacement for that private test-evidence contract.
+
 For validation controls, event names, evidence export, and two-peer
 correlation, follow the [validation handbook](../validation/README.md) and
 [test catalog](../validation/test-catalog.md).

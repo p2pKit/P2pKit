@@ -1,34 +1,85 @@
 name: Desktop cross-host
 
 on:
-  pull_request:
+  push:
+    branches: [main]
     paths:
       - ".github/workflows/desktop-cross-host.yml"
+      - ".gitattributes"
+      - ".gitignore"
+      - "LICENSE"
+      - "gradlew"
+      - "gradlew.bat"
       - "build.gradle.kts"
       - "settings.gradle.kts"
       - "gradle.properties"
       - "buildSrc/**"
       - "gradle/wrapper/**"
+      - "gradle/gradle-daemon-jvm.properties"
       - "gradle/libs.versions.toml"
       - "gradle/verification-metadata.xml"
       - "gradle/windows-directory-control.init.gradle"
       - "scripts/run-windows-directory-control.py"
+      - "scripts/package-sample-apps.py"
+      - "scripts/tests/package-sample-apps-test.py"
+      - "scripts/check-sample-app-workflow-policy.rb"
+      - "scripts/tests/check-sample-app-workflow-policy-test.rb"
       - "scripts/tests/run-windows-directory-control-test.py"
       - "scripts/tests/check-windows-directory-control-policy-test.rb"
       - "scripts/tests/fixtures/windows-directory-binding/settings.gradle"
       - "scripts/tests/fixtures/windows-directory-binding/build.gradle"
       - "gradle.lockfile"
       - "buildscript-gradle.lockfile"
+      - "samples/p2p-sample-android/**"
+      - "samples/sample-kmp-shared/**"
       - "samples/p2p-sample-desktop/**"
       - "samples/p2p-sample-desktop-ui/**"
       - "samples/p2p-sample-diagnostics/**"
       - "library/p2p-core/**"
       - "library/p2p-transport-lan/**"
       - "library/p2p-network-provisioning-desktop/**"
+      - "library/p2p-network-provisioning-android/**"
+  pull_request:
+    paths:
+      - ".github/workflows/desktop-cross-host.yml"
+      - ".gitattributes"
+      - ".gitignore"
+      - "LICENSE"
+      - "gradlew"
+      - "gradlew.bat"
+      - "build.gradle.kts"
+      - "settings.gradle.kts"
+      - "gradle.properties"
+      - "buildSrc/**"
+      - "gradle/wrapper/**"
+      - "gradle/gradle-daemon-jvm.properties"
+      - "gradle/libs.versions.toml"
+      - "gradle/verification-metadata.xml"
+      - "gradle/windows-directory-control.init.gradle"
+      - "scripts/run-windows-directory-control.py"
+      - "scripts/package-sample-apps.py"
+      - "scripts/tests/package-sample-apps-test.py"
+      - "scripts/check-sample-app-workflow-policy.rb"
+      - "scripts/tests/check-sample-app-workflow-policy-test.rb"
+      - "scripts/tests/run-windows-directory-control-test.py"
+      - "scripts/tests/check-windows-directory-control-policy-test.rb"
+      - "scripts/tests/fixtures/windows-directory-binding/settings.gradle"
+      - "scripts/tests/fixtures/windows-directory-binding/build.gradle"
+      - "gradle.lockfile"
+      - "buildscript-gradle.lockfile"
+      - "samples/p2p-sample-android/**"
+      - "samples/sample-kmp-shared/**"
+      - "samples/p2p-sample-desktop/**"
+      - "samples/p2p-sample-desktop-ui/**"
+      - "samples/p2p-sample-diagnostics/**"
+      - "library/p2p-core/**"
+      - "library/p2p-transport-lan/**"
+      - "library/p2p-network-provisioning-desktop/**"
+      - "library/p2p-network-provisioning-android/**"
   workflow_dispatch:
     inputs:
       operation:
-        description: Ordinary Desktop matrix, reviewed Windows witness, or no-child Mac capacity snapshot
+        description: Desktop apps plus Android APK on Linux, reviewed Windows witness, or no-child Mac capacity snapshot
         type: choice
         options: [desktop, windows-directory-fsync-control, macos-arm64-admission, macos-x64-admission]
         default: desktop
@@ -82,28 +133,106 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Configure Java 17
+      - name: Bind fresh sample outputs and Gradle home to this run
+        shell: bash
+        run: |
+          python_bin=python3
+          if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
+          "$python_bin" -I -B -S scripts/package-sample-apps.py prepare --output "$RUNNER_TEMP/p2pkit-sample-apps"
+          # runner.temp is not available in job-level env; export after allocation.
+          gradle_home="$RUNNER_TEMP/p2pkit-sample-gradle"
+          if [[ -e "$gradle_home" || -L "$gradle_home" ]]; then
+            echo 'FATAL: sample Gradle home already exists' >&2
+            exit 1
+          fi
+          mkdir -m 700 "$gradle_home"
+          printf 'GRADLE_USER_HOME=%s\n' "$gradle_home" >> "$GITHUB_ENV"
+
+      - name: Configure daemon Java 21 and wrapper Java 17
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
-          java-version: "17"
+          # setup-java installs both; the last entry supplies JAVA_HOME.
+          java-version: |
+            21
+            17
 
       - name: Validate wrapper and configure Gradle
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
           gradle-home-cache-excludes: caches/build-cache-1
 
-      - name: Verify CLI, Desktop runtime, tests, Hot Reload tooling, and application images
+      - name: Install Android compile platforms for the Linux APK producer
+        if: runner.os == 'Linux'
         shell: bash
         run: |
-          ./gradlew --no-daemon \
-            :p2p-sample-desktop:check \
-            :p2p-sample-desktop:installDist \
-            :p2p-sample-desktop-ui:test \
-            :p2p-sample-desktop-ui:checkRuntime \
-            :p2p-sample-desktop-ui:hotRunArgfile \
-            :p2p-sample-desktop-ui:createDistributable \
-            --console=plain
+          "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37.0'
+          grep -Fxq 'AndroidVersion.ApiLevel=36' "$ANDROID_HOME/platforms/android-36/source.properties"
+          grep -Fxq 'AndroidVersion.ApiLevel=37.0' "$ANDROID_HOME/platforms/android-37.0/source.properties"
+
+      - name: Verify CLI, Desktop runtime, tests, Hot Reload tooling, and application images
+        id: sample-build
+        shell: bash
+        run: |
+          tasks=(
+            :p2p-sample-desktop:check
+            :p2p-sample-desktop:installDist
+            :p2p-sample-desktop-ui:test
+            :p2p-sample-desktop-ui:checkRuntime
+            :p2p-sample-desktop-ui:hotRunArgfile
+            :p2p-sample-desktop-ui:createDistributable
+          )
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            tasks+=(:p2p-sample-android:assembleDebug)
+          fi
+          ./gradlew --no-daemon "${tasks[@]}" \
+            --dependency-verification strict --no-build-cache --max-workers=2 --no-parallel --console=plain \
+            -Dorg.gradle.java.installations.auto-download=false \
+            -Dorg.gradle.java.installations.fromEnv=JAVA_HOME_17_X64,JAVA_HOME_21_X64,JAVA_HOME_17_ARM64,JAVA_HOME_21_ARM64 \
+            '-Dorg.gradle.jvmargs=-Xmx2g -XX:MaxMetaspaceSize=768m -XX:+UseParallelGC -Dfile.encoding=UTF-8' \
+            -Pkotlin.compiler.execution.strategy=in-process
+
+      - name: Stop the sample job's Gradle home on every attempted build
+        id: stop-sample-gradle
+        if: ${{ always() && (steps.sample-build.outcome == 'success' || steps.sample-build.outcome == 'failure' || steps.sample-build.outcome == 'cancelled') }}
+        shell: bash
+        run: |
+          ./gradlew --stop --console=plain \
+            -Dorg.gradle.java.installations.auto-download=false \
+            -Dorg.gradle.java.installations.fromEnv=JAVA_HOME_17_X64,JAVA_HOME_21_X64,JAVA_HOME_17_ARM64,JAVA_HOME_21_ARM64
+
+      - name: Inspect and archive successful development sample apps
+        id: sample-packaging
+        if: ${{ success() && steps.sample-build.outcome == 'success' && steps.stop-sample-gradle.outcome == 'success' }}
+        shell: bash
+        run: |
+          python_bin=python3
+          if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
+          "$python_bin" -I -B -S scripts/package-sample-apps.py package --output "$RUNNER_TEMP/p2pkit-sample-apps"
+
+      - name: Upload native Desktop development apps
+        if: ${{ success() && steps.sample-packaging.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sample-desktop-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/p2pkit-sample-apps/desktop/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          include-hidden-files: false
+          overwrite: false
+
+      - name: Upload Android development APK
+        if: ${{ success() && runner.os == 'Linux' && steps.sample-packaging.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sample-android-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/p2pkit-sample-apps/android/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          include-hidden-files: false
+          overwrite: false
 
   windows-directory-fsync-control:
     name: windows-directory-fsync-control
