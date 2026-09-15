@@ -5,6 +5,12 @@ and [issue records](../audit/2026-09-04/issues.json) retain the completed work a
 exact limitations. [Consolidation/branch decisions](../maintenance/repository-consolidation-2026-09.md)
 explain the six unqualified dependency proposals intentionally kept separate.
 
+**15 September continuation:** the unmerged nonphysical campaign is consolidated
+on one [source/review/issue handoff](../maintenance/nonphysical-continuation-2026-09-15.md).
+Use its preservation-aware resume commands before choosing work; the original main
+clone recipe below does not include that unmerged campaign. Held builds/downloads
+are not restarted by reading the handoff.
+
 Status at handoff: **206/234 repair approvals (88.0%), 207 resolved (88.5%),
 27 unresolved (11.5%)**. Those are issue-row counts, not effort or readiness.
 The audit is **NOT_READY**; independent interoperability **#133 NOT_STARTED**.

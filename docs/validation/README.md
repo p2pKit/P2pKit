@@ -30,13 +30,18 @@ exception; this documentation cleanup does not claim it is satisfied.
 | <a id="apple-physical"></a>Apple devices and AWDL | **NOT STARTED** | [Apple physical-device and AWDL validation](apple-physical-awdl.md) | `LAN-T07`, `ENV-01`, `ENV-04`, `PS-T07`, `PS-T08`, `PS-T09` |
 | <a id="hostile-network"></a>Two-machine hostile networks | **NOT STARTED** | [Hostile-network validation](hostile-network.md) | `LAN-T08`, `ENV-02` |
 | <a id="cli-desktop"></a>CLI fault injection and headful Desktop | **PARTIALLY VALIDATED** | [CLI/Desktop validation](cli-desktop-faults.md) | `PS-T05`, `PS-T06` |
-| <a id="independent-interop"></a>Independent secure-v2 interoperability | **NOT STARTED** | [Secure-v2 interoperability](secure-v2-interoperability.md) | `SECURE-V2-INTEROP-01` |
+| <a id="independent-interop"></a>Independent secure-v2 interoperability | **IN PROGRESS** | [Secure-v2 interoperability](secure-v2-interoperability.md) | `SECURE-V2-INTEROP-01` |
 | <a id="professional-crypto"></a>Professional cryptographic review | **EXTERNAL AUDIT REQUIRED** | [Cryptographic-audit preparation](cryptographic-audit-preparation.md) | `CRYPTO-AUDIT-01` |
 
 Where the CLI/Desktop row is `PARTIALLY VALIDATED`, that label covers local
 builds and automated tests only, not execution of the fault-injection and
 headful observation procedures. Professional cryptographic review requires
 independent audit evidence; host/simulator results do not establish it.
+
+An interoperability `IN PROGRESS` status records started source-isolated peer work,
+not accepted whole-matrix interoperability. The [15 September evidence snapshot](../maintenance/nonphysical-continuation-2026-09-15.md#independent-peer-133)
+binds scoped public-core/loopback negative results, failed positive aggregates and
+unexecuted matrix cells; it does not qualify shipped LAN or an independent human audit.
 
 Repository-side lifecycle/resource prerequisites for Android and Apple manual
 provisioning were strengthened and host/simulator-tested in implementation
