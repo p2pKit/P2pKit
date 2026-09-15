@@ -575,6 +575,130 @@ class MulticastInterpreterTests(Fixture):
         self.assert_rejected_before_acquisition(alias)
 
 
+class SharedResourceClockTests(Fixture):
+    """Real controller checks, synthetic JSONL and clocks; no native calls."""
+    NOW = 30_000_000_000
+    DOMAIN = "darwin.clock_gettime_ns(CLOCK_MONOTONIC_RAW)"
+
+    def setUp(self):
+        super().setUp()
+        self.directory = self.state / "synthetic-resource-clock"
+        self.directory.mkdir()
+        self.rt.resource = SimpleNamespace(directory=self.directory, child=None, row={"errors": []})
+        self.local = self.use_patch(mock.patch.object(app.time, "monotonic", return_value=1.0))
+        self.raw = self.use_patch(mock.patch.object(app.time, "clock_gettime_ns", return_value=self.NOW, create=True))
+        self.use_patch(mock.patch.object(app.time, "CLOCK_MONOTONIC_RAW", 4, create=True))
+        self.use_patch(mock.patch.object(app.sys, "platform", "darwin"))
+        self.samples = {lane: {"schema": 2, "kind": "resource-sample", "lane": lane,
+            "clockDomain": self.DOMAIN, "observedRawNs": self.NOW,
+            "startedLocalMonotonic": 1.0, "observedLocalMonotonic": 1.0,
+            # Deliberately retain a legacy field to expose old epoch subtraction.
+            "observedMonotonic": 1.0} for lane in ("fast", "network")}
+
+    def emit(self):
+        rows = [*self.samples.values(), {"schema": 2, "kind": "resource-ready"}]
+        (self.directory / "stdout.log").write_text("".join(json.dumps(row) + "\n" for row in rows))
+        self.rt.resource_cursor, self.rt.resource_buffer, self.rt.resource_samples = 0, b"", {}
+        self.rt.resource_ready = False
+
+    def test_fresh_shared_time_does_not_depend_on_parent_process_epoch(self):
+        self.local.return_value = 100.0
+        self.emit()
+        self.rt.check()
+        self.raw.assert_called_once_with(4)
+        self.local.assert_not_called()
+
+    def test_five_and_eight_second_freshness_limits_remain_inclusive(self):
+        self.samples["fast"]["observedRawNs"] -= 5_000_000_000
+        self.samples["network"]["observedRawNs"] -= 8_000_000_000
+        self.emit()
+        self.rt.check()
+
+    def test_each_lane_rejects_one_nanosecond_beyond_its_limit(self):
+        for lane, limit in (("fast", 5_000_000_000), ("network", 8_000_000_000)):
+            with self.subTest(lane=lane):
+                self.samples[lane]["observedRawNs"] = self.NOW - limit - 1
+                self.emit()
+                with self.assertRaises(ValueError):
+                    self.rt.check()
+                self.samples[lane]["observedRawNs"] = self.NOW
+
+    def test_negative_legacy_age_cannot_hide_stale_raw_sample(self):
+        self.samples["fast"].update(observedMonotonic=100.0, observedRawNs=self.NOW - 6_000_000_000)
+        self.emit()
+        with self.assertRaises(ValueError):
+            self.rt.check()
+
+    def test_each_lane_rejects_future_sample(self):
+        for lane in self.samples:
+            with self.subTest(lane=lane):
+                self.samples[lane]["observedRawNs"] = self.NOW + 1
+                self.emit()
+                with self.assertRaises(ValueError):
+                    self.rt.check()
+                self.samples[lane]["observedRawNs"] = self.NOW
+
+    def test_old_missing_or_wrong_clock_contract_is_not_reinterpreted(self):
+        good = copy.deepcopy(self.samples["fast"])
+        for field, value in (("schema", 1), ("schema", True), ("schema", 2.0),
+                             ("clockDomain", "time.monotonic"), ("clockDomain", None),
+                             ("observedRawNs", None)):
+            with self.subTest(field=field, value=value):
+                self.samples["fast"] = {**good, field: value}
+                if value is None:
+                    self.samples["fast"].pop(field)
+                self.emit()
+                with self.assertRaises(ValueError):
+                    self.rt.check()
+
+    def test_sample_timestamp_requires_nonnegative_integer_nanoseconds(self):
+        for value in (True, "30000000000", 30_000_000_000.0, -1, 1 << 64):
+            with self.subTest(value=value):
+                self.samples["fast"]["observedRawNs"] = value
+                self.emit()
+                with self.assertRaises(ValueError):
+                    self.rt.check()
+
+    def test_unavailable_native_clock_fails_without_local_clock_fallback(self):
+        self.emit()
+        with mock.patch.object(app.sys, "platform", "linux"), self.assertRaises(ValueError):
+            self.rt.check()
+        self.raw.assert_not_called()
+        self.local.assert_not_called()
+
+    def test_invalid_native_clock_value_fails_closed(self):
+        for value in (True, -1, 0.5, "30000000000", 1 << 64):
+            with self.subTest(value=value):
+                self.raw.return_value = value
+                self.emit()
+                with self.assertRaises(ValueError):
+                    self.rt.check()
+
+    def test_stale_sample_cannot_suppress_same_home_stop_or_owned_drains(self):
+        self.samples["fast"]["observedRawNs"] -= 6_000_000_000
+        self.emit()
+        resource, original_wait = self.rt.resource, self.api.wait_process
+        self.rt.resource = None
+        def wait(scope, child, seconds, cancelled, check, *, stop):
+            # A pre-launch rejection correctly needs no Gradle stop. Inject the
+            # stale observation only after the modeled writer actually launches.
+            if scope.invocation == PRODUCT_ID:
+                self.rt.resource = resource
+            return original_wait(scope, child, seconds, cancelled, check, stop=stop)
+        self.api.wait_process = wait
+        self.model_product()
+        self.assertIsNone(self.rt.report["writer"]["waitExitCode"])
+        self.assertEqual(self.rt.report["stop"]["waitExitCode"], 0)
+        self.assertTrue(any(row["stage"] == "writer" and row["message"] == "LANE_STALE" for row in self.rt.errors))
+        self.assertTrue(all(scope.closed and scope.drains for scope in self.scopes))
+
+    def test_finalization_does_not_consult_failed_resource_clock(self):
+        self.raw.side_effect = AssertionError("Cleanup must not consult clock")
+        self.emit()
+        self.rt.check(finalizing=True)
+        self.raw.assert_not_called()
+
+
 class BoundedStreamTests(unittest.TestCase):
     def test_exact_stream_limit_is_complete_not_truncated(self):
         source, result, errors = io.BytesIO(b"12345678"), {}, []

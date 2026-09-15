@@ -31,14 +31,14 @@ NET = ("Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll\n"
 
 def fast(**overrides):
     now = time.monotonic()
-    return {"startedMonotonic": now, "observedMonotonic": now,
+    return {"startedLocalMonotonic": now, "observedLocalMonotonic": now,
             "pressure": 1, "pageSize": 16384, "swapoutBytes": 32768,
             "availableBytes": R.START_FREE, **overrides}
 
 
 def network(counters=None):
     now = time.monotonic()
-    return {"startedMonotonic": now, "observedMonotonic": now,
+    return {"startedLocalMonotonic": now, "observedLocalMonotonic": now,
             "counters": counters if counters is not None else {("en0", "<Link#6>"): 10}}
 
 
@@ -46,6 +46,13 @@ class ResourceControls(unittest.TestCase):
     def setUp(self):
         self.output, self.errors = io.StringIO(), io.StringIO()
         self.streams = R.Streams(self.output, self.errors)
+        # These remain offline controls on Linux as well as macOS. Native clock
+        # semantics are not inferred from their synthetic value.
+        for item in (patch.object(R.sys, "platform", "darwin"),
+                     patch.object(R.time, "CLOCK_MONOTONIC_RAW", 4, create=True),
+                     patch.object(R.time, "clock_gettime_ns", return_value=30_000_000_000, create=True)):
+            item.start()
+            self.addCleanup(item.stop)
 
     def reject(self, code, function, *args, **kwargs):
         with self.assertRaises(R.ResourceError) as caught:
@@ -151,7 +158,7 @@ class ResourceControls(unittest.TestCase):
             result = R.fast_frame({path: (1, 2)}, self.streams, call,
                                   lambda _: SimpleNamespace(f_frsize=4096, f_bavail=R.START_FREE // 4096), lambda: now[0])
         self.assertEqual([row[1] for row in calls], [2.0, 1.25])
-        self.assertEqual(result["observedMonotonic"], 1.5)
+        self.assertEqual(result["observedLocalMonotonic"], 1.5)
         self.assertEqual(result["availableBytes"], R.START_FREE)
 
     def test_successful_native_exit_after_deadline_is_not_a_valid_sample(self):
@@ -181,6 +188,75 @@ class ResourceControls(unittest.TestCase):
         self.assertEqual(len(commands), 1)
         self.assertNotIn("env", commands[0][1])
         self.assertEqual(row["counters"], R.parse_netstat(NET))
+
+
+class ResourceRawClockControls(unittest.TestCase):
+    """Call real frame producers with fake system tools and an explicit fake RAW clock."""
+    def setUp(self):
+        self.streams = R.Streams(io.StringIO(), io.StringIO())
+        self.patches = [patch.object(R.sys, "platform", "darwin"),
+                        patch.object(R.time, "CLOCK_MONOTONIC_RAW", 4, create=True),
+                        patch.object(R.time, "clock_gettime_ns", return_value=30_000_000_000, create=True)]
+        for item in self.patches:
+            value = item.start()
+            self.addCleanup(item.stop)
+        self.raw = value
+
+    def network_frame(self):
+        def call(argv, **kwargs):
+            return SimpleNamespace(returncode=0, stdout=NET.encode(), stderr=b"")
+        return R.network_frame(self.streams, call, lambda: 1.0)
+
+    def assert_stamp(self, row):
+        self.assertEqual(row["clockDomain"], "darwin.clock_gettime_ns(CLOCK_MONOTONIC_RAW)")
+        self.assertEqual(row["observedRawNs"], 30_000_000_000)
+        self.assertEqual(row["observedLocalMonotonic"], 1.0)
+        self.assertNotIn("observedMonotonic", row)
+        self.raw.assert_called_once_with(4)
+
+    def test_network_frame_stamps_completed_sample_with_explicit_raw_clock(self):
+        self.assert_stamp(self.network_frame())
+
+    def test_fast_frame_stamps_completed_sample_with_explicit_raw_clock(self):
+        def call(argv, **kwargs):
+            raw = b"1\n" if argv[0] == "/usr/sbin/sysctl" else VM.encode()
+            return SimpleNamespace(returncode=0, stdout=raw, stderr=b"")
+        path = Path("/synthetic-not-read")
+        with patch.object(R, "physical_directory", return_value=(1, 2)):
+            row = R.fast_frame({path: (1, 2)}, self.streams, call,
+                               lambda _: SimpleNamespace(f_frsize=4096, f_bavail=R.START_FREE // 4096), lambda: 1.0)
+        self.assert_stamp(row)
+
+    def test_raw_clock_is_unavailable_off_darwin_without_fallback(self):
+        with patch.object(R.sys, "platform", "linux"), self.assertRaises(ValueError):
+            self.network_frame()
+        self.raw.assert_not_called()
+
+    def test_missing_raw_api_or_clock_id_fails_closed(self):
+        for name in ("clock_gettime_ns", "CLOCK_MONOTONIC_RAW"):
+            with self.subTest(name=name), patch.object(R.time, name, None), self.assertRaises(ValueError):
+                self.network_frame()
+
+    def test_raw_clock_values_must_be_uint64_nanoseconds_not_coerced(self):
+        for value in (True, -1, 0.5, "30000000000", 1 << 64):
+            with self.subTest(value=value):
+                self.raw.return_value = value
+                with self.assertRaises(ValueError):
+                    self.network_frame()
+
+    def test_raw_clock_read_failure_never_uses_local_time(self):
+        self.raw.side_effect = OSError("synthetic clock read failure")
+        with self.assertRaises(OSError):
+            self.network_frame()
+
+    def test_new_records_use_new_schema_not_relabelled_old_timestamps(self):
+        # The real observer serializes accepted policy rows, not the raw frame's
+        # tuple-keyed interface counters.
+        row = R.NetworkPolicy().accept(self.network_frame())
+        self.streams.sample({"kind": "resource-sample", "lane": "network", **row})
+        row = json.loads(self.streams.output.getvalue())
+        self.assertEqual(row["schema"], 2)
+        self.assert_stamp(row)
 
 
 class OwnedSyntheticPaths(unittest.TestCase):

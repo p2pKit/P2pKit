@@ -28,6 +28,7 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 import audit_processes as processes
 import hosted_evidence
+import hosted_lock_resources as resources
 
 MIB, GIB = 1024 ** 2, 1024 ** 3
 OPERATION = "dependency-lock-candidate"
@@ -443,9 +444,7 @@ class Runtime:
                 if not finalizing:
                     require(self.resource.child.poll() is None, "resource observer exited during work")
             if self.resource_ready and not finalizing:
-                for lane, bound in (("fast", 5), ("network", 8)):
-                    require(time.monotonic() - self.resource_samples[lane]["observedMonotonic"] <= bound,
-                            "resource observation stale: " + lane)
+                resources.check_shared_freshness(self.resource_samples)
         if not finalizing:
             require(not self.cancelled, "controller cancelled")
             require(not self.errors, "prior failure remains latched")

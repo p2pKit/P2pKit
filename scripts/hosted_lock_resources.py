@@ -31,6 +31,8 @@ QUERY_SECONDS, TOOL_BYTES = 2.0, 1024 * 1024
 INTERVALS = {"fast": 2.0, "network": 5.0}
 STALE = {"fast": 5.0, "network": 8.0}
 UINT64 = (1 << 64) - 1
+SCHEMA, NS_PER_SECOND = 2, 1_000_000_000
+RAW_CLOCK_DOMAIN = "darwin.clock_gettime_ns(CLOCK_MONOTONIC_RAW)"
 NET_HEADER = "Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll".split()
 
 
@@ -43,6 +45,31 @@ class ResourceError(ValueError):
 def require(condition, code, sample=None):
     if not condition:
         raise ResourceError(code, sample)
+
+
+def shared_raw_ns():
+    # Python 3.9/macOS time.monotonic() has a process-local epoch. Only this
+    # explicitly shared kernel clock may cross the observer/controller boundary.
+    require(sys.platform == "darwin" and callable(getattr(time, "clock_gettime_ns", None)) and
+            type(getattr(time, "CLOCK_MONOTONIC_RAW", None)) is int, "RAW_CLOCK_UNAVAILABLE")
+    value = time.clock_gettime_ns(time.CLOCK_MONOTONIC_RAW)
+    require(type(value) is int and 0 <= value <= UINT64, "RAW_CLOCK_VALUE")
+    return value
+
+
+def check_shared_freshness(samples):
+    require(type(samples) is dict and set(samples) == set(STALE), "RESOURCE_LANES")
+    now = shared_raw_ns()
+    for lane, seconds in STALE.items():
+        row = samples[lane]
+        require(type(row) is dict and type(row.get("schema")) is int and row["schema"] == SCHEMA and
+                row.get("kind") == "resource-sample" and row.get("lane") == lane and
+                row.get("clockDomain") == RAW_CLOCK_DOMAIN, "SAMPLE_CLOCK")
+        observed = row.get("observedRawNs")
+        require(type(observed) is int and 0 <= observed <= UINT64, "SAMPLE_RAW_TIME")
+        age = now - observed
+        require(0 <= age <= int(seconds * NS_PER_SECOND), "LANE_STALE",
+                {"staleLane": lane, "ageNanoseconds": age, "limitNanoseconds": int(seconds * NS_PER_SECOND)})
 
 
 def unsigned(value, code):
@@ -102,7 +129,7 @@ class Streams:
 
     def sample(self, row):
         with self.lock:
-            print(json.dumps({"schema": 1, **row}, sort_keys=True, allow_nan=False), file=self.output, flush=True)
+            print(json.dumps({"schema": SCHEMA, **row}, sort_keys=True, allow_nan=False), file=self.output, flush=True)
 
     def original(self, label, argv, code, out, err, timed_out):
         stdout, stderr = out if out is not None else b"", err if err is not None else b""
@@ -187,7 +214,8 @@ def fast_frame(roots, streams, call=subprocess.run, statvfs=os.statvfs, clock=ti
         require(clock() <= deadline, "QUERY_DEADLINE")
     observed = clock()
     require(observed <= deadline, "QUERY_DEADLINE")
-    return {"startedMonotonic": started, "observedMonotonic": observed, "pressure": pressure,
+    return {"startedLocalMonotonic": started, "observedLocalMonotonic": observed, "pressure": pressure,
+            "clockDomain": RAW_CLOCK_DOMAIN, "observedRawNs": shared_raw_ns(),
             "availableBytes": min(available), **vm}
 
 
@@ -197,7 +225,8 @@ def network_frame(streams, call=subprocess.run, clock=time.monotonic):
                                    streams, call, clock))
     observed = clock()
     require(observed <= started + QUERY_SECONDS, "QUERY_DEADLINE")
-    return {"startedMonotonic": started, "observedMonotonic": observed, "counters": counters}
+    return {"startedLocalMonotonic": started, "observedLocalMonotonic": observed, "counters": counters,
+            "clockDomain": RAW_CLOCK_DOMAIN, "observedRawNs": shared_raw_ns()}
 
 
 class FastPolicy:
@@ -260,7 +289,7 @@ def observe(roots, stop_file, streams, cancelled=None, samplers=None, clock=time
 
     def fail(lane, error):
         row = {"kind": "resource-error", "lane": lane, "code": getattr(error, "code", "OBSERVATION_ERROR"),
-               "observedMonotonic": clock()}
+               "observedLocalMonotonic": clock()}
         if getattr(error, "sample", None) is not None:
             row["sample"] = error.sample
         with lock:
@@ -275,11 +304,11 @@ def observe(roots, stop_file, streams, cancelled=None, samplers=None, clock=time
                 row = policy.accept(frame)
                 streams.sample({"kind": "resource-sample", "lane": name, **row})
                 with lock:
-                    last[name] = frame["observedMonotonic"]
+                    last[name] = frame["observedLocalMonotonic"]
                     if len(last) == 2 and not ready[0]:
                         ready[0] = True
-                        streams.sample({"kind": "resource-ready", "observedMonotonic": clock()})
-                done.wait(max(0.0, frame["startedMonotonic"] + INTERVALS[name] - clock()))
+                        streams.sample({"kind": "resource-ready", "observedLocalMonotonic": clock()})
+                done.wait(max(0.0, frame["startedLocalMonotonic"] + INTERVALS[name] - clock()))
         except BaseException as error:
             fail(name, error)
 
@@ -313,7 +342,7 @@ def observe(roots, stop_file, streams, cancelled=None, samplers=None, clock=time
             fail("controller", ResourceError("OBSERVER_SIGNAL"))
     if errors or not stopped:
         return 125
-    streams.sample({"kind": "resource-stopped", "observedMonotonic": clock()})
+    streams.sample({"kind": "resource-stopped", "observedLocalMonotonic": clock()})
     return 0
 
 
@@ -333,7 +362,7 @@ def main(argv=None):
         return observe(roots, args.stop_file, streams, cancelled)
     except Exception as error:
         streams.sample({"kind": "resource-error", "lane": "admission", "code": getattr(error, "code", "ADMISSION_ERROR"),
-                        "observedMonotonic": time.monotonic()})
+                        "observedLocalMonotonic": time.monotonic()})
         return 125
 
 
