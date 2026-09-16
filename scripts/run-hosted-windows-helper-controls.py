@@ -228,11 +228,22 @@ def identity(environment, event, root):
     require(0 < len(public) <= encrypted.portable.MAX_KEY_BYTES and
             re.fullmatch(r"[0-9a-fA-F]{40}", fingerprint), "EXPLICIT_PUBLIC_RECIPIENT_REQUIRED")
     encrypted.portable._public_armor(public)  # Refuses secret packets, not merely an armor label.
-    expected_inputs = {"operation": OPERATION, "expected_sha": sha, "expected_tree": tree, "reviewed_base": "",
+    expected_inputs = {"operation": OPERATION, "expected_sha": sha, "expected_tree": tree,
                        "evidence_public_key": public.decode("ascii"), "evidence_fingerprint": fingerprint}
-    require(type(event) is dict and event.get("inputs") == expected_inputs and
-            type(event.get("repository")) is dict and event["repository"].get("full_name") == REPOSITORY and
-            event.get("ref") in (ref, ref[len("refs/heads/"):]), "EVENT_INPUT_IDENTITY_DIFFERS")
+    require(type(event) is dict and type(event.get("repository")) is dict and
+            event["repository"].get("full_name") == REPOSITORY, "EVENT_REPOSITORY_DIFFERS")
+    require(event.get("ref") in (ref, ref[len("refs/heads/"):]), "EVENT_REF_DIFFERS")
+    provided = event.get("inputs")
+    # This helper has no writer authority. As in the existing witness/capacity
+    # operations, the optional writer-only default can be omitted or exactly
+    # empty. Never normalize other inputs, nulls, whitespace or recipient bytes.
+    require(type(provided) is dict and set(provided) in
+            (set(expected_inputs), set(expected_inputs) | {"reviewed_base"}), "EVENT_INPUT_KEYS_DIFFER")
+    require("reviewed_base" not in provided or
+            (type(provided["reviewed_base"]) is str and provided["reviewed_base"] == ""),
+            "EVENT_WRITER_BASE_NOT_EMPTY")
+    require(all(type(provided[key]) is str and provided[key] == value for key, value in expected_inputs.items()),
+            "EVENT_REQUIRED_INPUT_VALUES_DIFFER")
     require(e.get("GITHUB_WORKSPACE") == str(root), "WORKSPACE_DIFFERS")
     return {"schema": 1, "operation": OPERATION, "repository": REPOSITORY, "sourceSha": sha, "sourceTree": tree,
             "runId": run, "runAttempt": attempt, "ref": ref, "workflowRef": e["GITHUB_WORKFLOW_REF"],

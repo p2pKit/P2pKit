@@ -102,12 +102,56 @@ class IdentityModels(Models):
     def test_event_ref_repository_extra_and_changed_inputs_refuse(self):
         env, event = dispatch()
         mutations = [lambda e: e.update(ref="main"), lambda e: e["repository"].update(full_name="other/repo"),
-                     lambda e: e["inputs"].update(command="echo"), lambda e: e["inputs"].update(expected_tree="d" * 40),
-                     lambda e: e["inputs"].pop("reviewed_base")]
+                     lambda e: e["inputs"].update(command="echo"), lambda e: e["inputs"].update(expected_tree="d" * 40)]
         for mutation in mutations:
             altered = copy.deepcopy(event); mutation(altered)
             with self.assertRaises(H.HelperError):
                 H.identity(env, altered, H.ROOT)
+
+    def test_optional_empty_writer_input_may_be_omitted_without_changing_identity(self):
+        env, event = dispatch()
+        expected = H.identity(env, event, H.ROOT)
+        event["inputs"].pop("reviewed_base")
+        original = copy.deepcopy(event)
+        self.assertEqual(H.identity(env, event, H.ROOT), expected)
+        self.assertEqual(event, original)  # Original event representation is not rewritten.
+
+    def test_optional_writer_input_rejects_null_nonstring_nonempty_and_whitespace(self):
+        env, event = dispatch()
+        for value in (None, False, 0, [], {}, " ", "\n", "a" * 40):
+            with self.subTest(value=value):
+                altered = copy.deepcopy(event); altered["inputs"]["reviewed_base"] = value
+                with self.assertRaises(H.HelperError) as caught:
+                    H.identity(env, altered, H.ROOT)
+                self.assertEqual(caught.exception.code, "EVENT_WRITER_BASE_NOT_EMPTY")
+
+    def test_every_authority_input_remains_required_exact_and_string_typed(self):
+        env, event = dispatch()
+        for key in set(event["inputs"]) - {"reviewed_base"}:
+            with self.subTest(key=key, mode="absent"):
+                altered = copy.deepcopy(event); altered["inputs"].pop(key)
+                with self.assertRaises(H.HelperError) as caught:
+                    H.identity(env, altered, H.ROOT)
+                self.assertEqual(caught.exception.code, "EVENT_INPUT_KEYS_DIFFER")
+            for value in (None, False, 0, [], {}, "", event["inputs"][key] + " "):
+                with self.subTest(key=key, value=value):
+                    altered = copy.deepcopy(event); altered["inputs"][key] = value
+                    with self.assertRaises(H.HelperError) as caught:
+                        H.identity(env, altered, H.ROOT)
+                    self.assertEqual(caught.exception.code, "EVENT_REQUIRED_INPUT_VALUES_DIFFER")
+
+    def test_event_rejections_report_fixed_boundary_codes_without_input_values(self):
+        env, event = dispatch()
+        cases = [(None, "EVENT_REPOSITORY_DIFFERS"),
+                 ({**event, "repository": {}}, "EVENT_REPOSITORY_DIFFERS"),
+                 ({**event, "ref": "different-ref"}, "EVENT_REF_DIFFERS"),
+                 ({**event, "inputs": None}, "EVENT_INPUT_KEYS_DIFFER"),
+                 ({**event, "inputs": {**event["inputs"], "extra": "not-to-print"}}, "EVENT_INPUT_KEYS_DIFFER")]
+        for altered, code in cases:
+            with self.subTest(code=code):
+                with self.assertRaises(H.HelperError) as caught:
+                    H.identity(env, altered, H.ROOT)
+                self.assertEqual(str(caught.exception), code)
 
     def test_ordinary_events_and_retired_audit_ref_never_bootstrap_helper(self):
         env, event = dispatch()
