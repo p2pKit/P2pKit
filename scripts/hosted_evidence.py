@@ -477,81 +477,87 @@ def _archive(root: Path, destination: Path, snapshot: dict[str, tuple[int, ...]]
 
 
 def _ciphertext_shape(path: Path, encryption_fingerprint: str) -> None:
+    """POSIX path wrapper; native Windows calls the same pathless parser."""
+    size = path.stat().st_size
+    with path.open("rb") as handle:
+        _ciphertext_stream(handle, size, encryption_fingerprint)
+
+
+def _ciphertext_stream(handle: BinaryIO, size: int, encryption_fingerprint: str) -> None:
     """Reject incomplete outer packets; only private decryption verifies integrity.
 
-    Depending on public-key preferences, maintained GPG versions select MDC or
-    AEAD. Obsolete --force-mdc/--rfc4880 switches do not force MDC in GPG 2.5.
-    Never admit the unprotected historical tag-9 encrypted packet.
+    The caller owns, pins and verifies a bounded immutable reader. This parser
+    neither opens a path nor turns a Win32 handle into a CRT descriptor. Maintained
+    GPG can select MDC or AEAD; unprotected historical tag-9 remains forbidden.
     """
-    size = path.stat().st_size
-    if not 32 < size <= MAX_CIPHERTEXT_BYTES:
+    if type(size) is not int or not 32 < size <= MAX_CIPHERTEXT_BYTES:
         _fail("Encrypted evidence size is invalid")
-    with path.open("rb") as handle:
-        def exact(count: int) -> bytes:
-            data = handle.read(count)
-            if len(data) != count:
-                _fail("Encrypted evidence is truncated")
-            return data
 
-        def length(old: int | None) -> tuple[int, bool]:
-            if old is not None:
-                if old == 3:
-                    _fail("Indeterminate ciphertext packet is not admitted")
-                return int.from_bytes(exact((1, 2, 4)[old]), "big"), False
-            first = exact(1)[0]
-            if first < 192:
-                return first, False
-            if first < 224:
-                return ((first - 192) << 8) + exact(1)[0] + 192, False
-            if first == 255:
-                return int.from_bytes(exact(4), "big"), False
-            return 1 << (first & 0x1F), True
+    def exact(count: int) -> bytes:
+        data = handle.read(count)
+        if len(data) != count:
+            _fail("Encrypted evidence is truncated")
+        return data
 
-        def header() -> tuple[int, int | None]:
-            byte = exact(1)[0]
-            if not byte & 0x80:
-                _fail("Invalid ciphertext packet header")
-            return (byte & 0x3F, None) if byte & 0x40 else ((byte >> 2) & 0x0F, byte & 3)
+    def length(old: int | None) -> tuple[int, bool]:
+        if old is not None:
+            if old == 3:
+                _fail("Indeterminate ciphertext packet is not admitted")
+            return int.from_bytes(exact((1, 2, 4)[old]), "big"), False
+        first = exact(1)[0]
+        if first < 192:
+            return first, False
+        if first < 224:
+            return ((first - 192) << 8) + exact(1)[0] + 192, False
+        if first == 255:
+            return int.from_bytes(exact(4), "big"), False
+        return 1 << (first & 0x1F), True
 
-        tag, old = header()
-        count, partial = length(old)
-        if tag != 1 or partial or not 10 < count <= 8192:
-            _fail("Encrypted evidence must have exactly one public-key recipient")
-        recipient = exact(count)
-        if recipient[0] != 3 or recipient[1:9].hex().upper() != encryption_fingerprint[-16:]:
-            _fail("Encrypted evidence recipient differs from the validated key")
-        tag, old = header()
-        if tag not in {18, 20} or old is not None:
-            _fail("Encrypted evidence lacks an integrity-protected data packet")
-        integrity_tag = tag
-        total, first = 0, True
-        while True:
-            count, partial = length(None)
-            total += count
-            if handle.tell() + count > size:
-                _fail("Encrypted evidence is truncated")
-            if first:
-                if count < 1:
-                    _fail("Unsupported encrypted-evidence integrity format")
-                version = exact(1)[0]
-                count -= 1
-                if integrity_tag == 18 and version == 1:
-                    pass  # RFC4880 integrity-protected encryption (MDC).
-                elif (integrity_tag == 18 and version == 2) or (integrity_tag == 20 and version == 1):
-                    if count < 3:
-                        _fail("Truncated AEAD header")
-                    cipher, aead, chunk = exact(3)
-                    count -= 3
-                    if cipher != 9 or aead not in {1, 2, 3} or chunk > 56:
-                        _fail("Unsupported encrypted-evidence AEAD parameters")
-                else:
-                    _fail("Unsupported encrypted-evidence integrity format")
-                first = False
-            handle.seek(count, os.SEEK_CUR)
-            if not partial:
-                break
-        if total < 32 or handle.tell() != size:
-            _fail("Encrypted evidence has missing integrity data or extra packets")
+    def header() -> tuple[int, int | None]:
+        byte = exact(1)[0]
+        if not byte & 0x80:
+            _fail("Invalid ciphertext packet header")
+        return (byte & 0x3F, None) if byte & 0x40 else ((byte >> 2) & 0x0F, byte & 3)
+
+    tag, old = header()
+    count, partial = length(old)
+    if tag != 1 or partial or not 10 < count <= 8192:
+        _fail("Encrypted evidence must have exactly one public-key recipient")
+    recipient = exact(count)
+    if recipient[0] != 3 or recipient[1:9].hex().upper() != encryption_fingerprint[-16:]:
+        _fail("Encrypted evidence recipient differs from the validated key")
+    tag, old = header()
+    if tag not in {18, 20} or old is not None:
+        _fail("Encrypted evidence lacks an integrity-protected data packet")
+    integrity_tag = tag
+    total, first = 0, True
+    while True:
+        count, partial = length(None)
+        total += count
+        if handle.tell() + count > size:
+            _fail("Encrypted evidence is truncated")
+        if first:
+            if count < 1:
+                _fail("Unsupported encrypted-evidence integrity format")
+            version = exact(1)[0]
+            count -= 1
+            if integrity_tag == 18 and version == 1:
+                pass  # RFC4880 integrity-protected encryption (MDC).
+            elif (integrity_tag == 18 and version == 2) or (integrity_tag == 20 and version == 1):
+                if count < 3:
+                    _fail("Truncated AEAD header")
+                cipher, aead, chunk = exact(3)
+                count -= 3
+                if cipher != 9 or aead not in {1, 2, 3} or chunk > 56:
+                    _fail("Unsupported encrypted-evidence AEAD parameters")
+            else:
+                _fail("Unsupported encrypted-evidence integrity format")
+            first = False
+        handle.seek(count, os.SEEK_CUR)
+        if not partial:
+            break
+    if total < 32 or handle.tell() != size:
+        _fail("Encrypted evidence has missing integrity data or extra packets")
 
 
 def _manifest_identity(source_commit: str, source_tree: str, run_id: str, run_attempt: str) -> dict:

@@ -34,15 +34,21 @@ def export_encrypted(evidence_dir: str | Path, output_dir: str | Path,
     """
     if os.name != "posix":
         raise hosted_evidence.EvidenceError("Ordinary encrypted export needs an admitted native filesystem backend")
+    manifest = _bound_manifest(recipient, profile=profile, root=root, admission=admission,
+                               query_runner=query_runner)
+    return hosted_evidence._export_bound_manifest(evidence_dir, output_dir, recipient, manifest=manifest,
+                                                  max_bytes=max_bytes, max_members=max_members,
+                                                  timeout_seconds=timeout_seconds)
+
+
+def _bound_manifest(recipient, *, profile, root, admission, query_runner) -> dict:
+    """Closed schema-2 identity shared by admitted native exporters, never raw input."""
     checked = hosted_test_identity.admit(profile, root, query_runner=query_runner, expected=admission)
     if recipient.fingerprint != checked.fingerprint or recipient.key_sha256 != checked.key_sha256:
         raise hosted_evidence.EvidenceError("Ordinary evidence recipient differs from the approved source policy")
     if recipient.expires_at and checked.expires_at > recipient.expires_at:
         raise hosted_evidence.EvidenceError("Ordinary policy validity exceeds its validated recipient lifetime")
     identity = json.loads(checked.record)
-    manifest = {"schema": 2, "scope": "ENCRYPTED_PRIVATE_TEST_EVIDENCE",
-                "source": identity["source"], "github": identity["github"], "policy": identity["policy"],
-                "custody": {"profile": identity["profile"], "suites": identity["suites"]}}
-    return hosted_evidence._export_bound_manifest(evidence_dir, output_dir, recipient, manifest=manifest,
-                                                  max_bytes=max_bytes, max_members=max_members,
-                                                  timeout_seconds=timeout_seconds)
+    return {"schema": 2, "scope": "ENCRYPTED_PRIVATE_TEST_EVIDENCE",
+            "source": identity["source"], "github": identity["github"], "policy": identity["policy"],
+            "custody": {"profile": identity["profile"], "suites": identity["suites"]}}
