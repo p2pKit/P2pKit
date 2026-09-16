@@ -15,20 +15,75 @@ jobs:
       queue: max
       cancel-in-progress: false
     runs-on: macos-latest
+    timeout-minutes: 90
     steps:
       - name: Check out repository
+        timeout-minutes: 3
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Configure Java 17
+      - name: Configure daemon Java 21 and wrapper Java 17
+        timeout-minutes: 10
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
-          java-version: "17"
+          # setup-java installs both; the last entry supplies wrapper JAVA_HOME.
+          java-version: |
+            21
+            17
+      - name: Admit native toolchains and a fresh bounded Gradle home
+        id: prepare
+        timeout-minutes: 3
+        shell: bash
+        run: python3 -I -B -S scripts/dependency-submission-prerequisites.py prepare
+      - name: Install only missing Android compile platforms
+        timeout-minutes: 15
+        shell: bash
+        env:
+          P2PKIT_DEPENDENCY_STATE: ${{ steps.prepare.outputs.state }}
+        run: python3 -I -B -S scripts/dependency-submission-prerequisites.py install-sdk
       - name: Submit Gradle dependency graph
+        id: submit-graph
+        timeout-minutes: 40
         uses: gradle/actions/dependency-submission@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
           gradle-home-cache-excludes: caches/build-cache-1
           # The action defaults to verification=off. Keep the reviewed artifact
           # allowlist effective, including its injected dependency-graph plugin.
           additional-arguments: --dependency-verification strict
+      - name: Stop the submission wrapper in its exact owned Gradle home
+        id: stop-gradle
+        if: ${{ always() && steps.prepare.outcome == 'success' && steps.submit-graph.outcome != 'skipped' }}
+        timeout-minutes: 3
+        shell: bash
+        env:
+          GRADLE_USER_HOME: ${{ steps.prepare.outputs.gradle-home }}
+        run: |
+          set +e
+          ./gradlew --stop --console=plain
+          stop_status=$?
+          printf 'exit-code=%s\n' "$stop_status" >> "$GITHUB_OUTPUT"
+          exit "$stop_status"
+      - name: Inspect actual source-bound graph and retain original outcomes
+        if: ${{ always() && steps.prepare.outcome == 'success' }}
+        timeout-minutes: 3
+        shell: bash
+        env:
+          P2PKIT_DEPENDENCY_STATE: ${{ steps.prepare.outputs.state }}
+          P2PKIT_DEPENDENCY_ACTION_OUTCOME: ${{ steps.submit-graph.outcome }}
+          P2PKIT_DEPENDENCY_STOP_OUTCOME: ${{ steps.stop-gradle.outcome }}
+          P2PKIT_DEPENDENCY_STOP_EXIT_CODE: ${{ steps.stop-gradle.outputs.exit-code }}
+        # Submission already happened in action main. This is not a pre-submit
+        # guard. Action POST/cache save and complete job readback are still required.
+        run: python3 -I -B -S scripts/dependency-submission-prerequisites.py verify
+      - name: Retain bounded prerequisite and post-main inspection receipts
+        if: ${{ always() && steps.prepare.outcome == 'success' }}
+        timeout-minutes: 5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dependency-submission-receipt-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.prepare.outputs.receipt }}/*.json
+          if-no-files-found: error
+          retention-days: 14
+      # The action saved this same home for its POST/cache-save phase. Keep it;
+      # ephemeral hosted-runner cleanup happens only after action posts complete.

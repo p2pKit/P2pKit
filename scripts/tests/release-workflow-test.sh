@@ -31,6 +31,7 @@ is_local_workflow_reference() {
 ruby "$ROOT/scripts/tests/check-workflow-checkout-policy-test.rb"
 ruby "$ROOT/scripts/check-workflow-checkout-policy.rb"
 ruby "$ROOT/scripts/tests/check-dependency-submission-policy-test.rb"
+python3 -I -B -S "$ROOT/scripts/tests/dependency-submission-prerequisites-test.py"
 ruby "$ROOT/scripts/tests/check-jvm-cross-host-policy-test.rb"
 ruby "$ROOT/scripts/tests/check-ci-scope-policy-test.rb"
 ruby "$ROOT/scripts/tests/check-heavy-job-queue-policy-test.rb"
