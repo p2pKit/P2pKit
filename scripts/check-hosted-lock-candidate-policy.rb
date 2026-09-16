@@ -7,7 +7,9 @@ module HostedLockCandidatePolicy
     Error = HeavyJobQueuePolicy::Error
     ROOT = File.expand_path("..", __dir__)
     JOB = "dependency-lock-candidate"
-    PYTHON = "/Applications/Xcode_26.5.app/Contents/Developer/usr/bin/python3"
+    INTEL_OPERATION = "dependency-lock-candidate-x64"
+    RUNNER = "${{ inputs.operation == 'dependency-lock-candidate-x64' && 'macos-15-intel' || 'macos-26' }}"
+    PYTHON = '"$DEVELOPER_DIR/usr/bin/python3"'
     STEP_NAME = "Verify isolated hosted lock-candidate controls"
     CHECKS = [
         "ruby scripts/tests/check-hosted-lock-candidate-policy-test.rb",
@@ -56,7 +58,7 @@ module HostedLockCandidatePolicy
     RELEASE_CALL = %r{\A(?:scripts/(?:tests/)?[a-z0-9-]+\.sh|ruby scripts/(?:tests/)?[a-z0-9-]+\.rb|python3(?: -B| -I -B -S)? scripts/(?:tests/)?[a-z0-9-]+\.py)\z}
     WORKFLOW_TEST_CALL = %r{\A(?:"\$ROOT/scripts/(?:tests/)?[a-z0-9-]+\.sh"|ruby "\$ROOT/scripts/(?:tests/)?[a-z0-9-]+\.rb"|python3(?: -B| -I -B -S)? "\$ROOT/scripts/(?:tests/)?[a-z0-9-]+\.py")\z}
     ENVIRONMENT = {
-        "DEVELOPER_DIR" => "/Applications/Xcode_26.5.app/Contents/Developer",
+        "DEVELOPER_DIR" => "${{ inputs.operation == 'dependency-lock-candidate-x64' && '/Applications/Xcode_26.3.app/Contents/Developer' || '/Applications/Xcode_26.5.app/Contents/Developer' }}",
         "P2PKIT_OPERATION" => "${{ inputs.operation }}",
         "P2PKIT_EXPECTED_SHA" => "${{ inputs.expected_sha }}",
         "P2PKIT_EXPECTED_TREE" => "${{ inputs.expected_tree }}",
@@ -105,7 +107,7 @@ module HostedLockCandidatePolicy
              %w[evidence_fingerprint evidence_public_key expected_sha expected_tree operation reviewed_base],
              "exact six shared dispatch inputs required")
         expected = {"operation" => {"type" => "choice", "options" => ["desktop", "sample-apps",
-            "windows-directory-fsync-control", "macos-arm64-admission", "macos-x64-admission", JOB],
+            "windows-directory-fsync-control", "macos-arm64-admission", "macos-x64-admission", JOB, INTEL_OPERATION],
             "default" => "desktop", "required" => true}}
         %w[expected_sha expected_tree reviewed_base evidence_public_key evidence_fingerprint].each do |name|
             expected[name] = {"type" => "string", "required" => false, "default" => ""}
@@ -120,7 +122,7 @@ module HostedLockCandidatePolicy
              "unexpected Desktop/writer job authority")
         job = jobs.fetch(JOB)
         need(job.is_a?(Hash) && job.keys.sort == %w[concurrency env if name permissions runs-on steps timeout-minutes] &&
-             job["name"] == JOB && job["runs-on"] == "macos-26" && job["timeout-minutes"] == 195 &&
+             job["name"] == JOB && job["runs-on"] == RUNNER && job["timeout-minutes"] == 195 &&
              job["permissions"] == {"contents" => "read"} &&
              job["if"] == HeavyJobQueuePolicy::CONDITIONS[["desktop-cross-host.yml", JOB]] &&
              job["concurrency"] == HeavyJobQueuePolicy::QUEUE,

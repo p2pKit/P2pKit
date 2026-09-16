@@ -365,10 +365,37 @@ class OwnedSyntheticPaths(unittest.TestCase):
         output = io.StringIO()
         with patch.object(R.audit_processes, "host_role", return_value="macos-x64"), \
                 patch.object(R, "observe") as observe, patch.object(R.sys, "stdout", output):
-            code = R.main(["observe", "--root", str(self.root), "--state", str(self.state), "--stop-file", str(self.stop)])
+            code = R.main(["observe", "--root", str(self.root), "--state", str(self.state), "--stop-file", str(self.stop),
+                           "--expected-host", "macos-arm64"])
         self.assertEqual(code, 125)
         observe.assert_not_called()
         self.assertEqual(json.loads(output.getvalue())["code"], "HOST_ROLE")
+
+    def test_each_selected_native_role_reaches_observer_without_weakening_path_admission(self):
+        roots = R.validate_paths(self.root, self.state, self.stop, self.env)
+        for role in ("macos-arm64", "macos-x64"):
+            with self.subTest(role=role):
+                with patch.object(R.audit_processes, "host_role", return_value=role), \
+                        patch.object(R.os, "geteuid", return_value=501), patch.dict(R.os.environ, self.env, clear=True), \
+                        patch.object(R, "observe", return_value=0) as observe, patch.object(R.signal, "signal"):
+                    code = R.main(["observe", "--root", str(self.root), "--state", str(self.state),
+                                   "--stop-file", str(self.stop), "--expected-host", role])
+                self.assertEqual(code, 0)
+                self.assertEqual(observe.call_args.args[:2], (roots, self.stop))
+
+    def test_selected_intel_rejects_arm_and_unsupported_actual_hosts(self):
+        for actual in ("macos-arm64", "linux-x64", "windows-x64"):
+            output = io.StringIO()
+            with self.subTest(actual=actual):
+                with patch.object(R.audit_processes, "host_role", return_value=actual), \
+                        patch.object(R, "validate_paths") as paths, patch.object(R, "observe") as observe, \
+                        patch.object(R.sys, "stdout", output):
+                    code = R.main(["observe", "--root", str(self.root), "--state", str(self.state),
+                                   "--stop-file", str(self.stop), "--expected-host", "macos-x64"])
+                self.assertEqual(code, 125)
+                self.assertEqual(json.loads(output.getvalue())["code"], "HOST_ROLE")
+                paths.assert_not_called()
+                observe.assert_not_called()
 
 
 if __name__ == "__main__":

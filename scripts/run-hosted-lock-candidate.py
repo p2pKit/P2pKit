@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One explicitly reviewed, mutable full dependency writer on genuine hosted ARM macOS.
+"""One explicitly reviewed, mutable full dependency writer on genuine hosted macOS.
 
 Not an immutable audit leaf, publisher, cache importer, or product acceptance assessor.
 All child output is private; the separate always-run seal step exports ciphertext only.
@@ -32,9 +32,18 @@ import hosted_lock_resources as resources
 
 MIB, GIB = 1024 ** 2, 1024 ** 3
 OPERATION = "dependency-lock-candidate"
+INTEL_OPERATION = "dependency-lock-candidate-x64"
 WORKFLOW = "p2pKit/P2pKit/.github/workflows/desktop-cross-host.yml@"
 XCODE = "/Applications/Xcode_26.5.app/Contents/Developer"
-RUNTIME = "com.apple.CoreSimulator.SimRuntime.iOS-26-5"
+PROFILES = {
+    OPERATION: {"runnerArch": "ARM64", "hostRole": "macos-arm64", "osMajor": "26", "javaArch": "aarch64|arm64",
+                "xcode": XCODE, "xcodeVersion": "Xcode 26.5\nBuild version 17F42\n",
+                "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-26-5", "runtimeVersion": "26.5"},
+    INTEL_OPERATION: {"runnerArch": "X64", "hostRole": "macos-x64", "osMajor": "15", "javaArch": "amd64|x86_64",
+                      "xcode": "/Applications/Xcode_26.3.app/Contents/Developer",
+                      "xcodeVersion": "Xcode 26.3\nBuild version 17C529\n",
+                      "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-26-2", "runtimeVersion": "26.2"},
+}
 WRITER_SECONDS, STOP_SECONDS = 7200, 120
 INIT = "gradle/hosted-lock-candidate.init.gradle"
 CUSTODY = "scripts/test-transcript-custody.py"
@@ -51,6 +60,11 @@ INPUTS = {"operation": "P2PKIT_OPERATION", "expected_sha": "P2PKIT_EXPECTED_SHA"
 def require(value, message):
     if not value:
         raise ValueError(message)
+
+
+def native_profile(operation):
+    require(operation in PROFILES, "unknown hosted native profile")
+    return PROFILES[operation]
 
 
 def physical(path, *, directory=False):
@@ -116,13 +130,14 @@ def identity(path):
 
 
 def dispatch(env, root):
+    operation = env.get("P2PKIT_OPERATION")
+    profile = native_profile(operation)
     require(env.get("GITHUB_ACTIONS") == "true" and env.get("GITHUB_REPOSITORY") == "p2pKit/P2pKit" and
             env.get("GITHUB_EVENT_NAME") == "workflow_dispatch" and env.get("RUNNER_ENVIRONMENT") == "github-hosted" and
-            env.get("RUNNER_OS") == "macOS" and env.get("RUNNER_ARCH") == "ARM64" and
+            env.get("RUNNER_OS") == "macOS" and env.get("RUNNER_ARCH") == profile["runnerArch"] and
             env.get("GITHUB_SERVER_URL") == "https://github.com" and env.get("GITHUB_API_URL") == "https://api.github.com",
-            "genuine hosted ARM dispatch required")
-    require(env.get("P2PKIT_OPERATION") == OPERATION and env.get("GITHUB_JOB") == OPERATION,
-            "wrong isolated operation/job")
+            "genuine hosted dispatch matching the selected native profile required")
+    require(env.get("GITHUB_JOB") == OPERATION, "wrong isolated operation/job")
     for name in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"):
         require(re.fullmatch(r"[1-9][0-9]{0,19}", env.get(name, "")), "invalid run identity")
     sha, tree = env.get("P2PKIT_EXPECTED_SHA", ""), env.get("P2PKIT_EXPECTED_TREE", "")
@@ -142,7 +157,7 @@ def dispatch(env, root):
     require(isinstance(key, str) and 0 < len(key.encode("ascii")) <= 65536 and
             "-----BEGIN PGP PUBLIC KEY BLOCK-----" in key and "PRIVATE KEY" not in key, "public evidence recipient required")
     require(re.fullmatch(r"[0-9A-F]{40}", expected["evidence_fingerprint"]), "full recipient fingerprint required")
-    return {"commit": sha, "tree": tree, "base": sha, "ref": ref,
+    return {"commit": sha, "tree": tree, "base": sha, "ref": ref, "operation": operation,
             "runId": env["GITHUB_RUN_ID"], "runAttempt": env["GITHUB_RUN_ATTEMPT"],
             "recipientFingerprint": expected["evidence_fingerprint"]}
 
@@ -164,13 +179,14 @@ def credential_free_environment(base, state, root):
                     and value), "ambient execution override must be resolved: " + name)
         require(not name.startswith("GIT_") or name == "GIT_TERMINAL_PROMPT", "ambient Git override")
         require(not name.startswith("P2PKIT_AUDIT_"), "nested/inherited owner is not this hosted controller")
-    require(base.get("DEVELOPER_DIR") == XCODE, "explicit admitted Xcode required")
+    profile = native_profile(base.get("P2PKIT_OPERATION"))
+    require(base.get("DEVELOPER_DIR") == profile["xcode"], "explicit admitted Xcode required")
     home = Path(base["HOME"]).resolve(strict=True)
     physical(home, directory=True)
     require(os.geteuid() != 0 and os.getuid() == os.geteuid(), "ordinary non-elevated user required")
     env = {name: base[name] for name in IDENTITY_ENV if name in base}
     env.update(PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", HOME=str(home),
-               LANG="en_US.UTF-8", LC_ALL="en_US.UTF-8", CI="true", DEVELOPER_DIR=XCODE,
+               LANG="en_US.UTF-8", LC_ALL="en_US.UTF-8", CI="true", DEVELOPER_DIR=profile["xcode"],
                GIT_TERMINAL_PROMPT="0", GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_SYSTEM="/dev/null", GIT_CONFIG_GLOBAL="/dev/null",
                GH_CONFIG_DIR=str(state / "empty-config/gh"), CURL_HOME=str(state / "empty-config/curl"),
                GNUPGHOME=str(state / "empty-config/gpg"), XDG_CONFIG_HOME=str(state / "empty-config/xdg"),
@@ -384,6 +400,7 @@ class Command:
 class Runtime:
     def __init__(self, root, state, binding, env, *, job=None):
         self.root, self.state, self.binding, self.env = root, state, binding, env
+        self.profile = native_profile(binding["operation"])
         self.job, self.api = job or uuid.uuid4().hex, load_api()
         self.home, self.evidence, self.commands = state / "gradle-home", state / "evidence", state / "evidence/commands"
         self.state_identity, self.home_identity = identity(state), identity(self.home)
@@ -491,14 +508,14 @@ class Runtime:
             physical(path)
             require(not path.exists(), "fresh output roots required")
         self.copy_candidates("before")
-        require(processes.host_role() == "macos-arm64", "native ARM interpreter required")
+        require(processes.host_role() == self.profile["hostRole"], "selected native interpreter role required")
         version = self.command("macos-version", ["/usr/bin/sw_vers", "-productVersion"]).text().strip()
-        require(re.fullmatch(r"26\.[0-9]+(?:\.[0-9]+)?", version), "unadmitted macOS major")
+        require(re.fullmatch(re.escape(self.profile["osMajor"]) + r"\.[0-9]+(?:\.[0-9]+)?", version), "unadmitted macOS major")
         memory = self.command("physical-memory", ["/usr/sbin/sysctl", "-n", "hw.memsize"]).text().strip()
         require(re.fullmatch(r"[0-9]+", memory) and int(memory) >= 7 * GIB, "hosted writer requires at least 7GiB physical RAM")
         self.command("xcode-version", ["/usr/bin/xcodebuild", "-version"])
         xcode = read(self.commands / f"{self.command_index:03d}-xcode-version/stdout.log").decode()
-        require(xcode == "Xcode 26.5\nBuild version 17F42\n", "unadmitted Xcode/build")
+        require(xcode == self.profile["xcodeVersion"], "unadmitted Xcode/build")
         self.command("xcode-first-launch", ["/usr/bin/xcodebuild", "-checkFirstLaunchStatus"])
         homes = []
         for major in (17, 21):
@@ -506,7 +523,7 @@ class Runtime:
             jdk = self.command("java-" + str(major), [str(home / "bin/java"), "-XshowSettings:properties", "-version"])
             output = read(jdk.directory / "stderr.log").decode()
             require(re.search(r"^\s*java.version = " + str(major) + r"\.", output, re.M) and
-                    re.search(r"^\s*os.arch = (aarch64|arm64)\s*$", output, re.M) and
+                    re.search(r"^\s*os.arch = (" + self.profile["javaArch"] + r")\s*$", output, re.M) and
                     re.search(r"^\s*java.io.tmpdir = " + re.escape(str(self.state / "tmp/java")) + r"\s*$", output, re.M),
                     "native JDK/version/temporary routing not admitted")
             require((home / "bin/javac").is_file(), "native JDK compiler missing")
@@ -520,11 +537,11 @@ class Runtime:
             raw = read(Path(self.env["ANDROID_HOME"]) / "platforms" / folder / "source.properties").decode()
             require(re.findall(r"^AndroidVersion.ApiLevel=(.*)$", raw, re.M) == [level], "literal Android platform metadata required")
         runtimes = parse(self.command("simulator-runtimes", ["/usr/bin/xcrun", "simctl", "list", "--json", "runtimes"]).text())
-        matches = [row for row in runtimes["runtimes"] if row.get("identifier") == RUNTIME]
-        require(len(matches) == 1 and matches[0].get("version") == "26.5" and matches[0].get("isAvailable") is True,
+        matches = [row for row in runtimes["runtimes"] if row.get("identifier") == self.profile["runtime"]]
+        require(len(matches) == 1 and matches[0].get("version") == self.profile["runtimeVersion"] and matches[0].get("isAvailable") is True,
                 "real admitted simulator runtime unavailable")
         devices = parse(self.command("simulator-devices", ["/usr/bin/xcrun", "simctl", "list", "--json", "devices", "available"]).text())
-        matches = [row for row in devices["devices"].get(RUNTIME, []) if row.get("name") == "iPhone 17" and
+        matches = [row for row in devices["devices"].get(self.profile["runtime"], []) if row.get("name") == "iPhone 17" and
                    row.get("state") == "Shutdown" and row.get("isAvailable") is True]
         require(len(matches) == 1 and re.fullmatch(r"[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}", matches[0].get("udid", "")),
                 "one available originally Shutdown iPhone 17 required")
@@ -536,13 +553,14 @@ class Runtime:
         record(self.state / "execution-environment.json", {"environment": self.env, "jvmArguments": self.jvm,
             "binding": self.binding, "job": self.job})
         self.command("native-controls", [sys.executable, "-I", "-B", "-S", str(SCRIPTS / "tests/run-audit-command-test.py"),
-            "--expected-host", "macos-arm64", "--evidence-dir", str(self.evidence / "native-controls"),
+            "--expected-host", self.profile["hostRole"], "--evidence-dir", str(self.evidence / "native-controls"),
             "--fixture-parent", str(self.state / "fixtures/native-tmp")], 1800)
         self.multicast()
 
     def start_resource(self):
         cmd = Command(self, "resources", [sys.executable, "-I", "-B", "-S", str(SCRIPTS / "hosted_lock_resources.py"),
-            "observe", "--root", str(self.root), "--state", str(self.state), "--stop-file", str(self.state / "resource-stop")], 10000)
+            "observe", "--root", str(self.root), "--state", str(self.state), "--stop-file", str(self.state / "resource-stop"),
+            "--expected-host", self.profile["hostRole"]], 10000)
         self.resource = cmd
         cmd.start()
         deadline = time.monotonic() + 10
@@ -663,7 +681,7 @@ class Runtime:
         def query():
             document = parse(self.command("simulator-retire-query", ["/usr/bin/xcrun", "simctl", "list", "--json", "devices", "available"],
                                           finalizing=True).text())
-            rows = [row for row in document["devices"].get(RUNTIME, []) if row.get("udid") == self.simulator["udid"]]
+            rows = [row for row in document["devices"].get(self.profile["runtime"], []) if row.get("udid") == self.simulator["udid"]]
             require(len(rows) == 1 and rows[0].get("isAvailable") is True, "owned simulator retirement unknown")
             return rows[0]
         before = query()
@@ -1084,7 +1102,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     root = SCRIPTS.parent
     binding = dispatch(dict(os.environ), root)
-    require(processes.host_role() == "macos-arm64", "native ARM Mac required")
+    require(processes.host_role() == native_profile(binding["operation"])["hostRole"], "selected native Mac role required")
     if args.action == "run":
         return run(root, binding)
     if args.action == "seal":

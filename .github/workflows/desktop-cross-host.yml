@@ -43,9 +43,9 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Sample apps, Windows witness, no-child Mac capacity, or encrypted full-lock candidate
+        description: Sample apps, Windows witness, no-child Mac capacity, or encrypted ARM/Intel full-lock candidate
         type: choice
-        options: [desktop, sample-apps, windows-directory-fsync-control, macos-arm64-admission, macos-x64-admission, dependency-lock-candidate]
+        options: [desktop, sample-apps, windows-directory-fsync-control, macos-arm64-admission, macos-x64-admission, dependency-lock-candidate, dependency-lock-candidate-x64]
         default: desktop
         required: true
       expected_sha:
@@ -78,13 +78,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: desktop-cross-host-${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'dependency-lock-candidate' && format('lock-{0}-{1}', github.run_id, github.run_attempt) || github.event_name == 'workflow_dispatch' && (inputs.operation == 'windows-directory-fsync-control' || inputs.operation == 'macos-arm64-admission' || inputs.operation == 'macos-x64-admission') && format('control-{0}-{1}', github.run_id, github.run_attempt) || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' || (inputs.operation != 'windows-directory-fsync-control' && inputs.operation != 'macos-arm64-admission' && inputs.operation != 'macos-x64-admission' && inputs.operation != 'dependency-lock-candidate') }}
+  group: desktop-cross-host-${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'dependency-lock-candidate' || inputs.operation == 'dependency-lock-candidate-x64') && format('lock-{0}-{1}', github.run_id, github.run_attempt) || github.event_name == 'workflow_dispatch' && (inputs.operation == 'windows-directory-fsync-control' || inputs.operation == 'macos-arm64-admission' || inputs.operation == 'macos-x64-admission') && format('control-{0}-{1}', github.run_id, github.run_attempt) || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' || (inputs.operation != 'windows-directory-fsync-control' && inputs.operation != 'macos-arm64-admission' && inputs.operation != 'macos-x64-admission' && inputs.operation != 'dependency-lock-candidate' && inputs.operation != 'dependency-lock-candidate-x64') }}
 
 jobs:
   verify:
     name: ${{ matrix.os }}
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.operation != 'windows-directory-fsync-control' && inputs.operation != 'macos-arm64-admission' && inputs.operation != 'macos-x64-admission' && inputs.operation != 'dependency-lock-candidate') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.operation != 'windows-directory-fsync-control' && inputs.operation != 'macos-arm64-admission' && inputs.operation != 'macos-x64-admission' && inputs.operation != 'dependency-lock-candidate' && inputs.operation != 'dependency-lock-candidate-x64') }}
     concurrency:
       group: p2pkit-nonphysical-heavy
       queue: max
@@ -392,17 +392,17 @@ jobs:
 
   dependency-lock-candidate:
     name: dependency-lock-candidate
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'dependency-lock-candidate' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'dependency-lock-candidate' || inputs.operation == 'dependency-lock-candidate-x64') }}
     concurrency:
       group: p2pkit-nonphysical-heavy
       queue: max
       cancel-in-progress: false
     permissions:
       contents: read
-    runs-on: macos-26
+    runs-on: ${{ inputs.operation == 'dependency-lock-candidate-x64' && 'macos-15-intel' || 'macos-26' }}
     timeout-minutes: 195
     env:
-      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+      DEVELOPER_DIR: ${{ inputs.operation == 'dependency-lock-candidate-x64' && '/Applications/Xcode_26.3.app/Contents/Developer' || '/Applications/Xcode_26.5.app/Contents/Developer' }}
       P2PKIT_OPERATION: ${{ inputs.operation }}
       P2PKIT_EXPECTED_SHA: ${{ inputs.expected_sha }}
       P2PKIT_EXPECTED_TREE: ${{ inputs.expected_tree }}
@@ -425,21 +425,21 @@ jobs:
         id: candidate
         timeout-minutes: 170
         shell: bash
-        run: exec /Applications/Xcode_26.5.app/Contents/Developer/usr/bin/python3 -I -B -S scripts/run-hosted-lock-candidate.py run
+        run: exec "$DEVELOPER_DIR/usr/bin/python3" -I -B -S scripts/run-hosted-lock-candidate.py run
 
       - name: Seal private original evidence after controller exit
         id: seal
         if: ${{ always() }}
         timeout-minutes: 15
         shell: bash
-        run: exec /Applications/Xcode_26.5.app/Contents/Developer/usr/bin/python3 -I -B -S scripts/run-hosted-lock-candidate.py seal
+        run: exec "$DEVELOPER_DIR/usr/bin/python3" -I -B -S scripts/run-hosted-lock-candidate.py seal
 
       - name: Validate exact encrypted public evidence
         id: public
         if: ${{ always() }}
         timeout-minutes: 2
         shell: bash
-        run: exec /Applications/Xcode_26.5.app/Contents/Developer/usr/bin/python3 -I -B -S scripts/run-hosted-lock-candidate.py validate-public
+        run: exec "$DEVELOPER_DIR/usr/bin/python3" -I -B -S scripts/run-hosted-lock-candidate.py validate-public
 
       - name: Retain encrypted lock-candidate evidence
         if: ${{ always() && steps.public.outputs.artifacts_ready == 'true' }}

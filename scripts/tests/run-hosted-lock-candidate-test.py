@@ -181,7 +181,7 @@ class Fixture(unittest.TestCase):
                       "ref": "work/synthetic", "repository": {"full_name": "p2pKit/P2pKit"}}
         write_json(self.event_path, self.event)
         self.binding = {"commit": SHA, "tree": TREE, "base": SHA, "ref": self.env["GITHUB_REF"],
-                        "runId": "123", "runAttempt": "1", "recipientFingerprint": FINGERPRINT}
+                        "runId": "123", "runAttempt": "1", "recipientFingerprint": FINGERPRINT, "operation": app.OPERATION}
         self.before = {"commit": SHA, "tree": TREE, "status": "", "diffSha256": hashlib.sha256(b"").hexdigest()}
         self.events, self.scopes, self.results = [], [], {}
         self.partial_launch = self.drain_failure = None
@@ -398,6 +398,190 @@ class EnvironmentTests(Fixture):
                 app.policy(bad, "/synthetic/jdk21", self.state / "tmp/java")
         with self.assertRaises(ValueError):
             app.policy("/synthetic/same", "/synthetic/same", self.state / "tmp/java")
+
+
+class NativeProfileTests(Fixture):
+    INTEL = "dependency-lock-candidate-x64"
+    INTEL_XCODE = "/Applications/Xcode_26.3.app/Contents/Developer"
+
+    def intel_environment(self):
+        return dict(self.env, P2PKIT_OPERATION=self.INTEL, RUNNER_ARCH="X64", DEVELOPER_DIR=self.INTEL_XCODE)
+
+    def event_for(self, env):
+        write_json(self.event_path, dict(self.event, inputs={key: env[name] for key, name in app.INPUTS.items()}))
+
+    def test_intel_dispatch_binds_operation_without_creating_another_job_or_input(self):
+        env = self.intel_environment()
+        self.event_for(env)
+        result = app.dispatch(env, self.root)
+        self.assertEqual(result, dict(self.binding, operation=self.INTEL))
+        self.assertEqual(env["GITHUB_JOB"], "dependency-lock-candidate")
+        self.assertEqual(len(app.INPUTS), 6)
+
+    def test_operation_runner_and_original_event_must_agree(self):
+        for operation, arch in ((app.OPERATION, "X64"), (self.INTEL, "ARM64"), ("shell", "X64")):
+            env = dict(self.env, P2PKIT_OPERATION=operation, RUNNER_ARCH=arch)
+            self.event_for(env)
+            with self.subTest(operation=operation, arch=arch), self.assertRaises(ValueError):
+                app.dispatch(env, self.root)
+        env = self.intel_environment()
+        self.event_for(self.env)
+        with self.assertRaises(ValueError):
+            app.dispatch(env, self.root)
+
+    def test_intel_child_uses_only_its_pinned_xcode_and_keeps_credentials_out(self):
+        env = dict(self.intel_environment(), GH_TOKEN="synthetic-never-used", SSH_AUTH_SOCK="/synthetic/agent")
+        child = app.credential_free_environment(env, self.state, self.root)
+        self.assertEqual(child["DEVELOPER_DIR"], self.INTEL_XCODE)
+        self.assertEqual(child["RUNNER_ARCH"], "X64")
+        self.assertNotIn("GH_TOKEN", child)
+        self.assertNotIn("SSH_AUTH_SOCK", child)
+        for original, wrong in ((env, app.XCODE), (self.env, self.INTEL_XCODE)):
+            with self.subTest(wrong=wrong), self.assertRaises(ValueError):
+                app.credential_free_environment(dict(original, DEVELOPER_DIR=wrong), self.state, self.root)
+
+    def model_admission(self, *, intel, wrong=None):
+        """Run the real admission with fake command bytes; no tool or native call."""
+        env = self.intel_environment() if intel else self.env.copy()
+        env["PATH"] = "/synthetic/never-executed"
+        operation = self.INTEL if intel else app.OPERATION
+        role, version, java_arch = ("macos-x64", "15.7.9", "amd64") if intel else ("macos-arm64", "26.6.2", "aarch64")
+        xcode = "Xcode 26.3\nBuild version 17C529\n" if intel else "Xcode 26.5\nBuild version 17F42\n"
+        runtime_version = "26.2" if intel else "26.5"
+        runtime = "com.apple.CoreSimulator.SimRuntime.iOS-" + runtime_version.replace(".", "-")
+        if wrong:
+            role, version, java_arch, xcode, runtime_version = (
+                wrong.get("role", role), wrong.get("version", version), wrong.get("java_arch", java_arch),
+                wrong.get("xcode", xcode), wrong.get("runtime_version", runtime_version))
+        state = Path(tempfile.mkdtemp(prefix="admit-", dir=self.base))
+        for name in ("evidence", "evidence/commands", "evidence/task-maps", "gradle-home", "gradle-home/init.d", "tmp", "tmp/java"):
+            (state / name).mkdir(mode=0o700)
+        rt = app.Runtime(self.root, state, dict(self.binding, operation=operation), env, job=JOB)
+        for folder, level in (("android-36", "36"), ("android-37.0", "37.0")):
+            path = self.sdk / "platforms" / folder
+            path.mkdir(parents=True, exist_ok=True)
+            (path / "source.properties").write_text("AndroidVersion.ApiLevel=" + level + "\n")
+        (self.root / app.INIT).parent.mkdir(exist_ok=True)
+        (self.root / app.INIT).write_text("// synthetic initializer bytes\n")
+        homes = {}
+        for major in (17, 21):
+            home = state / ("jdk" + str(major))
+            (home / "bin").mkdir(parents=True)
+            (home / "bin/javac").write_bytes(b"synthetic, never executed")
+            homes[major] = home
+        calls = []
+
+        def command(label, argv, *args, **kwargs):
+            calls.append((label, list(argv)))
+            rt.command_index += 1
+            directory = rt.commands / (f"{rt.command_index:03d}-" + label)
+            directory.mkdir()
+            outputs = {"macos-version": version + "\n", "physical-memory": str(8 * app.GIB) + "\n",
+                       "xcode-version": xcode, "xcode-first-launch": "", "native-controls": "",
+                       "simulator-runtimes": json.dumps({"runtimes": [
+                           {"identifier": runtime, "version": runtime_version, "isAvailable": True}]}),
+                       "simulator-devices": json.dumps({"devices": {runtime: [
+                           {"name": "iPhone 17", "state": "Shutdown", "isAvailable": True,
+                            "udid": "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"}]}})}
+            for major, home in homes.items():
+                outputs["java-home-" + str(major)] = str(home) + "\n"
+                outputs["java-" + str(major)] = ""
+            raw = outputs[label]
+            (directory / "stdout.log").write_text(raw)
+            if label in ("java-17", "java-21"):
+                major = label.removeprefix("java-")
+                (directory / "stderr.log").write_text(
+                    f"    java.version = {major}.0.1\n    os.arch = {java_arch}\n"
+                    f"    java.io.tmpdir = {state / 'tmp/java'}\n")
+            return SimpleNamespace(text=lambda: raw, directory=directory)
+
+        config = state / "config"
+        config.mkdir()
+        (config / "stdout.log").write_bytes(b"")
+        git_outputs = {"shallow": "false\n", "base-ancestry": "", "local-config-names": "",
+                       "lock-map": "\n".join(f"synthetic{i}/gradle.lockfile" for i in range(12)) + "\n"}
+        def git(label, *args, **kwargs):
+            return SimpleNamespace(text=lambda: git_outputs[label], directory=config)
+
+        with mock.patch.object(rt, "source", return_value=self.before), mock.patch.object(rt, "git", side_effect=git), \
+                mock.patch.object(rt, "command", side_effect=command), mock.patch.object(rt, "copy_candidates"), \
+                mock.patch.object(app.processes, "host_role", return_value=role), \
+                mock.patch.object(rt, "multicast") as multicast:
+            try:
+                rt.admit()
+            except ValueError:
+                multicast.assert_not_called()
+                self.assertNotIn("native-controls", [label for label, _ in calls])
+                raise
+            multicast.assert_called_once_with()
+        self.assertIn(("native-controls", [sys.executable, "-I", "-B", "-S",
+            str(app.SCRIPTS / "tests/run-audit-command-test.py"), "--expected-host", role,
+            "--evidence-dir", str(rt.evidence / "native-controls"), "--fixture-parent", str(state / "fixtures/native-tmp")]), calls)
+        self.assertEqual(rt.env["P2PKIT_WRITER_SIMULATOR"], "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")
+
+    def test_both_profiles_execute_actual_admission_with_their_own_pins(self):
+        for intel in (False, True):
+            with self.subTest(intel=intel):
+                self.model_admission(intel=intel)
+
+    def test_cross_profile_native_tool_and_runtime_values_fail_before_native_controls(self):
+        for wrong in ({"role": "macos-arm64"}, {"version": "26.6.2"}, {"java_arch": "aarch64"},
+                      {"xcode": "Xcode 26.5\nBuild version 17F42\n"}, {"runtime_version": "26.3"}):
+            with self.subTest(wrong=wrong), self.assertRaises(ValueError):
+                self.model_admission(intel=True, wrong=wrong)
+
+    def test_resource_helper_receives_exact_selected_native_role(self):
+        for operation, role in ((app.OPERATION, "macos-arm64"), (self.INTEL, "macos-x64")):
+            rt = app.Runtime(self.root, self.state, dict(self.binding, operation=operation), self.env, job=JOB)
+            fake = SimpleNamespace(start=lambda: setattr(rt, "resource_ready", True))
+            with mock.patch.object(app, "Command", return_value=fake) as command:
+                rt.start_resource()
+            argv = command.call_args.args[2]
+            self.assertEqual(argv[-2:], ["--expected-host", role])
+
+    def test_selected_simulator_runtime_retirement_never_touches_other_devices(self):
+        owned = {"udid": "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE", "isAvailable": True, "state": "Shutdown"}
+        other = dict(owned, udid="11111111-2222-3333-4444-555555555555", state="Booted")
+        for operation in (app.OPERATION, self.INTEL):
+            for initial in ("Shutdown", "Booted"):
+                with self.subTest(operation=operation, initial=initial):
+                    rt = app.Runtime(self.root, self.state, dict(self.binding, operation=operation), self.env, job=JOB)
+                    rt.simulator = owned
+                    rt.report["writer"] = {"launchAttempted": True}
+                    calls, queries = [], []
+                    def command(label, argv, **kwargs):
+                        self.assertEqual(kwargs, {"finalizing": True})
+                        calls.append((label, argv))
+                        if label == "simulator-shutdown":
+                            return None
+                        self.assertEqual(label, "simulator-retire-query")
+                        state = initial if not queries else "Shutdown"
+                        queries.append(state)
+                        document = {"devices": {rt.profile["runtime"]: [dict(owned, state=state), other],
+                                                "unrelated-runtime": [other]}}
+                        return SimpleNamespace(text=lambda: json.dumps(document))
+                    with mock.patch.object(rt, "command", side_effect=command):
+                        rt.retire_simulator()
+                    self.assertEqual(queries, [initial, "Shutdown"])
+                    shutdowns = [argv for label, argv in calls if label == "simulator-shutdown"]
+                    self.assertEqual(shutdowns, [] if initial == "Shutdown" else
+                                     [["/usr/bin/xcrun", "simctl", "shutdown", owned["udid"]]])
+                    self.assertEqual(rt.report["simulatorRetirement"]["status"], "KNOWN_SHUTDOWN")
+
+    def test_intel_simulator_in_wrong_runtime_or_externally_booted_is_not_retired(self):
+        owned = {"udid": "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE", "isAvailable": True, "state": "Shutdown"}
+        for wrong_bucket in (True, False):
+            with self.subTest(wrong_bucket=wrong_bucket):
+                rt = app.Runtime(self.root, self.state, dict(self.binding, operation=self.INTEL), self.env, job=JOB)
+                rt.simulator = owned
+                runtime = app.PROFILES[app.OPERATION]["runtime"] if wrong_bucket else rt.profile["runtime"]
+                document = {"devices": {runtime: [dict(owned, state="Booted")]}}
+                with mock.patch.object(rt, "command", return_value=SimpleNamespace(text=lambda: json.dumps(document))) as command:
+                    with self.assertRaises(ValueError):
+                        rt.retire_simulator()
+                command.assert_called_once()
+                self.assertEqual(command.call_args.args[0], "simulator-retire-query")
+                self.assertNotIn("simulatorRetirement", rt.report)
 
 
 class FileAndAdmissionTests(Fixture):
@@ -1447,7 +1631,8 @@ class PublicExportTests(Fixture):
         self.seal_receipt(output, manifest)
         original = app.parse(app.read(state / "sealed.json"))
         for field, value in (("recipientFingerprint", "E" * 40), ("manifestSha256", "0" * 64),
-                             ("binding", dict(self.binding, runAttempt="2"))):
+                             ("binding", dict(self.binding, runAttempt="2")),
+                             ("binding", dict(self.binding, operation=app.INTEL_OPERATION))):
             write_json(state / "sealed.json", dict(original, **{field: value}))
             with self.subTest(field=field), self.assertRaises(ValueError):
                 app.validate_public(self.binding)
@@ -1748,6 +1933,46 @@ class RecoveryTests(Fixture):
             app.seal(self.root, self.binding)
         scope.assert_not_called()
         encrypt.assert_not_called()
+
+    def test_changed_context_profile_blocks_seal_before_native_recovery_or_export(self):
+        state, _ = self.recovery_fixture()
+        context = app.parse(app.read(state / "context.json"))
+        context["binding"]["operation"] = app.INTEL_OPERATION
+        write_json(state / "context.json", context)
+        with mock.patch.object(app, "quiesce") as quiesce, \
+                mock.patch.object(app, "recover_interrupted") as recover, \
+                mock.patch.object(app.hosted_evidence, "export_encrypted") as encrypt, self.assertRaises(ValueError):
+            app.seal(self.root, self.binding)
+        quiesce.assert_not_called()
+        recover.assert_not_called()
+        encrypt.assert_not_called()
+        self.assertFalse((state / "sealed.json").exists())
+
+    def test_changed_saved_profile_blocks_recovery_stop_but_preserves_finalization_hold(self):
+        state, _ = self.recovery_fixture()
+        path = state / "execution-environment.json"
+        saved = app.parse(app.read(path))
+        saved["binding"]["operation"] = app.INTEL_OPERATION
+        write_json(path, saved)
+        original = path.read_bytes()
+        context = app.parse(app.read(state / "context.json"))
+        lock_map = "\n".join(f"module{i}/gradle.lockfile" for i in range(12)) + "\n"
+        with mock.patch.object(app.Runtime, "git", return_value=SimpleNamespace(text=lambda: lock_map)), \
+                mock.patch.object(app.Runtime, "collect_custody") as collect, \
+                mock.patch.object(app.Runtime, "retain") as retain, mock.patch.object(app, "Command") as command, \
+                mock.patch.object(app, "quiesce") as quiesce:
+            app.recover_interrupted(self.root, state, self.binding, context)
+        command.assert_not_called()
+        collect.assert_called_once_with()
+        retain.assert_called_once_with()
+        quiesce.assert_called_once_with(state, context, "recovery-final-quiescence")
+        result = app.parse(app.read(state / "evidence/interrupted-owner.json"))
+        self.assertEqual(result["candidateStatus"], "HOLD")
+        self.assertEqual(result["finalExitCode"], 125)
+        self.assertNotIn("recoveryStop", result)
+        self.assertTrue(any(row["stage"] == "recovery-stop" and row["message"] == "recovery execution binding differs"
+                            for row in result["errors"]))
+        self.assertEqual(path.read_bytes(), original)
 
     def test_replaced_gradle_home_rejected_before_recovery_or_export(self):
         state, _ = self.recovery_fixture()

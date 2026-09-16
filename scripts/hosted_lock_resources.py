@@ -352,10 +352,11 @@ def main(argv=None):
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--stop-file", type=Path, required=True)
+    parser.add_argument("--expected-host", choices=("macos-arm64", "macos-x64"), required=True)
     args = parser.parse_args(argv)
     streams, cancelled = Streams(), []
     try:
-        require(audit_processes.host_role() == "macos-arm64" and os.geteuid() != 0, "HOST_ROLE")
+        require(audit_processes.host_role() == args.expected_host and os.geteuid() != 0, "HOST_ROLE")
         roots = validate_paths(args.root, args.state, args.stop_file, os.environ)
         for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
             signal.signal(number, lambda signum, _frame: cancelled.append(signum))
