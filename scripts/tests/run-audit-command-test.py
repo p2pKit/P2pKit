@@ -964,6 +964,7 @@ class DarwinObservationTests(unittest.TestCase):
         self.scope.discovery_errors, self.scope.baseline = set(), set()
         self.scope.pending_discoveries, self.scope.discovery_reconciliations = {}, []
         self.scope.observation_reconciliations = []
+        self.scope.drain_reconciliations, self.scope.active_drain = [], None
         self.scope.self_port, self.scope.argmax = 7, 4096
         self.scope.system, self.scope.proc = mock.Mock(), mock.Mock()
         self.identity = {"pid": 43210, "uid": 1000, "realUid": 1000, "parentPid": 1, "group": 43210,
@@ -1379,6 +1380,255 @@ class DarwinObservationTests(unittest.TestCase):
         with self.clock(), self.assertRaisesRegex(processes.OwnershipError, "unresolved"):
             fixture.consumer_identity_live(entry)
         self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+        self.scope.system.task_name_for_pid.assert_not_called()
+
+    def known_drain_process(self):
+        key = self.scope._key(self.identity)
+        self.scope.known[key] = dict(self.identity)
+        self.scope.handles[key] = processes.AuditToken()
+        # A known lifetime must be rechecked even without a process-list entry.
+        self.scope._pids = lambda: []
+        return self.scope.handles[key]
+
+    def recover_drain_token(self, *, exec_change=False):
+        tokens, sent = [], []
+
+        def task_name(_self, _pid, port):
+            if self.elapsed <= 0.25:
+                return 5
+            ctypes.cast(port, ctypes.POINTER(processes.U32)).contents.value = 81
+            return 0
+
+        def task_info(_port, _flavor, token, _count):
+            tokens.append(token._obj)
+            if exec_change and len(tokens) == 1:
+                self.current["pidVersion"] += 1
+            return 0
+
+        def signal_token(token, signum):
+            sent.append((token._obj, signum, self.elapsed))
+            return 0
+
+        self.scope.system.task_name_for_pid.side_effect = task_name
+        self.scope.system.task_info.side_effect = task_info
+        self.scope.proc.proc_signal_with_audittoken.side_effect = signal_token
+        return tokens, sent
+
+    def test_known_signal_drain_reconciles_only_positive_terminal_observation(self):
+        for terminal, outcome in ((None, "absent"),
+                                  ({**self.identity, "status": 5, "live": False}, "nonrunning"),
+                                  ({**self.identity, "uniqueId": 100}, "replaced")):
+            with self.subTest(outcome=outcome):
+                self.setUp()
+                self.known_drain_process()
+                self.on_sleep = lambda: setattr(self, "current", terminal) if self.elapsed >= 0.30 else None
+                with self.clock():
+                    self.assertEqual(self.scope.drain(), [])
+                self.assertGreaterEqual(self.elapsed, 0.5)
+                self.assertLess(self.elapsed, 5)
+                event = self.scope.description()["drainReconciliations"][-1]
+                self.assertEqual(event["outcome"], "retired")
+                record = event["signalReconciliations"][0]
+                self.assertEqual((record["outcome"], record["lastIdentity"]), (outcome, terminal))
+                self.assertEqual(record["identity"], self.identity)
+                self.assertIn("Mach result 5", record["firstFailure"])
+                self.assertEqual(self.scope.observation_reconciliations[0]["outcome"], "unresolved")
+                self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_known_signal_drain_recovers_fresh_exec_token_without_declaring_live_process_retired(self):
+        cached = self.known_drain_process()
+        tokens, sent = self.recover_drain_token(exec_change=True)
+        self.on_sleep = lambda: setattr(self, "current", None) if self.elapsed >= 0.8 else None
+        with self.clock():
+            self.assertEqual(self.scope.drain(), [])
+        self.assertGreaterEqual(self.elapsed, 1.0)
+        self.assertGreaterEqual(len(tokens), 2)
+        self.assertIsNot(sent[0][0], cached)
+        self.assertIsNot(sent[0][0], tokens[0], "The pre-exec token must not authorize the signal")
+        self.assertIs(sent[0][0], tokens[1])
+        self.assertEqual(self.scope.system.mach_port_deallocate.call_count, len(tokens))
+        event = self.scope.description()["drainReconciliations"][-1]
+        self.assertEqual(event["signalReconciliations"][0]["outcome"], "signal-succeeded")
+        self.assertEqual(self.scope.observation_reconciliations[0]["outcome"], "unresolved")
+
+    def test_known_signal_drain_persistent_denial_is_unknown_with_fixed_phase_deadlines(self):
+        for status, flags in ((2, 0), (2, 16436), (4, 0)):
+            with self.subTest(status=status, flags=flags):
+                self.setUp()
+                self.current.update(status=status, flags=flags)
+                self.known_drain_process()
+                starts = []
+                send = self.scope._send
+
+                def tracked_send(identity, handle, signum):
+                    starts.append((signum, self.elapsed))
+                    return send(identity, handle, signum)
+
+                with self.clock(), mock.patch.object(self.scope, "_send", side_effect=tracked_send), \
+                        self.assertRaisesRegex(processes.DarwinObservationExhausted, "drain.*unresolved"):
+                    self.scope.drain()
+                self.assertGreaterEqual(self.elapsed, 10)
+                self.assertLessEqual(self.elapsed, 10.250001)
+                for signum, started in starts:
+                    self.assertLess(started, 5 if signum == processes.SIG_TERM else 10)
+                self.assertEqual({item[0] for item in starts}, {processes.SIG_TERM, processes.SIG_KILL})
+                event = self.scope.description()["drainReconciliations"][-1]
+                self.assertEqual(event["outcome"], "unresolved")
+                self.assertEqual([item["deadlineMonotonic"] for item in event["phases"]], [5, 10])
+                self.assertEqual(event["signalReconciliations"][0]["outcome"], "unresolved")
+                self.assertGreater(event["signalReconciliations"][0]["failures"], 1)
+                self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_known_signal_drain_changed_credentials_are_not_absence(self):
+        for field in ("uid", "realUid"):
+            with self.subTest(field=field):
+                self.setUp()
+                self.known_drain_process()
+                self.on_sleep = lambda: self.current.update({field: 0}) if self.elapsed >= 0.30 else None
+                with self.clock(), self.assertRaisesRegex(processes.DarwinObservationExhausted, "drain.*unresolved"):
+                    self.scope.drain()
+                record = self.scope.description()["drainReconciliations"][-1]["signalReconciliations"][0]
+                self.assertEqual(record["outcome"], "unresolved")
+                self.assertEqual(record["lastIdentity"][field], 0)
+                self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_known_signal_drain_pending_identity_denial_remains_fatal(self):
+        for error in (0, errno.EPERM, errno.EACCES):
+            with self.subTest(errno=error):
+                self.setUp()
+                self.known_drain_process()
+                original = self.scope._identity
+
+                def identity(pid, *, required=False):
+                    if self.elapsed >= 0.3:
+                        raise processes.DarwinObservationError(f"bound identity errno {error}")
+                    return original(pid, required=required)
+
+                self.scope._identity = identity
+                with self.clock(), self.assertRaisesRegex(processes.OwnershipError, "bound identity errno"):
+                    self.scope.drain()
+                record = self.scope.description()["drainReconciliations"][-1]
+                self.assertNotEqual(record["outcome"], "retired")
+                self.assertEqual(record["signalReconciliations"][0]["outcome"], "unresolved")
+
+    def test_known_signal_drain_denial_does_not_prevent_other_owned_signals(self):
+        self.known_drain_process()
+        other = {**self.identity, "pid": self.identity["pid"] + 1, "uniqueId": 101}
+        peers = {self.identity["pid"]: self.current, other["pid"]: other}
+        self.scope.known[self.scope._key(other)] = dict(other)
+        self.scope.handles[self.scope._key(other)] = processes.AuditToken()
+        self.scope._identity = lambda pid, **_kw: None if peers[pid] is None else dict(peers[pid])
+        tokens, signals = {}, []
+
+        def task_name(_self, pid, port):
+            if pid == self.identity["pid"]:
+                return 5
+            ctypes.cast(port, ctypes.POINTER(processes.U32)).contents.value = 81
+            return 0
+
+        def task_info(_port, _flavor, token, _count):
+            tokens[id(token._obj)] = other["pid"]
+            return 0
+
+        def signal_token(token, _signum):
+            pid = tokens[id(token._obj)]
+            signals.append(pid)
+            peers[pid] = None
+            return 0
+
+        self.scope.system.task_name_for_pid.side_effect = task_name
+        self.scope.system.task_info.side_effect = task_info
+        self.scope.proc.proc_signal_with_audittoken.side_effect = signal_token
+        self.on_sleep = lambda: peers.update({self.identity["pid"]: None}) if self.elapsed >= 0.30 else None
+        with self.clock():
+            self.assertEqual(self.scope.drain(), [])
+        self.assertEqual(signals, [other["pid"]])
+
+    def test_known_signal_drain_signal_esrch_does_not_retire_live_lifetime(self):
+        self.known_drain_process()
+        self.recover_drain_token()
+        self.scope.proc.proc_signal_with_audittoken.side_effect = None
+        self.scope.proc.proc_signal_with_audittoken.return_value = errno.ESRCH
+        self.on_sleep = lambda: setattr(self, "current", None) if self.elapsed >= 0.8 else None
+        with self.clock():
+            self.assertEqual(self.scope.drain(), [])
+        self.assertGreaterEqual(self.elapsed, 1.0)
+        self.assertGreater(self.scope.proc.proc_signal_with_audittoken.call_count, 1)
+        record = self.scope.description()["drainReconciliations"][-1]["signalReconciliations"][0]
+        self.assertEqual(record["outcome"], "absent")
+
+    def test_known_signal_drain_structural_failures_cannot_be_resolved_by_later_exit(self):
+        for failure in ("port-release", "signal-authority", "observation-overflow"):
+            with self.subTest(failure=failure):
+                self.setUp()
+                self.known_drain_process()
+                self.recover_drain_token()
+                if failure == "port-release":
+                    self.scope.system.mach_port_deallocate.return_value = 5
+                elif failure == "signal-authority":
+                    self.scope.proc.proc_signal_with_audittoken.side_effect = None
+                    self.scope.proc.proc_signal_with_audittoken.return_value = errno.EPERM
+                else:
+                    self.scope.observation_reconciliations = [{} for _ in range(1024)]
+                with self.clock(), self.assertRaises(processes.OwnershipError) as failure_context:
+                    self.scope.drain()
+                self.assertNotIsInstance(failure_context.exception, processes.DarwinObservationExhausted)
+                first = json.loads(json.dumps(self.scope.description()["drainReconciliations"][-1]))
+                self.current = None
+                with self.clock():
+                    self.assertEqual(self.scope.drain(), [])
+                self.assertEqual(self.scope.description()["drainReconciliations"][0], first)
+                self.assertEqual(first["outcome"], "failed")
+
+    def test_known_signal_drain_later_success_does_not_rewrite_original_unknown(self):
+        self.known_drain_process()
+        with self.clock(), self.assertRaises(processes.DarwinObservationExhausted):
+            self.scope.drain()
+        first = json.loads(json.dumps(self.scope.description()["drainReconciliations"][-1]))
+        self.current = None
+        with self.clock():
+            self.assertEqual(self.scope.drain(), [])
+        self.assertEqual(self.scope.description()["drainReconciliations"][0], first)
+        self.assertEqual(first["outcome"], "unresolved")
+        self.assertEqual(self.scope.description()["drainReconciliations"][1]["outcome"], "retired")
+
+    def test_known_signal_outside_drain_still_raises_exhausted_observation(self):
+        self.known_drain_process()
+        with self.clock(), self.assertRaises(processes.DarwinObservationExhausted):
+            self.scope.signal_all(processes.SIG_TERM)
+        self.assertEqual(self.scope.drain_reconciliations, [])
+
+    def test_known_signal_drain_no_success_without_three_quiet_censuses(self):
+        self.scope._pids = lambda: []
+        for grace, kill_wait in ((0, 0), (0.05, 0.05)):
+            with self.subTest(grace=grace, kill_wait=kill_wait):
+                self.elapsed = 0
+                with self.clock(), mock.patch.object(self.scope, "discover", return_value=[]) as discover, \
+                        self.assertRaisesRegex(processes.OwnershipError, "quiet"):
+                    self.scope.drain(grace=grace, kill_wait=kill_wait)
+                self.assertLessEqual(discover.call_count, 2)
+                self.assertLessEqual(self.elapsed, grace + kill_wait)
+
+    def test_known_signal_drain_final_snapshot_is_conservative_without_late_census(self):
+        self.known_drain_process()
+        self.recover_drain_token()
+        starts = []
+        original = self.scope.discover
+
+        def discover():
+            starts.append(self.elapsed)
+            return original()
+
+        with self.clock(), mock.patch.object(self.scope, "discover", side_effect=discover):
+            self.assertEqual(self.scope.drain(), [self.identity])
+        self.assertTrue(all(start < 10 for start in starts))
+        self.assertEqual(self.scope.description()["drainReconciliations"][-1]["outcome"], "last-observed-live")
+
+    def test_known_signal_drain_evidence_overflow_is_not_a_retry(self):
+        self.known_drain_process()
+        self.scope.drain_reconciliations = [{} for _ in range(1024)]
+        with self.clock(), self.assertRaisesRegex(processes.OwnershipError, "drain evidence"):
+            self.scope.drain()
         self.scope.system.task_name_for_pid.assert_not_called()
 
 

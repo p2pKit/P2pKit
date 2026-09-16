@@ -605,6 +605,8 @@ class DarwinScope(PosixScope):
 
     def _admit(self) -> None:
         self.observation_reconciliations: list[dict[str, Any]] = []
+        self.drain_reconciliations: list[dict[str, Any]] = []
+        self.active_drain: dict[str, Any] | None = None
         if (ctypes.sizeof(DarwinBsdInfo), ctypes.sizeof(DarwinUniqueInfo), ctypes.sizeof(DarwinIdentity),
                 ctypes.sizeof(AuditToken)) != (136, 56, 192, 32):
             raise OwnershipError("Unsupported Darwin process ABI layout")
@@ -812,7 +814,8 @@ class DarwinScope(PosixScope):
                 raise OwnershipError("Cannot release the owned Darwin task-name port")
 
     def description(self) -> dict[str, Any]:
-        return {**super().description(), "observationReconciliations": self.observation_reconciliations}
+        return {**super().description(), "observationReconciliations": self.observation_reconciliations,
+                "drainReconciliations": self.drain_reconciliations}
 
     def _send(self, identity: dict[str, Any], handle: AuditToken, signum: int) -> None:
         # A real token is reacquired after exec-version changes; never os.kill(pid).
@@ -822,6 +825,105 @@ class DarwinScope(PosixScope):
             raise ProcessLookupError(identity["pid"])
         if result != 0:
             raise OwnershipError(f"Darwin identity-scoped signal failed: errno {result}")
+
+    def _reconcile_drain_signals(self) -> None:
+        for key, record in list(self.active_drain["pending"].items()):
+            # A filtered/empty census, changed credentials, or a stale token's
+            # ESRCH is not retirement of this already-owned lifetime.
+            current = self._identity(record["identity"]["pid"], required=True)
+            record["lastIdentity"] = current
+            if current is None or not current["live"] or self._key(current) != key:
+                record["outcome"] = "absent" if current is None else "nonrunning" if not current["live"] else "replaced"
+                self.active_drain["pending"].pop(key)
+
+    def signal_all(self, signum: int) -> None:
+        if self.active_drain is None:
+            return super().signal_all(signum)
+        active = self.active_drain
+        if time.monotonic() >= active["deadline"]:
+            return
+        live = self.discover()
+        self._reconcile_drain_signals()
+        for identity in live:
+            # Do not start another signal observation after this phase. An
+            # in-flight census/_observe/kernel call retains its existing bounds.
+            if time.monotonic() >= active["deadline"]:
+                break
+            key = self._key(identity)
+            first_observation = len(self.observation_reconciliations)
+            try:
+                self._send(identity, self.handles[key], signum)
+            except ProcessLookupError:
+                self._reconcile_drain_signals()
+            except DarwinObservationExhausted as error:
+                record = active["pending"].get(key)
+                if record is None:
+                    if sum(len(row["signalReconciliations"]) for row in self.drain_reconciliations) >= 1024:
+                        raise OwnershipError("Darwin drain signal evidence exceeds its bound") from error
+                    record = {"identity": dict(identity), "firstFailure": str(error), "failures": 0,
+                              "firstSignal": signum, "firstObservation": first_observation, "outcome": "unresolved"}
+                    active["pending"][key] = record
+                    active["record"]["signalReconciliations"].append(record)
+                record.update(lastIdentity=dict(identity), lastFailure=str(error), lastSignal=signum,
+                              lastObservation=len(self.observation_reconciliations) - 1,
+                              failures=record["failures"] + 1)
+            else:
+                record = active["pending"].pop(key, None)
+                if record is not None:
+                    # A successful fresh-token signal resolves access, not exit.
+                    # Ordinary known-lifetime/quiet checks still govern retirement.
+                    record.update(outcome="signal-succeeded", lastSignal=signum, lastIdentity=dict(identity),
+                                  lastObservation=len(self.observation_reconciliations) - 1)
+
+    def drain(self, grace: float = 5.0, kill_wait: float = 5.0) -> list[dict[str, Any]]:
+        if self.active_drain is not None:
+            raise OwnershipError("Darwin drain is already active")
+        if len(self.drain_reconciliations) >= 1024:
+            raise OwnershipError("Darwin drain evidence exceeds its bound")
+        started = time.monotonic()
+        record = {"startedMonotonic": started, "graceSeconds": grace, "killWaitSeconds": kill_wait,
+                  "phases": [], "signalReconciliations": [], "outcome": "unresolved"}
+        self.drain_reconciliations.append(record)
+        self.active_drain = {"record": record, "pending": {}, "deadline": started}
+        live = []
+        try:
+            # Both deadlines are fixed before any failed signal/census. No new
+            # retry window is added for an exhausted 0.25-second observation.
+            for signum, deadline in ((SIG_TERM, started + grace), (SIG_KILL, started + grace + kill_wait)):
+                self.active_drain["deadline"] = deadline
+                record["phases"].append({"signal": signum, "deadlineMonotonic": deadline})
+                quiet = 0
+                while time.monotonic() < deadline:
+                    live = self.discover()
+                    self._reconcile_drain_signals()
+                    if not live and not self.active_drain["pending"]:
+                        quiet += 1
+                        if quiet >= 3:
+                            record["outcome"] = "retired"
+                            return []
+                    else:
+                        quiet = 0
+                        self.signal_all(signum)
+                    remaining = deadline - time.monotonic()
+                    if remaining > 0:
+                        time.sleep(min(0.1, remaining))
+            if self.active_drain["pending"]:
+                raise DarwinObservationExhausted("Darwin known-token drain remains unresolved within its phase bounds")
+            if live:
+                # No late discovery/token acquisition. This is the conservative
+                # last observation, not a claim that a later exit was inspected.
+                record["outcome"] = "last-observed-live"
+                return live
+            raise OwnershipError("Darwin drain did not establish three quiet censuses within its phase bounds")
+        except BaseException as error:
+            record["error"] = str(error)
+            record["outcome"] = "unresolved" if isinstance(error, DarwinObservationExhausted) else "failed"
+            raise
+        finally:
+            record["finishedMonotonic"] = time.monotonic()
+            # Per-drain records are terminal. A later product-final drain cannot
+            # rewrite an unresolved pre-stop observation into successful custody.
+            self.active_drain = None
 
 
 class SecurityAttributes(ctypes.Structure):
