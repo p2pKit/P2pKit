@@ -938,6 +938,61 @@ NATIVE_OBSERVATIONS = {
 }
 
 
+def assert_controller_directories(name, row, admitted):
+    """Require the complete retained embedding, not an unused creator/pass boolean."""
+    custody = row.get("directoryCustody")
+    require(type(custody) is dict and set(custody) == {"parentIdentity", "directories", "retirement"} and
+            custody["retirement"] == "KNOWN", "NATIVE_CONTROLLER_DIRECTORY_CUSTODY_MISSING")
+
+    def valid_identity(value):
+        return (type(value) is list and len(value) == 2 and type(value[0]) is int and 0 < value[0] < 2 ** 64 and
+                type(value[1]) is str and re.fullmatch(r"[0-9a-f]{32}", value[1]) is not None and
+                value[1] != "0" * 32)
+
+    parent, entries = custody["parentIdentity"], custody["directories"]
+    require(valid_identity(parent) and type(entries) is list and 1 <= len(entries) <= 128 and
+            all(type(entry) is dict for entry in entries), "NATIVE_CONTROLLER_DIRECTORY_INVENTORY_DIFFERS")
+    base = entries[0].get("path")
+    require(type(base) is str and re.fullmatch("p2pkit-windows-directory-" + re.escape(admitted["runId"]) + "-" +
+            re.escape(admitted["runAttempt"]) + r"-[0-9a-f]{32}", base) is not None,
+            "NATIVE_CONTROLLER_DIRECTORY_BASE_DIFFERS")
+    suffixes = {"", "/public", "/public/admission", "/public/current", "/public/preimage",
+                "/controller-ownership", "/raw"}
+    if name == "native-controller-command":
+        suffixes |= {"/public/admission/commands"}
+        for capture in ("1-tiny-emitter", "2-second-stream-fault"):
+            suffixes |= {"/raw/" + capture, "/public/admission/commands/" + capture}
+    else:
+        require(name == "native-controller-retirement", "NATIVE_CONTROLLER_DIRECTORY_CASE_DIFFERS")
+        for case in ("current", "preimage"):
+            suffixes |= {"/" + case + suffix for suffix in ("", "/source", "/state", "/state/gradle-home",
+                         "/state/fixtures", "/state/konan", "/state/android-user")}
+    expected, created, identities, admitted_paths = {base + suffix for suffix in suffixes}, [], [], {}
+    for entry in entries:
+        require(set(entry) == {"path", "created", "beforeWrite", "emptyBeforeWrite", "transientClosedBeforeWrite"} and
+                type(entry["path"]) is str and entry["path"] in expected and type(entry["created"]) is bool and
+                entry["emptyBeforeWrite"] is entry["created"] and entry["transientClosedBeforeWrite"] is True,
+                "NATIVE_CONTROLLER_DIRECTORY_ORDER_UNPROVED")
+        before = entry["beforeWrite"]
+        require(type(before) is dict and valid_identity(before.get("identity")) and
+                before["identity"][0] == parent[0] and before["identity"] != parent and
+                before.get("is_directory") is True and before.get("protected_dacl") is True and
+                type(before.get("owner_sid")) is str and re.fullmatch(r"S-1-(?:[0-9]+-){1,14}[0-9]+", before["owner_sid"]) and
+                type(before.get("attributes")) is int and before["attributes"] & files.DIRECTORY and
+                not before["attributes"] & files.REPARSE_POINT,
+                "NATIVE_CONTROLLER_DIRECTORY_NATIVE_POLICY_UNPROVED")
+        if entry["created"]:
+            require(entry["path"] not in admitted_paths, "NATIVE_CONTROLLER_DIRECTORY_RECREATED")
+            admitted_paths[entry["path"]] = before["identity"]
+            created.append(entry["path"])
+            identities.append(tuple(before["identity"]))
+        else:
+            require(admitted_paths.get(entry["path"]) == before["identity"],
+                    "NATIVE_CONTROLLER_DIRECTORY_READMISSION_CHANGED")
+    require(len(created) == len(expected) and set(created) == expected and len(set(identities)) == len(identities),
+            "NATIVE_CONTROLLER_DIRECTORY_COVERAGE_INCOMPLETE")
+
+
 def assert_native_result(name, value, admitted, read_member):
     """Bind completed tiny native cases to their exact original observations.
 
@@ -1006,12 +1061,14 @@ def assert_native_result(name, value, admitted, read_member):
                 encoded(cases[0].get("ownerPinsBefore")) == encoded(cases[0].get("ownerPinsAfter")),
                 "NATIVE_TEE_OUTPUT_CLOSURE_UNPROVED")
     elif name == "native-controller-command":
+        assert_controller_directories(name, row, admitted)
         cases = row.get("cases", [])
         require(row.get("productGradleExecuted") is False and len(cases) == 2 and
                 cases[0].get("originalFailureRetained") is True and cases[0].get("firstTeeRetired") is True and
                 cases[1].get("actualOuterOwnership", {}).get("discoveryErrors") == [],
                 "NATIVE_CALLER_OBSERVATIONS_INCOMPLETE")
     elif name == "native-controller-retirement":
+        assert_controller_directories(name, row, admitted)
         require(row.get("injection") == "AFTER_REAL_CLOSE_RETURN_NOT_AN_OS_FAULT" and
                 row.get("productGradleExecuted") is False and all(row.get(key) is True for key in
                 ("allFiveRootsPreservedPerCase", "bothCasesAndOuterAttempted", "originalNegativeReceiptsRemainFailed")),

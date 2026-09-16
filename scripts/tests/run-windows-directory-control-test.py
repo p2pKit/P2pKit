@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import copy
+from contextlib import contextmanager
 import hashlib
 import importlib.util
 import io
@@ -35,6 +36,10 @@ BAD = (C.audit.AuditError, ValueError)
 FIXTURE_SPEC = importlib.util.spec_from_file_location("native_fixture_definitions", ROOT / "scripts/tests/run-audit-command-test.py")
 F = importlib.util.module_from_spec(FIXTURE_SPEC)
 FIXTURE_SPEC.loader.exec_module(F)  # Definitions only; native suites are never run by these controls.
+NATIVE_SPEC = importlib.util.spec_from_file_location("native_controller_directory_definitions",
+                                                  ROOT / "scripts/tests/windows-helper-native-test.py")
+N = importlib.util.module_from_spec(NATIVE_SPEC)
+NATIVE_SPEC.loader.exec_module(N)  # Definitions only; calls below replace every native/process boundary.
 
 
 def dispatch():
@@ -2436,6 +2441,304 @@ class PureWindowsControlTests(unittest.TestCase):
             for number in controller.handlers:
                 self.assertIn(mock.call(number, "ORIGINAL_HANDLER"), setter.call_args_list)
             controller.scope.spawn.assert_not_called()
+
+
+class RetainedControllerDirectoryTests(unittest.TestCase):
+    """Actual tiny caller bodies with modeled ACLs/Jobs/Tee; never native proof."""
+
+    @contextmanager
+    def fixture(self):
+        with F.modeled_retained_directories() as model:
+            model.errors, model.opened, model.scopes, model.records = {}, [], [], {}
+            model.writes = []
+
+            def fail(operation, path):
+                error = model.errors.get((operation, path), model.errors.get((operation, path.name)))
+                if error is not None:
+                    raise error
+
+            class Directory:
+                def __init__(self, path, original):
+                    self.path, self.original, self._closed = path, original, False
+                    info = path.lstat()
+                    self.identity = (info.st_dev, format(info.st_ino, "032x"))
+                    model.opened.append(self)
+
+                def verify(self):
+                    fail("verify", self.path)
+                    if self._closed:
+                        raise AssertionError("MODEL closed native capability used")
+                    model.check(self.path)
+                    return F.windows_files.FileInfo(self.identity, True, 0, 1, 16, 1, 1, 1,
+                                                   "S-1-5-21-1-2-3-1001", True)
+
+                def create_directory(self, relative, **kwargs):
+                    path = self.path.joinpath(*F.windows_files.relative_parts(relative))
+                    fail("create", path)
+                    return Directory(path, F.windows_files.create_private_directory(path))
+
+                def open_directory(self, relative, **kwargs):
+                    path = self.path.joinpath(*F.windows_files.relative_parts(relative))
+                    fail("open", path)
+                    return Directory(path, F.windows_files.open_private_directory(path))
+
+                @contextmanager
+                def snapshot(self, **kwargs):
+                    fail("snapshot", self.path)
+                    if list(self.path.iterdir()):
+                        raise AssertionError("MODEL new directory is not empty before payload")
+                    yield SimpleNamespace(entries={"": self.verify()})
+
+                def close(self):
+                    model.events.append(("transient-close", self.path))
+                    fail("close", self.path)
+                    self.original.__exit__(None, None, None)
+                    self._closed = True
+
+            root = F.retained_directory(model.base / "retained")
+            fixture = N.Fixture.__new__(N.Fixture)
+            fixture.root = Directory(root, F.windows_files.open_private_directory(root))
+            fixture.owners, fixture.observations = [fixture.root], []
+            fixture.unknown, fixture.expected_hold = False, False
+            fixture.job = "MODEL_JOB_NOT_NATIVE"
+            fixture.name = "native-controller-command"
+
+            def scope_factory(*args, **kwargs):
+                scope = SimpleNamespace(job="MODEL_JOB_NOT_NATIVE")
+                def spawn(argv, cwd, env):
+                    # These explicit bytes model the two reviewed emitters;
+                    # no subprocess, arbitrary argv interpreter or thread runs.
+                    partial = scope.spawn.call_count == 2
+                    return SimpleNamespace(stdout=io.BytesIO(b"partial-original" if partial else b"controller-native\x00\xff\r\n"),
+                        stderr=io.BytesIO(b"sibling-original" if partial else b"original-stderr"),
+                        poll=lambda: 0, wait=lambda **_: 0)
+                scope.spawn = mock.Mock(side_effect=spawn)
+                scope.discover, scope.drain = mock.Mock(return_value=[]), mock.Mock(return_value=[])
+                scope.description = mock.Mock(return_value={"discoveryErrors": []})
+                scope.close = mock.Mock(side_effect=lambda: setattr(scope, "job", None))
+                model.scopes.append(scope)
+                return scope
+
+            original_new_file, original_open = C.audit.new_file, Path.open
+
+            def before_write(path):
+                model.check(path.parent)
+                fail("write", path)
+                model.writes.append(path)
+
+            def new_file(path):
+                before_write(path)
+                return original_new_file(path)
+
+            def open_file(path, mode="r", *args, **kwargs):
+                if any(flag in mode for flag in "wax") and model.base in path.parents:
+                    before_write(path)
+                return original_open(path, mode, *args, **kwargs)
+
+            class Tee:
+                def __init__(self, source, target, *unused):
+                    self.source, self.target = source, target
+                    self.errors, self._start_attempted = [], False
+                    self._complete = SimpleNamespace(is_set=lambda: self.source.closed)
+                    self.thread = SimpleNamespace(is_alive=lambda: False)
+                def start(self):
+                    self._start_attempted = True
+                    with C.audit.new_file(self.target) as stream:
+                        stream.write(self.source.read())
+                def finish(self):
+                    self.source.close()
+
+            def record(name, value):
+                model.records[name] = value
+                C.new_json(root / (name + ".json"), value)
+            fixture.record = record
+            model.fixture = fixture
+            environment = {"GITHUB_SHA": "a" * 40, "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1"}
+            with mock.patch.object(N, "C", C), mock.patch.object(N, "A", C.audit), \
+                    mock.patch.object(C, "controlled_environment", return_value={}), \
+                    mock.patch.object(C.processes, "ownership_environment", return_value={"GRADLE_USER_HOME": "MODEL"}), \
+                    mock.patch.object(C.processes, "make_scope", side_effect=scope_factory), \
+                    mock.patch.object(C, "native_memory", side_effect=AssertionError("MODEL cannot inspect native host")), \
+                    mock.patch.object(subprocess, "Popen", side_effect=AssertionError("MODEL cannot launch")), \
+                    mock.patch.object(C.audit, "Tee", Tee), mock.patch.object(C.audit, "new_file", side_effect=new_file), \
+                    mock.patch.object(Path, "open", new=open_file), mock.patch.dict(os.environ, environment), \
+                    mock.patch.object(N, "_RETAIN_TO_EXIT", []):
+                yield model
+
+    def test_native_controller_command_directories_are_private_before_actual_writers(self):
+        with self.fixture() as model:
+            model.fixture.native_controller_command()
+            row = model.records["controller-command-observed"]
+            self.assertFalse(row["productGradleExecuted"])
+            self.assertTrue(row["cases"][0]["firstTeeRetired"])
+            self.assertTrue(model.writes)
+            self.assertTrue(all(scope.job is None for scope in model.scopes))
+            for owner in model.opened:
+                self.assertEqual(owner._closed, owner not in model.fixture.owners)
+
+    def test_native_controller_retirement_roots_are_private_before_actual_sentinels(self):
+        with self.fixture() as model:
+            model.fixture.name = "native-controller-retirement"
+            model.fixture.native_controller_retirement()
+            row = model.records["controller-native-retirement"]
+            self.assertTrue(row["allFiveRootsPreservedPerCase"])
+            sentinels = [path for path in model.writes if path.name == "unstarted-sentinel"]
+            self.assertEqual(len(sentinels), 10)
+            self.assertTrue(all(path.read_bytes() == b"UNSTARTED_FIXTURE_NOT_PRODUCT" for path in sentinels))
+            self.assertEqual(len(model.scopes), 3)
+            self.assertTrue(all(scope.job is None for scope in model.scopes))
+
+    def test_ordinary_witness_default_and_hand_built_callers_keep_original_flags(self):
+        path = mock.Mock()
+        controller = C.Controller.__new__(C.Controller)
+        self.assertIs(controller.directory_creator, C.witness_directory)
+        self.assertIs(controller.directory_creator(path, parents=True, exist_ok=True), path)
+        path.mkdir.assert_called_once_with(mode=0o700, parents=True, exist_ok=True)
+
+    def test_constructor_native_refusal_does_not_write_spawn_retry_or_fall_back(self):
+        with self.fixture() as model:
+            original = OSError("MODEL native directory creation refused")
+            model.errors[("create", "public")] = original
+            with self.assertRaises(OSError) as caught:
+                model.fixture.actual_controller()
+            self.assertIs(caught.exception, original)
+            self.assertTrue(model.fixture.controller_directories.failed)
+            self.assertFalse(model.fixture.unknown)
+            self.assertEqual(model.writes, [])
+            self.assertEqual(model.scopes, [])
+            self.assertFalse(any(kind == "python-mkdir" for kind, _ in model.events))
+
+    def test_transient_close_failure_latches_unknown_and_blocks_next_writer(self):
+        with self.fixture() as model:
+            controller = model.fixture.actual_controller()
+            storage, path = model.fixture.controller_directories, controller.base / "close-fault"
+            original = OSError("MODEL native close did not complete")
+            model.errors[("close", path)] = original
+            with self.assertRaises(OSError) as caught:
+                storage(path)
+            self.assertIs(caught.exception, original)
+            self.assertTrue(model.fixture.unknown)
+            self.assertTrue(storage.failed)
+            self.assertEqual(len(storage.active), 1)
+            self.assertIn(storage, N._RETAIN_TO_EXIT)
+            events = list(model.events)
+            with self.assertRaisesRegex(N.H.HelperError, "CUSTODY_HELD"):
+                storage(controller.base / "must-not-create")
+            self.assertEqual(model.events, events)
+            self.assertEqual(model.writes, [])
+
+    def test_verification_cancellation_preserves_original_and_secondary_close_error(self):
+        with self.fixture() as model:
+            controller = model.fixture.actual_controller()
+            path, storage = controller.base / "combined", model.fixture.controller_directories
+            original, secondary = KeyboardInterrupt("MODEL verify cancellation"), OSError("MODEL secondary close")
+            model.errors[("verify", path)], model.errors[("close", path)] = original, secondary
+            with self.assertRaises(KeyboardInterrupt) as caught:
+                storage(path)
+            self.assertIs(caught.exception, original)
+            self.assertIn("MODEL secondary close", str(getattr(original, "__notes__", [])))
+            self.assertTrue(model.fixture.unknown)
+            self.assertEqual(model.events.count(("transient-close", path)), 1)
+            self.assertEqual(model.writes, [])
+
+    def test_acquisition_parent_close_unknown_is_not_lost_without_a_returned_owner(self):
+        with self.fixture() as model:
+            controller = model.fixture.actual_controller()
+            path, storage = controller.base / "acquisition-fault", model.fixture.controller_directories
+            original = OSError("MODEL acquisition parent close")
+            F.windows_files._note(original, "Native handle retirement UNKNOWN: 17")
+            model.errors[("create", path)] = original
+            with self.assertRaises(OSError) as caught:
+                storage(path)
+            self.assertIs(caught.exception, original)
+            self.assertEqual(storage.active, [])
+            self.assertTrue(model.fixture.unknown)
+            self.assertIn(storage, N._RETAIN_TO_EXIT)
+            self.assertFalse(path.exists())
+            self.assertEqual(model.writes, [])
+
+    def test_recursive_native_parents_existing_readmission_and_exclusive_creation(self):
+        with self.fixture() as model:
+            controller = model.fixture.actual_controller()
+            path, storage = controller.base / "nested/leaf", model.fixture.controller_directories
+            self.assertEqual(storage(path, parents=True), path)
+            self.assertEqual(storage(path, parents=True, exist_ok=True), path)
+            self.assertEqual([row["created"] for row in storage.rows[-3:]], [True, True, False])
+            with self.assertRaises(FileExistsError):
+                storage(path)
+            self.assertFalse(model.fixture.unknown)
+            self.assertEqual(model.writes, [])
+
+    def test_broad_file_and_reparse_refuse_without_repair_or_unsafe_parent_creation(self):
+        for kind in ("broad", "file", "reparse"):
+            with self.subTest(kind=kind), self.fixture() as model:
+                controller = model.fixture.actual_controller()
+                path, storage = controller.base / kind, model.fixture.controller_directories
+                if kind == "broad":
+                    path.mkdir(mode=0o700)  # Deliberate documented three-ACE model.
+                elif kind == "file":
+                    path.write_bytes(b"MODEL regular file, not a directory")
+                events = list(model.events)
+                if kind == "reparse":
+                    with mock.patch.object(N.A, "reject_symlinks", side_effect=C.audit.AuditError("MODEL reparse refused")), \
+                            self.assertRaisesRegex(C.audit.AuditError, "reparse"):
+                        storage(path, parents=True, exist_ok=True)
+                    self.assertEqual(model.events, events)
+                else:
+                    with self.assertRaises(F.windows_files.FilesystemError):
+                        storage(path, exist_ok=True)
+                    self.assertEqual(model.events[len(events):], [("native-open", path)])
+                self.assertFalse(model.fixture.unknown)
+
+    def test_outside_parent_parent_components_and_devices_refuse_before_lookup(self):
+        for suffix in ("outside", "..", "CON", "file:ads", "trailing."):
+            with self.subTest(suffix=suffix), self.fixture() as model:
+                controller = model.fixture.actual_controller()
+                path = model.base / "outside" if suffix == "outside" else controller.base / suffix
+                with mock.patch.object(N.A, "existing_lstat", side_effect=AssertionError("Unsafe path reached lookup")), \
+                        self.assertRaises((ValueError, F.windows_files.FilesystemError)):
+                    model.fixture.controller_directories(path, parents=True, exist_ok=True)
+                self.assertFalse(model.fixture.unknown)
+
+    def test_missing_changed_or_unretired_native_directory_observations_cannot_pass(self):
+        for name in ("native-controller-command", "native-controller-retirement"):
+            with self.subTest(name=name), self.fixture() as model:
+                fixture = model.fixture
+                fixture.name = name
+                getattr(fixture, name.replace("-", "_"))()
+                label = N.H.NATIVE_OBSERVATIONS[name][0]
+                observed = json.loads(N.H.encoded(model.records[label]))
+                admitted = {"sourceSha": "a" * 40, "sourceTree": "b" * 40, "runId": "123", "runAttempt": "1"}
+
+                def accept(row):
+                    raw = N.H.encoded(row)
+                    value = {"schema": 1, "case": name, "native": True, "passed": True,
+                        "source": {"commit": "a" * 40, "tree": "b" * 40}, "run": {"id": "123", "attempt": "1"},
+                        "observations": [{"path": label + ".json", "sha256": N.H.digest(raw)}],
+                        "privateDecryption": "NOT_RUN", "expectedPinHoldToInterpreterExit": False,
+                        "retirement": "KNOWN", "acceptanceAuthority": "PARENT_ZERO_EXIT_AND_NATIVE_JOB_RETIREMENT"}
+                    N.H.assert_native_result(name, value, admitted, lambda _: raw)
+
+                accept(observed)  # A source-owned model of the whole strict record, NOT native acceptance.
+                changes = [lambda row: row.pop("directoryCustody"),
+                    lambda row: row["directoryCustody"].update(retirement="UNKNOWN"),
+                    lambda row: row["directoryCustody"]["directories"].pop(6),
+                    lambda row: row["directoryCustody"]["directories"].append(row["directoryCustody"]["directories"][0])]
+                changes += [lambda row, key=key, value=value: row["directoryCustody"]["directories"][0].update({key: value})
+                            for key, value in (("path", "outside"), ("created", 1), ("emptyBeforeWrite", False),
+                                               ("transientClosedBeforeWrite", False))]
+                changes += [lambda row, key=key, value=value: row["directoryCustody"]["directories"][0]["beforeWrite"].update({key: value})
+                            for key, value in (("identity", [True, "a" * 32]), ("is_directory", False),
+                                               ("protected_dacl", False), ("attributes", 0x410), ("owner_sid", None))]
+                if name == "native-controller-command":
+                    changes.append(lambda row: row["directoryCustody"]["directories"][-1]["beforeWrite"].update(
+                        identity=[row["directoryCustody"]["parentIdentity"][0], "a" * 32]))
+                for number, change in enumerate(changes):
+                    with self.subTest(mutation=number):
+                        altered = copy.deepcopy(observed)
+                        change(altered)
+                        with self.assertRaises(N.H.HelperError):
+                            accept(altered)
 
 
 def load_tests(loader, tests, pattern):

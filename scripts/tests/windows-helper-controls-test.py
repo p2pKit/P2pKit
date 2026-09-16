@@ -1035,6 +1035,18 @@ class NativeFixtureFinalizationModels(Models):
         self.assertNotIn("close:/native-model", memory.events)
         self.assertIn(fixture, N._RETAIN_TO_EXIT)
 
+    def test_controller_constructor_failure_retains_partial_directory_observations(self):
+        fixture, memory = self.fixture()
+        original = OSError("MODEL native constructor directory refused")
+        fixture.controller_directories = SimpleNamespace(rows=[{"path": "MODEL-first-directory"}], failed=True)
+        fixture.native_sinks = lambda: (_ for _ in ()).throw(original)
+        self.assertEqual(fixture.execute(), 1)
+        result = H.decode(memory.data["/native-model/result.json"])
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["controllerDirectoryFailure"],
+                         {"directories": [{"path": "MODEL-first-directory"}], "creatorFailed": True})
+        self.assertEqual(result["failure"]["nodes"][0]["message"], str(original))
+
 
 class NativeTeeModels(Models):
     """Actual Tee/fixture orchestration over synthetic CRT/Win32/pipe owners."""

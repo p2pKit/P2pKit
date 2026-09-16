@@ -1564,10 +1564,16 @@ def verify_public(directory, identity, case_name):
     validate_public_worker_expansion(directory, identity, case_name, actual)
 
 
-def copy_public(source, destination, *, expected=None):
+def witness_directory(path, *, parents=False, exist_ok=False):
+    """Ordinary witness allocation; private helper embeddings supply their own creator."""
+    path.mkdir(mode=0o700, parents=parents, exist_ok=exist_ok)
+    return path
+
+
+def copy_public(source, destination, *, expected=None, directory_creator=witness_directory):
     value = regular(source, MAX_FILE if expected is None else len(expected))
     require(expected is None or value == expected, "Public synthetic marker differs from its reviewed bytes")
-    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    directory_creator(destination.parent, parents=True, exist_ok=True)
     write(destination, value)
     require(regular(destination) == value, "Public retention differs from its original")
 
@@ -1692,21 +1698,29 @@ class CommandFailure(audit.AuditError):
 
 
 class Controller:
-    def __init__(self, root, identity):
+    # This internal dependency is used only by the two retained helper fixtures.
+    # It is not a CLI/environment policy or a replacement for witness admission.
+    # The class default also preserves explicitly hand-built fault-model callers.
+    directory_creator = staticmethod(witness_directory)
+
+    def __init__(self, root, identity, *, directory_creator=None):
+        if directory_creator is not None:
+            require(callable(directory_creator), "Controller directory creator must be callable")
+            self.directory_creator = directory_creator
         self.root, self.identity = root, identity
         self.cancelled = []
         self.handlers = {}
         self.base = audit.absolute_path(os.environ["RUNNER_TEMP"])
         require(not audit.within(self.base, root) and not audit.within(root, self.base), "Runner temporary root overlaps source")
         self.base = self.base / ("p2pkit-windows-directory-" + identity["runId"] + "-" + identity["runAttempt"] + "-" + uuid.uuid4().hex)
-        self.base.mkdir(mode=0o700)
+        self.directory_creator(self.base)
         self.public = self.base / "public"
-        self.public.mkdir(mode=0o700)
+        self.directory_creator(self.public)
         for name in ("admission", "current", "preimage"):
-            (self.public / name).mkdir(mode=0o700)
+            self.directory_creator(self.public / name)
         self.active_public = self.public / "admission"
         self.state = self.base / "controller-ownership"
-        self.state.mkdir(mode=0o700)
+        self.directory_creator(self.state)
         self.job, self.invocation = uuid.uuid4().hex, uuid.uuid4().hex
         self.env = processes.ownership_environment(controlled_environment(dict(os.environ)), self.job, self.invocation,
                                                    str(self.state), str(self.state / "unused-home"), allow_new_context=True)
@@ -1714,7 +1728,7 @@ class Controller:
         self.final_deadline = self.deadline + 600
         self.cases = []
         self.raw = self.base / "raw"
-        self.raw.mkdir(mode=0o700)
+        self.directory_creator(self.raw)
         self.counter = 0
         self.safe = False
         self.scope = processes.make_scope(self.job, self.invocation, str(self.state), self.env["GRADLE_USER_HOME"])
@@ -1731,7 +1745,7 @@ class Controller:
         scope = scope or self.scope
         self.counter += 1
         output = self.raw / (str(self.counter) + "-" + name)
-        output.mkdir(mode=0o700)
+        self.directory_creator(output)
         errors, streams = [], []
         interruptions = []
 
@@ -1814,7 +1828,8 @@ class Controller:
             for file in ("start.json", "command.json", "stdout.log", "stderr.log"):
                 try:
                     if audit.existing_lstat(output / file) is not None:
-                        copy_public(output / file, self.active_public / "commands" / output.name / file)
+                        copy_public(output / file, self.active_public / "commands" / output.name / file,
+                                    directory_creator=self.directory_creator)
                 except BaseException as error:
                     record_error("Command public retention: " + file + ": ", error)
         if interruptions:
@@ -1860,9 +1875,9 @@ class Controller:
                 "A case cannot reuse another case's source/state/home")
         parent, public = self.base / name, self.public / name
         self.active_public = public
-        parent.mkdir(mode=0o700)
+        self.directory_creator(parent)
         root = parent / "source"
-        root.mkdir(mode=0o700)
+        self.directory_creator(root)
         info = root.lstat()
         case = {"name": name, "root": root, "parent": parent, "state": parent / "state", "public": public,
                 "context": None, "scope": None, "before": None, "leaves": [], "safe": False, "started": False,

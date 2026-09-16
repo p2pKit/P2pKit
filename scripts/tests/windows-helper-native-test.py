@@ -11,6 +11,7 @@ clearing quarantine; the outer actual Job must prove whole-child retirement.
 from __future__ import annotations
 
 import argparse
+import errno
 import gzip
 import hashlib
 import importlib.util
@@ -76,6 +77,77 @@ def tee_output_observation(output, descriptor, handle, get_osfhandle, api):
     native = handle_observation(api, handle)
     return {"descriptor": descriptor, "nativeHandle": handle, "outputClosed": output.closed,
             "crtHandle": crt, "crtErrno": error, **native}
+
+
+class ControllerDirectories:
+    """Private embedding of the real controller, not its ordinary witness policy.
+
+    Only descendants of the already-held fixture parent are admitted. The same
+    native supplier creates/opens and verifies each directory before a pathname
+    writer can run. Transient pins close first; the fixture's parent/root pins
+    remain live. No create-then-chmod, global mkdir patch, or failure fallback.
+    """
+
+    def __init__(self, fixture, parent):
+        self.fixture, self.parent = fixture, parent
+        self.rows, self.active, self.failed = [], [], False
+        self.deadline = time.monotonic() + 60  # Inside the unchanged 120-second child watchdog.
+
+    def close(self, owner, original):
+        try:
+            owner.close()
+        except BaseException as error:
+            self.fixture.unknown = True
+            _RETAIN_TO_EXIT.extend((self, owner, error))
+            if original is None:
+                raise
+            F._note(original, H.encoded(H.error_detail(error)).decode("ascii"))
+        else:
+            if owner in self.active:  # Allocation of the ownership-list entry may itself have failed.
+                self.active.remove(owner)
+
+    def __call__(self, path, *, parents=False, exist_ok=False):
+        check(not self.failed and not self.fixture.unknown, "CONTROLLER_DIRECTORY_CUSTODY_HELD")
+        owner = None
+        try:
+            F.absolute_parts(path)
+            relative = path.relative_to(self.parent.path).as_posix()
+            F.relative_parts(relative)  # Also rejects '.', '..', devices, ADS and ambiguous components.
+            A.reject_symlinks(path)
+            check(time.monotonic() < self.deadline and len(self.rows) < 128, "CONTROLLER_DIRECTORY_BOUND")
+            present = A.existing_lstat(path) is not None
+            if present and not exist_ok:
+                raise FileExistsError(errno.EEXIST, "Retained controller directory already exists", os.fspath(path))
+            if not present and parents and A.existing_lstat(path.parent) is None:
+                self(path.parent, parents=True)
+            try:
+                operation = self.parent.open_directory if present else self.parent.create_directory
+                owner = operation(relative, deadline=self.deadline)
+                self.active.append(owner)
+                info = owner.verify()
+                check(info.is_directory and info.protected_dacl is True, "CONTROLLER_DIRECTORY_POLICY_DIFFERS")
+                if not present:
+                    with owner.snapshot(max_bytes=1, max_members=1, deadline=self.deadline) as snapshot:
+                        check(set(snapshot.entries) == {""}, "CONTROLLER_DIRECTORY_NOT_EMPTY_BEFORE_WRITE")
+            finally:
+                if owner is not None:
+                    self.close(owner, sys.exc_info()[1])
+            self.rows.append({"path": relative, "created": not present, "beforeWrite": info.as_dict(),
+                              "emptyBeforeWrite": not present, "transientClosedBeforeWrite": True})
+            return path
+        except BaseException as error:
+            self.failed = True
+            if H.error_detail(error)["retirementUnknown"] or self.active:
+                self.fixture.unknown = True
+                _RETAIN_TO_EXIT.extend((self, error))
+            raise
+
+    def observation(self):
+        check(not self.failed and not self.active and not self.fixture.unknown,
+              "CONTROLLER_DIRECTORY_OBSERVATION_INCOMPLETE")
+        parent = self.parent.verify()
+        check(parent.identity == self.parent.identity, "CONTROLLER_DIRECTORY_PARENT_CHANGED")
+        return {"parentIdentity": list(parent.identity), "directories": list(self.rows), "retirement": "KNOWN"}
 
 
 class Fixture:
@@ -430,8 +502,9 @@ class Fixture:
         # GitHub identity is not forged, and the production Controller is used.
         identity = {"sourceSha": os.environ["GITHUB_SHA"], "runId": os.environ["GITHUB_RUN_ID"],
                     "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"], "fixture": "HELPER_NOT_PRODUCT_WITNESS"}
+        self.controller_directories = ControllerDirectories(self, temporary)
         with patch.dict(os.environ, {"RUNNER_TEMP": str(temporary.path)}):
-            return C.Controller(H.ROOT, identity)
+            return C.Controller(H.ROOT, identity, directory_creator=self.controller_directories)
 
     def native_controller_command(self):
         controller = self.actual_controller()
@@ -467,7 +540,8 @@ class Fixture:
         finally:
             description = self.ordinary_retire(controller.scope)
             observed.append({"actualOuterOwnership": description})
-        self.record("controller-command-observed", {"cases": observed, "productGradleExecuted": False})
+        self.record("controller-command-observed", {"cases": observed, "productGradleExecuted": False,
+                    "directoryCustody": self.controller_directories.observation()})
 
     def native_controller_retirement(self):
         controller = self.actual_controller()
@@ -476,10 +550,10 @@ class Fixture:
         try:
             for name in ("current", "preimage"):
                 case = controller.allocate(name)
-                case["state"].mkdir()
+                controller.directory_creator(case["state"])
                 for leaf in ("gradle-home", "fixtures", "konan", "android-user"):
                     path = case["state"] / leaf
-                    path.mkdir()
+                    controller.directory_creator(path)
                     info = path.stat()
                     case["roots"][str(path)] = {"device": info.st_dev, "inode": info.st_ino}
                 for spelling in case["roots"]:
@@ -517,7 +591,8 @@ class Fixture:
             self.record("controller-native-retirement", {"injection": "AFTER_REAL_CLOSE_RETURN_NOT_AN_OS_FAULT",
                         "nativeCloseWitness": originals, "originalCancellation": H.error_detail(expected),
                         "allFiveRootsPreservedPerCase": True, "bothCasesAndOuterAttempted": True,
-                        "originalNegativeReceiptsRemainFailed": True, "productGradleExecuted": False})
+                        "originalNegativeReceiptsRemainFailed": True, "productGradleExecuted": False,
+                        "directoryCustody": self.controller_directories.observation()})
         finally:
             if not finalization_attempted:
                 # Actual early allocation failure still reaches both already
@@ -675,6 +750,12 @@ class Fixture:
             getattr(self, self.name.replace("-", "_"))()
         except BaseException as error:
             original = error
+            storage = getattr(self, "controller_directories", None)
+            if storage is not None:
+                # Failed partial observations remain private failure evidence,
+                # not a completed top-level observation or an acceptance flag.
+                self.result["controllerDirectoryFailure"] = {"directories": list(storage.rows),
+                                                            "creatorFailed": storage.failed}
         # Child-root close is deliberately last. Every earlier failure/secondary
         # is retained privately while a still-owned journal pin remains usable.
         unexpected_hold = (self.unknown or bool(W._QUARANTINE or H._HELD) and not self.expected_hold or
