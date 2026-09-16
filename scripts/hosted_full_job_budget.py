@@ -46,6 +46,13 @@ CONTROLLER_TAIL = (
     ("product-return", 330), ("product-final", 45),
     ("collect", 120), ("collect-final", 45), ("collect-read", 30),
     ("uninstall", 90), ("uninstall-final", 45), ("uninstall-read", 30),
+    # Exact owned device: query / optional shutdown / terminal query. Reserve
+    # the worst case, including every native close and original readback. An
+    # unused shutdown slot is not extra productive time or an export extension.
+    ("simulator-retire-before", 120), ("simulator-retire-before-final", 45), ("simulator-retire-before-read", 30),
+    ("simulator-shutdown", 120), ("simulator-shutdown-final", 45), ("simulator-shutdown-read", 30),
+    ("simulator-retire-after", 120), ("simulator-retire-after-final", 45), ("simulator-retire-after-read", 30),
+    ("simulator-retirement", 30),
     ("export-freeze", 180), ("export", 240), ("export-final", 45), ("export-read", 30),
     ("export-open", 90), ("export-verify", 90), ("controller-return", 45),
 )

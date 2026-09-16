@@ -29,6 +29,7 @@ ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 import audit_processes as processes
 import hosted_full_job_budget as job_time
+import hosted_full_simulator as simulator
 import hosted_evidence as posix
 import hosted_test_evidence as ordinary
 import hosted_test_identity as identity
@@ -59,6 +60,17 @@ INSTALLERS = {"linux-x64": ":p2p-sample-desktop-ui:packageDeb",
 PRODUCT_SECONDS = {"full": 7200, "desktop": 600}
 OUTER_SECONDS = {"full": 7530, "desktop": 825}
 TOTAL_SECONDS = {"full": 8400, "desktop": 1500}
+FULL_STAGE = {"recipient-validation": "productive", "audit-init": "productive",
+              "custody-prepare": "productive", "product": "product-return", "custody-collect": "collect",
+              "custody-uninstall": "uninstall", "export": "export",
+              **{label: "productive" for label in (*simulator.PREPARE, simulator.PRELAUNCH)},
+              **{label: label for label in simulator.RETIRE}}
+FULL_FINISH = {"productive": "preparation-final", "product-return": "product-final", "collect": "collect-final",
+               "uninstall": "uninstall-final", "export": "export-final",
+               **{label: label + "-final" for label in simulator.RETIRE}}
+FULL_PREPARATION = ("job-time", "recipient-validation", "audit-init", *simulator.PREPARE,
+                    "custody-prepare", simulator.PRELAUNCH, "product")
+FULL_ORDER = (*FULL_PREPARATION, "custody-collect", "custody-uninstall", *simulator.RETIRE, "export")
 IDENTITY_ENV = (
     "GITHUB_ACTIONS", "GITHUB_REPOSITORY", "GITHUB_SHA", "GITHUB_REF", "GITHUB_RUN_ID",
     "GITHUB_RUN_ATTEMPT", "GITHUB_EVENT_NAME", "GITHUB_WORKFLOW_REF", "GITHUB_WORKFLOW_SHA",
@@ -517,6 +529,9 @@ class Controller(PrivateOwner):
         self.context = self.request = self.admitted = None
         self.product = self.custody = None
         self.product_attempted = self.encrypted = False
+        self.simulator = self.simulator_admission = self.simulator_binding = self.simulator_terminal = None
+        self.simulator_prelaunch = self.simulator_start = self.simulator_canonical = self.simulator_authority = None
+        self.simulator_directory = None
         self.export_return = None
         self.environment = child_environment(dict(os.environ), self.path, self.state_path)
 
@@ -591,17 +606,12 @@ class Controller(PrivateOwner):
                 raw_final_end = raw_work_end + FINAL_SECONDS * job_time.NS
             else:
                 require(self.budget is not None, "FULL_JOB_TIME_NOT_ADMITTED")
-                stage = {"recipient-validation": "productive", "audit-init": "productive",
-                         "custody-prepare": "productive", "product": "product-return",
-                         "custody-collect": "collect", "custody-uninstall": "uninstall", "export": "export"}
-                finish = {"productive": "preparation-final", "product-return": "product-final",
-                          "collect": "collect-final", "uninstall": "uninstall-final", "export": "export-final"}
-                require(label in stage, "FULL_JOB_CLOSED_PHASE")
-                end = min(end, self.window(stage[label], timeout))
-                final_end = min(final_end, self.window(finish[stage[label]], timeout + FINAL_SECONDS))
-                raw_work_end = min(raw_started + timeout * job_time.NS, self.budget.fence(stage[label]))
+                require(label in FULL_STAGE, "FULL_JOB_CLOSED_PHASE")
+                end = min(end, self.window(FULL_STAGE[label], timeout))
+                final_end = min(final_end, self.window(FULL_FINISH[FULL_STAGE[label]], timeout + FINAL_SECONDS))
+                raw_work_end = min(raw_started + timeout * job_time.NS, self.budget.fence(FULL_STAGE[label]))
                 raw_final_end = min(raw_started + (timeout + FINAL_SECONDS) * job_time.NS,
-                                    self.budget.fence(finish[stage[label]]))
+                                    self.budget.fence(FULL_FINISH[FULL_STAGE[label]]))
         else:
             require(not acquire_time, "JOB_TIME_FULL_ONLY")
         invocation = uuid.uuid4().hex
@@ -611,6 +621,10 @@ class Controller(PrivateOwner):
         home = state / ("gradle-home" if product else "control-home")
         env = processes.ownership_environment(self.environment, job, invocation, str(state), str(home),
                                               allow_new_context=True)
+        if self.profile == "full" and product:
+            require(label == "product" and self.simulator_binding is not None, "PRIMARY_SIMULATOR_BINDING_REQUIRED")
+            env.update({simulator.PATH_ENV: str(self.path / simulator.RELATIVE),
+                        simulator.HASH_ENV: digest(self.simulator_binding)})
         if acquire_time:
             require(type(self.actions_token) is str and self.actions_token, "JOB_TIME_READ_TOKEN_REQUIRED")
             env[job_time.TOKEN_ENV], self.actions_token = self.actions_token, None
@@ -620,7 +634,9 @@ class Controller(PrivateOwner):
         if self.profile == "full":
             row.update(jobBudgetSha256=None if self.budget is None else self.budget.sha256,
                        startedRawNs=raw_started, completedRawNs=None, finalizedRawNs=None,
-                       cooperativeCancellation=None)
+                       cooperativeCancellation=None, developerDir=self.environment.get("DEVELOPER_DIR"),
+                       simulatorBindingSha256=None if self.simulator_binding is None else digest(self.simulator_binding),
+                       childAncestorInvocationIds=env[processes.CHAIN_ENV].split(":"))
         self.records.append(row)
         before_errors = len(self.errors)
         receipt_complete = False
@@ -807,6 +823,10 @@ class Controller(PrivateOwner):
                    "canonicalSources": self.canonical_sources}
         if self.profile == "full":
             context["jobBudgetSha256"] = self.budget.sha256
+            context.update(primarySimulatorRequired=True, developerDir=self.environment.get("DEVELOPER_DIR"),
+                           ancestorInvocationIds=self.environment.get(processes.CHAIN_ENV, "").split(":")
+                           if self.environment.get(processes.CHAIN_ENV) else [])
+        self.run_context_raw = encoded(context)
         self.write(self.private, "run-context.json", context, self.window("productive", 45))
         self.context_hash = digest(encoded(context))
         self.crypto_operation("validate")
@@ -822,11 +842,14 @@ class Controller(PrivateOwner):
                          "--host", self.role), 120)
         require(row["exitCode"] == 0, "CANONICAL_INIT_FAILED")
         state = self.child(self.private, "state", self.window("productive", 30))
-        self.context = parse(self.read(state, "context.json", self.window("productive", 30)))
+        self.canonical_context_raw = self.read(state, "context.json", self.window("productive", 30))
+        self.context = parse(self.canonical_context_raw)
         require(self.context["root"] == str(ROOT) and self.context["host"] == self.role and
                 self.context["gradleHome"] == str(self.state_path / "gradle-home") and
                 self.context["source"] == {**original["source"], "status": "", "diffSha256": digest(b"")} and
                 not self.context["preexistingOutputPaths"], "CANONICAL_CONTEXT_DIFFERS_OR_STALE_OUTPUTS")
+        if self.profile == "full":
+            self.admit_simulator()  # Cheap inventory BEFORE installing a custody loader or launching any product.
         # Protect original outputs BEFORE the writers, not merely copied XML.
         for path in [*audit.output_roots(ROOT), ROOT / ".gradle", ROOT / ".kotlin",
                      ROOT / "buildSrc/.gradle", ROOT / "buildSrc/.kotlin"]:
@@ -839,10 +862,15 @@ class Controller(PrivateOwner):
             "both" if self.profile == "full" else "cli", "--", *self.command), 120)
         require(row["exitCode"] == 0, "CUSTODY_PREPARE_FAILED")
         directory = self.child(self.evidence, "custody", self.window("productive", 30))
-        self.request = parse(self.read(directory, "request.json", self.window("productive", 30)))
+        self.request_raw = self.read(directory, "request.json", self.window("productive", 30))
+        self.request = parse(self.request_raw)
         require(self.request["ownerKind"] == "audit" and self.request["owner"]["job"] == self.context["id"] and
                 self.request["command"] == self.command and self.request["ownerState"] == str(self.state_path),
                 "CUSTODY_RESERVATION_DIFFERS")
+        if self.profile == "full":
+            self.simulator_binding = simulator.binding_record(self.run_context_raw, self.canonical_context_raw,
+                                                             self.request_raw, self.simulator_admission)
+            self.write(self.simulator_directory, "binding.json", self.simulator_binding, self.window("productive", 30))
 
     def acquire_job_time(self):
         require(self.budget is None, "JOB_TIME_ALREADY_ADMITTED")
@@ -862,13 +890,169 @@ class Controller(PrivateOwner):
         self.check()  # Already-spent setup never reaches crypto/init/products.
 
     def product_run(self):
+        if self.profile == "full":
+            self.verify_simulator_inputs(self.window("productive", 30), require_binding=True)
+            observed = self.simulator_observation(simulator.PRELAUNCH)
+            self.simulator_prelaunch = simulator.prelaunch_record(self.run_context_raw, self.simulator_binding, *observed)
+            self.write(self.simulator_directory, "prelaunch.json", self.simulator_prelaunch, self.window("productive", 30))
         reserved = self.request["owner"]["productInvocation"]
         require(type(reserved) is str and re.fullmatch(r"[0-9a-f]{32}", reserved), "RESERVED_INVOCATION_REQUIRED")
         wrapper = ROOT / ("gradlew.bat" if self.role == "windows-x64" else "gradlew")
         argv = self.python(SCRIPTS / "run-audit-command.py", "--cwd", ROOT, "--wrapper", wrapper,
                            "--kind", self.kind, "--purpose", "ordinary-" + self.profile, "--id", reserved,
                            "--timeout", PRODUCT_SECONDS[self.profile], "--stop-timeout", 120, "--", *self.command)
-        self.product = self.phase("product", argv, OUTER_SECONDS[self.profile], product=True)
+        original = None
+        try:
+            self.product = self.phase("product", argv, OUTER_SECONDS[self.profile], product=True)
+        except BaseException as error:
+            original = error
+            raise
+        finally:
+            if self.profile == "full" and not self.unknown:
+                try:
+                    self.capture_simulator_authority()
+                except BaseException as error:
+                    self.error("simulator-launch-authority", error)
+                    if original is None:
+                        raise
+
+    def simulator_observation(self, label, *, finalizing=False):
+        """Closed native commands only; no writer Runtime, override UUID or new backend."""
+        require(self.profile == "full" and (label in simulator.RETIRE) == finalizing, "SIMULATOR_CLOSED_PHASE")
+        row = self.phase(label, simulator.command(label, self.simulator), simulator.SECONDS, finalizing=finalizing)
+        stage = label + "-read" if finalizing else "productive"
+        end = self.window(stage, 30)
+        directory = self.child(self.commands, label, end)
+        stdout, stderr = self.read(directory, "stdout.log", end), self.read(directory, "stderr.log", end)
+        self.check_window(stage, end)
+        require(type(row["exitCode"]) is int and row["exitCode"] == 0, "SIMULATOR_NATIVE_COMMAND_FAILED")
+        return row, stdout, stderr
+
+    def admit_simulator(self):
+        self.simulator_directory = self.child(self.evidence, "simulator", self.window("productive", 30), create=True)
+        observations = {}
+        for label in simulator.PREPARE:
+            observations[label] = self.simulator_observation(label)
+            simulator.original(label, self.role, observations[label][1])
+        self.simulator_admission = simulator.admission_record(self.run_context_raw, self.canonical_context_raw,
+            observations, self.environment.get("DEVELOPER_DIR"))
+        self.simulator = parse(self.simulator_admission)["selected"]
+        self.write(self.simulator_directory, "admission.json", self.simulator_admission, self.window("productive", 30))
+
+    def verify_simulator_inputs(self, end, *, require_binding):
+        require(self.simulator is not None and self.simulator_admission is not None, "SIMULATOR_ADMISSION_REQUIRED")
+        original, binding = original_simulator_inputs(self, self.private, end, binding_required=require_binding)
+        require(original == self.simulator_admission and binding == self.simulator_binding and
+                parse(original)["selected"] == self.simulator and
+                parse(original)["developerDir"] == self.environment.get("DEVELOPER_DIR"),
+                "SIMULATOR_IMMUTABLE_INPUT_CHANGED")
+        if self.simulator_prelaunch is not None:
+            require(original_simulator_prelaunch(self, self.private, binding, end) == self.simulator_prelaunch,
+                    "SIMULATOR_PRELAUNCH_CHANGED")
+        if self.simulator_authority is not None:
+            row = next(row for row in self.records if row["phase"] == "product")
+            start, canonical, authority = original_simulator_authority(self, self.private, binding, self.simulator_prelaunch,
+                                                                       row, end)
+            require((start, canonical, authority) == (self.simulator_start, self.simulator_canonical, self.simulator_authority),
+                    "SIMULATOR_LAUNCH_AUTHORITY_CHANGED")
+
+    def capture_simulator_authority(self):
+        """Freeze actual started-product authority before collection can fail/change evidence."""
+        row = next((row for row in self.records if row["phase"] == "product"), None)
+        if row is None or not any(launch.get("created") is True for launch in row.get("ownership", {}).get("launches", [])):
+            require(self.product is None or self.product.get("exitCode") != 0, "SIMULATOR_PRODUCT_NEVER_CREATED")
+            return
+        end = self.window("product-final", 30)
+        state = self.child(self.private, "state", end)
+        evidence = self.child(state, "evidence", end)
+        invocation = self.child(evidence, self.request["owner"]["productInvocation"], end)
+        start, canonical = self.read(invocation, "start.json", end), self.read(invocation, "receipt.json", end)
+        authority = simulator.launch_authority(self.simulator_binding, self.simulator_prelaunch, start, canonical, row)
+        self.check_window("product-final", end)
+        # These byte strings are independent of later on-disk receipt damage.
+        # They authorize only safe cleanup after this known native drain, never acceptance.
+        self.simulator_start, self.simulator_canonical, self.simulator_authority = start, canonical, authority
+        for name, raw in (("canonical-start.json", start), ("canonical-product.json", canonical), ("launch.json", authority)):
+            self.write(self.simulator_directory, name, raw, end)
+        self.check_window("product-final", end)
+
+    def retire_simulator(self):
+        if self.profile != "full" or self.simulator is None:
+            return
+        # Publish the in-memory UNKNOWN before any I/O. A failed/late record or
+        # close cannot leave a provisional KNOWN/green simulator disposition.
+        value = {"schema": 1, "scope": "PRIMARY_ORDINARY_FULL_SIMULATOR_RETIREMENT",
+                 "contextSha256": self.context_hash, "admissionSha256": digest(self.simulator_admission),
+                 "bindingSha256": None if self.simulator_binding is None else digest(self.simulator_binding),
+                 "prelaunchSha256": None if self.simulator_prelaunch is None else digest(self.simulator_prelaunch),
+                 "launchAuthoritySha256": None if self.simulator_authority is None else digest(self.simulator_authority),
+                 "productAttempted": self.product_attempted, "productPhaseSha256": self.phase_hashes.get("product"),
+                 "before": None, "after": None, "shutdownAttempted": False, "phases": {},
+                 "status": "HOLD", "retirement": "UNKNOWN", "cleanupStatus": "UNKNOWN", "coverage": None, "errors": []}
+        self.simulator_terminal = value
+        first = len(self.errors)
+        failure = None
+        observations = {}
+        try:
+            self.check(finalizing=True)
+            self.verify_simulator_inputs(self.window(simulator.BEFORE, 30), require_binding=self.product_attempted)
+        except BaseException as error:
+            failure = error
+            self.error("simulator-retirement-integrity", error)
+        try:
+            # Evidence integrity is distinct from already established in-memory
+            # cleanup authority. Never let damaged files suppress safe owned
+            # retirement, and never bypass an UNKNOWN native owner.
+            self.check(finalizing=True)
+            observations[simulator.BEFORE] = self.simulator_observation(simulator.BEFORE, finalizing=True)
+            value["before"] = simulator.terminal_device(observations[simulator.BEFORE][1], self.simulator)
+            if value["before"]["state"] != "Shutdown":
+                # A selected but never launched device remains externally owned.
+                # Do not acquire shutdown authority just because its state changed.
+                authority = None if self.simulator_authority is None else parse(self.simulator_authority)
+                require(type(authority) is dict and authority.get("bindingSha256") == value["bindingSha256"] and
+                        authority.get("prelaunchSha256") == value["prelaunchSha256"] and
+                        authority.get("device") == self.simulator["device"],
+                        "SIMULATOR_UNLAUNCHED_EXTERNAL_STATE_CHANGE")
+                observations[simulator.SHUTDOWN] = self.simulator_observation(simulator.SHUTDOWN, finalizing=True)
+        except BaseException as error:
+            failure = failure or error
+            self.error("simulator-retirement-before", error)
+        finally:
+            # A known failed shutdown still needs the exact terminal inventory;
+            # an UNKNOWN native owner cannot authorize another child launch.
+            if not self.unknown:
+                try:
+                    observations[simulator.AFTER] = self.simulator_observation(simulator.AFTER, finalizing=True)
+                    value["after"] = simulator.terminal_device(observations[simulator.AFTER][1], self.simulator)
+                    require(value["after"]["state"] == "Shutdown", "SIMULATOR_NOT_RETIRED")
+                except BaseException as error:
+                    failure = failure or error
+                    self.error("simulator-retirement-after", error)
+        value["shutdownAttempted"] = any(row["phase"] == simulator.SHUTDOWN and row["launchAttempted"]
+                                         for row in self.records)
+        value["phases"] = {label: simulator.phase_reference(*observed) for label, observed in observations.items()}
+        value["errors"] = self.errors[first:]
+        if not self.unknown and value["after"] is not None and value["after"]["state"] == "Shutdown" and \
+                simulator.AFTER in observations:
+            value["cleanupStatus"] = "KNOWN_SHUTDOWN"
+        if failure is None and not self.unknown:
+            value.update(status="KNOWN_SHUTDOWN", retirement="KNOWN")
+        try:
+            if not self.unknown:
+                end = self.window("simulator-retirement", 30)
+                if value["retirement"] == "KNOWN" and self.product_attempted and self.custody is not None and \
+                        type(self.custody.get("productExitCode")) is int and self.custody["productExitCode"] == 0:
+                    value["coverage"] = platform_simulator_binding(self, self.private, self.simulator_binding, end)
+                self.write(self.simulator_directory, "retirement.json", value, end)
+                self.check_window("simulator-retirement", end)
+        except BaseException as error:
+            failure = failure or error
+            self.error("simulator-retirement-record", error)
+        if failure is not None or self.unknown:
+            value.update(status="HOLD", retirement="UNKNOWN", errors=self.errors[first:])
+            self.unknown = True
+            raise failure or ControllerError("SIMULATOR_RETIREMENT_UNKNOWN")
 
     def collect(self):
         if self.request is None or self.unknown:
@@ -974,6 +1158,10 @@ class Controller(PrivateOwner):
                 "exportReturn": self.export_return, "errors": self.errors}
         if self.profile == "full":
             value["jobBudget"] = self.budget_result()
+            value["simulator"] = {"admissionSha256": None if self.simulator_admission is None else
+                                  digest(self.simulator_admission),
+                                  "bindingSha256": None if self.simulator_binding is None else digest(self.simulator_binding),
+                                  "selected": self.simulator, "terminal": self.simulator_terminal}
         value["profilePassed"] = profile_passed(value)
         return parse(encoded(value))
 
@@ -984,7 +1172,14 @@ def profile_passed(value):
     labels = ["recipient-validation", "audit-init", "custody-prepare", "product", "custody-collect",
               "custody-uninstall"]
     if value.get("profile") == "full":
-        labels.insert(0, "job-time")
+        owned = value.get("simulator")
+        if not simulator_profile_passed(value, owned):
+            return False
+        labels = ["job-time", "recipient-validation", "audit-init", *simulator.PREPARE,
+                  "custody-prepare", simulator.PRELAUNCH, "product", "custody-collect", "custody-uninstall", simulator.BEFORE]
+        if owned["terminal"]["shutdownAttempted"]:
+            labels.append(simulator.SHUTDOWN)
+        labels.append(simulator.AFTER)
         budget = value.get("jobBudget", {})
         if not (type(budget.get("sha256")) is str and re.fullmatch(r"[0-9a-f]{64}", budget["sha256"]) and
                 budget.get("exhausted") is False and budget.get("cutoffObservation") is None and
@@ -995,7 +1190,8 @@ def profile_passed(value):
                 continue
             if row.get("jobBudgetSha256") != budget["sha256"]:
                 return False
-            if row["phase"] in ("recipient-validation", "audit-init", "custody-prepare", "product") and not (
+            if row["phase"] in {"recipient-validation", "audit-init", "custody-prepare", "product",
+                                 *simulator.PREPARE, simulator.PRELAUNCH} and not (
                     type(row.get("completedRawNs")) is int and type(budget.get("productiveCutoffRawNs")) is int and
                     row["completedRawNs"] < budget["productiveCutoffRawNs"]):
                 return False
@@ -1010,6 +1206,171 @@ def profile_passed(value):
             type(custody) is dict and custody.get("result") == "RETAINED" and custody.get("retirement") == "KNOWN" and
             custody.get("errors") == [] and all(type(custody.get(key)) is int and custody[key] == 0 for key in
                 ("productExitCode", "stopExitCode", "ownerFinalExitCode")))
+
+
+def simulator_profile_passed(result, owned):
+    """No Boolean simulator label substitutes for original phase/Property proof."""
+    if type(owned) is not dict or set(owned) != {"admissionSha256", "bindingSha256", "selected", "terminal"}:
+        return False
+    terminal = owned["terminal"]
+    if not (type(terminal) is dict and terminal.get("status") == "KNOWN_SHUTDOWN" and
+            terminal.get("cleanupStatus") == "KNOWN_SHUTDOWN" and
+            all(type(terminal.get(key)) is str and re.fullmatch(r"[0-9a-f]{64}", terminal[key]) for key in
+                ("prelaunchSha256", "launchAuthoritySha256")) and
+            terminal.get("retirement") == "KNOWN" and terminal.get("errors") == [] and
+            terminal.get("productAttempted") is True and terminal.get("contextSha256") == result.get("contextSha256") and
+            terminal.get("admissionSha256") == owned["admissionSha256"] and
+            terminal.get("bindingSha256") == owned["bindingSha256"] and
+            all(type(owned.get(key)) is str and re.fullmatch(r"[0-9a-f]{64}", owned[key])
+                for key in ("admissionSha256", "bindingSha256")) and
+            terminal.get("productPhaseSha256") == result.get("phaseSha256", {}).get("product") and
+            terminal.get("productPhaseSha256") is not None and type(terminal.get("shutdownAttempted")) is bool and
+            type(terminal.get("coverage")) is dict and terminal["coverage"].get("status") == "BOUND" and
+            terminal["coverage"].get("bindingSha256") == owned["bindingSha256"]):
+        return False
+    try:
+        selected = owned["selected"]
+        if selected["device"]["state"] != "Shutdown" or simulator.descriptor(selected["device"]) != selected["device"]:
+            return False
+        before, after = terminal["before"], terminal["after"]
+        for observed in (before, after):
+            if simulator.descriptor(observed) != observed or any(observed[key] != value
+                    for key, value in selected["device"].items() if key != "state"):
+                return False
+        if after["state"] != "Shutdown" or terminal["shutdownAttempted"] != (before["state"] != "Shutdown"):
+            return False
+        labels = {simulator.BEFORE, simulator.AFTER} | ({simulator.SHUTDOWN} if terminal["shutdownAttempted"] else set())
+        return set(terminal["phases"]) == labels and all(terminal["phases"][label]["phaseSha256"] ==
+            result["phaseSha256"][label] for label in labels)
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def original_simulator_inputs(owner, private, end, *, binding_required):
+    """Reconstruct admission from ORIGINAL native stdout/phase bytes, not labels."""
+    run_raw = owner.read(private, "run-context.json", end)
+    state = owner.child(private, "state", end)
+    canonical_raw = owner.read(state, "context.json", end)
+    evidence = owner.child(private, "evidence", end)
+    directory = owner.child(evidence, "simulator", end)
+    raw = owner.read(directory, "admission.json", end)
+    commands = owner.child(evidence, "commands", end)
+    observations = {}
+    for label in simulator.PREPARE:
+        phase = owner.child(commands, label, end)
+        phase_raw = owner.read(phase, "result.json", end)
+        row = parse(phase_raw)
+        require(phase_raw == encoded(row), "SIMULATOR_ORIGINAL_PHASE_ENCODING_CHANGED")
+        observations[label] = row, owner.read(phase, "stdout.log", end), owner.read(phase, "stderr.log", end)
+    expected = simulator.admission_record(run_raw, canonical_raw, observations, parse(run_raw).get("developerDir"))
+    require(raw == expected, "SIMULATOR_ADMISSION_ORIGINALS_CHANGED")
+    binding = None
+    if binding_required or os.path.lexists(private.path / simulator.RELATIVE):
+        custody = owner.child(evidence, "custody", end)
+        request_raw = owner.read(custody, "request.json", end)
+        binding = owner.read(directory, "binding.json", end)
+        require(binding == simulator.binding_record(run_raw, canonical_raw, request_raw, raw),
+                "SIMULATOR_PRIMARY_BINDING_CHANGED")
+    return raw, binding
+
+
+def platform_simulator_binding(owner, private, binding_raw, end):
+    """Inspect the actual canonical-retained platform invocation/execution/summary.
+
+    The canonical product still calls the unchanged full selector. This adds a
+    receipt for its KGP Property proof, not a second product or fake ABI/test run.
+    """
+    require(binding_raw is not None, "SIMULATOR_PLATFORM_BINDING_REQUIRED")
+    binding = parse(binding_raw)
+    state = owner.child(private, "state", end)
+    evidence = owner.child(state, "evidence", end)
+    invocation = owner.child(evidence, binding["productInvocation"], end)
+    canonical_raw = owner.read(invocation, "receipt.json", end)
+    canonical = parse(canonical_raw)
+    start_raw = owner.read(invocation, "start.json", end)
+    simulator.canonical_start(binding_raw, start_raw, canonical.get("ancestorInvocationIds"), canonical.get("controllerPid"))
+    prelaunch_raw = original_simulator_prelaunch(owner, private, binding_raw, end)
+    require(canonical.get("id") == binding["productInvocation"] and canonical.get("jobId") == binding["job"] and
+            canonical.get("kind") == "command" and canonical.get("requestedArgv") ==
+            ["python3", "scripts/run-platform-tests.py", "full"] and canonical.get("sourceBefore") ==
+            canonical.get("sourceAfter") == binding["source"] and canonical.get("sourceUnchanged") is True,
+            "SIMULATOR_PLATFORM_CANONICAL_BINDING")
+    reports = canonical.get("reports")
+    require(type(reports) is list and len(reports) <= posix.MAX_MEMBERS and
+            all(type(row) is dict for row in reports), "SIMULATOR_PLATFORM_REPORT_MAP")
+    manifest = parse(owner.read(invocation, "report-manifest.json", end))
+    require(manifest.get("schema") == 1 and manifest.get("records") == reports, "SIMULATOR_PLATFORM_REPORT_MAP_CHANGED")
+    selected = {}
+    tokens = set()
+    for row in reports:
+        match = re.fullmatch(r"build/reports/platform-tests/([0-9a-f]{32})/(invocation|execution|summary)\.json",
+                             row.get("source", ""))
+        if match is None:
+            continue
+        token, name = match.groups()
+        require(name not in selected and row.get("classification") == "changed-since-admission" and
+                row.get("retained") == "reports/" + row["source"], "SIMULATOR_PLATFORM_REPORT_REUSED_OR_DUPLICATE")
+        selected[name] = row
+        tokens.add(token)
+    require(set(selected) == {"invocation", "execution", "summary"} and len(tokens) == 1,
+            "SIMULATOR_CURRENT_PLATFORM_REPORTS_MISSING")
+    token = next(iter(tokens))
+    directory = invocation
+    for name in ("reports", "build", "reports", "platform-tests", token):
+        directory = owner.child(directory, name, end)
+    raw, values = {}, {}
+    for name, row in selected.items():
+        raw[name] = owner.read(directory, name + ".json", end)
+        require(row.get("sha256") == digest(raw[name]) and type(row.get("bytes")) is int and
+                row["bytes"] == len(raw[name]), "SIMULATOR_PLATFORM_REPORT_BYTES_CHANGED")
+        values[name] = parse(raw[name])
+    source, execution, summary = (values[name] for name in ("invocation", "execution", "summary"))
+    identity = simulator.assess_coverage(execution, binding_raw, start_raw, prelaunch_raw)
+    for value in (source, summary):
+        require(value.get("profile") == "full" and value.get("token") == token and
+                all(value.get(key) == expected for key, expected in binding["source"].items()) and
+                value.get("ordinarySimulator") == identity, "SIMULATOR_PLATFORM_INVOCATION_CHANGED")
+    require(execution.get("token") == token and execution.get("buildFailed") is False and execution.get("dryRun") is False and
+            summary.get("sourceAfter") == binding["source"] and summary.get("result") == "PASS" and
+            summary.get("errors") == [] and type(summary.get("gradleExitCode")) is int and summary["gradleExitCode"] == 0 and
+            type(summary.get("stopExitCode")) is int and summary["stopExitCode"] == 0 and
+            source.get("command") == summary.get("command"), "SIMULATOR_PLATFORM_NOT_PASSED")
+    command = source.get("command", [])
+    require(type(command) is list and command[:2] == [str(ROOT / "gradlew"), "check"] and
+            "-Pp2pkit.ordinarySimulatorBinding=" + str(private.path / simulator.RELATIVE) in command and
+            "-Pp2pkit.ordinarySimulatorSha256=" + digest(binding_raw) in command and
+            "-Pp2pkit.ordinarySimulatorStartSha256=" + digest(start_raw) in command and
+            "-Pp2pkit.ordinarySimulatorPrelaunchSha256=" + digest(prelaunch_raw) in command,
+            "SIMULATOR_PLATFORM_SELECTOR_CHANGED")
+    return {"status": "BOUND", **identity, "token": token, "canonicalReceiptSha256": digest(canonical_raw),
+            "reportsSha256": {name: digest(data) for name, data in raw.items()}}
+
+
+def original_simulator_prelaunch(owner, private, binding_raw, end):
+    evidence = owner.child(private, "evidence", end)
+    directory = owner.child(evidence, "simulator", end)
+    commands = owner.child(evidence, "commands", end)
+    phase = owner.child(commands, simulator.PRELAUNCH, end)
+    raw = owner.read(phase, "result.json", end)
+    row = parse(raw)
+    require(raw == encoded(row), "SIMULATOR_PRELAUNCH_PHASE_ENCODING_CHANGED")
+    expected = simulator.prelaunch_record(owner.read(private, "run-context.json", end), binding_raw, row,
+                                          owner.read(phase, "stdout.log", end), owner.read(phase, "stderr.log", end))
+    require(owner.read(directory, "prelaunch.json", end) == expected, "SIMULATOR_PRELAUNCH_ORIGINALS_CHANGED")
+    return expected
+
+
+def original_simulator_authority(owner, private, binding_raw, prelaunch_raw, outer, end):
+    state = owner.child(private, "state", end)
+    canonical_evidence = owner.child(state, "evidence", end)
+    invocation = owner.child(canonical_evidence, parse(binding_raw)["productInvocation"], end)
+    start, canonical = owner.read(invocation, "start.json", end), owner.read(invocation, "receipt.json", end)
+    authority = simulator.launch_authority(binding_raw, prelaunch_raw, start, canonical, outer)
+    evidence = owner.child(private, "evidence", end)
+    directory = owner.child(evidence, "simulator", end)
+    for name, raw in (("canonical-start.json", start), ("canonical-product.json", canonical), ("launch.json", authority)):
+        require(owner.read(directory, name, end) == raw, "SIMULATOR_LAUNCH_ORIGINALS_CHANGED")
+    return start, canonical, authority
 
 
 def recipient_record(recipient):
@@ -1293,7 +1654,7 @@ def run(profile):
     finally:
         if controller is not None:
             controller.actions_token = None
-            for name in ("collect", "export"):
+            for name in ("collect", "retire_simulator", "export"):
                 try:
                     getattr(controller, name)()
                 except BaseException as error:
@@ -1375,13 +1736,23 @@ def verify_phase_bindings(owner, private, result, context, end, budget=None):
     evidence = owner.child(private, "evidence", end)
     commands = owner.child(evidence, "commands", end)
     request = None
-    require(type(result["phases"]) is list and len(result["phases"]) <= (8 if budget is not None else 7) and
+    require(type(result["phases"]) is list and len(result["phases"]) <= (len(FULL_STAGE) + 1 if budget is not None else 7) and
             len({row["phase"] for row in result["phases"]}) == len(result["phases"]), "PHASE_SET_CHANGED")
     require(set(result["phaseSha256"]) == {row["phase"] for row in result["phases"]}, "PHASE_BINDING_SET")
+    if budget is not None:
+        labels = [row["phase"] for row in result["phases"]]
+        preparation = [label for label in labels if label in FULL_PREPARATION]
+        require(all(label in FULL_ORDER for label in labels) and labels and labels[-1] == "export" and
+                labels == sorted(labels, key=FULL_ORDER.index) and preparation and
+                preparation == list(FULL_PREPARATION[:len(preparation)]) and
+                ("custody-collect" not in labels or "custody-prepare" in preparation) and
+                ("custody-uninstall" not in labels or "custody-collect" in labels), "PHASE_SEQUENCE_CHANGED")
+    previous_raw = None
     for row in result["phases"]:
         label = row["phase"]
-        require(label in ({"recipient-validation", "audit-init", "custody-prepare", "product", "custody-collect",
-                           "custody-uninstall", "export"} | ({"job-time"} if budget is not None else set())), "PHASE_LABEL")
+        allowed = set(FULL_STAGE) | {"job-time"} if budget is not None else {
+            "recipient-validation", "audit-init", "custody-prepare", "product", "custody-collect", "custody-uninstall", "export"}
+        require(label in allowed, "PHASE_LABEL")
         directory = owner.child(commands, label, end)
         raw = owner.read(directory, "result.json", end)
         require(digest(raw) == result["phaseSha256"][label] and parse(raw) == row and row["cwd"] == str(ROOT),
@@ -1389,19 +1760,34 @@ def verify_phase_bindings(owner, private, result, context, end, budget=None):
         if budget is not None:
             start = parse(owner.read(directory, "start.json", end))
             require(all(start[key] == row[key] for key in ("phase", "argv", "cwd", "job", "invocation", "state", "home",
-                                                         "jobBudgetSha256", "startedRawNs")), "PHASE_RAW_START_CHANGED")
+                         "jobBudgetSha256", "startedRawNs", "developerDir", "simulatorBindingSha256",
+                         "childAncestorInvocationIds")), "PHASE_RAW_START_CHANGED")
+            require(row["developerDir"] == context.get("developerDir"), "PHASE_DEVELOPER_DIR_CHANGED")
+            require(row["childAncestorInvocationIds"] == context["ancestorInvocationIds"] + [row["invocation"]],
+                    "PHASE_NATIVE_ANCESTORS_CHANGED")
             require(type(row.get("startedRawNs")) is int and type(row.get("finalizedRawNs")) is int and
                     0 <= row["startedRawNs"] <= row["finalizedRawNs"] <= job_time.UINT64,
                     "PHASE_RAW_INTERVAL_CHANGED")
+            require(previous_raw is None or previous_raw <= row["startedRawNs"], "PHASE_RAW_SEQUENCE_CHANGED")
+            previous_raw = row["finalizedRawNs"]
             if row.get("completedRawNs") is not None:
                 require(type(row["completedRawNs"]) is int and
                         row["startedRawNs"] <= row["completedRawNs"] <= row["finalizedRawNs"], "PHASE_RAW_INTERVAL_CHANGED")
             if label != "job-time":
-                finish = {"recipient-validation": "preparation-final", "audit-init": "preparation-final",
-                          "custody-prepare": "preparation-final", "product": "product-final",
-                          "custody-collect": "collect-final", "custody-uninstall": "uninstall-final", "export": "export-final"}
                 require(row["jobBudgetSha256"] == budget.sha256 and
-                        row["finalizedRawNs"] < budget.fence(finish[label]), "PHASE_JOB_TIME_CHANGED")
+                        row["startedRawNs"] < budget.fence(FULL_STAGE[label]) and
+                        row["finalizedRawNs"] < budget.fence(FULL_FINISH[FULL_STAGE[label]]), "PHASE_JOB_TIME_CHANGED")
+            if label != "product":
+                require(row["job"] == context["job"] and row["state"] == context["session"] and
+                        row["home"] == context["session"] + "/control-home", "PHASE_CONTROLLER_DOMAIN_CHANGED")
+            if label in (*simulator.PREPARE, simulator.PRELAUNCH, *simulator.RETIRE):
+                require(row["argv"] == simulator.command(label, result.get("simulator", {}).get("selected")),
+                        "SIMULATOR_FIXED_COMMAND_CHANGED")
+                require(row["finalizedRawNs"] < row["startedRawNs"] +
+                        (simulator.SECONDS + FINAL_SECONDS) * job_time.NS and
+                        (row["completedRawNs"] is None or row["completedRawNs"] < min(
+                            row["startedRawNs"] + simulator.SECONDS * job_time.NS,
+                            budget.fence(FULL_STAGE[label]))), "SIMULATOR_PHASE_BOUND_CHANGED")
         if row["retirement"] == "KNOWN" and row["launchAttempted"]:
             ownership = row["ownership"]
             expected_backend = {"linux-x64": "linux-proc-pidfd", "windows-x64": "windows-job-list-suspended",
@@ -1457,11 +1843,13 @@ def verify_phase_bindings(owner, private, result, context, end, budget=None):
                 timing.get("controllerReturnRawNs") == budget.fence("controller-return") and
                 type(timing.get("terminalRawNs")) is int and
                 budget.value["responseFinishedRawNs"] <= timing["terminalRawNs"] < budget.fence("controller-return") and
+                previous_raw is not None and previous_raw <= timing["terminalRawNs"] and
                 type(timing.get("exhausted")) is bool, "SEALED_JOB_BUDGET_CHANGED")
         cutoff = timing.get("cutoffObservation")
         if timing["exhausted"]:
             require(type(cutoff) is dict and set(cutoff) == {"phase", "observedRawNs"} and
-                    cutoff["phase"] in {"admission", "recipient-validation", "audit-init", "custody-prepare", "product"} and
+                    cutoff["phase"] in {"admission", "recipient-validation", "audit-init", "custody-prepare", "product",
+                                        *simulator.PREPARE, simulator.PRELAUNCH} and
                     type(cutoff["observedRawNs"]) is int and
                     budget.fence("productive") <= cutoff["observedRawNs"] <= timing["terminalRawNs"],
                     "SEALED_JOB_CUTOFF_CHANGED")
@@ -1490,6 +1878,81 @@ def verify_phase_bindings(owner, private, result, context, end, budget=None):
                         request["owner"]["productInvocation"] == cancellation["invocation"], "SEALED_CANCELLATION_CHANGED")
         else:
             require(product is None or product.get("cooperativeCancellation") is None, "SEALED_CANCELLATION_CHANGED")
+        verify_simulator_bindings(owner, private, result, context, end)
+
+
+def verify_simulator_bindings(owner, private, result, context, end):
+    """Independent post-return ownership fence, also for known failed products."""
+    owned = result.get("simulator")
+    require(context.get("primarySimulatorRequired") is True and type(owned) is dict and set(owned) ==
+            {"admissionSha256", "bindingSha256", "selected", "terminal"}, "SEALED_SIMULATOR_REQUIRED")
+    if owned["selected"] is None:
+        require(owned == {"admissionSha256": None, "bindingSha256": None, "selected": None, "terminal": None} and
+                result["productAttempted"] is False and not any(row["phase"] in {"product", *simulator.RETIRE}
+                    for row in result["phases"]) and not os.path.lexists(private.path / simulator.RELATIVE),
+                "SEALED_UNADMITTED_SIMULATOR_PRODUCT")
+        return  # Original known admission failure may be retained, but cannot pass the profile.
+    original, binding = original_simulator_inputs(owner, private, end, binding_required=result["productAttempted"])
+    require(digest(original) == owned["admissionSha256"] and parse(original)["selected"] == owned["selected"] and
+            (None if binding is None else digest(binding)) == owned["bindingSha256"], "SEALED_SIMULATOR_INPUT_CHANGED")
+    evidence = owner.child(private, "evidence", end)
+    directory = owner.child(evidence, "simulator", end)
+    terminal = parse(owner.read(directory, "retirement.json", end))
+    require(terminal == owned["terminal"] and terminal.get("schema") == 1 and
+            terminal.get("scope") == "PRIMARY_ORDINARY_FULL_SIMULATOR_RETIREMENT" and
+            terminal.get("contextSha256") == result["contextSha256"] and
+            terminal.get("admissionSha256") == owned["admissionSha256"] and
+            terminal.get("bindingSha256") == owned["bindingSha256"] and terminal.get("status") == "KNOWN_SHUTDOWN" and
+            terminal.get("cleanupStatus") == "KNOWN_SHUTDOWN" and
+            terminal.get("retirement") == "KNOWN" and terminal.get("errors") == [] and
+            terminal.get("productAttempted") is result["productAttempted"] and
+            terminal.get("productPhaseSha256") == result["phaseSha256"].get("product"), "SEALED_SIMULATOR_TERMINAL_CHANGED")
+    product = next((row for row in result["phases"] if row["phase"] == "product"), None)
+    if result["productAttempted"]:
+        bound = parse(binding)
+        expected = canonical_python(context["python"], context["canonicalSources"], "--cwd", str(ROOT),
+            "--wrapper", str(ROOT / "gradlew"), "--kind", "command", "--purpose", "ordinary-full", "--id",
+            bound["productInvocation"], "--timeout", str(PRODUCT_SECONDS["full"]), "--stop-timeout", "120", "--",
+            *context["command"])
+        require(type(product) is dict and product["launchAttempted"] is True and product["argv"] == expected and
+                product["job"] == bound["job"] and product["state"] == bound["state"] and product["home"] == bound["home"] and
+                product["simulatorBindingSha256"] == digest(binding), "SEALED_SIMULATOR_LAUNCH_AUTHORITY_CHANGED")
+    else:
+        require(product is None or product["launchAttempted"] is False, "SEALED_SIMULATOR_LAUNCH_AUTHORITY_CHANGED")
+    prelaunch = None
+    if terminal.get("prelaunchSha256") is not None:
+        prelaunch = original_simulator_prelaunch(owner, private, binding, end)
+        require(digest(prelaunch) == terminal["prelaunchSha256"], "SEALED_SIMULATOR_PRELAUNCH_CHANGED")
+    if terminal.get("launchAuthoritySha256") is not None:
+        require(product is not None and prelaunch is not None, "SEALED_SIMULATOR_LAUNCH_AUTHORITY_MISSING")
+        _start, _canonical, authority = original_simulator_authority(owner, private, binding, prelaunch, product, end)
+        require(digest(authority) == terminal["launchAuthoritySha256"], "SEALED_SIMULATOR_LAUNCH_AUTHORITY_CHANGED")
+    else:
+        require(terminal.get("shutdownAttempted") is False, "SEALED_SIMULATOR_SHUTDOWN_WITHOUT_LAUNCH")
+    commands = owner.child(evidence, "commands", end)
+    references, observed = {}, {}
+    for row in result["phases"]:
+        label = row["phase"]
+        if label not in simulator.RETIRE:
+            continue
+        require(row["exitCode"] == 0 and type(row["exitCode"]) is int and row["retirement"] == "KNOWN" and
+                row["launchAttempted"] is True and row["errors"] == [] and row["simulatorBindingSha256"] ==
+                owned["bindingSha256"], "SEALED_SIMULATOR_RETIREMENT_PHASE_FAILED")
+        phase = owner.child(commands, label, end)
+        stdout, stderr = owner.read(phase, "stdout.log", end), owner.read(phase, "stderr.log", end)
+        references[label] = simulator.phase_reference(row, stdout, stderr)
+        if label != simulator.SHUTDOWN:
+            observed[label] = simulator.terminal_device(stdout, owned["selected"])
+    require(terminal.get("phases") == references and set(observed) == {simulator.BEFORE, simulator.AFTER} and
+            terminal["before"] == observed[simulator.BEFORE] and terminal["after"] == observed[simulator.AFTER] and
+            terminal["after"]["state"] == "Shutdown" and type(terminal.get("shutdownAttempted")) is bool and
+            terminal["shutdownAttempted"] == (simulator.SHUTDOWN in references) == (terminal["before"]["state"] != "Shutdown") and
+            (result["productAttempted"] or terminal["shutdownAttempted"] is False), "SEALED_SIMULATOR_RETIREMENT_CHANGED")
+    if result["productAttempted"] and type(result["custody"]) is dict and result["custody"].get("productExitCode") == 0:
+        require(terminal.get("coverage") == platform_simulator_binding(owner, private, binding, end),
+                "SEALED_SIMULATOR_PROPERTY_EVIDENCE_CHANGED")
+    else:
+        require(terminal.get("coverage") is None, "SEALED_UNEXECUTED_SIMULATOR_COVERAGE")
 
 
 def validate_public(profile):

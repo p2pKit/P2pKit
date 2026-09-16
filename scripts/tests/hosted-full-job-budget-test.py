@@ -138,15 +138,28 @@ class PureBudgetModels(unittest.TestCase):
 
     def test_budget_charges_actual_setup_and_all_source_owned_reserves(self):
         budget = self.derive()
-        self.assertEqual(J.TAIL_SECONDS, 1455)
-        self.assertEqual(J.TAIL_SECONDS + J.SEAL_SECONDS, 1575)
-        self.assertEqual(J.RESERVE_SECONDS, 1815)
+        self.assertEqual(J.TAIL_SECONDS, 2070)
+        self.assertEqual(J.TAIL_SECONDS + J.SEAL_SECONDS, 2190)
+        self.assertEqual(J.RESERVE_SECONDS, 2430)
         self.assertEqual(budget.fence("upload"), (10000 + 3600 - 120 - 66) * J.NS)
-        self.assertEqual(budget.fence("productive"), budget.fence("upload") - 1815 * J.NS)
+        self.assertEqual(budget.fence("productive"), budget.fence("upload") - 2430 * J.NS)
         self.assertEqual(budget.fence("product-return"), budget.fence("productive") + 330 * J.NS)
         self.assertEqual(budget.fence("controller-return"), budget.fence("upload") - 360 * J.NS)
         self.assertEqual(budget.fence("seal"), budget.fence("upload") - 210 * J.NS)
         self.assertEqual(budget.value["originalsSha256"], {k: J.digest(v) for k, v in self.originals.items()})
+
+    def test_exact_simulator_retirement_reserve_is_not_borrowed_from_export_or_seal(self):
+        expected = [(label + suffix, seconds) for label in
+            ("simulator-retire-before", "simulator-shutdown", "simulator-retire-after")
+            for suffix, seconds in (("", 120), ("-final", 45), ("-read", 30))] + [("simulator-retirement", 30)]
+        actual = [(label, seconds) for label, seconds in J.CONTROLLER_TAIL if label.startswith("simulator-")]
+        self.assertEqual(actual, expected)
+        self.assertEqual(sum(seconds for _, seconds in actual), 615)
+        budget = self.derive()
+        self.assertEqual(budget.fence("simulator-retirement") - budget.fence("uninstall-read"), 615 * J.NS)
+        self.assertEqual(budget.fence("export-freeze") - budget.fence("simulator-retirement"), 180 * J.NS)
+        self.assertEqual(J.JOB_SECONDS, 3600)
+        self.assertEqual((J.SEAL_SECONDS, J.UPLOAD_SECONDS, J.TRANSITION_SECONDS), (120, 180, 30))
 
     def test_service_pr_head_is_not_synthetic_merge_source_and_base_is_exact(self):
         self.admitted = model_admission("pull_request")
@@ -236,7 +249,7 @@ class PureBudgetModels(unittest.TestCase):
         budget = self.derive()
         self.assertEqual(budget.fence("upload"), (10000 + 3600 - 120 - 66) * J.NS)
         with patch.object(J, "shared_raw_ns", return_value=10014 * J.NS), patch.object(J.time, "monotonic", return_value=50.):
-            self.assertEqual(budget.deadline("productive", 7200), 50 + 3600 - 120 - 66 - 1815 - 14)
+            self.assertEqual(budget.deadline("productive", 7200), 50 + 3600 - 120 - 66 - 2430 - 14)
 
     def test_actual_clock_unavailable_backwards_noninteger_or_overflow_never_falls_back(self):
         budget = self.derive()

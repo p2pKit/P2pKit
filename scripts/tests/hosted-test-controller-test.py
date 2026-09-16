@@ -9,6 +9,7 @@ interpreters do not execute products or claim genuine host/crypto proof.
 from __future__ import annotations
 
 from contextlib import ExitStack, redirect_stdout
+import copy
 import hashlib
 import importlib.util
 import io
@@ -59,24 +60,29 @@ class Scope:
         self.case, self.job, self.invocation = case, job, invocation
         self.state, self.home, self.baseline = state, home, {(10, 20)}
         self.launches = []
+        self.event_start = len(case.events)
         case.events.append("scope")
         if case.constructor_error:
             raise case.constructor_error
 
     def spawn(self, argv, cwd, environment, *, stdout, stderr):
         self.case.events.append("spawn")
+        self.pid = 1000 + len(self.case.calls)
         self.case.calls.append({"argv": argv, "cwd": cwd, "environment": dict(environment),
-                                "stdout": stdout, "stderr": stderr})
+                                "stdout": stdout, "stderr": stderr, "pid": self.pid})
         if self.case.spawn_error:
             raise self.case.spawn_error
-        os.write(stdout.fileno(), self.case.stdout)
-        os.write(stderr.fileno(), self.case.stderr)
-        self.launches.append({"argv": argv, "cwd": cwd, "created": True, "outputMode": "OFFLINE_SUPPLIED_FILES"})
+        out, err = (self.case.model_output(argv, stdout.path.parent.name) if hasattr(self.case, "model_output")
+                    else (self.case.stdout, self.case.stderr))
+        os.write(stdout.fileno(), out)
+        os.write(stderr.fileno(), err)
+        self.launches.append({"argv": argv, "requestedArgv": argv, "api": "subprocess.Popen", "shell": False,
+                              "cwd": cwd, "created": True, "pid": self.pid, "outputMode": "OFFLINE_SUPPLIED_FILES"})
         if self.case.after_launch:
             self.case.after_launch()
         if getattr(self.case, "model_child", None):
             self.case.model_child(argv, environment)
-        return SimpleNamespace(stdout=None, stderr=None, poll=self.poll)
+        return SimpleNamespace(pid=self.pid, stdout=None, stderr=None, poll=self.poll)
 
     def poll(self):
         self.case.events.append("poll")
@@ -99,12 +105,27 @@ class Scope:
     def description(self):
         return {"backend": "darwin-libproc-audit-token", "scope": "controlled-marker-inheriting-descendants",
                 "job": self.job, "invocation": self.invocation, "launches": self.launches,
-                "startedIdentities": [{"pid": 1}], "discoveryErrors": self.case.discovery_errors}
+                "startedIdentities": [model_identity(row["pid"]) for row in self.launches],
+                "discoveryErrors": self.case.discovery_errors}
 
     def close(self):
         self.case.events.append("scope-close")
         if self.case.close_error:
             raise self.case.close_error
+
+
+def model_identity(pid):
+    return {"pid": pid, "uniqueId": pid + 10000, "startSeconds": 100, "startMicroseconds": 0, "pidVersion": 1}
+
+
+def model_canonical_start(binding, ancestors, pid):
+    return {"schema": 1, "id": binding["productInvocation"], "purpose": "ordinary-full", "kind": "command",
+        "requestedArgv": ["python3", "scripts/run-platform-tests.py", "full"], "cwd": binding["root"],
+        "wrapper": binding["root"] + "/gradlew", "host": binding["role"], "jobId": binding["job"],
+        "gradleHome": binding["home"], "startedUtc": "2026-09-16T00:00:00Z", "controllerPid": pid,
+        "ancestorInvocationIds": ancestors, "sourceBefore": None, "sourceAfter": None, "productExitCode": None,
+        "stopExitCode": None, "finalExitCode": 125, "sourceUnchanged": False, "ownedSurvivors": [], "errors": [],
+        "evidenceDirectory": binding["state"] + "/evidence/" + binding["productInvocation"]}
 
 
 class Base(unittest.TestCase):
@@ -585,6 +606,7 @@ class FinalizationModels(Base):
         for name, value in locals().copy().items():
             if name in {"check", "setup", "product", "collect", "export", "result", "error", "write", "close"}:
                 setattr(state, "product_run" if name == "product" else name, value)
+        state.retire_simulator = lambda: None  # The real Desktop implementation is an unchanged no-op.
         return state
 
     def invoke(self, state):
@@ -679,6 +701,13 @@ class WholeControllerModels(Base):
         self.profile = "desktop"
         self.job, self.reserved = "c" * 32, "d" * 32
         self.product_code = 0
+        self.simulator_uuid = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
+        self.simulator_runtime = "com.apple.CoreSimulator.SimRuntime.iOS-26-5"
+        self.simulator_runtimes = {"runtimes": [{"identifier": self.simulator_runtime, "version": "26.5", "isAvailable": True}]}
+        self.simulator_devices = {"devices": {self.simulator_runtime: [{"name": "iPhone 17", "udid": self.simulator_uuid,
+            "state": "Shutdown", "isAvailable": True, "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"}]}}
+        self.simulator_outputs, self.simulator_codes, self.simulator_calls = {}, {}, []
+        self.product_boots_simulator = True
         self.fail_uninstall = False
         self.job_elapsed, self.job_time_calls, self.job_time_child_errors = 120, [], []
         self.crypto_owners, self.crypto_child_errors, self.crypto_child_quarantines = [], [], []
@@ -723,6 +752,17 @@ class WholeControllerModels(Base):
         self.use_full()
         with patch.object(C.shutil, "which", return_value=sys.executable):
             return self.execute()
+
+    def inject_product_poll(self, function):
+        # Keep the original cancellation-before-drain assertions scoped to the
+        # actual product, not the newly preceding prelaunch query's own drain.
+        spawn = Scope.spawn
+        def product(scope, argv, cwd, environment, **sinks):
+            if "--cwd" in argv:
+                del self.events[:scope.event_start]
+                self.poll_function = function
+            return spawn(scope, argv, cwd, environment, **sinks)
+        self.stack.enter_context(patch.object(Scope, "spawn", product))
 
     def assert_full_stopped_before_crypto(self):
         with patch.object(C.shutil, "which", return_value=sys.executable), redirect_stdout(io.StringIO()):
@@ -789,7 +829,74 @@ class WholeControllerModels(Base):
         self.save(output / C.posix.MANIFEST, manifest)
         return manifest
 
+    def model_output(self, argv, label):
+        if label in (*C.simulator.PREPARE, C.simulator.PRELAUNCH, *C.simulator.RETIRE):
+            output = {"simulator-macos-version": b"26.0\n",
+                      "simulator-xcode-version": b"Xcode 26.5\nBuild version 17F42\n",
+                      "simulator-first-launch": b"", "simulator-runtimes": C.encoded(self.simulator_runtimes),
+                      "simulator-devices": C.encoded(self.simulator_devices),
+                      C.simulator.PRELAUNCH: C.encoded(self.simulator_devices),
+                      C.simulator.BEFORE: C.encoded(self.simulator_devices), C.simulator.SHUTDOWN: b"",
+                      C.simulator.AFTER: C.encoded(self.simulator_devices)}[label]
+            return self.simulator_outputs.get(label, output), b""
+        return self.stdout, self.stderr
+
+    def simulator_state(self, state):
+        for rows in self.simulator_devices["devices"].values():
+            for row in rows:
+                if row["udid"] == self.simulator_uuid:
+                    row["state"] = state
+
+    def model_platform_reports(self, folder, environment):
+        """Synthetic configured-Property/outcome records, never KGP execution."""
+        binding_raw = Path(environment[C.simulator.PATH_ENV]).read_bytes()
+        self.assertEqual(C.digest(binding_raw), environment[C.simulator.HASH_ENV])
+        start_raw = (folder / "start.json").read_bytes()
+        prelaunch_raw = (Path(environment[C.simulator.PATH_ENV]).parent / "prelaunch.json").read_bytes()
+        bound = C.simulator.coverage_identity(binding_raw, start_raw, prelaunch_raw)
+        policy = C.parse((ROOT / "gradle/platform-test-policy.json").read_bytes())
+        tasks = [name for entry in policy["model"].values() for name in entry["tests"]]
+        token = "e" * 32
+        command = [str(self.root / "gradlew"), "check", "--no-daemon", "--no-build-cache", "--no-configuration-cache",
+                   "--rerun-tasks", "--dependency-verification", "strict", "--max-workers=2", "--no-parallel", "--console=plain",
+                   "--init-script", str(self.root / "gradle/platform-test-coverage.init.gradle"),
+                   "-Pp2pkit.testCoverageRoot=" + str(self.root), "-Pp2pkit.testCoverageToken=" + token,
+                   "-Pp2pkit.ordinarySimulatorBinding=" + environment[C.simulator.PATH_ENV],
+                   "-Pp2pkit.ordinarySimulatorSha256=" + C.digest(binding_raw),
+                   "-Pp2pkit.ordinarySimulatorStartSha256=" + C.digest(start_raw),
+                   "-Pp2pkit.ordinarySimulatorPrelaunchSha256=" + C.digest(prelaunch_raw)]
+        source = {**self.clean_source, "profile": "full", "token": token, "command": command, "ordinarySimulator": bound}
+        selected = {path: {"device": bound["device"], "type": C.simulator.TYPE} for path in C.simulator.TASKS}
+        execution = {"schema": 1, "token": token, "buildFailed": bool(self.product_code), "dryRun": False,
+            "host": {"os": "Mac OS X", "arch": "aarch64"}, "model": policy["model"],
+            "tests": {name: {"outcome": "SKIPPED" if name.endswith(":iosX64Test") else "EXECUTED",
+                             "enabled": not name.endswith(":iosX64Test"), "inGraph": True,
+                             "passed": 0 if name.endswith(":iosX64Test") else 1, "failed": 0, "skipped": 0} for name in tasks},
+            "ordinarySimulator": {**bound, "configured": selected, "inGraph": copy.deepcopy(selected), "unchanged": True}}
+        summary = {**source, "sourceAfter": self.clean_source, "result": "FAIL" if self.product_code else "PASS",
+                   "errors": ["MODEL_PRODUCT_FAILED"] if self.product_code else [], "gradleExitCode": self.product_code,
+                   "stopExitCode": 0}
+        directory = folder
+        for name in ("reports", "build", "reports", "platform-tests", token):
+            directory = directory / name
+            directory.mkdir(mode=0o700)
+        records = []
+        for name, value in (("invocation", source), ("execution", execution), ("summary", summary)):
+            raw = self.save(directory / (name + ".json"), value)
+            relative = "build/reports/platform-tests/" + token + "/" + name + ".json"
+            records.append({"source": relative, "retained": "reports/" + relative, "sha256": C.digest(raw), "bytes": len(raw),
+                            "classification": "changed-since-admission"})
+        self.save(folder / "report-manifest.json", {"schema": 1, "records": records})
+        return records
+
     def model_child(self, argv, environment):
+        if argv[0] in ("/usr/bin/sw_vers", "/usr/bin/xcodebuild", "/usr/bin/xcrun"):
+            label = self.calls[-1]["stdout"].path.parent.name
+            self.simulator_calls.append((label, list(argv)))
+            self.exit_code = self.simulator_codes.get(label, 0)
+            if label == C.simulator.SHUTDOWN and self.exit_code == 0:
+                self.simulator_state("Shutdown")
+            return
         if argv[4] == "-c":
             self.assertEqual(argv[5], C.CANONICAL_BOOTSTRAP)
             self.assertEqual(argv[6], str(self.root / "scripts"))
@@ -862,6 +969,19 @@ class WholeControllerModels(Base):
                  "sourceUnchanged": True, "productExitCode": self.product_code, "stopExitCode": 0,
                  "finalExitCode": self.product_code, "errors": [], "ownedSurvivors": [],
                  "ownership": {"discoveryErrors": []}}
+            if self.profile == "full":
+                binding = C.parse(Path(environment[C.simulator.PATH_ENV]).read_bytes())
+                start = model_canonical_start(binding, environment[C.processes.CHAIN_ENV].split(":"), self.calls[-1]["pid"])
+                self.save(folder / "start.json", start)
+                pid = self.calls[-1]["pid"] + 100000
+                canonical = {**start, **canonical, "executedArgv": command, "productPid": pid, "productLaunchIndex": 0,
+                    "ownership": {"backend": "darwin-libproc-audit-token", "scope": "controlled-marker-inheriting-descendants",
+                        "job": self.job, "invocation": self.reserved, "discoveryErrors": [],
+                        "launches": [{"api": "subprocess.Popen", "requestedArgv": command, "cwd": str(self.root),
+                                      "shell": False, "created": True, "pid": pid}], "startedIdentities": [model_identity(pid)]}}
+                if self.product_boots_simulator:
+                    self.simulator_state("Booted")
+                canonical["reports"] = self.model_platform_reports(folder, environment)
             self.save(folder / "receipt.json", canonical)
             self.exit_code = self.product_code
         elif args[0] == "collect":
@@ -945,6 +1065,413 @@ class WholeControllerModels(Base):
         self.assertEqual(prepare["argv"][prepare["argv"].index("--scope") + 1], "both")
         self.assertEqual(self.seal(), "artifacts_ready=true\nprofile_passed=true\n")
 
+    def test_full_without_original_shutdown_simulator_cannot_be_green(self):
+        # The actual controller must inspect this modeled inventory, not infer
+        # simulator ownership from an otherwise successful aggregate check.
+        self.simulator_devices = {"devices": {"com.apple.CoreSimulator.SimRuntime.iOS-26-5": []}}
+        _session, result = self.execute_full()
+        self.assertFalse(result["profilePassed"], "No originally Shutdown iPhone 17 was admitted")
+        self.assertFalse(any("prepare" in row["argv"] or "--cwd" in row["argv"] for row in self.calls))
+        self.assertEqual(self.seal(), "artifacts_ready=true\nprofile_passed=false\n")
+
+    def test_full_admits_before_loader_and_binds_then_retires_only_exact_uuid(self):
+        session, result = self.execute_full()
+        self.assertTrue(result["profilePassed"])
+        labels = [row["phase"] for row in result["phases"]]
+        self.assertEqual(labels, ["job-time", "recipient-validation", "audit-init", *C.simulator.PREPARE,
+            "custody-prepare", C.simulator.PRELAUNCH, "product", "custody-collect", "custody-uninstall", *C.simulator.RETIRE, "export"])
+        shutdown = [argv for label, argv in self.simulator_calls if label == C.simulator.SHUTDOWN]
+        self.assertEqual(shutdown, [["/usr/bin/xcrun", "simctl", "shutdown", self.simulator_uuid]])
+        terminal = result["simulator"]["terminal"]
+        self.assertEqual(terminal["before"]["state"], "Booted")
+        self.assertEqual(terminal["after"]["state"], "Shutdown")
+        self.assertEqual(terminal["coverage"]["productInvocation"], self.reserved)
+        raw = (session / C.simulator.RELATIVE).read_bytes()
+        binding = C.parse(raw)
+        self.assertEqual(binding["source"], self.clean_source)
+        self.assertEqual(binding["productInvocation"], self.reserved)
+        self.assertEqual(binding["job"], self.job)
+        self.assertEqual(binding["selected"]["device"]["state"], "Shutdown")
+        product = next(row for row in self.calls if "--cwd" in row["argv"])
+        self.assertEqual(product["environment"][C.simulator.PATH_ENV], str(session / C.simulator.RELATIVE))
+        self.assertEqual(product["environment"][C.simulator.HASH_ENV], C.digest(raw))
+        for row in self.calls:
+            if "--cwd" not in row["argv"]:
+                self.assertNotIn(C.simulator.PATH_ENV, row["environment"])
+        self.assertEqual(self.seal(), "artifacts_ready=true\nprofile_passed=true\n")
+        mapping = C.parse((session / "frozen-evidence/original-path-map.json").read_bytes())["files"]
+        names = {row["original"] for row in mapping}
+        self.assertTrue({"simulator/admission.json", "simulator/binding.json", "simulator/prelaunch.json",
+                         "simulator/canonical-start.json", "simulator/canonical-product.json", "simulator/launch.json",
+                         "simulator/retirement.json"} <= names)
+        self.assertTrue(all("commands/" + label + "/stdout.log" in names
+                            for label in (*C.simulator.PREPARE, C.simulator.PRELAUNCH, *C.simulator.RETIRE)))
+        retained = {row["original"]: row for row in mapping}
+        for name in ("canonical-start.json", "canonical-product.json", "launch.json", "prelaunch.json"):
+            with self.subTest(original=name):
+                row = retained["simulator/" + name]
+                copied = (session / "frozen-evidence" / row["member"]).read_bytes()
+                self.assertEqual(copied, (session / "evidence/simulator" / name).read_bytes())
+                self.assertEqual((len(copied), C.digest(copied)), (row["size"], row["sha256"]))
+
+    def test_full_originally_booted_device_is_not_adopted(self):
+        self.simulator_state("Booted")
+        _session, result = self.execute_full()
+        self.assertFalse(result["profilePassed"])
+        self.assertFalse(result["productAttempted"])
+        self.assertFalse(any(label in C.simulator.RETIRE for label, _argv in self.simulator_calls))
+        self.assertFalse(any("prepare" in row["argv"] for row in self.calls))
+        self.assertEqual(self.seal(), "artifacts_ready=true\nprofile_passed=false\n")
+
+    def test_full_old_writer_xcode_is_not_ordinary_admission(self):
+        self.simulator_outputs["simulator-xcode-version"] = b"Xcode 16.2\nBuild version 16C5032a\n"
+        _session, result = self.execute_full()
+        self.assertFalse(result["profilePassed"])
+        self.assertFalse(result["productAttempted"])
+        self.assertEqual([label for label, _argv in self.simulator_calls],
+                         ["simulator-macos-version", "simulator-xcode-version"])
+        self.assertFalse(any("prepare" in row["argv"] for row in self.calls))
+
+    def test_full_first_launch_nonzero_cannot_be_ignored(self):
+        self.simulator_codes["simulator-first-launch"] = 76
+        session, result = self.execute_full()
+        self.assertFalse(result["profilePassed"])
+        self.assertFalse(result["productAttempted"])
+        row = C.parse((session / "evidence/commands/simulator-first-launch/result.json").read_bytes())
+        self.assertEqual(row["exitCode"], 76)
+        self.assertEqual(row["retirement"], "KNOWN")
+        self.assertFalse(any(label == "simulator-runtimes" for label, _argv in self.simulator_calls))
+
+    def test_full_wrong_runtime_refuses_before_device_inventory_or_loader(self):
+        self.simulator_runtimes["runtimes"][0]["version"] = "26.2"
+        _session, result = self.execute_full()
+        self.assertFalse(result["profilePassed"])
+        self.assertFalse(any("prepare" in row["argv"] or "--cwd" in row["argv"] for row in self.calls))
+        self.assertNotIn("simulator-devices", [label for label, _argv in self.simulator_calls])
+
+    def test_full_no_boot_still_requires_both_retirement_inventories(self):
+        self.product_boots_simulator = False
+        _session, result = self.execute_full()
+        self.assertTrue(result["profilePassed"])
+        self.assertEqual([label for label, _argv in self.simulator_calls if label in C.simulator.RETIRE],
+                         [C.simulator.BEFORE, C.simulator.AFTER])
+        self.assertFalse(result["simulator"]["terminal"]["shutdownAttempted"])
+        self.assertEqual(self.seal(), "artifacts_ready=true\nprofile_passed=true\n")
+
+    def test_full_failed_product_still_retires_owned_uuid_and_stays_failed(self):
+        self.product_code = 23
+        _session, result = self.execute_full()
+        self.assertFalse(result["profilePassed"])
+        self.assertEqual(result["simulator"]["terminal"]["status"], "KNOWN_SHUTDOWN")
+        self.assertTrue(result["simulator"]["terminal"]["shutdownAttempted"])
+        self.assertIsNone(result["simulator"]["terminal"]["coverage"])
+        self.assertFalse(any("model-loader" in str(row["argv"]) for row in self.calls))
+        self.assertEqual(self.seal(), "artifacts_ready=true\nprofile_passed=false\n")
+
+    def test_full_failed_profile_cannot_seal_reordered_original_simulator_phases(self):
+        self.product_code = 23
+        session, result = self.execute_full()
+        self.assertFalse(result["profilePassed"])
+        phases = result["phases"]
+        first = next(index for index, row in enumerate(phases) if row["phase"] == C.simulator.BEFORE)
+        phases[first], phases[first + 1] = phases[first + 1], phases[first]
+        self.save(session / "controller-result.json", result)
+        with self.assertRaisesRegex(C.ControllerError, "PHASE_SEQUENCE_CHANGED"):
+            self.seal()
+        self.assertEqual((self.path / "public-step-output").read_bytes(), b"")
+
+    def test_full_failed_profile_cannot_seal_overlapping_raw_phase_intervals(self):
+        self.product_code = 23
+        session, result = self.execute_full()
+        row = next(row for row in result["phases"] if row["phase"] == C.simulator.BEFORE)
+        row["startedRawNs"] -= 1  # Still internally ordered, but precedes the previous finalized phase.
+        directory = session / "evidence/commands" / C.simulator.BEFORE
+        start = C.parse((directory / "start.json").read_bytes())
+        start["startedRawNs"] = row["startedRawNs"]
+        self.save(directory / "start.json", start)
+        raw = self.save(directory / "result.json", row)
+        result["phaseSha256"][C.simulator.BEFORE] = C.digest(raw)
+        terminal = result["simulator"]["terminal"]
+        terminal["phases"][C.simulator.BEFORE]["phaseSha256"] = C.digest(raw)
+        self.save(session / "evidence/simulator/retirement.json", terminal)
+        self.save(session / "controller-result.json", result)
+        with self.assertRaisesRegex(C.ControllerError, "PHASE_RAW_SEQUENCE_CHANGED"):
+            self.seal()
+        self.assertEqual((self.path / "public-step-output").read_bytes(), b"")
+
+    def test_full_no_launch_external_change_never_authorizes_shutdown(self):
+        controller = self.full_controller()
+        self.simulator_state("Booted")
+        with self.assertRaisesRegex(C.ControllerError, "SIMULATOR_UNLAUNCHED_EXTERNAL_STATE_CHANGE"):
+            controller.retire_simulator()
+        self.assertFalse(controller.product_attempted)
+        self.assertTrue(controller.unknown)
+        self.assertFalse(any(label == C.simulator.SHUTDOWN for label, _argv in self.simulator_calls))
+        self.assertEqual([label for label, _argv in self.simulator_calls if label in C.simulator.RETIRE],
+                         [C.simulator.BEFORE, C.simulator.AFTER])
+        self.assertEqual(controller.simulator_terminal["after"]["state"], "Booted")
+
+    def test_full_no_launch_unchanged_device_can_be_proven_shutdown_without_mutation(self):
+        controller = self.full_controller()
+        controller.retire_simulator()
+        self.assertFalse(controller.product_attempted)
+        self.assertEqual(controller.simulator_terminal["status"], "KNOWN_SHUTDOWN")
+        self.assertFalse(controller.simulator_terminal["shutdownAttempted"])
+        self.assertFalse(controller.result()["profilePassed"])
+        controller.close()
+
+    def test_full_external_boot_during_custody_prepare_is_never_adopted(self):
+        self.use_full()
+        self.product_boots_simulator = False
+        model = self.model_child
+        def external(argv, environment):
+            model(argv, environment)
+            if "prepare" in argv:
+                self.simulator_state("Booted")
+        with patch.object(self, "model_child", side_effect=external), \
+                patch.object(C.shutil, "which", return_value=sys.executable), redirect_stdout(io.StringIO()):
+            self.assertEqual(self.call_run(), 125)
+        controller = self.owners[-1]
+        self.assertFalse(controller.product_attempted)
+        self.assertFalse(controller.result()["profilePassed"])
+        self.assertFalse(any(label == C.simulator.SHUTDOWN for label, _argv in self.simulator_calls))
+        self.assertFalse((controller.path / "export").exists())
+
+    def test_full_outer_spawn_attempt_without_a_created_child_never_authorizes_shutdown(self):
+        controller = self.full_controller()
+        spawn = Scope.spawn
+        failure = OSError("SYNTHETIC_SPAWN_FAILED_BEFORE_CHILD_CREATION")
+        def failed(scope, argv, cwd, environment, **sinks):
+            if "--cwd" in argv:
+                self.simulator_state("Booted")  # External transition after the prelaunch observation.
+                raise failure
+            return spawn(scope, argv, cwd, environment, **sinks)
+        with patch.object(Scope, "spawn", failed), self.assertRaises(OSError) as caught:
+            controller.product_run()
+        self.assertIs(caught.exception, failure)
+        product = next(row for row in controller.records if row["phase"] == "product")
+        self.assertTrue(product["launchAttempted"])
+        self.assertEqual(product["ownership"]["launches"], [])
+        self.assertIsNone(controller.simulator_authority)
+        with self.assertRaisesRegex(C.ControllerError, "SIMULATOR_UNLAUNCHED_EXTERNAL_STATE_CHANGE"):
+            controller.retire_simulator()
+        self.assertIs(controller.original, failure)
+        self.assertFalse(any(label == C.simulator.SHUTDOWN for label, _argv in self.simulator_calls))
+
+    def test_full_created_outer_bootstrap_without_actual_start_never_authorizes_shutdown(self):
+        controller = self.full_controller()
+        model = self.model_child
+        def bootstrap_failure(argv, environment):
+            if "--cwd" in argv:
+                self.simulator_state("Booted")
+                self.exit_code = 2
+            else:
+                model(argv, environment)
+        with patch.object(self, "model_child", side_effect=bootstrap_failure), self.assertRaises(FileNotFoundError):
+            controller.product_run()
+        product = next(row for row in controller.records if row["phase"] == "product")
+        self.assertTrue(product["ownership"]["launches"][0]["created"])
+        self.assertIsNone(controller.simulator_authority)
+        self.assertTrue(controller.unknown)  # Existing opaque-reader failure policy is not weakened for cleanup.
+        with self.assertRaisesRegex(C.ControllerError, "PRIOR_NATIVE_RETIREMENT_UNKNOWN"):
+            controller.retire_simulator()
+        self.assertFalse(any(label in C.simulator.RETIRE for label, _argv in self.simulator_calls))
+
+    def test_full_allocated_start_without_created_canonical_product_grants_no_authority(self):
+        controller = self.full_controller()
+        model = self.model_child
+        def failed_product_start(argv, environment):
+            model(argv, environment)
+            if "--cwd" in argv:
+                path = controller.state_path / "evidence" / self.reserved / "receipt.json"
+                value = C.parse(path.read_bytes())
+                value["ownership"]["launches"] = []
+                self.save(path, value)
+        with patch.object(self, "model_child", side_effect=failed_product_start), \
+                self.assertRaisesRegex(ValueError, "SIMULATOR_NATIVE_LAUNCH_REQUIRED"):
+            controller.product_run()
+        self.assertIsNone(controller.simulator_authority)
+        with self.assertRaisesRegex(C.ControllerError, "SIMULATOR_UNLAUNCHED_EXTERNAL_STATE_CHANGE"):
+            controller.retire_simulator()
+        self.assertFalse(any(label == C.simulator.SHUTDOWN for label, _argv in self.simulator_calls))
+
+    def damaged_owned_receipt(self, relative):
+        controller = self.full_controller()
+        controller.product_run()
+        controller.collect()
+        authority = controller.simulator_authority
+        self.assertIsNotNone(authority)
+        path = controller.path / relative
+        self.save(path, path.read_bytes() + b" ")
+        with self.assertRaises(C.ControllerError):
+            controller.retire_simulator()
+        self.assertEqual(controller.simulator_authority, authority)
+        self.assertEqual(controller.simulator_terminal["after"]["state"], "Shutdown")
+        self.assertEqual(controller.simulator_terminal["cleanupStatus"], "KNOWN_SHUTDOWN")
+        self.assertEqual(controller.simulator_terminal["status"], "HOLD")
+        self.assertTrue(controller.unknown)
+        self.assertFalse(controller.result()["profilePassed"])
+        self.assertEqual([argv for label, argv in self.simulator_calls if label == C.simulator.SHUTDOWN],
+                         [["/usr/bin/xcrun", "simctl", "shutdown", self.simulator_uuid]])
+        self.assertFalse((controller.path / "export").exists())
+
+    def test_full_postproduct_admission_damage_keeps_hold_but_retires_owned_uuid(self):
+        self.damaged_owned_receipt("evidence/simulator/admission.json")
+
+    def test_full_postproduct_actual_start_damage_keeps_hold_but_retires_owned_uuid(self):
+        self.damaged_owned_receipt("state/evidence/" + self.reserved + "/start.json")
+
+    def test_full_mutated_reservation_refuses_before_product_scope(self):
+        controller = self.full_controller()
+        path = controller.path / C.simulator.RELATIVE
+        value = C.parse(path.read_bytes())
+        value["productInvocation"] = "f" * 32
+        self.save(path, value)
+        self.events.clear()
+        with self.assertRaisesRegex(C.ControllerError, "SIMULATOR_PRIMARY_BINDING_CHANGED"):
+            controller.product_run()
+        self.assertNotIn("scope", self.events)
+        self.assertFalse(controller.product_attempted)
+
+    def test_full_shutdown_failure_captures_terminal_inventory_but_never_exports(self):
+        self.use_full()
+        self.simulator_codes[C.simulator.SHUTDOWN] = 23
+        with patch.object(C.shutil, "which", return_value=sys.executable), redirect_stdout(io.StringIO()):
+            self.assertEqual(self.call_run(), 125)
+        controller = self.owners[-1]
+        self.assertTrue(controller.unknown)
+        self.assertEqual(controller.simulator_terminal["retirement"], "UNKNOWN")
+        self.assertTrue(any(label == C.simulator.AFTER for label, _argv in self.simulator_calls))
+        self.assertTrue((controller.path / "evidence/commands/simulator-shutdown/result.json").is_file())
+        self.assertFalse((controller.path / "export").exists())
+
+    def test_full_unknown_simulator_native_close_never_allows_next_phase_or_export(self):
+        self.use_full()
+        close = Scope.close
+        def unknown(scope):
+            close(scope)
+            if self.calls[-1]["stdout"].path.parent.name == C.simulator.BEFORE:
+                raise OSError("synthetic simulator-query close unknown")
+        with patch.object(Scope, "close", unknown), patch.object(C.shutil, "which", return_value=sys.executable), \
+                redirect_stdout(io.StringIO()):
+            self.assertEqual(self.call_run(), 125)
+        controller = self.owners[-1]
+        self.assertTrue(controller.unknown)
+        self.assertFalse(any(label in (C.simulator.SHUTDOWN, C.simulator.AFTER) for label, _argv in self.simulator_calls))
+        self.assertFalse((controller.path / "export").exists())
+
+    def test_full_late_terminal_query_zero_cannot_authorize_export(self):
+        self.use_full()
+        model = self.model_child
+        def late(argv, environment):
+            model(argv, environment)
+            if self.calls[-1]["stdout"].path.parent.name == C.simulator.AFTER:
+                self.clock.set_raw(self.owners[-1].budget.fence(C.simulator.AFTER))
+        with patch.object(self, "model_child", side_effect=late), patch.object(C.shutil, "which", return_value=sys.executable), \
+                redirect_stdout(io.StringIO()):
+            self.assertEqual(self.call_run(), 125)
+        self.assertTrue(self.owners[-1].unknown)
+        self.assertFalse(self.owners[-1].result()["profilePassed"])
+        self.assertFalse((self.owners[-1].path / "export").exists())
+
+    def test_full_late_retirement_record_keeps_provisional_receipt_but_actual_hold(self):
+        self.use_full()
+        write = C.PrivateOwner.write
+        def late(owner, directory, name, value, end):
+            result = write(owner, directory, name, value, end)
+            if name == "retirement.json":
+                self.clock.set_raw(self.owners[-1].budget.fence("simulator-retirement"))
+            return result
+        with patch.object(C.PrivateOwner, "write", late), patch.object(C.shutil, "which", return_value=sys.executable), \
+                redirect_stdout(io.StringIO()):
+            self.assertEqual(self.call_run(), 125)
+        controller = self.owners[-1]
+        provisional = C.parse((controller.path / "evidence/simulator/retirement.json").read_bytes())
+        self.assertEqual(provisional["status"], "KNOWN_SHUTDOWN")
+        self.assertEqual(controller.simulator_terminal["status"], "HOLD")
+        self.assertTrue(controller.unknown)
+        self.assertFalse((controller.path / "export").exists())
+
+    def test_full_terminal_original_mutation_cannot_seal_even_with_green_boolean(self):
+        session, result = self.execute_full()
+        self.assertTrue(result["profilePassed"])
+        path = session / "evidence/commands" / C.simulator.AFTER / "stdout.log"
+        terminal = C.parse(path.read_bytes())
+        terminal["devices"][self.simulator_runtime][0]["state"] = "Booted"
+        self.save(path, terminal)
+        with self.assertRaises(C.ControllerError):
+            self.seal()
+        self.assertEqual((self.path / "public-step-output").read_bytes(), b"")
+
+    def test_full_post_return_actual_start_mutation_cannot_seal(self):
+        session, result = self.execute_full()
+        self.assertTrue(result["profilePassed"])
+        path = session / "state/evidence" / self.reserved / "start.json"
+        self.save(path, path.read_bytes() + b" ")
+        with self.assertRaisesRegex(C.ControllerError, "SIMULATOR_LAUNCH_ORIGINALS_CHANGED"):
+            self.seal()
+        self.assertEqual((self.path / "public-step-output").read_bytes(), b"")
+
+    def test_full_post_return_launch_authority_copy_mutation_cannot_seal(self):
+        session, result = self.execute_full()
+        self.assertTrue(result["profilePassed"])
+        path = session / "evidence/simulator/launch.json"
+        self.save(path, path.read_bytes() + b" ")
+        with self.assertRaisesRegex(C.ControllerError, "SIMULATOR_LAUNCH_ORIGINALS_CHANGED"):
+            self.seal()
+        self.assertEqual((self.path / "public-step-output").read_bytes(), b"")
+
+    def test_full_post_return_prelaunch_inventory_mutation_cannot_seal(self):
+        session, result = self.execute_full()
+        self.assertTrue(result["profilePassed"])
+        path = session / "evidence/commands" / C.simulator.PRELAUNCH / "stdout.log"
+        value = C.parse(path.read_bytes())
+        value["devices"][self.simulator_runtime][0]["state"] = "Booted"
+        self.save(path, value)
+        with self.assertRaisesRegex(ValueError, "SIMULATOR_PRELAUNCH_EXTERNAL_STATE_CHANGE"):
+            self.seal()
+        self.assertEqual((self.path / "public-step-output").read_bytes(), b"")
+
+    def test_full_post_return_shutdown_cannot_drop_its_actual_launch_authority(self):
+        session, result = self.execute_full()
+        self.assertTrue(result["profilePassed"])
+        result["simulator"]["terminal"]["launchAuthoritySha256"] = None
+        self.save(session / "controller-result.json", result)
+        self.save(session / "evidence/simulator/retirement.json", result["simulator"]["terminal"])
+        with self.assertRaisesRegex(C.ControllerError, "SEALED_SIMULATOR_SHUTDOWN_WITHOUT_LAUNCH"):
+            self.seal()
+        self.assertEqual((self.path / "public-step-output").read_bytes(), b"")
+
+    def test_full_missing_retirement_receipt_is_not_reconstructed_from_result_boolean(self):
+        session, result = self.execute_full()
+        self.assertTrue(result["profilePassed"])
+        (session / "evidence/simulator/retirement.json").unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.seal()
+        self.assertEqual((self.path / "public-step-output").read_bytes(), b"")
+
+    def test_full_original_admission_cannot_be_rebound_to_another_device(self):
+        session, _result = self.execute_full()
+        path = session / "evidence/simulator/admission.json"
+        value = C.parse(path.read_bytes())
+        value["selected"]["device"]["udid"] = "BBBBBBBB-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
+        self.save(path, value)
+        with self.assertRaisesRegex(C.ControllerError, "SIMULATOR_ADMISSION_ORIGINALS_CHANGED"):
+            self.seal()
+        self.assertEqual((self.path / "public-step-output").read_bytes(), b"")
+
+    def test_full_missing_generated_property_evidence_blocks_export_not_just_label(self):
+        self.use_full()
+        model = self.model_platform_reports
+        def missing(folder, environment):
+            model(folder, environment)
+            return []
+        with patch.object(self, "model_platform_reports", side_effect=missing), \
+                patch.object(C.shutil, "which", return_value=sys.executable), redirect_stdout(io.StringIO()):
+            self.assertEqual(self.call_run(), 125)
+        self.assertFalse(self.owners[-1].result()["profilePassed"])
+        self.assertFalse((self.owners[-1].path / "export").exists())
+
     def test_full_without_service_job_time_refuses_before_crypto_or_init(self):
         self.profile = "full"
         record = C.parse(self.admitted.record)
@@ -961,7 +1488,15 @@ class WholeControllerModels(Base):
         controller = self.full_controller()
         self.events.clear()
         self.calls.clear()
+        reached = []
         def slow_scope(*args):
+            if args[0] != self.job:
+                return Scope(self, *args)
+            # New prelaunch query is independently drained before this same
+            # original product-scope cutoff. Keep assertions on its own trace.
+            self.events.clear()
+            self.calls.clear()
+            reached.append("product")
             scope = Scope(self, *args)
             self.clock.set_raw(controller.budget.fence("productive"))
             return scope
@@ -969,6 +1504,7 @@ class WholeControllerModels(Base):
                 patch.object(C.audit, "request_cancellation", side_effect=self.model_cancellation), \
                 self.assertRaises(C.ControllerError):
             controller.product_run()
+        self.assertEqual(reached, ["product"])
         self.assertNotIn("spawn", self.events)
         self.assertFalse(any("--cwd" in row["argv"] for row in self.calls))
         self.assertTrue(controller.budget_exhausted)
@@ -981,7 +1517,7 @@ class WholeControllerModels(Base):
             polls.append(self.clock.raw())
             self.clock.set_raw(controller.budget.fence("product-return") + C.job_time.NS)
             return 0
-        self.poll_function = delayed_poll
+        self.inject_product_poll(delayed_poll)
         with patch.object(C.audit, "request_cancellation", side_effect=self.model_cancellation) as cancellation, \
                 self.assertRaises(C.ControllerError):
             controller.product_run()
@@ -1199,7 +1735,7 @@ class WholeControllerModels(Base):
         def fail_request(*args):
             self.events.append("cooperative-attempt")
             raise failure
-        self.poll_function = poll
+        self.inject_product_poll(poll)
         with patch.object(C.audit, "request_cancellation", side_effect=fail_request) as cancellation, \
                 self.assertRaises(OSError) as raised:
             controller.product_run()
@@ -1234,7 +1770,7 @@ class WholeControllerModels(Base):
             if stream.path == controller.commands.path / "product/stdout.log" and "spawn" in self.events and not reached:
                 return fail()
             return verify(stream)
-        self.poll_function = fail if boundary == "poll" else lambda: None
+        self.inject_product_poll(fail if boundary == "poll" else lambda: None)
         with ExitStack() as changes:
             if boundary == "discovery":
                 changes.enter_context(patch.object(Scope, "discover", fail_discover))
@@ -1272,7 +1808,9 @@ class WholeControllerModels(Base):
         self.use_full()
         # Reach the job cutoff within audit-init's unchanged 120+45s envelope,
         # not by leaping beyond an already-expired independent operation cap.
-        self.job_elapsed = 1600
+        # Preserve the same near-cutoff scenario after the NEW required 615s
+        # simulator retirement reserve; this is not a relaxed timeout.
+        self.job_elapsed = C.job_time.JOB_SECONDS - C.job_time.RESERVE_SECONDS - 66 - 119
         modeled = self.model_child
         def late_init(argv, environment):
             modeled(argv, environment)
@@ -1840,9 +2378,11 @@ class WindowsFileModels(Base):
                 self.launches.append({"argv": argv, "cwd": cwd, "created": True})
                 return SimpleNamespace(stdout=None, stderr=None, poll=lambda: case.exit_code)
             def description(self):
-                result = super().description()
-                result.update(backend="windows-job-list-suspended", scope="kernel-job-no-breakaway-kill-on-close")
-                return result
+                # This existing in-memory Windows handle model is not the new
+                # Darwin simulator model and must not invent Darwin birth IDs.
+                return {"backend": "windows-job-list-suspended", "scope": "kernel-job-no-breakaway-kill-on-close",
+                        "job": self.job, "invocation": self.invocation, "launches": self.launches,
+                        "discoveryErrors": case.discovery_errors}
         return WindowsScopeModel(case, job, invocation, state, home)
 
     def tearDown(self):
