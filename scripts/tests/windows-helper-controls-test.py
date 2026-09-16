@@ -1190,5 +1190,387 @@ class RunFailureModels(Models):
         self.export.assert_not_called()
 
 
+
+class FilesystemObservationModels(Models):
+    @staticmethod
+    def detail(message, kind="FilesystemError"):
+        return {"nodes": [{"type": kind, "message": message}], "retirementUnknown": False}
+
+    def test_every_exact_supplier_literal_has_one_closed_public_guard(self):
+        sample = H.public_observation(H.Stage.CONTROLS, self.detail("Pinned native identity changed"))
+        self.assertIn("filesystemGuard", sample)
+        tree = ast.parse((SCRIPTS / "hosted_windows_files.py").read_bytes())
+        literals = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                index = {"require": 1, "FilesystemError": 0}.get(node.func.id)
+                if index is not None and len(node.args) > index:
+                    arg = node.args[index]
+                    if isinstance(arg, ast.Constant) and type(arg.value) is str:
+                        literals.append(arg.value)
+        self.assertEqual((len(literals), len(set(literals))), (92, 90))
+        self.assertEqual(set(H._FILESYSTEM_GUARDS), set(literals))
+        self.assertEqual(len(set(H._FILESYSTEM_GUARDS.values())), 90)
+        self.assertEqual({member.value for member in H.FilesystemGuard},
+                         {"UNOBSERVED", *H._FILESYSTEM_GUARDS.values()})
+        for message, guard in H._FILESYSTEM_GUARDS.items():
+            with self.subTest(guard=guard):
+                detail = self.detail(message); original = copy.deepcopy(detail)
+                value = H.public_observation(H.Stage.CONTROLS, detail)
+                self.assertEqual(value["filesystemGuard"], guard)
+                self.assertEqual(detail, original)
+                self.assertEqual(value["nativeOperation"], "UNOBSERVED")
+                output = io.StringIO()
+                with patch.object(H.sys, "stderr", output): H.print_public_failure(value)
+                self.assertIn("filesystemGuard=" + guard, output.getvalue())
+                self.assertNotIn(message, output.getvalue())
+
+    def test_specific_nested_guard_is_not_hidden_by_a_generic_wrapper(self):
+        detail = self.detail("Native file finalization failed")
+        detail["windowsEvidence"] = [{"failures": [{"detail": self.detail("Pinned native identity changed")}]}]
+        original = copy.deepcopy(detail)
+        self.assertEqual(H.public_observation(H.Stage.CONTROLS, detail).get("filesystemGuard"), "HANDLE_PIN_CHANGED")
+        self.assertEqual(detail, original)
+
+    def test_generic_fallback_and_multiple_specific_selection_are_deterministic(self):
+        wrappers = {"Native custody cleanup failed": "CUSTODY_CLEANUP_WRAPPER",
+                    "Native handle closure failed": "HANDLE_CLOSE_WRAPPER",
+                    "Native file finalization failed": "FILE_FINALIZATION_WRAPPER",
+                    "Native snapshot finalization failed": "SNAPSHOT_FINALIZATION_WRAPPER"}
+        self.assertEqual(set(H._FILESYSTEM_WRAPPERS), set(wrappers.values()))
+        for message, guard in wrappers.items():
+            with self.subTest(guard=guard):
+                detail = self.detail(message)
+                self.assertEqual(H.public_observation(H.Stage.CONTROLS, detail)["filesystemGuard"], guard)
+                detail["nodes"] += self.detail("Native filesystem deadline exceeded")["nodes"]
+                detail["nodes"] += self.detail("Pinned native identity changed")["nodes"]
+                self.assertEqual(H.public_observation(H.Stage.CONTROLS, detail)["filesystemGuard"], "DEADLINE_EXCEEDED")
+
+    def test_unknown_code_shaped_partial_nonstring_and_untyped_messages_stay_private(self):
+        message = "Pinned native identity changed"
+        for text in ("MODEL_PRIVATE_SENTINEL", "HANDLE_PIN_CHANGED", " " + message, message + " ", message + "\n",
+                     message + "MODEL_PRIVATE_SENTINEL", message.upper(), "x" * 2049, None, 1, {}, []):
+            with self.subTest(message=text):
+                value = H.public_observation(H.Stage.CONTROLS, self.detail(text))
+                self.assertEqual(value["filesystemGuard"], "UNOBSERVED")
+        for kind in ("OSError", "OwnershipError", "FilesystemErrorSuffix", None, {}, []):
+            self.assertEqual(H.public_observation(H.Stage.CONTROLS, self.detail(message, kind))["filesystemGuard"],
+                             "UNOBSERVED")
+        output = io.StringIO()
+        value = H.public_observation(H.Stage.CONTROLS, self.detail("MODEL_PRIVATE_SENTINEL"))
+        with patch.object(H.sys, "stderr", output): H.print_public_failure(value)
+        self.assertNotIn("MODEL", output.getvalue())
+
+    def test_existing_graph_bounds_and_malformed_nodes_cannot_expand_observation(self):
+        matching = self.detail("Pinned native identity changed")
+        unknown = self.detail("MODEL_PRIVATE_SENTINEL")["nodes"][0]
+        details = [None, [], "MODEL_PRIVATE_SENTINEL", {"nodes": None}, {"nodes": [None, [], "MODEL"]},
+                   {"nodes": [unknown] * 64 + matching["nodes"]},
+                   {"windowsEvidence": [{}] * 8 + [{"failures": [{"detail": matching}]}]},
+                   {"windowsEvidence": [{"failures": [{}] * 64 + [{"detail": matching}]}]},
+                   {"windowsEvidence": [{"failures": [{"detail": None}, None, []]}]}]
+        for detail in details:
+            self.assertEqual(H.public_observation(H.Stage.CONTROLS, detail)["filesystemGuard"], "UNOBSERVED")
+        detail = {"nodes": [unknown] * 63 + matching["nodes"]}
+        self.assertEqual(H.public_observation(H.Stage.CONTROLS, detail)["filesystemGuard"], "HANDLE_PIN_CHANGED")
+        cycle = {"nodes": [unknown]}; cycle["windowsEvidence"] = [{"failures": [{"detail": cycle}]}]
+        self.assertEqual(H.public_observation(H.Stage.CONTROLS, cycle)["filesystemGuard"], "UNOBSERVED")
+
+    def test_projection_uses_captured_details_without_live_exception_access(self):
+        class Hostile:
+            def __getattribute__(self, name): raise AssertionError("MODEL LIVE ACCESSOR")
+            def __str__(self): raise AssertionError("MODEL LIVE STR")
+            def __hash__(self): raise AssertionError("MODEL LIVE HASH")
+            def __eq__(self, other): raise AssertionError("MODEL LIVE EQ")
+        self.assertEqual(H.public_observation(H.Stage.CONTROLS, Hostile())["filesystemGuard"], "UNOBSERVED")
+        detail = self.detail(Hostile()); detail["code"] = "HANDLE_PIN_CHANGED"
+        self.assertEqual(H.public_observation(H.Stage.CONTROLS, detail)["filesystemGuard"], "UNOBSERVED")
+        with patch.object(H, "error_detail", side_effect=AssertionError("MODEL LIVE DETAIL ACCESS")):
+            value = H.public_observation(H.Stage.CONTROLS, self.detail("Pinned native identity changed"))
+        self.assertEqual(value["filesystemGuard"], "HANDLE_PIN_CHANGED")
+
+
+class ControlProgressModels(Models):
+    def test_fixed_control_inventory_is_exact_and_no_runtime_name_transform_is_used(self):
+        expected = {"executor": "EXECUTOR", "files": "FILES", "native-sinks": "NATIVE_SINKS",
+                    "native-output-bound": "NATIVE_OUTPUT_BOUND", "native-launch-close": "NATIVE_LAUNCH_CLOSE",
+                    "native-tee": "NATIVE_TEE", "native-controller-command": "NATIVE_CONTROLLER_COMMAND",
+                    "native-controller-retirement": "NATIVE_CONTROLLER_RETIREMENT", "native-export": "NATIVE_EXPORT",
+                    "native-export-wrong-recipient": "NATIVE_EXPORT_WRONG_RECIPIENT",
+                    "native-export-input-quarantine": "NATIVE_EXPORT_INPUT_QUARANTINE"}
+        self.assertEqual({name: unit.value for name, unit in H._CONTROL_UNITS.items()}, expected)
+        self.assertEqual(set(expected), {"executor", "files", *H.NATIVE_CASES})
+        self.assertEqual({unit.value for unit in H.ControlUnit},
+                         {"UNOBSERVED", "CONTROLS_POSTCHECK", *expected.values()})
+        self.assertEqual({phase.value for phase in H.ControlPhase},
+                         {"UNOBSERVED", "SETUP", "COMMAND", "VERIFY", "FINALIZE"})
+
+    def test_control_enum_inputs_and_public_pairs_are_closed_and_cleared_outside_controls(self):
+        progress = H.Progress(); progress.mark(H.Stage.CONTROLS)
+        for unit in H._CONTROL_UNITS.values():
+            for phase in (H.ControlPhase.SETUP, H.ControlPhase.COMMAND, H.ControlPhase.VERIFY, H.ControlPhase.FINALIZE):
+                progress.control(unit, phase)
+                value = progress.observation({"retirementUnknown": False})
+                self.assertEqual((value["controlUnit"], value["controlPhase"]), (unit.value, phase.value))
+        for unit, phase in (("EXECUTOR", H.ControlPhase.COMMAND), (H.ControlUnit.EXECUTOR, "COMMAND"),
+                            ("MODEL_PRIVATE_SENTINEL", "MODEL_PRIVATE_SENTINEL")):
+            with self.assertRaises(ValueError): progress.control(unit, phase)
+        progress.mark(H.Stage.EXPORT)
+        self.assertEqual((progress.control_unit, progress.control_phase),
+                         (H.ControlUnit.UNOBSERVED, H.ControlPhase.UNOBSERVED))
+        defaults = H.public_observation(H.Stage.CONTROLS, {})
+        invalid = [{**defaults, "controlUnit": "EXECUTOR"}, {**defaults, "controlPhase": "COMMAND"},
+                   {**defaults, "controlUnit": "CONTROLS_POSTCHECK", "controlPhase": "COMMAND"},
+                   {**defaults, "stage": "EXPORT", "controlUnit": "EXECUTOR", "controlPhase": "VERIFY"}]
+        for value in invalid:
+            output = io.StringIO()
+            with patch.object(H.sys, "stderr", output): H.print_public_failure(value)
+            self.assertIn("stage=UNOBSERVED", output.getvalue())
+            self.assertIn("controlUnit=UNOBSERVED", output.getvalue())
+            self.assertIn("retirementObservation=UNKNOWN", output.getvalue())
+
+    def test_successful_finalizer_preserves_primary_identity_context_and_prior_phase(self):
+        for phase in (H.ControlPhase.COMMAND, H.ControlPhase.VERIFY):
+            progress = H.Progress(); progress.mark(H.Stage.CONTROLS)
+            progress.control(H.ControlUnit.FILES, phase)
+            cause = ValueError("MODEL original cause")
+            original = KeyboardInterrupt("MODEL original cancellation"); original.__cause__ = cause
+            closed = []
+            def close():
+                closed.append(progress.control_phase)
+            with self.assertRaises(KeyboardInterrupt) as caught:
+                try: raise original
+                finally: progress.finalize_control(close)
+            self.assertIs(caught.exception, original)
+            self.assertIs(original.__cause__, cause)
+            self.assertIsNone(original.__context__)
+            self.assertEqual(closed, [H.ControlPhase.FINALIZE])
+            self.assertEqual(progress.control_phase, phase)
+
+    def test_failing_finalizer_preserves_surfaced_exception_and_original_context(self):
+        progress = H.Progress(); progress.mark(H.Stage.CONTROLS)
+        progress.control(H.ControlUnit.EXECUTOR, H.ControlPhase.COMMAND)
+        original = KeyboardInterrupt("MODEL original cancellation")
+        late = H.files.FilesystemError("Native handle closure failed")
+        called = []
+        def close():
+            called.append(True)
+            raise late
+        with self.assertRaises(H.files.FilesystemError) as caught:
+            try: raise original
+            finally: progress.finalize_control(close)
+        self.assertIs(caught.exception, late)
+        self.assertIs(late.__context__, original)
+        self.assertIsNone(late.__cause__)
+        self.assertEqual(called, [True])
+        self.assertEqual(progress.control_phase, H.ControlPhase.FINALIZE)
+
+
+def observation_execution_model(local, *, target=None, phase=None, original=None):
+    """All-in-memory caller exercise; no native body, executable or GPG process."""
+    model = RunFailureModels()
+    local.callback(model.doCleanups)
+    model.setUp()
+    memory = model.memory
+    original = H.files.FilesystemError("Pinned native identity changed") if original is None else original
+    model.progress = H.Progress()
+    model.boundaries, model.runners = [], []
+    create = Owner.create_directory
+    def directory(owner, name):
+        if str(owner.path) == "/run-model/state" and name == target and phase == "SETUP":
+            raise original
+        return create(owner, name)
+    local.enter_context(patch.object(Owner, "create_directory", directory))
+    class Runner:
+        def __init__(self, evidence, state, job, *, deadline, environment=None, cancellation=None):
+            self.evidence, self.state, self.deadline = evidence, state, deadline
+            self.environment, self.unknown = {}, False
+            self.cancelled = [] if cancellation is None else cancellation
+            model.runners.append(self)
+        def run(self, args, label, **kwargs):
+            model.invocations.append((label, args))
+            model.boundaries.append((label, model.progress.observation({"retirementUnknown": False})))
+            if label == target and phase == "COMMAND": raise original
+            capture = self.evidence.create_directory("original-" + label)
+            H.private_write(capture, "stdout.bin", b"MODEL NOT NATIVE")
+            H.private_write(capture, "stderr.bin", b"MODEL NOT NATIVE")
+            destination = self.evidence.create_directory(label + "-fixtures" if label in ("executor", "files") else label)
+            if label == "files":
+                H.private_json(destination, "summary.json", {"passed": True, "nativeRetirementKnown": True,
+                                                            "nativeMethods": ["test_model"]})
+            elif label not in ("executor", "files"):
+                H.private_json(destination, "result.json", {"MODEL_NOT_NATIVE": True})
+            return {"waitExitCode": 0}, capture
+        def close(self):
+            model.finalizations.append(str(self.state.path))
+            if self.state.path.name == target and phase == "FINALIZE": raise original
+            memory.fail("runner-close:" + str(self.state.path))
+    model.set(H, "Commands", new=Runner)
+    model.set(H.files, "open_private_directory", side_effect=lambda path: Owner(memory, path))
+    model.set(H, "public_file", return_value=b"MODEL NOT SOURCE VALIDATION")
+    model.set(H, "method_inventory", return_value={"WindowsNativeTests": ["test_model"], "NativeWindowsTests": ["test_model"]})
+    model.set(H.witness, "assess_native_cleanup", return_value=["MODEL_NOT_NATIVE"])
+    def verify(*args):
+        if target is not None and model.progress.control_unit == H._CONTROL_UNITS[target] and phase == "VERIFY":
+            raise original
+    model.set(H, "assert_unittest", side_effect=verify)
+    model.set(H, "assert_native_result", side_effect=verify)
+    local.enter_context(patch.dict(os.environ, dispatch()[0]))
+    return model
+
+
+class RunObservationModels(Models):
+    def model(self, local):
+        model = RunFailureModels()
+        local.callback(model.doCleanups)
+        model.setUp()
+        return model
+
+    def test_successful_suite_close_does_not_erase_the_actual_verify_failure_boundary(self):
+        with ExitStack() as local:
+            model = self.model(local)
+            self.assertEqual(H.run(), 0)
+            value = H.decode(model.memory.data["/run-model/evidence/controls-result.json"])
+            first = value["failures"][0]["observation"]
+            self.assertEqual((first.get("controlUnit"), first.get("controlPhase")), ("EXECUTOR", "VERIFY"))
+            self.assertEqual(value["failures"][0]["detail"]["nodes"][0]["message"], "NATIVE_SUITE_FAILED")
+            self.assertFalse(value["controlsPassed"])
+            self.assertEqual(model.finalizations, ["/run-model/state/executor", "/run-model/state"])
+
+    def test_every_unit_and_phase_is_observed_at_its_actual_caller_boundary(self):
+        names = ("executor", "files", *H.NATIVE_CASES)
+        for target in names:
+            for phase in ("SETUP", "COMMAND", "VERIFY", "FINALIZE"):
+                with self.subTest(unit=target, phase=phase), ExitStack() as local:
+                    model = observation_execution_model(local, target=target, phase=phase)
+                    self.assertEqual(H.run(model.progress), 0)
+                    value = H.decode(model.memory.data["/run-model/evidence/controls-result.json"])
+                    first = value["failures"][0]
+                    self.assertFalse(value["controlsPassed"])
+                    self.assertEqual(first["detail"]["nodes"][0]["message"], "Pinned native identity changed")
+                    observation = first["observation"]
+                    self.assertEqual((observation["controlUnit"], observation["controlPhase"], observation["filesystemGuard"]),
+                                     (H._CONTROL_UNITS[target].value, phase, "HANDLE_PIN_CHANGED"))
+                    self.assertEqual([label for label, _ in model.invocations],
+                                     list(names[:names.index(target) + (phase != "SETUP")]))
+                    for label, command in model.boundaries:
+                        self.assertEqual((command["controlUnit"], command["controlPhase"]),
+                                         (H._CONTROL_UNITS[label].value, "COMMAND"))
+
+    def test_postcheck_and_exit_from_controls_do_not_claim_a_stale_unit(self):
+        with ExitStack() as local:
+            model = observation_execution_model(local)
+            verify = H.assert_native_result
+            def cancel_at_last(name, *args):
+                verify(name, *args)
+                if name == H.NATIVE_CASES[-1]:
+                    # Model the existing shared cancellation list, not a real signal.
+                    model.runners[0].cancelled.append(15)
+            # No model cancellation flag is cleared or reused after this guard.
+            model.set(H, "assert_native_result", side_effect=cancel_at_last)
+            self.assertEqual(H.run(model.progress), 0)
+            result = H.decode(model.memory.data["/run-model/evidence/controls-result.json"])
+            self.assertFalse(result["controlsPassed"])
+            self.assertEqual(len(result["controls"]), 11)
+            failure = result["failures"][0]
+            self.assertEqual(failure["detail"]["nodes"][0]["message"], "HELPER_CANCELLED")
+            self.assertEqual((failure["observation"]["controlUnit"], failure["observation"]["controlPhase"]),
+                             ("CONTROLS_POSTCHECK", "VERIFY"))
+            self.assertEqual(model.runners[0].cancelled, [15])
+            self.assertEqual((model.progress.control_unit, model.progress.control_phase),
+                             (H.ControlUnit.UNOBSERVED, H.ControlPhase.UNOBSERVED))
+            self.assertEqual(model.progress.stage, H.Stage.ROOT_FINALIZATION)
+
+    def test_first_failure_and_captured_later_export_failure_are_separate(self):
+        with ExitStack() as local:
+            model = self.model(local)
+            model.export.side_effect = H.files.FilesystemError("Native output exceeds its byte bound")
+            self.assertEqual(H.run(), 1)
+            lines = model.stderr.getvalue().splitlines()
+            self.assertEqual(len(lines), 2)
+            self.assertTrue(lines[0].startswith("WINDOWS_HELPER_NOT_ACCEPTED="))
+            self.assertIn("stage=CONTROLS", lines[0])
+            self.assertTrue(lines[1].startswith("WINDOWS_HELPER_RETENTION_FAILURE=EXPORT_RETURN;"))
+            self.assertIn("stage=EXPORT", lines[1])
+            self.assertIn("filesystemGuard=FILE_OUTPUT_BOUND", lines[1])
+            private = H.decode(model.memory.data["/run-model/not-accepted.json"])
+            self.assertEqual([row["phase"] for row in private["failures"]], ["controls", "export-or-return"])
+            self.assertEqual(private["failures"][0]["detail"]["nodes"][0]["message"], "NATIVE_SUITE_FAILED")
+            self.assertEqual(private["failures"][1]["detail"]["nodes"][0]["message"], "Native output exceeds its byte bound")
+            self.assertNotIn("Native output", model.stderr.getvalue())
+            self.assertNotIn("/run-model/return.json", model.memory.data)
+            model.export.assert_called_once()
+
+    def test_later_unknown_keeps_first_failure_and_all_printed_records_unknown(self):
+        with ExitStack() as local:
+            model = self.model(local)
+            model.memory.errors["create:/run-model/started.json"] = OSError("MODEL_PRIVATE_SENTINEL")
+            model.memory.errors["close:/export-model"] = OSError("MODEL late close")
+            self.assertEqual(H.run(), 1)
+            lines = model.stderr.getvalue().splitlines()
+            self.assertEqual(len(lines), 2)
+            self.assertIn("stage=START_RECORD", lines[0])
+            self.assertTrue(lines[1].startswith("WINDOWS_HELPER_RETENTION_FAILURE=EXPORT_RETURN;"))
+            self.assertTrue(all("retirementObservation=UNKNOWN" in line for line in lines))
+            self.assertNotIn("MODEL", model.stderr.getvalue())
+            self.assertTrue(H._HELD)
+            model.export.assert_not_called()
+            self.assertNotIn("RETURNED_FOR_SEAL", model.stdout.getvalue())
+
+    def test_only_first_actual_later_failure_is_selected_not_each_cascade(self):
+        with ExitStack() as local:
+            model = self.model(local)
+            model.source_call.side_effect = [model.source, H.files.FilesystemError("Pinned native identity changed")]
+            self.assertEqual(H.run(), 1)
+            lines = model.stderr.getvalue().splitlines()
+            self.assertEqual(len(lines), 2)
+            self.assertTrue(lines[1].startswith("WINDOWS_HELPER_RETENTION_FAILURE=FINAL_SOURCE;"))
+            self.assertIn("filesystemGuard=HANDLE_PIN_CHANGED", lines[1])
+            model.export.assert_not_called()
+            private = H.decode(model.memory.data["/run-model/not-accepted.json"])
+            self.assertEqual([row["phase"] for row in private["failures"]], ["controls", "final-source", "export-or-return"])
+
+    def test_single_captured_export_failure_has_no_invented_secondary(self):
+        with ExitStack() as local:
+            model = observation_execution_model(local)
+            model.export.side_effect = OSError("MODEL_PRIVATE_SENTINEL")
+            self.assertEqual(H.run(model.progress), 1)
+            lines = model.stderr.getvalue().splitlines()
+            self.assertEqual(len(lines), 1)
+            self.assertIn("stage=EXPORT", lines[0])
+            self.assertIn("controlUnit=UNOBSERVED", lines[0])
+            self.assertNotIn("MODEL", lines[0])
+
+    def test_retention_selection_and_printer_use_only_closed_actual_record_fields(self):
+        value = H.public_observation(H.Stage.EXPORT, {"retirementUnknown": False})
+        first = {"phase": "controls", "observation": value}
+        self.assertIsNone(H.later_retention_failure([]))
+        self.assertIsNone(H.later_retention_failure([first]))
+        for rows in (None, {}, "MODEL_PRIVATE_SENTINEL", [first, {}], [first, None],
+                     [first, {"phase": "MODEL_PRIVATE_SENTINEL", "observation": value}],
+                     [first, {"phase": "export-or-return", "observation": "MODEL_PRIVATE_SENTINEL"}]):
+            self.assertIsNone(H.later_retention_failure(rows))
+        expected = {"final-source": "FINAL_SOURCE", "command-finalization": "COMMAND_FINALIZATION",
+                    "restore-signal": "SIGNAL_RESTORE", "export-or-return": "EXPORT_RETURN",
+                    "last-native-close": "ROOT_FINALIZATION"}
+        self.assertEqual({key: boundary.value for key, boundary in H._RETENTION_BOUNDARIES.items()}, expected)
+        for key, name in expected.items():
+            rows = [first, {"phase": key, "observation": value}]; before = copy.deepcopy(rows)
+            boundary, observed = H.later_retention_failure(rows)
+            self.assertEqual(boundary.value, name)
+            self.assertEqual(observed, value)
+            observed["stage"] = "MODEL_PRIVATE_SENTINEL"
+            self.assertEqual(rows, before)
+        output = io.StringIO()
+        with patch.object(H.sys, "stderr", output):
+            H.print_public_retention_failure("MODEL_PRIVATE_SENTINEL", value)
+            H.print_public_retention_failure(H.RetentionBoundary.EXPORT_RETURN,
+                                            {**value, "filesystemGuard": "MODEL_PRIVATE_SENTINEL"})
+        self.assertEqual(len(output.getvalue().splitlines()), 1)
+        self.assertNotIn("MODEL", output.getvalue())
+        self.assertIn("stage=UNOBSERVED", output.getvalue())
+        self.assertIn("retirementObservation=UNKNOWN", output.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

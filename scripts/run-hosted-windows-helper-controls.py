@@ -157,6 +157,165 @@ class RetirementObservation(str, Enum):
     UNKNOWN = "UNKNOWN"
 
 
+# Exact public SOURCE literals only, never a code/name derived from private data.
+# Unknown/dynamic text stays UNOBSERVED. These guards classify reported invariants,
+# not native execution, a root cause, test acceptance or retirement authority.
+_FILESYSTEM_GUARDS = {
+    "Native custody cleanup failed": "CUSTODY_CLEANUP_WRAPPER",
+    "Invalid native filesystem deadline": "DEADLINE_INVALID",
+    "Native filesystem deadline exceeded": "DEADLINE_EXCEEDED",
+    "Unsafe Windows path component": "PATH_COMPONENT_UNSAFE",
+    "Invalid Windows path encoding": "PATH_ENCODING_INVALID",
+    "Windows path component exceeds bound": "PATH_COMPONENT_BOUND",
+    "Windows device name is not a custody path": "PATH_DEVICE_NAME",
+    "Use a normalized local absolute Windows path, not UNC/device/drive-relative paths": "PATH_ABSOLUTE_FORM",
+    "Windows path depth exceeds bound": "PATH_ABSOLUTE_DEPTH",
+    "Use a relative slash-separated custody path": "PATH_RELATIVE_FORM",
+    "Relative custody depth exceeds bound": "PATH_RELATIVE_DEPTH",
+    "Native file resolved outside a local DOS volume": "PATH_NOT_LOCAL_DOS",
+    "Native final path differs from its pinned path": "PATH_PIN_DIFFERS",
+    "Unsupported current token user/default owner": "TOKEN_OWNER_UNSUPPORTED",
+    "Native owner/security descriptor differs from the admitted token": "TOKEN_OWNER_DESCRIPTOR_DIFFERS",
+    "A standalone custody root needs a protected DACL": "DACL_ROOT_UNPROTECTED",
+    "DACL is null, broad, duplicated, inherited from an unknown policy, or otherwise unsupported": "DACL_POLICY_UNSUPPORTED",
+    "Regular file lacks native stream information": "STREAM_INFO_ABSENT",
+    "Invalid native stream information": "STREAM_INFO_INVALID",
+    "Truncated/excessive stream information": "STREAM_INFO_BOUND",
+    "Invalid native stream record": "STREAM_RECORD_INVALID",
+    "Invalid native stream name": "STREAM_NAME_INVALID",
+    "Invalid native stream offset": "STREAM_OFFSET_INVALID",
+    "Alternate data streams are not admitted": "STREAM_ALTERNATE_PRESENT",
+    "Invalid native directory information": "DIRECTORY_INFO_INVALID",
+    "Truncated/excessive directory information": "DIRECTORY_INFO_BOUND",
+    "Invalid native directory name size": "DIRECTORY_NAME_SIZE",
+    "Invalid native directory name encoding": "DIRECTORY_NAME_ENCODING",
+    "Invalid native directory offset": "DIRECTORY_OFFSET_INVALID",
+    "Native 64-bit Windows Python is required; no emulated filesystem qualification": "HOST_NATIVE_WINDOWS_REQUIRED",
+    "Unsupported Windows filesystem ABI": "HOST_FILESYSTEM_ABI_UNSUPPORTED",
+    "Custody requires native AMD64/ARM64 Windows Python, not a translated process": "HOST_NATIVE_ARCH_REQUIRED",
+    "Windows LocalFree failed": "NATIVE_LOCALFREE_FAILED",
+    "Invalid native SID": "SID_INVALID",
+    "Native SID string exceeds bound": "SID_STRING_BOUND",
+    "Thread impersonation is not admitted": "THREAD_IMPERSONATION_PRESENT",
+    "Cannot establish absence of thread impersonation": "THREAD_IMPERSONATION_UNESTABLISHED",
+    "Invalid native token information size": "TOKEN_INFO_SIZE",
+    "Custody requires a local fixed volume": "VOLUME_LOCAL_FIXED_REQUIRED",
+    "Only NTFS with persistent ACLs and named-stream inspection is admitted": "VOLUME_NTFS_FEATURES_REQUIRED",
+    "Cannot pin native volume root": "VOLUME_ROOT_PIN_FAILED",
+    "Only exclusive newly created files are writable": "OPEN_EXCLUSIVE_CREATE_REQUIRED",
+    "Native exclusive creation/open result differs": "OPEN_RESULT_DIFFERS",
+    "Null DACL is not private custody": "DACL_NULL",
+    "Unsupported native DACL size/count": "DACL_SIZE_COUNT_UNSUPPORTED",
+    "Unsupported native ACE": "ACE_UNSUPPORTED",
+    "Native ACE SID size differs": "ACE_SID_SIZE_DIFFERS",
+    "Only native disk files are admitted": "FILE_NATIVE_DISK_REQUIRED",
+    "Custody handles must not be inheritable": "HANDLE_INHERITABLE",
+    "Linked/reparse/deleting/wrong-kind file is not admitted": "FILE_LINK_REPARSE_DELETE_OR_KIND",
+    "Native final path is unavailable or exceeds bound": "PATH_FINAL_UNAVAILABLE_OR_BOUND",
+    "Cannot inspect bounded native data streams": "STREAM_INSPECTION_UNAVAILABLE",
+    "Cannot enumerate native directory": "DIRECTORY_ENUMERATION_UNAVAILABLE",
+    "Directory has duplicate aliases or exceeds member bound": "DIRECTORY_ALIAS_OR_MEMBER_BOUND",
+    "Unknown/reparse native member kind": "DIRECTORY_MEMBER_KIND_UNSUPPORTED",
+    "Native read exceeds request": "READ_REQUEST_EXCEEDED",
+    "Native write made no progress or exceeded request": "WRITE_PROGRESS_OR_REQUEST",
+    "Custody parent handle is already closed": "HANDLE_PARENT_CLOSED",
+    "Custody handle released twice": "HANDLE_DOUBLE_RELEASE",
+    "Custody handle is closed": "HANDLE_CLOSED",
+    "Pinned native identity changed": "HANDLE_PIN_CHANGED",
+    "Directory pin is closed or wrong-kind": "DIRECTORY_PIN_CLOSED_OR_KIND",
+    "Native handle closure failed": "HANDLE_CLOSE_WRAPPER",
+    "Private directory is closed": "DIRECTORY_CLOSED",
+    "Custody child path exceeds its depth/length bound": "PATH_CHILD_DEPTH_OR_LENGTH_BOUND",
+    "Custody child crossed its pinned volume": "VOLUME_CHILD_CROSSED",
+    "Native file exceeds its byte bound": "FILE_BYTES_BOUND",
+    "Native file is closed": "FILE_CLOSED",
+    "Native file position exceeds its byte bound": "FILE_POSITION_BOUND",
+    "Invalid native file seek": "FILE_SEEK_INVALID",
+    "Native seek exceeds its byte bound": "FILE_SEEK_BOUND",
+    "Native file is not an admitted reader": "FILE_READER_NOT_ADMITTED",
+    "Reader position exceeds the original file size": "FILE_READER_POSITION_PAST_ORIGINAL",
+    "Use bounded streaming reads instead of materializing a large native file": "FILE_MATERIALIZATION_BOUND",
+    "Native file was truncated during its bounded read": "FILE_TRUNCATED_DURING_READ",
+    "Native file is not an exclusive writer": "FILE_WRITER_NOT_EXCLUSIVE",
+    "Native output exceeds its byte bound": "FILE_OUTPUT_BOUND",
+    "Native input changed or output exceeded its byte bound": "FILE_INPUT_CHANGED_OR_OUTPUT_BOUND",
+    "Native file finalization failed": "FILE_FINALIZATION_WRAPPER",
+    "Root path crossed its pinned local volume": "VOLUME_ROOT_CROSSED",
+    "Snapshot directory depth exceeds bound": "SNAPSHOT_DEPTH_BOUND",
+    "Snapshot member count exceeds bound": "SNAPSHOT_MEMBERS_BOUND",
+    "Snapshot byte count exceeds bound": "SNAPSHOT_BYTES_BOUND",
+    "Snapshot is closed": "SNAPSHOT_CLOSED",
+    "File is not a pinned snapshot member": "SNAPSHOT_MEMBER_NOT_PINNED",
+    "Snapshot file identity changed": "SNAPSHOT_FILE_IDENTITY_CHANGED",
+    "Snapshot directory metadata changed": "SNAPSHOT_DIRECTORY_METADATA_CHANGED",
+    "Snapshot membership changed": "SNAPSHOT_MEMBERSHIP_CHANGED",
+    "Snapshot file changed": "SNAPSHOT_FILE_CHANGED",
+    "Native snapshot finalization failed": "SNAPSHOT_FINALIZATION_WRAPPER",
+}
+FilesystemGuard = Enum("FilesystemGuard", {"UNOBSERVED": "UNOBSERVED",
+    **{name: name for name in _FILESYSTEM_GUARDS.values()}}, type=str)
+_FILESYSTEM_WRAPPERS = {"CUSTODY_CLEANUP_WRAPPER", "HANDLE_CLOSE_WRAPPER",
+                        "FILE_FINALIZATION_WRAPPER", "SNAPSHOT_FINALIZATION_WRAPPER"}
+
+
+class ControlUnit(str, Enum):
+    UNOBSERVED = "UNOBSERVED"
+    EXECUTOR = "EXECUTOR"
+    FILES = "FILES"
+    NATIVE_SINKS = "NATIVE_SINKS"
+    NATIVE_OUTPUT_BOUND = "NATIVE_OUTPUT_BOUND"
+    NATIVE_LAUNCH_CLOSE = "NATIVE_LAUNCH_CLOSE"
+    NATIVE_TEE = "NATIVE_TEE"
+    NATIVE_CONTROLLER_COMMAND = "NATIVE_CONTROLLER_COMMAND"
+    NATIVE_CONTROLLER_RETIREMENT = "NATIVE_CONTROLLER_RETIREMENT"
+    NATIVE_EXPORT = "NATIVE_EXPORT"
+    NATIVE_EXPORT_WRONG_RECIPIENT = "NATIVE_EXPORT_WRONG_RECIPIENT"
+    NATIVE_EXPORT_INPUT_QUARANTINE = "NATIVE_EXPORT_INPUT_QUARANTINE"
+    CONTROLS_POSTCHECK = "CONTROLS_POSTCHECK"
+
+
+class ControlPhase(str, Enum):
+    UNOBSERVED = "UNOBSERVED"
+    SETUP = "SETUP"
+    COMMAND = "COMMAND"
+    VERIFY = "VERIFY"
+    FINALIZE = "FINALIZE"
+
+
+class RetentionBoundary(str, Enum):
+    FINAL_SOURCE = "FINAL_SOURCE"
+    COMMAND_FINALIZATION = "COMMAND_FINALIZATION"
+    SIGNAL_RESTORE = "SIGNAL_RESTORE"
+    EXPORT_RETURN = "EXPORT_RETURN"
+    ROOT_FINALIZATION = "ROOT_FINALIZATION"
+
+
+_CONTROL_UNITS = {
+    "executor": ControlUnit.EXECUTOR, "files": ControlUnit.FILES,
+    "native-sinks": ControlUnit.NATIVE_SINKS, "native-output-bound": ControlUnit.NATIVE_OUTPUT_BOUND,
+    "native-launch-close": ControlUnit.NATIVE_LAUNCH_CLOSE, "native-tee": ControlUnit.NATIVE_TEE,
+    "native-controller-command": ControlUnit.NATIVE_CONTROLLER_COMMAND,
+    "native-controller-retirement": ControlUnit.NATIVE_CONTROLLER_RETIREMENT,
+    "native-export": ControlUnit.NATIVE_EXPORT,
+    "native-export-wrong-recipient": ControlUnit.NATIVE_EXPORT_WRONG_RECIPIENT,
+    "native-export-input-quarantine": ControlUnit.NATIVE_EXPORT_INPUT_QUARANTINE,
+}
+_RETENTION_BOUNDARIES = {
+    "final-source": RetentionBoundary.FINAL_SOURCE, "command-finalization": RetentionBoundary.COMMAND_FINALIZATION,
+    "restore-signal": RetentionBoundary.SIGNAL_RESTORE, "export-or-return": RetentionBoundary.EXPORT_RETURN,
+    "last-native-close": RetentionBoundary.ROOT_FINALIZATION,
+}
+
+
+def valid_control_pair(stage, unit, phase):
+    if not isinstance(unit, ControlUnit) or not isinstance(phase, ControlPhase):
+        return False
+    if unit is ControlUnit.UNOBSERVED:
+        return phase is ControlPhase.UNOBSERVED
+    return (stage is Stage.CONTROLS and phase is not ControlPhase.UNOBSERVED and
+            (unit is not ControlUnit.CONTROLS_POSTCHECK or phase is ControlPhase.VERIFY))
+
+
 _NATIVE_OPERATIONS = {
     "NtCreateFile": NativeOperation.FILE_CREATE,
     "GetFileInformationByHandleEx": NativeOperation.FILE_INFORMATION,
@@ -184,7 +343,9 @@ _NATIVE_STATUSES = {2: NativeStatus.PATH_ABSENT, 3: NativeStatus.PATH_ABSENT,
                     183: NativeStatus.ALREADY_EXISTS, 1: NativeStatus.UNSUPPORTED,
                     50: NativeStatus.UNSUPPORTED, 87: NativeStatus.INVALID_PARAMETER}
 _PUBLIC_FIELDS = {"stage": Stage, "reason": FailureReason, "nativeOperation": NativeOperation,
-                  "nativeStatus": NativeStatus, "lastGpgCommand": GpgCommand, "lastGpgExit": GpgExit,
+                  "nativeStatus": NativeStatus, "filesystemGuard": FilesystemGuard,
+                  "controlUnit": ControlUnit, "controlPhase": ControlPhase,
+                  "lastGpgCommand": GpgCommand, "lastGpgExit": GpgExit,
                   "retirementObservation": RetirementObservation}
 
 
@@ -192,14 +353,32 @@ class Progress:
     """Source-owned call-site observations, never host/retirement acceptance."""
     def __init__(self):
         self.stage = Stage.UNOBSERVED
+        self.control_unit, self.control_phase = ControlUnit.UNOBSERVED, ControlPhase.UNOBSERVED
 
     def mark(self, stage):
         if not isinstance(stage, Stage):
             raise ValueError("Expected a fixed helper observation stage")
         self.stage = stage
+        self.control_unit, self.control_phase = ControlUnit.UNOBSERVED, ControlPhase.UNOBSERVED
+
+    def control(self, unit, phase):
+        if not valid_control_pair(self.stage, unit, phase):
+            raise ValueError("Expected a fixed helper control boundary")
+        self.control_unit, self.control_phase = unit, phase
+
+    def finalize_control(self, close):
+        # Restore the earlier phase only if this exact existing close succeeds.
+        # No catch/rethrow: a failing close retains its original exception/context.
+        phase = self.control_phase
+        self.control_phase = ControlPhase.FINALIZE
+        close()
+        self.control_phase = phase
+
+    def observation(self, detail):
+        return public_observation(self.stage, detail, control_unit=self.control_unit, control_phase=self.control_phase)
 
 
-def public_observation(stage, detail):
+def public_observation(stage, detail, *, control_unit=ControlUnit.UNOBSERVED, control_phase=ControlPhase.UNOBSERVED):
     """Finite projection of already-bounded PRIVATE details; never echo their text.
 
     Native API/status matches are diagnostic classifications, not an OS cause or
@@ -236,6 +415,25 @@ def public_observation(stage, detail):
             operation = _NATIVE_OPERATIONS[matched[1]]
             status = _NATIVE_STATUSES.get(int(matched[2] or matched[3]), NativeStatus.OTHER)
             break
+    guard = fallback = FilesystemGuard.UNOBSERVED
+    for node in nodes:
+        message = node.get("message")
+        if type(node.get("type")) is not str or node["type"] != "FilesystemError" or \
+                type(message) is not str or len(message) > 2048:
+            continue
+        name = _FILESYSTEM_GUARDS.get(message)
+        if name is None:
+            continue
+        if name in _FILESYSTEM_WRAPPERS:
+            if fallback is FilesystemGuard.UNOBSERVED:
+                fallback = FilesystemGuard(name)
+        else:
+            guard = FilesystemGuard(name)
+            break
+    if guard is FilesystemGuard.UNOBSERVED:
+        guard = fallback
+    if not valid_control_pair(stage, control_unit, control_phase):
+        control_unit, control_phase = ControlUnit.UNOBSERVED, ControlPhase.UNOBSERVED
     gpg, exited = GpgCommand.UNOBSERVED, GpgExit.UNOBSERVED
     if stage is Stage.RECIPIENT:
         for record in records:
@@ -259,13 +457,15 @@ def public_observation(stage, detail):
                       GpgExit.NONZERO if type(code) is int and 0 < code <= 0xffffffff else GpgExit.NO_EXIT_CODE)
             break
     values = {"stage": stage if isinstance(stage, Stage) else Stage.UNOBSERVED, "reason": reason,
-              "nativeOperation": operation, "nativeStatus": status, "lastGpgCommand": gpg, "lastGpgExit": exited,
+              "nativeOperation": operation, "nativeStatus": status, "filesystemGuard": guard,
+              "controlUnit": control_unit, "controlPhase": control_phase,
+              "lastGpgCommand": gpg, "lastGpgExit": exited,
               "retirementObservation": (RetirementObservation.NO_UNKNOWN_REPORTED
                   if detail.get("retirementUnknown") is False else RetirementObservation.UNKNOWN)}
     return {name: value.value for name, value in values.items()}
 
 
-def print_public_failure(value):
+def print_public_failure(value, *, retention_boundary=None):
     # Defense in depth: even a future bad caller cannot turn code-shaped private
     # text into a public code. Only exact enum members cross this boundary.
     checked = {}
@@ -275,10 +475,34 @@ def print_public_failure(value):
                              if type(value) is dict and type(value.get(name)) is str else None)
         except (ValueError, TypeError):
             checked[name] = None
-    if any(item is None for item in checked.values()):
+    if any(item is None for item in checked.values()) or not valid_control_pair(
+            Stage(checked["stage"]), ControlUnit(checked["controlUnit"]), ControlPhase(checked["controlPhase"])):
         checked = public_observation(Stage.UNOBSERVED, {})
-    print("WINDOWS_HELPER_NOT_ACCEPTED=" + checked.pop("reason") + "; " +
-          "; ".join(name + "=" + text for name, text in checked.items()), file=sys.stderr)
+    if retention_boundary is not None and not isinstance(retention_boundary, RetentionBoundary):
+        return
+    reason = checked.pop("reason")
+    prefix = ("WINDOWS_HELPER_NOT_ACCEPTED=" + reason if retention_boundary is None else
+              "WINDOWS_HELPER_RETENTION_FAILURE=" + retention_boundary.value + "; reason=" + reason)
+    print(prefix + "; " + "; ".join(name + "=" + text for name, text in checked.items()), file=sys.stderr)
+
+
+def print_public_retention_failure(boundary, value):
+    if isinstance(boundary, RetentionBoundary):
+        print_public_failure(value, retention_boundary=boundary)
+
+
+def later_retention_failure(failures):
+    # Only a distinct, already captured later failure, never inferred from absent
+    # ciphertext. At most one bounded record; no new read/exception accessor.
+    if type(failures) is not list:
+        return None
+    for row in failures[1:65]:
+        if type(row) is not dict or type(row.get("phase")) is not str or type(row.get("observation")) is not dict:
+            continue
+        boundary = _RETENTION_BOUNDARIES.get(row["phase"])
+        if boundary is not None:
+            return boundary, dict(row["observation"])
+    return None
 
 
 class HelperError(RuntimeError):
@@ -832,7 +1056,7 @@ def run(progress=None):
     def fail(phase, error):
         detail = error_detail(error)
         failures.append({"phase": phase, "detail": detail,
-                         "observation": public_observation(progress.stage, detail)})
+                         "observation": progress.observation(detail)})
         if detail["retirementUnknown"]:
             result["retirement"] = "UNKNOWN"
         return detail["retirementUnknown"]
@@ -873,6 +1097,7 @@ def run(progress=None):
         progress.mark(Stage.CONTROLS)
         suites = [("executor", "run-audit-command-test.py", 300), ("files", "hosted-windows-files-test.py", 180)]
         for label, script, timeout in suites:
+            progress.control(_CONTROL_UNITS[label], ControlPhase.SETUP)
             suite_state = hold(state.create_directory(label))
             fixtures = hold(suite_state.create_directory("fixtures"))
             temporary = hold(fixtures.create_directory("native-tmp"))
@@ -887,7 +1112,9 @@ def run(progress=None):
             args += (["--expected-host", "windows-x64"] if label == "executor" else ["--native"])
             args += ["--evidence-dir", str(suite_evidence), "--fixture-parent", str(temporary.path)]
             try:
+                progress.control(_CONTROL_UNITS[label], ControlPhase.COMMAND)
                 row, directory = suite_runner.run(args, label, timeout=timeout)
+                progress.control(_CONTROL_UNITS[label], ControlPhase.VERIFY)
                 require(row["waitExitCode"] == 0, "NATIVE_SUITE_FAILED")
                 raw = public_file(SCRIPTS / "tests" / script, witness.MAX_FILE)
                 selection = (["PurePolicyTests", "DarwinObservationTests", "WindowsNativeTests"] if label == "executor" else
@@ -905,10 +1132,11 @@ def run(progress=None):
                             summary.get("nativeMethods") == inventory["NativeWindowsTests"], "FILE_FIXTURE_RETENTION_INCOMPLETE")
                 result["controls"].append({"suite": label, "passed": True, "inventory": inventory})
             finally:
-                suite_runner.close()
+                progress.finalize_control(suite_runner.close)
         # Every narrow supplement is a separate native interpreter. An expected
         # injected UNKNOWN case ends there; no latch is cleared or owner reused.
         for name in NATIVE_CASES:
+            progress.control(_CONTROL_UNITS[name], ControlPhase.SETUP)
             native_state = hold(state.create_directory(name))
             native_runner = Commands(evidence, native_state, uuid.uuid4().hex, deadline=runner.deadline,
                                      cancellation=runner.cancelled)
@@ -921,14 +1149,17 @@ def run(progress=None):
             args = [str(python), "-I", "-B", "-S", str(SCRIPTS / "tests/windows-helper-native-test.py"),
                     "--case", name, "--evidence-dir", str(destination)]
             try:
+                progress.control(_CONTROL_UNITS[name], ControlPhase.COMMAND)
                 row, directory = native_runner.run(args, name, timeout=120, environment=environment)
+                progress.control(_CONTROL_UNITS[name], ControlPhase.VERIFY)
                 require(row["waitExitCode"] == 0, "NATIVE_SUPPLEMENT_FAILED")
                 with files.open_private_directory(destination) as retained:
                     native = decode(private_read(retained, "result.json"))
                     assert_native_result(name, native, admitted, lambda member: private_read(retained, member))
                 result["controls"].append({"suite": name, "passed": True, "result": native})
             finally:
-                native_runner.close()
+                progress.finalize_control(native_runner.close)
+        progress.control(ControlUnit.CONTROLS_POSTCHECK, ControlPhase.VERIFY)
         require(not runner.cancelled, "HELPER_CANCELLED")
         controls_passed = True
     except BaseException as error:
@@ -993,9 +1224,16 @@ def run(progress=None):
         # Preserve the FIRST failing boundary; later eligibility/finalizer errors
         # cannot relabel an earlier source/tool failure as recipient failure.
         observation = dict(failures[0]["observation"]) if failures else public_observation(Stage.UNOBSERVED, {})
-        if encrypted._QUARANTINE or _HELD or any(row["detail"]["retirementUnknown"] for row in failures):
+        retirement_unknown = encrypted._QUARANTINE or _HELD or any(row["detail"]["retirementUnknown"] for row in failures)
+        if retirement_unknown:
             observation["retirementObservation"] = RetirementObservation.UNKNOWN.value
         print_public_failure(observation)
+        later = later_retention_failure(failures)
+        if later is not None:
+            boundary, secondary = later
+            if retirement_unknown:
+                secondary["retirementObservation"] = RetirementObservation.UNKNOWN.value
+            print_public_retention_failure(boundary, secondary)
         return 1
     print("WINDOWS_HELPER_CUSTODY=RETURNED_FOR_SEAL; PRIVATE_DECRYPTION=NOT_RUN")
     return 0  # The workflow's independently sealed controls_passed guard is mandatory.
@@ -1100,7 +1338,7 @@ def main():
         progress.mark(Stage.POST_RETURN_SEAL)
         return validate_public()
     except BaseException as error:
-        print_public_failure(public_observation(progress.stage, error_detail(error)))
+        print_public_failure(progress.observation(error_detail(error)))
         return 1
 
 
