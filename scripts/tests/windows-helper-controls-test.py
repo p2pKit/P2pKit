@@ -1698,6 +1698,8 @@ def observation_execution_model(local, *, target=None, phase=None, original=None
     original = H.files.FilesystemError("Pinned native identity changed") if original is None else original
     model.progress = H.Progress()
     model.boundaries, model.runners = [], []
+    model.child_environments = {}
+    model.observe_environment = model.prepare_environment = None
     create = Owner.create_directory
     def directory(owner, name):
         if str(owner.path) == "/run-model/state" and name == target and phase == "SETUP":
@@ -1707,12 +1709,19 @@ def observation_execution_model(local, *, target=None, phase=None, original=None
     class Runner:
         def __init__(self, evidence, state, job, *, deadline, environment=None, cancellation=None):
             self.evidence, self.state, self.deadline = evidence, state, deadline
-            self.environment, self.unknown = {}, False
+            self.environment = H.command_environment(dict(os.environ) if environment is None else environment)
+            self.unknown = False
             self.cancelled = [] if cancellation is None else cancellation
             model.runners.append(self)
+            if model.prepare_environment is not None:
+                model.prepare_environment(self)
         def run(self, args, label, **kwargs):
             model.invocations.append((label, args))
             model.boundaries.append((label, model.progress.observation({"retirementUnknown": False})))
+            environment = dict(kwargs.get("environment", self.environment))
+            model.child_environments[label] = environment
+            if model.observe_environment is not None:
+                model.observe_environment(label, environment)
             if label == target and phase == "COMMAND": raise original
             capture = self.evidence.create_directory("original-" + label)
             H.private_write(capture, "stdout.bin", b"MODEL NOT NATIVE")
@@ -1738,8 +1747,162 @@ def observation_execution_model(local, *, target=None, phase=None, original=None
             raise original
     model.set(H, "assert_unittest", side_effect=verify)
     model.set(H, "assert_native_result", side_effect=verify)
-    local.enter_context(patch.dict(os.environ, dispatch()[0]))
+    local.enter_context(patch.dict(os.environ, dispatch()[0], clear=True))
     return model
+
+
+class NativeCaseEnvironmentModels(Models):
+    def controller_route(self, target):
+        with ExitStack() as local:
+            model = observation_execution_model(local)
+            observed = []
+            def admit(label, environment):
+                if label == target:
+                    # The actual unchanged guard, not a replacement assertion or
+                    # mocked constructor. No native/controller body is launched.
+                    observed.append(H.witness.controlled_environment(environment))
+            model.observe_environment = admit
+            self.assertEqual(H.run(model.progress), 0)
+            result = H.decode(model.memory.data["/run-model/evidence/controls-result.json"])
+            self.assertEqual(result["failures"], [])
+            self.assertTrue(result["controlsPassed"])
+            self.assertEqual(len(observed), 1)
+            self.assertEqual(observed[0]["GIT_TERMINAL_PROMPT"], "0")
+            self.assertIn("/run-model/state/" + target, model.finalizations)
+            self.assertEqual([label for label, _ in model.invocations], ["executor", "files", *H.NATIVE_CASES])
+
+    def test_actual_command_route_admits_the_unchanged_controller_guard(self):
+        self.controller_route("native-controller-command")
+
+    def test_actual_retirement_route_admits_the_unchanged_controller_guard(self):
+        self.controller_route("native-controller-retirement")
+
+    def test_all_actual_routes_preserve_parent_identity_and_inherited_domains(self):
+        with ExitStack() as local:
+            model = observation_execution_model(local)
+            domain = H.processes.ownership_environment({"PATH": "MODEL_PATH", "TEMP": "MODEL_TEMP"},
+                        "1" * 32, "2" * 32, "model-state", "model-home", allow_new_context=True)
+            local.enter_context(patch.dict(os.environ, domain))
+            parent = H.command_environment(os.environ)
+            self.assertEqual(H.run(model.progress), 0)
+            result = H.decode(model.memory.data["/run-model/evidence/controls-result.json"])
+            self.assertTrue(result["controlsPassed"])
+            self.assertEqual(result["failures"], [])
+            self.assertTrue(all(runner.environment == parent for runner in model.runners))
+            for name in H.NATIVE_CASES:
+                selected = model.child_environments[name]
+                expected = dict(parent)
+                if name in ("native-controller-command", "native-controller-retirement"):
+                    for key in ("GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL", "GIT_OPTIONAL_LOCKS"):
+                        del expected[key]
+                for key in ("GITHUB_ACTIONS", "GITHUB_REPOSITORY", "GITHUB_EVENT_NAME", "GITHUB_SHA", "GITHUB_RUN_ID",
+                            "GITHUB_RUN_ATTEMPT", "P2PKIT_EVIDENCE_PUBLIC_KEY", "P2PKIT_EVIDENCE_FINGERPRINT"):
+                    expected[key] = os.environ[key]
+                expected["P2PKIT_HELPER_SOURCE_TREE"] = model.identity["sourceTree"]
+                self.assertEqual(selected, expected)
+                for key in (H.processes.JOB_ENV, H.processes.CHAIN_ENV, H.processes.DOMAINS_ENV,
+                            H.processes.STATE_ENV, "GRADLE_USER_HOME"):
+                    self.assertEqual(selected[key], domain[key])
+                if name.startswith("native-controller-"):
+                    guarded = H.witness.controlled_environment(selected)
+                    for key in (H.processes.JOB_ENV, H.processes.CHAIN_ENV, H.processes.DOMAINS_ENV,
+                                H.processes.STATE_ENV, "GRADLE_USER_HOME"):
+                        self.assertEqual(guarded[key], domain[key])
+
+    def test_selector_removes_only_the_three_exact_generated_query_settings(self):
+        original = H.command_environment({"TEMP": "MODEL_TEMP", "PATH": "MODEL_PATH"})
+        original["MODEL_UNRELATED"] = "preserved"
+        before = dict(original)
+        for name in ("native-controller-command", "native-controller-retirement"):
+            selected = H.native_case_environment(name, original)
+            self.assertEqual(selected, {key: value for key, value in original.items()
+                             if key not in {"GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL", "GIT_OPTIONAL_LOCKS"}})
+            self.assertEqual(original, before)
+            self.assertIsNot(selected, original)
+            selected["TEMP"] = "MODEL_CHANGED_COPY"
+            self.assertEqual(original, before)
+
+    def test_controller_missing_changed_or_nonstring_generated_settings_refuse(self):
+        original = H.command_environment({})
+        for name in ("native-controller-command", "native-controller-retirement"):
+            for key in ("GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL", "GIT_OPTIONAL_LOCKS", "GIT_TERMINAL_PROMPT"):
+                for mode, value in (("missing", None), ("changed", "MODEL_OTHER"), ("empty", ""),
+                                    ("boolean", False), ("null", None)):
+                    with self.subTest(name=name, key=key, mode=mode):
+                        base = dict(original)
+                        if mode == "missing":
+                            del base[key]
+                        else:
+                            base[key] = value
+                        before = dict(base)
+                        with self.assertRaisesRegex(H.HelperError, "^CONTROLLER_QUERY_ENVIRONMENT_DIFFERS$"):
+                            H.native_case_environment(name, base)
+                        self.assertEqual(base, before)
+
+    def test_unknown_and_case_aliased_git_settings_refuse_without_stripping_them(self):
+        for name in ("native-controller-command", "native-controller-retirement"):
+            for key in ("GIT_CONFIG_COUNT", "GIT_DIR", "GIT_WORK_TREE", "git_config_global", "Git_CONFIG_NOSYSTEM"):
+                with self.subTest(name=name, key=key):
+                    base = {**H.command_environment({}), key: "MODEL_SENTINEL"}
+                    before = dict(base)
+                    with self.assertRaisesRegex(H.HelperError, "^CONTROLLER_QUERY_ENVIRONMENT_DIFFERS$"):
+                        H.native_case_environment(name, base)
+                    self.assertEqual(base, before)
+
+    def test_seven_other_case_environments_remain_exact_and_unknown_case_refuses(self):
+        base = {**H.command_environment({}), "GIT_DIR": "MODEL_UNRELATED", "MODEL_OTHER": "preserved"}
+        original = dict(base)
+        names = [name for name in H.NATIVE_CASES if name not in ("native-controller-command", "native-controller-retirement")]
+        self.assertEqual(len(names), 7)
+        for name in names:
+            value = H.native_case_environment(name, base)
+            self.assertEqual(value, original)
+            self.assertIsNot(value, base)
+        for name in ("", "controller-command", "native-other", None):
+            with self.assertRaisesRegex(H.HelperError, "^NATIVE_CASE_ENVIRONMENT_UNSUPPORTED$"):
+                H.native_case_environment(name, base)
+        self.assertEqual(base, original)
+
+    def test_actual_selection_refusal_finalizes_constructed_runner_before_any_child(self):
+        for target in ("native-controller-command", "native-controller-retirement"):
+            with self.subTest(target=target), ExitStack() as local:
+                model = observation_execution_model(local)
+                def alter(runner):
+                    if runner.state.path.name == target:
+                        runner.environment["GIT_CONFIG_COUNT"] = "MODEL_UNEXPECTED"
+                model.prepare_environment = alter
+                self.assertEqual(H.run(model.progress), 0)
+                result = H.decode(model.memory.data["/run-model/evidence/controls-result.json"])
+                self.assertFalse(result["controlsPassed"])
+                failure = result["failures"][0]
+                self.assertEqual(failure["detail"]["nodes"][0]["message"], "CONTROLLER_QUERY_ENVIRONMENT_DIFFERS")
+                self.assertEqual((failure["observation"]["controlUnit"], failure["observation"]["controlPhase"]),
+                                 (H._CONTROL_UNITS[target].value, "SETUP"))
+                names = ["executor", "files", *H.NATIVE_CASES]
+                self.assertEqual([label for label, _ in model.invocations], names[:names.index(target)])
+                self.assertEqual(model.finalizations.count("/run-model/state/" + target), 1)
+                self.assertEqual(set(model.finalizations), {str(runner.state.path) for runner in model.runners})
+
+    def test_selection_refusal_with_late_unknown_still_refuses_export(self):
+        with ExitStack() as local:
+            target = "native-controller-command"
+            model = observation_execution_model(local)
+            def alter(runner):
+                if runner.state.path.name == target:
+                    del runner.environment["GIT_CONFIG_GLOBAL"]
+            model.prepare_environment = alter
+            failure = OSError("MODEL_NATIVE_CLOSE_UNKNOWN")
+            failure.__notes__ = ["Native handle retirement UNKNOWN: 9"]
+            model.memory.errors["runner-close:/run-model/state/" + target] = failure
+            self.assertEqual(H.run(model.progress), 1)
+            model.export.assert_not_called()
+            self.assertNotIn(target, model.child_environments)
+            self.assertIn("/run-model/state/" + target, model.finalizations)
+            self.assertNotIn("/run-model/return.json", model.memory.data)
+            result = H.decode(model.memory.data["/run-model/not-accepted.json"])
+            self.assertTrue(result["failures"][0]["detail"]["retirementUnknown"])
+            self.assertIn("CONTROLLER_QUERY_ENVIRONMENT_DIFFERS",
+                          [node["message"] for node in result["failures"][0]["detail"]["nodes"]])
 
 
 class RunObservationModels(Models):

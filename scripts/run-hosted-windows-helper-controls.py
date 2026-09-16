@@ -724,6 +724,22 @@ def command_environment(base):
     return result
 
 
+def native_case_environment(name, base):
+    """Keep query isolation out of only the two non-Git controller fixtures."""
+    require(name in NATIVE_CASES, "NATIVE_CASE_ENVIRONMENT_UNSUPPORTED")
+    result = dict(base)
+    if name in ("native-controller-command", "native-controller-retirement"):
+        expected = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+                    "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"}
+        # These are the exact settings generated above, not permission to strip
+        # arbitrary ambient overrides or weaken the actual Controller's guard.
+        actual = {key: value for key, value in result.items() if key.upper().startswith("GIT_")}
+        require(actual == expected, "CONTROLLER_QUERY_ENVIRONMENT_DIFFERS")
+        for key in ("GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL", "GIT_OPTIONAL_LOCKS"):
+            del result[key]
+    return result
+
+
 class Commands:
     """Private glue around the existing native owner; not another process owner."""
     def __init__(self, evidence, state, job, *, deadline, environment=None, cancellation=None):
@@ -1244,15 +1260,15 @@ def run(progress=None):
             native_state = hold(state.create_directory(name))
             native_runner = Commands(evidence, native_state, uuid.uuid4().hex, deadline=runner.deadline,
                                      cancellation=runner.cancelled)
-            environment = dict(native_runner.environment)
-            for key in ("GITHUB_ACTIONS", "GITHUB_REPOSITORY", "GITHUB_EVENT_NAME", "GITHUB_SHA", "GITHUB_RUN_ID",
-                        "GITHUB_RUN_ATTEMPT", "P2PKIT_EVIDENCE_PUBLIC_KEY", "P2PKIT_EVIDENCE_FINGERPRINT"):
-                environment[key] = os.environ[key]
-            environment["P2PKIT_HELPER_SOURCE_TREE"] = admitted["sourceTree"]
             destination = evidence.path / name
             args = [str(python), "-I", "-B", "-S", str(SCRIPTS / "tests/windows-helper-native-test.py"),
                     "--case", name, "--evidence-dir", str(destination)]
             try:
+                environment = native_case_environment(name, native_runner.environment)
+                for key in ("GITHUB_ACTIONS", "GITHUB_REPOSITORY", "GITHUB_EVENT_NAME", "GITHUB_SHA", "GITHUB_RUN_ID",
+                            "GITHUB_RUN_ATTEMPT", "P2PKIT_EVIDENCE_PUBLIC_KEY", "P2PKIT_EVIDENCE_FINGERPRINT"):
+                    environment[key] = os.environ[key]
+                environment["P2PKIT_HELPER_SOURCE_TREE"] = admitted["sourceTree"]
                 progress.control(_CONTROL_UNITS[name], ControlPhase.COMMAND)
                 row, directory = native_runner.run(args, name, timeout=120, environment=environment)
                 progress.control(_CONTROL_UNITS[name], ControlPhase.VERIFY)
