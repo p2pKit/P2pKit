@@ -146,6 +146,10 @@ NATIVE_TEMP_ENTRIES = 128
 NATIVE_TEMP_BYTES = 512 * 1024
 NATIVE_TEMP_STEPS = {"path", "root-before", "root-recheck", "entries", "entry-limit", "entry-name",
                      "entry-metadata", "root-after"}
+NATIVE_DIRECTORY_POLICY_MARKER = (
+    "test_retained_directory_native_acl_precedes_payload_and_accepts_inherited_file/"
+    "native-directory-policy/nested/before/marker.txt")
+NATIVE_DIRECTORY_POLICY_BYTES = b"SYNTHETIC-NATIVE-ACL-CONTROL\n"
 WORKER_NAME = r"gradle-worker-classpath[0-9]{1,20}txt"
 WORKER_MAIN = "worker.org.gradle.process.internal.worker.GradleWorkerMain"
 WORKER_BYTES = 256 * 1024
@@ -1445,6 +1449,8 @@ def assess_native_cleanup(directory, raw):
 
 def native_public_path(name):
     """Finite writers in the maintained Windows suite, not an arbitrary *.json glob."""
+    if name == NATIVE_DIRECTORY_POLICY_MARKER:
+        return True
     parts = PurePosixPath(name).parts
     if len(parts) < 2 or not re.fullmatch(r"test_[a-z0-9_]+", parts[0]):
         return False
@@ -1558,8 +1564,9 @@ def verify_public(directory, identity, case_name):
     validate_public_worker_expansion(directory, identity, case_name, actual)
 
 
-def copy_public(source, destination):
-    value = regular(source)
+def copy_public(source, destination, *, expected=None):
+    value = regular(source, MAX_FILE if expected is None else len(expected))
+    require(expected is None or value == expected, "Public synthetic marker differs from its reviewed bytes")
     destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     write(destination, value)
     require(regular(destination) == value, "Public retention differs from its original")
@@ -2154,7 +2161,9 @@ class Controller:
                     require(all(native_public_path(row["path"]) for row in rows),
                             "Native fixture evidence contains an unaudited public member; retain originals and stop")
                     for row in rows:
-                        copy_public(native / row["path"], self.public / "admission/native-controls" / row["path"])
+                        expected = NATIVE_DIRECTORY_POLICY_BYTES if row["path"] == NATIVE_DIRECTORY_POLICY_MARKER else None
+                        copy_public(native / row["path"], self.public / "admission/native-controls" / row["path"],
+                                    expected=expected)
             except Exception as error:
                 retention_errors.append("Native fixture evidence retention: " + type(error).__name__)
             case["retentionErrors"].extend(retention_errors)

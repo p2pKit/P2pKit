@@ -15,7 +15,7 @@ import importlib.util
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import signal
 import shutil
 import stat
@@ -24,6 +24,7 @@ import sys
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 import uuid
@@ -32,6 +33,7 @@ sys.dont_write_bytecode = True
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
 import audit_processes as processes
+import hosted_windows_files as windows_files
 
 SPEC = importlib.util.spec_from_file_location("audit_runner", SCRIPTS / "run-audit-command.py")
 assert SPEC is not None and SPEC.loader is not None
@@ -42,6 +44,47 @@ PYTHON = str(Path(sys.executable).resolve())
 EVIDENCE_ROOT = None
 CASE_EVIDENCE = None
 FIXTURE_PARENT = None
+WINDOWS_RETAINED_STORAGE = sys.platform == "win32"
+
+
+def retained_directory(path, *, parents=False, exist_ok=False):
+    """Create private retained storage before writing, not then repair its ACL.
+
+    Windows Python's mkdir(0700) uses a different DACL from our exact user and
+    SYSTEM policy. Keep temporary fixtures unchanged; only retained storage
+    uses this adapter. Native creation pins physical ancestors, is exclusive,
+    and validates the protected DACL before returning. A failed create/close
+    is never retried as an open, chmod, or weaker path operation.
+    """
+    if not WINDOWS_RETAINED_STORAGE:
+        path.mkdir(mode=0o700, parents=parents, exist_ok=exist_ok)
+        return path
+    windows_files.absolute_parts(path)
+    runner.reject_symlinks(path)
+    if runner.existing_lstat(path) is not None:
+        if not exist_ok:
+            raise FileExistsError(errno.EEXIST, "Retained evidence directory already exists", os.fspath(path))
+        with windows_files.open_private_directory(path):
+            return path
+    if parents and runner.existing_lstat(path.parent) is None:
+        retained_directory(path.parent, parents=True)
+    with windows_files.create_private_directory(path):
+        return path
+
+
+def allocate_evidence_root(value):
+    if value:
+        candidate = runner.absolute_path(value, exists=False)
+    elif os.environ.get(processes.STATE_ENV):
+        state = runner.absolute_path(os.environ[processes.STATE_ENV])
+        candidate = state / "evidence" / f"executor-fixtures-{uuid.uuid4().hex}"
+    elif WINDOWS_RETAINED_STORAGE:
+        # mkdtemp also delegates to mkdir(0700). Choose a fresh name, then let
+        # the native exclusive creator install the right DACL atomically.
+        candidate = Path(tempfile.gettempdir()).resolve() / f"p2pkit-executor-fixture-evidence-{uuid.uuid4().hex}"
+    else:
+        return Path(tempfile.mkdtemp(prefix="p2pkit-executor-fixture-evidence-")).resolve()
+    return retained_directory(candidate)
 
 
 def validated_fixture_parent(value, evidence_root):
@@ -80,7 +123,7 @@ def archive_fixture_file(source, destination, budget, *, count_entry=True):
         budget["entries"] += 1
     runner.require(budget["entries"] <= runner.MAX_ARCHIVE_FILES, "Fixture evidence entry count exceeds its bound")
     runner.reject_symlinks(destination)
-    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    retained_directory(destination.parent, parents=True, exist_ok=True)
     size = 0
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     with os.fdopen(os.open(source, flags), "rb") as input_stream, runner.new_file(destination) as output_stream:
@@ -121,7 +164,7 @@ def archive_fixture_tree(source, destination, errors, budget=None):
             runner.require(budget["entries"] <= runner.MAX_ARCHIVE_FILES,
                            "Fixture evidence entry count exceeds its bound")
             runner.reject_symlinks(target)
-            target.mkdir(parents=True, exist_ok=True, mode=0o700)
+            retained_directory(target, parents=True, exist_ok=True)
             with os.scandir(parent) as entries:
                 for entry in entries:
                     try:
@@ -211,7 +254,7 @@ class Capture:
         self.directory = None
         if CASE_EVIDENCE is not None:
             self.directory = CASE_EVIDENCE / f"controller-{uuid.uuid4().hex}"
-            self.directory.mkdir(mode=0o700)
+            retained_directory(self.directory)
             (self.directory / "start.json").write_text(json.dumps({"pid": child.pid}) + "\n")
         for source, destination, label in ((child.stdout, self.out, "stdout"), (child.stderr, self.err, "stderr")):
             log = (self.directory / f"{label}.log").open("xb", buffering=0) if self.directory else None
@@ -267,6 +310,80 @@ class StatFields:
 
     def __getattr__(self, name):
         return self.fields[name] if name in self.fields else getattr(self.actual, name)
+
+
+@contextmanager
+def modeled_retained_directories():
+    """Tiny real files with modeled Windows creation/ACLs; no native API/thread.
+
+    The ordinary mkdir boundary models CPython3.13's documented three ACEs.
+    The separate native-creator boundary models the existing protected two-ACE
+    policy. Actual validate_acl decides acceptance; neither is Windows proof.
+    All monkeypatches are scoped to these models, never the fixture executor.
+    """
+    policy = windows_files.AccessPolicy("S-1-5-21-1-2-3-1001", "S-1-5-21-1-2-3-1001")
+    proper = [(0, 3, windows_files.FILE_ALL_ACCESS, sid) for sid in (policy.user_sid, windows_files.SYSTEM_SID)]
+    python_acl = [(0, 3, windows_files.FILE_ALL_ACCESS, sid) for sid in
+                  (windows_files.SYSTEM_SID, windows_files.ADMINISTRATORS_SID, "S-1-3-4")]
+    with tempfile.TemporaryDirectory(prefix="retained-directory-model-", dir=FIXTURE_PARENT) as temporary:
+        model = SimpleNamespace(base=Path(temporary).resolve(), acls={}, events=[], close_error=None)
+        real_mkdir, real_open = Path.mkdir, Path.open
+
+        def check(path):
+            windows_files.require(path.is_dir() and path in model.acls and model.acls[path] is not None,
+                                  "Modeled directory is not private")
+            windows_files.validate_acl(policy, policy.owner_sid,
+                windows_files.SE_DACL_PRESENT | windows_files.SE_DACL_PROTECTED, 1, model.acls[path], directory=True)
+
+        class Directory:
+            def __init__(self, path):
+                self.path = path
+
+            def __enter__(self):
+                check(self.path)
+                return self
+
+            def __exit__(self, kind, value, trace):
+                model.events.append(("close", self.path))
+                if model.close_error is not None:
+                    raise model.close_error
+
+        def mkdir(path, mode=0o777, parents=False, exist_ok=False):
+            present = path.exists()
+            real_mkdir(path, mode=mode, parents=parents, exist_ok=exist_ok)
+            if not present:
+                model.acls[path] = python_acl if mode == 0o700 else None
+                model.events.append(("python-mkdir", path))
+
+        def create(path):
+            model.events.append(("native-create", path))
+            real_mkdir(path, mode=0o700)  # Exclusive; bypass only the modeled Python ACL boundary.
+            model.acls[path] = proper
+            return Directory(path)
+
+        def open_directory(path):
+            model.events.append(("native-open", path))
+            check(path)
+            return Directory(path)
+
+        def open_file(path, mode="r", *args, **kwargs):
+            if any(flag in mode for flag in "wax") and model.acls.get(path.parent) is not None:
+                check(path.parent)  # Refuse modeled broad retained storage before a payload write.
+                model.events.append(("write", path))
+            return real_open(path, mode, *args, **kwargs)
+
+        def absolute(path):
+            # Local fixture paths have this host's spelling, not native Windows
+            # spelling. The real parser's rejection is tested separately below.
+            windows_files.require(path.is_absolute() and ".." not in path.parts, "Invalid modeled absolute path")
+
+        model.check = check
+        with mock.patch.dict(globals(), WINDOWS_RETAINED_STORAGE=True), \
+                mock.patch.object(Path, "mkdir", new=mkdir), mock.patch.object(Path, "open", new=open_file), \
+                mock.patch.object(windows_files, "absolute_parts", side_effect=absolute), \
+                mock.patch.object(windows_files, "create_private_directory", side_effect=create), \
+                mock.patch.object(windows_files, "open_private_directory", side_effect=open_directory):
+            yield model
 
 
 @contextmanager
@@ -334,6 +451,131 @@ def cleanup_metadata(test, *, cached_device=0, full_device=47, child_fields=None
 
 
 class PurePolicyTests(unittest.TestCase):
+    def test_retained_archive_uses_native_private_directories(self):
+        with modeled_retained_directories() as model:
+            source = model.base / "source"
+            (source / "nested").mkdir(parents=True)
+            (source / "nested/report.txt").write_bytes(b"SYNTHETIC-RETAINED-REPORT\n")
+            destination = model.base / "retained"
+            errors = []
+            records = archive_fixture_tree(source, destination, errors)
+            self.assertEqual(errors, [])
+            self.assertEqual(len(records), 1)
+            for directory in (destination, destination / "nested"):
+                model.check(directory)
+                self.assertIn(("native-create", directory), model.events)
+                self.assertNotIn(("python-mkdir", directory), model.events)
+            self.assertEqual((destination / "nested/report.txt").read_bytes(), b"SYNTHETIC-RETAINED-REPORT\n")
+
+    def test_retained_directory_parents_existing_policy_and_exclusive_creation(self):
+        with modeled_retained_directories() as model:
+            leaf = model.base / "first/second/leaf"
+            self.assertEqual(retained_directory(leaf, parents=True), leaf)
+            for path in (model.base / "first", model.base / "first/second", leaf):
+                model.check(path)
+            with self.assertRaises(FileExistsError):
+                retained_directory(leaf)
+            self.assertEqual(retained_directory(leaf, exist_ok=True), leaf)
+            broad = model.base / "python0700"
+            broad.mkdir(mode=0o700)
+            with self.assertRaises(windows_files.FilesystemError):
+                retained_directory(broad, exist_ok=True)
+            regular = model.base / "file"
+            regular.write_bytes(b"UNCHANGED")
+            with self.assertRaises(windows_files.FilesystemError):
+                retained_directory(regular, exist_ok=True)
+            self.assertEqual(regular.read_bytes(), b"UNCHANGED")
+
+    def test_retained_directory_create_and_close_failure_have_no_fallback(self):
+        with modeled_retained_directories() as model:
+            target = model.base / "failed-create"
+            failure = windows_files.FilesystemError("SYNTHETIC original create failure")
+            with mock.patch.object(windows_files, "create_private_directory", side_effect=failure), \
+                    self.assertRaises(windows_files.FilesystemError) as caught:
+                retained_directory(target, exist_ok=True)
+            self.assertIs(caught.exception, failure)
+            self.assertFalse(target.exists())
+            self.assertEqual(model.events, [])
+            failure = windows_files.FilesystemError("SYNTHETIC native handle retirement UNKNOWN")
+            model.close_error = failure
+            with self.assertRaises(windows_files.FilesystemError) as caught:
+                retained_directory(target)
+            self.assertIs(caught.exception, failure)
+            self.assertEqual(model.events, [("native-create", target), ("close", target)])
+            self.assertEqual(list(target.iterdir()), [])
+
+    def test_retained_directory_windows_path_and_reparse_guards_precede_creation(self):
+        with mock.patch.dict(globals(), WINDOWS_RETAINED_STORAGE=True), \
+                mock.patch.object(runner, "reject_symlinks") as physical, \
+                mock.patch.object(windows_files, "create_private_directory") as create, \
+                mock.patch.object(windows_files, "open_private_directory") as reopen:
+            for path in ("relative", r"C:relative", r"\\server\share\evidence", r"C:\x\..\evidence",
+                         r"C:\evidence:stream", r"C:\NUL"):
+                with self.subTest(path=path), self.assertRaises(windows_files.FilesystemError):
+                    retained_directory(PureWindowsPath(path), parents=True, exist_ok=True)
+            physical.assert_not_called()
+            physical.side_effect = runner.AuditError("SYNTHETIC reparse ancestor")
+            with self.assertRaises(runner.AuditError):
+                retained_directory(PureWindowsPath(r"C:\safe\evidence"), exist_ok=True)
+            create.assert_not_called()
+            reopen.assert_not_called()
+
+    def test_retained_root_all_windows_allocation_modes_use_native_creation(self):
+        with modeled_retained_directories() as model:
+            explicit = allocate_evidence_root(str(model.base / "explicit"))
+            (model.base / "state/evidence").mkdir(parents=True)
+            with mock.patch.dict(os.environ, {processes.STATE_ENV: str(model.base / "state")}):
+                state_root = allocate_evidence_root(None)
+            environment = {key: value for key, value in os.environ.items() if key != processes.STATE_ENV}
+            with mock.patch.dict(os.environ, environment, clear=True), \
+                    mock.patch.object(tempfile, "gettempdir", return_value=str(model.base)), \
+                    mock.patch.object(tempfile, "mkdtemp", side_effect=AssertionError("Not private Windows creation")):
+                standalone = allocate_evidence_root(None)
+            self.assertEqual(state_root.parent, model.base / "state/evidence")
+            self.assertEqual(standalone.parent, model.base)
+            self.assertTrue(standalone.name.startswith("p2pkit-executor-fixture-evidence-"))
+            for path in (explicit, state_root, standalone):
+                model.check(path)
+                self.assertIn(("native-create", path), model.events)
+
+    def test_retained_capture_directory_is_private_before_any_output_write(self):
+        class InlineThread:
+            def __init__(self, target, args, daemon):
+                self.target, self.args = target, args
+
+            def start(self):
+                self.target(*self.args)  # Deliberate synchronous model; not thread evidence.
+
+            def join(self, timeout):
+                pass
+
+            def is_alive(self):
+                return False
+
+        with modeled_retained_directories() as model:
+            case = retained_directory(model.base / "case")
+            child = SimpleNamespace(pid=17, stdout=io.BytesIO(b"OUT\n"), stderr=io.BytesIO(b"ERR\n"), poll=lambda: 0)
+            with mock.patch.dict(globals(), CASE_EVIDENCE=case), mock.patch.object(threading, "Thread", InlineThread):
+                capture = Capture(child)
+                self.assertEqual(capture.finish(mock.Mock()), (0, b"OUT\n", b"ERR\n"))
+            model.check(capture.directory)
+            create = model.events.index(("native-create", capture.directory))
+            close = model.events.index(("close", capture.directory))
+            writes = [index for index, event in enumerate(model.events)
+                      if event[0] == "write" and event[1].parent == capture.directory]
+            self.assertTrue(writes)
+            self.assertTrue(all(create < close < index for index in writes))
+
+    def test_retained_directory_posix_mode_and_flags_are_unchanged(self):
+        path = mock.Mock()
+        with mock.patch.dict(globals(), WINDOWS_RETAINED_STORAGE=False), \
+                mock.patch.object(windows_files, "create_private_directory") as create, \
+                mock.patch.object(windows_files, "open_private_directory") as reopen:
+            self.assertIs(retained_directory(path, parents=True, exist_ok=True), path)
+        path.mkdir.assert_called_once_with(mode=0o700, parents=True, exist_ok=True)
+        create.assert_not_called()
+        reopen.assert_not_called()
+
     def test_readonly_retry_is_only_windows_exact_unlink_access_denied(self):
         denied = PermissionError(errno.EACCES, "synthetic original failure")
         denied.winerror = 5
@@ -1649,7 +1891,7 @@ class ExecutorFixtureTests(unittest.TestCase):
         self.fixture_archivists = []
         if EVIDENCE_ROOT is not None:
             case = EVIDENCE_ROOT / self._testMethodName
-            case.mkdir(mode=0o700)
+            retained_directory(case)
             CASE_EVIDENCE = case
             (case / "case.json").write_text(json.dumps({"source": str(self.root), "state": str(self.state)}) + "\n")
         (self.root / ".gitignore").write_text("build/\n!**/src/**/build/\nsamples/iosApp/p2pkit-sample.xcodeproj/\n",
@@ -1747,7 +1989,7 @@ class ExecutorFixtureTests(unittest.TestCase):
             candidate = EVIDENCE_ROOT / self._testMethodName / f"teardown-{record['id']}"
             def create_destination():
                 runner.reject_symlinks(candidate)
-                candidate.mkdir(parents=True, mode=0o700)
+                retained_directory(candidate, parents=True)
                 return candidate
             destination = attempt("Fixture archive directory creation", create_destination)
         else:
@@ -2828,7 +3070,7 @@ class PosixNativeTests(ExecutorFixtureTests):
         base = runner.absolute_path(created["fixtureBase"])
         runner.require(base != temporary and runner.within(base, temporary), "Consumer fixture escaped owned TMPDIR")
         destination = evidence / f"dependent-state-archive-{uuid.uuid4().hex}"
-        destination.mkdir(mode=0o700)
+        retained_directory(destination)
         errors, records = [], []
         budget = {"entries": 0, "bytes": 0}
         # These are the producer's two explicit fixture contexts, not a search
@@ -2843,7 +3085,7 @@ class PosixNativeTests(ExecutorFixtureTests):
                 if not present:
                     continue
                 target = destination / name
-                target.mkdir(mode=0o700)
+                retained_directory(target)
                 for relative in ("context.json", "gradle-home/gradle.properties"):
                     source = state / relative
                     present = runner.existing_lstat(source) is not None
@@ -3287,6 +3529,22 @@ class DarwinNativeTests(PosixNativeTests):
 
 
 class WindowsNativeTests(ExecutorFixtureTests):
+    def test_retained_directory_native_acl_precedes_payload_and_accepts_inherited_file(self):
+        # Current Windows only: validate real native ACLs while every directory
+        # is still empty, then inspect an ordinary file's inherited ACL/bytes.
+        root = EVIDENCE_ROOT / self._testMethodName / "native-directory-policy"
+        retained_directory(root / "nested/before", parents=True)
+        with windows_files.open_private_directory(root) as private:
+            with private.snapshot(max_bytes=0, max_members=3) as before:
+                self.assertEqual(set(before.entries), {"", "nested", "nested/before"})
+                self.assertTrue(all(row.is_directory and row.protected_dacl for row in before.entries.values()))
+            raw = b"SYNTHETIC-NATIVE-ACL-CONTROL\n"
+            (root / "nested/before/marker.txt").write_bytes(raw)
+            with private.snapshot(max_bytes=len(raw), max_members=4) as after:
+                self.assertFalse(after.entries["nested/before/marker.txt"].protected_dacl)
+                with after.open_file("nested/before/marker.txt") as stream:
+                    self.assertEqual(stream.read(), raw)
+
     def additional_fixture_sources(self):
         if self._testMethodName not in {"test_windows_sdk_style_batch_parentheses_roundtrip",
                                        "test_windows_sdk_style_batch_rejects_expansion_before_launch"}:
@@ -3556,15 +3814,7 @@ def main():
     if args.expected_host != processes.host_role():
         parser.error("Requested host does not match this native interpreter")
     FIXTURE_PARENT = validated_fixture_parent(args.fixture_parent, args.evidence_root)
-    if args.evidence_root:
-        EVIDENCE_ROOT = runner.absolute_path(args.evidence_root, exists=False)
-        EVIDENCE_ROOT.mkdir(mode=0o700)
-    elif os.environ.get(processes.STATE_ENV):
-        state = runner.absolute_path(os.environ[processes.STATE_ENV])
-        EVIDENCE_ROOT = state / "evidence" / f"executor-fixtures-{uuid.uuid4().hex}"
-        EVIDENCE_ROOT.mkdir(mode=0o700)
-    else:
-        EVIDENCE_ROOT = Path(tempfile.mkdtemp(prefix="p2pkit-executor-fixture-evidence-")).resolve()
+    EVIDENCE_ROOT = allocate_evidence_root(args.evidence_root)
     native = {"Linux": LinuxNativeTests, "Darwin": DarwinNativeTests, "Windows": WindowsNativeTests}.get(
         __import__("platform").system())
     if native is None:

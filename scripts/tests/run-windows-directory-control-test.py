@@ -224,13 +224,14 @@ class PureWindowsControlTests(unittest.TestCase):
         return state, parent, process, evidence
 
     def test_fixture_parent_cli_routes_all_actual_allocations_without_environment_changes(self):
-        # Execute the eight actual allocation expressions, not any native test body.
-        # The CLI's suite loader/runner are mocked; only local directories are real.
+        # Execute the nine actual allocation expressions, not any native test body.
+        # The CLI's suite loader/runner and custody policy are modeled; only local
+        # directories are real, including when this pure model runs on Windows.
         tree = ast.parse((ROOT / "scripts/tests/run-audit-command-test.py").read_bytes())
         allocations = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and
                        isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name) and
                        node.func.value.id == "tempfile" and node.func.attr == "TemporaryDirectory"]
-        self.assertEqual(len(allocations), 8)
+        self.assertEqual(len(allocations), 9)
         for node in allocations:
             self.assertEqual(node.args, [])
             self.assertEqual([item.arg for item in node.keywords], ["prefix", "dir"])
@@ -249,6 +250,13 @@ class PureWindowsControlTests(unittest.TestCase):
                         mock.patch.object(sys, "stdout", io.StringIO()), \
                         mock.patch.object(F, "FIXTURE_PARENT", "must be replaced by CLI selection"), \
                         mock.patch.object(F, "EVIDENCE_ROOT", None), \
+                        mock.patch.object(F, "WINDOWS_RETAINED_STORAGE", False), \
+                        mock.patch.object(F.windows_files, "_WinApi",
+                                          side_effect=AssertionError("PURE routing model cannot enter native custody")), \
+                        mock.patch.object(F.windows_files, "create_private_directory",
+                                          side_effect=AssertionError("PURE routing model cannot create native custody")), \
+                        mock.patch.object(F.windows_files, "open_private_directory",
+                                          side_effect=AssertionError("PURE routing model cannot open native custody")), \
                         mock.patch.object(tempfile, "tempdir", str(process)), \
                         mock.patch.object(F.unittest.defaultTestLoader, "loadTestsFromTestCase",
                                           return_value=unittest.TestSuite()) as loader, \
@@ -1994,6 +2002,38 @@ class PureWindowsControlTests(unittest.TestCase):
             link.symlink_to(target) if kind == "symlink" else os.link(target, link)
             self.rejects(lambda: C.regular(link))
 
+    def test_native_directory_policy_public_path_is_one_exact_reviewed_marker(self):
+        name = C.NATIVE_DIRECTORY_POLICY_MARKER
+        self.assertTrue(C.native_public_path(name))
+        self.assertTrue(C.public_path("native-controls/" + name))
+        for wrong in (name.replace(name.split("/")[0], "test_other"), name.replace("marker.txt", "private.json"),
+                      name + ".extra", name + "/private", "./" + name, name.replace("/nested/", "//nested/"),
+                      name.replace("/before/", "/before/../before/"), name.upper()):
+            self.assertFalse(C.native_public_path(wrong), wrong)
+        # The actual native fixture must still produce exactly these synthetic
+        # bytes; no arbitrary data/JSON allowance or public SID dump is added.
+        native = next(node for node in ast.parse((ROOT / "scripts/tests/run-audit-command-test.py").read_bytes()).body
+                      if isinstance(node, ast.ClassDef) and node.name == "WindowsNativeTests")
+        method = next(node for node in native.body if isinstance(node, ast.FunctionDef) and
+                      node.name == name.split("/")[0])
+        raw = [node.value.value for node in ast.walk(method) if isinstance(node, ast.Assign) and
+               any(isinstance(target, ast.Name) and target.id == "raw" for target in node.targets)]
+        self.assertEqual(raw, [C.NATIVE_DIRECTORY_POLICY_BYTES])
+
+    def test_synthetic_public_copy_rejects_changed_bytes_before_creating_destination(self):
+        source = self.base / "original-marker.txt"
+        expected = C.NATIVE_DIRECTORY_POLICY_BYTES
+        source.write_bytes(expected)
+        destination = self.base / "accepted/marker.txt"
+        C.copy_public(source, destination, expected=expected)
+        self.assertEqual(destination.read_bytes(), expected)
+        for index, wrong in enumerate((expected[:-1], expected + b"X", b"PRIVATE-MODEL-SENTINEL")):
+            source.write_bytes(wrong)
+            target = self.base / f"rejected-{index}/marker.txt"
+            self.rejects(lambda: C.copy_public(source, target, expected=expected))
+            self.assertFalse(target.parent.exists())
+            self.assertEqual(source.read_bytes(), wrong)
+
     def test_native_temporary_observation_is_direct_metadata_only(self):
         controller, case, temporary = self.native_model()
         before = controller.native_temporary(case, "before")
@@ -2121,12 +2161,17 @@ class PureWindowsControlTests(unittest.TestCase):
                         if location == "ancestor":
                             self.assertNotIn(temporary, visited)
 
-    def native_admission(self, *, failed=False, residue=False, write_failed=False, inventory_failed=False, cleanup_failed=False):
+    def native_admission(self, *, failed=False, residue=False, write_failed=False, inventory_failed=False,
+                         cleanup_failed=False, directory_marker=None):
         controller, case, temporary = self.native_model()
         original = RuntimeError("MODEL original native failure")
         native = case["state"] / "evidence/native-controls"
         (native / "test_model").mkdir(parents=True)
         C.new_json(native / "test_model/case.json", {"scope": "MODEL_ONLY_NOT_NATIVE"})
+        if directory_marker is not None:
+            marker = native / C.NATIVE_DIRECTORY_POLICY_MARKER
+            marker.parent.mkdir(parents=True)
+            marker.write_bytes(directory_marker)
         source = (ROOT / "scripts/tests/run-audit-command-test.py").read_bytes()
         text = "Running current-host real executor fixtures: windows-x64; MODEL_ONLY\n\nRan " + str(
             C.expected_native_count(source)) + " tests in 0.1s\n\nOK\n"
@@ -2190,6 +2235,22 @@ class PureWindowsControlTests(unittest.TestCase):
         self.assertFalse(case["nativeAccepted"])
         self.assertTrue((controller.public / "admission/native-controls/test_model/case.json").is_file())
         cleanup.assert_not_called()
+
+    def test_native_caller_retains_only_exact_synthetic_directory_policy_marker(self):
+        controller, case, error, _, cleanup = self.native_admission(directory_marker=C.NATIVE_DIRECTORY_POLICY_BYTES)
+        self.assertIsNone(error)
+        self.assertTrue(case["nativeAccepted"])
+        cleanup.assert_called_once()
+        retained = controller.public / "admission/native-controls" / C.NATIVE_DIRECTORY_POLICY_MARKER
+        self.assertEqual(retained.read_bytes(), C.NATIVE_DIRECTORY_POLICY_BYTES)
+        controller, case, error, _, cleanup = self.native_admission(directory_marker=b"PRIVATE-MODEL-SENTINEL")
+        self.assertIsInstance(error, C.audit.AuditError)
+        self.assertTrue(case["retentionErrors"])
+        self.assertFalse(case["nativeAccepted"])
+        cleanup.assert_not_called()
+        self.assertFalse((controller.public / "admission/native-controls" / C.NATIVE_DIRECTORY_POLICY_MARKER).exists())
+        self.assertEqual((case["state"] / "evidence/native-controls" / C.NATIVE_DIRECTORY_POLICY_MARKER).read_bytes(),
+                         b"PRIVATE-MODEL-SENTINEL")
 
     def test_native_diagnostic_failures_never_replace_original_or_allow_acceptance(self):
         for failed in (False, True):

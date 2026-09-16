@@ -583,11 +583,13 @@ class CommandModels(Models):
 
 
 class AcceptanceModels(Models):
-    def test_inventory_derives_current_inherited_executor109_and_files66(self):
+    def test_inventory_derives_current_inherited_executor117_and_files66(self):
         raw = (SCRIPTS / "tests/run-audit-command-test.py").read_bytes()
         inv = H.method_inventory(raw, ["PurePolicyTests", "DarwinObservationTests", "WindowsNativeTests"])
         self.assertEqual({key: len(value) for key, value in inv.items()},
-                         {"PurePolicyTests": 35, "DarwinObservationTests": 32, "WindowsNativeTests": 42})
+                         {"PurePolicyTests": 42, "DarwinObservationTests": 32, "WindowsNativeTests": 43})
+        self.assertIn("test_retained_directory_native_acl_precedes_payload_and_accepts_inherited_file",
+                      inv["WindowsNativeTests"])
         raw = (SCRIPTS / "tests/hosted-windows-files-test.py").read_bytes()
         inv = H.method_inventory(raw, ["PurePolicyTests", "NativeCallShapeTests", "ModelCustodyTests",
                                       "NativeFixtureOrchestrationTests", "NativeWindowsTests"])
