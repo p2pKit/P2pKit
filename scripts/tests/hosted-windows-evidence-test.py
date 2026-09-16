@@ -205,6 +205,47 @@ class ExporterModelTests(unittest.TestCase):
         return [json.loads(node.content) for name, node in self.api.nodes.items()
                 if name.startswith(str(self.work.path) + "\\") and "-result-" in name and name.endswith(".json")]
 
+
+    def actual_stream_query_gpg(self, *, post_drain_growth=False):
+        recipient = self.recipient()
+        queries = model.StreamQueryModel(self.api)
+        original_close = ScopeModel.close
+        def after_write(argv, out, err):
+            queries.append_after_standard(out.native_handle, b"+stdout")
+            queries.append_after_standard(err.native_handle, b"+stderr")
+        def close(scope):
+            original_close(scope)
+            if post_drain_growth:
+                queries.append_after_standard(self.borrowed[0].native_handle, b"late")
+        self.after_write = after_write
+        session = W._Session(self.work, "model-live-query")
+        try:
+            with patch.object(ScopeModel, "close", close):
+                result = W._gpg(session, recipient, ["--version"], time.monotonic() + 30)
+        finally:
+            session.finish()
+        return result, queries, session
+
+    def test_real_inspector_live_growth_is_captured_by_actual_gpg_loop(self):
+        (stdout, stderr), queries, session = self.actual_stream_query_gpg()
+        self.assertEqual(stdout, self.version + b"+stdout")
+        self.assertEqual(stderr, b"private-model-diagnostic\x00\xff\r\n+stderr")
+        self.assertEqual(sum(maximum is not None for _, maximum in queries.observations), 2)
+        self.assertEqual(session.commands[0]["waitExitCode"], 0)
+        self.assertEqual(session.commands[0]["outputs"]["stdout"]["sha256"], hashlib.sha256(stdout).hexdigest())
+        self.assertFalse(session.unknown)
+        self.assertTrue(all(row["closed"] for row in session.resources))
+
+    def test_actual_gpg_post_drain_verification_does_not_allow_live_growth(self):
+        with self.assertRaises(W.WindowsEvidenceError) as caught:
+            self.actual_stream_query_gpg(post_drain_growth=True)
+        self.assertEqual(str(caught.exception.original), "Alternate data streams are not admitted")
+        record = json.loads(caught.exception.private_record)
+        self.assertEqual(record["commands"][0]["waitExitCode"], 0)
+        self.assertEqual(record["result"], "FAILED")
+        self.assertFalse(caught.exception.retirement_unknown)
+        self.assertTrue(all(stream.closed for stream in self.borrowed))
+
     def test_model_export_seals_exact_two_files_and_preserves_original_normalized_archive(self):
         result = self.export()
         children = self.api.names(self.output._pins[-1].handle, 3, time.monotonic() + 10)

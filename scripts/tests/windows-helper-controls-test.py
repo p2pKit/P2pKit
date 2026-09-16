@@ -348,6 +348,10 @@ class Sink:
             raise ValueError("MODEL native output exceeded its byte bound")
         return SimpleNamespace(size=size, as_dict=lambda: {"size": size, "fixture": "MEMORY_NOT_NATIVE"})
 
+    def observe_live_output(self):
+        # This memory-only fixture keeps its existing fault/bound behavior.
+        return self.verify()
+
     def close(self):
         self.memory.fail("close:" + self.path)
         self.closed = True
@@ -526,8 +530,60 @@ class CommandModels(Models):
         self.assertEqual(self.memory.events, [])
 
 
+
+    def actual_stream_query_command(self, *, post_drain_growth=False):
+        api = T.ModelApi()
+        queries = T.StreamQueryModel(api)
+        evidence = H.files._root(r"C:\work\live-command", api, create=True)
+        state = H.files._root(r"C:\work\live-state", api, create=True)
+        self.stack.callback(evidence.close)
+        self.stack.callback(state.close)
+        expected = (b"private-stdout\x00\xff", b"private-stderr\r\n")
+        phases, streams = [], []
+        class Scope:
+            def spawn(self, argv, cwd, environment, *, stdout, stderr):
+                phases.append("spawn")
+                streams[:] = (stdout, stderr)
+                for stream, raw in zip(streams, expected):
+                    queries.append_after_standard(stream.native_handle, raw)
+                return SimpleNamespace(stdout=None, stderr=None, poll=lambda: phases.append("poll") or 0)
+            def discover(self): return []
+            def drain(self, **kwargs): phases.append("drain"); return []
+            def description(self): return {"discoveryErrors": [], "MODEL_NOT_NATIVE": True}
+            def close(self):
+                phases.append("close")
+                if post_drain_growth:
+                    queries.append_after_standard(streams[0].native_handle, b"late")
+        self.set(H.processes, "make_scope", return_value=Scope())
+        command = H.Commands(evidence, state, "1" * 32, deadline=time.monotonic() + 30, environment={})
+        self.stack.callback(command.close)
+        return command, queries, expected, phases, streams
+
+    def test_real_inspector_live_growth_is_captured_by_actual_helper_command(self):
+        command, queries, expected, phases, streams = self.actual_stream_query_command()
+        row, directory = command.run(["MODEL-NOT-EXECUTED"], "interquery", output_limit=64)
+        self.assertEqual(phases, ["spawn", "poll", "drain", "close"])
+        self.assertEqual(row["waitExitCode"], 0)
+        self.assertEqual([H.private_read(directory, name + ".bin") for name in ("stdout", "stderr")], list(expected))
+        self.assertEqual(sum(maximum == 64 for _, maximum in queries.observations), 2)
+        self.assertTrue(all(stream.closed for stream in streams))
+        self.assertEqual([row["outputs"][name]["sha256"] for name in ("stdout", "stderr")],
+                         [H.digest(raw) for raw in expected])
+
+    def test_actual_helper_post_drain_verification_does_not_allow_live_growth(self):
+        command, queries, _, phases, streams = self.actual_stream_query_command(post_drain_growth=True)
+        with self.assertRaises(H.encrypted.WindowsEvidenceError) as caught:
+            command.run(["MODEL-NOT-EXECUTED"], "post-drain", output_limit=64)
+        self.assertEqual(str(caught.exception.original), "Alternate data streams are not admitted")
+        self.assertEqual(phases, ["spawn", "poll", "drain", "close"])
+        self.assertEqual(command.records[0]["waitExitCode"], 0)
+        self.assertFalse(caught.exception.retirement_unknown)
+        self.assertTrue(all(stream.closed for stream in streams))
+        self.assertEqual(sum(maximum == 64 for _, maximum in queries.observations), 2)
+
+
 class AcceptanceModels(Models):
-    def test_inventory_derives_current_inherited_executor109_and_files58(self):
+    def test_inventory_derives_current_inherited_executor109_and_files66(self):
         raw = (SCRIPTS / "tests/run-audit-command-test.py").read_bytes()
         inv = H.method_inventory(raw, ["PurePolicyTests", "DarwinObservationTests", "WindowsNativeTests"])
         self.assertEqual({key: len(value) for key, value in inv.items()},
@@ -535,7 +591,7 @@ class AcceptanceModels(Models):
         raw = (SCRIPTS / "tests/hosted-windows-files-test.py").read_bytes()
         inv = H.method_inventory(raw, ["PurePolicyTests", "NativeCallShapeTests", "ModelCustodyTests",
                                       "NativeFixtureOrchestrationTests", "NativeWindowsTests"])
-        self.assertEqual(sum(map(len, inv.values())), 58)
+        self.assertEqual(sum(map(len, inv.values())), 66)
         self.assertEqual(len(inv["NativeWindowsTests"]), 7)
 
     def test_original_unittest_method_outcomes_accept_both_supported_verbose_shapes(self):
@@ -591,6 +647,42 @@ class AcceptanceModels(Models):
             observation = H.decode(raw); transform(observation)
             altered = H.encoded(observation); result["observations"][0]["sha256"] = H.digest(altered)
             with self.assertRaises(H.HelperError): H.assert_native_result("native-tee", result, identity, lambda _: altered)
+
+    def test_native_sink_acceptance_requires_both_query_controls_and_original_observations(self):
+        identity, result, _ = self.sample()
+        result["case"] = "native-sinks"
+        observation = {"actualNativeObservations": [
+            {"phase": "after-native-spawn", "pins": [{}, {}]},
+            {"phase": "after-real-scope-close", "pins": [{}, {}]}],
+            "stdout": {"bytes": 1028}, "stderr": {"bytes": 258},
+            "liveInterqueryChecks": [{"mode": mode,
+                "writeBoundary": "AFTER_REAL_STANDARD_BEFORE_REAL_STREAM_QUERY",
+                "earlierSize": 0, "laterSize": 1, "writeBytes": 1, "writeCount": 1,
+                "strictFinalSize": 1, "closedThenReopened": True, "sha256": H.digest(b"G"),
+                "outcome": "STRICT_REJECTED" if mode == "strict" else "LIVE_OBSERVED"}
+                for mode in ("strict", "live")]}
+        def check(value):
+            raw = H.encoded(value)
+            result["observations"] = [{"path": "native-sinks-observed.json", "sha256": H.digest(raw)}]
+            H.assert_native_result("native-sinks", result, identity, lambda _: raw)
+        check(observation)  # Parser/model acceptance only; this never runs a native fixture.
+        changes = (lambda value: value.pop("liveInterqueryChecks"),
+                   lambda value: value["liveInterqueryChecks"].pop(),
+                   lambda value: value["liveInterqueryChecks"][0].update(outcome="LIVE_OBSERVED"),
+                   lambda value: value["liveInterqueryChecks"][1].update(laterSize=0),
+                   lambda value: value["liveInterqueryChecks"][0].update(earlierSize=False),
+                   lambda value: value["liveInterqueryChecks"][1].update(laterSize=True),
+                   lambda value: value["liveInterqueryChecks"][1].update(writeCount=1.0),
+                   lambda value: value["liveInterqueryChecks"][1].update(closedThenReopened=1),
+                   lambda value: value["liveInterqueryChecks"][1].update(closedThenReopened=False),
+                   lambda value: value["liveInterqueryChecks"][1].update(sha256="0" * 64),
+                   lambda value: value["stdout"].update(bytes=0),
+                   lambda value: value["actualNativeObservations"].pop())
+        for mutation in changes:
+            changed = copy.deepcopy(observation)
+            mutation(changed)
+            with self.assertRaises(H.HelperError):
+                check(changed)
 
     def test_fixed_native_case_inventory_matches_definitions_and_separate_interpreters(self):
         tree = ast.parse((SCRIPTS / "tests/windows-helper-native-test.py").read_bytes())
@@ -1208,9 +1300,9 @@ class FilesystemObservationModels(Models):
                     arg = node.args[index]
                     if isinstance(arg, ast.Constant) and type(arg.value) is str:
                         literals.append(arg.value)
-        self.assertEqual((len(literals), len(set(literals))), (92, 90))
+        self.assertEqual((len(literals), len(set(literals))), (100, 94))
         self.assertEqual(set(H._FILESYSTEM_GUARDS), set(literals))
-        self.assertEqual(len(set(H._FILESYSTEM_GUARDS.values())), 90)
+        self.assertEqual(len(set(H._FILESYSTEM_GUARDS.values())), 94)
         self.assertEqual({member.value for member in H.FilesystemGuard},
                          {"UNOBSERVED", *H._FILESYSTEM_GUARDS.values()})
         for message, guard in H._FILESYSTEM_GUARDS.items():

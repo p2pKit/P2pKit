@@ -483,8 +483,12 @@ class NativeGitQueries:
             while True:
                 self._check()
                 posix_files._deadline(end)
-                out.verify()
-                err.verify()  # Child duplicates bypass sink.write(): observe LIVE size.
+                if self.native_role == "windows-x64":
+                    out.observe_live_output()
+                    err.observe_live_output()
+                else:
+                    out.verify()
+                    err.verify()
                 code = child.poll()
                 if code is not None:
                     row["waitExitCode"] = code

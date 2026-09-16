@@ -213,8 +213,12 @@ def validate_acl(policy, owner, control, revision, aces, *, directory, inherited
     return protected
 
 
-def decode_streams(raw, *, directory, size):
-    """Decode FILE_STREAM_INFO; reject alternate streams rather than omit them."""
+def decode_streams(raw, *, directory, size, live_output_max_bytes=None, live_output_min_bytes=0):
+    """Decode streams strictly, or bounded monotonic growth for a live writer."""
+    if live_output_max_bytes is not None:
+        require(not directory, "Live output observation requires a private regular file")
+        _bound(live_output_max_bytes, MAX_FILE_BYTES, "file bytes", zero=True)
+        _bound(live_output_min_bytes, live_output_max_bytes, "file bytes", zero=True)
     if raw is None:
         require(directory, "Regular file lacks native stream information")
         return ()
@@ -235,7 +239,12 @@ def decode_streams(raw, *, directory, size):
         require(following % 8 == 0 and following >= 24 + length and position + following < len(raw),
                 "Invalid native stream offset")
         position += following
-    require(rows == [("::$DATA", size)] and (not directory or size == 0), "Alternate data streams are not admitted")
+    if live_output_max_bytes is None:
+        require(rows == [("::$DATA", size)] and (not directory or size == 0), "Alternate data streams are not admitted")
+    else:
+        require(len(rows) == 1 and rows[0][0] == "::$DATA", "Alternate data streams are not admitted")
+        require(type(size) is int and live_output_min_bytes <= size <= rows[0][1] <= live_output_max_bytes,
+                "Live output stream shrank or exceeded its byte bound")
     return tuple(rows)
 
 
@@ -487,7 +496,12 @@ class _WinApi:
                                      directory=directory, inherited_allowed=inherited_allowed)
             return owner_sid, protected
 
-    def inspect(self, handle, path, *, directory, private=False, inherited_allowed=False):
+    def inspect(self, handle, path, *, directory, private=False, inherited_allowed=False,
+                live_output_max_bytes=None, live_output_min_bytes=0):
+        if live_output_max_bytes is not None:
+            require(private and not directory, "Live output observation requires a private regular file")
+            _bound(live_output_max_bytes, MAX_FILE_BYTES, "file bytes", zero=True)
+            _bound(live_output_min_bytes, live_output_max_bytes, "file bytes", zero=True)
         require(self.GetFileType(handle) == 1, "Only native disk files are admitted")
         flags = U32()
         self.checked(self.GetHandleInformation(handle, ctypes.byref(flags)), "GetHandleInformation")
@@ -505,12 +519,19 @@ class _WinApi:
         final_path_matches(final.value, path)
         owner, protected = (self._security(handle, directory=directory, inherited_allowed=inherited_allowed)
                             if private else (None, None))
+        observed_size = standard.size
         if private:
             capacity = 4096
             while True:
                 streams = ctypes.create_string_buffer(capacity)
                 if self.GetFileInformationByHandleEx(handle, 7, streams, len(streams)):
-                    decode_streams(streams.raw, directory=directory, size=standard.size)
+                    rows = decode_streams(streams.raw, directory=directory, size=standard.size,
+                                          live_output_max_bytes=live_output_max_bytes,
+                                          live_output_min_bytes=live_output_min_bytes)
+                    if live_output_max_bytes is not None:
+                        # The child may append between these separate native
+                        # queries. Never return the stale, smaller first size.
+                        observed_size = rows[0][1]
                     break
                 error = ctypes.get_last_error()
                 if error == 38 and directory:  # ERROR_HANDLE_EOF: directory has no data streams.
@@ -518,7 +539,7 @@ class _WinApi:
                     break
                 require(error in (122, 234) and capacity < 1024 * 1024, "Cannot inspect bounded native data streams")
                 capacity *= 2
-        return FileInfo((identifier.volume, bytes(identifier.identifier).hex()), directory, standard.size,
+        return FileInfo((identifier.volume, bytes(identifier.identifier).hex()), directory, observed_size,
                         standard.links, basic.attributes, basic.created, basic.modified, basic.changed, owner, protected)
 
     def names(self, handle, maximum, deadline):
@@ -569,9 +590,9 @@ class _WinApi:
 
 
 class _Pin:
-    def __init__(self, api, handle, path, info, *, private, inherited_allowed=False):
+    def __init__(self, api, handle, path, info, *, private, inherited_allowed=False, writable=False):
         self.api, self.handle, self.path, self.info = api, handle, path, info
-        self.private, self.inherited_allowed = private, inherited_allowed
+        self.private, self.inherited_allowed, self.writable = private, inherited_allowed, writable
         self.references, self.lock = 1, threading.RLock()
 
     def acquire(self):
@@ -589,11 +610,16 @@ class _Pin:
                 _close_native(self.api, handle)
                 self.handle = None
 
-    def observe(self):
+    def observe(self, *, live_output_max_bytes=None, live_output_min_bytes=0):
         with self.lock:
             require(self.references > 0, "Custody handle is closed")
+            options = {}
+            if live_output_max_bytes is not None:
+                require(self.writable and self.private and not self.info.is_directory,
+                        "Live output observation requires an exclusive private writer pin")
+                options.update(live_output_max_bytes=live_output_max_bytes, live_output_min_bytes=live_output_min_bytes)
             info = self.api.inspect(self.handle, self.path, directory=self.info.is_directory,
-                                    private=self.private, inherited_allowed=self.inherited_allowed)
+                                    private=self.private, inherited_allowed=self.inherited_allowed, **options)
             require(info.identity == self.info.identity, "Pinned native identity changed")
             return info
 
@@ -691,7 +717,7 @@ class PrivateDirectory:
             require(info.identity[0] == self.identity[0], "Custody child crossed its pinned volume")
             require(directory or info.size <= max_bytes, "Native file exceeds its byte bound")
             pins = _acquire(self._pins)
-            pins.append(_Pin(self._api, handle, path, info, private=True, inherited_allowed=not create))
+            pins.append(_Pin(self._api, handle, path, info, private=True, inherited_allowed=not create, writable=writable))
             handle = None
             owner = (PrivateDirectory(self._api, pins) if directory else
                      NativeFile(self._api, pins, max_bytes=max_bytes, writable=writable, deadline=end))
@@ -768,7 +794,8 @@ class NativeFile(io.RawIOBase):
 
     A native process owner may DuplicateHandle(native_handle) into an explicit
     child handle list, keeping this object alive until the child/duplicate retires.
-    Such writes bypass write(): that owner MUST bound live size, then verify/sync.
+    Such writes bypass write(): the owner MUST observe_live_output() while the
+    child may write, then strictly verify/sync only after its duplicates retire.
     fileno() is intentionally unsupported: Win32 handles are not CRT descriptors.
     readall() shares read()'s aggregate materialization limit; line-reading and
     implicit iteration are unsupported. Archive callers use bounded binary reads.
@@ -781,6 +808,7 @@ class NativeFile(io.RawIOBase):
         self._writable, self._deadline = writable, deadline
         self.path, self.identity = Path(pins[-1].path), pins[-1].info.identity
         self.initial_info = pins[-1].info
+        self._live_output_size = self.initial_info.size
         self.final_info = None
         self._retired = False
 
@@ -865,6 +893,25 @@ class NativeFile(io.RawIOBase):
             _check_time(self._deadline)
             total += self._api.write(self.native_handle, bytes(view[total:total + CHUNK]))
         return total
+
+    @_locked
+    def observe_live_output(self):
+        """Bound a live child writer, not an immutable snapshot or retirement proof.
+
+        Ancestors stay strict. Only this exclusive private file pin permits
+        monotonic growth across the separate size queries; both sizes are bounded.
+        No final_info is published: post-drain verify/close/reopen remain mandatory.
+        """
+        _check_time(self._deadline)
+        require(self.writable(), "Native file is not an exclusive writer")
+        for pin in self._pins[:-1]:
+            pin.observe()
+        current = self._pins[-1].observe(live_output_max_bytes=self.max_bytes,
+                                         live_output_min_bytes=self._live_output_size)
+        require(current.size <= self.max_bytes, "Native output exceeds its byte bound")
+        require(current.size >= self._live_output_size, "Native live output shrank between observations")
+        self._live_output_size = current.size
+        return current
 
     @_locked
     def verify(self):

@@ -572,8 +572,12 @@ class Controller(PrivateOwner):
             cancellation_requested = False
             while True:
                 posix._deadline(end)
-                out.verify()
-                err.verify()
+                if self.role == "windows-x64":
+                    out.observe_live_output()
+                    err.observe_live_output()
+                else:
+                    out.verify()
+                    err.verify()
                 code = child.poll()
                 if code is not None:
                     row["exitCode"] = code

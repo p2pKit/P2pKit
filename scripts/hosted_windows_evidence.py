@@ -454,8 +454,8 @@ def _gpg(session, recipient, arguments, end, *, output=None, output_name="stdout
         _require(process.stdout is None and process.stderr is None, "Native GPG did not borrow private sinks")
         while True:
             portable._deadline(end)
-            out.verify()
-            err.verify()  # Child duplicates bypass NativeFile.write(): live readback is mandatory.
+            out.observe_live_output()
+            err.observe_live_output()  # Child duplicates bypass NativeFile.write(): live readback is mandatory.
             code = process.poll()
             if code is not None:
                 row["waitExitCode"] = code

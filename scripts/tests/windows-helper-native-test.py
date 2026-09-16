@@ -142,6 +142,59 @@ class Fixture:
                 raise errors[0]
         return description
 
+    def _stream_query_controls(self):
+        """Actual NTFS queries/writes; deterministic interleaving, not an OS fault.
+
+        No result buffer is fabricated. One owned WriteFile occurs after the real
+        FileStandardInfo reply and before the real FileStreamInfo query. Existing
+        native_sinks separately exercises an actual child and inherited handles.
+        """
+        results = []
+        for mode in ("strict", "live"):
+            name = "interquery-" + mode + ".bin"
+            stream = self.hold(self.root.create_file(name, max_bytes=16, deadline=time.monotonic() + 20))
+            api, handle = stream._api, stream.native_handle
+            information = api._information
+            writes, earlier = [], []
+            def query(selected, kind, structure):
+                value = information(selected, kind, structure)
+                if selected == handle and kind == 1 and not writes:
+                    check(value.size == 0, "INTERQUERY_INITIAL_SIZE_DIFFERS")
+                    earlier.append(value.size)
+                    writes.append(api.write(handle, b"G"))
+                return value
+            try:
+                with patch.object(api, "_information", side_effect=query):
+                    if mode == "strict":
+                        try:
+                            stream.verify()
+                        except F.FilesystemError as error:
+                            check(str(error) == "Alternate data streams are not admitted", "STRICT_INTERQUERY_CAUSE_DIFFERS")
+                        else:
+                            raise H.HelperError("NATIVE_STRICT_INTERQUERY_GROWTH_ACCEPTED")
+                    else:
+                        check(stream.observe_live_output().size == 1 and stream.final_info is None,
+                              "LIVE_INTERQUERY_SIZE_OR_FINAL_AUTHORITY_DIFFERS")
+                check(earlier == [0] and writes == [1] and stream.verify().size == 1,
+                      "INTERQUERY_NATIVE_WRITE_OR_STRICT_FINAL_SIZE_DIFFERS")
+            finally:
+                original = sys.exc_info()[1]
+                try:
+                    stream.close()
+                except BaseException as error:
+                    self.unknown = True
+                    if original is None:
+                        raise
+                    F._note(original, H.encoded(H.error_detail(error)).decode("ascii"))
+            check(stream.closed and stream._retired, "INTERQUERY_NATIVE_PIN_NOT_CLOSED")
+            raw = H.private_read(self.root, name, 16)
+            check(raw == b"G", "INTERQUERY_REOPEN_BYTES_DIFFER")
+            results.append({"mode": mode, "writeBoundary": "AFTER_REAL_STANDARD_BEFORE_REAL_STREAM_QUERY",
+                            "earlierSize": 0, "laterSize": 1, "writeBytes": 1, "writeCount": 1,
+                            "strictFinalSize": 1, "closedThenReopened": True, "sha256": H.digest(raw),
+                            "outcome": "STRICT_REJECTED" if mode == "strict" else "LIVE_OBSERVED"})
+        return results
+
     def native_sinks(self):
         command = self.commands("real-sinks")
         observations = []
@@ -153,7 +206,7 @@ class Fixture:
             def spawn(*arguments, **keywords):
                 borrowed[:] = [keywords["stdout"], keywords["stderr"]]
                 child = actual_spawn(*arguments, **keywords)
-                observations.append({"phase": "after-native-spawn", "pins": [v.verify().as_dict() for v in borrowed],
+                observations.append({"phase": "after-native-spawn", "pins": [v.observe_live_output().as_dict() for v in borrowed],
                                      "handles": [v.native_handle for v in borrowed]})
                 return child
             def close():
@@ -176,6 +229,7 @@ class Fixture:
                   launch[0].get("jobAssignedBeforeResume") is True and launch[0].get("resumed") is True,
                   "JOB_OR_BORROWED_OUTPUT_PROOF_MISSING")
             self.record("native-sinks-observed", {"actualNativeObservations": observations,
+                        "liveInterqueryChecks": self._stream_query_controls(),
                         "stdout": {"bytes": len(stdout), "sha256": H.digest(stdout)},
                         "stderr": {"bytes": len(stderr), "sha256": H.digest(stderr)}})
         finally:

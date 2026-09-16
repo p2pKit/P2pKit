@@ -185,6 +185,10 @@ _FILESYSTEM_GUARDS = {
     "Invalid native stream name": "STREAM_NAME_INVALID",
     "Invalid native stream offset": "STREAM_OFFSET_INVALID",
     "Alternate data streams are not admitted": "STREAM_ALTERNATE_PRESENT",
+    "Live output observation requires a private regular file": "STREAM_LIVE_PRIVATE_FILE_REQUIRED",
+    "Live output stream shrank or exceeded its byte bound": "STREAM_LIVE_SHRANK_OR_BOUND",
+    "Live output observation requires an exclusive private writer pin": "FILE_LIVE_WRITER_PIN_REQUIRED",
+    "Native live output shrank between observations": "FILE_LIVE_OBSERVATION_SHRANK",
     "Invalid native directory information": "DIRECTORY_INFO_INVALID",
     "Truncated/excessive directory information": "DIRECTORY_INFO_BOUND",
     "Invalid native directory name size": "DIRECTORY_NAME_SIZE",
@@ -759,8 +763,8 @@ class Commands:
             require(child.stdout is None and child.stderr is None, "BORROWED_SINK_MODE_REQUIRED")
             while True:
                 require((finalizing or not self.cancelled) and time.monotonic() < end, "COMMAND_CANCELLED_OR_DEADLINE")
-                out.verify()
-                err.verify()
+                out.observe_live_output()
+                err.observe_live_output()
                 code = child.poll()
                 if code is not None:
                     row["waitExitCode"] = code
@@ -942,6 +946,13 @@ def assert_native_result(name, value, admitted, read_member):
                 all(len(item.get("pins", [])) == 2 for item in phases) and
                 row.get("stdout", {}).get("bytes") == 1028 and row.get("stderr", {}).get("bytes") == 258,
                 "NATIVE_SINK_OBSERVATIONS_INCOMPLETE")
+        # Canonical bytes distinguish integer counters from booleans/floats.
+        require(encoded(row.get("liveInterqueryChecks")) == encoded([
+            {"mode": mode, "writeBoundary": "AFTER_REAL_STANDARD_BEFORE_REAL_STREAM_QUERY",
+             "earlierSize": 0, "laterSize": 1, "writeBytes": 1, "writeCount": 1,
+             "strictFinalSize": 1, "closedThenReopened": True, "sha256": digest(b"G"),
+             "outcome": "STRICT_REJECTED" if mode == "strict" else "LIVE_OBSERVED"}
+            for mode in ("strict", "live")]), "NATIVE_STREAM_QUERY_REGRESSION_INCOMPLETE")
     elif name == "native-output-bound":
         require(row.get("admittedBytes") == 128 and row.get("bytesEmitted") == 1024 and
                 row.get("productionRecordNeverPromoted") is True and type(row.get("expectedFailure")) is dict,

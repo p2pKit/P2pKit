@@ -125,6 +125,42 @@ class WindowsQueryModels(unittest.TestCase):
         with self.assertRaises(Q.QueryError):
             owner.close()
 
+
+    def actual_stream_query(self, *, post_drain_growth=False):
+        queries = model.StreamQueryModel(self.api)
+        original_spawn, original_close = NativeSinkScopeModel.spawn, NativeSinkScopeModel.close
+        def spawn(scope, argv, cwd, env, *, stdout, stderr):
+            child = original_spawn(scope, argv, cwd, env, stdout=stdout, stderr=stderr)
+            queries.append_after_standard(stdout.native_handle, b"+stdout")
+            queries.append_after_standard(stderr.native_handle, b"+stderr")
+            return child
+        def close(scope):
+            original_close(scope)
+            if post_drain_growth:
+                queries.append_after_standard(self.calls[0][0].native_handle, b"late")
+        self.patches.enter_context(patch.object(NativeSinkScopeModel, "spawn", spawn))
+        self.patches.enter_context(patch.object(NativeSinkScopeModel, "close", close))
+        return self.owner(), queries
+
+    def test_real_inspector_live_growth_is_captured_by_actual_query_loop(self):
+        owner, queries = self.actual_stream_query()
+        self.assertEqual(self.query(owner), self.out + b"+stdout")
+        self.assertEqual(owner.records[0]["waitExitCode"], 0)
+        self.assertEqual(sum(maximum is not None for _, maximum in queries.observations), 2)
+        self.assertTrue(all(stream.closed for stream in self.calls[0][:2]))
+        owner.close()
+
+    def test_actual_query_post_drain_verification_does_not_allow_live_growth(self):
+        owner, queries = self.actual_stream_query(post_drain_growth=True)
+        with self.assertRaises(Q.QueryError):
+            self.query(owner)
+        self.assertEqual(owner.records[0]["waitExitCode"], 0)
+        self.assertEqual(owner.records[0]["result"], "HOLD")
+        self.assertIn("Alternate data streams are not admitted", json.dumps(owner.records[0]))
+        self.assertEqual(sum(maximum is not None for _, maximum in queries.observations), 2)
+        self.assertTrue(all(stream.closed for stream in self.calls[0][:2]))
+        self.close_failed(owner)
+
     def test_actual_nativefile_objects_are_borrowed_without_crt_conversion(self):
         owner = self.owner()
         self.assertEqual(self.query(owner), self.out)

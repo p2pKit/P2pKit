@@ -396,7 +396,8 @@ class ModelApi:
         files.require(directory is None or node.directory == directory, "Modeled wrong kind")
         return self._open(node, writable)
 
-    def inspect(self, handle, path, *, directory, private=False, inherited_allowed=False):
+    def inspect(self, handle, path, *, directory, private=False, inherited_allowed=False,
+                live_output_max_bytes=None, live_output_min_bytes=0):
         node = self.handles[handle][0]
         if self.inspect_failure == node.path:
             raise files.FilesystemError("Modeled readback failure")
@@ -409,6 +410,11 @@ class ModelApi:
                 records.append((0, 3, files.FILE_ALL_ACCESS, "S-1-1-0"))
             files.validate_acl(self.policy, node.owner, 0x4 | (0x1000 if node.protected else 0), 1, records,
                                directory=directory, inherited_allowed=inherited_allowed)
+        if live_output_max_bytes is not None:
+            files.require(private and not directory, "Model live output needs a private regular file")
+            files.decode_streams(stream_record("::$DATA", len(node.content)), directory=False,
+                                 size=len(node.content), live_output_max_bytes=live_output_max_bytes,
+                                 live_output_min_bytes=live_output_min_bytes)
         return files.FileInfo((1, f"{node.identifier:032x}"), directory, len(node.content), node.links,
                               files.DIRECTORY if directory else 0x20, 100, node.version, node.version,
                               node.owner if private else None, node.protected if private else None)
@@ -462,6 +468,88 @@ class ModelApi:
         del self.handles[handle]
         if self.close_failure == handle:
             raise files.FilesystemError("Modeled uncertain CloseHandle result")
+
+
+class StreamQueryModel:
+    """Actual inspector/pin/stream code; only separate Win32 query replies are modeled.
+
+    after_standard schedules one in-memory write AFTER the earlier native result
+    is filled. No native binding, child, thread, fixture or atomicity claim exists.
+    """
+    def __init__(self, api):
+        self.api = api
+        self.after_standard, self.raw_streams, self.flags = {}, {}, {}
+        self.observations, self.queries = [], []
+        self.native = object.__new__(files._WinApi)
+        self.native.policy = api.policy
+        self.native.GetFileType = lambda handle: 1
+        self.native.GetHandleInformation = self.handle_information
+        self.native.GetFileInformationByHandleEx = self.information
+        self.native.GetFinalPathNameByHandleW = self.final_path
+        self.native._security = self.security
+        self.native.checked = lambda value, operation: files.require(value, "Modeled Win32 call failed")
+        api.inspect = self.inspect
+
+    def append_after_standard(self, handle, raw):
+        assert handle not in self.after_standard
+        self.after_standard[handle] = lambda: self.api.write(handle, raw)
+
+    def handle_information(self, handle, output):
+        ctypes.cast(output, ctypes.POINTER(files.U32)).contents.value = self.flags.get(handle, 0)
+        return True
+
+    def information(self, handle, kind, output, capacity):
+        node = self.api.handles[handle][0]
+        self.queries.append((handle, kind, len(node.content)))
+        if kind == 18:
+            row = ctypes.cast(output, ctypes.POINTER(files._FileId)).contents
+            row.volume = 1
+            row.identifier[:] = node.identifier.to_bytes(16, "big")
+        elif kind == 0:
+            row = ctypes.cast(output, ctypes.POINTER(files._Basic)).contents
+            row.created, row.modified, row.changed = 100, node.version, node.version
+            row.attributes = (files.DIRECTORY if node.directory else 0x20) | (files.REPARSE_POINT if node.reparse else 0)
+        elif kind == 1:
+            row = ctypes.cast(output, ctypes.POINTER(files._Standard)).contents
+            row.size, row.allocated, row.links = len(node.content), max(4096, len(node.content)), node.links
+            row.delete_pending, row.directory = 0, int(node.directory)
+            action = self.after_standard.pop(handle, None)
+            if action is not None:
+                action()
+        elif kind == 7:
+            raw = stream_record("::$DATA", len(node.content))
+            if node.extra_stream:
+                raw = stream_record("::$DATA", len(node.content), 40) + stream_record(":hidden:$DATA", 1)
+            raw = self.raw_streams.get(handle, raw)
+            assert len(raw) <= capacity
+            output.raw = raw.ljust(capacity, b"\0")
+        else:
+            raise AssertionError("Unexpected modeled native information class")
+        return True
+
+    def final_path(self, handle, output, capacity, flags):
+        output.value = "\\\\?\\" + self.api.handles[handle][0].path
+        return len(output.value)
+
+    def security(self, handle, *, directory, inherited_allowed):
+        node = self.api.handles[handle][0]
+        records = acl(directory, node.protected)
+        if node.bad_acl or not node.private:
+            records.append((0, 3, files.FILE_ALL_ACCESS, "S-1-1-0"))
+        protected = files.validate_acl(self.api.policy, node.owner,
+            files.SE_DACL_PRESENT | (files.SE_DACL_PROTECTED if node.protected else 0), 1, records,
+            directory=directory, inherited_allowed=inherited_allowed)
+        return node.owner, protected
+
+    def inspect(self, handle, path, *, directory, private=False, inherited_allowed=False,
+                live_output_max_bytes=None, live_output_min_bytes=0):
+        self.observations.append((handle, live_output_max_bytes))
+        # Omit the new keyword in strict calls so the same regression can execute
+        # the original inspector and expose its real pre-repair rejection.
+        options = {} if live_output_max_bytes is None else {"live_output_max_bytes": live_output_max_bytes,
+                                                         "live_output_min_bytes": live_output_min_bytes}
+        return self.native.inspect(handle, path, directory=directory, private=private,
+                                   inherited_allowed=inherited_allowed, **options)
 
 
 class ModelCustodyTests(unittest.TestCase):
@@ -769,6 +857,139 @@ class ModelCustodyTests(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(results, [b"a"])
         self.assertTrue(closed.is_set())
+
+    def test_live_output_real_inspector_reports_later_size_without_finalizing_or_retrying(self):
+        queries = StreamQueryModel(self.api)
+        stream = self.keep(self.root.create_file("live.bin", max_bytes=32))
+        handle, deadline = stream.native_handle, stream._deadline
+        for before, after in ((0, 1), (1, 8), (8, 16)):
+            queries.queries.clear()
+            queries.append_after_standard(handle, b"G" * (after - before))
+            self.assertEqual(stream.observe_live_output().size, after)
+            self.assertEqual([(kind, size) for h, kind, size in queries.queries if h == handle],
+                             [(18, before), (0, before), (1, before), (7, after)])
+            self.assertIsNone(stream.final_info, "Live observation is not a final verification receipt")
+            self.assertEqual(stream._deadline, deadline)
+        self.assertEqual(stream.verify().size, 16)
+        self.assertEqual(queries.observations[-1], (handle, None), "Final verification must stay strict")
+
+    def test_live_output_default_inspect_and_verify_still_reject_interquery_growth(self):
+        queries = StreamQueryModel(self.api)
+        stream = self.keep(self.root.create_file("strict.bin", max_bytes=32))
+        for operation in (lambda: self.api.inspect(stream.native_handle, str(stream.path),
+                                                   directory=False, private=True), stream.verify):
+            queries.append_after_standard(stream.native_handle, b"G")
+            with self.assertRaisesRegex(files.FilesystemError, "^Alternate data streams are not admitted$"):
+                operation()
+        self.assertEqual(stream.verify().size, 2)
+
+    def test_live_output_bounds_both_queries_and_refuses_interquery_shrink(self):
+        queries = StreamQueryModel(self.api)
+        for before, after in ((8, 33), (33, 8), (16, 8)):
+            with self.subTest(before=before, after=after):
+                stream = self.keep(self.root.create_file(f"bound-{before}-{after}.bin", max_bytes=32))
+                node = self.api.handles[stream.native_handle][0]
+                node.content = b"B" * before
+                queries.after_standard[stream.native_handle] = lambda: setattr(node, "content", b"B" * after)
+                with self.assertRaisesRegex(files.FilesystemError, "Live output stream shrank or exceeded its byte bound"):
+                    stream.observe_live_output()
+                self.assertIsNone(stream.final_info)
+                if after > 32:
+                    with self.assertRaises(files.FilesystemError):
+                        stream.close()
+                    self.assertTrue(stream.closed and stream._retired)
+
+    def test_live_output_refuses_readonly_directory_and_unprivate_pin_authority(self):
+        queries = StreamQueryModel(self.api)
+        self.put("reader.bin", b"original")
+        reader = self.keep(self.root.open_file("reader.bin", max_bytes=32))
+        with self.assertRaises(files.FilesystemError):
+            reader.observe_live_output()
+        with self.assertRaises(files.FilesystemError):
+            reader._pins[-1].observe(live_output_max_bytes=32)
+        with self.assertRaises(files.FilesystemError):
+            self.root._pins[-1].observe(live_output_max_bytes=32)
+        with self.assertRaises(files.FilesystemError):
+            queries.native.inspect(reader.native_handle, str(reader.path), directory=False,
+                                   private=False, live_output_max_bytes=32)
+        with self.assertRaises(files.FilesystemError):
+            files.decode_streams(stream_record("::$DATA", 0), directory=True, size=0, live_output_max_bytes=32)
+        self.assertEqual(reader.verify().size, 8)
+
+    def test_live_output_keeps_stream_name_cardinality_and_binary_schema_closed(self):
+        queries = StreamQueryModel(self.api)
+        bad_streams = (stream_record("::$DATA", 0, 40) + stream_record(":secret:$DATA", 1),
+                       stream_record("::$DATA", 0, 40) + stream_record("::$DATA", 0),
+                       stream_record(":alias:$DATA", 0), stream_record("::$DATA", -1),
+                       struct.pack("<IIqq", 0, 3, 0, 0) + b"odd",
+                       struct.pack("<IIqq", 25, 14, 0, 0) + "::$DATA".encode("utf-16-le"))
+        for index, raw in enumerate(bad_streams):
+            with self.subTest(case=index):
+                stream = self.keep(self.root.create_file(f"schema-{index}.bin", max_bytes=32))
+                queries.raw_streams[stream.native_handle] = raw
+                with self.assertRaises(files.FilesystemError):
+                    stream.observe_live_output()
+                with self.assertRaises(files.FilesystemError):
+                    stream.close()
+                self.assertTrue(stream.closed and stream._retired)
+
+    def test_live_output_preserves_acl_path_identity_and_inheritance_guards(self):
+        queries = StreamQueryModel(self.api)
+        for key, value in (("owner", "S-1-5-21-8-8-8-1001"), ("bad_acl", True), ("reparse", True),
+                           ("identifier", 999), ("path", r"C:\wrong\file"), ("links", 2)):
+            with self.subTest(guard=key):
+                stream = self.keep(self.root.create_file(key + ".bin", max_bytes=32))
+                setattr(self.api.handles[stream.native_handle][0], key, value)
+                with self.assertRaises(files.FilesystemError):
+                    stream.observe_live_output()
+                with self.assertRaises(files.FilesystemError):
+                    stream.close()
+                self.assertTrue(stream.closed and stream._retired)
+        stream = self.keep(self.root.create_file("inheritable.bin", max_bytes=32))
+        queries.flags[stream.native_handle] = 1
+        with self.assertRaisesRegex(files.FilesystemError, "Custody handles must not be inheritable"):
+            stream.observe_live_output()
+        with self.assertRaises(files.FilesystemError):
+            stream.close()
+
+    def test_live_output_original_deadline_closed_state_and_monotonic_observations(self):
+        queries = StreamQueryModel(self.api)
+        stream = self.keep(self.root.create_file("monotonic.bin", max_bytes=32))
+        queries.append_after_standard(stream.native_handle, b"eight888")
+        self.assertEqual(stream.observe_live_output().size, 8)
+        self.api.handles[stream.native_handle][0].content = b"four"
+        with self.assertRaisesRegex(files.FilesystemError, "Live output stream shrank or exceeded its byte bound"):
+            stream.observe_live_output()
+        queries.append_after_standard(stream.native_handle, b"regrown")
+        with self.assertRaisesRegex(files.FilesystemError, "Live output stream shrank or exceeded its byte bound"):
+            stream.observe_live_output()  # Earlier size cannot shrink even if the later size regrows.
+        before = list(queries.observations)
+        with patch.object(files.time, "monotonic", return_value=stream._deadline), \
+                self.assertRaisesRegex(files.FilesystemError, "Native filesystem deadline exceeded"):
+            stream.observe_live_output()
+        self.assertEqual(queries.observations, before)
+        stream.close()
+        with self.assertRaises(files.FilesystemError):
+            stream.observe_live_output()
+        self.assertEqual(self.api.handles.keys(), {pin.handle for pin in self.root._pins})
+
+    def test_live_output_does_not_relax_readers_or_immutable_snapshot_checks(self):
+        queries = StreamQueryModel(self.api)
+        writer = self.root.create_file("immutable.bin", max_bytes=32)
+        queries.append_after_standard(writer.native_handle, b"original")
+        self.assertEqual(writer.observe_live_output().size, 8)
+        writer.close()
+        snapshot = self.root.snapshot(max_bytes=32, max_members=4)
+        reader = snapshot._files["immutable.bin"]
+        node = self.api.handles[reader.native_handle][0]
+        node.content, node.version = b"modified", node.version + 1
+        with self.assertRaises(files.FilesystemError):
+            reader.verify()
+        with self.assertRaises(files.FilesystemError):
+            snapshot.verify()
+        with self.assertRaises(files.FilesystemError):
+            snapshot.close()
+        self.assertTrue(reader.closed and reader._retired)
 
 
 def unknown_retirement(error):

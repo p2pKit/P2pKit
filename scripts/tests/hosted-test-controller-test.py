@@ -1262,6 +1262,54 @@ class WindowsFileModels(Base):
         self.assertEqual(self.api.handles, {}, "Unaccounted in-memory model handles")
         super().tearDown()
 
+
+    def actual_stream_query_phase(self, *, post_drain_growth=False):
+        queries = self.model.StreamQueryModel(self.api)
+        original_factory = self.native_scope
+        def factory(*args):
+            scope = original_factory(*args)
+            original_spawn, original_close = scope.spawn, scope.close
+            def spawn(argv, cwd, env, *, stdout, stderr):
+                child = original_spawn(argv, cwd, env, stdout=stdout, stderr=stderr)
+                queries.append_after_standard(stdout.native_handle, b"+stdout")
+                queries.append_after_standard(stderr.native_handle, b"+stderr")
+                return child
+            def close():
+                original_close()
+                if post_drain_growth:
+                    queries.append_after_standard(self.calls[0]["stdout"].native_handle, b"late")
+            scope.spawn, scope.close = spawn, close
+            return scope
+        self.stack.enter_context(patch.object(C.processes, "make_scope", side_effect=factory))
+        return self.controller(), queries
+
+    def test_real_inspector_live_growth_is_captured_by_actual_controller_phase(self):
+        controller, queries = self.actual_stream_query_phase()
+        row = controller.phase("product", ["synthetic-model"], 825)
+        self.assertEqual(row["exitCode"], 0)
+        self.assertEqual(row["retirement"], "KNOWN")
+        self.assertEqual(row["errors"], [])
+        self.assertEqual(sum(maximum is not None for _, maximum in queries.observations), 2)
+        for name in ("stdout", "stderr"):
+            stream = self.calls[0][name]
+            node = self.api.nodes[str(stream.path)]
+            self.assertEqual(node.content, getattr(self, name) + (b"+stdout" if name == "stdout" else b"+stderr"))
+            self.assertTrue(stream.closed)
+            self.assertEqual(stream._deadline, 970.)
+        controller.close()
+
+    def test_actual_controller_post_drain_verification_does_not_allow_live_growth(self):
+        controller, queries = self.actual_stream_query_phase(post_drain_growth=True)
+        with self.assertRaises(C.ControllerError):
+            controller.phase("product", ["synthetic-model"], 825)
+        row = controller.records[0]
+        self.assertEqual(row["exitCode"], 0)
+        self.assertIn("Alternate data streams are not admitted", json.dumps(row["errors"]))
+        self.assertEqual(sum(maximum is not None for _, maximum in queries.observations), 2)
+        self.assertTrue(all(self.calls[0][name].closed for name in ("stdout", "stderr")))
+        controller.close()  # Known native retirement may close resources; the failed phase stays failed.
+        self.assertTrue(row["errors"])
+
     def test_native_sinks_are_borrowed_without_fileno_and_original_deadlines_stay_fixed(self):
         controller = self.controller()
         row = controller.phase("product", ["synthetic-model"], 825)
