@@ -340,6 +340,9 @@ internal class AndroidLanDataTransport(
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Throwable) {
+                        // awaitClose cancels this job before closing its blocking listener.
+                        // That wakeup is cancellation, not a new active accept failure.
+                        currentCoroutineContext().ensureActive()
                         if (!closed) {
                             releaseServerSocket(sock, preservePort = true)
                             close(e)

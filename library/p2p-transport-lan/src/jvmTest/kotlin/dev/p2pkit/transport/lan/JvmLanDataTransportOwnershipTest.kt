@@ -23,6 +23,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -31,6 +32,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
@@ -70,6 +72,35 @@ class JvmLanDataTransportOwnershipTest {
         override fun accept(): Socket {
             acceptEntered.countDown()
             return super.accept()
+        }
+    }
+
+    private class GatedAcceptFailureServerSocket : TrackingServerSocket() {
+        val acceptEntered = CountDownLatch(1)
+        val acceptFailure = CompletableDeferred<SocketException>()
+        val releaseFailure = CountDownLatch(1)
+        val closeAttempts = AtomicInteger()
+
+        init {
+            soTimeout = TEST_TIMEOUT_MS.toInt()
+        }
+
+        override fun accept(): Socket {
+            acceptEntered.countDown()
+            return try {
+                super.accept()
+            } catch (failure: SocketException) {
+                acceptFailure.complete(failure)
+                check(releaseFailure.await(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                    "fixture accept failure gate timed out"
+                }
+                throw failure
+            }
+        }
+
+        override fun close() {
+            closeAttempts.incrementAndGet()
+            super.close()
         }
     }
 
@@ -444,6 +475,82 @@ class JvmLanDataTransportOwnershipTest {
             withTimeout(TEST_TIMEOUT_MS) { result.join() }
             received.forEach { it.close() }
             failed.closeFromFixture()
+        }
+    }
+
+    @Test
+    fun cancelledAcceptDoesNotReenterListenerFailureRelease() = runBlocking<Unit> {
+        val listener = GatedAcceptFailureServerSocket()
+        val transport = JvmLanDataTransport(
+            registration = registration("cancelled-accept"),
+            serverSocketFactory = { listener }
+        )
+        supervisorScope {
+            // An unexpected non-cancellation must be asserted, not escape into the test's parent.
+            val collector = async(Dispatchers.Default) { transport.incomingConnections().collect() }
+            val completion = CompletableDeferred<Throwable?>()
+            collector.invokeOnCompletion { completion.complete(it) }
+            try {
+                assertTrue(transport.start().isSuccess)
+                await(listener.acceptEntered, "blocking accept entry")
+                collector.cancel(CancellationException("controlled accept cancellation"))
+                withTimeout(TEST_TIMEOUT_MS) { listener.acceptFailure.await() }
+                assertEquals(1, listener.closeAttempts.get(), "awaitClose must release the listener")
+
+                // The real accept error cannot reach its catch until the accepter is cancelled.
+                listener.releaseFailure.countDown()
+                withTimeout(TEST_TIMEOUT_MS) { collector.join() }
+                assertEquals(
+                    1,
+                    listener.closeAttempts.get(),
+                    "a cancelled accepter must not classify listener teardown as an active failure"
+                )
+                assertIs<CancellationException>(withTimeout(TEST_TIMEOUT_MS) { completion.await() })
+                assertTrue(listener.isClosed)
+                assertNull(transport.tcpPort.value)
+            } finally {
+                listener.releaseFailure.countDown()
+                collector.cancel()
+                try {
+                    listener.close()
+                    withTimeout(TEST_TIMEOUT_MS) { collector.join() }
+                } finally {
+                    transport.close()
+                }
+            }
+        }
+    }
+
+    @Test
+    fun activeAcceptFailureStillClosesTheFlowWithItsError() = runBlocking<Unit> {
+        val listener = GatedAcceptFailureServerSocket()
+        val transport = JvmLanDataTransport(
+            registration = registration("active-accept-failure"),
+            serverSocketFactory = { listener }
+        )
+        val result = async(Dispatchers.Default) {
+            runCatching { transport.incomingConnections().collect() }
+        }
+        try {
+            assertTrue(transport.start().isSuccess)
+            await(listener.acceptEntered, "active accept entry")
+            // Only the listener is closed: the collector and accepter are still active.
+            listener.close()
+            val original = withTimeout(TEST_TIMEOUT_MS) { listener.acceptFailure.await() }
+            listener.releaseFailure.countDown()
+            val failure = withTimeout(TEST_TIMEOUT_MS) { result.await() }.exceptionOrNull()
+            assertIs<SocketException>(failure)
+            assertEquals(original.message, failure.message)
+            assertNull(transport.tcpPort.value)
+        } finally {
+            listener.releaseFailure.countDown()
+            result.cancel()
+            try {
+                listener.close()
+                withTimeout(TEST_TIMEOUT_MS) { result.join() }
+            } finally {
+                transport.close()
+            }
         }
     }
 
