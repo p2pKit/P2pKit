@@ -1,0 +1,2 @@
+// Standalone, built-in Gradle API controls. No plugins, repositories or dependencies.
+rootProject.name = "p2pkit-transcript-custody-api"

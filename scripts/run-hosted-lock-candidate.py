@@ -57,6 +57,19 @@ PROFILES = {
 WRITER_SECONDS, STOP_SECONDS = 7200, 120
 INIT = "gradle/hosted-lock-candidate.init.gradle"
 CUSTODY = "scripts/test-transcript-custody.py"
+CUSTODY_API_FIXTURE = "scripts/tests/fixtures/transcript-custody-api"
+CUSTODY_API_SCOPE = "GRADLE97_API_ACTION_ORDERING_ONLY"
+CUSTODY_API_CASES = {
+    "fresh-immutable-property", "same-system-property", "same-jvm-argument",
+    "conflicting-system-property", "conflicting-jvm-argument", "empty-key-argEmpty", "empty-key-argNull",
+    "empty-key-argBare", "similarly-prefixed-keys-preserved", "duplicate-effective-maps-rejected",
+    "provider-at-setup-not-evaluated", "plain-guard-before-stock", "already-realized-task-registration",
+    "lazy-registration-action-order", "earlier-type-action-layout-rejected", "later-type-setup-before-guard",
+    "late-conflicting-property", "late-conflicting-argument", "late-same-value-accepted", "late-sibling-accepted",
+    "late-provider-not-evaluated", "interposed-action-rejected", "missing-guard-rejected", "duplicate-guard-rejected",
+    "after-test-action-never-executed", "distinct-test-temporary-roots", "matching-root-and-requested-task",
+    "foreign-root-same-task-path", "buildsrc-shaped-root-filter", "unrequested-scope-filter",
+}
 IDENTITY_ENV = (
     "GITHUB_ACTIONS", "GITHUB_REPOSITORY", "GITHUB_SHA", "GITHUB_REF", "GITHUB_RUN_ID",
     "GITHUB_RUN_ATTEMPT", "GITHUB_EVENT_NAME", "GITHUB_WORKFLOW_REF", "GITHUB_WORKFLOW_SHA",
@@ -612,7 +625,6 @@ class Runtime:
         self.report["simulatorBefore"] = self.simulator
         record(self.evidence / "simulator-before.json", self.simulator)
         self.env["P2PKIT_WRITER_SIMULATOR"] = self.simulator["udid"]
-        write(self.home / "init.d/owned-simulator.gradle", read(self.root / INIT))
         record(self.state / "execution-environment.json", {"environment": self.env, "jvmArguments": self.jvm,
             "binding": self.binding, "job": self.job})
         self.command("native-controls", [sys.executable, "-I", "-B", "-S", str(SCRIPTS / "tests/run-audit-command-test.py"),
@@ -684,7 +696,112 @@ class Runtime:
         record(self.evidence / "multicast-inputs.json", {"files": {str(p.relative_to(self.root)): digest(p) for p in
             [*sources, resource, fixture]}, "dependencySha256": pin, "scope": "STARTUP_CONTROL_NOT_EIGHT_MODE_ACCEPTANCE"})
 
+    def custody_api(self):
+        """Short actual-Gradle API controls, before either product init.d loader.
+
+        Uses the already-required wrapper and same owned home as the next writer.
+        --offline constrains Gradle, not initial wrapper distribution acquisition.
+        No product task, Test worker, plugin repository or dependency is selected.
+        """
+        require(not self.custody_attempted and not any((self.home / "init.d").iterdir()),
+                "API controls must precede product/custody initializers")
+        work = self.state / "work/custody-api"
+        work.mkdir(mode=0o700)
+        (work / "gradle").mkdir(mode=0o700)
+        inputs = [CUSTODY_API_FIXTURE + "/settings.gradle", CUSTODY_API_FIXTURE + "/build.gradle",
+                  "gradle/test-transcript-custody.init.gradle", "gradle/gradle-daemon-jvm.properties",
+                  "gradlew", "gradle/wrapper/gradle-wrapper.properties", "gradle/wrapper/gradle-wrapper.jar"]
+        input_hashes = {name: digest(self.root / name) for name in inputs}
+        copies = {"settings.gradle": CUSTODY_API_FIXTURE + "/settings.gradle",
+                  "build.gradle": CUSTODY_API_FIXTURE + "/build.gradle",
+                  "gradle/gradle-daemon-jvm.properties": "gradle/gradle-daemon-jvm.properties"}
+        for target, source in copies.items():
+            write(work / target, read(self.root / source))
+            require(digest(work / target) == input_hashes[source], "copied API input changed")
+        record(self.evidence / "custody-api-inputs.json", {"scope": CUSTODY_API_SCOPE,
+            "source": self.report["sourceBefore"], "files": input_hashes,
+            "home": str(self.home), "work": str(work), "wrapperAcquisition": "Normal pinned wrapper; shared with writer"})
+        result_path = self.evidence / "custody-api.json"
+        argv = [str(self.root / "gradlew"), "--project-dir", str(work), "verifyTranscriptCustodyApi",
+                "--offline", "--dependency-verification=strict", "--no-daemon", "--console=plain", "--no-parallel",
+                "--max-workers=2", "--no-build-cache", "--no-configuration-cache", "--rerun-tasks", "--warning-mode=fail",
+                "-Pp2pkit.custodySource=" + str(self.root / "gradle/test-transcript-custody.init.gradle"),
+                "-Pp2pkit.custodyApiReport=" + str(result_path)]
+        command, stop, primary, failures = None, None, None, []
+        outcome = {"scope": CUSTODY_API_SCOPE, "status": "HOLD", "command": None, "stop": None}
+        self.report["custodyApi"] = outcome
+
+        def attempt(stage, action):
+            try:
+                return action()
+            except BaseException as error:
+                self.fail(stage, error)
+                failures.append(error)
+                return None
+
+        try:
+            command = Command(self, "custody-api", argv, 300)
+            require(command.wait() == 0, "actual Gradle custody API controls failed")
+        except BaseException as error:
+            primary = error
+            self.fail("custody-api", error)
+        finally:
+            if command is not None:
+                attempt("custody-api-pre-stop", lambda: command.drain("pre-stop"))
+                if command.row["launchAttempted"]:
+                    try:
+                        # Distinct random invocation IDs; real writer IDs are not
+                        # reserved yet and cannot be consumed by fixture controls.
+                        stop = Command(self, "custody-api-stop", [str(self.root / "gradlew"), "--stop", "--console=plain",
+                            "--no-parallel", "--max-workers=2", "-Dorg.gradle.jvmargs=" + self.jvm], STOP_SECONDS)
+                        require(stop.wait(True) == 0, "custody API same-home Gradle stop failed")
+                    except BaseException as error:
+                        self.fail("custody-api-stop", error)
+                        failures.append(error)
+                    finally:
+                        if stop is not None:
+                            attempt("custody-api-stop-drain", lambda: stop.drain("stop-final"))
+                            attempt("custody-api-stop-close", stop.close)
+                attempt("custody-api-final-drain", lambda: command.drain("command-final"))
+                attempt("custody-api-close", command.close)
+            outcome.update(command=command.row if command else None, stop=stop.row if stop else None)
+            if primary is None and not failures:
+                def validate_result():
+                    require(command is not None and stop is not None and stop.row["waitExitCode"] == 0 and
+                            not command.row["errors"] and not stop.row["errors"], "API control retirement incomplete")
+                    require(all(digest(self.root / name) == expected for name, expected in input_hashes.items()),
+                            "bound API source input changed")
+                    require(all(digest(work / target) == input_hashes[source] for target, source in copies.items()),
+                            "copied API input changed")
+                    result = parse(read(result_path, MIB))
+                    require(result.get("schema") == 1 and result.get("scope") == CUSTODY_API_SCOPE and
+                            result.get("gradleVersion") == "9.7.0" and
+                            re.fullmatch(r"21\.[0-9]+(?:\.[0-9]+)*(?:[+._-][A-Za-z0-9._+-]+)?", result.get("javaVersion", "")) and
+                            Path(result["javaHome"]).resolve(strict=True) == Path(self.env["P2PKIT_AUDIT_JDK21"]) and
+                            result.get("gradleHome") == str(self.home) and result.get("projectRoot") == str(work) and
+                            result.get("testWorkersExecuted") is False and result.get("stockTestActionsExecuted") is False,
+                            "wrong actual Gradle API scope/runtime/root")
+                    require(result.get("initializerSha256") == input_hashes["gradle/test-transcript-custody.init.gradle"] and
+                            result.get("fixtureSha256") == input_hashes[CUSTODY_API_FIXTURE + "/build.gradle"],
+                            "API result source binding differs")
+                    checks = result.get("checks", [])
+                    require(isinstance(checks, list) and len(checks) == len(CUSTODY_API_CASES) and
+                            {row.get("name") for row in checks} == CUSTODY_API_CASES and
+                            all(row.get("status") == "PASS" for row in checks), "finite API controls did not all pass")
+                    outcome.update(status="PASS", resultSha256=digest(result_path), controls=len(checks))
+                attempt("custody-api-result", validate_result)
+            # Original failure/result remains separate from any later writer.
+            attempt("custody-api-owner-receipt", lambda: record(self.evidence / "custody-api-owner.json", outcome))
+        if primary is not None:
+            raise primary
+        if failures:
+            outcome["status"] = "HOLD"
+            raise next((error for error in failures if not isinstance(error, Exception)), failures[0])
+        require(outcome["status"] == "PASS", "custody API prerequisite not accepted")
+
     def prepare_custody(self):
+        require(self.report.get("custodyApi", {}).get("status") == "PASS", "actual custody API prerequisite required")
+        write(self.home / "init.d/owned-simulator.gradle", read(self.root / INIT))
         self.custody_attempted = True
         write(self.state / "custody-attempted", b"attempted\n")
         argv = ["scripts/prepare-dependency-update.sh", self.binding["base"]]
@@ -986,6 +1103,7 @@ def run(root, binding):
             signal.signal(number, lambda value, _: runtime.cancelled.append(value))
         runtime.start_resource()
         runtime.admit()
+        runtime.custody_api()
         runtime.prepare_custody()
         runtime.check()
         require(runtime.resource_samples["fast"]["pressure"] == 1, "current NORMAL pressure required before full writer")
@@ -1071,8 +1189,13 @@ def recover_interrupted(root, state, binding, context):
             runtime.lockfiles = runtime.git("recovery-lock-map", "ls-files", "*lockfile", finalizing=True).text().splitlines()
             require(len(runtime.lockfiles) == len(set(runtime.lockfiles)) == 12, "recovery twelve-lock inventory incomplete")
     runtime.safely("recovery-originals", original_records)
-    attempted = (runtime.commands / "writer/launch-attempt.json").exists()
-    runtime.report["interruptedProductAttempted"] = attempted
+    # The short API prerequisite can start Gradle before the writer exists.
+    # Its original stop can also have been interrupted. Both need same-home
+    # recovery, but neither confers product/simulator shutdown authority.
+    gradle_launches = [label for label in ("custody-api", "custody-api-stop", "writer", "stop")
+                      if (runtime.commands / label / "launch-attempt.json").exists()]
+    runtime.report["interruptedProductAttempted"] = "writer" in gradle_launches
+    recovery["interruptedGradleLaunches"] = gradle_launches
 
     def cleanup_stop():
         saved = parse(read(state / "execution-environment.json"))
@@ -1087,7 +1210,7 @@ def recover_interrupted(root, state, binding, context):
             runtime.safely("recovery-stop-drain", lambda: stop.drain("recovery-stop-final"))
             runtime.safely("recovery-stop-close", stop.close)
             recovery["recoveryStop"] = stop.row
-    if attempted:
+    if gradle_launches:
         runtime.safely("recovery-stop", cleanup_stop)
 
     def simulator():

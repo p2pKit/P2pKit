@@ -6,7 +6,75 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
+import org.gradle.api.Action
+import org.gradle.api.GradleException
 import org.gradle.api.tasks.testing.Test
+
+// Kept in this hash-bound initializer. The isolated hosted API fixture compiles
+// this whole file and loads this helper without executing the request entrypoint.
+class TranscriptTestCustody {
+    private static final String TEMP_ARGUMENT = "-Djava.io.tmpdir"
+
+    private static void demand(boolean condition, String message) {
+        if (!condition) throw new GradleException("Transcript custody: " + message)
+    }
+
+    static String selectedScope(Test task, File root, Map projects, Set requested) {
+        if (task.project.rootProject.projectDir.canonicalFile != root.canonicalFile) return null
+        def scope = projects.find { key, value -> value == task.path }?.key
+        scope != null && requested.contains(scope) ? scope as String : null
+    }
+
+    static List<String> temporaryArguments(Test task) {
+        // allJvmArgs expands providers; Test's real fork expands them again.
+        // A stateful provider cannot be frozen by observing it twice. This finite
+        // two-task profile rejects providers without ever evaluating them.
+        demand(task.jvmArgumentProviders.isEmpty(), "test argument providers are not admitted")
+        task.allJvmArgs.findAll { it == TEMP_ARGUMENT || it.startsWith(TEMP_ARGUMENT + "=") }
+    }
+
+    static void verifyTemporary(Test task, String temporary) {
+        demand(temporaryArguments(task) == [TEMP_ARGUMENT + "=" + temporary],
+               "effective test temporary argument changed")
+    }
+
+    static void configureTemporary(Test task, String temporary) {
+        // Gradle 9.7 stores java.io.tmpdir in immutable fork options. The public
+        // systemProperties getter and parsed jvmArgs alone do not expose it.
+        def before = temporaryArguments(task)
+        demand(before.isEmpty() || before == [TEMP_ARGUMENT + "=" + temporary],
+               "conflicting effective test temporary argument")
+        task.systemProperty("java.io.tmpdir", temporary)
+        verifyTemporary(task, temporary)
+    }
+
+    static void verifyGuard(Map owner) {
+        def actions = owner.task.actions.toList()
+        def guardPositions = (0..<actions.size()).findAll { actions[it].is(owner.guard) }
+        def stockPositions = (0..<actions.size()).findAll { actions[it].is(owner.stock) }
+        demand(guardPositions.size() == 1 && stockPositions.size() == 1 &&
+               stockPositions[0] == guardPositions[0] + 1, "Test guard is not immediately before its original action")
+    }
+
+    static Map installGuard(Test task, String temporary, Closure ready) {
+        // Register before project plugins configure these finite Test tasks.
+        // Never guess, move or replace a framework action if this layout changes.
+        def original = task.actions.toList()
+        demand(original.size() == 1, "unsupported initial Test action layout")
+        def owner = [task: task, stock: original[0], guard: null, temporary: temporary]
+        task.doFirst("P2pKit transcript custody", { current ->
+            demand(current.is(task), "wrong guarded Test task")
+            verifyGuard(owner)
+            verifyTemporary(task, temporary)
+            ready.call()
+        } as Action)
+        // doFirst wraps the supplied Action. Bind the actual list identity, not
+        // the unwrapped closure; later doFirst setup stays ahead of this guard.
+        owner.guard = task.actions[0]
+        demand(task.actions.size() == 2 && task.actions[1].is(owner.stock), "Test action installation changed")
+        owner
+    }
+}
 
 def demand = { condition, message ->
     if (!condition) throw new GradleException("Transcript custody: " + message)
@@ -95,26 +163,33 @@ def event = { scope, suffix, fields ->
     Files.write(path, bytes, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
 }
 
-// Included builds (including buildSrc) share init.d. Do not impose this root's tasks on them.
+// Included builds (including buildSrc) share init.d. Filter by root before task
+// configuration. Install early so later normal doFirst setup runs BEFORE the
+// guard, which checks its adjacency to the original Test action at execution.
+def guarded = [:]
+gradle.beforeProject { project ->
+    if (project.rootProject.projectDir.canonicalFile != root.canonicalFile) return
+    project.tasks.withType(Test).configureEach { task ->
+        def scope = TranscriptTestCustody.selectedScope(task, root, projects, request.roots.keySet())
+        if (scope == null) return
+        demand(!guarded.containsKey(scope), "duplicate guarded Test task")
+        def temporary = request.roots[scope].path as String
+        guarded[scope] = TranscriptTestCustody.installGuard(task, temporary) {
+            validate()
+            def key = Files.readAttributes(new File(temporary).toPath(), "basic:fileKey", LinkOption.NOFOLLOW_LINKS).fileKey
+            event(scope, "start", [temporary: temporary, fileKey: key == null ? null : key.toString()])
+        }
+    }
+}
 gradle.projectsEvaluated {
     if (gradle.rootProject.projectDir.canonicalFile != root.canonicalFile) return
     validate()
     request.roots.each { scope, entry ->
         def task = gradle.rootProject.tasks.getByPath(projects[scope])
         demand(task instanceof Test, "expected an actual Test task")
-        def temp = entry.path as String
-        demand(!task.systemProperties.containsKey("java.io.tmpdir") || task.systemProperties["java.io.tmpdir"] == temp,
-               "conflicting test temporary property")
-        demand(!task.jvmArgs.any { it.startsWith("-Djava.io.tmpdir") }, "conflicting test JVM argument")
-        task.systemProperty("java.io.tmpdir", temp)
-        task.doFirst {
-            validate()
-            demand(task.systemProperties["java.io.tmpdir"] == temp, "test temporary property changed")
-            def args = task.allJvmArgs.findAll { it.startsWith("-Djava.io.tmpdir=") }
-            demand(args == ["-Djava.io.tmpdir=" + temp], "effective test temporary argument changed")
-            def key = Files.readAttributes(new File(temp).toPath(), "basic:fileKey", LinkOption.NOFOLLOW_LINKS).fileKey
-            event(scope, "start", [temporary: temp, fileKey: key == null ? null : key.toString()])
-        }
+        demand(guarded[scope]?.task?.is(task), "Test task missed early custody registration")
+        TranscriptTestCustody.configureTemporary(task, entry.path as String)
+        TranscriptTestCustody.verifyGuard(guarded[scope])
     }
 }
 gradle.taskGraph.afterTask { task, state ->

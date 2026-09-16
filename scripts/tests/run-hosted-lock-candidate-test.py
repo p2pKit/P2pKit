@@ -583,6 +583,7 @@ class NativeProfileTests(Fixture):
             str(app.SCRIPTS / "tests/run-audit-command-test.py"), "--expected-host", role,
             "--evidence-dir", str(rt.evidence / "native-controls"), "--fixture-parent", str(state / "fixtures/native-tmp")]), calls)
         self.assertEqual(rt.env["P2PKIT_WRITER_SIMULATOR"], "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")
+        self.assertEqual(list((rt.home / "init.d").iterdir()), [])
 
     def test_both_profiles_execute_actual_admission_with_their_own_pins(self):
         for intel in (False, True):
@@ -1058,6 +1059,212 @@ class BoundedStreamTests(unittest.TestCase):
         self.assertFalse(errors)
 
 
+class CustodyApiTests(Fixture):
+    """Actual Python controller routing, but modeled Gradle/native results only."""
+    API_ID, API_STOP_ID = "1" * 32, "2" * 32
+
+    def setUp(self):
+        super().setUp()
+        names = [app.CUSTODY_API_FIXTURE + "/settings.gradle", app.CUSTODY_API_FIXTURE + "/build.gradle",
+                 "gradle/test-transcript-custody.init.gradle", "gradle/gradle-daemon-jvm.properties",
+                 "gradlew", "gradle/wrapper/gradle-wrapper.properties", "gradle/wrapper/gradle-wrapper.jar", app.INIT]
+        for name in names:
+            target = self.root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((SOURCE.parents[1] / name).read_bytes())
+        self.jdk21 = self.base / "model-jdk21"
+        self.jdk21.mkdir()
+        self.rt.env["P2PKIT_AUDIT_JDK21"] = str(self.jdk21)
+        self.api_result = {
+            "schema": 1, "scope": app.CUSTODY_API_SCOPE, "gradleVersion": "9.7.0", "javaVersion": "21.0.12.1",
+            "javaHome": str(self.jdk21), "gradleHome": str(self.rt.home),
+            "projectRoot": str(self.state / "work/custody-api"), "testWorkersExecuted": False,
+            "stockTestActionsExecuted": False, "syntheticOnly": True,
+            "initializerSha256": app.digest(self.root / "gradle/test-transcript-custody.init.gradle"),
+            "fixtureSha256": app.digest(self.root / app.CUSTODY_API_FIXTURE / "build.gradle"),
+            "checks": [{"name": name, "status": "PASS"} for name in sorted(app.CUSTODY_API_CASES)],
+        }
+        self.write_api_result = True
+        self.before_api_result = lambda: None
+
+    def run_api(self):
+        original_wait = self.model_wait
+        def wait(scope, child, seconds, cancelled, check, *, stop):
+            if scope.invocation == self.API_ID and self.write_api_result:
+                self.before_api_result()
+                write_json(self.rt.evidence / "custody-api.json", self.api_result)
+            return original_wait(scope, child, seconds, cancelled, check, stop=stop)
+        ids = [SimpleNamespace(hex=value) for value in (self.API_ID, self.API_STOP_ID)]
+        with mock.patch.object(app.processes, "make_scope", side_effect=self.model_scope), \
+                mock.patch.object(app.uuid, "uuid4", side_effect=ids), \
+                mock.patch.object(self.api, "wait_process", side_effect=wait):
+            self.rt.custody_api()
+
+    def assert_stopped(self):
+        command, stop = self.command_result("custody-api"), self.command_result("custody-api-stop")
+        self.assertEqual(command["invocation"], self.API_ID)
+        self.assertEqual(stop["invocation"], self.API_STOP_ID)
+        self.assertEqual(len({self.API_ID, self.API_STOP_ID, PRODUCT_ID, STOP_ID}), 4)
+        self.assertEqual(stop["argv"][:3], [str(self.root / "gradlew"), "--stop", "--console=plain"])
+        self.assertEqual((command["timeoutSeconds"], stop["timeoutSeconds"]), (300, 120))
+        self.assertEqual([scope.home for scope in self.scopes], [str(self.rt.home)] * 2)
+        self.assertTrue(all(scope.closed for scope in self.scopes))
+        self.assertIn(("wait", self.API_STOP_ID, True), self.events)
+        self.assertIsNone(self.rt.report["writer"])
+        self.assertIsNone(self.rt.report["stop"])
+        self.assertFalse(self.rt.custody_attempted)
+        self.assertEqual(list((self.rt.home / "init.d").iterdir()), [])
+
+    def test_success_is_separate_owned_api_scope_before_any_product_loader(self):
+        self.run_api()
+        self.assert_stopped()
+        command = self.command_result("custody-api")
+        self.assertEqual(command["argv"][:4], [str(self.root / "gradlew"), "--project-dir",
+            str(self.state / "work/custody-api"), "verifyTranscriptCustodyApi"])
+        for flag in ("--offline", "--dependency-verification=strict", "--no-daemon", "--no-parallel", "--max-workers=2",
+                     "--no-build-cache", "--no-configuration-cache", "--rerun-tasks", "--warning-mode=fail"):
+            self.assertIn(flag, command["argv"])
+        outcome = self.rt.report["custodyApi"]
+        self.assertEqual((outcome["scope"], outcome["status"], outcome["controls"]), (app.CUSTODY_API_SCOPE, "PASS", 30))
+        self.assertEqual(outcome, app.parse(app.read(self.rt.evidence / "custody-api-owner.json")))
+        self.assertEqual((self.state / "work/custody-api/gradle/gradle-daemon-jvm.properties").read_bytes(),
+                         (self.root / "gradle/gradle-daemon-jvm.properties").read_bytes())
+        self.assertTrue((self.rt.evidence / "custody-api-inputs.json").is_file())
+        self.assertFalse(self.rt.report["candidateAccepted"])
+
+    def test_failed_api_command_still_stops_and_cannot_prepare_product(self):
+        self.results[self.API_ID] = 19
+        with self.assertRaisesRegex(ValueError, "actual Gradle custody API controls failed"):
+            self.run_api()
+        self.assert_stopped()
+        self.assertEqual(self.rt.report["custodyApi"]["status"], "HOLD")
+        with self.assertRaisesRegex(ValueError, "actual custody API prerequisite required"):
+            self.rt.prepare_custody()
+
+    def test_primary_cancellation_survives_secondary_stop_failure_and_receipts_remain(self):
+        primary = KeyboardInterrupt("MODEL_API_CANCEL")
+        self.results[self.API_ID], self.results[self.API_STOP_ID] = primary, 7
+        with self.assertRaises(KeyboardInterrupt) as raised:
+            self.run_api()
+        self.assertIs(raised.exception, primary)
+        self.assert_stopped()
+        self.assertTrue((self.rt.evidence / "custody-api-owner.json").is_file())
+        self.assertEqual(self.rt.report["custodyApi"]["status"], "HOLD")
+
+    def test_stop_failure_cannot_promote_passing_api_report(self):
+        self.results[self.API_STOP_ID] = 7
+        with self.assertRaisesRegex(ValueError, "same-home Gradle stop failed"):
+            self.run_api()
+        self.assert_stopped()
+        self.assertEqual(self.rt.report["custodyApi"]["status"], "HOLD")
+
+    def test_unknown_drain_preserves_stop_and_original_result_without_admission(self):
+        self.drain_failure = self.API_ID
+        with self.assertRaisesRegex(ValueError, "finalization incomplete"):
+            self.run_api()
+        self.assert_stopped()
+        self.assertTrue(self.command_result("custody-api")["errors"])
+        self.assertEqual(self.rt.report["custodyApi"]["status"], "HOLD")
+
+    def test_stop_allocation_failure_still_closes_and_retains_api_command(self):
+        (self.rt.commands / "custody-api-stop").mkdir()
+        sentinel = self.rt.commands / "custody-api-stop/other-owner"
+        sentinel.write_bytes(b"not overwritten")
+        with self.assertRaises(FileExistsError):
+            self.run_api()
+        self.assertTrue(self.scopes[0].closed)
+        self.assertTrue(self.command_result("custody-api"))
+        self.assertEqual(sentinel.read_bytes(), b"not overwritten")
+        self.assertEqual(self.rt.report["custodyApi"]["status"], "HOLD")
+
+    def test_missing_api_report_is_not_a_successful_gradle_api_result(self):
+        self.write_api_result = False
+        with self.assertRaises(FileNotFoundError):
+            self.run_api()
+        self.assert_stopped()
+
+    def test_wrong_api_gradle_version_is_not_qualified_by_a_zero_exit(self):
+        self.api_result["gradleVersion"] = "9.6.0"
+        with self.assertRaisesRegex(ValueError, "scope/runtime/root"):
+            self.run_api()
+        self.assert_stopped()
+
+    def test_wrong_daemon_or_worker_scope_is_not_admitted(self):
+        self.api_result["javaHome"] = str(self.base)
+        self.api_result["testWorkersExecuted"] = True
+        with self.assertRaisesRegex(ValueError, "scope/runtime/root"):
+            self.run_api()
+        self.assert_stopped()
+
+    def test_mismatched_initializer_hash_cannot_authorize_product(self):
+        self.api_result["initializerSha256"] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "source binding differs"):
+            self.run_api()
+        self.assert_stopped()
+
+    def test_changed_copied_fixture_and_matching_report_cannot_self_authorize(self):
+        def change():
+            fixture = self.state / "work/custody-api/build.gradle"
+            fixture.write_bytes(b"synthetic changed fixture, not the reviewed input\n")
+            self.api_result["fixtureSha256"] = app.digest(fixture)
+        self.before_api_result = change
+        with self.assertRaisesRegex(ValueError, "copied API input changed"):
+            self.run_api()
+        self.assert_stopped()
+        self.assertEqual(self.rt.report["custodyApi"]["status"], "HOLD")
+
+    def assert_changed_api_copy_rejected(self, name):
+        def change():
+            (self.state / "work/custody-api" / name).write_bytes(b"synthetic changed copied input\n")
+        self.before_api_result = change
+        with self.assertRaisesRegex(ValueError, "copied API input changed"):
+            self.run_api()
+        self.assert_stopped()
+
+    def test_changed_copied_settings_cannot_authorize_api_pass(self):
+        self.assert_changed_api_copy_rejected("settings.gradle")
+
+    def test_changed_copied_daemon_criteria_cannot_authorize_api_pass(self):
+        self.assert_changed_api_copy_rejected("gradle/gradle-daemon-jvm.properties")
+
+    def test_changed_initializer_and_matching_report_cannot_replace_original_binding(self):
+        def change():
+            initializer = self.root / "gradle/test-transcript-custody.init.gradle"
+            initializer.write_bytes(b"synthetic changed initializer, not the reviewed input\n")
+            self.api_result["initializerSha256"] = app.digest(initializer)
+        self.before_api_result = change
+        with self.assertRaisesRegex(ValueError, "bound API source input changed"):
+            self.run_api()
+        self.assert_stopped()
+
+    def test_failed_or_missing_control_is_not_an_api_pass(self):
+        self.api_result["checks"][0]["status"] = "FAIL"
+        with self.assertRaisesRegex(ValueError, "finite API controls"):
+            self.run_api()
+        self.assert_stopped()
+
+    def test_duplicate_control_cannot_replace_the_omitted_case(self):
+        self.api_result["checks"][0] = self.api_result["checks"][1].copy()
+        with self.assertRaisesRegex(ValueError, "finite API controls"):
+            self.run_api()
+        self.assert_stopped()
+
+    def test_existing_loader_blocks_api_before_any_allocation_or_launch(self):
+        path = self.rt.home / "init.d/owned-simulator.gradle"
+        path.write_text("preserve")
+        with self.assertRaisesRegex(ValueError, "must precede product/custody initializers"):
+            self.run_api()
+        self.assertFalse(self.scopes)
+        self.assertFalse((self.state / "work/custody-api").exists())
+        self.assertEqual(path.read_text(), "preserve")
+
+    def test_product_preparation_requires_actual_api_prerequisite(self):
+        with self.assertRaisesRegex(ValueError, "actual custody API prerequisite required"):
+            self.rt.prepare_custody()
+        self.assertFalse(self.rt.custody_attempted)
+        self.assertEqual(list((self.rt.home / "init.d").iterdir()), [])
+
+
 class ProductCustodyTests(Fixture):
     def assert_original_product_and_stop(self, expected_product):
         writer, stop = self.command_result("writer"), self.command_result("stop")
@@ -1207,6 +1414,9 @@ class ProductCustodyTests(Fixture):
 
     def test_prepare_consumes_actual_helper_reservation_and_full_writer_contract(self):
         request = copy.deepcopy(self.rt.custody_request)
+        self.rt.report["custodyApi"] = {"status": "PASS", "syntheticOnly": True}
+        (self.root / app.INIT).parent.mkdir(parents=True, exist_ok=True)
+        (self.root / app.INIT).write_text("// synthetic initializer, never executed\n")
         def prepare(label, argv, **kwargs):
             self.assertEqual(label, "custody-prepare")
             self.assertIn("--scope", argv)
@@ -1215,6 +1425,7 @@ class ProductCustodyTests(Fixture):
             self.assertEqual(argv[argv.index("--writer-job") + 1], JOB)
             self.assertEqual(argv[argv.index("--home") + 1], str(self.rt.home))
             self.assertEqual(argv[argv.index("--") + 1:], request["command"])
+            self.assertEqual((self.rt.home / "init.d/owned-simulator.gradle").read_bytes(), (self.root / app.INIT).read_bytes())
             custody = self.state / "custody"
             custody.mkdir()
             write_json(custody / "request.json", request)
@@ -1849,27 +2060,33 @@ class PublicExportTests(Fixture):
 
 
 class RecoveryTests(Fixture):
-    def recovery_fixture(self, *, attempted=True):
+    def recovery_fixture(self, *, attempted=True, label="writer"):
         state, output = app.paths(self.binding)
         state.mkdir(mode=0o700)
-        for name in ("evidence", "evidence/commands", "evidence/commands/writer", "gradle-home", "custody"):
+        for name in ("evidence", "evidence/commands", "evidence/commands/" + label, "gradle-home"):
             (state / name).mkdir(mode=0o700)
         (state / "recipient.asc").write_text(PUBLIC_KEY)
         write_json(state / "context.json", {"schema": 1, "binding": self.binding, "job": JOB, "root": str(self.root),
                    "stateIdentity": app.identity(state), "gradleHomeIdentity": app.identity(state / "gradle-home")})
-        write_json(state / "evidence/commands/writer/start.json", {"job": JOB, "invocation": PRODUCT_ID,
+        invocation = PRODUCT_ID if label == "writer" else "1" * 32
+        argv = (["scripts/prepare-dependency-update.sh", SHA] if label == "writer" else
+                [str(self.root / "gradlew"), "--stop" if label == "custody-api-stop" else "verifyTranscriptCustodyApi"])
+        directory = state / "evidence/commands" / label
+        write_json(directory / "start.json", {"job": JOB, "invocation": invocation,
                    "state": str(state), "home": str(state / "gradle-home"), "cwd": str(self.root),
-                   "argv": ["scripts/prepare-dependency-update.sh", SHA], "launchAttempted": False,
+                   "argv": argv, "launchAttempted": False,
                    "waitExitCode": None, "drains": [], "errors": []})
         if attempted:
-            start = app.parse(app.read(state / "evidence/commands/writer/start.json"))
-            write_json(state / "evidence/commands/writer/baseline.json", {"schema": 1,
+            start = app.parse(app.read(directory / "start.json"))
+            write_json(directory / "baseline.json", {"schema": 1,
                        "backend": "darwin-libproc-audit-token", "domain": app.scope_domain(start), "lifetimes": []})
-            write_json(state / "evidence/commands/writer/launch-attempt.json", {"job": JOB, "invocation": PRODUCT_ID,
-                       "argv": start["argv"], "baselineSha256": app.digest(state / "evidence/commands/writer/baseline.json")})
+            write_json(directory / "launch-attempt.json", {"job": JOB, "invocation": invocation,
+                       "argv": start["argv"], "baselineSha256": app.digest(directory / "baseline.json")})
         write_json(state / "execution-environment.json", {"binding": self.binding, "job": JOB,
                    "environment": self.env.copy(), "jvmArguments": self.rt.jvm})
-        write_json(state / "custody/result.json", {"result": "HOLD", "retirement": "UNKNOWN"})
+        if label == "writer":
+            (state / "custody").mkdir(mode=0o700)
+            write_json(state / "custody/result.json", {"result": "HOLD", "retirement": "UNKNOWN"})
         return state, output
 
     def export(self, evidence, output, recipient, **kwargs):
@@ -2047,6 +2264,62 @@ class RecoveryTests(Fixture):
         self.assertFalse(any(hasattr(scope, "argv") and ("--stop" in scope.argv or
                              "scripts/prepare-dependency-update.sh" in scope.argv) for scope in self.scopes))
         self.assertFalse((state / "evidence/result.json").exists())
+
+    def assert_api_only_recovery(self, label, attempted):
+        state, output = self.recovery_fixture(label=label, attempted=attempted)
+        directory = state / "evidence/commands" / label
+        original = {"scope": app.CUSTODY_API_SCOPE, "launchAttempted": attempted, "waitExitCode": 143,
+                    "status": "HOLD", "syntheticOnly": True}
+        write_json(directory / "command.json", original)
+        write_json(state / "evidence/custody-api.json", {"scope": app.CUSTODY_API_SCOPE, "syntheticOnly": True})
+        write_json(state / "evidence/custody-api-owner.json", original)
+        write_json(state / "evidence/simulator-before.json", {"udid": "MODEL_UNLAUNCHED_SIMULATOR"})
+        originals = {path: path.read_bytes() for path in directory.iterdir()}
+        originals.update({state / "evidence" / name: (state / "evidence" / name).read_bytes()
+                          for name in ("custody-api.json", "custody-api-owner.json")})
+        observed_product_authority = []
+        def simulator(runtime):
+            observed_product_authority.append(runtime.report["interruptedProductAttempted"])
+            self.assertIsNone(runtime.report["writer"])
+            self.assertIsNone(runtime.report["stop"])
+        recipient = SimpleNamespace(fingerprint=FINGERPRINT, encryption_fingerprint=ENCRYPTION_FINGERPRINT)
+        with mock.patch.object(app.processes, "make_scope", side_effect=self.model_scope), \
+                mock.patch.object(app.Runtime, "retire_simulator", simulator), \
+                mock.patch.object(app.hosted_evidence, "validate_recipient", return_value=recipient), \
+                mock.patch.object(app.hosted_evidence, "export_encrypted", side_effect=self.export):
+            self.assertEqual(app.seal(self.root, self.binding), 125)
+        recovery = app.parse(app.read(state / "evidence/interrupted-owner.json"))
+        stops = [scope for scope in self.scopes if hasattr(scope, "argv") and "--stop" in scope.argv]
+        self.assertEqual(len(stops), int(attempted))
+        if attempted:
+            self.assertEqual(stops[0].argv[:3], [str(self.root / "gradlew"), "--stop", "--console=plain"])
+            self.assertEqual(stops[0].env["GRADLE_USER_HOME"], str(state / "gradle-home"))
+            self.assertNotIn(stops[0].invocation, ("1" * 32, PRODUCT_ID, STOP_ID))
+            self.assertEqual(recovery["recoveryStop"]["waitExitCode"], 0)
+        else:
+            self.assertNotIn("recoveryStop", recovery)
+        self.assertEqual(observed_product_authority, [False])
+        self.assertEqual(recovery["candidateStatus"], "HOLD")
+        self.assertEqual(recovery["finalExitCode"], 125)
+        self.assertEqual(recovery["transcriptCustody"], {"result": "NOT_STARTED", "retirement": "NOT_APPLICABLE"})
+        self.assertFalse((state / "evidence/commands/writer").exists())
+        self.assertFalse((state / "evidence/commands/stop").exists())
+        self.assertFalse((state / "custody").exists())
+        self.assertFalse((state / "evidence/result.json").exists())
+        self.assertTrue((state / "evidence/recovery-final-quiescence.json").is_file())
+        self.assertTrue((output / "manifest.json").is_file())
+        self.assertTrue(all(scope.closed for scope in self.scopes))
+        for path, raw in originals.items():
+            self.assertEqual(path.read_bytes(), raw)
+
+    def test_interrupted_api_only_launch_gets_same_home_stop_without_product_authority(self):
+        self.assert_api_only_recovery("custody-api", True)
+
+    def test_interrupted_api_stop_only_launch_gets_distinct_recovery_stop(self):
+        self.assert_api_only_recovery("custody-api-stop", True)
+
+    def test_interrupted_api_before_launch_does_not_start_gradle_or_invent_product(self):
+        self.assert_api_only_recovery("custody-api", False)
 
     def test_recovery_owner_mismatch_fails_before_native_ownership_or_export(self):
         state, _ = self.recovery_fixture()
