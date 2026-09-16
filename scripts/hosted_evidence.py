@@ -589,6 +589,22 @@ def export_encrypted(evidence_dir: str | Path, output_dir: str | Path, recipient
                                   (timeout_seconds, MAX_TIMEOUT_SECONDS))):
         _fail("Evidence bounds must be positive and no greater than the fixed limits")
     manifest = _manifest_identity(source_commit, source_tree, run_id, run_attempt)
+    return _export_bound_manifest(evidence_dir, output_dir, recipient, manifest=manifest,
+                                  max_bytes=max_bytes, max_members=max_members, timeout_seconds=timeout_seconds)
+
+
+def _export_bound_manifest(evidence_dir: str | Path, output_dir: str | Path, recipient: Recipient, *,
+                           manifest: dict, max_bytes: int, max_members: int, timeout_seconds: int) -> dict:
+    """Shared POSIX mechanism, private to closed admitted entry points.
+
+    Ordinary CI has its own event/policy admission. The existing public manual
+    API above still performs the same bounds and actual-manual-identity checks;
+    neither entry point accepts an arbitrary caller-supplied public manifest.
+    """
+    if any(isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= maximum
+           for value, maximum in ((max_bytes, MAX_BYTES), (max_members, MAX_MEMBERS),
+                                  (timeout_seconds, MAX_TIMEOUT_SECONDS))):
+        _fail("Evidence bounds must be positive and no greater than the fixed limits")
     root = _private_directory(evidence_dir)
     work = _private_directory(recipient.work_dir)
     if _identity(work) != recipient.work_identity:
