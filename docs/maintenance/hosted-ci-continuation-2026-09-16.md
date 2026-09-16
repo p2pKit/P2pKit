@@ -310,3 +310,91 @@ Private continuation packets: `windows-helper-e6ca7c0-hosted-8riik_vt`,
 `review-allowlist-r3-ozef41jd`, `public-e6ca-native-checkpoint-7s68doqb` and
 `resume-r3-publish-srich28x`. These are private retention handles, not files to
 commit or public artifact URLs.
+
+## Later 16 September: actual-job-budget source correction preserved
+
+Reviewed source
+[`3eacb49e745aa7cb51e085966e057d270e3c1822`](https://github.com/p2pKit/P2pKit/commit/3eacb49e745aa7cb51e085966e057d270e3c1822),
+tree `85461022c2b8c4b236cbc9d69447a97727c0f544`, is pushed/read back on the same
+integration branch, **not main**. This completes the previously planned timing
+source slice for [#437](https://github.com/p2pKit/P2pKit/issues/437), not ordinary
+workflow activation or runtime acceptance for #437/#424. Workflows, protected
+instructions, dependency inputs and existing operation maxima are unchanged.
+
+The FULL controller now requires a native-owned, closed two-GET acquisition of
+its actual run/attempt and `complete-gate` job before crypto/init/products. Original
+API responses, job/source/runner identity, shared RAW intervals, native receipt
+and child return bind an immutable budget through context, encrypted evidence and
+separate seal. Missing, stale, substituted or expired inputs fail closed. The
+read token is confined to the acquisition child. **The actual new API supplier
+has not run**; historical gh/HTTP2 completed-job observations are only shape
+research, not its HTTP1.1/in-progress/clock qualification.
+
+The unchanged job maximum is 3,600 seconds. Existing controller-tail and separate
+seal allowances total 1,575 seconds; upload 180 and two 30-second transitions bring
+the reserved schedule to 1,815 seconds. These are reviewed **scheduling caps, not
+measured durations or delivery guarantees**. The source uses distinct productive,
+return, seal and upload fences without renewing them. Healthy monitored cutoff
+requests exact canonical cancellation once and preserves the original cutoff+330
+return fence. Late exit zero cannot become a pass. Before/after upload guards
+perform no upload and remain unwired.
+
+Independent review found an exceptional polling/discovery path which crossed
+cutoff and drained without recording exhaustion/requesting cancellation. The
+unchanged two-case oracle failed before and passed after correction. Original
+monitor errors and secondary request failures remain; a request followed by native
+failure cleanup is **not proof of cooperative completion or known retirement**.
+Original failures, including an author-found post-HTTP-close clock-error retention
+failure, remain preserved rather than rewritten as successful runs.
+
+Actually executed with installed Xcode Python 3.9.6, using `-I -B -S`:
+
+| Script | Final author and independent-review result |
+| --- | --- |
+| `scripts/tests/hosted-full-job-budget-test.py` | 25/25 PASS |
+| `scripts/tests/hosted-test-controller-test.py` | 110/110 PASS |
+| `scripts/tests/hosted-test-identity-test.py` | 32/32 PASS |
+
+The reviewer additionally passed four focused cases, including the unchanged two
+failure-before controls. These are offline models/import probes with native,
+HTTP/TLS, GPG and product suppliers replaced/forbidden, **not native or hosted
+execution**. The original no-job-time regression genuinely failed with `0 != 125`
+before this repair and passes unchanged after it. All 246 original assertion ASTs
+remain; exact patch reconstruction, source/constant preservation and whitespace
+checks passed. No product/build gate was rerun after committing identical bytes.
+
+Final verdict: **APPROVE_SCOPED_R4_SOURCE_AND_OFFLINE_CONTROLS**; independent report
+SHA-256 `80ac9b66d8e86c61ba881b37338efb0d869443da8e62163a250656fcd3f1215f`.
+Exact reviewed four-file diff SHA-256
+`6f407549ff4153605a9bfcc709f8d1c46cea55ef3d041810788541cb36db1f60`.
+This is not formal GitHub PR approval. No release/merge/closure eligibility follows.
+
+Remaining source work includes full-gate supplement ownership/order/retention,
+native stable-file dependency seeding and ordinary Desktop/full workflow wiring.
+Qualified cache population/resolver reuse and genuine ordinary API/RAW/cutoff/
+retention/seal/upload plus required gates remain unexecuted. Finite routine
+evidence-custodian responsibility, a safe first-policy bootstrap and a nonauthor
+formal PR reviewer remain separate unresolved prerequisites; candidate policy
+cannot authorize its own original base. No trust exception was selected.
+
+The earlier accepted writer (including CLI9, diagnostics23 and all six original
+exports), sample preview, OSV, branch submission, R13 witness and e6ca Windows
+helper were not repeated or relabeled as current ordinary-gate execution. In
+particular, the original private e6ca aggregate remains FAIL with the separately
+accepted truncation equivalence described above. Samples remain Actions artifacts
+expiring 30 September, not Releases. Kotlin 2.4.10 remains **EXCEPTED_NOT_FIXED**
+through the existing 31 October exception, not a newly executed scan or remediation.
+
+At the fresh metadata readback, main remained `3bc76f956f8f47447b51a62474fc878b9c43173c`
+/ tree `2a1105fde1d1ac299448489501e29d7a0d4a407a`; 74 issues and six dependency PRs
+were open, with no campaign PR or queued/in-progress run. Historical repair
+accounting remains **206/234; NOT_READY**. Physical-phone work remains deferred.
+Only small offline/source and Git/GitHub metadata operations accompanied this
+checkpoint. No local Java/Gradle/Xcode/app build, dependency download, emulator,
+simulator or CI dispatch occurred; owned model fixtures retired, and unrelated
+processes/dependencies/evidence were untouched. About 21–22 GiB disk remained.
+
+Private retained packets: `full-ci-job-budget-source-MnuDSY77`,
+`review-full-job-budget-r2-4hcdgok3`, `publish-full-job-budget-g8qo_2r_` and
+`resume-budget-review-9tsy7_ll`. Original logs/receipts remain private; the hashes
+above bind their scoped summaries, not a claim of fresh whole-gate success.
