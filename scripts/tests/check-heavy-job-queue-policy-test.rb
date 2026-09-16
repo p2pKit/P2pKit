@@ -122,6 +122,15 @@ end
 mutations["lock operation falls through into ordinary sample matrix"] = ["required-gate guard", ->(w) {
     w["desktop-cross-host.yml"]["jobs"]["verify"]["if"].sub!(" && inputs.operation != 'dependency-lock-candidate'", "")
 }]
+mutations["helper operation falls through into ordinary sample matrix"] = ["required-gate guard", ->(w) {
+    w["desktop-cross-host.yml"]["jobs"]["verify"]["if"].sub!(" && inputs.operation != 'windows-helper-controls'", "")
+}]
+mutations["helper workflow cancellation bypass"] = ["separate workflow concurrency", ->(w) {
+    w["desktop-cross-host.yml"]["concurrency"]["cancel-in-progress"].sub!(" && inputs.operation != 'windows-helper-controls'", "")
+}]
+mutations["helper workflow loses run-specific group"] = ["separate workflow concurrency", ->(w) {
+    w["desktop-cross-host.yml"]["concurrency"]["group"].sub!(" || inputs.operation == 'windows-helper-controls'", "")
+}]
 mutations["lock workflow can supersede other work"] = ["separate workflow concurrency", ->(w) {
     w["desktop-cross-host.yml"]["concurrency"]["group"] = "desktop-cross-host-${{ github.ref }}"
 }]

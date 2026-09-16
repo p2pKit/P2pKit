@@ -109,7 +109,7 @@ module HostedLockCandidatePolicy
              %w[evidence_fingerprint evidence_public_key expected_sha expected_tree operation reviewed_base],
              "exact six shared dispatch inputs required")
         expected = {"operation" => {"type" => "choice", "options" => ["desktop", "sample-apps",
-            "windows-directory-fsync-control", "macos-arm64-admission", "macos-x64-admission", JOB, INTEL_OPERATION, MACOS14_OPERATION],
+            "windows-directory-fsync-control", "windows-helper-controls", "macos-arm64-admission", "macos-x64-admission", JOB, INTEL_OPERATION, MACOS14_OPERATION],
             "default" => "desktop", "required" => true}}
         %w[expected_sha expected_tree reviewed_base evidence_public_key evidence_fingerprint].each do |name|
             expected[name] = {"type" => "string", "required" => false, "default" => ""}

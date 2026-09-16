@@ -15,6 +15,7 @@ from functools import wraps
 import hashlib
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import shutil
@@ -36,6 +37,69 @@ sys.modules[SPEC.name] = files
 SPEC.loader.exec_module(files)
 USER = "S-1-5-21-1-2-3-1001"
 POLICY = files.AccessPolicy(USER, USER)
+RETENTION = None
+FIXTURE_PARENT = None
+
+
+class NativeRetention:
+    """Optional private hosted journal; never put receipts inside a hostile fixture."""
+    def __init__(self, destination, fixture_parent):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import audit_processes
+        import hosted_windows_evidence
+        self.detail = hosted_windows_evidence._exception_detail
+        state = os.environ.get(audit_processes.STATE_ENV, "")
+        files.require(state and Path(fixture_parent) == Path(state) / "fixtures/native-tmp",
+                      "Native file fixtures must use their exact owning state")
+        a, b = Path(destination), Path(fixture_parent)
+        files.require(a != b and a not in b.parents and b not in a.parents, "Evidence/fixtures overlap")
+        with files.open_private_directory(b) as parent:
+            with parent.snapshot(max_bytes=0, max_members=1) as initial:
+                files.require(set(initial.entries) == {""}, "Native fixture parent must start empty")
+        self.root = files.create_private_directory(a)
+        self.events, self.completed, self.unknown = [], [], False
+
+    def write(self, name, raw):
+        files.require(type(raw) is bytes and len(raw) <= 1024 * 1024, "Native journal bound")
+        with self.root.create_file(name, max_bytes=len(raw)) as stream:
+            stream.write(raw)
+            stream.sync()
+            files.require(stream.verify().size == len(raw), "Native journal size changed")
+
+    def record(self, case, phase, **values):
+        row = {"case": case._testMethodName, "phase": phase, **values}
+        self.events.append(row)
+        try:
+            self.write("event-%04d.json" % len(self.events),
+                       (json.dumps(row, sort_keys=True, ensure_ascii=True) + "\n").encode("ascii"))
+        except BaseException:
+            self.unknown = True
+            case.retirement_unknown = True
+            raise
+
+    def failure(self, case, phase, error):
+        detail = self.detail(error)
+        self.unknown |= detail["retirementUnknown"]
+        case.retirement_unknown |= detail["retirementUnknown"]
+        try:
+            self.record(case, phase, detail=detail)
+        except BaseException as secondary:
+            self.unknown = case.retirement_unknown = True
+            # Do not replace an existing original cause/cancellation. Keep the
+            # secondary detail as a bounded private note and retain the fixture.
+            files._note(error, "Native journal retention UNKNOWN: " +
+                        json.dumps(self.detail(secondary), sort_keys=True)[:32768])
+            raise error
+
+    def original(self, case, label, raw):
+        name = "original-%04d.bin" % (len(self.events) + 1)
+        try:
+            self.write(name, raw)
+            self.record(case, "original-bytes", label=label, path=name, size=len(raw),
+                        sha256=hashlib.sha256(raw).hexdigest())
+        except BaseException:
+            self.unknown = case.retirement_unknown = True
+            raise
 
 
 def stream_record(name="::$DATA", size=0, following=0):
@@ -729,9 +793,14 @@ def native_control(method):
     @wraps(method)
     def guarded(self):
         try:
-            return method(self)
+            result = method(self)
+            if RETENTION is not None:
+                RETENTION.record(self, "body-pass")
+            return result
         except BaseException as error:
             self.retirement_unknown |= unknown_retirement(error)
+            if RETENTION is not None:
+                RETENTION.failure(self, "body-failure", error)
             raise
     return guarded
 
@@ -739,15 +808,20 @@ def native_control(method):
 class NativeWindowsTests(unittest.TestCase):
     """Selected only by --native; any missing native prerequisite is FAILURE."""
     def setUp(self):
-        self.parent = Path(tempfile.mkdtemp(prefix="p2pkit-windows-files-control-"))
+        self.parent = Path(tempfile.mkdtemp(prefix="p2pkit-windows-files-control-", dir=FIXTURE_PARENT))
         self.root_path = self.parent / "private"
         self.root = None
         self.retirement_unknown = False
         self.addCleanup(self.cleanup_fixture)
         try:
             self.root = files.create_private_directory(self.root_path)
+            if RETENTION is not None:
+                RETENTION.record(self, "native-root-created", root=self.root.verify().as_dict(),
+                                 fixtureParent=str(self.parent), rootPath=str(self.root_path))
         except BaseException as error:
-            self.retirement_unknown = unknown_retirement(error)
+            self.retirement_unknown |= unknown_retirement(error)
+            if RETENTION is not None:
+                RETENTION.failure(self, "setup-failure", error)
             raise
 
     def cleanup_fixture(self):
@@ -758,11 +832,28 @@ class NativeWindowsTests(unittest.TestCase):
                 self.root.close()
             except BaseException as error:
                 self.retirement_unknown |= unknown_retirement(error)
+                if RETENTION is not None:
+                    RETENTION.failure(self, "root-close-failure", error)
                 raise
         if self.retirement_unknown:
+            if RETENTION is not None:
+                RETENTION.unknown = True
+                RETENTION.record(self, "preserved-unknown", removed=False)
             return
         # Exact per-test fixture only, after every owned native handle is closed.
-        shutil.rmtree(self.parent)
+        if RETENTION is not None:
+            RETENTION.record(self, "retirement-known-before-disposal", removed=False)
+        try:
+            shutil.rmtree(self.parent)
+        except BaseException as error:
+            self.retirement_unknown = True
+            if RETENTION is not None:
+                RETENTION.failure(self, "fixture-disposal-failure", error)
+            raise
+        if RETENTION is not None:
+            files.require(not self.parent.exists(), "Native fixture removal not observed")
+            RETENTION.record(self, "fixture-disposed", removed=True)
+            RETENTION.completed.append(self._testMethodName)
 
     @contextmanager
     def expected_rejection(self, kind):
@@ -771,6 +862,8 @@ class NativeWindowsTests(unittest.TestCase):
         try:
             yield
         except BaseException as error:
+            if RETENTION is not None:
+                RETENTION.failure(self, "expected-rejection-observed", error)
             if unknown_retirement(error):
                 self.retirement_unknown = True
                 raise
@@ -784,6 +877,8 @@ class NativeWindowsTests(unittest.TestCase):
             stream.write(data)
             stream.sync()
             self.assertEqual(stream.verify().size, len(data))
+        if RETENTION is not None:
+            RETENTION.original(self, name, data)
 
     def set_fixture_dacl(self, sddl):
         """Native negative control on this test's new empty directory only."""
@@ -827,6 +922,8 @@ class NativeWindowsTests(unittest.TestCase):
         (nested / "raw").write_bytes(b"inherited-original")
         with self.root.open_directory("inherited") as directory:
             self.assertEqual(directory.read_bytes("raw", max_bytes=18), b"inherited-original")
+            if RETENTION is not None:
+                RETENTION.original(self, "inherited/raw", directory.read_bytes("raw", max_bytes=18))
         with self.expected_rejection(files.FilesystemError):
             files.open_private_directory(nested)
 
@@ -882,6 +979,8 @@ class NativeWindowsTests(unittest.TestCase):
         with self.expected_rejection(files.FilesystemError):
             files.open_private_directory(self.root_path / "linked")
         self.assertEqual((target / "unrelated").read_bytes(), b"untouched")
+        if RETENTION is not None:
+            RETENTION.original(self, "outside-sentinel", (target / "unrelated").read_bytes())
         (self.root_path / "linked").unlink()
 
     @native_control
@@ -903,6 +1002,13 @@ class NativeWindowsTests(unittest.TestCase):
 
 class NativeFixtureOrchestrationTests(unittest.TestCase):
     """Only mocked test-fixture control flow; no Windows or real file operations."""
+    def setUp(self):
+        # These methods model native fixture control flow; they never write to
+        # the genuine hosted native journal or inherit its disposal authority.
+        isolated = patch.dict(globals(), {"RETENTION": None, "FIXTURE_PARENT": None})
+        isolated.start()
+        self.addCleanup(isolated.stop)
+
     def case(self):
         class RootModel:
             identity = (1, "synthetic")
@@ -1013,13 +1119,48 @@ class NativeFixtureOrchestrationTests(unittest.TestCase):
         self.assertTrue(case.retirement_unknown)
 
 
+def finalize_retention(retention, result, methods):
+    """Unittest/body failures and late journal closure independently stay failed."""
+    original = None
+    try:
+        passed = result.wasSuccessful() and not result.skipped and not result.expectedFailures and not result.unexpectedSuccesses
+        known = not retention.unknown and sorted(retention.completed) == methods
+        retention.write("summary.json", (json.dumps({"schema": 1, "passed": bool(passed and known),
+                        "nativeMethods": methods, "nativeRetirementKnown": known,
+                        "testsRun": result.testsRun, "failures": len(result.failures), "errors": len(result.errors),
+                        "skipped": len(result.skipped)}, sort_keys=True) + "\n").encode("ascii"))
+        files.require(passed and known, "Native file retention/acceptance incomplete")
+    except BaseException as error:
+        original = error
+    finally:
+        try:
+            retention.root.close()
+        except BaseException as error:
+            retention.unknown = True
+            if original is None:
+                original = error
+            else:
+                files._note(original, "Native journal final close UNKNOWN: " +
+                            json.dumps(retention.detail(error), sort_keys=True)[:32768])
+    if original is not None:
+        raise original
+
+
 def main():
+    global RETENTION, FIXTURE_PARENT
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--native", action="store_true", help="Run real NTFS/ACL/handle controls; requires native Windows")
+    parser.add_argument("--evidence-dir", help="New protected private evidence directory, never a fixture descendant")
+    parser.add_argument("--fixture-parent", help="Existing empty owned state/fixtures/native-tmp; does not change TEMP")
     args = parser.parse_args()
     if args.native and os.name != "nt":
         print("NATIVE_WINDOWS_FILES=FAIL: --native requires genuine Windows, not this host", file=sys.stderr)
         return 2
+    if bool(args.evidence_dir) != bool(args.fixture_parent) or args.evidence_dir and not args.native:
+        parser.error("Both private path arguments require --native")
+    if args.evidence_dir:
+        RETENTION = NativeRetention(args.evidence_dir, args.fixture_parent)
+        FIXTURE_PARENT = args.fixture_parent
     suite = unittest.TestSuite()
     loader = unittest.defaultTestLoader
     for case in (PurePolicyTests, NativeCallShapeTests, ModelCustodyTests, NativeFixtureOrchestrationTests):
@@ -1027,6 +1168,8 @@ def main():
     if args.native:
         suite.addTests(loader.loadTestsFromTestCase(NativeWindowsTests))
     result = unittest.TextTestRunner(verbosity=2, failfast=args.native).run(suite)
+    if RETENTION is not None:
+        finalize_retention(RETENTION, result, loader.getTestCaseNames(NativeWindowsTests))
     print("NATIVE_WINDOWS_FILES=" + ("PASS" if args.native and result.wasSuccessful() else
                                      "FAIL" if args.native else "NOT_RUN (offline/model controls only)"))
     return 0 if result.wasSuccessful() else 1

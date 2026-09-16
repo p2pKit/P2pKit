@@ -2377,5 +2377,17 @@ class PureWindowsControlTests(unittest.TestCase):
             controller.scope.spawn.assert_not_called()
 
 
+def load_tests(loader, tests, pattern):
+    # The existing unconditional CI/release entry owns this added pure/model
+    # suite exactly once. It does not select or execute any native helper case.
+    spec = importlib.util.spec_from_file_location("windows_helper_models",
+                                                 ROOT / "scripts/tests/windows-helper-controls-test.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    tests.addTests(loader.loadTestsFromModule(module))
+    return tests
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

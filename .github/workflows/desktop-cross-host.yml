@@ -43,18 +43,18 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Sample apps, Windows witness, no-child Mac capacity, or an encrypted full-lock prerequisite candidate
+        description: Sample apps, Windows witness/helpers, no-child Mac capacity, or an encrypted full-lock prerequisite candidate
         type: choice
-        options: [desktop, sample-apps, windows-directory-fsync-control, macos-arm64-admission, macos-x64-admission, dependency-lock-candidate, dependency-lock-candidate-x64, dependency-lock-candidate-macos14]
+        options: [desktop, sample-apps, windows-directory-fsync-control, windows-helper-controls, macos-arm64-admission, macos-x64-admission, dependency-lock-candidate, dependency-lock-candidate-x64, dependency-lock-candidate-macos14]
         default: desktop
         required: true
       expected_sha:
-        description: Exact reviewed source commit (required for witness, capacity, or lock-candidate operations)
+        description: Exact reviewed source commit (required for witness, helper, capacity, or lock-candidate operations)
         type: string
         required: false
         default: ""
       expected_tree:
-        description: Exact reviewed source tree (required for witness, capacity, or lock-candidate operations)
+        description: Exact reviewed source tree (required for witness, helper, capacity, or lock-candidate operations)
         type: string
         required: false
         default: ""
@@ -64,12 +64,12 @@ on:
         required: false
         default: ""
       evidence_public_key:
-        description: ASCII-armored PUBLIC recipient key only; never submit a private key (lock candidate only)
+        description: ASCII-armored PUBLIC recipient key only; never submit a private key (lock candidate or Windows helper only)
         type: string
         required: false
         default: ""
       evidence_fingerprint:
-        description: Exact full recipient public-key fingerprint (lock candidate only)
+        description: Exact full recipient public-key fingerprint (lock candidate or Windows helper only)
         type: string
         required: false
         default: ""
@@ -78,13 +78,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: desktop-cross-host-${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'dependency-lock-candidate' || inputs.operation == 'dependency-lock-candidate-x64' || inputs.operation == 'dependency-lock-candidate-macos14') && format('lock-{0}-{1}', github.run_id, github.run_attempt) || github.event_name == 'workflow_dispatch' && (inputs.operation == 'windows-directory-fsync-control' || inputs.operation == 'macos-arm64-admission' || inputs.operation == 'macos-x64-admission') && format('control-{0}-{1}', github.run_id, github.run_attempt) || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' || (inputs.operation != 'windows-directory-fsync-control' && inputs.operation != 'macos-arm64-admission' && inputs.operation != 'macos-x64-admission' && inputs.operation != 'dependency-lock-candidate' && inputs.operation != 'dependency-lock-candidate-x64' && inputs.operation != 'dependency-lock-candidate-macos14') }}
+  group: desktop-cross-host-${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'dependency-lock-candidate' || inputs.operation == 'dependency-lock-candidate-x64' || inputs.operation == 'dependency-lock-candidate-macos14') && format('lock-{0}-{1}', github.run_id, github.run_attempt) || github.event_name == 'workflow_dispatch' && (inputs.operation == 'windows-directory-fsync-control' || inputs.operation == 'windows-helper-controls' || inputs.operation == 'macos-arm64-admission' || inputs.operation == 'macos-x64-admission') && format('control-{0}-{1}', github.run_id, github.run_attempt) || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' || (inputs.operation != 'windows-directory-fsync-control' && inputs.operation != 'windows-helper-controls' && inputs.operation != 'macos-arm64-admission' && inputs.operation != 'macos-x64-admission' && inputs.operation != 'dependency-lock-candidate' && inputs.operation != 'dependency-lock-candidate-x64' && inputs.operation != 'dependency-lock-candidate-macos14') }}
 
 jobs:
   verify:
     name: ${{ matrix.os }}
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.operation != 'windows-directory-fsync-control' && inputs.operation != 'macos-arm64-admission' && inputs.operation != 'macos-x64-admission' && inputs.operation != 'dependency-lock-candidate' && inputs.operation != 'dependency-lock-candidate-x64' && inputs.operation != 'dependency-lock-candidate-macos14') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.operation != 'windows-directory-fsync-control' && inputs.operation != 'windows-helper-controls' && inputs.operation != 'macos-arm64-admission' && inputs.operation != 'macos-x64-admission' && inputs.operation != 'dependency-lock-candidate' && inputs.operation != 'dependency-lock-candidate-x64' && inputs.operation != 'dependency-lock-candidate-macos14') }}
     concurrency:
       group: p2pkit-nonphysical-heavy
       queue: max
@@ -333,6 +333,78 @@ jobs:
         if: ${{ always() && steps.control.outputs.artifacts_ready != 'true' }}
         shell: pwsh
         run: throw 'Windows control did not seal safe original evidence; no acceptance claim'
+
+  windows-helper-controls:
+    name: windows-helper-controls
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'windows-helper-controls' }}
+    permissions:
+      contents: read
+    concurrency:
+      group: p2pkit-nonphysical-heavy
+      queue: max
+      cancel-in-progress: false
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      P2PKIT_OPERATION: ${{ inputs.operation }}
+      P2PKIT_EXPECTED_SHA: ${{ inputs.expected_sha }}
+      P2PKIT_EXPECTED_TREE: ${{ inputs.expected_tree }}
+      P2PKIT_REVIEWED_BASE: ${{ inputs.reviewed_base }}
+      P2PKIT_EVIDENCE_PUBLIC_KEY: ${{ inputs.evidence_public_key }}
+      P2PKIT_EVIDENCE_FINGERPRINT: ${{ inputs.evidence_fingerprint }}
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Check out exact reviewed helper source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: "false"
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Installed native Python/Git/GPG only. No SDK, Gradle, cache, installer,
+      # credential scope, private key, ordinary-policy bootstrap or publication.
+      - name: Run fixed native Windows helper controls with private custody
+        id: control
+        timeout-minutes: 21
+        shell: pwsh
+        run: |
+          python -I -B -S scripts/run-hosted-windows-helper-controls.py run
+          exit $LASTEXITCODE
+
+      - name: Seal exact ciphertext after the helper interpreter returns
+        id: seal
+        if: ${{ always() }}
+        timeout-minutes: 2
+        shell: pwsh
+        env:
+          P2PKIT_HELPER_RUN_OUTCOME: ${{ steps.control.outcome }}
+        run: |
+          python -I -B -S scripts/run-hosted-windows-helper-controls.py validate-public
+          exit $LASTEXITCODE
+
+      - name: Retain only sealed encrypted helper evidence
+        id: ciphertext
+        if: ${{ always() && steps.seal.outcome == 'success' && steps.seal.outputs.artifacts_ready == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-helper-controls-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/p2pkit-windows-helper-export-${{ github.run_id }}-${{ github.run_attempt }}/evidence.tar.gz.gpg
+            ${{ runner.temp }}/p2pkit-windows-helper-export-${{ github.run_id }}-${{ github.run_attempt }}/manifest.json
+          retention-days: 14
+          if-no-files-found: error
+          include-hidden-files: false
+          overwrite: false
+
+      - name: Require passing controls and complete encrypted retention
+        if: ${{ always() && (steps.control.outcome != 'success' || steps.seal.outcome != 'success' || steps.seal.outputs.artifacts_ready != 'true' || steps.seal.outputs.controls_passed != 'true' || steps.ciphertext.outcome != 'success') }}
+        shell: pwsh
+        run: throw 'Windows helper controls or encrypted retention failed; private review is still required'
 
   mac-host-admission-probe:
     name: mac-host-admission-probe

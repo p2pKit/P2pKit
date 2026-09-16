@@ -50,7 +50,7 @@ module MacHostAdmissionPolicy
         inputs = triggers.fetch("workflow_dispatch").fetch("inputs")
         need(inputs.keys.sort == %w[evidence_fingerprint evidence_public_key expected_sha expected_tree operation reviewed_base],
             "capacity permits only the fixed shared dispatch inputs")
-        expected = {"operation" => {"type" => "choice", "options" => ["desktop", "sample-apps", "windows-directory-fsync-control",
+        expected = {"operation" => {"type" => "choice", "options" => ["desktop", "sample-apps", "windows-directory-fsync-control", "windows-helper-controls",
             *OPERATIONS, "dependency-lock-candidate", "dependency-lock-candidate-x64", "dependency-lock-candidate-macos14"], "default" => "desktop", "required" => true}}
         %w[expected_sha expected_tree reviewed_base evidence_public_key evidence_fingerprint].each do |name|
             expected[name] = {"type" => "string", "required" => false, "default" => ""}
