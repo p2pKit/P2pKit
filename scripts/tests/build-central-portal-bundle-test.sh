@@ -2,27 +2,65 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-WORK_DIR="$(mktemp -d "${P2PKIT_RELEASE_TMPDIR:-/tmp}/p2pkit-central-bundle-test.XXXXXX")"
+AUDIT="${P2PKIT_CENTRAL_BUNDLE_AUDIT:-0}"
+[[ "$AUDIT" == 0 || "$AUDIT" == 1 ]] || { echo 'FATAL: invalid Central bundle audit opt-in' >&2; exit 125; }
+METADATA="$ROOT/scripts/prepare-audit-central-bundle-metadata.py"
+WORK_DIR=""
+GNUPGHOME=""
+AUDIT_ADMITTED=0
 PHASE="initialization"
 RELEASE_WORKTREE=""
 cleanup() {
-    status=$?
+    local status=$? final stop_status=0
+    trap - EXIT
+    trap '' HUP INT TERM
+    final="$status"
     if [[ $status -ne 0 ]]; then
         echo "FATAL: disposable-key bundle test failed during: $PHASE" >&2
     fi
-    if [[ -n "$RELEASE_WORKTREE" ]]; then
-        git -C "$ROOT" worktree remove --force "$RELEASE_WORKTREE" >/dev/null 2>&1 || true
+    if [[ "$AUDIT" == 1 ]]; then
+        if [[ "$AUDIT_ADMITTED" == 1 ]]; then
+            if [[ -n "$GNUPGHOME" ]]; then
+                python3 "$METADATA" stop --role signer || stop_status=$?
+            fi
+            if python3 "$METADATA" finish --status "$status" --phase "$PHASE"; then final=0; else final=$?; fi
+            [[ "$stop_status" == 0 ]] || final=125
+            # Borrowed work, keys and short homes remain reachable until the
+            # enclosing canonical receipt establishes native retirement.
+        fi
+    else
+        if [[ -n "$GNUPGHOME" ]]; then
+            gpgconf --homedir "$GNUPGHOME" --kill all >/dev/null 2>&1 || stop_status=$?
+        fi
+        if [[ "$stop_status" == 0 && -n "$RELEASE_WORKTREE" ]]; then
+            git -C "$ROOT" worktree remove --force "$RELEASE_WORKTREE" >/dev/null 2>&1 || stop_status=$?
+        fi
+        if [[ "$stop_status" == 0 ]]; then
+            [[ -z "$GNUPGHOME" ]] || rm -rf -- "$GNUPGHOME" || stop_status=$?
+            [[ -z "$WORK_DIR" ]] || rm -rf -- "$WORK_DIR" || stop_status=$?
+        fi
+        if [[ "$stop_status" != 0 ]]; then
+            echo "FATAL: bundle test cleanup failed; owned work/GPG home retained: $WORK_DIR / $GNUPGHOME" >&2
+            [[ "$final" != 0 ]] || final=125
+        fi
     fi
-    rm -rf "$WORK_DIR"
-    exit "$status"
+    exit "$final"
 }
 trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+if [[ "$AUDIT" == 1 ]]; then
+    python3 "$METADATA" admit --root "$ROOT"
+    AUDIT_ADMITTED=1
+    WORK_DIR="$P2PKIT_CENTRAL_BUNDLE_WORK_DIR"
+else
+    WORK_DIR="$(mktemp -d "${P2PKIT_RELEASE_TMPDIR:-/tmp}/p2pkit-central-bundle-test.XXXXXX")"
+fi
 OUTPUT="$WORK_DIR/p2pkit-test-central-bundle.zip"
-GNUPGHOME="$WORK_DIR/gnupg"
 PASSWORD="p2pkit-disposable-test-key"
 GROUP="$(sed -n 's/^GROUP=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
 VERSION="$(sed -n 's/^VERSION_NAME=//p' "$ROOT/gradle.properties" | tr -d '[:space:]')"
-mkdir -m 700 "$GNUPGHOME"
 
 ORIGINAL_SCRIPT="$ROOT/scripts/build-central-portal-bundle.sh"
 bash -n "$ORIGINAL_SCRIPT"
@@ -43,21 +81,29 @@ if [[ "$VERSION" == *-SNAPSHOT ]]; then
         exit 1
     }
 
-    PHASE="release fixture checkout"
-    RELEASE_WORKTREE="$WORK_DIR/release-source"
-    git -C "$ROOT" worktree add --detach "$RELEASE_WORKTREE" HEAD >/dev/null
-    VERSION="9.8.7-rc6"
-    sed -i.bak "s/^VERSION_NAME=.*/VERSION_NAME=$VERSION/" "$RELEASE_WORKTREE/gradle.properties"
-    rm -f "$RELEASE_WORKTREE/gradle.properties.bak"
-    if [[ -f "$ROOT/local.properties" ]]; then
-        cp "$ROOT/local.properties" "$RELEASE_WORKTREE/local.properties"
+    if [[ "$AUDIT" == 0 ]]; then
+        PHASE="release fixture checkout"
+        RELEASE_WORKTREE="$WORK_DIR/release-source"
+        git -C "$ROOT" worktree add --detach "$RELEASE_WORKTREE" HEAD >/dev/null
+        VERSION="9.8.7-rc6"
+        sed -i.bak "s/^VERSION_NAME=.*/VERSION_NAME=$VERSION/" "$RELEASE_WORKTREE/gradle.properties"
+        rm -f "$RELEASE_WORKTREE/gradle.properties.bak"
+        if [[ -f "$ROOT/local.properties" ]]; then
+            cp "$ROOT/local.properties" "$RELEASE_WORKTREE/local.properties"
+        fi
+        # Ordinary development callers retain the script-under-test overlay.
+        cp "$ORIGINAL_SCRIPT" "$RELEASE_WORKTREE/scripts/build-central-portal-bundle.sh"
+        SCRIPT="$RELEASE_WORKTREE/scripts/build-central-portal-bundle.sh"
     fi
-    # Exercise the script under test, including uncommitted development edits,
-    # against an otherwise clean non-SNAPSHOT release fixture.
-    cp "$ORIGINAL_SCRIPT" "$RELEASE_WORKTREE/scripts/build-central-portal-bundle.sh"
-    SCRIPT="$RELEASE_WORKTREE/scripts/build-central-portal-bundle.sh"
 else
     SCRIPT="$ORIGINAL_SCRIPT"
+fi
+if [[ "$AUDIT" == 1 ]]; then
+    PHASE="release fixture checkout"
+    python3 "$METADATA" fixture
+    RELEASE_WORKTREE="$WORK_DIR/release-source"
+    SCRIPT="$RELEASE_WORKTREE/scripts/build-central-portal-bundle.sh"
+    VERSION="$(sed -n 's/^VERSION_NAME=//p' "$RELEASE_WORKTREE/gradle.properties" | tr -d '[:space:]')"
 fi
 
 secret_appears_in_log() {
@@ -108,21 +154,41 @@ if env -u ORG_GRADLE_PROJECT_signingInMemoryKey \
     -u ORG_GRADLE_PROJECT_signingInMemoryKeyBase64 \
     -u ORG_GRADLE_PROJECT_signingInMemoryKeyPassword \
     -u MAVEN_SIGNING_KEY_FINGERPRINT \
-    "$SCRIPT" "$OUTPUT" >/dev/null 2>&1; then
+    "$SCRIPT" "$OUTPUT" >"$WORK_DIR/missing-key.log" 2>&1; then
     echo "FATAL: bundle builder accepted a release without a signing key" >&2
     exit 1
 fi
+if [[ "$AUDIT" == 1 ]]; then
+    grep -Fq 'an in-memory signing key is required' "$WORK_DIR/missing-key.log" || {
+        echo 'FATAL: bundle builder did not identify the missing-key rejection' >&2
+        exit 1
+    }
+fi
 
 PHASE="disposable key generation"
+command -v gpgconf >/dev/null 2>&1 || { echo 'FATAL: gpgconf is required' >&2; exit 1; }
+if [[ "$AUDIT" == 1 ]]; then
+    GNUPGHOME="$(python3 "$METADATA" home --role signer)"
+else
+    GNUPGHOME="$(mktemp -d "${P2PKIT_GPG_TMPDIR:-/tmp}/p2pkit-gpg.XXXXXX")"
+    GNUPGHOME="$(cd "$GNUPGHOME" && pwd -P)"
+    socket="$GNUPGHOME/S.gpg-agent.browser"
+    [[ "$(LC_ALL=C printf '%s' "$socket" | wc -c | tr -d '[:space:]')" -lt 103 ]] || {
+        echo 'FATAL: GPG socket path is too long; set a shorter P2PKIT_GPG_TMPDIR' >&2; exit 1;
+    }
+    chmod 700 "$GNUPGHOME"
+fi
+keygen_status=0
 gpg --batch --homedir "$GNUPGHOME" \
     --pinentry-mode loopback \
     --passphrase "$PASSWORD" \
     --quick-generate-key \
     "P2pKit disposable CI key <p2pkit-ci@users.noreply.github.com>" rsa2048 sign 1d \
-    >"$WORK_DIR/keygen.log" 2>&1 || {
-        tail -n 20 "$WORK_DIR/keygen.log" >&2
-        exit 1
-    }
+    >"$WORK_DIR/keygen.log" 2>&1 || keygen_status=$?
+if [[ "$keygen_status" != 0 ]]; then
+    [[ "$AUDIT" == 1 ]] || tail -n 20 "$WORK_DIR/keygen.log" >&2
+    exit "$keygen_status"
+fi
 FINGERPRINT="$(
     gpg --batch --homedir "$GNUPGHOME" --with-colons --list-secret-keys 2>/dev/null |
         awk -F: '$1 == "fpr" && fingerprint == "" { fingerprint = toupper($10) }
@@ -153,8 +219,8 @@ for secret in "$KEY_BASE64" "$PASSWORD"; do
 done
 
 if [[ ${bundle_status:-0} -ne 0 ]]; then
-    echo "FATAL: disposable-key bundle builder failed; sanitized tail follows" >&2
-    tail -n 80 "$WORK_DIR/bundle.log" >&2
+    echo "FATAL: disposable-key bundle builder failed; original log retained for credential-checked inspection" >&2
+    [[ "$AUDIT" == 1 ]] || tail -n 80 "$WORK_DIR/bundle.log" >&2
     exit "$bundle_status"
 fi
 
@@ -169,4 +235,8 @@ jq -e \
      .signingKeyFingerprint == $fingerprint and .signedFiles > 0' \
     "${OUTPUT%.zip}.summary.json" >/dev/null
 
-echo "RESULT: PASS — disposable-key signed bundle, signatures, checksums, manifest, and secret safety passed"
+if [[ "$AUDIT" == 1 ]]; then
+    echo "Bundle checks completed; selected retention and enclosing canonical retirement still required"
+else
+    echo "RESULT: PASS — disposable-key signed bundle, signatures, checksums, manifest, and secret safety passed"
+fi

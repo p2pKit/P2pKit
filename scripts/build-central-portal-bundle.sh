@@ -69,7 +69,7 @@ expected_fingerprint="$(printf '%s' "${MAVEN_SIGNING_KEY_FINGERPRINT:-}" | tr -d
 [[ "$expected_fingerprint" =~ ^[A-F0-9]{40}$|^[A-F0-9]{64}$ ]] ||
     fail "MAVEN_SIGNING_KEY_FINGERPRINT must be a complete 40- or 64-hex fingerprint"
 
-for command in base64 gpg jq openssl unzip zip; do
+for command in base64 gpg gpgconf jq openssl unzip zip; do
     command -v "$command" >/dev/null 2>&1 || fail "$command is required"
 done
 
@@ -84,11 +84,61 @@ for output_file in "$OUTPUT" "$MANIFEST" "$SUMMARY"; do
     [[ ! -e "$output_file" ]] || fail "refusing to overwrite existing output: $output_file"
 done
 
-REPOSITORY="$(mktemp -d "${P2PKIT_RELEASE_TMPDIR:-/tmp}/p2pkit-central-bundle.XXXXXX")"
-trap 'rm -rf "$REPOSITORY"' EXIT
+AUDIT="${P2PKIT_CENTRAL_BUNDLE_AUDIT:-0}"
+[[ "$AUDIT" == 0 || "$AUDIT" == 1 ]] || fail "invalid Central bundle audit opt-in"
+REPOSITORY=""
+GNUPGHOME=""
+AUDIT_ADMITTED=0
+METADATA="$ROOT/scripts/prepare-audit-central-bundle-metadata.py"
+cleanup_bundle() {
+    local status=$? stop_status=0 final
+    final="$status"
+    trap - EXIT
+    trap '' HUP INT TERM
+    if [[ "$AUDIT" == 1 ]]; then
+        if [[ "$AUDIT_ADMITTED" == 1 ]]; then
+            if [[ -n "$GNUPGHOME" ]]; then
+                python3 "$METADATA" stop --role verifier || stop_status=$?
+            fi
+            python3 "$METADATA" finish-builder --status "$status" || final=125
+            [[ "$stop_status" == 0 ]] || final=125
+            # The outer regression/controller retains and retires borrowed work.
+            # gpgconf success alone does not establish native retirement.
+        fi
+    else
+        if [[ -n "$GNUPGHOME" ]]; then
+            gpgconf --homedir "$GNUPGHOME" --kill all >/dev/null 2>&1 || stop_status=$?
+        fi
+        if [[ "$stop_status" == 0 ]]; then
+            [[ -z "$GNUPGHOME" ]] || rm -rf -- "$GNUPGHOME" || stop_status=$?
+            [[ -z "$REPOSITORY" ]] || rm -rf -- "$REPOSITORY" || stop_status=$?
+        fi
+        if [[ "$stop_status" != 0 ]]; then
+            echo "FATAL: bundle cleanup failed; owned repository/GPG home retained: $REPOSITORY / $GNUPGHOME" >&2
+            [[ "$final" != 0 ]] || final=125
+        fi
+    fi
+    exit "$final"
+}
+trap cleanup_bundle EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+if [[ "$AUDIT" == 1 ]]; then
+    ADMITTED_ROOT="$(python3 "$METADATA" builder --root "$ROOT" --output "$OUTPUT")"
+    AUDIT_ADMITTED=1
+    REPOSITORY="$P2PKIT_CENTRAL_BUNDLE_WORK_DIR/repository"
+    GNUPGHOME="$(python3 "$METADATA" home --role verifier)"
+else
+    REPOSITORY="$(mktemp -d "${P2PKIT_RELEASE_TMPDIR:-/tmp}/p2pkit-central-bundle.XXXXXX")"
+    GNUPGHOME="$(mktemp -d "${P2PKIT_GPG_TMPDIR:-/tmp}/p2pkit-gpg.XXXXXX")"
+    GNUPGHOME="$(cd "$GNUPGHOME" && pwd -P)"
+    socket="$GNUPGHOME/S.gpg-agent.browser"
+    [[ "$(LC_ALL=C printf '%s' "$socket" | wc -c | tr -d '[:space:]')" -lt 103 ]] ||
+        fail "GPG socket path is too long; set a shorter P2PKIT_GPG_TMPDIR"
+    chmod 700 "$GNUPGHOME"
+fi
 KEY_FILE="$REPOSITORY/release-key.asc"
-GNUPGHOME="$REPOSITORY/gnupg"
-mkdir -m 700 "$GNUPGHOME"
 if [[ -n "$base64_key" ]]; then
     decode_base64_file "$base64_key" "$KEY_FILE"
 else
@@ -97,7 +147,7 @@ fi
 chmod 600 "$KEY_FILE"
 
 actual_fingerprint="$(
-    gpg --batch --show-keys --with-colons "$KEY_FILE" 2>/dev/null |
+    gpg --batch --homedir "$GNUPGHOME" --show-keys --with-colons "$KEY_FILE" 2>/dev/null |
         awk -F: '$1 == "fpr" && fingerprint == "" { fingerprint = toupper($10) }
                  END { if (fingerprint != "") print fingerprint }'
 )"
@@ -113,6 +163,12 @@ if [[ -n "$base64_key" ]]; then
 else
     signing_isolation_args+=("-PsigningInMemoryKeyBase64=")
 fi
+if [[ "$AUDIT" == 1 ]]; then
+    # The helper binds the entire version-only derivative and the exact nested
+    # request/receipt. The canonical admitted-root wrapper selects it with -p;
+    # it also supplies strict/fresh flags, same-home stop and native ownership.
+    python3 "$ADMITTED_ROOT/scripts/prepare-audit-central-bundle-metadata.py" publish
+else
 (
     cd "$ROOT"
     # Release signatures are key-specific outputs, but Gradle's Sign task does
@@ -127,6 +183,7 @@ fi
         -PreleasePublication=true \
         -Dmaven.repo.local="$REPOSITORY"
 )
+fi
 
 "$ROOT/scripts/check-publish-artifacts.sh" "$REPOSITORY"
 
@@ -151,12 +208,24 @@ while IFS= read -r -d '' artifact; do
         unsigned=$((unsigned + 1))
         continue
     fi
-    status="$({
+    verify_status=0
+    if [[ "$AUDIT" == 1 ]]; then
+        status_file="$P2PKIT_CENTRAL_BUNDLE_WORK_DIR/signatures/$checked.status"
         gpg --batch --homedir "$GNUPGHOME" --status-fd 1 \
-            --verify "$signature" "$artifact" 2>/dev/null
-    } || true)"
+            --verify "$signature" "$artifact" >"$status_file" 2>"$status_file.stderr.log" || verify_status=$?
+        status="$(cat "$status_file")"
+    else
+        status="$({
+            gpg --batch --homedir "$GNUPGHOME" --status-fd 1 \
+                --verify "$signature" "$artifact" 2>/dev/null
+        } || true)"
+    fi
     signature_fingerprint="$(valid_signature_fingerprint "$status")"
-    if [[ "$signature_fingerprint" != "$expected_fingerprint" ]]; then
+    if [[ "$AUDIT" == 1 ]]; then
+        python3 "$METADATA" signature --artifact "${artifact#"$REPOSITORY/"}" --status-file "$status_file" \
+            --status "$verify_status" --fingerprint "$signature_fingerprint"
+    fi
+    if [[ "$signature_fingerprint" != "$expected_fingerprint" || "$verify_status" != 0 ]]; then
         echo "FAIL invalid or unexpected signature: ${artifact#"$REPOSITORY/"}" >&2
         invalid_signature=$((invalid_signature + 1))
     fi
@@ -228,7 +297,11 @@ jq -n \
         signedFiles: $signedFiles
     }' >"$SUMMARY"
 
-echo "RESULT: PASS — signed Central Portal bundle created (not uploaded)"
+if [[ "$AUDIT" == 1 ]]; then
+    echo "Signed disposable Central bundle created (not uploaded); enclosing retention/retirement pending"
+else
+    echo "RESULT: PASS — signed Central Portal bundle created (not uploaded)"
+fi
 echo "Bundle: $OUTPUT"
 echo "Manifest: $MANIFEST"
 echo "Summary: $SUMMARY"
