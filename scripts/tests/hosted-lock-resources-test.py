@@ -327,8 +327,7 @@ class OwnedSyntheticPaths(unittest.TestCase):
             if row["kind"] == "resource-sample":
                 lanes.add(row["lane"])
             if row["kind"] == "resource-ready":
-                self.stop.write_bytes(b"")
-                self.stop.chmod(0o600)
+                self.stop.touch(mode=0o600, exist_ok=False)
         streams.sample = emit
         code = R.observe(R.validate_paths(self.root, self.state, self.stop, self.env), self.stop, streams,
                          samplers={"fast": fast, "network": network})
