@@ -898,6 +898,33 @@ def assert_unittest(raw, inventory):
             "UNITTEST_COUNT_OR_TERMINAL_DIFFERS")
 
 
+def tee_output_observed(value, *, retired):
+    """Exact live/retired CRT and Win32 observations, not a Python closed label."""
+    if type(value) is not dict:
+        return False
+    descriptor, handle = value.get("descriptor"), value.get("nativeHandle")
+    if type(descriptor) is not int or not 0 <= descriptor < 2**31 or \
+            type(handle) is not int or not 0 < handle < 2**64 - 1:
+        return False
+    expected = {"descriptor": descriptor, "nativeHandle": handle, "outputClosed": retired,
+                "crtHandle": None if retired else handle, "crtErrno": 9 if retired else 0,
+                "nativeQueryReturned": 0 if retired else 1, "nativeQueryError": 6 if retired else 0,
+                "nativeFlags": None if retired else 0}
+    return encoded(value) == encoded(expected)
+
+
+def tee_owner_pins_observed(value):
+    """The same root/state handles must remain live around the output probe."""
+    if type(value) is not list or len(value) != 2 or any(type(row) is not dict for row in value):
+        return False
+    handles = [row.get("handle") for row in value]
+    if any(type(handle) is not int or not 0 < handle < 2**64 - 1 for handle in handles) or handles[0] == handles[1]:
+        return False
+    return encoded(value) == encoded([
+        {"role": role, "handle": handle, "nativeQueryReturned": 1, "nativeQueryError": 0, "nativeFlags": 0}
+        for role, handle in zip(("root", "state"), handles)])
+
+
 NATIVE_OBSERVATIONS = {
     "native-sinks": ("native-sinks-observed",),
     "native-output-bound": ("expected-native-bound-failure",),
@@ -964,11 +991,20 @@ def assert_native_result(name, value, admitted, read_member):
                 "NATIVE_INJECTED_CLOSE_OBSERVATIONS_INCOMPLETE")
     elif name == "native-tee":
         cases = row.get("cases", [])
-        require(row.get("finishPolicySeconds") == 3 and [item.get("mode") for item in cases] ==
-                ["constructor", "not-started", "started-cancel"] and cases[0].get("outputRenamedAfterFailure") is True and
-                cases[0].get("sourceStillCallerOwned") is True and all(item.get("completionAcknowledged") is True and
+        require(type(cases) is list and len(cases) == 3 and all(type(item) is dict for item in cases) and
+                row.get("finishPolicySeconds") == 3 and [item.get("mode") for item in cases] ==
+                ["constructor", "not-started", "started-cancel"] and
+                cases[0].get("sourceStillCallerOwned") is True and cases[0].get("originalFailureRetained") is True and
+                cases[0].get("retirementErrors") == [] and
+                cases[0].get("liveObservationRejected") is True and all(item.get("completionAcknowledged") is True and
                 item.get("workerRetired") is True for item in cases[1:]) and cases[2].get("originalCancellation") is True,
                 "NATIVE_TEE_OBSERVATIONS_INCOMPLETE")
+        before, after = cases[0].get("before"), cases[0].get("after")
+        require(tee_output_observed(before, retired=False) and tee_output_observed(after, retired=True) and
+                (before["descriptor"], before["nativeHandle"]) == (after["descriptor"], after["nativeHandle"]) and
+                tee_owner_pins_observed(cases[0].get("ownerPinsBefore")) and
+                encoded(cases[0].get("ownerPinsBefore")) == encoded(cases[0].get("ownerPinsAfter")),
+                "NATIVE_TEE_OUTPUT_CLOSURE_UNPROVED")
     elif name == "native-controller-command":
         cases = row.get("cases", [])
         require(row.get("productGradleExecuted") is False and len(cases) == 2 and

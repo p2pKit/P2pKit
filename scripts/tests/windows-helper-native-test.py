@@ -56,6 +56,28 @@ def source_identity():
     return {"commit": os.environ["GITHUB_SHA"], "tree": os.environ["P2PKIT_HELPER_SOURCE_TREE"]}
 
 
+def handle_observation(api, handle):
+    """Observe a borrowed handle only; never close it or acquire another owner."""
+    flags = F.U32()
+    F.ctypes.set_last_error(0)
+    returned = api.GetHandleInformation(handle, F.ctypes.byref(flags))
+    error = F.ctypes.get_last_error()
+    return {"nativeQueryReturned": int(returned), "nativeQueryError": error,
+            "nativeFlags": flags.value if returned else None}
+
+
+def tee_output_observation(output, descriptor, handle, get_osfhandle, api):
+    # No opens, journal writes or new handles between the CRT and native probes.
+    # A reused fd/handle or an error other than EBADF/ERROR_INVALID_HANDLE fails.
+    try:
+        crt, error = get_osfhandle(descriptor), 0
+    except OSError as caught:
+        crt, error = None, caught.errno
+    native = handle_observation(api, handle)
+    return {"descriptor": descriptor, "nativeHandle": handle, "outputClosed": output.closed,
+            "crtHandle": crt, "crtErrno": error, **native}
+
+
 class Fixture:
     def __init__(self, name, destination):
         check(os.name == "nt" and P.host_role() == "windows-x64", "WINDOWS_X64_REQUIRED")
@@ -297,54 +319,110 @@ class Fixture:
                 self.ordinary_retire(scope)
 
     def native_tee(self):
+        import msvcrt  # Bind before opening the measured output, never during its retirement probe.
+
         records = []
-        for mode in ("constructor", "not-started", "started-cancel"):
-            scope, env = self.native_scope()
-            child = tee = None
-            errors = []
-            target = self.root.path / ("tee-" + mode + ".bin")
-            try:
-                child = scope.spawn(emitter(b"tee-original", b""), str(self.root.path), env)
-                if mode == "constructor":
-                    expected = MemoryError("LABELED_THREAD_ALLOCATION_AFTER_OUTPUT_OPEN")
-                    try:
-                        with patch.object(A.threading, "Thread", side_effect=expected):
-                            A.Tee(child.stdout, target, None, errors, False)
-                    except MemoryError as caught:
-                        check(caught is expected and not child.stdout.closed, "TEE_CONSTRUCTOR_STOLE_SOURCE")
-                    else:
-                        raise H.HelperError("NATIVE_TEE_CONSTRUCTOR_FAULT_NOT_REACHED")
-                    # Exclusive rename proves the real output descriptor closed;
-                    # it is restored before the retained private inventory.
-                    renamed = target.with_suffix(".retired")
-                    target.rename(renamed); renamed.rename(target)
-                    records.append({"mode": mode, "outputRenamedAfterFailure": True,
-                                    "sourceStillCallerOwned": not child.stdout.closed})
-                else:
-                    tee = A.Tee(child.stdout, target, None, errors, False)
-                    if mode == "started-cancel":
-                        real_start = tee.thread.start
-                        expected = KeyboardInterrupt("LABELED_AFTER_REAL_THREAD_START")
-                        def start():
-                            real_start()
+        self.constructor_tee = None  # Strong reference: GC cannot manufacture descriptor closure.
+        try:
+            for mode in ("constructor", "not-started", "started-cancel"):
+                scope, env = self.native_scope()
+                child = tee = None
+                errors = []
+                constructor_retired = mode != "constructor"
+                target = self.root.path / ("tee-" + mode + ".bin")
+                try:
+                    child = scope.spawn(emitter(b"tee-original", b""), str(self.root.path), env)
+                    if mode == "constructor":
+                        observation = {"mode": mode}
+                        records.append(observation)
+                        api = self.root._api
+                        pins = [(role, owner._pins[-1].handle) for role, owner in
+                                (("root", self.root), ("state", self.state))]
+                        def owner_pins():
+                            return [{"role": role, "handle": handle, **handle_observation(api, handle)}
+                                    for role, handle in pins]
+                        observation["ownerPinsBefore"] = owner_pins()
+                        check(H.tee_owner_pins_observed(observation["ownerPinsBefore"]), "TEE_OWNER_PINS_NOT_LIVE")
+                        expected = MemoryError("LABELED_THREAD_ALLOCATION_AFTER_OUTPUT_OPEN")
+                        def thread_failure(*args, **kwargs):
+                            bound = kwargs.get("target")
+                            check(not args and set(kwargs) == {"target", "name", "daemon"} and
+                                  kwargs["name"] == "audit-byte-tee" and kwargs["daemon"] is True and
+                                  getattr(bound, "__func__", None) is A.Tee._copy and
+                                  type(getattr(bound, "__self__", None)) is A.Tee and self.constructor_tee is None,
+                                  "TEE_ALLOCATION_BOUNDARY_DIFFERS")
+                            # This is the real constructor's bound copy target. The
+                            # Tee already owns its output; every observation error
+                            # still passes through its unchanged constructor cleanup.
+                            self.constructor_tee = bound.__self__
+                            output = self.constructor_tee.output
+                            descriptor = output.fileno()
+                            handle = msvcrt.get_osfhandle(descriptor)
+                            observation["before"] = tee_output_observation(output, descriptor, handle,
+                                                                            msvcrt.get_osfhandle, api)
+                            check(H.tee_output_observed(observation["before"], retired=False), "TEE_OUTPUT_NOT_LIVE")
+                            observation["liveObservationRejected"] = not H.tee_output_observed(
+                                observation["before"], retired=True)
+                            check(observation["liveObservationRejected"], "TEE_LIVE_OUTPUT_ACCEPTED_AS_RETIRED")
                             raise expected
                         try:
-                            with patch.object(tee.thread, "start", side_effect=start):
-                                tee.start()
-                        except KeyboardInterrupt as caught:
-                            check(caught is expected, "TEE_START_CANCELLATION_CHANGED")
-                    check(scope.drain(grace=0, kill_wait=5) == [], "TEE_CHILD_DRAIN_UNKNOWN")
-                    tee.finish()
-                    check(tee._complete.is_set() and not tee.thread.is_alive() and tee.output.closed and child.stdout.closed,
-                          "TEE_FINALIZATION_INCOMPLETE")
-                    check(not errors, "TEE_NATIVE_ERRORS")
-                    records.append({"mode": mode, "startAttempted": tee._start_attempted, "completionAcknowledged": True,
-                                    "workerRetired": True, "originalCancellation": mode == "started-cancel"})
-            finally:
-                description = self.ordinary_retire(scope, (() if child is None else
-                                     tuple(stream for stream in (child.stdout, child.stderr) if stream is not None and not stream.closed)),
-                                     (() if tee is None else (tee,)))
-        self.record("actual-tee-paths", {"cases": records, "finishPolicySeconds": 3})
+                            with patch.object(A.threading, "Thread", side_effect=thread_failure):
+                                self.constructor_tee = A.Tee(child.stdout, target, None, errors, False)
+                        except MemoryError as caught:
+                            check(caught is expected and self.constructor_tee is not None, "TEE_CONSTRUCTOR_FAULT_DIFFERS")
+                            before = observation["before"]
+                            observation["after"] = tee_output_observation(self.constructor_tee.output,
+                                before["descriptor"], before["nativeHandle"], msvcrt.get_osfhandle, api)
+                            # Only now may another operation/journal allocate handles.
+                            observation["ownerPinsAfter"] = owner_pins()
+                            observation["sourceStillCallerOwned"] = not child.stdout.closed
+                            observation["originalFailureRetained"] = caught is expected
+                            observation["retirementErrors"] = list(errors)
+                            check(not errors and H.tee_output_observed(observation["after"], retired=True),
+                                  "TEE_OUTPUT_RETIREMENT_UNPROVED")
+                            check(observation["sourceStillCallerOwned"] and
+                                  observation["ownerPinsBefore"] == observation["ownerPinsAfter"],
+                                  "TEE_CONSTRUCTOR_STOLE_SOURCE_OR_OWNER_PINS_CHANGED")
+                            constructor_retired = True
+                        else:
+                            raise H.HelperError("NATIVE_TEE_CONSTRUCTOR_FAULT_NOT_REACHED")
+                    else:
+                        tee = A.Tee(child.stdout, target, None, errors, False)
+                        if mode == "started-cancel":
+                            real_start = tee.thread.start
+                            expected = KeyboardInterrupt("LABELED_AFTER_REAL_THREAD_START")
+                            def start():
+                                real_start()
+                                raise expected
+                            try:
+                                with patch.object(tee.thread, "start", side_effect=start):
+                                    tee.start()
+                            except KeyboardInterrupt as caught:
+                                check(caught is expected, "TEE_START_CANCELLATION_CHANGED")
+                        check(scope.drain(grace=0, kill_wait=5) == [], "TEE_CHILD_DRAIN_UNKNOWN")
+                        tee.finish()
+                        check(tee._complete.is_set() and not tee.thread.is_alive() and tee.output.closed and child.stdout.closed,
+                              "TEE_FINALIZATION_INCOMPLETE")
+                        check(not errors, "TEE_NATIVE_ERRORS")
+                        records.append({"mode": mode, "startAttempted": tee._start_attempted, "completionAcknowledged": True,
+                                        "workerRetired": True, "originalCancellation": mode == "started-cancel"})
+                finally:
+                    if not constructor_retired:
+                        self.unknown = True  # Keep the strong output reference and pins until interpreter exit.
+                    self.ordinary_retire(scope, (() if child is None else tuple(stream for stream in
+                        (child.stdout, child.stderr) if stream is not None and not stream.closed)),
+                        (() if tee is None else (tee,)))
+        finally:
+            original = sys.exc_info()[1]
+            try:
+                # Partial observations remain useful failure evidence, never a
+                # passing three-mode inventory or a successful child exit.
+                self.record("actual-tee-paths", {"cases": records, "finishPolicySeconds": 3})
+            except BaseException as error:
+                self.unknown = True
+                if original is None:
+                    raise
+                F._note(original, H.encoded(H.error_detail(error)).decode("ascii"))
 
     def actual_controller(self):
         temporary = self.directory("controller-private-parent")

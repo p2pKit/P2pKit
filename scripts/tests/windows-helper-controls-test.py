@@ -2,7 +2,7 @@
 """Pure/offline Windows helper control models, never native or GPG acceptance.
 
 No child, network, crypto, Gradle, SDK or native API is executed. Production
-custody state machines use in-memory owners; native fixture bodies are not run.
+custody state machines and selected fixture bodies use only in-memory owners.
 The maintained Windows controller test entry loads these methods exactly once.
 """
 from __future__ import annotations
@@ -611,7 +611,16 @@ class AcceptanceModels(Models):
 
     def sample(self):
         identity = admitted()
-        observation = {"cases": [{"mode": "constructor", "outputRenamedAfterFailure": True, "sourceStillCallerOwned": True},
+        before = {"descriptor": 40, "nativeHandle": 1040, "outputClosed": False, "crtHandle": 1040, "crtErrno": 0,
+                  "nativeQueryReturned": 1, "nativeQueryError": 0, "nativeFlags": 0}
+        after = {"descriptor": 40, "nativeHandle": 1040, "outputClosed": True, "crtHandle": None, "crtErrno": 9,
+                 "nativeQueryReturned": 0, "nativeQueryError": 6, "nativeFlags": None}
+        pins = [{"role": role, "handle": handle, "nativeQueryReturned": 1, "nativeQueryError": 0, "nativeFlags": 0}
+                for role, handle in (("root", 101), ("state", 102))]
+        observation = {"cases": [{"mode": "constructor", "before": before, "after": after,
+                                 "ownerPinsBefore": pins, "ownerPinsAfter": copy.deepcopy(pins),
+                                 "liveObservationRejected": True, "originalFailureRetained": True,
+                                 "retirementErrors": [], "sourceStillCallerOwned": True},
                                 {"mode": "not-started", "completionAcknowledged": True, "workerRetired": True},
                                 {"mode": "started-cancel", "completionAcknowledged": True, "workerRetired": True,
                                  "originalCancellation": True}], "finishPolicySeconds": 3}
@@ -649,6 +658,37 @@ class AcceptanceModels(Models):
             observation = H.decode(raw); transform(observation)
             altered = H.encoded(observation); result["observations"][0]["sha256"] = H.digest(altered)
             with self.assertRaises(H.HelperError): H.assert_native_result("native-tee", result, identity, lambda _: altered)
+
+    def test_tee_closure_needs_live_negative_exact_retired_handles_and_preserved_pins(self):
+        identity, result, raw = self.sample()
+        transforms = (
+            lambda v: v.pop("before"),
+            lambda v: v.pop("after"),
+            lambda v: v.update(liveObservationRejected=False),
+            lambda v: v.update(sourceStillCallerOwned=False),
+            lambda v: v.update(originalFailureRetained=False),
+            lambda v: v.update(retirementErrors=["MODEL unresolved close"]),
+            lambda v: v["before"].update(outputClosed=True),
+            lambda v: v["before"].update(crtHandle=1041),
+            lambda v: v["after"].update(crtHandle=1040),
+            lambda v: v["after"].update(crtErrno=5),
+            lambda v: v["after"].update(nativeQueryReturned=1),
+            lambda v: v["after"].update(nativeQueryError=5),
+            lambda v: v["after"].update(nativeHandle=1041),
+            lambda v: v["after"].update(descriptor=41),
+            lambda v: v["after"].update(outputClosed=1),
+            lambda v: v["after"].update(nativeQueryReturned=False),
+            lambda v: v["after"].update(nativeQueryError=6.0),
+            lambda v: v["after"].update(descriptor=True),
+            lambda v: v["ownerPinsBefore"][0].update(nativeQueryReturned=0),
+            lambda v: v["ownerPinsAfter"][0].update(handle=105),
+            lambda v: v.update(ownerPinsAfter=[]),
+        )
+        for transform in transforms:
+            observation = H.decode(raw); transform(observation["cases"][0])
+            altered = H.encoded(observation); result["observations"][0]["sha256"] = H.digest(altered)
+            with self.assertRaises(H.HelperError):
+                H.assert_native_result("native-tee", result, identity, lambda _: altered)
 
     def test_native_sink_acceptance_requires_both_query_controls_and_original_observations(self):
         identity, result, _ = self.sample()
@@ -994,6 +1034,183 @@ class NativeFixtureFinalizationModels(Models):
         self.assertEqual(fixture.execute(), 1)
         self.assertNotIn("close:/native-model", memory.events)
         self.assertIn(fixture, N._RETAIN_TO_EXIT)
+
+
+class NativeTeeModels(Models):
+    """Actual Tee/fixture orchestration over synthetic CRT/Win32/pipe owners."""
+
+    def fixture(self, *, leak=False, reused_fd=False, native_error=6, prior_unknown=False,
+                observation_error=None):
+        fixture = N.Fixture.__new__(N.Fixture)
+        fixture.unknown, fixture.observations = prior_unknown, []
+        fixture.result = {}
+        outputs, scopes, records, native_calls = [], [], [], []
+        last_error = [0]
+        test = self
+
+        class Output(io.BytesIO):
+            def __init__(self, descriptor):
+                super().__init__()
+                self.descriptor, self.handle = descriptor, descriptor + 1000
+
+            def fileno(self):
+                if self.closed:
+                    raise ValueError("MODEL closed descriptor")
+                return self.descriptor
+
+            def close(self):
+                if not (leak and self is outputs[0]):
+                    super().close()
+
+        def output(path):
+            test.assertEqual(path.parent, fixture.root.path)
+            value = Output(40 + len(outputs))
+            outputs.append(value)
+            return value
+
+        def crt(descriptor):
+            value = next(v for v in outputs if v.descriptor == descriptor)
+            if value.closed:
+                if reused_fd:
+                    return value.handle + 100
+                raise OSError(9, "MODEL EBADF")
+            return value.handle
+
+        def native(handle, flags):
+            native_calls.append(handle)
+            if observation_error is not None and handle >= 1000:
+                raise observation_error
+            live = handle in (101, 102) or any(v.handle == handle and not v.closed for v in outputs)
+            last_error[0] = 0 if live else native_error
+            flags._obj.value = 0
+            return 1 if live else 0
+
+        api = SimpleNamespace(GetHandleInformation=native)
+        fixture.root = SimpleNamespace(path=Path("/synthetic-pinned-tee"), _api=api,
+                                       _pins=[SimpleNamespace(handle=101)])
+        fixture.state = SimpleNamespace(_pins=[SimpleNamespace(handle=102)])
+
+        class NativeScope:
+            def __init__(self):
+                self.closed = False
+                self.child = SimpleNamespace(stdout=io.BytesIO(b"tee-original"), stderr=io.BytesIO())
+
+            def spawn(self, *args, **kwargs):
+                return self.child
+
+            def drain(self, **kwargs):
+                return []
+
+            def description(self):
+                return {"discoveryErrors": []}
+
+            def close(self):
+                self.closed = True
+
+        def scope():
+            value = NativeScope(); scopes.append(value)
+            return value, {}
+
+        class InlineThread:
+            def __init__(self, *, target, name, daemon):
+                self.target = target
+
+            def start(self):
+                self.target()  # Deterministic model; never starts a thread.
+
+            def is_alive(self):
+                return False
+
+            def join(self, **kwargs):
+                pass
+
+        fixture.native_scope = scope
+        fixture.record = lambda name, value: records.append((name, copy.deepcopy(value)))
+        self.stack.enter_context(patch.dict(sys.modules, {"msvcrt": SimpleNamespace(get_osfhandle=crt)}))
+        self.set(N.A, "new_file", side_effect=output)
+        self.set(N.A.os, "fsync", side_effect=lambda descriptor: self.assertIn(descriptor, [v.descriptor for v in outputs]))
+        self.set(N.A.threading, "Thread", new=InlineThread)
+        self.set(N.F.ctypes, "set_last_error", create=True, side_effect=lambda value: last_error.__setitem__(0, value))
+        self.set(N.F.ctypes, "get_last_error", create=True, side_effect=lambda: last_error[0])
+        self.set(N.F, "_WinApi", side_effect=AssertionError("MODEL cannot create native API"))
+        conflict = PermissionError("MODEL target-directory write conflicts with live FILE_SHARE_READ pin")
+        conflict.winerror = 32
+        rename = self.set(Path, "rename", side_effect=conflict)
+        return SimpleNamespace(fixture=fixture, outputs=outputs, scopes=scopes, records=records,
+                               native_calls=native_calls, rename=rename)
+
+    def test_pinned_directory_uses_nonmutating_real_tee_closure_oracle(self):
+        model = self.fixture()
+        model.fixture.native_tee()
+        model.rename.assert_not_called()
+        self.assertEqual(len(model.outputs), 3)
+        self.assertTrue(all(value.closed for value in model.outputs))
+        self.assertTrue(all(value.closed and value.child.stdout.closed and value.child.stderr.closed for value in model.scopes))
+        self.assertFalse(model.fixture.unknown)
+        self.assertEqual(len(model.records), 1)
+        observation = model.records[0][1]
+        self.assertEqual([row["mode"] for row in observation["cases"]], ["constructor", "not-started", "started-cancel"])
+        first = observation["cases"][0]
+        self.assertTrue(first["liveObservationRejected"])
+        self.assertTrue(first["sourceStillCallerOwned"])
+        self.assertIs(model.fixture.constructor_tee.output, model.outputs[0])
+        self.assertEqual(first["before"]["crtHandle"], model.outputs[0].handle)
+        self.assertEqual(first["after"]["crtErrno"], 9)
+        self.assertEqual(first["after"]["nativeQueryError"], 6)
+        self.assertEqual(first["ownerPinsBefore"], first["ownerPinsAfter"])
+        self.assertTrue(observation["cases"][2]["originalCancellation"])
+
+    def test_still_live_output_is_not_retirement_and_remains_strongly_held(self):
+        model = self.fixture(leak=True)
+        with self.assertRaisesRegex(N.H.HelperError, "TEE_OUTPUT_RETIREMENT_UNPROVED"):
+            model.fixture.native_tee()
+        self.assertTrue(model.fixture.unknown)
+        self.assertIs(model.fixture.constructor_tee.output, model.outputs[0])
+        self.assertFalse(model.outputs[0].closed)
+        self.assertEqual(len(model.outputs), 1)
+        self.assertEqual(model.records[0][1]["cases"][0]["after"]["nativeQueryReturned"], 1)
+        self.assertTrue(model.scopes[0].closed)
+
+    def test_reused_crt_descriptor_is_not_closed_output_proof(self):
+        model = self.fixture(reused_fd=True)
+        with self.assertRaisesRegex(N.H.HelperError, "TEE_OUTPUT_RETIREMENT_UNPROVED"):
+            model.fixture.native_tee()
+        self.assertTrue(model.fixture.unknown)
+        self.assertEqual(model.records[0][1]["cases"][0]["after"]["crtHandle"], model.outputs[0].handle + 100)
+
+    def test_native_query_access_denial_is_not_invalid_handle(self):
+        model = self.fixture(native_error=5)
+        with self.assertRaisesRegex(N.H.HelperError, "TEE_OUTPUT_RETIREMENT_UNPROVED"):
+            model.fixture.native_tee()
+        self.assertTrue(model.fixture.unknown)
+        self.assertEqual(model.records[0][1]["cases"][0]["after"]["nativeQueryError"], 5)
+
+    def test_injector_observation_failure_still_enters_actual_tee_constructor_cleanup(self):
+        expected = OSError("MODEL original observation failure")
+        model = self.fixture(observation_error=expected)
+        with self.assertRaises(OSError) as caught:
+            model.fixture.native_tee()
+        self.assertIs(caught.exception, expected)
+        self.assertTrue(model.outputs[0].closed)
+        self.assertTrue(model.fixture.unknown)
+        self.assertIs(model.fixture.constructor_tee.output, model.outputs[0])
+        self.assertTrue(model.scopes[0].closed)
+
+    def test_successful_constructor_probe_cannot_clear_prior_unknown(self):
+        model = self.fixture(prior_unknown=True)
+        model.fixture.native_tee()
+        self.assertTrue(model.fixture.unknown)
+
+    def test_partial_observation_journal_failure_preserves_original_retirement_failure(self):
+        model = self.fixture(leak=True)
+        secondary = KeyboardInterrupt("MODEL secondary observation journal interruption")
+        model.fixture.record = lambda *args: (_ for _ in ()).throw(secondary)
+        with self.assertRaisesRegex(N.H.HelperError, "TEE_OUTPUT_RETIREMENT_UNPROVED") as caught:
+            model.fixture.native_tee()
+        self.assertTrue(model.fixture.unknown)
+        self.assertTrue(any("MODEL secondary observation journal interruption" in note
+                            for note in caught.exception.__notes__))
+        self.assertIs(model.fixture.constructor_tee.output, model.outputs[0])
 
 
 class SourceBindingModels(Models):
