@@ -16,6 +16,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -28,17 +29,28 @@ sys.path.insert(0, str(ROOT / "scripts"))
 SPEC = importlib.util.spec_from_file_location("ordinary_controller_models", ROOT / "scripts/run-hosted-test-custody.py")
 C = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(C)
+JOB_SPEC = importlib.util.spec_from_file_location("ordinary_job_time_model_fixtures",
+    ROOT / "scripts/tests/hosted-full-job-budget-test.py")
+JOB_MODELS = importlib.util.module_from_spec(JOB_SPEC)
+JOB_SPEC.loader.exec_module(JOB_MODELS)
 
 
 class Clock:
     def __init__(self):
         self.now = 100.
+        self.raw_offset = 0
 
     def monotonic(self):
         return self.now
 
     def sleep(self, value):
         self.now += value
+
+    def raw(self):
+        return int((10000 + self.now) * C.job_time.NS) + self.raw_offset
+
+    def set_raw(self, value):
+        self.raw_offset = value - int((10000 + self.now) * C.job_time.NS)
 
 
 class Scope:
@@ -53,7 +65,7 @@ class Scope:
 
     def spawn(self, argv, cwd, environment, *, stdout, stderr):
         self.case.events.append("spawn")
-        self.case.calls.append({"argv": argv, "cwd": cwd, "environment": environment,
+        self.case.calls.append({"argv": argv, "cwd": cwd, "environment": dict(environment),
                                 "stdout": stdout, "stderr": stderr})
         if self.case.spawn_error:
             raise self.case.spawn_error
@@ -115,7 +127,7 @@ class Base(unittest.TestCase):
         self.stack = ExitStack()
         self.stack.enter_context(patch.dict(os.environ, {"RUNNER_TEMP": str(self.runner_temp), "GITHUB_RUN_ID": "123",
              "GITHUB_RUN_ATTEMPT": "1", "JAVA_HOME": "/synthetic/jdk17", "P2PKIT_AUDIT_JDK21": "/synthetic/jdk21",
-             "PATH": "/synthetic/bin"}, clear=True))
+             "PATH": "/synthetic/bin", "RUNNER_NAME": JOB_MODELS.RUNNER}, clear=True))
         self.stack.enter_context(patch.object(C, "ROOT", self.root))
         self.stack.enter_context(patch.object(C, "SCRIPTS", self.root / "scripts"))
         self.stack.enter_context(patch.object(C.processes, "host_role", return_value="macos-arm64"))
@@ -124,6 +136,11 @@ class Base(unittest.TestCase):
         self.stack.enter_context(patch.object(C.processes.ctypes, "CDLL", side_effect=AssertionError("NO_NATIVE_API")))
         self.stack.enter_context(patch.object(C.time, "monotonic", side_effect=self.clock.monotonic))
         self.stack.enter_context(patch.object(C.time, "sleep", side_effect=self.clock.sleep))
+        self.stack.enter_context(patch.object(C.job_time, "shared_raw_ns", side_effect=self.clock.raw))
+        self.stack.enter_context(patch.object(C.job_time.http.client, "HTTPSConnection", side_effect=AssertionError("NO_HTTP")))
+        self.stack.enter_context(patch.object(C.job_time.ssl, "create_default_context", side_effect=AssertionError("NO_TLS")))
+        self.stack.enter_context(patch.object(socket, "socket", side_effect=AssertionError("NO_SOCKET")))
+        self.stack.enter_context(patch.object(socket, "create_connection", side_effect=AssertionError("NO_SOCKET")))
         self.stack.enter_context(patch.object(C.signal, "getsignal", return_value="MODEL_PREVIOUS_HANDLER"))
         self.stack.enter_context(patch.object(C.signal, "signal", return_value="MODEL_PREVIOUS_HANDLER"))
         self.stack.enter_context(patch.object(C.query, "NativeGitQueries", side_effect=AssertionError("NO_UNMODELED_QUERY")))
@@ -663,6 +680,7 @@ class WholeControllerModels(Base):
         self.job, self.reserved = "c" * 32, "d" * 32
         self.product_code = 0
         self.fail_uninstall = False
+        self.job_elapsed, self.job_time_calls, self.job_time_child_errors = 120, [], []
         self.crypto_owners, self.crypto_child_errors, self.crypto_child_quarantines = [], [], []
         self.active_crypto_operation = None
         hold = C.PrivateOwner.hold
@@ -686,6 +704,50 @@ class WholeControllerModels(Base):
         self.stack.enter_context(patch.object(C.posix, "validate_recipient", side_effect=self.model_recipient))
         self.stack.enter_context(patch.object(C.ordinary, "export_encrypted", side_effect=self.model_export))
         self.stack.enter_context(patch.object(C.audit, "output_roots", return_value=[self.root / "build"]))
+        self.stack.enter_context(patch.object(C.job_time, "_request", side_effect=self.model_job_time_response))
+
+    def use_full(self):
+        self.profile = "full"
+        self.admitted = JOB_MODELS.model_admission()
+        os.environ[C.job_time.TOKEN_ENV] = JOB_MODELS.TOKEN
+
+    def full_controller(self):
+        self.use_full()
+        controller = C.Controller("full")
+        self.owners.append(controller)
+        with patch.object(C.shutil, "which", return_value=sys.executable):
+            controller.setup()
+        return controller
+
+    def execute_full(self):
+        self.use_full()
+        with patch.object(C.shutil, "which", return_value=sys.executable):
+            return self.execute()
+
+    def assert_full_stopped_before_crypto(self):
+        with patch.object(C.shutil, "which", return_value=sys.executable), redirect_stdout(io.StringIO()):
+            self.assertEqual(self.call_run(), 125)
+        self.assertFalse(any("_crypto" in row["argv"] or "init" in row["argv"] or "--cwd" in row["argv"]
+                             for row in self.calls))
+        self.assertNotIn(C.job_time.TOKEN_ENV, os.environ)
+        self.assertIsNone(self.owners[-1].actions_token)
+        return self.owners[-1]
+
+    def model_cancellation(self, state, job, invocation):
+        self.events.append("cooperative-cancellation")
+        self.assertEqual((state, job, invocation),
+                         (C.session_path("full", "macos-arm64") / "state", self.job, self.reserved))
+        self.save(state / "cancellations" / (invocation + ".json"),
+                  {"schema": 1, "id": invocation, "jobId": job, "requestedUtc": "2026-09-16T00:00:00Z"})
+
+    def model_job_time_response(self, path, token, invocation):
+        self.assertEqual(token, JOB_MODELS.TOKEN)
+        self.assertNotIn(C.job_time.TOKEN_ENV, os.environ)
+        self.job_time_calls.append(path)
+        paths = C.job_time.paths(self.admitted)
+        label = next(label for label, value in paths.items() if value == path)
+        return JOB_MODELS.model_responses(self.admitted, invocation, raw_ns=self.clock.raw(),
+                                         elapsed=self.job_elapsed)[label], None
 
     def save(self, path, value):
         raw = value if type(value) is bytes else C.encoded(value)
@@ -737,7 +799,15 @@ class WholeControllerModels(Base):
             args = argv[5:]
         session = C.session_path(self.profile, "macos-arm64")
         state, custody = session / "state", session / "evidence/custody"
-        if args[0] == "_crypto":
+        if args[0] == "_job-time":
+            try:
+                with patch.dict(os.environ, environment, clear=True):
+                    C.job_time_phase(self.profile, args[-1])
+                self.exit_code = 0
+            except BaseException as error:
+                self.job_time_child_errors.append(error)
+                self.exit_code = 125
+        elif args[0] == "_crypto":
             child_quarantines = ([], [], [])
             previous = self.active_crypto_operation
             self.active_crypto_operation = args[1]
@@ -842,6 +912,19 @@ class WholeControllerModels(Base):
             C.validate_public(self.profile)
         return output.read_text()
 
+    def upload(self, phase, *, before_hash=None):
+        output = self.path / ("upload-" + phase + "-output")
+        output.touch(mode=0o600)
+        environment = {"P2PKIT_HOSTED_TEST_RUN_OUTCOME": "success", "P2PKIT_HOSTED_TEST_SEAL_OUTCOME": "success",
+                       "GITHUB_OUTPUT": str(output)}
+        if phase == "after":
+            original = C.session_path("full", "macos-arm64") / "upload-before.json"
+            environment.update(P2PKIT_HOSTED_TEST_UPLOAD_OUTCOME="success",
+                P2PKIT_HOSTED_TEST_UPLOAD_GUARD_SHA256=before_hash or C.digest(original.read_bytes()))
+        with patch.dict(os.environ, environment), redirect_stdout(io.StringIO()):
+            C.upload_guard(phase)
+        return output.read_text()
+
     def test_desktop_whole_composition_and_post_return_seal_pass_in_model(self):
         session, result = self.execute()
         self.assertTrue(result["profilePassed"])
@@ -852,11 +935,7 @@ class WholeControllerModels(Base):
         self.assertFalse((session / "state/gradle-home/init.d/model-loader").exists())
 
     def test_full_profile_keeps_literal_command_and_both_custody_suites_in_model(self):
-        self.profile = "full"
-        record = C.parse(self.admitted.record)
-        record.update(profile="full", suites=["cli", "diagnostics"])
-        self.admitted = C.identity.Admission(C.encoded(record), self.admitted.original_event,
-            self.admitted.original_policy, self.public_key, "A" * 40, C.digest(self.public_key), 2000000000)
+        self.use_full()
         with patch.object(C.shutil, "which", return_value=sys.executable):
             session, result = self.execute()
         self.assertTrue(result["profilePassed"])
@@ -865,6 +944,524 @@ class WholeControllerModels(Base):
         prepare = next(row for row in self.calls if "prepare" in row["argv"])
         self.assertEqual(prepare["argv"][prepare["argv"].index("--scope") + 1], "both")
         self.assertEqual(self.seal(), "artifacts_ready=true\nprofile_passed=true\n")
+
+    def test_full_without_service_job_time_refuses_before_crypto_or_init(self):
+        self.profile = "full"
+        record = C.parse(self.admitted.record)
+        record.update(profile="full", suites=["cli", "diagnostics"])
+        self.admitted = C.identity.Admission(C.encoded(record), self.admitted.original_event,
+            self.admitted.original_policy, self.public_key, "A" * 40, C.digest(self.public_key), 2000000000)
+        os.environ.pop("P2PKIT_ACTIONS_READ_TOKEN", None)
+        with patch.object(C.shutil, "which", return_value=sys.executable), redirect_stdout(io.StringIO()):
+            self.assertEqual(self.call_run(), 125)
+        self.assertFalse(any("_crypto" in row["argv"] or "init" in row["argv"] or "--cwd" in row["argv"]
+                             for row in self.calls))
+
+    def test_full_raw_cutoff_before_product_spawn_never_launches_product(self):
+        controller = self.full_controller()
+        self.events.clear()
+        self.calls.clear()
+        def slow_scope(*args):
+            scope = Scope(self, *args)
+            self.clock.set_raw(controller.budget.fence("productive"))
+            return scope
+        with patch.object(C.processes, "make_scope", side_effect=slow_scope), \
+                patch.object(C.audit, "request_cancellation", side_effect=self.model_cancellation), \
+                self.assertRaises(C.ControllerError):
+            controller.product_run()
+        self.assertNotIn("spawn", self.events)
+        self.assertFalse(any("--cwd" in row["argv"] for row in self.calls))
+        self.assertTrue(controller.budget_exhausted)
+
+    def test_full_delayed_cutoff_retains_exact_request_before_drain_in_final_window(self):
+        controller = self.full_controller()
+        self.events.clear()
+        polls = []
+        def delayed_poll():
+            polls.append(self.clock.raw())
+            self.clock.set_raw(controller.budget.fence("product-return") + C.job_time.NS)
+            return 0
+        self.poll_function = delayed_poll
+        with patch.object(C.audit, "request_cancellation", side_effect=self.model_cancellation) as cancellation, \
+                self.assertRaises(C.ControllerError):
+            controller.product_run()
+        cancellation.assert_called_once_with(controller.state_path, self.job, self.reserved)
+        self.assertLess(self.events.index("cooperative-cancellation"), self.events.index("drain"))
+        original = (controller.state_path / "cancellations" / (self.reserved + ".json")).read_bytes()
+        retained = controller.path / "evidence/job-time/product-cancellation.json"
+        self.assertEqual(retained.read_bytes(), original)
+        self.assertEqual(controller.budget_cancellation["requestSha256"], C.digest(original))
+        self.assertTrue(controller.budget_exhausted)
+        self.assertFalse(controller.result()["profilePassed"])
+        self.assertEqual(len(polls), 1)
+
+    def test_full_finalizing_phase_rechecks_raw_work_fence_before_accepting_exit_zero(self):
+        controller = self.full_controller()
+        controller.product_run()
+        model = self.model_child
+        def late_collect(argv, environment):
+            model(argv, environment)
+            if "collect" in argv:
+                self.clock.set_raw(controller.budget.fence("collect"))
+        with patch.object(self, "model_child", side_effect=late_collect), self.assertRaises(C.ControllerError):
+            controller.collect()
+        self.assertFalse(any("uninstall" in row["argv"] for row in self.calls))
+        self.assertFalse(controller.result()["profilePassed"])
+
+    def test_full_raw_phase_receipt_close_overrun_cannot_become_complete(self):
+        controller = self.full_controller()
+        write = C.PrivateOwner.write
+        def late_write(owner, directory, name, value, end):
+            result = write(owner, directory, name, value, end)
+            if owner is controller and directory.path == controller.commands.path / "product" and name == "result.json":
+                self.clock.set_raw(controller.budget.fence("product-final"))
+            return result
+        with patch.object(C.PrivateOwner, "write", late_write), self.assertRaises(C.ControllerError):
+            controller.product_run()
+        self.assertNotIn("product", controller.phase_hashes)
+        self.assertTrue((controller.path / "evidence/commands/product/result.json").is_file())
+        self.assertFalse(controller.result()["profilePassed"])
+
+    def test_full_actual_job_spent_3590_seconds_refuses_without_crypto_or_init(self):
+        self.use_full()
+        self.job_elapsed = 3590
+        controller = self.assert_full_stopped_before_crypto()
+        self.assertEqual(len(self.job_time_calls), 2)
+        self.assertIsNone(controller.budget)
+        self.assertTrue((controller.path / "evidence/job-time/jobs.json").is_file())
+
+    def test_full_spent_finalization_reserve_refuses_without_renewing_job(self):
+        self.use_full()
+        self.job_elapsed = 2000
+        controller = self.assert_full_stopped_before_crypto()
+        self.assertTrue(controller.budget_exhausted)
+        self.assertLess(controller.budget.fence("productive"), self.clock.raw())
+        self.assertGreater(controller.budget.fence("controller-return"), self.clock.raw())
+
+    def test_full_repeated_controller_reads_cannot_renew_absolute_return_fence(self):
+        controller = self.full_controller()
+        original = controller.budget.record
+        self.clock.set_raw(controller.budget.fence("controller-return") - 2 * C.job_time.NS)
+        first = controller.window("controller-return", 45)
+        self.clock.now += 1
+        self.assertEqual(controller.window("controller-return", 45), first)
+        self.assertEqual(controller.budget.record, original)
+        self.clock.now += 1
+        with self.assertRaisesRegex(C.ControllerError, "FULL_JOB_STAGE_EXPIRED"):
+            controller.window("controller-return", 45)
+
+    def test_full_service_run_attempt_replay_refuses_before_crypto(self):
+        self.use_full()
+        modeled = self.model_job_time_response
+        def replay(path, token, invocation):
+            raw, error = modeled(path, token, invocation)
+            if path.endswith("/jobs?per_page=100&page=1"):
+                raw = JOB_MODELS.replace_body(raw, lambda row: row["jobs"][0].update(run_attempt=2))
+            return raw, error
+        with patch.object(C.job_time, "_request", side_effect=replay):
+            controller = self.assert_full_stopped_before_crypto()
+        self.assertIsNone(controller.budget)
+        self.assertEqual(str(controller.original), "JOB_TIME_JOB_IDENTITY")
+
+    def test_full_api_failure_preserves_original_and_never_calls_second_get(self):
+        self.use_full()
+        modeled = self.model_job_time_response
+        def fail(path, token, invocation):
+            raw, _ = modeled(path, token, invocation)
+            value = C.job_time.parse(raw)
+            value.update(complete=False, error="JOB_TIME_HTTP_FAILED")
+            return C.job_time.encoded(value), C.job_time.BudgetError("JOB_TIME_HTTP_FAILED")
+        with patch.object(C.job_time, "_request", side_effect=fail):
+            controller = self.assert_full_stopped_before_crypto()
+        self.assertEqual(len(self.job_time_calls), 1)
+        original = C.parse((controller.path / "evidence/job-time/attempt.json").read_bytes())
+        self.assertFalse(original["complete"])
+        self.assertFalse((controller.path / "evidence/job-time/jobs.json").exists())
+        returned = C.parse((controller.path / "runtime/job-time-result.json").read_bytes())
+        self.assertFalse(returned["returned"])
+
+    def test_full_original_job_time_child_return_mismatch_refuses_before_crypto(self):
+        self.use_full()
+        modeled = self.model_child
+        def wrong_return(argv, environment):
+            modeled(argv, environment)
+            if "_job-time" in argv:
+                path = C.session_path("full", "macos-arm64") / "runtime/job-time-result.json"
+                returned = C.parse(path.read_bytes())
+                returned["originalsSha256"]["jobs"] = "0" * 64
+                self.save(path, returned)
+        with patch.object(self, "model_child", side_effect=wrong_return):
+            controller = self.assert_full_stopped_before_crypto()
+        self.assertIsNone(controller.budget)
+        self.assertEqual(str(controller.original), "JOB_TIME_ORIGINAL_RESPONSES_CHANGED")
+
+    def test_full_raw_job_time_close_overrun_cannot_use_provisional_success(self):
+        self.use_full()
+        close = C.PrivateOwner.close
+        def late(owner):
+            close(owner)
+            if type(owner) is C.PrivateOwner:
+                self.clock.set_raw(self.clock.raw() + 46 * C.job_time.NS)
+        with patch.object(C.PrivateOwner, "close", late):
+            controller = self.assert_full_stopped_before_crypto()
+        returned = C.parse((controller.path / "runtime/job-time-result.json").read_bytes())
+        self.assertTrue(returned["returned"], "The original provisional receipt remains, not an invented failure")
+        self.assertIsNone(controller.budget)
+        self.assertTrue(self.job_time_child_errors)
+
+    def test_full_token_is_acquisition_only_and_original_budget_inputs_are_frozen(self):
+        session, result = self.execute_full()
+        self.assertTrue(result["profilePassed"])
+        acquisitions = [row for row in self.calls if "_job-time" in row["argv"]]
+        self.assertEqual(len(acquisitions), 1)
+        self.assertEqual(acquisitions[0]["environment"][C.job_time.TOKEN_ENV], JOB_MODELS.TOKEN)
+        for row in self.calls:
+            if "_job-time" not in row["argv"]:
+                self.assertNotIn(C.job_time.TOKEN_ENV, row["environment"])
+        self.assertNotIn(C.job_time.TOKEN_ENV, os.environ)
+        frozen = session / "frozen-evidence"
+        inventory = C.parse((frozen / "original-path-map.json").read_bytes())
+        mapping = {row["original"]: row for row in inventory["files"]}
+        originals = {"job-time/" + name + ".json": session / "evidence/job-time" / (name + ".json")
+                     for name in ("attempt", "jobs", "budget")}
+        originals["job-time/child-return.json"] = session / "runtime/job-time-result.json"
+        originals.update({"commands/job-time/" + name + ".json": session / "evidence/commands/job-time" / (name + ".json")
+                          for name in ("start", "result")})
+        for name, path in originals.items():
+            with self.subTest(original=name):
+                self.assertIn(name, mapping)
+                raw = (frozen / mapping[name]["member"]).read_bytes()
+                self.assertEqual(raw, path.read_bytes())
+                self.assertEqual((len(raw), C.digest(raw)), (mapping[name]["size"], mapping[name]["sha256"]))
+                self.assertNotIn(JOB_MODELS.TOKEN.encode(), raw)
+
+    def test_full_exact_cutoff_requests_once_and_late_zero_is_sealed_as_failed(self):
+        self.use_full()
+        modeled = self.model_child
+        product_polls = []
+        def poll():
+            product_polls.append(self.clock.raw())
+            if len(product_polls) == 1:
+                self.clock.set_raw(self.owners[-1].budget.fence("productive"))
+                return None
+            return 0
+        def child(argv, environment):
+            modeled(argv, environment)
+            self.poll_function = poll if "--cwd" in argv else None
+        with patch.object(self, "model_child", side_effect=child), \
+                patch.object(C.audit, "request_cancellation", side_effect=self.model_cancellation) as cancellation, \
+                patch.object(C.shutil, "which", return_value=sys.executable):
+            session, result = self.execute()
+        cancellation.assert_called_once_with(session / "state", self.job, self.reserved)
+        self.assertEqual(len(product_polls), 2)
+        product = next(row for row in result["phases"] if row["phase"] == "product")
+        self.assertEqual(product["exitCode"], 0, "Late product zero cannot erase the observed cutoff")
+        self.assertTrue(result["jobBudget"]["exhausted"])
+        self.assertFalse(result["profilePassed"])
+        self.assertEqual(result["jobBudget"]["cooperativeCancellation"]["reason"], "job-budget")
+        self.assertEqual(self.seal(), "artifacts_ready=true\nprofile_passed=false\n")
+        rows = C.parse((session / "frozen-evidence/original-path-map.json").read_bytes())["files"]
+        self.assertTrue(any(row["original"] == "job-time/product-cancellation.json" for row in rows))
+
+    def test_full_signal_then_cutoff_never_duplicates_canonical_cancellation(self):
+        self.use_full()
+        modeled = self.model_child
+        product_polls = []
+        def poll():
+            product_polls.append(self.clock.raw())
+            controller = self.owners[-1]
+            if len(product_polls) == 1:
+                self.clock.set_raw(controller.budget.fence("productive") - C.job_time.NS)
+                controller.cancelled.append(signal.SIGTERM)
+                return None
+            self.clock.set_raw(controller.budget.fence("productive"))
+            return 0
+        def child(argv, environment):
+            modeled(argv, environment)
+            self.poll_function = poll if "--cwd" in argv else None
+        with patch.object(self, "model_child", side_effect=child), \
+                patch.object(C.audit, "request_cancellation", side_effect=self.model_cancellation) as cancellation, \
+                patch.object(C.shutil, "which", return_value=sys.executable):
+            session, result = self.execute()
+        cancellation.assert_called_once_with(session / "state", self.job, self.reserved)
+        self.assertEqual(result["jobBudget"]["cooperativeCancellation"]["reason"], "signal")
+        self.assertTrue(result["jobBudget"]["exhausted"])
+        self.assertFalse(result["profilePassed"])
+        self.assertEqual(self.seal(), "artifacts_ready=true\nprofile_passed=false\n")
+
+    def test_full_cancellation_failure_retains_single_attempt_before_native_drain(self):
+        controller = self.full_controller()
+        self.events.clear()
+        failure = OSError("synthetic request write failed")
+        def poll():
+            self.clock.set_raw(controller.budget.fence("productive"))
+            return 0
+        def fail_request(*args):
+            self.events.append("cooperative-attempt")
+            raise failure
+        self.poll_function = poll
+        with patch.object(C.audit, "request_cancellation", side_effect=fail_request) as cancellation, \
+                self.assertRaises(OSError) as raised:
+            controller.product_run()
+        self.assertIs(raised.exception, failure)
+        cancellation.assert_called_once_with(controller.state_path, self.job, self.reserved)
+        self.assertLess(self.events.index("cooperative-attempt"), self.events.index("drain"))
+        self.assertFalse(controller.budget_cancellation["requested"])
+        self.assertIsNone(controller.budget_cancellation["requestSha256"])
+        self.assertTrue(controller.budget_exhausted)
+        self.assertFalse(controller.result()["profilePassed"])
+
+    def exceptional_product_cutoff(self, boundary, *, secondary_request_failure=False):
+        controller = self.full_controller()
+        self.events.clear()
+        failure = RuntimeError("synthetic original " + boundary + " monitor failure")
+        secondary = OSError("synthetic cancellation write failure")
+        reached = []
+        def fail():
+            reached.append(boundary)
+            self.clock.set_raw(controller.budget.fence("productive"))
+            raise failure
+        def request(*args):
+            if secondary_request_failure:
+                self.events.append("cooperative-cancellation")
+                raise secondary
+            self.model_cancellation(*args)
+        discover, verify = Scope.discover, C.query._PosixSink.verify
+        def fail_discover(scope):
+            discover(scope)
+            return fail()
+        def fail_verify(stream):
+            if stream.path == controller.commands.path / "product/stdout.log" and "spawn" in self.events and not reached:
+                return fail()
+            return verify(stream)
+        self.poll_function = fail if boundary == "poll" else lambda: None
+        with ExitStack() as changes:
+            if boundary == "discovery":
+                changes.enter_context(patch.object(Scope, "discover", fail_discover))
+            if boundary == "capture":
+                changes.enter_context(patch.object(C.query._PosixSink, "verify", fail_verify))
+            cancellation = changes.enter_context(patch.object(C.audit, "request_cancellation", side_effect=request))
+            with self.assertRaises(RuntimeError) as raised:
+                controller.product_run()
+        self.assertIs(raised.exception, failure)
+        self.assertIs(controller.original, failure)
+        cancellation.assert_called_once_with(controller.state_path, self.job, self.reserved)
+        self.assertEqual(reached, [boundary])
+        self.assertLess(self.events.index("cooperative-cancellation"), self.events.index("drain"))
+        self.assertTrue(controller.budget_exhausted)
+        self.assertFalse(controller.result()["profilePassed"])
+        self.assertEqual(controller.budget_cancellation["requested"], not secondary_request_failure)
+        if secondary_request_failure:
+            self.assertTrue(any(row["stage"] == "product-cutoff-finalizer" for row in controller.errors))
+        # These are FAILED-monitor cleanup paths. Request-before-drain is not
+        # evidence of a completed cooperative grace or canonical stop.
+
+    def test_full_poll_exception_at_cutoff_preserves_original_and_requests_before_drain(self):
+        self.exceptional_product_cutoff("poll")
+
+    def test_full_discovery_exception_at_cutoff_preserves_original_and_requests_before_drain(self):
+        self.exceptional_product_cutoff("discovery")
+
+    def test_full_capture_exception_at_cutoff_preserves_original_and_requests_before_drain(self):
+        self.exceptional_product_cutoff("capture")
+
+    def test_full_exceptional_cutoff_keeps_original_when_exact_request_also_fails(self):
+        self.exceptional_product_cutoff("poll", secondary_request_failure=True)
+
+    def test_full_cutoff_during_init_prevents_all_later_productive_phases(self):
+        self.use_full()
+        # Reach the job cutoff within audit-init's unchanged 120+45s envelope,
+        # not by leaping beyond an already-expired independent operation cap.
+        self.job_elapsed = 1600
+        modeled = self.model_child
+        def late_init(argv, environment):
+            modeled(argv, environment)
+            if "init" in argv:
+                self.clock.set_raw(self.owners[-1].budget.fence("productive"))
+        with patch.object(self, "model_child", side_effect=late_init), \
+                patch.object(C.shutil, "which", return_value=sys.executable):
+            _session, result = self.execute()
+        self.assertTrue(result["jobBudget"]["exhausted"])
+        self.assertEqual(result["jobBudget"]["cutoffObservation"]["phase"], "audit-init")
+        self.assertFalse(any("prepare" in row["argv"] or "--cwd" in row["argv"] for row in self.calls))
+        self.assertFalse(result["profilePassed"])
+        self.assertEqual(self.seal(), "artifacts_ready=true\nprofile_passed=false\n")
+
+    def test_full_raw_controller_close_expiry_refuses_provisional_green_result(self):
+        self.use_full()
+        controller_type = C.Controller
+        close = C.PrivateOwner.close
+        def late(owner):
+            close(owner)
+            if isinstance(owner, controller_type):
+                self.clock.set_raw(owner.budget.fence("controller-return"))
+        with patch.object(C.PrivateOwner, "close", late), patch.object(C.shutil, "which", return_value=sys.executable), \
+                redirect_stdout(io.StringIO()):
+            self.assertEqual(self.call_run(), 125)
+        session = C.session_path("full", "macos-arm64")
+        result = C.parse((session / "controller-result.json").read_bytes())
+        self.assertTrue(result["profilePassed"], "The retained provisional result is not the actual step outcome")
+        self.assertEqual(self.clock.raw(), self.owners[-1].budget.fence("controller-return"))
+        self.assertFalse((session / "post-return-validation").exists())
+
+    def test_full_raw_crypto_close_expiry_blocks_init_and_keeps_parent_hold(self):
+        self.use_full()
+        close = C.PrivateOwner.close
+        def late(owner):
+            close(owner)
+            if type(owner) is C.PrivateOwner and self.active_crypto_operation == "validate":
+                self.clock.set_raw(self.owners[-1].budget.fence("productive"))
+        with patch.object(C.PrivateOwner, "close", late), patch.object(C.shutil, "which", return_value=sys.executable), \
+                redirect_stdout(io.StringIO()):
+            self.assertEqual(self.call_run(), 125)
+        self.assertTrue(self.owners[-1].unknown)
+        self.assertFalse(any("init" in row["argv"] or "--cwd" in row["argv"] for row in self.calls))
+        self.assertTrue(self.crypto_child_errors)
+
+    def test_full_raw_seal_close_expiry_emits_no_upload_authority(self):
+        session, _result = self.execute_full()
+        budget = C.job_time.Budget((session / "evidence/job-time/budget.json").read_bytes())
+        close = C.PrivateOwner.close
+        def late(owner):
+            close(owner)
+            self.clock.set_raw(budget.fence("seal"))
+        with patch.object(C.PrivateOwner, "close", late), self.assertRaises(C.job_time.BudgetError):
+            self.seal()
+        self.assertEqual((self.path / "public-step-output").read_bytes(), b"")
+        self.assertTrue((session / "post-return-validation/seal.json").is_file())
+
+    def test_full_raw_seal_output_close_expiry_refuses_after_provisional_append(self):
+        session, _result = self.execute_full()
+        budget = C.job_time.Budget((session / "evidence/job-time/budget.json").read_bytes())
+        target, clock = self.path / "public-step-output", self.clock
+        original_open = Path.open
+        class LateOutput:
+            def __init__(self, stream): self.stream = stream
+            def __enter__(self): return self.stream
+            def __exit__(self, *args):
+                self.stream.close()
+                clock.set_raw(budget.fence("seal"))
+        def late(path, *args, **kwargs):
+            stream = original_open(path, *args, **kwargs)
+            return LateOutput(stream) if path == target and args and args[0] == "a" else stream
+        with patch.object(Path, "open", late), self.assertRaises(C.job_time.BudgetError):
+            self.seal()
+        self.assertEqual(target.read_text(), "artifacts_ready=true\nprofile_passed=true\n")
+
+    def test_full_budget_originals_and_phase_substitutions_cannot_seal(self):
+        session, _result = self.execute_full()
+        changes = [("evidence/job-time/budget.json", lambda row: row["policy"].update(jobSeconds=3601)),
+                   ("evidence/job-time/budget.json", lambda row: row["fencesRawNs"].update(productive=99999999999999)),
+                   ("evidence/job-time/jobs.json", lambda row: row.update(invocation="f" * 32)),
+                   ("evidence/job-time/child-return.json", lambda row: row.update(returned=False)),
+                   ("runtime/job-time-result.json", lambda row: row.update(invocation="f" * 32)),
+                   ("evidence/commands/job-time/start.json", lambda row: row.update(job="f" * 32)),
+                   ("evidence/commands/job-time/result.json", lambda row: row.update(exitCode=True)),
+                   ("run-context.json", lambda row: row.update(jobBudgetSha256="f" * 64))]
+        for name, change in changes:
+            path = session / name
+            raw = path.read_bytes()
+            value = C.parse(raw)
+            change(value)
+            try:
+                self.save(path, value)
+                with self.subTest(original=name), self.assertRaises((C.ControllerError, C.job_time.BudgetError)):
+                    self.seal()
+                self.assertFalse((session / "post-return-validation").exists())
+            finally:
+                self.save(path, raw)
+        self.assertEqual(self.seal(), "artifacts_ready=true\nprofile_passed=true\n")
+
+    def test_full_guard_before_and_after_share_exact_frozen_upload_cap(self):
+        session, result = self.execute_full()
+        self.seal()
+        before_output = self.upload("before")
+        before_raw = (session / "upload-before.json").read_bytes()
+        before = C.parse(before_raw)
+        self.assertEqual(before_output, "upload_ready=true\nupload_timeout_minutes=3\nupload_guard_sha256=" +
+                         C.digest(before_raw) + "\n")
+        self.assertEqual(before["jobBudgetSha256"], result["jobBudget"]["sha256"])
+        self.assertEqual(before["endRawNs"] - before["beganRawNs"], 180 * C.job_time.NS)
+        self.clock.set_raw(self.clock.raw() + C.job_time.NS)
+        self.assertEqual(self.upload("after"), "upload_complete=true\n")
+        after = C.parse((session / "upload-after.json").read_bytes())
+        self.assertEqual(after["beforeSha256"], C.digest(before_raw))
+        self.assertEqual(after["stepOutcome"], "success")
+        self.assertLess(after["observedRawNs"], before["endRawNs"])
+
+    def test_full_upload_expired_absolute_cap_cannot_be_renewed_by_after_guard(self):
+        session, _result = self.execute_full()
+        self.seal()
+        self.upload("before")
+        before = C.parse((session / "upload-before.json").read_bytes())
+        self.clock.set_raw(before["endRawNs"])
+        with self.assertRaisesRegex(C.ControllerError, "UPLOAD_ORIGINAL_FENCE_CHANGED_OR_EXPIRED"):
+            self.upload("after")
+        self.assertFalse((session / "upload-after.json").exists())
+
+    def test_full_upload_tampered_cap_refuses_even_with_matching_new_hash(self):
+        session, _result = self.execute_full()
+        self.seal()
+        self.upload("before")
+        path = session / "upload-before.json"
+        before = C.parse(path.read_bytes())
+        before["maximumSeconds"] = 181
+        raw = self.save(path, before)
+        with self.assertRaisesRegex(C.ControllerError, "UPLOAD_ORIGINAL_FENCE_CHANGED_OR_EXPIRED"):
+            self.upload("after", before_hash=C.digest(raw))
+        self.assertFalse((session / "upload-after.json").exists())
+
+    def test_full_upload_requires_both_real_preceding_step_outcomes(self):
+        for phase, environment in (("before", {}), ("before", {"P2PKIT_HOSTED_TEST_RUN_OUTCOME": "success"}),
+                ("before", {"P2PKIT_HOSTED_TEST_RUN_OUTCOME": "failure", "P2PKIT_HOSTED_TEST_SEAL_OUTCOME": "success"}),
+                ("after", {"P2PKIT_HOSTED_TEST_RUN_OUTCOME": "success", "P2PKIT_HOSTED_TEST_SEAL_OUTCOME": "success"})):
+            with self.subTest(phase=phase, environment=environment), patch.dict(os.environ, environment), \
+                    self.assertRaises(C.ControllerError):
+                C.upload_guard(phase)
+        self.assertEqual(self.owners, [])
+
+    def test_full_upload_rechecks_sealed_artifact_bytes_before_granting_upload(self):
+        session, _result = self.execute_full()
+        self.seal()
+        path = session / "export" / C.posix.ARTIFACT
+        original = path.read_bytes()
+        self.save(path, b"X" + original[1:])
+        with self.assertRaisesRegex(C.ControllerError, "UPLOAD_SEALED_MANIFEST_CHANGED"):
+            self.upload("before")
+        self.assertFalse((session / "upload-before.json").exists())
+
+    def test_full_raw_upload_guard_close_expiry_cannot_grant_upload(self):
+        session, _result = self.execute_full()
+        self.seal()
+        budget = C.job_time.Budget((session / "evidence/job-time/budget.json").read_bytes())
+        close = C.PrivateOwner.close
+        def late(owner):
+            close(owner)
+            self.clock.set_raw(budget.fence("upload-start"))
+        with patch.object(C.PrivateOwner, "close", late), self.assertRaises(C.job_time.BudgetError):
+            self.upload("before")
+        self.assertEqual((self.path / "upload-before-output").read_bytes(), b"")
+        self.assertTrue((session / "upload-before.json").is_file())
+
+    def test_full_raw_upload_after_output_close_expiry_refuses_provisional_output(self):
+        session, _result = self.execute_full()
+        self.seal()
+        self.upload("before")
+        upload_end = C.parse((session / "upload-before.json").read_bytes())["endRawNs"]
+        target, clock = self.path / "upload-after-output", self.clock
+        original_open = Path.open
+        class LateOutput:
+            def __init__(self, stream): self.stream = stream
+            def __enter__(self): return self.stream
+            def __exit__(self, *args):
+                self.stream.close()
+                clock.set_raw(upload_end)
+        def late(path, *args, **kwargs):
+            stream = original_open(path, *args, **kwargs)
+            return LateOutput(stream) if path == target and args and args[0] == "a" else stream
+        with patch.object(Path, "open", late), self.assertRaisesRegex(C.ControllerError, "UPLOAD_GUARD_EXPIRED"):
+            self.upload("after")
+        self.assertEqual(target.read_text(), "upload_complete=true\n")
 
     def test_crypto_failure_blocks_expensive_init_and_keeps_unknown(self):
         with patch.object(C.posix, "validate_recipient", side_effect=ValueError("synthetic GPG failure")), \

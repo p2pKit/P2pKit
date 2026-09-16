@@ -28,6 +28,7 @@ SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 import audit_processes as processes
+import hosted_full_job_budget as job_time
 import hosted_evidence as posix
 import hosted_test_evidence as ordinary
 import hosted_test_identity as identity
@@ -62,7 +63,7 @@ IDENTITY_ENV = (
     "GITHUB_ACTIONS", "GITHUB_REPOSITORY", "GITHUB_SHA", "GITHUB_REF", "GITHUB_RUN_ID",
     "GITHUB_RUN_ATTEMPT", "GITHUB_EVENT_NAME", "GITHUB_WORKFLOW_REF", "GITHUB_WORKFLOW_SHA",
     "GITHUB_WORKSPACE", "GITHUB_EVENT_PATH", "GITHUB_SERVER_URL", "GITHUB_API_URL", "GITHUB_JOB",
-    "RUNNER_OS", "RUNNER_ARCH", "RUNNER_ENVIRONMENT", "RUNNER_TEMP", "ImageOS", "ImageVersion",
+    "RUNNER_OS", "RUNNER_ARCH", "RUNNER_NAME", "RUNNER_ENVIRONMENT", "RUNNER_TEMP", "ImageOS", "ImageVersion",
 )
 
 # Only these two exact, source-bound siblings enter the isolated canonical
@@ -503,6 +504,13 @@ class Controller(PrivateOwner):
         self.path = session_path(profile, self.role)
         self.state_path = self.path / "state"
         self.deadline = time.monotonic() + TOTAL_SECONDS[profile]
+        # This remains an operation ceiling, NEVER the full job's start/time.
+        # Full products cannot launch until the actual service budget is bound.
+        self.budget, self.last_raw = None, 0
+        self.budget_exhausted, self.cutoff_observation = False, None
+        self.budget_cancellation, self.terminal_raw = None, None
+        token = os.environ.pop(job_time.TOKEN_ENV, None)
+        self.actions_token = token if profile == "full" else None
         self.cancelled, self.records, self.phase_hashes = [], [], {}
         self.job = uuid.uuid4().hex
         self.private = self.evidence = self.commands = self.runtime = self.crypto = None
@@ -512,10 +520,46 @@ class Controller(PrivateOwner):
         self.export_return = None
         self.environment = child_environment(dict(os.environ), self.path, self.state_path)
 
+    def now_raw(self):
+        self.last_raw = job_time.raw_now(self.last_raw)
+        return self.last_raw
+
+    def window(self, stage, seconds):
+        local = time.monotonic()
+        if self.budget is None:
+            return min(self.deadline, local + seconds)
+        now = self.now_raw()
+        fence = self.budget.fence(stage)
+        require(now < fence, "FULL_JOB_STAGE_EXPIRED")
+        return min(self.deadline, local + seconds, local + (fence - now) / job_time.NS)
+
+    def check_window(self, stage, end):
+        posix._deadline(end)
+        if self.budget is not None:
+            require(self.now_raw() < self.budget.fence(stage), "FULL_JOB_STAGE_EXPIRED")
+
+    def mark_cutoff(self, phase, now):
+        self.budget_exhausted = True
+        if self.cutoff_observation is None:
+            self.cutoff_observation = {"phase": phase, "observedRawNs": now}
+
+    def budget_result(self):
+        return {"sha256": None if self.budget is None else self.budget.sha256,
+                "productiveCutoffRawNs": None if self.budget is None else self.budget.fence("productive"),
+                "controllerReturnRawNs": None if self.budget is None else self.budget.fence("controller-return"),
+                "exhausted": self.budget_exhausted, "cutoffObservation": self.cutoff_observation,
+                "cooperativeCancellation": self.budget_cancellation, "terminalRawNs": self.terminal_raw}
+
     def check(self, finalizing=False):
         require(not self.unknown and not QUARANTINE and not windows._QUARANTINE and not query.QUARANTINE,
                 "PRIOR_NATIVE_RETIREMENT_UNKNOWN")
         posix._deadline(self.deadline)
+        if self.budget is not None:
+            now = self.now_raw()
+            require(now < self.budget.fence("controller-return"), "FULL_JOB_RETURN_EXPIRED")
+            if not finalizing and now >= self.budget.fence("productive"):
+                self.mark_cutoff("admission", now)
+            require(finalizing or not self.budget_exhausted, "FULL_JOB_PRODUCTIVE_CUTOFF")
         if self.cancelled and not finalizing:
             raise KeyboardInterrupt("ORDINARY_TEST_CONTROLLER_CANCELLED")
 
@@ -529,12 +573,37 @@ class Controller(PrivateOwner):
         self.child(self.private, "temporary", end, create=True)
         self.child(self.private, "control-home", end, create=True)
 
-    def phase(self, label, argv, timeout, *, finalizing=False, product=False):
+    def phase(self, label, argv, timeout, *, finalizing=False, product=False, acquire_time=False):
         """Actual fixed-caller composition around make_scope, not a new backend."""
         self.check(finalizing)
         require(type(timeout) is int and 0 < timeout <= OUTER_SECONDS[self.profile], "PHASE_TIMEOUT")
         started = time.monotonic()
         end, final_end = min(self.deadline, started + timeout), min(self.deadline, started + timeout + FINAL_SECONDS)
+        raw_started = raw_work_end = raw_final_end = None
+        if self.profile == "full":
+            raw_started = self.now_raw()
+            if acquire_time:
+                require(label == "job-time" and not finalizing and not product and self.budget is None and
+                        self.admitted is not None and timeout == job_time.ACQUIRE_SECONDS and
+                        argv == self.python(__file__, "_job-time", "--profile", "full", "--admission-sha256",
+                                            digest(self.admitted.record)), "JOB_TIME_CLOSED_ACQUISITION")
+                raw_work_end = raw_started + timeout * job_time.NS
+                raw_final_end = raw_work_end + FINAL_SECONDS * job_time.NS
+            else:
+                require(self.budget is not None, "FULL_JOB_TIME_NOT_ADMITTED")
+                stage = {"recipient-validation": "productive", "audit-init": "productive",
+                         "custody-prepare": "productive", "product": "product-return",
+                         "custody-collect": "collect", "custody-uninstall": "uninstall", "export": "export"}
+                finish = {"productive": "preparation-final", "product-return": "product-final",
+                          "collect": "collect-final", "uninstall": "uninstall-final", "export": "export-final"}
+                require(label in stage, "FULL_JOB_CLOSED_PHASE")
+                end = min(end, self.window(stage[label], timeout))
+                final_end = min(final_end, self.window(finish[stage[label]], timeout + FINAL_SECONDS))
+                raw_work_end = min(raw_started + timeout * job_time.NS, self.budget.fence(stage[label]))
+                raw_final_end = min(raw_started + (timeout + FINAL_SECONDS) * job_time.NS,
+                                    self.budget.fence(finish[stage[label]]))
+        else:
+            require(not acquire_time, "JOB_TIME_FULL_ONLY")
         invocation = uuid.uuid4().hex
         directory = self.child(self.commands, label, final_end, create=True)
         job = self.context["id"] if product else self.job
@@ -542,15 +611,73 @@ class Controller(PrivateOwner):
         home = state / ("gradle-home" if product else "control-home")
         env = processes.ownership_environment(self.environment, job, invocation, str(state), str(home),
                                               allow_new_context=True)
+        if acquire_time:
+            require(type(self.actions_token) is str and self.actions_token, "JOB_TIME_READ_TOKEN_REQUIRED")
+            env[job_time.TOKEN_ENV], self.actions_token = self.actions_token, None
         row = {"schema": 1, "phase": label, "argv": list(argv), "cwd": str(ROOT), "job": job,
                "invocation": invocation, "state": str(state), "home": str(home), "exitCode": None,
                "launchAttempted": False, "scopeAttempted": False, "retirement": "UNKNOWN", "errors": []}
+        if self.profile == "full":
+            row.update(jobBudgetSha256=None if self.budget is None else self.budget.sha256,
+                       startedRawNs=raw_started, completedRawNs=None, finalizedRawNs=None,
+                       cooperativeCancellation=None)
         self.records.append(row)
         before_errors = len(self.errors)
         receipt_complete = False
         scope = child = out = err = None
         native_known = False
         original = None
+        cancellation_requested = False
+
+        def check_phase_budget():
+            nonlocal cancellation_requested, end
+            now = self.now_raw() if self.profile == "full" else None
+            cutoff = self.budget is not None and not finalizing and now >= self.budget.fence("productive")
+            if cutoff:
+                self.mark_cutoff(label, now)
+            if (cutoff or self.cancelled) and not finalizing:
+                if product and not cancellation_requested:
+                    # Record the single ATTEMPT before entering the canonical
+                    # writer. A failed call is never retried or called a request.
+                    cancellation_requested = True
+                    cancellation = {"reason": "job-budget" if cutoff else "signal", "job": self.context["id"],
+                                    "invocation": self.request["owner"]["productInvocation"],
+                                    "attemptedRawNs": now, "returnedRawNs": None, "requested": False,
+                                    "requestSha256": None}
+                    if self.profile == "full":
+                        row["cooperativeCancellation"] = cancellation
+                        self.budget_cancellation = cancellation
+                    audit.request_cancellation(self.state_path, self.context["id"],
+                                               self.request["owner"]["productInvocation"])
+                    cancellation["requested"] = True
+                    cancellation["returnedRawNs"] = self.now_raw() if self.profile == "full" else None
+                    end = min(end, time.monotonic() + 330)
+                    if self.profile == "full":
+                        # The exact request still precedes native drain when a
+                        # delayed poll has consumed the cooperative slot. Its
+                        # original bytes may use ONLY the reserved final slot.
+                        copy_end = min(final_end, self.window("product-final", 30))
+                        state_directory = self.child(self.private, "state", copy_end)
+                        requests = self.child(state_directory, "cancellations", copy_end)
+                        raw = self.read(requests, cancellation["invocation"] + ".json", copy_end)
+                        actual = parse(raw)
+                        require(actual.get("schema") == 1 and actual.get("id") == cancellation["invocation"] and
+                                actual.get("jobId") == cancellation["job"], "JOB_TIME_CANCELLATION_CHANGED")
+                        target = self.child(self.evidence, "job-time", copy_end)
+                        self.write(target, "product-cancellation.json", raw, copy_end)
+                        cancellation["requestSha256"] = digest(raw)
+                        self.check_window("product-final", copy_end)
+                    # Full end already uses the immutable productive+330 fence;
+                    # observation delay MUST NOT grant another fresh 330s.
+                elif not product:
+                    if cutoff:
+                        raise ControllerError("FULL_JOB_PRODUCTIVE_CUTOFF")
+                    raise KeyboardInterrupt("ORDINARY_TEST_CONTROLLER_CANCELLED")
+            if self.profile == "full":
+                now = self.now_raw()
+                require(now < raw_work_end, "FULL_JOB_PHASE_EXPIRED")
+            return now
+
         try:
             self.write(directory, "start.json", row, final_end)
             out = self.acquire("phase-stdout", lambda: directory.create_file(
@@ -564,13 +691,17 @@ class Controller(PrivateOwner):
                 "baseline": sorted(scope.baseline) if hasattr(scope, "baseline") else None,
                 "kernelJob": self.role == "windows-x64"}, final_end)
             self.check(finalizing)
+            if self.profile == "full":
+                require(self.now_raw() < raw_work_end, "FULL_JOB_PHASE_EXPIRED")
             row["launchAttempted"] = True
             if product:
                 self.product_attempted = True
             child = scope.spawn(list(argv), str(ROOT), env, stdout=out, stderr=err)
             require(child.stdout is None and child.stderr is None, "PRIVATE_SUPPLIED_SINKS_REQUIRED")
-            cancellation_requested = False
             while True:
+                # Cooperative cancellation comes BEFORE a deadline exception
+                # can enter native drain, even if polling was badly delayed.
+                check_phase_budget()
                 posix._deadline(end)
                 if self.role == "windows-x64":
                     out.observe_live_output()
@@ -579,26 +710,31 @@ class Controller(PrivateOwner):
                     out.verify()
                     err.verify()
                 code = child.poll()
+                observed = check_phase_budget()
+                posix._deadline(end)
                 if code is not None:
                     row["exitCode"] = code
+                    if self.profile == "full":
+                        row["completedRawNs"] = observed
                     break
-                if self.cancelled and not finalizing:
-                    if product and not cancellation_requested:
-                        # Exact canonical cooperative cancellation, not a new
-                        # process/scope or a broad signal. Existing lease/stop
-                        # finalizers retain their original authority/deadlines.
-                        audit.request_cancellation(self.state_path, self.context["id"],
-                                                   self.request["owner"]["productInvocation"])
-                        cancellation_requested = True
-                        end = min(end, time.monotonic() + 330)
-                    elif not product:
-                        raise KeyboardInterrupt("ORDINARY_TEST_CONTROLLER_CANCELLED")
                 scope.discover()
                 time.sleep(.05)
         except BaseException as error:
             original = error
             self.error(label, error)
+            if self.profile == "full" and product and row["launchAttempted"]:
+                # A poll/capture/discovery error may itself have crossed the
+                # productive cutoff. Preserve that first error, but do not let
+                # its exceptional return bypass the single exact cooperative
+                # request before the existing native failure cleanup. A failed
+                # monitor is not permission for a new unmonitored grace/retry.
+                try:
+                    check_phase_budget()
+                except BaseException as secondary:
+                    self.error(label + "-cutoff-finalizer", secondary)
         finally:
+            env.pop(job_time.TOKEN_ENV, None)
+            self.actions_token = None
             if scope is not None:
                 try:
                     row["survivors"] = scope.drain(grace=5, kill_wait=5)
@@ -625,10 +761,15 @@ class Controller(PrivateOwner):
             else:
                 self.unknown = True  # Keep original pins/sinks beneath an unknown writer.
             row["retirement"] = "UNKNOWN" if self.unknown else "KNOWN"
-            row["errors"] = self.errors[before_errors:]
             try:
+                if self.profile == "full":
+                    row["finalizedRawNs"] = self.now_raw()
+                    require(row["finalizedRawNs"] < raw_final_end, "FULL_JOB_PHASE_FINAL_EXPIRED")
+                row["errors"] = self.errors[before_errors:]
                 posix._deadline(final_end)
                 self.write(directory, "result.json", row, final_end)
+                if self.profile == "full":
+                    require(self.now_raw() < raw_final_end, "FULL_JOB_PHASE_FINAL_EXPIRED")
                 self.phase_hashes[label] = digest(encoded(row))
                 receipt_complete = True
             except BaseException as error:
@@ -639,6 +780,7 @@ class Controller(PrivateOwner):
                 not row["errors"], "PHASE_FINALIZATION_FAILED")
         if self.cancelled and not finalizing:
             raise KeyboardInterrupt("ORDINARY_TEST_CONTROLLER_CANCELLED")
+        require(finalizing or not self.budget_exhausted, "FULL_JOB_PRODUCTIVE_CUTOFF")
         return row
 
     def python(self, *args):
@@ -656,15 +798,19 @@ class Controller(PrivateOwner):
                     "FULL_PYTHON_DIFFERS_FROM_NATIVE_CONTROLLER")
         original = parse(self.admitted.record)
         self.canonical_sources = canonical_bindings()
+        if self.profile == "full":
+            self.acquire_job_time()
         context = {"schema": 1, "scope": "CLOSED_ORDINARY_TEST_CONTROLLER", "profile": self.profile,
                    "role": self.role, "root": str(ROOT), "session": str(self.path), "job": self.job,
                    "admissionSha256": digest(self.admitted.record), "source": original["source"],
                    "command": self.command, "kind": self.kind, "python": str(Path(sys.executable).resolve(strict=True)),
                    "canonicalSources": self.canonical_sources}
-        self.write(self.private, "run-context.json", context, min(self.deadline, time.monotonic() + 45))
+        if self.profile == "full":
+            context["jobBudgetSha256"] = self.budget.sha256
+        self.write(self.private, "run-context.json", context, self.window("productive", 45))
         self.context_hash = digest(encoded(context))
         self.crypto_operation("validate")
-        self.recipient_raw = self.read(self.private, "recipient.json", min(self.deadline, time.monotonic() + 30))
+        self.recipient_raw = self.read(self.private, "recipient.json", self.window("productive", 30))
         recipient = parse(self.recipient_raw)
         require(recipient["fingerprint"] == self.admitted.fingerprint and
                 recipient["key_sha256"] == self.admitted.key_sha256 and
@@ -675,8 +821,8 @@ class Controller(PrivateOwner):
                          "--state", self.state_path, "--expected-commit", original["source"]["commit"],
                          "--host", self.role), 120)
         require(row["exitCode"] == 0, "CANONICAL_INIT_FAILED")
-        state = self.child(self.private, "state", min(self.deadline, time.monotonic() + 30))
-        self.context = parse(self.read(state, "context.json", min(self.deadline, time.monotonic() + 30)))
+        state = self.child(self.private, "state", self.window("productive", 30))
+        self.context = parse(self.read(state, "context.json", self.window("productive", 30)))
         require(self.context["root"] == str(ROOT) and self.context["host"] == self.role and
                 self.context["gradleHome"] == str(self.state_path / "gradle-home") and
                 self.context["source"] == {**original["source"], "status": "", "diffSha256": digest(b"")} and
@@ -692,11 +838,28 @@ class Controller(PrivateOwner):
             "--owner-state", self.state_path, "--owner-kind", "audit", "--scope",
             "both" if self.profile == "full" else "cli", "--", *self.command), 120)
         require(row["exitCode"] == 0, "CUSTODY_PREPARE_FAILED")
-        directory = self.child(self.evidence, "custody", min(self.deadline, time.monotonic() + 30))
-        self.request = parse(self.read(directory, "request.json", min(self.deadline, time.monotonic() + 30)))
+        directory = self.child(self.evidence, "custody", self.window("productive", 30))
+        self.request = parse(self.read(directory, "request.json", self.window("productive", 30)))
         require(self.request["ownerKind"] == "audit" and self.request["owner"]["job"] == self.context["id"] and
                 self.request["command"] == self.command and self.request["ownerState"] == str(self.state_path),
                 "CUSTODY_RESERVATION_DIFFERS")
+
+    def acquire_job_time(self):
+        require(self.budget is None, "JOB_TIME_ALREADY_ADMITTED")
+        row = self.phase("job-time", self.python(__file__, "_job-time", "--profile", "full", "--admission-sha256",
+                         digest(self.admitted.record)), job_time.ACQUIRE_SECONDS, acquire_time=True)
+        require(row["exitCode"] == 0, "JOB_TIME_ACQUISITION_FAILED")
+        end = min(self.deadline, time.monotonic() + 30)
+        budget = derive_job_budget(self, self.private, self.admitted, end)
+        directory = self.child(self.evidence, "job-time", end)
+        returned_raw = self.read(self.runtime, "job-time-result.json", end)
+        require(digest(returned_raw) == budget.value["provenance"]["childReturnSha256"],
+                "JOB_TIME_ORIGINAL_RETURN_CHANGED")
+        self.write(directory, "child-return.json", returned_raw, end)
+        self.write(directory, "budget.json", budget.record, end)
+        self.budget = budget
+        self.deadline = min(self.deadline, budget.deadline("controller-return", TOTAL_SECONDS["full"]))
+        self.check()  # Already-spent setup never reaches crypto/init/products.
 
     def product_run(self):
         reserved = self.request["owner"]["productInvocation"]
@@ -716,8 +879,10 @@ class Controller(PrivateOwner):
         # absent canonical receipt. The collector retains HOLD, not a fake pass.
         row = self.phase("custody-collect", self.python(SCRIPTS / "test-transcript-custody.py", "collect",
                          "--directory", directory, "--owner-result", receipt), 120, finalizing=True)
-        private = self.child(self.evidence, "custody", min(self.deadline, time.monotonic() + 30))
-        self.custody = parse(self.read(private, "result.json", min(self.deadline, time.monotonic() + 30)))
+        end = self.window("collect-read", 30)
+        private = self.child(self.evidence, "custody", end)
+        self.custody = parse(self.read(private, "result.json", end))
+        self.check_window("collect-read", end)
         require(row["exitCode"] in (0, 125), "CUSTODY_COLLECTOR_UNSUPPORTED_EXIT")
         if self.custody.get("retirement") != "KNOWN":
             self.unknown = True
@@ -725,14 +890,16 @@ class Controller(PrivateOwner):
         row = self.phase("custody-uninstall", self.python(SCRIPTS / "test-transcript-custody.py", "uninstall",
                          "--directory", directory), 90, finalizing=True)
         require(row["exitCode"] == 0, "CUSTODY_LOADER_UNINSTALL_FAILED")
-        removed = parse(self.read(private, "uninstalled.json", min(self.deadline, time.monotonic() + 30)))
+        end = self.window("uninstall-read", 30)
+        removed = parse(self.read(private, "uninstalled.json", end))
+        self.check_window("uninstall-read", end)
         require(removed.get("absent") is True and removed.get("originalsDeleted") is False,
                 "CUSTODY_UNINSTALL_RECEIPT_DIFFERS")
 
     def export(self):
         self.check(finalizing=True)
         require(self.admitted is not None and hasattr(self, "recipient_raw"), "NO_VALIDATED_RECIPIENT")
-        end = min(self.deadline, time.monotonic() + 180)
+        end = self.window("export-freeze", 180)
         if self.context is not None:
             state = self.child(self.private, "state", end)
             original = self.child(state, "evidence", end)
@@ -744,9 +911,15 @@ class Controller(PrivateOwner):
         # Frozen evidence must not contain subsequent query, crypto or outer
         # export-command writers. Only the already-frozen commands are copied.
         self.frozen = copy_tree(self, self.evidence, self.path / "frozen-evidence", end)
+        self.check_window("export-freeze", end)
         self.export_return = self.crypto_operation("export")
-        output = self.child(self.private, "export", min(self.deadline, time.monotonic() + 90))
-        verify_export_binding(self, output, self.export_return, min(self.deadline, time.monotonic() + 90))
+        end = self.window("export-open", 90)
+        output = self.child(self.private, "export", end)
+        self.check_window("export-open", end)
+        end = self.window("export-verify", 90)
+        verify_export_binding(self, output, self.export_return, end)
+        self.check_window("export-verify", end)
+        self.check(finalizing=True)
         self.encrypted = True
 
     def crypto_operation(self, operation):
@@ -773,11 +946,16 @@ class Controller(PrivateOwner):
             self.unknown = True
             raise ControllerError("CRYPTO_CHILD_DID_NOT_RETURN_KNOWN")
         try:
-            raw = self.read(self.runtime, operation + "-result.json", min(self.deadline, time.monotonic() + 30))
+            stage = "export-read" if operation == "export" else "productive"
+            end = self.window(stage, 30)
+            raw = self.read(self.runtime, operation + "-result.json", end)
+            self.check_window(stage, end)
             value = parse(raw)
             require(value["schema"] == 1 and value["operation"] == operation and value["profile"] == self.profile and
                     value["contextSha256"] == self.context_hash and value["retirement"] == "KNOWN" and
                     value["errors"] == [] and value["returned"] is True, "CRYPTO_RETURN_BINDING")
+            if self.profile == "full":
+                require(value.get("jobBudgetSha256") == self.budget.sha256, "CRYPTO_JOB_TIME_CHANGED")
             return {"result": value, "sha256": digest(raw)}
         except BaseException as error:
             self.error("crypto-return", error, unknown=True)
@@ -794,6 +972,8 @@ class Controller(PrivateOwner):
                 "readyForPostReturnSeal": self.encrypted and not self.unknown,
                 "phases": self.records, "phaseSha256": self.phase_hashes, "custody": self.custody,
                 "exportReturn": self.export_return, "errors": self.errors}
+        if self.profile == "full":
+            value["jobBudget"] = self.budget_result()
         value["profilePassed"] = profile_passed(value)
         return parse(encoded(value))
 
@@ -803,6 +983,22 @@ def profile_passed(value):
     rows = value["phases"]
     labels = ["recipient-validation", "audit-init", "custody-prepare", "product", "custody-collect",
               "custody-uninstall"]
+    if value.get("profile") == "full":
+        labels.insert(0, "job-time")
+        budget = value.get("jobBudget", {})
+        if not (type(budget.get("sha256")) is str and re.fullmatch(r"[0-9a-f]{64}", budget["sha256"]) and
+                budget.get("exhausted") is False and budget.get("cutoffObservation") is None and
+                budget.get("cooperativeCancellation") is None):
+            return False
+        for row in rows:
+            if row["phase"] == "job-time":
+                continue
+            if row.get("jobBudgetSha256") != budget["sha256"]:
+                return False
+            if row["phase"] in ("recipient-validation", "audit-init", "custody-prepare", "product") and not (
+                    type(row.get("completedRawNs")) is int and type(budget.get("productiveCutoffRawNs")) is int and
+                    row["completedRawNs"] < budget["productiveCutoffRawNs"]):
+                return False
     if value["encrypted"]:
         labels.append("export")
     custody = value["custody"]
@@ -837,13 +1033,142 @@ def restore_recipient(owner, work, raw, context):
                            work_identity=tuple(value["work_identity"]))
 
 
+def derive_job_budget(owner, private, admitted, end):
+    """Recompute from ORIGINAL API bytes + original native phase/child return."""
+    evidence = owner.child(private, "evidence", end)
+    originals = owner.child(evidence, "job-time", end)
+    commands = owner.child(evidence, "commands", end)
+    phase = owner.child(commands, "job-time", end)
+    runtime = owner.child(private, "runtime", end)
+    start_raw, phase_raw = owner.read(phase, "start.json", end), owner.read(phase, "result.json", end)
+    returned_raw = owner.read(runtime, "job-time-result.json", end)
+    start, row, returned = parse(start_raw), parse(phase_raw), parse(returned_raw)
+    expected = [str(Path(sys.executable).resolve(strict=True)), "-I", "-B", "-S", str(Path(__file__)), "_job-time",
+                "--profile", "full", "--admission-sha256", digest(admitted.record)]
+    require(start["phase"] == row["phase"] == "job-time" and start["argv"] == row["argv"] == expected and
+            start["cwd"] == row["cwd"] == str(ROOT) and start["job"] == row["job"] and
+            start["invocation"] == row["invocation"] and start["state"] == row["state"] == str(private.path) and
+            start["home"] == row["home"] == str(private.path / "control-home") and
+            type(row["exitCode"]) is int and row["exitCode"] == 0 and row["retirement"] == "KNOWN" and
+            row["launchAttempted"] is True and row["scopeAttempted"] is True and row["errors"] == [] and
+            row.get("survivors") == [] and row.get("jobBudgetSha256") is None and
+            row.get("cooperativeCancellation") is None, "JOB_TIME_ORIGINAL_PHASE_CHANGED")
+    ownership = row["ownership"]
+    require(ownership["backend"] == "darwin-libproc-audit-token" and ownership["job"] == row["job"] and
+            ownership["invocation"] == row["invocation"] and ownership["discoveryErrors"] == [] and
+            ownership["launches"] and ownership["startedIdentities"], "JOB_TIME_NATIVE_PHASE_REQUIRED")
+    require(type(returned.get("schema")) is int and returned["schema"] == 1 and
+            returned.get("scope") == "ORDINARY_FULL_JOB_TIME_ACQUISITION" and returned.get("returned") is True and
+            returned.get("retirement") == "KNOWN" and returned.get("errors") == [] and
+            returned.get("admissionSha256") == digest(admitted.record) and returned.get("job") == row["job"] and
+            returned.get("invocation") == row["invocation"] and returned.get("clockDomain") == job_time.RAW_CLOCK_DOMAIN,
+            "JOB_TIME_ORIGINAL_RETURN_CHANGED")
+    raw = {label: owner.read(originals, label + ".json", end, job_time.RECORD_LIMIT) for label in ("attempt", "jobs")}
+    require(returned.get("originalsSha256") == {label: digest(value) for label, value in raw.items()},
+            "JOB_TIME_ORIGINAL_RESPONSES_CHANGED")
+    first, last = job_time.parse(raw["attempt"]), job_time.parse(raw["jobs"])
+    times = [start.get("startedRawNs"), row.get("startedRawNs"), first.get("startedRawNs"), last.get("finishedRawNs"),
+             returned.get("completedRawNs"), row.get("completedRawNs"), row.get("finalizedRawNs")]
+    require(all(type(value) is int and 0 <= value <= job_time.UINT64 for value in times) and
+            times == sorted(times) and times[0] == times[1] and
+            times[-1] <= times[0] + (job_time.ACQUIRE_SECONDS + FINAL_SECONDS) * job_time.NS,
+            "JOB_TIME_NATIVE_INTERVAL_CHANGED")
+    return job_time.derive(admitted, raw, {"controllerJob": row["job"], "invocation": row["invocation"],
+        "phaseStartSha256": digest(start_raw), "phaseResultSha256": digest(phase_raw),
+        "childReturnSha256": digest(returned_raw), "runnerName": returned.get("runnerName")})
+
+
+def load_job_budget(owner, private, admitted, context, end):
+    budget = derive_job_budget(owner, private, admitted, end)
+    evidence = owner.child(private, "evidence", end)
+    original = owner.child(evidence, "job-time", end)
+    runtime = owner.child(private, "runtime", end)
+    returned_raw = owner.read(original, "child-return.json", end)
+    require(returned_raw == owner.read(runtime, "job-time-result.json", end) and
+            digest(returned_raw) == budget.value["provenance"]["childReturnSha256"],
+            "JOB_TIME_RETAINED_RETURN_CHANGED")
+    raw = owner.read(original, "budget.json", end)
+    require(raw == budget.record and digest(raw) == context.get("jobBudgetSha256") and
+            budget.value["provenance"]["controllerJob"] == context["job"], "IMMUTABLE_JOB_TIME_CHANGED")
+    return budget
+
+
+def job_time_phase(profile, admission_hash):
+    """One closed read-only child; the token never enters ordinary/Git children."""
+    token = os.environ.pop(job_time.TOKEN_ENV, None)
+    owner = PrivateOwner()
+    end, began = time.monotonic() + job_time.ACQUIRE_SECONDS, job_time.raw_now()
+    runtime = None
+    error, returned, terminal = None, None, False
+    try:
+        require(profile == "full", "JOB_TIME_FULL_ONLY")
+        inherited = query._inherited_context()
+        require(set(inherited) == set(query._CONTEXT), "JOB_TIME_REQUIRES_EXISTING_NATIVE_OWNER")
+        role = processes.host_role()
+        require(role in ("macos-arm64", "macos-x64"), "JOB_TIME_NATIVE_MAC_REQUIRED")
+        path = session_path(profile, role)
+        private = owner.open(path)
+        runtime = owner.child(private, "runtime", end)
+        evidence = owner.child(private, "evidence", end)
+        original = owner.child(evidence, "admission", end)
+        admitted = load_admission(owner, original, end)
+        require(digest(admitted.record) == admission_hash, "JOB_TIME_ADMISSION_CHANGED")
+        record, _, _, _ = job_time.admitted_identity(admitted)
+        require(record["github"]["runnerArch"] == ("ARM64" if role == "macos-arm64" else "X64"),
+                "JOB_TIME_NATIVE_ARCH_CHANGED")
+        commands = owner.child(evidence, "commands", end)
+        phase = owner.child(commands, "job-time", end)
+        start = parse(owner.read(phase, "start.json", end))
+        domain = processes.ownership_domains(inherited[processes.CHAIN_ENV], inherited[processes.DOMAINS_ENV])[-1]
+        require(start["job"] == domain["job"] and start["invocation"] == domain["id"] and
+                start["state"] == domain["state"] == str(path) and
+                start["home"] == domain["home"] == str(path / "control-home") and start["cwd"] == str(ROOT) and
+                start["phase"] == "job-time", "JOB_TIME_ORIGINAL_NATIVE_DOMAIN_CHANGED")
+        directory = owner.child(evidence, "job-time", end, create=True)
+        raw = job_time.acquire(admitted, domain["id"], token,
+                               lambda label, value: owner.write(directory, label + ".json", value, end))
+        returned = {"schema": 1, "scope": "ORDINARY_FULL_JOB_TIME_ACQUISITION", "admissionSha256": admission_hash,
+                    "job": domain["job"], "invocation": domain["id"], "runnerName": os.environ.get("RUNNER_NAME"),
+                    "clockDomain": job_time.RAW_CLOCK_DOMAIN, "completedRawNs": job_time.raw_now(began),
+                    "originalsSha256": {label: digest(value) for label, value in raw.items()}}
+    except BaseException as caught:
+        error = caught
+        owner.error("job-time-acquisition", caught)
+    finally:
+        token = None
+        try:
+            if runtime is not None:
+                owner.write(runtime, "job-time-result.json", {**(returned or {}), "returned": error is None,
+                    "retirement": "UNKNOWN" if owner.unknown else "KNOWN", "errors": owner.errors}, end)
+                terminal = True
+        except BaseException as caught:
+            error = error or caught
+            owner.error("job-time-terminal", caught)
+        try:
+            owner.close()
+        except BaseException as caught:
+            error = error or caught
+    # A provisional receipt is insufficient: actual child exit and native
+    # retirement must also succeed before the parent derives any budget.
+    posix._deadline(end)
+    require(job_time.raw_now(began) < began + job_time.ACQUIRE_SECONDS * job_time.NS, "JOB_TIME_ACQUISITION_EXPIRED")
+    if error is not None:
+        raise error
+    require(terminal and not owner.unknown and not owner.errors, "JOB_TIME_TERMINAL_INCOMPLETE")
+
+
 def crypto_phase(operation, profile, context_hash):
     """Closed child; its real outer native owner must outlive ALL GPG descendants."""
     owner = PrivateOwner()
-    error, terminal, runtime, exported = None, False, None, None
+    error, terminal, runtime, exported, budget, budget_clock = None, False, None, None, None, None
     end = time.monotonic() + 210
+    def check_crypto():
+        posix._deadline(end)
+        if budget_clock is not None:
+            budget_clock.check("productive" if operation == "validate" else "export")
     try:
         require(operation in ("validate", "export"), "CRYPTO_OPERATION")
+        require(job_time.TOKEN_ENV not in os.environ, "JOB_TIME_TOKEN_IN_CRYPTO")
         inherited = query._inherited_context()
         require(set(inherited) == set(query._CONTEXT), "CRYPTO_REQUIRES_EXISTING_NATIVE_OWNER")
         role = processes.host_role()
@@ -867,9 +1192,13 @@ def crypto_phase(operation, profile, context_hash):
         original = owner.child(evidence, "admission", end)
         admitted = load_admission(owner, original, end)
         require(digest(admitted.record) == context["admissionSha256"], "CRYPTO_ADMISSION_CHANGED")
+        if profile == "full":
+            budget = load_job_budget(owner, private, admitted, context, end)
+            budget_clock = job_time.BudgetClock(budget)
+            end = min(end, budget_clock.deadline("productive" if operation == "validate" else "export", 210))
         work = owner.child(private, "crypto", end)
         checked = admission(owner, profile, runtime.path / (operation + "-admission"),
-                            lambda: posix._deadline(end), expected=admitted)
+                            check_crypto, expected=admitted)
         if operation == "validate":
             if os.name == "nt":
                 recipient = windows.validate_recipient(checked.public_key, checked.fingerprint, work, job_id=context["job"])
@@ -884,7 +1213,7 @@ def crypto_phase(operation, profile, context_hash):
             supplier, original_error = None, None
             try:
                 supplier = query.NativeGitQueries(ROOT, runtime.path / "export-manifest-admission",
-                                                  check_cancel=lambda: posix._deadline(end))
+                                                  check_cancel=check_crypto)
                 supplier.native_host_matches_actions()
                 if os.name == "nt":
                     output = owner.new(path / "export")
@@ -913,7 +1242,7 @@ def crypto_phase(operation, profile, context_hash):
             if original_error is not None:
                 raise original_error
         require(not owner.unknown and not query.QUARANTINE and not windows._QUARANTINE, "CRYPTO_RETIREMENT_UNKNOWN")
-        posix._deadline(end)
+        check_crypto()
     except BaseException as caught:
         error = caught
         owner.error("crypto-" + operation, caught)
@@ -923,6 +1252,7 @@ def crypto_phase(operation, profile, context_hash):
                 owner.write(runtime, operation + "-result.json", {"schema": 1, "operation": operation,
                     "profile": profile, "contextSha256": context_hash, "returned": error is None,
                     "retirement": "UNKNOWN" if owner.unknown else "KNOWN", "errors": owner.errors,
+                    **({"jobBudgetSha256": budget.sha256} if budget is not None else {}),
                     **(exported or {})}, end)
                 terminal = True
         except BaseException as caught:
@@ -933,7 +1263,7 @@ def crypto_phase(operation, profile, context_hash):
         except BaseException as caught:
             error = error or caught
     try:
-        posix._deadline(end)
+        check_crypto()
     except BaseException as caught:
         owner.error("crypto-final-deadline", caught)
         error = error or caught
@@ -958,9 +1288,11 @@ def run(profile):
     except BaseException as error:
         original = error
         if controller is not None:
+            controller.actions_token = None
             controller.error("run", error)
     finally:
         if controller is not None:
+            controller.actions_token = None
             for name in ("collect", "export"):
                 try:
                     getattr(controller, name)()
@@ -968,6 +1300,9 @@ def run(profile):
                     controller.error(name, error)
                     original = original or error
             try:
+                if profile == "full":
+                    controller.check(finalizing=True)
+                    controller.terminal_raw = controller.now_raw()
                 result = controller.result()
                 if controller.private is not None:
                     controller.write(controller.private, "controller-result.json", result,
@@ -994,6 +1329,11 @@ def run(profile):
     ready = (terminal and result is not None and result["readyForPostReturnSeal"] and controller is not None and
              not controller.unknown and time.monotonic() < controller.deadline and not QUARANTINE and
              not windows._QUARANTINE and not query.QUARANTINE and result == controller.result())
+    if ready and profile == "full":
+        try:
+            controller.check(finalizing=True)
+        except BaseException:
+            ready = False
     print("ORDINARY_TEST_CUSTODY=" + ("RETURNED_FOR_SEAL" if ready else "HOLD"))
     return 0 if ready else 125
 
@@ -1030,21 +1370,38 @@ def verify_export_binding(owner, output, original, end):
     return raw
 
 
-def verify_phase_bindings(owner, private, result, context, end):
+def verify_phase_bindings(owner, private, result, context, end, budget=None):
     """Retain/recheck original phase bytes, exact selectors and native domains."""
     evidence = owner.child(private, "evidence", end)
     commands = owner.child(evidence, "commands", end)
-    require(type(result["phases"]) is list and len(result["phases"]) <= 7 and
+    request = None
+    require(type(result["phases"]) is list and len(result["phases"]) <= (8 if budget is not None else 7) and
             len({row["phase"] for row in result["phases"]}) == len(result["phases"]), "PHASE_SET_CHANGED")
     require(set(result["phaseSha256"]) == {row["phase"] for row in result["phases"]}, "PHASE_BINDING_SET")
     for row in result["phases"]:
         label = row["phase"]
-        require(label in {"recipient-validation", "audit-init", "custody-prepare", "product", "custody-collect",
-                          "custody-uninstall", "export"}, "PHASE_LABEL")
+        require(label in ({"recipient-validation", "audit-init", "custody-prepare", "product", "custody-collect",
+                           "custody-uninstall", "export"} | ({"job-time"} if budget is not None else set())), "PHASE_LABEL")
         directory = owner.child(commands, label, end)
         raw = owner.read(directory, "result.json", end)
         require(digest(raw) == result["phaseSha256"][label] and parse(raw) == row and row["cwd"] == str(ROOT),
                 "ORIGINAL_PHASE_CHANGED")
+        if budget is not None:
+            start = parse(owner.read(directory, "start.json", end))
+            require(all(start[key] == row[key] for key in ("phase", "argv", "cwd", "job", "invocation", "state", "home",
+                                                         "jobBudgetSha256", "startedRawNs")), "PHASE_RAW_START_CHANGED")
+            require(type(row.get("startedRawNs")) is int and type(row.get("finalizedRawNs")) is int and
+                    0 <= row["startedRawNs"] <= row["finalizedRawNs"] <= job_time.UINT64,
+                    "PHASE_RAW_INTERVAL_CHANGED")
+            if row.get("completedRawNs") is not None:
+                require(type(row["completedRawNs"]) is int and
+                        row["startedRawNs"] <= row["completedRawNs"] <= row["finalizedRawNs"], "PHASE_RAW_INTERVAL_CHANGED")
+            if label != "job-time":
+                finish = {"recipient-validation": "preparation-final", "audit-init": "preparation-final",
+                          "custody-prepare": "preparation-final", "product": "product-final",
+                          "custody-collect": "collect-final", "custody-uninstall": "uninstall-final", "export": "export-final"}
+                require(row["jobBudgetSha256"] == budget.sha256 and
+                        row["finalizedRawNs"] < budget.fence(finish[label]), "PHASE_JOB_TIME_CHANGED")
         if row["retirement"] == "KNOWN" and row["launchAttempted"]:
             ownership = row["ownership"]
             expected_backend = {"linux-x64": "linux-proc-pidfd", "windows-x64": "windows-job-list-suspended",
@@ -1093,14 +1450,55 @@ def verify_phase_bindings(owner, private, result, context, end):
             removed = parse(owner.read(custody, "uninstalled.json", end))
             require(removed["absent"] is True and removed["originalsDeleted"] is False and
                     removed["requestSha256"] == original["requestSha256"], "ORIGINAL_UNINSTALL_CHANGED")
+    if budget is not None:
+        timing = result.get("jobBudget", {})
+        require(timing.get("sha256") == budget.sha256 and
+                timing.get("productiveCutoffRawNs") == budget.fence("productive") and
+                timing.get("controllerReturnRawNs") == budget.fence("controller-return") and
+                type(timing.get("terminalRawNs")) is int and
+                budget.value["responseFinishedRawNs"] <= timing["terminalRawNs"] < budget.fence("controller-return") and
+                type(timing.get("exhausted")) is bool, "SEALED_JOB_BUDGET_CHANGED")
+        cutoff = timing.get("cutoffObservation")
+        if timing["exhausted"]:
+            require(type(cutoff) is dict and set(cutoff) == {"phase", "observedRawNs"} and
+                    cutoff["phase"] in {"admission", "recipient-validation", "audit-init", "custody-prepare", "product"} and
+                    type(cutoff["observedRawNs"]) is int and
+                    budget.fence("productive") <= cutoff["observedRawNs"] <= timing["terminalRawNs"],
+                    "SEALED_JOB_CUTOFF_CHANGED")
+        else:
+            require(cutoff is None, "SEALED_JOB_CUTOFF_CHANGED")
+        cancellation = timing.get("cooperativeCancellation")
+        product = next((row for row in result["phases"] if row["phase"] == "product"), None)
+        if cancellation is not None:
+            require(product is not None and product.get("cooperativeCancellation") == cancellation and
+                    cancellation.get("reason") in ("job-budget", "signal") and type(cancellation.get("requested")) is bool,
+                    "SEALED_CANCELLATION_CHANGED")
+            if cancellation["reason"] == "job-budget":
+                require(timing["exhausted"] and type(cancellation.get("attemptedRawNs")) is int and
+                        cancellation["attemptedRawNs"] >= budget.fence("productive"), "SEALED_CANCELLATION_CHANGED")
+            if cancellation["requested"]:
+                require(type(request) is dict, "SEALED_CANCELLATION_WITHOUT_CUSTODY")
+                original = owner.child(evidence, "job-time", end)
+                raw = owner.read(original, "product-cancellation.json", end)
+                state = owner.child(private, "state", end)
+                requests = owner.child(state, "cancellations", end)
+                require(owner.read(requests, cancellation["invocation"] + ".json", end) == raw and
+                        digest(raw) == cancellation.get("requestSha256"), "SEALED_CANCELLATION_ORIGINAL_CHANGED")
+                value = parse(raw)
+                require(value.get("schema") == 1 and value.get("jobId") == cancellation["job"] and
+                        value.get("id") == cancellation["invocation"] and request["owner"]["job"] == cancellation["job"] and
+                        request["owner"]["productInvocation"] == cancellation["invocation"], "SEALED_CANCELLATION_CHANGED")
+        else:
+            require(product is None or product.get("cooperativeCancellation") is None, "SEALED_CANCELLATION_CHANGED")
 
 
 def validate_public(profile):
     """Separate interpreter only; provisional files cannot grant upload authority."""
     require(os.environ.get("P2PKIT_HOSTED_TEST_RUN_OUTCOME") == "success", "ORIGINAL_CONTROLLER_DID_NOT_SUCCEED")
+    require(job_time.TOKEN_ENV not in os.environ, "JOB_TIME_TOKEN_IN_SEAL")
     owner = PrivateOwner()
     end = time.monotonic() + 120
-    error = None
+    error, budget, budget_clock = None, None, None
     passed = False
     try:
         role = processes.host_role()
@@ -1118,12 +1516,17 @@ def validate_public(profile):
         require(context["profile"] == profile and context["role"] == role and context["root"] == str(ROOT) and
                 context["session"] == str(path) and context["canonicalSources"] == canonical_bindings(),
                 "SEALED_CONTEXT_CHANGED")
-        # A replay cannot overwrite the previous post-return receipt.
-        validation = owner.new(path / "post-return-validation")
         evidence = owner.child(private, "evidence", end)
         original = owner.child(evidence, "admission", end)
         expected = load_admission(owner, original, end)
         require(digest(expected.record) == context["admissionSha256"], "SEALED_ADMISSION_CHANGED")
+        if profile == "full":
+            budget = load_job_budget(owner, private, expected, context, end)
+            budget_clock = job_time.BudgetClock(budget)
+            budget_clock.check("seal-start")
+            end = min(end, budget_clock.deadline("seal", 120))
+        # A replay cannot overwrite the previous post-return receipt.
+        validation = owner.new(path / "post-return-validation")
         checked = admission(owner, profile, path / "seal-admission", lambda: posix._deadline(end), expected=expected)
         output = owner.child(private, "export", end)
         runtime = owner.child(private, "runtime", end)
@@ -1133,6 +1536,8 @@ def validate_public(profile):
         returned = result["exportReturn"]["result"]
         require(returned["operation"] == "export" and returned["profile"] == profile and
                 returned["contextSha256"] == digest(context_raw), "SEALED_EXPORT_CONTEXT_CHANGED")
+        if budget is not None:
+            require(returned.get("jobBudgetSha256") == budget.sha256, "SEALED_EXPORT_JOB_TIME_CHANGED")
         manifest_raw = verify_export_binding(owner, output, result["exportReturn"], end)
         manifest = parse(manifest_raw)
         actual = manifest["artifact"]
@@ -1143,12 +1548,16 @@ def validate_public(profile):
         require(manifest == expected_manifest and result["source"] == context["source"] == record["source"],
                 "SEALED_MANIFEST_DIFFERS")
         require((context["kind"], context["command"]) == profile_command(profile, role), "SEALED_SELECTOR_CHANGED")
-        verify_phase_bindings(owner, private, result, context, end)
+        verify_phase_bindings(owner, private, result, context, end, budget)
         passed = profile_passed(result)
         require(type(result["profilePassed"]) is bool and result["profilePassed"] == passed, "FAILED_PROFILE_RELABELLED")
         owner.write(validation, "seal.json", {"schema": 1, "controllerResultSha256": digest(result_raw),
             "manifestSha256": digest(manifest_raw), "artifact": actual, "profilePassed": passed,
-            "source": record["source"], "retirement": "KNOWN", "decryption": "NOT_PERFORMED"}, end)
+            "source": record["source"], "retirement": "KNOWN", "decryption": "NOT_PERFORMED",
+            **({"jobBudgetSha256": budget.sha256, "clockDomain": job_time.RAW_CLOCK_DOMAIN,
+                "sealedAtRawNs": budget_clock.check("seal"),
+                "upload": {"seconds": job_time.UPLOAD_SECONDS, "latestStartRawNs": budget.fence("upload-start"),
+                           "endRawNs": budget.fence("upload")}} if budget is not None else {})}, end)
         require(owner.read(private, "controller-result.json", end) == result_raw and
                 owner.read(output, posix.MANIFEST, end, 65536) == manifest_raw, "POST_RETURN_INPUT_CHANGED")
     except BaseException as caught:
@@ -1164,6 +1573,8 @@ def validate_public(profile):
         raise error
     require(not owner.unknown, "POST_RETURN_CLOSE_UNKNOWN")
     posix._deadline(end)
+    if budget_clock is not None:
+        budget_clock.check("seal")
     # Mandatory workflow consumers also require THIS step's successful outcome;
     # a partial append/error does not grant upload from a failed seal step.
     target = Path(os.environ["GITHUB_OUTPUT"])
@@ -1176,24 +1587,140 @@ def validate_public(profile):
     # Step success is required even if a provisional output append preceded an
     # overrun/failure during fsync or output close. Never renew the original end.
     posix._deadline(end)
+    if budget_clock is not None:
+        budget_clock.check("seal")
     print("ORDINARY_TEST_CIPHERTEXT_SEAL=PASS; PRIVATE_DECRYPTION=NOT_PERFORMED")
+
+
+def upload_guard(phase):
+    """Closed before/after fence for FUTURE reviewed upload wiring, not upload.
+
+    Wiring must require both guards' real successful outcomes, the exact before
+    receipt hash, a <=3 minute pinned upload step and its successful outcome.
+    This guard cannot schedule/guarantee GitHub step transitions or transfer.
+    A late/failed upload never grants whole-gate acceptance from a prior seal.
+    """
+    require(phase in ("before", "after") and job_time.TOKEN_ENV not in os.environ and
+            os.environ.get("P2PKIT_HOSTED_TEST_RUN_OUTCOME") == "success" and
+            os.environ.get("P2PKIT_HOSTED_TEST_SEAL_OUTCOME") == "success", "UPLOAD_REQUIRES_REAL_SEAL_SUCCESS")
+    if phase == "after":
+        require(os.environ.get("P2PKIT_HOSTED_TEST_UPLOAD_OUTCOME") == "success", "UPLOAD_ORIGINAL_ACTION_FAILED")
+    owner = PrivateOwner()
+    error, clock, outputs, upload_end = None, None, None, None
+    end = time.monotonic() + job_time.TRANSITION_SECONDS
+    stage = "upload-start" if phase == "before" else "upload"
+    try:
+        private = owner.open(session_path("full", processes.host_role()))
+        context_raw = owner.read(private, "run-context.json", end)
+        result_raw = owner.read(private, "controller-result.json", end)
+        context, result = parse(context_raw), parse(result_raw)
+        require(context["profile"] == result["profile"] == "full" and context["root"] == str(ROOT) and
+                context["session"] == str(private.path) and context["canonicalSources"] == canonical_bindings() and
+                result["contextSha256"] == digest(context_raw) and result["retirement"] == "KNOWN" and
+                result["readyForPostReturnSeal"] is True, "UPLOAD_ORIGINAL_CONTEXT_CHANGED")
+        evidence = owner.child(private, "evidence", end)
+        original = owner.child(evidence, "admission", end)
+        admitted = load_admission(owner, original, end)
+        require(digest(admitted.record) == context["admissionSha256"], "UPLOAD_ORIGINAL_ADMISSION_CHANGED")
+        budget = load_job_budget(owner, private, admitted, context, end)
+        clock = job_time.BudgetClock(budget)
+        began = clock.check(stage)
+        end = min(end, clock.deadline(stage, job_time.TRANSITION_SECONDS))
+        seal_directory = owner.child(private, "post-return-validation", end)
+        seal_raw = owner.read(seal_directory, "seal.json", end)
+        seal = parse(seal_raw)
+        require(seal.get("jobBudgetSha256") == budget.sha256 and seal.get("clockDomain") == job_time.RAW_CLOCK_DOMAIN and
+                seal.get("controllerResultSha256") == digest(result_raw) and seal.get("source") == context["source"] and
+                seal.get("profilePassed") == result["profilePassed"] == profile_passed(result) and
+                seal.get("retirement") == "KNOWN" and type(seal.get("sealedAtRawNs")) is int and
+                budget.value["responseFinishedRawNs"] <= seal["sealedAtRawNs"] < budget.fence("seal") and
+                seal["sealedAtRawNs"] <= began and seal.get("upload") == {
+                    "seconds": job_time.UPLOAD_SECONDS, "latestStartRawNs": budget.fence("upload-start"),
+                    "endRawNs": budget.fence("upload")}, "UPLOAD_ORIGINAL_SEAL_CHANGED")
+        checked = admission(owner, "full", private.path / ("upload-" + phase + "-admission"),
+                            lambda: (posix._deadline(end), clock.check(stage)), expected=admitted)
+        require(parse(checked.record)["source"] == seal["source"], "UPLOAD_SOURCE_CHANGED")
+        output = owner.child(private, "export", end)
+        manifest_raw = owner.read(output, posix.MANIFEST, end, 65536)
+        require(digest(manifest_raw) == seal["manifestSha256"] and parse(manifest_raw)["artifact"] == seal["artifact"] and
+                artifact_metadata(owner, output, end) == seal["artifact"],
+                "UPLOAD_SEALED_MANIFEST_CHANGED")
+        binding = {"schema": 1, "scope": "CLOSED_FULL_UPLOAD_SCHEDULING_CAP", "contextSha256": digest(context_raw),
+                   "controllerResultSha256": digest(result_raw), "sealSha256": digest(seal_raw),
+                   "jobBudgetSha256": budget.sha256, "manifestSha256": digest(manifest_raw),
+                   "source": seal["source"], "clockDomain": job_time.RAW_CLOCK_DOMAIN,
+                   "maximumSeconds": job_time.UPLOAD_SECONDS, "timeoutMinutes": 3}
+        if phase == "before":
+            upload_end = min(budget.fence("upload"), began + job_time.UPLOAD_SECONDS * job_time.NS)
+            raw = encoded({**binding, "beganRawNs": began, "endRawNs": upload_end})
+            owner.write(private, "upload-before.json", raw, end)
+            outputs = "upload_ready=true\nupload_timeout_minutes=3\nupload_guard_sha256=" + digest(raw) + "\n"
+        else:
+            raw = owner.read(private, "upload-before.json", end)
+            before = parse(raw)
+            require(os.environ.get("P2PKIT_HOSTED_TEST_UPLOAD_GUARD_SHA256") == digest(raw) and
+                    set(before) == set(binding) | {"beganRawNs", "endRawNs"} and
+                    all(before.get(key) == value for key, value in binding.items()) and
+                    type(before["beganRawNs"]) is int and type(before["endRawNs"]) is int and
+                    seal["sealedAtRawNs"] <= before["beganRawNs"] < budget.fence("upload-start") and
+                    before["endRawNs"] == min(budget.fence("upload"),
+                                              before["beganRawNs"] + job_time.UPLOAD_SECONDS * job_time.NS) and
+                    before["beganRawNs"] <= began < before["endRawNs"], "UPLOAD_ORIGINAL_FENCE_CHANGED_OR_EXPIRED")
+            upload_end = before["endRawNs"]
+            owner.write(private, "upload-after.json", {**binding, "beforeSha256": digest(raw), "observedRawNs": began,
+                                                       "stepOutcome": "success"}, end)
+            outputs = "upload_complete=true\n"
+    except BaseException as caught:
+        error = caught
+        owner.error("upload-" + phase, caught)
+    finally:
+        try:
+            owner.close()
+        except BaseException as caught:
+            error = error or caught
+    if error is not None:
+        raise error
+    require(not owner.unknown and outputs is not None, "UPLOAD_GUARD_RETIREMENT_UNKNOWN")
+    posix._deadline(end)
+    require(clock.check(stage) < upload_end, "UPLOAD_GUARD_EXPIRED")
+    target = Path(os.environ["GITHUB_OUTPUT"])
+    audit.reject_symlinks(target)
+    with target.open("a", encoding="ascii") as stream:
+        posix._deadline(end)
+        require(clock.check(stage) < upload_end, "UPLOAD_GUARD_EXPIRED")
+        stream.write(outputs)
+        stream.flush()
+        os.fsync(stream.fileno())
+    posix._deadline(end)
+    require(clock.check(stage) < upload_end, "UPLOAD_GUARD_EXPIRED")
+    print("ORDINARY_FULL_UPLOAD_GUARD=" + phase.upper() + "; NO_UPLOAD_PERFORMED")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="operation", required=True)
-    for name in ("run", "validate-public", "_crypto"):
+    for name in ("run", "validate-public", "_crypto", "_job-time", "upload-guard"):
         entry = sub.add_parser(name)
-        entry.add_argument("--profile", choices=PRODUCT_SECONDS, required=True)
+        entry.add_argument("--profile", choices=("full",) if name in ("_job-time", "upload-guard") else PRODUCT_SECONDS,
+                           required=True)
         if name == "_crypto":
             entry.add_argument("phase", choices=("validate", "export"))
             entry.add_argument("--context-sha256", required=True)
+        elif name == "_job-time":
+            entry.add_argument("--admission-sha256", required=True)
+        elif name == "upload-guard":
+            entry.add_argument("phase", choices=("before", "after"))
     args = parser.parse_args()
     try:
         if args.operation == "run":
             return run(args.profile)
         if args.operation == "validate-public":
             validate_public(args.profile)
+        elif args.operation == "_job-time":
+            require(re.fullmatch(r"[0-9a-f]{64}", args.admission_sha256), "JOB_TIME_ADMISSION_HASH")
+            job_time_phase(args.profile, args.admission_sha256)
+        elif args.operation == "upload-guard":
+            upload_guard(args.phase)
         else:
             require(re.fullmatch(r"[0-9a-f]{64}", args.context_sha256), "CRYPTO_CONTEXT_HASH")
             crypto_phase(args.phase, args.profile, args.context_sha256)
