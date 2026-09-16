@@ -114,8 +114,8 @@ the 18th offer. Source quotas still apply first.
 This is **observable admission tightening, reserved for 0.8.0+**: JVM/Android
 previously inherited the coroutine default (normally 64). It is not an unchanged
 0.7 behavior promise or a new timeout, session limit, or whole-process fd bound.
-See [JVM accept](../../library/p2p-transport-lan/src/jvmMain/kotlin/dev/p2pkit/transport/lan/JvmLanDataTransport.kt#L357-L372)
-and [Android accept](../../library/p2p-transport-lan/src/androidMain/kotlin/dev/p2pkit/transport/lan/AndroidLanDataTransport.kt#L396-L411).
+See [JVM accept](../../library/p2p-transport-lan/src/jvmMain/kotlin/dev/p2pkit/transport/lan/JvmLanDataTransport.kt#L360-L375)
+and [Android accept](../../library/p2p-transport-lan/src/androidMain/kotlin/dev/p2pkit/transport/lan/AndroidLanDataTransport.kt#L399-L414).
 
 Subscribe to session `incoming` promptly and keep collectors fast. It has zero
 replay: with no subscriber, emitted messages are not saved for later. A slow
