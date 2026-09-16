@@ -205,6 +205,19 @@ class IdentityModels(Models):
         with self.assertRaisesRegex(H.HelperError, "GPG_NOT_NATIVE_AMD64_OR_SAFE_FILE"):
             H.admitted_tools()
 
+    def test_tool_observations_distinguish_each_actual_admission_without_extra_calls(self):
+        self.set(H.sys, "executable", new="C:\\native\\python.exe")
+        for index, expected in enumerate((H.Stage.PYTHON_TOOL, H.Stage.GIT_TOOL, H.Stage.GPG_TOOL)):
+            with self.subTest(tool=expected), ExitStack() as local:
+                local.enter_context(patch.object(H.shutil, "which", side_effect=["C:\\git.exe", "C:\\gpg.exe"]))
+                checked = local.enter_context(patch.object(H.encrypted, "_executable",
+                    side_effect=[*("hash" for _ in range(index)), OSError("MODEL private executable path")]))
+                progress = H.Progress()
+                with self.assertRaises((OSError, H.HelperError)):
+                    H.admitted_tools(observe=progress.mark)
+                self.assertEqual(progress.stage, expected)
+                self.assertEqual(checked.call_count, index + 1)
+
     def test_duplicate_nonfinite_and_oversized_private_records_refuse(self):
         for raw in (b'{"x":1,"x":2}', b'{"x":NaN}', b'[]', b'x' * (H.MAX_RECORD + 1)):
             with self.assertRaises((H.HelperError, ValueError)):
@@ -930,6 +943,122 @@ class SourceBindingModels(Models):
         H.source_snapshot(self.commands, Path("MODEL-git"), finalizing=True)
         self.assertTrue(all(options == {"timeout": 60, "finalizing": True} for _, options in self.queries))
 
+    def test_source_observations_are_fixed_and_preserve_query_order_flags_and_bounds(self):
+        stages = []
+        H.source_snapshot(self.commands, Path("MODEL-git"), observe=stages.append)
+        self.assertEqual(stages, [H.Stage.SOURCE_TOPLEVEL, H.Stage.SOURCE_HEAD, H.Stage.SOURCE_TREE,
+            H.Stage.SOURCE_SHALLOW, H.Stage.SOURCE_STATUS, H.Stage.SOURCE_ORIGIN,
+            H.Stage.SOURCE_ENTRIES, H.Stage.SOURCE_BYTES])
+        self.assertEqual(len(self.queries), 7)
+        self.assertTrue(all(options == {"timeout": 60, "finalizing": False} for _, options in self.queries))
+
+    def test_failed_source_query_keeps_its_exact_stage_without_runtime_values(self):
+        self.responses[("rev-parse", "--is-shallow-repository")] = b"true\n"
+        progress = H.Progress()
+        with self.assertRaisesRegex(H.HelperError, "FULL_HISTORY_REQUIRED"):
+            H.source_snapshot(self.commands, Path("MODEL-git"), observe=progress.mark)
+        self.assertEqual(progress.stage, H.Stage.SOURCE_SHALLOW)
+        self.assertEqual(len(self.queries), 4)
+
+
+class PublicFailureModels(Models):
+    def display(self, stage, error):
+        output = io.StringIO()
+        with patch.object(H.sys, "stderr", output):
+            value = H.public_observation(stage, H.error_detail(error))
+            H.print_public_failure(value)
+        self.assertEqual(set(value), set(H._PUBLIC_FIELDS))
+        for name, domain in H._PUBLIC_FIELDS.items():
+            self.assertIn(value[name], {member.value for member in domain})
+        return value, output.getvalue()
+
+    def test_code_shaped_untyped_and_helper_errors_never_become_public_codes(self):
+        for error in (OSError("MODEL_PRIVATE_SENTINEL"), H.HelperError("MODEL_PRIVATE_SENTINEL")):
+            with self.subTest(kind=type(error).__name__):
+                value, text = self.display(H.Stage.PYTHON_TOOL, error)
+                self.assertNotIn("MODEL_PRIVATE_SENTINEL", text)
+                self.assertEqual(value["stage"], "PYTHON_TOOL")
+
+    def test_forged_code_accessor_and_hostile_exception_diagnostics_cannot_escape(self):
+        class Hostile(H.HelperError):
+            def __init__(self):
+                RuntimeError.__init__(self, "MODEL_PRIVATE_SENTINEL")
+            @property
+            def code(self):
+                raise AssertionError("MODEL PRIVATE ACCESSOR SHOULD NOT RUN")
+            def __str__(self):
+                raise RuntimeError("MODEL PRIVATE STR")
+            @property
+            def private_record(self):
+                raise RuntimeError("MODEL PRIVATE RECORD")
+        value, text = self.display(H.Stage.RECIPIENT, Hostile())
+        self.assertEqual(value["retirementObservation"], "UNKNOWN")
+        self.assertNotIn("MODEL", text)
+
+    def test_every_public_field_requires_exact_finite_membership(self):
+        value = H.public_observation(H.Stage.SOURCE_HEAD, {})
+        for name in H._PUBLIC_FIELDS:
+            with self.subTest(field=name):
+                output = io.StringIO()
+                with patch.object(H.sys, "stderr", output):
+                    H.print_public_failure({**value, name: "MODEL_PRIVATE_SENTINEL"})
+                self.assertNotIn("MODEL_PRIVATE_SENTINEL", output.getvalue())
+                self.assertIn("stage=UNOBSERVED", output.getvalue())
+
+    def test_native_error_projection_is_typed_and_finite_not_raw_message_or_number(self):
+        for error, operation, status in (
+            (H.files.FilesystemError("Windows NtCreateFile failed (error 5)"), "FILE_CREATE", "ACCESS_DENIED"),
+            (H.processes.OwnershipError("Windows CreateProcessW (atomic job assignment) failed: error 87"),
+             "PROCESS_CREATE", "INVALID_PARAMETER"),
+            (H.files.FilesystemError("Windows ReadFile failed (error 1234567890)"), "FILE_READ", "OTHER_NATIVE_ERROR"),
+            (OSError("Windows NtCreateFile failed (error 5)"), "UNOBSERVED", "UNOBSERVED"),
+            (H.files.FilesystemError("Windows MODEL_PRIVATE_SENTINEL failed (error 5)"), "UNOBSERVED", "UNOBSERVED")):
+            with self.subTest(operation=operation, status=status):
+                value, text = self.display(H.Stage.SOURCE_HEAD, error)
+                self.assertEqual((value["nativeOperation"], value["nativeStatus"]), (operation, status))
+                self.assertNotIn("1234567890", text)
+                self.assertNotIn("MODEL_PRIVATE_SENTINEL", text)
+
+    def test_recipient_records_expose_only_last_fixed_command_and_exit_category(self):
+        common = ["--with-colons", "--with-fingerprint", "--with-subkey-fingerprint"]
+        for arguments, step in ((["--version"], "VERSION"),
+             (common + ["--import-options", "show-only", "--import", "MODEL_PRIVATE_KEY_PATH"], "SHOW_ONLY"),
+             (common + ["--list-keys"], "LIST_KEYS"), (["MODEL_PRIVATE_SENTINEL"], "UNRECOGNIZED_COMMAND")):
+            for code, outcome in ((None, "NO_EXIT_CODE"), (0, "ZERO"), (2, "NONZERO"), (True, "NO_EXIT_CODE")):
+                with self.subTest(step=step, outcome=outcome):
+                    record = {"operation": "recipient-validation", "retirement": "KNOWN",
+                              "commands": [{"argv": ["MODEL_PRIVATE_GPG_PATH", *arguments], "waitExitCode": code}]}
+                    error = H.encrypted.WindowsEvidenceError(OSError("MODEL PRIVATE"), H.encoded(record), False)
+                    value, text = self.display(H.Stage.RECIPIENT, error)
+                    self.assertEqual((value["lastGpgCommand"], value["lastGpgExit"]), (step, outcome))
+                    self.assertNotIn("MODEL", text)
+
+    def test_recipient_native_details_and_earlier_stage_do_not_invent_gpg_execution(self):
+        record = {"operation": "recipient-validation", "retirement": "KNOWN", "commands": [],
+                  "failures": [{"detail": H.error_detail(H.files.FilesystemError(
+                      "Windows GetFileInformationByHandleEx failed (error 50)"))}]}
+        error = H.encrypted.WindowsEvidenceError(OSError("MODEL PRIVATE"), H.encoded(record), False)
+        value, _ = self.display(H.Stage.RECIPIENT, error)
+        self.assertEqual(value["nativeOperation"], "FILE_INFORMATION")
+        self.assertEqual(value["lastGpgCommand"], "UNOBSERVED")
+        record["commands"] = [{"argv": ["MODEL_PRIVATE_GPG", "--version"], "waitExitCode": 0}]
+        error = H.encrypted.WindowsEvidenceError(OSError("MODEL PRIVATE"), H.encoded(record), False)
+        value, _ = self.display(H.Stage.SOURCE_HEAD, error)
+        self.assertEqual(value["lastGpgCommand"], "UNOBSERVED")
+
+    def test_main_does_not_read_arbitrary_helper_code_accessor(self):
+        class Hostile(H.HelperError):
+            def __init__(self):
+                RuntimeError.__init__(self, "MODEL_PRIVATE_SENTINEL")
+            @property
+            def code(self):
+                raise AssertionError("MODEL PRIVATE ACCESSOR SHOULD NOT RUN")
+        output = io.StringIO()
+        self.set(H.sys, "argv", new=["helper", "run"])
+        self.set(H.sys, "stderr", new=output)
+        self.set(H, "run", side_effect=Hostile())
+        self.assertEqual(H.main(), 1)
+        self.assertNotIn("MODEL", output.getvalue())
 
 class RunFailureModels(Models):
     def setUp(self):
@@ -983,7 +1112,10 @@ class RunFailureModels(Models):
         self.assertEqual(self.memory.data["/run-model/evidence/original-executor/stdout.bin"], b"MODEL ORIGINAL SUITE OUTPUT")
         self.assertEqual(self.export.call_count, 1)
         self.assertIn("PRIVATE_DECRYPTION=NOT_RUN", self.stdout.getvalue())
-        self.assertEqual(self.source_call.call_args_list[-1].kwargs, {"finalizing": True})
+        options = self.source_call.call_args_list[-1].kwargs
+        self.assertEqual(set(options), {"finalizing", "observe"})
+        self.assertIs(options["finalizing"], True)
+        self.assertTrue(callable(options["observe"]))
 
     def test_final_source_failure_prevents_export_and_still_retires_main_and_suite(self):
         self.source_call.side_effect = [self.source, {"changed": True}]
@@ -1021,6 +1153,41 @@ class RunFailureModels(Models):
         self.assertEqual(self.invocations, [])
         self.export.assert_not_called()
         self.assertTrue(any(call.args[-1] == "MODEL_ORIGINAL_HANDLER" for call in self.handlers.call_args_list))
+
+    def test_first_stage_survives_export_guard_and_privately_retains_original_error(self):
+        self.memory.errors["create:/run-model/started.json"] = OSError("MODEL_PRIVATE_SENTINEL")
+        self.assertEqual(H.run(), 1)
+        self.assertIn("stage=START_RECORD", self.stderr.getvalue())
+        self.assertNotIn("MODEL_PRIVATE_SENTINEL", self.stderr.getvalue())
+        self.assertNotIn("RECIPIENT_ADMISSION_INCOMPLETE", self.stderr.getvalue())
+        private = H.decode(self.memory.data["/run-model/not-accepted.json"])
+        self.assertEqual(private["failures"][0]["detail"]["nodes"][0]["message"], "MODEL_PRIVATE_SENTINEL")
+        self.assertEqual(self.invocations, [])
+        self.export.assert_not_called()
+
+    def test_later_unknown_finalization_cannot_erase_the_first_stage_or_original(self):
+        self.memory.errors["create:/run-model/started.json"] = OSError("MODEL_PRIVATE_SENTINEL")
+        self.memory.errors["close:/export-model"] = OSError("MODEL later close")
+        self.assertEqual(H.run(), 1)
+        self.assertIn("stage=START_RECORD", self.stderr.getvalue())
+        self.assertIn("retirementObservation=UNKNOWN", self.stderr.getvalue())
+        self.assertNotIn("MODEL", self.stderr.getvalue())
+        self.assertTrue(H._HELD)
+
+    def test_recipient_failure_reports_only_existing_last_command_and_original_stage(self):
+        record = {"operation": "recipient-validation", "retirement": "KNOWN", "commands": [
+            {"argv": ["MODEL_PRIVATE_GPG_PATH", "--version"], "waitExitCode": 2}]}
+        error = H.encrypted.WindowsEvidenceError(OSError("MODEL_PRIVATE_SENTINEL"), H.encoded(record), False)
+        self.set(H.encrypted, "validate_recipient", side_effect=error)
+        self.assertEqual(H.run(), 1)
+        self.assertIn("stage=RECIPIENT", self.stderr.getvalue())
+        self.assertIn("lastGpgCommand=VERSION", self.stderr.getvalue())
+        self.assertIn("lastGpgExit=NONZERO", self.stderr.getvalue())
+        self.assertNotIn("MODEL", self.stderr.getvalue())
+        private = H.decode(self.memory.data["/run-model/not-accepted.json"])
+        self.assertEqual(private["failures"][0]["detail"]["windowsEvidence"][0], record)
+        self.assertEqual(self.invocations, [])
+        self.export.assert_not_called()
 
 
 if __name__ == "__main__":

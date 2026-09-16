@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import ast
 from datetime import datetime, timezone
+from enum import Enum
 import hashlib
 import importlib.util
 import json
@@ -60,6 +61,224 @@ NATIVE_CASES = ("native-sinks", "native-output-bound", "native-launch-close", "n
                 "native-controller-command", "native-controller-retirement", "native-export",
                 "native-export-wrong-recipient", "native-export-input-quarantine")
 _HELD = []  # Deliberate strong references after UNKNOWN; never a recovery API.
+
+
+class Stage(str, Enum):
+    UNOBSERVED = "UNOBSERVED"
+    IDENTITY = "IDENTITY"
+    PATHS = "PATHS"
+    BASE_ROOT = "BASE_ROOT"
+    STATE_ROOT = "STATE_ROOT"
+    EVIDENCE_ROOT = "EVIDENCE_ROOT"
+    WORK_ROOT = "WORK_ROOT"
+    OUTPUT_ROOT = "OUTPUT_ROOT"
+    START_RECORD = "START_RECORD"
+    COMMAND_SETUP = "COMMAND_SETUP"
+    SIGNAL_SETUP = "SIGNAL_SETUP"
+    PYTHON_TOOL = "PYTHON_TOOL"
+    GIT_TOOL = "GIT_TOOL"
+    GPG_TOOL = "GPG_TOOL"
+    SOURCE_TOPLEVEL = "SOURCE_TOPLEVEL"
+    SOURCE_HEAD = "SOURCE_HEAD"
+    SOURCE_TREE = "SOURCE_TREE"
+    SOURCE_SHALLOW = "SOURCE_SHALLOW"
+    SOURCE_STATUS = "SOURCE_STATUS"
+    SOURCE_ORIGIN = "SOURCE_ORIGIN"
+    SOURCE_ENTRIES = "SOURCE_ENTRIES"
+    SOURCE_BYTES = "SOURCE_BYTES"
+    SOURCE_BINDING = "SOURCE_BINDING"
+    RECIPIENT = "RECIPIENT"
+    CONTROLS = "CONTROLS"
+    COMMAND_FINALIZATION = "COMMAND_FINALIZATION"
+    SIGNAL_RESTORE = "SIGNAL_RESTORE"
+    EXPORT = "EXPORT"
+    ROOT_FINALIZATION = "ROOT_FINALIZATION"
+    POST_RETURN_SEAL = "POST_RETURN_SEAL"
+
+
+class FailureReason(str, Enum):
+    HELPER_GUARD = "HELPER_GUARD_REFUSED"
+    FILESYSTEM = "NATIVE_FILESYSTEM_REFUSED"
+    PROCESS = "NATIVE_PROCESS_REFUSED"
+    EVIDENCE = "EVIDENCE_REFUSED"
+    OTHER = "UNCLASSIFIED_FAILURE"
+
+
+class NativeOperation(str, Enum):
+    UNOBSERVED = "UNOBSERVED"
+    FILE_CREATE = "FILE_CREATE"
+    FILE_INFORMATION = "FILE_INFORMATION"
+    FILE_SECURITY = "FILE_SECURITY"
+    FILE_READ = "FILE_READ"
+    FILE_WRITE = "FILE_WRITE"
+    FILE_FLUSH = "FILE_FLUSH"
+    HANDLE_INFORMATION = "HANDLE_INFORMATION"
+    HANDLE_DUPLICATE = "HANDLE_DUPLICATE"
+    HANDLE_CLOSE = "HANDLE_CLOSE"
+    JOB_CREATE = "JOB_CREATE"
+    JOB_CONFIGURE = "JOB_CONFIGURE"
+    JOB_QUERY = "JOB_QUERY"
+    JOB_ASSIGN = "JOB_ASSIGN"
+    JOB_TERMINATE = "JOB_TERMINATE"
+    PROCESS_CREATE = "PROCESS_CREATE"
+    PROCESS_IDENTITY = "PROCESS_IDENTITY"
+    PROCESS_EXIT = "PROCESS_EXIT"
+    STARTUP_ATTRIBUTES = "STARTUP_ATTRIBUTES"
+
+
+class NativeStatus(str, Enum):
+    UNOBSERVED = "UNOBSERVED"
+    ACCESS_DENIED = "ACCESS_DENIED"
+    SHARING_VIOLATION = "SHARING_VIOLATION"
+    PATH_ABSENT = "PATH_ABSENT"
+    ALREADY_EXISTS = "ALREADY_EXISTS"
+    UNSUPPORTED = "UNSUPPORTED"
+    INVALID_PARAMETER = "INVALID_PARAMETER"
+    OTHER = "OTHER_NATIVE_ERROR"
+
+
+class GpgCommand(str, Enum):
+    UNOBSERVED = "UNOBSERVED"
+    VERSION = "VERSION"
+    SHOW_ONLY = "SHOW_ONLY"
+    LIST_KEYS = "LIST_KEYS"
+    OTHER = "UNRECOGNIZED_COMMAND"
+
+
+class GpgExit(str, Enum):
+    UNOBSERVED = "UNOBSERVED"
+    NO_EXIT_CODE = "NO_EXIT_CODE"
+    ZERO = "ZERO"
+    NONZERO = "NONZERO"
+
+
+class RetirementObservation(str, Enum):
+    NO_UNKNOWN_REPORTED = "NO_UNKNOWN_REPORTED"
+    UNKNOWN = "UNKNOWN"
+
+
+_NATIVE_OPERATIONS = {
+    "NtCreateFile": NativeOperation.FILE_CREATE,
+    "GetFileInformationByHandleEx": NativeOperation.FILE_INFORMATION,
+    "GetSecurityInfo": NativeOperation.FILE_SECURITY,
+    "ReadFile": NativeOperation.FILE_READ, "WriteFile": NativeOperation.FILE_WRITE,
+    "FlushFileBuffers": NativeOperation.FILE_FLUSH,
+    "GetHandleInformation": NativeOperation.HANDLE_INFORMATION,
+    "DuplicateHandle owned output": NativeOperation.HANDLE_DUPLICATE,
+    "CloseHandle": NativeOperation.HANDLE_CLOSE,
+    "CreateJobObjectW": NativeOperation.JOB_CREATE,
+    "SetInformationJobObject": NativeOperation.JOB_CONFIGURE,
+    "QueryInformationJobObject": NativeOperation.JOB_QUERY,
+    "IsProcessInJob": NativeOperation.JOB_ASSIGN, "pre-resume IsProcessInJob": NativeOperation.JOB_ASSIGN,
+    "TerminateJobObject": NativeOperation.JOB_TERMINATE,
+    "TerminateJobObject failed launch": NativeOperation.JOB_TERMINATE,
+    "CreateProcessW (atomic job assignment)": NativeOperation.PROCESS_CREATE,
+    "GetProcessTimes": NativeOperation.PROCESS_IDENTITY,
+    "GetExitCodeProcess": NativeOperation.PROCESS_EXIT,
+    "Initialize attributes": NativeOperation.STARTUP_ATTRIBUTES,
+    "HANDLE_LIST": NativeOperation.STARTUP_ATTRIBUTES, "JOB_LIST": NativeOperation.STARTUP_ATTRIBUTES,
+}
+_NATIVE_STATUSES = {2: NativeStatus.PATH_ABSENT, 3: NativeStatus.PATH_ABSENT,
+                    5: NativeStatus.ACCESS_DENIED, 32: NativeStatus.SHARING_VIOLATION,
+                    33: NativeStatus.SHARING_VIOLATION, 80: NativeStatus.ALREADY_EXISTS,
+                    183: NativeStatus.ALREADY_EXISTS, 1: NativeStatus.UNSUPPORTED,
+                    50: NativeStatus.UNSUPPORTED, 87: NativeStatus.INVALID_PARAMETER}
+_PUBLIC_FIELDS = {"stage": Stage, "reason": FailureReason, "nativeOperation": NativeOperation,
+                  "nativeStatus": NativeStatus, "lastGpgCommand": GpgCommand, "lastGpgExit": GpgExit,
+                  "retirementObservation": RetirementObservation}
+
+
+class Progress:
+    """Source-owned call-site observations, never host/retirement acceptance."""
+    def __init__(self):
+        self.stage = Stage.UNOBSERVED
+
+    def mark(self, stage):
+        if not isinstance(stage, Stage):
+            raise ValueError("Expected a fixed helper observation stage")
+        self.stage = stage
+
+
+def public_observation(stage, detail):
+    """Finite projection of already-bounded PRIVATE details; never echo their text.
+
+    Native API/status matches are diagnostic classifications, not an OS cause or
+    retirement proof. A last GPG command record does not prove a child started,
+    or that the following command was reached. No exception accessor runs here.
+    """
+    def rows(value, maximum):
+        return value[:maximum] if type(value) is list else ()
+    detail = detail if type(detail) is dict else {}
+    records = [row for row in rows(detail.get("windowsEvidence"), 8) if type(row) is dict]
+    details = [detail]
+    for record in records:
+        details.extend(row["detail"] for row in rows(record.get("failures"), 64)
+                       if type(row) is dict and type(row.get("detail")) is dict)
+    nodes = []
+    for item in details[:65]:
+        nodes.extend(row for row in rows(item.get("nodes"), 64 - len(nodes)) if type(row) is dict)
+        if len(nodes) >= 64:
+            break
+    kinds = {row["type"] for row in nodes if type(row.get("type")) is str}
+    reason = next((value for name, value in (("FilesystemError", FailureReason.FILESYSTEM),
+                  ("OwnershipError", FailureReason.PROCESS), ("HelperError", FailureReason.HELPER_GUARD),
+                  ("WindowsEvidenceError", FailureReason.EVIDENCE), ("EvidenceError", FailureReason.EVIDENCE))
+                   if name in kinds), FailureReason.OTHER)
+    operation, status = NativeOperation.UNOBSERVED, NativeStatus.UNOBSERVED
+    for node in nodes:
+        message = node.get("message")
+        if node.get("type") not in ("FilesystemError", "OwnershipError") or \
+                type(message) is not str or len(message) > 2048:
+            continue
+        matched = re.fullmatch(
+            r"Windows (.{1,80}) failed(?: \(error ([0-9]{1,10})\)|: error ([0-9]{1,10}))", message)
+        if matched and matched[1] in _NATIVE_OPERATIONS:
+            operation = _NATIVE_OPERATIONS[matched[1]]
+            status = _NATIVE_STATUSES.get(int(matched[2] or matched[3]), NativeStatus.OTHER)
+            break
+    gpg, exited = GpgCommand.UNOBSERVED, GpgExit.UNOBSERVED
+    if stage is Stage.RECIPIENT:
+        for record in records:
+            commands = record.get("commands")
+            if record.get("operation") != "recipient-validation" or \
+                    type(commands) is not list or not 0 < len(commands) <= 8:
+                continue
+            last = commands[-1]
+            if type(last) is not dict or type(last.get("argv")) is not list:
+                continue
+            argv = last["argv"]
+            if len(argv) > 128 or not all(type(value) is str and len(value) <= 65536 for value in argv):
+                continue
+            common = ["--with-colons", "--with-fingerprint", "--with-subkey-fingerprint"]
+            gpg = (GpgCommand.VERSION if argv[-1:] == ["--version"] else
+                   GpgCommand.LIST_KEYS if argv[-4:] == common + ["--list-keys"] else
+                   GpgCommand.SHOW_ONLY if argv[-7:-1] == common + ["--import-options", "show-only", "--import"] else
+                   GpgCommand.OTHER)
+            code = last.get("waitExitCode")
+            exited = (GpgExit.ZERO if type(code) is int and code == 0 else
+                      GpgExit.NONZERO if type(code) is int and 0 < code <= 0xffffffff else GpgExit.NO_EXIT_CODE)
+            break
+    values = {"stage": stage if isinstance(stage, Stage) else Stage.UNOBSERVED, "reason": reason,
+              "nativeOperation": operation, "nativeStatus": status, "lastGpgCommand": gpg, "lastGpgExit": exited,
+              "retirementObservation": (RetirementObservation.NO_UNKNOWN_REPORTED
+                  if detail.get("retirementUnknown") is False else RetirementObservation.UNKNOWN)}
+    return {name: value.value for name, value in values.items()}
+
+
+def print_public_failure(value):
+    # Defense in depth: even a future bad caller cannot turn code-shaped private
+    # text into a public code. Only exact enum members cross this boundary.
+    checked = {}
+    for name, domain in _PUBLIC_FIELDS.items():
+        try:
+            checked[name] = (domain(value[name]).value
+                             if type(value) is dict and type(value.get(name)) is str else None)
+        except (ValueError, TypeError):
+            checked[name] = None
+    if any(item is None for item in checked.values()):
+        checked = public_observation(Stage.UNOBSERVED, {})
+    print("WINDOWS_HELPER_NOT_ACCEPTED=" + checked.pop("reason") + "; " +
+          "; ".join(name + "=" + text for name, text in checked.items()), file=sys.stderr)
 
 
 class HelperError(RuntimeError):
@@ -390,24 +609,28 @@ class Commands:
             raise failure from errors[0]
 
 
-def source_snapshot(commands, git, *, finalizing=False):
-    def query(*args):
+def source_snapshot(commands, git, *, finalizing=False, observe=None):
+    def query(stage, *args):
+        if observe is not None:
+            observe(stage)
         argv = [str(git), "--no-replace-objects", "-c", "core.autocrlf=false", "-c", "core.fsmonitor=false",
                 "-c", "core.hooksPath=" + str(commands.state.path), "-c", "credential.helper=", "-C", str(ROOT), *args]
         row, directory = commands.run(argv, "source", timeout=60, finalizing=finalizing)
         require(row["waitExitCode"] == 0, "SOURCE_QUERY_FAILED")
         return private_read(directory, "stdout.bin", MAX_OUTPUT)
-    require(query("rev-parse", "--show-toplevel").decode().strip().replace("/", "\\").casefold() ==
+    require(query(Stage.SOURCE_TOPLEVEL, "rev-parse", "--show-toplevel").decode().strip().replace("/", "\\").casefold() ==
             str(ROOT).casefold(), "SOURCE_TOPLEVEL_DIFFERS")
-    sha = query("rev-parse", "HEAD").decode().strip()
-    tree = query("rev-parse", "HEAD^{tree}").decode().strip()
-    require(query("rev-parse", "--is-shallow-repository").strip() == b"false", "FULL_HISTORY_REQUIRED")
-    require(query("status", "--porcelain=v1", "--untracked-files=all", "--ignored").strip() == b"",
+    sha = query(Stage.SOURCE_HEAD, "rev-parse", "HEAD").decode().strip()
+    tree = query(Stage.SOURCE_TREE, "rev-parse", "HEAD^{tree}").decode().strip()
+    require(query(Stage.SOURCE_SHALLOW, "rev-parse", "--is-shallow-repository").strip() == b"false", "FULL_HISTORY_REQUIRED")
+    require(query(Stage.SOURCE_STATUS, "status", "--porcelain=v1", "--untracked-files=all", "--ignored").strip() == b"",
             "CLEAN_FRESH_SOURCE_REQUIRED")
-    require(query("config", "--get", "remote.origin.url").strip() in
+    require(query(Stage.SOURCE_ORIGIN, "config", "--get", "remote.origin.url").strip() in
             (b"https://github.com/p2pKit/P2pKit.git", b"https://github.com/p2pKit/P2pKit",
              b"git@github.com:p2pKit/P2pKit.git"), "ORIGIN_REPOSITORY_DIFFERS")
-    entries = witness.tree_entries(query("ls-tree", "-rlz", "HEAD"))
+    entries = witness.tree_entries(query(Stage.SOURCE_ENTRIES, "ls-tree", "-rlz", "HEAD"))
+    if observe is not None:
+        observe(Stage.SOURCE_BYTES)
     observed = {}
     for name, entry in entries.items():
         raw = public_file(ROOT / name, witness.MAX_FILE)
@@ -547,14 +770,20 @@ def assert_native_result(name, value, admitted, read_member):
     return observed
 
 
-def admitted_tools():
+def admitted_tools(*, observe=None):
+    if observe is not None:
+        observe(Stage.PYTHON_TOOL)
     python = Path(sys.executable)
     require(python.suffix.lower() == ".exe", "NATIVE_PYTHON_EXE_REQUIRED")
     python_sha = encrypted._executable(python, time.monotonic() + 30)
+    if observe is not None:
+        observe(Stage.GIT_TOOL)
     git = shutil.which("git.exe")
     require(git is not None, "INSTALLED_GIT_REQUIRED")
     git = Path(git)
     git_sha = encrypted._executable(git, time.monotonic() + 30)
+    if observe is not None:
+        observe(Stage.GPG_TOOL)
     gpg = shutil.which("gpg.exe")
     require(gpg is not None, "GPG_NOT_INSTALLED_ON_PATH")
     try:
@@ -584,8 +813,11 @@ def close_all(owners):
         raise error from failures[0]
 
 
-def run():
+def run(progress=None):
+    progress = Progress() if progress is None else progress
+    progress.mark(Stage.IDENTITY)
     admitted = actual_identity()
+    progress.mark(Stage.PATHS)
     base_path, output_path = paths(admitted)
     owners, failures, handlers = [], [], {}
     runner = base = evidence = state = work = output = None
@@ -599,34 +831,46 @@ def run():
         return owner
     def fail(phase, error):
         detail = error_detail(error)
-        failures.append({"phase": phase, "detail": detail})
+        failures.append({"phase": phase, "detail": detail,
+                         "observation": public_observation(progress.stage, detail)})
         if detail["retirementUnknown"]:
             result["retirement"] = "UNKNOWN"
         return detail["retirementUnknown"]
     try:
+        progress.mark(Stage.BASE_ROOT)
         base = hold(files.create_private_directory(base_path))
+        progress.mark(Stage.STATE_ROOT)
         state = hold(base.create_directory("state"))
+        progress.mark(Stage.EVIDENCE_ROOT)
         evidence = hold(base.create_directory("evidence"))
+        progress.mark(Stage.WORK_ROOT)
         work = hold(base.create_directory("export-work"))
+        progress.mark(Stage.OUTPUT_ROOT)
         output = hold(files.create_private_directory(output_path))
+        progress.mark(Stage.START_RECORD)
         private_json(base, "started.json", result)
+        progress.mark(Stage.COMMAND_SETUP)
         job = uuid.uuid4().hex
         runner = Commands(evidence, state, job, deadline=time.monotonic() + 900)
+        progress.mark(Stage.SIGNAL_SETUP)
         for number in (signal.SIGINT, signal.SIGTERM, getattr(signal, "SIGBREAK", signal.SIGINT)):
             if number not in handlers:
                 handlers[number] = signal.getsignal(number)
                 signal.signal(number, lambda signum, _: runner.cancelled.append(signum))
-        python, git, tools = admitted_tools()
+        python, git, tools = admitted_tools(observe=progress.mark)
         result["tools"] = tools
-        before = source_snapshot(runner, git)
+        before = source_snapshot(runner, git, observe=progress.mark)
+        progress.mark(Stage.SOURCE_BINDING)
         require((before["commit"], before["tree"]) == (admitted["sourceSha"], admitted["sourceTree"]),
                 "REVIEWED_SOURCE_IDENTITY_DIFFERS")
         private_json(evidence, "source-before.json", before)
         # Actual GPG admission precedes every fixture. Never download or fall back.
+        progress.mark(Stage.RECIPIENT)
         recipient = encrypted.validate_recipient(os.environ["P2PKIT_EVIDENCE_PUBLIC_KEY"].encode("ascii"),
                        admitted["recipientFingerprint"], work, job_id=job)
         result["recipient"] = {"fingerprint": recipient.fingerprint, "encryptionFingerprint": recipient.encryption_fingerprint,
                                "expiresAt": recipient.expires_at, "keySha256": recipient.key_sha256}
+        progress.mark(Stage.CONTROLS)
         suites = [("executor", "run-audit-command-test.py", 300), ("files", "hosted-windows-files-test.py", 180)]
         for label, script, timeout in suites:
             suite_state = hold(state.create_directory(label))
@@ -692,7 +936,8 @@ def run():
     finally:
         if runner is not None and "before" in locals() and not runner.unknown and not encrypted._QUARANTINE and not _HELD:
             try:
-                after = source_snapshot(runner, git, finalizing=True)
+                after = source_snapshot(runner, git, finalizing=True, observe=progress.mark)
+                progress.mark(Stage.SOURCE_BINDING)
                 require(after == before and actual_identity() == admitted, "POST_CONTROLS_SOURCE_OR_EVENT_CHANGED")
                 private_json(evidence, "source-after.json", after)
                 source_verified = True
@@ -700,15 +945,18 @@ def run():
                 fail("final-source", error)
         if runner is not None:
             try:
+                progress.mark(Stage.COMMAND_FINALIZATION)
                 runner.close()
             except BaseException as error:
                 fail("command-finalization", error)
         for number, handler in handlers.items():
             try:
+                progress.mark(Stage.SIGNAL_RESTORE)
                 signal.signal(number, handler)
             except BaseException as error:
                 fail("restore-signal", error)
     try:
+        progress.mark(Stage.EXPORT)
         require(base is not None and evidence is not None and work is not None and output is not None,
                 "PRIVATE_ROOT_ADMISSION_INCOMPLETE")
         require(not encrypted._QUARANTINE and not (runner and runner.unknown) and
@@ -736,15 +984,18 @@ def run():
             except BaseException:
                 pass  # Never substitute fabricated evidence or leak the raw error.
     try:
+        progress.mark(Stage.ROOT_FINALIZATION)
         close_all(owners)
     except BaseException as error:
-        failures.append({"phase": "last-native-close", "detail": error_detail(error)})
+        fail("last-native-close", error)
         final_record_written = False
     if not final_record_written:
-        code = next((row["detail"]["nodes"][0].get("message") for row in failures if row["detail"].get("nodes") and
-                     re.fullmatch(r"[A-Z][A-Z0-9_]{0,79}", row["detail"]["nodes"][0].get("message", ""))),
-                    "PRIVATE_EVIDENCE_NOT_SEALED")
-        print("WINDOWS_HELPER_NOT_ACCEPTED=" + code, file=sys.stderr)
+        # Preserve the FIRST failing boundary; later eligibility/finalizer errors
+        # cannot relabel an earlier source/tool failure as recipient failure.
+        observation = dict(failures[0]["observation"]) if failures else public_observation(Stage.UNOBSERVED, {})
+        if encrypted._QUARANTINE or _HELD or any(row["detail"]["retirementUnknown"] for row in failures):
+            observation["retirementObservation"] = RetirementObservation.UNKNOWN.value
+        print_public_failure(observation)
         return 1
     print("WINDOWS_HELPER_CUSTODY=RETURNED_FOR_SEAL; PRIVATE_DECRYPTION=NOT_RUN")
     return 0  # The workflow's independently sealed controls_passed guard is mandatory.
@@ -842,11 +1093,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("run", "validate-public"))
     args = parser.parse_args()
+    progress = Progress()
     try:
-        return run() if args.action == "run" else validate_public()
+        if args.action == "run":
+            return run(progress)
+        progress.mark(Stage.POST_RETURN_SEAL)
+        return validate_public()
     except BaseException as error:
-        code = error.code if isinstance(error, HelperError) else "ADMISSION_OR_SEAL_FAILED"
-        print("WINDOWS_HELPER_NOT_ACCEPTED=" + code, file=sys.stderr)
+        print_public_failure(public_observation(progress.stage, error_detail(error)))
         return 1
 
 
