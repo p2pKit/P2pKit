@@ -343,9 +343,12 @@ class Command:
         record(self.directory / "launch-attempt.json", {"job": self.rt.job, "invocation": self.invocation,
             "startedMonotonic": self.row["startedMonotonic"], "argv": self.argv,
             "baselineSha256": digest(self.directory / "baseline.json")})
+        primary = None
         try:
             self.child = self.scope.spawn(self.argv, str(self.rt.root), env)
-        finally:
+        except BaseException as error:
+            primary = error
+        try:
             if self.child is None and self.scope.leaders:
                 require(len(self.scope.leaders) == 1, "unexpected partial-launch leader set")
                 self.child = self.scope.leaders[0]
@@ -354,7 +357,17 @@ class Command:
                     observation = self.row["streams"][name] = {}
                     bounded = BoundedReader(pipe, self.rt.final_stream_budget if finalizing else self.rt.stream_budget,
                                             observation, self.row["errors"])
-                    self.tees.append(self.rt.api.Tee(bounded, self.directory / (name + ".log"), None, self.row["errors"]))
+                    tee = self.rt.api.Tee(bounded, self.directory / (name + ".log"), None, self.row["errors"], False)
+                    self.tees.append(tee)
+                    tee.start()
+        except BaseException as error:
+            self.row["errors"].append("capture setup: " + processes.format_ownership_error(error))
+            if primary is None:
+                primary = error
+            else:
+                self.rt.fail("command-capture-setup", error)
+        if primary is not None:
+            raise primary
 
     def wait(self, finalizing=False):
         if self.scope is None:
@@ -379,27 +392,59 @@ class Command:
         self.row["drains"].append(outcome)
 
     def close(self):
+        primary = sys.exc_info()[1]
+        failures, receipt_error = [], None
+
+        def failed(label, error):
+            self.row["errors"].append(label + processes.format_ownership_error(error))
+            failures.append(error)
+
         try:
             if self.child is not None:
                 self.row["exitAfterDrain"] = self.child.poll()
+        except BaseException as error:
+            failed("exit observation: ", error)
+        try:
             if self.scope is not None:
                 self.row["ownership"] = self.scope.description()
                 self.row["errors"].extend(self.row["ownership"].get("discoveryErrors", []))
-        except Exception as error:
-            self.row["errors"].append("retirement record: " + str(error))
-        finally:
-            for tee in self.tees:
+        except BaseException as error:
+            failed("retirement record: ", error)
+        for tee in self.tees:
+            try:
+                tee.finish()
+            except BaseException as error:
+                failed("stream finalization: ", error)
+        if self.child is not None:
+            for pipe in (self.child.stdout, self.child.stderr):
+                # Tees borrow BoundedReader wrappers, not these raw child pipes.
+                # A registered but uncertain start still owns its pipe: never
+                # race-close it merely because Thread.start() raised.
+                if pipe is None or any(tee.source.source is pipe for tee in self.tees):
+                    continue
                 try:
-                    tee.finish()
-                except Exception as error:
-                    self.row["errors"].append("stream finalization: " + str(error))
-            if self.scope is not None:
-                try:
-                    self.scope.close()
-                except Exception as error:
-                    self.row["errors"].append("native handle close: " + str(error))
-            self.row["endedMonotonic"] = time.monotonic()
+                    pipe.close()
+                except BaseException as error:
+                    failed("unclaimed pipe close: ", error)
+        if self.scope is not None:
+            try:
+                self.scope.close()
+            except BaseException as error:
+                failed("native handle close: ", error)
+        self.row["endedMonotonic"] = time.monotonic()
+        try:
             record(self.directory / "command.json", self.row)
+        except BaseException as error:
+            failed("command receipt: ", error)
+            self.rt.fail("command-receipt", error)
+            receipt_error = error
+        # Called from a failed start/wait's finally, close must not replace that
+        # already-active primary (especially cancellation) with a cleanup error.
+        if primary is not None:
+            return
+        terminal = next((error for error in failures if not isinstance(error, Exception)), receipt_error)
+        if terminal is not None:
+            raise terminal
         require(not self.row["errors"], "original command finalization incomplete")
 
     def text(self):
@@ -483,8 +528,15 @@ class Runtime:
         try:
             require(cmd.wait(finalizing) in allowed, label + " exited nonzero")
         finally:
-            cmd.drain("command-final")
-            cmd.close()
+            primary, failures = sys.exc_info()[1], []
+            for stage, action in (("command-final", lambda: cmd.drain("command-final")), ("command-close", cmd.close)):
+                try:
+                    action()
+                except BaseException as error:
+                    failures.append(error)
+                    self.fail(stage, error)
+            if primary is None and failures:
+                raise next((error for error in failures if not isinstance(error, Exception)), failures[0])
         return cmd
 
     def git(self, label, *args, finalizing=False, allowed=(0,)):

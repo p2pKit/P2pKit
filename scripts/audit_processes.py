@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ctypes
 import errno
+import io
 import json
 import os
 from pathlib import Path
@@ -35,6 +36,82 @@ SIG_KILL = 9
 
 class OwnershipError(RuntimeError):
     """Ownership cannot be established or finalized safely."""
+
+
+MAX_RETIREMENT_ERRORS = 256
+
+
+def _exception_text(error: BaseException) -> str:
+    try:
+        message = str(error)[:2048]
+    except BaseException:
+        message = "<exception message unavailable>"
+    return f"{type(error).__name__}: {message}"
+
+
+def retirement_details(error: BaseException) -> dict[str, Any]:
+    """Bounded, JSON-safe secondary failures; never mutate the primary's args/type."""
+    value = getattr(error, "_p2pkit_retirement", None)
+    return {"status": "UNKNOWN", "resources": [dict(row) for row in value["resources"]],
+            "omitted": value["omitted"]} if value is not None else {}
+
+
+def _retirement_text(row: dict[str, Any]) -> str:
+    return f"Windows resource retirement UNKNOWN ({row['phase']}/{row['resource']}): {row['error']}"
+
+
+def format_ownership_error(error: BaseException) -> str:
+    """Use at real receipt boundaries: str(error) alone omits exception notes."""
+    text = _exception_text(error)
+    detail = retirement_details(error)
+    if detail:
+        text += "; " + "; ".join(_retirement_text(row) for row in detail["resources"])
+        if detail["omitted"]:
+            text += f"; retirement UNKNOWN: {detail['omitted']} further resource errors exceed the evidence bound"
+    return text
+
+
+def _retire_actions(actions: list[Any], phase: str) -> tuple[list[dict[str, Any]], list[Any]]:
+    outcomes, failures = [], []
+    for label, action in actions:
+        row = {"phase": phase, "resource": label, "status": "RETIRED"}
+        try:
+            action()
+        except BaseException as error:
+            row.update(status="UNKNOWN", error=_exception_text(error)[:512])
+            failures.append((row, error))
+        outcomes.append(row)
+    return outcomes, failures
+
+
+def _finish_retirement(failures: list[Any], original: BaseException | None = None) -> None:
+    if not failures:
+        return
+    # Preserve every attempt even if the bounded carrier cannot hold every
+    # diagnostic. Overflow is explicit UNKNOWN, never disposal/next-run authority.
+    rows, omitted = [], 0
+    for row, error in failures:
+        rows.append(row)
+        nested = retirement_details(error)
+        rows.extend(nested.get("resources", []))
+        omitted += nested.get("omitted", 0)
+    cancellation = next((error for _, error in failures if not isinstance(error, Exception)), None)
+    failure = original if original is not None else cancellation
+    if failure is None:
+        failure = OwnershipError("Windows resource retirement UNKNOWN; all remaining resources attempted; " +
+                                 "; ".join(_retirement_text(row) for row in rows[:MAX_RETIREMENT_ERRORS]))
+    prior = retirement_details(failure)
+    combined = [*prior.get("resources", []), *rows]
+    failure._p2pkit_retirement = {"status": "UNKNOWN", "resources": combined[:MAX_RETIREMENT_ERRORS],
+        "omitted": prior.get("omitted", 0) + omitted + max(0, len(combined) - MAX_RETIREMENT_ERRORS)}
+    # Notes aid tracebacks on newer Python; the explicit carrier/formatter above
+    # also works on Python 3.9 and survives constructor failure with scope=None.
+    notes = [_retirement_text(row) for row in rows[:MAX_RETIREMENT_ERRORS]]
+    failure.__notes__ = [*getattr(failure, "__notes__", ()), *notes]
+    if original is None:
+        if cancellation is not None:
+            raise cancellation
+        raise failure from failures[0][1]
 
 
 def host_role() -> str:
@@ -340,14 +417,24 @@ class PosixScope:
                 live.append(dict(current))
         return sorted(live, key=lambda item: item["pid"])
 
-    def spawn(self, argv: list[str], cwd: str, env: dict[str, str]) -> PosixProcess:
+    def spawn(self, argv: list[str], cwd: str, env: dict[str, str], *,
+              stdout: Any = None, stderr: Any = None) -> PosixProcess:
+        # Optional privately owned sinks avoid an additional pipe/thread owner.
+        # The caller retains both sinks until complete scope retirement, bounds
+        # live output size, and verifies/syncs them before accepting a result.
+        # The default pipe contract used by existing executor callers is unchanged.
+        if (stdout is None) != (stderr is None):
+            raise OwnershipError("Both owned output sinks are required")
         launch = {"api": "subprocess.Popen", "requestedArgv": list(argv),
                   "cwd": cwd, "shell": False, "created": False}
+        if stdout is not None:
+            launch["outputMode"] = "caller-owned-files"
         self.launches.append(launch)
         actual = resolve_executable(argv, cwd, env)
         launch.update({"resolvedArgv": actual, "executable": actual[0]})
         process = PosixProcess(subprocess.Popen(actual, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
-                                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                               stdout=subprocess.PIPE if stdout is None else stdout,
+                                               stderr=subprocess.PIPE if stderr is None else stderr,
                                                start_new_session=True, close_fds=True, bufsize=0))
         launch.update({"created": True, "pid": process.pid})
         self.leaders.append(process)
@@ -813,6 +900,8 @@ class WinApi:
         self._bind("IsProcessInJob", [PTR, PTR, ctypes.POINTER(I32)], I32)
         self._bind("CreatePipe", [ctypes.POINTER(PTR), ctypes.POINTER(PTR), ctypes.POINTER(SecurityAttributes), U32], I32)
         self._bind("SetHandleInformation", [PTR, U32, U32], I32)
+        self._bind("GetHandleInformation", [PTR, ctypes.POINTER(U32)], I32)
+        self._bind("DuplicateHandle", [PTR, PTR, PTR, ctypes.POINTER(PTR), U32, I32, U32], I32)
         self._bind("CreateFileW", [ctypes.c_wchar_p, U32, U32, ctypes.POINTER(SecurityAttributes), U32, U32, PTR], PTR)
         self._bind("InitializeProcThreadAttributeList", [PTR, U32, U32, ctypes.POINTER(SIZE)], I32)
         self._bind("UpdateProcThreadAttribute", [PTR, U32, SIZE, PTR, SIZE, PTR, PTR], I32)
@@ -861,6 +950,68 @@ class WinApi:
         return path
 
 
+class _WindowsPipeReader:
+    """One CRT descriptor owner with a strictly nonowning, unbuffered I/O view."""
+
+    def __init__(self, handle: int, name: str):
+        self.native_handle, self.name = handle, name
+        self._fd: int | None = None
+        self._view: Any = None
+        self._adoption_started = self._closed = self._fd_close_attempted = False
+        self._close_error: BaseException | None = None
+
+    @property
+    def descriptor_adopted(self) -> bool:
+        # Remains true even after an ambiguous descriptor-close failure. The
+        # original Win32 value must never then reach CloseHandle as a fallback.
+        return self._fd is not None or self._fd_close_attempted
+
+    def adopt(self) -> None:
+        import msvcrt
+        if self._adoption_started or self._closed:
+            raise OwnershipError("Owned pipe descriptor adoption cannot be repeated")
+        self._adoption_started = True
+        self._fd = msvcrt.open_osfhandle(self.native_handle, os.O_RDONLY | os.O_BINARY)
+        # The pending owner is already registered before either adoption or this
+        # fallible constructor. FileIO can never close/recycle the owned fd.
+        self._view = io.FileIO(self._fd, "rb", closefd=False)
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def fileno(self) -> int:
+        if self._closed or self._fd is None:
+            raise ValueError("I/O operation on a closed owned pipe")
+        return self._fd
+
+    def read(self, size: int = -1) -> bytes:
+        if self._closed or self._view is None:
+            raise ValueError("I/O operation on a closed owned pipe")
+        return self._view.read(size)
+
+    def close(self) -> None:
+        if self._closed:
+            if self._close_error is not None:
+                raise self._close_error
+            return
+        self._closed = True
+        view, self._view = self._view, None
+        actions = []
+        if view is not None:
+            actions.append((self.name + "-nonowning-view", view.close))
+        if self._fd is not None:
+            self._fd_close_attempted = True
+            fd, self._fd = self._fd, None  # No retry, including cancellation or uncertain os.close.
+            actions.append((self.name + "-crt-descriptor", lambda: os.close(fd)))
+        _, failures = _retire_actions(actions, "pipe-close")
+        try:
+            _finish_retirement(failures)
+        except BaseException as error:
+            self._close_error = error
+            raise
+
+
 class WindowsProcess:
     def __init__(self, api: WinApi, handle: Any, pid: int, stdout: Any, stderr: Any):
         self.api, self.handle, self.pid = api, handle, pid
@@ -890,8 +1041,10 @@ class WindowsProcess:
 
     def close(self) -> None:
         if self.handle:
-            self.api.close(self.handle)
-            self.handle = None
+            # A failed native close has UNKNOWN retirement. Never retry a raw
+            # handle value which the OS might already have recycled.
+            handle, self.handle = self.handle, None
+            self.api.close(handle)
 
 
 class WindowsScope:
@@ -910,10 +1063,20 @@ class WindowsScope:
             limits.basic.flags = 0x2000  # KILL_ON_JOB_CLOSE; no breakaway bits.
             self.api.check(self.api.SetInformationJobObject(self.job, 9, ctypes.byref(limits),
                                                            ctypes.sizeof(limits)), "SetInformationJobObject")
-        except BaseException:
-            self.api.close(self.job)
-            self.job = None
+        except BaseException as error:
+            job, self.job = self.job, None
+            self._retire([("job", lambda: self.api.close(job))], original=error, phase="scope-construction")
             raise
+
+    def _retire(self, actions: list[Any], *, original: BaseException | None = None,
+                launch: dict[str, Any] | None = None, phase: str = "scope-close") -> None:
+        """Attempt every acquired resource once; cleanup cannot hide a primary failure."""
+        outcomes, failures = _retire_actions(actions, phase)
+        for row, _ in failures:
+            self.discovery_errors.add(_retirement_text(row))
+        if launch is not None:
+            launch.setdefault("resourceCleanup", []).extend(outcomes)
+        _finish_retirement(failures, original)
 
     def _member_pids(self) -> list[int]:
         capacity = 64
@@ -956,10 +1119,23 @@ class WindowsScope:
                 self.api.close(handle)
         return sorted(result, key=lambda item: item["pid"])
 
-    def spawn(self, argv: list[str], cwd: str, env: dict[str, str]) -> WindowsProcess:
-        import msvcrt
+    def spawn(self, argv: list[str], cwd: str, env: dict[str, str], *,
+              stdout: Any = None, stderr: Any = None) -> WindowsProcess:
+        """Spawn with the existing pipe contract or two pinned private NativeFiles.
+
+        Supplied sinks remain caller-owned. Only fresh duplicates of their
+        borrowed, noninheritable Win32 handles enter the explicit HANDLE_LIST;
+        a Win32 handle is never treated as a CRT descriptor. The caller must keep
+        each original alive without a concurrent close through duplication and
+        full child/domain retirement, monitor live size, then verify and sync.
+        Job assignment, suspended creation and no-breakaway remain unchanged.
+        """
+        if (stdout is None) != (stderr is None):
+            raise OwnershipError("Both owned output sinks are required")
         launch = {"api": "CreateProcessW", "requestedArgv": list(argv), "cwd": cwd,
                   "created": False, "resumed": False}
+        if stdout is not None:
+            launch["outputMode"] = "caller-owned-native-files"
         self.launches.append(launch)
         actual = resolve_executable(argv, cwd, env)
         launch["resolvedArgv"] = actual
@@ -982,20 +1158,41 @@ class WindowsScope:
         attributes = None
         initialized = False
         handles: list[Any] = []
-        streams: list[Any] = []
+        streams: list[_WindowsPipeReader] = []
         process = ProcessInformation()
         created = False
+        original = None
         try:
             security = SecurityAttributes(ctypes.sizeof(SecurityAttributes), None, 1)
             reads, writes = [], []
-            for _ in range(2):
-                read, write = PTR(), PTR()
-                self.api.check(self.api.CreatePipe(ctypes.byref(read), ctypes.byref(write),
-                                                    ctypes.byref(security), 0), "CreatePipe")
-                handles.extend([read.value, write.value])
-                self.api.check(self.api.SetHandleInformation(read, 1, 0), "SetHandleInformation")
-                reads.append(read.value)
-                writes.append(write.value)
+            if stdout is None:
+                for _ in range(2):
+                    read, write = PTR(), PTR()
+                    self.api.check(self.api.CreatePipe(ctypes.byref(read), ctypes.byref(write),
+                                                        ctypes.byref(security), 0), "CreatePipe")
+                    handles.extend([read.value, write.value])
+                    self.api.check(self.api.SetHandleInformation(read, 1, 0), "SetHandleInformation")
+                    reads.append(read.value)
+                    writes.append(write.value)
+            else:
+                borrowed = set()
+                for sink in (stdout, stderr):
+                    handle = sink.native_handle
+                    if type(handle) is not int or handle in (0, ctypes.c_void_p(-1).value) or \
+                            handle in borrowed or not sink.writable():
+                        raise OwnershipError("Distinct open native output handles are required")
+                    borrowed.add(handle)
+                    flags, duplicate = U32(), PTR()
+                    self.api.check(self.api.GetHandleInformation(handle, ctypes.byref(flags)), "GetHandleInformation")
+                    if flags.value & 1:
+                        raise OwnershipError("Original private output handle must not be inheritable")
+                    # DUPLICATE_SAME_ACCESS into this process; inherit ONLY the
+                    # explicitly listed duplicate, never the original or all
+                    # ambient runner handles.
+                    self.api.check(self.api.DuplicateHandle(PTR(-1), handle, PTR(-1), ctypes.byref(duplicate),
+                                                            0, 1, 2), "DuplicateHandle owned output")
+                    handles.append(duplicate.value)
+                    writes.append(duplicate.value)
             stdin = self.api.CreateFileW("NUL", 0x80000000, 3, ctypes.byref(security), 3, 0x80, None)
             if stdin in (None, ctypes.c_void_p(-1).value):
                 raise OwnershipError("Cannot create owned Windows NUL stdin")
@@ -1039,31 +1236,52 @@ class WindowsScope:
             identity["jobAssignedBeforeResume"] = True
             launch["jobAssignedBeforeResume"] = True
             self.known[(process.pid, identity["creationFileTime"])] = identity
-            for handle in reads:
-                fd = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
-                handles.remove(handle)  # Descriptor now owns the OS handle.
-                streams.append(os.fdopen(fd, "rb", buffering=0))
-            child = WindowsProcess(self.api, process.process, process.pid, streams[0], streams[1])
+            for index, handle in enumerate(reads):
+                reader = _WindowsPipeReader(handle, "stdout" if index == 0 else "stderr")
+                streams.append(reader)  # Register before CRT adoption or fallible FileIO wrapping.
+                reader.adopt()
+            child = WindowsProcess(self.api, process.process, process.pid,
+                                   streams[0] if streams else None, streams[1] if streams else None)
             self.leaders.append(child)
             process.process = None  # Child object now owns the process handle.
             if self.api.ResumeThread(process.thread) == 0xFFFFFFFF:
                 raise OwnershipError("ResumeThread failed for assigned Windows child")
             launch["resumed"] = True
-            streams.clear()  # The caller's independent tee threads now own them.
-            return child
-        except BaseException:
-            if created:
-                self.api.TerminateJobObject(self.job, 125)
+        except BaseException as error:
+            original = error
             raise
         finally:
+            actions = []
             if initialized:
-                self.api.DeleteProcThreadAttributeList(attributes)
-            for handle in handles:
-                self.api.close(handle)
-            for stream in streams:
-                stream.close()
-            self.api.close(process.thread)
-            self.api.close(process.process)
+                actions.append(("startup-attributes", lambda: self.api.DeleteProcThreadAttributeList(attributes)))
+            # Keep raw acquisition records until this phase. Successful CRT
+            # adoption, including a failed FileIO construction, excludes that
+            # raw handle from CloseHandle without a second ownership handoff.
+            adopted = {stream.native_handle for stream in streams if stream.descriptor_adopted}
+            actions.extend((f"launch-handle-{index}", lambda value=handle: self.api.close(value))
+                           for index, handle in enumerate(handles) if handle not in adopted)
+            if process.thread:
+                actions.append(("primary-thread", lambda: self.api.close(process.thread)))
+            if process.process:
+                actions.append(("untransferred-process", lambda: self.api.close(process.process)))
+            try:
+                self._retire(actions, original=original, launch=launch, phase="launch-temporary")
+            except BaseException as error:
+                original = error
+                raise
+            finally:
+                if original is not None:
+                    pending = []
+                    if created:
+                        pending.append(("failed-launch-job-termination", lambda: self.api.check(
+                            self.api.TerminateJobObject(self.job, 125), "TerminateJobObject failed launch")))
+                    pending.extend((f"launch-stream-{index}", stream.close) for index, stream in enumerate(streams))
+                    # Includes a late temporary-finalizer failure after resume.
+                    # No caller/tee received these readers; the process handle
+                    # remains registered for the outer owner's bounded drain.
+                    self._retire(pending, original=original, launch=launch, phase="failed-return")
+        streams.clear()  # Transfer only after every fallible launch finalizer succeeded.
+        return child
 
     def signal_all(self, signum: int) -> None:
         if signum == SIG_KILL:
@@ -1099,11 +1317,11 @@ class WindowsScope:
                 "discoveryErrors": sorted(self.discovery_errors)}
 
     def close(self) -> None:
-        for child in self.leaders:
-            child.close()
-        if self.job:
-            self.api.close(self.job)
-            self.job = None
+        job, self.job = self.job, None
+        actions = [(f"leader-{index}", child.close) for index, child in enumerate(self.leaders)]
+        if job:
+            actions.append(("job", lambda: self.api.close(job)))
+        self._retire(actions)
 
 
 def make_scope(job: str, invocation: str, state: str, home: str) -> PosixScope | WindowsScope:

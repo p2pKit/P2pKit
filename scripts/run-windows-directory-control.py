@@ -263,6 +263,14 @@ def export_archive(raw, entries, root):
     require(seen == set(entries), "Archive omitted a tracked source (including export-ignore)")
 
 
+def preserve_finalization_errors(original, failures, phase):
+    """Keep secondary failures on the same terminal object, including Python 3.9."""
+    pending = [({"phase": phase, "resource": label, "status": "UNKNOWN",
+                 "error": processes.format_ownership_error(error)[:512]}, error)
+               for label, error in failures if error is not original]
+    processes._finish_retirement(pending, original=original)
+
+
 def regular(path, limit=MAX_FILE):
     audit.reject_symlinks(path)
     before = path.lstat()
@@ -1718,6 +1726,13 @@ class Controller:
         output = self.raw / (str(self.counter) + "-" + name)
         output.mkdir(mode=0o700)
         errors, streams = [], []
+        interruptions = []
+
+        def record_error(prefix, error):
+            errors.append(prefix + processes.format_ownership_error(error))
+            if not isinstance(error, Exception) and not interruptions:
+                interruptions.append(error)
+
         child = None
         record = {"argv": argv, "cwd": str(cwd), "startedUtc": audit.utc(), "exitCode": None,
                   "cancelled": False, "finalizing": finalizing, "errors": errors}
@@ -1727,8 +1742,10 @@ class Controller:
             require(finalizing or not self.cancelled, "Controller cancelled before command start")
             require(time.monotonic() < deadline, "Command admission deadline exceeded")
             child = scope.spawn(argv, str(cwd), env)
-            streams.append(audit.Tee(child.stdout, output / "stdout.log", None, errors))
-            streams.append(audit.Tee(child.stderr, output / "stderr.log", None, errors))
+            for pipe, name in ((child.stdout, "stdout"), (child.stderr, "stderr")):
+                stream = audit.Tee(pipe, output / (name + ".log"), None, errors, False)
+                streams.append(stream)
+                stream.start()
             while child.poll() is None:
                 scope.discover()
                 require(time.monotonic() < deadline and (finalizing or not self.cancelled), "Controller deadline or cancellation")
@@ -1738,9 +1755,9 @@ class Controller:
                         "Command output exceeded its retained bound")
                 time.sleep(.1)
             record["exitCode"] = child.wait(timeout=5)
-        except Exception as error:
-            errors.append(type(error).__name__ + ": " + str(error))
-            record["cancelled"] = bool(self.cancelled) or "deadline" in str(error).lower()
+        except BaseException as error:
+            record_error("", error)
+            record["cancelled"] = bool(self.cancelled) or bool(interruptions) or "deadline" in str(error).lower()
         finally:
             if child is not None and child.poll() is None and cancellation is not None:
                 try:
@@ -1749,8 +1766,8 @@ class Controller:
                     while child.poll() is None and time.monotonic() < end:
                         scope.discover()
                         time.sleep(.1)
-                except Exception as error:
-                    errors.append("Cooperative cancellation: " + type(error).__name__ + ": " + str(error))
+                except BaseException as error:
+                    record_error("Cooperative cancellation: ", error)
             try:
                 # A command is complete only after its own domain has drained,
                 # including a partially failed launch or an exited leader.
@@ -1762,36 +1779,39 @@ class Controller:
                 require(survivors == [], "Owned command retirement is unknown")
                 if child is not None:
                     record["exitCode"] = child.wait(timeout=5)
-            except Exception as error:
-                errors.append("Command retirement: " + type(error).__name__ + ": " + str(error))
+            except BaseException as error:
+                record_error("Command retirement: ", error)
             for stream in streams:
                 try:
                     stream.finish()
-                except Exception as error:
-                    errors.append("Command stream finalization: " + type(error).__name__ + ": " + str(error))
+                except BaseException as error:
+                    record_error("Command stream finalization: ", error)
             if child is not None:
                 for pipe in (child.stdout, child.stderr):
-                    if not any(getattr(stream, "source", None) is pipe for stream in streams):
+                    if pipe is not None and not any(getattr(stream, "source", None) is pipe for stream in streams):
                         try:
                             pipe.close()  # A partially failed Tee allocation never acquired this pipe.
-                        except Exception as error:
-                            errors.append("Unclaimed command pipe close: " + type(error).__name__)
+                        except BaseException as error:
+                            record_error("Unclaimed command pipe close: ", error)
             try:
                 record["ownership"] = scope.description()
                 errors.extend(record["ownership"].get("discoveryErrors", []))
-            except Exception as error:
-                errors.append("Command ownership retention: " + type(error).__name__ + ": " + str(error))
+            except BaseException as error:
+                record_error("Command ownership retention: ", error)
+            record["cancelled"] = record["cancelled"] or bool(interruptions)
             record["endedUtc"] = audit.utc()
             try:
                 new_json(output / "command.json", record)
-            except Exception as error:
-                errors.append("Command record retention: " + type(error).__name__ + ": " + str(error))
+            except BaseException as error:
+                record_error("Command record retention: ", error)
             for file in ("start.json", "command.json", "stdout.log", "stderr.log"):
                 try:
                     if audit.existing_lstat(output / file) is not None:
                         copy_public(output / file, self.active_public / "commands" / output.name / file)
-                except Exception as error:
-                    errors.append("Command public retention: " + file + ": " + type(error).__name__ + ": " + str(error))
+                except BaseException as error:
+                    record_error("Command public retention: " + file + ": ", error)
+        if interruptions:
+            raise interruptions[0]
         if errors or record["cancelled"]:
             raise CommandFailure("Controlled command infrastructure failed; original output retained", output, record["exitCode"])
         return record["exitCode"], output
@@ -2349,7 +2369,13 @@ class Controller:
         """
         record = {"schema": 1, "caseName": case["name"], "startedUtc": audit.utc(), "exitCode": None, "errors": [],
                   "originalLeaves": [{key: row[key] for key in ("id", "purpose", "status", "valid")} for row in case["leaves"]]}
-        lock = None
+        lock, receipt_error = None, None
+        failures = []
+
+        def failed(label, error):
+            record["errors"].append(label + processes.format_ownership_error(error))
+            failures.append((label, error))
+
         try:
             state, context = audit.context_at(str(case["state"]))
             require(context == case["context"] and digest(regular(state / "context.json")) == case["contextHash"],
@@ -2366,40 +2392,83 @@ class Controller:
                                    scope=case["scope"], finalizing=True)
             record["exitCode"] = code
             require(code == 0, "Same-home fallback stop failed")
-        except Exception as error:
-            record["errors"].append(type(error).__name__ + ": " + str(error))
+        except BaseException as error:
+            failed("Fallback stop: ", error)
         finally:
             if lock is not None:
                 try:
                     lock.close()
-                except Exception as error:
-                    record["errors"].append("Fallback lease close: " + type(error).__name__)
+                except BaseException as error:
+                    failed("Fallback lease close: ", error)
             record["endedUtc"] = audit.utc()
-            new_json(case["public"] / "fallback-stop.json", record)
+            try:
+                new_json(case["public"] / "fallback-stop.json", record)
+            except BaseException as error:
+                failed("Fallback receipt: ", error)
+                receipt_error = error
+        terminal = next((error for _, error in failures if not isinstance(error, Exception)), receipt_error)
+        if terminal is not None:
+            preserve_finalization_errors(terminal, failures, "fallback-stop")
+            raise terminal
         return record
 
     def retire(self, case):
         require(not case["retirementAttempted"], "A retirement attempt cannot overwrite original evidence")
         case["retirementAttempted"] = True
+        case["safe"] = False
         self.active_public = case["public"]
-        errors = []
+        errors, failures = [], []
         state, scope = case["state"], case["scope"]
         record = {"schema": 1, "caseName": case["name"], "roots": case["roots"], "removed": [], "errors": errors,
                   "startedUtc": audit.utc(), "scope": "only this allocation's source copy/home/fixtures/konan/android-user",
                   "statePath": str(state), "initialized": case["initialized"]}
-        lock = None
+        lock, receipt_error, close_attempted = None, None, False
+
+        def failed(label, error):
+            errors.append(label + processes.format_ownership_error(error))
+            failures.append((label, error))
+            case["safe"] = False
+
+        def close_scope():
+            nonlocal close_attempted
+            if scope is not None and not close_attempted:
+                close_attempted = True  # A failed native close is not safe to retry.
+                try:
+                    scope.close()
+                except BaseException as error:
+                    failed("Ownership handle close: ", error)
+
         try:
             survivors = None
             if scope is not None:
                 try:
                     survivors = scope.drain()
-                    record["ownership"] = scope.description()
-                    record["survivors"] = survivors
-                except Exception as error:
-                    record["drainError"] = type(error).__name__ + ": " + str(error)
+                except BaseException as error:
+                    record["drainError"] = processes.format_ownership_error(error)
+                    failed("Case ownership drain: ", error)
             if case["started"] and not all(row["valid"] for row in case["leaves"]):
-                record["fallbackStop"] = self.fallback_stop(case)
-            require(survivors == [] and record.get("ownership", {}).get("discoveryErrors") == [],
+                try:
+                    record["fallbackStop"] = self.fallback_stop(case)
+                    require(not record["fallbackStop"]["errors"], "Fallback stop retirement is incomplete")
+                except BaseException as error:
+                    failed("Case fallback stop: ", error)
+                # Fallback may have launched a child even when it failed. Drain
+                # after that attempt before closing the case's native owner.
+                try:
+                    survivors = scope.drain() if scope is not None else None
+                except BaseException as error:
+                    survivors = None
+                    failed("Post-fallback ownership drain: ", error)
+            record["survivors"] = survivors
+            if scope is not None:
+                try:
+                    record["ownership"] = scope.description()
+                except BaseException as error:
+                    failed("Case ownership record: ", error)
+            # An empty census is not sufficient disposal authority: a native
+            # close can still become UNKNOWN. Close BEFORE touching any root.
+            close_scope()
+            require(not errors and survivors == [] and record.get("ownership", {}).get("discoveryErrors") == [],
                     "Controller bridge retirement unknown")
             require_disposal_evidence(case)
             require(digest(regular(state / "context.json")) == case["contextHash"], "Immutable state changed")
@@ -2432,27 +2501,25 @@ class Controller:
                 require(audit.existing_lstat(path) is None, "Owned disposable root remains")
                 record["removed"].append(spelling)
             case["safe"] = True
-        except Exception as error:
-            errors.append(type(error).__name__ + ": " + str(error))
+        except BaseException as error:
+            failed("Case retirement: ", error)
         finally:
             if lock is not None:
                 try:
                     lock.close()
-                except Exception as error:
-                    errors.append("Cleanup lease close: " + type(error).__name__)
-                    case["safe"] = False
-            try:
-                if scope is not None:
-                    scope.close()
-            except Exception as error:
-                errors.append("Ownership handle close: " + type(error).__name__)
-                case["safe"] = False
+                except BaseException as error:
+                    failed("Cleanup lease close: ", error)
+            close_scope()  # Independent fallback if an earlier operation failed.
             record.update(endedUtc=audit.utc(), complete=case["safe"] and not errors)
             try:
                 new_json(case["public"] / "retirement.json", record)
-            except Exception:
-                case["safe"] = False
-                raise
+            except BaseException as error:
+                failed("Case retirement receipt: ", error)
+                receipt_error = error
+        terminal = next((error for _, error in failures if not isinstance(error, Exception)), receipt_error)
+        if terminal is not None:
+            preserve_finalization_errors(terminal, failures, "case-retirement")
+            raise terminal
         require(case["safe"] and not errors, "Unknown retirement; preserve remaining sources/caches/evidence")
 
     def retire_command_copies(self):
@@ -2474,13 +2541,22 @@ class Controller:
                 "files": raw_rows, "duplicateCapturesRemoved": True, "controllerStateRemoved": True}
 
     def finalize_resources(self, source, errors):
+        failures, receipt_error = [], None
+
+        def failed(label, error):
+            errors.append(label + processes.format_ownership_error(error))
+            failures.append((label, error))
+            self.safe = False
+
         for case in self.cases:
             if not case["retirementAttempted"]:
                 try:
                     self.retire(case)
-                except Exception as error:
-                    errors.append("Partial allocation finalization: " + type(error).__name__ + ": " + str(error))
+                except BaseException as error:
+                    failed("Partial allocation finalization: ", error)
                     case["safe"] = self.safe = False
+            if not case["safe"]:
+                self.safe = False
         self.active_public = self.public / "admission"
         outer = {"schema": 1, "identity": self.identity, "startedUtc": audit.utc()}
         # Source observation failure must not skip independent owned-worker drain.
@@ -2489,51 +2565,78 @@ class Controller:
                 after = self.source(self.root, self.identity["sourceSha"], finalizing=True)
                 new_json(self.public / "admission/source-after.json", after)
                 require(after == source, "Campaign checkout changed; do not claim acceptance")
-        except Exception as error:
-            errors.append("Final source observation: " + type(error).__name__ + ": " + str(error))
-            self.safe = False
-        retired = False
+        except BaseException as error:
+            failed("Final source observation: ", error)
+        survivors, ownership, closed = None, {}, False
         try:
             survivors = self.scope.drain()
-            outer.update(survivors=survivors, ownership=self.scope.description())
-            require(survivors == [] and outer["ownership"].get("discoveryErrors") == [], "Outer native ownership did not retire")
-            retired = True
-        except Exception as error:
-            errors.append("Outer finalization: " + type(error).__name__ + ": " + str(error))
-            self.safe = False
-        finally:
-            try:
-                self.scope.close()
-            except Exception as error:
-                errors.append("Outer ownership close: " + type(error).__name__ + ": " + str(error))
-                retired = self.safe = False
+            require(survivors == [], "Outer owned workers did not retire")
+        except BaseException as error:
+            failed("Outer finalization: ", error)
+        try:
+            ownership = self.scope.description()
+            require(ownership.get("discoveryErrors") == [], "Outer native ownership did not retire")
+        except BaseException as error:
+            failed("Outer ownership record: ", error)
+        try:
+            self.scope.close()
+            closed = True
+        except BaseException as error:
+            failed("Outer ownership close: ", error)
+        retired = survivors == [] and ownership.get("discoveryErrors") == [] and closed
+        outer.update(survivors=survivors, ownership=ownership)
         # Preserve incomplete allocations/originals; dispose only verified copies.
         if retired and all(case["safe"] for case in self.cases):
             try:
                 outer["duplicateCaptureCleanup"] = self.retire_command_copies()
-            except Exception as error:
-                errors.append("Duplicate capture retirement: " + type(error).__name__ + ": " + str(error))
-                self.safe = False
+            except BaseException as error:
+                failed("Duplicate capture retirement: ", error)
         if self.cancelled:
             self.safe = False
         outer.update(endedUtc=audit.utc(), retirementKnown=retired, complete=self.safe and not errors, errors=list(errors))
-        new_json(self.public / "admission/controller-retirement.json", outer)
+        try:
+            new_json(self.public / "admission/controller-retirement.json", outer)
+        except BaseException as error:
+            failed("Controller retirement receipt: ", error)
+            receipt_error = error
+        terminal = next((error for _, error in failures if not isinstance(error, Exception)), receipt_error)
+        if terminal is not None:
+            preserve_finalization_errors(terminal, failures, "controller-retirement")
+            raise terminal
 
     def seal_results(self, outcomes, errors):
+        failures = []
+
+        def attempt(label, action):
+            try:
+                action()
+            except BaseException as error:
+                errors.append(label + processes.format_ownership_error(error))
+                failures.append((label, error))
+                self.safe = False
+
         for name, outcome in outcomes.items():
             case = next((case for case in self.cases if case["name"] == name), None)
-            new_json(self.public / name / "outcome.json", {"schema": 1, "identity": self.identity,
+            attempt(name + " outcome: ", lambda: new_json(self.public / name / "outcome.json", {"schema": 1, "identity": self.identity,
                 "caseName": name, **outcome, "retirementComplete": bool(case and case["safe"]),
                 "leafExits": [{key: row[key] for key in ("id", "purpose", "status", "valid", "retained")}
                               for row in case["leaves"]] if case else [],
-                "retentionErrors": case["retentionErrors"] if case else []})
-        new_json(self.public / "admission/outcome.json", {"schema": 1, "identity": self.identity,
+                "retentionErrors": case["retentionErrors"] if case else []}))
+            # These cases are independent. A failed seal must not suppress the
+            # other case or the final admission failure record. Never rewrite a
+            # case after its seal, including when a later case fails.
+            attempt(name + " artifact seal: ", lambda: seal_public(self.public / name, self.identity, name))
+            attempt(name + " artifact verification: ", lambda: verify_public(self.public / name, self.identity, name))
+        attempt("Admission outcome: ", lambda: new_json(self.public / "admission/outcome.json", {"schema": 1, "identity": self.identity,
             "verdict": "PASS_SCOPED_CONTROL" if self.safe and not errors and not self.cancelled else "NOT_ACCEPTED",
             "errors": errors, "cancelledSignals": self.cancelled, "endedUtc": audit.utc(),
-            "limitations": "Not all #141 criteria, full Windows/Linux suites, full gate, release or physical qualification."})
-        for name in ("admission", "current", "preimage"):
-            seal_public(self.public / name, self.identity, name)
-            verify_public(self.public / name, self.identity, name)
+            "limitations": "Not all #141 criteria, full Windows/Linux suites, full gate, release or physical qualification."}))
+        attempt("Admission artifact seal: ", lambda: seal_public(self.public / "admission", self.identity, "admission"))
+        attempt("Admission artifact verification: ", lambda: verify_public(self.public / "admission", self.identity, "admission"))
+        if failures:
+            terminal = next((error for _, error in failures if not isinstance(error, Exception)), failures[0][1])
+            preserve_finalization_errors(terminal, failures, "artifact-sealing")
+            raise terminal  # Never announce artifacts_ready after any failed seal.
         require(not any(char in str(self.public) for char in "\0\r\n"), "Unsafe public output path")
         output = audit.absolute_path(os.environ["GITHUB_OUTPUT"])
         regular(output)  # Actual runner output file, not a symlink or another source.
@@ -2543,6 +2646,18 @@ class Controller:
     def run(self):
         outcomes = {name: {"verdict": "NOT_EXECUTED", "scope": "No product acceptance"} for name in ("current", "preimage")}
         errors, source = [], None
+        interruption, finalization_error, failures = None, None, []
+
+        def failed(label, error, *, unhandled=False):
+            nonlocal interruption, finalization_error
+            errors.append(label + processes.format_ownership_error(error))
+            failures.append((label, error))
+            self.safe = False
+            if not isinstance(error, Exception) and interruption is None:
+                interruption = error
+            if unhandled and finalization_error is None:
+                finalization_error = error
+
         try:
             for number in (signal.SIGINT, signal.SIGTERM, *([signal.SIGBREAK] if hasattr(signal, "SIGBREAK") else [])):
                 self.handlers[number] = signal.getsignal(number)
@@ -2554,41 +2669,39 @@ class Controller:
             for name in ("current", "preimage"):
                 outcomes[name] = {"verdict": "NOT_ACCEPTED", "scope": "Case preparation/admission started; no product acceptance"}
                 case = self.initialize(name)
-                try:
-                    if name == "current":
-                        self.sdk_and_native(case)
-                        self.binding_controls(case)
-                    outcomes[name] = self.product(case)
-                except Exception:
-                    try:
-                        self.retire(case)
-                    except Exception as error:
-                        errors.append("Failed-case retirement: " + type(error).__name__ + ": " + str(error))
-                        case["safe"] = False
-                    raise  # The product's original failure remains authoritative.
+                if name == "current":
+                    self.sdk_and_native(case)
+                    self.binding_controls(case)
+                outcomes[name] = self.product(case)
                 self.retire(case)
                 require(case["safe"], "Earlier case retirement is incomplete")
             self.safe = True
-        except Exception as error:
-            errors.append(type(error).__name__ + ": " + str(error))
-            self.safe = False
+        except BaseException as error:
+            failed("", error)
             try:
                 write(self.public / "admission/controller-error.txt", (errors[-1] + "\n").encode("utf-8"))
-            except Exception as retention_error:
-                errors.append("Controller error retention: " + type(retention_error).__name__)
+            except BaseException as retention_error:
+                failed("Controller error retention: ", retention_error)
         finally:
             try:
                 self.finalize_resources(source, errors)
-            finally:
-                # Guaranteed even if resource receipts, artifact sealing or the
-                # runner's output channel fail. No owned work starts afterward.
-                for number, handler in self.handlers.items():
-                    try:
-                        signal.signal(number, handler)
-                    except Exception as error:
-                        errors.append("Signal handler restoration: " + type(error).__name__)
-                        self.safe = False
-        self.seal_results(outcomes, errors)
+            except BaseException as error:
+                failed("Controller finalization: ", error, unhandled=True)
+            # Each restoration and sealing is independent even when cancellation
+            # occurred inside a native close or a terminal receipt write.
+            for number, handler in self.handlers.items():
+                try:
+                    signal.signal(number, handler)
+                except BaseException as error:
+                    failed("Signal handler restoration: ", error)
+            try:
+                self.seal_results(outcomes, errors)
+            except BaseException as error:
+                failed("Artifact finalization: ", error, unhandled=True)
+        terminal = interruption if interruption is not None else finalization_error
+        if terminal is not None:
+            preserve_finalization_errors(terminal, failures, "controller-run")
+            raise terminal
         return 0 if self.safe and not errors and not self.cancelled else 125
 
 
@@ -2612,8 +2725,10 @@ def main():
             print("PASS: exact hosted Windows dispatch/source identity only; no product execution")
             return 0
         return Controller(root, identity).run()
-    except (Exception, KeyboardInterrupt) as error:
-        print("Windows directory control NOT_ACCEPTED: " + type(error).__name__ + ": " + str(error), file=sys.stderr)
+    except BaseException as error:
+        print("Windows directory control NOT_ACCEPTED: " + processes.format_ownership_error(error), file=sys.stderr)
+        if not isinstance(error, Exception):
+            raise
         return 125
 
 

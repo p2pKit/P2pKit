@@ -639,7 +639,7 @@ class PurePolicyTests(unittest.TestCase):
                     self.assertTrue(delivered.wait(timeout=3), "Reader did not deliver the prefix live")
                     tee.finish()  # Keep the real writer open through the bounded failure path.
                     self.assertTrue(tee.thread.is_alive())
-                    self.assertEqual(errors, ["Owned pipe did not reach EOF after worker drain"])
+                    self.assertEqual(errors, ["Owned stream retirement UNKNOWN: worker start/completion not acknowledged after drain"])
                     self.assertEqual(live.getvalue(), prefix)
                     self.assertEqual(destination.read_bytes(), prefix)
                 finally:

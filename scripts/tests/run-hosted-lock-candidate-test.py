@@ -44,12 +44,17 @@ def write_json(path, value):
 
 
 class FakeTee:
-    def __init__(self, stream, path, unused, errors):
-        path.write_bytes(stream.read())
-        path.chmod(0o600)
+    def __init__(self, stream, path, unused, errors, start=True):
+        self.source, self.path = stream, path
+        if start:
+            self.start()
+
+    def start(self):
+        self.path.write_bytes(self.source.read())
+        self.path.chmod(0o600)
 
     def finish(self):
-        pass
+        self.source.close()
 
 
 class ModelScope:
@@ -2148,6 +2153,16 @@ class RecoveryTests(Fixture):
         self.assertTrue(quiescence["recoveredUnexpectedWorkers"])
         self.assertEqual((state / "evidence/result.json").read_bytes(), raw)
         self.assertTrue((output / "manifest.json").is_file())
+
+
+def load_tests(loader, tests, pattern):
+    """Keep shared output-custody regressions in this established pure CI entry."""
+    spec = importlib.util.spec_from_file_location(
+        "owned_output_sinks_ci_controls", Path(__file__).with_name("owned-output-sinks-test.py"))
+    shared = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(shared)
+    tests.addTests(loader.loadTestsFromModule(shared, pattern=pattern))
+    return tests
 
 
 if __name__ == "__main__":
