@@ -27,6 +27,11 @@ import tempfile
 import time
 from typing import BinaryIO
 
+# Isolated script/fixture entry points still use the exact checked-in supplier.
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import audit_processes
+
 
 MAX_KEY_BYTES = 64 * 1024
 MAX_BYTES = 512 * 1024 * 1024
@@ -201,10 +206,44 @@ def _public_armor(data: bytes) -> bytes:
         _fail("Malformed public-key armor")
 
 
+def _gpg_environment(recipient: Recipient) -> dict[str, str]:
+    """Keep credential isolation without erasing an actual enclosing owner.
+
+    The existing manual/direct caller may have no native context. An owned caller
+    must supply its COMPLETE original context: preserve it, never invent a domain
+    or accept a partial one. This does not create a native scope, prove retirement
+    or authorize a different recipient/source. The outer controller still owns
+    its original baseline, complete result, failure custody and post-return seal.
+    """
+    environment = {"PATH": os.defpath, "HOME": str(recipient.work_dir), "GNUPGHOME": str(recipient.home),
+                   "LANG": "C", "LC_ALL": "C", "TMPDIR": str(recipient.work_dir / "tmp")}
+    markers = (audit_processes.JOB_ENV, audit_processes.CHAIN_ENV,
+               audit_processes.DOMAINS_ENV, audit_processes.STATE_ENV)
+    if not any(name in os.environ for name in markers):
+        return environment
+    try:
+        owner = {name: os.environ[name] for name in (*markers, "GRADLE_USER_HOME")}
+        # Native POSIX discovery decodes these original bytes as ASCII. Keep
+        # escaped Unicode paths valid; never reserialize an unrecognizable domain.
+        if not owner[audit_processes.DOMAINS_ENV].isascii():
+            _fail("Incomplete or mismatched enclosing evidence owner")
+        domains = audit_processes.ownership_domains(owner[audit_processes.CHAIN_ENV],
+                                                    owner[audit_processes.DOMAINS_ENV])
+        if not domains or owner[audit_processes.JOB_ENV] != domains[-1]["job"] or \
+                owner[audit_processes.STATE_ENV] != domains[-1]["state"] or \
+                owner["GRADLE_USER_HOME"] != domains[-1]["home"]:
+            _fail("Incomplete or mismatched enclosing evidence owner")
+    except (KeyError, audit_processes.OwnershipError):
+        raise EvidenceError("Incomplete or mismatched enclosing evidence owner") from None
+    environment.update(owner)
+    return environment
+
+
 def _gpg(recipient: Recipient, arguments: list[str], end: float, *, output: Path | None = None,
          status: bool = False) -> tuple[bytes, bytes]:
-    """GPG has no agent/network authority; only this direct child is terminated."""
+    """Bound the direct child and retain a real enclosing native domain, if any."""
     _deadline(end)
+    environment = _gpg_environment(recipient)
     operation = Path(tempfile.mkdtemp(prefix="gpg-", dir=recipient.work_dir))
     stdout_path = output if output is not None else operation / "stdout"
     stderr_path, status_path = operation / "stderr", operation / "status"
@@ -213,8 +252,6 @@ def _gpg(recipient: Recipient, arguments: list[str], end: float, *, output: Path
                "--no-auto-key-import", "--auto-key-locate", "clear", "--disable-dirmngr",
                "--pinentry-mode", "error", "--no-random-seed-file", "--no-default-keyring",
                "--keyring", str(recipient.work_dir / "recipient.gpg")]
-    environment = {"PATH": os.defpath, "HOME": str(recipient.work_dir), "GNUPGHOME": str(recipient.home),
-                   "LANG": "C", "LC_ALL": "C", "TMPDIR": str(recipient.work_dir / "tmp")}
     process = None
     code = None
     problem = None
