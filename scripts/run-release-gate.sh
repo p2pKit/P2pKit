@@ -26,6 +26,7 @@ python3 -I -B -S scripts/tests/test-transcript-custody-test.py
 ruby scripts/tests/check-hosted-lock-candidate-policy-test.rb
 python3 -I -B -S scripts/tests/run-hosted-lock-candidate-test.py
 python3 -I -B -S scripts/tests/hosted-lock-resources-test.py
+python3 -I -B -S scripts/tests/hosted-apple-link-test.py
 python3 -I -B -S scripts/tests/encrypt-hosted-evidence-test.py
 ruby scripts/tests/sample-release-workflow-test.rb
 python3 -I -B -S scripts/tests/publish-sample-release-test.py

@@ -27,22 +27,32 @@ sys.dont_write_bytecode = True
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 import audit_processes as processes
+import hosted_apple_link
 import hosted_evidence
 import hosted_lock_resources as resources
 
 MIB, GIB = 1024 ** 2, 1024 ** 3
 OPERATION = "dependency-lock-candidate"
 INTEL_OPERATION = "dependency-lock-candidate-x64"
+MACOS14_OPERATION = "dependency-lock-candidate-macos14"
 WORKFLOW = "p2pKit/P2pKit/.github/workflows/desktop-cross-host.yml@"
 XCODE = "/Applications/Xcode_26.5.app/Contents/Developer"
 PROFILES = {
     OPERATION: {"runnerArch": "ARM64", "hostRole": "macos-arm64", "osMajor": "26", "javaArch": "aarch64|arm64",
                 "xcode": XCODE, "xcodeVersion": "Xcode 26.5\nBuild version 17F42\n",
-                "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-26-5", "runtimeVersion": "26.5"},
+                "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-26-5", "runtimeVersion": "26.5",
+                "simulatorName": "iPhone 17"},
     INTEL_OPERATION: {"runnerArch": "X64", "hostRole": "macos-x64", "osMajor": "15", "javaArch": "amd64|x86_64",
                       "xcode": "/Applications/Xcode_26.3.app/Contents/Developer",
                       "xcodeVersion": "Xcode 26.3\nBuild version 17C529\n",
-                      "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-26-2", "runtimeVersion": "26.2"},
+                      "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-26-2", "runtimeVersion": "26.2",
+                      "simulatorName": "iPhone 17"},
+    # A separately admitted writer prerequisite, not current Apple/Intel qualification.
+    MACOS14_OPERATION: {"runnerArch": "ARM64", "hostRole": "macos-arm64", "osMajor": "14", "javaArch": "aarch64|arm64",
+                        "xcode": "/Applications/Xcode_16.2.app/Contents/Developer",
+                        "xcodeVersion": "Xcode 16.2\nBuild version 16C5032a\n",
+                        "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-18-2", "runtimeVersion": "18.2",
+                        "simulatorName": "iPhone 16"},
 }
 WRITER_SECONDS, STOP_SECONDS = 7200, 120
 INIT = "gradle/hosted-lock-candidate.init.gradle"
@@ -414,7 +424,8 @@ class Runtime:
         self.custody_attempted = False
         self.custody_request = None
         self.report = {"schema": 1, "scope": "MUTABLE_FULL_WRITER_NOT_AUDIT_LEAF", "state": str(state),
-                       "binding": binding, "job": self.job, "writer": None, "stop": None, "errors": self.errors,
+                       "binding": binding, "nativeProfile": dict(self.profile),
+                       "job": self.job, "writer": None, "stop": None, "errors": self.errors,
                        "candidateAccepted": False, "releaseGateExecuted": False, "physicalDeviceEvidence": False}
         self.lockfiles = []
         self.jvm = None
@@ -541,10 +552,10 @@ class Runtime:
         require(len(matches) == 1 and matches[0].get("version") == self.profile["runtimeVersion"] and matches[0].get("isAvailable") is True,
                 "real admitted simulator runtime unavailable")
         devices = parse(self.command("simulator-devices", ["/usr/bin/xcrun", "simctl", "list", "--json", "devices", "available"]).text())
-        matches = [row for row in devices["devices"].get(self.profile["runtime"], []) if row.get("name") == "iPhone 17" and
+        matches = [row for row in devices["devices"].get(self.profile["runtime"], []) if row.get("name") == self.profile["simulatorName"] and
                    row.get("state") == "Shutdown" and row.get("isAvailable") is True]
         require(len(matches) == 1 and re.fullmatch(r"[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}", matches[0].get("udid", "")),
-                "one available originally Shutdown iPhone 17 required")
+                "one available originally Shutdown " + self.profile["simulatorName"] + " required")
         self.simulator = matches[0]
         self.report["simulatorBefore"] = self.simulator
         record(self.evidence / "simulator-before.json", self.simulator)
@@ -556,6 +567,12 @@ class Runtime:
             "--expected-host", self.profile["hostRole"], "--evidence-dir", str(self.evidence / "native-controls"),
             "--fixture-parent", str(self.state / "fixtures/native-tmp")], 1800)
         self.multicast()
+        if self.binding["operation"] == MACOS14_OPERATION:
+            # The published CryptoKit archive is newer than this installed Xcode.
+            # Prove its real bounded link before any Gradle/Konan acquisition.
+            result = hosted_apple_link.admit(self.root, self.evidence / "apple-link-admission", self.command)
+            self.report["appleLinkAdmission"] = result
+            require(result.get("status") == "ADMITTED_LINK_ONLY", "Apple dependency link not admitted")
 
     def start_resource(self):
         cmd = Command(self, "resources", [sys.executable, "-I", "-B", "-S", str(SCRIPTS / "hosted_lock_resources.py"),
@@ -902,6 +919,8 @@ def run(root, binding):
             "boundary": "CHILD_CREDENTIAL_NONINHERITANCE_NOT_SAME_USER_SANDBOX",
             "parentSshAgentHookPresent": "SSH_AUTH_SOCK" in os.environ,
             "coldAcquisitionPlan": {"installedJdkSdkXcode": "admit without installing", "firstFetchMaxBytes": MIB,
+                "appleLinkArtifactMaxBytes": 3 * 128 * 1024 if binding["operation"] == MACOS14_OPERATION else 0,
+                "appleLinkOrder": "macos14 only; after natural multicast, before the complete writer",
                 "fullGraph": "one unchanged complete preparer; no retry", "observedIngressAbortBytes": 8 * GIB,
                 "limitation": "Sampled hosted interface accounting, NOT an absolute wire-byte quota; no local cache upload"}})
         # Recipient validity precedes every native fixture, dependency fetch and build.

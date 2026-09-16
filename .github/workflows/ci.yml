@@ -132,6 +132,7 @@ jobs:
           ruby scripts/tests/check-hosted-lock-candidate-policy-test.rb
           python3 -I -B -S scripts/tests/run-hosted-lock-candidate-test.py
           python3 -I -B -S scripts/tests/hosted-lock-resources-test.py
+          python3 -I -B -S scripts/tests/hosted-apple-link-test.py
           python3 -I -B -S scripts/tests/encrypt-hosted-evidence-test.py
 
       - name: Verify development sample release policy

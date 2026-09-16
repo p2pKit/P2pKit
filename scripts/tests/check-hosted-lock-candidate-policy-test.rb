@@ -31,6 +31,18 @@ mutations = {
     "Intel uses wrong Xcode" => ->(v) {
         v["jobs"][policy::JOB]["env"]["DEVELOPER_DIR"].sub!("Xcode_26.3", "Xcode_26.5")
     },
+    "macOS14 writer falls through to samples" => ->(v) {
+        v["jobs"]["verify"]["if"].sub!(" && inputs.operation != 'dependency-lock-candidate-macos14'", "")
+    },
+    "macOS14 writer enters cancelling workflow group" => ->(v) {
+        v["concurrency"]["cancel-in-progress"].sub!(" && inputs.operation != 'dependency-lock-candidate-macos14'", "")
+    },
+    "macOS14 writer silently substitutes another image" => ->(v) {
+        v["jobs"][policy::JOB]["runs-on"].sub!("'macos-14'", "'macos-15'")
+    },
+    "macOS14 writer silently substitutes default Xcode" => ->(v) {
+        v["jobs"][policy::JOB]["env"]["DEVELOPER_DIR"].sub!("Xcode_16.2", "Xcode")
+    },
     "arbitrary command input" => ->(v) { (v["on"] || v[true])["workflow_dispatch"]["inputs"]["command"] = {"type" => "string"} },
     "default writer operation" => ->(v) { (v["on"] || v[true])["workflow_dispatch"]["inputs"]["operation"]["default"] = policy::JOB },
     "unknown operation" => ->(v) { (v["on"] || v[true])["workflow_dispatch"]["inputs"]["operation"]["options"] << "shell" },

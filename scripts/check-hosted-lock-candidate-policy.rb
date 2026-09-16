@@ -8,13 +8,15 @@ module HostedLockCandidatePolicy
     ROOT = File.expand_path("..", __dir__)
     JOB = "dependency-lock-candidate"
     INTEL_OPERATION = "dependency-lock-candidate-x64"
-    RUNNER = "${{ inputs.operation == 'dependency-lock-candidate-x64' && 'macos-15-intel' || 'macos-26' }}"
+    MACOS14_OPERATION = "dependency-lock-candidate-macos14"
+    RUNNER = "${{ inputs.operation == 'dependency-lock-candidate-macos14' && 'macos-14' || inputs.operation == 'dependency-lock-candidate-x64' && 'macos-15-intel' || 'macos-26' }}"
     PYTHON = '"$DEVELOPER_DIR/usr/bin/python3"'
     STEP_NAME = "Verify isolated hosted lock-candidate controls"
     CHECKS = [
         "ruby scripts/tests/check-hosted-lock-candidate-policy-test.rb",
         "python3 -I -B -S scripts/tests/run-hosted-lock-candidate-test.py",
         "python3 -I -B -S scripts/tests/hosted-lock-resources-test.py",
+        "python3 -I -B -S scripts/tests/hosted-apple-link-test.py",
         "python3 -I -B -S scripts/tests/encrypt-hosted-evidence-test.py",
     ].freeze
     # These small, reviewed prologues are deliberately not a general shell
@@ -58,7 +60,7 @@ module HostedLockCandidatePolicy
     RELEASE_CALL = %r{\A(?:scripts/(?:tests/)?[a-z0-9-]+\.sh|ruby scripts/(?:tests/)?[a-z0-9-]+\.rb|python3(?: -B| -I -B -S)? scripts/(?:tests/)?[a-z0-9-]+\.py)\z}
     WORKFLOW_TEST_CALL = %r{\A(?:"\$ROOT/scripts/(?:tests/)?[a-z0-9-]+\.sh"|ruby "\$ROOT/scripts/(?:tests/)?[a-z0-9-]+\.rb"|python3(?: -B| -I -B -S)? "\$ROOT/scripts/(?:tests/)?[a-z0-9-]+\.py")\z}
     ENVIRONMENT = {
-        "DEVELOPER_DIR" => "${{ inputs.operation == 'dependency-lock-candidate-x64' && '/Applications/Xcode_26.3.app/Contents/Developer' || '/Applications/Xcode_26.5.app/Contents/Developer' }}",
+        "DEVELOPER_DIR" => "${{ inputs.operation == 'dependency-lock-candidate-macos14' && '/Applications/Xcode_16.2.app/Contents/Developer' || inputs.operation == 'dependency-lock-candidate-x64' && '/Applications/Xcode_26.3.app/Contents/Developer' || '/Applications/Xcode_26.5.app/Contents/Developer' }}",
         "P2PKIT_OPERATION" => "${{ inputs.operation }}",
         "P2PKIT_EXPECTED_SHA" => "${{ inputs.expected_sha }}",
         "P2PKIT_EXPECTED_TREE" => "${{ inputs.expected_tree }}",
@@ -107,7 +109,7 @@ module HostedLockCandidatePolicy
              %w[evidence_fingerprint evidence_public_key expected_sha expected_tree operation reviewed_base],
              "exact six shared dispatch inputs required")
         expected = {"operation" => {"type" => "choice", "options" => ["desktop", "sample-apps",
-            "windows-directory-fsync-control", "macos-arm64-admission", "macos-x64-admission", JOB, INTEL_OPERATION],
+            "windows-directory-fsync-control", "macos-arm64-admission", "macos-x64-admission", JOB, INTEL_OPERATION, MACOS14_OPERATION],
             "default" => "desktop", "required" => true}}
         %w[expected_sha expected_tree reviewed_base evidence_public_key evidence_fingerprint].each do |name|
             expected[name] = {"type" => "string", "required" => false, "default" => ""}
@@ -143,7 +145,7 @@ module HostedLockCandidatePolicy
         end
         first = lines.index(commands.first)
         need(lines[first, commands.length] == commands,
-             "#{label}: keep the four exact hosted controls in one ordered, fail-closed block")
+             "#{label}: keep the five exact hosted controls in one ordered, fail-closed block")
         prefix = lines.take(first)
         need(prefix.take(prologue.length) == prologue &&
              prefix.drop(prologue.length).all? { |line| allowed_call.match?(line) },

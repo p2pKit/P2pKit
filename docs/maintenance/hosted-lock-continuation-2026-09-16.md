@@ -1,5 +1,8 @@
 # Hosted sample-build prerequisites — 16 September 2026
 
+The later [separate macOS 14 prerequisite plan](hosted-lock-macos14-2026-09-16.md)
+preserves all failures below; its source/profile is not a successful host or writer.
+
 The owner now requests GitHub-only execution until the sample workflow works.
 Local source/offline checks are allowed; local Gradle, SDK/dependency acquisition
 and app/device builds remain held. This supersedes the earlier dated no-retry

@@ -403,6 +403,8 @@ class EnvironmentTests(Fixture):
 class NativeProfileTests(Fixture):
     INTEL = "dependency-lock-candidate-x64"
     INTEL_XCODE = "/Applications/Xcode_26.3.app/Contents/Developer"
+    MACOS14 = "dependency-lock-candidate-macos14"
+    MACOS14_XCODE = "/Applications/Xcode_16.2.app/Contents/Developer"
 
     def intel_environment(self):
         return dict(self.env, P2PKIT_OPERATION=self.INTEL, RUNNER_ARCH="X64", DEVELOPER_DIR=self.INTEL_XCODE)
@@ -417,6 +419,31 @@ class NativeProfileTests(Fixture):
         self.assertEqual(result, dict(self.binding, operation=self.INTEL))
         self.assertEqual(env["GITHUB_JOB"], "dependency-lock-candidate")
         self.assertEqual(len(app.INPUTS), 6)
+
+    def test_macos14_dispatch_is_a_separate_exact_source_prerequisite_profile(self):
+        env = dict(self.env, P2PKIT_OPERATION=self.MACOS14, DEVELOPER_DIR=self.MACOS14_XCODE)
+        self.event_for(env)
+        result = app.dispatch(env, self.root)
+        self.assertEqual(result, dict(self.binding, operation=self.MACOS14))
+        self.assertEqual(env["GITHUB_JOB"], "dependency-lock-candidate")
+        self.assertEqual(len(app.INPUTS), 6)
+        self.assertEqual(app.native_profile(self.MACOS14)["hostRole"], "macos-arm64")
+        with self.assertRaises(ValueError):
+            app.dispatch(dict(env, RUNNER_ARCH="X64"), self.root)
+        self.event_for(self.env)
+        with self.assertRaises(ValueError):
+            app.dispatch(env, self.root)
+
+    def test_macos14_child_requires_its_real_xcode_without_inheriting_credentials(self):
+        env = dict(self.env, P2PKIT_OPERATION=self.MACOS14, DEVELOPER_DIR=self.MACOS14_XCODE,
+                   GH_TOKEN="synthetic-never-used", SSH_AUTH_SOCK="/synthetic/agent")
+        child = app.credential_free_environment(env, self.state, self.root)
+        self.assertEqual(child["DEVELOPER_DIR"], self.MACOS14_XCODE)
+        self.assertNotIn("GH_TOKEN", child)
+        self.assertNotIn("SSH_AUTH_SOCK", child)
+        for wrong in (app.XCODE, self.INTEL_XCODE):
+            with self.subTest(wrong=wrong), self.assertRaises(ValueError):
+                app.credential_free_environment(dict(env, DEVELOPER_DIR=wrong), self.state, self.root)
 
     def test_operation_runner_and_original_event_must_agree(self):
         for operation, arch in ((app.OPERATION, "X64"), (self.INTEL, "ARM64"), ("shell", "X64")):
@@ -440,19 +467,27 @@ class NativeProfileTests(Fixture):
             with self.subTest(wrong=wrong), self.assertRaises(ValueError):
                 app.credential_free_environment(dict(original, DEVELOPER_DIR=wrong), self.state, self.root)
 
-    def model_admission(self, *, intel, wrong=None):
+    def model_admission(self, *, intel=False, macos14=False, wrong=None, fail_multicast=False, link_status="ADMITTED_LINK_ONLY"):
         """Run the real admission with fake command bytes; no tool or native call."""
+        self.assertFalse(intel and macos14)
         env = self.intel_environment() if intel else self.env.copy()
         env["PATH"] = "/synthetic/never-executed"
         operation = self.INTEL if intel else app.OPERATION
         role, version, java_arch = ("macos-x64", "15.7.9", "amd64") if intel else ("macos-arm64", "26.6.2", "aarch64")
         xcode = "Xcode 26.3\nBuild version 17C529\n" if intel else "Xcode 26.5\nBuild version 17F42\n"
         runtime_version = "26.2" if intel else "26.5"
+        device_name = "iPhone 17"
+        if macos14:
+            operation = self.MACOS14
+            env.update(P2PKIT_OPERATION=operation, DEVELOPER_DIR=self.MACOS14_XCODE)
+            version, xcode = "14.8.9", "Xcode 16.2\nBuild version 16C5032a\n"
+            runtime_version, device_name = "18.2", "iPhone 16"
         runtime = "com.apple.CoreSimulator.SimRuntime.iOS-" + runtime_version.replace(".", "-")
         if wrong:
             role, version, java_arch, xcode, runtime_version = (
                 wrong.get("role", role), wrong.get("version", version), wrong.get("java_arch", java_arch),
                 wrong.get("xcode", xcode), wrong.get("runtime_version", runtime_version))
+            device_name = wrong.get("device_name", device_name)
         state = Path(tempfile.mkdtemp(prefix="admit-", dir=self.base))
         for name in ("evidence", "evidence/commands", "evidence/task-maps", "gradle-home", "gradle-home/init.d", "tmp", "tmp/java"):
             (state / name).mkdir(mode=0o700)
@@ -481,7 +516,7 @@ class NativeProfileTests(Fixture):
                        "simulator-runtimes": json.dumps({"runtimes": [
                            {"identifier": runtime, "version": runtime_version, "isAvailable": True}]}),
                        "simulator-devices": json.dumps({"devices": {runtime: [
-                           {"name": "iPhone 17", "state": "Shutdown", "isAvailable": True,
+                           {"name": device_name, "state": "Shutdown", "isAvailable": True,
                             "udid": "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"}]}})}
             for major, home in homes.items():
                 outputs["java-home-" + str(major)] = str(home) + "\n"
@@ -503,17 +538,42 @@ class NativeProfileTests(Fixture):
         def git(label, *args, **kwargs):
             return SimpleNamespace(text=lambda: git_outputs[label], directory=config)
 
+        def multicast_control():
+            calls.append(("multicast", []))
+            if fail_multicast:
+                raise ValueError("synthetic original multicast failure")
+
+        def apple_link(root, directory, owner_command):
+            self.assertEqual((root, directory), (self.root, rt.evidence / "apple-link-admission"))
+            self.assertEqual(owner_command, rt.command)
+            calls.append(("apple-link", []))
+            return {"status": link_status, "syntheticOnly": True}
+
         with mock.patch.object(rt, "source", return_value=self.before), mock.patch.object(rt, "git", side_effect=git), \
                 mock.patch.object(rt, "command", side_effect=command), mock.patch.object(rt, "copy_candidates"), \
                 mock.patch.object(app.processes, "host_role", return_value=role), \
-                mock.patch.object(rt, "multicast") as multicast:
+                mock.patch.object(rt, "multicast", side_effect=multicast_control) as multicast, \
+                mock.patch.object(app.hosted_apple_link, "admit", side_effect=apple_link) as link:
             try:
                 rt.admit()
             except ValueError:
-                multicast.assert_not_called()
-                self.assertNotIn("native-controls", [label for label, _ in calls])
+                if wrong:
+                    multicast.assert_not_called()
+                    self.assertNotIn("native-controls", [label for label, _ in calls])
+                if wrong or fail_multicast:
+                    link.assert_not_called()
+                self.assertIsNone(rt.report["writer"])
+                self.assertIsNone(rt.report["stop"])
+                self.assertFalse(rt.custody_attempted)
                 raise
             multicast.assert_called_once_with()
+            if macos14:
+                link.assert_called_once()
+                self.assertEqual([label for label, _ in calls][-3:], ["native-controls", "multicast", "apple-link"])
+                self.assertEqual(rt.report["appleLinkAdmission"]["status"], "ADMITTED_LINK_ONLY")
+                self.assertEqual(rt.report["nativeProfile"]["simulatorName"], "iPhone 16")
+            else:
+                link.assert_not_called()
         self.assertIn(("native-controls", [sys.executable, "-I", "-B", "-S",
             str(app.SCRIPTS / "tests/run-audit-command-test.py"), "--expected-host", role,
             "--evidence-dir", str(rt.evidence / "native-controls"), "--fixture-parent", str(state / "fixtures/native-tmp")]), calls)
@@ -524,6 +584,24 @@ class NativeProfileTests(Fixture):
             with self.subTest(intel=intel):
                 self.model_admission(intel=intel)
 
+    def test_macos14_admission_requires_real_profile_then_multicast_then_bounded_link(self):
+        self.model_admission(macos14=True)
+
+    def test_macos14_rejects_wrong_os_architecture_xcode_runtime_and_device_before_native_work(self):
+        for wrong in ({"role": "macos-x64"}, {"version": "15.7.9"}, {"java_arch": "amd64"},
+                      {"xcode": "Xcode 15.4\nBuild version 15F31d\n"}, {"runtime_version": "26.5"},
+                      {"device_name": "iPhone 17"}):
+            with self.subTest(wrong=wrong), self.assertRaises(ValueError):
+                self.model_admission(macos14=True, wrong=wrong)
+
+    def test_macos14_failed_multicast_never_downloads_or_runs_apple_link_admission(self):
+        with self.assertRaisesRegex(ValueError, "original multicast failure"):
+            self.model_admission(macos14=True, fail_multicast=True)
+
+    def test_macos14_incomplete_link_result_cannot_admit_the_writer(self):
+        with self.assertRaisesRegex(ValueError, "Apple dependency link not admitted"):
+            self.model_admission(macos14=True, link_status="HOLD")
+
     def test_cross_profile_native_tool_and_runtime_values_fail_before_native_controls(self):
         for wrong in ({"role": "macos-arm64"}, {"version": "26.6.2"}, {"java_arch": "aarch64"},
                       {"xcode": "Xcode 26.5\nBuild version 17F42\n"}, {"runtime_version": "26.3"}):
@@ -531,7 +609,7 @@ class NativeProfileTests(Fixture):
                 self.model_admission(intel=True, wrong=wrong)
 
     def test_resource_helper_receives_exact_selected_native_role(self):
-        for operation, role in ((app.OPERATION, "macos-arm64"), (self.INTEL, "macos-x64")):
+        for operation, role in ((app.OPERATION, "macos-arm64"), (self.INTEL, "macos-x64"), (self.MACOS14, "macos-arm64")):
             rt = app.Runtime(self.root, self.state, dict(self.binding, operation=operation), self.env, job=JOB)
             fake = SimpleNamespace(start=lambda: setattr(rt, "resource_ready", True))
             with mock.patch.object(app, "Command", return_value=fake) as command:
@@ -542,7 +620,7 @@ class NativeProfileTests(Fixture):
     def test_selected_simulator_runtime_retirement_never_touches_other_devices(self):
         owned = {"udid": "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE", "isAvailable": True, "state": "Shutdown"}
         other = dict(owned, udid="11111111-2222-3333-4444-555555555555", state="Booted")
-        for operation in (app.OPERATION, self.INTEL):
+        for operation in (app.OPERATION, self.INTEL, self.MACOS14):
             for initial in ("Shutdown", "Booted"):
                 with self.subTest(operation=operation, initial=initial):
                     rt = app.Runtime(self.root, self.state, dict(self.binding, operation=operation), self.env, job=JOB)
@@ -1977,10 +2055,10 @@ class RecoveryTests(Fixture):
         scope.assert_not_called()
         encrypt.assert_not_called()
 
-    def test_changed_context_profile_blocks_seal_before_native_recovery_or_export(self):
+    def assert_context_profile_rejected(self, operation):
         state, _ = self.recovery_fixture()
         context = app.parse(app.read(state / "context.json"))
-        context["binding"]["operation"] = app.INTEL_OPERATION
+        context["binding"]["operation"] = operation
         write_json(state / "context.json", context)
         with mock.patch.object(app, "quiesce") as quiesce, \
                 mock.patch.object(app, "recover_interrupted") as recover, \
@@ -1991,11 +2069,17 @@ class RecoveryTests(Fixture):
         encrypt.assert_not_called()
         self.assertFalse((state / "sealed.json").exists())
 
-    def test_changed_saved_profile_blocks_recovery_stop_but_preserves_finalization_hold(self):
+    def test_changed_context_profile_blocks_seal_before_native_recovery_or_export(self):
+        self.assert_context_profile_rejected(app.INTEL_OPERATION)
+
+    def test_macos14_context_cannot_relabel_an_existing_profiles_evidence(self):
+        self.assert_context_profile_rejected(app.MACOS14_OPERATION)
+
+    def assert_saved_profile_rejected(self, operation):
         state, _ = self.recovery_fixture()
         path = state / "execution-environment.json"
         saved = app.parse(app.read(path))
-        saved["binding"]["operation"] = app.INTEL_OPERATION
+        saved["binding"]["operation"] = operation
         write_json(path, saved)
         original = path.read_bytes()
         context = app.parse(app.read(state / "context.json"))
@@ -2016,6 +2100,12 @@ class RecoveryTests(Fixture):
         self.assertTrue(any(row["stage"] == "recovery-stop" and row["message"] == "recovery execution binding differs"
                             for row in result["errors"]))
         self.assertEqual(path.read_bytes(), original)
+
+    def test_changed_saved_profile_blocks_recovery_stop_but_preserves_finalization_hold(self):
+        self.assert_saved_profile_rejected(app.INTEL_OPERATION)
+
+    def test_macos14_saved_profile_cannot_redirect_an_existing_profiles_recovery(self):
+        self.assert_saved_profile_rejected(app.MACOS14_OPERATION)
 
     def test_replaced_gradle_home_rejected_before_recovery_or_export(self):
         state, _ = self.recovery_fixture()
