@@ -9,8 +9,11 @@ import java.net.InetSocketAddress;
 import java.net.MulticastSocket;
 import java.net.NetworkInterface;
 import java.net.NoRouteToHostException;
+import java.net.StandardProtocolFamily;
 import java.net.StandardSocketOptions;
 import java.nio.ByteBuffer;
+import java.nio.channels.DatagramChannel;
+import java.nio.channels.MembershipKey;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -991,9 +994,23 @@ public final class JmdnsCloseLifecycleFixture {
             // interoperability, a policy diagnosis, or a reason to change the original FAIL.
             System.out.println("startup primitivePair observation=POST_FAILURE scope=CAPTURED_IPV4_MDNS"
                     + " interpretation=KERNEL_ACCEPTANCE_ONLY");
-            jdkSend(network);
-            if (matchedNetwork(fixture) == null) {
-                System.out.println("startup primitive=PYTHON_IPV4 attempted=false reason=CURRENT_INTERFACE_NOT_MATCHED");
+            if (!jdkSend(network) || Thread.currentThread().isInterrupted()) {
+                System.out.println("startup primitivePair continued=false reason=JDK_RETIREMENT_OR_INTERRUPT");
+                return;
+            }
+            if ("true".equals(System.getProperty("p2pkit.audit.jmdnsIpv4ChannelPrimitive"))) {
+                network = matchedNetwork(fixture);
+                if (network == null || Thread.currentThread().isInterrupted()) {
+                    System.out.println("startup primitive=JDK_INET4 attempted=false reason=INTERFACE_OR_INTERRUPT");
+                    return;
+                }
+                if (!jdkInetSend(network) || Thread.currentThread().isInterrupted()) {
+                    System.out.println("startup primitive=PYTHON_IPV4 attempted=false reason=INET_RETIREMENT_OR_INTERRUPT");
+                    return;
+                }
+            }
+            if (matchedNetwork(fixture) == null || Thread.currentThread().isInterrupted()) {
+                System.out.println("startup primitive=PYTHON_IPV4 attempted=false reason=INTERFACE_OR_INTERRUPT");
                 return;
             }
             nativeSend(python, snapshot.selected, fixture.address);
@@ -1005,7 +1022,7 @@ public final class JmdnsCloseLifecycleFixture {
                     InterfaceIdentity.capture(() -> network)) ? network : null;
         }
 
-        private static void jdkSend(NetworkInterface network) {
+        private static boolean jdkSend(NetworkInterface network) {
             MulticastSocket socket = null;
             String stage = "SOCKET", result = "FAIL", failureClass = "NONE", closeFailure = "NONE";
             int sent = 0;
@@ -1024,6 +1041,9 @@ public final class JmdnsCloseLifecycleFixture {
                 socket.joinGroup(new InetSocketAddress(group, DNSConstants.MDNS_PORT), network);
                 stage = "TTL";
                 socket.setTimeToLive(255);
+                System.out.println("startup primitive=JDK_MULTICAST ttl=" + socket.getTimeToLive()
+                        + " loopbackEnabled=" + socket.getOption(StandardSocketOptions.IP_MULTICAST_LOOP)
+                        + " selectedInterfaceMatch=" + network.equals(socket.getNetworkInterface()));
                 byte[] query = HexFormat.of().parseHex(QUERY_HEX);
                 stage = "SEND";
                 socket.send(new DatagramPacket(query, query.length, group, DNSConstants.MDNS_PORT));
@@ -1044,6 +1064,73 @@ public final class JmdnsCloseLifecycleFixture {
                         + " socketClosed=" + (socket == null ? "NOT_CREATED" : socket.isClosed())
                         + " closeFailureClass=" + closeFailure);
             }
+            return (socket == null || socket.isClosed()) && "NONE".equals(closeFailure);
+        }
+
+        private static boolean jdkInetSend(NetworkInterface network) {
+            // Extra opt-in observation in the SAME JVM, never a product fallback.
+            // INET plus a different socket API/nonblocking path is not pure family isolation.
+            DatagramChannel channel = null;
+            MembershipKey membership = null;
+            String stage = "SOCKET", result = "FAIL", failureClass = "NONE", closeFailure = "NONE";
+            int sent = 0;
+            try {
+                channel = DatagramChannel.open(StandardProtocolFamily.INET);
+                stage = "NONBLOCKING";
+                channel.configureBlocking(false);
+                require(!channel.isBlocking(), "inet_channel_must_be_nonblocking");
+                stage = "REUSE";
+                channel.setOption(StandardSocketOptions.SO_REUSEADDR, true);
+                channel.setOption(StandardSocketOptions.SO_REUSEPORT, true);
+                boolean reuseAddress = Boolean.TRUE.equals(channel.getOption(StandardSocketOptions.SO_REUSEADDR));
+                boolean reusePort = Boolean.TRUE.equals(channel.getOption(StandardSocketOptions.SO_REUSEPORT));
+                System.out.println("startup primitive=JDK_INET4 requestedFamily=INET nonblocking=" + !channel.isBlocking()
+                        + " reuseAddress=" + reuseAddress + " reusePort=" + reusePort);
+                require(reuseAddress && reusePort, "inet_reuse_options_not_matched");
+                stage = "BIND";
+                channel.bind(new InetSocketAddress(InetAddress.getByAddress(new byte[4]), DNSConstants.MDNS_PORT));
+                stage = "INTERFACE";
+                channel.setOption(StandardSocketOptions.IP_MULTICAST_IF, network);
+                boolean interfaceMatch = network.equals(channel.getOption(StandardSocketOptions.IP_MULTICAST_IF));
+                System.out.println("startup primitive=JDK_INET4 selectedInterfaceMatch=" + interfaceMatch);
+                require(interfaceMatch, "inet_selected_interface_not_matched");
+                InetAddress group = InetAddress.getByAddress(new byte[] {(byte) 224, 0, 0, (byte) 251});
+                stage = "JOIN";
+                membership = channel.join(group, network);
+                require(membership.isValid() && membership.channel() == channel
+                        && network.equals(membership.networkInterface()) && group.equals(membership.group())
+                        && membership.sourceAddress() == null, "inet_membership_not_matched");
+                stage = "TTL";
+                channel.setOption(StandardSocketOptions.IP_MULTICAST_TTL, 255);
+                Integer ttl = channel.getOption(StandardSocketOptions.IP_MULTICAST_TTL);
+                Boolean loopback = channel.getOption(StandardSocketOptions.IP_MULTICAST_LOOP);
+                System.out.println("startup primitive=JDK_INET4 ttl=" + ttl + " loopbackEnabled=" + loopback);
+                require(Integer.valueOf(255).equals(ttl) && Boolean.TRUE.equals(loopback), "inet_options_not_matched");
+                byte[] query = HexFormat.of().parseHex(QUERY_HEX);
+                stage = "SEND";
+                // One send only. Zero (possible in nonblocking mode) or a short count is not acceptance.
+                sent = channel.send(ByteBuffer.wrap(query), new InetSocketAddress(group, DNSConstants.MDNS_PORT));
+                require(sent == 42 && sent == query.length, "inet_send_not_complete");
+                result = "KERNEL_ACCEPTED";
+            } catch (Throwable failure) {
+                failureClass = failure.getClass().getName();
+            } finally {
+                if (channel != null) {
+                    try {
+                        channel.close();
+                    } catch (Throwable failure) {
+                        closeFailure = failure.getClass().getName();
+                    }
+                }
+                // Closing the channel invalidates its memberships. Keep send and cleanup outcomes separate.
+                System.out.println("startup primitive=JDK_INET4 stage=" + stage + " result=" + result
+                        + " failureClass=" + failureClass + " errno=UNKNOWN sentBytes=" + sent
+                        + " channelClosed=" + (channel == null ? "NOT_CREATED" : !channel.isOpen())
+                        + " membershipInvalidated=" + (membership == null ? "NOT_JOINED" : !membership.isValid())
+                        + " closeFailureClass=" + closeFailure);
+            }
+            return (channel == null || !channel.isOpen()) && (membership == null || !membership.isValid())
+                    && "NONE".equals(closeFailure);
         }
 
         private static void nativeSend(Path python, InterfaceIdentity network, Inet4Address address) {

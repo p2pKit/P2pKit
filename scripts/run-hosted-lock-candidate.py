@@ -605,6 +605,7 @@ class Runtime:
         command = self.command("multicast-control", [self.env["JAVA_HOME"] + "/bin/java", "-Xms16m", "-Xmx128m",
             "-XX:MaxMetaspaceSize=128m", "-XX:ActiveProcessorCount=2", "-XX:+UseSerialGC",
             "-Dorg.slf4j.simpleLogger.defaultLogLevel=off", "-Dp2pkit.audit.jmdnsStartupPrimitives=true",
+            "-Dp2pkit.audit.jmdnsIpv4ChannelPrimitive=true",
             "-Dp2pkit.audit.pythonExecutable=" + str(python), "-cp",
             os.pathsep.join(map(str, (work / "fixture", work / "vendor", vendor / "resources", jar))),
             "dev.p2pkit.transport.lan.internal.jmdns.impl.JmdnsCloseLifecycleFixture", "control"], 45)

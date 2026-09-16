@@ -696,6 +696,7 @@ class MulticastInterpreterTests(Fixture):
         self.python.chmod(0o700)
         self.rt.env["JAVA_HOME"] = str(self.base / "synthetic-jdk")
         self.calls = []
+        self.control_transcript = b"PASS mode=control\n"
         real_digest = app.digest
         self.use_patch(mock.patch.object(app, "digest", side_effect=lambda p:
             self.pin if Path(p).name == "slf4j-api-2.0.7.jar" else real_digest(p)))
@@ -705,7 +706,7 @@ class MulticastInterpreterTests(Fixture):
         self.calls.append((label, argv))
         directory = self.rt.commands / label
         directory.mkdir()
-        (directory / "stdout.log").write_bytes(b"PASS mode=control\n" if label == "multicast-control" else b"")
+        (directory / "stdout.log").write_bytes(self.control_transcript if label == "multicast-control" else b"")
         (directory / "stderr.log").write_bytes(b"")
         if label == "multicast-dependency":
             Path(argv[argv.index("--output") + 1]).write_bytes(b"SYNTHETIC, NOT A JAR")
@@ -757,6 +758,48 @@ class MulticastInterpreterTests(Fixture):
         alias = self.base / "broken-launcher"
         alias.symlink_to(self.base / "absent-python")
         self.assert_rejected_before_acquisition(alias)
+
+    def assert_ipv4_diagnostic_contract(self):
+        self.assert_interpreter(self.python)
+        command = self.command.call_args_list[-1]
+        self.assertEqual(command.args[0], "multicast-control")
+        self.assertEqual(command.args[2], 45)
+        argv = command.args[1]
+        self.assertEqual(argv.count("-Dp2pkit.audit.jmdnsStartupPrimitives=true"), 1)
+        self.assertEqual(argv.count("-Dp2pkit.audit.jmdnsIpv4ChannelPrimitive=true"), 1)
+        self.assertFalse(any(arg.startswith(("-Djava.net.preferIPv4Stack=", "-Djava.net.preferIPv6Addresses="))
+                             for arg in argv))
+        for label, release in (("multicast-vendor-compile", "8"), ("multicast-fixture-compile", "17")):
+            compiler = next(argv for name, argv in self.calls if name == label)
+            self.assertEqual(compiler[compiler.index("--release") + 1], release)
+
+    def test_arm_diagnostic_is_opted_in_without_global_network_flags_or_extended_bound(self):
+        self.assert_ipv4_diagnostic_contract()
+
+    def test_intel_diagnostic_is_opted_in_without_global_network_flags_or_extended_bound(self):
+        self.rt.profile = app.PROFILES["dependency-lock-candidate-x64"]
+        self.assert_ipv4_diagnostic_contract()
+
+    def test_failed_original_is_not_admitted_by_ipv4_kernel_acceptance(self):
+        self.control_transcript = (b"FAIL mode=control\n"
+            b"startup primitive=JDK_INET4 stage=SEND result=KERNEL_ACCEPTED sentBytes=42\n")
+        with mock.patch.object(app.sys, "executable", str(self.python)), self.assertRaises(ValueError):
+            self.rt.multicast()
+        self.assertFalse((self.rt.evidence / "multicast-inputs.json").exists())
+
+    def test_stray_pass_and_kernel_acceptance_cannot_rescue_original_failure(self):
+        self.control_transcript = (b"FAIL mode=control\nPASS mode=control\n"
+            b"startup primitive=JDK_INET4 stage=SEND result=KERNEL_ACCEPTED sentBytes=42\n")
+        with mock.patch.object(app.sys, "executable", str(self.python)), self.assertRaises(ValueError):
+            self.rt.multicast()
+        self.assertFalse((self.rt.evidence / "multicast-inputs.json").exists())
+
+    def test_rescue_is_not_natural_admission_even_with_pass_and_kernel_acceptance(self):
+        self.control_transcript = (b"PASS mode=control\nphase=fixture_rescue_begin\n"
+            b"startup primitive=JDK_INET4 stage=SEND result=KERNEL_ACCEPTED sentBytes=42\n")
+        with mock.patch.object(app.sys, "executable", str(self.python)), self.assertRaises(ValueError):
+            self.rt.multicast()
+        self.assertFalse((self.rt.evidence / "multicast-inputs.json").exists())
 
 
 class SharedResourceClockTests(Fixture):

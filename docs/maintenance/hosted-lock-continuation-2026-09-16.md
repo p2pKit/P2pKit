@@ -102,6 +102,83 @@ cross-profile seal/recovery rejection and selected-simulator-only retirement.
 Source review/dispatch and any later generated candidate require their own exact
 bindings.
 
+## Actual Intel result: same admission failure, not accepted locks
+
+[Run 35044849839/1](https://github.com/p2pKit/P2pKit/actions/runs/35044849839),
+job `104632364405`, executed `dependency-lock-candidate-x64` at source/base
+`50b7e6b50b419639054487c2431eb23f05659776`, tree
+`68344d0a8561a62f893a1108855854c6c1f414a6`, completing at
+`2026-09-16T01:41:26Z`. **FAILURE/HOLD**, controller 125. The source includes
+the separately reviewed, test-only [#442](https://github.com/p2pKit/P2pKit/issues/442)
+exclusive-private stop-marker correction; production resource logic is unchanged.
+
+Real Intel macOS 15.7.9, Xcode 26.3/17C529 and native JDK 17.0.20.1/21.0.12.1
+passed their setup checks. The applicable iOS 26.2 runtime and selected Shutdown
+iPhone 17 were inventoried; no simulator boot/app execution occurred. The same
+native-control command as above, with `--expected-host macos-x64`, passed **93
+tests in 135.858 s**. Both current vendored-source/fixture `javac` commands passed.
+`JmdnsCloseLifecycleFixture control` then failed: `host_not_announced`, two send
+calls/zero returns, original exit 1 and rescue preserved. Other modes were not run
+in this attempt; earlier ordinary-Mac eight-mode evidence retains its separate scope.
+
+The default JDK primitive again failed SEND/`NoRouteToHostException`/0 bytes;
+canonical Python reported SEND/`KERNEL_ACCEPTED`/42 bytes, closed/reaped.
+This does not establish delivery or a network, privacy, provider or family cause.
+The resource observer emitted 90 fast/37 network shared-RAW samples, consumed by
+the real controller with unchanged freshness limits; all 217 original resource
+queries were independently inspected. No native fault injection is claimed.
+
+**Writer/stop null; no Gradle, #424 suites/custody or sample build started.** All
+twelve locks and verification XML remain byte-identical; six obsolete memberships
+still block compilation. All 32 command scopes and 39 final native fixture
+retirements were verified; selected simulator remained Shutdown. Artifact
+`10426309873` expires `2026-09-30T01:41:20Z`; its 677,980-byte ZIP has SHA-256
+`f50e0e452d41e9cdc88875254101f3db093bfa3fad6a501618fdaf6e82a5bf83`.
+Authenticated decryption and all 1,714 archive members/6,165,729 file bytes were
+checked, with the retrieval's owned GPG agent retired. Private packet:
+`hosted-lock-run-35044849839-73yzg_5m`.
+
+Independent verdict **APPROVE_SCOPED_INTEL_POSTIMAGE_AND_FAILED_RUN_CUSTODY**;
+report SHA-256 `945c8386da5e53374e47d7a19af21c609efd6efea0e7fa4109d9718625b48015`.
+It does not approve the failed host/writer, apps, formal PR or closure. Separate
+review-only parser errors are preserved in the private report; they are not
+hosted failures. No unchanged full writer/sample retry is justified by this result.
+
+## Next diagnostic: explicit IPv4 in the same JVM, not a product workaround
+
+The two real hosts justify one narrower comparison, rather than speculative
+global JVM flags. The controller now opts into
+`-Dp2pkit.audit.jmdnsIpv4ChannelPrimitive=true` inside the existing guarded,
+post-failure Mac/control/IPv4-NoRoute path. The private fixture helper opens
+`DatagramChannel.open(StandardProtocolFamily.INET)` in the **same JVM**. It
+sets/verifies both reuse options before explicit IPv4 wildcard binding, matches
+the captured interface/group/port, validates membership/TTL/loopback, and sends
+the same fixed 42-byte diagnostic once in nonblocking mode. Zero/short sends fail.
+It closes its channel in `finally`, observes membership invalidation, rechecks
+interface/interruption between probes and stops the sequence on uncertain cleanup.
+Only exception classes and fixed-label observations are logged, never addresses.
+
+Original readiness/FAIL/rescue, 45-second outer command, full-writer admission,
+Python bounds, production socket behavior and IPv6 support are unchanged. A
+successful explicit-INET send would establish only a same-process **socket/API-path
+difference**, not family causation, packet delivery or a production repair. If
+both Java paths reach SEND and fail with `NoRouteToHostException` while Python
+accepts 42 bytes, explicit INET alone did not suffice for this diagnostic. Setup
+failure, zero send, timeout or uncertain retirement leave the comparison
+inconclusive. Neither outcome establishes global JVM-flag/product behavior or
+an OS/privacy explanation.
+
+Actually executed offline: `python3 -I -B -S
+scripts/tests/run-hosted-lock-candidate-test.py` — **116 PASS**, 1.016 s. The
+same final focused tests first produced two intended absent-opt-in failures;
+the existing rejection of original FAIL, stray PASS and rescue remained intact.
+Every compiler/network/native child is mocked in this suite. Python AST and
+whitespace passed. Raw logs/patch/source binding are retained in
+`inet-diagnostic-offline-qcqcz34_`. **New Java compilation/native send/cleanup
+are not yet executed** at this source checkpoint; no Mac build or dependency
+download was performed. Independent exact-diff approval must precede a single
+source-bound hosted invocation; diagnostic success cannot admit the writer.
+
 ## Delivery acceptance still required
 
 Refs [#425](https://github.com/p2pKit/P2pKit/issues/425),
