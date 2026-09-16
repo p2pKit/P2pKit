@@ -14,7 +14,7 @@ import importlib.util
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import struct
 import sys
 import tarfile
@@ -56,6 +56,21 @@ def ciphertext(fingerprint=ENCRYPTION):
     recipient = b"\x03" + bytes.fromhex(fingerprint[-16:]) + b"\x12xy"
     protected = b"\x01" + b"SYNTHETIC-ONLY-NOT-CRYPTOGRAPHIC" * 2
     return b"\xc1" + bytes([len(recipient)]) + recipient + b"\xd2" + bytes([len(protected)]) + protected
+
+
+def plain_keyring_resource_model(resource, cwd, home, *, drive_letters):
+    """Plain fixture resource URL/filename selection, NOT a GPG/Windows execution.
+
+    GnuPG rejects a colon without HAVE_DRIVE_LETTERS and resolves a bare filename
+    under homedir, but a name containing a directory separator against cwd:
+    https://github.com/gpg/gnupg/blob/gnupg-2.4.8/g10/keydb.c#L605-L631
+    PureWindowsPath maps those choices to the existing in-memory native fixture;
+    it does not model MSYS I/O, resource schemes, tilde expansion or crypto.
+    """
+    if not drive_letters and ":" in resource:
+        raise ValueError("MODEL invalid key resource URL")
+    contains_separator = "/" in resource or drive_letters and "\\" in resource
+    return PureWindowsPath(cwd if contains_separator else home) / resource
 
 
 class ScopeModel:
@@ -219,7 +234,7 @@ class ExporterModelTests(unittest.TestCase):
             for flag in ("--no-options", "--no-autostart", "--no-auto-key-retrieve", "--no-auto-key-import",
                          "--disable-dirmngr", "--no-random-seed-file", "--lock-never", "--no-auto-check-trustdb"):
                 self.assertIn(flag, command)
-            self.assertEqual(command[command.index("--keyring") + 1], str(self.work.path) + "\\recipient.gpg")
+            self.assertEqual(command[command.index("--keyring") + 1], "./recipient.gpg")
             self.assertEqual(cwd, str(self.work.path))
             self.assertNotIn("GITHUB_TOKEN", environment)
             self.assertNotIn("SSH_AUTH_SOCK", environment)
@@ -229,6 +244,64 @@ class ExporterModelTests(unittest.TestCase):
         self.assertEqual(command[command.index("--output") + 1], "-")
         self.assertIn("--no-encrypt-to", command)
         self.assertEqual(self.events.count(("drain", 0, 5)), 5)
+
+    def keyring_resource_probe(self, *, drive_letters):
+        selected, rejected = [], []
+        ring = str(PureWindowsPath(str(self.work.path)) / "recipient.gpg")
+
+        def poll():
+            command, cwd, _ = self.calls[-1]  # Actual _gpg -> mocked WindowsScope.spawn inputs.
+            self.assertEqual(cwd, str(self.work.path))
+            if "--version" in command:
+                return 0  # Version exits before GnuPG registers keyring resources.
+            argument = command[command.index("--keyring") + 1]
+            home = command[command.index("--homedir") + 1]
+            try:
+                chosen = str(plain_keyring_resource_model(argument, cwd, home, drive_letters=drive_letters))
+            except ValueError:
+                rejected.append(argument)
+                return 2  # Modeled supplier URL error, not an observed GPG exit.
+            self.assertEqual(chosen, ring, "Resource must select the actual pinned ring, not a homedir shadow")
+            selected.append(chosen)
+            for name, expected in (("recipient.gpg", H._public_armor(PUBLIC)), ("recipient.asc", PUBLIC)):
+                node = self.node(self.work, name)
+                handles = [state for state in self.api.handles.values() if state[0] is node]
+                self.assertTrue(handles, "Resource inputs must still have live native-model pins")
+                self.assertTrue(all(not state[2] for state in handles), "Input pins must remain read-only")
+                self.assertEqual(node.content, expected)
+            return 0
+
+        self.poll_hook = poll
+        failure = None
+        try:
+            self.export()
+        except W.WindowsEvidenceError as error:
+            failure = error
+        self.assertIsNone(failure, "Real _gpg argv failed the modeled resource parser: " + repr(rejected))
+        self.assertEqual(selected, [ring] * 4)  # show-only, selected, refresh, encryption; all modeled.
+        self.assertEqual(self.events.count(("drain", 0, 5)), 5)
+        self.assertEqual(W._QUARANTINE, [])
+
+    def test_posix_gpg_resource_parser_resolves_actual_argv_to_live_pinned_ring(self):
+        self.keyring_resource_probe(drive_letters=False)
+
+    def test_native_drive_gpg_resource_parser_keeps_actual_argv_on_same_pinned_ring(self):
+        self.keyring_resource_probe(drive_letters=True)
+
+    def test_plain_keyring_model_distinguishes_drive_colon_cwd_and_homedir(self):
+        cwd, home = r"C:\work\exporter", r"C:\work\exporter\gnupg"
+        ring = PureWindowsPath(cwd) / "recipient.gpg"
+        for argument in (str(ring), ring.as_posix()):
+            with self.subTest(argument=argument), self.assertRaisesRegex(ValueError, "invalid key resource URL"):
+                plain_keyring_resource_model(argument, cwd, home, drive_letters=False)
+            self.assertEqual(plain_keyring_resource_model(argument, cwd, home, drive_letters=True), ring)
+        for drive_letters in (False, True):
+            with self.subTest(drive_letters=drive_letters):
+                self.assertEqual(plain_keyring_resource_model("./recipient.gpg", cwd, home,
+                                                              drive_letters=drive_letters), ring)
+                self.assertEqual(plain_keyring_resource_model("recipient.gpg", cwd, home,
+                                                              drive_letters=drive_letters),
+                                 PureWindowsPath(home) / "recipient.gpg")
 
     def test_parent_ownership_chain_is_preserved_without_credential_or_hook_inheritance(self):
         parent_job, parent_invocation = "a" * 32, "b" * 32
@@ -715,6 +788,34 @@ class ExporterModelTests(unittest.TestCase):
         with self.assertRaises(W.WindowsEvidenceError):
             self.export(recipient)
         self.assertEqual(self.calls, [])
+
+    def test_recipient_ring_byte_change_is_rejected_before_child_creation(self):
+        recipient = self.recipient()
+        self.calls.clear()
+        ring = self.node(self.work, "recipient.gpg")
+        ring.content = ring.content[:-1] + bytes([ring.content[-1] ^ 1])
+        with self.assertRaises(W.WindowsEvidenceError) as caught:
+            self.export(recipient)
+        self.assertIn("Validated recipient bytes changed", str(caught.exception.original))
+        self.assertEqual(self.calls, [])
+
+    def test_relative_keyring_does_not_hide_pinned_name_change_after_child(self):
+        recipient = self.recipient()
+        self.calls.clear()
+        ring = self.node(self.work, "recipient.gpg")
+        original_path = ring.path
+        def change_name(argv, out, err):
+            ring.path = original_path + ".moved"  # Inject a mismatched native name readback, not a real rename.
+        self.after_write = change_name
+        try:
+            with self.assertRaises(W.WindowsEvidenceError) as caught:
+                self.export(recipient)
+            self.assertIn("identity/kind/link rejection", str(caught.exception.original))
+            self.assertEqual(len(self.calls), 1)
+            self.assertEqual(json.loads(caught.exception.private_record)["commands"][-1]["waitExitCode"], 0)
+            self.assertEqual(self.api.names(self.output._pins[-1].handle, 3, time.monotonic() + 10), [])
+        finally:
+            ring.path = original_path
 
     def test_expired_recipient_after_validation_prevents_encryption(self):
         recipient = dataclasses.replace(self.recipient(), expires_at=1)

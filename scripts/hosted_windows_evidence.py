@@ -431,10 +431,12 @@ def _gpg(session, recipient, arguments, end, *, output=None, output_name="stdout
     out = session.hold("gpg-stdout", destination.create_file(output_name, max_bytes=maximum, deadline=end))
     err = session.hold("gpg-stderr-status", operation.create_file("stderr", max_bytes=portable.MAX_DIAGNOSTIC_BYTES,
                                                                deadline=end))
+    # POSIX/MSYS GPG treats a drive colon as a resource URL. Explicit ./ selects
+    # this pinned work cwd's ring rather than a bare name relative to GNUPGHOME.
     command = [str(recipient.executable), "--no-options", "--homedir", str(home.path),
                "--batch", "--no-tty", "--no-autostart", "--no-auto-key-retrieve", "--no-auto-key-import",
                "--auto-key-locate", "clear", "--disable-dirmngr", "--pinentry-mode", "error",
-               "--no-random-seed-file", "--no-default-keyring", "--keyring", str(ring.path),
+               "--no-random-seed-file", "--no-default-keyring", "--keyring", "./recipient.gpg",
                "--lock-never", "--no-auto-check-trustdb", "--trust-model", "always"]
     if encryption:
         command += ["--status-fd", "2"]
