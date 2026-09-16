@@ -583,7 +583,7 @@ class CommandModels(Models):
 
 
 class AcceptanceModels(Models):
-    def test_inventory_derives_current_inherited_executor117_and_files66(self):
+    def test_inventory_derives_current_inherited_executor117_and_files73(self):
         raw = (SCRIPTS / "tests/run-audit-command-test.py").read_bytes()
         inv = H.method_inventory(raw, ["PurePolicyTests", "DarwinObservationTests", "WindowsNativeTests"])
         self.assertEqual({key: len(value) for key, value in inv.items()},
@@ -593,7 +593,7 @@ class AcceptanceModels(Models):
         raw = (SCRIPTS / "tests/hosted-windows-files-test.py").read_bytes()
         inv = H.method_inventory(raw, ["PurePolicyTests", "NativeCallShapeTests", "ModelCustodyTests",
                                       "NativeFixtureOrchestrationTests", "NativeWindowsTests"])
-        self.assertEqual(sum(map(len, inv.values())), 66)
+        self.assertEqual(sum(map(len, inv.values())), 73)
         self.assertEqual(len(inv["NativeWindowsTests"]), 7)
 
     def test_original_unittest_method_outcomes_accept_both_supported_verbose_shapes(self):

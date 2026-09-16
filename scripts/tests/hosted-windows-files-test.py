@@ -1033,6 +1033,7 @@ class NativeWindowsTests(unittest.TestCase):
         self.root_path = self.parent / "private"
         self.root = None
         self.retirement_unknown = False
+        self.fixture_readmission_required = False
         self.addCleanup(self.cleanup_fixture)
         try:
             self.root = files.create_private_directory(self.root_path)
@@ -1046,6 +1047,8 @@ class NativeWindowsTests(unittest.TestCase):
             raise
 
     def cleanup_fixture(self):
+        if self.fixture_readmission_required:
+            self.retirement_unknown = True
         # Attempt every still-owned known root closure even when an earlier
         # child retirement was uncertain. Never delete that retained fixture.
         if self.root is not None:
@@ -1100,6 +1103,38 @@ class NativeWindowsTests(unittest.TestCase):
             self.assertEqual(stream.verify().size, len(data))
         if RETENTION is not None:
             RETENTION.original(self, name, data)
+
+    @contextmanager
+    def unpinned_hardlink_setup(self):
+        # Windows opens the link target's directory with FILE_WRITE_DATA. Our
+        # intentional FILE_SHARE_READ pin must retire before hostile setup;
+        # weakening the production sharing policy would invalidate this test.
+        identity = self.root.verify().identity
+        # Latch before releasing the pin, including cancellation before the
+        # finalizer itself can be entered. This never clears sticky UNKNOWN.
+        self.fixture_readmission_required = True
+        self.root.close()
+
+        def readmit():
+            try:
+                self.root = files.open_private_directory(self.root_path)
+                info = self.root.verify()
+                files.require(info.identity == identity, "Native fixture identity changed while unpinned")
+                if RETENTION is not None:
+                    RETENTION.record(self, "fixture-readmitted", root=info.as_dict())
+                self.fixture_readmission_required = False
+            except BaseException:
+                # Even a known handle close cannot grant deletion authority
+                # over a root whose exact identity was not re-established.
+                self.retirement_unknown = True
+                raise
+
+        # Restore custody on setup failure too, without replacing that original
+        # failure if readmission also fails. A new capability stays cleanup-owned.
+        with files._on_exit(readmit):
+            if RETENTION is not None:
+                RETENTION.record(self, "fixture-unpinned", identity=identity)
+            yield
 
     def set_fixture_dacl(self, sddl):
         """Native negative control on this test's new empty directory only."""
@@ -1180,7 +1215,8 @@ class NativeWindowsTests(unittest.TestCase):
     @native_control
     def test_native_hardlink_and_alternate_data_streams_rejected(self):
         self.put("hard")
-        os.link(self.root_path / "hard", self.root_path / "hard-alias")
+        with self.unpinned_hardlink_setup():
+            os.link(self.root_path / "hard", self.root_path / "hard-alias")
         with self.expected_rejection(files.FilesystemError):
             self.root.open_file("hard", max_bytes=100)
         self.put("ads")
@@ -1259,12 +1295,161 @@ class NativeFixtureOrchestrationTests(unittest.TestCase):
         case.parent = Path("/synthetic-never-created")
         case.root_path = case.parent / "private"
         case.retirement_unknown = False
+        case.fixture_readmission_required = False
         return case
 
     def uncertain(self):
         error = files.FilesystemError("Synthetic expected rejection plus uncertain cleanup")
         files._note(error, "Native handle retirement UNKNOWN: 202")
         return error
+
+    @contextmanager
+    def hardlink_fixture(self, *, close_error=None, link_error=None, reopen_error=None,
+                         reopened_identity=(1, "synthetic")):
+        """Model the documented target-directory sharing conflict, not Win32."""
+        case, events = self.case(), []
+        test = self
+
+        class FixtureRoot:
+            def __init__(self, identity, original=False):
+                self.identity, self.original, self.closed = identity, original, False
+
+            def verify(self):
+                test.assertFalse(self.closed)
+                return SimpleNamespace(identity=self.identity)
+
+            def close(self):
+                if self.closed:
+                    return
+                events.append("close-original" if self.original else "close-reopened")
+                if self.original and close_error is not None:
+                    raise close_error
+                self.closed = True
+
+            def open_file(self, name, *, max_bytes):
+                test.assertFalse(self.closed)
+                test.assertFalse(self.original, "Provider rejection requires strict readmission")
+                test.assertEqual(self.identity, original.identity)
+                test.assertEqual(max_bytes, 100)
+                events.append("reject-" + name)
+                raise files.FilesystemError("Modeled hostile file rejection")
+
+        original, reopened = FixtureRoot((1, "synthetic"), True), FixtureRoot(reopened_identity)
+        case.root = original
+
+        def put(name):
+            test.assertFalse(case.root.closed)
+            events.append("put-" + name)
+
+        def link(source, target):
+            test.assertEqual((source, target), (case.root_path / "hard", case.root_path / "hard-alias"))
+            events.append("link")
+            if not original.closed:
+                error = PermissionError("Modeled FILE_WRITE_DATA conflicts with live FILE_SHARE_READ directory")
+                error.winerror = 32
+                raise error
+            if link_error is not None:
+                raise link_error
+
+        def reopen(path):
+            test.assertEqual(path, case.root_path)
+            test.assertTrue(original.closed)
+            events.append("reopen")
+            if reopen_error is not None:
+                raise reopen_error
+            return reopened
+
+        def ads(path, mode):
+            test.assertEqual((path, mode), (str(case.root_path / "ads") + ":hidden", "wb"))
+            test.assertIs(case.root, reopened)
+            events.append("ads")
+            return io.BytesIO()
+
+        with patch.object(case, "put", side_effect=put), patch.object(os, "link", side_effect=link), \
+                patch.object(files, "open_private_directory", side_effect=reopen), \
+                patch("builtins.open", side_effect=ads), patch.object(shutil, "rmtree") as remove:
+            yield SimpleNamespace(case=case, events=events, original=original, reopened=reopened, remove=remove)
+
+    def test_hardlink_setup_retires_directory_pin_then_readmits_identity_before_rejection(self):
+        with self.hardlink_fixture() as model:
+            model.case.test_native_hardlink_and_alternate_data_streams_rejected()
+            self.assertEqual(model.events, ["put-hard", "close-original", "link", "reopen", "reject-hard",
+                                           "put-ads", "ads", "reject-ads"])
+            self.assertFalse(model.case.retirement_unknown)
+            model.case.cleanup_fixture()
+            self.assertTrue(model.reopened.closed)
+            model.remove.assert_called_once_with(model.case.parent)
+
+    def test_hardlink_setup_close_unknown_stops_mutation_and_preserves_fixture(self):
+        error = self.uncertain()
+        with self.hardlink_fixture(close_error=error) as model:
+            with self.assertRaises(files.FilesystemError) as caught:
+                model.case.test_native_hardlink_and_alternate_data_streams_rejected()
+            self.assertIs(caught.exception, error)
+            self.assertEqual(model.events, ["put-hard", "close-original"])
+            self.assertTrue(model.case.retirement_unknown)
+            with self.assertRaises(files.FilesystemError):
+                model.case.cleanup_fixture()
+            model.remove.assert_not_called()
+
+    def test_hardlink_creation_failure_remains_original_after_successful_readmission(self):
+        error = PermissionError("Synthetic link creation failure, not provider rejection")
+        with self.hardlink_fixture(link_error=error) as model:
+            with self.assertRaises(PermissionError) as caught:
+                model.case.test_native_hardlink_and_alternate_data_streams_rejected()
+            self.assertIs(caught.exception, error)
+            self.assertEqual(model.events, ["put-hard", "close-original", "link", "reopen"])
+            self.assertFalse(model.case.retirement_unknown)
+            model.case.cleanup_fixture()
+            self.assertTrue(model.reopened.closed)
+            model.remove.assert_called_once_with(model.case.parent)
+
+    def test_hardlink_readmission_failure_cannot_reach_rejection_or_authorize_disposal(self):
+        error = files.FilesystemError("Synthetic strict readmission failure")
+        with self.hardlink_fixture(reopen_error=error) as model:
+            with self.assertRaises(files.FilesystemError) as caught:
+                model.case.test_native_hardlink_and_alternate_data_streams_rejected()
+            self.assertIs(caught.exception.__cause__, error)
+            self.assertEqual(model.events, ["put-hard", "close-original", "link", "reopen"])
+            self.assertTrue(model.case.retirement_unknown)
+            model.case.cleanup_fixture()
+            model.remove.assert_not_called()
+
+    def test_hardlink_identity_change_keeps_new_capability_owned_but_not_disposal_authority(self):
+        with self.hardlink_fixture(reopened_identity=(1, "replacement")) as model:
+            with self.assertRaises(files.FilesystemError) as caught:
+                model.case.test_native_hardlink_and_alternate_data_streams_rejected()
+            self.assertIn("Native fixture identity changed", str(caught.exception.__cause__))
+            self.assertIs(model.case.root, model.reopened)
+            self.assertTrue(model.case.retirement_unknown)
+            self.assertEqual(model.events, ["put-hard", "close-original", "link", "reopen"])
+            model.case.cleanup_fixture()
+            self.assertTrue(model.reopened.closed)
+            model.remove.assert_not_called()
+
+    def test_hardlink_setup_error_is_not_replaced_by_failed_readmission(self):
+        original, secondary = PermissionError("Synthetic original link failure"), self.uncertain()
+        with self.hardlink_fixture(link_error=original, reopen_error=secondary) as model:
+            with self.assertRaises(PermissionError) as caught:
+                model.case.test_native_hardlink_and_alternate_data_streams_rejected()
+            self.assertIs(caught.exception, original)
+            self.assertTrue(unknown_retirement(original))
+            self.assertTrue(model.case.retirement_unknown)
+            self.assertEqual(model.events, ["put-hard", "close-original", "link", "reopen"])
+            model.case.cleanup_fixture()
+            model.remove.assert_not_called()
+
+    def test_hardlink_cancellation_before_finalizer_cannot_authorize_disposal(self):
+        error = KeyboardInterrupt("Synthetic cancellation after root close, before finalizer entry")
+        with self.hardlink_fixture() as model:
+            with patch.object(files, "_on_exit", side_effect=error):
+                with self.assertRaises(KeyboardInterrupt) as caught:
+                    model.case.test_native_hardlink_and_alternate_data_streams_rejected()
+            self.assertIs(caught.exception, error)
+            self.assertEqual(model.events, ["put-hard", "close-original"])
+            model.case.cleanup_fixture()
+            model.remove.assert_not_called()
+            self.assertTrue(model.case.retirement_unknown)
 
     def test_expected_rejection_cannot_swallow_unknown_retirement_or_dispose_fixture(self):
         case, error = self.case(), self.uncertain()
