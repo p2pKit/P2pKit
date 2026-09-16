@@ -179,6 +179,80 @@ are not yet executed** at this source checkpoint; no Mac build or dependency
 download was performed. Independent exact-diff approval must precede a single
 source-bound hosted invocation; diagnostic success cannot admit the writer.
 
+## Explicit-INET result: failed host admission, no unchanged retry
+
+The planned comparison above actually ran in
+[35046572332/1](https://github.com/p2pKit/P2pKit/actions/runs/35046572332), job
+`104637573383`, at source/base `206520cbdc006728f1695feb8a112cf76f2bb438`, tree
+`94c8ae80807d8470e60f358c09cb2608806f9cfd`, ending `2026-09-16T02:08:25Z`.
+**FAILURE/HOLD125**, not accepted locks or a working sample workflow.
+
+Native Intel macOS 15.7.9 / Xcode 26.3 (`17C529`), native JDK 17.0.20.1/21.0.12.1
+and real iOS 26.2 inventory passed their setup portions. The selected iPhone 17
+remained Shutdown. The same native-control command, with `--expected-host macos-x64`,
+passed **93 tests in 145.069 s**. Fresh `javac --release 8` compilation of all
+60 vendored sources and `javac --release 17` of the reviewed fixture both exited 0.
+The unchanged `JmdnsCloseLifecycleFixture control` then failed `host_not_announced`:
+two product send calls, zero returns, original exit 1/FAIL/rescue preserved.
+
+| Actual post-failure diagnostic | Result | Observed retirement |
+| --- | --- | --- |
+| Default JDK `MulticastSocket` | SEND / `NoRouteToHostException` / 0 bytes | Socket closed, no close exception. |
+| Same-JVM explicit-INET `DatagramChannel` | SEND / `NoRouteToHostException` / 0 bytes | Channel closed, membership invalidated, no close exception. |
+| Canonical Python IPv4 | SEND / `KERNEL_ACCEPTED` / 42 bytes | Socket closed and child reaped. |
+
+Both Java paths reached SEND after their option/interface checks. Explicit INET
+did not suffice **for this diagnostic**. This establishes neither packet delivery
+nor a socket-family, privacy, provider or OS root cause. No global IPv4 flag,
+root/daemon launcher, permission override, longer deadline or product change is
+justified. The maintained 45-second command bound was unchanged; actual command
+duration was 12.294 s. Seven other lifecycle modes were not run in this attempt.
+The earlier ordinary-Mac eight-mode result keeps its distinct scope.
+
+**Writer/stop null; no Gradle, #424 suites, ABI, Dokka, SBOM or app packages.** All
+twelve locks/XML remain unchanged and six obsolete JmDNS memberships remain.
+All 32 owned command scopes and 39 final native fixture retirements were checked,
+including terminal seal quiescence. The observer stopped normally after 98 fast
+and 40 network RAW samples; 236 original native queries were independently
+reparsed. Sampled pressure stayed NORMAL with zero swap growth. These are scoped
+observations, not a host-wide retirement or dependency-download quota claim.
+
+Artifact `10427287939` expires `2026-09-30T02:08:20Z`. Its 682,490-byte ZIP has
+SHA-256 `809e09e35f2f003a4c624b887a87f82c9016290841e526a8eb99dd190e4a3bf1`.
+Private authenticated decryption (`DECRYPTION_OKAY`/`GOODMDC`) and all 1,714 archive
+members / 6,226,824 file bytes were verified. The retrieval's dedicated GPG agent
+retired. Packet: `hosted-lock-run-35046572332-ns3cxexx`; no private key or raw
+transcript is published. Independent nonimplementing verdict:
+**APPROVE_SCOPED_INET_DIAGNOSTIC_POSTIMAGE_AND_FAILED_RUN_CUSTODY**, report SHA-256
+`7e3739246f4feb35cac202d95b60558056ab9270bfd21ef9954c269b29f078ad`.
+This is not a host, writer, sample, formal PR or closure approval.
+
+### Current external prerequisite, not an excuse to stop independent work
+
+Read-only runner queries on September 16 found **zero repository-visible
+self-hosted runners**. The organization larger-hosted API returned 404/not supported;
+the organization self-hosted inventory returned 403/requires additional permission,
+so organization-wide availability is **unknown**, not proved absent. No settings,
+credential scopes or runner registrations were changed.
+
+The full writer shell does not prohibit Linux, but a Linux equivalent is **not
+established**: its graph still includes every registered subproject check and
+strict LAN Dokka, whose historical Linux Apple-classpath failure is retained.
+Complete native configuration coverage also needs proof. A Linux invocation or
+partial resolution cannot be relabeled a complete candidate. Separately, the
+integrated full native gate explicitly requires macOS. No expensive Linux writer
+probe or unchanged Mac retry is planned from these observations.
+
+To resume the blocked writer, provide a demonstrably changed supported hosted
+environment with genuine Java multicast admission, or a separate authorized
+GitHub-connected supported Mac with ordinary-user execution, actual prerequisites
+and private custody. The owner's local Mac remains excluded from builds; phone
+work remains deferred. Do not guess or bypass OS permissions. Independent route
+assessment SHA-256:
+`397fa4feef342db56f757691d543d945cc341f042014489a8f6ad23b863996c3`.
+The missing ordinary-CI/Windows #424 custody integration remains feasible source
+work and is being continued; its implementation is not a hardware blocker.
+
 ## Delivery acceptance still required
 
 Refs [#425](https://github.com/p2pKit/P2pKit/issues/425),
