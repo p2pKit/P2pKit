@@ -106,6 +106,44 @@ validation checks original semantics, **not later live H/S contents**. A future
 provider caller must independently recheck the frozen save set before and after
 its action; receipt validation alone cannot authorize saving modified bytes.
 
+### Dormant live save-set observations
+
+`save_set` supplies that read-only file check, but has **no workflow/provider
+caller yet**. Given the original positive export and original stage/seed/context/
+admission bytes, it checks the original container and S, the exact complete
+file/ancestor-directory roster, and every exported destination identity, stamp,
+size and SHA-256. It also checks the actual original `staging.json` beside S.
+That receipt is not part of the saved prefix. Unexpected files, even empty
+directories, aliases, replaced ancestors and unsafe file kinds fail closed.
+
+The first observation records directory metadata after export; export receipts
+do not contain an earlier directory-stamp baseline. The after-save observation
+requires the **original retained before-save bytes**, unchanged input hashes and
+unchanged live directory/file bindings. A coherent replacement of the export or
+context is not the original receipt. A record supplied by an untrusted caller
+cannot authenticate itself; original-byte custody still belongs to the eventual
+controller and separate seal.
+
+Traversal streams per-file reads, keeps live handles depth-bounded, freshly
+enumerates directories and reopens members for final metadata checks. It does
+not use the Windows aggregate `Snapshot` (whose 576MiB limit is smaller than
+the dependency cohort). Existing 512MiB/file, 2GiB dependency-byte, 10,000-member,
+4MiB receipt and 120-second hard/90-second new-work bounds remain. Each pre/post
+observation needs its own admitted interval; neither may precede its original
+export/frozen predecessor or extend the relevant job cutoff. Backward clocks,
+late validation and unknown closes cannot publish success. The helper retains
+its final observed clock high-water; the caller must also bind return/retention.
+
+A positive **partial export** can be frozen only as its exact completely checked
+subset. A partially checked set, empty export or zero-byte cohort cannot pass.
+`KNOWN_FROZEN` / `KNOWN_UNCHANGED` describe these observations, not complete
+dependency population, a cache entry or resolver reuse. Closed pre/post checks
+are not an atomic filesystem snapshot or proof of the bytes an external action
+archives between them. Original producer success, same-home stop, loader removal,
+worker retirement, provider custody/outcomes and inter-step timing remain the
+separate bootstrap caller's obligations. No deletion or cleanup authority is
+added by this helper.
+
 ## Provider observations are not provider execution
 
 The selected standalone pair is
