@@ -15,8 +15,9 @@ Exact containing commits, review verdicts and remote readbacks are mapped in
   query and two-full-SHA merge-base form; that five-line repair is preserved.
   [Exact checks, original failures and independent review](https://github.com/p2pKit/P2pKit/issues/437#issuecomment-5719961231)
   are source/offline evidence, not hosted identity or producer qualification.
-- This continuation adds **pre-budget cohort binding** at plan/stage/intent
-  boundaries. It refuses cross-cohort and consume substitution. Recognizable
+- Commit `740079f39181e08fc5445e709e6b477ef1e9f221`, tree
+  `deb98c63ca5afeb56a2d04d48e8c88a81387c1cf`, adds **pre-budget cohort binding**
+  at plan/stage/intent boundaries. It refuses cross-cohort and consume substitution. Recognizable
   bootstrap identity fields, workflow/job and event bindings cannot silently
   fall through the ordinary path when other fields are stripped or relabelled.
   Seed/export/save entry and retained-receipt paths refuse bootstrap **before
@@ -27,13 +28,13 @@ Exact containing commits, review verdicts and remote readbacks are mapped in
 The seed source roster also binds the two identity suppliers. Its sole composition
 expectation was changed only after independent review of that exact seed delta;
 the other five supplier expectations and both ordinary workflow HOLDs are unchanged.
-There is still **no bootstrap workflow, CLI/controller/producer/provider caller**,
-and no production caller of `cache.export_snapshot` or `cache.save_set`.
+There is still **no bootstrap workflow, CLI/controller/producer launcher or
+provider caller**, and no production caller of `cache.export_snapshot` or `cache.save_set`.
 
-## Verification ledger
+## Cohort-increment verification ledger
 
-Final same-source offline checks used installed Linux Python 3.12.3 with
-`-I -B -S`, no Java, Gradle, GPG, native process provider, API execution or
+That increment's final same-source offline checks used installed Linux Python
+3.12.3 with `-I -B -S`, no Java, Gradle, GPG, native process provider, API execution or
 dependency acquisition. The containing commit's #437 mapping supplies exact
 review bindings and remote readbacks.
 Tiny POSIX filesystem/connected fixtures run as the actual unprivileged `nobody`
@@ -77,13 +78,71 @@ Mac originals listed in the pause are still not automatically available here.
 Do not substitute public hashes for originals or recreate expensive runs to
 reconstruct missing evidence.
 
+## Dormant canonical producer-record increment
+
+[`hosted_cache_bootstrap_producer.py`](../../scripts/hosted_cache_bootstrap_producer.py)
+now binds a **pure proposed request and supplied original canonical records**.
+It does not launch a producer, read a file/clock, derive a budget or grant save
+authority. The separate bootstrap identity/cohort binds the canonical source,
+home, invocation/ancestor chain, fixed configuration-only recipe and same-home
+stop. Original prelaunch/terminal bytes and the separately observed process exit
+must agree. Native launch declarations distinguish POSIX argv, Windows suspended
+pipe-path/batch framing/temporary records and Darwin terminal reconciliations.
+
+The result is only `CANONICAL_CONFIGURATION_REPORTED_SUCCESS`: tests remain
+`NOT_PERFORMED`, enclosing native retirement `NOT_OBSERVED_HERE`, budget
+`NOT_ADMITTED_HERE`, and export/save authority false. Consistent supplied records
+do not authenticate themselves. Failed originals still need custody. No provider,
+native owner, actual System32 identity, dependency population or resolver reuse
+is established by this helper or its models. The existing bootstrap execution
+refusal remains unchanged.
+
+Executed offline with installed Linux Python 3.12.3:
+
+```bash
+timeout --kill-after=5s 120s python3 -I -B -S scripts/tests/hosted-cache-bootstrap-producer-test.py -v
+timeout --kill-after=5s 90s ruby scripts/tests/check-hosted-test-workflow-policy-test.rb
+```
+
+- Final producer controls: **26/26 PASS**. They use synthetic records and the
+  unchanged canonical/native suppliers' pure JSON/argv/batch formatters, not
+  their executor, file, clock or native APIs. Explicit no-I/O/no-clock/no-native/
+  no-process controls and all six cohort models leave authority withheld.
+- Original 20-method and then 22-method aggregates passed but lacked the later
+  terminal-history regressions. Independent review found two contradictions:
+  unresolved Darwin discovery under an empty error list, and unresolved signals
+  under a retired drain label. Its frozen eight-method oracle initially had
+  **six pass/two failed assertions**, no errors; this is a supplied-record defect,
+  not an observed native or hosted bypass.
+- Four added author methods reproduced the defects and malformed variants:
+  **26-method preimage, 68 failed assertions**, no errors. The 13-line correction
+  requires the native supplier's closed terminal dispositions in every relevant
+  history. The unchanged final suite passed; 80 resolved-history cases retain
+  legitimate earlier observation failures rather than erasing/rejecting them.
+- Final independent oracle **8/8 PASS**, separate frozen resolved-history
+  controls **2/2 PASS** (18 cases), independent author-suite replay **26/26 PASS**
+  and composition checker PASS. Overlapping replays do not add distinct tests.
+  Verdict **APPROVE_EXACT_DORMANT_CANONICAL_PRODUCER_RECORD_SOURCE_OFFLINE_ONLY**;
+  exact complete-patch/report bindings are in the containing commit's #437 map.
+- Ordinary workflow policy: **521 offline policy/synthetic-shell controls PASS**.
+  Only literal HOLD/terminal shells and modeled final dispatch execute, never the
+  controller or a build. Both activation HOLDs remain. Shared executable supplier
+  bytes and composition expectations are unchanged from `740079f3`.
+
+Original commands, logs, exits, pre/post hashes and reviewer packets remain
+private on this device. The check counts above are not native tests, product
+acceptance, a provider qualification, measured schedule or formal GitHub approval.
+The bootstrap controls are standalone, not workflow-registered. Static document/
+layout/release-metadata/whitespace results are recorded separately in #437.
+
 ## Next engineering and unchanged authority boundaries
 
 The next bootstrap slice needs a **separate original execution/budget context**,
 not ordinary FULL/Desktop with `help`. Retain and rederive actual source/run/clock
 and service/native budget originals; a digest or fresh allowance cannot grant
-authority. Then bind the canonical configuration-only producer's original start,
-requested/executed argv, same-home stop and known complete native retirement;
+authority. The live caller must invoke the canonical configuration-only producer,
+retain its original start/requested/executed argv/same-home stop and independently
+establish complete enclosing native retirement, not infer it from the pure helper;
 only afterward permit positive empty-seed-derived export, before/after frozen-byte
 observations, original standalone save/exact-probe outcomes and separate encrypted
 custody/seal. Existing helpers do not establish those facts for their callers.

@@ -95,6 +95,41 @@ activation HOLDs remain. The original checkpoint's untested WIP status is dated;
 later scoped checks/review are recorded against their exact source, not claimed
 as executions at that checkpoint.
 
+### Canonical producer records, not producer execution
+
+[`hosted_cache_bootstrap_producer.py`](../../scripts/hosted_cache_bootstrap_producer.py)
+adds a dormant **pure request/observation contract**, not a producer launcher.
+The request binds the original bootstrap admission and canonical context, one
+invocation and its existing ancestor chain, exact configuration-only request,
+canonical enforced arguments and same-home stop. It has no timeout or budget.
+It does not instantiate the ordinary controller or relax the seed/export/save
+execution refusal above.
+
+The observation requires the original prelaunch `start.json`, terminal canonical
+`receipt.json` and separately supplied original process exit. It checks source,
+home/job/invocation, unchanged start fields, typed successful product/stop/final
+exits, and the corresponding native launch declarations. Windows batch framing,
+suspended job assignment and temporary-resource records are separate from POSIX
+argv and Darwin's original drain dispositions. These are consistency checks of
+supplied records, not native execution or authentication of a supplied System32
+path. Complete original records are hash-bound; reserialized or replaced records
+cannot validate an earlier observation even when their parsed fields agree.
+Darwin terminal discovery and per-drain signal histories must have the native
+supplier's resolved dispositions; an empty error list or a later quiet drain
+cannot conceal unresolved terminal records. Earlier observation failures remain
+in the original history even when their access uncertainty was later reconciled.
+
+`CANONICAL_CONFIGURATION_REPORTED_SUCCESS` explicitly leaves test acceptance
+`NOT_PERFORMED`, enclosing native retirement `NOT_OBSERVED_HERE`, budget
+`NOT_ADMITTED_HERE` and export/save authority false. The canonical report cannot
+observe the enclosing controller's subsequent close/return. UTC labels and
+duration metadata do not establish shared-clock deadlines; empty reports prove
+no tests or dependency population. Errors still require failed-original custody,
+not disposal. Live re-admission, source/native/toolchain and original-budget
+binding, known complete enclosing retirement, positive empty-seed export,
+freeze/provider/custody integration and separate sealing remain necessary.
+No caller invokes this helper in production.
+
 ## Connected consume and delivery path
 
 After the unchanged HOLD and native/source admission, `prepare-consume` binds
@@ -238,6 +273,7 @@ Focused offline commands (not a claim they ran on a particular host):
 ```bash
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-identity-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-cohort-test.py
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-producer-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
@@ -248,7 +284,7 @@ python3 -I -B -S scripts/tests/hosted-desktop-job-budget-test.py
 These use modeled provider/native boundaries and tiny synthetic owned files, no
 dependency download or Gradle. The connected/budget controls are registered in the
 unconditional ordinary CI policy step and both release script entry points.
-The separate bootstrap identity/cohort controls are currently standalone, not an
+The separate bootstrap identity/cohort/producer-record controls are standalone, not an
 activated or registered bootstrap workflow.
 Native Windows provider behavior and actual resolver/cache reuse require
 separate genuine execution. Changes to shared executable suppliers also require

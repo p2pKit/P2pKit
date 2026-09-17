@@ -1,7 +1,8 @@
 > **Later source resume (17 September 2026):** the
 > [reviewed source continuation](docs/maintenance/nonphysical-source-resume-2026-09-17.md)
-> records identity/cohort progress. Both ordinary execution HOLDs remain; this
-> does not promote dormant bootstrap source or older builds to runtime acceptance.
+> records identity/cohort and producer-record progress. Both ordinary execution
+> HOLDs remain; this does not promote dormant bootstrap source or older builds
+> to runtime acceptance.
 >
 > **Paused integration-branch handoff (17 September 2026):** read the
 > [portable checkpoint](docs/maintenance/nonphysical-checkpoint-2026-09-17.md)
