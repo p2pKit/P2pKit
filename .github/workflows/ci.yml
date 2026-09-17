@@ -153,6 +153,8 @@ jobs:
           ruby scripts/tests/check-hosted-test-workflow-policy-test.rb
           python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
           python3 -I -B -S scripts/tests/hosted-controller-import-test.py
+          python3 -I -B -S scripts/tests/hosted-consume-delivery-test.py
+          python3 -I -B -S scripts/tests/hosted-desktop-job-budget-test.py
 
       - name: Classify required-check scope
         id: scope
@@ -219,12 +221,41 @@ jobs:
             --evidence-directory "$RUNNER_TEMP/p2pkit-test-admission-full-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$role"
           printf 'session_directory=%s/p2pkit-test-full-%s-%s-%s\n' "$RUNNER_TEMP" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$role" >> "$GITHUB_OUTPUT"
 
-      - name: Allocate separate ordinary dependency staging
+      - name: Bind original ordinary job timing and dependency consume plan
         id: dependency-stage
         if: ${{ success() && (steps.scope.outputs.full == 'true') }}
         shell: bash
+        env:
+          P2PKIT_ACTIONS_READ_TOKEN: ${{ github.token }}
+          DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
         run: |
-          python3 -I -B -S scripts/run-hosted-test-custody.py stage-dependencies --profile full
+          python3 -I -B -S scripts/run-hosted-test-custody.py prepare-consume --profile full
+
+      - name: Restore only the exact ordinary dependency byte cohort
+        id: dependency-restore
+        if: ${{ success() && (steps.scope.outputs.full == 'true') && steps.dependency-stage.outcome == 'success' && steps.dependency-stage.outputs.dependency_seed_ready == 'true' && (steps.dependency-stage.outputs.cache_restore_timeout_minutes == '1' || steps.dependency-stage.outputs.cache_restore_timeout_minutes == '2' || steps.dependency-stage.outputs.cache_restore_timeout_minutes == '3') }}
+        timeout-minutes: ${{ fromJSON(steps.dependency-stage.outputs.cache_restore_timeout_minutes) }}
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ steps.dependency-stage.outputs.cache_path }}
+          key: ${{ steps.dependency-stage.outputs.cache_key }}
+          enableCrossOsArchive: false
+          fail-on-cache-miss: true
+          lookup-only: false
+
+      - name: Validate the original ordinary restore result
+        id: dependency-restore-guard
+        if: ${{ always() && (steps.scope.outputs.full == 'true') && (steps.dependency-stage.outcome == 'success' || steps.dependency-stage.outcome == 'failure' || steps.dependency-stage.outcome == 'cancelled') }}
+        shell: bash
+        env:
+          P2PKIT_HOSTED_PREPARE_OUTCOME: ${{ steps.dependency-stage.outcome }}
+          P2PKIT_HOSTED_PREPARE_SHA256: ${{ steps.dependency-stage.outputs.preparation_sha256 }}
+          P2PKIT_CACHE_RESTORE_OUTCOME: ${{ steps.dependency-restore.outcome }}
+          P2PKIT_CACHE_RESTORE_PRIMARY_KEY: ${{ steps.dependency-restore.outputs.cache-primary-key }}
+          P2PKIT_CACHE_RESTORE_MATCHED_KEY: ${{ steps.dependency-restore.outputs.cache-matched-key }}
+          P2PKIT_CACHE_RESTORE_HIT: ${{ steps.dependency-restore.outputs.cache-hit }}
+        run: |
+          python3 -I -B -S scripts/run-hosted-test-custody.py restore-guard --profile full
 
       - name: Configure daemon Java 21 and wrapper Java 17
         id: java
@@ -289,19 +320,23 @@ jobs:
 
       - name: Run ordinary full with private custody
         id: ordinary-run
-        if: ${{ success() && (steps.scope.outputs.full == 'true') && steps.dependency-stage.outcome == 'success' && steps.dependency-stage.outputs.dependency_seed_ready == 'true' }}
+        if: ${{ success() && (steps.scope.outputs.full == 'true') && steps.dependency-stage.outcome == 'success' && steps.dependency-stage.outputs.dependency_seed_ready == 'true' && steps.dependency-restore-guard.outcome == 'success' && steps.dependency-restore-guard.outputs.dependency_cache_ready == 'true' }}
         shell: bash
         env:
           P2PKIT_DEPENDENCY_SEED_STAGE_OUTCOME: ${{ steps.dependency-stage.outcome }}
           P2PKIT_DEPENDENCY_SEED_STAGE_SHA256: ${{ steps.dependency-stage.outputs.dependency_seed_staging_sha256 }}
+          P2PKIT_HOSTED_PREPARE_OUTCOME: ${{ steps.dependency-stage.outcome }}
+          P2PKIT_HOSTED_PREPARE_SHA256: ${{ steps.dependency-stage.outputs.preparation_sha256 }}
+          P2PKIT_CACHE_GUARD_OUTCOME: ${{ steps.dependency-restore-guard.outcome }}
+          P2PKIT_CACHE_RESTORATION_SHA256: ${{ steps.dependency-restore-guard.outputs.restoration_sha256 }}
           DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
-          P2PKIT_ACTIONS_READ_TOKEN: ${{ github.token }}
         run: |
-          python3 -I -B -S scripts/run-hosted-test-custody.py run --profile full --seed-dependencies
+          python3 -I -B -S scripts/run-hosted-test-custody.py run --profile full --consume-dependencies
 
       - name: Seal ordinary full evidence after controller return
         id: ordinary-seal
         if: ${{ always() && (steps.scope.outputs.full == 'true') && steps.ordinary-run.outcome == 'success' }}
+        timeout-minutes: 2
         shell: bash
         env:
           P2PKIT_HOSTED_TEST_RUN_OUTCOME: ${{ steps.ordinary-run.outcome }}
@@ -354,6 +389,8 @@ jobs:
           ORDINARY_ACTIVATION: ${{ steps.ordinary-activation.outcome }}
           ORDINARY_ADMISSION: ${{ steps.ordinary-admission.outcome }}
           DEPENDENCY_STAGE: ${{ steps.dependency-stage.outcome }}
+          DEPENDENCY_RESTORE: ${{ steps.dependency-restore.outcome }}
+          DEPENDENCY_RESTORE_GUARD: ${{ steps.dependency-restore-guard.outcome }}
           JAVA: ${{ steps.java.outcome }}
           ORDINARY_JDK21: ${{ steps.ordinary-jdk21.outcome }}
           ORDINARY_XCODEGEN: ${{ steps.ordinary-xcodegen.outcome }}
@@ -365,6 +402,7 @@ jobs:
           ORDINARY_UPLOAD_BEFORE: ${{ steps.ordinary-upload-before.outcome }}
           ORDINARY_UPLOAD_AFTER: ${{ steps.ordinary-upload-after.outcome }}
           SEED_READY: ${{ steps.dependency-stage.outputs.dependency_seed_ready }}
+          CACHE_READY: ${{ steps.dependency-restore-guard.outputs.dependency_cache_ready }}
           ARTIFACTS_READY: ${{ steps.ordinary-seal.outputs.artifacts_ready }}
           PROFILE_PASSED: ${{ steps.ordinary-seal.outputs.profile_passed }}
           UPLOAD_COMPLETE: ${{ steps.ordinary-upload-after.outputs.upload_complete }}
@@ -372,6 +410,8 @@ jobs:
           test "$ORDINARY_ACTIVATION" = success
           test "$ORDINARY_ADMISSION" = success
           test "$DEPENDENCY_STAGE" = success
+          test "$DEPENDENCY_RESTORE" = success
+          test "$DEPENDENCY_RESTORE_GUARD" = success
           test "$JAVA" = success
           test "$ORDINARY_JDK21" = success
           test "$ORDINARY_XCODEGEN" = success
@@ -383,6 +423,7 @@ jobs:
           test "$ORDINARY_UPLOAD_BEFORE" = success
           test "$ORDINARY_UPLOAD_AFTER" = success
           test "$SEED_READY" = true
+          test "$CACHE_READY" = true
           test "$ARTIFACTS_READY" = true
           test "$PROFILE_PASSED" = true
           test "$UPLOAD_COMPLETE" = true

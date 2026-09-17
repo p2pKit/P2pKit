@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Closed ordinary FULL job-time acquisition and immutable shared-RAW fences.
+"""Closed ordinary job-time acquisition and immutable same-host clock fences.
 
 This is not a workflow activator, clock fallback, generic HTTP client or process
 backend. The caller must first admit the actual ordinary Actions identity and
 own the acquisition child with the existing native controller. Imports do no I/O.
 All original responses stay private. A response/receipt is not hosted acceptance.
 
-The 180s upload and two 30s step-transition windows are scheduling CAPS, not
-measurements or a guarantee that evidence can always be delivered. They cannot
-extend the unchanged 60-minute job or any existing operation maximum.
+FULL's original Darwin supplier, 2430s reserve and 60-minute ceiling are unchanged.
+Desktop's 30-minute job keeps one shared controller envelope and one shared600s
+delivery envelope. Per-operation caps are NOT additional reserved slots: their
+maxima do not all fit. Exhausted custody/delivery remains a failure, never an
+extension, smaller cleanup policy, successful retention or native qualification.
 """
 from __future__ import annotations
 
@@ -58,6 +60,21 @@ CONTROLLER_TAIL = (
 )
 TAIL_SECONDS = sum(seconds for _, seconds in CONTROLLER_TAIL)
 RESERVE_SECONDS = TAIL_SECONDS + SEAL_SECONDS + UPLOAD_SECONDS + 2 * TRANSITION_SECONDS
+DESKTOP_JOB_SECONDS, DESKTOP_CONTROLLER_SECONDS = 1800, 1500
+DESKTOP_PRODUCT_SECONDS, DESKTOP_OUTER_SECONDS = 600, 825
+DESKTOP_PRODUCT_RETURN_SECONDS, DESKTOP_PRODUCT_FINAL_SECONDS = 225, 45
+DESKTOP_DELIVERY_SECONDS, PACKAGE_SECONDS = 600, 120
+DESKTOP_HOSTS = {
+    ("Linux", "X64"): ("linux-x64", "ubuntu-latest"),
+    ("Windows", "X64"): ("windows-x64", "windows-latest"),
+    ("macOS", "ARM64"): ("macos-arm64", "macos-15"),
+    ("macOS", "X64"): ("macos-x64", "macos-15"),
+}
+DESKTOP_CONTROLLER_STAGES = (
+    "collect", "collect-final", "collect-read", "uninstall", "uninstall-final", "uninstall-read",
+    "export-freeze", "export", "export-final", "export-read", "export-open", "export-verify", "controller-return",
+)
+DESKTOP_DELIVERY_STAGES = ("seal-start", "seal", "upload-start", "upload", "package", "samples", "delivery")
 
 
 class BudgetError(ValueError):
@@ -75,6 +92,45 @@ def shared_raw_ns():
     from hosted_lock_resources import RAW_CLOCK_DOMAIN as domain, shared_raw_ns as read
     require(domain == RAW_CLOCK_DOMAIN, "JOB_TIME_RAW_DOMAIN")
     return read()
+
+
+def _clocks():
+    # Keep the actual cold Windows controller import independent of both native
+    # suppliers. This module performs no clock observation until explicitly read.
+    import hosted_job_clock
+    return hosted_job_clock
+
+
+def clock_value(clock):
+    """Exact public-safe identity data; not a host admission or a clock reader."""
+    _clocks().validate_identity(clock)
+    return {"role": clock.role, "domain": clock.domain, "ticksPerSecond": clock.ticks_per_second}
+
+
+def clock_identity(value):
+    require(type(value) is dict and set(value) == {"role", "domain", "ticksPerSecond"}, "JOB_TIME_CLOCK_IDENTITY")
+    return _clocks().validate_identity(_clocks().ClockIdentity(value["role"], value["domain"], value["ticksPerSecond"]))
+
+
+def _profile_clock(profile, clock, github=None):
+    require(profile in ("full", "desktop"), "JOB_TIME_PROFILE")
+    if clock is None:
+        require(profile == "full", "JOB_TIME_DESKTOP_CLOCK_REQUIRED")
+        return
+    _clocks().validate_identity(clock)
+    require(profile != "full" or clock.role.startswith("macos-") and clock.domain == RAW_CLOCK_DOMAIN,
+            "JOB_TIME_FULL_CLOCK_REQUIRED")
+    if github is not None:
+        selected = DESKTOP_HOSTS.get((github.get("runnerOS"), github.get("runnerArch")))
+        require(selected is not None and clock.role == selected[0], "JOB_TIME_CLOCK_HOST_CHANGED")
+
+
+def current_reading(profile):
+    """Keep the real first observation as well as its identity; no fallback."""
+    require(profile in ("full", "desktop"), "JOB_TIME_PROFILE")
+    observed = _clocks().validate_reading(_clocks().observe())
+    _profile_clock(profile, observed.clock)
+    return observed
 
 
 def digest(raw):
@@ -97,8 +153,10 @@ def integer(value, minimum=0, maximum=UINT64):
     return value
 
 
-def raw_now(minimum=0):
-    value = shared_raw_ns()  # Never time.time(), another process's monotonic(), or observer startup.
+def raw_now(minimum=0, *, clock=None):
+    # None is ONLY the unchanged legacy FULL API. Desktop consumers always bind
+    # the exact role/domain/frequency, including every HTTP parser clock read.
+    value = shared_raw_ns() if clock is None else _clocks().checked_now(clock, minimum_ns=minimum)
     return integer(value, minimum)
 
 
@@ -123,8 +181,22 @@ def http_epoch(value):
         raise BudgetError("JOB_TIME_HTTP_DATE") from None
 
 
-def policy():
-    return {"schema": 1, "jobSeconds": JOB_SECONDS, "clockDomain": RAW_CLOCK_DOMAIN,
+def policy(profile="full", *, clock=None):
+    _profile_clock(profile, clock)
+    if profile == "desktop":
+        return {"schema": 2, "profile": profile, "jobSeconds": DESKTOP_JOB_SECONDS, "clock": clock_value(clock),
+                "clockDomain": clock.domain, "dateQuantizationSeconds": 1,
+                "maximumServiceCacheSeconds": CACHE_SECONDS, "clockMarginSeconds": CLOCK_MARGIN_SECONDS,
+                "controllerSeconds": DESKTOP_CONTROLLER_SECONDS, "productSeconds": DESKTOP_PRODUCT_SECONDS,
+                "outerSeconds": DESKTOP_OUTER_SECONDS, "productReturnSeconds": DESKTOP_PRODUCT_RETURN_SECONDS,
+                "productFinalSeconds": DESKTOP_PRODUCT_FINAL_SECONDS, "deliverySeconds": DESKTOP_DELIVERY_SECONDS,
+                "sealSeconds": SEAL_SECONDS, "eachUploadSeconds": UPLOAD_SECONDS, "packageSeconds": PACKAGE_SECONDS,
+                "eachTransitionSeconds": TRANSITION_SECONDS,
+                "scope": "SHARED_ENVELOPES_CAPS_NOT_MAXIMUM_DURATION_FIT_OR_DELIVERY_GUARANTEES",
+                "acquisitionSeconds": ACQUIRE_SECONDS, "requestSeconds": REQUEST_SECONDS,
+                "socketSeconds": SOCKET_SECONDS, "bodyLimit": BODY_LIMIT, "headerLimit": HEADER_LIMIT,
+                "requests": 2, "retries": 0, "redirects": False, "ambientProxy": False}
+    value = {"schema": 1, "jobSeconds": JOB_SECONDS, "clockDomain": RAW_CLOCK_DOMAIN,
             "dateQuantizationSeconds": 1, "maximumServiceCacheSeconds": CACHE_SECONDS,
             "clockMarginSeconds": CLOCK_MARGIN_SECONDS, "controllerTail": [list(row) for row in CONTROLLER_TAIL],
             "controllerTailSeconds": TAIL_SECONDS, "sealSeconds": SEAL_SECONDS,
@@ -133,6 +205,9 @@ def policy():
             "acquisitionSeconds": ACQUIRE_SECONDS, "requestSeconds": REQUEST_SECONDS,
             "socketSeconds": SOCKET_SECONDS, "bodyLimit": BODY_LIMIT, "headerLimit": HEADER_LIMIT,
             "requests": 2, "retries": 0, "redirects": False, "ambientProxy": False}
+    if clock is not None:
+        value.update(schema=2, profile=profile, clock=clock_value(clock))
+    return value
 
 
 def admitted_identity(admitted):
@@ -140,16 +215,19 @@ def admitted_identity(admitted):
     value = parse(admitted.record)
     github = value.get("github", {})
     source = value.get("source", {})
-    require(value.get("profile") == "full" and github.get("repository") == identity.REPOSITORY and
-            github.get("workflow") == identity.PROFILES["full"][0] and github.get("job") == "complete-gate" and
-            github.get("workflowSha") == source.get("commit") and github.get("runnerOS") == "macOS" and
-            github.get("runnerArch") in ("ARM64", "X64"), "JOB_TIME_ADMISSION_IDENTITY")
+    profile = value.get("profile")
+    require(profile in identity.PROFILES and github.get("repository") == identity.REPOSITORY and
+            github.get("workflow") == identity.PROFILES[profile][0] and github.get("job") == identity.PROFILES[profile][1] and
+            github.get("workflowSha") == source.get("commit") and
+            (github.get("runnerOS"), github.get("runnerArch")) in DESKTOP_HOSTS and
+            (profile != "full" or github.get("runnerOS") == "macOS"), "JOB_TIME_ADMISSION_IDENTITY")
     for name in ("commit", "tree"):
         identity.sha(source.get(name))
     for name in ("runId", "runAttempt"):
         require(type(github.get(name)) is str and identity.ID.fullmatch(github[name]), "JOB_TIME_RUN_ID")
         integer(int(github[name]), 1, (1 << 63) - 1)
-    require(github.get("event") in ("push", "schedule", "workflow_dispatch", "pull_request"), "JOB_TIME_EVENT")
+    require(github.get("event") in ("push", "schedule", "workflow_dispatch", "pull_request") and
+            (profile != "desktop" or github.get("event") != "schedule"), "JOB_TIME_EVENT")
     require(digest(admitted.original_event) == github.get("eventSha256"), "JOB_TIME_EVENT_BYTES")
     event = identity.parse(admitted.original_event, identity.EVENT_LIMIT)
     if github["event"] == "pull_request":
@@ -219,15 +297,21 @@ def freshness(fields):
     return http_epoch(fields.get("date"))
 
 
-def observation(raw, expected_path, invocation):
+def observation(raw, expected_path, invocation, *, profile="full", clock=None):
+    _profile_clock(profile, clock)
     value = parse(raw)
-    require(set(value) == {"schema", "scope", "origin", "method", "path", "invocation", "clockDomain",
+    fields = {"schema", "scope", "origin", "method", "path", "invocation", "clockDomain",
             "startedRawNs", "finishedRawNs", "status", "headersBase64", "bodyBase64", "complete", "retirement",
-            "error"} and type(value["schema"]) is int and value["schema"] == 1 and
+            "error"}
+    if clock is not None:
+        fields.update(("profile", "clock"))
+    require(set(value) == fields and type(value["schema"]) is int and value["schema"] == (1 if clock is None else 2) and
             value["scope"] == "PRIVATE_ACTIONS_JOB_TIME_RESPONSE" and value["origin"] == ORIGIN and
             value["method"] == "GET" and value["path"] == expected_path and value["invocation"] == invocation and
-            value["clockDomain"] == RAW_CLOCK_DOMAIN and value["complete"] is True and
+            value["clockDomain"] == (RAW_CLOCK_DOMAIN if clock is None else clock.domain) and value["complete"] is True and
             value["retirement"] == "KNOWN" and value["error"] is None, "JOB_TIME_RESPONSE_BINDING")
+    if clock is not None:
+        require(value["profile"] == profile and clock_identity(value["clock"]) == clock, "JOB_TIME_RESPONSE_CLOCK_CHANGED")
     start, finish = integer(value["startedRawNs"]), integer(value["finishedRawNs"])
     require(start <= finish <= start + REQUEST_SECONDS * NS, "JOB_TIME_REQUEST_INTERVAL")
     decoded = []
@@ -280,7 +364,10 @@ def response_identity(admitted, attempt, jobs, runner_name):
             all(type(row) is dict for row in rows), "JOB_TIME_COMPLETE_PAGE_REQUIRED")
     ids = [integer(row.get("id"), 1, (1 << 63) - 1) for row in rows]
     require(len(set(ids)) == len(ids), "JOB_TIME_DUPLICATE_JOB")
-    selected = [row for row in rows if row.get("name") == "complete-gate"]
+    selector = ("macos-latest" if record["profile"] == "full" else
+                DESKTOP_HOSTS[(github["runnerOS"], github["runnerArch"])][1])
+    job_name = "complete-gate" if record["profile"] == "full" else selector
+    selected = [row for row in rows if row.get("name") == job_name]
     require(len(selected) == 1, "JOB_TIME_EXACT_JOB_REQUIRED")
     job = selected[0]
     require(integer(job.get("run_id"), 1) == run and integer(job.get("run_attempt"), 1) == number and
@@ -294,7 +381,7 @@ def response_identity(admitted, attempt, jobs, runner_name):
     # its current service job. Do not invent GITHUB_JOB_ID or OS/arch job labels.
     require(type(runner_name) is str and 0 < len(runner_name) <= 256 and
             not any(ord(c) < 32 or ord(c) == 127 for c in runner_name) and job.get("runner_name") == runner_name and
-            integer(job.get("runner_id"), 1) > 0 and job.get("labels") == ["macos-latest"] and
+            integer(job.get("runner_id"), 1) > 0 and job.get("labels") == [selector] and
             type(job.get("runner_group_id")) is int and job["runner_group_id"] == 0 and
             job.get("runner_group_name") == "GitHub Actions", "JOB_TIME_RUNNER_IDENTITY")
     start = utc_epoch(job.get("started_at"))
@@ -303,27 +390,20 @@ def response_identity(admitted, attempt, jobs, runner_name):
     return record, job, start
 
 
-def derive(admitted, originals, provenance):
-    """Pure recomputation. No new observation/derivation may renew this record."""
-    require(type(originals) is dict and set(originals) == {"attempt", "jobs"} and type(provenance) is dict and
-            set(provenance) == {"controllerJob", "invocation", "phaseStartSha256", "phaseResultSha256",
-                                "childReturnSha256", "runnerName"}, "JOB_TIME_PROVENANCE")
-    for key in ("controllerJob", "invocation"):
-        require(type(provenance[key]) is str and re.fullmatch(r"[0-9a-f]{32}", provenance[key]), "JOB_TIME_PROVENANCE")
-    for key in ("phaseStartSha256", "phaseResultSha256", "childReturnSha256"):
-        require(type(provenance[key]) is str and re.fullmatch(r"[0-9a-f]{64}", provenance[key]), "JOB_TIME_PROVENANCE")
-    expected_paths = paths(admitted)
-    left, attempt, left_date = observation(originals["attempt"], expected_paths["attempt"], provenance["invocation"])
-    right, jobs, right_date = observation(originals["jobs"], expected_paths["jobs"], provenance["invocation"])
-    require(left["finishedRawNs"] <= right["startedRawNs"] <= right["finishedRawNs"] <=
-            left["startedRawNs"] + ACQUIRE_SECONDS * NS, "JOB_TIME_ACQUISITION_INTERVAL")
-    require(0 <= right_date - left_date <= math.ceil((right["finishedRawNs"] - left["startedRawNs"]) / NS) +
-            CACHE_SECONDS + 1, "JOB_TIME_SERVICE_CLOCK_CHANGED")
-    record, job, started = response_identity(admitted, attempt, jobs, provenance["runnerName"])
-    require(started <= right_date, "JOB_TIME_FUTURE_START")
-    job_end = right["startedRawNs"] + (started + JOB_SECONDS - right_date - 1 - CACHE_SECONDS - CLOCK_MARGIN_SECONDS) * NS
-    integer(job_end)
-    require(right["finishedRawNs"] < job_end, "JOB_TIME_ALREADY_EXPIRED")
+def _fences(job_end, profile):
+    if profile == "desktop":
+        controller_end = integer(job_end - DESKTOP_DELIVERY_SECONDS * NS)
+        cutoff = integer(controller_end - (DESKTOP_PRODUCT_RETURN_SECONDS + DESKTOP_PRODUCT_FINAL_SECONDS) * NS)
+        # Only native product stop/outer-final receives its pre-existing225+45s
+        # protected interval. Custody/export keep their existing local caps but
+        # SHARE controller_end. They may HOLD: summing all their maxima would
+        # exceed this job, and that sum is not represented as reserved capacity.
+        return {"productive": cutoff, "preparation-final": cutoff + 45 * NS,
+                "product-return": cutoff + DESKTOP_PRODUCT_RETURN_SECONDS * NS,
+                "product-final": controller_end,
+                **{label: controller_end for label in DESKTOP_CONTROLLER_STAGES},
+                **{label: job_end for label in DESKTOP_DELIVERY_STAGES}}
+    require(profile == "full", "JOB_TIME_PROFILE")
     cutoff = integer(job_end - RESERVE_SECONDS * NS)
     fences, cursor = {"productive": cutoff, "preparation-final": cutoff + 45 * NS}, cutoff
     for label, seconds in CONTROLLER_TAIL:
@@ -334,14 +414,47 @@ def derive(admitted, originals, provenance):
     fences["upload-start"] = fences["seal"] + TRANSITION_SECONDS * NS
     fences["upload"] = fences["upload-start"] + UPLOAD_SECONDS * NS
     require(fences["upload"] == job_end, "JOB_TIME_RESERVE_ACCOUNTING")
-    value = {"schema": 1, "scope": "IMMUTABLE_ORDINARY_FULL_JOB_BUDGET", "admissionSha256": digest(admitted.record),
+    return fences
+
+
+def derive(admitted, originals, provenance, *, clock=None):
+    """Pure recomputation. No new observation/derivation may renew this record."""
+    record, _, _, _ = admitted_identity(admitted)
+    profile = record["profile"]
+    _profile_clock(profile, clock, record["github"])
+    require(type(originals) is dict and set(originals) == {"attempt", "jobs"} and type(provenance) is dict and
+            set(provenance) == {"controllerJob", "invocation", "phaseStartSha256", "phaseResultSha256",
+                                "childReturnSha256", "runnerName"}, "JOB_TIME_PROVENANCE")
+    for key in ("controllerJob", "invocation"):
+        require(type(provenance[key]) is str and re.fullmatch(r"[0-9a-f]{32}", provenance[key]), "JOB_TIME_PROVENANCE")
+    for key in ("phaseStartSha256", "phaseResultSha256", "childReturnSha256"):
+        require(type(provenance[key]) is str and re.fullmatch(r"[0-9a-f]{64}", provenance[key]), "JOB_TIME_PROVENANCE")
+    expected_paths = paths(admitted)
+    left, attempt, left_date = observation(originals["attempt"], expected_paths["attempt"], provenance["invocation"],
+                                         profile=profile, clock=clock)
+    right, jobs, right_date = observation(originals["jobs"], expected_paths["jobs"], provenance["invocation"],
+                                         profile=profile, clock=clock)
+    require(left["finishedRawNs"] <= right["startedRawNs"] <= right["finishedRawNs"] <=
+            left["startedRawNs"] + ACQUIRE_SECONDS * NS, "JOB_TIME_ACQUISITION_INTERVAL")
+    require(0 <= right_date - left_date <= math.ceil((right["finishedRawNs"] - left["startedRawNs"]) / NS) +
+            CACHE_SECONDS + 1, "JOB_TIME_SERVICE_CLOCK_CHANGED")
+    record, job, started = response_identity(admitted, attempt, jobs, provenance["runnerName"])
+    require(started <= right_date, "JOB_TIME_FUTURE_START")
+    job_seconds = JOB_SECONDS if profile == "full" else DESKTOP_JOB_SECONDS
+    job_end = right["startedRawNs"] + (started + job_seconds - right_date - 1 - CACHE_SECONDS - CLOCK_MARGIN_SECONDS) * NS
+    integer(job_end)
+    require(right["finishedRawNs"] < job_end, "JOB_TIME_ALREADY_EXPIRED")
+    fences = _fences(job_end, profile)
+    value = {"schema": 1, "scope": "IMMUTABLE_ORDINARY_" + profile.upper() + "_JOB_BUDGET", "admissionSha256": digest(admitted.record),
              "source": record["source"], "github": record["github"], "numericJobId": job["id"],
              "runner": {key: job[key] for key in ("runner_id", "runner_name", "runner_group_id", "runner_group_name", "labels")},
              "jobStartedAt": job["started_at"], "jobStartedEpochSeconds": started,
              "originDateEpochSeconds": right_date, "requestStartRawNs": right["startedRawNs"],
-             "responseFinishedRawNs": right["finishedRawNs"], "clockDomain": RAW_CLOCK_DOMAIN,
+             "responseFinishedRawNs": right["finishedRawNs"], "clockDomain": RAW_CLOCK_DOMAIN if clock is None else clock.domain,
              "originalsSha256": {key: digest(raw) for key, raw in originals.items()}, "provenance": provenance,
-             "policy": policy(), "fencesRawNs": fences}
+             "policy": policy(profile, clock=clock), "fencesRawNs": fences}
+    if clock is not None:
+        value.update(schema=2, profile=profile, clock=clock_value(clock))
     return Budget(encoded(value))
 
 
@@ -351,7 +464,38 @@ class Budget:
 
     @property
     def value(self):
-        return parse(self.record)
+        value = parse(self.record)
+        if value.get("schema") == 2:
+            profile, clock = value.get("profile"), clock_identity(value.get("clock"))
+            _profile_clock(profile, clock, value.get("github", {}))
+            require(type(value["schema"]) is int and value.get("scope") ==
+                    "IMMUTABLE_ORDINARY_" + profile.upper() + "_JOB_BUDGET" and
+                    value.get("clockDomain") == clock.domain and
+                    encoded(value.get("policy")) == encoded(policy(profile, clock=clock)),
+                    "JOB_TIME_BUDGET_CLOCK_CHANGED")
+            # A serialized stage/policy may not replace a fence from the service
+            # observations with a new process's local epoch or a fresh allowance.
+            job_seconds = JOB_SECONDS if profile == "full" else DESKTOP_JOB_SECONDS
+            end = integer(value["requestStartRawNs"]) + (integer(value["jobStartedEpochSeconds"]) + job_seconds -
+                integer(value["originDateEpochSeconds"]) - 1 - CACHE_SECONDS - CLOCK_MARGIN_SECONDS) * NS
+            require(encoded(value.get("fencesRawNs")) == encoded(_fences(integer(end), profile)),
+                    "JOB_TIME_BUDGET_FENCES_CHANGED")
+        else:
+            require(type(value.get("schema")) is int and value["schema"] == 1 and
+                    value.get("scope") == "IMMUTABLE_ORDINARY_FULL_JOB_BUDGET" and
+                    "profile" not in value and "clock" not in value and value.get("clockDomain") == RAW_CLOCK_DOMAIN and
+                    value.get("github", {}).get("job") == identity.PROFILES["full"][1] and
+                    value.get("github", {}).get("workflow") == identity.PROFILES["full"][0], "JOB_TIME_BUDGET_PROFILE")
+        return value
+
+    @property
+    def profile(self):
+        return self.value.get("profile", "full")
+
+    @property
+    def clock(self):
+        value = self.value
+        return clock_identity(value["clock"]) if value["schema"] == 2 else None
 
     @property
     def sha256(self):
@@ -363,7 +507,9 @@ class Budget:
         return integer(values[stage])
 
     def check(self, stage, *, minimum=None):
-        now = raw_now(self.value["responseFinishedRawNs"] if minimum is None else minimum)
+        value = self.value
+        original = integer(value["responseFinishedRawNs"])
+        now = raw_now(original if minimum is None else max(original, integer(minimum)), clock=self.clock)
         require(now < self.fence(stage), "JOB_TIME_FENCE_EXPIRED")
         return now
 
@@ -374,7 +520,19 @@ class Budget:
         # shorten, not lengthen, the computed local deadline. Never serialize it.
         local = time.monotonic()
         now = self.check(stage)
-        return local + min(seconds, (self.fence(stage) - now) / NS)
+        if self.clock is None:
+            return local + min(seconds, (self.fence(stage) - now) / NS)
+        return _directed_deadline(local, seconds, self.fence(stage), now)
+
+
+def _directed_deadline(local, seconds, fence, now):
+    # Match the reviewed cross-host supplier's directed rounding. A float
+    # conversion must never extend the original integer shared-clock fence.
+    require(type(local) in (int, float) and math.isfinite(local) and local >= 0, "JOB_TIME_LOCAL_CLOCK")
+    remaining = math.nextafter((fence - now) / NS, 0.0)
+    end = math.nextafter(local + min(seconds, remaining), -math.inf)
+    require(math.isfinite(end) and end > local, "JOB_TIME_LOCAL_DEADLINE")
+    return end
 
 
 class BudgetClock:
@@ -391,18 +549,21 @@ class BudgetClock:
                 "JOB_TIME_OPERATION_MAXIMUM")
         local = time.monotonic()
         now = self.check(stage)
-        return local + min(seconds, (self.budget.fence(stage) - now) / NS)
+        if self.budget.clock is None:
+            return local + min(seconds, (self.budget.fence(stage) - now) / NS)
+        return _directed_deadline(local, seconds, self.budget.fence(stage), now)
 
 
 class _Reader:
     """Bound all HTTP parser reads, including status/headers/chunk framing."""
-    def __init__(self, stream, sock, end, start):
+    def __init__(self, stream, sock, end, start, *, clock=None):
         self.stream, self.sock, self.end, self.last = stream, sock, end, start
+        self.clock = clock
         self.header = bytearray()
         self.in_headers, self.wire_bytes = True, 0
 
     def _read(self, name, amount):
-        now = raw_now(self.last)
+        now = raw_now(self.last, clock=self.clock)
         self.last = now
         require(now < self.end, "JOB_TIME_HTTP_TIMEOUT")
         sock = self.sock
@@ -414,7 +575,7 @@ class _Reader:
         if self.in_headers:
             self.header.extend(data)
             require(len(self.header) <= HEADER_LIMIT, "JOB_TIME_HTTP_HEADERS_LIMIT")
-        self.last = raw_now(now)
+        self.last = raw_now(now, clock=self.clock)
         require(self.last < self.end, "JOB_TIME_HTTP_TIMEOUT")
         return data
 
@@ -440,9 +601,10 @@ class _Reader:
         self.stream.close()
 
 
-def _request(path, token, invocation):
+def _request(path, token, invocation, *, profile="full", clock=None, minimum=0):
     """Only called by acquire(); native outer phase is also a whole-call bound."""
-    start = raw_now()
+    _profile_clock(profile, clock)
+    start = raw_now(minimum, clock=clock)
     connection = response = reader = None
     body, header, status, complete = bytearray(), b"", None, False
     error, retired = None, True
@@ -456,12 +618,12 @@ def _request(path, token, invocation):
             def __init__(self, sock, **kwargs):
                 nonlocal reader
                 super().__init__(sock, **kwargs)
-                reader = _Reader(self.fp, sock, start + REQUEST_SECONDS * NS, start)
+                reader = _Reader(self.fp, sock, start + REQUEST_SECONDS * NS, start, clock=clock)
                 self.fp = reader
 
         connection.response_class = Response
         connection.request("GET", path, headers={"Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "P2pKit-ordinary-full-job-time",
+            "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "P2pKit-ordinary-" + profile + "-job-time",
             "Authorization": "Bearer " + token, "Cache-Control": "no-cache, max-age=0",
             "Pragma": "no-cache", "Accept-Encoding": "identity", "Connection": "close"})
         response = connection.getresponse()
@@ -500,7 +662,10 @@ def _request(path, token, invocation):
                     retired = False
                     error = error or BudgetError("JOB_TIME_HTTP_CLOSE_FAILED")
     try:
-        finish = raw_now(start)
+        # A final reading above request start can still move backwards from a
+        # successful parser sample. Keep that high-water mark through both closes.
+        final_minimum = max(start, reader.last) if reader is not None else start
+        finish = raw_now(final_minimum, clock=clock)
         if finish - start > REQUEST_SECONDS * NS:
             error = error or BudgetError("JOB_TIME_HTTP_TIMEOUT")
     except BaseException:
@@ -510,26 +675,41 @@ def _request(path, token, invocation):
         finish = None
         error = error or BudgetError("JOB_TIME_CLOCK_FAILED")
     value = {"schema": 1, "scope": "PRIVATE_ACTIONS_JOB_TIME_RESPONSE", "origin": ORIGIN, "method": "GET", "path": path,
-             "invocation": invocation, "clockDomain": RAW_CLOCK_DOMAIN, "startedRawNs": start, "finishedRawNs": finish,
+             "invocation": invocation, "clockDomain": RAW_CLOCK_DOMAIN if clock is None else clock.domain,
+             "startedRawNs": start, "finishedRawNs": finish,
              "status": status, "headersBase64": base64.b64encode(header[:HEADER_LIMIT]).decode("ascii"),
              "bodyBase64": base64.b64encode(bytes(body[:BODY_LIMIT])).decode("ascii"), "complete": complete and error is None,
              "retirement": "KNOWN" if retired else "UNKNOWN", "error": None if error is None else str(error)}
+    if clock is not None:
+        value.update(schema=2, profile=profile, clock=clock_value(clock))
     return encoded(value), error
 
 
-def acquire(admitted, invocation, token, retain):
-    """Exactly two fixed GETs; each original is retained before parsing/refusal."""
+def acquire(admitted, invocation, token, retain, *, clock=None, minimum=0):
+    """Two fixed GETs; return originals AND the final post-retention observation.
+
+    The native parent supplies its validated predecessor floor. The caller must
+    carry the returned high-water into its own final observation/retirement;
+    response timestamps alone precede this supplier's last deadline check.
+    """
+    record, _, _, _ = admitted_identity(admitted)
+    profile = record["profile"]
+    _profile_clock(profile, clock, record["github"])
     expected = paths(admitted)
     require(type(invocation) is str and re.fullmatch(r"[0-9a-f]{32}", invocation), "JOB_TIME_INVOCATION")
     require(type(token) is str and re.fullmatch(r"[A-Za-z0-9_.-]{16,4096}", token), "JOB_TIME_READ_TOKEN_REQUIRED")
-    result, start = {}, raw_now()
+    result, start = {}, raw_now(integer(minimum), clock=clock)
+    last = start
     for label in ("attempt", "jobs"):
-        require(raw_now(start) < start + ACQUIRE_SECONDS * NS, "JOB_TIME_HTTP_TIMEOUT")
-        raw, error = _request(expected[label], token, invocation)
+        last = raw_now(last, clock=clock)
+        require(last < start + ACQUIRE_SECONDS * NS, "JOB_TIME_HTTP_TIMEOUT")
+        raw, error = _request(expected[label], token, invocation, profile=profile, clock=clock, minimum=last)
         retain(label, raw)
         if error is not None:
             raise error
-        observation(raw, expected[label], invocation)
+        observed, _, _ = observation(raw, expected[label], invocation, profile=profile, clock=clock)
+        last = observed["finishedRawNs"]
         result[label] = raw
-    require(raw_now(start) < start + ACQUIRE_SECONDS * NS, "JOB_TIME_HTTP_TIMEOUT")
-    return result
+    completed = raw_now(last, clock=clock)
+    require(completed < start + ACQUIRE_SECONDS * NS, "JOB_TIME_HTTP_TIMEOUT")
+    return result, completed

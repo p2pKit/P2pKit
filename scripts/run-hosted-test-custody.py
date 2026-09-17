@@ -28,6 +28,7 @@ SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 import audit_processes as processes
+import hosted_dependency_cache as cache
 import hosted_dependency_seed_files as seed
 import hosted_full_job_budget as job_time
 import hosted_full_simulator as simulator
@@ -66,14 +67,18 @@ TOTAL_SECONDS = {"full": 8400, "desktop": 1500}
 FULL_STAGE = {"recipient-validation": "productive", "audit-init": "productive",
               "custody-prepare": "productive", "product": "product-return", "custody-collect": "collect",
               "custody-uninstall": "uninstall", "export": "export",
+              "sample-packaging": "controller-return",
               **{label: "productive" for label in (*simulator.PREPARE, simulator.PRELAUNCH)},
               **{label: label for label in simulator.RETIRE}, **supplements.STAGES}
 FULL_FINISH = {"productive": "preparation-final", "product-return": "product-final", "collect": "collect-final",
                "uninstall": "uninstall-final", "export": "export-final",
+               "controller-return": "controller-return",
                **{label: label + "-final" for label in simulator.RETIRE}}
 FULL_PREPARATION = ("job-time", "recipient-validation", "audit-init", *simulator.PREPARE,
                     "custody-prepare", simulator.PRELAUNCH, "product")
 FULL_ORDER = (*FULL_PREPARATION, "custody-collect", "custody-uninstall", *simulator.RETIRE, *supplements.ORDER, "export")
+DESKTOP_ORDER = ("job-time", "recipient-validation", "audit-init", "custody-prepare", "product",
+                 "custody-collect", "custody-uninstall", "sample-packaging", "export")
 IDENTITY_ENV = (
     "GITHUB_ACTIONS", "GITHUB_REPOSITORY", "GITHUB_SHA", "GITHUB_REF", "GITHUB_RUN_ID",
     "GITHUB_RUN_ATTEMPT", "GITHUB_EVENT_NAME", "GITHUB_WORKFLOW_REF", "GITHUB_WORKFLOW_SHA",
@@ -156,6 +161,50 @@ def parse(raw):
     return identity.parse(raw, RECORD_LIMIT)
 
 
+def check_cancelled(cancelled):
+    if cancelled:
+        raise KeyboardInterrupt("ORDINARY_TEST_CONTROLLER_CANCELLED")
+
+
+def guarded_operation(function, *args, **kwargs):
+    """Own CLI signal handlers before allocation; finalizers retain first failure.
+
+    Provisional outputs are not authority if handler restoration or the last
+    cancellation check fails. Every workflow consumer requires step success.
+    """
+    handlers, cancelled, original = {}, [], None
+    try:
+        for number in (signal.SIGINT, signal.SIGTERM, *([signal.SIGBREAK] if hasattr(signal, "SIGBREAK") else [])):
+            handlers[number] = signal.getsignal(number)
+            signal.signal(number, lambda signum, _frame: cancelled.append(signum))
+        function(*args, cancelled=cancelled, **kwargs)
+        check_cancelled(cancelled)
+    except BaseException as error:
+        original = error
+    finally:
+        for number, handler in handlers.items():
+            try:
+                signal.signal(number, handler)
+            except BaseException as error:
+                if original is None:
+                    original = error
+                else:
+                    seed._note(original, "signal-restoration", error)
+    if original is not None:
+        raise original
+    check_cancelled(cancelled)
+
+
+def original_clock(budget, *observations):
+    """Carry every validated predecessor's high-water mark across processes."""
+    first = budget.value["responseFinishedRawNs"]
+    require(all(type(value) is int and first <= value <= job_time.UINT64 for value in observations),
+            "ORIGINAL_CLOCK_OBSERVATION")
+    clock = job_time.BudgetClock(budget)
+    clock.last = max((first, *observations))
+    return clock
+
+
 def canonical_bindings():
     """Capture only canonical suppliers after exact ordinary source admission."""
     result = {}
@@ -198,7 +247,7 @@ def session_path(profile, role):
     return parent / ("p2pkit-test-" + profile + "-" + run + "-" + attempt + "-" + role)
 
 
-def child_environment(base, session, state):
+def child_environment(base, session, state, *, require_jdks=True):
     """Drop credentials, not conflicting execution policy; never impersonate CI."""
     blocked = {"JAVA_OPTS", "GRADLE_OPTS", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS",
                "BASH_ENV", "ENV", "ZDOTDIR", "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONINSPECT",
@@ -215,7 +264,8 @@ def child_environment(base, session, state):
                "JAVA_HOME", "P2PKIT_AUDIT_JDK21", "ANDROID_HOME", "LANG", "LC_ALL"}
     result = {name: value for name, value in base.items() if name in allowed}
     result.update(context)
-    require(result.get("JAVA_HOME") and result.get("P2PKIT_AUDIT_JDK21"), "TWO_EXPLICIT_JDK_HOMES_REQUIRED")
+    require(not require_jdks or result.get("JAVA_HOME") and result.get("P2PKIT_AUDIT_JDK21"),
+            "TWO_EXPLICIT_JDK_HOMES_REQUIRED")
     result.update(CI="true", GIT_TERMINAL_PROMPT="0", PYTHONDONTWRITEBYTECODE="1", PYTHONUNBUFFERED="1",
                   TMPDIR=str(session / "temporary"), TEMP=str(session / "temporary"), TMP=str(session / "temporary"),
                   KONAN_DATA_DIR=str(state / "konan"), ANDROID_USER_HOME=str(state / "android-user"),
@@ -1089,12 +1139,323 @@ def frozen_seed_packet(owner, private, end, check=lambda: None):
             "outerMapSha256": digest(outer_raw), "copies": [outer_rows[name] for name in sorted(expected_copies)]}
 
 
+def frozen_consume_packet(owner, private, end, check):
+    """Original pre-tool/restore records must be the bytes actually encrypted.
+
+    No live S/H cache is opened after the product. All these original records
+    precede product/Central execution; no post-screen exception is introduced.
+    """
+    context_raw = owner.read(private, "run-context.json", end)
+    context = parse(context_raw)
+    evidence = owner.child(private, "evidence", end)
+    admitted = load_admission(owner, owner.child(evidence, "admission", end), end)
+    budget = load_job_budget(owner, private, admitted, context, end)
+    bound = consume_binding(owner, private, admitted, budget, end)
+    require(bound == context.get("dependencyCache"), "CACHE_FROZEN_CONTEXT_CHANGED")
+    originals = {}
+    directory = owner.child(evidence, "dependency-cache", end)
+    names = {"plan.json", "staging.json", "preparation.json", "provider.json", "restoration.json",
+             "controller-context.json"}
+    require(set(seed_names(owner, directory.path, end)) == names, "CACHE_ORIGINAL_RECEIPT_ROSTER")
+    for name in sorted(names):
+        originals["dependency-cache/" + name] = owner.read(directory, name, end)
+    require(originals["dependency-cache/controller-context.json"] == context_raw, "CACHE_ORIGINAL_CONTEXT_CHANGED")
+    timing = owner.child(evidence, "job-time", end)
+    names = set(seed_names(owner, timing.path, end))
+    fixed = {"attempt.json", "jobs.json", "child-return.json", "budget.json"}
+    require(fixed <= names <= fixed | {"product-cancellation.json"}, "CACHE_TIMING_RECEIPT_ROSTER")
+    for name in sorted(names):
+        originals["job-time/" + name] = owner.read(timing, name, end)
+    phase = owner.child(owner.child(evidence, "commands", end), "job-time", end)
+    names = {"start.json", "result.json", "baseline.json", "stdout.log", "stderr.log"}
+    require(set(seed_names(owner, phase.path, end)) == names, "CACHE_TIME_PHASE_ROSTER")
+    for name in sorted(names):
+        originals["commands/job-time/" + name] = owner.read(phase, name, end)
+    anchors = {"dependency-cache/" + name + ".json": bound[key + "Sha256"] for name, key in
+               (("preparation", "preparation"), ("restoration", "restoration"), ("plan", "plan"),
+                ("provider", "provider"), ("staging", "staging"))}
+    anchors.update({"job-time/budget.json": budget.sha256,
+        **{"job-time/" + key + ".json": sha for key, sha in budget.value["originalsSha256"].items()},
+        "job-time/child-return.json": budget.value["provenance"]["childReturnSha256"],
+        "commands/job-time/start.json": budget.value["provenance"]["phaseStartSha256"],
+        "commands/job-time/result.json": budget.value["provenance"]["phaseResultSha256"]})
+    require(all(digest(originals[name]) == sha for name, sha in anchors.items()),
+            "CACHE_VALIDATED_ORIGINALS_CHANGED_BEFORE_FREEZE")
+    before_raw = owner.read(evidence, "profile-result-before-export.json", end)
+    require(parse(before_raw).get("dependencyCache") == bound and
+            parse(before_raw).get("contextSha256") == digest(context_raw), "CACHE_FROZEN_PROFILE_CHANGED")
+    originals["profile-result-before-export.json"] = before_raw
+    frozen = owner.child(private, "frozen-evidence", end)
+    map_raw = owner.read(frozen, "original-path-map.json", end)
+    mapping = seed_copy_map(map_raw, evidence.path)
+    rows = {row["original"]: row for row in mapping["files"]}
+    require(set(seed_names(owner, frozen.path, end)) == {"original-path-map.json", *[row["member"] for row in rows.values()]} and
+            all({name for name in rows if name.startswith(prefix)} == {name for name in originals if name.startswith(prefix)}
+                for prefix in ("dependency-cache/", "job-time/", "commands/job-time/")), "CACHE_FROZEN_ROSTER_CHANGED")
+    for name, raw in originals.items():
+        check()
+        row = rows.get(name)
+        require(type(row) is dict and (row["size"], row["sha256"]) == (len(raw), digest(raw)) and
+                owner.read(frozen, row["member"], end) == raw, "CACHE_FROZEN_ORIGINAL_DIFFERS")
+    for name, raw in originals.items():
+        current = evidence
+        parts = name.split("/")  # Closed producer-selected names above, never external paths.
+        for part in parts[:-1]:
+            current = owner.child(current, part, end)
+        require(owner.read(current, parts[-1], end) == raw, "CACHE_ORIGINAL_CHANGED_DURING_FREEZE")
+    require(owner.read(frozen, "original-path-map.json", end) == map_raw and
+            owner.read(private, "run-context.json", end) == context_raw and not owner.unknown,
+            "CACHE_PACKET_CHANGED_DURING_VERIFICATION")
+    check()
+    return {"contextSha256": digest(context_raw), "binding": bound, "mapSha256": digest(map_raw),
+            "files": [rows[name] for name in sorted(originals)]}
+
+
+def sample_posix_reader(directory, name, snapshot, end):
+    """Read a closed sample member without expanding dependency-name authority.
+
+    The two dotfile receipts are not dependency filenames. The already-owned
+    public source directory pins its descriptor/ancestry; O_NONBLOCK prevents a
+    swapped FIFO waiting for a writer before fstat can reject it. Neither this
+    adapter nor its caller starts a process or owns another directory descriptor.
+    """
+    require(isinstance(directory, seed.PosixSourceDirectory), "SAMPLE_PINNED_POSIX_DIRECTORY_REQUIRED")
+    if name not in (".prepare.json", ".complete.json"):
+        seed.authority._basename(name)
+    posix._deadline(end)
+    directory.verify()
+    parent = directory._pins[-1].fd
+    require(posix._stamp(os.fstat(parent)) == snapshot[""], "SAMPLE_DIRECTORY_CHANGED_BEFORE_OPEN")
+    fd, stream = None, None
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+        require(posix._stamp(os.fstat(fd)) == snapshot[name] and stat.S_ISREG(snapshot[name][2]),
+                "SAMPLE_FILE_CHANGED_BEFORE_OPEN")
+        stream = os.fdopen(fd, "rb")
+        fd = None  # Ownership transfers only after fdopen succeeds.
+        directory.verify()
+        posix._deadline(end)
+        return stream
+    except BaseException as original:
+        try:
+            if stream is not None:
+                stream.close()
+            elif fd is not None:
+                os.close(fd)
+        except BaseException as error:
+            seed._note(original, "sample-reader-allocation-close", error)
+        raise
+
+
+def sample_output_identity(directory, end, check):
+    """Observe the producer's Python stat identity under the original root pin.
+
+    Windows FileInfo uses a volume/128-bit-ID hex pair, not Python st_dev/st_ino.
+    Keep both representations separately; never guess a conversion between them.
+    Original pinned ancestry is verified on both sides of the no-follow stat.
+    """
+    check()
+    posix._deadline(end)
+    before = directory.verify()
+    info = os.stat(directory.path, follow_symlinks=False)
+    require(stat.S_ISDIR(info.st_mode) and not getattr(info, "st_file_attributes", 0) & 0x400 and
+            all(type(value) is int and value >= 0 for value in (info.st_dev, info.st_ino)) and
+            directory.verify() == before, "SAMPLE_OUTPUT_IDENTITY_CHANGED")
+    check()
+    posix._deadline(end)
+    return [info.st_dev, info.st_ino]
+
+
+def sample_file(owner, directory, name, end, check, *, metadata=False):
+    """Hash one original regular file using existing pinned/snapshot readers.
+
+    Ordinary delivery retains the existing512MiB file/2GiB aggregate bound.
+    This does not widen the Windows file supplier for oversized packages.
+    """
+    maximum = RECORD_LIMIT if metadata else seed.FILE_LIMIT
+    stream, rows, parts = None, None, []
+    try:
+        directory.verify()
+        if os.name == "nt":
+            stream = owner.acquire("sample-reader", lambda: directory.open_file(name, max_bytes=maximum, deadline=end))
+            info = stream.initial_info
+            size, file_id = info.size, list(info.identity)
+        else:
+            rows = posix_snapshot(owner, directory.path, seed.TOTAL_LIMIT, 64, end)
+            require(name in rows and stat.S_ISREG(rows[name][2]) and 0 < rows[name][5] <= maximum,
+                    "SAMPLE_FILE_BOUND_OR_KIND")
+            size, file_id = rows[name][5], list(rows[name][:2])
+            stream = owner.acquire("sample-reader", lambda: sample_posix_reader(directory, name, rows, end))
+        require(0 < size <= maximum, "SAMPLE_FILE_BOUND_OR_KIND")
+        hasher, total = hashlib.sha256(), 0
+        while total < size:
+            check()
+            block = stream.read(min(MIB, size - total))
+            require(type(block) is bytes and block, "SAMPLE_FILE_TRUNCATED")
+            total += len(block)
+            hasher.update(block)
+            if metadata:
+                parts.append(block)
+        require(stream.read(1) == b"", "SAMPLE_FILE_GREW")
+        if os.name == "nt":
+            require(stream.verify() == info, "SAMPLE_FILE_CHANGED")
+        else:
+            require(posix._stamp(os.fstat(stream.fileno())) == rows[name] and
+                    posix_snapshot(owner, directory.path, seed.TOTAL_LIMIT, 64, end) == rows, "SAMPLE_FILE_CHANGED")
+        directory.verify()
+        check()
+        result = {"size": total, "sha256": hasher.hexdigest(), "identity": file_id}
+    except BaseException as error:
+        owner.error("sample-reader", error)
+        raise
+    finally:
+        if stream is not None:
+            owner.close_one(stream)
+    require(not owner.unknown, "SAMPLE_READER_RETIREMENT_UNKNOWN")
+    check()
+    return result, b"".join(parts) if metadata else None
+
+
+def sample_snapshot(owner, session, admitted, role, end, check):
+    """Exact successful packager output, never arbitrary upload paths or globbing."""
+    root_path = session.parent / "p2pkit-sample-apps"
+    root = owner.acquire("sample-output", lambda: seed.public_root(root_path))
+    platforms = ["desktop", "android"] if role == "linux-x64" else ["desktop"]
+    top = {".prepare.json", ".complete.json", *platforms}
+    require(set(root.names(max_names=64, deadline=end)) == top, "SAMPLE_OUTPUT_ROSTER")
+    output_identity = sample_output_identity(root, end, check)
+    roster, originals, directories = {}, {}, {"": list(root.identity)}
+    def capture(directory, prefix, name, metadata=False):
+        row, raw = sample_file(owner, directory, name, end, check, metadata=metadata)
+        roster[prefix + name] = row
+        require(sum(item["size"] for item in roster.values()) <= seed.TOTAL_LIMIT, "SAMPLE_AGGREGATE_BOUND")
+        if raw is not None:
+            originals[prefix + name] = raw
+        return raw
+    prepared = parse(capture(root, "", ".prepare.json", True))
+    completed = parse(capture(root, "", ".complete.json", True))
+    record = parse(admitted.record)
+    source, github = record["source"], record["github"]
+    platform = "linux" if role.startswith("linux-") else "windows" if role.startswith("windows-") else "macos"
+    architecture = "arm64" if role == "macos-arm64" else "x64"
+    expected = {"repository": identity.REPOSITORY, **source, "run_id": github["runId"],
+        "run_attempt": github["runAttempt"], "event_name": github["event"], "ref": github["ref"],
+        "workflow_ref": identity.REPOSITORY + "/" + github["workflow"] + "@" + github["ref"],
+        "workflow_sha": github["workflowSha"], "job": github["job"], "platform": platform,
+        "architecture": architecture}
+    current = completed.get("context")
+    require(type(current) is dict and all(current.get(key) == value for key, value in expected.items()) and
+            type(completed.get("schema")) is int and completed["schema"] == 1 and
+            type(completed.get("scope")) is dict and completed["scope"].get("kind") ==
+                "DEVELOPMENT_SAMPLE_BUILD_ARTIFACTS" and prepared.get("context") == current and
+            prepared.get("root") == str(ROOT) and prepared.get("outputIdentity") == output_identity,
+            "SAMPLE_ORIGINAL_SOURCE_OR_OUTPUT_CHANGED")
+    label = platform + "-" + architecture + "-" + source["commit"][:12]
+    licenses = {"P2pKit-LICENSE", "JmDNS-LICENSE", "JmDNS-NOTICE.txt"}
+    for kind in platforms:
+        check()
+        directory = owner.acquire("sample-platform", lambda: root.open_directory(kind, deadline=end))
+        directories[kind] = list(directory.identity)
+        prefix = kind + "/"
+        manifest = parse(capture(directory, prefix, "manifest.json", True))
+        checksums = capture(directory, prefix, "checksums.sha256", True)
+        require(manifest.get("schema") == 2 and manifest.get("sourceAndRun") == current and
+                manifest.get("scope") == completed["scope"], "SAMPLE_MANIFEST_SOURCE_CHANGED")
+        if kind == "desktop":
+            suffix = ".zip" if platform == "windows" else ".tar.gz"
+            extension = {"linux": "deb", "windows": "msi", "macos": "dmg"}[platform]
+            names = {"desktop-ui-" + label + suffix, "desktop-cli-" + label + suffix,
+                     "desktop-installer-" + label + "." + extension}
+            artifacts = manifest.get("artifacts")
+            require(type(artifacts) is list and len(artifacts) == 3, "SAMPLE_ARTIFACT_ROSTER")
+        else:
+            artifacts = [manifest.get("artifact")]
+            require(type(artifacts[0]) is dict and type(artifacts[0].get("file")) is str and
+                    re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,100}\.apk", artifacts[0]["file"]),
+                    "SAMPLE_ANDROID_ARTIFACT_NAME")
+            names = {artifacts[0]["file"]}
+        require(all(type(row) is dict for row in artifacts) and {row.get("file") for row in artifacts} == names and
+                set(directory.names(max_names=64, deadline=end)) == {"manifest.json", "checksums.sha256", "licenses", *names},
+                "SAMPLE_ARTIFACT_ROSTER")
+        for row in artifacts:
+            capture(directory, prefix, row["file"])
+            actual = roster[prefix + row["file"]]
+            require(type(row.get("bytes")) is int and row["bytes"] == actual["size"] and
+                    row.get("sha256") == actual["sha256"], "SAMPLE_ARTIFACT_CHANGED")
+        notices = owner.acquire("sample-licenses", lambda: directory.open_directory("licenses", deadline=end))
+        directories[kind + "/licenses"] = list(notices.identity)
+        require(set(notices.names(max_names=64, deadline=end)) == licenses, "SAMPLE_LICENSE_ROSTER")
+        for name in sorted(licenses):
+            capture(notices, prefix + "licenses/", name)
+        expected_checksums = "".join(roster[name]["sha256"] + "  " + name[len(prefix):] + "\n"
+            for name in sorted(roster) if name.startswith(prefix) and name != prefix + "checksums.sha256").encode("ascii")
+        require(checksums == expected_checksums, "SAMPLE_CHECKSUM_ROSTER_CHANGED")
+        notices.verify()
+        directory.verify()
+    root.verify()
+    require(set(root.names(max_names=64, deadline=end)) == top and
+            sample_output_identity(root, end, check) == output_identity, "SAMPLE_OUTPUT_CHANGED")
+    check()
+    return {"path": str(root_path), "packagerOutputIdentity": output_identity, "directories": directories, "files": roster}
+
+
+def frozen_package_packet(owner, private, end, check):
+    """Packaging command/summary originals must be inside the one encrypted copy."""
+    evidence = owner.child(private, "evidence", end)
+    context_raw = owner.read(private, "run-context.json", end)
+    context = parse(context_raw)
+    before_raw = owner.read(evidence, "profile-result-before-export.json", end)
+    before = parse(before_raw)
+    raw = owner.read(evidence, "sample-packaging.json", end)
+    report = parse(raw)
+    require(context.get("samplePackagingRequired") is True and context["profile"] == before["profile"] == "desktop" and
+            before["samplePackaging"] == {"required": True, "status": "PASS", "manifestSha256": digest(raw)} and
+            report.get("scope") == "ORIGINAL_PACKAGED_SAMPLES" and report.get("schema") == 1 and
+            report.get("contextSha256") == before["contextSha256"] == digest(context_raw) and
+            report.get("source") == context["source"] and report.get("role") == context["role"] and
+            report.get("phaseSha256") == before["phaseSha256"]["sample-packaging"], "SAMPLE_ORIGINAL_PACKAGE_CHANGED")
+    originals = {"sample-packaging.json": raw, "profile-result-before-export.json": before_raw}
+    phase = owner.child(owner.child(evidence, "commands", end), "sample-packaging", end)
+    for name in ("start.json", "result.json", "baseline.json", "stdout.log", "stderr.log"):
+        originals["commands/sample-packaging/" + name] = owner.read(phase, name, end, OUTPUT_LIMIT)
+    phase_raw = originals["commands/sample-packaging/result.json"]
+    require(digest(phase_raw) == report["phaseSha256"] and parse(phase_raw) in before["phases"],
+            "SAMPLE_PACKAGING_PHASE_CHANGED")
+    frozen = owner.child(private, "frozen-evidence", end)
+    map_raw = owner.read(frozen, "original-path-map.json", end)
+    rows = {row["original"]: row for row in seed_copy_map(map_raw, evidence.path)["files"]}
+    require({name for name in rows if name.startswith("commands/sample-packaging/")} ==
+            {name for name in originals if name.startswith("commands/sample-packaging/")}, "SAMPLE_FROZEN_ROSTER_CHANGED")
+    for name, content in originals.items():
+        check()
+        row = rows.get(name)
+        require(type(row) is dict and (row["size"], row["sha256"]) == (len(content), digest(content)) and
+                owner.read(frozen, row["member"], end, OUTPUT_LIMIT) == content, "SAMPLE_FROZEN_ORIGINAL_DIFFERS")
+        directory = phase if name.startswith("commands/") else evidence
+        require(owner.read(directory, name.split("/")[-1], end, OUTPUT_LIMIT) == content,
+                "SAMPLE_ORIGINAL_CHANGED_DURING_FREEZE")
+    require(owner.read(frozen, "original-path-map.json", end) == map_raw and
+            owner.read(private, "run-context.json", end) == context_raw and not owner.unknown,
+            "SAMPLE_PACKET_CHANGED_DURING_FREEZE")
+    check()
+    return {"manifestSha256": digest(raw), "mapSha256": digest(map_raw),
+            "files": [rows[name] for name in sorted(originals)]}
+
+
 class Controller(PrivateOwner):
-    def __init__(self, profile, *, seed_dependencies=False):
+    def __init__(self, profile, *, seed_dependencies=False, consume_dependencies=False, preflight=False):
         super().__init__()
         require(profile in PRODUCT_SECONDS, "CONTROLLER_PROFILE")
         self.profile, self.role = profile, processes.host_role()
-        require(type(seed_dependencies) is bool, "SEED_OPTION_MUST_BE_BOOLEAN")
+        require(all(type(value) is bool for value in (seed_dependencies, consume_dependencies, preflight)),
+                "SEED_OPTION_MUST_BE_BOOLEAN")
+        require(not preflight or not (seed_dependencies or consume_dependencies), "PREFLIGHT_EXECUTION_SCOPE")
+        self.consume_requested, self.preflight = consume_dependencies, preflight
+        self.sample_required = profile == "desktop" and consume_dependencies
+        self.sample_result = {"required": True, "status": "NOT_ATTEMPTED", "manifestSha256": None}
+        self.sample_attempted = False
+        seed_dependencies |= consume_dependencies
+        self.cache_binding = self.preparation_raw = None
         self.seed_requested, self.seed_directory, self.seed_intent = seed_dependencies, None, None
         self.seed_result = ({"required": True, "status": "FAILED", "completed": False, "retirement": "KNOWN"}
                             if seed_dependencies else None)
@@ -1104,11 +1465,11 @@ class Controller(PrivateOwner):
         self.deadline = time.monotonic() + TOTAL_SECONDS[profile]
         # This remains an operation ceiling, NEVER the full job's start/time.
         # Full products cannot launch until the actual service budget is bound.
-        self.budget, self.last_raw = None, 0
+        self.budget, self.last_raw, self.clock = None, 0, None
         self.budget_exhausted, self.cutoff_observation = False, None
         self.budget_cancellation, self.terminal_raw = None, None
         token = os.environ.pop(job_time.TOKEN_ENV, None)
-        self.actions_token = token if profile == "full" else None
+        self.actions_token = token if profile == "full" or preflight else None
         self.cancelled, self.records, self.phase_hashes = [], [], {}
         self.job = uuid.uuid4().hex
         self.private = self.evidence = self.commands = self.runtime = self.crypto = None
@@ -1125,10 +1486,11 @@ class Controller(PrivateOwner):
         self.collect_attempted = self.uninstall_attempted = self.simulator_retirement_attempted = False
         self.active_canonical = None
         self.full = supplements.Full(self, globals()) if profile == "full" else None
-        self.environment = child_environment(dict(os.environ), self.path, self.state_path)
+        self.environment = child_environment(dict(os.environ), self.path, self.state_path, require_jdks=not preflight)
 
     def now_raw(self):
-        self.last_raw = job_time.raw_now(self.last_raw)
+        self.last_raw = (job_time.raw_now(self.last_raw) if self.clock is None else
+                         job_time.raw_now(self.last_raw, clock=self.clock))
         return self.last_raw
 
     def window(self, stage, seconds):
@@ -1184,6 +1546,14 @@ class Controller(PrivateOwner):
               supplement=None, helper=False):
         """Actual fixed-caller composition around make_scope, not a new backend."""
         self.check(finalizing)
+        packaging = label == "sample-packaging"
+        if packaging:
+            require(self.sample_required and finalizing and not product and not acquire_time and
+                    supplement is None and not helper and timeout == job_time.PACKAGE_SECONDS - FINAL_SECONDS and
+                    argv == self.python(SCRIPTS / "package-sample-apps.py", "package", "--output",
+                                        self.path.parent / "p2pkit-sample-apps"), "SAMPLE_PACKAGING_CLOSED_COMMAND")
+            check_cancelled(self.cancelled)
+        timed = self.profile == "full" or self.budget is not None or acquire_time
         if supplement is not None or helper:
             require(self.full is not None and not product and not acquire_time, "SUPPLEMENT_FULL_ONLY")
             self.full.admit_phase(label, argv, supplement, helper)
@@ -1195,12 +1565,12 @@ class Controller(PrivateOwner):
         started = time.monotonic()
         end, final_end = min(self.deadline, started + timeout), min(self.deadline, started + timeout + FINAL_SECONDS)
         raw_started = raw_work_end = raw_final_end = None
-        if self.profile == "full":
+        if timed:
             raw_started = self.now_raw()
             if acquire_time:
                 require(label == "job-time" and not finalizing and not product and self.budget is None and
                         self.admitted is not None and timeout == job_time.ACQUIRE_SECONDS and
-                        argv == self.python(__file__, "_job-time", "--profile", "full", "--admission-sha256",
+                        argv == self.python(__file__, "_job-time", "--profile", self.profile, "--admission-sha256",
                                             digest(self.admitted.record)), "JOB_TIME_CLOSED_ACQUISITION")
                 raw_work_end = raw_started + timeout * job_time.NS
                 raw_final_end = raw_work_end + FINAL_SECONDS * job_time.NS
@@ -1220,8 +1590,6 @@ class Controller(PrivateOwner):
                     raw_final_end = min(raw_final_end, cap + FINAL_SECONDS * job_time.NS)
                     end = min(end, started + (raw_work_end - raw_started) / job_time.NS)
                     final_end = min(final_end, started + (raw_final_end - raw_started) / job_time.NS)
-        else:
-            require(not acquire_time, "JOB_TIME_FULL_ONLY")
         invocation = uuid.uuid4().hex
         directory = self.child(self.commands, label, final_end, create=True)
         job = self.context["id"] if canonical_domain else self.job
@@ -1242,7 +1610,7 @@ class Controller(PrivateOwner):
         row = {"schema": 1, "phase": label, "argv": list(argv), "cwd": str(ROOT), "job": job,
                "invocation": invocation, "state": str(state), "home": str(home), "exitCode": None,
                "launchAttempted": False, "scopeAttempted": False, "retirement": "UNKNOWN", "errors": []}
-        if self.profile == "full":
+        if timed:
             row.update(jobBudgetSha256=None if self.budget is None else self.budget.sha256,
                        startedRawNs=raw_started, completedRawNs=None, finalizedRawNs=None,
                        cooperativeCancellation=None, developerDir=self.environment.get("DEVELOPER_DIR"),
@@ -1250,6 +1618,8 @@ class Controller(PrivateOwner):
                        childAncestorInvocationIds=env[processes.CHAIN_ENV].split(":"),
                        canonicalInvocation=canonical_id, supplementPhase=supplement is not None,
                        postReturnHelper=bool(helper), supplementEnvironment=supplement_environment)
+            if self.clock is not None:
+                row["clock"] = job_time.clock_value(self.clock)
         self.records.append(row)
         before_errors = len(self.errors)
         receipt_complete = False
@@ -1260,11 +1630,11 @@ class Controller(PrivateOwner):
 
         def check_phase_budget():
             nonlocal cancellation_requested, end
-            now = self.now_raw() if self.profile == "full" else None
+            now = self.now_raw() if timed else None
             cutoff = self.budget is not None and not finalizing and now >= self.budget.fence("productive")
             if cutoff:
                 self.mark_cutoff(label, now)
-            if (cutoff or self.cancelled) and not finalizing:
+            if (cutoff or self.cancelled) and (not finalizing or packaging):
                 if canonical_id is not None and self.active_canonical == canonical_id and not cancellation_requested:
                     # Record the single ATTEMPT before entering the canonical
                     # writer. A failed call is never retried or called a request.
@@ -1273,14 +1643,14 @@ class Controller(PrivateOwner):
                                     "invocation": canonical_id,
                                     "attemptedRawNs": now, "returnedRawNs": None, "requested": False,
                                     "requestSha256": None}
-                    if self.profile == "full":
+                    if timed:
                         row["cooperativeCancellation"] = cancellation
                         self.budget_cancellation = cancellation
                     audit.request_cancellation(self.state_path, self.context["id"], canonical_id)
                     cancellation["requested"] = True
-                    cancellation["returnedRawNs"] = self.now_raw() if self.profile == "full" else None
-                    end = min(end, time.monotonic() + 330)
-                    if self.profile == "full":
+                    cancellation["returnedRawNs"] = self.now_raw() if timed else None
+                    end = min(end, time.monotonic() + (330 if self.profile == "full" else 225))
+                    if timed:
                         # The exact request still precedes native drain when a
                         # delayed poll has consumed the cooperative slot. Its
                         # original bytes may use ONLY the reserved final slot.
@@ -1301,7 +1671,7 @@ class Controller(PrivateOwner):
                     if cutoff:
                         raise ControllerError("FULL_JOB_PRODUCTIVE_CUTOFF")
                     raise KeyboardInterrupt("ORDINARY_TEST_CONTROLLER_CANCELLED")
-            if self.profile == "full":
+            if timed:
                 now = self.now_raw()
                 require(now < raw_work_end, "FULL_JOB_PHASE_EXPIRED")
             return now
@@ -1319,7 +1689,9 @@ class Controller(PrivateOwner):
                 "baseline": sorted(scope.baseline) if hasattr(scope, "baseline") else None,
                 "kernelJob": self.role == "windows-x64"}, final_end)
             self.check(finalizing)
-            if self.profile == "full":
+            if packaging:
+                check_cancelled(self.cancelled)
+            if timed:
                 require(self.now_raw() < raw_work_end, "FULL_JOB_PHASE_EXPIRED")
             row["launchAttempted"] = True
             if product:
@@ -1355,7 +1727,7 @@ class Controller(PrivateOwner):
                 observed = check_phase_budget()
                 posix._deadline(end)
                 if code is not None:
-                    if self.profile == "full":
+                    if timed:
                         row["completedRawNs"] = observed
                     break
                 scope.discover()
@@ -1363,7 +1735,7 @@ class Controller(PrivateOwner):
         except BaseException as error:
             original = error
             self.error(label, error)
-            if self.profile == "full" and canonical_id is not None and self.active_canonical == canonical_id:
+            if timed and canonical_id is not None and self.active_canonical == canonical_id:
                 # A poll/capture/discovery error may itself have crossed the
                 # productive cutoff. Preserve that first error, but do not let
                 # its exceptional return bypass the single exact cooperative
@@ -1405,13 +1777,13 @@ class Controller(PrivateOwner):
             if native_known and not self.unknown:
                 self.active_canonical = None
             try:
-                if self.profile == "full":
+                if timed:
                     row["finalizedRawNs"] = self.now_raw()
                     require(row["finalizedRawNs"] < raw_final_end, "FULL_JOB_PHASE_FINAL_EXPIRED")
                 row["errors"] = self.errors[before_errors:]
                 posix._deadline(final_end)
                 self.write(directory, "result.json", row, final_end)
-                if self.profile == "full":
+                if timed:
                     require(self.now_raw() < raw_final_end, "FULL_JOB_PHASE_FINAL_EXPIRED")
                 self.phase_hashes[label] = digest(encoded(row))
                 receipt_complete = True
@@ -1421,7 +1793,7 @@ class Controller(PrivateOwner):
             raise original
         require(receipt_complete and not self.unknown and len(self.errors) == before_errors and
                 not row["errors"], "PHASE_FINALIZATION_FAILED")
-        if self.cancelled and not finalizing:
+        if self.cancelled and (not finalizing or packaging):
             raise KeyboardInterrupt("ORDINARY_TEST_CONTROLLER_CANCELLED")
         require(finalizing or not self.budget_exhausted, "FULL_JOB_PRODUCTIVE_CUTOFF")
         return row
@@ -1433,23 +1805,35 @@ class Controller(PrivateOwner):
         return [executable, "-I", "-B", "-S", *map(str, args)]
 
     def setup(self):
-        self.allocate()
-        self.admitted = admission(self, self.profile, self.evidence.path / "admission", self.check)
+        if self.consume_requested:
+            adopt_preparation(self)
+        else:
+            self.allocate()
+            self.admitted = admission(self, self.profile, self.evidence.path / "admission", self.check)
         if self.profile == "full":
             resolved = shutil.which("python3", path=self.environment.get("PATH", ""))
             require(resolved is not None and Path(resolved).resolve(strict=True) == Path(sys.executable).resolve(strict=True),
                     "FULL_PYTHON_DIFFERS_FROM_NATIVE_CONTROLLER")
         original = parse(self.admitted.record)
         self.canonical_sources = canonical_bindings()
-        if self.profile == "full":
+        if self.profile == "full" and self.budget is None:
             self.acquire_job_time()
         context = {"schema": 1, "scope": "CLOSED_ORDINARY_TEST_CONTROLLER", "profile": self.profile,
                    "role": self.role, "root": str(ROOT), "session": str(self.path), "job": self.job,
                    "admissionSha256": digest(self.admitted.record), "source": original["source"],
                    "command": self.command, "kind": self.kind, "python": str(Path(sys.executable).resolve(strict=True)),
                    "canonicalSources": self.canonical_sources}
-        if self.profile == "full":
+        if self.budget is not None:
             context["jobBudgetSha256"] = self.budget.sha256
+        if self.consume_requested:
+            context.update(dependencyCache=self.cache_binding,
+                           jobTimeAcquisitionSha256=digest(self.preparation_raw),
+                           developerDir=self.environment.get("DEVELOPER_DIR"),
+                           ancestorInvocationIds=self.environment.get(processes.CHAIN_ENV, "").split(":")
+                           if self.environment.get(processes.CHAIN_ENV) else [])
+        if self.sample_required:
+            context["samplePackagingRequired"] = True
+        if self.profile == "full":
             context.update(primarySimulatorRequired=True, primaryAbiRequired=True,
                            fullSupplementIntent=self.full.intent(),
                            primaryAbiAccounting={"modes": ["productive", "terminal"], "oneShot": True,
@@ -1461,6 +1845,9 @@ class Controller(PrivateOwner):
             context["dependencySeed"] = self.prepare_seed_intent()
         self.run_context_raw = encoded(context)
         self.write(self.private, "run-context.json", context, self.window("productive", 45))
+        if self.consume_requested:
+            self.write(cache_directory(self, self.private, self.window("productive", 30)), "controller-context.json",
+                       self.run_context_raw, self.window("productive", 30))
         self.context_hash = digest(encoded(context))
         self.crypto_operation("validate")
         self.recipient_raw = self.read(self.private, "recipient.json", self.window("productive", 30))
@@ -1538,6 +1925,10 @@ class Controller(PrivateOwner):
             self.write(self.seed_directory, "staging.json", staging_raw, end)
             self.seed_staging_raw, self.seed_compiled = staging_raw, compiled
             self.seed_intent = seed.seed_intent(self.admitted.record, self.profile, self.role, path, staging_raw, inputs)
+            if self.consume_requested:
+                binding = consume_binding(self, self.private, self.admitted, self.budget, end,
+                                          staging_raw=staging_raw, inputs=inputs, compiled=compiled)
+                require(binding == self.cache_binding, "CACHE_ORIGINAL_RESTORE_CHANGED")
         except BaseException as error:
             original = error
             raise
@@ -1559,8 +1950,13 @@ class Controller(PrivateOwner):
                    started + int(max(0, self.deadline - time.monotonic()) * job_time.NS))
         if self.profile == "full":
             hard = min(hard, self.budget.fence("productive"))
+        # Desktop's copier deliberately retains its process-local representation.
+        # The independently bound service-job clock clamps/checks this interval;
+        # a Desktop budget hash is NOT a RAW copier-window identity.
+        hard = min(hard, started + int(max(0, end - time.monotonic()) * job_time.NS))
         interval = seed.window(started, hard, min(hard, started + seed.SOFT_SECONDS * job_time.NS),
-                               raw=self.profile == "full", job_budget=self.budget.sha256 if self.budget else None)
+                               raw=self.profile == "full",
+                               job_budget=self.budget.sha256 if self.profile == "full" else None)
         def check():
             self.check()
             self.check_window("productive", end)
@@ -1581,6 +1977,9 @@ class Controller(PrivateOwner):
             copy_tree(self, self.seed_directory, self.evidence.path / "dependency-seed", end)
             check()  # A late close/write cannot authorize a provisional known manifest.
             self.seed_result = seed.disposition(raw)
+            if self.consume_requested:
+                require(sum(item["size"] for item in result["admitted"]) > 0,
+                        "CACHE_EXACT_HIT_WITHOUT_ADMITTED_BYTES")
         except BaseException as error:
             result = getattr(error, "seed_result", None)
             if result is not None:
@@ -1594,7 +1993,12 @@ class Controller(PrivateOwner):
 
     def acquire_job_time(self):
         require(self.budget is None, "JOB_TIME_ALREADY_ADMITTED")
-        row = self.phase("job-time", self.python(__file__, "_job-time", "--profile", "full", "--admission-sha256",
+        if self.profile == "desktop":
+            reading = job_time.current_reading(self.profile)
+            require(reading.clock.role == self.role and reading.nanoseconds >= self.last_raw,
+                    "JOB_TIME_NATIVE_CLOCK_CHANGED")
+            self.clock, self.last_raw = reading.clock, reading.nanoseconds
+        row = self.phase("job-time", self.python(__file__, "_job-time", "--profile", self.profile, "--admission-sha256",
                          digest(self.admitted.record)), job_time.ACQUIRE_SECONDS, acquire_time=True)
         require(row["exitCode"] == 0, "JOB_TIME_ACQUISITION_FAILED")
         end = min(self.deadline, time.monotonic() + 30)
@@ -1606,7 +2010,9 @@ class Controller(PrivateOwner):
         self.write(directory, "child-return.json", returned_raw, end)
         self.write(directory, "budget.json", budget.record, end)
         self.budget = budget
-        self.deadline = min(self.deadline, budget.deadline("controller-return", TOTAL_SECONDS["full"]))
+        timing = original_clock(budget, self.last_raw)
+        self.deadline = min(self.deadline, timing.deadline("controller-return", TOTAL_SECONDS[self.profile]))
+        self.last_raw = timing.last
         self.check()  # Already-spent setup never reaches crypto/init/products.
 
     def product_run(self):
@@ -1810,6 +2216,38 @@ class Controller(PrivateOwner):
         require(removed.get("absent") is True and removed.get("originalsDeleted") is False,
                 "CUSTODY_UNINSTALL_RECEIPT_DIFFERS")
 
+    def package_samples(self):
+        """Archive successful Desktop products BEFORE the single evidence freeze.
+
+        No second product/build or post-seal writer. The75s native work and45s
+        finalization share one120s ceiling inside the original controller end.
+        Packaging originals go into the same encrypted test-evidence packet;
+        application bytes remain outside it for separate successful delivery.
+        """
+        require(self.sample_required and not self.sample_attempted, "SAMPLE_PACKAGING_ONE_SHOT")
+        self.sample_attempted = True
+        preceding = self.result()
+        preceding.pop("samplePackaging")
+        require(self.collect_attempted and self.uninstall_attempted and profile_passed(preceding),
+                "SAMPLE_PACKAGING_REQUIRES_SUCCESSFUL_RETIRED_PRODUCT")
+        self.sample_result["status"] = "FAILED"
+        end = self.window("controller-return", job_time.PACKAGE_SECONDS)
+        def check():
+            self.check(finalizing=True)
+            check_cancelled(self.cancelled)
+            self.check_window("controller-return", end)
+        check()
+        row = self.phase("sample-packaging", self.python(SCRIPTS / "package-sample-apps.py", "package", "--output",
+            self.path.parent / "p2pkit-sample-apps"), job_time.PACKAGE_SECONDS - FINAL_SECONDS, finalizing=True)
+        require(type(row["exitCode"]) is int and row["exitCode"] == 0, "SAMPLE_PACKAGER_FAILED")
+        snapshot = sample_snapshot(self, self.path, self.admitted, self.role, end, check)
+        raw = encoded({"schema": 1, "scope": "ORIGINAL_PACKAGED_SAMPLES", "contextSha256": self.context_hash,
+                       "source": parse(self.admitted.record)["source"], "role": self.role,
+                       "phaseSha256": self.phase_hashes["sample-packaging"], "snapshot": snapshot})
+        self.write(self.evidence, "sample-packaging.json", raw, end)
+        check()
+        self.sample_result.update(status="PASS", manifestSha256=digest(raw))
+
     def primary_barrier_passed(self):
         if (self.profile != "full" or self.errors or self.cancelled or self.unknown or self.budget_exhausted or
                 self.active_canonical is not None or not self.collect_attempted or not self.uninstall_attempted or
@@ -1913,6 +2351,14 @@ class Controller(PrivateOwner):
             require(self.export_return["result"].get("dependencySeedFrozen") ==
                     frozen_seed_packet(self, self.private, end, lambda: self.check_window("export-verify", end)),
                     "SEED_ORIGINAL_EXPORT_RETURN_DIFFERS")
+        if self.consume_requested:
+            require(self.export_return["result"].get("dependencyCacheFrozen") ==
+                    frozen_consume_packet(self, self.private, end, lambda: self.check_window("export-verify", end)),
+                    "CACHE_ORIGINAL_EXPORT_RETURN_DIFFERS")
+        if self.sample_required and self.sample_result["status"] == "PASS":
+            require(self.export_return["result"].get("samplePackagingFrozen") ==
+                    frozen_package_packet(self, self.private, end, lambda: self.check_window("export-verify", end)),
+                    "SAMPLE_ORIGINAL_EXPORT_RETURN_DIFFERS")
         self.check_window("export-verify", end)
         self.check(finalizing=True)
         self.encrypted = True
@@ -1949,7 +2395,7 @@ class Controller(PrivateOwner):
             require(value["schema"] == 1 and value["operation"] == operation and value["profile"] == self.profile and
                     value["contextSha256"] == self.context_hash and value["retirement"] == "KNOWN" and
                     value["errors"] == [] and value["returned"] is True, "CRYPTO_RETURN_BINDING")
-            if self.profile == "full":
+            if self.budget is not None:
                 require(value.get("jobBudgetSha256") == self.budget.sha256, "CRYPTO_JOB_TIME_CHANGED")
             return {"result": value, "sha256": digest(raw)}
         except BaseException as error:
@@ -1967,8 +2413,13 @@ class Controller(PrivateOwner):
                 "readyForPostReturnSeal": self.encrypted and not self.unknown,
                 "phases": self.records, "phaseSha256": self.phase_hashes, "custody": self.custody,
                 "exportReturn": self.export_return, "errors": self.errors}
-        if self.profile == "full":
+        if self.budget is not None or self.profile == "full":
             value["jobBudget"] = self.budget_result()
+        if self.consume_requested:
+            value["dependencyCache"] = self.cache_binding
+        if self.sample_required:
+            value["samplePackaging"] = self.sample_result
+        if self.profile == "full":
             value["primaryAbi"] = self.primary_abi
             value["primaryAbiAccounting"] = self.primary_abi_accounting
             value["fullSupplements"] = self.full.result()
@@ -1989,6 +2440,22 @@ def profile_passed(value):
     rows = value["phases"]
     labels = ["recipient-validation", "audit-init", "custody-prepare", "product", "custody-collect",
               "custody-uninstall"]
+    if value.get("profile") == "desktop" and "jobBudget" in value:
+        labels.insert(0, "job-time")
+        budget = value["jobBudget"]
+        if not (type(budget.get("sha256")) is str and re.fullmatch(r"[0-9a-f]{64}", budget["sha256"]) and
+                budget.get("exhausted") is False and budget.get("cutoffObservation") is None and
+                budget.get("cooperativeCancellation") is None):
+            return False
+        for row in rows:
+            if row["phase"] == "job-time":
+                continue
+            if row.get("jobBudgetSha256") != budget["sha256"]:
+                return False
+            if row["phase"] in labels[1:5] and not (type(row.get("completedRawNs")) is int and
+                    type(budget.get("productiveCutoffRawNs")) is int and
+                    row["completedRawNs"] < budget["productiveCutoffRawNs"]):
+                return False
     if value.get("profile") == "full":
         if not supplements.profile_passed(value):
             return False
@@ -2027,6 +2494,14 @@ def profile_passed(value):
                 return False
     if value["encrypted"]:
         labels.append("export")
+    if "samplePackaging" in value:
+        packaged = value["samplePackaging"]
+        if not (value.get("profile") == "desktop" and type(packaged) is dict and
+                set(packaged) == {"required", "status", "manifestSha256"} and packaged["required"] is True and
+                packaged["status"] == "PASS" and type(packaged["manifestSha256"]) is str and
+                re.fullmatch(r"[0-9a-f]{64}", packaged["manifestSha256"])):
+            return False
+        labels.insert(labels.index("export") if "export" in labels else len(labels), "sample-packaging")
     custody = value["custody"]
     return (value["productAttempted"] is True and value["cancelled"] is False and value["retirement"] == "KNOWN" and
             value["errors"] == [] and [row["phase"] for row in rows] == labels and
@@ -2224,6 +2699,286 @@ def restore_recipient(owner, work, raw, context):
                            work_identity=tuple(value["work_identity"]))
 
 
+PREPARATION_SCOPE = "ORIGINAL_CONSUME_ONLY_ACQUISITION"
+PREPARATION_DIRECTORIES = ("evidence", "runtime", "crypto", "temporary", "control-home")
+PREPARATION_KEYS = {"schema", "scope", "profile", "role", "session", "sessionIdentity", "directories",
+                    "source", "github", "admissionSha256", "job", "jobBudgetSha256", "phaseResultSha256",
+                    "planSha256", "stagingSha256", "restoreWindow", "completedRawNs", "pid", "retirement"}
+
+
+def append_outputs(value, check):
+    """Step success, including final close/deadline, is required by every caller."""
+    require(type(value) is str and value.endswith("\n"), "OUTPUT_RECORD")
+    target = Path(os.environ["GITHUB_OUTPUT"])
+    audit.reject_symlinks(target)
+    check()
+    with target.open("a", encoding="utf-8") as output:
+        output.write(value)
+        output.flush()
+        os.fsync(output.fileno())
+    check()
+
+
+def cache_directory(owner, private, end):
+    return owner.child(owner.child(private, "evidence", end), "dependency-cache", end)
+
+
+def read_preparation(owner, private, admitted, budget, end):
+    """Rebind the original pre-tool process, not its UUID as a new owner."""
+    directory = cache_directory(owner, private, end)
+    raw = owner.read(directory, "preparation.json", end)
+    value, record = parse(raw), parse(admitted.record)
+    require(set(value) == PREPARATION_KEYS and type(value["schema"]) is int and value["schema"] == 1 and
+            value["scope"] == PREPARATION_SCOPE and value["profile"] == budget.profile == record["profile"] and
+            value["source"] == record["source"] and value["github"] == record["github"] and
+            value["admissionSha256"] == digest(admitted.record) and value["session"] == str(private.path) and
+            value["sessionIdentity"] == list(private.identity) and value["retirement"] == "KNOWN" and
+            type(value["pid"]) is int and value["pid"] > 0 and value["jobBudgetSha256"] == budget.sha256 and
+            value["job"] == budget.value["provenance"]["controllerJob"] and
+            value["phaseResultSha256"] == budget.value["provenance"]["phaseResultSha256"] and
+            value["role"] in INSTALLERS and value["session"] == str(session_path(value["profile"], value["role"])) and
+            (budget.clock is None or value["role"] == budget.clock.role) and
+            record["github"]["runnerOS"] == ("Linux" if value["role"].startswith("linux-") else
+                "Windows" if value["role"].startswith("windows-") else "macOS") and
+            record["github"]["runnerArch"] == ("ARM64" if value["role"] == "macos-arm64" else "X64"),
+            "CACHE_ORIGINAL_PREPARATION_CHANGED")
+    require(type(value["directories"]) is dict and set(value["directories"]) == set(PREPARATION_DIRECTORIES),
+            "CACHE_PREPARATION_DIRECTORY_ROSTER")
+    private.verify()
+    for name, original in value["directories"].items():
+        current = owner.child(private, name, end)
+        current.verify()
+        require(list(current.identity) == original, "CACHE_PREPARATION_DIRECTORY_REPLACED")
+    plan_raw, stage_raw = (owner.read(directory, name, end) for name in ("plan.json", "staging.json"))
+    require(digest(plan_raw) == value["planSha256"] and digest(stage_raw) == value["stagingSha256"] and
+            raw == encoded(value), "CACHE_PREPARATION_INPUT_CHANGED")
+    phase = owner.child(owner.child(owner.child(private, "evidence", end), "commands", end), "job-time", end)
+    phase_raw = owner.read(phase, "result.json", end)
+    require(digest(phase_raw) == value["phaseResultSha256"], "CACHE_PREPARATION_PHASE_CHANGED")
+    finalized = parse(phase_raw).get("finalizedRawNs")
+    interval = value["restoreWindow"]
+    require(type(interval) is dict and set(interval) == {"beganRawNs", "endRawNs", "timeoutMinutes"} and
+            all(type(interval[key]) is int for key in interval) and type(value["completedRawNs"]) is int and
+            type(finalized) is int and budget.value["responseFinishedRawNs"] <= finalized <=
+                value["completedRawNs"] == interval["beganRawNs"] <
+                interval["endRawNs"] <= budget.fence("productive") and
+            interval["endRawNs"] == min(budget.fence("productive"), interval["beganRawNs"] + 180 * job_time.NS) and
+            interval["timeoutMinutes"] == (interval["endRawNs"] - interval["beganRawNs"]) // (60 * job_time.NS) and
+            1 <= interval["timeoutMinutes"] <= 3, "CACHE_ORIGINAL_RESTORE_WINDOW_CHANGED")
+    return raw
+
+
+def consume_binding(owner, private, admitted, budget, end, *, staging_raw=None, inputs=None, compiled=None):
+    prepared_raw = read_preparation(owner, private, admitted, budget, end)
+    directory = cache_directory(owner, private, end)
+    plan_raw, original_stage, provider_raw, restored_raw = (owner.read(directory, name, end) for name in
+        ("plan.json", "staging.json", "provider.json", "restoration.json"))
+    prepared, plan, provider, restored = map(parse, (prepared_raw, plan_raw, provider_raw, restored_raw))
+    require(digest(plan_raw) == prepared["planSha256"] and digest(original_stage) == prepared["stagingSha256"],
+            "CACHE_PREPARATION_INPUT_CHANGED")
+    if compiled is None:
+        inputs, compiled = seed.source_inputs(owner, ROOT, end, lambda: posix._deadline(end))
+    require(staging_raw is None or original_stage == staging_raw, "CACHE_RESTORED_STAGE_CHANGED")
+    cache.validate_plan(plan, admitted.record, original_stage, compiled, inputs, session=private.path,
+                        profile=prepared["profile"], role=prepared["role"], mode="consume")
+    cache.validate_provider_observation(provider, plan, "restore")
+    require(provider["status"] == "REPORTED_EXACT_HIT", "CACHE_NO_QUALIFIED_EXACT_HIT")
+    expected = {"schema": 1, "scope": "ORIGINAL_EXACT_CACHE_RESTORE", "preparationSha256": digest(prepared_raw),
+                "planSha256": digest(plan_raw), "stagingSha256": digest(original_stage),
+                "providerSha256": digest(provider_raw), "jobBudgetSha256": budget.sha256,
+                "source": prepared["source"], "github": prepared["github"], "retirement": "KNOWN"}
+    require(set(restored) == set(expected) | {"observedRawNs"} and
+            all(restored[key] == value for key, value in expected.items()) and
+            type(restored["observedRawNs"]) is int and
+            prepared["completedRawNs"] <= restored["observedRawNs"] < prepared["restoreWindow"]["endRawNs"] and
+            all(raw == encoded(value) for raw, value in ((plan_raw, plan), (provider_raw, provider),
+                                                         (restored_raw, restored))),
+            "CACHE_ORIGINAL_RESTORE_RECEIPT_CHANGED")
+    return {"scope": "CONSUME_ONLY_ORIGINALS", "preparationSha256": digest(prepared_raw),
+            "restorationSha256": digest(restored_raw), "planSha256": digest(plan_raw),
+            "providerSha256": digest(provider_raw), "stagingSha256": digest(original_stage),
+            "restoredAtRawNs": restored["observedRawNs"]}
+
+
+def adopt_preparation(controller):
+    """Adopt successful original observations, never a prior controller identity."""
+    require(os.environ.get("P2PKIT_HOSTED_PREPARE_OUTCOME") == "success" and
+            os.environ.get("P2PKIT_CACHE_GUARD_OUTCOME") == "success", "CACHE_ORIGINAL_STEPS_REQUIRED")
+    end = min(controller.deadline, time.monotonic() + 90)
+    controller.private = controller.open(controller.path)
+    for name in ("evidence", "runtime", "crypto"):
+        setattr(controller, name, controller.child(controller.private, name, end))
+    controller.commands = controller.child(controller.evidence, "commands", end)
+    controller.admitted = load_admission(controller, controller.child(controller.evidence, "admission", end), end)
+    budget = derive_job_budget(controller, controller.private, controller.admitted, end)
+    prepared_raw = read_preparation(controller, controller.private, controller.admitted, budget, end)
+    prepared = parse(prepared_raw)
+    require(digest(prepared_raw) == os.environ.get("P2PKIT_HOSTED_PREPARE_SHA256") and
+            prepared["role"] == controller.role and prepared["pid"] != os.getpid() and
+            prepared["job"] != controller.job, "CACHE_PREPARATION_REPLAYED_OR_CHANGED")
+    controller.cache_binding = consume_binding(controller, controller.private, controller.admitted, budget, end)
+    require(controller.cache_binding["restorationSha256"] == os.environ.get("P2PKIT_CACHE_RESTORATION_SHA256"),
+            "CACHE_ORIGINAL_RESTORE_OUTPUT_CHANGED")
+    controller.budget, controller.clock, controller.preparation_raw = budget, budget.clock, prepared_raw
+    timing = original_clock(budget, prepared["completedRawNs"], controller.cache_binding["restoredAtRawNs"])
+    controller.last_raw = timing.last
+    controller.deadline = min(controller.deadline, timing.deadline("controller-return", TOTAL_SECONDS[controller.profile]))
+    controller.last_raw = timing.last
+    controller.check()
+    end = min(end, controller.window("productive", 90))
+    original = controller.child(controller.evidence, "job-time", end)
+    require(controller.read(original, "budget.json", end) == budget.record and
+            controller.read(original, "child-return.json", end) ==
+                controller.read(controller.runtime, "job-time-result.json", end), "CACHE_ORIGINAL_BUDGET_CHANGED")
+    admission(controller, controller.profile, controller.runtime.path / "adoption-admission", controller.check,
+              expected=controller.admitted)
+    original_phase = controller.child(controller.commands, "job-time", end)
+    phase_raw = controller.read(original_phase, "result.json", end)
+    controller.records.append(parse(phase_raw))
+    controller.phase_hashes["job-time"] = digest(phase_raw)
+    controller.check()
+
+
+def prepare_consume(profile, *, cancelled=None):
+    """Native, source-bound pre-tool acquisition. No Gradle, restore or cache save."""
+    controller, error, outputs = None, None, None
+    try:
+        controller = Controller(profile, preflight=True)
+        controller.cancelled = [] if cancelled is None else cancelled
+        controller.check()
+        controller.allocate()
+        controller.admitted = admission(controller, profile, controller.evidence.path / "admission", controller.check)
+        controller.acquire_job_time()
+        end = controller.window("productive", 120)
+        check = lambda: (controller.check(), controller.check_window("productive", end))
+        path = seed.stage_path(controller.path, profile, controller.role)
+        stage = controller.acquire("cache-stage", lambda: seed.private_root(path, create=True))
+        source = controller.acquire("cache-restore-home", lambda: stage.create_directory("restore-home", deadline=end))
+        inputs, compiled = seed.source_inputs(controller, ROOT, end, check)
+        admission(controller, profile, controller.runtime.path / "cache-source-admission", check,
+                  expected=controller.admitted)
+        staging_raw = seed.encoded(seed.stage_record(controller.admitted.record, profile, controller.role, path,
+                                                     stage.verify(), source.verify(), inputs))
+        controller.write(stage, "staging.json", staging_raw, end)
+        directory = controller.child(controller.evidence, "dependency-cache", end, create=True)
+        plan = cache.make_plan(controller.admitted.record, staging_raw, compiled, inputs, session=controller.path,
+                               profile=profile, role=controller.role, mode="consume")
+        plan_raw = encoded(plan)
+        controller.write(directory, "plan.json", plan_raw, end)
+        controller.write(directory, "staging.json", staging_raw, end)
+        now = controller.now_raw()
+        fence = min(controller.budget.fence("productive"), now + 180 * job_time.NS)
+        minutes = (fence - now) // (60 * job_time.NS)
+        require(1 <= minutes <= 3, "CACHE_RESTORE_WINDOW_EXHAUSTED")
+        record = parse(controller.admitted.record)
+        prepared_raw = encoded({"schema": 1, "scope": PREPARATION_SCOPE, "profile": profile, "role": controller.role,
+            "session": str(controller.path), "sessionIdentity": list(controller.private.identity),
+            "directories": {name: list(controller.child(controller.private, name, end).identity)
+                            for name in PREPARATION_DIRECTORIES},
+            "source": record["source"], "github": record["github"], "admissionSha256": digest(controller.admitted.record),
+            "job": controller.job, "jobBudgetSha256": controller.budget.sha256,
+            "phaseResultSha256": controller.phase_hashes["job-time"], "planSha256": digest(plan_raw),
+            "stagingSha256": digest(staging_raw), "restoreWindow": {"beganRawNs": now, "endRawNs": fence,
+                                                                   "timeoutMinutes": minutes},
+            "completedRawNs": now, "pid": os.getpid(), "retirement": "KNOWN"})
+        controller.write(directory, "preparation.json", prepared_raw, end)
+        require(read_preparation(controller, controller.private, controller.admitted, controller.budget, end) ==
+                prepared_raw, "CACHE_PREPARATION_FINAL_READBACK_CHANGED")
+        outputs = ("dependency_seed_ready=true\ndependency_seed_home=" + plan["restoreHome"] +
+                   "\ndependency_seed_staging_sha256=" + digest(staging_raw) + "\ncache_key=" + plan["key"] +
+                   "\ncache_path=" + plan["path"] + "\npreparation_sha256=" + digest(prepared_raw) +
+                   "\ncache_restore_timeout_minutes=" + str(minutes) + "\n")
+    except BaseException as caught:
+        error = caught
+        if controller is not None:
+            controller.error("prepare-consume", caught)
+    finally:
+        if controller is not None:
+            controller.actions_token = None
+            try:
+                controller.close()
+            except BaseException as caught:
+                error = error or caught
+    if error is not None:
+        raise error
+    require(controller is not None and not controller.unknown and not controller.errors and outputs is not None,
+            "CACHE_PREPARATION_NOT_RETURNED")
+    def final_check():
+        controller.check()
+        controller.check_window("productive", end)
+        require(controller.now_raw() < fence, "CACHE_RESTORE_WINDOW_EXHAUSTED")
+    append_outputs(outputs, final_check)
+    print("DEPENDENCY_CACHE=CONSUME_PREPARED; RESTORE_AND_PRODUCT=NOT_RUN")
+
+
+def restore_guard(profile, *, cancelled=None):
+    """Original action outcome + exact key; a miss never becomes a cold product."""
+    require(os.environ.get("P2PKIT_HOSTED_PREPARE_OUTCOME") == "success" and job_time.TOKEN_ENV not in os.environ,
+            "CACHE_PREPARATION_NOT_SUCCESSFUL")
+    owner, error, outputs, clock, fence = PrivateOwner(), None, None, None, None
+    end = time.monotonic() + job_time.TRANSITION_SECONDS
+    def check():
+        check_cancelled(cancelled)
+        posix._deadline(end)
+        require(not owner.unknown and clock.check("productive") < fence, "CACHE_RESTORE_EXPIRED")
+    try:
+        role = processes.host_role()
+        private = owner.open(session_path(profile, role))
+        evidence = owner.child(private, "evidence", end)
+        admitted = load_admission(owner, owner.child(evidence, "admission", end), end)
+        budget = derive_job_budget(owner, private, admitted, end)
+        prepared_raw = read_preparation(owner, private, admitted, budget, end)
+        prepared = parse(prepared_raw)
+        require(prepared["role"] == role and digest(prepared_raw) == os.environ.get("P2PKIT_HOSTED_PREPARE_SHA256"),
+                "CACHE_PREPARATION_OUTPUT_CHANGED")
+        clock = original_clock(budget, prepared["completedRawNs"])
+        fence = prepared["restoreWindow"]["endRawNs"]
+        end = min(end, original_deadline(clock, "productive", fence, job_time.TRANSITION_SECONDS))
+        check()
+        directory = cache_directory(owner, private, end)
+        plan_raw, stage_raw = (owner.read(directory, name, end) for name in ("plan.json", "staging.json"))
+        plan = parse(plan_raw)
+        inputs, compiled = seed.source_inputs(owner, ROOT, end, check)
+        cache.validate_plan(plan, admitted.record, stage_raw, compiled, inputs, session=private.path,
+                            profile=profile, role=role, mode="consume")
+        observed = cache.provider_observation(plan, "restore", original_outcome=os.environ.get(
+            "P2PKIT_CACHE_RESTORE_OUTCOME", ""), outputs={
+                "cache-primary-key": os.environ.get("P2PKIT_CACHE_RESTORE_PRIMARY_KEY", ""),
+                "cache-matched-key": os.environ.get("P2PKIT_CACHE_RESTORE_MATCHED_KEY", ""),
+                "cache-hit": os.environ.get("P2PKIT_CACHE_RESTORE_HIT", "")})
+        provider_raw = encoded(observed)
+        owner.write(directory, "provider.json", provider_raw, end)  # Failed originals remain failed.
+        check()
+        require(observed["status"] == "REPORTED_EXACT_HIT", "CACHE_NO_QUALIFIED_EXACT_HIT")
+        path = seed.stage_path(private.path, profile, role)
+        stage = owner.acquire("cache-stage-original", lambda: seed.private_root(path))
+        source = owner.acquire("cache-restored-original", lambda: seed.public_root(path / "restore-home"))
+        seed.validate_stage(parse(stage_raw), admitted.record, profile, role, path, stage.verify(), source.verify(), inputs)
+        require(owner.read(stage, "staging.json", end) == stage_raw, "CACHE_STAGE_REPLACED")
+        admission(owner, profile, private.path / "restore-admission", check, expected=admitted)
+        raw = encoded({"schema": 1, "scope": "ORIGINAL_EXACT_CACHE_RESTORE", "preparationSha256": digest(prepared_raw),
+            "planSha256": digest(plan_raw), "stagingSha256": digest(stage_raw), "providerSha256": digest(provider_raw),
+            "jobBudgetSha256": budget.sha256, "source": prepared["source"], "github": prepared["github"],
+            "observedRawNs": clock.check("productive"), "retirement": "KNOWN"})
+        owner.write(directory, "restoration.json", raw, end)
+        consume_binding(owner, private, admitted, budget, end, staging_raw=stage_raw, inputs=inputs, compiled=compiled)
+        check()
+        outputs = "dependency_cache_ready=true\nrestoration_sha256=" + digest(raw) + "\n"
+    except BaseException as caught:
+        error = caught
+        owner.error("cache-restore-guard", caught)
+    finally:
+        try:
+            owner.close()
+        except BaseException as caught:
+            error = error or caught
+    if error is not None:
+        raise error
+    require(not owner.unknown and outputs is not None, "CACHE_RESTORE_NOT_RETURNED")
+    append_outputs(outputs, check)
+    print("DEPENDENCY_CACHE=REPORTED_EXACT_HIT; FILE_AND_RESOLVER_ADMISSION=STILL_REQUIRED")
+
+
 def derive_job_budget(owner, private, admitted, end):
     """Recompute from ORIGINAL API bytes + original native phase/child return."""
     evidence = owner.child(private, "evidence", end)
@@ -2234,8 +2989,12 @@ def derive_job_budget(owner, private, admitted, end):
     start_raw, phase_raw = owner.read(phase, "start.json", end), owner.read(phase, "result.json", end)
     returned_raw = owner.read(runtime, "job-time-result.json", end)
     start, row, returned = parse(start_raw), parse(phase_raw), parse(returned_raw)
+    profile = parse(admitted.record)["profile"]
+    clock = job_time.clock_identity(row.get("clock")) if profile == "desktop" else None
+    require((clock is None and "clock" not in start and "clock" not in row) or
+            start.get("clock") == row.get("clock"), "JOB_TIME_PHASE_CLOCK_CHANGED")
     expected = [str(Path(sys.executable).resolve(strict=True)), "-I", "-B", "-S", str(Path(__file__)), "_job-time",
-                "--profile", "full", "--admission-sha256", digest(admitted.record)]
+                "--profile", profile, "--admission-sha256", digest(admitted.record)]
     require(start["phase"] == row["phase"] == "job-time" and start["argv"] == row["argv"] == expected and
             start["cwd"] == row["cwd"] == str(ROOT) and start["job"] == row["job"] and
             start["invocation"] == row["invocation"] and start["state"] == row["state"] == str(private.path) and
@@ -2245,14 +3004,19 @@ def derive_job_budget(owner, private, admitted, end):
             row.get("survivors") == [] and row.get("jobBudgetSha256") is None and
             row.get("cooperativeCancellation") is None, "JOB_TIME_ORIGINAL_PHASE_CHANGED")
     ownership = row["ownership"]
-    require(ownership["backend"] == "darwin-libproc-audit-token" and ownership["job"] == row["job"] and
+    backend = ("darwin-libproc-audit-token" if clock is None or clock.role.startswith("macos-") else
+               "linux-proc-pidfd" if clock.role == "linux-x64" else "windows-job-list-suspended")
+    require(ownership["backend"] == backend and ownership["job"] == row["job"] and
             ownership["invocation"] == row["invocation"] and ownership["discoveryErrors"] == [] and
             ownership["launches"] and ownership["startedIdentities"], "JOB_TIME_NATIVE_PHASE_REQUIRED")
-    require(type(returned.get("schema")) is int and returned["schema"] == 1 and
-            returned.get("scope") == "ORDINARY_FULL_JOB_TIME_ACQUISITION" and returned.get("returned") is True and
+    require(type(returned.get("schema")) is int and returned["schema"] == (1 if clock is None else 2) and
+            returned.get("scope") == "ORDINARY_" + profile.upper() + "_JOB_TIME_ACQUISITION" and
+            returned.get("returned") is True and
             returned.get("retirement") == "KNOWN" and returned.get("errors") == [] and
             returned.get("admissionSha256") == digest(admitted.record) and returned.get("job") == row["job"] and
-            returned.get("invocation") == row["invocation"] and returned.get("clockDomain") == job_time.RAW_CLOCK_DOMAIN,
+            returned.get("invocation") == row["invocation"] and
+            returned.get("clockDomain") == (job_time.RAW_CLOCK_DOMAIN if clock is None else clock.domain) and
+            (clock is None and "clock" not in returned or returned.get("clock") == job_time.clock_value(clock)),
             "JOB_TIME_ORIGINAL_RETURN_CHANGED")
     raw = {label: owner.read(originals, label + ".json", end, job_time.RECORD_LIMIT) for label in ("attempt", "jobs")}
     require(returned.get("originalsSha256") == {label: digest(value) for label, value in raw.items()},
@@ -2264,9 +3028,11 @@ def derive_job_budget(owner, private, admitted, end):
             times == sorted(times) and times[0] == times[1] and
             times[-1] <= times[0] + (job_time.ACQUIRE_SECONDS + FINAL_SECONDS) * job_time.NS,
             "JOB_TIME_NATIVE_INTERVAL_CHANGED")
-    return job_time.derive(admitted, raw, {"controllerJob": row["job"], "invocation": row["invocation"],
+    provenance = {"controllerJob": row["job"], "invocation": row["invocation"],
         "phaseStartSha256": digest(start_raw), "phaseResultSha256": digest(phase_raw),
-        "childReturnSha256": digest(returned_raw), "runnerName": returned.get("runnerName")})
+        "childReturnSha256": digest(returned_raw), "runnerName": returned.get("runnerName")}
+    return job_time.derive(admitted, raw, provenance, clock=clock) if clock is not None else job_time.derive(
+        admitted, raw, provenance)
 
 
 def load_job_budget(owner, private, admitted, context, end):
@@ -2279,8 +3045,14 @@ def load_job_budget(owner, private, admitted, context, end):
             digest(returned_raw) == budget.value["provenance"]["childReturnSha256"],
             "JOB_TIME_RETAINED_RETURN_CHANGED")
     raw = owner.read(original, "budget.json", end)
-    require(raw == budget.record and digest(raw) == context.get("jobBudgetSha256") and
-            budget.value["provenance"]["controllerJob"] == context["job"], "IMMUTABLE_JOB_TIME_CHANGED")
+    require(raw == budget.record and digest(raw) == context.get("jobBudgetSha256"), "IMMUTABLE_JOB_TIME_CHANGED")
+    if "jobTimeAcquisitionSha256" in context:
+        prepared_raw = read_preparation(owner, private, admitted, budget, end)
+        require(digest(prepared_raw) == context["jobTimeAcquisitionSha256"] and
+                context.get("dependencyCache", {}).get("preparationSha256") == digest(prepared_raw) and
+                parse(prepared_raw)["job"] != context["job"], "JOB_TIME_ADOPTION_CHANGED")
+    else:
+        require(budget.value["provenance"]["controllerJob"] == context["job"], "IMMUTABLE_JOB_TIME_CHANGED")
     return budget
 
 
@@ -2288,15 +3060,27 @@ def job_time_phase(profile, admission_hash):
     """One closed read-only child; the token never enters ordinary/Git children."""
     token = os.environ.pop(job_time.TOKEN_ENV, None)
     owner = PrivateOwner()
-    end, began = time.monotonic() + job_time.ACQUIRE_SECONDS, job_time.raw_now()
+    clock, last, began = None, 0, None
+    def now(minimum=0):
+        nonlocal last
+        floor = max(last, job_time.integer(minimum))
+        last = job_time.raw_now(floor) if clock is None else job_time.raw_now(floor, clock=clock)
+        return last
+    end = time.monotonic() + job_time.ACQUIRE_SECONDS
     runtime = None
     error, returned, terminal = None, None, False
     try:
-        require(profile == "full", "JOB_TIME_FULL_ONLY")
+        require(profile in PRODUCT_SECONDS, "JOB_TIME_PROFILE")
+        if profile == "desktop":
+            reading = job_time.current_reading(profile)
+            clock, last = reading.clock, reading.nanoseconds
+            began = last
+        else:
+            began = now()
         inherited = query._inherited_context()
         require(set(inherited) == set(query._CONTEXT), "JOB_TIME_REQUIRES_EXISTING_NATIVE_OWNER")
         role = processes.host_role()
-        require(role in ("macos-arm64", "macos-x64"), "JOB_TIME_NATIVE_MAC_REQUIRED")
+        require(role in INSTALLERS and (profile != "full" or role.startswith("macos-")), "JOB_TIME_NATIVE_ROLE")
         path = session_path(profile, role)
         private = owner.open(path)
         runtime = owner.child(private, "runtime", end)
@@ -2305,7 +3089,8 @@ def job_time_phase(profile, admission_hash):
         admitted = load_admission(owner, original, end)
         require(digest(admitted.record) == admission_hash, "JOB_TIME_ADMISSION_CHANGED")
         record, _, _, _ = job_time.admitted_identity(admitted)
-        require(record["github"]["runnerArch"] == ("ARM64" if role == "macos-arm64" else "X64"),
+        require(record["github"]["runnerArch"] == ("ARM64" if role == "macos-arm64" else "X64") and
+                (clock is None or clock.role == role),
                 "JOB_TIME_NATIVE_ARCH_CHANGED")
         commands = owner.child(evidence, "commands", end)
         phase = owner.child(commands, "job-time", end)
@@ -2314,14 +3099,24 @@ def job_time_phase(profile, admission_hash):
         require(start["job"] == domain["job"] and start["invocation"] == domain["id"] and
                 start["state"] == domain["state"] == str(path) and
                 start["home"] == domain["home"] == str(path / "control-home") and start["cwd"] == str(ROOT) and
-                start["phase"] == "job-time", "JOB_TIME_ORIGINAL_NATIVE_DOMAIN_CHANGED")
+                start["phase"] == "job-time" and
+                ("clock" not in start if clock is None else start.get("clock") == job_time.clock_value(clock)),
+                "JOB_TIME_ORIGINAL_NATIVE_DOMAIN_CHANGED")
+        require(start.get("jobBudgetSha256") is None and
+                job_time.integer(start.get("startedRawNs")) <= began,
+                "JOB_TIME_PRECEDES_ORIGINAL_NATIVE_START")
+        require(now() < began + job_time.ACQUIRE_SECONDS * job_time.NS, "JOB_TIME_ACQUISITION_EXPIRED")
         directory = owner.child(evidence, "job-time", end, create=True)
-        raw = job_time.acquire(admitted, domain["id"], token,
-                               lambda label, value: owner.write(directory, label + ".json", value, end))
-        returned = {"schema": 1, "scope": "ORDINARY_FULL_JOB_TIME_ACQUISITION", "admissionSha256": admission_hash,
+        retain = lambda label, value: owner.write(directory, label + ".json", value, end)
+        raw, acquired_at = job_time.acquire(admitted, domain["id"], token, retain, clock=clock, minimum=last)
+        returned = {"schema": 1, "scope": "ORDINARY_" + profile.upper() + "_JOB_TIME_ACQUISITION",
+                    "admissionSha256": admission_hash,
                     "job": domain["job"], "invocation": domain["id"], "runnerName": os.environ.get("RUNNER_NAME"),
-                    "clockDomain": job_time.RAW_CLOCK_DOMAIN, "completedRawNs": job_time.raw_now(began),
+                    "clockDomain": job_time.RAW_CLOCK_DOMAIN if clock is None else clock.domain,
+                    "completedRawNs": now(job_time.integer(acquired_at, last)),
                     "originalsSha256": {label: digest(value) for label, value in raw.items()}}
+        if clock is not None:
+            returned.update(schema=2, clock=job_time.clock_value(clock))
     except BaseException as caught:
         error = caught
         owner.error("job-time-acquisition", caught)
@@ -2341,8 +3136,13 @@ def job_time_phase(profile, admission_hash):
             error = error or caught
     # A provisional receipt is insufficient: actual child exit and native
     # retirement must also succeed before the parent derives any budget.
-    posix._deadline(end)
-    require(job_time.raw_now(began) < began + job_time.ACQUIRE_SECONDS * job_time.NS, "JOB_TIME_ACQUISITION_EXPIRED")
+    try:
+        posix._deadline(end)
+        if began is not None:
+            require(now() < began + job_time.ACQUIRE_SECONDS * job_time.NS, "JOB_TIME_ACQUISITION_EXPIRED")
+    except BaseException as caught:
+        owner.error("job-time-final-deadline", caught)
+        error = error or caught
     if error is not None:
         raise error
     require(terminal and not owner.unknown and not owner.errors, "JOB_TIME_TERMINAL_INCOMPLETE")
@@ -2383,9 +3183,22 @@ def crypto_phase(operation, profile, context_hash):
         original = owner.child(evidence, "admission", end)
         admitted = load_admission(owner, original, end)
         require(digest(admitted.record) == context["admissionSha256"], "CRYPTO_ADMISSION_CHANGED")
-        if profile == "full":
+        if "jobBudgetSha256" in context:
             budget = load_job_budget(owner, private, admitted, context, end)
-            budget_clock = job_time.BudgetClock(budget)
+            require(started.get("phase") == ("recipient-validation" if operation == "validate" else "export") and
+                    started.get("jobBudgetSha256") == budget.sha256 and
+                    ("clock" not in started if budget.clock is None else
+                     started.get("clock") == job_time.clock_value(budget.clock)),
+                    "CRYPTO_ORIGINAL_BUDGET_CLOCK_CHANGED")
+            observations = [started.get("startedRawNs")]
+            if "dependencyCache" in context:
+                bound = consume_binding(owner, private, admitted, budget, end)
+                require(bound == context["dependencyCache"] and
+                        type(started.get("startedRawNs")) is int and
+                        started["startedRawNs"] >= bound["restoredAtRawNs"],
+                        "CRYPTO_PRECEDES_ORIGINAL_RESTORE")
+                observations.append(bound["restoredAtRawNs"])
+            budget_clock = original_clock(budget, *observations)
             end = min(end, budget_clock.deadline("productive" if operation == "validate" else "export", 210))
         work = owner.child(private, "crypto", end)
         checked = admission(owner, profile, runtime.path / (operation + "-admission"),
@@ -2406,6 +3219,11 @@ def crypto_phase(operation, profile, context_hash):
             abi_frozen = frozen_abi_packet(owner, private, end)[0] if profile == "full" else None
             seed_frozen = (frozen_seed_packet(owner, private, end, check_crypto)
                            if "dependencySeed" in context else None)
+            cache_frozen = (frozen_consume_packet(owner, private, end, check_crypto)
+                            if "dependencyCache" in context else None)
+            before = parse(owner.read(evidence, "profile-result-before-export.json", end))
+            package_frozen = (frozen_package_packet(owner, private, end, check_crypto)
+                              if before.get("samplePackaging", {}).get("status") == "PASS" else None)
             supplier, original_error = None, None
             try:
                 supplier = query.NativeGitQueries(ROOT, runtime.path / "export-manifest-admission",
@@ -2429,6 +3247,14 @@ def crypto_phase(operation, profile, context_hash):
                     require(frozen_seed_packet(owner, private, end, check_crypto) == seed_frozen,
                             "SEED_CHANGED_DURING_ORIGINAL_EXPORT")
                     exported["dependencySeedFrozen"] = seed_frozen
+                if cache_frozen is not None:
+                    require(frozen_consume_packet(owner, private, end, check_crypto) == cache_frozen,
+                            "CACHE_CHANGED_DURING_ORIGINAL_EXPORT")
+                    exported["dependencyCacheFrozen"] = cache_frozen
+                if package_frozen is not None:
+                    require(frozen_package_packet(owner, private, end, check_crypto) == package_frozen,
+                            "SAMPLE_CHANGED_DURING_ORIGINAL_EXPORT")
+                    exported["samplePackagingFrozen"] = package_frozen
                 require(owner.read(output, posix.MANIFEST, end, 65536) == encoded(manifest) and
                         artifact_metadata(owner, output, end) == manifest["artifact"], "ORIGINAL_EXPORT_DIFFERS")
             except BaseException as caught:
@@ -2475,7 +3301,7 @@ def crypto_phase(operation, profile, context_hash):
     require(terminal and not owner.unknown and not owner.errors, "CRYPTO_TERMINAL_INCOMPLETE")
 
 
-def run(profile, *, seed_dependencies=False):
+def run(profile, *, seed_dependencies=False, consume_dependencies=False):
     controller, result, terminal = None, None, False
     handlers, cancelled = {}, []
     original = None
@@ -2483,7 +3309,8 @@ def run(profile, *, seed_dependencies=False):
         for number in (signal.SIGINT, signal.SIGTERM, *([signal.SIGBREAK] if hasattr(signal, "SIGBREAK") else [])):
             handlers[number] = signal.getsignal(number)
             signal.signal(number, lambda value, _frame: cancelled.append(value))
-        controller = Controller(profile, seed_dependencies=True) if seed_dependencies else Controller(profile)
+        controller = (Controller(profile, consume_dependencies=True) if consume_dependencies else
+                      Controller(profile, seed_dependencies=True) if seed_dependencies else Controller(profile))
         controller.cancelled = cancelled
         controller.check()
         controller.setup()
@@ -2496,6 +3323,9 @@ def run(profile, *, seed_dependencies=False):
             controller.retain_primary_abi(mode="productive")
             require(controller.primary_abi["status"] == "PASS", "FULL_PRIMARY_ABI_NOT_PASSING")
             controller.full.run()
+        elif controller.sample_required:
+            controller.collect()
+            controller.package_samples()
     except BaseException as error:
         original = error
         if controller is not None:
@@ -2512,7 +3342,7 @@ def run(profile, *, seed_dependencies=False):
                     controller.error(name, error)
                     original = original or error
             try:
-                if profile == "full":
+                if controller.budget is not None:
                     controller.check(finalizing=True)
                     controller.terminal_raw = controller.now_raw()
                 result = controller.result()
@@ -2541,7 +3371,7 @@ def run(profile, *, seed_dependencies=False):
     ready = (terminal and result is not None and result["readyForPostReturnSeal"] and controller is not None and
              not controller.unknown and time.monotonic() < controller.deadline and not QUARANTINE and
              not windows._QUARANTINE and not query.QUARANTINE and result == controller.result())
-    if ready and profile == "full":
+    if ready and controller.budget is not None:
         try:
             controller.check(finalizing=True)
         except BaseException:
@@ -2587,21 +3417,24 @@ def verify_phase_bindings(owner, private, result, context, end, budget=None):
     evidence = owner.child(private, "evidence", end)
     commands = owner.child(evidence, "commands", end)
     request = None
-    require(type(result["phases"]) is list and len(result["phases"]) <= (len(FULL_STAGE) + 1 if budget is not None else 7) and
+    full = result["profile"] == "full"
+    order = FULL_ORDER if full else DESKTOP_ORDER
+    preparatory = FULL_PREPARATION if full else DESKTOP_ORDER[:5]
+    require(type(result["phases"]) is list and len(result["phases"]) <= (len(order) if budget is not None else 7) and
             len({row["phase"] for row in result["phases"]}) == len(result["phases"]), "PHASE_SET_CHANGED")
     require(set(result["phaseSha256"]) == {row["phase"] for row in result["phases"]}, "PHASE_BINDING_SET")
     if budget is not None:
         labels = [row["phase"] for row in result["phases"]]
-        preparation = [label for label in labels if label in FULL_PREPARATION]
-        require(all(label in FULL_ORDER for label in labels) and labels and labels[-1] == "export" and
-                labels == sorted(labels, key=FULL_ORDER.index) and preparation and
-                preparation == list(FULL_PREPARATION[:len(preparation)]) and
+        preparation = [label for label in labels if label in preparatory]
+        require(all(label in order for label in labels) and labels and labels[-1] == "export" and
+                labels == sorted(labels, key=order.index) and preparation and
+                preparation == list(preparatory[:len(preparation)]) and
                 ("custody-collect" not in labels or "custody-prepare" in preparation) and
                 ("custody-uninstall" not in labels or "custody-collect" in labels), "PHASE_SEQUENCE_CHANGED")
     previous_raw = None
     for row in result["phases"]:
         label = row["phase"]
-        allowed = set(FULL_STAGE) | {"job-time"} if budget is not None else {
+        allowed = set(order) if budget is not None else {
             "recipient-validation", "audit-init", "custody-prepare", "product", "custody-collect", "custody-uninstall", "export"}
         require(label in allowed, "PHASE_LABEL")
         directory = owner.child(commands, label, end)
@@ -2617,6 +3450,20 @@ def verify_phase_bindings(owner, private, result, context, end, budget=None):
             require(row["developerDir"] == context.get("developerDir"), "PHASE_DEVELOPER_DIR_CHANGED")
             require(row["childAncestorInvocationIds"] == context["ancestorInvocationIds"] + [row["invocation"]],
                     "PHASE_NATIVE_ANCESTORS_CHANGED")
+            if not full:
+                require(start.get("clock") == row.get("clock") == job_time.clock_value(budget.clock) and
+                        row.get("simulatorBindingSha256") is None and row.get("supplementPhase") is False and
+                        row.get("postReturnHelper") is False and row.get("supplementEnvironment") is None,
+                        "DESKTOP_PHASE_CLOCK_OR_SCOPE_CHANGED")
+                if label == "sample-packaging":
+                    require(context.get("samplePackagingRequired") is True and
+                            row["argv"] == [context["python"], "-I", "-B", "-S",
+                                str(SCRIPTS / "package-sample-apps.py"), "package", "--output",
+                                str(private.path.parent / "p2pkit-sample-apps")] and
+                            row["job"] == context["job"] and row["state"] == str(private.path) and
+                            row["home"] == str(private.path / "control-home") and row["canonicalInvocation"] is None and
+                            row["finalizedRawNs"] < row["startedRawNs"] + job_time.PACKAGE_SECONDS * job_time.NS,
+                            "SAMPLE_PACKAGING_COMMAND_OR_BOUND_CHANGED")
             require(type(row.get("startedRawNs")) is int and type(row.get("finalizedRawNs")) is int and
                     0 <= row["startedRawNs"] <= row["finalizedRawNs"] <= job_time.UINT64,
                     "PHASE_RAW_INTERVAL_CHANGED")
@@ -2629,8 +3476,12 @@ def verify_phase_bindings(owner, private, result, context, end, budget=None):
                 require(row["jobBudgetSha256"] == budget.sha256 and
                         row["startedRawNs"] < budget.fence(FULL_STAGE[label]) and
                         row["finalizedRawNs"] < budget.fence(FULL_FINISH[FULL_STAGE[label]]), "PHASE_JOB_TIME_CHANGED")
-            supplements.verify_phase_role(owner, globals(), private, row, result, context, end)
-            if label in {*FULL_PREPARATION[1:], *supplements.PRODUCTIVE}:
+                if "dependencyCache" in context:
+                    require(row["startedRawNs"] >= context["dependencyCache"]["restoredAtRawNs"],
+                            "PHASE_PRECEDES_ORIGINAL_RESTORE")
+            if full:
+                supplements.verify_phase_role(owner, globals(), private, row, result, context, end)
+            if label in {*preparatory[1:], *(supplements.PRODUCTIVE if full else ())}:
                 require(row["startedRawNs"] < budget.fence("productive"), "PRODUCTIVE_PHASE_STARTED_AFTER_CUTOFF")
             if label in (*simulator.PREPARE, simulator.PRELAUNCH, *simulator.RETIRE):
                 require(row["argv"] == simulator.command(label, result.get("simulator", {}).get("selected")),
@@ -2707,8 +3558,58 @@ def verify_phase_bindings(owner, private, result, context, end, budget=None):
                     "SEALED_JOB_CUTOFF_CHANGED")
         else:
             require(cutoff is None, "SEALED_JOB_CUTOFF_CHANGED")
-        supplements.verify_cancellation(owner, globals(), private, result, context, end, budget)
-        verify_simulator_bindings(owner, private, result, context, end)
+        if full:
+            supplements.verify_cancellation(owner, globals(), private, result, context, end, budget)
+            verify_simulator_bindings(owner, private, result, context, end)
+        else:
+            verify_desktop_cancellation(owner, private, result, end, budget)
+
+
+def verify_desktop_cancellation(owner, private, result, end, budget):
+    """Existing canonical request and native birth, without a Darwin-only oracle."""
+    cancellation = result["jobBudget"].get("cooperativeCancellation")
+    rows = [row for row in result["phases"] if row.get("cooperativeCancellation") is not None]
+    if cancellation is None:
+        require(not rows, "DESKTOP_CANCELLATION_CHANGED")
+        return
+    require(len(rows) == 1 and rows[0]["phase"] == "product" and rows[0]["cooperativeCancellation"] == cancellation and
+            type(cancellation) is dict and set(cancellation) == {"reason", "job", "invocation", "attemptedRawNs",
+                "returnedRawNs", "requested", "requestSha256"}, "DESKTOP_CANCELLATION_CHANGED")
+    row = rows[0]
+    require(cancellation["job"] == row["job"] and cancellation["invocation"] == row["canonicalInvocation"] and
+            row["launchAttempted"] is True and cancellation["reason"] in ("job-budget", "signal") and
+            type(cancellation["requested"]) is bool and type(cancellation["attemptedRawNs"]) is int and
+            row["startedRawNs"] <= cancellation["attemptedRawNs"] <= row["finalizedRawNs"],
+            "DESKTOP_CANCELLATION_CHANGED")
+    launches = row["ownership"]["launches"]
+    require(len(launches) == 1 and launches[0].get("created") is True and launches[0].get("requestedArgv") == row["argv"] and
+            launches[0].get("cwd") == str(ROOT) and
+            (launches[0].get("api") == "CreateProcessW" and launches[0].get("resumed") is True and
+             "shell" not in launches[0] if result["role"] == "windows-x64" else
+             launches[0].get("api") == "subprocess.Popen" and launches[0].get("shell") is False) and
+            len([entry for entry in row["ownership"]["startedIdentities"]
+                 if entry.get("pid") == launches[0].get("pid")]) == 1, "DESKTOP_CANCELLATION_REQUIRES_NATIVE_BIRTH")
+    if cancellation["reason"] == "job-budget":
+        require(result["jobBudget"]["exhausted"] and cancellation["attemptedRawNs"] >= budget.fence("productive"),
+                "DESKTOP_CANCELLATION_CHANGED")
+    else:
+        require(result["cancelled"] is True, "DESKTOP_CANCELLATION_CHANGED")
+    if cancellation["requested"]:
+        require(type(cancellation["returnedRawNs"]) is int and
+                cancellation["attemptedRawNs"] <= cancellation["returnedRawNs"] <= row["finalizedRawNs"],
+                "DESKTOP_CANCELLATION_CHANGED")
+        state = owner.child(private, "state", end)
+        original = owner.child(state, "cancellations", end)
+        raw = owner.read(original, cancellation["invocation"] + ".json", end)
+        retained = owner.child(owner.child(private, "evidence", end), "job-time", end)
+        value = parse(raw)
+        require(raw == owner.read(retained, "product-cancellation.json", end) and
+                digest(raw) == cancellation["requestSha256"] and value.get("schema") == 1 and
+                value.get("jobId") == cancellation["job"] and value.get("id") == cancellation["invocation"],
+                "DESKTOP_CANCELLATION_ORIGINAL_CHANGED")
+    else:
+        require(cancellation["returnedRawNs"] is None and cancellation["requestSha256"] is None,
+                "DESKTOP_FAILED_CANCELLATION_RELABELLED")
 
 
 def verify_abi_acquisition(value, generated):
@@ -2895,14 +3796,36 @@ def verify_simulator_bindings(owner, private, result, context, end):
         require(terminal.get("coverage") is None, "SEALED_UNEXECUTED_SIMULATOR_COVERAGE")
 
 
-def validate_public(profile):
+def desktop_delivery_end(budget, result):
+    """One original controller-terminal +600 cap, not a fresh tail per process."""
+    require(budget.profile == result.get("profile") == "desktop", "DESKTOP_DELIVERY_SCOPE")
+    terminal = result.get("jobBudget", {}).get("terminalRawNs")
+    require(type(terminal) is int and budget.value["responseFinishedRawNs"] <= terminal <
+            budget.fence("controller-return"), "DESKTOP_ORIGINAL_TERMINAL_REQUIRED")
+    return min(budget.fence("delivery"), terminal + job_time.DESKTOP_DELIVERY_SECONDS * job_time.NS)
+
+
+def original_deadline(clock, stage, fence, seconds):
+    local = time.monotonic()
+    now = clock.check(stage)
+    require(now < fence, "ORIGINAL_DELIVERY_WINDOW_EXPIRED")
+    return job_time._directed_deadline(local, seconds, min(fence, clock.budget.fence(stage)), now)
+
+
+def validate_public(profile, *, cancelled=None):
     """Separate interpreter only; provisional files cannot grant upload authority."""
     require(os.environ.get("P2PKIT_HOSTED_TEST_RUN_OUTCOME") == "success", "ORIGINAL_CONTROLLER_DID_NOT_SUCCEED")
     require(job_time.TOKEN_ENV not in os.environ, "JOB_TIME_TOKEN_IN_SEAL")
     owner = PrivateOwner()
     end = time.monotonic() + 120
-    error, budget, budget_clock = None, None, None
+    error, budget, budget_clock, delivery_end = None, None, None, None
     passed = False
+    def check_seal():
+        check_cancelled(cancelled)
+        posix._deadline(end)
+        if budget_clock is not None:
+            observed = budget_clock.check("seal")
+            require(delivery_end is None or observed < delivery_end, "DESKTOP_SEAL_DELIVERY_EXPIRED")
     try:
         role = processes.host_role()
         path = session_path(profile, role)
@@ -2923,14 +3846,17 @@ def validate_public(profile):
         original = owner.child(evidence, "admission", end)
         expected = load_admission(owner, original, end)
         require(digest(expected.record) == context["admissionSha256"], "SEALED_ADMISSION_CHANGED")
-        if profile == "full":
+        if "jobBudgetSha256" in context:
             budget = load_job_budget(owner, private, expected, context, end)
-            budget_clock = job_time.BudgetClock(budget)
+            budget_clock = original_clock(budget, result["jobBudget"]["terminalRawNs"])
             budget_clock.check("seal-start")
             end = min(end, budget_clock.deadline("seal", 120))
+            if profile == "desktop":
+                delivery_end = desktop_delivery_end(budget, result)
+                end = min(end, original_deadline(budget_clock, "seal", delivery_end, 120))
         # A replay cannot overwrite the previous post-return receipt.
         validation = owner.new(path / "post-return-validation")
-        checked = admission(owner, profile, path / "seal-admission", lambda: posix._deadline(end), expected=expected)
+        checked = admission(owner, profile, path / "seal-admission", check_seal, expected=expected)
         output = owner.child(private, "export", end)
         runtime = owner.child(private, "runtime", end)
         returned_raw = owner.read(runtime, "export-result.json", end)
@@ -2941,6 +3867,11 @@ def validate_public(profile):
                 returned["contextSha256"] == digest(context_raw), "SEALED_EXPORT_CONTEXT_CHANGED")
         require(("dependencySeed" in context) == ("dependencySeed" in result) ==
                 ("dependencySeedFrozen" in returned), "SEED_SEALED_REQUIRED_DISPOSITION_MISSING")
+        require(("dependencyCache" in context) == ("dependencyCache" in result) ==
+                ("dependencyCacheFrozen" in returned), "CACHE_SEALED_REQUIRED_DISPOSITION_MISSING")
+        require((context.get("samplePackagingRequired") is True) == ("samplePackaging" in result) and
+                (result.get("samplePackaging", {}).get("status") == "PASS") == ("samplePackagingFrozen" in returned),
+                "SAMPLE_SEALED_REQUIRED_DISPOSITION_MISSING")
         if budget is not None:
             require(returned.get("jobBudgetSha256") == budget.sha256, "SEALED_EXPORT_JOB_TIME_CHANGED")
         manifest_raw = verify_export_binding(owner, output, result["exportReturn"], end)
@@ -2960,6 +3891,17 @@ def validate_public(profile):
                 lambda: (posix._deadline(end), budget_clock.check("seal") if budget_clock is not None else None))
             require(seed_frozen == returned["dependencySeedFrozen"] and
                     seed_frozen["disposition"] == result["dependencySeed"], "SEED_SEALED_EXPORT_RETURN_CHANGED")
+        cache_frozen = None
+        if "dependencyCache" in context:
+            cache_frozen = frozen_consume_packet(owner, private, end, check_seal)
+            require(cache_frozen == returned["dependencyCacheFrozen"] and
+                    cache_frozen["binding"] == result["dependencyCache"], "CACHE_SEALED_EXPORT_RETURN_CHANGED")
+        package_frozen = None
+        if "samplePackagingFrozen" in returned:
+            package_frozen = frozen_package_packet(owner, private, end, check_seal)
+            require(package_frozen == returned["samplePackagingFrozen"] and
+                    package_frozen["manifestSha256"] == result["samplePackaging"]["manifestSha256"],
+                    "SAMPLE_SEALED_EXPORT_RETURN_CHANGED")
         if profile == "full":
             supplements.verify(owner, globals(), private, result, context, end)
             before = parse(supplements.read_path(owner, globals(),
@@ -2972,16 +3914,24 @@ def validate_public(profile):
         owner.write(validation, "seal.json", {"schema": 1, "controllerResultSha256": digest(result_raw),
             "manifestSha256": digest(manifest_raw), "artifact": actual, "profilePassed": passed,
             "source": record["source"], "retirement": "KNOWN", "decryption": "NOT_PERFORMED",
-            **({"jobBudgetSha256": budget.sha256, "clockDomain": job_time.RAW_CLOCK_DOMAIN,
+            **({"jobBudgetSha256": budget.sha256, "clockDomain": budget.value["clockDomain"],
                 "sealedAtRawNs": budget_clock.check("seal"),
                 "upload": {"seconds": job_time.UPLOAD_SECONDS, "latestStartRawNs": budget.fence("upload-start"),
-                           "endRawNs": budget.fence("upload")}} if budget is not None else {})}, end)
+                           "endRawNs": budget.fence("upload") if delivery_end is None else delivery_end}}
+               if budget is not None else {}),
+            **({"deliveryEndRawNs": delivery_end} if delivery_end is not None else {})}, end)
         require(owner.read(private, "controller-result.json", end) == result_raw and
                 owner.read(output, posix.MANIFEST, end, 65536) == manifest_raw, "POST_RETURN_INPUT_CHANGED")
         if seed_frozen is not None:
             require(frozen_seed_packet(owner, private, end,
                     lambda: (posix._deadline(end), budget_clock.check("seal") if budget_clock is not None else None)) ==
                     seed_frozen, "SEED_POST_RETURN_INPUT_CHANGED")
+        if cache_frozen is not None:
+            require(frozen_consume_packet(owner, private, end, check_seal) == cache_frozen,
+                    "CACHE_POST_RETURN_INPUT_CHANGED")
+        if package_frozen is not None:
+            require(frozen_package_packet(owner, private, end, check_seal) == package_frozen,
+                    "SAMPLE_POST_RETURN_INPUT_CHANGED")
     except BaseException as caught:
         error = caught
         owner.error("post-return-seal", caught)
@@ -2994,9 +3944,7 @@ def validate_public(profile):
     if error is not None:
         raise error
     require(not owner.unknown, "POST_RETURN_CLOSE_UNKNOWN")
-    posix._deadline(end)
-    if budget_clock is not None:
-        budget_clock.check("seal")
+    check_seal()
     # Mandatory workflow consumers also require THIS step's successful outcome;
     # a partial append/error does not grant upload from a failed seal step.
     target = Path(os.environ["GITHUB_OUTPUT"])
@@ -3008,13 +3956,11 @@ def validate_public(profile):
         os.fsync(stream.fileno())
     # Step success is required even if a provisional output append preceded an
     # overrun/failure during fsync or output close. Never renew the original end.
-    posix._deadline(end)
-    if budget_clock is not None:
-        budget_clock.check("seal")
+    check_seal()
     print("ORDINARY_TEST_CIPHERTEXT_SEAL=PASS; PRIVATE_DECRYPTION=NOT_PERFORMED")
 
 
-def upload_guard(phase):
+def full_upload_guard(phase, *, cancelled=None):
     """Closed before/after fence for FUTURE reviewed upload wiring, not upload.
 
     Wiring must require both guards' real successful outcomes, the exact before
@@ -3025,6 +3971,7 @@ def upload_guard(phase):
     require(phase in ("before", "after") and job_time.TOKEN_ENV not in os.environ and
             os.environ.get("P2PKIT_HOSTED_TEST_RUN_OUTCOME") == "success" and
             os.environ.get("P2PKIT_HOSTED_TEST_SEAL_OUTCOME") == "success", "UPLOAD_REQUIRES_REAL_SEAL_SUCCESS")
+    check_cancelled(cancelled)
     if phase == "after":
         require(os.environ.get("P2PKIT_HOSTED_TEST_UPLOAD_OUTCOME") == "success", "UPLOAD_ORIGINAL_ACTION_FAILED")
     owner = PrivateOwner()
@@ -3045,12 +3992,14 @@ def upload_guard(phase):
         admitted = load_admission(owner, original, end)
         require(digest(admitted.record) == context["admissionSha256"], "UPLOAD_ORIGINAL_ADMISSION_CHANGED")
         budget = load_job_budget(owner, private, admitted, context, end)
-        clock = job_time.BudgetClock(budget)
-        began = clock.check(stage)
-        end = min(end, clock.deadline(stage, job_time.TRANSITION_SECONDS))
         seal_directory = owner.child(private, "post-return-validation", end)
         seal_raw = owner.read(seal_directory, "seal.json", end)
         seal = parse(seal_raw)
+        previous = (parse(owner.read(private, "upload-before.json", end))["beganRawNs"]
+                    if phase == "after" else seal["sealedAtRawNs"])
+        clock = original_clock(budget, result["jobBudget"]["terminalRawNs"], seal["sealedAtRawNs"], previous)
+        began = clock.check(stage)
+        end = min(end, clock.deadline(stage, job_time.TRANSITION_SECONDS))
         require(seal.get("jobBudgetSha256") == budget.sha256 and seal.get("clockDomain") == job_time.RAW_CLOCK_DOMAIN and
                 seal.get("controllerResultSha256") == digest(result_raw) and seal.get("source") == context["source"] and
                 seal.get("profilePassed") == result["profilePassed"] == profile_passed(result) and
@@ -3060,7 +4009,7 @@ def upload_guard(phase):
                     "seconds": job_time.UPLOAD_SECONDS, "latestStartRawNs": budget.fence("upload-start"),
                     "endRawNs": budget.fence("upload")}, "UPLOAD_ORIGINAL_SEAL_CHANGED")
         checked = admission(owner, "full", private.path / ("upload-" + phase + "-admission"),
-                            lambda: (posix._deadline(end), clock.check(stage)), expected=admitted)
+                            lambda: (check_cancelled(cancelled), posix._deadline(end), clock.check(stage)), expected=admitted)
         require(parse(checked.record)["source"] == seal["source"], "UPLOAD_SOURCE_CHANGED")
         output = owner.child(private, "export", end)
         manifest_raw = owner.read(output, posix.MANIFEST, end, 65536)
@@ -3103,6 +4052,7 @@ def upload_guard(phase):
     if error is not None:
         raise error
     require(not owner.unknown and outputs is not None, "UPLOAD_GUARD_RETIREMENT_UNKNOWN")
+    check_cancelled(cancelled)
     posix._deadline(end)
     require(clock.check(stage) < upload_end, "UPLOAD_GUARD_EXPIRED")
     target = Path(os.environ["GITHUB_OUTPUT"])
@@ -3115,7 +4065,393 @@ def upload_guard(phase):
         os.fsync(stream.fileno())
     posix._deadline(end)
     require(clock.check(stage) < upload_end, "UPLOAD_GUARD_EXPIRED")
+    check_cancelled(cancelled)
     print("ORDINARY_FULL_UPLOAD_GUARD=" + phase.upper() + "; NO_UPLOAD_PERFORMED")
+
+
+def delivery_inputs(owner, end):
+    """Read a separately sealed Desktop result; do not create new time authority."""
+    require(job_time.TOKEN_ENV not in os.environ and
+            all(os.environ.get("P2PKIT_HOSTED_TEST_" + key + "_OUTCOME") == "success" for key in ("RUN", "SEAL")),
+            "DELIVERY_REQUIRES_ORIGINAL_SUCCESS")
+    role = processes.host_role()
+    private = owner.open(session_path("desktop", role))
+    context_raw, result_raw = (owner.read(private, name, end) for name in ("run-context.json", "controller-result.json"))
+    context, result = parse(context_raw), parse(result_raw)
+    require(context.get("profile") == result.get("profile") == "desktop" and context.get("role") == result.get("role") == role and
+            context.get("root") == str(ROOT) and context.get("session") == str(private.path) and
+            context.get("canonicalSources") == canonical_bindings() and context.get("samplePackagingRequired") is True and
+            type(context.get("dependencyCache")) is dict and result.get("contextSha256") == digest(context_raw) and
+            result.get("retirement") == "KNOWN" and result.get("encrypted") is True and
+            result.get("readyForPostReturnSeal") is True, "DELIVERY_ORIGINAL_CONTEXT_CHANGED")
+    evidence = owner.child(private, "evidence", end)
+    admitted = load_admission(owner, owner.child(evidence, "admission", end), end)
+    require(digest(admitted.record) == context["admissionSha256"] and
+            parse(admitted.record)["source"] == context["source"] == result["source"], "DELIVERY_ORIGINAL_SOURCE_CHANGED")
+    budget = load_job_budget(owner, private, admitted, context, end)
+    fence = desktop_delivery_end(budget, result)
+    sealed = owner.child(private, "post-return-validation", end)
+    seal_raw = owner.read(sealed, "seal.json", end)
+    seal = parse(seal_raw)
+    require(seal.get("jobBudgetSha256") == budget.sha256 and seal.get("clockDomain") == budget.value["clockDomain"] and
+            seal.get("controllerResultSha256") == digest(result_raw) and seal.get("source") == context["source"] and
+            type(seal.get("profilePassed")) is bool and seal["profilePassed"] == result["profilePassed"] == profile_passed(result) and
+            seal.get("retirement") == "KNOWN" and type(seal.get("sealedAtRawNs")) is int and
+            result["jobBudget"]["terminalRawNs"] <= seal["sealedAtRawNs"] < fence and
+            seal.get("deliveryEndRawNs") == fence and seal.get("upload") == {"seconds": job_time.UPLOAD_SECONDS,
+                "latestStartRawNs": budget.fence("upload-start"), "endRawNs": fence}, "DELIVERY_ORIGINAL_SEAL_CHANGED")
+    clock = original_clock(budget, result["jobBudget"]["terminalRawNs"], seal["sealedAtRawNs"])
+    return {"private": private, "role": role, "context": context, "contextRaw": context_raw,
+            "result": result, "resultRaw": result_raw, "seal": seal, "sealRaw": seal_raw,
+            "admitted": admitted, "budget": budget, "clock": clock, "endRawNs": fence}
+
+
+def delivery_binding(data, scope):
+    return {"schema": 1, "scope": scope, "contextSha256": digest(data["contextRaw"]),
+            "controllerResultSha256": digest(data["resultRaw"]), "sealSha256": digest(data["sealRaw"]),
+            "jobBudgetSha256": data["budget"].sha256, "source": data["context"]["source"],
+            "clockDomain": data["budget"].value["clockDomain"], "deliveryEndRawNs": data["endRawNs"]}
+
+
+def delivery_check(data, stage, end, cancelled, *, fence=None):
+    check_cancelled(cancelled)
+    posix._deadline(end)
+    now = data["clock"].check(stage)
+    require(now < min(data["endRawNs"], fence if fence is not None else data["endRawNs"]),
+            "ORIGINAL_DELIVERY_WINDOW_EXPIRED")
+    return now
+
+
+def desktop_upload_before(data, raw):
+    value = parse(raw)
+    binding = delivery_binding(data, "CLOSED_DESKTOP_UPLOAD_SCHEDULING_CAP")
+    expected_keys = set(binding) | {"beganRawNs", "endRawNs", "timeoutObservedRawNs", "timeoutMinutes"}
+    require(set(value) == expected_keys and all(value.get(key) == item for key, item in binding.items()) and
+            all(type(value[key]) is int for key in ("beganRawNs", "endRawNs", "timeoutObservedRawNs", "timeoutMinutes")) and
+            data["seal"]["sealedAtRawNs"] <= value["beganRawNs"] <= value["timeoutObservedRawNs"] < value["endRawNs"] and
+            value["endRawNs"] == min(data["endRawNs"], value["beganRawNs"] + job_time.UPLOAD_SECONDS * job_time.NS) and
+            1 <= value["timeoutMinutes"] <= 3 and value["timeoutMinutes"] ==
+                (value["endRawNs"] - value["timeoutObservedRawNs"]) // (60 * job_time.NS),
+            "UPLOAD_ORIGINAL_FENCE_CHANGED_OR_EXPIRED")
+    return value
+
+
+def desktop_upload_pair(owner, data, end):
+    private = data["private"]
+    before_raw = owner.read(private, "upload-before.json", end)
+    before = desktop_upload_before(data, before_raw)
+    after_raw = owner.read(private, "upload-after.json", end)
+    after = parse(after_raw)
+    binding = delivery_binding(data, "CLOSED_DESKTOP_UPLOAD_SCHEDULING_CAP")
+    require(set(after) == set(binding) | {"beforeSha256", "observedRawNs", "stepOutcome"} and
+            all(after.get(key) == value for key, value in binding.items()) and after.get("stepOutcome") == "success" and
+            after.get("beforeSha256") == digest(before_raw) and type(after.get("observedRawNs")) is int and
+            before["timeoutObservedRawNs"] <= after["observedRawNs"] < before["endRawNs"],
+            "DELIVERY_ORIGINAL_UPLOAD_CHANGED")
+    data["clock"].last = max(data["clock"].last, after["observedRawNs"])
+    return before_raw, after_raw
+
+
+def upload_guard(phase, profile="full", *, cancelled=None):
+    if profile == "full":
+        return full_upload_guard(phase, cancelled=cancelled)
+    require(profile == "desktop" and phase in ("before", "after"), "UPLOAD_CLOSED_PROFILE")
+    if phase == "after":
+        require(os.environ.get("P2PKIT_HOSTED_TEST_UPLOAD_OUTCOME") == "success", "UPLOAD_ORIGINAL_ACTION_FAILED")
+    owner, error, outputs, data, fence = PrivateOwner(), None, None, None, None
+    end = time.monotonic() + job_time.TRANSITION_SECONDS
+    def check():
+        require(not owner.unknown, "UPLOAD_GUARD_RETIREMENT_UNKNOWN")
+        return delivery_check(data, "upload", end, cancelled, fence=fence)
+    try:
+        check_cancelled(cancelled)
+        data = delivery_inputs(owner, end)
+        private = data["private"]
+        before_raw = owner.read(private, "upload-before.json", end) if phase == "after" else None
+        if before_raw is not None:
+            before = desktop_upload_before(data, before_raw)
+            require(digest(before_raw) == os.environ.get("P2PKIT_HOSTED_TEST_UPLOAD_GUARD_SHA256"),
+                    "UPLOAD_ORIGINAL_GUARD_CHANGED")
+            data["clock"].last = max(data["clock"].last, before["timeoutObservedRawNs"])
+            fence = before["endRawNs"]
+        began = check()
+        if fence is None:
+            fence = min(data["endRawNs"], began + job_time.UPLOAD_SECONDS * job_time.NS)
+        end = min(end, original_deadline(data["clock"], "upload", fence, job_time.TRANSITION_SECONDS))
+        admission(owner, "desktop", private.path / ("upload-" + phase + "-admission"), check, expected=data["admitted"])
+        output = owner.child(private, "export", end)
+        manifest_raw = owner.read(output, posix.MANIFEST, end, 65536)
+        require(digest(manifest_raw) == data["seal"]["manifestSha256"] and
+                parse(manifest_raw)["artifact"] == data["seal"]["artifact"] and
+                artifact_metadata(owner, output, end) == data["seal"]["artifact"], "UPLOAD_SEALED_MANIFEST_CHANGED")
+        binding = delivery_binding(data, "CLOSED_DESKTOP_UPLOAD_SCHEDULING_CAP")
+        observed = check()
+        if phase == "before":
+            minutes = (fence - observed) // (60 * job_time.NS)
+            require(1 <= minutes <= 3, "UPLOAD_NO_COMPLETE_MINUTE_LEFT")
+            raw = encoded({**binding, "beganRawNs": began, "endRawNs": fence,
+                           "timeoutObservedRawNs": observed, "timeoutMinutes": minutes})
+            desktop_upload_before(data, raw)
+            owner.write(private, "upload-before.json", raw, end)
+            outputs = "upload_ready=true\nupload_timeout_minutes=" + str(minutes) + "\nupload_guard_sha256=" + digest(raw) + "\n"
+        else:
+            owner.write(private, "upload-after.json", {**binding, "beforeSha256": digest(before_raw),
+                        "observedRawNs": observed, "stepOutcome": "success"}, end)
+            desktop_upload_pair(owner, data, end)
+            outputs = "upload_complete=true\n"
+        check()
+    except BaseException as caught:
+        error = caught
+        owner.error("desktop-upload-" + phase, caught)
+    finally:
+        try:
+            owner.close()
+        except BaseException as caught:
+            error = error or caught
+    if error is not None:
+        raise error
+    require(outputs is not None and not owner.unknown, "UPLOAD_GUARD_NOT_RETURNED")
+    append_outputs(outputs, check)
+    print("ORDINARY_DESKTOP_UPLOAD_GUARD=" + phase.upper() + "; NO_UPLOAD_PERFORMED")
+
+
+def successful_sample_inputs(owner, end):
+    require(all(os.environ.get("P2PKIT_HOSTED_TEST_" + name + "_OUTCOME") == "success"
+                for name in ("UPLOAD", "UPLOAD_AFTER")), "SAMPLES_REQUIRE_ORIGINAL_EVIDENCE_UPLOAD")
+    data = delivery_inputs(owner, end)
+    require(data["result"]["profilePassed"] is True and
+            data["result"].get("samplePackaging", {}).get("status") == "PASS", "SAMPLES_REQUIRE_PASSING_PROFILE")
+    _, after_raw = desktop_upload_pair(owner, data, end)
+    data["uploadAfterRaw"] = after_raw
+    return data
+
+
+def original_package(owner, data, end, check):
+    private = data["private"]
+    evidence = owner.child(private, "evidence", end)
+    raw = owner.read(evidence, "sample-packaging.json", end)
+    report = parse(raw)
+    frozen = frozen_package_packet(owner, private, end, check)
+    require(digest(raw) == data["result"]["samplePackaging"]["manifestSha256"] == frozen["manifestSha256"] and
+            frozen == data["result"]["exportReturn"]["result"].get("samplePackagingFrozen"),
+            "SAMPLE_ORIGINAL_FROZEN_PACKAGE_CHANGED")
+    return raw, report, frozen
+
+
+def packaging_binding(data, raw, report, frozen):
+    return {**delivery_binding(data, "SEALED_ORIGINAL_SAMPLE_PACKAGE_READY"),
+            "packageManifestSha256": digest(raw), "snapshotSha256": digest(encoded(report["snapshot"])),
+            "frozenPacketSha256": digest(encoded(frozen)), "evidenceUploadAfterSha256": digest(data["uploadAfterRaw"])}
+
+
+def package_succeeded(owner, data, end, check):
+    require(os.environ.get("P2PKIT_SAMPLE_PACKAGE_OUTCOME") == "success", "SAMPLE_PACKAGE_GUARD_NOT_SUCCESSFUL")
+    raw, report, frozen = original_package(owner, data, end, check)
+    ready_raw = owner.read(data["private"], "packaging-ready.json", end)
+    ready, binding = parse(ready_raw), packaging_binding(data, raw, report, frozen)
+    require(digest(ready_raw) == os.environ.get("P2PKIT_SAMPLE_PACKAGE_SHA256") and
+            set(ready) == set(binding) | {"observedRawNs"} and
+            all(ready.get(key) == value for key, value in binding.items()) and type(ready.get("observedRawNs")) is int and
+            parse(data["uploadAfterRaw"])["observedRawNs"] <= ready["observedRawNs"] < data["endRawNs"],
+            "SAMPLE_ORIGINAL_PACKAGE_GUARD_CHANGED")
+    data["clock"].last = max(data["clock"].last, ready["observedRawNs"])
+    return ready_raw, report
+
+
+def package_samples_guard(profile, *, cancelled=None):
+    """NO WRITER: verify the original pre-export package and its delivery bytes."""
+    require(profile == "desktop", "SAMPLE_DELIVERY_DESKTOP_ONLY")
+    owner, error, outputs, data = PrivateOwner(), None, None, None
+    end = time.monotonic() + job_time.TRANSITION_SECONDS
+    def check():
+        require(not owner.unknown, "SAMPLE_GUARD_RETIREMENT_UNKNOWN")
+        return delivery_check(data, "delivery", end, cancelled)
+    try:
+        check_cancelled(cancelled)
+        data = successful_sample_inputs(owner, end)
+        end = min(end, original_deadline(data["clock"], "delivery", data["endRawNs"], job_time.TRANSITION_SECONDS))
+        admission(owner, "desktop", data["private"].path / "package-guard-admission", check, expected=data["admitted"])
+        raw, report, frozen = original_package(owner, data, end, check)
+        require(sample_snapshot(owner, data["private"].path, data["admitted"], data["role"], end, check) == report["snapshot"],
+                "SAMPLE_ORIGINAL_DELIVERY_BYTES_CHANGED")
+        ready = encoded({**packaging_binding(data, raw, report, frozen), "observedRawNs": check()})
+        owner.write(data["private"], "packaging-ready.json", ready, end)
+        outputs = "packaging_ready=true\npackaging_sha256=" + digest(ready) + "\n"
+        check()
+    except BaseException as caught:
+        error = caught
+        owner.error("sample-package-guard", caught)
+    finally:
+        try:
+            owner.close()
+        except BaseException as caught:
+            error = error or caught
+    if error is not None:
+        raise error
+    require(outputs is not None and not owner.unknown, "SAMPLE_PACKAGE_GUARD_NOT_RETURNED")
+    append_outputs(outputs, check)
+    print("SAMPLE_PACKAGE_GUARD=PASS; NEW_PACKAGING_OR_BUILD=NOT_PERFORMED")
+
+
+def sample_window(data, package_raw, raw):
+    value = parse(raw)
+    binding = {**delivery_binding(data, "ONE_ORIGINAL_SAMPLE_UPLOAD_WINDOW"), "packagingSha256": digest(package_raw)}
+    require(set(value) == set(binding) | {"beganRawNs", "endRawNs"} and
+            all(value.get(key) == item for key, item in binding.items()) and
+            type(value.get("beganRawNs")) is int and type(value.get("endRawNs")) is int and
+            parse(package_raw)["observedRawNs"] <= value["beganRawNs"] < value["endRawNs"] and
+            value["endRawNs"] == min(data["endRawNs"], value["beganRawNs"] + job_time.UPLOAD_SECONDS * job_time.NS),
+            "SAMPLE_ORIGINAL_SHARED_WINDOW_CHANGED")
+    return value
+
+
+def sample_upload_binding(data, platform, package_raw, window_raw):
+    return {**delivery_binding(data, "ORIGINAL_SAMPLE_UPLOAD"), "platform": platform,
+            "packagingSha256": digest(package_raw), "windowSha256": digest(window_raw)}
+
+
+def sample_before(data, platform, package_raw, window_raw, raw):
+    window, value = sample_window(data, package_raw, window_raw), parse(raw)
+    binding = sample_upload_binding(data, platform, package_raw, window_raw)
+    require(set(value) == set(binding) | {"beganRawNs", "timeoutObservedRawNs", "timeoutMinutes"} and
+            all(value.get(key) == item for key, item in binding.items()) and
+            all(type(value.get(key)) is int for key in ("beganRawNs", "timeoutObservedRawNs", "timeoutMinutes")) and
+            window["beganRawNs"] <= value["beganRawNs"] <= value["timeoutObservedRawNs"] < window["endRawNs"] and
+            1 <= value["timeoutMinutes"] <= 3 and value["timeoutMinutes"] ==
+                (window["endRawNs"] - value["timeoutObservedRawNs"]) // (60 * job_time.NS),
+            "SAMPLE_ORIGINAL_UPLOAD_FENCE_CHANGED")
+    return value
+
+
+def sample_upload_pair(owner, data, platform, package_raw, window_raw, end):
+    before_raw = owner.read(data["private"], "sample-" + platform + "-before.json", end)
+    before = sample_before(data, platform, package_raw, window_raw, before_raw)
+    after_raw = owner.read(data["private"], "sample-" + platform + "-after.json", end)
+    after = parse(after_raw)
+    binding = sample_upload_binding(data, platform, package_raw, window_raw)
+    require(set(after) == set(binding) | {"beforeSha256", "observedRawNs", "stepOutcome"} and
+            all(after.get(key) == item for key, item in binding.items()) and after.get("beforeSha256") == digest(before_raw) and
+            after.get("stepOutcome") == "success" and type(after.get("observedRawNs")) is int and
+            before["timeoutObservedRawNs"] <= after["observedRawNs"] < parse(window_raw)["endRawNs"],
+            "SAMPLE_ORIGINAL_UPLOAD_AFTER_CHANGED")
+    data["clock"].last = max(data["clock"].last, after["observedRawNs"])
+    return after_raw
+
+
+def sample_upload_guard(phase, platform, profile, *, cancelled=None):
+    require(profile == "desktop" and phase in ("before", "after") and platform in ("desktop", "android"),
+            "SAMPLE_UPLOAD_CLOSED_CALL")
+    if phase == "after":
+        require(os.environ.get("P2PKIT_SAMPLE_UPLOAD_OUTCOME") == "success", "SAMPLE_ORIGINAL_UPLOAD_FAILED")
+    owner, error, outputs, data, fence = PrivateOwner(), None, None, None, None
+    end = time.monotonic() + job_time.TRANSITION_SECONDS
+    def check():
+        require(not owner.unknown, "SAMPLE_GUARD_RETIREMENT_UNKNOWN")
+        return delivery_check(data, "samples", end, cancelled, fence=fence)
+    try:
+        check_cancelled(cancelled)
+        data = successful_sample_inputs(owner, end)
+        require(platform != "android" or data["role"] == "linux-x64", "ANDROID_SAMPLE_LINUX_ONLY")
+        # Validate predecessor bytes before the first new clock sample. This
+        # floor prevents a later process accepting a temporarily backward clock.
+        package_raw, report = package_succeeded(owner, data, end, lambda: posix._deadline(end))
+        private = data["private"]
+        if phase == "before" and platform == "desktop":
+            began = check()
+            window_raw = encoded({**delivery_binding(data, "ONE_ORIGINAL_SAMPLE_UPLOAD_WINDOW"),
+                "packagingSha256": digest(package_raw), "beganRawNs": began,
+                "endRawNs": min(data["endRawNs"], began + job_time.UPLOAD_SECONDS * job_time.NS)})
+            owner.write(private, "sample-window.json", window_raw, end)
+        else:
+            window_raw = owner.read(private, "sample-window.json", end)
+        window = sample_window(data, package_raw, window_raw)
+        fence = window["endRawNs"]
+        data["clock"].last = max(data["clock"].last, window["beganRawNs"])
+        if platform == "android":
+            require(os.environ.get("P2PKIT_SAMPLE_DESKTOP_AFTER_OUTCOME") == "success",
+                    "ANDROID_SAMPLE_REQUIRES_DESKTOP_RETURN")
+            sample_upload_pair(owner, data, "desktop", package_raw, window_raw, end)
+        before_raw = None
+        if phase == "after":
+            before_raw = owner.read(private, "sample-" + platform + "-before.json", end)
+            before = sample_before(data, platform, package_raw, window_raw, before_raw)
+            require(digest(before_raw) == os.environ.get("P2PKIT_SAMPLE_UPLOAD_GUARD_SHA256"),
+                    "SAMPLE_ORIGINAL_BEFORE_OUTPUT_CHANGED")
+            data["clock"].last = max(data["clock"].last, before["timeoutObservedRawNs"])
+        began = check()
+        end = min(end, original_deadline(data["clock"], "samples", fence, job_time.TRANSITION_SECONDS))
+        admission(owner, "desktop", private.path / ("sample-" + platform + "-" + phase + "-admission"), check,
+                  expected=data["admitted"])
+        require(sample_snapshot(owner, private.path, data["admitted"], data["role"], end, check) == report["snapshot"],
+                "SAMPLE_ORIGINAL_DELIVERY_BYTES_CHANGED")
+        binding, observed = sample_upload_binding(data, platform, package_raw, window_raw), check()
+        if phase == "before":
+            minutes = (fence - observed) // (60 * job_time.NS)
+            require(1 <= minutes <= 3, "SAMPLE_UPLOAD_NO_COMPLETE_MINUTE_LEFT")
+            raw = encoded({**binding, "beganRawNs": began, "timeoutObservedRawNs": observed, "timeoutMinutes": minutes})
+            sample_before(data, platform, package_raw, window_raw, raw)
+            owner.write(private, "sample-" + platform + "-before.json", raw, end)
+            outputs = "upload_ready=true\nupload_timeout_minutes=" + str(minutes) + "\nupload_guard_sha256=" + digest(raw) + "\n"
+        else:
+            owner.write(private, "sample-" + platform + "-after.json", {**binding, "beforeSha256": digest(before_raw),
+                        "observedRawNs": observed, "stepOutcome": "success"}, end)
+            sample_upload_pair(owner, data, platform, package_raw, window_raw, end)
+            outputs = "upload_complete=true\n"
+        check()
+    except BaseException as caught:
+        error = caught
+        owner.error("sample-" + platform + "-" + phase, caught)
+    finally:
+        try:
+            owner.close()
+        except BaseException as caught:
+            error = error or caught
+    if error is not None:
+        raise error
+    require(outputs is not None and not owner.unknown, "SAMPLE_UPLOAD_GUARD_NOT_RETURNED")
+    append_outputs(outputs, check)
+    print("SAMPLE_UPLOAD_GUARD=" + platform.upper() + "_" + phase.upper() + "; NO_UPLOAD_PERFORMED")
+
+
+def sample_delivery_guard(profile, *, cancelled=None):
+    require(profile == "desktop", "SAMPLE_DELIVERY_DESKTOP_ONLY")
+    owner, error, data = PrivateOwner(), None, None
+    end = time.monotonic() + job_time.TRANSITION_SECONDS
+    def check():
+        require(not owner.unknown, "SAMPLE_GUARD_RETIREMENT_UNKNOWN")
+        return delivery_check(data, "delivery", end, cancelled)
+    try:
+        check_cancelled(cancelled)
+        data = successful_sample_inputs(owner, end)
+        package_raw, _report = package_succeeded(owner, data, end, lambda: posix._deadline(end))
+        private = data["private"]
+        window_raw = owner.read(private, "sample-window.json", end)
+        sample_window(data, package_raw, window_raw)
+        after = {}
+        for platform in ("desktop", "android"):
+            expected = "success" if platform == "desktop" or data["role"] == "linux-x64" else "skipped"
+            require(all(os.environ.get("P2PKIT_SAMPLE_" + platform.upper() + "_" + phase + "_OUTCOME") == expected
+                        for phase in ("BEFORE", "UPLOAD", "AFTER")), "SAMPLE_DELIVERY_ORIGINAL_OUTCOME_FAILED")
+            if expected == "success":
+                after[platform] = digest(sample_upload_pair(owner, data, platform, package_raw, window_raw, end))
+        end = min(end, original_deadline(data["clock"], "delivery", data["endRawNs"], job_time.TRANSITION_SECONDS))
+        admission(owner, "desktop", private.path / "sample-delivery-admission", check, expected=data["admitted"])
+        owner.write(private, "sample-delivery.json", {**delivery_binding(data, "ONE_HOST_SAMPLE_DELIVERY_COMPLETE"),
+                    "packagingSha256": digest(package_raw), "windowSha256": digest(window_raw), "uploads": after,
+                    "observedRawNs": check(), "retirement": "KNOWN"}, end)
+        check()
+    except BaseException as caught:
+        error = caught
+        owner.error("sample-delivery", caught)
+    finally:
+        try:
+            owner.close()
+        except BaseException as caught:
+            error = error or caught
+    if error is not None:
+        raise error
+    check()
+    print("ONE_HOST_SAMPLE_DELIVERY=PASS; RELEASE_PUBLICATION=NOT_PERFORMED")
 
 
 def stage_dependencies(profile):
@@ -3176,32 +4512,48 @@ def stage_dependencies(profile):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="operation", required=True)
-    for name in ("run", "validate-public", "_crypto", "_job-time", "upload-guard", "stage-dependencies"):
+    for name in ("run", "validate-public", "_crypto", "_job-time", "upload-guard", "stage-dependencies",
+                 "prepare-consume", "restore-guard", "package-samples", "sample-upload-guard", "sample-delivery-guard"):
         entry = sub.add_parser(name)
-        entry.add_argument("--profile", choices=("full",) if name in ("_job-time", "upload-guard") else PRODUCT_SECONDS,
+        entry.add_argument("--profile", choices=("desktop",) if name in
+                           ("package-samples", "sample-upload-guard", "sample-delivery-guard") else PRODUCT_SECONDS,
                            required=True)
         if name == "_crypto":
             entry.add_argument("phase", choices=("validate", "export"))
             entry.add_argument("--context-sha256", required=True)
         elif name == "_job-time":
             entry.add_argument("--admission-sha256", required=True)
-        elif name == "upload-guard":
+        elif name in ("upload-guard", "sample-upload-guard"):
             entry.add_argument("phase", choices=("before", "after"))
+            if name == "sample-upload-guard":
+                entry.add_argument("--platform", choices=("desktop", "android"), required=True)
         elif name == "run":
-            entry.add_argument("--seed-dependencies", action="store_true")
+            seeds = entry.add_mutually_exclusive_group()
+            seeds.add_argument("--seed-dependencies", action="store_true")
+            seeds.add_argument("--consume-dependencies", action="store_true")
     args = parser.parse_args()
     try:
         if args.operation == "run":
-            return run(args.profile, seed_dependencies=args.seed_dependencies)
+            return run(args.profile, seed_dependencies=args.seed_dependencies, consume_dependencies=args.consume_dependencies)
         if args.operation == "validate-public":
-            validate_public(args.profile)
+            guarded_operation(validate_public, args.profile)
+        elif args.operation == "prepare-consume":
+            guarded_operation(prepare_consume, args.profile)
+        elif args.operation == "restore-guard":
+            guarded_operation(restore_guard, args.profile)
+        elif args.operation == "package-samples":
+            guarded_operation(package_samples_guard, args.profile)
+        elif args.operation == "sample-upload-guard":
+            guarded_operation(sample_upload_guard, args.phase, args.platform, args.profile)
+        elif args.operation == "sample-delivery-guard":
+            guarded_operation(sample_delivery_guard, args.profile)
         elif args.operation == "stage-dependencies":
             stage_dependencies(args.profile)
         elif args.operation == "_job-time":
             require(re.fullmatch(r"[0-9a-f]{64}", args.admission_sha256), "JOB_TIME_ADMISSION_HASH")
             job_time_phase(args.profile, args.admission_sha256)
         elif args.operation == "upload-guard":
-            upload_guard(args.phase)
+            guarded_operation(upload_guard, args.phase, args.profile)
         else:
             require(re.fullmatch(r"[0-9a-f]{64}", args.context_sha256), "CRYPTO_CONTEXT_HASH")
             crypto_phase(args.phase, args.profile, args.context_sha256)

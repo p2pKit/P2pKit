@@ -21,8 +21,10 @@ from pathlib import Path
 # and prevent an unchanged helper being shadowed by a later assignment.
 # The seed supplier's 2026-09-17 bounded-export factoring was independently
 # source/offline reviewed; its updated expectation is not native/cache acceptance.
+# The connected consume/delivery controller and predecessor-clock corrections
+# received separate source/offline review before this controller-only update.
 EXPECTED = {
-    "scripts/run-hosted-test-custody.py": "52664a6b44f3d44632a7ec223d3e2c77dbf3de7879bfa4747a7374c434d3f42c",
+    "scripts/run-hosted-test-custody.py": "eb10c042667499ee489e499ab89bb8657882e556c5c6d8dc74916feff0245499",
     "scripts/hosted_full_supplements.py": "9f5c6a0f410c00ee7531664e95dab233c0febc6740dd6a8b1005e3fc3a64310c",
     "scripts/hosted_primary_abi.py": "ff168e70c31bc23b1c6e545a32d0c4217f9a212f7244a2c34571eee09f761553",
     "scripts/run-platform-tests.py": "1a3e6f093abe3a79bfbc2d3f426f26e71db77c6f72034effeb2e296dc833c271",

@@ -78,25 +78,58 @@ mutations = {
     "preview cleanup on ordinary path" => ->(v) { step(v, "stop-sample-gradle")["if"] = "${{ always() }}" },
     "ignored cleanup failure" => ->(v) { step(v, "stop-sample-gradle")["continue-on-error"] = true },
     "package after failed stop" => ->(v) { step(v, "sample-packaging")["if"] = "${{ always() }}" },
-    "ordinary package before final acceptance" => ->(v) { step(v, "sample-packaging")["if"].sub!("steps.ordinary-required.outcome == 'success'", "steps.ordinary-run.outcome == 'success'") },
+    "ordinary package before final acceptance" => ->(v) { step(v, "ordinary-package")["if"].sub!("steps.ordinary-required.outcome == 'success'", "steps.ordinary-run.outcome == 'success'") },
     "package stale outputs" => ->(v) { step(v, "sample-packaging")["run"] = "echo success" },
+    "ordinary package guard becomes an unsealed writer" => ->(v) { step(v, "ordinary-package")["run"] = P.helper("package") },
+    "ordinary package guard regains writer allowance" => ->(v) { step(v, "ordinary-package")["timeout-minutes"] = 2 },
+    "ordinary package ignores failure" => ->(v) { step(v, "ordinary-package")["continue-on-error"] = true },
+    "ordinary package unvalidated evidence delivery" => ->(v) { step(v, "ordinary-package")["env"].delete("P2PKIT_HOSTED_TEST_UPLOAD_AFTER_OUTCOME") },
+    "ordinary package forged evidence outcome" => ->(v) { step(v, "ordinary-package")["env"]["P2PKIT_HOSTED_TEST_UPLOAD_OUTCOME"] = "success" },
+    "ordinary delivery omitted" => ->(v) { ordinary(v)["steps"].delete(step(v, "ordinary-delivery")) },
+    "ordinary delivery success-only" => ->(v) { step(v, "ordinary-delivery")["if"] = "${{ success() }}" },
+    "ordinary delivery no actual deadline check" => ->(v) { step(v, "ordinary-delivery")["run"].sub!("sample-delivery-guard", "echo") },
+    "ordinary delivery ignores partial upload" => ->(v) { step(v, "ordinary-delivery")["run"].sub!('test "$ANDROID_UPLOAD_COMPLETE" = true', "true") },
+    "ordinary delivery admits Android on nonLinux" => ->(v) { step(v, "ordinary-delivery")["run"].sub!('test "$P2PKIT_SAMPLE_ANDROID_UPLOAD_OUTCOME" = skipped', "true") },
     "extra side effect" => ->(v) { ordinary(v)["steps"] << {"run" => "git push origin HEAD:main"} },
     "wrong native host" => ->(v) { ordinary(v)["strategy"]["matrix"]["os"][1] = "ubuntu-latest" },
     "overlapping heavy matrix" => ->(v) { ordinary(v)["strategy"]["max-parallel"] = 3 },
     "queue bypass" => ->(v) { ordinary(v).delete("concurrency") },
 }
 %w[pull_request].each do |event|
-    %w[gradlew gradlew.bat .gitattributes .gitignore LICENSE].each do |path|
+    %w[gradlew gradlew.bat .gitattributes .gitignore LICENSE scripts/hosted_dependency_cache.py
+       scripts/hosted_job_clock.py scripts/tests/hosted-consume-delivery-test.py
+       scripts/tests/hosted-desktop-job-budget-test.py].each do |path|
         mutations["omitted #{event} input #{path}"] = ->(v) { (v["on"] || v[true])[event]["paths"].delete(path) }
     end
 end
-["Upload native Desktop development apps", "Upload Android development APK"].each do |name|
+["Upload native Desktop development apps", "Upload Android development APK",
+ "Upload ordinary native Desktop development apps", "Upload ordinary Android development APK"].each do |name|
     {"if-no-files-found" => "warn", "path" => "**/*", "name" => "latest", "retention-days" => 90,
      "include-hidden-files" => true, "overwrite" => true}.each do |key, value|
         mutations["#{name} #{key}"] = ->(v) { named_step(v, name)["with"][key] = value }
     end
     mutations["#{name} after failure"] = ->(v) { named_step(v, name)["if"] = "${{ always() }}" }
 end
+%w[desktop android].each do |kind|
+    before, action, after = %W[ordinary-#{kind}-before ordinary-#{kind}-apps ordinary-#{kind}-after]
+    mutations["#{kind} before omitted"] = ->(v) { ordinary(v)["steps"].delete(step(v, before)) }
+    mutations["#{kind} before has no original package hash"] = ->(v) { step(v, before)["env"].delete("P2PKIT_SAMPLE_PACKAGE_SHA256") }
+    mutations["#{kind} before accepts failed package"] = ->(v) { step(v, before)["if"] = "${{ always() }}" }
+    mutations["#{kind} independent fresh upload allowance"] = ->(v) { step(v, action)["timeout-minutes"] = 3 }
+    mutations["#{kind} wrong original upload allowance"] = ->(v) { step(v, action)["timeout-minutes"] = "${{ fromJSON(steps.ordinary-upload-before.outputs.upload_timeout_minutes) }}" }
+    mutations["#{kind} upload cap widened"] = ->(v) { step(v, action)["if"].sub!("upload_timeout_minutes == '3'", "upload_timeout_minutes == '4'") }
+    mutations["#{kind} after omitted"] = ->(v) { ordinary(v)["steps"].delete(step(v, after)) }
+    mutations["#{kind} after success-only"] = ->(v) { step(v, after)["if"] = "${{ success() }}" }
+    mutations["#{kind} after no original guard hash"] = ->(v) { step(v, after)["env"].delete("P2PKIT_SAMPLE_UPLOAD_GUARD_SHA256") }
+    mutations["#{kind} after forged action success"] = ->(v) { step(v, after)["env"]["P2PKIT_SAMPLE_UPLOAD_OUTCOME"] = "success" }
+    mutations["#{kind} terminal uses conclusion"] = ->(v) { step(v, "ordinary-delivery")["env"]["P2PKIT_SAMPLE_#{kind.upcase}_UPLOAD_OUTCOME"] = "${{ steps.#{action}.conclusion }}" }
+end
+mutations["Android loses shared-window predecessor"] = ->(v) {
+    step(v, "ordinary-android-before")["env"].delete("P2PKIT_SAMPLE_DESKTOP_AFTER_OUTCOME")
+}
+mutations["Android proceeds after failed Desktop upload"] = ->(v) {
+    step(v, "ordinary-android-before")["if"].sub!("steps.ordinary-desktop-after.outcome == 'success'", "true")
+}
 
 mutations.each do |name, mutate|
     altered = Marshal.load(Marshal.dump(workflow))

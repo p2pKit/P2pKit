@@ -295,16 +295,23 @@ a configured workflow or another OS's pass is not host-execution evidence.
 `scripts/tests/release-workflow-test.sh` checks the matrix, actual task command,
 report paths, and fail-closed dependency guard, with negative policy controls.
 
-The [bounded dependency-cache preparation](hosted-dependency-cache.md) provides
-an explicit consume/bootstrap plan, original-action observation checks and an
-allowlisted H-to-empty-S exporter. It is dormant: no provider is run or qualified,
-both ordinary activation HOLDs remain, and dependency-byte reuse never grants
-test-result credit to changed source.
+The [bounded dependency-cache path](hosted-dependency-cache.md) now has
+consume-only source wiring behind both unchanged ordinary activation HOLDs:
+original timing/plan preparation, exact standalone restore, original-result
+guard, and strict positive-byte admission into a fresh owned Gradle home.
+There is no cold fallback, cache save or qualified provider/download-savings
+claim. Bootstrap and the allowlisted H-to-empty-S exporter remain dormant.
+Dependency-byte reuse never grants test-result credit to changed source.
 
-The [ordinary job-clock prerequisite](hosted-job-clock.md) separately prepares
-closed same-host elapsed observations for future cross-process budget guards.
-It is not wired into FULL/Desktop, does not renew a job deadline, and supplies
-no native/runtime qualification or missing cache/delivery time allocation.
+The [ordinary job-clock chain](hosted-job-clock.md) binds the original same-host
+service-job budget through restore, controller, separate seal and delivery.
+FULL keeps its existing reserve; Desktop now shares bounded controller/delivery
+envelopes without refreshing deadlines. Ordinary sample packaging precedes the
+single evidence freeze/export; post-seal `package-samples` only verifies those
+original package bytes and writes guard metadata. Both sample uploads share
+one bounded window. This source wiring is not native/runtime acceptance or
+proof the full work fits. The initial dormant-helper milestone remains history
+in the linked guides, not the current wiring state.
 
 `python3 -I -B -S scripts/tests/hosted-controller-import-test.py` separately
 checks the actual cold ordinary-controller/budget/supplement import graph with
@@ -312,8 +319,12 @@ Unix-only APIs absent and native, clock, network and child calls blocked. The
 budget lazily delegates to the unchanged Darwin RAW supplier, checking its exact
 domain; imports on Desktop need no Darwin observer. These offline models run in
 the unconditional ordinary CI controls and release-workflow/release-gate checks.
-They do not execute or qualify a Windows controller, lift either activation HOLD,
-or replace current native admission and shared-gate acceptance.
+The connected-path and Desktop-budget models are registered alongside it as
+`scripts/tests/hosted-consume-delivery-test.py` and
+`scripts/tests/hosted-desktop-job-budget-test.py`. They do not qualify a native
+Windows controller, lift either activation HOLD, or replace current native
+admission and shared-gate acceptance. Recipes and authored tests are not evidence
+that those commands or genuine hosted paths have successfully run.
 
 ### Participating hosted job queue
 

@@ -85,8 +85,16 @@ class CompositionPolicy(unittest.TestCase):
 
     def test_success_labels_and_separate_seal_do_not_replace_real_outcomes(self):
         self.mutate("scripts/run-hosted-test-custody.py", b'passed = profile_passed(result)', b'passed = True')
-        self.mutate("scripts/run-hosted-test-custody.py", b'validate_public(args.profile)', b'print("PASS")')
-        self.mutate("scripts/run-hosted-test-custody.py", b'upload_guard(args.phase)', b'print("PASS")')
+        self.mutate("scripts/run-hosted-test-custody.py", b'guarded_operation(validate_public, args.profile)', b'print("PASS")')
+        self.mutate("scripts/run-hosted-test-custody.py", b'guarded_operation(upload_guard, args.phase, args.profile)',
+                    b'print("PASS")')
+
+    def test_consume_packaging_and_original_clock_edges_remain_reachable(self):
+        path = "scripts/run-hosted-test-custody.py"
+        self.mutate(path, b'adopt_preparation(self)', b'pass')
+        self.mutate(path, b'controller.package_samples()', b'pass')
+        self.mutate(path, b'frozen_consume_packet(owner, private, end, check_crypto)', b'None')
+        self.mutate(path, b'timing = original_clock(budget, self.last_raw)', b'timing = original_clock(budget)')
 
     def test_cache_stop_and_resource_boundaries_are_not_relaxed(self):
         self.mutate("scripts/run-audit-command.py", b'"org.gradle.workers.max=2"', b'"org.gradle.workers.max=8"')

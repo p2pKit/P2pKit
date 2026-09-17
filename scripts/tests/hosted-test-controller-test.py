@@ -631,7 +631,8 @@ class FinalizationModels(Base):
     def fake_controller(self):
         events = self.events
         state = SimpleNamespace(unknown=False, errors=[], private=object(), deadline=200., encrypted=True,
-                                cancelled=[], receipt_error=False, close_error=False)
+                                cancelled=[], receipt_error=False, close_error=False, budget=None,
+                                primary_abi_attempted=False, sample_required=False)
         def check(**kwargs):
             events.append("check")
         def setup():
@@ -846,7 +847,10 @@ class WholeControllerModels(Base):
         self.save(state / "cancellations" / (invocation + ".json"),
                   {"schema": 1, "id": invocation, "jobId": job, "requestedUtc": "2026-09-16T00:00:00Z"})
 
-    def model_job_time_response(self, path, token, invocation):
+    def model_job_time_response(self, path, token, invocation, *, profile="full", clock=None, minimum=0):
+        self.assertEqual(profile, "full")
+        self.assertIsNone(clock)  # This retained fixture is the unchanged legacy FULL clock path.
+        self.assertLessEqual(minimum, self.clock.raw())
         self.assertEqual(token, JOB_MODELS.TOKEN)
         self.assertNotIn(C.job_time.TOKEN_ENV, os.environ)
         self.job_time_calls.append(path)

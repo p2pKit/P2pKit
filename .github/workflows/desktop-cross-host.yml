@@ -37,12 +37,14 @@ on:
       - "scripts/run-audit-command.py"
       - "scripts/check-audit-receipt.py"
       - "scripts/audit_processes.py"
+      - "scripts/hosted_dependency_cache.py"
       - "scripts/hosted_dependency_seed.py"
       - "scripts/hosted_dependency_seed_files.py"
       - "scripts/hosted_evidence.py"
       - "scripts/hosted_full_job_budget.py"
       - "scripts/hosted_full_simulator.py"
       - "scripts/hosted_full_supplements.py"
+      - "scripts/hosted_job_clock.py"
       - "scripts/hosted_lock_resources.py"
       - "scripts/hosted_primary_abi.py"
       - "scripts/hosted_test_identity.py"
@@ -55,6 +57,8 @@ on:
       - "scripts/check-hosted-test-composition.py"
       - "scripts/tests/check-hosted-test-workflow-policy-test.rb"
       - "scripts/tests/check-hosted-test-composition-test.py"
+      - "scripts/tests/hosted-consume-delivery-test.py"
+      - "scripts/tests/hosted-desktop-job-budget-test.py"
       - "gradle.lockfile"
       - "buildscript-gradle.lockfile"
       - "samples/p2p-sample-android/**"
@@ -110,6 +114,9 @@ concurrency:
 jobs:
   verify:
     name: ${{ matrix.os }}
+    permissions:
+      contents: read
+      actions: read
     if: ${{ github.event_name != 'workflow_dispatch' || (inputs.operation != 'windows-directory-fsync-control' && inputs.operation != 'windows-helper-controls' && inputs.operation != 'macos-arm64-admission' && inputs.operation != 'macos-x64-admission' && inputs.operation != 'dependency-lock-candidate' && inputs.operation != 'dependency-lock-candidate-x64' && inputs.operation != 'dependency-lock-candidate-macos14' && inputs.operation != 'iphoneos-product') }}
     concurrency:
       group: p2pkit-nonphysical-heavy
@@ -193,14 +200,44 @@ jobs:
           "$python_bin" -I -B -S -c 'from pathlib import Path; import sys; Path(sys.argv[1]).mkdir(mode=0o700)' "$gradle_home"
           printf 'GRADLE_USER_HOME=%s\n' "$gradle_home" >> "$GITHUB_ENV"
 
-      - name: Allocate separate ordinary dependency staging
+      - name: Bind original ordinary job timing and dependency consume plan
         id: dependency-stage
         if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') }}
         shell: bash
+        env:
+          P2PKIT_ACTIONS_READ_TOKEN: ${{ github.token }}
         run: |
           python_bin=python3
           if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
-          "$python_bin" -I -B -S scripts/run-hosted-test-custody.py stage-dependencies --profile desktop
+          "$python_bin" -I -B -S scripts/run-hosted-test-custody.py prepare-consume --profile desktop
+
+      - name: Restore only the exact ordinary dependency byte cohort
+        id: dependency-restore
+        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.dependency-stage.outcome == 'success' && steps.dependency-stage.outputs.dependency_seed_ready == 'true' && (steps.dependency-stage.outputs.cache_restore_timeout_minutes == '1' || steps.dependency-stage.outputs.cache_restore_timeout_minutes == '2' || steps.dependency-stage.outputs.cache_restore_timeout_minutes == '3') }}
+        timeout-minutes: ${{ fromJSON(steps.dependency-stage.outputs.cache_restore_timeout_minutes) }}
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ steps.dependency-stage.outputs.cache_path }}
+          key: ${{ steps.dependency-stage.outputs.cache_key }}
+          enableCrossOsArchive: false
+          fail-on-cache-miss: true
+          lookup-only: false
+
+      - name: Validate the original ordinary restore result
+        id: dependency-restore-guard
+        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && (steps.dependency-stage.outcome == 'success' || steps.dependency-stage.outcome == 'failure' || steps.dependency-stage.outcome == 'cancelled') }}
+        shell: bash
+        env:
+          P2PKIT_HOSTED_PREPARE_OUTCOME: ${{ steps.dependency-stage.outcome }}
+          P2PKIT_HOSTED_PREPARE_SHA256: ${{ steps.dependency-stage.outputs.preparation_sha256 }}
+          P2PKIT_CACHE_RESTORE_OUTCOME: ${{ steps.dependency-restore.outcome }}
+          P2PKIT_CACHE_RESTORE_PRIMARY_KEY: ${{ steps.dependency-restore.outputs.cache-primary-key }}
+          P2PKIT_CACHE_RESTORE_MATCHED_KEY: ${{ steps.dependency-restore.outputs.cache-matched-key }}
+          P2PKIT_CACHE_RESTORE_HIT: ${{ steps.dependency-restore.outputs.cache-hit }}
+        run: |
+          python_bin=python3
+          if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
+          "$python_bin" -I -B -S scripts/run-hosted-test-custody.py restore-guard --profile desktop
 
       - name: Configure daemon Java 21 and wrapper Java 17
         id: java
@@ -296,19 +333,24 @@ jobs:
 
       - name: Run ordinary desktop with private custody
         id: ordinary-run
-        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.dependency-stage.outcome == 'success' && steps.dependency-stage.outputs.dependency_seed_ready == 'true' }}
+        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.dependency-stage.outcome == 'success' && steps.dependency-stage.outputs.dependency_seed_ready == 'true' && steps.dependency-restore-guard.outcome == 'success' && steps.dependency-restore-guard.outputs.dependency_cache_ready == 'true' }}
         shell: bash
         env:
           P2PKIT_DEPENDENCY_SEED_STAGE_OUTCOME: ${{ steps.dependency-stage.outcome }}
           P2PKIT_DEPENDENCY_SEED_STAGE_SHA256: ${{ steps.dependency-stage.outputs.dependency_seed_staging_sha256 }}
+          P2PKIT_HOSTED_PREPARE_OUTCOME: ${{ steps.dependency-stage.outcome }}
+          P2PKIT_HOSTED_PREPARE_SHA256: ${{ steps.dependency-stage.outputs.preparation_sha256 }}
+          P2PKIT_CACHE_GUARD_OUTCOME: ${{ steps.dependency-restore-guard.outcome }}
+          P2PKIT_CACHE_RESTORATION_SHA256: ${{ steps.dependency-restore-guard.outputs.restoration_sha256 }}
         run: |
           python_bin=python3
           if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
-          "$python_bin" -I -B -S scripts/run-hosted-test-custody.py run --profile desktop --seed-dependencies
+          "$python_bin" -I -B -S scripts/run-hosted-test-custody.py run --profile desktop --consume-dependencies
 
       - name: Seal ordinary desktop evidence after controller return
         id: ordinary-seal
         if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-run.outcome == 'success' }}
+        timeout-minutes: 2
         shell: bash
         env:
           P2PKIT_HOSTED_TEST_RUN_OUTCOME: ${{ steps.ordinary-run.outcome }}
@@ -317,10 +359,22 @@ jobs:
           if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
           "$python_bin" -I -B -S scripts/run-hosted-test-custody.py validate-public --profile desktop
 
+      - name: Admit the original DESKTOP evidence upload window
+        id: ordinary-upload-before
+        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-run.outcome == 'success' && steps.ordinary-seal.outcome == 'success' && steps.ordinary-seal.outputs.artifacts_ready == 'true' }}
+        shell: bash
+        env:
+          P2PKIT_HOSTED_TEST_RUN_OUTCOME: ${{ steps.ordinary-run.outcome }}
+          P2PKIT_HOSTED_TEST_SEAL_OUTCOME: ${{ steps.ordinary-seal.outcome }}
+        run: |
+          python_bin=python3
+          if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
+          "$python_bin" -I -B -S scripts/run-hosted-test-custody.py upload-guard before --profile desktop
+
       - name: Upload only sealed ordinary desktop evidence
         id: ordinary-evidence
-        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-run.outcome == 'success' && steps.ordinary-seal.outcome == 'success' && steps.ordinary-seal.outputs.artifacts_ready == 'true' }}
-        timeout-minutes: 3
+        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-run.outcome == 'success' && steps.ordinary-seal.outcome == 'success' && steps.ordinary-seal.outputs.artifacts_ready == 'true' && steps.ordinary-upload-before.outcome == 'success' && steps.ordinary-upload-before.outputs.upload_ready == 'true' && (steps.ordinary-upload-before.outputs.upload_timeout_minutes == '1' || steps.ordinary-upload-before.outputs.upload_timeout_minutes == '2' || steps.ordinary-upload-before.outputs.upload_timeout_minutes == '3') }}
+        timeout-minutes: ${{ fromJSON(steps.ordinary-upload-before.outputs.upload_timeout_minutes) }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: ordinary-desktop-evidence-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -333,6 +387,20 @@ jobs:
           include-hidden-files: false
           overwrite: false
 
+      - name: Verify DESKTOP upload completed inside its original window
+        id: ordinary-upload-after
+        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-run.outcome == 'success' && steps.ordinary-seal.outcome == 'success' && steps.ordinary-seal.outputs.artifacts_ready == 'true' && steps.ordinary-upload-before.outcome == 'success' && steps.ordinary-upload-before.outputs.upload_ready == 'true' }}
+        shell: bash
+        env:
+          P2PKIT_HOSTED_TEST_RUN_OUTCOME: ${{ steps.ordinary-run.outcome }}
+          P2PKIT_HOSTED_TEST_SEAL_OUTCOME: ${{ steps.ordinary-seal.outcome }}
+          P2PKIT_HOSTED_TEST_UPLOAD_OUTCOME: ${{ steps.ordinary-evidence.outcome }}
+          P2PKIT_HOSTED_TEST_UPLOAD_GUARD_SHA256: ${{ steps.ordinary-upload-before.outputs.upload_guard_sha256 }}
+        run: |
+          python_bin=python3
+          if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
+          "$python_bin" -I -B -S scripts/run-hosted-test-custody.py upload-guard after --profile desktop
+
       - name: Require the complete ordinary desktop result
         id: ordinary-required
         if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') }}
@@ -341,6 +409,8 @@ jobs:
           ORDINARY_ACTIVATION: ${{ steps.ordinary-activation.outcome }}
           ORDINARY_ADMISSION: ${{ steps.ordinary-admission.outcome }}
           DEPENDENCY_STAGE: ${{ steps.dependency-stage.outcome }}
+          DEPENDENCY_RESTORE: ${{ steps.dependency-restore.outcome }}
+          DEPENDENCY_RESTORE_GUARD: ${{ steps.dependency-restore-guard.outcome }}
           JAVA: ${{ steps.java.outcome }}
           ORDINARY_JDK21: ${{ steps.ordinary-jdk21.outcome }}
           ORDINARY_OUTPUT: ${{ steps.ordinary-output.outcome }}
@@ -348,14 +418,20 @@ jobs:
           ORDINARY_RUN: ${{ steps.ordinary-run.outcome }}
           ORDINARY_SEAL: ${{ steps.ordinary-seal.outcome }}
           ORDINARY_EVIDENCE: ${{ steps.ordinary-evidence.outcome }}
+          ORDINARY_UPLOAD_BEFORE: ${{ steps.ordinary-upload-before.outcome }}
+          ORDINARY_UPLOAD_AFTER: ${{ steps.ordinary-upload-after.outcome }}
           SEED_READY: ${{ steps.dependency-stage.outputs.dependency_seed_ready }}
+          CACHE_READY: ${{ steps.dependency-restore-guard.outputs.dependency_cache_ready }}
           ARTIFACTS_READY: ${{ steps.ordinary-seal.outputs.artifacts_ready }}
           PROFILE_PASSED: ${{ steps.ordinary-seal.outputs.profile_passed }}
+          UPLOAD_COMPLETE: ${{ steps.ordinary-upload-after.outputs.upload_complete }}
           SDK_OUTCOME: ${{ steps.sample-sdk.outcome }}
         run: |
           test "$ORDINARY_ACTIVATION" = success
           test "$ORDINARY_ADMISSION" = success
           test "$DEPENDENCY_STAGE" = success
+          test "$DEPENDENCY_RESTORE" = success
+          test "$DEPENDENCY_RESTORE_GUARD" = success
           test "$JAVA" = success
           test "$ORDINARY_JDK21" = success
           test "$ORDINARY_OUTPUT" = success
@@ -363,9 +439,13 @@ jobs:
           test "$ORDINARY_RUN" = success
           test "$ORDINARY_SEAL" = success
           test "$ORDINARY_EVIDENCE" = success
+          test "$ORDINARY_UPLOAD_BEFORE" = success
+          test "$ORDINARY_UPLOAD_AFTER" = success
           test "$SEED_READY" = true
+          test "$CACHE_READY" = true
           test "$ARTIFACTS_READY" = true
           test "$PROFILE_PASSED" = true
+          test "$UPLOAD_COMPLETE" = true
           case "$RUNNER_OS" in
             Linux) test "$SDK_OUTCOME" = success ;;
             Windows|macOS) test "$SDK_OUTCOME" = skipped ;;
@@ -374,7 +454,7 @@ jobs:
 
       - name: Inspect and archive successful development sample apps
         id: sample-packaging
-        if: ${{ success() && ((github.event_name == 'workflow_dispatch' && inputs.operation == 'sample-apps' && steps.sample-build.outcome == 'success' && steps.stop-sample-gradle.outcome == 'success') || ((github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-required.outcome == 'success')) }}
+        if: ${{ success() && github.event_name == 'workflow_dispatch' && inputs.operation == 'sample-apps' && steps.sample-build.outcome == 'success' && steps.stop-sample-gradle.outcome == 'success' }}
         shell: bash
         run: |
           python_bin=python3
@@ -404,6 +484,167 @@ jobs:
           compression-level: 0
           include-hidden-files: false
           overwrite: false
+
+      - name: Verify original packaged samples before delivery
+        id: ordinary-package
+        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-required.outcome == 'success' }}
+        timeout-minutes: 1
+        shell: bash
+        env:
+          P2PKIT_HOSTED_TEST_RUN_OUTCOME: ${{ steps.ordinary-run.outcome }}
+          P2PKIT_HOSTED_TEST_SEAL_OUTCOME: ${{ steps.ordinary-seal.outcome }}
+          P2PKIT_HOSTED_TEST_UPLOAD_OUTCOME: ${{ steps.ordinary-evidence.outcome }}
+          P2PKIT_HOSTED_TEST_UPLOAD_AFTER_OUTCOME: ${{ steps.ordinary-upload-after.outcome }}
+        run: |
+          python_bin=python3
+          if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
+          "$python_bin" -I -B -S scripts/run-hosted-test-custody.py package-samples --profile desktop
+
+      - name: Admit the original desktop sample upload window
+        id: ordinary-desktop-before
+        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-required.outcome == 'success' && steps.ordinary-package.outcome == 'success' && steps.ordinary-package.outputs.packaging_ready == 'true' }}
+        shell: bash
+        env:
+          P2PKIT_HOSTED_TEST_RUN_OUTCOME: ${{ steps.ordinary-run.outcome }}
+          P2PKIT_HOSTED_TEST_SEAL_OUTCOME: ${{ steps.ordinary-seal.outcome }}
+          P2PKIT_HOSTED_TEST_UPLOAD_OUTCOME: ${{ steps.ordinary-evidence.outcome }}
+          P2PKIT_HOSTED_TEST_UPLOAD_AFTER_OUTCOME: ${{ steps.ordinary-upload-after.outcome }}
+          P2PKIT_SAMPLE_PACKAGE_OUTCOME: ${{ steps.ordinary-package.outcome }}
+          P2PKIT_SAMPLE_PACKAGE_SHA256: ${{ steps.ordinary-package.outputs.packaging_sha256 }}
+        run: |
+          python_bin=python3
+          if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
+          "$python_bin" -I -B -S scripts/run-hosted-test-custody.py sample-upload-guard before --platform desktop --profile desktop
+
+      - name: Upload ordinary native Desktop development apps
+        id: ordinary-desktop-apps
+        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-desktop-before.outcome == 'success' && steps.ordinary-desktop-before.outputs.upload_ready == 'true' && (steps.ordinary-desktop-before.outputs.upload_timeout_minutes == '1' || steps.ordinary-desktop-before.outputs.upload_timeout_minutes == '2' || steps.ordinary-desktop-before.outputs.upload_timeout_minutes == '3') }}
+        timeout-minutes: ${{ fromJSON(steps.ordinary-desktop-before.outputs.upload_timeout_minutes) }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: sample-desktop-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/p2pkit-sample-apps/desktop/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          include-hidden-files: false
+          overwrite: false
+
+      - name: Verify desktop sample upload inside the original window
+        id: ordinary-desktop-after
+        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-desktop-before.outcome == 'success' && steps.ordinary-desktop-before.outputs.upload_ready == 'true' }}
+        shell: bash
+        env:
+          P2PKIT_HOSTED_TEST_RUN_OUTCOME: ${{ steps.ordinary-run.outcome }}
+          P2PKIT_HOSTED_TEST_SEAL_OUTCOME: ${{ steps.ordinary-seal.outcome }}
+          P2PKIT_HOSTED_TEST_UPLOAD_OUTCOME: ${{ steps.ordinary-evidence.outcome }}
+          P2PKIT_HOSTED_TEST_UPLOAD_AFTER_OUTCOME: ${{ steps.ordinary-upload-after.outcome }}
+          P2PKIT_SAMPLE_PACKAGE_OUTCOME: ${{ steps.ordinary-package.outcome }}
+          P2PKIT_SAMPLE_PACKAGE_SHA256: ${{ steps.ordinary-package.outputs.packaging_sha256 }}
+          P2PKIT_SAMPLE_UPLOAD_OUTCOME: ${{ steps.ordinary-desktop-apps.outcome }}
+          P2PKIT_SAMPLE_UPLOAD_GUARD_SHA256: ${{ steps.ordinary-desktop-before.outputs.upload_guard_sha256 }}
+        run: |
+          python_bin=python3
+          if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
+          "$python_bin" -I -B -S scripts/run-hosted-test-custody.py sample-upload-guard after --platform desktop --profile desktop
+
+      - name: Admit the original android sample upload window
+        id: ordinary-android-before
+        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-required.outcome == 'success' && steps.ordinary-package.outcome == 'success' && steps.ordinary-package.outputs.packaging_ready == 'true' && runner.os == 'Linux' && steps.ordinary-desktop-after.outcome == 'success' && steps.ordinary-desktop-after.outputs.upload_complete == 'true' }}
+        shell: bash
+        env:
+          P2PKIT_HOSTED_TEST_RUN_OUTCOME: ${{ steps.ordinary-run.outcome }}
+          P2PKIT_HOSTED_TEST_SEAL_OUTCOME: ${{ steps.ordinary-seal.outcome }}
+          P2PKIT_HOSTED_TEST_UPLOAD_OUTCOME: ${{ steps.ordinary-evidence.outcome }}
+          P2PKIT_HOSTED_TEST_UPLOAD_AFTER_OUTCOME: ${{ steps.ordinary-upload-after.outcome }}
+          P2PKIT_SAMPLE_PACKAGE_OUTCOME: ${{ steps.ordinary-package.outcome }}
+          P2PKIT_SAMPLE_PACKAGE_SHA256: ${{ steps.ordinary-package.outputs.packaging_sha256 }}
+          P2PKIT_SAMPLE_DESKTOP_AFTER_OUTCOME: ${{ steps.ordinary-desktop-after.outcome }}
+        run: |
+          python_bin=python3
+          if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
+          "$python_bin" -I -B -S scripts/run-hosted-test-custody.py sample-upload-guard before --platform android --profile desktop
+
+      - name: Upload ordinary Android development APK
+        id: ordinary-android-apps
+        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-android-before.outcome == 'success' && steps.ordinary-android-before.outputs.upload_ready == 'true' && (steps.ordinary-android-before.outputs.upload_timeout_minutes == '1' || steps.ordinary-android-before.outputs.upload_timeout_minutes == '2' || steps.ordinary-android-before.outputs.upload_timeout_minutes == '3') && runner.os == 'Linux' }}
+        timeout-minutes: ${{ fromJSON(steps.ordinary-android-before.outputs.upload_timeout_minutes) }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: sample-android-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/p2pkit-sample-apps/android/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          include-hidden-files: false
+          overwrite: false
+
+      - name: Verify android sample upload inside the original window
+        id: ordinary-android-after
+        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-android-before.outcome == 'success' && steps.ordinary-android-before.outputs.upload_ready == 'true' && runner.os == 'Linux' }}
+        shell: bash
+        env:
+          P2PKIT_HOSTED_TEST_RUN_OUTCOME: ${{ steps.ordinary-run.outcome }}
+          P2PKIT_HOSTED_TEST_SEAL_OUTCOME: ${{ steps.ordinary-seal.outcome }}
+          P2PKIT_HOSTED_TEST_UPLOAD_OUTCOME: ${{ steps.ordinary-evidence.outcome }}
+          P2PKIT_HOSTED_TEST_UPLOAD_AFTER_OUTCOME: ${{ steps.ordinary-upload-after.outcome }}
+          P2PKIT_SAMPLE_PACKAGE_OUTCOME: ${{ steps.ordinary-package.outcome }}
+          P2PKIT_SAMPLE_PACKAGE_SHA256: ${{ steps.ordinary-package.outputs.packaging_sha256 }}
+          P2PKIT_SAMPLE_DESKTOP_AFTER_OUTCOME: ${{ steps.ordinary-desktop-after.outcome }}
+          P2PKIT_SAMPLE_UPLOAD_OUTCOME: ${{ steps.ordinary-android-apps.outcome }}
+          P2PKIT_SAMPLE_UPLOAD_GUARD_SHA256: ${{ steps.ordinary-android-before.outputs.upload_guard_sha256 }}
+        run: |
+          python_bin=python3
+          if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
+          "$python_bin" -I -B -S scripts/run-hosted-test-custody.py sample-upload-guard after --platform android --profile desktop
+
+      - name: Require complete ordinary sample delivery inside its original deadline
+        id: ordinary-delivery
+        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') }}
+        shell: bash
+        env:
+          P2PKIT_HOSTED_TEST_RUN_OUTCOME: ${{ steps.ordinary-run.outcome }}
+          P2PKIT_HOSTED_TEST_SEAL_OUTCOME: ${{ steps.ordinary-seal.outcome }}
+          P2PKIT_HOSTED_TEST_UPLOAD_OUTCOME: ${{ steps.ordinary-evidence.outcome }}
+          P2PKIT_HOSTED_TEST_UPLOAD_AFTER_OUTCOME: ${{ steps.ordinary-upload-after.outcome }}
+          P2PKIT_SAMPLE_PACKAGE_OUTCOME: ${{ steps.ordinary-package.outcome }}
+          P2PKIT_SAMPLE_PACKAGE_SHA256: ${{ steps.ordinary-package.outputs.packaging_sha256 }}
+          P2PKIT_SAMPLE_DESKTOP_BEFORE_OUTCOME: ${{ steps.ordinary-desktop-before.outcome }}
+          P2PKIT_SAMPLE_DESKTOP_UPLOAD_OUTCOME: ${{ steps.ordinary-desktop-apps.outcome }}
+          P2PKIT_SAMPLE_DESKTOP_AFTER_OUTCOME: ${{ steps.ordinary-desktop-after.outcome }}
+          P2PKIT_SAMPLE_ANDROID_BEFORE_OUTCOME: ${{ steps.ordinary-android-before.outcome }}
+          P2PKIT_SAMPLE_ANDROID_UPLOAD_OUTCOME: ${{ steps.ordinary-android-apps.outcome }}
+          P2PKIT_SAMPLE_ANDROID_AFTER_OUTCOME: ${{ steps.ordinary-android-after.outcome }}
+          ORDINARY_REQUIRED: ${{ steps.ordinary-required.outcome }}
+          PACKAGING_READY: ${{ steps.ordinary-package.outputs.packaging_ready }}
+          DESKTOP_UPLOAD_COMPLETE: ${{ steps.ordinary-desktop-after.outputs.upload_complete }}
+          ANDROID_UPLOAD_COMPLETE: ${{ steps.ordinary-android-after.outputs.upload_complete }}
+        run: |
+          test "$ORDINARY_REQUIRED" = success
+          test "$P2PKIT_SAMPLE_PACKAGE_OUTCOME" = success
+          test "$PACKAGING_READY" = true
+          test "$P2PKIT_SAMPLE_DESKTOP_BEFORE_OUTCOME" = success
+          test "$P2PKIT_SAMPLE_DESKTOP_UPLOAD_OUTCOME" = success
+          test "$P2PKIT_SAMPLE_DESKTOP_AFTER_OUTCOME" = success
+          test "$DESKTOP_UPLOAD_COMPLETE" = true
+          case "$RUNNER_OS" in
+            Linux)
+              test "$P2PKIT_SAMPLE_ANDROID_BEFORE_OUTCOME" = success
+              test "$P2PKIT_SAMPLE_ANDROID_UPLOAD_OUTCOME" = success
+              test "$P2PKIT_SAMPLE_ANDROID_AFTER_OUTCOME" = success
+              test "$ANDROID_UPLOAD_COMPLETE" = true
+              ;;
+            Windows|macOS)
+              test "$P2PKIT_SAMPLE_ANDROID_BEFORE_OUTCOME" = skipped
+              test "$P2PKIT_SAMPLE_ANDROID_UPLOAD_OUTCOME" = skipped
+              test "$P2PKIT_SAMPLE_ANDROID_AFTER_OUTCOME" = skipped
+              test -z "$ANDROID_UPLOAD_COMPLETE"
+              ;;
+            *) exit 1 ;;
+          esac
+          python_bin=python3
+          if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
+          "$python_bin" -I -B -S scripts/run-hosted-test-custody.py sample-delivery-guard --profile desktop
 
   windows-directory-fsync-control:
     name: windows-directory-fsync-control

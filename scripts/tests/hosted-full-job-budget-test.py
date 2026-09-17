@@ -386,9 +386,10 @@ class HttpModels(unittest.TestCase):
             row = J.parse(modeled[label])
             self.responses.append(base64.b64decode(row["headersBase64"]) + base64.b64decode(row["bodyBase64"]))
         retained = {}
-        result = J.acquire(admitted, "e" * 32, TOKEN, lambda label, raw: retained.update({label: raw}))
+        result, completed = J.acquire(admitted, "e" * 32, TOKEN, lambda label, raw: retained.update({label: raw}))
         self.assertEqual(set(result), {"attempt", "jobs"})
         self.assertEqual(result, retained)
+        self.assertEqual(completed, self.now)
         self.assertEqual([row[:2] for row in self.requests], [("GET", value) for value in J.paths(admitted).values()])
         for _, _, headers in self.requests:
             self.assertEqual(headers["Authorization"], "Bearer " + TOKEN)
