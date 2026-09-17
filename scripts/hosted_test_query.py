@@ -14,6 +14,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -269,8 +270,20 @@ class NativeGitQueries:
     receipts say READY_FOR_CALLER_SEAL, never upload/build/crypto acceptance.
     """
 
-    def __init__(self, root, directory, *, check_cancel):
+    def __init__(self, root, directory, *, check_cancel, owner_deadlines=None):
         require(callable(check_cancel), "QUERY_CANCELLATION_OWNER_REQUIRED")
+        # Optional SAME-PROCESS monotonic work/final fences can only shorten the
+        # existing per-query15/final45 caps. Keep one immutable pair across all
+        # queries, admission retention, failure retention and session close.
+        # This is not a service-job budget or a cross-process clock identity.
+        if owner_deadlines is not None:
+            try:
+                require(type(owner_deadlines) is tuple and len(owner_deadlines) == 2 and
+                        all(type(value) in (int, float) and math.isfinite(value) for value in owner_deadlines) and
+                        time.monotonic() < owner_deadlines[0] <= owner_deadlines[1], "QUERY_OWNER_DEADLINES")
+            except (OverflowError, TypeError, ValueError):
+                raise QueryError("QUERY_OWNER_DEADLINES") from None
+        self._owner_deadlines = owner_deadlines
         self.root, self.path = Path(root), Path(directory)
         self.check_cancel = check_cancel
         self.thread = threading.get_ident()
@@ -279,7 +292,7 @@ class NativeGitQueries:
         self.first_error = self.cancellation = None
         self.failed = self.unknown = self.closed = self.active = False
         self.total = 0
-        self.io_deadline = time.monotonic() + FINALIZATION_SECONDS
+        self.io_deadline = self._cap(time.monotonic() + FINALIZATION_SECONDS, final=True)
         self.private = self.home = None
         self.ambient_context = _inherited_context()  # Validate before native allocation.
         self.git_environment = _git_environment()
@@ -292,23 +305,36 @@ class NativeGitQueries:
         executable = shutil.which("git")
         require(executable is not None, "QUERY_GIT_UNAVAILABLE")
         self.executable = str(Path(executable).resolve(strict=True))
+        self._work_fence()
         try:
             self.private = self._acquire("private-root", lambda: _new_private_directory(self.path))
+            self._work_fence()
             self.home = self._acquire("query-home", lambda: self.private.create_directory(
                 "query-home", deadline=self.io_deadline))
+            self._work_fence()
             self._write(self.private, "owner.json", {"schema": 1, "scope": "ORDINARY_GIT_QUERIES_ONLY",
                 "job": self.job, "state": str(self.path), "home": str(self.home.path), "root": str(self.root),
                 "nativeRole": self.native_role, "git": self.executable, "ancestorContext": self.ambient_context})
+            self._work_fence()
         except BaseException as error:
             self._error(None, "allocation", error, unknown=True)
             self._quarantine()
             self._raise_failure()
+
+    def _cap(self, deadline, *, final):
+        return deadline if self._owner_deadlines is None else min(deadline, self._owner_deadlines[int(final)])
+
+    def _work_fence(self):
+        if self._owner_deadlines is not None:
+            require(time.monotonic() < self._owner_deadlines[0], "QUERY_OWNER_WORK_EXPIRED")
 
     def _hold(self, label, owner):
         self.resources.append({"label": label, "owner": owner, "closeAttempted": False, "closed": False})
         return owner
 
     def _acquire(self, label, factory):
+        if self._owner_deadlines is not None:
+            posix_files._deadline(self._cap(self.io_deadline, final=True))
         try:
             return self._hold(label, factory())
         except BaseException as error:
@@ -348,6 +374,7 @@ class NativeGitQueries:
                 "QUERY_OWNER_NOT_LIVE")
         require(_inherited_context() == self.ambient_context and _git_environment() == self.git_environment,
                 "QUERY_AMBIENT_CONTEXT_CHANGED")
+        self._work_fence()
         self.check_cancel()
 
     def _close(self, owner, row=None):
@@ -371,6 +398,7 @@ class NativeGitQueries:
         Conservatively quarantine original ancestor pins on ANY delegated-reader
         failure, including receipt readback, and retain the original diagnostic.
         """
+        deadline = self._cap(deadline, final=True)
         posix_files._deadline(deadline)  # No reader can be allocated after this bound.
         outcome = {"parent": str(parent.path), "name": name, "maximum": maximum,
                    "retirement": "UNKNOWN", "result": "HOLD"}
@@ -388,8 +416,9 @@ class NativeGitQueries:
 
     def _write(self, parent, name, value):
         # Frozen once by the owning phase, NOT a new allowance for every receipt
-        # or reader. In a query this is exactly started+timeout+45 throughout.
-        end = self.io_deadline
+        # or reader. At most started+timeout+45 in a query, shortened by any
+        # original owner final fence, never renewed by a later retention call.
+        end = self._cap(self.io_deadline, final=True)
         posix_files._deadline(end)
         raw = value if type(value) is bytes else encoded(value)
         require(len(raw) <= MAX_RECEIPT_BYTES and self.total + len(raw) <= MAX_SESSION_BYTES, "QUERY_SESSION_LIMIT")
@@ -419,6 +448,8 @@ class NativeGitQueries:
             self.check_cancel()
         except BaseException as error:
             self._error(row, "final-cancellation", error)
+        if self._owner_deadlines is not None:
+            deadline = self._owner_deadlines[1] if deadline is None else self._cap(deadline, final=True)
         if deadline is not None:
             try:
                 posix_files._deadline(deadline)
@@ -450,7 +481,8 @@ class NativeGitQueries:
             self._error(None, "query-input", error)
             self._raise_failure()
         invocation, started = uuid.uuid4().hex, time.monotonic()
-        end, final_end = started + timeout_seconds, started + timeout_seconds + FINALIZATION_SECONDS
+        end = self._cap(started + timeout_seconds, final=False)
+        final_end = self._cap(started + timeout_seconds + FINALIZATION_SECONDS, final=True)
         self.io_deadline = final_end
         row = {"schema": 1, "scope": "NATIVE_OWNED_ORDINARY_GIT_QUERY", "id": invocation,
                "job": self.job, "state": str(self.path), "home": str(self.home.path), "cwd": str(self.root),
@@ -572,7 +604,7 @@ class NativeGitQueries:
 
     def retain_admission(self, admission):
         self._check()
-        self.io_deadline = time.monotonic() + FINALIZATION_SECONDS
+        self.io_deadline = self._cap(time.monotonic() + FINALIZATION_SECONDS, final=True)
         require(type(admission) is identity.Admission, "QUERY_ADMISSION_TYPE")
         for name, raw in (("admission.json", admission.record), ("original-event.json", admission.original_event),
                           ("original-policy.json", admission.original_policy), ("recipient-public.asc", admission.public_key)):
@@ -586,7 +618,7 @@ class NativeGitQueries:
         self._error(None, "admission", error)
         # A distinct failure-retention phase, never a renewal allowing a query
         # to succeed beyond its original absolute finalization deadline.
-        self.io_deadline = time.monotonic() + FINALIZATION_SECONDS
+        self.io_deadline = self._cap(time.monotonic() + FINALIZATION_SECONDS, final=True)
         if self.private is not None:
             try:
                 self._write(self.private, "admission-failure.json", {"schema": 1, "result": "HOLD",
@@ -600,7 +632,7 @@ class NativeGitQueries:
                 self._raise_failure()
             return
         self.closed = True
-        self.io_deadline = time.monotonic() + FINALIZATION_SECONDS
+        self.io_deadline = self._cap(time.monotonic() + FINALIZATION_SECONDS, final=True)
         self._final_fence(None)
         if self.active:
             self.unknown = True

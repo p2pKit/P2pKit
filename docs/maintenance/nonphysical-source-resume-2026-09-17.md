@@ -135,6 +135,54 @@ acceptance, a provider qualification, measured schedule or formal GitHub approva
 The bootstrap controls are standalone, not workflow-registered. Static document/
 layout/release-metadata/whitespace results are recorded separately in #437.
 
+## Optional query owner-fence increment
+
+The native Git-query supplier now has an optional immutable same-process
+monotonic work/final fence pair. It only shortens the existing 15-second query
+and 45-second finalization caps. The original pair also bounds constructor
+allocation, admission/failure retention, delegated readers/writers and session
+close. No ordinary caller supplies it; default record shapes and deadline policy
+are unchanged.
+No bootstrap controller, shared-clock context, service-job budget or workflow
+is introduced by this seam. It is preparation for the missing acquisition caller,
+not native/runtime acceptance or an admitted 5,400-second bootstrap job.
+
+Executed author controls used installed Linux Python 3.12.3 with `-I -B -S`, an
+actual unprivileged `nobody` account and an exact tracked-source-only fixture copy.
+Only tiny synthetic private files were created; Git/native process ownership and
+time were modeled, with no Git child, network, GPG, Java or Gradle execution.
+
+- Final optional-fence suite: **20/20 PASS**. It covers invalid/expired pairs,
+  unchanged defaults, shorter work/final caps, no renewed query or retention
+  allowance, late construction/return, preserved cancellation and UNKNOWN pins.
+- Unchanged native-query suite on the final supplier: **42/42 PASS**. This is
+  a compatibility replay for the shared-source change, not 42 native operations
+  or new bootstrap acceptance tests.
+- The initial 16-method suite passed but omitted a constructor delay that crossed
+  only the work cutoff. An added author regression produced **17 methods, one
+  failed assertion**, no errors. The preallocation work recheck corrected it.
+  An intermediate aggregate had **one error** because the early guard exposed
+  `EvidenceError` instead of the constructor's `QueryError`; the final source
+  uses a fixed public-safe `QueryError`, with a tightened regression assertion.
+  All original logs/commands/input hashes remain private outside Git.
+- Subsequent source inspection/independent controls found two remaining
+  constructor gaps: a bare root could be allocated after its original IO45
+  fence, and returned allocation/retention could cross the work cutoff without
+  a constructor recheck. Two added author methods reproduced **20 methods,
+  four failed assertions**, no errors, across root/home/owner-record boundaries.
+  The correction caps delegated allocation by the original IO/final minimum
+  and checks the original work fence after each constructor boundary. The same
+  final suite passes; default ordinary behavior is not relabelled bootstrap.
+- A final late-close control explicitly retains the earlier provisional
+  `READY_FOR_CALLER_SEAL` bytes while requiring the supplier's actual return
+  to fail. Neither receipt labels nor attempted cleanup establish timely return.
+  Known original resources still close on expiry; UNKNOWN does not permit forced
+  cleanup or renewed acquisition.
+
+Exact independent implementation review, containing commit/tree and remote
+readbacks are mapped separately in #437. These standalone tests do not activate
+a workflow, change a composition expectation, or grant cache/export/save authority.
+
 ## Next engineering and unchanged authority boundaries
 
 The next bootstrap slice needs a **separate original execution/budget context**,

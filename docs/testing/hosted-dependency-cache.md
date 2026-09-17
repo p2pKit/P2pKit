@@ -67,6 +67,17 @@ count, capture, 15-second query and 45-second finalization bounds are unchanged;
 they are not a complete bootstrap schedule. Supplied event/Git models do not
 attest a real hosted caller or native retirement.
 
+The native-query supplier also accepts an optional **same-process monotonic
+work/final owner-fence pair**. It only shortens the existing bounds, including
+constructor allocation, every query, admission/failure retention, readers,
+writers and final session close. Defaults preserve ordinary behavior; no
+production caller supplies this pair yet. Cancellation callbacks alone cannot
+cap the supplier's finalization I/O. Expiry forbids new retained-file acquisition
+but does not excuse known-owner cleanup; UNKNOWN still quarantines its pins.
+A provisional session receipt can precede a failed late close, so it never
+substitutes for actual supplier return. This seam supplies no shared-clock
+identity, complete bootstrap allocation or service-job/productive budget.
+
 Pre-budget plan, stage and seed-intent helpers now bind that closed cohort to
 the original bootstrap admission. Selection, native host labels, manual workflow,
 configuration-only request and `NOT_PERFORMED` disposition must agree. A caller
@@ -274,6 +285,7 @@ Focused offline commands (not a claim they ran on a particular host):
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-identity-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-cohort-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-producer-test.py
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-query-fence-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
@@ -284,7 +296,7 @@ python3 -I -B -S scripts/tests/hosted-desktop-job-budget-test.py
 These use modeled provider/native boundaries and tiny synthetic owned files, no
 dependency download or Gradle. The connected/budget controls are registered in the
 unconditional ordinary CI policy step and both release script entry points.
-The separate bootstrap identity/cohort/producer-record controls are standalone, not an
+The separate bootstrap identity/cohort/producer-record/query-fence controls are standalone, not an
 activated or registered bootstrap workflow.
 Native Windows provider behavior and actual resolver/cache reuse require
 separate genuine execution. Changes to shared executable suppliers also require
