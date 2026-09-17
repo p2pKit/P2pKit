@@ -306,6 +306,15 @@ closed same-host elapsed observations for future cross-process budget guards.
 It is not wired into FULL/Desktop, does not renew a job deadline, and supplies
 no native/runtime qualification or missing cache/delivery time allocation.
 
+`python3 -I -B -S scripts/tests/hosted-controller-import-test.py` separately
+checks the actual cold ordinary-controller/budget/supplement import graph with
+Unix-only APIs absent and native, clock, network and child calls blocked. The
+budget lazily delegates to the unchanged Darwin RAW supplier, checking its exact
+domain; imports on Desktop need no Darwin observer. These offline models run in
+the unconditional ordinary CI controls and release-workflow/release-gate checks.
+They do not execute or qualify a Windows controller, lift either activation HOLD,
+or replace current native admission and shared-gate acceptance.
+
 ### Participating hosted job queue
 
 CI's `jvm-library-checks` and `complete-gate`, Desktop's `verify` and opt-in

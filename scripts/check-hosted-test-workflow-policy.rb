@@ -15,7 +15,8 @@ module HostedTestWorkflowPolicy
     PREVIEW = "${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'sample-apps' }}"
     CONTROL_NAME = "Verify ordinary custody caller policy"
     CONTROL_COMMANDS = ["ruby scripts/tests/check-hosted-test-workflow-policy-test.rb",
-                        "python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py"].freeze
+                        "python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py",
+                        "python3 -I -B -S scripts/tests/hosted-controller-import-test.py"].freeze
     HOLD = <<~'SH'
         echo 'ORDINARY_TEST_ACTIVATION=HOLD; QUALIFIED_DEPENDENCY_CACHE_REQUIRED' >&2
         exit 125
@@ -54,10 +55,11 @@ module HostedTestWorkflowPolicy
         grep -Fxq 'AndroidVersion.ApiLevel=36' "$ANDROID_HOME/platforms/android-36/source.properties"
         grep -Fxq 'AndroidVersion.ApiLevel=37.0' "$ANDROID_HOME/platforms/android-37.0/source.properties"
     SH
-    # Reviewed unchanged pre-acquisition CI prefix plus the two new offline caller
-    # controls. Canonical key ordering; no value is derived from the workflow here.
+    # Reviewed pre-acquisition CI prefix with the offline caller/composition and
+    # cold controller-import controls. Canonical key ordering; no value is derived
+    # from the workflow here.
     # This fences even a product command inserted in an otherwise named policy step.
-    FULL_PREFIX_SHA256 = "e1f5c5b8a1ba063a914d51aff6ae3da4971229569f57c78fa3099c1adc2b4c68"
+    FULL_PREFIX_SHA256 = "e36b33b4316970b3fca74256a655287dc7068dbe689938347d0a0d65bcbc24b4"
 
     def self.need(value, message)
         raise Error, message unless value

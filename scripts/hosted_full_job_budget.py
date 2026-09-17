@@ -25,10 +25,10 @@ import ssl
 import time
 
 import hosted_test_identity as identity
-from hosted_lock_resources import RAW_CLOCK_DOMAIN, shared_raw_ns
 
 NS = 1_000_000_000
 UINT64 = (1 << 64) - 1
+RAW_CLOCK_DOMAIN = "darwin.clock_gettime_ns(CLOCK_MONOTONIC_RAW)"
 ORIGIN, HOST = "https://api.github.com", "api.github.com"
 TOKEN_ENV = "P2PKIT_ACTIONS_READ_TOKEN"
 JOB_SECONDS = 3600
@@ -67,6 +67,14 @@ class BudgetError(ValueError):
 def require(value, code):
     if not value:
         raise BudgetError(code)
+
+
+def shared_raw_ns():
+    # Desktop imports this module on Windows too. Only a FULL clock read needs
+    # the unchanged Darwin-only observer (whose defaults require Unix APIs).
+    from hosted_lock_resources import RAW_CLOCK_DOMAIN as domain, shared_raw_ns as read
+    require(domain == RAW_CLOCK_DOMAIN, "JOB_TIME_RAW_DOMAIN")
+    return read()
 
 
 def digest(raw):

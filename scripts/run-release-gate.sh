@@ -24,6 +24,7 @@ ruby scripts/tests/check-sample-app-workflow-policy-test.rb
 python3 -I -B -S scripts/tests/package-sample-apps-test.py
 ruby scripts/tests/check-hosted-test-workflow-policy-test.rb
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
+python3 -I -B -S scripts/tests/hosted-controller-import-test.py
 python3 -I -B -S scripts/tests/test-transcript-custody-test.py
 ruby scripts/tests/check-hosted-lock-candidate-policy-test.rb
 python3 -I -B -S scripts/tests/run-hosted-lock-candidate-test.py

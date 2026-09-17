@@ -152,6 +152,7 @@ jobs:
         run: |
           ruby scripts/tests/check-hosted-test-workflow-policy-test.rb
           python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
+          python3 -I -B -S scripts/tests/hosted-controller-import-test.py
 
       - name: Classify required-check scope
         id: scope
