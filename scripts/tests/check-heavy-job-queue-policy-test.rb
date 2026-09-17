@@ -131,6 +131,15 @@ mutations["helper workflow cancellation bypass"] = ["separate workflow concurren
 mutations["helper workflow loses run-specific group"] = ["separate workflow concurrency", ->(w) {
     w["desktop-cross-host.yml"]["concurrency"]["group"].sub!(" || inputs.operation == 'windows-helper-controls'", "")
 }]
+mutations["iphoneos operation falls through into ordinary sample matrix"] = ["required-gate guard", ->(w) {
+    w["desktop-cross-host.yml"]["jobs"]["verify"]["if"].sub!(" && inputs.operation != 'iphoneos-product'", "")
+}]
+mutations["iphoneos workflow can cancel an owned product"] = ["separate workflow concurrency", ->(w) {
+    w["desktop-cross-host.yml"]["concurrency"]["cancel-in-progress"].sub!(" && inputs.operation != 'iphoneos-product'", "")
+}]
+mutations["iphoneos workflow loses run-attempt separation"] = ["separate workflow concurrency", ->(w) {
+    w["desktop-cross-host.yml"]["concurrency"]["group"].sub!("format('iphoneos-{0}-{1}', github.run_id, github.run_attempt)", "github.ref")
+}]
 mutations["lock workflow can supersede other work"] = ["separate workflow concurrency", ->(w) {
     w["desktop-cross-host.yml"]["concurrency"]["group"] = "desktop-cross-host-${{ github.ref }}"
 }]

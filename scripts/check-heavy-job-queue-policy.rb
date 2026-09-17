@@ -11,7 +11,7 @@ module HeavyJobQueuePolicy
     JOBS = {
         "ci.yml" => {"jvm-library-checks" => "JVM libraries (${{ matrix.os }})", "complete-gate" => nil},
         "desktop-cross-host.yml" => {"verify" => "${{ matrix.os }}", "windows-directory-fsync-control" => "windows-directory-fsync-control",
-            "windows-helper-controls" => "windows-helper-controls", "mac-host-admission-probe" => "mac-host-admission-probe", "dependency-lock-candidate" => "dependency-lock-candidate"},
+            "windows-helper-controls" => "windows-helper-controls", "mac-host-admission-probe" => "mac-host-admission-probe", "dependency-lock-candidate" => "dependency-lock-candidate", "iphoneos-product" => "iphoneos-product"},
         "ios-x64-tests.yml" => {"ios-x64" => nil},
         "dependency-submission.yml" => {"submit" => nil},
     }.freeze
@@ -23,8 +23,8 @@ module HeavyJobQueuePolicy
             "cancel-in-progress" => "${{ github.event_name != 'schedule' }}",
         },
         "desktop-cross-host.yml" => {
-            "group" => "desktop-cross-host-${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'dependency-lock-candidate' || inputs.operation == 'dependency-lock-candidate-x64' || inputs.operation == 'dependency-lock-candidate-macos14') && format('lock-{0}-{1}', github.run_id, github.run_attempt) || github.event_name == 'workflow_dispatch' && (inputs.operation == 'windows-directory-fsync-control' || inputs.operation == 'windows-helper-controls' || inputs.operation == 'macos-arm64-admission' || inputs.operation == 'macos-x64-admission') && format('control-{0}-{1}', github.run_id, github.run_attempt) || github.ref }}",
-            "cancel-in-progress" => "${{ github.event_name != 'workflow_dispatch' || (inputs.operation != 'windows-directory-fsync-control' && inputs.operation != 'windows-helper-controls' && inputs.operation != 'macos-arm64-admission' && inputs.operation != 'macos-x64-admission' && inputs.operation != 'dependency-lock-candidate' && inputs.operation != 'dependency-lock-candidate-x64' && inputs.operation != 'dependency-lock-candidate-macos14') }}",
+            "group" => "desktop-cross-host-${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'iphoneos-product' && format('iphoneos-{0}-{1}', github.run_id, github.run_attempt) || github.event_name == 'workflow_dispatch' && (inputs.operation == 'dependency-lock-candidate' || inputs.operation == 'dependency-lock-candidate-x64' || inputs.operation == 'dependency-lock-candidate-macos14') && format('lock-{0}-{1}', github.run_id, github.run_attempt) || github.event_name == 'workflow_dispatch' && (inputs.operation == 'windows-directory-fsync-control' || inputs.operation == 'windows-helper-controls' || inputs.operation == 'macos-arm64-admission' || inputs.operation == 'macos-x64-admission') && format('control-{0}-{1}', github.run_id, github.run_attempt) || github.ref }}",
+            "cancel-in-progress" => "${{ github.event_name != 'workflow_dispatch' || (inputs.operation != 'windows-directory-fsync-control' && inputs.operation != 'windows-helper-controls' && inputs.operation != 'macos-arm64-admission' && inputs.operation != 'macos-x64-admission' && inputs.operation != 'dependency-lock-candidate' && inputs.operation != 'dependency-lock-candidate-x64' && inputs.operation != 'dependency-lock-candidate-macos14' && inputs.operation != 'iphoneos-product') }}",
         },
         "ios-x64-tests.yml" => {"group" => "ios-x64-tests-${{ github.ref }}", "cancel-in-progress" => false},
     }.freeze
@@ -37,11 +37,12 @@ module HeavyJobQueuePolicy
     }.freeze
     CONDITIONS = {
         ["ci.yml", "complete-gate"] => "${{ always() }}",
-        ["desktop-cross-host.yml", "verify"] => "${{ github.event_name != 'workflow_dispatch' || (inputs.operation != 'windows-directory-fsync-control' && inputs.operation != 'windows-helper-controls' && inputs.operation != 'macos-arm64-admission' && inputs.operation != 'macos-x64-admission' && inputs.operation != 'dependency-lock-candidate' && inputs.operation != 'dependency-lock-candidate-x64' && inputs.operation != 'dependency-lock-candidate-macos14') }}",
+        ["desktop-cross-host.yml", "verify"] => "${{ github.event_name != 'workflow_dispatch' || (inputs.operation != 'windows-directory-fsync-control' && inputs.operation != 'windows-helper-controls' && inputs.operation != 'macos-arm64-admission' && inputs.operation != 'macos-x64-admission' && inputs.operation != 'dependency-lock-candidate' && inputs.operation != 'dependency-lock-candidate-x64' && inputs.operation != 'dependency-lock-candidate-macos14' && inputs.operation != 'iphoneos-product') }}",
         ["desktop-cross-host.yml", "windows-directory-fsync-control"] => "${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'windows-directory-fsync-control' }}",
         ["desktop-cross-host.yml", "windows-helper-controls"] => "${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'windows-helper-controls' }}",
         ["desktop-cross-host.yml", "mac-host-admission-probe"] => "${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'macos-arm64-admission' || inputs.operation == 'macos-x64-admission') }}",
         ["desktop-cross-host.yml", "dependency-lock-candidate"] => "${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'dependency-lock-candidate' || inputs.operation == 'dependency-lock-candidate-x64' || inputs.operation == 'dependency-lock-candidate-macos14') }}",
+        ["desktop-cross-host.yml", "iphoneos-product"] => "${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'iphoneos-product' }}",
     }.freeze
 
     def self.require_policy(condition, message)
@@ -139,5 +140,5 @@ if $PROGRAM_NAME == __FILE__
     rescue HeavyJobQueuePolicy::Error, SystemCallError => error
         abort "FATAL: #{error.message}"
     end
-    puts "RESULT: PASS — nine participating jobs share the bounded non-cancelling queue; workflow groups remain separate"
+    puts "RESULT: PASS — ten participating jobs share the bounded non-cancelling queue; workflow groups remain separate"
 end

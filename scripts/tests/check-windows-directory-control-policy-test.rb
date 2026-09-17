@@ -41,7 +41,7 @@ module WindowsDirectoryControlPolicy
         need(inputs.keys.sort == %w[evidence_fingerprint evidence_public_key expected_sha expected_tree operation reviewed_base],
              "no arbitrary control inputs")
         expected = {"operation" => {"type" => "choice", "options" => ["desktop", "sample-apps", OPERATION, HELPER,
-            "macos-arm64-admission", "macos-x64-admission", "dependency-lock-candidate", "dependency-lock-candidate-x64", "dependency-lock-candidate-macos14"], "default" => "desktop", "required" => true}}
+            "macos-arm64-admission", "macos-x64-admission", "dependency-lock-candidate", "dependency-lock-candidate-x64", "dependency-lock-candidate-macos14", "iphoneos-product"], "default" => "desktop", "required" => true}}
         %w[expected_sha expected_tree reviewed_base evidence_public_key evidence_fingerprint].each do |name|
             expected[name] = {"type" => "string", "required" => false, "default" => ""}
         end
@@ -52,7 +52,7 @@ module WindowsDirectoryControlPolicy
         need(workflow["concurrency"] == HeavyJobQueuePolicy::WORKFLOW_CONCURRENCY["desktop-cross-host.yml"],
              "control reruns cannot share ordinary cancelling workflow group")
         jobs = workflow.fetch("jobs")
-        need(jobs.keys.sort == ["verify", OPERATION, HELPER, "mac-host-admission-probe", "dependency-lock-candidate"].sort,
+        need(jobs.keys.sort == ["verify", OPERATION, HELPER, "mac-host-admission-probe", "dependency-lock-candidate", "iphoneos-product"].sort,
              "unexpected or missing Desktop/control job")
         helper(jobs.fetch(HELPER))
         job = jobs.fetch(OPERATION)

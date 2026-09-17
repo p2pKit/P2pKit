@@ -43,18 +43,18 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Sample apps, Windows witness/helpers, no-child Mac capacity, or an encrypted full-lock prerequisite candidate
+        description: Sample apps, Windows witness/helpers, Mac capacity, an encrypted lock candidate, or unsigned iphoneos product proof
         type: choice
-        options: [desktop, sample-apps, windows-directory-fsync-control, windows-helper-controls, macos-arm64-admission, macos-x64-admission, dependency-lock-candidate, dependency-lock-candidate-x64, dependency-lock-candidate-macos14]
+        options: [desktop, sample-apps, windows-directory-fsync-control, windows-helper-controls, macos-arm64-admission, macos-x64-admission, dependency-lock-candidate, dependency-lock-candidate-x64, dependency-lock-candidate-macos14, iphoneos-product]
         default: desktop
         required: true
       expected_sha:
-        description: Exact reviewed source commit (required for witness, helper, capacity, or lock-candidate operations)
+        description: Exact reviewed source commit (required for witness, helper, capacity, lock-candidate, or iphoneos-product operations)
         type: string
         required: false
         default: ""
       expected_tree:
-        description: Exact reviewed source tree (required for witness, helper, capacity, or lock-candidate operations)
+        description: Exact reviewed source tree (required for witness, helper, capacity, lock-candidate, or iphoneos-product operations)
         type: string
         required: false
         default: ""
@@ -78,13 +78,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: desktop-cross-host-${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'dependency-lock-candidate' || inputs.operation == 'dependency-lock-candidate-x64' || inputs.operation == 'dependency-lock-candidate-macos14') && format('lock-{0}-{1}', github.run_id, github.run_attempt) || github.event_name == 'workflow_dispatch' && (inputs.operation == 'windows-directory-fsync-control' || inputs.operation == 'windows-helper-controls' || inputs.operation == 'macos-arm64-admission' || inputs.operation == 'macos-x64-admission') && format('control-{0}-{1}', github.run_id, github.run_attempt) || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' || (inputs.operation != 'windows-directory-fsync-control' && inputs.operation != 'windows-helper-controls' && inputs.operation != 'macos-arm64-admission' && inputs.operation != 'macos-x64-admission' && inputs.operation != 'dependency-lock-candidate' && inputs.operation != 'dependency-lock-candidate-x64' && inputs.operation != 'dependency-lock-candidate-macos14') }}
+  group: desktop-cross-host-${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'iphoneos-product' && format('iphoneos-{0}-{1}', github.run_id, github.run_attempt) || github.event_name == 'workflow_dispatch' && (inputs.operation == 'dependency-lock-candidate' || inputs.operation == 'dependency-lock-candidate-x64' || inputs.operation == 'dependency-lock-candidate-macos14') && format('lock-{0}-{1}', github.run_id, github.run_attempt) || github.event_name == 'workflow_dispatch' && (inputs.operation == 'windows-directory-fsync-control' || inputs.operation == 'windows-helper-controls' || inputs.operation == 'macos-arm64-admission' || inputs.operation == 'macos-x64-admission') && format('control-{0}-{1}', github.run_id, github.run_attempt) || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' || (inputs.operation != 'windows-directory-fsync-control' && inputs.operation != 'windows-helper-controls' && inputs.operation != 'macos-arm64-admission' && inputs.operation != 'macos-x64-admission' && inputs.operation != 'dependency-lock-candidate' && inputs.operation != 'dependency-lock-candidate-x64' && inputs.operation != 'dependency-lock-candidate-macos14' && inputs.operation != 'iphoneos-product') }}
 
 jobs:
   verify:
     name: ${{ matrix.os }}
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.operation != 'windows-directory-fsync-control' && inputs.operation != 'windows-helper-controls' && inputs.operation != 'macos-arm64-admission' && inputs.operation != 'macos-x64-admission' && inputs.operation != 'dependency-lock-candidate' && inputs.operation != 'dependency-lock-candidate-x64' && inputs.operation != 'dependency-lock-candidate-macos14') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.operation != 'windows-directory-fsync-control' && inputs.operation != 'windows-helper-controls' && inputs.operation != 'macos-arm64-admission' && inputs.operation != 'macos-x64-admission' && inputs.operation != 'dependency-lock-candidate' && inputs.operation != 'dependency-lock-candidate-x64' && inputs.operation != 'dependency-lock-candidate-macos14' && inputs.operation != 'iphoneos-product') }}
     concurrency:
       group: p2pkit-nonphysical-heavy
       queue: max
@@ -530,4 +530,93 @@ jobs:
         shell: bash
         run: |
           echo 'FATAL: no safe encrypted lock-candidate evidence; no acceptance claim' >&2
+          exit 1
+
+  iphoneos-product:
+    name: iphoneos-product
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'iphoneos-product' }}
+    permissions:
+      contents: read
+    concurrency:
+      group: p2pkit-nonphysical-heavy
+      queue: max
+      cancel-in-progress: false
+    runs-on: macos-26
+    timeout-minutes: 180
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+      P2PKIT_OPERATION: ${{ inputs.operation }}
+      P2PKIT_EXPECTED_SHA: ${{ inputs.expected_sha }}
+      P2PKIT_EXPECTED_TREE: ${{ inputs.expected_tree }}
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Check out exact reviewed iphoneos recipe source
+        timeout-minutes: 5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Admit exact manual iphoneos product dispatch
+        timeout-minutes: 1
+        shell: bash
+        run: exec "$DEVELOPER_DIR/usr/bin/python3" -I -B -S scripts/run-hosted-iphoneos-product.py admit
+
+      - name: Configure native iphoneos producer JDKs
+        timeout-minutes: 10
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          architecture: arm64
+          java-version: |
+            21
+            17
+
+      - name: Bind native daemon JDK path
+        timeout-minutes: 1
+        shell: bash
+        run: |
+          jdk="${JAVA_HOME_21_ARM64:?Missing native daemon JDK}"
+          [[ "$jdk" == /* && "$jdk" != *$'\n'* && "$jdk" != *$'\r'* ]]
+          printf 'P2PKIT_AUDIT_JDK21=%s\n' "$jdk" >> "$GITHUB_ENV"
+
+      # No device/runtime, SDK-license acceptance, cache import or signing scope.
+      # Both literal Android compile SDKs must already be present; otherwise HOLD.
+      - name: Build and inspect fresh unsigned iphoneos recipe product
+        id: product
+        timeout-minutes: 155
+        shell: bash
+        run: exec "$DEVELOPER_DIR/usr/bin/python3" -I -B -S scripts/run-hosted-iphoneos-product.py run
+
+      - name: Validate exact original iphoneos metadata after driver return
+        id: public
+        if: ${{ always() }}
+        timeout-minutes: 2
+        shell: bash
+        env:
+          P2PKIT_IPHONEOS_RUN_OUTCOME: ${{ steps.product.outcome }}
+        run: exec "$DEVELOPER_DIR/usr/bin/python3" -I -B -S scripts/run-hosted-iphoneos-product.py validate-public
+
+      - name: Retain only allowlisted iphoneos recipe evidence
+        id: evidence
+        if: ${{ always() && steps.public.outcome == 'success' && steps.public.outputs.artifacts_ready == 'true' }}
+        timeout-minutes: 3
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: iphoneos-product-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/p2pkit-iphoneos-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: error
+          include-hidden-files: false
+          overwrite: false
+          compression-level: 0
+
+      - name: Require actual product proof and retained evidence
+        if: ${{ always() && (steps.product.outcome != 'success' || steps.public.outcome != 'success' || steps.public.outputs.product_passed != 'true' || steps.public.outputs.artifacts_ready != 'true' || steps.evidence.outcome != 'success') }}
+        timeout-minutes: 1
+        shell: bash
+        run: |
+          echo 'FATAL: iphoneos recipe product or original evidence incomplete; no acceptance claim' >&2
           exit 1
