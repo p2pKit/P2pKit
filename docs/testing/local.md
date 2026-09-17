@@ -457,6 +457,12 @@ four envelope variants and both kit-level v1/v2 rejection directions. Common sui
 Android-source wrappers run on the host JVM. See that guide for focused commands, exact provenance and the policy
 against automatically refreshing fixtures. These are regression checks, not independent or device interoperability.
 
+The separate [independent-peer terminal capture](independent-peer-capture.md) helper
+retains a source-bound peer's opt-in diagnostics without changing its original
+return/exception or stdout/stderr. Its focused Python controls are synthetic/owned
+filesystem checks, not a peer run or Kotlin-parent compilation. A complete exit70
+record remains failed runtime evidence; the independent matrix is not waived.
+
 ## Authenticated kit fixtures
 
 Use `commonTest/.../testfixtures/createSecureTestKit` for new secure session
