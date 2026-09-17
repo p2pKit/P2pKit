@@ -19,13 +19,15 @@ from pathlib import Path
 # Baseline 59b91c738da2801cc4d5008acd54dfd728a2e18d: approved B1/B2/C source,
 # not an execution at that commit. Whole programs also bind dispatch/call order
 # and prevent an unchanged helper being shadowed by a later assignment.
+# The seed supplier's 2026-09-17 bounded-export factoring was independently
+# source/offline reviewed; its updated expectation is not native/cache acceptance.
 EXPECTED = {
     "scripts/run-hosted-test-custody.py": "52664a6b44f3d44632a7ec223d3e2c77dbf3de7879bfa4747a7374c434d3f42c",
     "scripts/hosted_full_supplements.py": "9f5c6a0f410c00ee7531664e95dab233c0febc6740dd6a8b1005e3fc3a64310c",
     "scripts/hosted_primary_abi.py": "ff168e70c31bc23b1c6e545a32d0c4217f9a212f7244a2c34571eee09f761553",
     "scripts/run-platform-tests.py": "1a3e6f093abe3a79bfbc2d3f426f26e71db77c6f72034effeb2e296dc833c271",
     "scripts/run-audit-command.py": "70216745a371d41101a0c4f6d27ca1d73b5f3d82c3e7ea4fc70009fb44f51cc5",
-    "scripts/hosted_dependency_seed_files.py": "4424910906cad71f98937dcb172f3991a9a3c61ac0e27506b54965b7b66a6849",
+    "scripts/hosted_dependency_seed_files.py": "e122a97ccab8f58e015b8b8db378b205fee0c3836275bc4f9a7fe19dc516d417",
 }
 LIMIT = 1024 * 1024
 

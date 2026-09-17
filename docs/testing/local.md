@@ -295,6 +295,12 @@ a configured workflow or another OS's pass is not host-execution evidence.
 `scripts/tests/release-workflow-test.sh` checks the matrix, actual task command,
 report paths, and fail-closed dependency guard, with negative policy controls.
 
+The [bounded dependency-cache preparation](hosted-dependency-cache.md) provides
+an explicit consume/bootstrap plan, original-action observation checks and an
+allowlisted H-to-empty-S exporter. It is dormant: no provider is run or qualified,
+both ordinary activation HOLDs remain, and dependency-byte reuse never grants
+test-result credit to changed source.
+
 ### Participating hosted job queue
 
 CI's `jvm-library-checks` and `complete-gate`, Desktop's `verify` and opt-in

@@ -603,10 +603,13 @@ class _SourceLookup:
 
 class _Destination:
     """Only this invocation's recorded exclusive directories may be reopened."""
-    def __init__(self, owners, root, end, check):
+    def __init__(self, owners, root, end, check, *, empty=False):
+        require(type(empty) is bool, "SEED_DESTINATION_MODE")
         self.owners, self.end, self.check = owners, end, check
         self.directories, self.identities = {(): root}, {(): root.identity}
-        self.members, self.created = {(): {"gradle.properties"}}, 0
+        # The fresh-H seed keeps its original properties-only default. A
+        # dependency-only export must explicitly select a truly empty target.
+        self.members, self.created = {(): set() if empty else {"gradle.properties"}}, 0
 
     def directory(self, parts, create=True):
         self.check()
@@ -761,6 +764,62 @@ def window(started, hard, soft, *, raw, job_budget):
             "hardEndNs": hard, "softEndNs": soft, "finishedNs": None, "jobBudgetSha256": job_budget}
 
 
+def _copy_allowlisted(owners, source, output, compiled, result, end, check, now, interval, budget,
+                      *, empty_destination=False):
+    """Shared bounded traversal; callers separately admit original H/S custody.
+
+    This never resolves dependencies, adopts existing target files or invents a
+    reversed seed context. Only the destination's initial member set differs.
+    """
+    counts, accepted, misses = result["counts"], result["admitted"], result["misses"]
+    used = 0
+    def reserve(index, path, size):
+        maximum = {"identity": [2**64 - 1, "f" * 32], "stampSha256": "f" * 64}
+        row = {"index": index, "path": path, "size": size, "sha256": "f" * 64, "sha1": "f" * 40,
+               "source": maximum, "destination": maximum}
+        return used + len(encoded(row)) <= budget
+    lookup = _SourceLookup(owners, source, end, check)
+    destination = _Destination(owners, output, end, check, empty=empty_destination)
+    stopped = False
+    for index, artifact in enumerate(compiled.artifacts):
+        check()
+        if stopped or now() >= interval["softEndNs"]:
+            stopped = True
+            misses.append({"index": index, "reason": "BUDGET_NOT_STARTED", "rejected": 0})
+            continue
+        coordinate = (*PREFIX, artifact.group, artifact.module, artifact.version)
+        version = lookup.coordinate(coordinate)
+        outcome, rejected = "ABSENT", 0
+        if version is not None:
+            buckets = lookup.names(coordinate, VERSION_LIMIT)
+            for bucket in buckets:
+                if not re.fullmatch(r"[0-9a-f]{40}", bucket):
+                    continue
+                check()
+                if now() >= interval["softEndNs"]:
+                    outcome, stopped = "BUDGET_NOT_STARTED", True
+                    break
+                selected = (*coordinate, bucket)
+                directory = lookup.directory(selected)
+                if artifact.name not in lookup.names(selected):
+                    continue
+                outcome, row = _copy_candidate(owners, directory, artifact, bucket, index, destination,
+                                               counts, end, check, reserve)
+                if outcome == "ADMITTED":
+                    accepted.append(row)
+                    used += len(encoded(row))
+                    break
+                if "BUDGET" in outcome:
+                    stopped = True
+                    break
+                counts["sha256Rejected" if outcome == "SHA256_REJECTED" else "layoutRejected"] += 1
+                rejected += 1
+        if outcome != "ADMITTED":
+            misses.append({"index": index, "reason": outcome, "rejected": rejected})
+    destination.verify(accepted)
+    counts.update(sourceNames=len(lookup.observed), destinationMembers=destination.created)
+
+
 def seed_home(parent, home, intent, staging, compiled, context_raw, canonical_raw, admitted_raw,
               *, end, check, now, interval):
     """Complete one owned seed, or fail without exposing a partial H to a loader."""
@@ -781,13 +840,6 @@ def seed_home(parent, home, intent, staging, compiled, context_raw, canonical_ra
         _deadline(end)
         require(now() < interval["hardEndNs"], "SEED_ORIGINAL_HARD_DEADLINE")
     budget = RECEIPT_LIMIT - len(encoded(result)) - 512 * 1024
-    used = 0
-    def reserve(index, path, size):
-        # Native identities are <=64-bit volume/dev plus a128-bit file ID.
-        maximum = {"identity": [2**64 - 1, "f" * 32], "stampSha256": "f" * 64}
-        row = {"index": index, "path": path, "size": size, "sha256": "f" * 64, "sha1": "f" * 40,
-               "source": maximum, "destination": maximum}
-        return used + len(encoded(row)) <= budget
     try:
         checked()
         container = owners.acquire("restore-container", lambda: private_root(intent["container"]))
@@ -802,49 +854,11 @@ def seed_home(parent, home, intent, staging, compiled, context_raw, canonical_ra
         require(digest(properties) == canonical["gradlePropertiesSha256"], "SEED_CANONICAL_PROPERTIES_CHANGED")
         result.update(sourceIdentity=list(source.identity), homeIdentity=list(output.identity),
                       propertiesSha256=digest(properties), propertiesAfterSha256=None)
-        lookup, destination = _SourceLookup(owners, source, end, checked), _Destination(owners, output, end, checked)
-        stopped = False
-        for index, artifact in enumerate(compiled.artifacts):
-            checked()
-            if stopped or now() >= interval["softEndNs"]:
-                stopped = True
-                misses.append({"index": index, "reason": "BUDGET_NOT_STARTED", "rejected": 0})
-                continue
-            coordinate = (*PREFIX, artifact.group, artifact.module, artifact.version)
-            version = lookup.coordinate(coordinate)
-            outcome, rejected = "ABSENT", 0
-            if version is not None:
-                buckets = lookup.names(coordinate, VERSION_LIMIT)
-                for bucket in buckets:
-                    if not re.fullmatch(r"[0-9a-f]{40}", bucket):
-                        continue
-                    checked()
-                    if now() >= interval["softEndNs"]:
-                        outcome, stopped = "BUDGET_NOT_STARTED", True
-                        break
-                    selected = (*coordinate, bucket)
-                    directory = lookup.directory(selected)
-                    if artifact.name not in lookup.names(selected):
-                        continue
-                    outcome, row = _copy_candidate(owners, directory, artifact, bucket, index, destination,
-                                                   counts, end, checked, reserve)
-                    if outcome == "ADMITTED":
-                        accepted.append(row)
-                        used += len(encoded(row))
-                        break
-                    if "BUDGET" in outcome:
-                        stopped = True
-                        break
-                    counts["sha256Rejected" if outcome == "SHA256_REJECTED" else "layoutRejected"] += 1
-                    rejected += 1
-            if outcome != "ADMITTED":
-                misses.append({"index": index, "reason": outcome, "rejected": rejected})
-        destination.verify(accepted)
+        _copy_allowlisted(owners, source, output, compiled, result, end, checked, now, interval, budget)
         require(_small_read(owners, output, "gradle.properties", end, RECEIPT_LIMIT, checked) == properties,
                 "SEED_CANONICAL_PROPERTIES_CHANGED")
         source.verify()
         result["propertiesAfterSha256"] = digest(properties)
-        counts.update(sourceNames=len(lookup.observed), destinationMembers=destination.created)
         checked()
     except BaseException as error:
         first = error
@@ -965,6 +979,14 @@ def validate_receipt(value, intent, staging_raw, context_raw, canonical_raw, adm
     else:
         require(interval["clock"] == "process-monotonic-ns" and interval["jobBudgetSha256"] is None,
                 "SEED_RECEIPT_CLOCK_CHANGED")
+    _validate_inventory(value, compiled)
+    return value
+
+
+def _validate_inventory(value, compiled, *, statuses=KNOWN, destination_identity=None):
+    """Closed shared copy inventory, not provenance or a provider observation."""
+    if destination_identity is None:
+        destination_identity = value["homeIdentity"]
     counts = value["counts"]
     require(type(counts) is dict and set(counts) == {"prehashBytes", "outputBytes", "sourceNames",
             "destinationMembers", "sha256Rejected", "layoutRejected"} and
@@ -986,7 +1008,7 @@ def validate_receipt(value, intent, staging_raw, context_raw, canonical_raw, adm
         require(row["sha256"] == artifact.sha256 and row["path"] == "/".join(parts) and
                 row["path"] not in paths and row["source"]["identity"] != row["destination"]["identity"] and
                 tuple(row["destination"]["identity"]) not in identities and
-                row["destination"]["identity"] != value["homeIdentity"] and
+                row["destination"]["identity"] != destination_identity and
                 row["source"]["identity"] != value["sourceIdentity"],
                 "SEED_ADMITTED_AUTHORITY_CHANGED")
         seen.add(row["index"])
@@ -1006,7 +1028,7 @@ def validate_receipt(value, intent, staging_raw, context_raw, canonical_raw, adm
             counts["destinationMembers"] == len(destinations) and
             sum(row["rejected"] for row in value["misses"]) <= counts["sha256Rejected"] + counts["layoutRejected"] <=
             counts["sourceNames"] and
-            value["status"] == ("KNOWN_MISS" if not value["admitted"] else
-                                "KNOWN_PARTIAL" if value["misses"] else "KNOWN_SEEDED"),
+            value["status"] == (statuses[0] if not value["admitted"] else
+                                statuses[1] if value["misses"] else statuses[2]),
             "SEED_TERMINAL_RELABELLED")
     return value
