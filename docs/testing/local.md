@@ -399,6 +399,11 @@ A skipped job is not runtime evidence and does not replace any required gate.
 This audit-branch trigger is dormant after main consolidation; do not recreate the branch
 or fabricate an Actions event to run it. A future hosted relocation requires separate review.
 
+The separate [API37 LAN readback content contract](android-lan-readback.md)
+prepares strict, dependency-free declared-input checks for #372. Even matching
+readbacks remain `COMPAT_STATE_UNPROVEN`; this is not the missing ordinary-UID
+collector, runtime admission or same-instance revocation acceptance.
+
 ## iOS launcher cleanup and recovery
 
 `./gradlew :iosApp:runIosSimulator` and `:iosApp:runIosUiTests` require Python 3
