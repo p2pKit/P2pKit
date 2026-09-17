@@ -31,6 +31,7 @@ import audit_processes as processes
 import hosted_full_job_budget as job_time
 import hosted_full_simulator as simulator
 import hosted_evidence as posix
+import hosted_primary_abi as abi
 import hosted_test_evidence as ordinary
 import hosted_test_identity as identity
 import hosted_test_query as query
@@ -507,6 +508,453 @@ def hash_member(owner, root, name, end, *, maximum):
     return result
 
 
+def abi_references(owner, commit, destination, end, check):
+    """Own exactly24 closed Git reads including constructor/final-return failures."""
+    supplier, original, references = None, None, {}
+    try:
+        supplier = query.NativeGitQueries(ROOT, destination, check_cancel=check)
+        check()  # A returned allocation is owned even if this pre-entry check fails.
+        supplier.native_host_matches_actions()
+        view = identity.GitView(ROOT, dict(os.environ), supplier)
+        for index, path in enumerate(abi.BASELINES):
+            check()
+            references[index] = view.abi_baseline(commit, path)
+        check()
+    except BaseException as error:
+        original = error
+    finally:
+        if supplier is not None:
+            try:
+                supplier._finalize(original)
+            except BaseException as error:
+                original = original or error
+        if (supplier is not None and supplier.unknown) or query.QUARANTINE or windows._QUARANTINE:
+            owner.error("abi-reference-query", original or ControllerError("QUERY_UNKNOWN"), unknown=True)
+        try:
+            check()  # Native query close cannot extend the caller's original fence.
+        except BaseException as error:
+            original = original or error
+    if original is not None:
+        raise original
+    require(not owner.unknown and set(references) == set(range(8)), "ABI_REFERENCE_QUERIES_INCOMPLETE")
+    directory = owner.open(destination)
+    raw = owner.read(directory, "session-result.json", end, query.MAX_RECEIPT_BYTES)
+    value = parse(raw)
+    require(value.get("schema") == 1 and value.get("scope") == "ORDINARY_GIT_QUERIES_ONLY" and
+            value.get("result") == "READY_FOR_CALLER_SEAL" and value.get("retirement") == "KNOWN" and
+            value.get("firstError") is None and value.get("errors") == [] and
+            type(value.get("queries")) is list and len(value["queries"]) == 24, "ABI_REFERENCE_QUERY_RETURN")
+    for index, path in enumerate(abi.BASELINES):
+        blob, _raw = references[index]
+        suffixes = (("ls-tree", "-z", commit, "--", path), ("cat-file", "-s", blob), ("cat-file", "blob", blob))
+        for row, suffix in zip(value["queries"][index * 3:index * 3 + 3], suffixes):
+            require(row.get("argv") == [view.executable, "--no-replace-objects", "--no-pager", "-c",
+                        "core.fsmonitor=false", "-C", str(ROOT), *suffix] and
+                    row.get("cwd") == str(ROOT) and row.get("result") == "READY_FOR_CALLER_SEAL" and
+                    row.get("retirement") == "KNOWN" and row.get("errors") == [] and
+                    type(row.get("waitExitCode")) is int and row["waitExitCode"] == 0,
+                    "ABI_REFERENCE_ORIGINAL_QUERY_CHANGED")
+    check()
+    return references, {"bytes": len(raw), "sha256": digest(raw)}
+
+
+def abi_ancestors(build, subtree):
+    """Public0755 generated descendants are not private-directory suppliers."""
+    build.verify()  # Original pre-writer root owner, never a newly adopted build.
+    stamps = {}
+    for relative in ("kotlin", "kotlin/" + subtree):
+        path = build.path / relative
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            return None  # A known absent output can be retained as missing, never green.
+        require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and not info.st_mode & 0o022,
+                "ABI_GENERATED_ANCESTOR_UNSAFE")
+        stamps[relative] = list(posix._stamp(info))
+    return stamps
+
+
+def retain_abi_generated(owner, target, build_owners, end):
+    """Six exact snapshots; eight separately acquired original generated files."""
+    require(os.name == "posix", "PRIMARY_FULL_ABI_NATIVE_MAC_ONLY")
+    groups = {}
+    for index, (module, generated, *_rest) in enumerate(abi.ROUTES):
+        subtree, name = generated.split("/", 1)
+        groups.setdefault((module, subtree), []).append((index, name))
+    originals, acquired, roots = {}, {}, []
+    for (module, subtree), members in groups.items():
+        posix._deadline(end)
+        build_path = ROOT / "library" / module / "build"
+        require(build_path in build_owners, "ABI_PREWRITER_BUILD_OWNER_MISSING")
+        build = build_owners[build_path]
+        require(build.path == build_path, "ABI_PREWRITER_BUILD_OWNER_CHANGED")
+        before = abi_ancestors(build, subtree)
+        root = build.path / "kotlin" / subtree
+        bound = {"root": str(root.relative_to(ROOT)), "buildRoot": str(build_path.relative_to(ROOT)),
+                 "buildIdentity": list(build.identity), "ancestors": before}
+        roots.append(bound)
+        if before is None:
+            for index, _name in members:
+                originals[index] = acquired[index] = None
+            require(abi_ancestors(build, subtree) is None, "ABI_MISSING_OUTPUT_CHANGED")
+            continue
+        names = {name for _index, name in members}
+        directories = {""} | {name.rsplit("/", 1)[0] for name in names if "/" in name}
+        entries = posix_snapshot(owner, root, len(members) * abi.FILE_LIMIT, len(names | directories), end)
+        require(set(entries) == names | directories and
+                all(stat.S_ISDIR(entries[name][2]) for name in directories) and
+                all(stat.S_ISREG(entries[name][2]) and 0 < entries[name][5] <= abi.FILE_LIMIT for name in names),
+                "ABI_EXACT_GENERATED_ROSTER_REQUIRED")
+        for index, name in members:
+            reader = owner.acquire("abi-generated-reader", lambda: posix._open_member(root, name, entries))
+            original = None
+            try:
+                posix._deadline(end)
+                raw = reader.read(entries[name][5] + 1)
+                require(type(raw) is bytes and len(raw) == entries[name][5] and reader.read(1) == b"" and
+                        posix._stamp(os.fstat(reader.fileno())) == entries[name], "ABI_ORIGINAL_CHANGED_DURING_READ")
+            except BaseException as error:
+                original = error
+                owner.error("abi-generated-read", error)
+            finally:
+                owner.close_one(reader)
+            if original is not None:
+                raise original
+            require(not owner.unknown, "ABI_GENERATED_READER_RETIREMENT_UNKNOWN")
+            owner.write(target, abi.member(index, "generated"), raw, end)
+            originals[index], acquired[index] = raw, list(entries[name])
+        require(posix_snapshot(owner, root, len(members) * abi.FILE_LIMIT, len(names | directories), end) == entries and
+                abi_ancestors(build, subtree) == before, "ABI_GENERATED_SNAPSHOT_CHANGED")
+        build.verify()
+    return originals, {"roots": roots, "files": [acquired[index] for index in range(8)]}
+
+
+def primary_abi_log(owner, invocation, end, *, name="product.stdout.log"):
+    """Bounded original-log stream; never the4MiB JSON record reader."""
+    invocation.verify()
+    query._component(name)  # Also admits only the closed opaque frozen-copy member.
+    path = invocation.path / name
+    info = path.lstat()
+    require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and info.st_nlink == 1 and
+            not info.st_mode & 0o077 and 0 <= info.st_size <= abi.LOG_LIMIT, "ABI_ORIGINAL_LOG_UNSAFE")
+    rows = {"": posix._stamp(invocation.path.lstat()), name: posix._stamp(info)}
+    reader = owner.acquire("abi-log-reader", lambda: posix._open_member(invocation.path, name, rows))
+    original, result = None, None
+    try:
+        result = abi.observe_log(reader, info.st_size, lambda: posix._deadline(end))
+        require(posix._stamp(os.fstat(reader.fileno())) == rows[name], "ABI_ORIGINAL_LOG_CHANGED")
+    except BaseException as error:
+        original = error
+        owner.error("abi-log-read", error)
+    finally:
+        owner.close_one(reader)
+    if original is not None:
+        raise original
+    require(not owner.unknown and posix._stamp(path.lstat()) == rows[name] and
+            posix._stamp(invocation.path.lstat()) == rows[""], "ABI_ORIGINAL_LOG_CHANGED_OR_UNCLOSED")
+    invocation.verify()
+    return result
+
+
+def primary_abi_inputs(owner, private, context, end):
+    """The original command receipt + platform Gradle selector, not an invented leaf."""
+    state = owner.child(private, "state", end)
+    state_raw = owner.read(state, "context.json", end)
+    admitted = parse(state_raw)
+    evidence = owner.child(private, "evidence", end)
+    custody = owner.child(evidence, "custody", end)
+    request_raw, custody_raw = (owner.read(custody, name, end) for name in ("request.json", "result.json"))
+    request, collected = parse(request_raw), parse(custody_raw)
+    retained = owner.child(custody, "retained", end)
+    canonical_evidence = owner.child(state, "evidence", end)
+    invocation = owner.child(canonical_evidence, request["owner"]["productInvocation"], end)
+    canonical_raw = owner.read(invocation, "receipt.json", end)
+    canonical = parse(canonical_raw)
+    require(canonical_raw == owner.read(retained, "owner-result.json", end), "ABI_ORIGINAL_CUSTODY_DIFFERS")
+    source = {**context["source"], "status": "", "diffSha256": digest(b"")}
+    require(context.get("primaryAbiRequired") is True and context["profile"] == "full" and
+            context["root"] == str(ROOT) and context["session"] == str(private.path) and
+            context["role"] in ("macos-arm64", "macos-x64") and
+            context["kind"] == "command" and context["command"] == ["python3", "scripts/run-platform-tests.py", "full"] and
+            admitted["source"] == request["source"] == source and admitted["preexistingOutputPaths"] == [] and
+            admitted["id"] == request["owner"]["job"] == canonical["jobId"] and
+            admitted["host"] == canonical["host"] == context["role"] and admitted["root"] == request["root"] == str(ROOT) and
+            admitted["gradleHome"] == request["home"] == canonical["gradleHome"] == str(state.path / "gradle-home") and
+            request["ownerKind"] == "audit" and request["ownerState"] == str(state.path) and
+            request["command"] == canonical["requestedArgv"] == canonical.get("executedArgv") == context["command"] and
+            canonical["id"] == request["owner"]["productInvocation"] and canonical["kind"] == "command" and
+            canonical.get("purpose") == "ordinary-full" and canonical["cwd"] == str(ROOT) and
+            canonical.get("wrapper") == str(ROOT / "gradlew") and
+            canonical["sourceBefore"] == canonical["sourceAfter"] == source and canonical["sourceUnchanged"] is True and
+            canonical["errors"] == [] and canonical["ownedSurvivors"] == [] and
+            canonical["ownership"]["discoveryErrors"] == [] and
+            (canonical.get("cancelledSignals") is None or canonical.get("cancelledSignals") == []) and
+            (canonical.get("cancelRequested") is None or canonical.get("cancelRequested") is False) and
+            all(type(canonical[key]) is int and canonical[key] == 0 for key in
+                ("productExitCode", "stopExitCode", "finalExitCode")) and
+            collected["requestSha256"] == digest(request_raw) and collected["result"] == "RETAINED" and
+            collected["retirement"] == "KNOWN" and collected["errors"] == [] and
+            all(type(collected[key]) is int and collected[key] == 0 for key in
+                ("productExitCode", "stopExitCode", "ownerFinalExitCode")), "ABI_PRIMARY_CANONICAL_NOT_PASSING")
+    uninstall_raw = owner.read(custody, "uninstalled.json", end)
+    uninstall = parse(uninstall_raw)
+    require(uninstall.get("absent") is True and uninstall.get("originalsDeleted") is False and
+            uninstall.get("requestSha256") == digest(request_raw), "ABI_PRIMARY_LOADER_NOT_UNINSTALLED")
+    commands = owner.child(evidence, "commands", end)
+    product_directory = owner.child(commands, "product", end)
+    product_raw = owner.read(product_directory, "result.json", end)
+    product = parse(product_raw)
+    require(type(product["exitCode"]) is int and product["exitCode"] == 0 and product["retirement"] == "KNOWN" and
+            product["errors"] == [] and product["survivors"] == [], "ABI_PRIMARY_OUTER_NOT_PASSING")
+    binding = owner.read(owner.child(evidence, "simulator", end), "binding.json", end)
+    platform = platform_simulator_binding(owner, private, binding, end)
+    start_raw = owner.read(invocation, "start.json", end)
+    prelaunch = original_simulator_prelaunch(owner, private, binding, end)
+    # Existing A authority verifies actual created outer/canonical native births.
+    original_simulator_authority(owner, private, binding, prelaunch, product, end)
+    report_directory = invocation
+    for name in ("reports", "build", "reports", "platform-tests", platform["token"]):
+        report_directory = owner.child(report_directory, name, end)
+    reports = {}
+    for name in ("invocation", "execution", "summary"):
+        raw = owner.read(report_directory, name + ".json", end)
+        require(digest(raw) == platform["reportsSha256"][name], "ABI_PLATFORM_REPORT_CHANGED")
+        reports[name] = parse(raw)
+    expected = [str(ROOT / "gradlew"), "check", *abi.FLAGS, "--init-script",
+                str(ROOT / "gradle/platform-test-coverage.init.gradle"), "-Pp2pkit.testCoverageRoot=" + str(ROOT),
+                "-Pp2pkit.testCoverageToken=" + platform["token"],
+                "-Pp2pkit.ordinarySimulatorBinding=" + str(private.path / simulator.RELATIVE),
+                "-Pp2pkit.ordinarySimulatorSha256=" + digest(binding),
+                "-Pp2pkit.ordinarySimulatorStartSha256=" + digest(start_raw),
+                "-Pp2pkit.ordinarySimulatorPrelaunchSha256=" + digest(prelaunch)]
+    arch = reports["execution"].get("host", {})
+    require(reports["invocation"].get("command") == reports["summary"].get("command") == expected and
+            arch.get("os") in ("Mac OS X", "Darwin") and arch.get("arch", "").lower() in
+            (("aarch64", "arm64") if context["role"] == "macos-arm64" else ("x86_64", "amd64")),
+            "ABI_PLATFORM_FULL_SELECTOR_OR_HOST_CHANGED")
+    return {"canonicalReceiptSha256": digest(canonical_raw), "canonicalStartSha256": digest(start_raw),
+            "canonicalContextSha256": digest(state_raw), "custodyRequestSha256": digest(request_raw),
+            "custodyResultSha256": digest(custody_raw), "uninstallSha256": digest(uninstall_raw),
+            "productPhaseSha256": digest(product_raw), "productInvocation": canonical["id"],
+            "reportManifestSha256": digest(owner.read(invocation, "report-manifest.json", end)),
+            "platform": platform, "gradleCommand": expected}, primary_abi_log(owner, invocation, end)
+
+
+def abi_disposition(raw):
+    value = parse(raw)
+    return {"status": value["assessment"]["status"], "manifestSha256": digest(raw),
+            "contextSha256": value["contextSha256"], "productPhaseSha256": value["primary"]["productPhaseSha256"],
+            "generatedCount": sum(row["generated"] is not None for row in value["assessment"]["routes"])}
+
+
+def abi_copy_map(raw, root):
+    """The exact two copy_tree schemas; their strings are lookups, never paths to open."""
+    mapping = parse(raw)
+    require(type(mapping) is dict and set(mapping) == {"schema", "scope", "originalRoot", "directories", "files"} and
+            type(mapping["schema"]) is int and mapping["schema"] == 1 and
+            mapping["scope"] == "REVERSIBLE_PRIVATE_BYTE_COPY" and mapping["originalRoot"] == str(root) and
+            type(mapping["files"]) is list and type(mapping["directories"]) is list and
+            len(mapping["files"]) + len(mapping["directories"]) <= posix.MAX_MEMBERS, "ABI_FROZEN_MAP_CHANGED")
+    all_rows = mapping["files"]
+
+    def relative(name):
+        return (type(name) is str and len(name.encode("utf-8")) <= 1024 and "\\" not in name and
+                all(ord(part) >= 32 and ord(part) != 127 for part in name) and
+                (name == "" or len(name.split("/")) <= 65 and
+                 all(part not in ("", ".", "..") for part in name.split("/"))))
+
+    require(all(type(row) is dict and set(row) == {"original", "member", "size", "sha256"} and
+                relative(row["original"]) and row["original"] != "" and type(row["member"]) is str and
+                row["member"] == "member-" + str(index).zfill(5) + ".bin" and
+                type(row["size"]) is int and 0 <= row["size"] <= posix.MAX_BYTES and
+                type(row["sha256"]) is str and re.fullmatch(r"[0-9a-f]{64}", row["sha256"])
+                for index, row in enumerate(all_rows)) and
+            all(relative(name) for name in mapping["directories"]), "ABI_FROZEN_MAP_ROSTER")
+    names, directories = [row["original"] for row in all_rows], mapping["directories"]
+    require(names == sorted(set(names)) and directories == sorted(set(directories)) and "" in directories and
+            not set(names) & set(directories) and sum(row["size"] for row in all_rows) <= posix.MAX_BYTES and
+            all((name.rsplit("/", 1)[0] if "/" in name else "") in directories
+                for name in [*names, *directories] if name),
+            "ABI_FROZEN_MAP_ROSTER")
+    return mapping
+
+
+def frozen_abi_provenance(owner, private, frozen, outer, end):
+    """Resolve only closed primary roles through BOTH maps to independent originals.
+
+    A self-consistent copied map cannot certify its own content. Read the original
+    custody ID and canonical token inventory, not a path supplied by either map.
+    Known failed/partial products bind available originals without requiring PASS;
+    absence is checked too. This adds no process, query, product or time window.
+    """
+    directories, absent, stamps, originals = {(): private}, set(), {}, []
+
+    def directory(parts):
+        if parts in directories:
+            return directories[parts]
+        parent = directory(parts[:-1])
+        if parent is None:
+            return None
+        query._component(parts[-1])
+        parent.verify()
+        posix._deadline(end)
+        path = parent.path / parts[-1]
+        if not os.path.lexists(path):
+            absent.add(path)
+            directories[parts] = None
+        else:
+            directories[parts] = owner.child(parent, parts[-1], end)
+        return directories[parts]
+
+    def original(parts, maximum, log=False):
+        parent = directory(parts[:-1])
+        if parent is None:
+            return None
+        query._component(parts[-1])
+        parent.verify()
+        posix._deadline(end)
+        path = parent.path / parts[-1]
+        try:
+            stamps[path] = posix._stamp(path.lstat())
+        except FileNotFoundError:
+            absent.add(path)
+            return None
+        return (primary_abi_log(owner, parent, end, name=parts[-1]) if log else
+                owner.read(parent, parts[-1], end, maximum))
+
+    def copied(row, maximum, log=False):
+        require(type(row) is dict and 0 <= row["size"] <= maximum, "ABI_FROZEN_PROVENANCE_BOUND")
+        value = (primary_abi_log(owner, frozen, end, name=row["member"]) if log else
+                 owner.read(frozen, row["member"], end, maximum))
+        size, sha256 = (value["bytes"], value["sha256"]) if log else (len(value), digest(value))
+        require((size, sha256) == (row["size"], row["sha256"]), "ABI_FROZEN_PROVENANCE_BYTES_CHANGED")
+        return value
+
+    def match(parts, copied_name, maximum=RECORD_LIMIT, *, inner_row=None, log=False):
+        value = original(parts, maximum, log)
+        row = outer.get(copied_name)
+        require((value is None) == (row is None), "ABI_FROZEN_PROVENANCE_MISSING")
+        if value is None:
+            originals.append({"original": "/".join(parts), "copy": copied_name, "present": False})
+            return None
+        if inner_row is not None:
+            require((row["size"], row["sha256"]) == (inner_row["size"], inner_row["sha256"]),
+                    "ABI_FROZEN_CANONICAL_MAP_DIFFERS")
+        require(copied(row, maximum, log) == value, "ABI_FROZEN_ORIGINAL_PROVENANCE_DIFFERS")
+        size, sha256 = (value["bytes"], value["sha256"]) if log else (len(value), digest(value))
+        originals.append({"original": "/".join(parts), "copy": copied_name, "member": row["member"],
+                          "present": True, "size": size, "sha256": sha256,
+                          **({"log": value} if log else {})})
+        return value
+
+    run_raw = original(("run-context.json",), RECORD_LIMIT)
+    require(run_raw is not None, "ABI_ORIGINAL_CONTEXT_MISSING")
+    request_raw = None
+    direct = ["profile-result-before-export.json", "primary-abi/manifest.json", "custody/request.json", "custody/result.json",
+              "custody/uninstalled.json", "custody/retained/owner-result.json",
+              "primary-abi-queries/session-result.json", "commands/product/start.json", "commands/product/result.json"]
+    direct += ["simulator/" + name + ".json" for name in
+               ("admission", "binding", "prelaunch", "canonical-start", "canonical-product", "launch", "retirement")]
+    direct += ["commands/" + label + "/" + name for label in
+               (*simulator.PREPARE, simulator.PRELAUNCH, *simulator.RETIRE)
+               for name in ("start.json", "result.json", "stdout.log", "stderr.log")]
+    for name in direct:
+        value = match(("evidence", *name.split("/")), name,
+                      query.MAX_RECEIPT_BYTES if name == "primary-abi-queries/session-result.json" else RECORD_LIMIT)
+        if name == "custody/request.json":
+            request_raw = value
+
+    # Before canonical admission a failed init may leave an unused partial state.
+    # Once its context was used by simulator/custody/B1, both exported roles are
+    # mandatory, even for HOLD. Never read a cache or adopt a generated build here.
+    canonical_used = (directory(("evidence", "simulator")) is not None or
+                      directory(("evidence", "custody")) is not None or
+                      directory(("evidence", "canonical-audit")) is not None or
+                      any(name == "canonical-context.json" or name.startswith("canonical-audit/") for name in outer))
+    canonical_raw, canonical_directory, canonical_rows = None, None, None
+    if canonical_used:
+        require(match(("state", "context.json"), "canonical-context.json") is not None,
+                "ABI_FROZEN_CANONICAL_CONTEXT_MISSING")
+        canonical_directory = directory(("state", "evidence"))
+        require(canonical_directory is not None, "ABI_FROZEN_CANONICAL_ROOT_MISSING")
+        canonical_rows = posix_snapshot(owner, canonical_directory.path, posix.MAX_BYTES, posix.MAX_MEMBERS, end)
+        canonical_raw = copied(outer.get("canonical-audit/original-path-map.json"), RECORD_LIMIT)
+        inner = abi_copy_map(canonical_raw, private.path / "state/evidence")
+        inner_rows = {row["original"]: row for row in inner["files"]}
+        require(inner["directories"] == sorted(name for name, row in canonical_rows.items() if stat.S_ISDIR(row[2])) and
+                set(inner_rows) == {name for name, row in canonical_rows.items() if stat.S_ISREG(row[2])} and
+                all(row["size"] == canonical_rows[name][5] for name, row in inner_rows.items()),
+                "ABI_FROZEN_CANONICAL_ROSTER_DIFFERS")
+        require({name for name in outer if name.startswith("canonical-audit/")} ==
+                {"canonical-audit/original-path-map.json", *["canonical-audit/" + row["member"]
+                                                           for row in inner["files"]]},
+                "ABI_FROZEN_CANONICAL_COPY_ROSTER")
+        if request_raw is not None:
+            request = parse(request_raw)
+            invocation = request.get("owner", {}).get("productInvocation")
+            require(type(invocation) is str and re.fullmatch(r"[0-9a-f]{32}", invocation), "ABI_ORIGINAL_INVOCATION")
+            paths = [invocation + "/" + name for name in
+                     ("receipt.json", "start.json", "report-manifest.json", "product.stdout.log")]
+            reports = [name for name in canonical_rows if re.fullmatch(re.escape(invocation) +
+                       r"/reports/build/reports/platform-tests/[0-9a-f]{32}/(?:invocation|execution|summary)\.json", name)]
+            require(len({name.split("/")[-2] for name in reports}) <= 1, "ABI_ORIGINAL_PLATFORM_TOKEN_ROSTER")
+            for name in [*paths, *sorted(reports)]:
+                row = inner_rows.get(name)
+                # None cannot address any outer row; a missing original stays
+                # missing rather than being supplied from another invocation.
+                copied_name = None if row is None else "canonical-audit/" + row["member"]
+                log = name == invocation + "/product.stdout.log"
+                match(("state", "evidence", *name.split("/")), copied_name,
+                      abi.LOG_LIMIT if log else RECORD_LIMIT, inner_row=row, log=log)
+    for path, stamp in stamps.items():
+        posix._deadline(end)
+        require(os.path.lexists(path) and posix._stamp(path.lstat()) == stamp, "ABI_ORIGINAL_PROVENANCE_CHANGED")
+    for path in absent:
+        posix._deadline(end)
+        require(not os.path.lexists(path), "ABI_ORIGINAL_PROVENANCE_APPEARED")
+    for parent in directories.values():
+        if parent is not None:
+            parent.verify()
+    if canonical_directory is not None:
+        require(posix_snapshot(owner, canonical_directory.path, posix.MAX_BYTES, posix.MAX_MEMBERS, end) == canonical_rows,
+                "ABI_ORIGINAL_CANONICAL_TREE_CHANGED")
+    require(not owner.unknown, "ABI_PROVENANCE_RETIREMENT_UNKNOWN")
+    posix._deadline(end)
+    return {"contextSha256": digest(run_raw), "canonicalMapSha256": None if canonical_raw is None else digest(canonical_raw),
+            "originals": originals}
+
+
+def frozen_abi_packet(owner, private, end):
+    """Exact flat copies consumed by the real export child, not live build paths."""
+    require(os.name == "posix", "PRIMARY_FULL_ABI_NATIVE_MAC_ONLY")
+    frozen = owner.child(private, "frozen-evidence", end)
+    snapshot = posix_snapshot(owner, frozen.path, posix.MAX_BYTES, posix.MAX_MEMBERS, end)
+    map_raw = owner.read(frozen, "original-path-map.json", end)
+    mapping = abi_copy_map(map_raw, private.path / "evidence")
+    all_rows = mapping["files"]
+    require(set(snapshot) == {"", "original-path-map.json", *[row["member"] for row in all_rows]} and
+            all(stat.S_ISREG(row[2]) for name, row in snapshot.items() if name), "ABI_FROZEN_MAP_MEMBERS_CHANGED")
+    accepted = {"primary-abi/manifest.json", "profile-result-before-export.json"} | {
+        "primary-abi/" + abi.member(index, role) for index in range(8) for role in ("generated", "baseline")}
+    rows = [row for row in all_rows if row["original"].startswith("primary-abi/") or
+            row["original"] == "profile-result-before-export.json"]
+    require({row["original"] for row in rows} <= accepted and
+            any(row["original"] == "profile-result-before-export.json" for row in rows), "ABI_FROZEN_PACKET_ROSTER")
+    originals = {}
+    for row in rows:
+        maximum = RECORD_LIMIT if row["original"].endswith(".json") else abi.FILE_LIMIT
+        require(type(row["size"]) is int and 0 < row["size"] <= maximum, "ABI_FROZEN_PACKET_BOUND")
+        raw = owner.read(frozen, row["member"], end, maximum)
+        require(len(raw) == row["size"] and digest(raw) == row["sha256"], "ABI_FROZEN_PACKET_CHANGED")
+        originals[row["original"]] = raw
+    provenance = frozen_abi_provenance(owner, private, frozen, {row["original"]: row for row in all_rows}, end)
+    require(owner.read(frozen, "original-path-map.json", end) == map_raw and
+            posix_snapshot(owner, frozen.path, posix.MAX_BYTES, posix.MAX_MEMBERS, end) == snapshot, "ABI_FROZEN_MAP_CHANGED")
+    manifest = originals.get("primary-abi/manifest.json")
+    return {"mapSha256": digest(map_raw), "files": rows, "provenance": provenance,
+            "manifestSha256": None if manifest is None else digest(manifest)}, originals
+
+
 class Controller(PrivateOwner):
     def __init__(self, profile):
         super().__init__()
@@ -533,6 +981,8 @@ class Controller(PrivateOwner):
         self.simulator_prelaunch = self.simulator_start = self.simulator_canonical = self.simulator_authority = None
         self.simulator_directory = None
         self.export_return = None
+        self.build_owners = {}
+        self.primary_abi, self.primary_abi_attempted, self.export_freeze_end = None, False, None
         self.environment = child_environment(dict(os.environ), self.path, self.state_path)
 
     def now_raw(self):
@@ -823,7 +1273,8 @@ class Controller(PrivateOwner):
                    "canonicalSources": self.canonical_sources}
         if self.profile == "full":
             context["jobBudgetSha256"] = self.budget.sha256
-            context.update(primarySimulatorRequired=True, developerDir=self.environment.get("DEVELOPER_DIR"),
+            context.update(primarySimulatorRequired=True, primaryAbiRequired=True,
+                           developerDir=self.environment.get("DEVELOPER_DIR"),
                            ancestorInvocationIds=self.environment.get(processes.CHAIN_ENV, "").split(":")
                            if self.environment.get(processes.CHAIN_ENV) else [])
         self.run_context_raw = encoded(context)
@@ -851,11 +1302,14 @@ class Controller(PrivateOwner):
         if self.profile == "full":
             self.admit_simulator()  # Cheap inventory BEFORE installing a custody loader or launching any product.
         # Protect original outputs BEFORE the writers, not merely copied XML.
-        for path in [*audit.output_roots(ROOT), ROOT / ".gradle", ROOT / ".kotlin",
+        outputs = audit.output_roots(ROOT)
+        for path in [*outputs, ROOT / ".gradle", ROOT / ".kotlin",
                      ROOT / "buildSrc/.gradle", ROOT / "buildSrc/.kotlin"]:
             self.check()
             require(not os.path.lexists(path), "PREEXISTING_OUTPUT_OR_CACHE_ROOT")
-            self.new(path)  # Native protected DACL + original ancestry pins on Windows.
+            owned = self.new(path)  # Native protected DACL + original ancestry pins on Windows.
+            if path in outputs:
+                self.build_owners[path] = owned
         row = self.phase("custody-prepare", self.python(SCRIPTS / "test-transcript-custody.py", "prepare",
             "--root", ROOT, "--directory", self.evidence.path / "custody", "--home", self.state_path / "gradle-home",
             "--owner-state", self.state_path, "--owner-kind", "audit", "--scope",
@@ -1080,10 +1534,51 @@ class Controller(PrivateOwner):
         require(removed.get("absent") is True and removed.get("originalsDeleted") is False,
                 "CUSTODY_UNINSTALL_RECEIPT_DIFFERS")
 
+    def freeze_end(self):
+        # B1 retention and the existing export copies share ONE local and RAW
+        # window. Re-entering export never renews a separate180s allowance.
+        if self.export_freeze_end is None:
+            self.export_freeze_end = self.window("export-freeze", 180)
+        self.check_window("export-freeze", self.export_freeze_end)
+        return self.export_freeze_end
+
+    def retain_primary_abi(self):
+        if self.profile != "full" or self.request is None or not self.product_attempted:
+            return
+        self.check(finalizing=True)
+        require(not self.primary_abi_attempted, "ABI_PRIMARY_RETENTION_IS_ONE_SHOT")
+        self.primary_abi_attempted = True
+        self.primary_abi = {"status": "HOLD", "manifestSha256": None, "contextSha256": self.context_hash,
+                            "productPhaseSha256": self.phase_hashes.get("product"), "generatedCount": None}
+        end = self.freeze_end()
+        target = self.child(self.evidence, "primary-abi", end, create=True)
+        # Every generated byte is separately acquired BEFORE reference reads and
+        # before any future supplemental writer. A baseline is never a fallback.
+        generated, acquisition = retain_abi_generated(self, target, self.build_owners, end)
+
+        def check():
+            self.check(finalizing=True)
+            self.check_window("export-freeze", end)
+
+        references, queries = abi_references(self, parse(self.admitted.record)["source"]["commit"],
+            self.evidence.path / "primary-abi-queries", end, check)
+        for index, (_blob, raw) in references.items():
+            self.write(target, abi.member(index, "baseline"), raw, end)
+        context_raw = self.read(self.private, "run-context.json", end)
+        require(context_raw == self.run_context_raw, "ABI_CONTEXT_CHANGED")
+        primary, log = primary_abi_inputs(self, self.private, parse(context_raw), end)
+        require(primary["productPhaseSha256"] == self.phase_hashes.get("product"), "ABI_PRIMARY_PHASE_CHANGED")
+        raw = encoded({"schema": 1, "scope": "PRIMARY_FULL_ABI_ORIGINALS", "source": parse(context_raw)["source"],
+                       "contextSha256": self.context_hash, "primary": primary, "referenceQueries": queries,
+                       "acquisition": acquisition, "assessment": abi.assess(generated, references, log)})
+        self.write(target, "manifest.json", raw, end)
+        check()  # A late/failed write keeps the earlier HOLD, not a provisional pass.
+        self.primary_abi = abi_disposition(raw)
+
     def export(self):
         self.check(finalizing=True)
         require(self.admitted is not None and hasattr(self, "recipient_raw"), "NO_VALIDATED_RECIPIENT")
-        end = self.window("export-freeze", 180)
+        end = self.freeze_end()
         if self.context is not None:
             state = self.child(self.private, "state", end)
             original = self.child(state, "evidence", end)
@@ -1158,6 +1653,7 @@ class Controller(PrivateOwner):
                 "exportReturn": self.export_return, "errors": self.errors}
         if self.profile == "full":
             value["jobBudget"] = self.budget_result()
+            value["primaryAbi"] = self.primary_abi
             value["simulator"] = {"admissionSha256": None if self.simulator_admission is None else
                                   digest(self.simulator_admission),
                                   "bindingSha256": None if self.simulator_binding is None else digest(self.simulator_binding),
@@ -1172,6 +1668,15 @@ def profile_passed(value):
     labels = ["recipient-validation", "audit-init", "custody-prepare", "product", "custody-collect",
               "custody-uninstall"]
     if value.get("profile") == "full":
+        retained = value.get("primaryAbi")
+        if not (type(retained) is dict and set(retained) == {"status", "manifestSha256", "contextSha256",
+                "productPhaseSha256", "generatedCount"} and retained["status"] == "PASS" and
+                type(retained["generatedCount"]) is int and retained["generatedCount"] == 8 and
+                retained["contextSha256"] == value.get("contextSha256") and
+                retained["productPhaseSha256"] == value.get("phaseSha256", {}).get("product") and
+                all(type(retained[key]) is str and re.fullmatch(r"[0-9a-f]{64}", retained[key]) for key in
+                    ("manifestSha256", "contextSha256", "productPhaseSha256"))):
+            return False
         owned = value.get("simulator")
         if not simulator_profile_passed(value, owned):
             return False
@@ -1571,6 +2076,7 @@ def crypto_phase(operation, profile, context_hash):
         else:
             recipient = restore_recipient(owner, work, owner.read(private, "recipient.json", end), context)
             frozen = owner.child(private, "frozen-evidence", end)
+            abi_frozen = frozen_abi_packet(owner, private, end)[0] if profile == "full" else None
             supplier, original_error = None, None
             try:
                 supplier = query.NativeGitQueries(ROOT, runtime.path / "export-manifest-admission",
@@ -1587,6 +2093,9 @@ def crypto_phase(operation, profile, context_hash):
                 # Bind the exporter's ORIGINAL return before the enclosing child
                 # returns, not a manifest synthesized from post-return files.
                 exported = {"manifest": manifest, "manifestSha256": digest(encoded(manifest))}
+                if profile == "full":
+                    require(frozen_abi_packet(owner, private, end)[0] == abi_frozen, "ABI_CHANGED_DURING_ORIGINAL_EXPORT")
+                    exported["primaryAbiFrozen"] = abi_frozen
                 require(owner.read(output, posix.MANIFEST, end, 65536) == encoded(manifest) and
                         artifact_metadata(owner, output, end) == manifest["artifact"], "ORIGINAL_EXPORT_DIFFERS")
             except BaseException as caught:
@@ -1654,7 +2163,7 @@ def run(profile):
     finally:
         if controller is not None:
             controller.actions_token = None
-            for name in ("collect", "retire_simulator", "export"):
+            for name in ("collect", "retire_simulator", "retain_primary_abi", "export"):
                 try:
                     getattr(controller, name)()
                 except BaseException as error:
@@ -1881,6 +2390,101 @@ def verify_phase_bindings(owner, private, result, context, end, budget=None):
         verify_simulator_bindings(owner, private, result, context, end)
 
 
+def verify_abi_acquisition(value, generated):
+    """Frozen acquisition stamps, never newly adopted/supplemental build outputs."""
+    require(type(value) is dict and set(value) == {"roots", "files"} and type(value["roots"]) is list and
+            type(value["files"]) is list and len(value["files"]) == 8, "ABI_ACQUISITION_ROSTER")
+    groups = list(dict.fromkeys((module, path.split("/", 1)[0]) for module, path, *_rest in abi.ROUTES))
+    require(len(value["roots"]) == len(groups), "ABI_ACQUISITION_ROOTS")
+
+    def stamp(row, directory, size=None):
+        require(type(row) is list and len(row) == 8 and all(type(part) is int and part >= 0 for part in row) and
+                row[3] == os.getuid() and not row[2] & 0o022 and
+                (stat.S_ISDIR(row[2]) if directory else stat.S_ISREG(row[2]) and row[4] == 1 and row[5] == size),
+                "ABI_ACQUISITION_STAMP")
+
+    for row, (module, subtree) in zip(value["roots"], groups):
+        build = "library/" + module + "/build"
+        require(type(row) is dict and set(row) == {"root", "buildRoot", "buildIdentity", "ancestors"} and
+                row["root"] == build + "/kotlin/" + subtree and row["buildRoot"] == build and
+                type(row["buildIdentity"]) is list and len(row["buildIdentity"]) == 2 and
+                all(type(part) is int and part >= 0 for part in row["buildIdentity"]), "ABI_ACQUISITION_ROOT_IDENTITY")
+        indices = [index for index, route in enumerate(abi.ROUTES) if route[0] == module and route[1].split("/", 1)[0] == subtree]
+        ancestors = row["ancestors"]
+        if ancestors is None:
+            require(all(generated[index] is None and value["files"][index] is None for index in indices),
+                    "ABI_MISSING_ORIGINAL_RELABELLED")
+        else:
+            require(type(ancestors) is dict and set(ancestors) == {"kotlin", "kotlin/" + subtree}, "ABI_ANCESTOR_STAMPS")
+            for entry in ancestors.values():
+                stamp(entry, True)
+            for index in indices:
+                require(generated[index] is not None, "ABI_GENERATED_ROLE_MISSING")
+                stamp(value["files"][index], False, len(generated[index]))
+
+
+def verify_primary_abi_bindings(owner, private, result, context, end, check):
+    """Reassess from original producer and frozen primary bytes, without rebuilding."""
+    require(context.get("primaryAbiRequired") is True, "SEALED_PRIMARY_ABI_REQUIRED")
+    bound, frozen = frozen_abi_packet(owner, private, end)
+    require(bound == result["exportReturn"]["result"].get("primaryAbiFrozen"), "ABI_ORIGINAL_EXPORT_BINDING_CHANGED")
+    before = parse(frozen["profile-result-before-export.json"])
+    disposition = result.get("primaryAbi")
+    require(before.get("primaryAbi") == disposition and before.get("source") == context["source"] and
+            before.get("contextSha256") == result["contextSha256"], "ABI_FROZEN_PROFILE_CHANGED")
+    names = {name.removeprefix("primary-abi/") for name in frozen if name.startswith("primary-abi/")}
+    evidence = owner.child(private, "evidence", end)
+    if disposition is None:
+        require(result["productAttempted"] is False and not names and
+                not os.path.lexists(evidence.path / "primary-abi"), "ABI_UNATTEMPTED_RELABELLED")
+        require(frozen_abi_packet(owner, private, end)[0] == bound, "ABI_POST_RETURN_PACKET_CHANGED")
+        check()
+        return
+    original = owner.child(evidence, "primary-abi", end)
+    rows = posix_snapshot(owner, original.path, 2 * abi.TOTAL_LIMIT + RECORD_LIMIT, 18, end)
+    require(set(rows) == {"", *names}, "ABI_RETAINED_PACKET_ROSTER_CHANGED")
+    for name in names:
+        raw = owner.read(original, name, end, RECORD_LIMIT if name == "manifest.json" else abi.FILE_LIMIT)
+        require(raw == frozen["primary-abi/" + name], "ABI_FROZEN_ORIGINAL_DIFFERS")
+
+    def final_integrity():
+        # A retained failed/partial product has the same final integrity fence;
+        # HOLD is not permission to encrypt/accept changed primary originals.
+        require(posix_snapshot(owner, original.path, 2 * abi.TOTAL_LIMIT + RECORD_LIMIT, 18, end) == rows and
+                frozen_abi_packet(owner, private, end)[0] == bound, "ABI_POST_RETURN_PACKET_CHANGED")
+        check()
+
+    raw = frozen.get("primary-abi/manifest.json")
+    if raw is None:
+        # Safe partial failure retention, never regenerated evidence or a pass.
+        require(disposition == {"status": "HOLD", "manifestSha256": None, "contextSha256": result["contextSha256"],
+                "productPhaseSha256": result["phaseSha256"].get("product"), "generatedCount": None} and
+                result.get("errors"), "ABI_INCOMPLETE_RETENTION_RELABELLED")
+        final_integrity()
+        return
+    manifest = parse(raw)
+    require(raw == encoded(manifest) and set(manifest) == {"schema", "scope", "source", "contextSha256", "primary",
+            "referenceQueries", "acquisition", "assessment"} and manifest["schema"] == 1 and
+            manifest["scope"] == "PRIMARY_FULL_ABI_ORIGINALS" and manifest["source"] == context["source"] and
+            manifest["contextSha256"] == result["contextSha256"] and disposition == abi_disposition(raw),
+            "ABI_MANIFEST_BINDING_CHANGED")
+    references, _queries = abi_references(owner, context["source"]["commit"], private.path / "seal-primary-abi-queries", end, check)
+    query_directory = owner.child(evidence, "primary-abi-queries", end)
+    query_raw = owner.read(query_directory, "session-result.json", end, query.MAX_RECEIPT_BYTES)
+    require(manifest["referenceQueries"] == {"bytes": len(query_raw), "sha256": digest(query_raw)},
+            "ABI_ORIGINAL_REFERENCE_QUERIES_CHANGED")
+    generated = {}
+    for index in range(8):
+        generated[index] = frozen.get("primary-abi/" + abi.member(index, "generated"))
+        require(frozen.get("primary-abi/" + abi.member(index, "baseline")) == references[index][1],
+                "ABI_FROZEN_REFERENCE_DIFFERS_FROM_SOURCE")
+    primary, log = primary_abi_inputs(owner, private, context, end)
+    require(primary == manifest["primary"] and primary["productPhaseSha256"] == result["phaseSha256"].get("product") and
+            manifest["assessment"] == abi.assess(generated, references, log), "ABI_ORIGINAL_ASSESSMENT_CHANGED")
+    verify_abi_acquisition(manifest["acquisition"], generated)
+    final_integrity()
+
+
 def verify_simulator_bindings(owner, private, result, context, end):
     """Independent post-return ownership fence, also for known failed products."""
     owned = result.get("simulator")
@@ -2012,6 +2616,9 @@ def validate_public(profile):
                 "SEALED_MANIFEST_DIFFERS")
         require((context["kind"], context["command"]) == profile_command(profile, role), "SEALED_SELECTOR_CHANGED")
         verify_phase_bindings(owner, private, result, context, end, budget)
+        if profile == "full":
+            verify_primary_abi_bindings(owner, private, result, context, end,
+                                       lambda: (posix._deadline(end), budget_clock.check("seal")))
         passed = profile_passed(result)
         require(type(result["profilePassed"]) is bool and result["profilePassed"] == passed, "FAILED_PROFILE_RELABELLED")
         owner.write(validation, "seal.json", {"schema": 1, "controllerResultSha256": digest(result_raw),

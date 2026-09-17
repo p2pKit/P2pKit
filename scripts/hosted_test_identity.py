@@ -18,6 +18,8 @@ import shutil
 import stat
 import time
 
+import hosted_primary_abi as abi
+
 
 REPOSITORY = "p2pKit/P2pKit"
 POLICY_PATH = ".github/test-evidence-recipient.json"
@@ -181,6 +183,20 @@ class GitView:
         require(len(raw) == int(size), "RECIPIENT_POLICY_CHANGED")
         actual = hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\x00" + raw).hexdigest()
         require(actual == blob, "RECIPIENT_POLICY_BLOB")
+        return blob, raw
+
+    def abi_baseline(self, commit, path):
+        """Eight public reference blobs at the admitted full SHA; never a live API path."""
+        require(type(path) is str and path in abi.BASELINES, "ABI_BASELINE_CLOSED_PATH")
+        value = self.query("ls-tree", "-z", sha(commit), "--", path)
+        match = re.fullmatch(rb"100644 blob ([0-9a-f]{40})\t" + re.escape(path.encode("ascii")) + rb"\x00", value)
+        require(match is not None, "ABI_BASELINE_REGULAR_BLOB_REQUIRED")
+        blob = match.group(1).decode("ascii")
+        size = self.query("cat-file", "-s", blob).strip()
+        require(re.fullmatch(rb"[1-9][0-9]{0,6}", size) and int(size) <= abi.FILE_LIMIT, "ABI_BASELINE_SIZE")
+        raw = self.query("cat-file", "blob", blob, limit=abi.FILE_LIMIT)
+        require(len(raw) == int(size), "ABI_BASELINE_CHANGED")
+        require(abi.blob(raw) == blob, "ABI_BASELINE_BLOB")
         return blob, raw
 
 

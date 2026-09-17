@@ -246,7 +246,8 @@ def _allowed_suffix(arguments):
                                  r"[0-9a-f]{40}\^\{tree\}", arguments[2]))
     if len(arguments) == 4 and arguments[:3] == ("show", "-s", "--format=%P"):
         return bool(identity.SHA.fullmatch(arguments[3]))
-    if len(arguments) == 5 and arguments[:2] == ("ls-tree", "-z") and arguments[3:] == ("--", identity.POLICY_PATH):
+    if len(arguments) == 5 and arguments[:2] == ("ls-tree", "-z") and arguments[3] == "--" and \
+            arguments[4] in (identity.POLICY_PATH, *identity.abi.BASELINES):
         return bool(identity.SHA.fullmatch(arguments[2]))
     if len(arguments) == 3 and arguments[0] == "cat-file" and arguments[1] in ("-s", "blob"):
         return bool(identity.SHA.fullmatch(arguments[2]))

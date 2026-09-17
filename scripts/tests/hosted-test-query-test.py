@@ -288,6 +288,21 @@ class QueryTests(unittest.TestCase):
                 self.assertEqual(self.query(owner, *suffix), self.out)
         owner.close()
 
+    def test_only_the_eight_exact_abi_paths_extend_ls_tree_admission(self):
+        for path in Q.identity.abi.BASELINES:
+            with self.subTest(path=path):
+                self.assertTrue(Q._allowed_suffix(("ls-tree", "-z", SOURCE, "--", path)))
+                for ref in ("HEAD", "main", SOURCE + "~1", SOURCE[:12]):
+                    self.assertFalse(Q._allowed_suffix(("ls-tree", "-z", ref, "--", path)))
+                for wrong in (path + "/", path + ".extra", "/" + path, path.replace("/api/", "/api/../api/")):
+                    self.assertFalse(Q._allowed_suffix(("ls-tree", "-z", SOURCE, "--", wrong)))
+        for suffix in (("ls-tree", "-z", SOURCE, "--", "private.key"),
+                       ("ls-tree", "-r", "-z", SOURCE, "--", Q.identity.abi.BASELINES[0]),
+                       ("ls-tree", "-z", SOURCE, "--", *Q.identity.abi.BASELINES[:2])):
+            self.assertFalse(Q._allowed_suffix(suffix))
+        self.assertEqual(Q.MAX_QUERIES, 64)
+        self.assertEqual(Q.MAX_SESSION_BYTES, 64 * 1024 * 1024)
+
     def test_empty_git_stdout_is_valid_and_stderr_is_still_retained(self):
         self.out = b""
         owner = self.owner()

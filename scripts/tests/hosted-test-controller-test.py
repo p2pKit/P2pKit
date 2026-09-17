@@ -276,6 +276,41 @@ class ContractModels(Base):
             controller.setup()
         self.assertEqual(self.calls, [])
 
+    def test_abi_query_constructor_unknown_blocks_without_a_returned_owner(self):
+        owner = self.owner()
+        def failed(*args, **kwargs):
+            C.query.QUARANTINE.append(object())
+            raise C.query.QueryError("ABI_ALLOCATION_UNKNOWN")
+        with patch.object(C.query, "NativeGitQueries", side_effect=failed), self.assertRaises(C.query.QueryError):
+            C.abi_references(owner, "a" * 40, self.path / "query", 200., lambda: None)
+        self.assertTrue(owner.unknown)
+        self.assertEqual(self.calls, [])
+
+    def test_abi_query_returned_allocation_is_finalized_before_entry_cancellation(self):
+        owner, calls = self.owner(), []
+        error = KeyboardInterrupt("ABI_PREENTRY_CANCEL")
+        supplier = SimpleNamespace(unknown=False, _finalize=lambda original: calls.append(original))
+        def cancelled():
+            raise error
+        with patch.object(C.query, "NativeGitQueries", return_value=supplier), self.assertRaises(KeyboardInterrupt) as seen:
+            C.abi_references(owner, "a" * 40, self.path / "query", 200., cancelled)
+        self.assertIs(seen.exception, error)
+        self.assertEqual(calls, [error])
+        self.assertFalse(owner.unknown)
+
+    def test_abi_query_late_finalizer_failure_preserves_original_before_return(self):
+        owner, calls = self.owner(), []
+        original = KeyboardInterrupt("ORIGINAL_ABI_CANCEL")
+        def finalize(error):
+            calls.append(error)
+            raise OSError("SECONDARY_ABI_FINALIZER")
+        supplier = SimpleNamespace(unknown=True, _finalize=finalize)
+        with patch.object(C.query, "NativeGitQueries", return_value=supplier), self.assertRaises(KeyboardInterrupt) as seen:
+            C.abi_references(owner, "a" * 40, self.path / "query", 200., lambda: (_ for _ in ()).throw(original))
+        self.assertIs(seen.exception, original)
+        self.assertEqual(calls, [original])
+        self.assertTrue(owner.unknown)
+
 
 class PhaseModels(Base):
     def test_success_privately_captures_both_streams_then_drains_closes_and_receipts(self):
@@ -607,6 +642,7 @@ class FinalizationModels(Base):
             if name in {"check", "setup", "product", "collect", "export", "result", "error", "write", "close"}:
                 setattr(state, "product_run" if name == "product" else name, value)
         state.retire_simulator = lambda: None  # The real Desktop implementation is an unchanged no-op.
+        state.retain_primary_abi = lambda: None
         return state
 
     def invoke(self, state):
@@ -708,6 +744,12 @@ class WholeControllerModels(Base):
             "state": "Shutdown", "isAvailable": True, "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"}]}}
         self.simulator_outputs, self.simulator_codes, self.simulator_calls = {}, {}, []
         self.product_boots_simulator = True
+        self.produce_primary_abi = True
+        # Checked-in public bytes are only MODEL INPUTS, not generated evidence.
+        # The modeled child separately creates files; real acquisition/retention
+        # reads them independently of the modeled immutable Git callback.
+        self.abi_references = {index: (ROOT / path).read_bytes() for index, path in enumerate(C.abi.BASELINES)}
+        self.abi_query_sessions = []
         self.fail_uninstall = False
         self.job_elapsed, self.job_time_calls, self.job_time_child_errors = 120, [], []
         self.crypto_owners, self.crypto_child_errors, self.crypto_child_quarantines = [], [], []
@@ -719,6 +761,9 @@ class WholeControllerModels(Base):
             return hold(owner, label, resource)
         self.stack.enter_context(patch.object(C.PrivateOwner, "hold", remember))
         (self.root / "buildSrc").mkdir(mode=0o700)
+        (self.root / "library").mkdir(mode=0o700)
+        for module in dict.fromkeys(route[0] for route in C.abi.ROUTES):
+            (self.root / "library" / module).mkdir(mode=0o755)
         self.public_key = b"SYNTHETIC PUBLIC KEY; NOT CRYPTOGRAPHIC MATERIAL"
         event, policy = C.encoded({"model": "event"}), C.encoded({"model": "policy"})
         record = {"source": self.source, "profile": self.profile, "suites": ["cli"],
@@ -728,11 +773,12 @@ class WholeControllerModels(Base):
         self.admitted = C.identity.Admission(C.encoded(record), event, policy, self.public_key,
                                             "A" * 40, C.digest(self.public_key), 2000000000)
         self.stack.enter_context(patch.object(C, "admission", side_effect=self.model_admission))
-        self.stack.enter_context(patch.object(C.query, "NativeGitQueries", side_effect=lambda *a, **k:
-             SimpleNamespace(unknown=False, native_host_matches_actions=lambda: None, _finalize=lambda error: None)))
+        self.stack.enter_context(patch.object(C.identity.shutil, "which", return_value=sys.executable))
+        self.stack.enter_context(patch.object(C.query, "NativeGitQueries", side_effect=self.model_git_queries))
         self.stack.enter_context(patch.object(C.posix, "validate_recipient", side_effect=self.model_recipient))
         self.stack.enter_context(patch.object(C.ordinary, "export_encrypted", side_effect=self.model_export))
-        self.stack.enter_context(patch.object(C.audit, "output_roots", return_value=[self.root / "build"]))
+        self.stack.enter_context(patch.object(C.audit, "output_roots", return_value=[self.root / "build", *[
+            self.root / "library" / module / "build" for module in dict.fromkeys(route[0] for route in C.abi.ROUTES)]]))
         self.stack.enter_context(patch.object(C.job_time, "_request", side_effect=self.model_job_time_response))
 
     def use_full(self):
@@ -805,6 +851,44 @@ class WholeControllerModels(Base):
                           ("original-policy.json", self.admitted.original_policy), ("recipient-public.asc", self.public_key)):
             self.save(destination / name, raw)
         return self.admitted
+
+    def model_git_queries(self, root, destination, *, check_cancel):
+        case = self
+        class GitModel:
+            def __init__(self):
+                self.unknown, self.closed, self.rows = False, False, []
+                self.path = Path(destination)
+                self.path.mkdir(mode=0o700)
+                case.abi_query_sessions.append(self)
+
+            def native_host_matches_actions(self):
+                check_cancel()
+
+            def __call__(self, **request):
+                check_cancel()
+                argv = request["argv"]
+                suffix = argv[7:]
+                case.assertTrue(C.query._allowed_suffix(suffix))
+                case.assertEqual(root, case.root)
+                if suffix[:2] == ("ls-tree", "-z"):
+                    case.assertEqual(suffix[2], case.source["commit"])
+                    index = C.abi.BASELINES.index(suffix[4])
+                    raw = ("100644 blob " + C.abi.blob(case.abi_references[index]) + "\t" + suffix[4] + "\0").encode()
+                else:
+                    data = next(raw for raw in case.abi_references.values() if C.abi.blob(raw) == suffix[2])
+                    raw = str(len(data)).encode() if suffix[1] == "-s" else data
+                case.assertLessEqual(len(raw), request["stdout_limit"])
+                self.rows.append({"argv": list(argv), "cwd": str(root), "waitExitCode": 0,
+                    "result": "READY_FOR_CALLER_SEAL", "retirement": "KNOWN", "errors": []})
+                check_cancel()
+                return raw
+
+            def _finalize(self, original):
+                self.closed = True
+                case.save(self.path / "session-result.json", {"schema": 1, "scope": "ORDINARY_GIT_QUERIES_ONLY",
+                    "result": "READY_FOR_CALLER_SEAL" if original is None else "HOLD", "retirement": "KNOWN",
+                    "firstError": None if original is None else type(original).__name__, "errors": [], "queries": self.rows})
+        return GitModel()
 
     def model_recipient(self, key, fingerprint, work):
         self.assertEqual(key.read_bytes(), self.public_key)
@@ -982,6 +1066,13 @@ class WholeControllerModels(Base):
                 if self.product_boots_simulator:
                     self.simulator_state("Booted")
                 canonical["reports"] = self.model_platform_reports(folder, environment)
+                self.save(folder / "product.stdout.log", b"MODEL NOT A BUILD\n" + b"".join(
+                    b"> Task " + task.encode() + b"\n" for task in C.abi.FRESH_TASKS))
+                if self.produce_primary_abi:
+                    for index, path in enumerate(C.abi.GENERATED):
+                        output = self.root / path
+                        output.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+                        self.save(output, self.abi_references[index])
             self.save(folder / "receipt.json", canonical)
             self.exit_code = self.product_code
         elif args[0] == "collect":
@@ -1073,6 +1164,808 @@ class WholeControllerModels(Base):
         self.assertFalse(result["profilePassed"], "No originally Shutdown iPhone 17 was admitted")
         self.assertFalse(any("prepare" in row["argv"] or "--cwd" in row["argv"] for row in self.calls))
         self.assertEqual(self.seal(), "artifacts_ready=true\nprofile_passed=false\n")
+
+    def test_full_missing_generated_primary_abi_cannot_be_green(self):
+        # Actual controller over synthetic admitted children. No ABI producer
+        # bytes exist; a passing modeled aggregate must not imply retention.
+        self.produce_primary_abi = False
+        _session, result = self.execute_full()
+        self.assertFalse(result["profilePassed"])
+
+    def test_full_retains_all_eight_before_export_and_reassesses_original_bytes(self):
+        opened = []
+        actual = C.posix._open_member
+        def observe(root, name, snapshot):
+            if "/build/kotlin/" in str(root):
+                opened.append(str(root / name))
+            return actual(root, name, snapshot)
+        with patch.object(C.posix, "_open_member", observe):
+            session, result = self.execute_full()
+        self.assertTrue(result["profilePassed"])
+        self.assertEqual(opened, [str(self.root / path) for path in C.abi.GENERATED])
+        manifest_raw = (session / "evidence/primary-abi/manifest.json").read_bytes()
+        manifest = C.parse(manifest_raw)
+        self.assertEqual(result["primaryAbi"], C.abi_disposition(manifest_raw))
+        self.assertEqual(manifest["assessment"]["additive"]["preimageSha256"], C.abi.PREIMAGE_SHA256)
+        self.assertEqual(manifest["primary"]["productInvocation"], self.reserved)
+        self.assertEqual(len(manifest["acquisition"]["roots"]), 6)
+        self.assertEqual(len(manifest["assessment"]["routes"]), 8)
+        queries = next(row for row in self.abi_query_sessions if row.path.name == "primary-abi-queries")
+        self.assertTrue(queries.closed)
+        self.assertEqual(len(queries.rows), 24)
+        self.assertEqual(self.seal(), "artifacts_ready=true\nprofile_passed=true\n")
+        returned = C.parse((session / "runtime/export-result.json").read_bytes())
+        self.assertEqual(returned["primaryAbiFrozen"]["manifestSha256"], C.digest(manifest_raw))
+        for index in range(8):
+            for role in ("generated", "baseline"):
+                self.assertEqual((session / "evidence/primary-abi" / C.abi.member(index, role)).read_bytes(),
+                                 self.abi_references[index])
+
+    def test_full_all_missing_originals_retains_references_without_substitution(self):
+        self.produce_primary_abi = False
+        session, result = self.execute_full()
+        manifest = C.parse((session / "evidence/primary-abi/manifest.json").read_bytes())
+        self.assertFalse(result["profilePassed"])
+        self.assertEqual(result["primaryAbi"]["generatedCount"], 0)
+        self.assertTrue(all(row["generated"] is None for row in manifest["assessment"]["routes"]))
+        self.assertEqual(len(list((session / "evidence/primary-abi").glob("baseline-*.bin"))), 8)
+        self.assertEqual(list((session / "evidence/primary-abi").glob("generated-*.bin")), [])
+        self.assertEqual(self.seal(), "artifacts_ready=true\nprofile_passed=false\n")
+
+    def abi_failure_subcase(self, mutation, *, unknown=False):
+        """Fresh synthetic state per adversarial case; never reuse an old product."""
+        case = WholeControllerModels("runTest")
+        case.setUp()
+        try:
+            retain = C.Controller.retain_primary_abi
+            def changed(controller):
+                mutation(case, controller)
+                return retain(controller)
+            case.use_full()
+            with patch.object(C.Controller, "retain_primary_abi", changed), redirect_stdout(io.StringIO()):
+                code = case.call_run()
+            controller = case.owners[-1]
+            self.assertFalse(controller.result()["profilePassed"])
+            if unknown:
+                self.assertEqual(code, 125)
+                self.assertTrue(controller.unknown)
+                self.assertFalse((controller.path / "export").exists())
+            else:
+                self.assertEqual(code, 0)
+                self.assertEqual(case.seal(), "artifacts_ready=true\nprofile_passed=false\n")
+        finally:
+            case.tearDown()
+
+    def test_each_missing_generated_file_cannot_be_replaced_by_the_reference(self):
+        for index in range(8):
+            with self.subTest(index=index):
+                self.abi_failure_subcase(lambda case, _controller: (case.root / C.abi.GENERATED[index]).unlink())
+
+    def test_each_generated_byte_mutation_is_a_retained_failed_comparison(self):
+        for index in range(8):
+            def change(case, _controller):
+                path = case.root / C.abi.GENERATED[index]
+                case.save(path, b"!" + path.read_bytes()[1:])
+            with self.subTest(index=index):
+                self.abi_failure_subcase(change)
+
+    def test_original_log_stale_failed_duplicate_or_android_only_events_do_not_pass(self):
+        def change(case, controller, mode):
+            path = controller.state_path / "evidence" / case.reserved / "product.stdout.log"
+            raw = path.read_bytes()
+            marker = b"> Task :p2p-core:checkKotlinAbi\n"
+            if mode == "duplicate":
+                raw += marker
+            elif mode == "android-only":
+                raw = b"\n".join(b"> Task " + task.encode() for task in C.abi.FRESH_TASKS[-2:]) + b"\n"
+            else:
+                raw = raw.replace(marker, marker[:-1] + b" " + mode.encode() + b"\n")
+            case.save(path, raw)
+        for mode in ("FROM-CACHE", "UP-TO-DATE", "SKIPPED", "FAILED", "duplicate", "android-only"):
+            with self.subTest(mode=mode):
+                self.abi_failure_subcase(lambda case, controller: change(case, controller, mode))
+
+    def test_failed_full_aggregate_never_becomes_green_from_eight_matching_files(self):
+        self.product_code = 7
+        session, result = self.execute_full()
+        self.assertFalse(result["profilePassed"])
+        self.assertEqual(result["primaryAbi"]["status"], "HOLD")
+        self.assertEqual(len(list((session / "evidence/primary-abi").glob("generated-*.bin"))), 8)
+        self.assertEqual(self.seal(), "artifacts_ready=true\nprofile_passed=false\n")
+
+    def test_known_partial_failure_still_rechecks_original_snapshot_after_final_read(self):
+        self.product_code = 7
+        session, result = self.execute_full()
+        primary = session / "evidence/primary-abi"
+        self.assertIsNone(result["primaryAbi"]["manifestSha256"])
+        self.assertFalse((primary / "manifest.json").exists())
+        count, read = 0, C.PrivateOwner.read
+        def changed(owner, directory, name, *args, **kwargs):
+            nonlocal count
+            raw = read(owner, directory, name, *args, **kwargs)
+            if directory.path == primary:
+                count += 1
+                if count == 16:
+                    self.save(directory.path / name, b"!" + raw[1:])
+            return raw
+        with patch.object(C.PrivateOwner, "read", changed), \
+                self.assertRaisesRegex(C.ControllerError, "ABI_POST_RETURN_PACKET_CHANGED"):
+            self.seal()
+        self.assertEqual(count, 16)
+
+    def test_primary_generated_live_outputs_may_change_after_retention_not_frozen_evidence(self):
+        export = C.Controller.export
+        def supplement_boundary(controller):
+            self.assertEqual(controller.primary_abi["status"], "PASS")
+            self.assertTrue((controller.evidence.path / "primary-abi/manifest.json").is_file())
+            for path in C.abi.GENERATED:
+                self.save(self.root / path, b"SYNTHETIC LATER OUTPUT; NOT AN ABI SUPPLEMENT RUN\n")
+            return export(controller)
+        with patch.object(C.Controller, "export", supplement_boundary):
+            _session, result = self.execute_full()
+        self.assertTrue(result["profilePassed"])
+        self.assertEqual(self.seal(), "artifacts_ready=true\nprofile_passed=true\n")
+
+    def test_full_original_log_mutation_is_detected_post_return(self):
+        session, _result = self.execute_full()
+        path = session / "state/evidence" / self.reserved / "product.stdout.log"
+        self.save(path, path.read_bytes() + b"changed after primary return\n")
+        # The copied-original fence now detects the changed log size before
+        # the later semantic reassessment, with the same no-public-output rule.
+        with self.assertRaisesRegex(C.ControllerError, "ABI_FROZEN_CANONICAL_ROSTER_DIFFERS"):
+            self.seal()
+        self.assertEqual((self.path / "public-step-output").read_bytes(), b"")
+
+    def test_full_retained_original_mutation_cannot_be_relabelled_by_result(self):
+        session, result = self.execute_full()
+        path = session / "evidence/primary-abi/generated-00.bin"
+        self.save(path, b"!" + path.read_bytes()[1:])
+        result["profilePassed"] = True
+        self.save(session / "controller-result.json", result)
+        with self.assertRaisesRegex(C.ControllerError, "ABI_FROZEN_ORIGINAL_DIFFERS"):
+            self.seal()
+
+    def test_coordinated_result_manifest_and_frozen_map_mutation_cannot_replace_export_return(self):
+        session, result = self.execute_full()
+        path = session / "evidence/primary-abi/manifest.json"
+        manifest = C.parse(path.read_bytes())
+        manifest["assessment"]["additive"]["preimageSha256"] = "f" * 64
+        raw = self.save(path, manifest)
+        result["primaryAbi"] = C.abi_disposition(raw)
+        self.save(session / "controller-result.json", result)
+        frozen = session / "frozen-evidence"
+        mapping = C.parse((frozen / "original-path-map.json").read_bytes())
+        for row in mapping["files"]:
+            if row["original"] == "primary-abi/manifest.json":
+                self.save(frozen / row["member"], raw)
+                row.update(size=len(raw), sha256=C.digest(raw))
+            elif row["original"] == "profile-result-before-export.json":
+                before = C.parse((frozen / row["member"]).read_bytes())
+                before["primaryAbi"] = result["primaryAbi"]
+                before_raw = self.save(frozen / row["member"], before)
+                row.update(size=len(before_raw), sha256=C.digest(before_raw))
+        self.save(frozen / "original-path-map.json", mapping)
+        # The forged copied profile already differs from its retained original;
+        # reject before comparing the complete packet to the export return.
+        with self.assertRaisesRegex(C.ControllerError, "ABI_FROZEN_ORIGINAL_PROVENANCE_DIFFERS"):
+            self.seal()
+        self.assertEqual((self.path / "public-step-output").read_bytes(), b"")
+
+    def test_coordinated_controller_and_export_return_mutation_still_requires_original_frozen_packet(self):
+        session, result = self.execute_full()
+        returned = C.parse((session / "runtime/export-result.json").read_bytes())
+        returned["primaryAbiFrozen"]["manifestSha256"] = "f" * 64
+        raw = self.save(session / "runtime/export-result.json", returned)
+        result["exportReturn"] = {"result": returned, "sha256": C.digest(raw)}
+        self.save(session / "controller-result.json", result)
+        with self.assertRaisesRegex(C.ControllerError, "ABI_ORIGINAL_EXPORT_BINDING_CHANGED"):
+            self.seal()
+
+    def test_frozen_generated_copy_mutation_is_not_accepted_from_matching_live_output(self):
+        session, _result = self.execute_full()
+        frozen = session / "frozen-evidence"
+        mapping = C.parse((frozen / "original-path-map.json").read_bytes())
+        row = next(row for row in mapping["files"] if row["original"] == "primary-abi/generated-07.bin")
+        path = frozen / row["member"]
+        self.save(path, b"!" + path.read_bytes()[1:])
+        with self.assertRaisesRegex(C.ControllerError, "ABI_FROZEN_PACKET_CHANGED"):
+            self.seal()
+
+    def test_original_reference_query_return_is_part_of_primary_binding(self):
+        session, _result = self.execute_full()
+        path = session / "evidence/primary-abi-queries/session-result.json"
+        self.save(path, path.read_bytes() + b" ")
+        # Exact original/copy equality precedes the manifest's reference hash.
+        with self.assertRaisesRegex(C.ControllerError, "ABI_FROZEN_ORIGINAL_PROVENANCE_DIFFERS"):
+            self.seal()
+        self.assertEqual((self.path / "public-step-output").read_bytes(), b"")
+
+    def test_primary_retention_and_export_share_one_local_window_without_renewal(self):
+        self.use_full()
+        write = C.PrivateOwner.write
+        original_end = []
+        def late(owner, target, name, value, end):
+            returned = write(owner, target, name, value, end)
+            if name == "manifest.json" and target.path.name == "primary-abi":
+                original_end.append(end)
+                self.clock.now = end + 1
+            return returned
+        with patch.object(C.PrivateOwner, "write", late), redirect_stdout(io.StringIO()):
+            self.assertEqual(self.call_run(), 125)
+        controller = self.owners[-1]
+        self.assertEqual(controller.export_freeze_end, original_end[0])
+        self.assertEqual(controller.primary_abi["status"], "HOLD")
+        self.assertFalse((controller.path / "export").exists())
+
+    def test_primary_abi_raw_fence_expiry_after_query_close_blocks_export(self):
+        self.use_full()
+        factory = self.model_git_queries
+        def late(*args, **kwargs):
+            supplier = factory(*args, **kwargs)
+            finalize = supplier._finalize
+            def closed(error):
+                finalize(error)
+                if supplier.path.name == "primary-abi-queries":
+                    self.clock.set_raw(self.owners[-1].budget.fence("export-freeze"))
+            supplier._finalize = closed
+            return supplier
+        with patch.object(C.query, "NativeGitQueries", side_effect=late), redirect_stdout(io.StringIO()):
+            self.assertEqual(self.call_run(), 125)
+        controller = self.owners[-1]
+        self.assertEqual(controller.primary_abi["status"], "HOLD")
+        self.assertTrue(next(row for row in self.abi_query_sessions if row.path.name == "primary-abi-queries").closed)
+        self.assertFalse((controller.path / "export").exists())
+
+    def test_primary_retention_is_one_shot_and_not_authority_for_supplement_work(self):
+        controller = self.full_controller()
+        controller.product_run()
+        controller.collect()
+        controller.retire_simulator()
+        controller.retain_primary_abi()
+        first = controller.primary_abi.copy()
+        with self.assertRaisesRegex(C.ControllerError, "ABI_PRIMARY_RETENTION_IS_ONE_SHOT"):
+            controller.retain_primary_abi()
+        self.assertEqual(controller.primary_abi, first)
+        self.assertEqual(C.job_time.RESERVE_SECONDS, 2430)
+        self.assertEqual(C.job_time.JOB_SECONDS, 3600)
+
+    def test_generated_snapshot_rejects_links_hardlinks_writable_extras_and_empty_files(self):
+        def change(case, _controller, mode):
+            path = case.root / C.abi.GENERATED[0]
+            if mode == "file-link":
+                saved = case.path / "original-api"
+                path.rename(saved)
+                path.symlink_to(saved)
+            elif mode == "hardlink":
+                os.link(path, case.path / "extra-hardlink")
+            elif mode == "writable":
+                path.chmod(0o666)
+            elif mode == "extra":
+                case.save(path.parent / "unexpected.api", b"extra")
+            else:
+                case.save(path, b"")
+        for mode in ("file-link", "hardlink", "writable", "extra", "empty"):
+            with self.subTest(mode=mode):
+                self.abi_failure_subcase(lambda case, controller: change(case, controller, mode), unknown=mode != "empty")
+
+    def test_generated_ancestors_cannot_be_links_or_a_newly_adopted_build_owner(self):
+        def change(case, _controller, mode):
+            path = case.root / C.abi.GENERATED[0]
+            selected = path.parent if mode == "subtree" else path.parent.parent if mode == "kotlin" else path.parents[2]
+            saved = case.path / "moved-generated-parent"
+            selected.rename(saved)
+            if mode == "build":
+                selected.mkdir(mode=0o700)
+            else:
+                selected.symlink_to(saved, target_is_directory=True)
+        for mode in ("subtree", "kotlin", "build"):
+            with self.subTest(mode=mode):
+                self.abi_failure_subcase(lambda case, controller: change(case, controller, mode))
+
+    def test_generated_growth_truncation_same_size_mutation_and_snapshot_drift_fail(self):
+        def install(case, _controller, mode):
+            opened = C.posix._open_member
+            original_path = case.root / C.abi.GENERATED[0]
+            class ChangedReader:
+                def __init__(self, raw):
+                    self.raw, self.first = raw, True
+                def fileno(self):
+                    return self.raw.fileno()
+                def read(self, size):
+                    result = self.raw.read(size)
+                    if self.first and mode != "snapshot":
+                        self.first = False
+                        before = original_path.read_bytes()
+                        case.save(original_path, before + b"x" if mode == "grow" else
+                                  before[:-1] if mode == "truncate" else b"!" + before[1:])
+                    return result
+                def close(self):
+                    self.raw.close()
+                    if mode == "snapshot":
+                        case.save(original_path, b"!" + original_path.read_bytes()[1:])
+            def reader(root, name, snapshot):
+                actual = opened(root, name, snapshot)
+                return ChangedReader(actual) if root / name == original_path else actual
+            case.stack.enter_context(patch.object(C.posix, "_open_member", reader))
+        for mode in ("grow", "truncate", "same-size", "snapshot"):
+            with self.subTest(mode=mode):
+                self.abi_failure_subcase(lambda case, controller: install(case, controller, mode))
+
+    def test_generated_reader_close_ambiguity_keeps_unknown_and_no_export(self):
+        def install(case, _controller):
+            opened = C.posix._open_member
+            original_path = case.root / C.abi.GENERATED[0]
+            def reader(root, name, snapshot):
+                actual = opened(root, name, snapshot)
+                if root / name != original_path:
+                    return actual
+                def close():
+                    actual.close()
+                    raise OSError("SYNTHETIC ABI READER CLOSE UNKNOWN")
+                return SimpleNamespace(read=actual.read, fileno=actual.fileno, close=close)
+            case.stack.enter_context(patch.object(C.posix, "_open_member", reader))
+        self.abi_failure_subcase(install, unknown=True)
+
+    def test_generated_copy_short_write_or_corrupt_readback_cannot_pass(self):
+        def install(case, _controller, mode):
+            if mode == "short":
+                write = C.query._PosixSink.write
+                def short(stream, raw):
+                    return write(stream, raw[:-1] if stream.path.name == "generated-00.bin" else raw)
+                case.stack.enter_context(patch.object(C.query._PosixSink, "write", short))
+            else:
+                read = C.query._PosixDirectory.read_bytes
+                first = True
+                def corrupt(directory, name, **kwargs):
+                    nonlocal first
+                    raw = read(directory, name, **kwargs)
+                    if first and directory.path.name == "primary-abi" and name == "generated-00.bin":
+                        first = False
+                        return b"!" + raw[1:]
+                    return raw
+                case.stack.enter_context(patch.object(C.query._PosixDirectory, "read_bytes", corrupt))
+        for mode in ("short", "readback"):
+            with self.subTest(mode=mode):
+                self.abi_failure_subcase(lambda case, controller: install(case, controller, mode))
+
+    def test_strict_full_flags_are_required_in_actual_primary_platform_report(self):
+        original = self.model_platform_reports
+        def reports(folder, environment):
+            rows = original(folder, environment)
+            for row in rows:
+                if row["source"].endswith(("/invocation.json", "/summary.json")):
+                    path = folder / row["retained"]
+                    value = C.parse(path.read_bytes())
+                    value["command"].remove("--no-build-cache")
+                    raw = self.save(path, value)
+                    row.update(sha256=C.digest(raw), bytes=len(raw))
+            self.save(folder / "report-manifest.json", {"schema": 1, "records": rows})
+            return rows
+        with patch.object(self, "model_platform_reports", side_effect=reports):
+            session, result = self.execute_full()
+        self.assertEqual(result["simulator"]["terminal"]["status"], "KNOWN_SHUTDOWN")
+        self.assertFalse(result["profilePassed"])
+        self.assertIn("ABI_PLATFORM_FULL_SELECTOR_OR_HOST_CHANGED", json.dumps(result["errors"]))
+        self.assertEqual(len(list((session / "evidence/primary-abi").glob("generated-*.bin"))), 8)
+        self.assertEqual(self.seal(), "artifacts_ready=true\nprofile_passed=false\n")
+
+    def test_export_child_binds_same_abi_bytes_before_and_after_real_export_call(self):
+        self.use_full()
+        actual = self.model_export
+        def changed(evidence, *args, **kwargs):
+            result = actual(evidence, *args, **kwargs)
+            mapping = C.parse((evidence / "original-path-map.json").read_bytes())
+            row = next(row for row in mapping["files"] if row["original"] == "primary-abi/manifest.json")
+            path = evidence / row["member"]
+            self.save(path, path.read_bytes() + b" ")
+            return result
+        with patch.object(C.ordinary, "export_encrypted", side_effect=changed), redirect_stdout(io.StringIO()):
+            self.assertEqual(self.call_run(), 125)
+        self.assertTrue(self.owners[-1].unknown)
+        self.assertFalse(self.owners[-1].result()["profilePassed"])
+        self.assertTrue(self.crypto_child_errors)
+
+    def copied_provenance_failure(self, layer, original_name, *, failed=False, map_change=None, reason=None):
+        """Corrupt the actual copy seam, not the original or a mocked validation result."""
+        case = WholeControllerModels("runTest")
+        case.setUp()
+        try:
+            case.use_full()
+            case.product_code = 7 if failed else 0
+            actual_copy, observations = C.copy_tree, []
+            def changed(owner, source, destination, end):
+                copied = actual_copy(owner, source, destination, end)
+                if copied.path.name != layer:
+                    return copied
+                path = copied.path / "original-path-map.json"
+                mapping = C.parse(path.read_bytes())
+                row = next(row for row in mapping["files"] if row["original"] == original_name)
+                original = source.path / row["original"]
+                before = original.read_bytes()
+                self.assertEqual((copied.path / row["member"]).read_bytes(), before)
+                observations.append((original, before))
+                if map_change is None:
+                    replacement = b"!" + before[1:]
+                    case.save(copied.path / row["member"], replacement)
+                    row.update(size=len(replacement), sha256=C.digest(replacement))
+                else:
+                    map_change(mapping, row)
+                case.save(path, mapping)
+                return copied
+            with patch.object(C, "copy_tree", changed), redirect_stdout(io.StringIO()):
+                self.assertEqual(case.call_run(), 125)
+            self.assertEqual(len(observations), 1, "The intended copy corruption must actually execute")
+            for original, before in observations:
+                self.assertEqual(original.read_bytes(), before)
+            controller = case.owners[-1]
+            self.assertFalse(controller.encrypted)
+            self.assertFalse(controller.result()["profilePassed"])
+            self.assertFalse(controller.result()["readyForPostReturnSeal"])
+            self.assertFalse((controller.path / "export").exists(), "Reject before invoking even the modeled exporter")
+            self.assertEqual(len(case.crypto_child_errors), 1)
+            operation, error = case.crypto_child_errors[0]
+            self.assertEqual(operation, "export")
+            self.assertIsInstance(error, C.ControllerError)
+            self.assertEqual(str(error), reason or "ABI_FROZEN_ORIGINAL_PROVENANCE_DIFFERS")
+            case.assert_refused_run_cannot_seal()
+        finally:
+            case.tearDown()
+
+    def assert_refused_run_cannot_seal(self):
+        # The explicit child refusal above made the controller nonzero/UNKNOWN;
+        # its final check intentionally wrote no sealable controller receipt.
+        # Check the REAL failed-step precondition, not an invented success label.
+        self.assertFalse((self.owners[-1].path / "controller-result.json").exists())
+        output = self.path / "public-step-output"
+        output.touch(mode=0o600)
+        with patch.dict(os.environ, {"P2PKIT_HOSTED_TEST_RUN_OUTCOME": "failure", "GITHUB_OUTPUT": str(output)}), \
+                self.assertRaisesRegex(C.ControllerError, "ORIGINAL_CONTROLLER_DID_NOT_SUCCEED"):
+            C.validate_public(self.profile)
+        self.assertEqual(output.read_bytes(), b"")
+
+    def test_each_copied_canonical_authority_must_equal_its_independent_original(self):
+        names = ["receipt.json", "start.json", "report-manifest.json", "product.stdout.log"] + [
+            "reports/build/reports/platform-tests/" + "e" * 32 + "/" + name + ".json"
+            for name in ("invocation", "execution", "summary")]
+        for name in names:
+            with self.subTest(original=name):
+                self.copied_provenance_failure("canonical-audit", self.reserved + "/" + name)
+
+    def test_each_copied_direct_and_simulator_authority_must_equal_its_original(self):
+        # Kept independent of the implementation's role list. Empty original
+        # stderr/first-launch output is still evidence, not permission to omit it.
+        names = ["canonical-context.json", "custody/request.json", "custody/result.json", "custody/uninstalled.json",
+                 "custody/retained/owner-result.json", "primary-abi-queries/session-result.json",
+                 "commands/product/start.json", "commands/product/result.json", "profile-result-before-export.json",
+                 "primary-abi/manifest.json"]
+        names += ["simulator/" + name + ".json" for name in
+                  ("admission", "binding", "prelaunch", "canonical-start", "canonical-product", "launch", "retirement")]
+        names += ["commands/" + label + "/" + name for label in
+                  ("simulator-macos-version", "simulator-xcode-version", "simulator-first-launch", "simulator-runtimes",
+                   "simulator-devices", "simulator-prelaunch", "simulator-retire-before", "simulator-shutdown",
+                   "simulator-retire-after") for name in ("start.json", "result.json", "stdout.log", "stderr.log")]
+        for name in names:
+            with self.subTest(original=name):
+                self.copied_provenance_failure("frozen-evidence", name)
+
+    def test_failed_partial_retention_still_refuses_corrupted_copied_authority(self):
+        for layer, name in (("canonical-audit", self.reserved + "/receipt.json"),
+                            ("canonical-audit", self.reserved + "/product.stdout.log"),
+                            ("frozen-evidence", "custody/result.json"),
+                            ("frozen-evidence", "simulator/retirement.json")):
+            with self.subTest(layer=layer, original=name):
+                self.copied_provenance_failure(layer, name, failed=True)
+
+    def test_both_copy_maps_require_exact_schema_roots_unique_roles_sizes_and_hashes(self):
+        changes = {
+            "root": (lambda mapping, _row: mapping.update(originalRoot=str(self.path)), "ABI_FROZEN_MAP_CHANGED"),
+            "schema": (lambda mapping, _row: mapping.update(schema=True), "ABI_FROZEN_MAP_CHANGED"),
+            "scope": (lambda mapping, _row: mapping.update(scope="UNTRUSTED_COPY"), "ABI_FROZEN_MAP_CHANGED"),
+            "extra": (lambda mapping, _row: mapping.update(other=True), "ABI_FROZEN_MAP_CHANGED"),
+            "alias": (lambda mapping, row: row.update(member=mapping["files"][0]["member"]), "ABI_FROZEN_MAP_ROSTER"),
+            "role-alias": (lambda mapping, row: row.update(original=mapping["files"][0]["original"]),
+                           "ABI_FROZEN_MAP_ROSTER"),
+            "traversal": (lambda _mapping, row: row.update(original="../escape"), "ABI_FROZEN_MAP_ROSTER"),
+            "member-path": (lambda _mapping, row: row.update(member="../escape"), "ABI_FROZEN_MAP_ROSTER"),
+            "directory": (lambda mapping, _row: mapping["directories"].remove(""), "ABI_FROZEN_MAP_ROSTER"),
+            "bool-size": (lambda _mapping, row: row.update(size=True), "ABI_FROZEN_MAP_ROSTER"),
+            "negative-size": (lambda _mapping, row: row.update(size=-1), "ABI_FROZEN_MAP_ROSTER"),
+            "invalid-hash": (lambda _mapping, row: row.update(sha256="X" * 64), "ABI_FROZEN_MAP_ROSTER"),
+        }
+        for layer, name in (("canonical-audit", self.reserved + "/start.json"),
+                            ("frozen-evidence", "simulator/retirement.json")):
+            for label, (change, reason) in changes.items():
+                with self.subTest(layer=layer, change=label):
+                    self.copied_provenance_failure(layer, name, map_change=change, reason=reason)
+            for label, change in (("omitted", lambda mapping, row: mapping["files"].remove(row)),
+                                  ("size", lambda _mapping, row: row.update(size=row["size"] + 1)),
+                                  ("hash", lambda _mapping, row: row.update(sha256="0" * 64))):
+                reason = ("ABI_FROZEN_CANONICAL_ROSTER_DIFFERS" if label != "hash" else
+                          "ABI_FROZEN_CANONICAL_MAP_DIFFERS") if layer == "canonical-audit" else (
+                          "ABI_FROZEN_MAP_MEMBERS_CHANGED" if label == "omitted" else
+                          "ABI_FROZEN_PROVENANCE_BYTES_CHANGED")
+                with self.subTest(layer=layer, change=label):
+                    self.copied_provenance_failure(layer, name, map_change=change, reason=reason)
+
+    def replace_frozen_provenance(self, session, name, *, canonical=False):
+        """Self-consistent replacement through both maps after the original return."""
+        frozen = session / "frozen-evidence"
+        mapping_path = frozen / "original-path-map.json"
+        outer = C.parse(mapping_path.read_bytes())
+        nested_row = inner = inner_row = None
+        if canonical:
+            nested_row = next(row for row in outer["files"] if row["original"] == "canonical-audit/original-path-map.json")
+            inner = C.parse((frozen / nested_row["member"]).read_bytes())
+            inner_row = next(row for row in inner["files"] if row["original"] == self.reserved + "/" + name)
+            name = "canonical-audit/" + inner_row["member"]
+        row = next(row for row in outer["files"] if row["original"] == name)
+        raw = (frozen / row["member"]).read_bytes()
+        replacement = b"!" + raw[1:]
+        self.save(frozen / row["member"], replacement)
+        row.update(size=len(replacement), sha256=C.digest(replacement))
+        if canonical:
+            inner_row.update(size=len(replacement), sha256=C.digest(replacement))
+            raw = self.save(frozen / nested_row["member"], inner)
+            nested_row.update(size=len(raw), sha256=C.digest(raw))
+        self.save(mapping_path, outer)
+
+    def test_separate_seal_rechecks_both_layers_against_original_provenance(self):
+        for canonical, name in ((True, "product.stdout.log"), (True, "receipt.json"),
+                                 (False, "custody/result.json"), (False, "simulator/admission.json")):
+            with self.subTest(canonical=canonical, original=name):
+                case = WholeControllerModels("runTest")
+                case.setUp()
+                try:
+                    session, result = case.execute_full()
+                    self.assertTrue(result["profilePassed"])
+                    case.replace_frozen_provenance(session, name, canonical=canonical)
+                    with self.assertRaisesRegex(C.ControllerError, "ABI_FROZEN_ORIGINAL_PROVENANCE_DIFFERS"):
+                        case.seal()
+                    self.assertEqual((case.path / "public-step-output").read_bytes(), b"")
+                finally:
+                    case.tearDown()
+
+    def test_export_child_rechecks_copied_provenance_after_the_exporter_returns(self):
+        self.use_full()
+        actual = self.model_export
+        def changed(evidence, *args, **kwargs):
+            result = actual(evidence, *args, **kwargs)
+            self.replace_frozen_provenance(evidence.parent, "receipt.json", canonical=True)
+            return result
+        with patch.object(C.ordinary, "export_encrypted", side_effect=changed), redirect_stdout(io.StringIO()):
+            self.assertEqual(self.call_run(), 125)
+        self.assertEqual(str(self.crypto_child_errors[0][1]), "ABI_FROZEN_ORIGINAL_PROVENANCE_DIFFERS")
+        self.assertFalse(self.owners[-1].encrypted)
+        self.assertFalse(self.owners[-1].result()["profilePassed"])
+        self.assert_refused_run_cannot_seal()
+
+    def test_bound_provenance_includes_original_canonical_log_tasks_and_all_simulator_phases(self):
+        session, result = self.execute_full()
+        proof = result["exportReturn"]["result"]["primaryAbiFrozen"]["provenance"]
+        self.assertEqual(proof["contextSha256"], result["contextSha256"])
+        self.assertEqual(proof["canonicalMapSha256"],
+                         C.digest((session / "evidence/canonical-audit/original-path-map.json").read_bytes()))
+        names = [row["original"] for row in proof["originals"]]
+        self.assertEqual(len(names), len(set(names)))
+        log = next(row for row in proof["originals"] if row["original"].endswith("/product.stdout.log"))
+        self.assertEqual(log["original"], "state/evidence/" + self.reserved + "/product.stdout.log")
+        self.assertEqual(log["log"], C.parse((session / "evidence/primary-abi/manifest.json").read_bytes())["assessment"]["log"])
+        self.assertEqual(len(log["log"]["tasks"]), 32)
+        self.assertTrue(all(row["present"] for row in proof["originals"]))
+        self.assertEqual(len(names), 60)  # 53 direct/context +7 original canonical roles.
+        self.assertEqual(self.seal(), "artifacts_ready=true\nprofile_passed=true\n")
+
+    def test_original_and_frozen_provenance_cannot_change_after_their_bounded_read(self):
+        for change_original in (True, False):
+            with self.subTest(original=change_original):
+                case = WholeControllerModels("runTest")
+                case.setUp()
+                try:
+                    session, _result = case.execute_full()
+                    owner = case.owner()
+                    private = owner.open(session)
+                    mapping = C.parse((session / "frozen-evidence/original-path-map.json").read_bytes())
+                    row = next(row for row in mapping["files"] if row["original"] == "custody/result.json")
+                    target = (session / "evidence/custody/result.json" if change_original else
+                              session / "frozen-evidence" / row["member"])
+                    read, changed = C.PrivateOwner.read, []
+                    def mutation(reader, parent, name, *args, **kwargs):
+                        raw = read(reader, parent, name, *args, **kwargs)
+                        if parent.path / name == target and not changed:
+                            changed.append(True)
+                            case.save(target, b"!" + raw[1:])
+                        return raw
+                    reason = "ABI_ORIGINAL_PROVENANCE_CHANGED" if change_original else "ABI_FROZEN_MAP_CHANGED"
+                    with patch.object(C.PrivateOwner, "read", mutation), self.assertRaisesRegex(C.ControllerError, reason):
+                        C.frozen_abi_packet(owner, private, case.clock.now + 45)
+                    self.assertEqual(changed, [True])
+                    self.assertFalse(owner.unknown)
+                    owner.close()
+                finally:
+                    case.tearDown()
+
+    def test_frozen_provenance_reader_failure_preserves_original_and_unknown(self):
+        session, _result = self.execute_full()
+        owner = self.owner()
+        private = owner.open(session)
+        mapping = C.parse((session / "frozen-evidence/original-path-map.json").read_bytes())
+        row = next(row for row in mapping["files"] if row["original"] == "custody/result.json")
+        actual, reached = C.query._PosixDirectory.read_bytes, []
+        failure = OSError("SYNTHETIC_COPIED_AUTHORITY_OPAQUE_READER_FAILURE")
+        def failed(parent, name, **kwargs):
+            if parent.path == session / "frozen-evidence" and name == row["member"]:
+                reached.append(True)
+                raise failure
+            return actual(parent, name, **kwargs)
+        with patch.object(C.query._PosixDirectory, "read_bytes", failed), self.assertRaises(OSError) as caught:
+            C.frozen_abi_packet(owner, private, self.clock.now + 45)
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(reached, [True])
+        self.assertTrue(owner.unknown)
+        self.assertIs(owner.original, failure)
+        with self.assertRaisesRegex(C.ControllerError, "CONTROLLER_RESOURCE_RETIREMENT_UNKNOWN"):
+            owner.close()
+
+    def test_frozen_large_log_uses_streaming_and_preserves_original_task_observations(self):
+        child = self.model_child
+        def large(argv, environment):
+            child(argv, environment)
+            if "--cwd" in argv:
+                path = C.session_path("full", "macos-arm64") / "state/evidence" / self.reserved / "product.stdout.log"
+                self.save(path, path.read_bytes() + (b"n" * 1023 + b"\n") * 5120)
+        log, opened, active = C.primary_abi_log, C.posix._open_member, []
+        reads, closed = [], []
+        def observe(owner, directory, end, **kwargs):
+            active.append(directory.path.name == "frozen-evidence")
+            try:
+                return log(owner, directory, end, **kwargs)
+            finally:
+                active.pop()
+        def stream(root, name, snapshot):
+            original = opened(root, name, snapshot)
+            if not active:
+                return original
+            copied = active[-1]
+            class Reader:
+                def read(_self, size):
+                    self.assertLessEqual(size, 64 * 1024)
+                    reads.append((copied, size))
+                    return original.read(size)
+                def fileno(_self):
+                    return original.fileno()
+                def close(_self):
+                    original.close()
+                    closed.append(copied)
+            return Reader()
+        with patch.object(self, "model_child", side_effect=large), patch.object(C, "primary_abi_log", observe), \
+                patch.object(C.posix, "_open_member", stream):
+            session, result = self.execute_full()
+            self.assertTrue(result["profilePassed"])
+            self.assertEqual(self.seal(), "artifacts_ready=true\nprofile_passed=true\n")
+        evidence = C.parse((session / "evidence/primary-abi/manifest.json").read_bytes())["assessment"]["log"]
+        self.assertGreater(evidence["bytes"], C.RECORD_LIMIT)
+        self.assertEqual(len(evidence["tasks"]), 32)
+        self.assertGreater(sum(copied for copied, _size in reads), 80)
+        self.assertGreater(closed.count(True), 0)
+        self.assertGreater(closed.count(False), 0)
+
+    def test_copied_log_read_error_and_secondary_close_ambiguity_never_return_a_packet(self):
+        session, _result = self.execute_full()
+        owner = self.owner()
+        private = owner.open(session)
+        opened, reached, closed = C.posix._open_member, [], []
+        failure = ValueError("SYNTHETIC_COPIED_LOG_READ_FAILURE")
+        def broken(root, name, snapshot):
+            original = opened(root, name, snapshot)
+            if root != session / "frozen-evidence":
+                return original
+            reached.append(name)
+            class Reader:
+                def read(_self, _size):
+                    raise failure
+                def fileno(_self):
+                    return original.fileno()
+                def close(_self):
+                    original.close()
+                    closed.append(name)
+                    raise OSError("SYNTHETIC_COPIED_LOG_CLOSE_UNKNOWN")
+            return Reader()
+        # Only the log reader uses this low-level seam here; small records use
+        # the unchanged private read_bytes supplier, not a replacement backend.
+        with patch.object(C.posix, "_open_member", broken), self.assertRaises(ValueError) as caught:
+            C.frozen_abi_packet(owner, private, self.clock.now + 45)
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(len(reached), 1)
+        self.assertEqual(closed, reached)
+        self.assertTrue(owner.unknown)
+        self.assertIs(owner.original, failure)
+        self.assertIn("SYNTHETIC_COPIED_LOG_CLOSE_UNKNOWN", json.dumps(owner.errors))
+        with self.assertRaisesRegex(C.ControllerError, "CONTROLLER_RESOURCE_RETIREMENT_UNKNOWN"):
+            owner.close()
+
+    def test_provenance_reads_keep_original_deadline_and_check_after_copied_log_close(self):
+        session, _result = self.execute_full()
+        owner = self.owner()
+        private = owner.open(session)
+        end = self.clock.now + 45
+        opened, reached = C.posix._open_member, []
+        def delayed(root, name, snapshot):
+            original = opened(root, name, snapshot)
+            if root != session / "frozen-evidence":
+                return original
+            class Reader:
+                def read(_self, size):
+                    return original.read(size)
+                def fileno(_self):
+                    return original.fileno()
+                def close(_self):
+                    original.close()
+                    reached.append(name)
+                    self.clock.now = end
+            return Reader()
+        read, deadlines = C.PrivateOwner.read, []
+        def observe(reader, parent, name, deadline, *args, **kwargs):
+            deadlines.append(deadline)
+            return read(reader, parent, name, deadline, *args, **kwargs)
+        with patch.object(C.posix, "_open_member", delayed), patch.object(C.PrivateOwner, "read", observe), \
+                self.assertRaisesRegex(C.posix.EvidenceError, "exceeded its deadline"):
+            C.frozen_abi_packet(owner, private, end)
+        self.assertEqual(len(reached), 1)
+        self.assertEqual(set(deadlines), {end})
+        self.assertFalse(owner.unknown)
+        owner.close()
+
+    def test_copied_log_close_ambiguity_alone_never_returns_a_packet(self):
+        session, _result = self.execute_full()
+        owner = self.owner()
+        private = owner.open(session)
+        opened, closed = C.posix._open_member, []
+        failure = OSError("SYNTHETIC_COPIED_LOG_CLOSE_ONLY_UNKNOWN")
+        def ambiguous(root, name, snapshot):
+            original = opened(root, name, snapshot)
+            if root != session / "frozen-evidence":
+                return original
+            class Reader:
+                def read(_self, size):
+                    return original.read(size)
+                def fileno(_self):
+                    return original.fileno()
+                def close(_self):
+                    original.close()
+                    closed.append(name)
+                    raise failure
+            return Reader()
+        with patch.object(C.posix, "_open_member", ambiguous), \
+                self.assertRaisesRegex(C.ControllerError, "ABI_ORIGINAL_LOG_CHANGED_OR_UNCLOSED"):
+            C.frozen_abi_packet(owner, private, self.clock.now + 45)
+        self.assertEqual(len(closed), 1)
+        self.assertIs(owner.original, failure)
+        self.assertTrue(owner.unknown)
+        with self.assertRaisesRegex(C.ControllerError, "CONTROLLER_RESOURCE_RETIREMENT_UNKNOWN"):
+            owner.close()
+
+    def test_known_absent_provenance_cannot_appear_during_packet_verification(self):
+        self.product_boots_simulator = False
+        session, result = self.execute_full()
+        self.assertTrue(result["profilePassed"])
+        owner = self.owner()
+        private = owner.open(session)
+        added = session / "evidence/commands/simulator-shutdown"
+        self.assertFalse(added.exists())
+        read, reached = C.PrivateOwner.read, []
+        def appeared(reader, parent, name, *args, **kwargs):
+            raw = read(reader, parent, name, *args, **kwargs)
+            if parent.path == session / "evidence/commands/simulator-retire-after" and name == "result.json":
+                reached.append(True)
+                added.mkdir(mode=0o700)
+                self.save(added / "result.json", b"SYNTHETIC_LATE_UNBOUND_ORIGINAL")
+            return raw
+        with patch.object(C.PrivateOwner, "read", appeared), \
+                self.assertRaisesRegex(C.ControllerError, "ABI_ORIGINAL_PROVENANCE_APPEARED"):
+            C.frozen_abi_packet(owner, private, self.clock.now + 45)
+        self.assertEqual(reached, [True])
+        self.assertFalse(owner.unknown)
+        owner.close()
 
     def test_full_admits_before_loader_and_binds_then_retires_only_exact_uuid(self):
         session, result = self.execute_full()

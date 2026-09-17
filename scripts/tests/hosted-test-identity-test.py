@@ -16,6 +16,7 @@ from unittest.mock import Mock, patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts"))
 SPEC = importlib.util.spec_from_file_location("hosted_test_identity", ROOT / "scripts/hosted_test_identity.py")
 H = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = H
@@ -364,6 +365,56 @@ class GitReaderTests(unittest.TestCase):
         self.assertEqual(view.policy(BASE), (expected, raw))
         self.assertEqual(view.query.call_args_list[0].args, ("ls-tree", "-z", BASE, "--", H.POLICY_PATH))
         self.assertEqual(view.query.call_args_list[-1].args, ("cat-file", "blob", expected))
+
+    def test_all_eight_abi_references_are_exact_full_sha_regular_blobs(self):
+        for path in H.abi.BASELINES:
+            with self.subTest(path=path):
+                raw = ("synthetic reference " + path + "\n").encode()
+                expected = H.abi.blob(raw)
+                view = self.view([f"100644 blob {expected}\t{path}\0".encode(), str(len(raw)).encode(), raw])
+                self.assertEqual(view.abi_baseline(BASE, path), (expected, raw))
+                self.assertEqual(view.query.call_args_list[0].args, ("ls-tree", "-z", BASE, "--", path))
+                self.assertEqual(view.query.call_args_list[2].kwargs, {"limit": 1024 * 1024})
+                self.assertEqual(view.query.call_count, 3)
+
+    def test_abi_reader_refuses_every_nonclosed_path_or_mutable_ref_before_query(self):
+        for path in (H.POLICY_PATH, "private.key", "library/p2p-core/api/../api/p2p-core.klib.api",
+                     H.abi.BASELINES[0] + "/", "/" + H.abi.BASELINES[0], True):
+            view = self.view([])
+            with self.subTest(path=path), self.assertRaisesRegex(H.AdmissionError, "ABI_BASELINE_CLOSED_PATH"):
+                view.abi_baseline(BASE, path)
+            view.query.assert_not_called()
+        for commit in ("main", "HEAD", "refs/heads/main", BASE + "~1", BASE[:12], True):
+            view = self.view([])
+            with self.subTest(commit=commit), self.assertRaisesRegex(H.AdmissionError, "IDENTITY_FULL_SHA"):
+                view.abi_baseline(commit, H.abi.BASELINES[0])
+            view.query.assert_not_called()
+
+    def test_abi_reader_rejects_tree_alias_links_modes_duplicates_and_wrong_path(self):
+        path = H.abi.BASELINES[0]
+        good = f"100644 blob {HEAD}\t{path}\0".encode()
+        values = [b"", good[:-1], good + good, good.replace(b"100644", b"120000"),
+                  good.replace(b"100644", b"100755"), good.replace(b"blob", b"tree"),
+                  good.replace(path.encode(), H.abi.BASELINES[1].encode()), good.replace(HEAD.encode(), b"bad")]
+        for value in values:
+            with self.subTest(value=value):
+                view = self.view([value])
+                with self.assertRaisesRegex(H.AdmissionError, "ABI_BASELINE_REGULAR_BLOB_REQUIRED"):
+                    view.abi_baseline(BASE, path)
+                self.assertEqual(view.query.call_count, 1)
+
+    def test_abi_reader_refuses_bad_size_truncation_growth_and_wrong_blob(self):
+        path, raw = H.abi.BASELINES[0], b"synthetic\n"
+        entry = f"100644 blob {H.abi.blob(raw)}\t{path}\0".encode()
+        for size in (b"0", b"01", b"-1", b"NaN", str(H.abi.FILE_LIMIT + 1).encode()):
+            view = self.view([entry, size])
+            with self.subTest(size=size), self.assertRaisesRegex(H.AdmissionError, "ABI_BASELINE_SIZE"):
+                view.abi_baseline(BASE, path)
+            self.assertEqual(view.query.call_count, 2)
+        for changed in (raw[:-1], raw + b"x", b"!" + raw[1:]):
+            view = self.view([entry, str(len(raw)).encode(), changed])
+            with self.subTest(changed=changed), self.assertRaises(H.AdmissionError):
+                view.abi_baseline(BASE, path)
 
     def test_missing_symlink_executable_or_duplicate_policy_is_rejected(self):
         for raw in (b"", f"120000 blob {HEAD}\t{H.POLICY_PATH}\0".encode(),
