@@ -37,6 +37,47 @@ Plans are private, path-bearing records, not public evidence companions. A pure
 consume path separately requires the exact admitted source, stage and original
 action outcomes; those requirements still need genuine hosted qualification.
 
+## Separate bootstrap identity (dormant)
+
+[`hosted_cache_bootstrap_identity.py`](../../scripts/hosted_cache_bootstrap_identity.py)
+defines a manual-only `cache-bootstrap` identity, not an ordinary FULL/Desktop
+test identity. Its closed `selection` names are `desktop-linux-x64`,
+`desktop-windows-x64`, `desktop-macos-arm64`, `desktop-macos-x64`,
+`full-macos-arm64` and `full-macos-x64`. The separate `cacheCohort` selects only
+the byte-reuse profile/role. A future controller must derive that cohort from
+the admission; it cannot accept an independent caller-selected profile or give
+FULL's simulator/ABI/transcript authority to a configuration-only producer.
+
+The three dispatch inputs are exactly `selection`, `expected_sha` and
+`expected_tree`. The fixed proposed producer request is
+`help --console=plain --no-configure-on-demand`; it is explicitly
+`CONFIGURATION_ONLY_NOT_COMPLETE_DEPENDENCIES_OR_TESTS` with `NOT_PERFORMED`
+test acceptance. Configuration may resolve only part of the dependencies.
+Neither a declared identity nor a successful configuration proves population,
+resolver reuse, zero downloads or any ordinary product test.
+
+The identity requires exact hosted workflow/run/source/tree/role labels, clean
+full history and ancestry from the original fetched main. Recipient policy is
+read only from that main, with source and main rechecked afterward. Candidate
+policy and key/budget/command inputs cannot supply authority. The real entry
+uses the existing required native-owned Git query boundary. Its closed grammar
+admits the exact shallow-repository query and `merge-base` with two full lowercase
+commit SHAs, not arbitrary refs/options, fetches or writes. Existing query
+count, capture, 15-second query and 45-second finalization bounds are unchanged;
+they are not a complete bootstrap schedule. Supplied event/Git models do not
+attest a real hosted caller or native retirement.
+
+This identity has no CLI/controller/producer/provider caller or workflow. The
+named future `.github/workflows/dependency-cache-bootstrap.yml` still does not
+exist. Original producer success, same-home stop, known worker retirement,
+empty-seed/export/freeze/save/probe custody, separate seal and a complete admitted
+budget remain unfinished. The proposed 5,400 seconds is **not admitted or
+measured**. Windows file ownership still has its 900-second lifetime; its
+576MiB aggregate Snapshot cannot hold the 2GiB dependency cohort. Both ordinary
+activation HOLDs remain. The original checkpoint's untested WIP status is dated;
+later scoped checks/review are recorded against their exact source, not claimed
+as executions at that checkpoint.
+
 ## Connected consume and delivery path
 
 After the unchanged HOLD and native/source admission, `prepare-consume` binds
@@ -178,6 +219,7 @@ permission to reuse another source/run/attempt's result.
 Focused offline commands (not a claim they ran on a particular host):
 
 ```bash
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-identity-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
@@ -188,6 +230,8 @@ python3 -I -B -S scripts/tests/hosted-desktop-job-budget-test.py
 These use modeled provider/native boundaries and tiny synthetic owned files, no
 dependency download or Gradle. The connected/budget controls are registered in the
 unconditional ordinary CI policy step and both release script entry points.
+The separate bootstrap-identity controls are currently standalone, not an
+activated or registered bootstrap workflow.
 Native Windows provider behavior and actual resolver/cache reuse require
 separate genuine execution. Changes to shared executable suppliers also require
 independent review of the explicit composition tripwire update.

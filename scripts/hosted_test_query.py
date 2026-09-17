@@ -239,8 +239,13 @@ def _inherited_context():
 
 def _allowed_suffix(arguments):
     if arguments in (("rev-parse", "--show-toplevel"),
+                     ("rev-parse", "--is-shallow-repository"),
                      ("status", "--porcelain=v1", "--untracked-files=all")):
         return True
+    # Bootstrap identity checks full history and original-main ancestry. Admit
+    # only two immutable commits, never arbitrary refs, revision syntax or flags.
+    if len(arguments) == 3 and arguments[0] == "merge-base":
+        return all(identity.SHA.fullmatch(value) is not None for value in arguments[1:])
     if len(arguments) == 3 and arguments[:2] == ("rev-parse", "--verify"):
         return bool(re.fullmatch(r"(?:HEAD|refs/remotes/origin/main|[0-9a-f]{40})\^\{commit\}|"
                                  r"[0-9a-f]{40}\^\{tree\}", arguments[2]))
