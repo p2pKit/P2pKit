@@ -28,6 +28,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 
 
@@ -43,6 +44,29 @@ BACKENDS = {"macos-arm64": "darwin-libproc-audit-token", "macos-x64": "darwin-li
             "linux-x64": "linux-proc-pidfd", "windows-x64": "windows-job-list-suspended"}
 
 
+# Only the ordinary-FULL post-return prepare action installs this bound. It is
+# shared across context/source/metadata/Git/file work, never renewed per helper.
+BOUND_CHECK = lambda: None
+BOUND_REMAINING = lambda: 60.0
+BOUND_RAW_END = None
+
+
+def bounded_retirement(raw_end):
+    global BOUND_CHECK, BOUND_REMAINING, BOUND_RAW_END
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import hosted_full_job_budget as budget
+    first = budget.raw_now()
+    require(type(raw_end) is int and first < raw_end <= first + 285 * budget.NS, "Central original retirement bound invalid")
+    BOUND_RAW_END = raw_end
+    previous = [first]
+    def remaining():
+        previous[0] = budget.raw_now(previous[0])
+        require(previous[0] < raw_end, "Central original retirement bound exhausted")
+        return min(60.0, (raw_end - previous[0]) / budget.NS)
+    BOUND_REMAINING = remaining
+    BOUND_CHECK = lambda: remaining()
+
+
 def require(condition, message):
     if not condition:
         raise ValueError(message)
@@ -53,6 +77,7 @@ def digest(data):
 
 
 def physical(value, *, directory=True, missing=False):
+    BOUND_CHECK()
     path = Path(value)
     require(path.is_absolute() and path.resolve() == path and not path.is_symlink(),
             "expected an absolute physical non-symlink path")
@@ -72,6 +97,7 @@ def read_bytes(path, limit=MAX_DOCUMENT):
     physical(path, directory=False)
     with path.open("rb") as stream:
         data = stream.read(limit + 1)
+    BOUND_CHECK()
     require(len(data) <= limit, "input exceeds its bounded document size")
     return data
 
@@ -91,6 +117,7 @@ def read_json(path):
 
 
 def write_new(path, data):
+    BOUND_CHECK()
     physical(path, directory=False, missing=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
     with os.fdopen(fd, "wb") as stream:
@@ -98,6 +125,7 @@ def write_new(path, data):
         stream.flush()
         os.fsync(stream.fileno())
     path.chmod(0o444)
+    BOUND_CHECK()
 
 
 def write_json(path, value):
@@ -105,8 +133,10 @@ def write_json(path, value):
 
 
 def git(root, *args):
-    return subprocess.run(["git", "-C", str(root), *args], check=True, timeout=60,
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
+    result = subprocess.run(["git", "-C", str(root), *args], check=True, timeout=BOUND_REMAINING(),
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
+    BOUND_CHECK()
+    return result
 
 
 def snapshot(root):
@@ -126,6 +156,7 @@ def file_record(path):
     with path.open("rb") as stream:
         require(os.fstat(stream.fileno()) == before, "file changed while opening")
         for chunk in iter(lambda: stream.read(512 * 1024), b""):
+            BOUND_CHECK()
             sha.update(chunk)
             blob.update(chunk)
         after = os.fstat(stream.fileno())
@@ -300,12 +331,15 @@ def fixture(c):
     check_fixture(c, before_publication=True)
 
 
-def walk_files(directory, *, skip=()):
+def walk_files(directory, *, skip=(), check=None):
+    check = check or BOUND_CHECK
     result, pending, count = [], [(directory, 0)], 0
     while pending:
+        check()
         parent, depth = pending.pop()
         require(depth < 64, "excessive directory nesting")
         for path in sorted(parent.iterdir()):
+            check()
             count += 1
             require(count <= MAX_FILES, "excessive directory entries")
             info = path.lstat()
@@ -568,12 +602,19 @@ def bundle_check(c):
 def secret_needles(c):
     values = [PASSWORD.encode(), b"-----BEGIN PGP PRIVATE KEY BLOCK-----"]
     for path in (c["work"] / "key.asc", c["repository"] / "release-key.asc"):
+        BOUND_CHECK()
         if path.exists():
             key = read_bytes(path)
             values.extend([key, base64.b64encode(key)])
             values.extend(line for line in key.splitlines() if len(line) >= 32)
-    return {part for value in values for part in ([value] if len(value) <= 128 else
-            [value[offset:offset + 128] for offset in range(0, len(value), 128)]) if len(part) >= 16}
+    needles = set()
+    for value in values:
+        for offset in range(0, len(value), 128):
+            BOUND_CHECK()
+            part = value[offset:offset + 128]
+            if len(part) >= 16:
+                needles.add(part)
+    return needles
 
 
 def safe_file(path, needles):
@@ -679,7 +720,7 @@ def finish(c, status, phase):
     return code
 
 
-def retire(c, receipt_path):
+def retire(c, receipt_path, *, prepare_only=False):
     a = admission(c, active=False)
     r = read_json(c["evidence"] / "result.json")
     require(r["outerId"] == a["outerId"] and r["retentionStatus"] == "RETAINED" and r["errors"] == [],
@@ -728,7 +769,8 @@ def retire(c, receipt_path):
                 with (c["evidence"] / (prefix + ".stdout.log")).open("xb") as out, \
                         (c["evidence"] / (prefix + ".stderr.log")).open("xb") as err:
                     observation["exitCode"] = subprocess.run(observation["argv"], stdout=out, stderr=err,
-                                                             timeout=60).returncode
+                                                             timeout=BOUND_REMAINING()).returncode
+                    BOUND_CHECK()
             except (OSError, subprocess.SubprocessError) as error:
                 observation["errorType"] = type(error).__name__
             for suffix in (".stdout.log", ".stderr.log"):
@@ -759,6 +801,21 @@ def retire(c, receipt_path):
         require(removal["exitCode"] == 0 and removal["errorType"] is None and path_absent is True and
                 registry["exitCode"] == 0 and registry["errorType"] is None and registry_absent is True,
                 "owned worktree removal/registry retirement failed")
+    if prepare_only:
+        require(BOUND_RAW_END is not None, "bounded prepare-only retirement required")
+        # Keep actual key inputs and homes reachable while the enclosing native
+        # helper/stop captures close. The controller screens them before removal.
+        keys = key_input_records(c, r)
+        write_json(c["evidence"] / "retirement-prepared.json", {
+            "schema": 1, "scope": "CENTRAL_POST_RETURN_PREPARED_NOT_REMOVED", "contextSha256": c["contextSha256"],
+            "source": c["source"], "workIdentity": a["workIdentity"], "outerId": a["outerId"],
+            "outerReceiptSha256": digest(read_bytes(directory / "receipt.json")),
+            "admissionSha256": digest(read_bytes(c["evidence"] / "admission.json")),
+            "resultSha256": digest(read_bytes(c["evidence"] / "result.json")),
+            "deadlineRawNs": BOUND_RAW_END, "keyInputs": keys,
+            "homes": [{"path": str(path), "identity": identity(path)} for path in homes],
+            "metadata": {path.name: file_record(path) for path in sorted(c["evidence"].glob("*.json"))}})
+        return
     for path in homes:
         shutil.rmtree(path)
         require(not path.exists(), "owned GPG home removal failed")
@@ -769,6 +826,165 @@ def retire(c, receipt_path):
         "schema": 1, "nativeRetirement": "KNOWN", "workRemoved": True, "gpgHomesRemoved": True,
         "outerReceiptSha256": digest(read_bytes(directory / "receipt.json")),
         "productExitCode": r["productExitCode"], "productPassed": r["finalExitCode"] == 0})
+
+
+def key_input_records(c, result):
+    BOUND_CHECK()
+    expected = []
+    if "signer" in result["gpgStopExitCodes"]:
+        expected.append(c["work"] / "key.asc")
+    if (c["evidence"] / "builder-admission.json").exists():
+        expected.append(c["repository"] / "release-key.asc")
+    for path in (c["work"] / "key.asc", c["repository"] / "release-key.asc"):
+        if path.exists() and path not in expected:
+            expected.append(path)
+    records = []
+    for path in expected:
+        BOUND_CHECK()
+        data = read_bytes(path)
+        require(data, "original disposable key input missing; quarantine required")
+        records.append({"relative": str(path.relative_to(c["work"])), "sha256": digest(data), "bytes": len(data)})
+    return records
+
+
+def complete_prepared_retirement(c, prepared_raw, *, check):
+    """File-only tail, called by the same owning controller after closed-stream screening.
+
+    No CLI exposes this removal authority. The caller holds the original native
+    return and exact prepare bytes; revalidate original inactive O and every
+    admitted path/content here, without impersonating O or launching a child.
+    """
+    global BOUND_CHECK
+    old_check = BOUND_CHECK
+    BOUND_CHECK = check
+    try:
+        check()
+        require(read_bytes(c["evidence"] / "retirement-prepared.json") == prepared_raw, "Central prepare original changed")
+        prepared = json.loads(prepared_raw, object_pairs_hook=unique)
+        a, r = read_json(c["evidence"] / "admission.json"), read_json(c["evidence"] / "result.json")
+        require(prepared["schema"] == 1 and prepared["scope"] == "CENTRAL_POST_RETURN_PREPARED_NOT_REMOVED" and
+                prepared["contextSha256"] == c["contextSha256"] and prepared["source"] == c["source"] and
+                prepared["outerId"] == a["outerId"] == r["outerId"] and prepared["workIdentity"] == identity(c["work"]) == a["workIdentity"] and
+                a["root"] == str(c["root"]) and a["state"] == str(c["state"]) and a["work"] == str(c["work"]) and
+                prepared["admissionSha256"] == digest(read_bytes(c["evidence"] / "admission.json")) and
+                prepared["resultSha256"] == digest(read_bytes(c["evidence"] / "result.json")) and
+                r["retentionStatus"] == "RETAINED" and r["errors"] == [], "Central original prepare authority changed")
+        for name, record in prepared["metadata"].items():
+            require(Path(name).name == name and name.endswith(".json") and file_record(c["evidence"] / name) == record,
+                    "Central original prepare metadata changed")
+        for name, record in a["trackedSource"].items():
+            require(file_record(c["root"] / name) == record, "Central source changed after prepare")
+        receipt, directory = canonical_receipt(c, c["state"] / "evidence" / a["outerId"] / "receipt.json", r["finalExitCode"],
+            a["outerStart"]["purpose"], a["outerStart"]["requestedArgv"], "command", a["outerStart"]["ancestorInvocationIds"])
+        require(digest(read_bytes(directory / "receipt.json")) == prepared["outerReceiptSha256"] and
+                not c["fixture"].exists() and key_input_records(c, r) == prepared["keyInputs"],
+                "Central source/keys/outer changed before removal")
+        homes = []
+        for role in ("signer", "verifier"):
+            if role in r["gpgStopExitCodes"]:
+                _record, path = home_record(c, role, a)
+                homes.append(path)
+        require([{ "path": str(path), "identity": identity(path)} for path in homes] == prepared["homes"],
+                "Central prepared home roster changed")
+        for path, expected in zip(homes, prepared["homes"]):
+            remove_bounded_tree(path, expected["identity"], check)
+        require(identity(c["work"]) == a["workIdentity"], "Central work replaced before removal")
+        remove_bounded_tree(c["work"], a["workIdentity"], check)
+        check()
+        return {"schema": 1, "workRemoved": not os.path.lexists(c["work"]),
+                "gpgHomesRemoved": all(not os.path.lexists(path) for path in homes),
+                "preparedSha256": digest(prepared_raw), "outerReceiptSha256": prepared["outerReceiptSha256"],
+                "productExitCode": r["productExitCode"], "productPassed": r["finalExitCode"] == 0}
+    finally:
+        BOUND_CHECK = old_check
+
+
+def remove_bounded_tree(path, expected, check):
+    """Only a previously admitted Central root; no new process or cleanup lease.
+
+    Open the actual physical ancestor chain and root BEFORE walking. fwalk and
+    all deletions are fd-relative, never a path-following recursive remover. The
+    original root must still name that same object before each destructive step;
+    an unverified replacement is not disposable. Symlink children are unlinked,
+    not entered. Every operation shares the caller's original RAW transaction.
+    """
+    require(os.name == "posix" and path.is_absolute() and path != Path("/") and ".." not in path.parts and
+            type(expected) is dict and set(expected) == {"device", "inode"}, "Central removal original root required")
+    handles, anchors, walker, failure = [], [], None, None
+    def stamp(info):
+        return info.st_dev, info.st_ino, info.st_mode
+    def guard():
+        check()
+        for original, record in anchors:
+            require(stamp(original.lstat()) == record and stat.S_ISDIR(record[2]), "Central removal ancestor replaced")
+        if handles and len(anchors) == len(path.parts):
+            info = os.fstat(handles[-1])
+            require({"device": info.st_dev, "inode": info.st_ino} == expected and
+                    stamp(os.stat(path.name, dir_fd=handles[-2], follow_symlinks=False)) == stamp(info),
+                    "Central removal original root replaced")
+    try:
+        current = Path("/")
+        for part in path.parts:
+            check()
+            if part != "/":
+                current = current / part
+            before = current.lstat()
+            require(stat.S_ISDIR(before.st_mode) and not stat.S_ISLNK(before.st_mode), "Central removal physical ancestor required")
+            fd = os.open("/" if part == "/" else part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                         **({"dir_fd": handles[-1]} if handles else {}))
+            handles.append(fd)
+            require(stamp(os.fstat(fd)) == stamp(before), "Central removal opened ancestor changed")
+            anchors.append((current, stamp(before)))
+        guard()
+        require(len(handles) > 1 and stat.S_IMODE(os.fstat(handles[-1]).st_mode) == 0o700,
+                "Central removal private original root required")
+        # Bound depth/count before bottom-up fwalk can descend to its first
+        # yield. This read-only preflight grants no path-based deletion rights.
+        walk_files(path, check=guard)
+        guard()
+        walker = os.fwalk(".", topdown=False, follow_symlinks=False, dir_fd=handles[-1])
+        count = 0
+        for relative, directories, leaves, fd in walker:
+            guard()
+            require(len(Path(relative).parts) <= 64, "Central removal nesting bound")
+            for name in [*leaves, *directories]:
+                guard()
+                count += 1
+                require(count <= MAX_FILES, "Central removal entry bound")
+                info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                if stat.S_ISDIR(info.st_mode):
+                    os.rmdir(name, dir_fd=fd)
+                else:
+                    require(stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode), "Central removal special entry")
+                    os.unlink(name, dir_fd=fd)
+                guard()
+        guard()
+        os.rmdir(path.name, dir_fd=handles[-2])
+        check()
+        require(not os.path.lexists(path), "Central removed root replaced")
+    except BaseException as error:
+        failure = error
+    finally:
+        # No ambiguous descriptor close is retried. UNKNOWN is carried through
+        # the maintained controller exception graph and blocks further removal.
+        if walker is not None:
+            try:
+                walker.close()
+            except BaseException as error:
+                failure = failure or error
+                failure.__notes__ = [*getattr(failure, "__notes__", ()), "Central fwalk retirement UNKNOWN"]
+        for fd in reversed(handles):
+            try:
+                os.close(fd)
+            except BaseException as error:
+                failure = failure or error
+                failure.__notes__ = [*getattr(failure, "__notes__", ()), "Central removal descriptor retirement UNKNOWN"]
+        try:
+            check()
+        except BaseException as error:
+            failure = failure or error
+    if failure is not None:
+        raise failure
 
 
 def check_fixture_for_retirement(c):
@@ -782,7 +998,7 @@ def check_fixture_for_retirement(c):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("admit", "fixture", "home", "stop", "builder", "publish", "signature",
-                                           "finish-builder", "finish", "retire"))
+                                           "finish-builder", "finish", "retire", "prepare-retire"))
     parser.add_argument("--root")
     parser.add_argument("--output")
     parser.add_argument("--role", choices=("signer", "verifier"))
@@ -792,9 +1008,14 @@ def main():
     parser.add_argument("--status-file")
     parser.add_argument("--fingerprint")
     parser.add_argument("--outer-receipt")
+    parser.add_argument("--deadline-raw-ns", type=int)
     args = parser.parse_args()
     try:
-        c = context(active=args.action != "retire")
+        if args.action == "prepare-retire":
+            bounded_retirement(args.deadline_raw_ns)
+        else:
+            require(args.deadline_raw_ns is None, "Central deadline applies only to bounded prepare retirement")
+        c = context(active=args.action not in ("retire", "prepare-retire"))
         if args.action == "admit":
             admit(c, args.root)
         elif args.action == "fixture":
@@ -816,7 +1037,7 @@ def main():
         elif args.action == "finish":
             return finish(c, args.status, args.phase)
         else:
-            retire(c, args.outer_receipt)
+            retire(c, args.outer_receipt, prepare_only=args.action == "prepare-retire")
     except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError, zipfile.BadZipFile) as error:
         # Do not dump child output or key-bearing values on exceptional paths.
         print("HOLD: Central bundle adapter: " + type(error).__name__ + ": " +

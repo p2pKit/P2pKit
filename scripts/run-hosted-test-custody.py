@@ -30,6 +30,7 @@ sys.path.insert(0, str(SCRIPTS))
 import audit_processes as processes
 import hosted_full_job_budget as job_time
 import hosted_full_simulator as simulator
+import hosted_full_supplements as supplements
 import hosted_evidence as posix
 import hosted_primary_abi as abi
 import hosted_test_evidence as ordinary
@@ -65,13 +66,13 @@ FULL_STAGE = {"recipient-validation": "productive", "audit-init": "productive",
               "custody-prepare": "productive", "product": "product-return", "custody-collect": "collect",
               "custody-uninstall": "uninstall", "export": "export",
               **{label: "productive" for label in (*simulator.PREPARE, simulator.PRELAUNCH)},
-              **{label: label for label in simulator.RETIRE}}
+              **{label: label for label in simulator.RETIRE}, **supplements.STAGES}
 FULL_FINISH = {"productive": "preparation-final", "product-return": "product-final", "collect": "collect-final",
                "uninstall": "uninstall-final", "export": "export-final",
                **{label: label + "-final" for label in simulator.RETIRE}}
 FULL_PREPARATION = ("job-time", "recipient-validation", "audit-init", *simulator.PREPARE,
                     "custody-prepare", simulator.PRELAUNCH, "product")
-FULL_ORDER = (*FULL_PREPARATION, "custody-collect", "custody-uninstall", *simulator.RETIRE, "export")
+FULL_ORDER = (*FULL_PREPARATION, "custody-collect", "custody-uninstall", *simulator.RETIRE, *supplements.ORDER, "export")
 IDENTITY_ENV = (
     "GITHUB_ACTIONS", "GITHUB_REPOSITORY", "GITHUB_SHA", "GITHUB_REF", "GITHUB_RUN_ID",
     "GITHUB_RUN_ATTEMPT", "GITHUB_EVENT_NAME", "GITHUB_WORKFLOW_REF", "GITHUB_WORKFLOW_SHA",
@@ -574,7 +575,7 @@ def abi_ancestors(build, subtree):
     return stamps
 
 
-def retain_abi_generated(owner, target, build_owners, end):
+def retain_abi_generated(owner, target, build_owners, end, check=lambda: None):
     """Six exact snapshots; eight separately acquired original generated files."""
     require(os.name == "posix", "PRIMARY_FULL_ABI_NATIVE_MAC_ONLY")
     groups = {}
@@ -583,6 +584,7 @@ def retain_abi_generated(owner, target, build_owners, end):
         groups.setdefault((module, subtree), []).append((index, name))
     originals, acquired, roots = {}, {}, []
     for (module, subtree), members in groups.items():
+        check()
         posix._deadline(end)
         build_path = ROOT / "library" / module / "build"
         require(build_path in build_owners, "ABI_PREWRITER_BUILD_OWNER_MISSING")
@@ -601,11 +603,13 @@ def retain_abi_generated(owner, target, build_owners, end):
         names = {name for _index, name in members}
         directories = {""} | {name.rsplit("/", 1)[0] for name in names if "/" in name}
         entries = posix_snapshot(owner, root, len(members) * abi.FILE_LIMIT, len(names | directories), end)
+        check()
         require(set(entries) == names | directories and
                 all(stat.S_ISDIR(entries[name][2]) for name in directories) and
                 all(stat.S_ISREG(entries[name][2]) and 0 < entries[name][5] <= abi.FILE_LIMIT for name in names),
                 "ABI_EXACT_GENERATED_ROSTER_REQUIRED")
         for index, name in members:
+            check()
             reader = owner.acquire("abi-generated-reader", lambda: posix._open_member(root, name, entries))
             original = None
             try:
@@ -613,6 +617,7 @@ def retain_abi_generated(owner, target, build_owners, end):
                 raw = reader.read(entries[name][5] + 1)
                 require(type(raw) is bytes and len(raw) == entries[name][5] and reader.read(1) == b"" and
                         posix._stamp(os.fstat(reader.fileno())) == entries[name], "ABI_ORIGINAL_CHANGED_DURING_READ")
+                check()
             except BaseException as error:
                 original = error
                 owner.error("abi-generated-read", error)
@@ -621,15 +626,18 @@ def retain_abi_generated(owner, target, build_owners, end):
             if original is not None:
                 raise original
             require(not owner.unknown, "ABI_GENERATED_READER_RETIREMENT_UNKNOWN")
+            check()
             owner.write(target, abi.member(index, "generated"), raw, end)
+            check()
             originals[index], acquired[index] = raw, list(entries[name])
         require(posix_snapshot(owner, root, len(members) * abi.FILE_LIMIT, len(names | directories), end) == entries and
                 abi_ancestors(build, subtree) == before, "ABI_GENERATED_SNAPSHOT_CHANGED")
         build.verify()
+        check()
     return originals, {"roots": roots, "files": [acquired[index] for index in range(8)]}
 
 
-def primary_abi_log(owner, invocation, end, *, name="product.stdout.log"):
+def primary_abi_log(owner, invocation, end, *, name="product.stdout.log", check=lambda: None):
     """Bounded original-log stream; never the4MiB JSON record reader."""
     invocation.verify()
     query._component(name)  # Also admits only the closed opaque frozen-copy member.
@@ -641,7 +649,7 @@ def primary_abi_log(owner, invocation, end, *, name="product.stdout.log"):
     reader = owner.acquire("abi-log-reader", lambda: posix._open_member(invocation.path, name, rows))
     original, result = None, None
     try:
-        result = abi.observe_log(reader, info.st_size, lambda: posix._deadline(end))
+        result = abi.observe_log(reader, info.st_size, lambda: (posix._deadline(end), check()))
         require(posix._stamp(os.fstat(reader.fileno())) == rows[name], "ABI_ORIGINAL_LOG_CHANGED")
     except BaseException as error:
         original = error
@@ -653,10 +661,11 @@ def primary_abi_log(owner, invocation, end, *, name="product.stdout.log"):
     require(not owner.unknown and posix._stamp(path.lstat()) == rows[name] and
             posix._stamp(invocation.path.lstat()) == rows[""], "ABI_ORIGINAL_LOG_CHANGED_OR_UNCLOSED")
     invocation.verify()
+    check()
     return result
 
 
-def primary_abi_inputs(owner, private, context, end):
+def primary_abi_inputs(owner, private, context, end, check=lambda: None):
     """The original command receipt + platform Gradle selector, not an invented leaf."""
     state = owner.child(private, "state", end)
     state_raw = owner.read(state, "context.json", end)
@@ -737,7 +746,7 @@ def primary_abi_inputs(owner, private, context, end):
             "custodyResultSha256": digest(custody_raw), "uninstallSha256": digest(uninstall_raw),
             "productPhaseSha256": digest(product_raw), "productInvocation": canonical["id"],
             "reportManifestSha256": digest(owner.read(invocation, "report-manifest.json", end)),
-            "platform": platform, "gradleCommand": expected}, primary_abi_log(owner, invocation, end)
+            "platform": platform, "gradleCommand": expected}, primary_abi_log(owner, invocation, end, check=check)
 
 
 def abi_disposition(raw):
@@ -948,10 +957,12 @@ def frozen_abi_packet(owner, private, end):
         require(len(raw) == row["size"] and digest(raw) == row["sha256"], "ABI_FROZEN_PACKET_CHANGED")
         originals[row["original"]] = raw
     provenance = frozen_abi_provenance(owner, private, frozen, {row["original"]: row for row in all_rows}, end)
+    supplement_binding = supplements.frozen_packet(owner, globals(), private, frozen,
+                                                    {row["original"]: row for row in all_rows}, end)
     require(owner.read(frozen, "original-path-map.json", end) == map_raw and
             posix_snapshot(owner, frozen.path, posix.MAX_BYTES, posix.MAX_MEMBERS, end) == snapshot, "ABI_FROZEN_MAP_CHANGED")
     manifest = originals.get("primary-abi/manifest.json")
-    return {"mapSha256": digest(map_raw), "files": rows, "provenance": provenance,
+    return {"mapSha256": digest(map_raw), "files": rows, "provenance": provenance, "supplements": supplement_binding,
             "manifestSha256": None if manifest is None else digest(manifest)}, originals
 
 
@@ -983,6 +994,10 @@ class Controller(PrivateOwner):
         self.export_return = None
         self.build_owners = {}
         self.primary_abi, self.primary_abi_attempted, self.export_freeze_end = None, False, None
+        self.primary_abi_accounting = None
+        self.collect_attempted = self.uninstall_attempted = self.simulator_retirement_attempted = False
+        self.active_canonical = None
+        self.full = supplements.Full(self, globals()) if profile == "full" else None
         self.environment = child_environment(dict(os.environ), self.path, self.state_path)
 
     def now_raw(self):
@@ -1038,9 +1053,17 @@ class Controller(PrivateOwner):
         self.child(self.private, "temporary", end, create=True)
         self.child(self.private, "control-home", end, create=True)
 
-    def phase(self, label, argv, timeout, *, finalizing=False, product=False, acquire_time=False):
+    def phase(self, label, argv, timeout, *, finalizing=False, product=False, acquire_time=False,
+              supplement=None, helper=False):
         """Actual fixed-caller composition around make_scope, not a new backend."""
         self.check(finalizing)
+        if supplement is not None or helper:
+            require(self.full is not None and not product and not acquire_time, "SUPPLEMENT_FULL_ONLY")
+            self.full.admit_phase(label, argv, supplement, helper)
+        canonical_id = (self.request["owner"]["productInvocation"] if product else
+                        supplement["id"] if supplement is not None else None)
+        canonical_domain = canonical_id is not None or helper
+        require(self.active_canonical is None, "CANONICAL_SCOPE_ALREADY_EXECUTING")
         require(type(timeout) is int and 0 < timeout <= OUTER_SECONDS[self.profile], "PHASE_TIMEOUT")
         started = time.monotonic()
         end, final_end = min(self.deadline, started + timeout), min(self.deadline, started + timeout + FINAL_SECONDS)
@@ -1062,19 +1085,30 @@ class Controller(PrivateOwner):
                 raw_work_end = min(raw_started + timeout * job_time.NS, self.budget.fence(FULL_STAGE[label]))
                 raw_final_end = min(raw_started + (timeout + FINAL_SECONDS) * job_time.NS,
                                     self.budget.fence(FULL_FINISH[FULL_STAGE[label]]))
+                if label == supplements.CENTRAL_RETIRE:
+                    # Original transaction fence, not a new285s on helper entry.
+                    cap = self.full.central["helperEndRawNs"]
+                    require(raw_started < cap, "CENTRAL_RETIREMENT_TRANSACTION_EXPIRED")
+                    raw_work_end = min(raw_work_end, cap)
+                    raw_final_end = min(raw_final_end, cap + FINAL_SECONDS * job_time.NS)
+                    end = min(end, started + (raw_work_end - raw_started) / job_time.NS)
+                    final_end = min(final_end, started + (raw_final_end - raw_started) / job_time.NS)
         else:
             require(not acquire_time, "JOB_TIME_FULL_ONLY")
         invocation = uuid.uuid4().hex
         directory = self.child(self.commands, label, final_end, create=True)
-        job = self.context["id"] if product else self.job
-        state = self.state_path if product else self.path
-        home = state / ("gradle-home" if product else "control-home")
+        job = self.context["id"] if canonical_domain else self.job
+        state = self.state_path if canonical_domain else self.path
+        home = state / ("gradle-home" if canonical_domain else "control-home")
         env = processes.ownership_environment(self.environment, job, invocation, str(state), str(home),
                                               allow_new_context=True)
         if self.profile == "full" and product:
             require(label == "product" and self.simulator_binding is not None, "PRIMARY_SIMULATOR_BINDING_REQUIRED")
             env.update({simulator.PATH_ENV: str(self.path / simulator.RELATIVE),
                         simulator.HASH_ENV: digest(self.simulator_binding)})
+        supplement_environment = self.full.environment(label) if supplement is not None or helper else None
+        if supplement_environment is not None:
+            env.update(supplement_environment)
         if acquire_time:
             require(type(self.actions_token) is str and self.actions_token, "JOB_TIME_READ_TOKEN_REQUIRED")
             env[job_time.TOKEN_ENV], self.actions_token = self.actions_token, None
@@ -1086,7 +1120,9 @@ class Controller(PrivateOwner):
                        startedRawNs=raw_started, completedRawNs=None, finalizedRawNs=None,
                        cooperativeCancellation=None, developerDir=self.environment.get("DEVELOPER_DIR"),
                        simulatorBindingSha256=None if self.simulator_binding is None else digest(self.simulator_binding),
-                       childAncestorInvocationIds=env[processes.CHAIN_ENV].split(":"))
+                       childAncestorInvocationIds=env[processes.CHAIN_ENV].split(":"),
+                       canonicalInvocation=canonical_id, supplementPhase=supplement is not None,
+                       postReturnHelper=bool(helper), supplementEnvironment=supplement_environment)
         self.records.append(row)
         before_errors = len(self.errors)
         receipt_complete = False
@@ -1102,19 +1138,18 @@ class Controller(PrivateOwner):
             if cutoff:
                 self.mark_cutoff(label, now)
             if (cutoff or self.cancelled) and not finalizing:
-                if product and not cancellation_requested:
+                if canonical_id is not None and self.active_canonical == canonical_id and not cancellation_requested:
                     # Record the single ATTEMPT before entering the canonical
                     # writer. A failed call is never retried or called a request.
                     cancellation_requested = True
                     cancellation = {"reason": "job-budget" if cutoff else "signal", "job": self.context["id"],
-                                    "invocation": self.request["owner"]["productInvocation"],
+                                    "invocation": canonical_id,
                                     "attemptedRawNs": now, "returnedRawNs": None, "requested": False,
                                     "requestSha256": None}
                     if self.profile == "full":
                         row["cooperativeCancellation"] = cancellation
                         self.budget_cancellation = cancellation
-                    audit.request_cancellation(self.state_path, self.context["id"],
-                                               self.request["owner"]["productInvocation"])
+                    audit.request_cancellation(self.state_path, self.context["id"], canonical_id)
                     cancellation["requested"] = True
                     cancellation["returnedRawNs"] = self.now_raw() if self.profile == "full" else None
                     end = min(end, time.monotonic() + 330)
@@ -1135,7 +1170,7 @@ class Controller(PrivateOwner):
                         self.check_window("product-final", copy_end)
                     # Full end already uses the immutable productive+330 fence;
                     # observation delay MUST NOT grant another fresh 330s.
-                elif not product:
+                elif canonical_id is None:
                     if cutoff:
                         raise ControllerError("FULL_JOB_PRODUCTIVE_CUTOFF")
                     raise KeyboardInterrupt("ORDINARY_TEST_CONTROLLER_CANCELLED")
@@ -1164,6 +1199,13 @@ class Controller(PrivateOwner):
                 self.product_attempted = True
             child = scope.spawn(list(argv), str(ROOT), env, stdout=out, stderr=err)
             require(child.stdout is None and child.stderr is None, "PRIVATE_SUPPLIED_SINKS_REQUIRED")
+            if canonical_id is not None:
+                if self.profile == "full":
+                    birth = simulator.created_native_launch(scope.description(), 0, list(argv), str(ROOT), job, invocation)
+                    require(birth["launch"]["pid"] == child.pid, "CANONICAL_CREATED_PROCESS_REQUIRED")
+                # A reservation/spawn attempt is not an executing process. Do
+                # not cancel a never-born ID after an exceptional spawn return.
+                self.active_canonical = canonical_id
             while True:
                 # Cooperative cancellation comes BEFORE a deadline exception
                 # can enter native drain, even if polling was badly delayed.
@@ -1176,10 +1218,16 @@ class Controller(PrivateOwner):
                     out.verify()
                     err.verify()
                 code = child.poll()
+                if code is not None:
+                    # Consume the actual return BEFORE the next fallible RAW
+                    # read/signal check. A still-owned native scope may require
+                    # draining, but its returned canonical child is no longer
+                    # the cancellation target. The late cutoff still fails it.
+                    row["exitCode"] = code
+                    self.active_canonical = None
                 observed = check_phase_budget()
                 posix._deadline(end)
                 if code is not None:
-                    row["exitCode"] = code
                     if self.profile == "full":
                         row["completedRawNs"] = observed
                     break
@@ -1188,7 +1236,7 @@ class Controller(PrivateOwner):
         except BaseException as error:
             original = error
             self.error(label, error)
-            if self.profile == "full" and product and row["launchAttempted"]:
+            if self.profile == "full" and canonical_id is not None and self.active_canonical == canonical_id:
                 # A poll/capture/discovery error may itself have crossed the
                 # productive cutoff. Preserve that first error, but do not let
                 # its exceptional return bypass the single exact cooperative
@@ -1227,6 +1275,8 @@ class Controller(PrivateOwner):
             else:
                 self.unknown = True  # Keep original pins/sinks beneath an unknown writer.
             row["retirement"] = "UNKNOWN" if self.unknown else "KNOWN"
+            if native_known and not self.unknown:
+                self.active_canonical = None
             try:
                 if self.profile == "full":
                     row["finalizedRawNs"] = self.now_raw()
@@ -1274,6 +1324,9 @@ class Controller(PrivateOwner):
         if self.profile == "full":
             context["jobBudgetSha256"] = self.budget.sha256
             context.update(primarySimulatorRequired=True, primaryAbiRequired=True,
+                           fullSupplementIntent=self.full.intent(),
+                           primaryAbiAccounting={"modes": ["productive", "terminal"], "oneShot": True,
+                             "productiveCutoffRawNs": self.budget.fence("productive"), "localSeconds": 180},
                            developerDir=self.environment.get("DEVELOPER_DIR"),
                            ancestorInvocationIds=self.environment.get(processes.CHAIN_ENV, "").split(":")
                            if self.environment.get(processes.CHAIN_ENV) else [])
@@ -1300,6 +1353,7 @@ class Controller(PrivateOwner):
                 self.context["source"] == {**original["source"], "status": "", "diffSha256": digest(b"")} and
                 not self.context["preexistingOutputPaths"], "CANONICAL_CONTEXT_DIFFERS_OR_STALE_OUTPUTS")
         if self.profile == "full":
+            self.full.allocate(state)
             self.admit_simulator()  # Cheap inventory BEFORE installing a custody loader or launching any product.
         # Protect original outputs BEFORE the writers, not merely copied XML.
         outputs = audit.output_roots(ROOT)
@@ -1310,6 +1364,8 @@ class Controller(PrivateOwner):
             owned = self.new(path)  # Native protected DACL + original ancestry pins on Windows.
             if path in outputs:
                 self.build_owners[path] = owned
+        if self.full is not None:
+            self.full.bind_owners()
         row = self.phase("custody-prepare", self.python(SCRIPTS / "test-transcript-custody.py", "prepare",
             "--root", ROOT, "--directory", self.evidence.path / "custody", "--home", self.state_path / "gradle-home",
             "--owner-state", self.state_path, "--owner-kind", "audit", "--scope",
@@ -1433,6 +1489,9 @@ class Controller(PrivateOwner):
     def retire_simulator(self):
         if self.profile != "full" or self.simulator is None:
             return
+        if self.simulator_retirement_attempted:
+            return
+        self.simulator_retirement_attempted = True
         # Publish the in-memory UNKNOWN before any I/O. A failed/late record or
         # close cannot leave a provisional KNOWN/green simulator disposition.
         value = {"schema": 1, "scope": "PRIMARY_ORDINARY_FULL_SIMULATOR_RETIREMENT",
@@ -1513,26 +1572,46 @@ class Controller(PrivateOwner):
             return
         directory = self.evidence.path / "custody"
         receipt = self.state_path / "evidence" / self.request["owner"]["productInvocation"] / "receipt.json"
-        # Also run after nonzero exit, timeout, cancellation, partial launch or
-        # absent canonical receipt. The collector retains HOLD, not a fake pass.
-        row = self.phase("custody-collect", self.python(SCRIPTS / "test-transcript-custody.py", "collect",
-                         "--directory", directory, "--owner-result", receipt), 120, finalizing=True)
-        end = self.window("collect-read", 30)
-        private = self.child(self.evidence, "custody", end)
-        self.custody = parse(self.read(private, "result.json", end))
-        self.check_window("collect-read", end)
-        require(row["exitCode"] in (0, 125), "CUSTODY_COLLECTOR_UNSUPPORTED_EXIT")
-        if self.custody.get("retirement") != "KNOWN":
-            self.unknown = True
-            raise ControllerError("CANONICAL_CUSTODY_RETIREMENT_UNKNOWN")
+        if not self.collect_attempted:
+            # Latch BEFORE any I/O. Reentry after failure must not replace the
+            # original fixed-path attempt or renew its budget.
+            self.collect_attempted = True
+            row = self.phase("custody-collect", self.python(SCRIPTS / "test-transcript-custody.py", "collect",
+                             "--directory", directory, "--owner-result", receipt), 120, finalizing=True)
+            end = self.window("collect-read", 30)
+            private = self.child(self.evidence, "custody", end)
+            self.custody = parse(self.read(private, "result.json", end))
+            self.check_window("collect-read", end)
+            require(row["exitCode"] in (0, 125), "CUSTODY_COLLECTOR_UNSUPPORTED_EXIT")
+            if self.custody.get("retirement") != "KNOWN":
+                self.unknown = True
+                raise ControllerError("CANONICAL_CUSTODY_RETIREMENT_UNKNOWN")
+        if self.custody is None or self.custody.get("retirement") != "KNOWN" or self.uninstall_attempted:
+            return
+        # Collector125 with original KNOWN may uninstall ONLY its exact loader.
+        self.uninstall_attempted = True
         row = self.phase("custody-uninstall", self.python(SCRIPTS / "test-transcript-custody.py", "uninstall",
                          "--directory", directory), 90, finalizing=True)
         require(row["exitCode"] == 0, "CUSTODY_LOADER_UNINSTALL_FAILED")
         end = self.window("uninstall-read", 30)
+        private = self.child(self.evidence, "custody", end)
         removed = parse(self.read(private, "uninstalled.json", end))
         self.check_window("uninstall-read", end)
         require(removed.get("absent") is True and removed.get("originalsDeleted") is False,
                 "CUSTODY_UNINSTALL_RECEIPT_DIFFERS")
+
+    def primary_barrier_passed(self):
+        if (self.profile != "full" or self.errors or self.cancelled or self.unknown or self.budget_exhausted or
+                self.active_canonical is not None or not self.collect_attempted or not self.uninstall_attempted or
+                not self.simulator_retirement_attempted):
+            return False
+        labels = ("product", "custody-collect", "custody-uninstall")
+        rows = {row["phase"]: row for row in self.records}
+        return (all(label in rows and rows[label]["exitCode"] == 0 and rows[label]["retirement"] == "KNOWN" and
+                    rows[label]["errors"] == [] for label in labels) and self.custody is not None and
+                self.custody.get("result") == "RETAINED" and self.custody.get("errors") == [] and
+                self.simulator_terminal is not None and self.simulator_terminal.get("retirement") == "KNOWN" and
+                self.simulator_terminal.get("status") == "KNOWN_SHUTDOWN")
 
     def freeze_end(self):
         # B1 retention and the existing export copies share ONE local and RAW
@@ -1542,35 +1621,53 @@ class Controller(PrivateOwner):
         self.check_window("export-freeze", self.export_freeze_end)
         return self.export_freeze_end
 
-    def retain_primary_abi(self):
+    def retain_primary_abi(self, *, mode="terminal"):
         if self.profile != "full" or self.request is None or not self.product_attempted:
             return
-        self.check(finalizing=True)
+        require(mode in ("productive", "terminal"), "ABI_ACCOUNTING_MODE")
         require(not self.primary_abi_attempted, "ABI_PRIMARY_RETENTION_IS_ONE_SHOT")
+        require(mode != "productive" or self.primary_barrier_passed(), "ABI_PRODUCTIVE_BARRIER_REQUIRED")
+        # Latch the one original attempt and truthful unacquired HOLD BEFORE
+        # any RAW/clock/window call can fail. Failure must not enable a terminal
+        # retry or turn a begun acquisition into an unattempted product.
         self.primary_abi_attempted = True
         self.primary_abi = {"status": "HOLD", "manifestSha256": None, "contextSha256": self.context_hash,
                             "productPhaseSha256": self.phase_hashes.get("product"), "generatedCount": None}
-        end = self.freeze_end()
+        self.primary_abi_accounting = {"mode": mode, "startedRawNs": None, "finishedRawNs": None,
+            "productiveCutoffRawNs": self.budget.fence("productive"), "endRawNs": None, "acquisitionStarted": False,
+            "rosterSha256": digest(encoded(parse(self.run_context_raw)["fullSupplementIntent"]))}
+        self.check(finalizing=mode == "terminal")
+        raw_start = self.now_raw()
+        self.primary_abi_accounting["startedRawNs"] = raw_start
+        stage = "productive" if mode == "productive" else "export-freeze"
+        end = self.window("productive", 180) if mode == "productive" else self.freeze_end()
+        self.primary_abi_accounting["endRawNs"] = min(raw_start + 180 * job_time.NS, self.budget.fence(stage))
+        def check():
+            self.check(finalizing=mode == "terminal")
+            self.check_window(stage, end)
+
+        check()
+        self.primary_abi_accounting["acquisitionStarted"] = True
         target = self.child(self.evidence, "primary-abi", end, create=True)
         # Every generated byte is separately acquired BEFORE reference reads and
         # before any future supplemental writer. A baseline is never a fallback.
-        generated, acquisition = retain_abi_generated(self, target, self.build_owners, end)
-
-        def check():
-            self.check(finalizing=True)
-            self.check_window("export-freeze", end)
-
+        generated, acquisition = retain_abi_generated(self, target, self.build_owners, end, check)
+        check()
         references, queries = abi_references(self, parse(self.admitted.record)["source"]["commit"],
             self.evidence.path / "primary-abi-queries", end, check)
         for index, (_blob, raw) in references.items():
+            check()
             self.write(target, abi.member(index, "baseline"), raw, end)
         context_raw = self.read(self.private, "run-context.json", end)
         require(context_raw == self.run_context_raw, "ABI_CONTEXT_CHANGED")
-        primary, log = primary_abi_inputs(self, self.private, parse(context_raw), end)
+        primary, log = primary_abi_inputs(self, self.private, parse(context_raw), end, check)
         require(primary["productPhaseSha256"] == self.phase_hashes.get("product"), "ABI_PRIMARY_PHASE_CHANGED")
+        check()
+        self.primary_abi_accounting["finishedRawNs"] = self.now_raw()
         raw = encoded({"schema": 1, "scope": "PRIMARY_FULL_ABI_ORIGINALS", "source": parse(context_raw)["source"],
                        "contextSha256": self.context_hash, "primary": primary, "referenceQueries": queries,
-                       "acquisition": acquisition, "assessment": abi.assess(generated, references, log)})
+                       "acquisition": acquisition, "assessment": abi.assess(generated, references, log),
+                       "accounting": self.primary_abi_accounting})
         self.write(target, "manifest.json", raw, end)
         check()  # A late/failed write keeps the earlier HOLD, not a provisional pass.
         self.primary_abi = abi_disposition(raw)
@@ -1579,6 +1676,8 @@ class Controller(PrivateOwner):
         self.check(finalizing=True)
         require(self.admitted is not None and hasattr(self, "recipient_raw"), "NO_VALIDATED_RECIPIENT")
         end = self.freeze_end()
+        if self.full is not None:
+            self.full.freeze(end)
         if self.context is not None:
             state = self.child(self.private, "state", end)
             original = self.child(state, "evidence", end)
@@ -1654,6 +1753,8 @@ class Controller(PrivateOwner):
         if self.profile == "full":
             value["jobBudget"] = self.budget_result()
             value["primaryAbi"] = self.primary_abi
+            value["primaryAbiAccounting"] = self.primary_abi_accounting
+            value["fullSupplements"] = self.full.result()
             value["simulator"] = {"admissionSha256": None if self.simulator_admission is None else
                                   digest(self.simulator_admission),
                                   "bindingSha256": None if self.simulator_binding is None else digest(self.simulator_binding),
@@ -1668,6 +1769,8 @@ def profile_passed(value):
     labels = ["recipient-validation", "audit-init", "custody-prepare", "product", "custody-collect",
               "custody-uninstall"]
     if value.get("profile") == "full":
+        if not supplements.profile_passed(value):
+            return False
         retained = value.get("primaryAbi")
         if not (type(retained) is dict and set(retained) == {"status", "manifestSha256", "contextSha256",
                 "productPhaseSha256", "generatedCount"} and retained["status"] == "PASS" and
@@ -1685,6 +1788,7 @@ def profile_passed(value):
         if owned["terminal"]["shutdownAttempted"]:
             labels.append(simulator.SHUTDOWN)
         labels.append(simulator.AFTER)
+        labels.extend(supplements.passing_labels(value))
         budget = value.get("jobBudget", {})
         if not (type(budget.get("sha256")) is str and re.fullmatch(r"[0-9a-f]{64}", budget["sha256"]) and
                 budget.get("exhausted") is False and budget.get("cutoffObservation") is None and
@@ -1696,7 +1800,7 @@ def profile_passed(value):
             if row.get("jobBudgetSha256") != budget["sha256"]:
                 return False
             if row["phase"] in {"recipient-validation", "audit-init", "custody-prepare", "product",
-                                 *simulator.PREPARE, simulator.PRELAUNCH} and not (
+                                 *simulator.PREPARE, simulator.PRELAUNCH, *supplements.PRODUCTIVE} and not (
                     type(row.get("completedRawNs")) is int and type(budget.get("productiveCutoffRawNs")) is int and
                     row["completedRawNs"] < budget["productiveCutoffRawNs"]):
                 return False
@@ -2155,6 +2259,14 @@ def run(profile):
         controller.check()
         controller.setup()
         controller.product_run()
+        if profile == "full":
+            controller.collect()
+            controller.retire_simulator()
+            controller.check()
+            require(controller.primary_barrier_passed(), "FULL_PRIMARY_BARRIER_NOT_PASSING")
+            controller.retain_primary_abi(mode="productive")
+            require(controller.primary_abi["status"] == "PASS", "FULL_PRIMARY_ABI_NOT_PASSING")
+            controller.full.run()
     except BaseException as error:
         original = error
         if controller is not None:
@@ -2165,7 +2277,8 @@ def run(profile):
             controller.actions_token = None
             for name in ("collect", "retire_simulator", "retain_primary_abi", "export"):
                 try:
-                    getattr(controller, name)()
+                    if name != "retain_primary_abi" or not controller.primary_abi_attempted:
+                        getattr(controller, name)()
                 except BaseException as error:
                     controller.error(name, error)
                     original = original or error
@@ -2270,7 +2383,8 @@ def verify_phase_bindings(owner, private, result, context, end, budget=None):
             start = parse(owner.read(directory, "start.json", end))
             require(all(start[key] == row[key] for key in ("phase", "argv", "cwd", "job", "invocation", "state", "home",
                          "jobBudgetSha256", "startedRawNs", "developerDir", "simulatorBindingSha256",
-                         "childAncestorInvocationIds")), "PHASE_RAW_START_CHANGED")
+                         "childAncestorInvocationIds", "canonicalInvocation", "supplementPhase", "postReturnHelper",
+                         "supplementEnvironment")), "PHASE_RAW_START_CHANGED")
             require(row["developerDir"] == context.get("developerDir"), "PHASE_DEVELOPER_DIR_CHANGED")
             require(row["childAncestorInvocationIds"] == context["ancestorInvocationIds"] + [row["invocation"]],
                     "PHASE_NATIVE_ANCESTORS_CHANGED")
@@ -2286,9 +2400,9 @@ def verify_phase_bindings(owner, private, result, context, end, budget=None):
                 require(row["jobBudgetSha256"] == budget.sha256 and
                         row["startedRawNs"] < budget.fence(FULL_STAGE[label]) and
                         row["finalizedRawNs"] < budget.fence(FULL_FINISH[FULL_STAGE[label]]), "PHASE_JOB_TIME_CHANGED")
-            if label != "product":
-                require(row["job"] == context["job"] and row["state"] == context["session"] and
-                        row["home"] == context["session"] + "/control-home", "PHASE_CONTROLLER_DOMAIN_CHANGED")
+            supplements.verify_phase_role(owner, globals(), private, row, result, context, end)
+            if label in {*FULL_PREPARATION[1:], *supplements.PRODUCTIVE}:
+                require(row["startedRawNs"] < budget.fence("productive"), "PRODUCTIVE_PHASE_STARTED_AFTER_CUTOFF")
             if label in (*simulator.PREPARE, simulator.PRELAUNCH, *simulator.RETIRE):
                 require(row["argv"] == simulator.command(label, result.get("simulator", {}).get("selected")),
                         "SIMULATOR_FIXED_COMMAND_CHANGED")
@@ -2358,35 +2472,13 @@ def verify_phase_bindings(owner, private, result, context, end, budget=None):
         if timing["exhausted"]:
             require(type(cutoff) is dict and set(cutoff) == {"phase", "observedRawNs"} and
                     cutoff["phase"] in {"admission", "recipient-validation", "audit-init", "custody-prepare", "product",
-                                        *simulator.PREPARE, simulator.PRELAUNCH} and
+                                        *simulator.PREPARE, simulator.PRELAUNCH, *supplements.PRODUCTIVE} and
                     type(cutoff["observedRawNs"]) is int and
                     budget.fence("productive") <= cutoff["observedRawNs"] <= timing["terminalRawNs"],
                     "SEALED_JOB_CUTOFF_CHANGED")
         else:
             require(cutoff is None, "SEALED_JOB_CUTOFF_CHANGED")
-        cancellation = timing.get("cooperativeCancellation")
-        product = next((row for row in result["phases"] if row["phase"] == "product"), None)
-        if cancellation is not None:
-            require(product is not None and product.get("cooperativeCancellation") == cancellation and
-                    cancellation.get("reason") in ("job-budget", "signal") and type(cancellation.get("requested")) is bool,
-                    "SEALED_CANCELLATION_CHANGED")
-            if cancellation["reason"] == "job-budget":
-                require(timing["exhausted"] and type(cancellation.get("attemptedRawNs")) is int and
-                        cancellation["attemptedRawNs"] >= budget.fence("productive"), "SEALED_CANCELLATION_CHANGED")
-            if cancellation["requested"]:
-                require(type(request) is dict, "SEALED_CANCELLATION_WITHOUT_CUSTODY")
-                original = owner.child(evidence, "job-time", end)
-                raw = owner.read(original, "product-cancellation.json", end)
-                state = owner.child(private, "state", end)
-                requests = owner.child(state, "cancellations", end)
-                require(owner.read(requests, cancellation["invocation"] + ".json", end) == raw and
-                        digest(raw) == cancellation.get("requestSha256"), "SEALED_CANCELLATION_ORIGINAL_CHANGED")
-                value = parse(raw)
-                require(value.get("schema") == 1 and value.get("jobId") == cancellation["job"] and
-                        value.get("id") == cancellation["invocation"] and request["owner"]["job"] == cancellation["job"] and
-                        request["owner"]["productInvocation"] == cancellation["invocation"], "SEALED_CANCELLATION_CHANGED")
-        else:
-            require(product is None or product.get("cooperativeCancellation") is None, "SEALED_CANCELLATION_CHANGED")
+        supplements.verify_cancellation(owner, globals(), private, result, context, end, budget)
         verify_simulator_bindings(owner, private, result, context, end)
 
 
@@ -2431,13 +2523,25 @@ def verify_primary_abi_bindings(owner, private, result, context, end, check):
     before = parse(frozen["profile-result-before-export.json"])
     disposition = result.get("primaryAbi")
     require(before.get("primaryAbi") == disposition and before.get("source") == context["source"] and
-            before.get("contextSha256") == result["contextSha256"], "ABI_FROZEN_PROFILE_CHANGED")
+            before.get("contextSha256") == result["contextSha256"] and
+            before.get("primaryAbiAccounting") == result.get("primaryAbiAccounting"), "ABI_FROZEN_PROFILE_CHANGED")
     names = {name.removeprefix("primary-abi/") for name in frozen if name.startswith("primary-abi/")}
     evidence = owner.child(private, "evidence", end)
     if disposition is None:
-        require(result["productAttempted"] is False and not names and
+        require(result["productAttempted"] is False and result.get("primaryAbiAccounting") is None and not names and
                 not os.path.lexists(evidence.path / "primary-abi"), "ABI_UNATTEMPTED_RELABELLED")
         require(frozen_abi_packet(owner, private, end)[0] == bound, "ABI_POST_RETURN_PACKET_CHANGED")
+        check()
+        return
+    if not os.path.lexists(evidence.path / "primary-abi"):
+        require(not names and disposition == {"status": "HOLD", "manifestSha256": None,
+                "contextSha256": result["contextSha256"], "productPhaseSha256": result["phaseSha256"].get("product"),
+                "generatedCount": None} and result.get("errors") and
+                result.get("primaryAbiAccounting", {}).get("acquisitionStarted") is False,
+                "ABI_UNACQUIRED_HOLD_CHANGED")
+        supplements.verify_abi_accounting(result["primaryAbiAccounting"], result, context, partial=True)
+        require(frozen_abi_packet(owner, private, end)[0] == bound and
+                not os.path.lexists(evidence.path / "primary-abi"), "ABI_UNACQUIRED_ORIGINAL_CHANGED")
         check()
         return
     original = owner.child(evidence, "primary-abi", end)
@@ -2460,14 +2564,17 @@ def verify_primary_abi_bindings(owner, private, result, context, end, check):
         require(disposition == {"status": "HOLD", "manifestSha256": None, "contextSha256": result["contextSha256"],
                 "productPhaseSha256": result["phaseSha256"].get("product"), "generatedCount": None} and
                 result.get("errors"), "ABI_INCOMPLETE_RETENTION_RELABELLED")
+        supplements.verify_abi_accounting(result.get("primaryAbiAccounting"), result, context, partial=True)
         final_integrity()
         return
     manifest = parse(raw)
     require(raw == encoded(manifest) and set(manifest) == {"schema", "scope", "source", "contextSha256", "primary",
-            "referenceQueries", "acquisition", "assessment"} and manifest["schema"] == 1 and
+            "referenceQueries", "acquisition", "assessment", "accounting"} and manifest["schema"] == 1 and
             manifest["scope"] == "PRIMARY_FULL_ABI_ORIGINALS" and manifest["source"] == context["source"] and
             manifest["contextSha256"] == result["contextSha256"] and disposition == abi_disposition(raw),
             "ABI_MANIFEST_BINDING_CHANGED")
+    supplements.verify_abi_accounting(manifest["accounting"], result, context)
+    require(manifest["accounting"] == result.get("primaryAbiAccounting"), "ABI_ACCOUNTING_CHANGED")
     references, _queries = abi_references(owner, context["source"]["commit"], private.path / "seal-primary-abi-queries", end, check)
     query_directory = owner.child(evidence, "primary-abi-queries", end)
     query_raw = owner.read(query_directory, "session-result.json", end, query.MAX_RECEIPT_BYTES)
@@ -2478,7 +2585,7 @@ def verify_primary_abi_bindings(owner, private, result, context, end, check):
         generated[index] = frozen.get("primary-abi/" + abi.member(index, "generated"))
         require(frozen.get("primary-abi/" + abi.member(index, "baseline")) == references[index][1],
                 "ABI_FROZEN_REFERENCE_DIFFERS_FROM_SOURCE")
-    primary, log = primary_abi_inputs(owner, private, context, end)
+    primary, log = primary_abi_inputs(owner, private, context, end, check)
     require(primary == manifest["primary"] and primary["productPhaseSha256"] == result["phaseSha256"].get("product") and
             manifest["assessment"] == abi.assess(generated, references, log), "ABI_ORIGINAL_ASSESSMENT_CHANGED")
     verify_abi_acquisition(manifest["acquisition"], generated)
@@ -2617,6 +2724,10 @@ def validate_public(profile):
         require((context["kind"], context["command"]) == profile_command(profile, role), "SEALED_SELECTOR_CHANGED")
         verify_phase_bindings(owner, private, result, context, end, budget)
         if profile == "full":
+            supplements.verify(owner, globals(), private, result, context, end)
+            before = parse(supplements.read_path(owner, globals(),
+                           private.path / "evidence/profile-result-before-export.json", end))
+            require(before.get("fullSupplements") == result.get("fullSupplements"), "SUPPLEMENT_FROZEN_PROFILE_CHANGED")
             verify_primary_abi_bindings(owner, private, result, context, end,
                                        lambda: (posix._deadline(end), budget_clock.check("seal")))
         passed = profile_passed(result)

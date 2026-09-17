@@ -34,6 +34,10 @@ JOB_SPEC = importlib.util.spec_from_file_location("ordinary_job_time_model_fixtu
     ROOT / "scripts/tests/hosted-full-job-budget-test.py")
 JOB_MODELS = importlib.util.module_from_spec(JOB_SPEC)
 JOB_SPEC.loader.exec_module(JOB_MODELS)
+SUPPLIER_SPEC = importlib.util.spec_from_file_location("ordinary_full_synthetic_suppliers",
+    ROOT / "scripts/tests/hosted-full-supplement-fixtures.py")
+SUPPLIERS = importlib.util.module_from_spec(SUPPLIER_SPEC)
+SUPPLIER_SPEC.loader.exec_module(SUPPLIERS)
 
 
 class Clock:
@@ -135,7 +139,8 @@ class Base(unittest.TestCase):
         self.root = self.path / "source"
         self.root.mkdir(mode=0o700)
         (self.root / "scripts").mkdir(mode=0o700)
-        for name in ("audit_processes.py", "run-audit-command.py"):
+        for name in ("audit_processes.py", "run-audit-command.py", "check-audit-receipt.py",
+                     "prepare-audit-central-bundle-metadata.py"):
             (self.root / "scripts" / name).write_bytes((ROOT / "scripts" / name).read_bytes())
         self.runner_temp = self.path / "runner-temp"
         self.runner_temp.mkdir(mode=0o700)
@@ -184,6 +189,18 @@ class Base(unittest.TestCase):
                         pass
         for target, before in self.quarantines:
             target[:] = before
+        # Modeled child objects never represented real/native processes. Close
+        # only synthetic capture fixtures after UNKNOWN assertions, not as a
+        # production helper quarantine recovery or a native-retirement claim.
+        suppliers = getattr(self, "suppliers", None)
+        for module in suppliers.swift_modules if suppliers else ():
+            for owner, _child, out, err in module.QUARANTINE:
+                for resource in (out, err, owner):
+                    if resource is not None:
+                        try:
+                            resource.close()
+                        except BaseException:
+                            pass
         self.stack.close()
         self.temp.cleanup()
 
@@ -780,6 +797,7 @@ class WholeControllerModels(Base):
         self.stack.enter_context(patch.object(C.audit, "output_roots", return_value=[self.root / "build", *[
             self.root / "library" / module / "build" for module in dict.fromkeys(route[0] for route in C.abi.ROUTES)]]))
         self.stack.enter_context(patch.object(C.job_time, "_request", side_effect=self.model_job_time_response))
+        self.suppliers = SUPPLIERS.Suppliers(self, C)
 
     def use_full(self):
         self.profile = "full"
@@ -822,7 +840,8 @@ class WholeControllerModels(Base):
     def model_cancellation(self, state, job, invocation):
         self.events.append("cooperative-cancellation")
         self.assertEqual((state, job, invocation),
-                         (C.session_path("full", "macos-arm64") / "state", self.job, self.reserved))
+                         (C.session_path("full", "macos-arm64") / "state", self.job,
+                          getattr(self, "expected_cancellation", self.reserved)))
         self.save(state / "cancellations" / (invocation + ".json"),
                   {"schema": 1, "id": invocation, "jobId": job, "requestedUtc": "2026-09-16T00:00:00Z"})
 
@@ -914,6 +933,9 @@ class WholeControllerModels(Base):
         return manifest
 
     def model_output(self, argv, label):
+        if label == C.supplements.SWIFT_PRELAUNCH or label in C.supplements.SWIFT_RETIRE:
+            output = b"" if label == C.supplements.SWIFT_RETIRE[1] else C.encoded(self.simulator_devices)
+            return self.simulator_outputs.get(label, output), b""
         if label in (*C.simulator.PREPARE, C.simulator.PRELAUNCH, *C.simulator.RETIRE):
             output = {"simulator-macos-version": b"26.0\n",
                       "simulator-xcode-version": b"Xcode 26.5\nBuild version 17F42\n",
@@ -978,8 +1000,10 @@ class WholeControllerModels(Base):
             label = self.calls[-1]["stdout"].path.parent.name
             self.simulator_calls.append((label, list(argv)))
             self.exit_code = self.simulator_codes.get(label, 0)
-            if label == C.simulator.SHUTDOWN and self.exit_code == 0:
+            if label in (C.simulator.SHUTDOWN, C.supplements.SWIFT_RETIRE[1]) and self.exit_code == 0:
                 self.simulator_state("Shutdown")
+            return
+        if self.profile == "full" and self.suppliers.helper_child(argv, environment):
             return
         if argv[4] == "-c":
             self.assertEqual(argv[5], C.CANONICAL_BOOTSTRAP)
@@ -1024,8 +1048,11 @@ class WholeControllerModels(Base):
             state.mkdir(mode=0o700)
             for name in ("gradle-home", "evidence", "cancellations"):
                 (state / name).mkdir(mode=0o700)
+            policy = self.save(state / "gradle-home/gradle.properties", b"org.gradle.workers.max=2\n")
             self.save(state / "context.json", {"schema": 1, "id": self.job, "root": str(self.root), "host": "macos-arm64",
-                 "gradleHome": str(state / "gradle-home"), "source": self.clean_source, "preexistingOutputPaths": []})
+                 "gradleHome": str(state / "gradle-home"), "source": self.clean_source, "preexistingOutputPaths": [],
+                 "expectedCommit": self.source["commit"], "tree": self.source["tree"],
+                 "gradlePropertiesSha256": C.digest(policy)})
         elif args[0] == "prepare":
             self.assertTrue((self.root / "build").is_dir(), "Outputs must be private before any product writer")
             self.assertEqual((self.root / "build").stat().st_mode & 0o777, 0o700)
@@ -1039,6 +1066,9 @@ class WholeControllerModels(Base):
             (state / "gradle-home/init.d").mkdir(mode=0o700)
             self.save(state / "gradle-home/init.d/model-loader", b"synthetic owned loader")
         elif args[0] == "--cwd":
+            if self.profile == "full" and args[args.index("--id") + 1] != self.reserved:
+                self.suppliers.canonical_child(args, environment)
+                return
             self.assertEqual(args[args.index("--id") + 1], self.reserved)
             self.assertEqual(environment[C.processes.STATE_ENV], str(state))
             self.assertEqual(environment["GRADLE_USER_HOME"], str(state / "gradle-home"))
@@ -1218,9 +1248,9 @@ class WholeControllerModels(Base):
         case.setUp()
         try:
             retain = C.Controller.retain_primary_abi
-            def changed(controller):
+            def changed(controller, **kwargs):
                 mutation(case, controller)
-                return retain(controller)
+                return retain(controller, **kwargs)
             case.use_full()
             with patch.object(C.Controller, "retain_primary_abi", changed), redirect_stdout(io.StringIO()):
                 code = case.call_run()
@@ -1380,8 +1410,11 @@ class WholeControllerModels(Base):
             self.seal()
         self.assertEqual((self.path / "public-step-output").read_bytes(), b"")
 
-    def test_primary_retention_and_export_share_one_local_window_without_renewal(self):
-        self.use_full()
+    def test_terminal_primary_retention_and_export_share_one_local_window_without_renewal(self):
+        controller = self.full_controller()
+        controller.product_run()
+        controller.collect()
+        controller.retire_simulator()
         write = C.PrivateOwner.write
         original_end = []
         def late(owner, target, name, value, end):
@@ -1390,12 +1423,31 @@ class WholeControllerModels(Base):
                 original_end.append(end)
                 self.clock.now = end + 1
             return returned
-        with patch.object(C.PrivateOwner, "write", late), redirect_stdout(io.StringIO()):
-            self.assertEqual(self.call_run(), 125)
-        controller = self.owners[-1]
+        with patch.object(C.PrivateOwner, "write", late), self.assertRaises(C.posix.EvidenceError):
+            controller.retain_primary_abi(mode="terminal")
+        self.assertEqual(len(original_end), 1)
         self.assertEqual(controller.export_freeze_end, original_end[0])
         self.assertEqual(controller.primary_abi["status"], "HOLD")
+        with self.assertRaises(C.posix.EvidenceError):
+            controller.freeze_end()
+        self.assertEqual(controller.export_freeze_end, original_end[0])
         self.assertFalse((controller.path / "export").exists())
+
+    def test_b2_productive_abi_does_not_start_or_renew_terminal_export_window(self):
+        controller = self.full_controller()
+        controller.product_run()
+        controller.collect()
+        controller.retire_simulator()
+        controller.retain_primary_abi(mode="productive")
+        self.assertEqual(controller.primary_abi["status"], "PASS")
+        self.assertEqual(controller.primary_abi_accounting["mode"], "productive")
+        self.assertIsNone(controller.export_freeze_end)
+        self.clock.now += 1
+        original = controller.freeze_end()
+        self.clock.now += 1
+        self.assertEqual(controller.freeze_end(), original)
+        self.assertEqual(controller.primary_abi_accounting["endRawNs"],
+                         controller.primary_abi_accounting["startedRawNs"] + 180 * C.job_time.NS)
 
     def test_primary_abi_raw_fence_expiry_after_query_close_blocks_export(self):
         self.use_full()
@@ -1687,7 +1739,7 @@ class WholeControllerModels(Base):
                 with self.subTest(layer=layer, change=label):
                     self.copied_provenance_failure(layer, name, map_change=change, reason=reason)
 
-    def replace_frozen_provenance(self, session, name, *, canonical=False):
+    def replace_frozen_provenance(self, session, name, *, canonical=False, invocation=None):
         """Self-consistent replacement through both maps after the original return."""
         frozen = session / "frozen-evidence"
         mapping_path = frozen / "original-path-map.json"
@@ -1696,7 +1748,7 @@ class WholeControllerModels(Base):
         if canonical:
             nested_row = next(row for row in outer["files"] if row["original"] == "canonical-audit/original-path-map.json")
             inner = C.parse((frozen / nested_row["member"]).read_bytes())
-            inner_row = next(row for row in inner["files"] if row["original"] == self.reserved + "/" + name)
+            inner_row = next(row for row in inner["files"] if row["original"] == (invocation or self.reserved) + "/" + name)
             name = "canonical-audit/" + inner_row["member"]
         row = next(row for row in outer["files"] if row["original"] == name)
         raw = (frozen / row["member"]).read_bytes()
@@ -1810,7 +1862,7 @@ class WholeControllerModels(Base):
         child = self.model_child
         def large(argv, environment):
             child(argv, environment)
-            if "--cwd" in argv:
+            if "--cwd" in argv and argv[argv.index("--id") + 1] == self.reserved:
                 path = C.session_path("full", "macos-arm64") / "state/evidence" / self.reserved / "product.stdout.log"
                 self.save(path, path.read_bytes() + (b"n" * 1023 + b"\n") * 5120)
         log, opened, active = C.primary_abi_log, C.posix._open_member, []
@@ -1972,9 +2024,17 @@ class WholeControllerModels(Base):
         self.assertTrue(result["profilePassed"])
         labels = [row["phase"] for row in result["phases"]]
         self.assertEqual(labels, ["job-time", "recipient-validation", "audit-init", *C.simulator.PREPARE,
-            "custody-prepare", C.simulator.PRELAUNCH, "product", "custody-collect", "custody-uninstall", *C.simulator.RETIRE, "export"])
+            "custody-prepare", C.simulator.PRELAUNCH, "product", "custody-collect", "custody-uninstall", *C.simulator.RETIRE,
+            *C.supplements.ORDER, "export"])
         shutdown = [argv for label, argv in self.simulator_calls if label == C.simulator.SHUTDOWN]
         self.assertEqual(shutdown, [["/usr/bin/xcrun", "simctl", "shutdown", self.simulator_uuid]])
+        swift_shutdown = [argv for label, argv in self.simulator_calls if label == C.supplements.SWIFT_RETIRE[1]]
+        self.assertEqual(swift_shutdown, [["/usr/bin/xcrun", "simctl", "shutdown", self.simulator_uuid]])
+        self.assertEqual(result["fullSupplements"]["swift"]["after"]["state"], "Shutdown")
+        primary = next(row for row in result["phases"] if row["phase"] == "product")
+        swift = next(row for row in result["phases"] if row["phase"] == "swift-ui")
+        self.assertNotEqual(primary["invocation"], swift["invocation"])
+        self.assertNotEqual(primary["canonicalInvocation"], swift["canonicalInvocation"])
         terminal = result["simulator"]["terminal"]
         self.assertEqual(terminal["before"]["state"], "Booted")
         self.assertEqual(terminal["after"]["state"], "Shutdown")
@@ -2409,7 +2469,7 @@ class WholeControllerModels(Base):
         def delayed_poll():
             polls.append(self.clock.raw())
             self.clock.set_raw(controller.budget.fence("product-return") + C.job_time.NS)
-            return 0
+            return None  # Still executing; a consumed return is not cancellable.
         self.inject_product_poll(delayed_poll)
         with patch.object(C.audit, "request_cancellation", side_effect=self.model_cancellation) as cancellation, \
                 self.assertRaises(C.ControllerError):
@@ -2423,6 +2483,766 @@ class WholeControllerModels(Base):
         self.assertTrue(controller.budget_exhausted)
         self.assertFalse(controller.result()["profilePassed"])
         self.assertEqual(len(polls), 1)
+
+    def test_b2_observed_completed_canonical_is_not_cancelled_at_next_cutoff_read(self):
+        controller = self.full_controller()
+        def completed():
+            self.clock.set_raw(controller.budget.fence("productive"))
+            return 0
+        self.inject_product_poll(completed)
+        with patch.object(C.audit, "request_cancellation", side_effect=self.model_cancellation) as cancellation, \
+                self.assertRaises(C.ControllerError):
+            controller.product_run()
+        cancellation.assert_not_called()
+        row = next(row for row in controller.records if row["phase"] == "product")
+        self.assertEqual(row["exitCode"], 0)
+        self.assertTrue(controller.budget_exhausted)
+        self.assertIsNone(controller.budget_cancellation)
+        self.assertIsNone(controller.active_canonical)
+        self.assertFalse(controller.result()["profilePassed"])
+
+    def test_b2_observed_completed_canonical_is_not_cancelled_for_late_signal(self):
+        controller = self.full_controller()
+        def completed():
+            controller.cancelled.append(signal.SIGTERM)
+            return 0
+        self.inject_product_poll(completed)
+        with patch.object(C.audit, "request_cancellation", side_effect=self.model_cancellation) as cancellation, \
+                self.assertRaises(KeyboardInterrupt):
+            controller.product_run()
+        cancellation.assert_not_called()
+        self.assertIsNone(controller.budget_cancellation)
+        self.assertFalse(controller.result()["profilePassed"])
+
+    def test_b2_failed_spawn_without_native_birth_never_cancels_reserved_id(self):
+        controller = self.full_controller()
+        original, spawn = RuntimeError("MODEL SPAWN FAILED BEFORE BIRTH"), Scope.spawn
+        def fail(scope, argv, cwd, environment, **sinks):
+            if "--cwd" in argv:
+                self.clock.set_raw(controller.budget.fence("productive"))
+                raise original
+            return spawn(scope, argv, cwd, environment, **sinks)
+        with patch.object(Scope, "spawn", fail), \
+                patch.object(C.audit, "request_cancellation", side_effect=self.model_cancellation) as cancellation, \
+                self.assertRaises(RuntimeError) as raised:
+            controller.product_run()
+        self.assertIs(raised.exception, original)
+        cancellation.assert_not_called()
+        self.assertIs(controller.original, original)
+        self.assertIsNone(controller.budget_cancellation)
+        self.assertIsNone(controller.active_canonical)
+
+    def test_b2_productive_abi_window_failure_latches_truthful_unacquired_hold(self):
+        controller = self.full_controller()
+        controller.product_run()
+        controller.collect()
+        controller.retire_simulator()
+        window = controller.window
+        def expired(stage, seconds):
+            if stage == "productive" and seconds == 180:
+                self.clock.set_raw(controller.budget.fence("productive"))
+            return window(stage, seconds)
+        with patch.object(controller, "window", side_effect=expired), self.assertRaises(C.ControllerError):
+            controller.retain_primary_abi(mode="productive")
+        self.assertTrue(controller.primary_abi_attempted)
+        self.assertIsNotNone(controller.primary_abi, "A begun one-shot attempt is not an unattempted product")
+        self.assertEqual(controller.primary_abi["status"], "HOLD")
+        self.assertIsNotNone(controller.primary_abi_accounting)
+        self.assertIsNone(controller.primary_abi_accounting["finishedRawNs"])
+        self.assertFalse((controller.evidence.path / "primary-abi").exists())
+
+    def abi_early_failure(self, boundary):
+        self.use_full()
+        retain, now, window, create = (C.Controller.retain_primary_abi, C.Controller.now_raw,
+                                     C.Controller.window, C.query._PosixDirectory.create_directory)
+        original, reached, attempts = OSError("MODEL PRIMARY ABI " + boundary), [], []
+        def attempt(controller, **kwargs):
+            attempts.append(kwargs.get("mode", "terminal"))
+            return retain(controller, **kwargs)
+        def raw(controller):
+            if boundary == "first-raw" and not reached and controller.primary_abi_attempted and \
+                    controller.primary_abi_accounting["startedRawNs"] is None:
+                reached.append(boundary)
+                raise original
+            return now(controller)
+        def bounded(controller, stage, seconds):
+            if boundary == "window" and not reached and controller.primary_abi_attempted and stage == "productive" and seconds == 180:
+                reached.append(boundary)
+                raise original
+            return window(controller, stage, seconds)
+        def allocation(directory, name, **kwargs):
+            if boundary == "target-allocation" and not reached and name == "primary-abi":
+                reached.append(boundary)
+                raise original
+            return create(directory, name, **kwargs)
+        with patch.object(C.Controller, "retain_primary_abi", attempt), patch.object(C.Controller, "now_raw", raw), \
+                patch.object(C.Controller, "window", bounded), patch.object(C.query._PosixDirectory, "create_directory", allocation), \
+                patch.object(C.shutil, "which", return_value=sys.executable), redirect_stdout(io.StringIO()):
+            code = self.call_run()
+        controller = self.owners[-1]
+        self.assertEqual(reached, [boundary])
+        self.assertEqual(attempts, ["productive"], "Finally must not retry this begun one-shot attempt")
+        self.assertIs(controller.original, original)
+        self.assertEqual(controller.primary_abi["status"], "HOLD")
+        self.assertFalse(controller.result()["profilePassed"])
+        self.assertEqual(controller.full.scopes, [])
+        self.assertFalse((controller.evidence.path / "primary-abi").exists())
+        if boundary == "target-allocation":
+            self.assertEqual(code, 125)
+            self.assertTrue(controller.unknown, "An opaque failed allocator does not establish resource return")
+            self.assertTrue(controller.primary_abi_accounting["acquisitionStarted"])
+            self.assertFalse((controller.path / "export").exists())
+        else:
+            self.assertEqual(code, 0)
+            self.assertFalse(controller.primary_abi_accounting["acquisitionStarted"])
+            self.assertEqual(self.seal(), "artifacts_ready=true\nprofile_passed=false\n")
+            terminal = C.parse((controller.path / "controller-result.json").read_bytes())
+            frozen = C.parse((controller.evidence.path / "profile-result-before-export.json").read_bytes())
+            self.assertEqual(terminal["primaryAbiAccounting"], frozen["primaryAbiAccounting"])
+
+    def test_b2_first_abi_raw_failure_exports_and_seals_truthful_unacquired_hold_without_retry(self):
+        self.abi_early_failure("first-raw")
+
+    def test_b2_abi_window_failure_exports_and_seals_truthful_unacquired_hold_without_retry(self):
+        self.abi_early_failure("window")
+
+    def test_b2_abi_target_allocation_failure_is_unknown_and_never_retried(self):
+        self.abi_early_failure("target-allocation")
+
+    def supplement_failure_subcase(self, name, *, missing):
+        case = WholeControllerModels("runTest")
+        case.setUp()
+        try:
+            case.use_full()
+            if missing:
+                case.suppliers.omit.add(name)
+            else:
+                case.suppliers.codes[name] = 73
+            with patch.object(C.shutil, "which", return_value=sys.executable), redirect_stdout(io.StringIO()):
+                code = case.call_run()
+            controller = case.owners[-1]
+            prefix = list(C.supplements.NAMES[:C.supplements.NAMES.index(name)])
+            self.assertEqual(controller.full.completed, prefix)
+            self.assertEqual(controller.full.pending, name)
+            self.assertEqual([row["scope"] for row in controller.full.scopes], prefix + [name])
+            self.assertEqual(controller.primary_abi["status"], "PASS")
+            self.assertFalse(controller.result()["profilePassed"], "Primary success cannot replace " + name)
+            self.assertEqual([row["phase"] for row in controller.records if row["phase"] in C.supplements.NAMES], prefix + [name])
+            if missing and name == "central-bundle":
+                self.assertEqual(code, 125)
+                self.assertFalse((controller.path / "export").exists())
+                self.assertFalse((controller.evidence.path / "canonical-audit").exists(), "No first raw copy before screening")
+            else:
+                self.assertEqual(code, 0)
+                self.assertEqual(case.seal(), "artifacts_ready=true\nprofile_passed=false\n")
+            if not missing and name == "swift-ui":
+                self.assertEqual(controller.full.swift["after"]["state"], "Shutdown")
+                self.assertEqual(controller.full.swift["inspectionRetirement"], "NOT_REACHED")
+                self.assertTrue((controller.evidence.path / "full-supplements/swift-xcresult-0/original-path-map.json").is_file())
+        finally:
+            case.tearDown()
+
+    def test_b2_every_mandatory_supplement_missing_is_a_failed_prefix_not_primary_success(self):
+        for name in C.supplements.NAMES:
+            with self.subTest(scope=name):
+                self.supplement_failure_subcase(name, missing=True)
+
+    def test_b2_every_mandatory_supplement_nonzero_is_a_failed_prefix_not_primary_success(self):
+        for name in C.supplements.NAMES:
+            with self.subTest(scope=name):
+                self.supplement_failure_subcase(name, missing=False)
+
+    def active_supplement_cancellation(self, *, request_failure=False):
+        self.use_full()
+        model, polls, attempts = self.model_child, [], []
+        original = OSError("MODEL SUPPLEMENT CANCELLATION WRITE FAILURE")
+        def poll():
+            controller = self.owners[-1]
+            polls.append(self.clock.raw())
+            if len(polls) == 1:
+                self.clock.set_raw(controller.budget.fence("productive"))
+                return None
+            return 0  # The next poll must not rewind RAW after the modeled sleep.
+        def child(argv, environment):
+            model(argv, environment)
+            targeted = "--purpose" in argv and argv[argv.index("--purpose") + 1] == "ordinary-full-lock-policy"
+            self.poll_function = poll if targeted else None
+            if targeted:
+                self.expected_cancellation = argv[argv.index("--id") + 1]
+        def cancel(*args):
+            attempts.append(args)
+            if request_failure:
+                self.events.append("cooperative-cancellation")
+                raise original
+            return self.model_cancellation(*args)
+        with patch.object(self, "model_child", side_effect=child), \
+                patch.object(C.audit, "request_cancellation", side_effect=cancel), \
+                patch.object(C.shutil, "which", return_value=sys.executable):
+            session, result = self.execute()
+        self.assertEqual(attempts, [(session / "state", self.job, self.expected_cancellation)])
+        self.assertNotEqual(self.expected_cancellation, self.reserved)
+        self.assertEqual(result["fullSupplements"]["pending"], "lock-policy")
+        self.assertEqual(result["fullSupplements"]["completed"], [])
+        self.assertEqual(result["jobBudget"]["cooperativeCancellation"]["invocation"], self.expected_cancellation)
+        self.assertEqual(result["jobBudget"]["cooperativeCancellation"]["requested"], not request_failure)
+        self.assertFalse(result["profilePassed"])
+        self.assertEqual(self.seal(), "artifacts_ready=true\nprofile_passed=false\n")
+        if request_failure:
+            self.assertIs(self.owners[-1].original, original)
+        else:
+            self.assertEqual((session / "evidence/job-time/product-cancellation.json").read_bytes(),
+                             (session / "state/cancellations" / (self.expected_cancellation + ".json")).read_bytes())
+        self.assertFalse(any(row["phase"] == "android-abi-graph" for row in result["phases"]))
+
+    def test_b2_active_supplement_cancels_only_its_own_canonical_id_and_seals_failed_prefix(self):
+        self.active_supplement_cancellation()
+
+    def test_b2_supplement_cancellation_failure_is_one_attempt_and_never_cancels_primary(self):
+        self.active_supplement_cancellation(request_failure=True)
+
+    def test_b2_cutoff_between_completed_supplements_starts_no_next_producer(self):
+        self.use_full()
+        retain = C.supplements.Full.retain_scope
+        def late(full, name, binding, end):
+            value = retain(full, name, binding, end)
+            if name == "lock-policy":
+                self.clock.set_raw(full.c.budget.fence("productive"))
+            return value
+        with patch.object(C.supplements.Full, "retain_scope", late), \
+                patch.object(C.audit, "request_cancellation", side_effect=self.model_cancellation) as cancellation:
+            _session, result = self.execute_full()
+        cancellation.assert_not_called()
+        self.assertEqual(result["fullSupplements"]["pending"], "lock-policy")
+        self.assertEqual(result["fullSupplements"]["completed"], [])
+        self.assertFalse(any(row["phase"] == "android-abi-graph" for row in result["phases"]))
+        self.assertEqual(self.seal(), "artifacts_ready=true\nprofile_passed=false\n")
+
+    def test_b2_later_supplement_writer_cannot_replace_retained_primary_abi(self):
+        def overwrite(name, _folder, _result):
+            if name == "lock-policy":
+                for path in C.abi.GENERATED:
+                    self.save(self.root / path, b"MODEL LATER SUPPLEMENT OUTPUT, NOT PRIMARY ABI\n")
+        self.suppliers.after_canonical = overwrite
+        session, result = self.execute_full()
+        self.assertTrue(result["profilePassed"])
+        for index in range(8):
+            self.assertEqual((session / "evidence/primary-abi" / C.abi.member(index, "generated")).read_bytes(),
+                             self.abi_references[index])
+        self.assertEqual(self.seal(), "artifacts_ready=true\nprofile_passed=true\n")
+
+    def test_b2_swift_external_prelaunch_boot_is_not_adopted_or_shut_down(self):
+        def external(name, _folder, _result):
+            if name == "xcframework-minimum-os":
+                self.simulator_state("Booted")
+        self.suppliers.after_canonical = external
+        _session, result = self.execute_full()
+        self.assertFalse(result["profilePassed"])
+        self.assertEqual(result["fullSupplements"]["pending"], "swift-ui")
+        self.assertFalse(any(row["phase"] in ("swift-ui", *C.supplements.SWIFT_RETIRE) for row in result["phases"]))
+        self.assertEqual(self.simulator_devices["devices"][self.simulator_runtime][0]["state"], "Booted")
+        self.assertEqual(self.seal(), "artifacts_ready=true\nprofile_passed=false\n")
+
+    def swift_inspector_fixture(self):
+        controller = self.full_controller()
+        f = C.supplements
+        module = f.load_helper(ROOT / "scripts/inspect-ordinary-swift-results.py", "swift_inspector_controls")
+        self.suppliers.swift_modules.append(module)
+        bundle = controller.state_path / "work/swift-ui/DerivedData/Logs/Test/Synthetic.xcresult"
+        self.suppliers.file(bundle / "Data/data.bin", b"MODEL XCRESULT, NOT NATIVE EXECUTION\n")
+        value = {"schema": 1, "contextSha256": controller.context_hash,
+                 "canonicalId": controller.full.spec("swift-ui")["id"], "bundles": [str(bundle)]}
+        raw = self.suppliers.file(controller.evidence.path / "full-supplements/swift-inspection-input.json", value)
+        environment = C.processes.ownership_environment(controller.environment, self.job, "f" * 32,
+            str(controller.state_path), str(controller.state_path / "gradle-home"), allow_new_context=True)
+        argv = [str(ROOT / "scripts/inspect-ordinary-swift-results.py"), "--session", str(controller.path),
+                "--input-sha256", C.digest(raw)]
+        return controller, module, environment, argv
+
+    def test_b2_swift_inspector_rejects_oversized_stderr_not_just_stdout(self):
+        controller, module, environment, argv = self.swift_inspector_fixture()
+        def overflow(_command, _out, err):
+            os.write(err.fileno(), b"x" * (C.supplements.LIMIT + 1))
+        self.suppliers.swift_spawn_output = overflow
+        with patch.dict(os.environ, environment, clear=True), patch.object(sys, "argv", argv), \
+                patch.object(module.subprocess, "Popen", side_effect=self.suppliers.swift_popen), self.assertRaisesRegex(Exception, "QUERY_PRIVATE_FILE_CHANGED"):
+            module.main()
+        self.assertFalse((controller.state_path / "evidence/swift-case-results.json").exists())
+        self.assertEqual((controller.state_path / "evidence/swift-inspection/actions-0.json.stderr").stat().st_size,
+                         C.supplements.LIMIT + 1)
+        self.assertEqual(self.suppliers.swift_poll_calls, [], "Live overflow must stop before another child poll")
+        terminal = C.parse((controller.state_path / "evidence/swift-inspection-return.json").read_bytes())
+        self.assertEqual(terminal["retirement"], "UNKNOWN")
+
+    def swift_stream_overflow(self, stream, *, after_poll):
+        controller, module, environment, argv = self.swift_inspector_fixture()
+        def overflow(_command, out, err):
+            os.write((out if stream == "stdout" else err).fileno(), b"x" * (C.supplements.LIMIT + 1))
+            return 0
+        if after_poll:
+            self.suppliers.swift_poll = overflow
+        else:
+            self.suppliers.swift_spawn_output = overflow
+        with patch.dict(os.environ, environment, clear=True), patch.object(sys, "argv", argv), \
+                patch.object(module.subprocess, "Popen", side_effect=self.suppliers.swift_popen), \
+                self.assertRaisesRegex(Exception, "QUERY_PRIVATE_FILE_CHANGED"):
+            module.main()
+        terminal = C.parse((controller.state_path / "evidence/swift-inspection-return.json").read_bytes())
+        self.assertEqual((terminal["status"], terminal["retirement"]), ("HOLD", "UNKNOWN"))
+        self.assertEqual(terminal["commands"][0]["childReturned"], after_poll)
+        self.assertEqual(len(self.suppliers.swift_poll_calls), int(after_poll))
+        self.assertFalse((controller.state_path / "evidence/swift-case-results.json").exists())
+
+    def test_b2_swift_stdout_live_overflow_blocks_first_poll(self):
+        self.swift_stream_overflow("stdout", after_poll=False)
+
+    def test_b2_swift_stdout_overflow_at_return_never_becomes_pass(self):
+        self.swift_stream_overflow("stdout", after_poll=True)
+
+    def test_b2_swift_stderr_overflow_at_return_never_becomes_pass(self):
+        self.swift_stream_overflow("stderr", after_poll=True)
+
+    def test_b2_swift_missing_reference_and_failed_cases_remain_unknown_private(self):
+        for label in ("missing-ref", "failed-case"):
+            case = WholeControllerModels("runTest")
+            case.setUp()
+            try:
+                case.use_full()
+                if label == "missing-ref":
+                    case.suppliers.swift_refs = []
+                else:
+                    case.suppliers.swift_cases["p2pkit-sample-uitests"] = [("ModelUITests/testOrdinary()", "Failure")]
+                with self.subTest(case=label), patch.object(C.shutil, "which", return_value=sys.executable), redirect_stdout(io.StringIO()):
+                    self.assertEqual(case.call_run(), 125)
+                controller = case.owners[-1]
+                self.assertTrue(controller.unknown)
+                self.assertEqual(controller.full.swift["inspectionRetirement"], "UNKNOWN")
+                self.assertIsNone(controller.full.swift["cases"])
+                self.assertEqual(len(case.suppliers.helper_errors), 1)
+                self.assertTrue((controller.evidence.path / "full-supplements/swift-xcresult-0/original-path-map.json").exists())
+                self.assertFalse((controller.path / "export").exists())
+            finally:
+                case.tearDown()
+
+    def test_b2_postreturn_swift_helper_cutoff_does_not_cancel_a_finished_canonical_id(self):
+        self.use_full()
+        def late(script, _argv, _environment):
+            if script == "inspect-ordinary-swift-results.py":
+                self.clock.set_raw(self.owners[-1].budget.fence("productive"))
+        self.suppliers.after_helper = late
+        with patch.object(C.audit, "request_cancellation", side_effect=self.model_cancellation) as cancellation, \
+                patch.object(C.shutil, "which", return_value=sys.executable), redirect_stdout(io.StringIO()):
+            self.assertEqual(self.call_run(), 125)
+        cancellation.assert_not_called()
+        controller = self.owners[-1]
+        self.assertTrue(controller.budget_exhausted)
+        self.assertTrue(controller.unknown)
+        self.assertIsNone(controller.active_canonical)
+        self.assertFalse((controller.path / "export").exists())
+        self.assertFalse(any(row["phase"] == "central-bundle" for row in controller.records))
+
+    def swift_ambiguous_close(self, relative, *, mode="xb", ordinal=1, earlier_failure=False):
+        """Real helper I/O over synthetic bytes; only one close return is modeled."""
+        self.use_full()
+        target = C.session_path("full", "macos-arm64") / "state/evidence" / relative
+        actual, matched, closed = Path.open, [], []
+        original = OSError("MODEL AMBIGUOUS SWIFT DESCRIPTOR CLOSE")
+        if earlier_failure:
+            self.suppliers.swift_refs = []
+        class AmbiguousClose:
+            def __init__(self, stream):
+                self.stream = stream
+            def __getattr__(self, name):
+                return getattr(self.stream, name)
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                self.stream.close()  # Only the synthetic fixture is really closed.
+                closed.append(target)
+                raise original
+        def open_file(path, *args, **kwargs):
+            stream = actual(path, *args, **kwargs)
+            if path == target and (args[0] if args else kwargs.get("mode", "r")) == mode:
+                matched.append(path)
+                if len(matched) == ordinal:
+                    return AmbiguousClose(stream)
+            return stream
+        with patch.object(Path, "open", open_file), patch.object(C.shutil, "which", return_value=sys.executable), \
+                redirect_stdout(io.StringIO()):
+            code = self.call_run()
+        self.assertEqual(closed, [target])
+        self.assertEqual(code, 125, "A returned nonzero helper cannot establish descriptor retirement")
+        controller = self.owners[-1]
+        self.assertTrue(controller.unknown)
+        self.assertEqual(controller.full.swift["inspectionRetirement"], "UNKNOWN")
+        phase = next(row for row in controller.records if row["phase"] == C.supplements.SWIFT_INSPECT)
+        self.assertEqual((phase["exitCode"], phase["retirement"]), (125, "KNOWN"),
+                         "Missing helper-custody proof must not invent a native-child retirement failure")
+        self.assertTrue(target.is_file(), "Keep original ambiguous partials private")
+        self.assertFalse((controller.path / "export").exists())
+        self.assertFalse(any(row["phase"] == "central-bundle" for row in controller.records))
+        self.assertEqual(len(self.suppliers.helper_errors), 1)
+        return controller, original, self.suppliers.helper_errors[0][1]
+
+    def test_b2_swift_case_result_close_failure_quarantines_at_actual_parent(self):
+        _controller, original, retained = self.swift_ambiguous_close("swift-case-results.json")
+        self.assertIs(retained, original)
+
+    def test_b2_swift_second_capture_read_close_failure_quarantines_at_actual_parent(self):
+        _controller, original, retained = self.swift_ambiguous_close(
+            "swift-inspection/actions-0.json", mode="rb", ordinal=2)
+        self.assertIs(retained, original)
+
+    def test_b2_swift_terminal_close_after_pass_bytes_does_not_prove_helper_return(self):
+        controller, original, retained = self.swift_ambiguous_close("swift-inspection-return.json")
+        self.assertIs(retained, original)
+        provisional = C.parse((controller.state_path / "evidence/swift-inspection-return.json").read_bytes())
+        self.assertEqual((provisional["status"], provisional["retirement"]), ("PASS", "KNOWN"))
+        self.assertIsNone(provisional["firstError"], "Provisional bytes precede the actual failed close")
+
+    def test_b2_swift_terminal_close_preserves_first_and_secondary_failures(self):
+        controller, _secondary, original = self.swift_ambiguous_close(
+            "swift-inspection-return.json", earlier_failure=True)
+        self.assertEqual(str(original), "SWIFT_TESTSREF_REQUIRED")
+        self.assertIn("Swift terminal write/close/return UNKNOWN: OSError", original.__notes__)
+        provisional = C.parse((controller.state_path / "evidence/swift-inspection-return.json").read_bytes())
+        self.assertEqual((provisional["status"], provisional["retirement"], provisional["firstError"]),
+                         ("HOLD", "UNKNOWN", "ValueError"))
+
+    def swift_bad_return_at_parent(self, mutation, *, code):
+        self.use_full()
+        touched = []
+        def after(script, _argv, _environment):
+            if script != "inspect-ordinary-swift-results.py":
+                return
+            path = self.suppliers.state / "evidence/swift-inspection-return.json"
+            mutation(path)
+            touched.append(path)
+            self.exit_code = code
+        self.suppliers.after_helper = after
+        with patch.object(C.shutil, "which", return_value=sys.executable), redirect_stdout(io.StringIO()):
+            self.assertEqual(self.call_run(), 125)
+        controller = self.owners[-1]
+        self.assertEqual(len(touched), 1)
+        self.assertTrue(controller.unknown)
+        self.assertEqual(controller.full.swift["inspectionRetirement"], "UNKNOWN")
+        phase = next(row for row in controller.records if row["phase"] == C.supplements.SWIFT_INSPECT)
+        self.assertEqual((phase["exitCode"], phase["retirement"]), (code, "KNOWN"))
+        self.assertFalse((controller.path / "export").exists())
+        self.assertTrue((controller.state_path / "evidence/swift-case-results.json").is_file())
+        self.assertFalse(any(row["phase"] == "central-bundle" for row in controller.records))
+        return controller
+
+    def test_b2_swift_missing_terminal_keeps_successful_native_phase_but_unknown_helper(self):
+        self.swift_bad_return_at_parent(lambda path: path.unlink(), code=0)
+
+    def test_b2_swift_stale_hold_known_nonzero_cannot_authorize_failed_export(self):
+        def stale(path):
+            value = C.parse(path.read_bytes())
+            value.update(status="HOLD", retirement="KNOWN", firstError="OSError")
+            self.save(path, value)
+        self.swift_bad_return_at_parent(stale, code=125)
+
+    def test_b2_swift_independent_seal_rechecks_failed_helper_not_just_emitter_label(self):
+        session, result = self.execute_full()
+        self.assertTrue(result["profilePassed"])
+        load, observed = C.supplements.load_helper, []
+        def stale_return(path, label):
+            module = load(path, label)
+            if label == "full_swift_retirement":
+                assess = module.assess_return
+                def changed(directory, value, phase, **kwargs):
+                    # Inject the legacy HOLD+KNOWN/nonzero combination exactly
+                    # at the separate seal's real resource-proof seam. Other
+                    # original artifacts/maps and all predicates remain real.
+                    observed.append(phase["invocation"])
+                    return assess(directory, {**value, "status": "HOLD", "firstError": "OSError"},
+                                  {**phase, "exitCode": 125}, **kwargs)
+                module.assess_return = changed
+            return module
+        with patch.object(C.supplements, "load_helper", stale_return), \
+                self.assertRaisesRegex(ValueError, "SWIFT_HELPER_SUCCESSFUL_PHASE_REQUIRED"):
+            self.seal()
+        self.assertEqual(observed, [next(row["invocation"] for row in result["phases"]
+                                       if row["phase"] == C.supplements.SWIFT_INSPECT)])
+        self.assertFalse((session / "post-return-validation/seal.json").exists())
+        self.assertEqual((self.path / "public-step-output").read_bytes(), b"")
+
+    def central_quarantine_subcase(self, kind, name=None):
+        case = WholeControllerModels("runTest")
+        case.setUp()
+        try:
+            case.use_full()
+            touched, helper_git = [], []
+            fragment = case.suppliers.central_secret.splitlines()[1]
+            def replace(path, value):
+                path.chmod(0o600)  # Only this synthetic, fixture-owned original.
+                case.save(path, value)
+                touched.append(path)
+            def canonical(scope, folder, _result):
+                if scope != "central-bundle":
+                    return
+                metadata = case.suppliers.state / "evidence/central-bundle"
+                if kind == "canonical-stream":
+                    replace(folder / name, (folder / name).read_bytes() + fragment)
+                elif kind == "controller-stream":
+                    path = case.owners[-1].evidence.path / "commands/central-bundle" / name
+                    replace(path, path.read_bytes() + fragment)
+                elif kind == "missing-key":
+                    path = case.suppliers.state / "work/central-bundle/key.asc"
+                    path.unlink()
+                    touched.append(path)
+                elif kind == "missing-receipt":
+                    (folder / "receipt.json").unlink()
+                    touched.append(folder / "receipt.json")
+                elif kind == "retention-hold":
+                    value = C.parse((metadata / "result.json").read_bytes())
+                    value["retentionStatus"] = "HOLD_PRIVATE_QUARANTINE"
+                    replace(metadata / "result.json", value)
+            def before(script, _argv, _environment):
+                if script != "prepare-audit-central-bundle-metadata.py":
+                    return
+                if kind == "late-git-stream":
+                    case.suppliers.central_injections[name] = fragment + b"\0"
+                    touched.append(name)
+                elif kind == "context-budget":
+                    helper_git.append(len(case.suppliers.git_calls))
+                    case.suppliers.central_git_seconds = 58
+            def after(script, _argv, _environment):
+                if script != "prepare-audit-central-bundle-metadata.py":
+                    return
+                if kind == "helper-stream":
+                    path = case.owners[-1].evidence.path / "commands" / C.supplements.CENTRAL_RETIRE / name
+                    replace(path, path.read_bytes() + fragment)
+                elif kind == "prepared-changed":
+                    path = case.suppliers.state / "evidence/central-bundle/retirement-prepared.json"
+                    value = C.parse(path.read_bytes())
+                    value["outerId"] = "f" * 32
+                    replace(path, value)
+                elif kind == "helper-unknown":
+                    case.discovery_errors.append("MODEL CENTRAL HELPER DISCOVERY UNKNOWN")
+                    touched.append(kind)
+            case.suppliers.after_canonical, case.suppliers.before_helper, case.suppliers.after_helper = canonical, before, after
+            with patch.object(C.shutil, "which", return_value=sys.executable), redirect_stdout(io.StringIO()):
+                self.assertEqual(case.call_run(), 125)
+            controller = case.owners[-1]
+            self.assertFalse(controller.result()["profilePassed"])
+            self.assertEqual(controller.full.pending, "central-bundle")
+            self.assertEqual(controller.full.central["status"], "PENDING_PRIVATE_QUARANTINE")
+            self.assertFalse((controller.evidence.path / "canonical-audit").exists(), "Never make the first raw copy on quarantine")
+            self.assertFalse((controller.path / "export").exists())
+            self.assertTrue((case.suppliers.state / "work/central-bundle").is_dir())
+            for role in ("signer", "verifier"):
+                record = C.parse((case.suppliers.state / "evidence/central-bundle" / (role + "-home.json")).read_bytes())
+                self.assertTrue(Path(record["path"]).is_dir(), "Do not destroy a home after failed/unknown screening")
+            if kind == "context-budget":
+                self.assertEqual(len(helper_git), 1)
+                calls = case.suppliers.git_calls[helper_git[0]:]
+                self.assertEqual([row["argv"][3:] for row in calls], [["rev-parse", "--show-toplevel"],
+                    ["rev-parse", "HEAD"], ["rev-parse", "HEAD^{tree}"],
+                    ["status", "--porcelain=v1", "--untracked-files=all"],
+                    ["diff", "--binary", "--no-ext-diff", "--no-textconv", "HEAD"]])
+                self.assertEqual([row["timeout"] for row in calls], [60., 60., 60., 60., 53.])
+                self.assertFalse((case.suppliers.state / "evidence/central-bundle/retirement-prepared.json").exists())
+            else:
+                self.assertEqual(len(touched), 1)
+            if kind.endswith("stream"):
+                self.assertIn("CENTRAL_ORIGINAL_CREDENTIAL_QUARANTINE", json.dumps(controller.errors))
+        finally:
+            case.tearDown()
+
+    def test_b2_central_screens_all_canonical_product_and_stop_streams_before_any_raw_copy(self):
+        for name in ("product.stdout.log", "product.stderr.log", "stop.stdout.log", "stop.stderr.log"):
+            with self.subTest(stream=name):
+                self.central_quarantine_subcase("canonical-stream", name)
+
+    def test_b2_central_screens_closed_controller_and_helper_stdout_and_stderr(self):
+        for kind in ("controller-stream", "helper-stream"):
+            for name in ("stdout.log", "stderr.log"):
+                with self.subTest(role=kind, stream=name):
+                    self.central_quarantine_subcase(kind, name)
+
+    def test_b2_central_screens_late_worktree_removal_and_registry_both_streams(self):
+        for name in ("worktree-remove.stdout.log", "worktree-remove.stderr.log",
+                     "worktree-registry.stdout.log", "worktree-registry.stderr.log"):
+            with self.subTest(stream=name):
+                self.central_quarantine_subcase("late-git-stream", name)
+
+    def test_b2_central_missing_or_changed_authority_never_removes_keys_homes_or_exports(self):
+        for kind in ("missing-key", "missing-receipt", "retention-hold", "prepared-changed", "helper-unknown"):
+            with self.subTest(authority=kind):
+                self.central_quarantine_subcase(kind)
+
+    def test_b2_central_original_budget_includes_all_five_context_git_calls(self):
+        self.central_quarantine_subcase("context-budget")
+
+    def supplement_copy_corruption(self, stage, *, canonical):
+        case = WholeControllerModels("runTest")
+        case.setUp()
+        try:
+            case.use_full()
+            if canonical:
+                case.suppliers.codes["lock-policy"] = 73  # Failed/stop originals need the same protection.
+            observed = []
+            copy_tree, export = C.copy_tree, case.model_export
+            direct = "commands/" + C.supplements.CENTRAL_RETIRE + "/stderr.log"
+            def identify():
+                return case.suppliers.spec("lock-policy")["id"] if canonical else None
+            def copied(owner, source, destination, end):
+                target = copy_tree(owner, source, destination, end)
+                if stage != "before" or target.path.name != ("canonical-audit" if canonical else "frozen-evidence"):
+                    return target
+                path = target.path / "original-path-map.json"
+                mapping = C.parse(path.read_bytes())
+                name = identify() + "/stop.stderr.log" if canonical else direct
+                row = next(row for row in mapping["files"] if row["original"] == name)
+                source_path = source.path / name
+                raw = source_path.read_bytes()
+                observed.append((source_path, raw))
+                changed = b"!" + raw[1:]
+                case.save(target.path / row["member"], changed)
+                row.update(size=len(changed), sha256=C.digest(changed))
+                case.save(path, mapping)
+                return target
+            def exported(evidence, *args, **kwargs):
+                result = export(evidence, *args, **kwargs)
+                if stage == "after":
+                    observed.append(stage)
+                    case.replace_frozen_provenance(evidence.parent, "stop.stderr.log" if canonical else direct,
+                                                   canonical=canonical, invocation=identify())
+                return result
+            if stage == "seal":
+                session, result = case.execute()
+                self.assertEqual(result["profilePassed"], not canonical)
+                case.replace_frozen_provenance(session, "stop.stderr.log" if canonical else direct,
+                                               canonical=canonical, invocation=identify())
+                with self.assertRaisesRegex((C.ControllerError, ValueError),
+                        "ABI_FROZEN_ORIGINAL_PROVENANCE_DIFFERS|SUPPLEMENT_FROZEN_ORIGINAL_DIFFERS"):
+                    case.seal()
+                self.assertEqual((case.path / "public-step-output").read_bytes(), b"")
+            else:
+                with patch.object(C, "copy_tree", copied), patch.object(C.ordinary, "export_encrypted", side_effect=exported), \
+                        patch.object(C.shutil, "which", return_value=sys.executable), redirect_stdout(io.StringIO()):
+                    self.assertEqual(case.call_run(), 125)
+                self.assertEqual(len(observed), 1)
+                if stage == "before":
+                    source_path, raw = observed[0]
+                    self.assertEqual(source_path.read_bytes(), raw, "Only copied bytes were replaced")
+                    self.assertFalse((case.owners[-1].path / "export").exists())
+                self.assertFalse(case.owners[-1].encrypted)
+                self.assertTrue(case.owners[-1].unknown)
+                self.assertEqual(case.crypto_child_errors[0][0], "export")
+                self.assertRegex(str(case.crypto_child_errors[0][1]),
+                    "ABI_FROZEN_ORIGINAL_PROVENANCE_DIFFERS|SUPPLEMENT_FROZEN_ORIGINAL_DIFFERS")
+                case.assert_refused_run_cannot_seal()
+        finally:
+            case.tearDown()
+
+    def test_b2_failed_canonical_stop_and_late_helper_actual_copies_bind_before_export(self):
+        for canonical in (True, False):
+            with self.subTest(canonical=canonical):
+                self.supplement_copy_corruption("before", canonical=canonical)
+
+    def test_b2_export_return_rechecks_supplemental_bytes_through_both_copy_maps(self):
+        for canonical in (True, False):
+            with self.subTest(canonical=canonical):
+                self.supplement_copy_corruption("after", canonical=canonical)
+
+    def test_b2_separate_seal_rejects_self_consistent_supplemental_copy_substitution(self):
+        for canonical in (True, False):
+            with self.subTest(canonical=canonical):
+                self.supplement_copy_corruption("seal", canonical=canonical)
+
+    def test_b2_late_original_helper_stream_mutation_after_export_is_not_frozen_evidence(self):
+        self.use_full()
+        export = self.model_export
+        def changed(evidence, *args, **kwargs):
+            result = export(evidence, *args, **kwargs)
+            path = evidence.parent / "evidence/commands" / C.supplements.CENTRAL_RETIRE / "stdout.log"
+            self.save(path, path.read_bytes() + b"MODEL LATE ORIGINAL MUTATION\n")
+            return result
+        with patch.object(C.ordinary, "export_encrypted", side_effect=changed), \
+                patch.object(C.shutil, "which", return_value=sys.executable), redirect_stdout(io.StringIO()):
+            self.assertEqual(self.call_run(), 125)
+        self.assertIn("CENTRAL_SCREENED_BYTES_CHANGED", str(self.crypto_child_errors[0][1]))
+        self.assertFalse(self.owners[-1].encrypted)
+        self.assert_refused_run_cannot_seal()
+
+    def test_b2_central_remover_rejects_replaced_root_and_ancestor_without_deleting_replacement(self):
+        module = C.supplements.load_helper(ROOT / "scripts/prepare-audit-central-bundle-metadata.py", "central_removal_models")
+        for replace_ancestor in (False, True):
+            with self.subTest(ancestor=replace_ancestor):
+                parent = self.path / ("ancestor-case" if replace_ancestor else "root-case")
+                root = parent / "owned"
+                root.mkdir(parents=True, mode=0o700)
+                self.save(root / "original", b"KEEP ORIGINAL\n")
+                expected = module.identity(root)
+                opened, reached = os.open, []
+                displaced = parent.with_name(parent.name + "-displaced") if replace_ancestor else root.with_name("displaced")
+                def substituted(path, flags, **kwargs):
+                    fd = opened(path, flags, **kwargs)
+                    if path == root.name and not reached and "dir_fd" in kwargs:
+                        reached.append(path)
+                        if replace_ancestor:
+                            parent.rename(displaced)
+                            root.mkdir(parents=True, mode=0o700)
+                        else:
+                            root.rename(displaced)
+                            root.mkdir(mode=0o700)
+                        self.save(root / "replacement", b"KEEP UNADMITTED REPLACEMENT\n")
+                    return fd
+                with patch.object(module.os, "open", substituted), \
+                        self.assertRaisesRegex(ValueError, "Central removal ancestor replaced"):
+                    module.remove_bounded_tree(root, expected, lambda: None)
+                self.assertEqual(reached, [root.name])
+                self.assertEqual((root / "replacement").read_bytes(), b"KEEP UNADMITTED REPLACEMENT\n")
+                original = displaced / "owned/original" if replace_ancestor else displaced / "original"
+                self.assertEqual(original.read_bytes(), b"KEEP ORIGINAL\n")
+
+    def test_b2_central_remover_keeps_first_error_and_fwalk_descriptor_close_unknown(self):
+        module = C.supplements.load_helper(ROOT / "scripts/prepare-audit-central-bundle-metadata.py", "central_removal_close_models")
+        root = self.path / "admitted-removal"
+        root.mkdir(mode=0o700)
+        self.save(root / "keep", b"MODEL KEEP ON FAILED REMOVAL\n")
+        original = ValueError("MODEL FIRST UNLINK FAILURE")
+        opened, fwalk, close, unlink = os.open, os.fwalk, os.close, os.unlink
+        root_fds, closes, walker_closed = [], [], []
+        def pin(path, flags, **kwargs):
+            fd = opened(path, flags, **kwargs)
+            if path == root.name:
+                root_fds.append(fd)
+            return fd
+        class Walker:
+            def __init__(self, iterator):
+                self.iterator = iterator
+            def __iter__(self):
+                return self
+            def __next__(self):
+                return next(self.iterator)
+            def close(self):
+                self.iterator.close()
+                walker_closed.append(True)
+                raise OSError("MODEL FWALK CLOSE UNKNOWN")
+        def closing(fd):
+            close(fd)  # Dispose only the real synthetic fixture fd before reporting modeled ambiguity.
+            if fd in root_fds:
+                closes.append(fd)
+                raise OSError("MODEL ROOT FD CLOSE UNKNOWN")
+        def failed(name, **kwargs):
+            if name == "keep" and "dir_fd" in kwargs:
+                raise original
+            return unlink(name, **kwargs)
+        with patch.object(module.os, "open", pin), patch.object(module.os, "fwalk", side_effect=lambda *a, **kw: Walker(fwalk(*a, **kw))), \
+                patch.object(module.os, "close", closing), patch.object(module.os, "unlink", failed), \
+                self.assertRaises(ValueError) as caught:
+            module.remove_bounded_tree(root, module.identity(root), lambda: None)
+        self.assertIs(caught.exception, original)
+        self.assertEqual(walker_closed, [True])
+        self.assertEqual(closes, root_fds)
+        self.assertEqual(len(closes), 1, "Never retry an ambiguous descriptor close")
+        self.assertIn("Central fwalk retirement UNKNOWN", original.__notes__)
+        self.assertIn("Central removal descriptor retirement UNKNOWN", original.__notes__)
+        self.assertTrue(C.windows._exception_detail(original)["retirementUnknown"])
+        self.assertEqual((root / "keep").read_bytes(), b"MODEL KEEP ON FAILED REMOVAL\n")
 
     def test_full_finalizing_phase_rechecks_raw_work_fence_before_accepting_exit_zero(self):
         controller = self.full_controller()
@@ -2624,7 +3444,7 @@ class WholeControllerModels(Base):
         failure = OSError("synthetic request write failed")
         def poll():
             self.clock.set_raw(controller.budget.fence("productive"))
-            return 0
+            return None  # This negative control models a still-live canonical child.
         def fail_request(*args):
             self.events.append("cooperative-attempt")
             raise failure
