@@ -327,6 +327,27 @@ class AndroidArtAdmissionTest(unittest.TestCase):
             with self.subTest(malformed=bad[-100:]), self.assertRaises(ValueError):
                 art.instrumentation_result(bad, token, pin)
 
+    def test_profile_readback_terminal_cannot_satisfy_the_unchanged_peer_oracle(self):
+        # Synthetic protocol boundaries, NOT output captured from the uncompiled Android collector.
+        raw, token, pin = instrumentation_output()
+        renamed = raw.replace(b"test=permissionRecreationAndPinnedTcp", b"test=publicFlagProfileReadback")
+        with self.assertRaises(ValueError):
+            art.instrumentation_result(renamed, token, pin)
+        for outcome, status, code in (("RECORDED_UNQUALIFIED", 0, -1), ("FAILED", -2, 0)):
+            fields = {"class": art.INSTRUMENTATION, "test": "publicFlagProfileReadback",
+                      "numtests": "1", "current": "1", "p2pkitToken": token,
+                      "p2pkitReadbackMode": "profile-readback", "p2pkitReadbackOutcome": outcome,
+                      "p2pkitReadbackCompleted": "1", "p2pkitReadbackRetained": "true",
+                      "p2pkitQualification": "HOLD_UNQUALIFIED_RUNTIME_SEMANTICS",
+                      "p2pkitPermissionEnforcement": "NOT_PROVEN",
+                      "p2pkitSameInstanceRevocation": "NOT_EXECUTED"}
+            lines = ["INSTRUMENTATION_STATUS: " + key + "=" + value for key, value in fields.items()]
+            lines += ["INSTRUMENTATION_STATUS_CODE: " + str(status)]
+            lines += ["INSTRUMENTATION_RESULT: " + key + "=" + value for key, value in fields.items()]
+            lines += ["INSTRUMENTATION_CODE: " + str(code)]
+            with self.subTest(outcome=outcome), self.assertRaises(ValueError):
+                art.instrumentation_result(("\n".join(lines) + "\n").encode(), token, pin)
+
     def test_final_runtime_host_admission_rejects_late_output_control_and_cli_failures(self):
         alias = "anon-" + "c" * 16
         lines = [f"incoming from {alias}: <text 40B>",

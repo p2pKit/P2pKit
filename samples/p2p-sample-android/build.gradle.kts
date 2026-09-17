@@ -41,6 +41,13 @@ android {
         buildConfig = true
     }
 
+    // One recorder is exercised by host tests and the explicit API37 collector.
+    // It is test support, never part of the shipped application or library API.
+    sourceSets {
+        getByName("test").java.srcDir("src/acceptanceTestSupport/java")
+        getByName("androidTest").java.srcDir("src/acceptanceTestSupport/java")
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false

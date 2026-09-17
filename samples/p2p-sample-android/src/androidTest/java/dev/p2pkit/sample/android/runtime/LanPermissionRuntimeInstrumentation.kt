@@ -68,6 +68,11 @@ class LanPermissionRuntimeInstrumentation : Instrumentation() {
 
     override fun onStart() {
         super.onStart()
+        if (arguments.containsKey("mode")) {
+            // A separate terminal contract, not a peer PASS or a 317/324 UI selector.
+            LanPermissionProfileReadback.run(this, arguments)
+            return
+        }
         result.putString("p2pkitToken", arguments.getString("token"))
         result.putString("p2pkitRecreation", "NOT_RUN")
         result.putString("p2pkitRequestSettled", "false")
@@ -134,6 +139,7 @@ class LanPermissionRuntimeInstrumentation : Instrumentation() {
 
     @OptIn(ExperimentalP2pApi::class)
     private suspend fun exercise() {
+        check(arguments.keySet() == setOf("token", "host", "controlPort", "cliPort", "fingerprint"))
         val token = argument("token").also { check(it.matches(Regex("[0-9a-f]{32}"))) }
         val host = argument("host").also { check(it == "10.0.2.2") }
         val controlPort = argument("controlPort").toInt().also { check(it in 1024..65535) }
