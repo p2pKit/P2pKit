@@ -1,3 +1,8 @@
+> **Paused integration-branch handoff (17 September 2026):** read the
+> [portable checkpoint](docs/maintenance/nonphysical-checkpoint-2026-09-17.md)
+> before continuing. The main/consolidation account below is historical to that
+> later branch work; it does not mean the branch is merged or fully qualified.
+
 <!-- audit-current:start -->
 # Current audit continuation — scoped repairs approved; qualification still blocked
 
