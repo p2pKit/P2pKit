@@ -301,6 +301,11 @@ allowlisted H-to-empty-S exporter. It is dormant: no provider is run or qualifie
 both ordinary activation HOLDs remain, and dependency-byte reuse never grants
 test-result credit to changed source.
 
+The [ordinary job-clock prerequisite](hosted-job-clock.md) separately prepares
+closed same-host elapsed observations for future cross-process budget guards.
+It is not wired into FULL/Desktop, does not renew a job deadline, and supplies
+no native/runtime qualification or missing cache/delivery time allocation.
+
 ### Participating hosted job queue
 
 CI's `jvm-library-checks` and `complete-gate`, Desktop's `verify` and opt-in
