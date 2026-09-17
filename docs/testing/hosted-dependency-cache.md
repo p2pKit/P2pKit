@@ -67,6 +67,23 @@ count, capture, 15-second query and 45-second finalization bounds are unchanged;
 they are not a complete bootstrap schedule. Supplied event/Git models do not
 attest a real hosted caller or native retirement.
 
+Pre-budget plan, stage and seed-intent helpers now bind that closed cohort to
+the original bootstrap admission. Selection, native host labels, manual workflow,
+configuration-only request and `NOT_PERFORMED` disposition must agree. A caller
+cannot choose a different profile/role or use bootstrap admission in consume mode.
+Removing/relabeling the bootstrap scope/profile while leaving its reserved fields
+or recognizable bootstrap workflow/job/event-binding markers does not select the
+legacy ordinary path. Stage/plan declarations still cannot
+attest empty directories, original live identities or successful acquisition.
+
+This is **cohort planning, not the bootstrap execution-context integration**.
+Seed, export and save-set entry/retained-receipt checks explicitly refuse bootstrap
+admission before owned acquisition. Fabricated ordinary Desktop context or FULL
+`primaryAbiAccounting` cannot fill the missing producer/budget path. A future
+separate path must retain and rederive original source/run/clock-bound budget
+evidence and carry a nonrenewable fence; a supplied budget digest alone is not
+authority. No new context schema, allowance or clock is admitted by these guards.
+
 This identity has no CLI/controller/producer/provider caller or workflow. The
 named future `.github/workflows/dependency-cache-bootstrap.yml` still does not
 exist. Original producer success, same-home stop, known worker retirement,
@@ -220,6 +237,7 @@ Focused offline commands (not a claim they ran on a particular host):
 
 ```bash
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-identity-test.py
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-cohort-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
@@ -230,7 +248,7 @@ python3 -I -B -S scripts/tests/hosted-desktop-job-budget-test.py
 These use modeled provider/native boundaries and tiny synthetic owned files, no
 dependency download or Gradle. The connected/budget controls are registered in the
 unconditional ordinary CI policy step and both release script entry points.
-The separate bootstrap-identity controls are currently standalone, not an
+The separate bootstrap identity/cohort controls are currently standalone, not an
 activated or registered bootstrap workflow.
 Native Windows provider behavior and actual resolver/cache reuse require
 separate genuine execution. Changes to shared executable suppliers also require

@@ -15,6 +15,7 @@ import re
 import stat
 import time
 
+import hosted_cache_bootstrap_identity as bootstrap
 import hosted_dependency_seed as authority
 import hosted_windows_files as windows
 
@@ -29,7 +30,8 @@ KNOWN = ("KNOWN_MISS", "KNOWN_PARTIAL", "KNOWN_SEEDED")
 STATUS = (*KNOWN, "FAILED", "UNKNOWN")
 INPUTS = ("gradle/verification-metadata.xml", "gradle/wrapper/gradle-wrapper.properties",
           "scripts/hosted_dependency_seed.py", "scripts/hosted_dependency_seed_files.py",
-          "scripts/hosted_windows_files.py", "scripts/run-hosted-test-custody.py")
+          "scripts/hosted_windows_files.py", "scripts/run-hosted-test-custody.py",
+          "scripts/hosted_cache_bootstrap_identity.py", "scripts/hosted_test_identity.py")
 
 
 class SeedError(RuntimeError):
@@ -523,7 +525,28 @@ def stage_path(session, profile, role):
     return Path(session).parent / ("p2pkit-dependency-seed-" + profile + "-" + role)
 
 
+def _bootstrap_cohort(admitted_raw):
+    try:
+        return bootstrap.cache_cohort(admitted_raw)
+    except bootstrap.ordinary.AdmissionError:
+        raise SeedError("SEED_BOOTSTRAP_IDENTITY_CHANGED") from None
+
+
+def validate_cohort(admitted_raw, profile, role):
+    """Pre-budget byte routing only; no native/staging/producer authority."""
+    selected = _bootstrap_cohort(admitted_raw)
+    require(selected is None or selected == (profile, role), "SEED_BOOTSTRAP_COHORT_CHANGED")
+    return selected
+
+
+def require_connected_execution(admitted_raw):
+    # Bootstrap needs a separate original-budget/producer/custody path. Never
+    # route it through ordinary Desktop or fictional FULL primary ABI fields.
+    require(_bootstrap_cohort(admitted_raw) is None, "SEED_BOOTSTRAP_EXECUTION_NOT_CONNECTED")
+
+
 def stage_record(admitted_raw, profile, role, path, root_info, source_info, inputs):
+    validate_cohort(admitted_raw, profile, role)
     admitted = record(admitted_raw)
     return {"schema": 1, "scope": "DEPENDENCY_SEED_STAGING_V1", "profile": profile, "role": role,
             "source": admitted["source"], "github": admitted["github"], "admissionSha256": digest(admitted_raw),
@@ -539,6 +562,7 @@ def validate_stage(stage, admitted_raw, profile, role, path, root_info, source_i
 
 
 def seed_intent(admitted_raw, profile, role, path, staging_raw, inputs):
+    validate_cohort(admitted_raw, profile, role)
     return {"schema": 1, "policy": POLICY, "profile": profile, "role": role,
             "admissionSha256": digest(admitted_raw), "stagingSha256": digest(staging_raw),
             "container": str(path), "restoreHome": str(path / "restore-home"), "inputs": inputs}
@@ -546,6 +570,7 @@ def seed_intent(admitted_raw, profile, role, path, staging_raw, inputs):
 
 def validate_retained_stage(stage, admitted_raw, context, inputs):
     """Validate original receipt grammar, NOT the post-product S/cache contents."""
+    validate_cohort(admitted_raw, context["profile"], context["role"])
     require(type(stage) is dict and _identity(stage.get("containerIdentity")) and
             _identity(stage.get("sourceIdentity")) and stage["containerIdentity"] != stage["sourceIdentity"],
             "SEED_STAGING_IDENTITY_GRAMMAR")
@@ -823,6 +848,7 @@ def _copy_allowlisted(owners, source, output, compiled, result, end, check, now,
 def seed_home(parent, home, intent, staging, compiled, context_raw, canonical_raw, admitted_raw,
               *, end, check, now, interval):
     """Complete one owned seed, or fail without exposing a partial H to a loader."""
+    require_connected_execution(admitted_raw)
     owners, first = _Owners(parent), None
     admitted_record, canonical = record(admitted_raw), record(canonical_raw)
     counts = {"prehashBytes": 0, "outputBytes": 0, "sourceNames": 0, "destinationMembers": 0,
@@ -927,6 +953,7 @@ def _file_binding(value):
 
 def validate_receipt(value, intent, staging_raw, context_raw, canonical_raw, admitted_raw, compiled):
     """Closed semantic verification, without reopening post-product cache bytes."""
+    require_connected_execution(admitted_raw)
     required = {"schema", "scope", "intentSha256", "contextSha256", "canonicalContextSha256",
                 "stagingSha256", "source", "github", "role", "home", "restoreHome", "inputs", "policy",
                 "wrapper", "status", "completed", "retirement", "errors", "window", "counts", "admitted",

@@ -32,6 +32,7 @@ SELECTIONS = (
 INPUTS = frozenset(("selection", "expected_sha", "expected_tree"))
 COMMAND = ("help", "--console=plain", "--no-configure-on-demand")
 PRODUCER_SCOPE = "CONFIGURATION_ONLY_NOT_COMPLETE_DEPENDENCIES_OR_TESTS"
+CACHE_FIELDS = frozenset(("selection", "cacheCohort", "producerCommand", "producerScope", "testAcceptance"))
 
 
 def require(value, code):
@@ -44,6 +45,44 @@ def selection(value):
         if value == name:
             return profile, role, system, architecture
     raise ordinary.AdmissionError("BOOTSTRAP_SELECTION")
+
+
+def cache_cohort(admitted_raw):
+    """Route retained declarations, not a new admission or producer authority.
+
+    None preserves the existing ordinary/model helper contract. Bootstrap-only
+    fields cannot fall through that branch when its scope/profile is removed or
+    relabelled. Original-byte custody and real source/policy re-admission remain
+    mandatory in a future caller; a supplied record cannot authenticate itself.
+    """
+    value = ordinary.parse(admitted_raw, ordinary.EVENT_LIMIT)
+    github = value.get("github")
+    binding = github.get("eventBinding") if type(github) is dict else None
+    nested = type(github) is dict and (github.get("workflow") == WORKFLOW or github.get("job") == JOB or
+        type(binding) is dict and {"selection", "expectedCommit", "expectedTree"}.intersection(binding))
+    if not (value.get("scope") == SCOPE or value.get("profile") == PROFILE or
+            CACHE_FIELDS.intersection(value) or nested):
+        require("scope" not in value or value["scope"] == "ORDINARY_HOSTED_TEST_CUSTODY_IDENTITY",
+                "BOOTSTRAP_OR_ORDINARY_SCOPE")
+        return None
+    require(set(value) == {"schema", "scope", "profile", "source", "github", "policy"} | CACHE_FIELDS and
+            type(value["schema"]) is int and value["schema"] == 1 and
+            value["scope"] == SCOPE and value["profile"] == PROFILE, "BOOTSTRAP_CACHE_IDENTITY")
+    profile, role, system, architecture = selection(value["selection"])
+    require(value["cacheCohort"] == {"profile": profile, "role": role} and
+            value["producerCommand"] == list(COMMAND) and value["producerScope"] == PRODUCER_SCOPE and
+            value["testAcceptance"] == "NOT_PERFORMED", "BOOTSTRAP_CACHE_COHORT_OR_EXECUTION_CHANGED")
+    source, github, policy = (ordinary.mapping(value[name]) for name in ("source", "github", "policy"))
+    require(set(source) == {"commit", "tree"}, "BOOTSTRAP_CACHE_SOURCE")
+    commit, tree, main = (ordinary.sha(source["commit"]), ordinary.sha(source["tree"]),
+                          ordinary.sha(policy.get("commit")))
+    require(github.get("repository") == ordinary.REPOSITORY and github.get("event") == "workflow_dispatch" and
+            github.get("workflow") == WORKFLOW and github.get("workflowSha") == commit and github.get("job") == JOB and
+            (github.get("runnerOS"), github.get("runnerArch")) == (system, architecture) and
+            github.get("eventBinding") == {"policyMain": main, "selection": value["selection"],
+                "expectedCommit": commit, "expectedTree": tree}, "BOOTSTRAP_CACHE_HOST_OR_SOURCE_CHANGED")
+    require(admitted_raw == ordinary.encoded(value), "BOOTSTRAP_CACHE_ORIGINAL_RECORD_ENCODING")
+    return profile, role
 
 
 def _admit(env, event_raw, git, now):

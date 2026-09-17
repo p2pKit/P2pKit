@@ -23,13 +23,15 @@ from pathlib import Path
 # source/offline reviewed; its updated expectation is not native/cache acceptance.
 # The connected consume/delivery controller and predecessor-clock corrections
 # received separate source/offline review before this controller-only update.
+# Bootstrap's pre-budget cohort guards received independent source/offline
+# review before the seed-only expectation update; no bootstrap execution opens.
 EXPECTED = {
     "scripts/run-hosted-test-custody.py": "eb10c042667499ee489e499ab89bb8657882e556c5c6d8dc74916feff0245499",
     "scripts/hosted_full_supplements.py": "9f5c6a0f410c00ee7531664e95dab233c0febc6740dd6a8b1005e3fc3a64310c",
     "scripts/hosted_primary_abi.py": "ff168e70c31bc23b1c6e545a32d0c4217f9a212f7244a2c34571eee09f761553",
     "scripts/run-platform-tests.py": "1a3e6f093abe3a79bfbc2d3f426f26e71db77c6f72034effeb2e296dc833c271",
     "scripts/run-audit-command.py": "70216745a371d41101a0c4f6d27ca1d73b5f3d82c3e7ea4fc70009fb44f51cc5",
-    "scripts/hosted_dependency_seed_files.py": "e122a97ccab8f58e015b8b8db378b205fee0c3836275bc4f9a7fe19dc516d417",
+    "scripts/hosted_dependency_seed_files.py": "2d3c4db8cbd2450287e4cf3db7c2eedfac32cf0ac4fd1294df4c2a1f0263c2b5",
 }
 LIMIT = 1024 * 1024
 

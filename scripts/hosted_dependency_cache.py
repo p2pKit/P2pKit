@@ -69,6 +69,8 @@ def make_plan(admitted_raw, staging_raw, compiled, inputs, *, session, profile, 
     """Pure plan from independently admitted source/stage inputs, not admission."""
     _profile(profile, role)
     require(type(mode) is str and mode in MODES, "CACHE_EXPLICIT_MODE_REQUIRED")
+    cohort = files.validate_cohort(admitted_raw, profile, role)
+    require(cohort is None or mode == "bootstrap", "CACHE_BOOTSTRAP_CANNOT_CONSUME")
     session = Path(session)
     require(session.is_absolute() and ".." not in session.parts and len(session.parts) > 2,
             "CACHE_SESSION_PATH")
@@ -153,6 +155,7 @@ def validate_provider_observation(value, plan, phase):
 
 
 def _export_inputs(plan, staging_raw, seed_raw, context_raw, canonical_raw, admitted_raw, compiled):
+    files.require_connected_execution(admitted_raw)
     context, canonical, previous = map(files.record, (context_raw, canonical_raw, seed_raw))
     intent = context["dependencySeed"]
     validate_plan(plan, admitted_raw, staging_raw, compiled, intent["inputs"], session=context["session"],
