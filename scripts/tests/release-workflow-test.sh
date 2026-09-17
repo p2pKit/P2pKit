@@ -39,6 +39,8 @@ ruby "$ROOT/scripts/tests/check-windows-directory-control-policy-test.rb"
 python3 -B "$ROOT/scripts/tests/run-windows-directory-control-test.py"
 ruby "$ROOT/scripts/tests/check-sample-app-workflow-policy-test.rb"
 python3 -I -B -S "$ROOT/scripts/tests/package-sample-apps-test.py"
+ruby "$ROOT/scripts/tests/check-hosted-test-workflow-policy-test.rb"
+python3 -I -B -S "$ROOT/scripts/tests/check-hosted-test-composition-test.py"
 python3 -I -B -S "$ROOT/scripts/tests/test-transcript-custody-test.py"
 ruby "$ROOT/scripts/tests/check-hosted-lock-candidate-policy-test.rb"
 python3 -I -B -S "$ROOT/scripts/tests/run-hosted-lock-candidate-test.py"
@@ -226,18 +228,8 @@ grep -Fq 'os: [ubuntu-latest, windows-latest, macos-15]' "$DESKTOP_WORKFLOW" || 
     echo "FATAL: Desktop cross-host workflow does not cover Linux, Windows, and macOS" >&2
     exit 1
 }
-for task in \
-    ':p2p-sample-desktop:check' \
-    ':p2p-sample-desktop:installDist' \
-    ':p2p-sample-desktop-ui:test' \
-    ':p2p-sample-desktop-ui:checkRuntime' \
-    ':p2p-sample-desktop-ui:hotRunArgfile' \
-    ':p2p-sample-desktop-ui:createDistributable'; do
-    grep -Fq -- "$task" "$DESKTOP_WORKFLOW" || {
-        echo "FATAL: Desktop cross-host workflow is missing $task" >&2
-        exit 1
-    }
-done
+# The caller/composition controls above check actual ordinary Desktop tasks
+# inside custody. Preview task strings in YAML cannot substitute for that path.
 grep -Fq 'samples/p2p-sample-desktop/**' "$DESKTOP_WORKFLOW" || {
     echo "FATAL: CLI changes do not trigger Desktop cross-host verification" >&2
     exit 1
@@ -270,8 +262,9 @@ if grep -Eq 'org\.jetbrains\.compose\.desktop:desktop-jvm-(linux|macos|windows)|
     exit 1
 fi
 
-ruby - "$CI_WORKFLOW" <<'RUBY'
+ruby - "$CI_WORKFLOW" "$ROOT/scripts/check-hosted-test-workflow-policy.rb" <<'RUBY'
 require "yaml"
+require ARGV.fetch(1)
 
 workflow = YAML.safe_load(File.read(ARGV.fetch(0)), aliases: true)
 complete_gate = workflow.fetch("jobs").fetch("complete-gate")
@@ -299,25 +292,10 @@ raise "CI whitespace check must run for both scopes" if whitespace.key?("if")
 raise "CI whitespace check is not range-bound" unless
   whitespace.fetch("run").include?("scripts/check-git-whitespace.sh \"$BASE_SHA\" \"$HEAD_SHA\"")
 
-ui_evidence = steps.find { |step| step["name"] == "Upload iOS UI failure evidence" }
-raise "CI does not retain failed iOS UI results" unless ui_evidence
-raise "iOS UI evidence must be failure-only" unless ui_evidence.fetch("if").include?("failure()")
-raise "iOS UI evidence action is not pinned" unless ui_evidence.fetch("uses") ==
-  "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
-raise "iOS UI evidence path is not an xcresult" unless
-  ui_evidence.fetch("with").fetch("path").end_with?("*.xcresult")
-
-sbom_evidence = steps.find { |step| step["name"] == "Upload SBOM evidence" }
-raise "CI SBOM evidence step is missing" unless sbom_evidence
-raise "early failures must not create a second missing-SBOM failure" unless
-  sbom_evidence.fetch("with").fetch("if-no-files-found") == "warn"
-
-xc_evidence = steps.find { |step| step["name"] == "Upload XCFramework provenance evidence" }
-raise "CI XCFramework provenance evidence step is missing" unless xc_evidence
-raise "XCFramework provenance evidence must be full-scope only" unless
-  xc_evidence.fetch("if").include?("steps.scope.outputs.full == 'true'")
-raise "XCFramework provenance evidence does not include sidecars" unless
-  xc_evidence.fetch("with").fetch("path").include?("XCFrameworks/release/BUILD_*.txt")
+# Swift xcresult, SBOM and XCFramework sidecars are retained inside private
+# custody by the unchanged executable composition checked/mutated above.
+# Only the separately sealed ciphertext and safe public manifest may upload.
+HostedTestWorkflowPolicy.check_full(workflow)
 RUBY
 
 # Tripwire: scripts/install-xcodegen.sh XCODEGEN_VERSION; review the release
@@ -380,7 +358,6 @@ grep -Fq 'scripts/tests/classify-ci-scope-test.sh' "$ROOT/scripts/run-release-ga
 for regression in \
     scripts/tests/resolve-ci-scope-test.sh \
     scripts/tests/check-git-whitespace-test.sh \
-    scripts/tests/ios-project-generation-test.py \
     scripts/tests/check-release-identity-test.sh; do
     grep -Fq "$regression" "$CI_WORKFLOW" || {
         echo "FATAL: CI does not run $regression" >&2
@@ -391,6 +368,12 @@ for regression in \
         exit 1
     }
 done
+# CI's actual project-generation supplement is bound by the composition
+# controls above; the standalone release gate still invokes it directly.
+grep -Fq 'python3 scripts/tests/ios-project-generation-test.py' "$ROOT/scripts/run-release-gate.sh" || {
+    echo "FATAL: release gate does not run the project-generation regression" >&2
+    exit 1
+}
 grep -Fq 'scripts/check-git-whitespace.sh' "$ROOT/scripts/run-release-gate.sh" || {
     echo "FATAL: release gate does not audit committed, staged, and worktree whitespace" >&2
     exit 1

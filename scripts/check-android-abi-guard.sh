@@ -96,12 +96,17 @@ for module_build in "${module_builds[@]}"; do
         fail "$module_build must consume exactly one compiler-owned class-directory provider"
 done
 
-ci_command=':p2p-core:checkAndroidAbi :p2p-transport-lan:checkAndroidAbi :p2p-network-provisioning-android:checkAndroidAbi'
-[[ "$(grep -Fc "$ci_command" "$CI_WORKFLOW")" == "1" ]] ||
-    fail "CI must invoke every Android ABI comparison together exactly once"
+# Ordinary CI now selects all three fresh Android comparisons through the
+# primary ABI roster, and the real module graph through its FULL supplements.
+# Bind the actual caller and parsed executable composition, not stale YAML text.
+ruby "$ROOT/scripts/check-hosted-test-workflow-policy.rb" "$CI_WORKFLOW" ||
+    fail "CI ordinary FULL caller policy failed"
+python3 -I -B -S "$ROOT/scripts/check-hosted-test-composition.py" --root "$ROOT" ||
+    fail "CI ordinary ABI/supplement executable composition failed"
 
 # An explicit comparison does not prove module check owns it. The full-mode
-# graph probe is a separate, load-bearing command in both complete gates.
+# graph probe is a separate, load-bearing command in both complete gates. CI's
+# actual supplier is bound above; the standalone release call remains direct.
 # Match executable, unflagged lines, not comments, --static-only or || true.
 require_full_graph_call() {
     local file="$1"
@@ -110,7 +115,6 @@ require_full_graph_call() {
         fail "$gate must invoke the Android ABI task-graph verification in full mode exactly once"
 }
 
-require_full_graph_call "$CI_WORKFLOW" "CI"
 require_full_graph_call "$RELEASE_GATE" "release gate"
 
 # Static policy (also exercised by its own fixture suite) protects the direct

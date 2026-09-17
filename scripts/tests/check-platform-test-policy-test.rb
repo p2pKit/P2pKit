@@ -2,6 +2,7 @@
 require "yaml"
 require "json"
 require "shellwords"
+require_relative "../check-hosted-test-workflow-policy"
 
 ROOT = File.expand_path("../..", __dir__)
 FULL = "steps.scope.outputs.full == 'true'"
@@ -52,7 +53,10 @@ end
 
 def check_platform_policy(inputs)
     ci, intel, dry, publish, release = inputs.values_at(:ci, :intel, :dry, :publish, :release)
-    check_job(ci.fetch("jobs").fetch("complete-gate"), "full", true)
+    # Ordinary FULL is now executed inside the private-custody controller.
+    # Its exact caller is checked here; executable driver/ABI/supplement edges
+    # are bound and mutated by check-hosted-test-composition-test.py.
+    HostedTestWorkflowPolicy.check_full(ci)
     raise "Intel simulator validation must remain secret-free/read-only" unless
         intel.fetch("permissions") == {"contents" => "read"} && !JSON.generate(intel).include?("secrets.")
     triggers = intel.fetch("on") { intel.fetch(true) }
@@ -93,12 +97,12 @@ inputs = {
 inputs[:release] = File.read(File.join(ROOT, "scripts/run-release-gate.sh"))
 check_platform_policy(inputs)
 mutations = {
-    "raw check bypass" => ->(v) { by_id(v[:ci]["jobs"]["complete-gate"], "platform-tests")["run"] = "./gradlew check" },
+    "raw check bypass" => ->(v) { by_id(v[:ci]["jobs"]["complete-gate"], "ordinary-run")["run"] = "./gradlew check" },
     "echo instead of execution" => ->(v) {
-        by_id(v[:ci]["jobs"]["complete-gate"], "platform-tests")["run"] = "echo python3 scripts/run-platform-tests.py full"
+        by_id(v[:ci]["jobs"]["complete-gate"], "ordinary-run")["run"] = "echo python3 scripts/run-platform-tests.py full"
     },
     "missing full report" => ->(v) {
-        v[:ci]["jobs"]["complete-gate"]["steps"].delete(by_id(v[:ci]["jobs"]["complete-gate"], "platform-reports"))
+        v[:ci]["jobs"]["complete-gate"]["steps"].delete(by_id(v[:ci]["jobs"]["complete-gate"], "ordinary-evidence"))
     },
     "arm64 instead of Intel" => ->(v) { v[:intel]["jobs"]["ios-x64"]["runs-on"] = "macos-latest" },
     "Intel job disabled" => ->(v) { v[:intel]["jobs"]["ios-x64"]["if"] = false },
@@ -113,7 +117,14 @@ mutations = {
     "missing release policy" => ->(v) { v[:release].sub!("ruby scripts/tests/check-platform-test-policy-test.rb", "true") },
     "missing release regression" => ->(v) { v[:release].sub!("python3 scripts/tests/run-platform-tests-test.py", "true") },
 }
-{ci: "complete-gate", intel: "ios-x64"}.each do |workflow, job|
+%w[ordinary-run ordinary-seal ordinary-evidence ordinary-required].each do |id|
+    mutations["FULL ignored #{id}"] = ->(v) { by_id(v[:ci]["jobs"]["complete-gate"], id)["continue-on-error"] = true }
+    mutations["FULL conditional #{id}"] = ->(v) { by_id(v[:ci]["jobs"]["complete-gate"], id)["if"] = "success()" }
+end
+mutations["FULL missing sealed evidence path"] = ->(v) {
+    by_id(v[:ci]["jobs"]["complete-gate"], "ordinary-evidence")["with"]["path"] = "build/reports/**"
+}
+{intel: "ios-x64"}.each do |workflow, job|
     %w[platform-tests stop-platform-gradle platform-reports].each do |id|
         mutations["#{workflow} ignored #{id}"] = ->(v) { by_id(v[workflow]["jobs"][job], id)["continue-on-error"] = true }
         mutations["#{workflow} conditional #{id}"] = ->(v) { by_id(v[workflow]["jobs"][job], id)["if"] = "success()" }
@@ -135,10 +146,11 @@ end
 mutations.each do |name, mutate|
     altered = Marshal.load(Marshal.dump(inputs))
     mutate.call(altered)
+    raise "platform mutation had no effect: #{name}" if altered == inputs
     rejected = false
     begin
         check_platform_policy(altered)
-    rescue KeyError, RuntimeError, ArgumentError
+    rescue KeyError, RuntimeError, ArgumentError, HostedTestWorkflowPolicy::Error
         rejected = true
     end
     raise "unsafe platform-test policy accepted: #{name}" unless rejected

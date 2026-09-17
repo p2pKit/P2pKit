@@ -23,6 +23,12 @@ reset_fixture() {
     cp "$ROOT/build.gradle.kts" "$FIXTURE/build.gradle.kts"
     cp "$ROOT/.github/workflows/ci.yml" "$FIXTURE/.github/workflows/ci.yml"
     cp "$ROOT/scripts/run-release-gate.sh" "$FIXTURE/scripts/run-release-gate.sh"
+    for policy_input in \
+        check-heavy-job-queue-policy.rb check-hosted-test-workflow-policy.rb check-hosted-test-composition.py \
+        run-hosted-test-custody.py hosted_full_supplements.py hosted_primary_abi.py \
+        run-platform-tests.py run-audit-command.py hosted_dependency_seed_files.py; do
+        cp "$ROOT/scripts/$policy_input" "$FIXTURE/scripts/$policy_input"
+    done
     cp "$ROOT/scripts/tests/check-kotlin-toolchain-policy-test.sh" \
         "$FIXTURE/scripts/tests/check-kotlin-toolchain-policy-test.sh"
     cp "$ROOT/library/p2p-core/build.gradle.kts" "$FIXTURE/library/p2p-core/build.gradle.kts"
@@ -79,21 +85,45 @@ expect_rejected "missing-check-edge" "do not depend on the Android ABI compariso
 reset_fixture
 remove_matching_lines \
     "$FIXTURE/.github/workflows/ci.yml" \
-    ':p2p-core:checkAndroidAbi :p2p-transport-lan:checkAndroidAbi :p2p-network-provisioning-android:checkAndroidAbi'
-expect_rejected "missing-ci-edge" "CI must invoke every Android ABI comparison"
+    'scripts/run-hosted-test-custody.py run --profile full --seed-dependencies'
+expect_rejected "missing-ci-edge" "CI ordinary FULL caller policy failed"
+
+reset_fixture
+sed 's/"checkAndroidAbi"/"checkKotlinAbi"/g' "$FIXTURE/scripts/hosted_primary_abi.py" \
+    >"$FIXTURE/scripts/hosted_primary_abi.py.new"
+mv "$FIXTURE/scripts/hosted_primary_abi.py.new" "$FIXTURE/scripts/hosted_primary_abi.py"
+expect_rejected "missing-three-android-comparisons" \
+    "ordinary executable composition changed: scripts/hosted_primary_abi.py"
+
+# Mutate the real composed graph command instead of a no-longer-executable
+# YAML/comment string. No supplier module is imported or executed by this test.
+for mutation in removed static-only commented duplicated ignored-failure; do
+    reset_fixture
+    python3 -I -B -S - "$FIXTURE/scripts/hosted_full_supplements.py" "$mutation" <<'PY'
+from pathlib import Path
+import sys
+path, mutation = Path(sys.argv[1]), sys.argv[2]
+before = '        ("command", ["bash", "scripts/check-android-abi-guard.sh"]),'
+after = {
+    "removed": "",
+    "static-only": '        ("command", ["bash", "scripts/check-android-abi-guard.sh", "--static-only"]),',
+    "commented": "#" + before,
+    "duplicated": before + "\n" + before,
+    "ignored-failure": '        ("command", ["bash", "-c", "scripts/check-android-abi-guard.sh || true"]),',
+}[mutation]
+source = path.read_text(encoding="utf-8")
+assert source.count(before) == 1, "fixture must mutate the actual graph command once"
+path.write_text(source.replace(before, after), encoding="utf-8")
+PY
+    expect_rejected "ci-graph-$mutation" \
+        "ordinary executable composition changed: scripts/hosted_full_supplements.py"
+done
 
 # Keep the actual graph probe reachable exactly once from each complete gate.
 # These fixtures need no wrapper: --static-only must enforce the caller policy.
-for gate in ci release; do
-    for mutation in removed static-only commented duplicated ignored-failure; do
+for mutation in removed static-only commented duplicated ignored-failure; do
         reset_fixture
-        if [[ "$gate" == "ci" ]]; then
-            caller="$FIXTURE/.github/workflows/ci.yml"
-            label="CI"
-        else
-            caller="$FIXTURE/scripts/run-release-gate.sh"
-            label="release gate"
-        fi
+        caller="$FIXTURE/scripts/run-release-gate.sh"
         awk -v mutation="$mutation" '
             /scripts\/check-android-abi-guard\.sh/ {
                 if (mutation == "removed") next
@@ -105,9 +135,8 @@ for gate in ci release; do
             { print }
         ' "$caller" >"$caller.new"
         mv "$caller.new" "$caller"
-        expect_rejected "$gate-graph-$mutation" \
-            "$label must invoke the Android ABI task-graph verification in full mode exactly once"
-    done
+        expect_rejected "release-graph-$mutation" \
+            "release gate must invoke the Android ABI task-graph verification in full mode exactly once"
 done
 
 reset_fixture

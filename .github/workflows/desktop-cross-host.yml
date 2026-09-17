@@ -6,6 +6,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/desktop-cross-host.yml"
+      - ".github/test-evidence-recipient.json"
       - ".gitattributes"
       - ".gitignore"
       - "LICENSE"
@@ -29,6 +30,31 @@ on:
       - "scripts/tests/check-windows-directory-control-policy-test.rb"
       - "scripts/tests/fixtures/windows-directory-binding/settings.gradle"
       - "scripts/tests/fixtures/windows-directory-binding/build.gradle"
+      - "gradle/test-transcript-custody.init.gradle"
+      - "scripts/run-hosted-test-admission.py"
+      - "scripts/run-hosted-test-custody.py"
+      - "scripts/test-transcript-custody.py"
+      - "scripts/run-audit-command.py"
+      - "scripts/check-audit-receipt.py"
+      - "scripts/audit_processes.py"
+      - "scripts/hosted_dependency_seed.py"
+      - "scripts/hosted_dependency_seed_files.py"
+      - "scripts/hosted_evidence.py"
+      - "scripts/hosted_full_job_budget.py"
+      - "scripts/hosted_full_simulator.py"
+      - "scripts/hosted_full_supplements.py"
+      - "scripts/hosted_lock_resources.py"
+      - "scripts/hosted_primary_abi.py"
+      - "scripts/hosted_test_identity.py"
+      - "scripts/hosted_test_query.py"
+      - "scripts/hosted_test_evidence.py"
+      - "scripts/hosted_windows_evidence.py"
+      - "scripts/hosted_windows_files.py"
+      - "scripts/check-gradle-wrapper.sh"
+      - "scripts/check-hosted-test-workflow-policy.rb"
+      - "scripts/check-hosted-test-composition.py"
+      - "scripts/tests/check-hosted-test-workflow-policy-test.rb"
+      - "scripts/tests/check-hosted-test-composition-test.py"
       - "gradle.lockfile"
       - "buildscript-gradle.lockfile"
       - "samples/p2p-sample-android/**"
@@ -108,11 +134,50 @@ jobs:
           fi
 
       - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          fetch-depth: 0
           persist-credentials: false
 
+      - name: Hold ordinary desktop acquisition until cache qualification
+        id: ordinary-activation
+        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') }}
+        shell: bash
+        run: |
+          echo 'ORDINARY_TEST_ACTIVATION=HOLD; QUALIFIED_DEPENDENCY_CACHE_REQUIRED' >&2
+          exit 125
+
+      - name: Admit ordinary desktop source and trusted recipient policy
+        id: ordinary-admission
+        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') }}
+        shell: bash
+        run: |
+          python_bin=python3
+          if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
+          case "$RUNNER_OS/$RUNNER_ARCH" in
+            Linux/X64) role=linux-x64 ;;
+            Windows/X64) role=windows-x64 ;;
+            macOS/ARM64) role=macos-arm64 ;;
+            macOS/X64) role=macos-x64 ;;
+            *) echo 'FATAL: unsupported ordinary native host' >&2; exit 1 ;;
+          esac
+          "$python_bin" -I -B -S scripts/run-hosted-test-admission.py --profile desktop \
+            --root "$GITHUB_WORKSPACE" \
+            --evidence-directory "$RUNNER_TEMP/p2pkit-test-admission-desktop-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$role"
+          printf 'session_directory=%s/p2pkit-test-desktop-%s-%s-%s\n' "$RUNNER_TEMP" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$role" >> "$GITHUB_OUTPUT"
+
+      - name: Bind fresh ordinary sample outputs to this run
+        id: ordinary-output
+        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') }}
+        shell: bash
+        run: |
+          python_bin=python3
+          if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
+          "$python_bin" -I -B -S scripts/package-sample-apps.py prepare --output "$RUNNER_TEMP/p2pkit-sample-apps"
+
       - name: Bind fresh sample outputs and Gradle home to this run
+        id: preview-output
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'sample-apps' }}
         shell: bash
         run: |
           python_bin=python3
@@ -128,21 +193,50 @@ jobs:
           "$python_bin" -I -B -S -c 'from pathlib import Path; import sys; Path(sys.argv[1]).mkdir(mode=0o700)' "$gradle_home"
           printf 'GRADLE_USER_HOME=%s\n' "$gradle_home" >> "$GITHUB_ENV"
 
+      - name: Allocate separate ordinary dependency staging
+        id: dependency-stage
+        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') }}
+        shell: bash
+        run: |
+          python_bin=python3
+          if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
+          "$python_bin" -I -B -S scripts/run-hosted-test-custody.py stage-dependencies --profile desktop
+
       - name: Configure daemon Java 21 and wrapper Java 17
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        id: java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
         with:
           distribution: temurin
-          # setup-java installs both; the last entry supplies JAVA_HOME.
           java-version: |
             21
             17
 
+      - name: Bind the native ordinary daemon JDK
+        id: ordinary-jdk21
+        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') }}
+        shell: bash
+        run: |
+          case "$RUNNER_ARCH" in X64|ARM64) ;; *) echo 'FATAL: unsupported native Java architecture' >&2; exit 1 ;; esac
+          daemon_variable="JAVA_HOME_21_${RUNNER_ARCH}"
+          daemon_home="${!daemon_variable}"
+          case "$daemon_home" in ''|*$'\n'*|*$'\r'*) echo 'FATAL: missing or invalid daemon JDK path' >&2; exit 1 ;; esac
+          printf 'P2PKIT_AUDIT_JDK21=%s\n' "$daemon_home" >> "$GITHUB_ENV"
+
       - name: Validate wrapper and configure Gradle
-        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        id: preview-gradle
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'sample-apps' }}
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb
         with:
           gradle-home-cache-excludes: caches/build-cache-1
 
+      - name: Verify the ordinary source wrapper
+        id: ordinary-wrapper
+        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') }}
+        shell: bash
+        run: scripts/check-gradle-wrapper.sh
+
       - name: Install Android compile platforms for the Linux APK producer
+        id: sample-sdk
         if: runner.os == 'Linux'
         shell: bash
         run: |
@@ -152,6 +246,7 @@ jobs:
 
       - name: Verify CLI, Desktop runtime, tests, Hot Reload tooling, and application images
         id: sample-build
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'sample-apps' }}
         shell: bash
         env:
           P2PKIT_SAMPLE_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'sample-apps' }}
@@ -192,16 +287,94 @@ jobs:
 
       - name: Stop the sample job's Gradle home on every attempted build
         id: stop-sample-gradle
-        if: ${{ always() && (steps.sample-build.outcome == 'success' || steps.sample-build.outcome == 'failure' || steps.sample-build.outcome == 'cancelled') }}
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.operation == 'sample-apps' && (steps.sample-build.outcome == 'success' || steps.sample-build.outcome == 'failure' || steps.sample-build.outcome == 'cancelled') }}
         shell: bash
         run: |
           ./gradlew --stop --console=plain \
             -Dorg.gradle.java.installations.auto-download=false \
             -Dorg.gradle.java.installations.fromEnv=JAVA_HOME_17_X64,JAVA_HOME_21_X64,JAVA_HOME_17_ARM64,JAVA_HOME_21_ARM64
 
+      - name: Run ordinary desktop with private custody
+        id: ordinary-run
+        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.dependency-stage.outcome == 'success' && steps.dependency-stage.outputs.dependency_seed_ready == 'true' }}
+        shell: bash
+        env:
+          P2PKIT_DEPENDENCY_SEED_STAGE_OUTCOME: ${{ steps.dependency-stage.outcome }}
+          P2PKIT_DEPENDENCY_SEED_STAGE_SHA256: ${{ steps.dependency-stage.outputs.dependency_seed_staging_sha256 }}
+        run: |
+          python_bin=python3
+          if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
+          "$python_bin" -I -B -S scripts/run-hosted-test-custody.py run --profile desktop --seed-dependencies
+
+      - name: Seal ordinary desktop evidence after controller return
+        id: ordinary-seal
+        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-run.outcome == 'success' }}
+        shell: bash
+        env:
+          P2PKIT_HOSTED_TEST_RUN_OUTCOME: ${{ steps.ordinary-run.outcome }}
+        run: |
+          python_bin=python3
+          if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
+          "$python_bin" -I -B -S scripts/run-hosted-test-custody.py validate-public --profile desktop
+
+      - name: Upload only sealed ordinary desktop evidence
+        id: ordinary-evidence
+        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-run.outcome == 'success' && steps.ordinary-seal.outcome == 'success' && steps.ordinary-seal.outputs.artifacts_ready == 'true' }}
+        timeout-minutes: 3
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ordinary-desktop-evidence-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.ordinary-admission.outputs.session_directory }}/export/evidence.tar.gz.gpg
+            ${{ steps.ordinary-admission.outputs.session_directory }}/export/manifest.json
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          include-hidden-files: false
+          overwrite: false
+
+      - name: Require the complete ordinary desktop result
+        id: ordinary-required
+        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') }}
+        shell: bash
+        env:
+          ORDINARY_ACTIVATION: ${{ steps.ordinary-activation.outcome }}
+          ORDINARY_ADMISSION: ${{ steps.ordinary-admission.outcome }}
+          DEPENDENCY_STAGE: ${{ steps.dependency-stage.outcome }}
+          JAVA: ${{ steps.java.outcome }}
+          ORDINARY_JDK21: ${{ steps.ordinary-jdk21.outcome }}
+          ORDINARY_OUTPUT: ${{ steps.ordinary-output.outcome }}
+          ORDINARY_WRAPPER: ${{ steps.ordinary-wrapper.outcome }}
+          ORDINARY_RUN: ${{ steps.ordinary-run.outcome }}
+          ORDINARY_SEAL: ${{ steps.ordinary-seal.outcome }}
+          ORDINARY_EVIDENCE: ${{ steps.ordinary-evidence.outcome }}
+          SEED_READY: ${{ steps.dependency-stage.outputs.dependency_seed_ready }}
+          ARTIFACTS_READY: ${{ steps.ordinary-seal.outputs.artifacts_ready }}
+          PROFILE_PASSED: ${{ steps.ordinary-seal.outputs.profile_passed }}
+          SDK_OUTCOME: ${{ steps.sample-sdk.outcome }}
+        run: |
+          test "$ORDINARY_ACTIVATION" = success
+          test "$ORDINARY_ADMISSION" = success
+          test "$DEPENDENCY_STAGE" = success
+          test "$JAVA" = success
+          test "$ORDINARY_JDK21" = success
+          test "$ORDINARY_OUTPUT" = success
+          test "$ORDINARY_WRAPPER" = success
+          test "$ORDINARY_RUN" = success
+          test "$ORDINARY_SEAL" = success
+          test "$ORDINARY_EVIDENCE" = success
+          test "$SEED_READY" = true
+          test "$ARTIFACTS_READY" = true
+          test "$PROFILE_PASSED" = true
+          case "$RUNNER_OS" in
+            Linux) test "$SDK_OUTCOME" = success ;;
+            Windows|macOS) test "$SDK_OUTCOME" = skipped ;;
+            *) exit 1 ;;
+          esac
+
       - name: Inspect and archive successful development sample apps
         id: sample-packaging
-        if: ${{ success() && steps.sample-build.outcome == 'success' && steps.stop-sample-gradle.outcome == 'success' }}
+        if: ${{ success() && ((github.event_name == 'workflow_dispatch' && inputs.operation == 'sample-apps' && steps.sample-build.outcome == 'success' && steps.stop-sample-gradle.outcome == 'success') || ((github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-required.outcome == 'success')) }}
         shell: bash
         run: |
           python_bin=python3
@@ -210,7 +383,7 @@ jobs:
 
       - name: Upload native Desktop development apps
         if: ${{ success() && steps.sample-packaging.outcome == 'success' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: sample-desktop-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/p2pkit-sample-apps/desktop/
@@ -222,7 +395,7 @@ jobs:
 
       - name: Upload Android development APK
         if: ${{ success() && runner.os == 'Linux' && steps.sample-packaging.outcome == 'success' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: sample-android-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/p2pkit-sample-apps/android/

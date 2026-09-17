@@ -124,8 +124,10 @@ grep -Fq 'check_rc2_legacy_jvm_symbols' "$PUBLICATION_GATE" ||
     fail "published artifacts do not retain the supplemental RC2 JVM-symbol guard"
 
 [[ -x "$XCFRAMEWORK_GATE" ]] || fail "the XCFramework minimum-OS gate is not executable"
-grep -Fq 'scripts/check-xcframework-minimum-os.sh' "$CI_WORKFLOW" ||
-    fail "CI does not verify the linked XCFramework deployment floor"
+# Ordinary CI runs the linked minimum-OS/provenance supplement in custody,
+# not a direct YAML command. Check both the caller and its executable supplier.
+ruby "$ROOT/scripts/check-hosted-test-workflow-policy.rb" "$CI_WORKFLOW"
+python3 -I -B -S "$ROOT/scripts/check-hosted-test-composition.py" --root "$ROOT"
 grep -Fq 'scripts/check-xcframework-minimum-os.sh' "$RELEASE_GATE" ||
     fail "the release gate does not verify the linked XCFramework deployment floor"
 

@@ -154,7 +154,7 @@ mutations = {
     "missing PR coverage" => ->(v) { (v["on"] || v[true])["pull_request"]["paths"].pop },
     "ordinary skipped green" => ->(v) { v["jobs"]["verify"]["if"] = false },
     "missing unknown guard" => ->(v) { v["jobs"]["verify"]["steps"].shift },
-    "ordinary tasks omitted" => ->(v) { v["jobs"]["verify"]["steps"].find { |s| s["id"] == "sample-build" }["run"] = "echo pass" },
+    "ordinary controller omitted" => ->(v) { v["jobs"]["verify"]["steps"].find { |s| s["id"] == "ordinary-run" }["run"] = "echo pass" },
     "wrong native host" => ->(v) { v["jobs"][P::OPERATION]["runs-on"] = "ubuntu-latest" },
     "control cancellation" => ->(v) { v["concurrency"]["cancel-in-progress"] = true },
     "missing queue" => ->(v) { v["jobs"][P::OPERATION].delete("concurrency") },

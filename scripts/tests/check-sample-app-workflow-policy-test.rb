@@ -13,7 +13,13 @@ def ordinary(value)
 end
 
 def step(value, id)
-    ordinary(value).fetch("steps").find { |item| item["id"] == id }
+    matches = ordinary(value).fetch("steps").select { |item| item["id"] == id }
+    raise "expected one #{id} step" unless matches.length == 1
+    matches.first
+end
+
+def named_step(value, name)
+    ordinary(value).fetch("steps").find { |item| item["name"] == name } || raise("missing #{name} step")
 end
 
 mutations = {
@@ -27,20 +33,23 @@ mutations = {
     "publisher environment" => ->(v) { ordinary(v)["environment"] = "release" },
     "secret scope" => ->(v) { ordinary(v)["env"] = {"TOKEN" => "${{ secrets.PUBLISH }}"} },
     "unsupported job context" => ->(v) { ordinary(v)["env"] = {"GRADLE_USER_HOME" => "${{ runner.temp }}/p2pkit-sample-gradle"} },
-    "shared default home" => ->(v) { ordinary(v)["steps"][2]["run"] = P.helper("prepare") },
-    "pre-existing Gradle home" => ->(v) { ordinary(v)["steps"][2]["run"].sub!('[[ -e "$gradle_home" || -L "$gradle_home" ]]', "false") },
-    "Windows chmod regression" => ->(v) { ordinary(v)["steps"][2]["run"].sub!(%q!"$python_bin" -I -B -S -c 'from pathlib import Path; import sys; Path(sys.argv[1]).mkdir(mode=0o700)'!, "mkdir -m 700") },
-    "nonexclusive home creation" => ->(v) { ordinary(v)["steps"][2]["run"].sub!(".mkdir(mode=0o700)", ".mkdir(mode=0o700, exist_ok=True)") },
-    "world-readable Unix home" => ->(v) { ordinary(v)["steps"][2]["run"].sub!("mode=0o700", "mode=0o755") },
+    "preview shared default home" => ->(v) { step(v, "preview-output")["run"] = P.helper("prepare") },
+    "preview pre-existing Gradle home" => ->(v) { step(v, "preview-output")["run"].sub!('[[ -e "$gradle_home" || -L "$gradle_home" ]]', "false") },
+    "preview Windows chmod regression" => ->(v) { step(v, "preview-output")["run"].sub!(%q!"$python_bin" -I -B -S -c 'from pathlib import Path; import sys; Path(sys.argv[1]).mkdir(mode=0o700)'!, "mkdir -m 700") },
+    "preview nonexclusive home creation" => ->(v) { step(v, "preview-output")["run"].sub!(".mkdir(mode=0o700)", ".mkdir(mode=0o700, exist_ok=True)") },
+    "preview world-readable Unix home" => ->(v) { step(v, "preview-output")["run"].sub!("mode=0o700", "mode=0o755") },
     "unknown operation admitted" => ->(v) { ordinary(v)["steps"].shift },
     "credential checkout" => ->(v) { ordinary(v)["steps"][1]["with"]["persist-credentials"] = true },
     "moving checkout" => ->(v) { ordinary(v)["steps"][1]["with"]["ref"] = "main" },
-    "old outputs admitted" => ->(v) { ordinary(v)["steps"][2]["run"] = "echo prepared" },
-    "implicit JDK acquisition" => ->(v) { ordinary(v)["steps"][3]["with"]["java-version"] = "17" },
-    "Kotlin cache restored" => ->(v) { ordinary(v)["steps"][4]["with"].delete("gradle-home-cache-excludes") },
-    "missing SDK37" => ->(v) { ordinary(v)["steps"][5]["run"].sub!("'platforms;android-37.0'", "") },
-    "nonliteral SDK37 admission" => ->(v) { ordinary(v)["steps"][5]["run"].gsub!("grep -Fxq", "grep -xq") },
-    "Android SDK on every host" => ->(v) { ordinary(v)["steps"][5].delete("if") },
+    "old ordinary outputs admitted" => ->(v) { step(v, "ordinary-output")["run"] = "echo prepared" },
+    "old preview outputs admitted" => ->(v) { step(v, "preview-output")["run"] = "echo prepared" },
+    "implicit JDK acquisition" => ->(v) { step(v, "java")["with"]["java-version"] = "17" },
+    "preview Kotlin cache restored" => ->(v) { step(v, "preview-gradle")["with"].delete("gradle-home-cache-excludes") },
+    "preview cache on ordinary path" => ->(v) { step(v, "preview-gradle").delete("if") },
+    "preview home on ordinary path" => ->(v) { step(v, "preview-output").delete("if") },
+    "missing SDK37" => ->(v) { step(v, "sample-sdk")["run"].sub!("'platforms;android-37.0'", "") },
+    "nonliteral SDK37 admission" => ->(v) { step(v, "sample-sdk")["run"].gsub!("grep -Fxq", "grep -xq") },
+    "Android SDK on every host" => ->(v) { step(v, "sample-sdk").delete("if") },
     "Android on every host" => ->(v) { step(v, "sample-build")["run"].sub!('[[ "$RUNNER_OS" == Linux ]]', "true") },
     "build-only enabled for required verification" => ->(v) { step(v, "sample-build")["env"]["P2PKIT_SAMPLE_ONLY"] = "true" },
     "build-only outside explicit operation" => ->(v) { step(v, "sample-build")["env"]["P2PKIT_SAMPLE_ONLY"] = "${{ github.event_name == 'push' }}" },
@@ -66,8 +75,10 @@ mutations = {
     "parallel Gradle" => ->(v) { step(v, "sample-build")["run"].sub!("--no-parallel", "--parallel") },
     "cleanup success-only" => ->(v) { step(v, "stop-sample-gradle")["if"] = "${{ success() }}" },
     "cleanup wrong home" => ->(v) { step(v, "stop-sample-gradle")["env"] = {"GRADLE_USER_HOME" => "other"} },
+    "preview cleanup on ordinary path" => ->(v) { step(v, "stop-sample-gradle")["if"] = "${{ always() }}" },
     "ignored cleanup failure" => ->(v) { step(v, "stop-sample-gradle")["continue-on-error"] = true },
     "package after failed stop" => ->(v) { step(v, "sample-packaging")["if"] = "${{ always() }}" },
+    "ordinary package before final acceptance" => ->(v) { step(v, "sample-packaging")["if"].sub!("steps.ordinary-required.outcome == 'success'", "steps.ordinary-run.outcome == 'success'") },
     "package stale outputs" => ->(v) { step(v, "sample-packaging")["run"] = "echo success" },
     "extra side effect" => ->(v) { ordinary(v)["steps"] << {"run" => "git push origin HEAD:main"} },
     "wrong native host" => ->(v) { ordinary(v)["strategy"]["matrix"]["os"][1] = "ubuntu-latest" },
@@ -79,17 +90,18 @@ mutations = {
         mutations["omitted #{event} input #{path}"] = ->(v) { (v["on"] || v[true])[event]["paths"].delete(path) }
     end
 end
-[9, 10].each do |index|
+["Upload native Desktop development apps", "Upload Android development APK"].each do |name|
     {"if-no-files-found" => "warn", "path" => "**/*", "name" => "latest", "retention-days" => 90,
      "include-hidden-files" => true, "overwrite" => true}.each do |key, value|
-        mutations["upload #{index} #{key}"] = ->(v) { ordinary(v)["steps"][index]["with"][key] = value }
+        mutations["#{name} #{key}"] = ->(v) { named_step(v, name)["with"][key] = value }
     end
-    mutations["upload #{index} after failure"] = ->(v) { ordinary(v)["steps"][index]["if"] = "${{ always() }}" }
+    mutations["#{name} after failure"] = ->(v) { named_step(v, name)["if"] = "${{ always() }}" }
 end
 
 mutations.each do |name, mutate|
     altered = Marshal.load(Marshal.dump(workflow))
     mutate.call(altered)
+    raise "sample mutation had no effect: #{name}" if altered == workflow
     begin
         P.check(altered)
     rescue P::Error

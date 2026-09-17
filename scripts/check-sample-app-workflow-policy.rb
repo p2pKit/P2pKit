@@ -1,7 +1,9 @@
 #!/usr/bin/env ruby
-# Ordinary development app delivery only; no publisher or audit-host admission.
+# Development app delivery; ordinary runtime evidence uses the closed custody
+# caller while the explicit sample-apps preview remains a separate build-only path.
 require "json"
 require_relative "check-heavy-job-queue-policy"
+require_relative "check-hosted-test-workflow-policy"
 
 module SampleAppWorkflowPolicy
     Error = HeavyJobQueuePolicy::Error
@@ -10,14 +12,24 @@ module SampleAppWorkflowPolicy
     JAVA = "actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961"
     GRADLE = "gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb"
     UPLOAD = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
-    PATHS = %w[.github/workflows/desktop-cross-host.yml .gitattributes .gitignore LICENSE gradlew gradlew.bat
+    CUSTODY = HostedTestWorkflowPolicy
+    PATHS = %w[.github/workflows/desktop-cross-host.yml .github/test-evidence-recipient.json .gitattributes .gitignore LICENSE gradlew gradlew.bat
         build.gradle.kts settings.gradle.kts gradle.properties
         buildSrc/** gradle/wrapper/** gradle/gradle-daemon-jvm.properties gradle/libs.versions.toml
         gradle/verification-metadata.xml gradle/windows-directory-control.init.gradle scripts/run-windows-directory-control.py
         scripts/package-sample-apps.py scripts/tests/package-sample-apps-test.py scripts/check-sample-app-workflow-policy.rb
         scripts/tests/check-sample-app-workflow-policy-test.rb scripts/tests/run-windows-directory-control-test.py
         scripts/tests/check-windows-directory-control-policy-test.rb scripts/tests/fixtures/windows-directory-binding/settings.gradle
-        scripts/tests/fixtures/windows-directory-binding/build.gradle gradle.lockfile buildscript-gradle.lockfile
+        scripts/tests/fixtures/windows-directory-binding/build.gradle
+        gradle/test-transcript-custody.init.gradle scripts/run-hosted-test-admission.py scripts/run-hosted-test-custody.py
+        scripts/test-transcript-custody.py scripts/run-audit-command.py scripts/check-audit-receipt.py scripts/audit_processes.py
+        scripts/hosted_dependency_seed.py scripts/hosted_dependency_seed_files.py scripts/hosted_evidence.py
+        scripts/hosted_full_job_budget.py scripts/hosted_full_simulator.py scripts/hosted_full_supplements.py
+        scripts/hosted_lock_resources.py scripts/hosted_primary_abi.py scripts/hosted_test_identity.py
+        scripts/hosted_test_query.py scripts/hosted_test_evidence.py scripts/hosted_windows_evidence.py
+        scripts/hosted_windows_files.py scripts/check-gradle-wrapper.sh scripts/check-hosted-test-workflow-policy.rb
+        scripts/check-hosted-test-composition.py scripts/tests/check-hosted-test-workflow-policy-test.rb
+        scripts/tests/check-hosted-test-composition-test.py gradle.lockfile buildscript-gradle.lockfile
         samples/p2p-sample-android/** samples/sample-kmp-shared/** samples/p2p-sample-desktop/** samples/p2p-sample-desktop-ui/**
         samples/p2p-sample-diagnostics/** library/p2p-core/** library/p2p-transport-lan/**
         library/p2p-network-provisioning-desktop/** library/p2p-network-provisioning-android/**].freeze
@@ -75,8 +87,8 @@ module SampleAppWorkflowPolicy
           -Dorg.gradle.java.installations.auto-download=false \
           -Dorg.gradle.java.installations.fromEnv=JAVA_HOME_17_X64,JAVA_HOME_21_X64,JAVA_HOME_17_ARM64,JAVA_HOME_21_ARM64
     SH
-    STOP_IF = "${{ always() && (steps.sample-build.outcome == 'success' || steps.sample-build.outcome == 'failure' || steps.sample-build.outcome == 'cancelled') }}"
-    PACKAGE_IF = "${{ success() && steps.sample-build.outcome == 'success' && steps.stop-sample-gradle.outcome == 'success' }}"
+    STOP_IF = "${{ always() && github.event_name == 'workflow_dispatch' && inputs.operation == 'sample-apps' && (steps.sample-build.outcome == 'success' || steps.sample-build.outcome == 'failure' || steps.sample-build.outcome == 'cancelled') }}"
+    PACKAGE_IF = "${{ success() && ((github.event_name == 'workflow_dispatch' && inputs.operation == 'sample-apps' && steps.sample-build.outcome == 'success' && steps.stop-sample-gradle.outcome == 'success') || ((github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-required.outcome == 'success')) }}"
     OWNED_HOME = <<~'SH'
         # runner.temp is not available in job-level env; export after allocation.
         gradle_home="$RUNNER_TEMP/p2pkit-sample-gradle"
@@ -121,21 +133,28 @@ module SampleAppWorkflowPolicy
         [
             {"name" => "Reject unknown Desktop dispatch operations", "shell" => "bash",
              "env" => {"P2PKIT_DESKTOP_OPERATION" => "${{ inputs.operation }}"}, "run" => REJECT_UNKNOWN},
-            {"name" => "Check out repository", "uses" => CHECKOUT, "with" => {"persist-credentials" => false}},
-            {"name" => "Bind fresh sample outputs and Gradle home to this run", "shell" => "bash",
+            {"name" => "Check out repository", "uses" => CHECKOUT, "with" => {"fetch-depth" => 0, "persist-credentials" => false}},
+            CUSTODY.activation("desktop"), CUSTODY.admission("desktop"),
+            {"name" => "Bind fresh ordinary sample outputs to this run", "id" => "ordinary-output",
+             "if" => CUSTODY.when_profile("desktop"), "shell" => "bash", "run" => helper("prepare")},
+            {"name" => "Bind fresh sample outputs and Gradle home to this run", "id" => "preview-output",
+             "if" => CUSTODY::PREVIEW, "shell" => "bash",
              "run" => helper("prepare") + OWNED_HOME},
-            {"name" => "Configure daemon Java 21 and wrapper Java 17", "uses" => JAVA,
-             "with" => {"distribution" => "temurin", "java-version" => "21\n17\n"}},
-            {"name" => "Validate wrapper and configure Gradle", "uses" => GRADLE,
+            CUSTODY.stage("desktop"), CUSTODY.java, CUSTODY.daemon("desktop"),
+            {"name" => "Validate wrapper and configure Gradle", "id" => "preview-gradle", "if" => CUSTODY::PREVIEW,
+             "uses" => GRADLE,
              "with" => {"gradle-home-cache-excludes" => "caches/build-cache-1"}},
-            {"name" => "Install Android compile platforms for the Linux APK producer", "if" => "runner.os == 'Linux'",
+            {"name" => "Verify the ordinary source wrapper", "id" => "ordinary-wrapper",
+             "if" => CUSTODY.when_profile("desktop"), "shell" => "bash", "run" => "scripts/check-gradle-wrapper.sh"},
+            {"name" => "Install Android compile platforms for the Linux APK producer", "id" => "sample-sdk", "if" => "runner.os == 'Linux'",
              "shell" => "bash", "run" => SDK},
             {"name" => "Verify CLI, Desktop runtime, tests, Hot Reload tooling, and application images",
-             "id" => "sample-build", "shell" => "bash",
+             "id" => "sample-build", "if" => CUSTODY::PREVIEW, "shell" => "bash",
              "env" => {"P2PKIT_SAMPLE_ONLY" => "${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'sample-apps' }}"},
              "run" => BUILD},
             {"name" => "Stop the sample job's Gradle home on every attempted build", "id" => "stop-sample-gradle",
              "if" => STOP_IF, "shell" => "bash", "run" => STOP},
+            CUSTODY.run("desktop"), CUSTODY.seal("desktop"), CUSTODY.upload("desktop"), CUSTODY.terminal("desktop"),
             {"name" => "Inspect and archive successful development sample apps", "id" => "sample-packaging",
              "if" => PACKAGE_IF, "shell" => "bash", "run" => helper("package")},
             upload("desktop"), upload("android"),
