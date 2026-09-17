@@ -70,8 +70,9 @@ attest a real hosted caller or native retirement.
 The native-query supplier also accepts an optional **same-process monotonic
 work/final owner-fence pair**. It only shortens the existing bounds, including
 constructor allocation, every query, admission/failure retention, readers,
-writers and final session close. Defaults preserve ordinary behavior; no
-production caller supplies this pair yet. Cancellation callbacks alone cannot
+writers and final session close. Defaults preserve ordinary behavior. The
+separate dormant original-acquisition caller now supplies this pair; no ordinary
+caller or activated workflow does. Cancellation callbacks alone cannot
 cap the supplier's finalization I/O. Expiry forbids new retained-file acquisition
 but does not excuse known-owner cleanup; UNKNOWN still quarantines its pins.
 A provisional session receipt can precede a failed late close, so it never
@@ -95,9 +96,9 @@ separate path must retain and rederive original source/run/clock-bound budget
 evidence and carry a nonrenewable fence; a supplied budget digest alone is not
 authority. No new context schema, allowance or clock is admitted by these guards.
 
-This identity has no CLI/controller/producer/provider caller or workflow. The
-named future `.github/workflows/dependency-cache-bootstrap.yml` still does not
-exist. Original producer success, same-home stop, known worker retirement,
+The evidence-only caller below now connects this identity, not a productive
+bootstrap job. The named future `.github/workflows/dependency-cache-bootstrap.yml`
+still does not exist. Original producer success, same-home stop, known worker retirement,
 empty-seed/export/freeze/save/probe custody, separate seal and a complete admitted
 budget remain unfinished. The proposed 5,400 seconds is **not admitted or
 measured**. Windows file ownership still has its 900-second lifetime; its
@@ -105,6 +106,70 @@ measured**. Windows file ownership still has its 900-second lifetime; its
 activation HOLDs remain. The original checkpoint's untested WIP status is dated;
 later scoped checks/review are recorded against their exact source, not claimed
 as executions at that checkpoint.
+
+### Original acquisition, not bootstrap execution
+
+[`run-hosted-cache-bootstrap.py`](../../scripts/run-hosted-cache-bootstrap.py)
+and [`hosted_cache_bootstrap_origin.py`](../../scripts/hosted_cache_bootstrap_origin.py)
+add a **dormant, not-workflow-wired original-acquisition slice**. Its sole public
+operation is `prepare-originals`; `_service` is the closed native-child entry,
+not a local identity override or standalone adoption command. No environment
+impersonation or execution is authorized by this documentation.
+
+The source-proposed prelude caps are **120 seconds final /75 seconds new work**,
+explicitly **UNMEASURED / NOT_ADMITTED**, not part of an admitted 5,400-second
+bootstrap budget. One native service phase uses the earlier of its original
+45-second work fence or the prelude work cutoff, followed by at most45 seconds
+of finalization inside the original prelude. Each GET remains15 seconds/socket5;
+the pair, retention and child success share the original phase work fence.
+Initial child metadata reads have a local45 ceiling that loading the original
+parent frame can only shorten. Known-owner cleanup is still attempted on expiry;
+expiry cannot turn new acquisition or a late return into success.
+
+The caller retains the original prelude, actual native-query admission/session
+return, closed context/prelaunch records, prelaunch native baseline, native birth,
+process exit/drain/close dispositions, capture outcomes and two closed Actions
+GET observations. The original first child reading must follow the **last parent
+pre-spawn high-water**, carried in the exact native launch argv. Early metadata
+observations are preserved through frame binding. The parent's later birth
+observation can occur concurrently with child work; it is not substituted for
+that pre-spawn floor. Original source/main/policy admission runs again before
+the final provisional receipt.
+
+The Actions-read token is confined to service-child acquisition and is absent
+from retained command/context records and the native Git environment. This is
+non-inheritance, not memory erasure or a sandbox against hostile same-user code.
+Closed selectors map the four native roles to `ubuntu-latest`, `windows-latest`,
+`macos-26` and `macos-15-intel`; these are dormant source selections, not deployed
+or qualified runner environments. Configuration and product execution never run
+in this slice.
+
+Failed HTTP observations use only the remaining **original** failure-finalization
+interval. A failed or implicit EOF reader close keeps UNKNOWN even after the
+standard HTTP parser detaches its reader, without retrying an ambiguous close.
+Cancellation and the first failure remain failures. Observations retain bounded
+bytes actually returned through the supplier, not a complete wire capture or a
+reconstruction of bytes lost before return. Long-lived capture files use the
+original phase final fence, not a newly started or prematurely ending IO45
+allowance; their allocation still checks the original work cutoff.
+
+The chain is acyclic: child provisional terminal → post-close ACK → separately
+observed native return/retirement → parent provisional receipt. Internal
+revalidation is **repeatable read-only within that owning call**. It requires
+that owner's original returned phase/admission objects and exact retained
+prelude/session/baseline/response bytes; copied data or a caller success flag
+does not create provenance. No cross-process execution-adoption entry exists.
+A future trusted workflow must bind the **exact original prepare-step outcome**,
+not its normalized conclusion or the provisional receipt/digest, before any
+downstream adoption. No receipt can observe its own later successful return.
+
+There is still no canonical initializer/producer launcher, seed/export/save/probe
+caller, encrypted export/seal/upload, or productive/job-budget acceptance here.
+No production caller invokes `cache.export_snapshot` or `cache.save_set`.
+The [source continuation](../maintenance/nonphysical-source-resume-2026-09-17.md)
+records executed offline controls, retained failures and exact independent-review
+scope. Neither those controls nor this caller lifts either ordinary activation
+HOLD or supplies the missing routine recipient policy.
 
 ### Canonical producer records, not producer execution
 
@@ -286,6 +351,7 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-identity-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-cohort-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-producer-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-query-fence-test.py
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-origin-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
@@ -296,8 +362,10 @@ python3 -I -B -S scripts/tests/hosted-desktop-job-budget-test.py
 These use modeled provider/native boundaries and tiny synthetic owned files, no
 dependency download or Gradle. The connected/budget controls are registered in the
 unconditional ordinary CI policy step and both release script entry points.
-The separate bootstrap identity/cohort/producer-record/query-fence controls are standalone, not an
-activated or registered bootstrap workflow.
+The separate bootstrap identity/cohort/producer-record/query-fence/original-acquisition
+controls are standalone, not an activated or registered bootstrap workflow.
+Tiny private-file controls require an actual ordinary UID; root is not an
+acceptable substitute and their modeled native boundaries are not host admission.
 Native Windows provider behavior and actual resolver/cache reuse require
 separate genuine execution. Changes to shared executable suppliers also require
 independent review of the explicit composition tripwire update.

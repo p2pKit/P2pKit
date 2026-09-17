@@ -28,8 +28,10 @@ Exact containing commits, review verdicts and remote readbacks are mapped in
 The seed source roster also binds the two identity suppliers. Its sole composition
 expectation was changed only after independent review of that exact seed delta;
 the other five supplier expectations and both ordinary workflow HOLDs are unchanged.
-There is still **no bootstrap workflow, CLI/controller/producer launcher or
-provider caller**, and no production caller of `cache.export_snapshot` or `cache.save_set`.
+At that increment there was **no bootstrap workflow, CLI/controller/producer
+launcher or provider caller**. The later original-acquisition slice below adds
+only an evidence caller; there is still no production caller of
+`cache.export_snapshot` or `cache.save_set`.
 
 ## Cohort-increment verification ledger
 
@@ -144,7 +146,7 @@ allocation, admission/failure retention, delegated readers/writers and session
 close. No ordinary caller supplies it; default record shapes and deadline policy
 are unchanged.
 No bootstrap controller, shared-clock context, service-job budget or workflow
-is introduced by this seam. It is preparation for the missing acquisition caller,
+was introduced by that seam. It prepared the later acquisition caller below,
 not native/runtime acceptance or an admitted 5,400-second bootstrap job.
 
 Executed author controls used installed Linux Python 3.12.3 with `-I -B -S`, an
@@ -183,12 +185,99 @@ Exact independent implementation review, containing commit/tree and remote
 readbacks are mapped separately in #437. These standalone tests do not activate
 a workflow, change a composition expectation, or grant cache/export/save authority.
 
+## Dormant original-acquisition caller increment
+
+The separate [`run-hosted-cache-bootstrap.py`](../../scripts/run-hosted-cache-bootstrap.py)
+and [`hosted_cache_bootstrap_origin.py`](../../scripts/hosted_cache_bootstrap_origin.py)
+now connect original evidence acquisition only. They do **not** instantiate
+ordinary FULL/Desktop with `help`, run a canonical producer, or provide a
+workflow/job budget. The source-proposed120-second prelude/75-second work cap is
+**UNMEASURED / NOT_ADMITTED**. The [cache contract](../testing/hosted-dependency-cache.md#original-acquisition-not-bootstrap-execution)
+describes the original native-query/session/prelude/baseline/clock/HTTP/capture
+chain and its nonrenewable bounds.
+
+The parent retains the actual native phase return, not a supplied success flag.
+The child receives the latest original **pre-spawn** clock floor in its exact
+executed argv and preserves early metadata high-waters. Its later parent birth
+observation is concurrent, not an interchangeable first-child minimum. Exact
+original records and typed successful exit, known retirement and closed capture
+outcomes are all required. Read-only revalidation can repeat in the current
+owning call, but copied phase/admission data cannot create current-call provenance.
+The final source/main/policy admission is an actual caller step, not a digest
+comparison. Native query and HTTP suppliers are **modeled**, not executed, by
+the tests below.
+
+The public operation is only `prepare-originals`. There is no independent
+cross-process adoption CLI or trusted workflow yet. Child/parent outputs stay
+provisional until their actual calls return; any later adopter must bind the
+trusted workflow's **exact original prepare-step outcome**, not a caller flag
+or normalized conclusion. No original can attest its own later close/return.
+
+Executed author command in each recorded source-only ordinary-UID fixture:
+
+```bash
+timeout --kill-after=5s 90s runuser -u nobody -- \
+  python3 -I -B -S <exact-read-only-source-copy>/scripts/tests/hosted-cache-bootstrap-origin-test.py -v
+```
+
+The installed Linux Python3.12.3 suite passed **74/74 methods** on the final
+executable/test snapshot. Actions/TLS/network, shared clocks, native process
+ownership and admission suppliers are explicit models; only tiny POSIX private
+files and their inherited regular-file descriptor writes are real. No Git child,
+provider/cache action, GPG, Java, Gradle, SDK or simulator ran. Source manifests
+before/after each fixture matched. These are not hosted/native/service-provider
+tests, an actual recipient-policy admission or measured scheduling.
+
+Retained intermediate outcomes are not replaced by the final pass:
+
+- Incoming WIP29: **8 failed assertions /11 errors**. Fixture hooks initially
+  repeated an unintended clock change on GET2 and returned `None` as a synthetic
+  allocation. After correcting those fixtures without changing source, seven
+  focused desired-state methods each failed an assertion, zero errors. They
+  covered work/final ownership, HTTP predecessor clocks and native birth binding.
+- The first integrated29 passed but did not cover the later close/lifetime gaps.
+  Independent review identified the standard HTTP parser's implicit EOF close:
+  it detaches `fp` before closing, so final outer close alone could falsely label
+  a failed reader close KNOWN. Two added author methods **both failed before**
+  and **both passed after** the sticky close-disposition correction. Underlying
+  ambiguous close is not retried; original cancellation is preserved.
+- Expanded66 had **two fixture errors**, not native incidents: a displaced test
+  tail and a simulated child calling the parent's Python sink instead of writing
+  its inherited descriptor. Correcting the model exposed the separate capture
+  lifetime defect: a three-method control run had **one failed assertion /two
+  passes**, zero errors. Capture sync/verify had prematurely inherited a local
+  IO45 cap despite the original phase's remaining final interval. Binding those
+  long-lived files to the original phase final fence made the unchanged three
+  controls pass. No work/job/native-file deadline was extended; late native
+  returns remain failures and known cleanup still runs on expiry.
+- The final74 also exercise actual caller admission/expected-original forwarding,
+  failed finalizers, original baseline/session/return/prelude substitution,
+  repeatable same-owner revalidation, foreign/copied provenance refusal,
+  pre-spawn/early-child regressions, failed-response final custody, propagated
+  UNKNOWN, malformed/short/late ACKs, native record variants and supported Darwin
+  zero `pidVersion`. Configuration-only admission never becomes product authority.
+
+Exact independent implementation verdict, frozen full patch/report hashes,
+separate independent controls, static checks and containing commit/tree are
+mapped in #437 and shared #424. Review is source/offline only, not formal GitHub
+approval. This increment changes no shared executable supplier, composition
+expectation, existing required check, workflow, activation HOLD or accepted
+product/fixture repair. The new suite is standalone, not workflow-registered.
+
+The private packet `20260917-bootstrap-originals-rkU7jK` retains original input
+snapshots, exact command/exit/log/source manifests and intermediate failures on
+this device. Reviewer originals are separate. They contain modeled inputs and
+must not be confused with the unavailable previous-Mac originals or with genuine
+native/HTTP/provider evidence. Public hashes are navigation, not replacements
+for any necessary private originals.
+
 ## Next engineering and unchanged authority boundaries
 
-The next bootstrap slice needs a **separate original execution/budget context**,
-not ordinary FULL/Desktop with `help`. Retain and rederive actual source/run/clock
-and service/native budget originals; a digest or fresh allowance cannot grant
-authority. The live caller must invoke the canonical configuration-only producer,
+The next bootstrap slice still needs a **separate original execution/job-budget
+context**, not ordinary FULL/Desktop with `help` or the evidence-only prelude
+above. Retain and rederive actual source/run/clock and service/native budget
+originals and trusted workflow outcomes; a digest or fresh allowance cannot grant
+authority. A future live caller must invoke the canonical configuration-only producer,
 retain its original start/requested/executed argv/same-home stop and independently
 establish complete enclosing native retirement, not infer it from the pure helper;
 only afterward permit positive empty-seed-derived export, before/after frozen-byte
