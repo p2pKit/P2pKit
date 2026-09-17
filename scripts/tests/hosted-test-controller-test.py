@@ -182,7 +182,8 @@ class Base(unittest.TestCase):
         for owner in [*self.owners, *getattr(self, "crypto_owners", [])]:
             for row in reversed(owner.resources):
                 resource = row["owner"]
-                if isinstance(resource, (C.query._PosixDirectory, C.query._PosixSink)):
+                if isinstance(resource, (C.query._PosixDirectory, C.query._PosixSink,
+                                         C.seed._PosixDirectory, C.seed.PosixFile)):
                     try:
                         resource.close()
                     except BaseException:
@@ -1127,12 +1128,294 @@ class WholeControllerModels(Base):
 
     def call_run(self):
         actual = C.Controller
-        def construct(profile):
-            value = actual(profile)
+        def construct(profile, **kwargs):
+            value = actual(profile, **kwargs)
             self.owners.append(value)
             return value
         with patch.object(C, "Controller", side_effect=construct):
-            return C.run(self.profile)
+            return C.run(self.profile, seed_dependencies=getattr(self, "seed_enabled", False))
+
+    def seed_source(self):
+        self.seed_payload = b"small synthetic dependency fixture; not a real artifact"
+        xml = ('<?xml version="1.0" encoding="UTF-8"?><verification-metadata xmlns="' + C.seed.authority.NAMESPACE +
+            '" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="' +
+            C.seed.authority.SCHEMA_LOCATION + '"><configuration><verify-metadata>true</verify-metadata>' +
+            '<verify-signatures>false</verify-signatures></configuration><components>' +
+            '<component group="org.fixture" name="Example" version="1.0"><artifact name="Example.jar">' +
+            '<sha256 value="' + C.digest(self.seed_payload) + '"/></artifact></component>' +
+            '</components></verification-metadata>').encode()
+        for index, name in enumerate(C.seed.INPUTS):
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self.save(path, xml if index == 0 else (ROOT / name).read_bytes())
+
+    def enable_seed(self, *, populate=True):
+        self.seed_source()
+        self.seed_enabled = True
+        output = self.path / "seed-stage-output"
+        output.touch(mode=0o600)
+        with patch.dict(os.environ, {"GITHUB_OUTPUT": str(output)}), redirect_stdout(io.StringIO()):
+            C.stage_dependencies(self.profile)
+        values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+        self.assertEqual(values["dependency_seed_ready"], "true")
+        self.seed_home = Path(values["dependency_seed_home"])
+        self.assertFalse(C.session_path(self.profile, "macos-arm64").exists(), "Stage must not create canonical H")
+        os.environ["P2PKIT_DEPENDENCY_SEED_STAGE_OUTCOME"] = "success"
+        os.environ["P2PKIT_DEPENDENCY_SEED_STAGE_SHA256"] = values["dependency_seed_staging_sha256"]
+        self.seed_home.chmod(0o755)  # Typical restored public modes, not private evidence ACLs.
+        if populate:
+            self.seed_leaf = self.seed_home.joinpath(*C.seed.PREFIX, "org.fixture", "Example", "1.0",
+                hashlib.sha1(self.seed_payload).hexdigest(), "Example.jar")
+            self.seed_leaf.parent.mkdir(parents=True, mode=0o755)
+            self.save(self.seed_leaf, self.seed_payload)
+            self.seed_leaf.chmod(0o644)
+
+    def assert_seed_blocked(self):
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(self.call_run(), 125)
+        self.assertFalse(any("prepare" in row["argv"] or "--cwd" in row["argv"] for row in self.calls))
+
+    def test_seed_stage_intent_precedes_crypto_and_complete_receipt_precedes_loader(self):
+        self.enable_seed()
+        original = self.model_recipient
+        def recipient(*args, **kwargs):
+            session = C.session_path(self.profile, "macos-arm64")
+            context = C.parse((session / "run-context.json").read_bytes())
+            self.assertIn("dependencySeed", context)
+            self.assertFalse((session / "state").exists())
+            self.assertFalse((session / "dependency-seed/manifest.json").exists())
+            return original(*args, **kwargs)
+        self.stack.enter_context(patch.object(C.posix, "validate_recipient", side_effect=recipient))
+        original_child = self.model_child
+        def child(argv, environment):
+            if "prepare" in argv:
+                manifest = C.session_path(self.profile, "macos-arm64") / "dependency-seed/manifest.json"
+                self.assertEqual(C.parse(manifest.read_bytes())["status"], "KNOWN_SEEDED")
+                self.assertTrue(all(row["closed"] for row in self.owners[-1].resources
+                                    if row["label"].startswith("dependency-seed-")))
+            return original_child(argv, environment)
+        self.model_child = child
+        session, result = self.execute()
+        self.assertEqual(result["dependencySeed"]["status"], "KNOWN_SEEDED")
+        self.assertEqual([row["phase"] for row in result["phases"]], ["recipient-validation", "audit-init",
+            "custody-prepare", "product", "custody-collect", "custody-uninstall", "export"])
+        self.assertEqual(set(p.name for p in (session / "dependency-seed").iterdir()), {"staging.json", "manifest.json"})
+        self.assertEqual(self.seal(), "artifacts_ready=true\nprofile_passed=true\n")
+
+    def test_seed_miss_does_not_claim_reuse_or_replace_product_gate(self):
+        self.enable_seed(populate=False)
+        self.product_code = 1
+        _session, result = self.execute()
+        self.assertEqual(result["dependencySeed"]["status"], "KNOWN_MISS")
+        self.assertEqual(result["dependencySeed"]["wrapper"], "MISS_NOT_SEEDED_V1")
+        self.assertFalse(result["profilePassed"])
+        self.assertEqual(self.seal(), "artifacts_ready=true\nprofile_passed=false\n")
+
+    def test_seed_stale_step_outcome_cannot_consume_provisional_stage_receipt(self):
+        self.enable_seed()
+        os.environ["P2PKIT_DEPENDENCY_SEED_STAGE_OUTCOME"] = "failure"
+        self.assert_seed_blocked()
+        self.assertFalse(any("_crypto" in row["argv"] or "init" in row["argv"] for row in self.calls))
+
+    def test_seed_stale_exported_stage_hash_blocks_before_crypto_or_init(self):
+        self.enable_seed()
+        os.environ["P2PKIT_DEPENDENCY_SEED_STAGE_SHA256"] = "0" * 64
+        self.assert_seed_blocked()
+        self.assertFalse(any("_crypto" in row["argv"] for row in self.calls))
+
+    def test_seed_source_changed_since_actual_staging_is_rejected(self):
+        self.enable_seed()
+        path = self.root / "scripts/hosted_dependency_seed_files.py"
+        path.write_bytes(path.read_bytes() + b"\n# synthetic source mutation\n")
+        self.assert_seed_blocked()
+
+    def test_seed_stale_attempt_in_stage_is_rejected_even_with_matching_hash(self):
+        self.enable_seed()
+        stage = self.seed_home.parent / "staging.json"
+        value = C.parse(stage.read_bytes())
+        value["github"]["runAttempt"] = "2"
+        raw = self.save(stage, value)
+        os.environ["P2PKIT_DEPENDENCY_SEED_STAGE_SHA256"] = C.digest(raw)
+        self.assert_seed_blocked()
+
+    def test_seed_allocated_root_replacement_blocks_before_init(self):
+        self.enable_seed()
+        self.seed_home.rename(self.seed_home.parent / "previous-home")
+        self.seed_home.mkdir(mode=0o755)
+        self.assert_seed_blocked()
+
+    def test_seed_selected_open_failure_blocks_loader_product_and_export(self):
+        self.enable_seed()
+        original = C.seed.PosixSourceDirectory.open_file
+        def denied(directory, name, **kwargs):
+            if name == "Example.jar":
+                raise PermissionError("synthetic selected input failure")
+            return original(directory, name, **kwargs)
+        with patch.object(C.seed.PosixSourceDirectory, "open_file", denied):
+            self.assert_seed_blocked()
+        self.assertTrue(self.owners[-1].unknown)
+
+    def test_seed_receipt_write_failure_does_not_authorize_loader(self):
+        self.enable_seed()
+        original = C.PrivateOwner.write
+        def failed(owner, directory, name, value, end):
+            result = original(owner, directory, name, value, end)
+            if directory.path.name == "dependency-seed" and name == "manifest.json":
+                raise OSError("synthetic receipt finalization failure after provisional bytes")
+            return result
+        with patch.object(C.PrivateOwner, "write", failed):
+            self.assert_seed_blocked()
+        self.assertFalse(self.owners[-1].seed_result["completed"])
+
+    def test_seed_original_full_raw_cutoff_cannot_be_extended_by_file_window(self):
+        self.use_full()
+        self.enable_seed()
+        controller = C.Controller("full", seed_dependencies=True)
+        self.owners.append(controller)
+        original = C.seed.seed_home
+        def cutoff(*args, **kwargs):
+            interval = kwargs["interval"]
+            self.assertEqual(interval["clock"], "controller-raw-ns")
+            self.assertLessEqual(interval["hardEndNs"], controller.budget.fence("productive"))
+            self.assertLessEqual(interval["hardEndNs"] - interval["startedNs"], 120 * C.job_time.NS)
+            self.clock.set_raw(interval["hardEndNs"])
+            return original(*args, **kwargs)
+        with patch.object(C.seed, "seed_home", cutoff), patch.object(C.shutil, "which", return_value=sys.executable):
+            with self.assertRaises((C.ControllerError, C.seed.SeedError)):
+                controller.setup()
+        self.assertFalse(any("prepare" in row["argv"] or "--cwd" in row["argv"] for row in self.calls))
+
+    def test_seed_full_model_preserves_primary_supplement_abi_simulator_and_clock_contracts(self):
+        self.use_full()
+        self.enable_seed()
+        with patch.object(C.shutil, "which", return_value=sys.executable):
+            _session, result = self.execute()
+        self.assertTrue(result["profilePassed"])
+        self.assertEqual(result["dependencySeed"]["status"], "KNOWN_SEEDED")
+        self.assertEqual(result["primaryAbi"]["status"], "PASS")
+        self.assertEqual(result["simulator"]["terminal"]["status"], "KNOWN_SHUTDOWN")
+        self.assertFalse(result["jobBudget"]["exhausted"])
+        self.assertEqual(self.seal(), "artifacts_ready=true\nprofile_passed=true\n")
+
+    def test_seed_modification_during_original_export_blocks_child_return(self):
+        self.enable_seed()
+        original = self.model_export
+        def mutate(*args, **kwargs):
+            manifest = original(*args, **kwargs)
+            path = C.session_path(self.profile, "macos-arm64") / "dependency-seed/manifest.json"
+            value = C.parse(path.read_bytes())
+            value["window"]["finishedNs"] += 1
+            self.save(path, value)
+            return manifest
+        with patch.object(C.ordinary, "export_encrypted", side_effect=mutate), redirect_stdout(io.StringIO()):
+            self.assertEqual(self.call_run(), 125)
+        self.assertTrue(self.owners[-1].unknown)
+        self.assertFalse(self.owners[-1].encrypted)
+
+    def test_seed_live_cache_changes_after_product_do_not_invalidate_original_receipts(self):
+        self.enable_seed()
+        os.environ["GRADLE_USER_HOME"] = str(self.seed_home)
+        session, result = self.execute()
+        product = next(row for row in self.calls if "--cwd" in row["argv"])
+        self.assertEqual(product["environment"]["GRADLE_USER_HOME"], str(session / "state/gradle-home"))
+        home = session / "state/gradle-home"
+        (home / "caches/legitimate-index").write_bytes(b"modeled legitimate Gradle change")
+        self.seed_home.rename(self.seed_home.parent / "post-action-home")
+        self.assertEqual(self.seal(), "artifacts_ready=true\nprofile_passed=true\n")
+        self.assertTrue(result["profilePassed"])
+
+    def test_seed_seal_rejects_dropping_required_disposition(self):
+        self.enable_seed()
+        session, result = self.execute()
+        result.pop("dependencySeed")
+        self.save(session / "controller-result.json", result)
+        with self.assertRaisesRegex(C.ControllerError, "SEED_SEALED_REQUIRED"):
+            self.seal()
+
+    def test_seed_seal_rejects_original_receipt_tampering(self):
+        self.enable_seed()
+        session, _result = self.execute()
+        path = session / "dependency-seed/manifest.json"
+        value = C.parse(path.read_bytes())
+        value["admitted"][0]["sha256"] = "0" * 64
+        self.save(path, value)
+        with self.assertRaises(C.seed.SeedError):
+            self.seal()
+
+    def test_seed_both_copy_maps_are_checked_against_originals(self):
+        self.enable_seed()
+        session, _result = self.execute()
+        owner = self.owner()
+        private = owner.open(session)
+        for relative in ("evidence/dependency-seed/original-path-map.json", "frozen-evidence/original-path-map.json"):
+            path = session / relative
+            original = path.read_bytes()
+            value = C.parse(original)
+            row = (value["files"][0] if relative.startswith("evidence/") else
+                   next(row for row in value["files"] if row["original"].startswith("dependency-seed/member-")))
+            row["sha256"] = "0" * 64
+            self.save(path, value)
+            with self.subTest(relative=relative), self.assertRaises(C.ControllerError):
+                C.frozen_seed_packet(owner, private, 500.)
+            self.save(path, original)
+        owner.close()
+
+    def test_seed_coherent_copy_substitution_cannot_replace_original_export_return(self):
+        self.enable_seed()
+        session, result = self.execute()
+        original = session / "dependency-seed/manifest.json"
+        value = C.parse(original.read_bytes())
+        value["window"]["finishedNs"] += 1
+        manifest_raw = self.save(original, value)
+        disposition = C.seed.disposition(manifest_raw)
+        inner_path = session / "evidence/dependency-seed/original-path-map.json"
+        inner = C.parse(inner_path.read_bytes())
+        row = next(row for row in inner["files"] if row["original"] == "manifest.json")
+        self.save(inner_path.parent / row["member"], manifest_raw)
+        row.update(size=len(manifest_raw), sha256=C.digest(manifest_raw))
+        inner_raw = self.save(inner_path, inner)
+        before_path = session / "evidence/profile-result-before-export.json"
+        before = C.parse(before_path.read_bytes())
+        before["dependencySeed"] = disposition
+        before_raw = self.save(before_path, before)
+        outer_path = session / "frozen-evidence/original-path-map.json"
+        outer = C.parse(outer_path.read_bytes())
+        changed = {"dependency-seed/" + row["member"]: manifest_raw,
+                   "dependency-seed/original-path-map.json": inner_raw,
+                   "profile-result-before-export.json": before_raw}
+        for entry in outer["files"]:
+            if entry["original"] in changed:
+                raw = changed[entry["original"]]
+                self.save(outer_path.parent / entry["member"], raw)
+                entry.update(size=len(raw), sha256=C.digest(raw))
+        self.save(outer_path, outer)
+        result["dependencySeed"] = disposition
+        self.save(session / "controller-result.json", result)
+        with self.assertRaisesRegex(C.ControllerError, "SEED_SEALED_EXPORT_RETURN"):
+            self.seal()
+
+    def test_seed_stage_failure_after_private_close_never_exports_success(self):
+        self.seed_source()
+        output = self.path / "stage-failure-output"
+        output.touch(mode=0o600)
+        original = C.seed.PosixPrivateDirectory.close
+        def failed(directory):
+            fail = directory.path.name == "p2pkit-dependency-seed-desktop-macos-arm64" and not directory.closed
+            original(directory)
+            if fail:
+                raise OSError("synthetic late private-container close")
+        with patch.object(C.seed.PosixPrivateDirectory, "close", failed), \
+                patch.dict(os.environ, {"GITHUB_OUTPUT": str(output)}):
+            with self.assertRaises(C.ControllerError):
+                C.stage_dependencies("desktop")
+        self.assertEqual(output.read_bytes(), b"")
+
+    def test_seed_stage_existing_slot_is_never_cleaned_or_reallocated(self):
+        self.enable_seed(populate=False)
+        receipt = (self.seed_home.parent / "staging.json").read_bytes()
+        with self.assertRaises(FileExistsError):
+            C.stage_dependencies("desktop")
+        self.assertEqual((self.seed_home.parent / "staging.json").read_bytes(), receipt)
 
     def execute(self):
         self.exit_code = 0

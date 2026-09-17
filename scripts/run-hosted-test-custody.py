@@ -28,6 +28,7 @@ SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 import audit_processes as processes
+import hosted_dependency_seed_files as seed
 import hosted_full_job_budget as job_time
 import hosted_full_simulator as simulator
 import hosted_full_supplements as supplements
@@ -966,11 +967,137 @@ def frozen_abi_packet(owner, private, end):
             "manifestSha256": None if manifest is None else digest(manifest)}, originals
 
 
+def seed_names(owner, path, end):
+    """Bounded flat receipt inventory; never snapshot restored dependency bytes."""
+    directory = owner.acquire("dependency-seed-record-directory", lambda: seed.private_root(path))
+    original = None
+    try:
+        return directory.names(max_names=seed.MEMBER_LIMIT, deadline=end)
+    except BaseException as error:
+        original = error
+        raise
+    finally:
+        owner.close_one(directory)
+        if owner.unknown and original is None:
+            raise ControllerError("SEED_RECORD_DIRECTORY_CLOSE_UNKNOWN")
+
+
+def dependency_seed_intent(owner, private, admitted, context_raw, end, check):
+    """Current admitted inputs plus original staging; no live cache revalidation."""
+    context = parse(context_raw)
+    intent = context.get("dependencySeed")
+    require(type(intent) is dict, "SEED_ORIGINAL_INTENT_MISSING")
+    check()
+    inputs, compiled = seed.source_inputs(owner, ROOT, end, check)
+    directory = owner.child(private, "dependency-seed", end)
+    staging_raw = owner.read(directory, "staging.json", end)
+    staging = parse(staging_raw)
+    seed.validate_retained_stage(staging, admitted.record, context, inputs)
+    require(staging_raw == seed.encoded(staging) and intent == seed.seed_intent(admitted.record,
+            context["profile"], context["role"], seed.stage_path(private.path, context["profile"], context["role"]),
+            staging_raw, inputs), "SEED_ORIGINAL_INTENT_CHANGED")
+    check()
+    return directory, staging_raw, compiled
+
+
+def seed_copy_map(raw, root):
+    """Seed-specific verification of copy_tree's closed map; strings are not paths."""
+    value = parse(raw)
+    require(set(value) == {"schema", "scope", "originalRoot", "directories", "files"} and
+            type(value["schema"]) is int and value["schema"] == 1 and
+            value["scope"] == "REVERSIBLE_PRIVATE_BYTE_COPY" and value["originalRoot"] == str(root) and
+            type(value["files"]) is list and type(value["directories"]) is list and
+            len(value["files"]) + len(value["directories"]) <= posix.MAX_MEMBERS, "SEED_COPY_MAP_GRAMMAR")
+    def relative(name):
+        return (type(name) is str and len(name.encode("utf-8")) <= 1024 and "\\" not in name and
+                all(ord(char) >= 32 and ord(char) != 127 for char in name) and
+                (name == "" or len(name.split("/")) <= 65 and
+                 all(part not in ("", ".", "..") for part in name.split("/"))))
+    rows, directories = value["files"], value["directories"]
+    require(all(type(row) is dict and set(row) == {"original", "member", "size", "sha256"} and
+            relative(row["original"]) and row["original"] != "" and
+            row["member"] == "member-" + str(index).zfill(5) + ".bin" and type(row["size"]) is int and
+            0 <= row["size"] <= posix.MAX_BYTES and type(row["sha256"]) is str and
+            re.fullmatch(r"[0-9a-f]{64}", row["sha256"]) for index, row in enumerate(rows)) and
+            all(relative(name) for name in directories), "SEED_COPY_MAP_ROWS")
+    names = [row["original"] for row in rows]
+    require(names == sorted(set(names)) and directories == sorted(set(directories)) and "" in directories and
+            not set(names) & set(directories) and sum(row["size"] for row in rows) <= posix.MAX_BYTES and
+            all((name.rsplit("/", 1)[0] if "/" in name else "") in directories
+                for name in [*names, *directories] if name), "SEED_COPY_MAP_ROSTER")
+    return value
+
+
+def frozen_seed_packet(owner, private, end, check=lambda: None):
+    """Original seed receipts -> inner map/copies -> outer map/copies -> export return.
+
+    The stage container, S and H/cache payloads are never opened here. Legitimate
+    later Gradle mutations are not a reason to invalidate original file custody.
+    """
+    context_raw = owner.read(private, "run-context.json", end)
+    context = parse(context_raw)
+    evidence = owner.child(private, "evidence", end)
+    admitted = load_admission(owner, owner.child(evidence, "admission", end), end)
+    require(digest(admitted.record) == context["admissionSha256"], "SEED_ORIGINAL_ADMISSION_CHANGED")
+    original, staging_raw, compiled = dependency_seed_intent(owner, private, admitted, context_raw, end, check)
+    originals = {"staging.json": staging_raw, "manifest.json": owner.read(original, "manifest.json", end)}
+    require(set(seed_names(owner, original.path, end)) == set(originals), "SEED_ORIGINAL_RECEIPT_ROSTER")
+    state = owner.child(private, "state", end)
+    canonical_raw = owner.read(state, "context.json", end)
+    seed.validate_receipt(parse(originals["manifest.json"]), context["dependencySeed"], staging_raw, context_raw,
+                          canonical_raw, admitted.record, compiled)
+    disposition = seed.disposition(originals["manifest.json"])
+    before_raw = owner.read(evidence, "profile-result-before-export.json", end)
+    require(parse(before_raw).get("dependencySeed") == disposition, "SEED_FROZEN_PROFILE_CHANGED")
+    copied = owner.child(evidence, "dependency-seed", end)
+    inner_raw = owner.read(copied, "original-path-map.json", end)
+    inner = seed_copy_map(inner_raw, original.path)
+    require(inner["directories"] == [""] and [row["original"] for row in inner["files"]] == sorted(originals) and
+            set(seed_names(owner, copied.path, end)) == {"original-path-map.json", *[row["member"]
+                for row in inner["files"]]}, "SEED_INNER_MAP_ROSTER")
+    frozen = owner.child(private, "frozen-evidence", end)
+    outer_raw = owner.read(frozen, "original-path-map.json", end)
+    outer = seed_copy_map(outer_raw, evidence.path)
+    outer_rows = {row["original"]: row for row in outer["files"]}
+    expected_copies = {"dependency-seed/original-path-map.json": inner_raw,
+                       "profile-result-before-export.json": before_raw}
+    for row in inner["files"]:
+        raw = originals[row["original"]]
+        require((len(raw), digest(raw)) == (row["size"], row["sha256"]) and
+                owner.read(copied, row["member"], end) == raw, "SEED_INNER_COPY_CHANGED")
+        expected_copies["dependency-seed/" + row["member"]] = raw
+    require({name for name in outer_rows if name.startswith("dependency-seed/")} ==
+            {name for name in expected_copies if name.startswith("dependency-seed/")} and
+            [name for name in outer["directories"] if name == "dependency-seed" or
+             name.startswith("dependency-seed/")] == ["dependency-seed"] and
+            set(seed_names(owner, frozen.path, end)) == {"original-path-map.json", *[row["member"]
+                for row in outer["files"]]}, "SEED_OUTER_MAP_ROSTER")
+    for name, raw in expected_copies.items():
+        row = outer_rows.get(name)
+        require(type(row) is dict and (row["size"], row["sha256"]) == (len(raw), digest(raw)) and
+                owner.read(frozen, row["member"], end) == raw, "SEED_OUTER_COPY_CHANGED")
+    require(owner.read(private, "run-context.json", end) == context_raw and
+            owner.read(state, "context.json", end) == canonical_raw and
+            owner.read(evidence, "profile-result-before-export.json", end) == before_raw and
+            all(owner.read(original, name, end) == raw for name, raw in originals.items()) and
+            owner.read(copied, "original-path-map.json", end) == inner_raw and
+            owner.read(frozen, "original-path-map.json", end) == outer_raw and not owner.unknown,
+            "SEED_PACKET_CHANGED_DURING_VERIFICATION")
+    check()
+    return {"disposition": disposition, "stagingSha256": digest(staging_raw), "contextSha256": digest(context_raw),
+            "canonicalContextSha256": digest(canonical_raw), "innerMapSha256": digest(inner_raw),
+            "outerMapSha256": digest(outer_raw), "copies": [outer_rows[name] for name in sorted(expected_copies)]}
+
+
 class Controller(PrivateOwner):
-    def __init__(self, profile):
+    def __init__(self, profile, *, seed_dependencies=False):
         super().__init__()
         require(profile in PRODUCT_SECONDS, "CONTROLLER_PROFILE")
         self.profile, self.role = profile, processes.host_role()
+        require(type(seed_dependencies) is bool, "SEED_OPTION_MUST_BE_BOOLEAN")
+        self.seed_requested, self.seed_directory, self.seed_intent = seed_dependencies, None, None
+        self.seed_result = ({"required": True, "status": "FAILED", "completed": False, "retirement": "KNOWN"}
+                            if seed_dependencies else None)
         self.kind, self.command = profile_command(profile, self.role)
         self.path = session_path(profile, self.role)
         self.state_path = self.path / "state"
@@ -1330,6 +1457,8 @@ class Controller(PrivateOwner):
                            developerDir=self.environment.get("DEVELOPER_DIR"),
                            ancestorInvocationIds=self.environment.get(processes.CHAIN_ENV, "").split(":")
                            if self.environment.get(processes.CHAIN_ENV) else [])
+        if self.seed_requested:
+            context["dependencySeed"] = self.prepare_seed_intent()
         self.run_context_raw = encoded(context)
         self.write(self.private, "run-context.json", context, self.window("productive", 45))
         self.context_hash = digest(encoded(context))
@@ -1366,6 +1495,8 @@ class Controller(PrivateOwner):
                 self.build_owners[path] = owned
         if self.full is not None:
             self.full.bind_owners()
+        if self.seed_requested:
+            self.seed_dependencies()  # File-only; does not add a process phase or a new time allowance.
         row = self.phase("custody-prepare", self.python(SCRIPTS / "test-transcript-custody.py", "prepare",
             "--root", ROOT, "--directory", self.evidence.path / "custody", "--home", self.state_path / "gradle-home",
             "--owner-state", self.state_path, "--owner-kind", "audit", "--scope",
@@ -1381,6 +1512,85 @@ class Controller(PrivateOwner):
             self.simulator_binding = simulator.binding_record(self.run_context_raw, self.canonical_context_raw,
                                                              self.request_raw, self.simulator_admission)
             self.write(self.simulator_directory, "binding.json", self.simulator_binding, self.window("productive", 30))
+
+    def prepare_seed_intent(self):
+        require(os.environ.get("P2PKIT_DEPENDENCY_SEED_STAGE_OUTCOME") == "success" and
+                re.fullmatch(r"[0-9a-f]{64}", os.environ.get("P2PKIT_DEPENDENCY_SEED_STAGE_SHA256", "")),
+                "SEED_ORIGINAL_STAGE_DID_NOT_SUCCEED")
+        end = self.window("productive", 90)
+        check = lambda: (self.check(), self.check_window("productive", end))
+        path = seed.stage_path(self.path, self.profile, self.role)
+        owners, original = seed._Owners(self), None
+        try:
+            container = owners.acquire("stage-container", lambda: seed.private_root(path))
+            source = owners.acquire("stage-source", lambda: seed.public_root(path / "restore-home"))
+            staging_raw = self.read(container, "staging.json", end)
+            require(digest(staging_raw) == os.environ["P2PKIT_DEPENDENCY_SEED_STAGE_SHA256"],
+                    "SEED_ORIGINAL_STAGE_OUTPUT_CHANGED")
+            inputs, compiled = seed.source_inputs(self, ROOT, end, check)
+            # Existing exact clean-source/native admission, not a new Git blob API.
+            admission(self, self.profile, self.runtime.path / "seed-input-admission", check, expected=self.admitted)
+            staging = parse(staging_raw)
+            seed.validate_stage(staging, self.admitted.record, self.profile, self.role, path,
+                                container.verify(), source.verify(), inputs)
+            require(staging_raw == seed.encoded(staging), "SEED_STAGE_NOT_CANONICAL")
+            self.seed_directory = self.child(self.private, "dependency-seed", end, create=True)
+            self.write(self.seed_directory, "staging.json", staging_raw, end)
+            self.seed_staging_raw, self.seed_compiled = staging_raw, compiled
+            self.seed_intent = seed.seed_intent(self.admitted.record, self.profile, self.role, path, staging_raw, inputs)
+        except BaseException as error:
+            original = error
+            raise
+        finally:
+            try:
+                owners.close()
+            except BaseException as error:
+                if original is None:
+                    raise
+                seed._note(original, "stage-inputs", error)
+        check()
+        return self.seed_intent
+
+    def seed_dependencies(self):
+        now = self.now_raw if self.profile == "full" else lambda: int(time.monotonic() * job_time.NS)
+        started = now()
+        end = self.window("productive", seed.HARD_SECONDS)
+        hard = min(started + seed.HARD_SECONDS * job_time.NS,
+                   started + int(max(0, self.deadline - time.monotonic()) * job_time.NS))
+        if self.profile == "full":
+            hard = min(hard, self.budget.fence("productive"))
+        interval = seed.window(started, hard, min(hard, started + seed.SOFT_SECONDS * job_time.NS),
+                               raw=self.profile == "full", job_budget=self.budget.sha256 if self.budget else None)
+        def check():
+            self.check()
+            self.check_window("productive", end)
+            require(now() < hard, "SEED_ORIGINAL_WINDOW_EXPIRED")
+        try:
+            result = seed.seed_home(self, self.state_path / "gradle-home", self.seed_intent,
+                parse(self.seed_staging_raw), self.seed_compiled, self.run_context_raw, self.canonical_context_raw,
+                self.admitted.record, end=end, check=check, now=now, interval=interval)
+            seed.validate_receipt(result, self.seed_intent, self.seed_staging_raw, self.run_context_raw,
+                                  self.canonical_context_raw, self.admitted.record, self.seed_compiled)
+            require(self.read(self.private, "run-context.json", end) == self.run_context_raw,
+                    "SEED_ORIGINAL_CONTEXT_CHANGED")
+            raw = seed.encoded(result)
+            self.write(self.seed_directory, "manifest.json", raw, end)
+            # The closed receipt-only copy precedes ALL product/key-capable
+            # writers. Full's later Central secret screen must see this exact
+            # inventory; do not add a new post-screen namespace exemption.
+            copy_tree(self, self.seed_directory, self.evidence.path / "dependency-seed", end)
+            check()  # A late close/write cannot authorize a provisional known manifest.
+            self.seed_result = seed.disposition(raw)
+        except BaseException as error:
+            result = getattr(error, "seed_result", None)
+            if result is not None:
+                self.seed_result = seed.disposition(seed.encoded(result))
+                try:
+                    self.write(self.seed_directory, "failure.json", seed.encoded(result), end)
+                except BaseException as secondary:
+                    self.error("seed-failure-receipt", secondary)
+                    seed._note(error, "failure-receipt", secondary)
+            raise
 
     def acquire_job_time(self):
         require(self.budget is None, "JOB_TIME_ALREADY_ADMITTED")
@@ -1676,6 +1886,9 @@ class Controller(PrivateOwner):
         self.check(finalizing=True)
         require(self.admitted is not None and hasattr(self, "recipient_raw"), "NO_VALIDATED_RECIPIENT")
         end = self.freeze_end()
+        if self.seed_requested:
+            require(seed.profile_passed({"contextSha256": self.context_hash, "dependencySeed": self.seed_result}),
+                    "SEED_NOT_COMPLETE_FOR_EXPORT")
         if self.full is not None:
             self.full.freeze(end)
         if self.context is not None:
@@ -1696,6 +1909,10 @@ class Controller(PrivateOwner):
         self.check_window("export-open", end)
         end = self.window("export-verify", 90)
         verify_export_binding(self, output, self.export_return, end)
+        if self.seed_requested:
+            require(self.export_return["result"].get("dependencySeedFrozen") ==
+                    frozen_seed_packet(self, self.private, end, lambda: self.check_window("export-verify", end)),
+                    "SEED_ORIGINAL_EXPORT_RETURN_DIFFERS")
         self.check_window("export-verify", end)
         self.check(finalizing=True)
         self.encrypted = True
@@ -1759,12 +1976,16 @@ class Controller(PrivateOwner):
                                   digest(self.simulator_admission),
                                   "bindingSha256": None if self.simulator_binding is None else digest(self.simulator_binding),
                                   "selected": self.simulator, "terminal": self.simulator_terminal}
+        if self.seed_requested:
+            value["dependencySeed"] = self.seed_result
         value["profilePassed"] = profile_passed(value)
         return parse(encoded(value))
 
 
 def profile_passed(value):
     """A boolean label cannot overrule original phase/custody outcomes."""
+    if not seed.profile_passed(value):
+        return False
     rows = value["phases"]
     labels = ["recipient-validation", "audit-init", "custody-prepare", "product", "custody-collect",
               "custody-uninstall"]
@@ -2170,6 +2391,8 @@ def crypto_phase(operation, profile, context_hash):
         checked = admission(owner, profile, runtime.path / (operation + "-admission"),
                             check_crypto, expected=admitted)
         if operation == "validate":
+            if "dependencySeed" in context:
+                dependency_seed_intent(owner, private, checked, raw, end, check_crypto)
             if os.name == "nt":
                 recipient = windows.validate_recipient(checked.public_key, checked.fingerprint, work, job_id=context["job"])
             else:
@@ -2181,6 +2404,8 @@ def crypto_phase(operation, profile, context_hash):
             recipient = restore_recipient(owner, work, owner.read(private, "recipient.json", end), context)
             frozen = owner.child(private, "frozen-evidence", end)
             abi_frozen = frozen_abi_packet(owner, private, end)[0] if profile == "full" else None
+            seed_frozen = (frozen_seed_packet(owner, private, end, check_crypto)
+                           if "dependencySeed" in context else None)
             supplier, original_error = None, None
             try:
                 supplier = query.NativeGitQueries(ROOT, runtime.path / "export-manifest-admission",
@@ -2200,6 +2425,10 @@ def crypto_phase(operation, profile, context_hash):
                 if profile == "full":
                     require(frozen_abi_packet(owner, private, end)[0] == abi_frozen, "ABI_CHANGED_DURING_ORIGINAL_EXPORT")
                     exported["primaryAbiFrozen"] = abi_frozen
+                if seed_frozen is not None:
+                    require(frozen_seed_packet(owner, private, end, check_crypto) == seed_frozen,
+                            "SEED_CHANGED_DURING_ORIGINAL_EXPORT")
+                    exported["dependencySeedFrozen"] = seed_frozen
                 require(owner.read(output, posix.MANIFEST, end, 65536) == encoded(manifest) and
                         artifact_metadata(owner, output, end) == manifest["artifact"], "ORIGINAL_EXPORT_DIFFERS")
             except BaseException as caught:
@@ -2246,7 +2475,7 @@ def crypto_phase(operation, profile, context_hash):
     require(terminal and not owner.unknown and not owner.errors, "CRYPTO_TERMINAL_INCOMPLETE")
 
 
-def run(profile):
+def run(profile, *, seed_dependencies=False):
     controller, result, terminal = None, None, False
     handlers, cancelled = {}, []
     original = None
@@ -2254,7 +2483,7 @@ def run(profile):
         for number in (signal.SIGINT, signal.SIGTERM, *([signal.SIGBREAK] if hasattr(signal, "SIGBREAK") else [])):
             handlers[number] = signal.getsignal(number)
             signal.signal(number, lambda value, _frame: cancelled.append(value))
-        controller = Controller(profile)
+        controller = Controller(profile, seed_dependencies=True) if seed_dependencies else Controller(profile)
         controller.cancelled = cancelled
         controller.check()
         controller.setup()
@@ -2710,6 +2939,8 @@ def validate_public(profile):
         returned = result["exportReturn"]["result"]
         require(returned["operation"] == "export" and returned["profile"] == profile and
                 returned["contextSha256"] == digest(context_raw), "SEALED_EXPORT_CONTEXT_CHANGED")
+        require(("dependencySeed" in context) == ("dependencySeed" in result) ==
+                ("dependencySeedFrozen" in returned), "SEED_SEALED_REQUIRED_DISPOSITION_MISSING")
         if budget is not None:
             require(returned.get("jobBudgetSha256") == budget.sha256, "SEALED_EXPORT_JOB_TIME_CHANGED")
         manifest_raw = verify_export_binding(owner, output, result["exportReturn"], end)
@@ -2723,6 +2954,12 @@ def validate_public(profile):
                 "SEALED_MANIFEST_DIFFERS")
         require((context["kind"], context["command"]) == profile_command(profile, role), "SEALED_SELECTOR_CHANGED")
         verify_phase_bindings(owner, private, result, context, end, budget)
+        seed_frozen = None
+        if "dependencySeed" in context:
+            seed_frozen = frozen_seed_packet(owner, private, end,
+                lambda: (posix._deadline(end), budget_clock.check("seal") if budget_clock is not None else None))
+            require(seed_frozen == returned["dependencySeedFrozen"] and
+                    seed_frozen["disposition"] == result["dependencySeed"], "SEED_SEALED_EXPORT_RETURN_CHANGED")
         if profile == "full":
             supplements.verify(owner, globals(), private, result, context, end)
             before = parse(supplements.read_path(owner, globals(),
@@ -2741,6 +2978,10 @@ def validate_public(profile):
                            "endRawNs": budget.fence("upload")}} if budget is not None else {})}, end)
         require(owner.read(private, "controller-result.json", end) == result_raw and
                 owner.read(output, posix.MANIFEST, end, 65536) == manifest_raw, "POST_RETURN_INPUT_CHANGED")
+        if seed_frozen is not None:
+            require(frozen_seed_packet(owner, private, end,
+                    lambda: (posix._deadline(end), budget_clock.check("seal") if budget_clock is not None else None)) ==
+                    seed_frozen, "SEED_POST_RETURN_INPUT_CHANGED")
     except BaseException as caught:
         error = caught
         owner.error("post-return-seal", caught)
@@ -2877,10 +3118,65 @@ def upload_guard(phase):
     print("ORDINARY_FULL_UPLOAD_GUARD=" + phase.upper() + "; NO_UPLOAD_PERFORMED")
 
 
+def stage_dependencies(profile):
+    """Closed optional staging allocation. No restore, Gradle, save or H creation.
+
+    Future workflow wiring must require this step's actual successful outcome,
+    bind dependency_seed_staging_sha256 as P2PKIT_DEPENDENCY_SEED_STAGE_SHA256,
+    and pass that outcome as P2PKIT_DEPENDENCY_SEED_STAGE_OUTCOME. A provisional
+    receipt/output cannot authorize run --seed-dependencies after late failure.
+    """
+    owner, error, raw = PrivateOwner(), None, None
+    end = time.monotonic() + 120
+    def check():
+        posix._deadline(end)
+        require(not owner.unknown and not QUARANTINE and not query.QUARANTINE and not windows._QUARANTINE,
+                "SEED_STAGE_RETIREMENT_UNKNOWN")
+    try:
+        role = processes.host_role()
+        session = session_path(profile, role)
+        path = seed.stage_path(session, profile, role)
+        require(path != ROOT and path not in ROOT.parents and ROOT not in path.parents and
+                path != session and path not in session.parents and session not in path.parents,
+                "SEED_STAGE_ALIAS")
+        container = owner.acquire("dependency-seed-stage-container", lambda: seed.private_root(path, create=True))
+        admitted = admission(owner, profile, path / "admission", check)
+        inputs, _compiled = seed.source_inputs(owner, ROOT, end, check)
+        admission(owner, profile, path / "source-recheck", check, expected=admitted)
+        source = owner.acquire("dependency-seed-stage-source", lambda: container.create_directory(
+            "restore-home", deadline=end))
+        raw = seed.encoded(seed.stage_record(admitted.record, profile, role, path, container.verify(),
+                                            source.verify(), inputs))
+        owner.write(container, "staging.json", raw, end)
+        check()
+    except BaseException as caught:
+        error = caught
+        owner.error("dependency-seed-stage", caught)
+    finally:
+        try:
+            owner.close()
+        except BaseException as caught:
+            error = error or caught
+    if error is not None:
+        raise error
+    require(raw is not None and not owner.unknown, "SEED_STAGE_NOT_FINALIZED")
+    check()
+    target = Path(os.environ["GITHUB_OUTPUT"])
+    audit.reject_symlinks(target)
+    with target.open("a", encoding="ascii") as output:
+        check()
+        output.write("dependency_seed_ready=true\ndependency_seed_home=" + str(path / "restore-home") +
+                     "\ndependency_seed_staging_sha256=" + digest(raw) + "\n")
+        output.flush()
+        os.fsync(output.fileno())
+    check()  # The actual successful step outcome, not earlier output, is mandatory.
+    print("DEPENDENCY_SEED_STAGE=ALLOCATED; RESTORE_AND_REUSE=NOT_PERFORMED")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="operation", required=True)
-    for name in ("run", "validate-public", "_crypto", "_job-time", "upload-guard"):
+    for name in ("run", "validate-public", "_crypto", "_job-time", "upload-guard", "stage-dependencies"):
         entry = sub.add_parser(name)
         entry.add_argument("--profile", choices=("full",) if name in ("_job-time", "upload-guard") else PRODUCT_SECONDS,
                            required=True)
@@ -2891,12 +3187,16 @@ def main():
             entry.add_argument("--admission-sha256", required=True)
         elif name == "upload-guard":
             entry.add_argument("phase", choices=("before", "after"))
+        elif name == "run":
+            entry.add_argument("--seed-dependencies", action="store_true")
     args = parser.parse_args()
     try:
         if args.operation == "run":
-            return run(args.profile)
+            return run(args.profile, seed_dependencies=args.seed_dependencies)
         if args.operation == "validate-public":
             validate_public(args.profile)
+        elif args.operation == "stage-dependencies":
+            stage_dependencies(args.profile)
         elif args.operation == "_job-time":
             require(re.fullmatch(r"[0-9a-f]{64}", args.admission_sha256), "JOB_TIME_ADMISSION_HASH")
             job_time_phase(args.profile, args.admission_sha256)

@@ -497,7 +497,7 @@ class _WinApi:
             return owner_sid, protected
 
     def inspect(self, handle, path, *, directory, private=False, inherited_allowed=False,
-                live_output_max_bytes=None, live_output_min_bytes=0):
+                live_output_max_bytes=None, live_output_min_bytes=0, strict_streams=False):
         if live_output_max_bytes is not None:
             require(private and not directory, "Live output observation requires a private regular file")
             _bound(live_output_max_bytes, MAX_FILE_BYTES, "file bytes", zero=True)
@@ -520,7 +520,7 @@ class _WinApi:
         owner, protected = (self._security(handle, directory=directory, inherited_allowed=inherited_allowed)
                             if private else (None, None))
         observed_size = standard.size
-        if private:
+        if private or strict_streams:
             capacity = 4096
             while True:
                 streams = ctypes.create_string_buffer(capacity)
@@ -590,9 +590,12 @@ class _WinApi:
 
 
 class _Pin:
-    def __init__(self, api, handle, path, info, *, private, inherited_allowed=False, writable=False):
+    def __init__(self, api, handle, path, info, *, private, inherited_allowed=False, writable=False,
+                 strict_streams=False, immutable=False):
         self.api, self.handle, self.path, self.info = api, handle, path, info
         self.private, self.inherited_allowed, self.writable = private, inherited_allowed, writable
+        self.strict_streams = strict_streams
+        self.immutable = immutable
         self.references, self.lock = 1, threading.RLock()
 
     def acquire(self):
@@ -614,6 +617,10 @@ class _Pin:
         with self.lock:
             require(self.references > 0, "Custody handle is closed")
             options = {}
+            if self.strict_streams:
+                # Public dependency inputs may have readable ACLs, but EVERY
+                # observation still checks their strict unnamed-stream shape.
+                options["strict_streams"] = True
             if live_output_max_bytes is not None:
                 require(self.writable and self.private and not self.info.is_directory,
                         "Live output observation requires an exclusive private writer pin")
@@ -621,6 +628,7 @@ class _Pin:
             info = self.api.inspect(self.handle, self.path, directory=self.info.is_directory,
                                     private=self.private, inherited_allowed=self.inherited_allowed, **options)
             require(info.identity == self.info.identity, "Pinned native identity changed")
+            require(not self.immutable or info == self.info, "Pinned dependency source changed")
             return info
 
     def names(self, maximum, deadline):
@@ -699,6 +707,11 @@ class PrivateDirectory:
         for pin in self._pins:
             pin.observe()
         return self._pins[-1].observe()
+
+    @_locked
+    def names(self, *, max_names, deadline=None):
+        """One complete pinned listing, not a recursive snapshot or absence API."""
+        return _directory_names(self, max_names, deadline)
 
     @_locked
     def _child(self, name, *, directory, create=False, writable=False, max_bytes=MAX_FILE_BYTES, deadline=None):
@@ -994,6 +1007,115 @@ def create_private_directory(path):
 def open_private_directory(path):
     """Open a protected private root; arbitrary inherited roots are not admitted."""
     return _root(path, _WinApi(), create=False)
+
+
+def _directory_names(directory, maximum, deadline):
+    _bound(maximum, MAX_MEMBERS, "directory names")
+    end = _end(deadline)
+    before = directory.verify()
+    names = directory._pins[-1].names(maximum, end)
+    require(len(names) <= maximum and len(set(name.casefold() for name in names)) == len(names),
+            "Directory has duplicate aliases or exceeds member bound")
+    for name in names:
+        component(name)
+    require(directory.verify() == before, "Directory changed during its complete listing")
+    _check_time(end)
+    return tuple(sorted(names))
+
+
+class DependencySourceDirectory:
+    """Read-only public dependency bytes; never private evidence or a writer.
+
+    It shares the existing native supplier and pins, not PrivateDirectory's
+    writable API or ACL policy. Source roots/selected ancestors always retain
+    strict ADS checks, including later NativeFile verification observations.
+    """
+
+    def __init__(self, api, pins):
+        self._operation_lock = threading.RLock()
+        self._api, self._pins, self._closed = api, pins, False
+        self.path, self.identity = Path(pins[-1].path), pins[-1].info.identity
+
+    @_locked
+    def verify(self):
+        require(not self._closed, "Dependency source directory is closed")
+        for pin in self._pins:
+            current = pin.observe()
+        require(current == self._pins[-1].info, "Dependency source directory changed")
+        return current
+
+    @_locked
+    def names(self, *, max_names, deadline=None):
+        return _directory_names(self, max_names, deadline)
+
+    @_locked
+    def _child(self, name, *, directory, max_bytes=MAX_FILE_BYTES, deadline=None):
+        component(name)
+        end = _end(deadline)
+        self.verify()
+        parent = self._pins[-1]
+        path = parent.path + "\\" + name
+        require(len(self._pins) <= MAX_DEPTH and len(path.encode("utf-16-le")) < 65500,
+                "Dependency source path exceeds its depth/length bound")
+        handle = self._api.child(parent.handle, name, directory=directory)
+        pins = []
+        with _on_exit(lambda: _close_native(self._api, handle), lambda: _release(pins)):
+            info = self._api.inspect(handle, path, directory=directory, strict_streams=True)
+            require(info.identity[0] == self.identity[0], "Dependency source crossed its pinned volume")
+            require(directory or info.size <= max_bytes, "Dependency source exceeds its byte bound")
+            self.verify()
+            pins = _acquire(self._pins)
+            pins.append(_Pin(self._api, handle, path, info, private=False, strict_streams=True, immutable=True))
+            handle = None
+            result = (DependencySourceDirectory(self._api, pins) if directory else
+                      NativeFile(self._api, pins, max_bytes=max_bytes, writable=False, deadline=end))
+            pins = []
+            return result
+
+    def open_directory(self, name, *, deadline=None):
+        return self._child(name, directory=True, deadline=deadline)
+
+    def open_file(self, name, *, max_bytes, deadline=None):
+        _bound(max_bytes, MAX_FILE_BYTES, "file bytes", zero=True)
+        return self._child(name, directory=False, max_bytes=max_bytes, deadline=deadline)
+
+    @_locked
+    def close(self):
+        if self._closed:
+            return
+        pins = self._pins
+        try:
+            with _on_exit(lambda: _release(pins)):
+                self.verify()
+        finally:
+            self._closed, self._pins = True, []
+
+
+def _dependency_source_root(path, api):
+    drive, parts = absolute_parts(path)
+    pins, handle = [], None
+    with _on_exit(lambda: _close_native(api, handle), lambda: _release(pins)):
+        handle = api.drive(drive)
+        info = api.inspect(handle, drive, directory=True, strict_streams=True)
+        pins.append(_Pin(api, handle, drive, info, private=False, strict_streams=True))
+        handle = None
+        for index, name in enumerate(parts):
+            parent = pins[-1]
+            native_path = parent.path + ("" if parent.path.endswith("\\") else "\\") + name
+            handle = api.child(parent.handle, name, directory=True)
+            info = api.inspect(handle, native_path, directory=True, strict_streams=True)
+            require(info.identity[0] == pins[0].info.identity[0], "Dependency source crossed its pinned volume")
+            pins.append(_Pin(api, handle, native_path, info, private=False, strict_streams=True,
+                             immutable=index == len(parts) - 1))
+            handle = None
+        result = DependencySourceDirectory(api, pins)
+        pins = []
+        return result
+
+
+def open_dependency_source(path):
+    """Open only existing public input; never create, rewrite ACLs, save or delete."""
+    return _dependency_source_root(path, _WinApi())
 
 
 class Snapshot:

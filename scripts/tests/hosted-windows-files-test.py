@@ -397,12 +397,14 @@ class ModelApi:
         return self._open(node, writable)
 
     def inspect(self, handle, path, *, directory, private=False, inherited_allowed=False,
-                live_output_max_bytes=None, live_output_min_bytes=0):
+                live_output_max_bytes=None, live_output_min_bytes=0, strict_streams=False):
         node = self.handles[handle][0]
         if self.inspect_failure == node.path:
             raise files.FilesystemError("Modeled readback failure")
         files.require(node.path == path and node.directory == directory and not node.reparse and
                       (directory or node.links == 1), "Modeled identity/kind/link rejection")
+        if strict_streams:
+            files.require(not node.extra_stream, "Modeled public-source ADS rejection")
         if private:
             files.require(node.private and not node.extra_stream, "Modeled privacy/ADS rejection")
             records = acl(directory, node.protected)
@@ -542,12 +544,14 @@ class StreamQueryModel:
         return node.owner, protected
 
     def inspect(self, handle, path, *, directory, private=False, inherited_allowed=False,
-                live_output_max_bytes=None, live_output_min_bytes=0):
+                live_output_max_bytes=None, live_output_min_bytes=0, strict_streams=False):
         self.observations.append((handle, live_output_max_bytes))
         # Omit the new keyword in strict calls so the same regression can execute
         # the original inspector and expose its real pre-repair rejection.
         options = {} if live_output_max_bytes is None else {"live_output_max_bytes": live_output_max_bytes,
                                                          "live_output_min_bytes": live_output_min_bytes}
+        if strict_streams:
+            options["strict_streams"] = True
         return self.native.inspect(handle, path, directory=directory, private=private,
                                    inherited_allowed=inherited_allowed, **options)
 
@@ -1024,6 +1028,103 @@ def native_control(method):
                 RETENTION.failure(self, "body-failure", error)
             raise
     return guarded
+
+
+class DependencySourceModels(unittest.TestCase):
+    """Actual source adapter/inspector; modeled Win32 calls, NOT native qualification."""
+    def setUp(self):
+        self.api = ModelApi()
+        self.api.nodes[r"C:\work\restore"] = Node(r"C:\work\restore", True, 3)
+        self.api.nodes[r"C:\work\restore\Example.jar"] = Node(r"C:\work\restore\Example.jar", False, 4,
+                                                               content=b"synthetic-public-bytes")
+        self.owners = []
+        self.queries = StreamQueryModel(self.api)
+
+    def tearDown(self):
+        for owner in reversed(self.owners):
+            try:
+                owner.close()
+            except files.FilesystemError:
+                pass
+        self.assertEqual(self.api.handles, {}, "Synthetic native handles leaked")
+
+    def source(self):
+        result = files._dependency_source_root(r"C:\work\restore", self.api)
+        self.owners.append(result)
+        return result
+
+    def test_public_acl_is_readable_but_stays_invalid_for_private_custody(self):
+        source = self.source()
+        self.assertEqual(source.names(max_names=10), ("Example.jar",))
+        reader = source.open_file("Example.jar", max_bytes=100)
+        self.owners.append(reader)
+        self.assertEqual(reader.read(100), b"synthetic-public-bytes")
+        self.assertFalse(reader.writable())
+        self.assertFalse(hasattr(source, "create_file"))
+        self.assertFalse(hasattr(source, "create_directory"))
+        self.assertIsNone(reader.initial_info.owner_sid)
+        with self.assertRaises(files.FilesystemError):
+            files._root(r"C:\work\restore", self.api, create=False)
+
+    def test_public_selected_ads_rejected_by_actual_inspector_on_initial_open(self):
+        self.api.nodes[r"C:\work\restore\Example.jar"].extra_stream = True
+        source = self.source()
+        with self.assertRaises(files.FilesystemError):
+            source.open_file("Example.jar", max_bytes=100)
+
+    def test_every_later_public_file_and_ancestor_observation_keeps_ads_rejection(self):
+        source = self.source()
+        reader = source.open_file("Example.jar", max_bytes=100)
+        self.owners.append(reader)
+        for path in ("C:\\", r"C:\work", r"C:\work\restore", r"C:\work\restore\Example.jar"):
+            with self.subTest(path=path):
+                node = self.api.nodes[path]
+                node.extra_stream = True
+                with self.assertRaises(files.FilesystemError):
+                    reader.verify()
+                node.extra_stream = False
+        self.assertEqual(reader.verify(), reader.initial_info)
+
+    def test_public_selected_parent_membership_mutation_defeats_reader_verification(self):
+        source = self.source()
+        reader = source.open_file("Example.jar", max_bytes=100)
+        self.owners.append(reader)
+        self.api.nodes[r"C:\work\restore"].version += 1
+        with self.assertRaises(files.FilesystemError):
+            reader.verify()
+
+    def test_bounded_complete_listing_refuses_changes_aliases_and_truncation(self):
+        source = self.source()
+        self.api.nodes[r"C:\work\restore\second"] = Node(r"C:\work\restore\second", False, 5)
+        with self.assertRaises(files.FilesystemError):
+            source.names(max_names=1)
+        self.api.names_hook = lambda path: setattr(self.api.nodes[path], "version", 99)
+        with self.assertRaises(files.FilesystemError):
+            source.names(max_names=10)
+
+    def test_public_acquisition_failure_preserves_original_and_secondary_close_unknown(self):
+        source = self.source()
+        original = self.api.inspect
+        def fail(handle, path, **kwargs):
+            if path.endswith("Example.jar"):
+                self.api.close_failure = handle
+                raise files.FilesystemError("original synthetic inspect failure")
+            return original(handle, path, **kwargs)
+        self.api.inspect = fail
+        with self.assertRaises(files.FilesystemError) as caught:
+            source.open_file("Example.jar", max_bytes=100)
+        self.assertEqual(str(caught.exception), "original synthetic inspect failure")
+        self.assertTrue(any("UNKNOWN" in note for note in getattr(caught.exception, "__notes__", ())))
+
+    def test_private_listing_addition_does_not_change_private_acl_policy(self):
+        private = files._root(r"C:\work\private", self.api, create=True)
+        self.owners.append(private)
+        self.assertEqual(private.names(max_names=10), ())
+        private.create_directory("child").close()
+        self.assertEqual(private.names(max_names=10), ("child",))
+        self.api.nodes[r"C:\work\private"].bad_acl = True
+        with self.assertRaises(files.FilesystemError):
+            private.names(max_names=10)
 
 
 class NativeWindowsTests(unittest.TestCase):
@@ -1569,7 +1670,8 @@ def main():
         FIXTURE_PARENT = args.fixture_parent
     suite = unittest.TestSuite()
     loader = unittest.defaultTestLoader
-    for case in (PurePolicyTests, NativeCallShapeTests, ModelCustodyTests, NativeFixtureOrchestrationTests):
+    for case in (PurePolicyTests, NativeCallShapeTests, ModelCustodyTests, DependencySourceModels,
+                 NativeFixtureOrchestrationTests):
         suite.addTests(loader.loadTestsFromTestCase(case))
     if args.native:
         suite.addTests(loader.loadTestsFromTestCase(NativeWindowsTests))
