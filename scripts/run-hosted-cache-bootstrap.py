@@ -28,6 +28,7 @@ sys.path.insert(0, str(SCRIPTS))
 import audit_processes as processes
 import hosted_cache_bootstrap_identity as bootstrap
 import hosted_cache_bootstrap_origin as origin
+import hosted_cache_bootstrap_service_time as service_time
 import hosted_evidence as posix
 import hosted_test_query as query
 import hosted_windows_evidence as diagnostics
@@ -845,7 +846,8 @@ def chain_content(owner, private, context_raw, admitted, records, returned, admi
             child["retirement"] == "KNOWN" and child["errors"] == [] and
             child["launchMinimumNs"] == row["launchMinimumNs"], "BOOTSTRAP_ORIGINAL_CHILD_TERMINAL")
     responses = {name: owner.read(directory, name + ".json", final=final) for name in ("attempt", "jobs")}
-    service = origin.service_identity(admitted, responses, start["invocation"], fence.clock, context["runnerName"])
+    basis = service_time.derive(admitted, responses, start["invocation"], fence.clock, context["runnerName"])
+    service = basis["service"]
     require(child["originalsSha256"] == service["originalsSha256"], "BOOTSTRAP_ORIGINAL_RESPONSES_CHANGED")
     times = [fence.first, context["admissionReturnedNs"], start["startedNs"], row["launchMinimumNs"],
              child["beganNs"], child["metadataLastNs"], service["firstNs"],
@@ -857,7 +859,7 @@ def chain_content(owner, private, context_raw, admitted, records, returned, admi
             row["launchMinimumNs"] <= origin.integer(birth["observedNs"]) <= row["completedNs"],
             "BOOTSTRAP_ORIGINAL_CLOCK_CHAIN")
     last = fence.now(final=final, minimum=max(*times, birth["observedNs"]))
-    return {"service": service, "childTerminalSha256": origin.digest(child_raw),
+    return {"service": service, "serviceTimeBasis": basis, "childTerminalSha256": origin.digest(child_raw),
             "phaseSha256": {name: origin.digest(raw) for name, raw in records.items()},
             "admissionOriginals": admission_hashes, "preludeSha256": origin.digest(fence.raw), "revalidatedNs": last,
             "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False}

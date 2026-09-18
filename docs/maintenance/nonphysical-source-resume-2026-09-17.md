@@ -533,13 +533,97 @@ this device. The containing commit and final independent implementation/document
 review bindings belong in #437/shared #424 after successful normal push/readback.
 Agent review remains separate from formal different-account GitHub PR approval.
 
+## 18 September: original service-time basis without a job allowance
+
+The [service-time contract](../testing/hosted-dependency-cache.md#original-service-time-basis-not-a-job-budget)
+adds a pure conservative translation to the existing read-only original chain.
+It derives from the original jobs request start and original service Date/job
+start, with unchanged1-second quantization,60-second cache charge and5-second
+margin. It does not substitute a later response/retention/current clock, clamp
+underflow or choose a job duration. Exact zero remains representable; integer
+arithmetic preserves nanoseconds above the floating-point exact range.
+
+`originalChain.serviceTimeBasis` binds the bootstrap admission, source/run/cohort,
+full clock identity, invocation, exact original response bytes and closed policy.
+The existing chain/entry checks rederive it. Older chains missing the mandatory
+nested versioned record are refused, not backfilled or rewritten; retained older
+evidence stays historical. This is not a native job-start observation or proof
+of service-clock/suspend assumptions, provider behavior or scheduling fit.
+
+No ordinary budget, shared executable supplier, composition expectation, workflow
+or activation HOLD changed. Original75 new work, local45 owned I/O/close and
+original120 post-close public completion remain separate and unchanged. The
+basis/chain/entry still declare `NOT_ADMITTED`, `NOT_PERFORMED` and export/save
+authority false. Proposed5,400 seconds remains unadmitted/unmeasured.
+
+### Executed offline controls
+
+Installed Linux Python3.12.3, actual UID65534, exact read-only source copies:
+
+```bash
+timeout --kill-after=5s 90s runuser -u nobody -- \
+  python3 -I -B -S <exact-read-only-source-copy>/scripts/tests/hosted-cache-bootstrap-service-time-test.py -v
+timeout --kill-after=5s 90s runuser -u nobody -- \
+  python3 -I -B -S <exact-read-only-source-copy>/scripts/tests/hosted-cache-bootstrap-entry-test.py -v
+timeout --kill-after=5s 90s runuser -u nobody -- \
+  python3 -I -B -S <exact-read-only-source-copy>/scripts/tests/hosted-cache-bootstrap-handoff-test.py -v
+timeout --kill-after=5s 90s runuser -u nobody -- \
+  python3 -I -B -S <exact-read-only-source-copy>/scripts/tests/hosted-cache-bootstrap-origin-test.py -v
+```
+
+- New suite **41/41 PASS**:31 pure methods and10 read-only-chain methods. Exact
+  arithmetic/UINT64/zero boundaries, six cohorts, fixed charges, complete service
+  revalidation, clock/byte/policy substitutions, non-authority and no-I/O controls
+  are separate from the small real-file chain retention/adoption models.
+- Affected compatibility: entry **44/44**, handoff **39/39**, origin **74/74 PASS**,
+  using their unchanged test files against the changed caller. The new suite's
+  explicit `load_tests` excludes inherited methods; these counts are not added
+  as new tests or converted to native/product coverage.
+- All four author fixtures retained unchanged1,397-file source manifests during execution.
+  The first complete41 passed. This is a prospective prerequisite, not a repaired
+  deployed defect; no failed preimage is invented for an API that did not exist.
+
+The nonimplementing reviewer issued
+**APPROVE_EXACT_DORMANT_BOOTSTRAP_SERVICE_TIME_BASIS_IMPLEMENTATION_SOURCE_OFFLINE_ONLY**
+against the three-file implementation/test tree
+`6e07b6e701f71b82d0de6f7abfcb8538b72d4fcd`, excluding this documentation. Independent
+controls passed **24/24** (17 pure,7 chain); guarded author41 replay also passed,
+overlapping the author suite. The reviewer inspected and rehashed the original
+44/39/74 compatibility packets without replaying them. Final independent runs
+used actual UID/EUID65534, retained all1,399 source/control hashes unchanged and
+guarded candidate process/network/native API/clock boundaries. Report SHA-256:
+`7aeba9252364702d70515bbaf872ce15cbbe983074b62f3b07307ef5ea5bb321`.
+
+Reviewer failures remain separate, not candidate defects or first-attempt passes:
+two harness startup failures executed zero tests (missing launcher PATH entry,
+then omitted trusted standard-library preload). Only the recorder's launcher
+path and pre-audit ctypes preload were corrected; the candidate-native-load
+prohibition stayed unchanged. The first actual24-method aggregate had **23 passes/
+one assertion failure/zero errors**: the positive oracle assumed the model's
+pre-observation epoch rather than its retained first prelude reading. Only its
+two expected work/final values were corrected to that original first reading
+plus75/120 seconds. Source never changed; original guards, oracles, fixtures,
+commands and failures remain retained before the final24/24 and overlapping41/41.
+
+Only tiny POSIX files/capture descriptors are real. Native/query/clock/HTTP and
+different-process identity are models. No build, SDK/dependency acquisition,
+GPG, native process-provider, cache/provider action or held CI dispatch ran.
+Private packet `20260918-bootstrap-service-time-VYo0Sv5p` retains the source,
+command/exit/log/manifests and review inputs on this device; prior Mac originals
+remain separate and unavailable unless legitimately transferred.
+
+Exact independent implementation/complete-patch verdicts, report/patch hashes,
+static checks and containing commit/tree belong in #437/shared #424 after normal
+push/readback. These source/offline results do not supply formal GitHub approval
+or current native/provider/custody/delivery acceptance. Apps are not in Releases.
+
 ## Next engineering and unchanged authority boundaries
 
 The next bootstrap slice still needs a **separate productive owner/job-budget
-context**, not ordinary FULL/Desktop with `help`, the evidence-only prelude or
-the same-call read-only entry above. Retain and rederive actual source/run/clock
-and service/native budget originals and trusted workflow outcomes; a digest or fresh allowance cannot grant
-authority. A future live caller must invoke the canonical configuration-only producer,
+context**, not ordinary FULL/Desktop with `help`, the evidence-only prelude,
+same-call read-only entry or service-time basis above. Retain and rederive actual
+source/run/clock and service/native budget originals and trusted workflow outcomes;
+a digest or fresh allowance cannot grant authority. A future live caller must invoke the canonical configuration-only producer,
 retain its original start/requested/executed argv/same-home stop and independently
 establish complete enclosing native retirement, not infer it from the pure helper;
 only afterward permit positive empty-seed-derived export, before/after frozen-byte

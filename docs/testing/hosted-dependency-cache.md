@@ -262,6 +262,50 @@ the proposed5,400 seconds remains unadmitted/unmeasured. The entry cannot make
 configuration-only execution satisfy ordinary FULL ABI/simulator/transcript
 acceptance or lift either ordinary activation HOLD.
 
+### Original service-time basis, not a job budget
+
+[`hosted_cache_bootstrap_service_time.py`](../../scripts/hosted_cache_bootstrap_service_time.py)
+derives a closed, private `BOOTSTRAP_SERVICE_TIME_BASIS_V1` record from the two
+original service responses. It reuses their complete bootstrap identity/freshness
+validation, not an ordinary FULL/Desktop budget or a caller-supplied service
+summary. It reads no clock/file and selects no job duration, reserve, deadline,
+productive allocation or execution owner.
+
+Its integer-only translation is:
+
+```text
+jobStartBasisNs = original_jobs_request_started_ns
+    - (original_jobs_Date_epoch - original_job_started_at_epoch + 1 + 60 + 5) * 1000000000
+```
+
+The unchanged charges are Date quantization1 second, maximum service-cache60
+seconds and clock margin5 seconds. Absent/zero Age and max-age0 do not discount
+them. The anchor is the original **jobs request start**, not the attempt request,
+response finish, retention or a later observation. Unsigned overflow/underflow
+refuses without clamping or selecting a new epoch; exact zero is representable.
+This is a conservative service-Date translation under the existing clock policy,
+**not an observed native job start**, HTTP Date correctness, cross-boot/suspend
+qualification or measured scheduling fit.
+
+The basis binds the original admission/source/run/cohort, complete role/domain/
+frequency identity, invocation, exact response hashes, selected service job and
+fixed policy. `validate_basis` rederives and compares exact canonical bytes;
+matching copied records still cannot attest their provenance. Reserialized or
+changed responses cannot validate an earlier basis even when parsed fields agree.
+
+The existing original-chain reader now retains and rederives mandatory
+`originalChain.serviceTimeBasis`; preparation, read-only adoption and entry
+consumption carry it unchanged. Only the existing `revalidatedNs` observation
+may advance. Older source-generated chains missing this nested versioned record
+remain historical evidence, but this changed reader **rejects** them: it does
+not backfill, migrate or rewrite originals. All original owner/step/source
+admission requirements and original75/local45/original120 bounds remain.
+
+Budget remains `NOT_ADMITTED`, tests `NOT_PERFORMED`, export/save authority false.
+The proposed5,400 seconds is still unadmitted/unmeasured. A separate productive
+owner and complete bounded allocation, live native qualification and trusted
+workflow outcomes remain necessary before any producer/export/provider action.
+
 ### Canonical producer records, not producer execution
 
 [`hosted_cache_bootstrap_producer.py`](../../scripts/hosted_cache_bootstrap_producer.py)
@@ -445,6 +489,7 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-query-fence-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-origin-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-handoff-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-entry-test.py
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-service-time-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
@@ -455,8 +500,9 @@ python3 -I -B -S scripts/tests/hosted-desktop-job-budget-test.py
 These use modeled provider/native boundaries and tiny synthetic owned files, no
 dependency download or Gradle. The connected/budget controls are registered in the
 unconditional ordinary CI policy step and both release script entry points.
-The separate bootstrap identity/cohort/producer-record/query-fence/original-acquisition/handoff/entry
-controls are standalone, not an activated or registered bootstrap workflow.
+The separate bootstrap identity/cohort/producer-record/query-fence/original-acquisition/
+handoff/entry/service-time controls are standalone, not an activated or registered
+bootstrap workflow.
 Tiny private-file controls require an actual ordinary UID; root is not an
 acceptable substitute and their modeled native boundaries are not host admission.
 Native Windows provider behavior and actual resolver/cache reuse require
