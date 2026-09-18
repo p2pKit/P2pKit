@@ -101,6 +101,43 @@ class CompositionPolicy(unittest.TestCase):
         self.mutate("scripts/run-audit-command.py", b'"--no-build-cache"', b'"--build-cache"')
         self.mutate("scripts/hosted_dependency_seed_files.py", b'def seed_home(', b'def unverified_seed_home(')
 
+    def test_shared_helper_is_an_additional_required_program_not_a_replacement(self):
+        self.assertEqual(set(POLICY.EXPECTED), {
+            "scripts/run-hosted-test-custody.py", "scripts/hosted_full_supplements.py",
+            "scripts/hosted_primary_abi.py", "scripts/run-platform-tests.py",
+            "scripts/run-audit-command.py", "scripts/hosted_dependency_seed_files.py",
+            "scripts/hosted_canonical_python.py",
+        })
+
+    def test_shared_argv_and_isolated_two_supplier_loader_cannot_change(self):
+        path = "scripts/hosted_canonical_python.py"
+        for before, after in (
+            (b'"-I", "-B", "-S", "-c"', b'"-B", "-S", "-c"'),
+            (b'CANONICAL_NAMES = ("audit_processes.py", "run-audit-command.py")',
+             b'CANONICAL_NAMES = ("audit_processes.py", "run-audit-command.py", "foreign.py")'),
+            (b'sys.flags.isolated == 1', b'sys.flags.isolated == 0'),
+            (b'hashlib.sha256(raw).hexdigest() == bindings[name]', b'True'),
+            (b'compile(raw, str(path), "exec", dont_inherit=True)',
+             b'compile(path.read_bytes(), str(path), "exec", dont_inherit=True)'),
+        ):
+            with self.subTest(before=before):
+                self.mutate(path, before, after)
+
+    def test_ordinary_capture_hash_guard_and_seed_provenance_cannot_be_removed(self):
+        path = "scripts/run-hosted-test-custody.py"
+        self.mutate(path, b'hashlib.sha256(raw).hexdigest() == _CANONICAL_HELPER_SHA256', b'True')
+        self.mutate(path, b'_CANONICAL_HELPER = _load_canonical_helper()', b'_CANONICAL_HELPER = {}')
+        self.mutate(path, b'exec(compile(raw, str(path), "exec", dont_inherit=True), namespace)',
+                    b'exec(compile(path.read_bytes(), str(path), "exec", dont_inherit=True), namespace)')
+        self.mutate("scripts/hosted_dependency_seed_files.py", b', "scripts/hosted_canonical_python.py"', b'')
+
+    def test_late_shared_helper_shadowing_is_rejected(self):
+        changed = dict(self.sources)
+        path = "scripts/hosted_canonical_python.py"
+        changed[path] += b'\nassemble = lambda *args: ["unbound-python", "foreign.py"]\n'
+        with self.assertRaisesRegex(ValueError, "ordinary executable composition changed: " + path):
+            POLICY.check_sources(changed)
+
     def test_late_program_shadowing_is_rejected(self):
         changed = dict(self.sources)
         path = "scripts/run-hosted-test-custody.py"

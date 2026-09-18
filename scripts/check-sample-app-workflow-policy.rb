@@ -22,6 +22,7 @@ module SampleAppWorkflowPolicy
         scripts/tests/check-windows-directory-control-policy-test.rb scripts/tests/fixtures/windows-directory-binding/settings.gradle
         scripts/tests/fixtures/windows-directory-binding/build.gradle
         gradle/test-transcript-custody.init.gradle scripts/run-hosted-test-admission.py scripts/run-hosted-test-custody.py
+        scripts/hosted_canonical_python.py scripts/hosted_cache_bootstrap_canonical.py scripts/tests/hosted-canonical-python-test.py
         scripts/test-transcript-custody.py scripts/run-audit-command.py scripts/check-audit-receipt.py scripts/audit_processes.py
         scripts/hosted_dependency_cache.py scripts/hosted_dependency_seed.py scripts/hosted_dependency_seed_files.py scripts/hosted_evidence.py
         scripts/hosted_full_job_budget.py scripts/hosted_full_simulator.py scripts/hosted_full_supplements.py

@@ -89,52 +89,10 @@ IDENTITY_ENV = (
 # Only these two exact, source-bound siblings enter the isolated canonical
 # interpreter. Do not restore the script directory or ambient PYTHONPATH: the
 # canonical supplier imports audit_processes without adding its own directory.
-CANONICAL_NAMES = ("audit_processes.py", "run-audit-command.py")
-CANONICAL_SOURCE_LIMIT = 512 * 1024
-CANONICAL_BOOTSTRAP = '''import hashlib, json, os, stat, sys, types
-from pathlib import Path
-def require(value):
-    if not value:
-        raise RuntimeError("CANONICAL_BOOTSTRAP_REFUSED")
-require(sys.flags.isolated == 1 and sys.flags.no_site == 1 and sys.dont_write_bytecode)
-require(len(sys.argv) >= 4 and "audit_processes" not in sys.modules)
-directory = Path(sys.argv[1])
-require(directory.is_absolute() and ".." not in directory.parts and directory.name == "scripts")
-for path in (directory, *directory.parents):
-    info = path.lstat()
-    require(not stat.S_ISLNK(info.st_mode) and not getattr(info, "st_file_attributes", 0) & 0x400)
-bindings = json.loads(sys.argv[2])
-names = ("audit_processes.py", "run-audit-command.py")
-require(type(bindings) is dict and set(bindings) == set(names))
-source = {}
-for name in names:
-    path = directory / name
-    before = path.lstat()
-    require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and
-            not getattr(before, "st_file_attributes", 0) & 0x400 and 0 < before.st_size <= 512 * 1024)
-    with path.open("rb") as stream:
-        opened = os.fstat(stream.fileno())
-        require(os.path.samestat(before, opened))
-        raw = stream.read(512 * 1024 + 1)
-        after = os.fstat(stream.fileno())
-    current = path.lstat()
-    require(os.path.samestat(before, after) and os.path.samestat(before, current) and
-            before.st_mtime_ns == after.st_mtime_ns == current.st_mtime_ns and
-            before.st_size == after.st_size == current.st_size == len(raw) and
-            type(bindings[name]) is str and hashlib.sha256(raw).hexdigest() == bindings[name])
-    source[name] = compile(raw, str(path), "exec", dont_inherit=True)
-# Execute precisely the admitted bytes, not a second path read after hashing.
-# Preloading this closed sibling preserves -I without changing sys.path.
-module = types.ModuleType("audit_processes")
-module.__file__, module.__package__, module.__spec__ = str(directory / names[0]), None, None
-sys.modules["audit_processes"] = module
-exec(source[names[0]], module.__dict__)
-sys.argv = [str(directory / names[1]), *sys.argv[3:]]
-main = types.ModuleType("__main__")
-main.__file__, main.__package__, main.__spec__, main.__cached__ = sys.argv[0], None, None, None
-sys.modules["__main__"] = main
-exec(source[names[1]], main.__dict__)
-'''
+# Separately reviewed source binding: never load this helper via a module cache,
+# SourceFileLoader or ambient import path. It contains no non-stdlib imports.
+_CANONICAL_HELPER_SHA256 = "432c06f0be8f98db286979b7adc58365d9eafde739c023ac13af1f227acaeba4"
+_CANONICAL_HELPER_LIMIT = 32 * 1024
 
 
 class ControllerError(RuntimeError):
@@ -205,6 +163,75 @@ def original_clock(budget, *observations):
     return clock
 
 
+def _canonical_source(name, maximum):
+    """Read a closed source sibling, never cached bytecode or an ambient alias.
+
+    This is bounded source-byte inspection, not native/source/host admission or
+    an atomic filesystem snapshot. A failed close cannot publish helper code.
+    """
+    require(type(name) is str and name in ("hosted_canonical_python.py", "audit_processes.py", "run-audit-command.py") and
+            type(maximum) is int and 0 < maximum <= 512 * 1024, "CANONICAL_HELPER_SOURCE")
+    path = SCRIPTS / name
+    require(path.is_absolute() and ".." not in path.parts, "CANONICAL_HELPER_SOURCE")
+    ancestors = [(parent, parent.lstat()) for parent in path.parents]
+    require(all(stat.S_ISDIR(info.st_mode) and not getattr(info, "st_file_attributes", 0) & 0x400
+                for _, info in ancestors), "CANONICAL_HELPER_SOURCE")
+    before = path.lstat()
+    require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and
+            not getattr(before, "st_file_attributes", 0) & 0x400 and 0 < before.st_size <= maximum,
+            "CANONICAL_HELPER_SOURCE")
+    attributes = ("st_dev", "st_ino", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns", "st_file_attributes")
+    stamp = tuple(getattr(before, name, None) for name in attributes)
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0) |
+                         getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    original, raw = None, b""
+    try:
+        opened = os.fstat(descriptor)
+        require(tuple(getattr(opened, name, None) for name in attributes) == stamp, "CANONICAL_HELPER_SOURCE")
+        while len(raw) <= maximum:
+            block = os.read(descriptor, maximum + 1 - len(raw))
+            if not block:
+                break
+            raw += block
+        after = os.fstat(descriptor)
+        require(tuple(getattr(after, name, None) for name in attributes) == stamp and
+                len(raw) == before.st_size, "CANONICAL_HELPER_SOURCE")
+    except BaseException as error:
+        original = error
+    try:
+        os.close(descriptor)
+    except BaseException as error:
+        if original is not None:
+            raise original from error
+        raise
+    if original is not None:
+        raise original
+    current = path.lstat()
+    require(tuple(getattr(current, name, None) for name in attributes) == stamp, "CANONICAL_HELPER_SOURCE")
+    for parent, previous in ancestors:
+        current = parent.lstat()
+        require(os.path.samestat(previous, current) and stat.S_ISDIR(current.st_mode) and
+                not getattr(current, "st_file_attributes", 0) & 0x400, "CANONICAL_HELPER_SOURCE")
+    return raw
+
+
+def _load_canonical_helper():
+    raw = _canonical_source("hosted_canonical_python.py", _CANONICAL_HELPER_LIMIT)
+    require(hashlib.sha256(raw).hexdigest() == _CANONICAL_HELPER_SHA256, "CANONICAL_HELPER_SOURCE_BINDING")
+    path = SCRIPTS / "hosted_canonical_python.py"
+    namespace = {"__name__": "p2pkit_canonical_helpers", "__file__": str(path), "__package__": None}
+    # Execute precisely the bounded bytes just compared to the caller's original
+    # expected hash. No import cache, path mutation, loader hook or second read.
+    exec(compile(raw, str(path), "exec", dont_inherit=True), namespace)
+    return namespace
+
+
+_CANONICAL_HELPER = _load_canonical_helper()
+CANONICAL_NAMES = _CANONICAL_HELPER["CANONICAL_NAMES"]
+CANONICAL_SOURCE_LIMIT = _CANONICAL_HELPER["CANONICAL_SOURCE_LIMIT"]
+CANONICAL_BOOTSTRAP = _CANONICAL_HELPER["CANONICAL_BOOTSTRAP"]
+
+
 def canonical_bindings():
     """Capture only canonical suppliers after exact ordinary source admission."""
     result = {}
@@ -219,8 +246,8 @@ def canonical_python(executable, bindings, *args):
     require(type(bindings) is dict and set(bindings) == set(CANONICAL_NAMES) and
             all(type(value) is str and re.fullmatch(r"[0-9a-f]{64}", value) for value in bindings.values()),
             "CANONICAL_SOURCE_BINDINGS")
-    return [executable, "-I", "-B", "-S", "-c", CANONICAL_BOOTSTRAP, str(SCRIPTS),
-            encoded(bindings).decode("ascii").strip(), *map(str, args)]
+    return _CANONICAL_HELPER["assemble"](executable, str(SCRIPTS),
+                                       encoded(bindings).decode("ascii").strip(), *args)
 
 
 def profile_command(profile, role):

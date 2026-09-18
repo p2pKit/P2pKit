@@ -30,7 +30,7 @@ KNOWN = ("KNOWN_MISS", "KNOWN_PARTIAL", "KNOWN_SEEDED")
 STATUS = (*KNOWN, "FAILED", "UNKNOWN")
 INPUTS = ("gradle/verification-metadata.xml", "gradle/wrapper/gradle-wrapper.properties",
           "scripts/hosted_dependency_seed.py", "scripts/hosted_dependency_seed_files.py",
-          "scripts/hosted_windows_files.py", "scripts/run-hosted-test-custody.py",
+          "scripts/hosted_windows_files.py", "scripts/run-hosted-test-custody.py", "scripts/hosted_canonical_python.py",
           "scripts/hosted_cache_bootstrap_identity.py", "scripts/hosted_test_identity.py")
 
 

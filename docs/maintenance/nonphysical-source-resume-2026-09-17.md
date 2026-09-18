@@ -1405,6 +1405,11 @@ was supplied by those metadata reads. Main and protected release refs stay uncha
 
 ## Next engineering and unchanged authority boundaries
 
+The later [shared canonical-source increment](hosted-canonical-source-2026-09-18.md)
+extracts the existing isolated two-supplier argv loader and adds a dormant init
+request descriptor. It is source/offline preparation, **not initializer execution**;
+its exact controls, retained failures and independent review are recorded separately.
+
 The next bootstrap slice still needs a **separate productive owner/job-budget
 context**, not ordinary FULL/Desktop with `help`, the evidence-only prelude,
 same-call read-only entry/close transition, fresh-entry readmission/close,

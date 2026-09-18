@@ -26,7 +26,7 @@ reset_fixture() {
     for policy_input in \
         check-heavy-job-queue-policy.rb check-hosted-test-workflow-policy.rb check-hosted-test-composition.py \
         run-hosted-test-custody.py hosted_full_supplements.py hosted_primary_abi.py \
-        run-platform-tests.py run-audit-command.py hosted_dependency_seed_files.py; do
+        run-platform-tests.py run-audit-command.py hosted_dependency_seed_files.py hosted_canonical_python.py; do
         cp "$ROOT/scripts/$policy_input" "$FIXTURE/scripts/$policy_input"
     done
     cp "$ROOT/scripts/tests/check-kotlin-toolchain-policy-test.sh" \
@@ -69,6 +69,11 @@ reset_fixture
 "$CHECKER" --root "$FIXTURE" --static-only >/dev/null
 
 reset_fixture
+rm "$FIXTURE/scripts/hosted_canonical_python.py"
+expect_rejected "missing-canonical-helper" \
+    "ordinary composition input is missing/oversized: scripts/hosted_canonical_python.py"
+
+reset_fixture
 remove_matching_lines "$FIXTURE/build.gradle.kts" '    ":p2p-network-provisioning-android",'
 expect_rejected "missing-module" "project set must contain exactly"
 
@@ -83,9 +88,13 @@ remove_matching_lines "$FIXTURE/build.gradle.kts" 'dependsOn(checkAndroidAbi)'
 expect_rejected "missing-check-edge" "do not depend on the Android ABI comparison"
 
 reset_fixture
-remove_matching_lines \
-    "$FIXTURE/.github/workflows/ci.yml" \
-    'scripts/run-hosted-test-custody.py run --profile full --seed-dependencies'
+ci_run='          python3 -I -B -S scripts/run-hosted-test-custody.py run --profile full --consume-dependencies'
+[[ "$(grep -Fxc "$ci_run" "$FIXTURE/.github/workflows/ci.yml")" == 1 ]] ||
+    fail "fixture must remove the actual ordinary FULL command exactly once"
+remove_matching_lines "$FIXTURE/.github/workflows/ci.yml" "$ci_run"
+if grep -Fq "$ci_run" "$FIXTURE/.github/workflows/ci.yml"; then
+    fail "fixture did not remove the actual ordinary FULL command"
+fi
 expect_rejected "missing-ci-edge" "CI ordinary FULL caller policy failed"
 
 reset_fixture

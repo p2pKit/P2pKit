@@ -18,6 +18,7 @@ module HostedTestWorkflowPolicy
     CONTROL_COMMANDS = ["ruby scripts/tests/check-hosted-test-workflow-policy-test.rb",
                         "python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py",
                         "python3 -I -B -S scripts/tests/hosted-controller-import-test.py",
+                        "python3 -I -B -S scripts/tests/hosted-canonical-python-test.py",
                         "python3 -I -B -S scripts/tests/hosted-consume-delivery-test.py",
                         "python3 -I -B -S scripts/tests/hosted-desktop-job-budget-test.py"].freeze
     HOLD = <<~'SH'
@@ -59,10 +60,10 @@ module HostedTestWorkflowPolicy
         grep -Fxq 'AndroidVersion.ApiLevel=37.0' "$ANDROID_HOME/platforms/android-37.0/source.properties"
     SH
     # Reviewed pre-acquisition CI prefix with offline caller/composition, cold
-    # controller-import, connected-consume/delivery and Desktop-budget controls.
+    # controller-import/shared-canonical, connected-consume/delivery and Desktop-budget controls.
     # Canonical key ordering; no value is derived from the workflow here.
     # This fences even a product command inserted in an otherwise named policy step.
-    FULL_PREFIX_SHA256 = "d08c699fd6ca504fd2a1e387313aa215ab29ac277873c51933bd09fcfb7e9ee8"
+    FULL_PREFIX_SHA256 = "b80f70caa6bf0be98552ee2cd6b112940d738aac3c468dc5544ee8e8d415c744"
 
     def self.need(value, message)
         raise Error, message unless value

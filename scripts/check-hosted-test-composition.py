@@ -25,13 +25,18 @@ from pathlib import Path
 # received separate source/offline review before this controller-only update.
 # Bootstrap's pre-budget cohort guards received independent source/offline
 # review before the seed-only expectation update; no bootstrap execution opens.
+# The 2026-09-18 shared canonical extraction, ordinary wrapper and seed-source
+# roster received independent exact core source/offline approval before these
+# two expectation changes and the seventh supplier. The unchanged two-file
+# child loader is not a new child roster or provider-key component.
 EXPECTED = {
-    "scripts/run-hosted-test-custody.py": "eb10c042667499ee489e499ab89bb8657882e556c5c6d8dc74916feff0245499",
+    "scripts/run-hosted-test-custody.py": "eed36ef0e3b814ccdf4e1755ea4162a7ebd5caeb20833ab9a5ed326f8f2c116b",
     "scripts/hosted_full_supplements.py": "9f5c6a0f410c00ee7531664e95dab233c0febc6740dd6a8b1005e3fc3a64310c",
     "scripts/hosted_primary_abi.py": "ff168e70c31bc23b1c6e545a32d0c4217f9a212f7244a2c34571eee09f761553",
     "scripts/run-platform-tests.py": "1a3e6f093abe3a79bfbc2d3f426f26e71db77c6f72034effeb2e296dc833c271",
     "scripts/run-audit-command.py": "70216745a371d41101a0c4f6d27ca1d73b5f3d82c3e7ea4fc70009fb44f51cc5",
-    "scripts/hosted_dependency_seed_files.py": "2d3c4db8cbd2450287e4cf3db7c2eedfac32cf0ac4fd1294df4c2a1f0263c2b5",
+    "scripts/hosted_dependency_seed_files.py": "93991406fab4cc91d09a8920a971244956f2180c99a2aa2076a41a9ab65dd8cd",
+    "scripts/hosted_canonical_python.py": "e93b7d0cb32b847d8cca57b074c9a9afae902ef5d0e2e0e5991c599ef772a2b0",
 }
 LIMIT = 1024 * 1024
 

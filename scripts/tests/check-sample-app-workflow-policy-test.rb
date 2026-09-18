@@ -97,7 +97,8 @@ mutations = {
 }
 %w[pull_request].each do |event|
     %w[gradlew gradlew.bat .gitattributes .gitignore LICENSE scripts/hosted_dependency_cache.py
-       scripts/hosted_job_clock.py scripts/tests/hosted-consume-delivery-test.py
+       scripts/hosted_job_clock.py scripts/hosted_canonical_python.py scripts/hosted_cache_bootstrap_canonical.py
+       scripts/tests/hosted-canonical-python-test.py scripts/tests/hosted-consume-delivery-test.py
        scripts/tests/hosted-desktop-job-budget-test.py].each do |path|
         mutations["omitted #{event} input #{path}"] = ->(v) { (v["on"] || v[true])[event]["paths"].delete(path) }
     end

@@ -25,6 +25,7 @@ python3 -I -B -S scripts/tests/package-sample-apps-test.py
 ruby scripts/tests/check-hosted-test-workflow-policy-test.rb
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
 python3 -I -B -S scripts/tests/hosted-controller-import-test.py
+python3 -I -B -S scripts/tests/hosted-canonical-python-test.py
 python3 -I -B -S scripts/tests/hosted-consume-delivery-test.py
 python3 -I -B -S scripts/tests/hosted-desktop-job-budget-test.py
 python3 -I -B -S scripts/tests/test-transcript-custody-test.py

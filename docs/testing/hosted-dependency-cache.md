@@ -704,6 +704,47 @@ source scopes, selected executed methods, failed aggregates and independent revi
 Both ordinary HOLDs, Windows NativeFile900/Snapshot576MiB and the missing routine
 custodian/trusted-base formal approval remain unchanged;5400 stays unadmitted.
 
+### Shared canonical argv, not bootstrap initialization
+
+[`hosted_canonical_python.py`](../../scripts/hosted_canonical_python.py) contains
+only the existing canonical child-loader literal, its two supplier names and
+512KiB source limit, and argv assembly. Both callers load the helper from bounded,
+captured source bytes compared with a separately retained expected SHA-256; they
+do not use a module alias, ambient import path, cached bytecode or a second source
+read for execution. The helper itself imports nothing and creates no owner,
+clock, file or process. Ordinary `canonical_bindings()` still selects exactly
+`audit_processes.py` and `run-audit-command.py`; ordinary binding validation,
+error type, JSON encoding and argument conversion remain in its wrapper contract.
+
+The helper is a separate source/seed-provenance input, **not a third canonical
+child supplier or a new reusable provider-key component**. The semantic allowlist,
+wrapper and profile/role key grammar remains unchanged. The ordinary composition
+tripwire must independently bind this shared executable supplier as well as its
+existing callers; an expected hash is not implementation review or execution.
+
+[`hosted_cache_bootstrap_canonical.py`](../../scripts/hosted_cache_bootstrap_canonical.py)
+describes only a private, data-only `init_request(state, expected_commit, role)`.
+It binds the current resolved interpreter and two canonical source hashes to
+fixed `init --root … --state … --expected-commit … --host …` argv. It accepts no
+executable, root, command, recipient, profile, budget or source-hash override.
+Source/interpreter rechecks are point-in-time observations, not an atomic freeze
+or native admission. Supplied commit/role/state labels, including an existing
+state directory, remain **unattested**, not proof of state absence or ownership.
+
+The descriptor never imports the ordinary controller, executes its generated
+command, calls an initializer, creates a state/home or consumes `RecipientPrefix`.
+It returns `NOT_ATTESTED_HERE`, `NOT_ACQUIRED_OR_ATTESTED`, `NOT_ADMITTED` and
+`NOT_PERFORMED`, with next-phase/export/save authority false. No public command,
+workflow or productive transaction calls it. A future same-live-call extension
+still needs distinct pinned initialization resources, actual source/native
+readmission, original proposal/job fences and failure custody. Initializer120
+cannot renew recipient first315/read30 or resurrect a closed owner. Both ordinary
+HOLDs and the unadmitted/unmeasured5400 proposal remain unchanged.
+
+The [dated shared-source record](../maintenance/hosted-canonical-source-2026-09-18.md)
+separates actual focused offline passes, original failed aggregates and independent
+review from still-unexecuted canonical initialization and hosted qualification.
+
 ### Canonical producer records, not producer execution
 
 [`hosted_cache_bootstrap_producer.py`](../../scripts/hosted_cache_bootstrap_producer.py)
@@ -896,6 +937,7 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-readmission-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-recipient-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-recipient-parent-test.py \
   ParentModels.test_actual_parent_runs_child_and_reads_only_after_native_and_capture_close -v
+python3 -I -B -S scripts/tests/hosted-canonical-python-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
@@ -906,6 +948,10 @@ python3 -I -B -S scripts/tests/hosted-desktop-job-budget-test.py
 These use modeled provider/native boundaries and tiny synthetic owned files, no
 dependency download or Gradle. The connected/budget controls are registered in the
 unconditional ordinary CI policy step and both release script entry points.
+The shared canonical-helper controls are registered there too; they prohibit
+generated initializer, controller, native, network and child execution. Their
+actual tiny POSIX source reads and modeled Windows reparse checks do not qualify
+native Windows source custody or a productive bootstrap phase.
 The separate bootstrap identity/cohort/producer-record/query-fence/original-acquisition/
 handoff/entry/service-time/allocation-proposal/close/history/legacy-reader/fresh-entry/recipient-child/recipient-parent
 controls are standalone, not an activated or registered bootstrap workflow.
