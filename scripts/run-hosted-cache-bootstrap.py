@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Dormant bootstrap originals, recipient and initializer; NOT a cache builder.
+"""Dormant bootstrap originals through configuration reservation; NOT a builder.
 
-No workflow, productive budget, producer, seed/export/save,
+No workflow, productive budget, producer, export/save,
 policy installer or uploader exists here. Separate read-only original adoption
 never becomes execution authority. A future trusted workflow must bind the
 actual original prepare-step outcome, not a provisional receipt/digest.
@@ -33,6 +33,7 @@ sys.path.insert(0, str(SCRIPTS))
 import audit_processes as processes
 import hosted_cache_bootstrap_allocation as allocation
 import hosted_cache_bootstrap_canonical as canonical
+import hosted_cache_bootstrap_custody as custody
 import hosted_cache_bootstrap_history as history
 import hosted_cache_bootstrap_identity as bootstrap
 import hosted_cache_bootstrap_initialization as initialization
@@ -2919,7 +2920,7 @@ del _original_parent_controls
 def _parent_originals(call):
     # Closed source-owned pairs only; never virtual/caller-selected registries.
     if type(call) is _RecipientParent:
-        width = 6
+        width = 7
     elif type(call) is _InitializerParent:
         width = 6
     else:
@@ -3357,8 +3358,9 @@ class _RecipientParent:
         if type(self) is _InitializerParent:
             registered[4].checked(self, cleanup=cleanup)
         else:
-            require(type(registered[4]) is bool and type(registered[5]) is bool and
-                    (not registered[5] or registered[4]), "BOOTSTRAP_RECIPIENT_INTENT_CHANGED")
+            require(all(type(value) is bool for value in registered[4:]) and
+                    (not registered[6] or registered[5]) and (not registered[5] or registered[4]),
+                    "BOOTSTRAP_RECIPIENT_INTENT_CHANGED")
         # Full parsing repeatedly recursed through the same closed records at
         # every nested clock/Owner check. Exact transitive typed pins preserve
         # immediate rejection, without repeatedly parsing unchanged originals.
@@ -3853,7 +3855,7 @@ def run_recipient_after_entry(transition):
     caps. No live Recipient is reconstructed from child JSON; this wrapper never
     selects initialization. Producer/cache/custody remains separate unfinished work.
     """
-    return _recipient_after_entry(transition, initialize=False, stage=False)
+    return _recipient_after_entry(transition, initialize=False, stage=False, reserve=False)
 
 
 def initialize_after_entry(transition):
@@ -3863,7 +3865,7 @@ def initialize_after_entry(transition):
     fixes its intent before any clock/native/file supplier and consumes failure.
     Initialization yields evidence only, not producer/cache permission.
     """
-    return _recipient_after_entry(transition, initialize=True, stage=False)
+    return _recipient_after_entry(transition, initialize=True, stage=False, reserve=False)
 
 
 def stage_after_entry(transition):
@@ -3872,7 +3874,16 @@ def stage_after_entry(transition):
     Intent is fixed before the shared claim, never selected by returned JSON.
     No CLI, workflow, producer or provider calls this dormant operation.
     """
-    return _recipient_after_entry(transition, initialize=True, stage=True)
+    return _recipient_after_entry(transition, initialize=True, stage=True, reserve=False)
+
+
+def reserve_configuration_after_entry(transition):
+    """INTERNAL one-claim prefix through file-only configuration reservation.
+
+    The original claim fixes reserve => stage => initialize before suppliers.
+    No CLI/workflow calls this operation; no producer or collection is launched.
+    """
+    return _recipient_after_entry(transition, initialize=True, stage=True, reserve=True)
 
 
 def _install_parent_handlers(call, control):
@@ -3926,14 +3937,15 @@ def _close_parent(call, owner, window, control):
     call.closed_roster()
 
 
-def _recipient_after_entry(transition, *, initialize, stage):
-    require(type(initialize) is bool and type(stage) is bool and (not stage or initialize), "BOOTSTRAP_RECIPIENT_INTENT")
+def _recipient_after_entry(transition, *, initialize, stage, reserve):
+    require(all(type(value) is bool for value in (initialize, stage, reserve)) and
+            (not reserve or stage) and (not stage or initialize), "BOOTSTRAP_RECIPIENT_INTENT")
     check_new_entry_transition(transition)
     pins = (*_recipient_predecessor_pins(transition), _RecipientPredecessorGraph.capture(transition))
     call = _RecipientParent(transition, pins)
     with _RECIPIENT_CLAIM_LOCK:
         require(id(transition) not in _RECIPIENT_ATTEMPTS, "BOOTSTRAP_RECIPIENT_ALREADY_CLAIMED")
-        _RECIPIENT_ATTEMPTS[id(transition)] = (transition, call, pins, None, initialize, stage)
+        _RECIPIENT_ATTEMPTS[id(transition)] = (transition, call, pins, None, initialize, stage, reserve)
         control = _ParentControl(call, _RECIPIENT_ATTEMPTS, id(transition), _RECIPIENT_ATTEMPTS[id(transition)])
         _register_parent_control(control)
         _PARENT_CONTROLS[id(call)] = control
@@ -3951,7 +3963,7 @@ def _recipient_after_entry(transition, *, initialize, stage):
             owner.admissions, owner.resources, owner.errors, window_state=[window.phase_state()],
             observations=[window.last, window.local_last])
         with _RECIPIENT_CLAIM_LOCK:
-            _bind_parent_control(call, control, (transition, call, pins, call.bindings, initialize, stage))
+            _bind_parent_control(call, control, (transition, call, pins, call.bindings, initialize, stage, reserve))
         call.errors, call.state = owner.errors, "RUNNING"
         owner.end()
         _install_parent_handlers(call, control)
@@ -4056,7 +4068,7 @@ def _recipient_after_entry(transition, *, initialize, stage):
                 all(row["attempted"] is True and row["closed"] is True for row in owner.resources),
                 "BOOTSTRAP_RECIPIENT_PREFIX_FINAL_STATE_CHANGED")
         registered = _recipient_parent_registration(call)
-        require(registered[4] is initialize and registered[5] is stage and
+        require(registered[4] is initialize and registered[5] is stage and registered[6] is reserve and
                 registered[3].handler_restored == registered[3].handler_rows,
                 "BOOTSTRAP_RECIPIENT_INTENT_OR_HANDLERS_CHANGED")
         if not initialize:
@@ -4634,6 +4646,16 @@ class StagingPrefix:
 
 
 @dataclass(frozen=True)
+class ConfigurationCustodyPrefix:
+    """Closed reservation evidence only; NEVER a producer/next-phase permit."""
+    raw: bytes = field(repr=False)
+    staged: object = field(repr=False)
+    custody_leaf: object = field(repr=False)
+    checked_ns: int = field(repr=False)
+    checked_local: float = field(repr=False)
+
+
+@dataclass(frozen=True)
 class _StagingPhaseReturn:
     raw: bytes = field(repr=False)
     leaf: object = field(repr=False)
@@ -4671,10 +4693,11 @@ class _StagingClosedGraph:
             _RecipientParent, _InitializerParent, _RecipientParentWindow, _InitializerWindow,
             _RecipientParentBindings, _RecipientResource, _ParentControl, _RecipientPredecessorGraph,
             _InitializerPredecessor, _InitializationInputs, initialization.InstalledToolchains,
-            InitializationPrefix, _StagingPhaseParent, _StagingWindow, _StagingPhaseReturn,
+            InitializationPrefix, _StagingPhaseParent, _StagingWindow, _StagingPhaseReturn, StagingPrefix,
+            custody.StagedEvidence, custody.ReservationEvidence, ConfigurationCustodyPrefix,
             staging.Originals, staging.PhaseStart, staging.LeafEvidence)
         scalars = (type(None), bool, int, float, str, bytes, signal.Signals)
-        sequences = (list, tuple, _StagingFrame, _StagingLimits)
+        sequences = (list, tuple, _StagingFrame, _StagingLimits, _CustodyRequestPin)
         pending, seen, nodes, paths = list(roots), set(), [], []
         while pending:
             value = pending.pop()
@@ -4730,17 +4753,151 @@ class _StagingClosedGraph:
 # published on a caller object. Replacing a module registry or public alias
 # rejects live work but does not redirect the original known close obligations.
 _StagingSequenceFrame = namedtuple("_StagingSequenceFrame", "call registry record graph originals original_pin "
-    "files paths callbacks phases state original registries")
+    "files paths callbacks phases state original registries plan result")
 _StagingLimits = namedtuple("_StagingLimits", "clock first soft hard local_start local_soft local_hard")
 _StagingFrame = namedtuple("_StagingFrame", "call sequence name previous previous_pin previous_graph published state "
     "first phase_start phase_pin limits owner window callback owner_bindings resources handles files handlers restored "
-    "close_roster leaf leaf_pin pending_raw result last local_last original unknown query_attempted queries foreign_resources")
+    "close_roster leaf leaf_pin pending_raw result last local_last original unknown query_attempted queries foreign_resources "
+    "closed_frames staged staged_pin request_pin")
+_CustodyRequestPin = namedtuple("_CustodyRequestPin", "path directory retained binding_raw")
 
 _STAGING_RESOURCE_LABELS = frozenset({"directory", "writer", "bootstrap-leaf-initializer-session",
     "bootstrap-leaf-initializer-directory", "bootstrap-leaf-reader", "bootstrap-leaf-bootstrap-source",
     "bootstrap-leaf-bootstrap-source-parent", "bootstrap-leaf-container", "bootstrap-leaf-restore-home",
     "bootstrap-leaf-staging-writer", "bootstrap-leaf-dependency-seed-source-root",
     "bootstrap-leaf-dependency-seed-source-parent", "bootstrap-leaf-dependency-seed-input"})
+_CUSTODY_RESOURCE_LABELS = _STAGING_RESOURCE_LABELS | frozenset({
+    "bootstrap-leaf-custody-source-root", "bootstrap-leaf-custody-source-scripts",
+    "bootstrap-leaf-custody-stage-container", "bootstrap-leaf-custody-stage-home",
+    "bootstrap-leaf-custody-directory", "bootstrap-leaf-custody-retained", "bootstrap-leaf-custody-request-writer"})
+
+
+def _staging_plan(registries):
+    # The original recipient control, not a returned prefix or mutable boolean,
+    # fixes the only two source-selected plans. Initializer indices stay intact.
+    recipient = registries[7][4]
+    require(type(recipient) is tuple and len(recipient) == 7 and
+            recipient[4] is True and recipient[5] is True and type(recipient[6]) is bool,
+            "BOOTSTRAP_STAGING_INTENT_NOT_ORIGINAL")
+    return ("dependency-stage", "empty-seed", "custody-prepare") if recipient[6] else ("dependency-stage", "empty-seed")
+
+
+def _staging_labels(frame):
+    require(frame.name in ("dependency-stage", "empty-seed", "custody-prepare"), "BOOTSTRAP_STAGING_PHASE")
+    return _CUSTODY_RESOURCE_LABELS if frame.name == "custody-prepare" else _STAGING_RESOURCE_LABELS
+
+
+def _staging_leaf_capture(name, value):
+    if name == "custody-prepare":
+        require(type(value) is custody.ReservationEvidence, "BOOTSTRAP_CUSTODY_LEAF_KIND")
+        return (staging._bytes(value.raw), staging._bytes(value.request_raw), origin.integer(value.checked_ns),
+                staging._local(value.local_started), staging._local(value.checked_local))
+    require(name in ("dependency-stage", "empty-seed"), "BOOTSTRAP_STAGING_PHASE")
+    return staging._capture_evidence(value)
+
+
+def _capture_custody_request(frame):
+    """Bind the returned original request BEFORE any later clock/I/O supplier.
+
+    Retained parent copies cannot replace the actual reservation file. Only
+    detached immutable path/identity/binding values escape this data validator.
+    """
+    saved = _staging_sequence_frame(frame.sequence)
+    inputs = custody._Inputs(saved.originals, saved.original_pin, frame.staged, frame.staged_pin)
+    leaf = frame.leaf
+    value, request = staging.files.record(leaf.raw), staging.files.record(leaf.request_raw)
+    require(staging.files.encoded(value) == leaf.raw and staging.files.encoded(request) == leaf.request_raw,
+            "BOOTSTRAP_CUSTODY_RETURN_ENCODING")
+    file_binding, window = value.get("requestBinding"), value.get("window")
+    require(staging.files._file_binding(file_binding) and type(window) is dict and
+            set(window) == {"phase", "clock", "firstNs", "hardEndNs", "softEndNs", "lastNewWorkNs", "finishedNs",
+                            "predecessorSha256", "predecessorCheckedNs", "proposalSha256"},
+            "BOOTSTRAP_CUSTODY_RETURN_BINDING")
+    limits = frame.limits
+    last_new, finished = origin.integer(window["lastNewWorkNs"]), origin.integer(window["finishedNs"])
+    require(limits.first <= last_new <= finished <= leaf.checked_ns < limits.hard,
+            "BOOTSTRAP_CUSTODY_RETURN_CHRONOLOGY")
+    custody._equal(window, {"phase": "custody-prepare", "clock": origin.clock_value(inputs.clock),
+        "firstNs": limits.first, "hardEndNs": limits.hard, "softEndNs": limits.soft,
+        "lastNewWorkNs": last_new, "finishedNs": finished, "predecessorSha256": origin.digest(frame.previous_pin[0]),
+        "predecessorCheckedNs": frame.previous_pin[1], "proposalSha256": origin.digest(inputs.proposal_raw)},
+        "BOOTSTRAP_CUSTODY_RETURN_WINDOW")
+    custody._equal(value, {"schema": 1, "scope": custody.SCOPE, "binding": inputs.binding(),
+        "predecessors": inputs.predecessors(), "status": "RESERVED_CONFIGURATION_ONLY", "completed": True,
+        "leafHandleClose": "KNOWN", "enclosingOwnerRetirement": "NOT_OBSERVED_HERE", "nextPhaseAuthority": False,
+        "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False,
+        "requestSha256": origin.digest(leaf.request_raw), "requestBinding": file_binding, "window": window},
+        "BOOTSTRAP_CUSTODY_RETURN_SCOPE")
+    identities = request.get("directories")
+    require(type(identities) is dict and set(identities) == {"custody", "retained"}, "BOOTSTRAP_CUSTODY_REQUEST_DIRECTORIES")
+    directory, retained = (staging._identity(identities[name], inputs.role) for name in ("custody", "retained"))
+    require(directory != retained and directory not in inputs.directories.values() and
+            retained not in inputs.directories.values(), "BOOTSTRAP_CUSTODY_REQUEST_DIRECTORY_ALIAS")
+    staging._identity(file_binding["identity"], inputs.role)
+    require(set(request) == {"schema", "scope", "binding", "predecessors", "inputs", "bootstrapInputs", "custodyInputs",
+            "fileBindings", "directory", "directories", "owner", "evidenceDirectory", "evidenceDirectoryOwnership",
+            "purpose", "kind", "requestedArgv", "producerScope", "ancestorDomainChain", "loader", "sourceAdmission",
+            "nextPhaseAuthority", "budgetAcceptance", "testAcceptance", "exportSaveAuthority"},
+            "BOOTSTRAP_CUSTODY_REQUEST_FIELDS")
+    for name, expected in {"schema": 1, "scope": custody.REQUEST_SCOPE, "binding": inputs.binding(),
+            "predecessors": inputs.predecessors(), "directory": str(inputs.directory),
+            "purpose": custody.producer.PURPOSE, "kind": "gradle", "requestedArgv": list(bootstrap.COMMAND),
+            "producerScope": bootstrap.PRODUCER_SCOPE, "evidenceDirectoryOwnership": "NOT_CREATED_HERE",
+            "ancestorDomainChain": "NOT_SYNTHESIZED_OR_ADMITTED", "loader": "NOT_INSTALLED_BY_CONFIGURATION_RESERVATION",
+            "sourceAdmission": "NOT_ATTESTED_HERE", "nextPhaseAuthority": False, "budgetAcceptance": "NOT_ADMITTED",
+            "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False}.items():
+        custody._equal(request[name], expected, "BOOTSTRAP_CUSTODY_REQUEST_SCOPE")
+    return _CustodyRequestPin(str(inputs.directory), directory, retained, staging.files.encoded(file_binding))
+
+
+def _custody_request_reader(parent):
+    """Shared _read facade over this exact owner, not another owner/window.
+
+    Immutable lexical pins survive public alias failure. Every actual resource
+    still belongs to _StagingFileOwner's private ledger and original close path.
+    """
+    frame = parent.check()
+    owner, window, request_pin = parent.live(), frame.window, frame.request_pin
+    require(frame.name == "custody-prepare" and type(request_pin) is _CustodyRequestPin,
+            "BOOTSTRAP_CUSTODY_REQUEST_NOT_BOUND")
+    def bound():
+        actual = _staging_owner_frame(owner)
+        require(actual.call is parent and actual.window is window and actual.request_pin is request_pin and
+                actual.name == "custody-prepare", "BOOTSTRAP_CUSTODY_REQUEST_READER_CHANGED")
+        return actual
+    class Reader:
+        def check(self, *, new=False):
+            require(type(new) is bool, "BOOTSTRAP_CUSTODY_REQUEST_READER_MODE")
+            bound()
+            window.now()  # Reads always use this phase's SOFT==HARD window.
+            bound()
+
+        def end(self, *, new=False):
+            self.check(new=new)
+            return owner.end()
+
+        def acquire(self, label, factory):
+            require(label == "reader", "BOOTSTRAP_CUSTODY_REQUEST_READER_LABEL")
+            self.check(new=True)
+            return owner.acquire("bootstrap-leaf-reader", factory)
+
+        def error(self, stage, error, *, unknown=False):
+            parent.error(stage, error, unknown=unknown)
+
+        def close_one(self, resource):
+            try:
+                bound()
+                owner.close_one(resource)
+            except BaseException as error:
+                parent.error("custody-request-close", error)
+            actual = _staging_frame(parent)
+            first = actual.original if actual.original is not None else owner.original
+            if first is not None:
+                raise first  # close_one can record rather than raise; preserve falsey first errors.
+            require(not actual.unknown and not owner.unknown and
+                    any(pin[2] is resource and pin[3] and pin[4] for pin in actual.resources),
+                    "BOOTSTRAP_CUSTODY_REQUEST_CLOSE_UNKNOWN")
+    return Reader()
 
 
 def _staging_private_controls():
@@ -4748,7 +4905,7 @@ def _staging_private_controls():
     def claim(sequence, registry, record):
         require(id(sequence) not in sequences, "BOOTSTRAP_STAGING_SEQUENCE_REENTRY")
         sequences[id(sequence)] = _StagingSequenceFrame(sequence, registry, record,
-            None, None, None, (), (), (), (), "CLAIMED", None, ())
+            None, None, None, (), (), (), (), "CLAIMED", None, (), (), None)
     def sequence_frame(sequence):
         saved = sequences.get(id(sequence))
         require(type(saved) is _StagingSequenceFrame and saved.call is sequence, "BOOTSTRAP_STAGING_NOT_CLAIMED")
@@ -4757,17 +4914,19 @@ def _staging_private_controls():
         saved = sequence_frame(sequence)
         sequences[id(sequence)] = saved._replace(**values)
         return sequences[id(sequence)]
-    def register(parent, previous_pin, previous_graph):
-        saved = sequence_frame(parent.sequence)
-        names = ("dependency-stage", "empty-seed")
-        require(len(saved.phases) < 2 and parent.name == names[len(saved.phases)] and
+    def register(parent, previous_pin, previous_graph, *, closed_frames=(), staged=None):
+        saved = _staging_sequence_checked(parent.sequence)
+        require(saved.state == "RUNNING" and len(saved.phases) < len(saved.plan) and
+                parent.name == saved.plan[len(saved.phases)] and
                 id(parent) not in frames, "BOOTSTRAP_STAGING_PHASE_REENTRY")
+        staged_pin = None if staged is None else custody._capture_staged(staged)
         saved = sequence_update(parent.sequence, phases=(*saved.phases, parent))
         parent.sequence.phases = saved.phases
         frames[id(parent)] = _StagingFrame(parent, parent.sequence, parent.name, parent.previous,
             previous_pin, previous_graph, (parent.handles, parent.records, parent.handlers, parent.cancelled),
             "CLAIMED", None, None, None, None, None, None, None, None, (), (), (), (), (), None,
-            None, None, None, None, None, None, None, False, False, (), ())
+            None, None, None, None, None, None, None, False, False, (), (), closed_frames, staged,
+            staged_pin, None)
     def frame(parent):
         saved = frames.get(id(parent))
         require(type(saved) is _StagingFrame and saved.call is parent, "BOOTSTRAP_STAGING_PHASE_NOT_CLAIMED")
@@ -4806,7 +4965,8 @@ def _staging_sequence_checked(sequence):
             saved.registry.get(id(sequence.initializer)) is saved.record and
             saved.record[0] is sequence.initializer and saved.record[1] is sequence.returned and saved.record[2] is sequence and
             sequence.originals is saved.originals and sequence.phases is saved.phases and sequence.state == saved.state and
-            sequence.original is saved.original and saved.graph is not None, "BOOTSTRAP_STAGING_SEQUENCE_CHANGED")
+            sequence.original is saved.original and sequence.result is saved.result and saved.graph is not None,
+            "BOOTSTRAP_STAGING_SEQUENCE_CHANGED")
     entries, recipients, initializers, controls, attempt, entry_record, init_frame, recipient_frame = saved.registries
     require(_ENTRY_ATTEMPTS is entries and _RECIPIENT_ATTEMPTS is recipients and
             _INITIALIZER_ATTEMPTS is initializers and _PARENT_CONTROLS is controls and
@@ -4815,6 +4975,10 @@ def _staging_sequence_checked(sequence):
                 controls.get(id(frame[1])) is frame[0] and frame[2].get(frame[3]) is frame[4]
                 for frame in (init_frame, recipient_frame)), "BOOTSTRAP_STAGING_REGISTRY_CHANGED")
     saved.graph.checked()
+    require(type(saved.plan) is tuple and saved.plan == _staging_plan(saved.registries) and
+            len(saved.phases) <= len(saved.plan) and
+            all(type(parent) is _StagingPhaseParent and parent.name == saved.plan[index]
+                for index, parent in enumerate(saved.phases)), "BOOTSTRAP_STAGING_PLAN_CHANGED")
     require(staging._capture(saved.originals) == saved.original_pin, "BOOTSTRAP_STAGING_ORIGINALS_CHANGED")
     return saved
 
@@ -4935,7 +5099,7 @@ class _StagingFileOwner(Owner):
 
     def acquire(self, label, factory, *, final=False):
         frame = self._checked()
-        require(type(label) is str and label in _STAGING_RESOURCE_LABELS and type(final) is bool,
+        require(type(label) is str and label in _staging_labels(frame) and type(final) is bool,
                 "BOOTSTRAP_STAGING_RESOURCE_LABEL")
         require(frame.state == "RUNNING" and frame.close_roster is None,
                 "BOOTSTRAP_STAGING_ACQUIRE_NOT_LIVE")
@@ -5206,7 +5370,7 @@ class _StagingPhaseParent:
                         "BOOTSTRAP_STAGING_CLOSE_ROSTER_CHANGED")
             for row, pin in zip(original_rows, pins):
                 require(row is pin[0] and type(row) is dict and set(row) == {"label", "owner", "attempted", "closed"} and
-                        row["label"] == pin[1] and pin[1] in _STAGING_RESOURCE_LABELS and row["owner"] is pin[2] and
+                        row["label"] == pin[1] and pin[1] in _staging_labels(frame) and row["owner"] is pin[2] and
                         type(row["attempted"]) is bool and type(row["closed"]) is bool and
                         row["attempted"] is pin[3] and row["closed"] is pin[4],
                         "BOOTSTRAP_STAGING_ROSTER_CHANGED")
@@ -5236,15 +5400,30 @@ class _StagingPhaseParent:
             require(frame.previous is sequence.record[1] and frame.previous_pin ==
                     (frame.previous.raw, frame.previous.checked_ns, sequence.originals.initializer_checked_local),
                     "BOOTSTRAP_STAGING_INITIALIZER_RETURN_CHANGED")
-        else:
+        elif frame.name == "empty-seed":
             require(type(frame.previous) is _StagingPhaseReturn and frame.previous_pin ==
                     (frame.previous.raw, frame.previous.checked_ns, frame.previous.checked_local) and
                     sequence.phases[0].result is frame.previous, "BOOTSTRAP_STAGING_STAGE_RETURN_CHANGED")
+        else:
+            require(frame.name == "custody-prepare" and len(sequence.phases) == 3 and sequence.phases[2] is self and
+                    type(frame.previous) is StagingPrefix and frame.previous_pin ==
+                    (frame.previous.raw, frame.previous.checked_ns, frame.previous.checked_local) and
+                    sequence.phases[1].result is frame.previous and len(frame.closed_frames) == 2 and
+                    all(parent is sequence.phases[index] and _staging_frame(parent) is old and
+                        old.state == "COMPLETE" and parent.state == "COMPLETE" and parent.result is old.result
+                        for index, (parent, old) in enumerate(frame.closed_frames)),
+                    "BOOTSTRAP_CUSTODY_SEED_PARENT_RETURN_CHANGED")
+            require(type(frame.staged) is custody.StagedEvidence and custody._capture_staged(frame.staged) == frame.staged_pin and
+                    frame.staged.stage_leaf is frame.previous.stage_leaf and frame.staged.seed_leaf is frame.previous.seed_leaf,
+                    "BOOTSTRAP_CUSTODY_STAGED_RETURN_CHANGED")
+        if frame.name != "custody-prepare":
+            require(not frame.closed_frames and frame.staged is None and frame.staged_pin is None and frame.request_pin is None,
+                    "BOOTSTRAP_STAGING_UNEXPECTED_CUSTODY_INPUT")
         if frame.phase_start is not None:
             require(staging._capture_phase(frame.phase_start) == frame.phase_pin and
                     type(frame.window) is _StagingWindow and frame.window.call is self, "BOOTSTRAP_STAGING_PHASE_CHANGED")
         if frame.leaf is not None:
-            require(staging._capture_evidence(frame.leaf) == frame.leaf_pin, "BOOTSTRAP_STAGING_LEAF_RETURN_CHANGED")
+            require(_staging_leaf_capture(frame.name, frame.leaf) == frame.leaf_pin, "BOOTSTRAP_STAGING_LEAF_RETURN_CHANGED")
         if frame.owner is not None:
             _staging_actual_owner(frame)
         require(not QUARANTINE and not query.QUARANTINE and not diagnostics._QUARANTINE,
@@ -5369,6 +5548,45 @@ class _StagingPhaseParent:
             _new_entry_owned(owner, directory, path, identity)
             require(owner.read(directory, name, maximum) == raw, "BOOTSTRAP_STAGING_RETAINED_BYTES_CHANGED")
         self.check()
+        if _staging_frame(self).name == "custody-prepare":
+            self.read_custody_request()
+
+    def read_custody_request(self):
+        """Reopen the ACTUAL reservation, not only request-original.json."""
+        frame = self.check()
+        owner, pin = self.live(), frame.request_pin
+        reader = _custody_request_reader(self)
+        opened = []
+        try:
+            directory = owner.acquire("bootstrap-leaf-custody-directory", lambda: staging.files.private_root(pin.path))
+            opened.append(directory)
+            end = owner.end()
+            retained = owner.acquire("bootstrap-leaf-custody-retained",
+                lambda: directory.open_directory("retained", deadline=end))
+            opened.append(retained)
+            require(str(directory.path) == pin.path and tuple(directory.verify().identity) == pin.directory and
+                    tuple(retained.verify().identity) == pin.retained, "BOOTSTRAP_CUSTODY_REQUEST_DIRECTORY_CHANGED")
+            staging._read(reader, directory, "request.json", expected=frame.leaf_pin[1],
+                          binding=staging.files.record(pin.binding_raw))
+            staging._names(reader, directory, ("request.json", "retained"))
+            staging._names(reader, retained, ())
+            require(tuple(directory.verify().identity) == pin.directory and
+                    tuple(retained.verify().identity) == pin.retained, "BOOTSTRAP_CUSTODY_REQUEST_DIRECTORY_CHANGED")
+            reader.check()
+        except BaseException as error:
+            self.error("custody-request-readback", error)
+            raise _staging_frame(self).original
+        finally:
+            for resource in reversed(opened):
+                if owner.unknown:
+                    break
+                try:
+                    reader.close_one(resource)
+                except BaseException as error:
+                    self.error("custody-request-readback-close", error)
+        if _staging_frame(self).original is not None:
+            raise _staging_frame(self).original
+        self.check()
 
     def admit(self):
         """Both immutable query deadlines AND actual finalizer return fit SOFT."""
@@ -5473,19 +5691,38 @@ def _close_staging_phase(parent):
 
 def _run_staging_phase(sequence, previous, name):
     saved = _staging_sequence_checked(sequence)
-    require(name in ("dependency-stage", "empty-seed"), "BOOTSTRAP_STAGING_PHASE")
+    require(type(name) is str and name in saved.plan and saved.state == "RUNNING", "BOOTSTRAP_STAGING_PHASE")
+    staged, closed_frames = None, ()
     if name == "dependency-stage":
         require(not saved.phases and previous is saved.record[1], "BOOTSTRAP_STAGING_PHASE_ORDER")
         pin = (previous.raw, previous.checked_ns, saved.originals.initializer_checked_local)
         previous_graph = None
-    else:
+    elif name == "empty-seed":
         require(len(saved.phases) == 1 and type(previous) is _StagingPhaseReturn and
                 saved.phases[0].state == "COMPLETE" and saved.phases[0].result is previous,
                 "BOOTSTRAP_STAGING_PHASE_ORDER")
         pin = (previous.raw, previous.checked_ns, previous.checked_local)
         previous_graph = _StagingClosedGraph.capture(saved.phases[0], _staging_frame(saved.phases[0]), previous)
+    else:
+        require(name == "custody-prepare" and len(saved.phases) == 2 and type(previous) is StagingPrefix,
+                "BOOTSTRAP_CUSTODY_PHASE_ORDER")
+        closed_frames = tuple((parent, _staging_frame(parent)) for parent in saved.phases)
+        stage_parent, seed_parent = (pair[1] for pair in closed_frames)
+        require(all(parent.state == "COMPLETE" and old.state == "COMPLETE" and parent.result is old.result
+                    for parent, old in closed_frames) and seed_parent.result is previous and
+                type(stage_parent.result) is _StagingPhaseReturn and previous.stage_leaf is stage_parent.leaf and
+                previous.seed_leaf is seed_parent.leaf and previous.stage_raw == stage_parent.result.raw and
+                previous.checked_ns == seed_parent.last and previous.checked_local == seed_parent.local_last,
+                "BOOTSTRAP_CUSTODY_NOT_ORIGINAL_SEED_RETURN")
+        pin = (previous.raw, previous.checked_ns, previous.checked_local)
+        staged = custody.StagedEvidence(previous.raw, previous.stage_raw, previous.stage_leaf,
+                                       previous.seed_leaf, previous.checked_ns, previous.checked_local)
+        # The coordinator legitimately advances; NEVER freeze its whole dict.
+        # Pin BOTH closed private frames and the fully traversed typed prefix.
+        previous_graph = _StagingClosedGraph.capture(*saved.phases, stage_parent, seed_parent, previous, staged)
     parent = _StagingPhaseParent(sequence, name, previous)
-    _register_staging_phase(parent, pin, previous_graph)  # Consume before all clocks/suppliers.
+    _register_staging_phase(parent, pin, previous_graph, closed_frames=closed_frames, staged=staged)
+    # Registration consumes the phase before all clocks/suppliers.
     owner = window = None
     try:
         parent.check()
@@ -5526,21 +5763,32 @@ def _run_staging_phase(sequence, previous, name):
         target = parent.directory("phase", saved.paths[3] / (name + "-parent"), parent=initial, create=True)
         parent.admit()
         parent.read_originals()
-        leaf = (staging.stage_empty(owner, saved.originals, phase) if name == "dependency-stage" else
-                staging.observe_empty_seed(owner, saved.originals, phase, previous.leaf))
-        _update_staging_frame(parent, leaf=leaf, leaf_pin=staging._capture_evidence(leaf))
+        if name == "dependency-stage":
+            leaf = staging.stage_empty(owner, saved.originals, phase)
+        elif name == "empty-seed":
+            leaf = staging.observe_empty_seed(owner, saved.originals, phase, previous.leaf)
+        else:
+            leaf = custody.reserve_configuration(owner, saved.originals, phase, _staging_frame(parent).staged)
+        _update_staging_frame(parent, leaf=leaf, leaf_pin=_staging_leaf_capture(name, leaf))
         parent.leaf = leaf
+        if name == "custody-prepare":
+            _update_staging_frame(parent, request_pin=_capture_custody_request(_staging_frame(parent)))
         parent.check()
         # The actual leaf return is not the later parent return/closed graph.
         require(leaf.local_started == local and leaf.checked_ns >= first.nanoseconds and leaf.checked_local >= local,
                 "BOOTSTRAP_STAGING_LEAF_RETURN_CLOCK")
         window.now(minimum=leaf.checked_ns)
         require(window.local_last >= leaf.checked_local, "BOOTSTRAP_STAGING_LEAF_LOCAL_RETURN")
+        if name == "custody-prepare":
+            parent.read_custody_request()
         parent.remember("leaf-evidence", target, "leaf-evidence.json", owner.write(target, "leaf-evidence.json", leaf.raw))
-        parent.remember("staging-original", target, "staging-original.json", owner.write(target, "staging-original.json", leaf.staging_raw))
+        key, original = ("request-original", leaf.request_raw) if name == "custody-prepare" else ("staging-original", leaf.staging_raw)
+        parent.remember(key, target, key + ".json", owner.write(target, key + ".json", original))
         parent.read_originals()
         parent.reread()
-        pending = owner.write(target, "pending.json", {"schema": 1, "scope": "BOOTSTRAP_STAGING_PARENT_PENDING_CLOSE_V1",
+        pending_scope = ("BOOTSTRAP_CONFIGURATION_CUSTODY_PARENT_PENDING_CLOSE_V1" if name == "custody-prepare" else
+                         "BOOTSTRAP_STAGING_PARENT_PENDING_CLOSE_V1")
+        pending = owner.write(target, "pending.json", {"schema": 1, "scope": pending_scope,
             "phase": name, "window": window.record(), "predecessorSha256": origin.digest(pin[0]),
             "predecessorCheckedNs": pin[1], "leafSha256": origin.digest(leaf.raw), "leafCheckedNs": leaf.checked_ns,
             "originalsSha256": {key: origin.digest(raw) for key, raw in parent.records.items()},
@@ -5567,7 +5815,9 @@ def _run_staging_phase(sequence, previous, name):
                 "BOOTSTRAP_STAGING_PARENT_NOT_CLOSED")
         parent.cancel()
         closed = window.now(final=True, minimum=frame.leaf.checked_ns)
-        raw = origin.encoded({"schema": 1, "scope": "BOOTSTRAP_STAGING_PARENT_CLOSED_NO_EXECUTION_V1", "phase": name,
+        scope = ("BOOTSTRAP_CONFIGURATION_CUSTODY_PARENT_CLOSED_NO_EXECUTION_V1" if name == "custody-prepare" else
+                 "BOOTSTRAP_STAGING_PARENT_CLOSED_NO_EXECUTION_V1")
+        raw = origin.encoded({"schema": 1, "scope": scope, "phase": name,
             "window": window.record(), "pendingSha256": origin.digest(frame.pending_raw),
             "predecessorSha256": origin.digest(pin[0]), "predecessorCheckedNs": pin[1],
             "leafSha256": origin.digest(frame.leaf.raw), "leafCheckedNs": frame.leaf.checked_ns, "closedNs": closed,
@@ -5582,8 +5832,12 @@ def _run_staging_phase(sequence, previous, name):
                 owner.unknown is False and frame.unknown is False and not frame.foreign_resources and
                 frame.handlers == frame.restored and all(pin[3] and pin[4] for pin in frame.resources),
                 "BOOTSTRAP_STAGING_FINAL_RETURN_CHANGED")
-        result = (_StagingPhaseReturn(raw, frame.leaf, checked, frame.local_last) if name == "dependency-stage" else
-                  StagingPrefix(raw, previous.raw, previous.leaf, frame.leaf, checked, frame.local_last))
+        if name == "dependency-stage":
+            result = _StagingPhaseReturn(raw, frame.leaf, checked, frame.local_last)
+        elif name == "empty-seed":
+            result = StagingPrefix(raw, previous.raw, previous.leaf, frame.leaf, checked, frame.local_last)
+        else:
+            result = ConfigurationCustodyPrefix(raw, previous, frame.leaf, checked, frame.local_last)
         _update_staging_frame(parent, result=result, state="COMPLETE")
         parent.result, parent.state = result, "COMPLETE"
         return result
@@ -5614,15 +5868,20 @@ def _stage_after_initialization(initializer, returned):
     try:
         graph, originals, original_pin, files, paths, callbacks, registries = _capture_staging_initializer(initializer, returned)
         _update_staging_sequence(sequence, graph=graph, originals=originals, original_pin=original_pin,
-                                 files=files, paths=paths, callbacks=callbacks, registries=registries, state="RUNNING")
+                                 files=files, paths=paths, callbacks=callbacks, registries=registries,
+                                 plan=_staging_plan(registries), state="RUNNING")
         sequence.originals, sequence.state = originals, "RUNNING"
         stage = _run_staging_phase(sequence, returned, "dependency-stage")
         # This starts only AFTER actual stage parent return, not its leaf or
         # pending JSON. No call/clock/resource on the closed stage parent.
         result = _run_staging_phase(sequence, stage, "empty-seed")
-        # No supplier/graph traversal after the seed parent's final RAW/LOCAL
-        # boundary: only private bookkeeping and returning its exact result.
-        _update_staging_sequence(sequence, state="COMPLETE")
+        if _staging_sequence_frame(sequence).plan == ("dependency-stage", "empty-seed", "custody-prepare"):
+            # Still RUNNING, with a DISTINCT third owner. Outside both closed
+            # parents' handlers: success/failure never reopens or errors them.
+            result = _run_staging_phase(sequence, result, "custody-prepare")
+        # The selected final parent has already observed its final RAW/LOCAL
+        # boundary. Only private bookkeeping follows; stage-only is unchanged.
+        _update_staging_sequence(sequence, state="COMPLETE", result=result)
         sequence.result, sequence.state = result, "COMPLETE"
         return result
     except BaseException as error:

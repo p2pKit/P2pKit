@@ -190,7 +190,7 @@ class ParentModels(R.ReadmissionModels):
         if type(call) is S._RecipientParent:
             call.state = "HANDED_OFF"
             registry, key = S._RECIPIENT_ATTEMPTS, id(call.transition)
-            record = (call.transition, call, call.originals, bound, initialize, stage)
+            record = (call.transition, call, call.originals, bound, initialize, stage, False)
             control = S._ParentControl(call, registry, key, record)
         else:
             call.state = "COMPLETE"
@@ -851,7 +851,7 @@ class ParentModels(R.ReadmissionModels):
         self.assertEqual(list(inspect.signature(S.stage_after_entry).parameters), ["transition"])
         for initialize, stage in ((False, True), (True, 1), (1, False), (True, None)):
             with self.subTest(initialize=initialize, stage=stage), self.assertRaisesRegex(O.OriginError, "RECIPIENT_INTENT"):
-                S._recipient_after_entry(object(), initialize=initialize, stage=stage)
+                S._recipient_after_entry(object(), initialize=initialize, stage=stage, reserve=False)
 
     def original_intent_probe(self, operation, expected):
         with self.ready() as call:
@@ -860,10 +860,11 @@ class ParentModels(R.ReadmissionModels):
                     self.assertRaisesRegex(IntentProbe, "STOP_BEFORE_RECIPIENT_OWNER"):
                 operation(transition)
             registered = S._RECIPIENT_ATTEMPTS[id(transition)]
-            self.assertEqual(len(registered), 6)
-            self.assertEqual(registered[4:], expected)
+            self.assertEqual(len(registered), 7)
+            self.assertEqual(registered[4:], (*expected, False))
             self.assertIs(type(registered[4]), bool)
             self.assertIs(type(registered[5]), bool)
+            self.assertIs(registered[6], False)
             self.assertEqual(S._INITIALIZER_ATTEMPTS, {})
             self.assertEqual(S._STAGING_ATTEMPTS, {})
 
