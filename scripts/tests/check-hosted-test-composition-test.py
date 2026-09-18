@@ -101,6 +101,50 @@ class CompositionPolicy(unittest.TestCase):
         self.mutate("scripts/run-audit-command.py", b'"--no-build-cache"', b'"--build-cache"')
         self.mutate("scripts/hosted_dependency_seed_files.py", b'def seed_home(', b'def unverified_seed_home(')
 
+    def test_canonical_capture_cap_read_contract_and_prefix_accounting_are_required(self):
+        path = "scripts/run-audit-command.py"
+        for before, after in (
+            (b'MAX_STREAM_BYTES = 64 * 1024 * 1024', b'MAX_STREAM_BYTES = 128 * 1024 * 1024'),
+            (b'block = self.source.read(65536)', b'block = self.source.read(min(65536, remaining))'),
+            (b'type(block) is bytes and len(block) <= 65536', b'True'),
+            (b'if retained < len(block) and not overflow:', b'if False:'),
+            (b'remaining -= retained', b'remaining = MAX_STREAM_BYTES'),
+            (b'block = block[:retained]', b'pass # retain the unbounded original instead'),
+        ):
+            with self.subTest(before=before):
+                self.mutate(path, before, after)
+
+    def test_canonical_capture_both_write_acknowledgements_remain_required(self):
+        path = "scripts/run-audit-command.py"
+        for sink in (b'Evidence', b'Product'):
+            with self.subTest(sink=sink):
+                before = (b'require(type(written) is int and written == len(block), "' +
+                          sink + b' stream write acknowledgement differs")')
+                self.mutate(path, before, b'pass # unchecked write acknowledgement')
+
+    def test_canonical_capture_product_error_polling_keeps_stop_separate(self):
+        path = "scripts/run-audit-command.py"
+        for before, after in (
+            (b'wait_process(scope, child, args.timeout, cancelled, check_product)',
+             b'wait_process(scope, child, args.timeout, cancelled, check_cancel)'),
+            (b'wait_process(scope, stop_child, args.stop_timeout, cancelled, check_cancel, stop=True)',
+             b'wait_process(scope, stop_child, args.stop_timeout, cancelled, check_product, stop=True)'),
+            (b'check_cancel()\n        require(not errors, "Product stream capture failed")',
+             b'require(not errors, "Product stream capture failed")\n        check_cancel()'),
+        ):
+            with self.subTest(before=before):
+                self.mutate(path, before, after)
+
+    def test_canonical_capture_late_shadowing_cannot_replace_the_bounded_worker(self):
+        path = "scripts/run-audit-command.py"
+        for suffix in (b'\nTee._copy = lambda self, remaining: None\n',
+                       b'\nMAX_STREAM_BYTES = 128 * 1024 * 1024\n'):
+            with self.subTest(suffix=suffix):
+                changed = dict(self.sources)
+                changed[path] += suffix
+                with self.assertRaisesRegex(ValueError, "ordinary executable composition changed: " + path):
+                    POLICY.check_sources(changed)
+
     def test_shared_helper_is_an_additional_required_program_not_a_replacement(self):
         self.assertEqual(set(POLICY.EXPECTED), {
             "scripts/run-hosted-test-custody.py", "scripts/hosted_full_supplements.py",

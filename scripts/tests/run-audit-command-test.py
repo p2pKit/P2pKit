@@ -8,7 +8,7 @@ are mandatory; another host's tests are not selected or counted as native eviden
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import ctypes
 import errno
 import importlib.util
@@ -1192,6 +1192,841 @@ class PurePolicyTests(unittest.TestCase):
                 processes.ProcessInformation, processes.StartupInfo, processes.StartupInfoEx,
                 processes.JobBasicLimits, processes.IoCounters, processes.JobExtendedLimits)),
                 (24, 24, 104, 112, 64, 48, 144))
+
+
+class CapturePolicyTests(unittest.TestCase):
+    """Tiny streams/threads and modeled execute ownership; never native/product evidence."""
+
+    OVERFLOW = "Evidence stream byte limit exceeded; retained prefix only"
+
+    class Source:
+        def __init__(self, chunks):
+            self.chunks, self.requests, self.close_count = list(chunks), [], 0
+
+        def read(self, count):
+            self.requests.append(count)
+            value = self.chunks.pop(0) if self.chunks else b""
+            if isinstance(value, BaseException):
+                raise value
+            return value
+
+        def close(self):
+            self.close_count += 1
+
+    def setUp(self):
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        self.base = Path(self.stack.enter_context(tempfile.TemporaryDirectory(
+            prefix="audit capture policy ", dir=FIXTURE_PARENT))).resolve()
+        self.tees, self.releases = [], []
+        self.addCleanup(self.retire_threads)
+        for module, name in ((runner, "make_scope"), (processes, "make_scope"), (runner, "git")):
+            self.stack.enter_context(mock.patch.object(module, name,
+                side_effect=AssertionError("NO_NATIVE_OR_GIT_IN_CAPTURE_MODELS")))
+
+    def retire_threads(self):
+        for release in self.releases:
+            release.set()
+        for tee in self.tees:
+            if tee._start_attempted:
+                tee.thread.join(timeout=5)
+                self.assertFalse(tee.thread.is_alive(), "Test-owned capture thread did not retire")
+            else:
+                tee.finish()
+
+    def capture(self, chunks, *, maximum=None, live=None):
+        source = self.Source(chunks)
+        destination = self.base / (uuid.uuid4().hex + ".log")
+        live = io.BytesIO() if live is None else live
+        errors = []
+        options = {} if maximum is None else {"max_bytes": maximum}
+        tee = runner.Tee(source, destination, live, errors, False, **options)
+        self.tees.append(tee)
+        tee.start()
+        tee.finish()
+        self.assertFalse(tee.thread.is_alive())
+        self.assertEqual(source.close_count, 1)
+        self.assertTrue(tee.output.closed)
+        return SimpleNamespace(source=source, destination=destination, live=live, errors=errors, tee=tee)
+
+    def execute_model(self, *, product=(b"product\x00\xff\n", b""), stop=(b"stop\r\n", b""),
+                      maximum=None, file_failure=False, fail_if_repoll=False, product_code=0,
+                      stop_pending=False, cancellation=None, live_failure=False, late_close=False,
+                      scope_close_error=None, handler_error=None):
+        """Actual execute/Tee/lock/receipt flow; source/native/report/signal suppliers are models."""
+        invocation_base = self.base / uuid.uuid4().hex
+        invocation_base.mkdir()
+        root, state = invocation_base / "root", invocation_base / "state"
+        root.mkdir()
+        (state / "gradle-home").mkdir(parents=True)
+        (state / "evidence").mkdir()
+        (state / "cancellations").mkdir()
+        wrapper = root / ("gradlew.bat" if os.name == "nt" else "gradlew")
+        wrapper.write_bytes(b"NONFUNCTIONAL_OFFLINE_FIXTURE_NEVER_EXECUTE\n")
+        policy = b"# synthetic context, not Java admission\n"
+        (state / "gradle-home/gradle.properties").write_bytes(policy)
+        source = {"commit": "a" * 40, "tree": "b" * 40, "status": "", "diffSha256": runner.digest(b"")}
+        context = {"id": "c" * 32, "root": str(root), "gradleHome": str(state / "gradle-home"),
+                   "source": source, "gradlePropertiesSha256": runner.digest(policy)}
+        (state / "context.json").write_bytes(runner.json_bytes(context))
+        invocation = "d" * 32
+        calls, streams, violations, cancel_calls = [], [], [], []
+        case = self
+        close_release = threading.Event()
+        self.releases.append(close_release)
+
+        class LateCloseSource(self.Source):
+            def close(self):
+                case.assertTrue(close_release.wait(timeout=5), "Modeled stop did not release the test source")
+                super().close()
+                raise OSError(errno.EIO, "MODELED_LATE_CAPTURE_CLOSE_FAILURE")
+
+        class Scope:
+            def __init__(self):
+                self.launches, self.drains, self.closed = [], 0, False
+
+            def spawn(self, argv, cwd, env):
+                is_stop = len(self.launches) == 1
+                case.assertEqual(cwd, str(root))
+                case.assertEqual(env[processes.STATE_ENV], str(state))
+                case.assertEqual(env["GRADLE_USER_HOME"], str(state / "gradle-home"))
+                expected = ([str(wrapper), "--stop", "--console=plain", "--no-parallel", "--max-workers=2",
+                             "-Dorg.gradle.jvmargs=" + runner.JVM_ARGUMENTS] if is_stop else
+                            [str(wrapper), *runner.gradle_arguments(["help", "--console=plain"])])
+                case.assertEqual(argv, expected)
+                self.launches.append({"requestedArgv": list(argv), "scope": "MODELED_NOT_A_NATIVE_LAUNCH"})
+                calls.append("stop-spawn" if is_stop else "product-spawn")
+                if is_stop:
+                    close_release.set()
+                output, error = stop if is_stop else product
+                count = 0
+
+                def poll():
+                    nonlocal count
+                    for tee in streams:
+                        if late_close and not is_stop:
+                            continue  # Product exits before its modeled source finally closes.
+                        tee.thread.join(timeout=2)
+                        case.assertFalse(tee.thread.is_alive())
+                    count += 1
+                    calls.append("stop-poll" if is_stop else "product-poll")
+                    if not is_stop and fail_if_repoll and count > 1 and self.drains == 0:
+                        violations.append("PRODUCT_REPOLLED_AFTER_CAPTURE_FAILURE_BEFORE_DRAIN")
+                        return product_code
+                    if count == 1 and ((is_stop and stop_pending) or (not is_stop and fail_if_repoll)):
+                        return None
+                    return 0 if is_stop else product_code
+
+                output_source = LateCloseSource if late_close and not is_stop else case.Source
+                return SimpleNamespace(pid=200 + len(self.launches), stdout=output_source([output]),
+                                       stderr=case.Source([error]), poll=poll)
+
+            def discover(self):
+                calls.append("discover")
+                return []
+
+            def drain(self):
+                self.drains += 1
+                calls.append("drain")
+                return []
+
+            def description(self):
+                return {"backend": "MODELED_NOT_NATIVE", "launches": list(self.launches), "discoveryErrors": []}
+
+            def close(self):
+                self.closed = True
+                calls.append("scope-close")
+                if scope_close_error is not None:
+                    raise scope_close_error
+
+        scope = Scope()
+        original_tee, original_file = runner.Tee, runner.new_file
+
+        def tee_factory(*args, **kwargs):
+            if maximum is not None:
+                kwargs["max_bytes"] = maximum
+            tee = original_tee(*args, **kwargs)
+            streams.append(tee)
+            self.tees.append(tee)
+            return tee
+
+        def new_file(path):
+            output = original_file(path)
+            if file_failure and path.name == "product.stdout.log":
+                proxy = mock.Mock(wraps=output)
+                proxy.write.side_effect = OSError(errno.EIO, "modeled evidence write failure")
+                return proxy
+            return output
+
+        def check_cancel(*_args):
+            cancel_calls.append(len(scope.launches))
+            calls.append("cancel-" + str(len(scope.launches)))
+            if cancellation is not None and len(scope.launches) == 1 and streams:
+                raise cancellation
+
+        class FailedLive(io.BytesIO):
+            def write(self, _block):
+                raise OSError(errno.EIO, "modeled live write failure")
+
+        def text_stream(*, fail=False):
+            messages = io.StringIO()
+            return SimpleNamespace(buffer=FailedLive() if fail else io.BytesIO(),
+                                   write=messages.write, flush=messages.flush)
+
+        handler_calls = []
+
+        def set_handler(number, handler):
+            handler_calls.append((number, handler))
+            if handler_error is not None and scope.closed:
+                raise handler_error
+
+        interruption = None
+        with ExitStack() as patches:
+            patches.enter_context(mock.patch.dict(os.environ, {processes.STATE_ENV: str(state)}, clear=True))
+            for name, value in (("context_at", lambda _value: (state, context)), ("source_snapshot", lambda _root: source),
+                                ("host_role", lambda: "MODELED_NOT_HOST_ADMISSION"), ("report_snapshot", lambda *_args: {}),
+                                ("retain_reports", lambda *_args: []), ("make_scope", lambda *_args: scope),
+                                ("cancellation_requested", check_cancel), ("Tee", tee_factory), ("new_file", new_file)):
+                patches.enter_context(mock.patch.object(runner, name, value))
+            patches.enter_context(mock.patch.object(signal, "getsignal", return_value=object()))
+            patches.enter_context(mock.patch.object(signal, "signal", side_effect=set_handler))
+            patches.enter_context(mock.patch.object(sys, "stdout", text_stream(fail=live_failure)))
+            patches.enter_context(mock.patch.object(sys, "stderr", text_stream()))
+            try:
+                result = runner.execute(SimpleNamespace(cwd=str(root), wrapper=str(wrapper), id=invocation,
+                    purpose="offline-capture-model", kind="gradle", argv=["help", "--console=plain"],
+                    receipt=None, timeout=2.0, stop_timeout=2.0))
+            except BaseException as error:
+                if error is not cancellation:
+                    raise
+                result, interruption = None, error
+        evidence = state / "evidence" / invocation
+        receipt = json.loads((evidence / "receipt.json").read_bytes())
+        self.assertTrue(scope.closed)
+        self.assertEqual(len(scope.launches), 2)
+        self.assertEqual(calls.count("stop-spawn"), 1)
+        self.assertTrue(all(tee._complete.is_set() for tee in streams))
+        return SimpleNamespace(result=result, receipt=receipt, evidence=evidence, calls=calls,
+                               scope=scope, violations=violations, cancel_calls=cancel_calls, streams=streams,
+                               interruption=interruption, handler_calls=handler_calls)
+
+    def test_default_capture_limit_enforced_without_a_caller_option(self):
+        # Constant memory: repeated immutable block and counted discard sinks,
+        # not a64MiB disk/memory fixture, download or native product.
+        maximum = 64 * 1024 * 1024
+
+        class RepeatingSource(self.Source):
+            def __init__(self):
+                super().__init__([])
+                self.remaining = maximum + 1
+
+            def read(self, count):
+                self.requests.append(count)
+                size = min(count, self.remaining)
+                self.remaining -= size
+                return b"x" * size
+
+        class Counter:
+            def __init__(self):
+                self.bytes, self.closed = 0, False
+
+            def write(self, block):
+                self.bytes += len(block)
+                return len(block)
+
+            def flush(self):
+                pass
+
+            def fileno(self):
+                return -1  # fsync is explicitly modeled, never called with this value.
+
+            def close(self):
+                self.closed = True
+
+        source, output, live, errors = RepeatingSource(), Counter(), Counter(), []
+        with mock.patch.object(runner, "new_file", return_value=output), mock.patch.object(os, "fsync"):
+            tee = runner.Tee(source, self.base / "modeled-count-only", live, errors, False)
+            self.tees.append(tee)
+            tee.start()
+            tee.finish()
+        self.assertEqual((output.bytes, live.bytes), (maximum, maximum))
+        self.assertEqual(errors, [self.OVERFLOW])
+        self.assertEqual(source.remaining, 0)
+        self.assertTrue(all(0 < count <= 65536 for count in source.requests))
+        self.assertEqual(source.close_count, 1)
+        self.assertTrue(output.closed)
+
+    def test_evidence_short_write_fails_but_live_and_drain_continue(self):
+        original_file = runner.new_file
+        writes = []
+
+        def limited(path):
+            output = original_file(path)
+            proxy = mock.Mock(wraps=output)
+
+            def write(block):
+                writes.append(block)
+                return output.write(block[:1])
+
+            proxy.write.side_effect = write
+            return proxy
+
+        with mock.patch.object(runner, "new_file", side_effect=limited):
+            value = self.capture([b"abc", b"def"])
+        self.assertEqual(value.errors, ["Evidence stream write failed: AuditError"])
+        self.assertEqual(writes, [b"abc"])
+        self.assertEqual(value.destination.read_bytes(), b"a")
+        self.assertEqual(value.live.getvalue(), b"abcdef")
+        self.assertEqual(len(value.source.requests), 3)
+
+    def test_live_short_write_fails_but_evidence_and_drain_continue(self):
+        class ShortLive(io.BytesIO):
+            calls = 0
+
+            def write(self, block):
+                self.calls += 1
+                return super().write(block[:1])
+
+        live = ShortLive()
+        value = self.capture([b"abc", b"def"], live=live)
+        self.assertEqual(value.errors, ["Product stream delivery failed: AuditError"])
+        self.assertEqual(live.calls, 1)
+        self.assertEqual(live.getvalue(), b"a")
+        self.assertEqual(value.destination.read_bytes(), b"abcdef")
+        self.assertEqual(len(value.source.requests), 3)
+
+    def test_product_capture_failure_enters_drain_before_a_second_wait_poll(self):
+        value = self.execute_model(file_failure=True, fail_if_repoll=True)
+        self.assertEqual(value.violations, [])
+        self.assertEqual(value.result, 125)
+        self.assertEqual(value.receipt["stopExitCode"], 0)
+        self.assertLess(value.calls.index("drain"), value.calls.index("stop-spawn"))
+        self.assertIn("Evidence stream write failed: OSError", value.receipt["errors"])
+
+    def test_cap_validation_precedes_allocation_and_caller_source_acquisition(self):
+        class IntSubclass(int):
+            pass
+
+        for maximum in (True, False, -1, 64 * 1024 * 1024 + 1, None, 0.0, 1.5,
+                        float("nan"), float("inf"), "1", object(), IntSubclass(1)):
+            with self.subTest(type=type(maximum).__name__, maximum=repr(maximum)):
+                source, errors = self.Source([b"unchanged"]), []
+                with mock.patch.object(runner, "new_file") as allocate, \
+                        mock.patch.object(threading, "Thread") as thread, \
+                        mock.patch.object(threading, "Event") as event:
+                    with self.assertRaisesRegex(runner.AuditError, "only shorten"):
+                        runner.Tee(source, self.base / "absent", None, errors, False, max_bytes=maximum)
+                allocate.assert_not_called()
+                thread.assert_not_called()
+                event.assert_not_called()
+                self.assertEqual((source.requests, source.close_count, errors), ([], 0, []))
+                self.assertEqual(source.chunks, [b"unchanged"])
+                self.assertFalse((self.base / "absent").exists())
+
+    def test_cap_is_keyword_only_and_maximum_empty_stream_is_admitted(self):
+        source = self.Source([])
+        with mock.patch.object(runner, "new_file") as allocate, self.assertRaises(TypeError):
+            runner.Tee(source, self.base / "absent", None, [], False, 1)
+        allocate.assert_not_called()
+        self.assertEqual(source.close_count, 0)
+        value = self.capture([], maximum=64 * 1024 * 1024)
+        self.assertEqual(value.errors, [])
+        self.assertEqual(value.destination.read_bytes(), b"")
+        self.assertEqual(value.source.requests, [65536])
+
+    def test_zero_below_and_exact_limit_eof_preserve_original_binary_bytes(self):
+        binary = b"N\x00\xff\r\n"
+        for chunks, maximum in (([], 0), ([], 1), ([binary], len(binary) + 1),
+                                ([binary[:2], binary[2:]], len(binary))):
+            with self.subTest(chunks=chunks, maximum=maximum):
+                value = self.capture(chunks, maximum=maximum)
+                self.assertEqual(value.errors, [])
+                self.assertEqual(value.destination.read_bytes(), b"".join(chunks))
+                self.assertEqual(value.live.getvalue(), b"".join(chunks))
+                self.assertEqual(value.source.requests, [65536] * (len(chunks) + 1))
+
+    def test_first_excess_in_same_or_next_block_retains_only_prefix_and_drains(self):
+        cases = (([b"N\x00\xff\r\ntail", b"later", b"last"], 5, b"N\x00\xff\r\n"),
+                 ([b"abc", b"d", b"tail"], 3, b"abc"), ([b"x", b"tail"], 0, b""))
+        for chunks, maximum, prefix in cases:
+            with self.subTest(maximum=maximum, chunks=chunks):
+                value = self.capture(chunks, maximum=maximum)
+                self.assertEqual(value.errors, [self.OVERFLOW])
+                self.assertEqual(value.destination.read_bytes(), prefix)
+                self.assertEqual(value.live.getvalue(), prefix)
+                self.assertEqual(value.source.requests, [65536] * (len(chunks) + 1))
+                self.assertEqual(value.source.chunks, [])
+
+    def test_original_allowance_survives_mutable_aliases_and_supplier_constant_changes(self):
+        case, holder = self, {}
+
+        class MutatingSource(self.Source):
+            def read(self, count):
+                tee = holder["tee"]
+                tee.max_bytes, tee.remaining, tee.retained_bytes = 999999, 999999, 0
+                runner.MAX_STREAM_BYTES = 999999999
+                return super().read(count)
+
+        class MutatingLive(io.BytesIO):
+            def write(self, block):
+                holder["tee"].remaining = 999999
+                case.assertLessEqual(len(block), 4)
+                return super().write(block)
+
+        source, live, errors = MutatingSource([b"abc", b"def", b"tail"]), MutatingLive(), []
+        destination = self.base / "immutable-prefix"
+        with mock.patch.object(runner, "MAX_STREAM_BYTES", runner.MAX_STREAM_BYTES):
+            tee = runner.Tee(source, destination, live, errors, False, max_bytes=4)
+            holder["tee"] = tee
+            self.tees.append(tee)
+            tee.start()
+            tee.finish()
+        self.assertEqual((destination.read_bytes(), live.getvalue()), (b"abcd", b"abcd"))
+        self.assertEqual(errors, [self.OVERFLOW])
+        self.assertEqual(source.requests, [65536] * 4)
+        self.assertEqual(source.close_count, 1)
+
+    def test_each_tee_has_its_own_prefix_allowance(self):
+        first = self.capture([b"abcdef"], maximum=2)
+        second = self.capture([b"abcdef"], maximum=4)
+        self.assertEqual((first.destination.read_bytes(), second.destination.read_bytes()), (b"ab", b"abcd"))
+        self.assertEqual((first.live.getvalue(), second.live.getvalue()), (b"ab", b"abcd"))
+        self.assertEqual((first.errors, second.errors), ([self.OVERFLOW], [self.OVERFLOW]))
+
+    def test_observed_overflow_precedes_all_sinks_and_no_tail_is_written(self):
+        case, errors, calls = self, [], []
+        destination = self.base / "ordered-prefix"
+        output = runner.new_file(destination)
+        self.addCleanup(lambda: None if output.closed else output.close())
+        proxy = mock.Mock(wraps=output)
+
+        def write(block):
+            case.assertEqual(errors, [case.OVERFLOW])
+            calls.append(("evidence", block))
+            return output.write(block)
+
+        def flush():
+            case.assertEqual(errors, [case.OVERFLOW])
+            calls.append(("flush",))
+            output.flush()
+
+        class Live(io.BytesIO):
+            def write(self, block):
+                case.assertEqual(errors, [case.OVERFLOW])
+                case.assertEqual(destination.read_bytes(), b"abc")
+                calls.append(("live", block))
+                return super().write(block)
+
+        proxy.write.side_effect, proxy.flush.side_effect = write, flush
+        source, live = self.Source([b"abcde", b"tail", b"more"]), Live()
+        with mock.patch.object(runner, "new_file", return_value=proxy):
+            tee = runner.Tee(source, destination, live, errors, False, max_bytes=3)
+            self.tees.append(tee)
+            tee.start()
+            tee.finish()
+        self.assertEqual(calls, [("evidence", b"abc"), ("flush",), ("live", b"abc"), ("flush",)])
+        self.assertEqual((destination.read_bytes(), live.getvalue()), (b"abc", b"abc"))
+        self.assertEqual(source.requests, [65536] * 4)
+        self.assertEqual(source.close_count, 1)
+        self.assertTrue(output.closed)
+
+    def test_falsey_nonbytes_mutable_subclass_and_oversized_reads_fail_without_retry(self):
+        class BytesSubclass(bytes):
+            pass
+
+        malformed = (None, "", bytearray(), bytearray(b"x"), memoryview(b"x"), 0, False,
+                     BytesSubclass(), BytesSubclass(b"x"), b"x" * 65537)
+        for invalid in malformed:
+            with self.subTest(type=type(invalid).__name__):
+                value = self.capture([b"p", invalid, b"unread"], maximum=1)
+                self.assertEqual((value.destination.read_bytes(), value.live.getvalue()), (b"p", b"p"))
+                self.assertEqual(value.errors, [
+                    "Owned stream read failed: AuditError: Owned stream read violated byte/chunk contract"])
+                self.assertEqual(value.source.requests, [65536, 65536])
+                self.assertEqual(value.source.chunks, [b"unread"])
+
+    def test_invalid_evidence_ack_disables_only_evidence_and_cannot_refill_budget(self):
+        class IntSubclass(int):
+            pass
+
+        for block, answer in ((b"abc", 0), (b"abc", -1), (b"abc", 4), (b"abc", None),
+                              (b"x", True), (b"x", 1.0), (b"abc", "3"), (b"abc", IntSubclass(3))):
+            with self.subTest(block=block, answer=repr(answer)):
+                original_file, writes, outputs = runner.new_file, [], []
+
+                def limited(path):
+                    output = original_file(path)
+                    outputs.append(output)
+                    proxy = mock.Mock(wraps=output)
+
+                    def write(part):
+                        writes.append(part)
+                        output.write(part[:1])  # Explicit actual physical effect, regardless of bad ack.
+                        return answer
+
+                    proxy.write.side_effect = write
+                    return proxy
+
+                with mock.patch.object(runner, "new_file", side_effect=limited):
+                    value = self.capture([block, b"def", b"tail"], maximum=4)
+                self.assertEqual(value.errors, ["Evidence stream write failed: AuditError", self.OVERFLOW])
+                self.assertEqual(writes, [block])
+                self.assertEqual(value.destination.read_bytes(), block[:1])
+                self.assertEqual(value.live.getvalue(), (block + b"def")[:4])
+                self.assertEqual(value.source.requests, [65536] * 4)
+                self.assertTrue(all(output.closed for output in outputs))
+
+    def test_evidence_write_and_flush_exceptions_disable_only_that_sink(self):
+        for action in ("write", "flush"):
+            for error_type in (OSError, ValueError):
+                with self.subTest(action=action, error=error_type.__name__):
+                    original_file, outputs = runner.new_file, []
+
+                    def failing(path):
+                        output = original_file(path)
+                        proxy = mock.Mock(wraps=output)
+                        outputs.append((output, proxy))
+                        if action == "write":
+                            proxy.write.side_effect = error_type("modeled evidence write failure")
+                        else:
+                            def flush():
+                                if proxy.flush.call_count == 1:
+                                    raise error_type("modeled evidence flush failure")
+                                output.flush()
+                            proxy.flush.side_effect = flush
+                        return proxy
+
+                    with mock.patch.object(runner, "new_file", side_effect=failing):
+                        value = self.capture([b"abc", b"def", b"tail"], maximum=4)
+                    self.assertEqual(value.errors, ["Evidence stream write failed: " + error_type.__name__, self.OVERFLOW])
+                    self.assertEqual(value.destination.read_bytes(), b"" if action == "write" else b"abc")
+                    self.assertEqual(value.live.getvalue(), b"abcd")
+                    self.assertEqual(outputs[0][1].write.call_count, 1)
+                    self.assertTrue(outputs[0][0].closed)
+                    self.assertEqual(value.source.requests, [65536] * 4)
+
+    def test_invalid_live_ack_disables_only_live_and_cannot_refill_budget(self):
+        class IntSubclass(int):
+            pass
+
+        for block, answer in ((b"abc", 0), (b"abc", -1), (b"abc", 4), (b"abc", None),
+                              (b"x", True), (b"x", 1.0), (b"abc", "3"), (b"abc", IntSubclass(3))):
+            with self.subTest(block=block, answer=repr(answer)):
+                class BadLive(io.BytesIO):
+                    calls = 0
+
+                    def write(self, part):
+                        self.calls += 1
+                        super().write(part[:1])
+                        return answer
+
+                live = BadLive()
+                value = self.capture([block, b"def", b"tail"], maximum=4, live=live)
+                self.assertEqual(value.errors, ["Product stream delivery failed: AuditError", self.OVERFLOW])
+                self.assertEqual(value.destination.read_bytes(), (block + b"def")[:4])
+                self.assertEqual(live.getvalue(), block[:1])
+                self.assertEqual(live.calls, 1)
+                self.assertEqual(value.source.requests, [65536] * 4)
+
+    def test_live_write_and_flush_exceptions_leave_bounded_evidence_and_drain(self):
+        for action in ("write", "flush"):
+            for error_type in (OSError, ValueError):
+                with self.subTest(action=action, error=error_type.__name__):
+                    class BadLive(io.BytesIO):
+                        calls = 0
+
+                        def write(self, block):
+                            self.calls += 1
+                            if action == "write":
+                                raise error_type("modeled live write failure")
+                            return super().write(block)
+
+                        def flush(self):
+                            if action == "flush":
+                                raise error_type("modeled live flush failure")
+                            return super().flush()
+
+                    live = BadLive()
+                    value = self.capture([b"abc", b"def", b"tail"], maximum=4, live=live)
+                    self.assertEqual(value.errors, ["Product stream delivery failed: " + error_type.__name__, self.OVERFLOW])
+                    self.assertEqual(value.destination.read_bytes(), b"abcd")
+                    self.assertEqual(live.getvalue(), b"" if action == "write" else b"abc")
+                    self.assertEqual(live.calls, 1)
+                    self.assertEqual(value.source.requests, [65536] * 4)
+
+    def test_read_failure_and_worker_interruption_preserve_prefix_and_first_error(self):
+        class FalseyInterruption(BaseException):
+            def __bool__(self):
+                return False
+
+        for failure in (OSError("modeled read failure"), FalseyInterruption("modeled worker interruption")):
+            with self.subTest(failure=type(failure).__name__):
+                uncaught = []
+                with mock.patch.object(threading, "excepthook", side_effect=uncaught.append):
+                    value = self.capture([b"abcd", failure, b"unread"], maximum=2)
+                self.assertEqual((value.destination.read_bytes(), value.live.getvalue()), (b"ab", b"ab"))
+                self.assertEqual(value.errors[0], self.OVERFLOW)
+                self.assertEqual(len(value.errors), 2)
+                self.assertIn("Owned stream read failed: " + type(failure).__name__, value.errors[1])
+                self.assertEqual(value.source.chunks, [b"unread"])
+                if isinstance(failure, Exception):
+                    self.assertEqual(uncaught, [])
+                else:
+                    self.assertEqual(len(uncaught), 1)
+                    self.assertIs(uncaught[0].exc_value, failure)
+
+    def test_first_errors_survive_both_sink_and_once_only_retirement_failures(self):
+        class FailingSource(self.Source):
+            def close(self):
+                super().close()
+                raise OSError("modeled source close failure")
+
+        destination = self.base / "multiple-failures"
+        output = runner.new_file(destination)
+        self.addCleanup(lambda: None if output.closed else output.close())
+        proxy = mock.Mock(wraps=output)
+        proxy.write.side_effect = OSError("modeled evidence write failure")
+        proxy.flush.side_effect = ValueError("modeled final flush failure")
+
+        def close():
+            output.close()
+            raise OSError("modeled output close failure")
+
+        proxy.close.side_effect = close
+        source, errors = FailingSource([b"abc", b"tail"]), ["PRIOR_ORIGINAL_ERROR"]
+        live = mock.Mock()
+        live.write.side_effect = OSError("modeled live write failure")
+        with mock.patch.object(runner, "new_file", return_value=proxy), \
+                mock.patch.object(os, "fsync", side_effect=OSError("modeled fsync failure")) as sync:
+            tee = runner.Tee(source, destination, live, errors, False, max_bytes=2)
+            self.tees.append(tee)
+            tee.start()
+            tee.finish()
+            tee.finish()
+        self.assertEqual(errors[:4], ["PRIOR_ORIGINAL_ERROR", self.OVERFLOW,
+                         "Evidence stream write failed: OSError", "Product stream delivery failed: OSError"])
+        self.assertEqual(len(errors), 8)
+        for prefix, error in zip(("Owned stream close failed; retirement UNKNOWN:",
+                                  "Evidence stream flush failed:", "Evidence stream sync failed:",
+                                  "Evidence stream close failed; retirement UNKNOWN:"), errors[4:]):
+            self.assertTrue(error.startswith(prefix), error)
+        self.assertEqual((source.close_count, proxy.write.call_count, proxy.flush.call_count,
+                          sync.call_count, proxy.close.call_count, live.write.call_count), (1, 1, 1, 1, 1, 1))
+        self.assertTrue(output.closed)
+        self.assertEqual(source.requests, [65536] * 3)
+
+    def test_no_eof_keeps_three_second_unknown_without_owner_race_close_or_second_budget(self):
+        release, blocked = threading.Event(), threading.Event()
+        self.releases.append(release)
+        case, close_threads = self, []
+
+        class BlockedSource(self.Source):
+            def read(self, count):
+                if self.chunks:
+                    return super().read(count)
+                self.requests.append(count)
+                blocked.set()
+                case.assertTrue(release.wait(timeout=10), "Test-owned blocked source was not released")
+                return b""
+
+            def close(self):
+                close_threads.append(threading.get_ident())
+                super().close()
+
+        source, live, errors = BlockedSource([b"abcde"]), io.BytesIO(), []
+        destination = self.base / "bounded-unknown"
+        tee = runner.Tee(source, destination, live, errors, False, max_bytes=3)
+        self.tees.append(tee)
+        tee.start()
+        self.assertTrue(blocked.wait(timeout=2))
+        started = time.monotonic()
+        tee.finish()
+        elapsed = time.monotonic() - started
+        self.assertGreaterEqual(elapsed, 2.9)
+        self.assertLess(elapsed, 5)
+        self.assertTrue(tee.thread.is_alive())
+        self.assertEqual(source.close_count, 0)
+        self.assertFalse(tee.output.closed)
+        self.assertEqual(errors, [self.OVERFLOW,
+            "Owned stream retirement UNKNOWN: worker start/completion not acknowledged after drain"])
+        self.assertEqual((destination.read_bytes(), live.getvalue()), (b"abc", b"abc"))
+        with mock.patch.object(tee._complete, "wait", side_effect=AssertionError("No second finish allowance")):
+            tee.finish()
+        release.set()
+        tee.thread.join(timeout=3)
+        self.assertFalse(tee.thread.is_alive())
+        self.assertEqual(source.close_count, 1)
+        self.assertEqual(close_threads, [tee.thread.ident])
+        self.assertNotEqual(close_threads[0], threading.get_ident())
+        self.assertTrue(tee.output.closed)
+        self.assertEqual(len(errors), 2)  # Test cleanup does not erase the original UNKNOWN.
+
+    def test_valid_short_cap_allocation_failure_does_not_claim_the_source(self):
+        source, errors = self.Source([b"unread"]), []
+        failure = OSError("modeled allocation refusal")
+        with mock.patch.object(runner, "new_file", side_effect=failure), \
+                mock.patch.object(threading, "Thread") as thread, self.assertRaises(OSError) as caught:
+            runner.Tee(source, self.base / "not-created", None, errors, False, max_bytes=1)
+        self.assertIs(caught.exception, failure)
+        thread.assert_not_called()
+        self.assertEqual((source.close_count, source.requests, errors), (0, [], []))
+
+    def test_short_cap_thread_allocation_failure_closes_only_the_new_output(self):
+        source, errors = self.Source([b"unread"]), []
+        destination = self.base / "thread-allocation"
+        output = runner.new_file(destination)
+        self.addCleanup(lambda: None if output.closed else output.close())
+        failure = OSError("modeled thread allocation refusal")
+        with mock.patch.object(runner, "new_file", return_value=output), \
+                mock.patch.object(threading, "Thread", side_effect=failure), self.assertRaises(OSError) as caught:
+            runner.Tee(source, destination, None, errors, False, max_bytes=1)
+        self.assertIs(caught.exception, failure)
+        self.assertTrue(output.closed)
+        self.assertEqual((source.close_count, source.requests, errors), (0, [], []))
+
+    def test_deferred_short_cap_retirement_is_once_only_without_source_reads(self):
+        source, errors = self.Source([b"unread"]), []
+        tee = runner.Tee(source, self.base / "unstarted", None, errors, False, max_bytes=1)
+        self.tees.append(tee)
+        tee.finish()
+        tee.finish()
+        with self.assertRaisesRegex(runner.AuditError, "cannot start twice or after retirement"):
+            tee.start()
+        self.assertEqual((source.close_count, source.requests, errors), (1, [], []))
+        self.assertTrue(tee.output.closed)
+        self.assertTrue(tee._complete.is_set())
+        self.assertFalse(tee.thread.is_alive())
+
+    def test_eager_post_entry_start_error_preserves_pending_tee_and_worker_owned_close(self):
+        close_threads = []
+
+        class TrackingSource(self.Source):
+            def close(self):
+                close_threads.append(threading.get_ident())
+                super().close()
+
+        source, errors = TrackingSource([b"abcd"]), []
+        failure = OSError("modeled uncertain start return after actual worker entry")
+        original_start = threading.Thread.start
+
+        def entered(thread):
+            original_start(thread)
+            raise failure
+
+        with mock.patch.object(threading.Thread, "start", entered), self.assertRaises(OSError) as caught:
+            runner.Tee(source, self.base / "pending-start", None, errors, max_bytes=2)
+        self.assertIs(caught.exception, failure)
+        tee = failure._p2pkit_pending_tee
+        self.tees.append(tee)
+        self.assertFalse(tee.thread.is_alive())
+        self.assertEqual(source.close_count, 1)
+        self.assertEqual(close_threads, [tee.thread.ident])
+        self.assertNotEqual(close_threads[0], threading.get_ident())
+        self.assertTrue(tee.output.closed)
+        self.assertEqual(errors, [self.OVERFLOW])
+        tee.finish()
+        self.assertEqual(source.close_count, 1)
+
+    def test_modeled_clean_and_expected_red_products_keep_exact_stop_and_exit(self):
+        for code in (0, 7):
+            with self.subTest(product_code=code):
+                value = self.execute_model(product=(b"p\x00\xff\r\n", b"err"), stop=(b"s", b""),
+                                           maximum=5, product_code=code)
+                self.assertEqual(value.result, code)
+                self.assertEqual(value.receipt["finalExitCode"], code)
+                self.assertEqual(value.receipt["productExitCode"], code)
+                self.assertEqual(value.receipt["stopExitCode"], 0)
+                self.assertEqual(value.receipt["errors"], [])
+                self.assertEqual(value.scope.drains, 1)
+                self.assertTrue(value.receipt["sourceUnchanged"])
+                for name, raw in (("product.stdout.log", b"p\x00\xff\r\n"), ("product.stderr.log", b"err"),
+                                  ("stop.stdout.log", b"s"), ("stop.stderr.log", b"")):
+                    self.assertEqual((value.evidence / name).read_bytes(), raw)
+
+    def test_product_error_callback_observes_original_errors_even_with_polled_zero(self):
+        value = self.execute_model(file_failure=True)
+        self.assertEqual(value.result, 125)
+        self.assertIn("AuditError: Product stream capture failed", value.receipt["errors"])
+        self.assertEqual(value.receipt["productExitCode"], 0)
+        self.assertEqual(value.receipt["stopExitCode"], 0)
+        self.assertEqual(value.scope.drains, 2)
+        self.assertLess(value.calls.index("cancel-1"), value.calls.index("drain"))
+
+    def test_product_stdout_or_stderr_overflow_enters_original_drain_and_stop(self):
+        for product in ((b"12345", b"x"), (b"x", b"12345")):
+            with self.subTest(product=product):
+                value = self.execute_model(product=product, stop=(b"s", b""), maximum=4, fail_if_repoll=True)
+                self.assertEqual(value.result, 125)
+                self.assertEqual(value.violations, [])
+                self.assertEqual(value.receipt["errors"].count(self.OVERFLOW), 1)
+                self.assertIn("AuditError: Product stream capture failed", value.receipt["errors"])
+                self.assertEqual(value.scope.drains, 2)
+                self.assertLess(value.calls.index("drain"), value.calls.index("stop-spawn"))
+                self.assertEqual(value.receipt["stopExitCode"], 0)
+                self.assertEqual((value.evidence / "product.stdout.log").read_bytes(), product[0][:4])
+                self.assertEqual((value.evidence / "product.stderr.log").read_bytes(), product[1][:4])
+
+    def test_product_live_failure_enters_drain_while_evidence_is_preserved(self):
+        value = self.execute_model(product=(b"abc", b""), stop=(b"s", b""), maximum=3,
+                                   live_failure=True, fail_if_repoll=True)
+        self.assertEqual(value.result, 125)
+        self.assertEqual(value.violations, [])
+        self.assertIn("Product stream delivery failed: OSError", value.receipt["errors"])
+        self.assertEqual(value.scope.drains, 2)
+        self.assertEqual(value.receipt["stopExitCode"], 0)
+        self.assertEqual((value.evidence / "product.stdout.log").read_bytes(), b"abc")
+
+    def test_stop_pending_then_zero_is_not_aborted_by_prior_product_capture_failure(self):
+        value = self.execute_model(product=(b"overflow", b""), stop=(b"s", b""), maximum=3,
+                                   fail_if_repoll=True, stop_pending=True)
+        self.assertEqual(value.result, 125)
+        self.assertEqual(value.violations, [])
+        self.assertEqual(value.calls.count("stop-poll"), 2)
+        self.assertEqual(value.receipt["stopExitCode"], 0)
+        self.assertFalse(any("Wrapper stop/finalizer failed" in error for error in value.receipt["errors"]))
+        self.assertEqual(value.receipt["errors"].count("AuditError: Product stream capture failed"), 1)
+
+    def test_stop_stdout_or_stderr_overflow_remains_final_failure_without_aborting_stop(self):
+        for stop in ((b"12345", b"x"), (b"x", b"12345")):
+            with self.subTest(stop=stop):
+                value = self.execute_model(product=(b"p", b""), stop=stop, maximum=4, stop_pending=True)
+                self.assertEqual(value.result, 125)
+                self.assertEqual(value.receipt["errors"], [self.OVERFLOW])
+                self.assertEqual(value.receipt["stopExitCode"], 0)
+                self.assertEqual(value.calls.count("stop-poll"), 2)
+                self.assertEqual(value.scope.drains, 1)
+                self.assertEqual((value.evidence / "stop.stdout.log").read_bytes(), stop[0][:4])
+                self.assertEqual((value.evidence / "stop.stderr.log").read_bytes(), stop[1][:4])
+
+    def test_late_product_capture_close_failure_cannot_become_success(self):
+        value = self.execute_model(product=(b"p", b""), stop=(b"s", b""), maximum=1, late_close=True)
+        self.assertEqual(value.result, 125)
+        self.assertEqual((value.receipt["productExitCode"], value.receipt["stopExitCode"]), (0, 0))
+        self.assertEqual(value.scope.drains, 1)  # No claim that an unavailable earlier error was observed.
+        self.assertEqual(len(value.receipt["errors"]), 1)
+        self.assertIn("Owned stream close failed; retirement UNKNOWN:", value.receipt["errors"][0])
+        self.assertIn("MODELED_LATE_CAPTURE_CLOSE_FAILURE", value.receipt["errors"][0])
+        self.assertEqual((value.evidence / "product.stdout.log").read_bytes(), b"p")
+
+    def test_original_falsey_cancellation_precedes_capture_check_and_survives_later_failures(self):
+        class FalseyCancellation(BaseException):
+            def __bool__(self):
+                return False
+
+        failure = FalseyCancellation("MODELED_ORIGINAL_CANCELLATION")
+        value = self.execute_model(file_failure=True, cancellation=failure,
+                                   scope_close_error=OSError("MODELED_LATER_OWNER_CLOSE"),
+                                   handler_error=ValueError("MODELED_LATER_HANDLER_RESTORE"))
+        self.assertIs(value.interruption, failure)
+        self.assertIsNone(value.result)
+        self.assertEqual(value.receipt["finalExitCode"], 125)
+        self.assertIn("Evidence stream write failed: OSError", value.receipt["errors"])
+        self.assertIn("FalseyCancellation: MODELED_ORIGINAL_CANCELLATION", value.receipt["errors"])
+        self.assertNotIn("AuditError: Product stream capture failed", value.receipt["errors"])
+        self.assertTrue(any("MODELED_LATER_OWNER_CLOSE" in error for error in value.receipt["errors"]))
+        self.assertTrue(any("MODELED_LATER_HANDLER_RESTORE" in error for error in value.receipt["errors"]))
+        self.assertEqual(value.receipt["stopExitCode"], 0)
+        self.assertEqual(value.scope.drains, 2)
 
 
 class DarwinObservationTests(unittest.TestCase):
@@ -3820,6 +4655,7 @@ def main():
     if native is None:
         parser.error("No native ownership fixture suite for this host")
     suite = unittest.TestSuite([unittest.defaultTestLoader.loadTestsFromTestCase(PurePolicyTests),
+                               unittest.defaultTestLoader.loadTestsFromTestCase(CapturePolicyTests),
                                unittest.defaultTestLoader.loadTestsFromTestCase(DarwinObservationTests),
                                unittest.defaultTestLoader.loadTestsFromTestCase(native)])
     print(f"Running current-host real executor fixtures: {processes.host_role()}; no other-host/native claims", flush=True)

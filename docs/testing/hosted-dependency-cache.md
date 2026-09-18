@@ -1067,6 +1067,27 @@ Producer/stop/collection/retirement, bounded raw capture, export/freeze/save/pro
 and encrypted custody/seal remain unfinished. Both ordinary HOLDs and all external
 recipient/qualification/formal-review/delivery prerequisites remain unchanged.
 
+### Shared canonical stream bound, not a producer or session budget
+
+The canonical executor now bounds each product/stop Tee to a source-owned64MiB
+retained/live prefix. Only an exact-integer shortening is accepted before
+allocation. Positive bounded reads continue through actual EOF; overflow latches
+failure and discards the tail. Exact full write acknowledgements are required
+for both sinks; a failed sink cannot refill the original source-byte allowance
+or stop the other sink's bounded delivery. Product polling observes capture
+errors after cancellation, while same-home stop keeps cancellation-only checks.
+Worker-only once-close and the original3-second UNKNOWN finish stay unchanged.
+
+The [canonical capture record](../maintenance/hosted-canonical-capture-2026-09-18.md)
+separates31 author method passes across five invocations,33 independent passes
+across four, the retained failed preimage4, and five AST-only composition passes.
+No ordinary native suite, producer or application ran. The per-stream ceiling
+is not a whole-session/nested/custody budget; stricter direct-caller limits remain.
+It does not fit2GiB dependencies into Windows'576MiB Snapshot or qualify900-second
+native capture. Original launch/deadline continuity, the actual shared-clock
+producer/stop/retirement/collection bridge and export/save/probe/custody integration
+remain unfinished. No workflow HOLD, admission, deadline or test selector changes.
+
 ## Connected consume and delivery path
 
 After the unchanged HOLD and native/source admission, `prepare-consume` binds

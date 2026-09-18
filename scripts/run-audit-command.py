@@ -38,6 +38,7 @@ AUDIT_FLAGS = ["--no-daemon", "--console=plain", "--dependency-verification", "s
                "--no-build-cache", "--no-configuration-cache", "--no-parallel", "--max-workers=2",
                "-Pkotlin.compiler.execution.strategy=in-process", f"-Dorg.gradle.jvmargs={JVM_ARGUMENTS}"]
 MAX_JSON_BYTES = 4 * 1024 * 1024
+MAX_STREAM_BYTES = 64 * 1024 * 1024
 MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
 MAX_ARCHIVE_FILES = 20000
 MAX_CLEANUP_ENTRIES = 250000
@@ -500,14 +501,19 @@ class LeafLock:
 
 
 class Tee:
-    def __init__(self, source: Any, destination: Path, live: Any | None, errors: list[str], start: bool = True):
+    def __init__(self, source: Any, destination: Path, live: Any | None, errors: list[str], start: bool = True,
+                 *, max_bytes: int = MAX_STREAM_BYTES):
+        require(type(max_bytes) is int and 0 <= max_bytes <= MAX_STREAM_BYTES,
+                "Evidence stream byte limit must only shorten the source-owned ceiling")
         self.source, self.live, self.errors = source, live, errors
         self.output = self.thread = None
         self._start_attempted = self._finish_attempted = self._resources_attempted = False
         self._complete = threading.Event()
         try:
             self.output = new_file(destination)
-            self.thread = threading.Thread(target=self._copy, name="audit-byte-tee", daemon=True)
+            # Bind the original allowance before any source/sink calls; mutable
+            # published counters and successful writes cannot refill it.
+            self.thread = threading.Thread(target=self._copy, args=(max_bytes,), name="audit-byte-tee", daemon=True)
         except BaseException:
             # No thread start was attempted. The caller still owns the input;
             # this not-yet-returned allocation owns only its new output file.
@@ -555,25 +561,40 @@ class Tee:
         if cancellation is not None and original is None:
             raise cancellation
 
-    def _copy(self) -> None:
+    def _copy(self, remaining: int) -> None:
         file_ok, live_ok = True, self.live is not None
+        overflow = False
         try:
             while True:
+                # Always ask for a positive chunk, even at the cap: read(0) is
+                # not actual EOF. Broken suppliers fail without retry or slicing.
                 block = self.source.read(65536)
+                require(type(block) is bytes and len(block) <= 65536, "Owned stream read violated byte/chunk contract")
                 if not block:
                     break
+                retained = min(remaining, len(block))
+                if retained < len(block) and not overflow:
+                    # Latch already-observed excess before any fallible sink.
+                    self.errors.append("Evidence stream byte limit exceeded; retained prefix only")
+                    overflow = True
+                remaining -= retained
+                block = block[:retained]
+                if not block:
+                    continue  # Drain bounded chunks; never retain the tail.
                 if file_ok:
                     try:
-                        self.output.write(block)
+                        written = self.output.write(block)
+                        require(type(written) is int and written == len(block), "Evidence stream write acknowledgement differs")
                         self.output.flush()  # Retain the prefix before live delivery, even without EOF.
-                    except OSError as error:
+                    except (OSError, ValueError, AuditError) as error:
                         self.errors.append(f"Evidence stream write failed: {type(error).__name__}")
                         file_ok = False
                 if live_ok:
                     try:
-                        self.live.write(block)
+                        written = self.live.write(block)
+                        require(type(written) is int and written == len(block), "Product stream write acknowledgement differs")
                         self.live.flush()
-                    except (OSError, ValueError) as error:
+                    except (OSError, ValueError, AuditError) as error:
                         self.errors.append(f"Product stream delivery failed: {type(error).__name__}")
                         live_ok = False
         except BaseException as error:
@@ -930,6 +951,11 @@ def execute(args: argparse.Namespace) -> int:
     context_hash = digest((state / "context.json").read_bytes())
     monotonic_start = time.monotonic()
     check_cancel = lambda: cancellation_requested(state, context, invocation, cancelled)
+
+    def check_product() -> None:
+        check_cancel()
+        require(not errors, "Product stream capture failed")
+
     write_new_json(evidence / "start.json", receipt)
     try:
         if args.receipt:
@@ -980,7 +1006,7 @@ def execute(args: argparse.Namespace) -> int:
             stream = Tee(pipe, evidence / ("product." + name + ".log"), live, errors, False)
             streams.append(stream)
             stream.start()
-        receipt["productExitCode"] = wait_process(scope, child, args.timeout, cancelled, check_cancel)
+        receipt["productExitCode"] = wait_process(scope, child, args.timeout, cancelled, check_product)
     except BaseException as error:
         record_error("", error)
     finally:
