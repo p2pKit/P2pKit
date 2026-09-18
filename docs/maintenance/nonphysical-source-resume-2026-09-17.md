@@ -6,6 +6,14 @@ new audit or permission to restart held execution. Continue on
 Exact containing commits, review verdicts and remote readbacks are mapped in
 [#437](https://github.com/p2pKit/P2pKit/issues/437). This branch is **not merge-ready**.
 
+Later18 September source increments have separate records for
+[canonical initialization](hosted-bootstrap-initialization-2026-09-18.md),
+[staging/empty-seed leaves](hosted-bootstrap-staging-2026-09-18.md), and their
+[same-call file-only parents](hosted-bootstrap-staging-parent-2026-09-18.md).
+Those exact-source/offline results supersede the older "next source work" wording
+below only within their recorded scope. They do not supply current composed
+native/hosted qualification, lift either ordinary HOLD or deliver apps to Releases.
+
 ## Reviewed source progress
 
 - Commit `77039f9cdcbd00ba21552d69b883eba4727c02bd`, tree

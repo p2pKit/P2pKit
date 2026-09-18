@@ -6,8 +6,9 @@ run, provider qualification or measured download savings. Dependency bootstrap,
 H-to-S snapshot export and save/probe orchestration remain dormant; source or
 offline-model success cannot lift either HOLD.
 The internal bootstrap recipient/initializer and separate staging/empty-seed
-leaf now have source implementation and focused offline controls, but no public
-command or workflow invokes that path. The leaf's same-call parent is still absent.
+leaf and same-call parents now have source implementation and focused offline
+controls, but no public command or workflow invokes that path. Configuration
+producer/custody integration remains separate unfinished work.
 [`hosted_dependency_cache.py`](../../scripts/hosted_dependency_cache.py) has no
 CLI, action runner, downloader, extraction, deletion or subprocess entry point.
 The connected caller is
@@ -815,10 +816,12 @@ Windows NativeFile900/Snapshot576MiB and the missing custodian policy remain.
 [`hosted_cache_bootstrap_staging.py`](../../scripts/hosted_cache_bootstrap_staging.py)
 exposes `stage_empty(parent, originals, phase)` and
 `observe_empty_seed(parent, originals, phase, stage_evidence)` as dormant leaf
-suppliers. Neither has a production caller, public command or workflow. Supplied
+suppliers, used only by the dormant internal parents below, not a public command
+or workflow. Supplied
 consistent initializer/admission/response/clock records cannot authenticate
 original execution, successful return or single use. `InitializationPrefix`
-is not execution authority; that original same-call parent remains unfinished.
+is not execution authority; original same-call provenance belongs to the separate
+parent, not these supplied records.
 
 Independent original values are snapshotted before callbacks. The leaf rederives
 the service-bound allocation and derives the byte cohort only from bootstrap
@@ -855,6 +858,57 @@ separates executed offline controls, failed preimages and exact review scope.
 Unlike the initializer tests, these leaf tests do not execute canonical
 `initialize()`, even in process. Both ordinary HOLDs and all delivery prerequisites
 remain;5400 is still unadmitted/unmeasured.
+
+### Internal same-call staging/seed parents, not producer/cache execution
+
+`stage_after_entry(transition)` fixes recipient/initializer/staging intent before
+the shared once-claim. Existing wrappers keep stage false, including after failed
+attempts; returned JSON cannot retrofit their intent. The actual initializer
+return precedes a separate one-use staging claim. Its COMPLETE state/result and
+closed graph remain unchanged on downstream success or failure. There is no
+public CLI or workflow caller.
+
+Two distinct file-only parents own staging and empty seed, never reopening or
+advancing an old Owner/Fence/resource. The new exact original reader uses new
+handles and current phase limits; typed pins include initializer/toolchain inputs,
+actual returns, paths and original registry/control publications. Complete original
+chain reads surround admission/retention; no second service HTTP acquisition occurs.
+These finite bindings are not a sandbox against arbitrary Python-code replacement.
+
+Stage has soft/hard120; seed has soft90/hard120, intersected with original
+proposed cumulative/job fences and independent LOCAL ceilings. Both query
+deadlines and actual query-finalizer return fit SOFT. New file acquisition spends
+SOFT even with `final=True`; the HARD tail permits only already-owned completion/
+close. No deadline is widened. Actual leaf and later parent RAW/LOCAL returns stay
+separate; seed follows the parent, not its earlier leaf or pending record. A valid
+RAW high-water survives a subsequent LOCAL failure. Equality is expired.
+
+The staging-only exact file Owner separately records actual unique factory
+returns before any fallible post-return check. Only those pins authorize close,
+and only actual close attempts/returns advance private flags. Duplicate returns
+create no second obligation. Discovered/substituted public rows enter a separate
+sticky foreign ledger: retained UNKNOWN, never closed or promoted. Restoring
+public flags/removing rows cannot rehabilitate private uncertainty. Rejected
+public aliases cannot erase original known cleanup; actual owner/fence/roster
+corruption forbids redirected dispatch. Original `Owner`/`Owner.bind` and the
+approved leaf remain unchanged.
+
+Leaf originals/pending evidence stay outside canonical state/H, its evidence/
+cancellation directories and S. Final results follow resource close, handler
+restoration and final checks, but retain false successor/export/save authority,
+`NOT_ADMITTED` and `NOT_PERFORMED`. No producer, dependency copy, export/save,
+provider or encrypted failure-custody caller is added. First errors and original
+resource references survive; custody may remain UNAVAILABLE/INCOMPLETE. No new
+failure writer/owner, retry, key or allowance is invented.
+
+The [staging-parent continuation](../maintenance/hosted-bootstrap-staging-parent-2026-09-18.md)
+records exact source review,40 author passes over17 disjoint invocations,
+14 independent passes over2, original failures and static shared-path assessment.
+New parents/leaves/POSIX files run; recipient/initializer predecessors are modeled
+closed graphs. Canonical `initialize()` is not executed, and the shared-intent
+probes stop before recipient Owner construction. No complete composed/native/
+hosted qualification follows. Both ordinary HOLDs, missing routine recipient
+approval, unadmitted5400 and Windows NativeFile900/Snapshot576MiB remain.
 
 ### Canonical producer records, not producer execution
 
@@ -1052,6 +1106,8 @@ python3 -I -B -S scripts/tests/hosted-canonical-python-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-initialization-test.py \
   InitModels.test_same_live_parent_initializes_only_after_recipient_closure -v
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-staging-test.py LeafModels -v
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-staging-parent-test.py \
+  ParentModels.test_actual_new_parents_and_leaves_close_distinct_owners_with_complete_original_reads -v
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
@@ -1067,13 +1123,16 @@ generated initializer, controller, native, network and child execution. Their
 actual tiny POSIX source reads and modeled Windows reparse checks do not qualify
 native Windows source custody or a productive bootstrap phase.
 The separate bootstrap identity/cohort/producer-record/query-fence/original-acquisition/
-handoff/entry/service-time/allocation-proposal/close/history/legacy-reader/fresh-entry/recipient-child/recipient-parent/initialization/staging-leaf
+handoff/entry/service-time/allocation-proposal/close/history/legacy-reader/fresh-entry/recipient-child/recipient-parent/initialization/staging-leaf/staging-parent
 controls are standalone, not an activated or registered bootstrap workflow.
-The parent example selects one method; its complete suite was executed in
+The recipient-parent example selects one method; its complete suite was executed in
 externally bounded four-method batches, as recorded in the source continuation.
 The initializer example also selects one method. Its disjoint selected executions
 are separately source-bound; do not call a selected pass a complete-file aggregate
 or select inherited historical classes as if they contained only new tests.
+The staging-parent example also selects one method; its40 own methods passed in
+17 disjoint bounded invocations, not a whole-file aggregate. Neither its modeled
+closed initializer nor a shared-intent probe is actual canonical initialization.
 Tiny private-file controls require an actual ordinary UID; root is not an
 acceptable substitute and their modeled native boundaries are not host admission.
 Native Windows provider behavior and actual resolver/cache reuse require
