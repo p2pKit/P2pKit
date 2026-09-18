@@ -576,6 +576,58 @@ activation HOLDs and the missing routine recipient/trusted-base formal approval
 remain. Proposed5,400 is unadmitted/unmeasured; genuine native/provider/resolver/
 custody/scheduling/delivery and normal reviewed main delivery remain necessary.
 
+### Standalone recipient child, not a connected parent transaction
+
+The caller's closed `_recipient --context-sha256 … --minimum-ns …` entry is
+**DORMANT_EXECUTABLE_RECIPIENT_CHILD_ADAPTER_NOT_PARENT_CONNECTED**. No parent
+claims `NewEntryTransition` or launches it. It is a real supplier-call adapter,
+not a configuration producer, custodian installer or new hosted-identity override.
+The source-owned argv and separate sanitized installed-tool lookup environment
+admit no acquisition token, arbitrary command, key, path or duration input.
+
+The child has distinct immutable metadata45 and operative210 windows and separate
+resource owners. Both windows start at its actual first local/RAW observations;
+learning the original frame never starts another210. Metadata ownership must
+close before operative ownership exists. The latter only shortens against the
+validated original parent work240 and service-derived proposal fences. Parent
+final45 is not extra successful child/ACK time. `Owner`, `Owner.bind`, original75,
+local45, original120 and all ordinary deadlines remain unchanged. These new
+bootstrap windows are source proposals, **not admitted or measured schedules**.
+
+Before and after actual native-query readmission, the child rechecks the original
+admission/context/attempt/jobs/allocation bytes and native directory identities.
+Its complete bootstrap source/run/clock/prelaunch and inherited native-domain
+checks cannot authenticate the missing parent from consistent supplied records.
+Query work75/final120 share their original query start and only shorten against
+the original child cap; a provisional session file cannot replace actual return.
+
+The adapter invokes the unchanged POSIX/Windows `validate_recipient` supplier,
+then checks its actual returned object, original work identity, exact key hash,
+full fingerprint, encryption fingerprint and policy lifetime. Their synchronous60
+internals have no caller deadline/cancellation injection. Child checks reject a
+late return but **cannot preempt blocked/native work or prove enclosing descendant
+retirement**. A genuine parent native240/final45 launch/drain/close and separate
+recipient-read30 remain unimplemented and necessary.
+
+The private child result is provisional until actual child-resource close. A
+small ACK follows successful close and handler restoration; flush, cancellation,
+original-fence checks and process return can still fail afterward. Neither record
+attests the parent's later native retirement or trusted workflow outcome. The
+first exception survives later close wrappers, including metadata handover.
+Explicit Windows supplier UNKNOWN and global quarantine are independently sticky;
+no new failure file/owner, retry, overwrite or optimistic cleanup is allowed after
+UNKNOWN/close. Partial supplier originals stay private; failure custody can be
+unavailable/incomplete, not promised encrypted delivery.
+
+This slice supplies no once-claim parent, canonical initializer, productive owner,
+producer, seed/export/save/probe, encryption/seal/upload or workflow wiring. Results
+retain `NOT_ADMITTED`, `NOT_PERFORMED` and export/save authority false. The missing
+named custodian/exact key/finite14-day trusted-original-base policy/formal approval,
+both ordinary HOLDs and genuine qualification remain. The
+[source continuation](../maintenance/nonphysical-source-resume-2026-09-17.md#18-september-standalone-recipient-child-not-parent-integration)
+separates executed offline controls, retained failures and independent review from
+native/GPG/hosted acceptance.
+
 ### Canonical producer records, not producer execution
 
 [`hosted_cache_bootstrap_producer.py`](../../scripts/hosted_cache_bootstrap_producer.py)
@@ -765,6 +817,7 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-close-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-history-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-reader-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-readmission-test.py
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-recipient-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
@@ -776,7 +829,7 @@ These use modeled provider/native boundaries and tiny synthetic owned files, no
 dependency download or Gradle. The connected/budget controls are registered in the
 unconditional ordinary CI policy step and both release script entry points.
 The separate bootstrap identity/cohort/producer-record/query-fence/original-acquisition/
-handoff/entry/service-time/allocation-proposal/close/history/legacy-reader/fresh-entry
+handoff/entry/service-time/allocation-proposal/close/history/legacy-reader/fresh-entry/recipient-child
 controls are standalone, not an activated or registered bootstrap workflow.
 Tiny private-file controls require an actual ordinary UID; root is not an
 acceptable substitute and their modeled native boundaries are not host admission.

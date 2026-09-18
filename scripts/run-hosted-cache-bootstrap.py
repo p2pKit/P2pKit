@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Dormant, evidence-only bootstrap original acquisition; NOT a cache builder.
+"""Dormant bootstrap originals and recipient child; NOT a cache builder.
 
 No workflow, productive budget, canonical init/producer, seed/export/save,
 policy installer or uploader exists here. Separate read-only original adoption
 never becomes execution authority. A future trusted workflow must bind the
 actual original prepare-step outcome, not a provisional receipt/digest.
+The separate recipient child has no parent launcher. Its synchronous supplier
+checks cannot replace that missing native parent's deadline/retirement proof.
 """
 from __future__ import annotations
 
@@ -94,6 +96,15 @@ NEW_ENTRY_PENDING_SCOPE = "BOOTSTRAP_NEW_ENTRY_READMISSION_PENDING_CLOSE_V1"
 NEW_ENTRY_WINDOW_SCOPE = "BOOTSTRAP_NEW_ENTRY_SOURCE_CAP_NOT_JOB_ADMISSION_V1"
 _ENTRY_CLAIM_LOCK = threading.Lock()
 _ENTRY_ATTEMPTS = {}
+RECIPIENT_CONTEXT_SCOPE = "BOOTSTRAP_RECIPIENT_CHILD_CONTEXT_V1"
+RECIPIENT_START_SCOPE = "BOOTSTRAP_RECIPIENT_PARENT_PRELAUNCH_V1"
+RECIPIENT_SCOPE = "BOOTSTRAP_RECIPIENT_SUPPLIER_RETURN_PENDING_CHILD_CLOSE_V1"
+RECIPIENT_ACK_SCOPE = "BOOTSTRAP_RECIPIENT_CHILD_POST_CLOSE_ACK_V1"
+RECIPIENT_DIRECTORIES = ("recipient-validation", "crypto", "control-home", "temporary")
+RECIPIENT_CONTEXT_FIELDS = {"schema", "scope", "profile", "selection", "cacheCohort", "source", "github",
+    "root", "session", "originalSession", "originalContextSha256", "admissionSha256", "proposalSha256",
+    "clock", "job", "inheritedContext", "runnerName", "previousTransitionSha256", "previousCheckedNs",
+    "directories", "budgetAcceptance", "testAcceptance", "exportSaveAuthority"}
 
 
 @dataclass(frozen=True)
@@ -2308,6 +2319,372 @@ def adopt_originals(cancelled):
     return public_result(ADOPTION_SCOPE, "adoptionSha256", result_raw), fence, fence.final
 
 
+def recipient_command(context_hash, minimum=None):
+    """Closed argv only. No parent launches this child yet."""
+    require(type(context_hash) is str and re.fullmatch(r"[0-9a-f]{64}", context_hash), "BOOTSTRAP_RECIPIENT_CONTEXT_HASH")
+    result = [str(Path(sys.executable).resolve(strict=True)), "-I", "-B", "-S", str(Path(__file__).resolve()),
+              "_recipient", "--context-sha256", context_hash]
+    return result if minimum is None else result + ["--minimum-ns", str(origin.integer(minimum))]
+
+
+def recipient_environment(path):
+    """Separate narrow installed-tool lookup, never broaden the service child.
+
+    The future native parent must use this environment and add its real domain.
+    This function creates no owner/credential authority and downloads nothing.
+    """
+    require(origin.wire.TOKEN_ENV not in os.environ, "BOOTSTRAP_RECIPIENT_TOKEN_FORBIDDEN")
+    result = child_environment(path)  # Keep the existing override refusal unchanged.
+    search = os.environ.get("PATH", os.defpath)
+    require(type(search) is str and 0 < len(search) <= 32768 and
+            not any(ord(char) < 32 or ord(char) == 127 for char in search) and
+            all(part and Path(part).is_absolute() for part in search.split(os.pathsep)),
+            "BOOTSTRAP_RECIPIENT_INSTALLED_TOOL_PATH")
+    result["PATH"] = search
+    return result
+
+
+@dataclass(frozen=True)
+class _RecipientWindow:
+    """New child-only cap, not a productive owner or an authenticated parent.
+
+    Metadata has its own immutable45 window/owner, closed before operative
+    ownership. Both clocks still start at the actual child's FIRST observations;
+    learning the frame never starts another210. The original parent work fence
+    only shortens operative ownership, not the already-closed metadata owner.
+    Synchronous validators cannot be preempted by these before/after checks.
+    """
+    reading: object = field(repr=False)
+    metadata_last: int
+    local_start: float = field(repr=False)
+    parent_work: object
+    cancelled: object = field(repr=False, compare=False)
+    metadata: bool = False
+    clock: object = field(init=False, repr=False)
+    first: int = field(init=False)
+    work: int = field(init=False)
+    final: int = field(init=False)
+    local_end: float = field(init=False, repr=False)
+    last: int = field(init=False)
+
+    def __post_init__(self):
+        origin.clocks.validate_reading(self.reading)
+        first = self.reading.nanoseconds
+        require(type(self.metadata) is bool and (self.parent_work is None) == self.metadata,
+                "BOOTSTRAP_RECIPIENT_WINDOW_KIND")
+        seconds = 45 if self.metadata else 210
+        end = origin.integer(first + seconds * origin.NS)
+        if not self.metadata:
+            end = min(end, origin.integer(self.parent_work))
+        require(first <= origin.integer(self.metadata_last) < end and callable(self.cancelled),
+                "BOOTSTRAP_RECIPIENT_CHILD_WINDOW")
+        local_end = origin.wire._directed_deadline(self.local_start, seconds, end, first)
+        for name, value in (("clock", self.reading.clock), ("first", first), ("work", end), ("final", end),
+                            ("local_end", local_end), ("last", self.metadata_last)):
+            object.__setattr__(self, name, value)
+
+    def now(self, *, final=False, minimum=0, limit=None):
+        observed = origin.clocks.checked_now(self.clock, minimum_ns=max(self.last, origin.integer(minimum)))
+        object.__setattr__(self, "last", observed)  # Before expiry/cancellation/local conversion can fail.
+        end = self.final if limit is None else min(self.final, origin.integer(limit))
+        require(observed < end, "BOOTSTRAP_RECIPIENT_CHILD_EXPIRED")
+        posix._deadline(self.local_end)
+        if not final:
+            self.cancelled()
+        require(self.last == observed, "BOOTSTRAP_RECIPIENT_HIGHWATER_CHANGED")
+        return observed
+
+    def deadline(self, maximum, *, final=False, limit=None):
+        require(type(maximum) in (int, float) and math.isfinite(maximum) and 0 < maximum <= 210,
+                "BOOTSTRAP_RECIPIENT_OPERATION_MAXIMUM")
+        local = time.monotonic()
+        observed = self.now(final=final, limit=limit)
+        end = self.final if limit is None else min(self.final, origin.integer(limit))
+        return min(self.local_end, origin.wire._directed_deadline(local, maximum, end, observed))
+
+
+def _recipient_content(raws, admitted, identities, original_path, path, first, minimum):
+    """Supplied-original consistency, NOT parent-launch/once-claim admission."""
+    past = history.HistoricalPrelude(origin.encoded(origin.parse(raws["original-context"])["prelude"]))
+    require(past.clock == first.clock, "BOOTSTRAP_RECIPIENT_ORIGINAL_CLOCK")
+    original = _context_history_record(raws["original-context"], admitted, original_path, past)
+    service_start = _start_history_record(raws["service-start"], raws["original-context"], original, original_path, past)
+    responses = {name: raws[name] for name in ("attempt", "jobs")}
+    proposal = allocation.validate_proposal(raws["proposal"], admitted, responses,
+        service_start["invocation"], first.clock, original["runnerName"])
+    value, start = origin.parse(raws["context"]), origin.parse(raws["start"])
+    record = origin.admitted_value(admitted)
+    require(set(value) == RECIPIENT_CONTEXT_FIELDS and raws["context"] == origin.encoded(value) and
+            type(value["schema"]) is int and value["schema"] == 1 and value["scope"] == RECIPIENT_CONTEXT_SCOPE and
+            value["profile"] == bootstrap.PROFILE and value["root"] == str(ROOT) and value["session"] == str(path) and
+            value["originalSession"] == str(original_path) and value["clock"] == origin.clock_value(first.clock) and
+            value["originalContextSha256"] == origin.digest(raws["original-context"]) and
+            value["admissionSha256"] == origin.digest(admitted.record) and
+            value["proposalSha256"] == origin.digest(raws["proposal"]) and
+            value["directories"] == identities and value["inheritedContext"] == original["inheritedContext"] and
+            value["runnerName"] == original["runnerName"] and
+            all(value[name] == record[name] for name in ("selection", "cacheCohort", "source", "github")) and
+            value["budgetAcceptance"] == "NOT_ADMITTED" and value["testAcceptance"] == "NOT_PERFORMED" and
+            value["exportSaveAuthority"] is False, "BOOTSTRAP_RECIPIENT_CONTEXT")
+    require(type(value["job"]) is str and re.fullmatch(r"[0-9a-f]{32}", value["job"]) and
+            type(value["previousTransitionSha256"]) is str and
+            re.fullmatch(r"[0-9a-f]{64}", value["previousTransitionSha256"]), "BOOTSTRAP_RECIPIENT_CONTEXT_IDENTITIES")
+    require(type(value["directories"]) is dict and set(value["directories"]) == set(identities) and
+            all(directory_identity(item, first.clock.role) == identities[name]
+                for name, item in value["directories"].items()) and
+            origin.wire.clock_identity(value["clock"]) == first.clock, "BOOTSTRAP_RECIPIENT_NATIVE_IDENTITIES")
+    previous = origin.integer(value["previousCheckedNs"], proposal["serviceTimeBasis"]["service"]["lastNs"])
+    require(set(start) == START_FIELDS and raws["start"] == origin.encoded(start) and
+            type(start["schema"]) is int and start["schema"] == 1 and start["scope"] == RECIPIENT_START_SCOPE and
+            start["contextSha256"] == origin.digest(raws["context"]) and
+            start["argv"] == recipient_command(origin.digest(raws["context"])) and start["cwd"] == str(ROOT) and
+            start["role"] == first.clock.role and start["job"] == value["job"] and
+            start["state"] == str(path) and start["home"] == str(path / "control-home") and
+            start["exitCode"] is None and start["launchAttempted"] is False and start["scopeAttempted"] is False and
+            start["retirement"] == "UNKNOWN" and type(start["invocation"]) is str and
+            re.fullmatch(r"[0-9a-f]{32}", start["invocation"]), "BOOTSTRAP_RECIPIENT_PRELAUNCH")
+    began = origin.integer(start["startedNs"], previous)
+    work = min(origin.integer(began + 240 * origin.NS), proposal["phaseFencesNs"]["recipient-validation"],
+               proposal["proposedJobEndNs"])
+    final = min(origin.integer(began + 285 * origin.NS), proposal["phaseFencesNs"]["recipient-final"],
+                proposal["proposedJobEndNs"])
+    require(type(start["workEndNs"]) is int and type(start["finalEndNs"]) is int and
+            start["workEndNs"] == work and start["finalEndNs"] == final and
+            began <= origin.integer(minimum) <= first.nanoseconds < work <= final,
+            "BOOTSTRAP_RECIPIENT_PARENT_FENCES")
+    expected = processes.ownership_environment(value["inheritedContext"], value["job"], start["invocation"],
+        str(path), str(path / "control-home"), allow_new_context=True)
+    require(start["inheritedContext"] == {name: expected[name] for name in query._CONTEXT} and
+            query._inherited_context() == start["inheritedContext"], "BOOTSTRAP_RECIPIENT_ORIGINAL_NATIVE_CONTEXT")
+    return value, start, proposal
+
+
+def _recipient_inputs(owner, context_hash, minimum):
+    owner.end()
+    require(not QUARANTINE and not query.QUARANTINE and not diagnostics._QUARANTINE, "BOOTSTRAP_PRIOR_UNKNOWN")
+    selection, original_path, event = host_inputs(owner.first.clock.role)
+    path = original_path.with_name(original_path.name + "-productive")
+    expected_environment = recipient_environment(path)
+    require(set(query._inherited_context()) == set(query._CONTEXT), "BOOTSTRAP_RECIPIENT_NATIVE_PARENT_REQUIRED")
+    # A genuine source-owned parent will pass only this environment. Never let
+    # an ambient credential/tool hook reach the child merely because GPG later
+    # uses a sanitized environment. CPython may add this locale-coercion value.
+    actual = dict(os.environ)
+    if "LC_CTYPE" not in expected_environment and actual.get("LC_CTYPE") in ("C.UTF-8", "UTF-8"):
+        actual.pop("LC_CTYPE")
+    require(actual == expected_environment, "BOOTSTRAP_RECIPIENT_CHILD_ENVIRONMENT")
+    original, private = owner.open(original_path), owner.open(path)
+    handles = {"original": original, "session": private}
+    handles.update({name: owner.child(private, name) for name in RECIPIENT_DIRECTORIES})
+    source_admission = owner.child(original, "admission")
+    admitted = load_admission(owner, source_admission)
+    service = owner.child(original, "service")
+    raws = {"context": owner.read(private, "recipient-context.json"),
+            "start": owner.read(handles["recipient-validation"], "start.json"),
+            "proposal": owner.read(private, "allocation.json"),
+            "original-context": owner.read(original, "context.json"),
+            "service-start": owner.read(service, "start.json"),
+            **{name: owner.read(service, name + ".json") for name in ("attempt", "jobs")}}
+    require(origin.digest(raws["context"]) == context_hash, "BOOTSTRAP_RECIPIENT_CONTEXT_HASH_CHANGED")
+    identities = {}
+    for name, directory in handles.items():
+        owner.end()
+        directory.verify()
+        identities[name] = directory_identity(list(directory.identity), owner.first.clock.role)
+        owner.end()
+    context, start, proposal = _recipient_content(raws, admitted, identities, original_path, path, owner.first, minimum)
+    require(selection == context["selection"] and event == admitted.original_event and
+            context["runnerName"] == os.environ.get("RUNNER_NAME"), "BOOTSTRAP_RECIPIENT_HOST_CHANGED")
+    return {"admitted": admitted, "context": context, "start": start, "proposal": proposal, "handles": handles,
+            "raws": raws, "binding": (admitted, tuple(sorted(raws.items())), origin.encoded(identities))}
+
+
+def _recipient_admit(owner, directory, phase_directory, admitted):
+    """Actual query/return inside original query75/120 AND child/parent caps."""
+    window, supplier, original, result = owner.fence, None, None, None
+    began = window.now()
+    work, final = min(window.final, began + 75 * origin.NS), min(window.final, began + 120 * origin.NS)
+    limits = owner.work_limit, owner.final_limit
+    owner.work_limit, owner.final_limit = work, final
+    try:
+        try:
+            pair = (window.deadline(75, limit=work), window.deadline(120, final=True, limit=final))
+            supplier = query.NativeGitQueries(ROOT, directory, check_cancel=lambda: window.now(limit=work),
+                                              owner_deadlines=pair)
+            supplier.native_host_matches_actions()
+            result = bootstrap.admit(ROOT, query_runner=supplier, expected=admitted)
+            supplier.retain_admission(result)
+            window.now(limit=work)
+        except BaseException as error:
+            original = error
+        finally:
+            if supplier is not None:
+                try:
+                    supplier._finalize(original)
+                except BaseException as error:
+                    if original is None:
+                        original = error
+            if (supplier is not None and supplier.unknown) or query.QUARANTINE or diagnostics._QUARANTINE:
+                if original is None:
+                    original = origin.OriginError("BOOTSTRAP_QUERY_UNKNOWN")
+                owner.error("recipient-native-query", original, unknown=True)
+        if original is not None:
+            raise original
+        require(type(result) is I.Admission and result == admitted, "BOOTSTRAP_RECIPIENT_READMISSION")
+        # The actual supplier returned after its finalizer. Its provisional
+        # session bytes alone could not attest that later close/return.
+        owner.work_limit = final
+        owner.end()
+        retained = owner.open(directory)
+        require(load_admission(owner, retained) == result, "BOOTSTRAP_RECIPIENT_READMISSION_CHANGED")
+        session = owner.read(retained, "session-result.json")
+        returned = origin.encoded({"admissionSha256": origin.digest(result.record), "sessionSha256": origin.digest(session),
+            "clock": origin.clock_value(window.clock), "returnedNs": window.now(limit=final)})
+        owner.write(phase_directory, "admission-return.json", returned)
+        originals = (result, session, returned)
+        owner.admissions[str(directory)] = originals
+        return retained, originals
+    finally:
+        owner.work_limit, owner.final_limit = limits
+
+
+def _recipient_admission_readback(owner, directory, phase_directory, originals):
+    require(owner.admissions.get(str(directory.path)) is originals, "BOOTSTRAP_RECIPIENT_NOT_CURRENT_ADMISSION")
+    admitted, session, returned = originals
+    require(load_admission(owner, directory) == admitted and owner.read(directory, "session-result.json") == session and
+            owner.read(phase_directory, "admission-return.json") == returned, "BOOTSTRAP_RECIPIENT_ADMISSION_ORIGINALS_CHANGED")
+
+
+def _recipient_supplier_record(recipient, work, admitted, job):
+    """Bind the actual returned supplier object; do not reconstruct success."""
+    if os.name == "nt":
+        require(type(recipient) is diagnostics.Recipient and recipient.work is work and recipient.job_id == job,
+                "BOOTSTRAP_RECIPIENT_NATIVE_RETURN")
+    else:
+        require(type(recipient) is posix.Recipient and recipient.work_dir == work.path and
+                recipient.home == work.path / "gnupg", "BOOTSTRAP_RECIPIENT_NATIVE_RETURN")
+    work.verify()
+    require(recipient.work_identity == work.identity and recipient.key_sha256 == admitted.key_sha256 and
+            recipient.fingerprint == admitted.fingerprint.upper() and type(recipient.encryption_fingerprint) is str and
+            re.fullmatch(r"[0-9A-F]{40}", recipient.encryption_fingerprint) and type(recipient.expires_at) is int and
+            0 <= recipient.expires_at and (recipient.expires_at == 0 or admitted.expires_at <= recipient.expires_at),
+            "BOOTSTRAP_RECIPIENT_KEY_OR_POLICY_CHANGED")
+    names = ("fingerprint", "encryption_fingerprint", "expires_at", "key_sha256", "work_identity")
+    value = {name: getattr(recipient, name) for name in names}
+    value["executable"] = str(recipient.executable)
+    if os.name == "nt":
+        value.update(executable_sha256=recipient.executable_sha256, job_id=recipient.job_id)
+    return value
+
+
+def recipient_child(context_hash, minimum, cancelled):
+    """Executable child prerequisite, NOT a connected recipient transaction.
+
+    No parent claims NewEntryTransition or launches this path yet. A supplied
+    context cannot attest that missing parent, native240/final45 or read30.
+    Validation does not authorize the routine custodian or any producer/cache.
+    """
+    recipient_command(context_hash, minimum)
+    local_start = time.monotonic()
+    first = origin.clocks.validate_reading(origin.clocks.observe())
+    require(first.nanoseconds >= origin.integer(minimum), "BOOTSTRAP_RECIPIENT_PRECEDES_LAUNCH")
+    metadata_window = _RecipientWindow(first, first.nanoseconds, local_start, None,
+                                       lambda: cancellation(cancelled), metadata=True)
+    metadata = Owner(metadata_window.local_end, metadata_window, first=first, cancelled=metadata_window.cancelled)
+    owner, target, window, result_raw, original, recipient = metadata, None, None, None, None, None
+    try:
+        initial = _recipient_inputs(metadata, context_hash, minimum)
+        target = initial["handles"]["recipient-validation"]
+        metadata.close()
+        if metadata.original is not None:
+            raise metadata.original
+        require(not metadata.unknown and all(row["attempted"] is True and row["closed"] is True
+                for row in metadata.resources), "BOOTSTRAP_RECIPIENT_METADATA_CLOSE")
+        window = _RecipientWindow(first, metadata_window.last, local_start, initial["start"]["workEndNs"],
+                                  lambda: cancellation(cancelled))
+        window.now()
+        # A separate owner, not Owner.bind/local45 renewal. The new owner's
+        # inclusive end was fixed by the FIRST child observation above.
+        owner = Owner(window.local_end, window, first=first, cancelled=window.cancelled)
+        target = None
+        current = _recipient_inputs(owner, context_hash, minimum)
+        require(current["binding"] == initial["binding"], "BOOTSTRAP_RECIPIENT_METADATA_CHANGED")
+        target = current["handles"]["recipient-validation"]
+        private, work = current["handles"]["session"], current["handles"]["crypto"]
+        admission_directory, admission_originals = _recipient_admit(owner, private.path / "recipient-admission", target,
+                                                                   current["admitted"])
+        _recipient_admission_readback(owner, admission_directory, target, admission_originals)
+        require(_recipient_inputs(owner, context_hash, minimum)["binding"] == initial["binding"],
+                "BOOTSTRAP_RECIPIENT_ORIGINALS_CHANGED")
+        window.now()
+        checked = admission_originals[0]
+        # Both existing suppliers are synchronous60. The absent real native
+        # parent is essential to stop an overrun/descendant. No inline deadline
+        # observation or child ACK claims to supply that enclosing enforcement.
+        if os.name == "nt":
+            recipient = diagnostics.validate_recipient(checked.public_key, checked.fingerprint, work,
+                                                       job_id=current["context"]["job"])
+        else:
+            recipient = posix.validate_recipient(admission_directory.path / "recipient-public.asc", checked.fingerprint, work.path)
+        if diagnostics._QUARANTINE:
+            error = origin.OriginError("BOOTSTRAP_RECIPIENT_SUPPLIER_UNKNOWN")
+            owner.error("recipient-supplier", error, unknown=True)
+            raise error
+        returned_ns = window.now()
+        value = _recipient_supplier_record(recipient, work, checked, current["context"]["job"])
+        _recipient_admission_readback(owner, admission_directory, target, admission_originals)
+        require(_recipient_inputs(owner, context_hash, minimum)["binding"] == initial["binding"],
+                "BOOTSTRAP_RECIPIENT_ORIGINALS_CHANGED")
+        result_raw = owner.write(target, "child-result.json", {"schema": 1, "scope": RECIPIENT_SCOPE,
+            "contextSha256": context_hash, "startSha256": origin.digest(current["raws"]["start"]),
+            "proposalSha256": origin.digest(current["raws"]["proposal"]),
+            "admissionReturnSha256": origin.digest(admission_originals[2]), "recipient": value,
+            "clock": origin.clock_value(window.clock), "invocation": current["start"]["invocation"],
+            "launchMinimumNs": minimum, "beganNs": first.nanoseconds, "metadataLastNs": metadata_window.last,
+            "supplierReturnedNs": returned_ns, "completedNs": window.now(minimum=returned_ns),
+            "supplierReturned": True, "childResourceClose": "PENDING_CLOSE", "parentRetirement": "NOT_OBSERVED_HERE",
+            "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False})
+        require(_recipient_inputs(owner, context_hash, minimum)["binding"] == initial["binding"] and
+                owner.read(target, "child-result.json") == result_raw, "BOOTSTRAP_RECIPIENT_TERMINAL_CHANGED")
+    except BaseException as error:
+        # Owner.close records the first error before raising its later UNKNOWN
+        # wrapper, including during metadata handover. Keep that original.
+        original = error if owner.original is None else owner.original
+        supplier_unknown = (isinstance(error, diagnostics.WindowsEvidenceError) and
+                            error.retirement_unknown is not False)
+        owner.error("recipient-child", error,
+                    unknown=supplier_unknown or bool(diagnostics._QUARANTINE or query.QUARANTINE))
+        if target is not None and not owner.closed and not owner.unknown:
+            try:
+                owner.write(target, "child-failure.json", {"schema": 1, "result": "HOLD", "errors": owner.errors,
+                    "childResourceClose": "PENDING_CLOSE", "parentRetirement": "NOT_OBSERVED_HERE",
+                    "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False}, final=True)
+            except BaseException as secondary:
+                owner.error("recipient-failure-retention", secondary)
+    finally:
+        # Strong local owner references, not fields in caller-supplied records.
+        # No new failure owner, overwrite, retry or postclose file acquisition.
+        for actual in (owner,) if owner is metadata else (owner, metadata):
+            try:
+                actual.close()
+            except BaseException as error:
+                if original is None:
+                    original = error if actual.original is None else actual.original
+            if original is None:
+                original = actual.original
+    if original is not None:
+        raise original
+    require(window is not None and result_raw is not None and not owner.unknown and
+            all(row["attempted"] is True and row["closed"] is True for row in owner.resources),
+            "BOOTSTRAP_RECIPIENT_CHILD_INCOMPLETE")
+    cancellation(cancelled)
+    closed_ns = window.now()
+    return {"schema": 1, "scope": RECIPIENT_ACK_SCOPE, "invocation": current["start"]["invocation"],
+            "terminalSha256": origin.digest(result_raw), "clock": origin.clock_value(window.clock), "closedNs": closed_ns,
+            "childResourceClose": "KNOWN_RESOURCE_CLOSE_ONLY", "parentRetirement": "NOT_OBSERVED_HERE",
+            "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False}, window, window.final
+
+
 def guarded(operation):
     handlers, cancelled, original, result = {}, [], None, None
     try:
@@ -2323,13 +2700,14 @@ def guarded(operation):
             try:
                 signal.signal(number, handler)
             except BaseException as error:
-                original = original or error
+                if original is None:
+                    original = error
     if original is not None:
         raise original
     value, fence, limit = result
     cancellation(cancelled)
     observed = fence.now(final=True, limit=limit)
-    if value.get("scope") == ACK_SCOPE:
+    if value.get("scope") in (ACK_SCOPE, RECIPIENT_ACK_SCOPE):
         value["closedNs"] = observed
     raw = origin.encoded(value)
     require(len(raw) <= ACK_LIMIT and sys.stdout.buffer.write(raw) == len(raw), "BOOTSTRAP_ACK_WRITE")
@@ -2345,9 +2723,10 @@ def main():
     commands = parser.add_subparsers(dest="operation", required=True)
     commands.add_parser("prepare-originals")
     commands.add_parser("adopt-originals")
-    child = commands.add_parser("_service")
-    child.add_argument("--context-sha256", required=True)
-    child.add_argument("--minimum-ns", required=True)
+    for name in ("_service", "_recipient"):
+        child = commands.add_parser(name)
+        child.add_argument("--context-sha256", required=True)
+        child.add_argument("--minimum-ns", required=True)
     args = parser.parse_args()
     try:
         require(sys.flags.isolated == 1 and sys.flags.no_site == 1 and sys.dont_write_bytecode,
@@ -2359,8 +2738,12 @@ def main():
         else:
             require(re.fullmatch(r"0|[1-9][0-9]{0,19}", args.minimum_ns), "BOOTSTRAP_LAUNCH_MINIMUM")
             minimum = origin.integer(int(args.minimum_ns))
-            command(args.context_sha256, minimum)
-            guarded(lambda cancelled: service_child(args.context_sha256, minimum, cancelled))
+            if args.operation == "_service":
+                command(args.context_sha256, minimum)
+                guarded(lambda cancelled: service_child(args.context_sha256, minimum, cancelled))
+            else:
+                recipient_command(args.context_sha256, minimum)
+                guarded(lambda cancelled: recipient_child(args.context_sha256, minimum, cancelled))
         return 0
     except BaseException:
         # No exception/argv/path/response/token is suitable for public logs.

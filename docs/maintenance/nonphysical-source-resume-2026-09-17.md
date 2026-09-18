@@ -1106,12 +1106,173 @@ This result remains `NOT_ADMITTED`, tests `NOT_PERFORMED`, productive owner
 trusted-base/native/provider/resolver/custody/scheduling/delivery/formal-review
 requirements remain. Audit/release is **NOT_READY**.
 
+## 18 September: standalone recipient child, not parent integration
+
+The [separate recipient child](../testing/hosted-dependency-cache.md#standalone-recipient-child-not-a-connected-parent-transaction)
+starts from `f2e56501d04aaec61ae4854b516ce38cb17d293e`, tree
+`f84102aefc7753ed53ab93f3dbbd66708fa6d5d4`. Its scope is
+**DORMANT_EXECUTABLE_RECIPIENT_CHILD_ADAPTER_NOT_PARENT_CONNECTED**. The closed
+`_recipient` adapter obtains actual native-query readmission and invokes the
+unchanged POSIX/Windows recipient supplier when legitimately called; **no parent
+or workflow calls it**. Consistent context/marker bytes cannot authenticate that
+missing parent or authorize the absent routine custodian policy.
+
+Distinct metadata45 and operative210 owners/windows retain the actual first
+child local/RAW readings. Metadata closes before the operative owner exists;
+the latter can only shorten against original parent work240/service-derived
+proposal fences. Parent final45 is not extra child success time. Query75/120
+retains its original start and child cap. The unchanged synchronous60 recipient
+suppliers cannot be hard-preempted by before/after child checks. Parent once-claim,
+real native240/final45 enforcement/retirement and recipient-read30 remain missing.
+Original75/local45/original120, Windows NativeFile900/Snapshot576MiB, both ordinary
+HOLDs and all bootstrap cache refusals are unchanged;5400 remains unadmitted and
+unmeasured. No canonical init, producer/cache/provider or encrypted custody runs.
+
+### Executed controls and retained adverse evidence
+
+Linux Python3.12.3, actual UID65534, isolated read-only source copies:
+
+```bash
+timeout --kill-after=5s 90s runuser -u nobody -- \
+  python3 -I -B -S <exact-read-only-source-copy>/scripts/tests/hosted-cache-bootstrap-recipient-test.py -v
+```
+
+The initial r1 author smoke passed1/1. A disjoint run of the other37 methods
+**FAILED:36 pass/1 failure**, not a passing38-method aggregate. The failing model
+supplied `WindowsEvidenceError(retirement_unknown=True)` without a global
+quarantine entry. The new child recognized the global but missed that explicit
+flag, so the expected child UNKNOWN/quarantine assertion failed. The existing
+real Windows supplier normally sets the global too; this adversarial model is
+**not an observed native Windows failure**. Initial caller SHA-256 was
+`5216ba184699d210eeebf69e90728d2766f2f89bf43e369f036c37b7fc66e41c`.
+
+Independent r1 controls were frozen before author-test inspection and executed
+once: **11 pass/1 genuine failure**, verdict
+`REQUEST_CHANGES_EXACT_DORMANT_BOOTSTRAP_RECIPIENT_CHILD_R1_FIRST_CLOSE_EXCEPTION`.
+When operative resource close failed first, unchanged `Owner.close` retained the
+exact error, then raised its generic UNKNOWN wrapper. The child incorrectly
+returned that later wrapper. Metadata handover had the analogous static path.
+The independent failure was not a false-success ACK, harness error or native
+execution. Report SHA-256:
+`e706723d06585125195732512135c054593794f59ca89e2d63f9f27a6d57de95`.
+
+The r3 correction is the first source change after those runs. It preserves the
+actual saved first owner exception ahead of later close wrappers, honors the
+Windows supplier's explicit UNKNOWN flag independently of its global, and uses
+`None` rather than exception truthiness in the new query/child failure paths.
+Existing shared owners, diagnostic parser and recipient suppliers are unchanged.
+Three new regressions cover metadata close and falsey query/supplier first errors;
+the existing operative-close test now also requires exact exception identity.
+
+The corrected r3 author suite passed **41/41**, test time1.423 seconds,
+recorder2.095577533 seconds, started07:13:10UTC. All1,405 source files/rosters stayed
+unchanged in the fixture and repository, with no extra fixture files. Tiny POSIX
+files are actual; native/Git/GPG/host/service/clock boundaries are modeled or
+forbidden. Windows returned work/job identity is modeled, not Windows execution.
+`load_tests` selects this class only, not inherited legacy methods. No actual GPG,
+key import, native child launch, network, download or application build was performed.
+
+The r3 source/tests tree is
+`9526cdb33d2ead791f9d81de2f422ecd4d69938d`, patch SHA-256
+`11a31f018d4d1fc09dbefb7b559ceb7b0b5a1721d83d9686360036219fa59ad1`:
+
+| File under `scripts/` | SHA-256 |
+| --- | --- |
+| `run-hosted-cache-bootstrap.py` | `2873ae59ac2f6c5332299e54ba724ceb6391c03d4caf648d33cbe991b70c3493` |
+| `tests/hosted-cache-bootstrap-recipient-test.py` | `0824e25f556980cab5fdc9562f2f21ad3430bb655054b4c49a7ceb0448ad96c7` |
+
+Independent r3 checking passed **1/1 unchanged original close oracle**. A separate
+new aggregate **FAILED:6 pass/1 failure**. The child now preserved a falsey first
+supplier exception, but `guarded` replaced it with a later handler-restoration
+error through `original or error`. This is another real integration defect, not
+false success, native failure or a setup error. Verdict:
+`REQUEST_CHANGES_EXACT_DORMANT_BOOTSTRAP_RECIPIENT_CHILD_R3_GUARDED_FIRST_EXCEPTION`,
+report SHA-256 `c4b42f11d2d7ccaa00eb4311919314bb3b03f7dd3ad5e8492c62d6fd1acacde7`.
+After freezing its own controls, the reviewer reconciled the r3 author originals
+and all1,405 fixture blobs without replay.
+
+The r4 implementation changes **only** that shared guard's secondary-error
+selection to an explicit `None` check. No other r3 implementation byte changes;
+handler restoration, output ordering and deadlines stay intact. Two new author
+methods cover falsey supplier and first-restoration errors followed by secondary
+restoration failures. The focused five-method run includes those two and the
+three existing guard/ACK methods: **5/5 PASS**,0.344 seconds tests /
+1.041759193 seconds recorder, started07:17:45UTC. Exact selected methods:
+
+```text
+RecipientModels.test_guarded_ack_is_after_handler_restoration_but_provisional_until_flush_and_return
+RecipientModels.test_failed_handler_restoration_emits_no_ack_even_after_child_resource_close
+RecipientModels.test_falsey_supplier_error_precedes_failed_handler_restoration
+RecipientModels.test_first_falsey_handler_restore_error_precedes_later_restore_error
+RecipientModels.test_late_ack_flush_checks_original210_not_a_new_output_allowance
+```
+
+These selections use the command above with the method names before `-v`.
+The file contains43 methods; this is **not a passing43-method aggregate**. The
+earlier41 passes remain r3-scoped, not replayed/relabelled r4. All actual fixture/
+repository source hashes and rosters stayed unchanged; the r4 fixture contained
+the two then-draft nonexecuted documents, separately from its source/tests-only
+tree. No native or hosted qualification follows from either run.
+
+The r4 source/tests tree is `e5216947a2cc974ec435f2969fb381d7f9ff4919`, patch
+SHA-256 `12032995e4d3848f84bc3802c90f6c57aa894f47cd5dbfe2ba7fbb427b2c0e79`:
+
+| File under `scripts/` | SHA-256 |
+| --- | --- |
+| `run-hosted-cache-bootstrap.py` | `407b6fcc866db20f500a4d9bb9b7829b407b935f47668dc7508efbece364735c` |
+| `tests/hosted-cache-bootstrap-recipient-test.py` | `0bf0e77e3c1502d90ea90c2bf8f906918f9652b4684db1dedc611ac881f0d5b7` |
+
+Independent r4 checking passed **1/1 unchanged failing guard oracle** and **4/4
+separately frozen guard controls**. The new controls include first-restoration,
+prior truthy/cancellation, failed installation and modeled legacy/recipient output
+ordering. No legacy operation or native execution was performed. Earlier r1/r3
+controls retain their exact source scopes and failed aggregates. The reviewer
+independently reconciled all1,405 actual author fixture bytes/manifests, including
+the two draft-document differences, without rerunning author tests.
+
+Independent implementation verdict:
+**APPROVE_EXACT_DORMANT_BOOTSTRAP_RECIPIENT_CHILD_R4_SOURCE_OFFLINE_ONLY**,
+report SHA-256 `c7740acfa3476474c57442645d5397853e4807705746bae2d675fd919b761541`.
+No remaining blocking source finding in that bounded scope. AST inspection against
+the committed base finds83 existing top-level bodies unchanged; `guarded` and
+`main` change and nine definitions are added. Those are static counts, not tests.
+Complete-patch/static/commit and final review bindings are mapped separately in
+#437/shared #424. Agent review is not formal different-account GitHub approval.
+
+Private packet `20260918-bootstrap-recipient-child-q2ryx660` retains exact source,
+argv/manifests/logs/exits and both adverse histories. Its redundant implementation
+r2 freeze had identical r1 bytes; a reconciliation corrects an initial chronology
+note. That administrative correction is not a source/test failure or a different
+implementation. Neither failed aggregate was overwritten or relabeled a pass.
+
+The complete paginated06:50UTC snapshot retained78 open issues, seven dependency
+PRs, no campaign PR, no queried active Actions and no Release app assets. Recursive
+comparison with06:36 reconciled all24 changes in10 domains: only the known f2e
+mapping comments, issue counts/timestamps and timeline mirrors. No new recipient/
+owner/formal approval or advisory/check requirement changed in those snapshots.
+A further complete paginated07:15UTC refresh found all29 common domains unchanged,
+including full relevant conversations, required checks and advisory metadata.
+No scan/remediation/exception extension occurred. All24 inspected worktree HEADs
+are in campaign ancestry;20 historical review worktrees retain patches and were
+left untouched. This is **not an all-worktrees-clean claim**.
+
+Apps remain outside repository Releases. The accepted four-platform preview and
+#424 writer originals were not rebuilt/redownloaded; historical acceptance is
+unchanged. No held dispatch, PR/merge, Release, settings change or issue closure
+occurred. Audit/release remains **NOT_READY**.
+
 ## Next engineering and unchanged authority boundaries
 
 The next bootstrap slice still needs a **separate productive owner/job-budget
 context**, not ordinary FULL/Desktop with `help`, the evidence-only prelude,
 same-call read-only entry/close transition, fresh-entry readmission/close,
-service-time basis or allocation proposal above.
+standalone recipient child, service-time basis or allocation proposal above.
+The immediate parent slice must once-claim the exact `NewEntryTransition`, retain
+its final high-water and actual owner references, launch the existing child in
+its genuine native240/final45 scope, preserve original captures/return/retirement,
+and enforce separate recipient-read30. The standalone child cannot supply those
+parent facts. Do not bypass that prerequisite with a fictional validated-recipient
+record or a direct unbounded supplier call.
 Retain and rederive actual source/run/clock and service/native budget originals
 and trusted workflow outcomes;
 a digest or fresh allowance cannot grant authority. A future live caller must invoke the canonical configuration-only producer,
