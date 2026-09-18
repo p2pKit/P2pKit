@@ -8,8 +8,10 @@ offline-model success cannot lift either HOLD.
 The internal bootstrap recipient/initializer and separate staging/empty-seed
 leaf and same-call parents now have source implementation and focused offline
 controls, as do the file-only configuration-custody reservation leaf and its
-same-call third parent. No public command or workflow invokes that path.
-Producer and collection integration remain separate unfinished work.
+same-call third parent. A separate internal original-call configuration producer
+now has source implementation and focused offline controls. No public command
+or workflow invokes that path. Four-log/report collection, no-loader observation,
+export/freeze/save/probe and encrypted-custody integration remain unfinished.
 [`hosted_dependency_cache.py`](../../scripts/hosted_dependency_cache.py) has no
 CLI, action runner, downloader, extraction, deletion or subprocess entry point.
 The connected caller is
@@ -944,7 +946,8 @@ no tests or dependency population. Errors still require failed-original custody,
 not disposal. Live re-admission, source/native/toolchain and original-budget
 binding, known complete enclosing retirement, positive empty-seed export,
 freeze/provider/custody integration and separate sealing remain necessary.
-No caller invokes this helper in production.
+The separate internal configuration parent below now consumes this helper;
+no public CLI or workflow invokes that parent.
 
 ### Fixed producer-command descriptor, not a launcher
 
@@ -961,8 +964,9 @@ Its fixed runtime suffix is `--cwd … --wrapper … --purpose cache-bootstrap-c
 --kind gradle --id … --timeout 600 --stop-timeout 120 -- help --console=plain
 --no-configure-on-demand`, without an execution subcommand, runtime `--state`,
 optional `--receipt` or duplicate enforcement vector. No environment/domain chain
-is synthesized: `NOT_BUILT_OR_ADMITTED`. Real original domains, toolchains and
-credential screens remain future-parent obligations. Nothing launches or creates
+is synthesized: `NOT_BUILT_OR_ADMITTED`. Original domains, toolchains and
+credential screens belong to the separate internal parent below, not this
+descriptor; their genuine qualification remains outstanding. Nothing launches or creates
 a state/home. Repeatable descriptors grant no single-use/next-phase/export/save
 authority; budget stays `NOT_ADMITTED` and tests `NOT_PERFORMED`.
 
@@ -970,8 +974,9 @@ The existing allocation must retain work600/return225/final45/read30, with stop1
 included in225 and read30 outside proposed native capture870. These are checked
 proposals, not original live deadlines. The canonical executor now carries a
 local pre-spawn end through stream setup and wait, as described below; it has
-no original shared-clock/job/phase identity. A future parent must enforce those
-job, phase and capture fences and own actual cancellation/retirement.5400 remains
+no original shared-clock/job/phase identity. The internal parent below now binds
+those original fences and cancellation/retirement suppliers in source; actual
+native execution and scheduling remain unqualified.5400 remains
 unadmitted/unmeasured; Windows NativeFile900/Snapshot576MiB are unchanged.
 
 The [descriptor continuation](../maintenance/hosted-bootstrap-producer-command-2026-09-18.md)
@@ -1085,9 +1090,10 @@ across four, the retained failed preimage4, and five AST-only composition passes
 No ordinary native suite, producer or application ran. The per-stream ceiling
 is not a whole-session/nested/custody budget; stricter direct-caller limits remain.
 It does not fit2GiB dependencies into Windows'576MiB Snapshot or qualify900-second
-native capture. The actual shared-clock producer/stop/retirement/collection bridge
-and export/save/probe/custody integration
-remain unfinished. No workflow HOLD, admission, deadline or test selector changes.
+native capture. The separate original-call producer parent below now binds
+shared-clock producer/stop/retirement observations in source. Collection and
+export/save/probe/custody integration remain unfinished. No workflow HOLD,
+admission, deadline or test selector changes.
 
 ### Shared canonical local deadline, not a shared-clock producer parent
 
@@ -1111,12 +1117,71 @@ an enclosing job/capture/custody budget. Admission, pre-stop drain/lease and fin
 native/stream/report/receipt work keep their separate bounds. The unchanged
 hosted-lock `Command.wait` still has a relative-computation-to-entry gap.
 
-A separate parent still must bind the original shared-clock work/return/final/read
-fences, actual canonical cancellation, producer/stop/native retirement and bounded
-collection before export/freeze/save/probe/custody. Neither local timing nor help
+The separate parent below now binds original shared-clock work/return/final/read
+fences and canonical cancellation/producer/stop/native-retirement suppliers in
+dormant source. Bounded collection still precedes export/freeze/save/probe/custody.
+Neither local timing nor help
 supplies ordinary ABI/simulator/transcript acceptance. Proposed5400 remains
 unadmitted/unmeasured; Windows NativeFile900/Snapshot576MiB, both ordinary HOLDs,
 exact selectors and all recipient/formal-review/delivery requirements remain.
+
+### Internal configuration producer parent, not collection/cache execution
+
+`configure_after_entry(transition)` privately fixes configuration intent before
+the original shared reservation call. It once-claims the exact transition,
+including failure; it accepts no returned reservation or `ConfigurationPrefix`
+as execution authority. Existing tuple7 recipient and tuple6 initializer contracts
+stay unchanged. The actual COMPLETE coordinator, all three closed staging/seed/
+custody parent instances and their private frames are pinned before new suppliers.
+No closed owner/window/resource is reopened, advanced or used for cleanup.
+No public CLI, `adopt-originals` or workflow calls this operation.
+
+The distinct producer Owner/window/native/capture resources share source-proposed
+caps: **WORK600**, **RETURN≤actual-start225/first825**,
+**FINAL≤actual-start45/first870**, **READ≤actual-start30/first900**. Every phase
+also intersects its original cumulative/job fence and independent LOCAL ceiling.
+Stop120 is inside RETURN225, not another allowance. Failed starts are consumed
+before their first supplier and cannot recover fresh discretionary cleanup time.
+Returned RAW/LOCAL samples stay with their original private frame even when a
+supplier changes a public alias. Equality expires; late exit0 cannot pass WORK.
+These caps remain **UNADMITTED / UNMEASURED**, not native timing qualification.
+
+New handles reread original chain/admission/service/allocation and reservation
+bytes, source/native/toolchain/domain and trusted prepare-outcome bindings. Query
+finalizer return stays inside WORK. Prelaunch H remains properties-only and S
+empty; postlaunch checks permit producer additions without ignoring changed
+original context/properties or directory identity. The fixed descriptor launches
+only configuration `help`, never ordinary FULL/Desktop or a Test loader.
+
+Failure requests cancellation only for the known original canonical child and
+its exact original cancellation directory/file. No second stop is spawned by
+the parent. Original native drain/close precedes two outer capture readbacks;
+known cleanup retains its original target even when live-publication checks fail.
+Polling bounds each outer stream at67,174,400 bytes and both at134,348,800; these
+are observed limits, **not kernel quotas or complete custody**. Closed readback
+streams positive64KiB chunks and true EOF, with original identity/stamp checks;
+it does not use an aggregate Snapshot. Original first failures and UNKNOWN remain.
+
+Canonical `start.json` and `receipt.json` must name the actual outer child PID.
+Their original file bindings survive rereads, and the unchanged producer observer
+checks the reported product/same-home-stop/terminal result. `ConfigurationPrefix`
+follows resource close, handler restoration and final RAW/LOCAL observations.
+It is evidence only: `NOT_ADMITTED`, `NOT_PERFORMED`, false next-phase/export/save
+authority, population `NOT_ATTESTED`, and four-log/report collection `NOT_PERFORMED`.
+No canonical report path is followed or report inventory qualified here. Partial
+failure originals/references remain; encrypted failure delivery is not promised.
+
+The [producer-parent continuation](../maintenance/hosted-bootstrap-producer-parent-2026-09-18.md)
+records60 distinct author passes in seven disjoint final-source invocations and33
+independent passes in three, with earlier failures preserved. Author controls run
+the new parent/owner/window and tiny ordinary-UID POSIX files over modeled upstream,
+native/query/host/descriptor/clocks. Reviewer controls use actual extracted source
+with inert memory suppliers. Neither is original-chain end-to-end, native/provider,
+Gradle, cache or hosted acceptance. Ordinary composition's seven supplier bindings
+are unchanged; no expectation update or workflow registration is needed here.
+Both ordinary HOLDs, missing recipient/trusted-base/formal approval, unadmitted5400
+and NativeFile900/Snapshot576MiB remain. Collection → no-loader observation →
+export/freeze/save/probe → encrypted custody/seal/delivery are still separate work.
 
 ## Connected consume and delivery path
 
@@ -1284,6 +1349,8 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-staging-parent-test.py \
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-custody-test.py ReservationModels -v
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-custody-parent-test.py \
   CustodyParentModels.test_third_parent_reserves_with_exact_originals_one_window_and_known_close -v
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-producer-parent-test.py \
+  ProducerParentModels.test_whole_parent_uses_modeled_closed_prefix_but_real_new_owner_files_and_record_reader -v
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
@@ -1299,7 +1366,7 @@ generated initializer, controller, native, network and child execution. Their
 actual tiny POSIX source reads and modeled Windows reparse checks do not qualify
 native Windows source custody or a productive bootstrap phase.
 The separate bootstrap identity/cohort/producer-record/query-fence/original-acquisition/
-handoff/entry/service-time/allocation-proposal/close/history/legacy-reader/fresh-entry/recipient-child/recipient-parent/initialization/staging-leaf/staging-parent/configuration-custody-reservation/configuration-custody-parent
+handoff/entry/service-time/allocation-proposal/close/history/legacy-reader/fresh-entry/recipient-child/recipient-parent/initialization/staging-leaf/staging-parent/configuration-custody-reservation/configuration-custody-parent/configuration-producer-parent
 controls are standalone, not an activated or registered bootstrap workflow.
 The recipient-parent example selects one method; its complete suite was executed in
 externally bounded four-method batches, as recorded in the source continuation.
@@ -1316,6 +1383,11 @@ The custody-parent example also selects only one method. Its54 distinct author
 passes span seven bounded invocations; the original failed9 aggregate remains
 failed. Upstream entry/recipient/initializer/stage/seed and admission are models;
 only the new third parent, approved custody leaf and tiny POSIX suppliers execute.
+The producer-parent example selects one of60 new methods; seven disjoint bounded
+invocations cover all60 final-source methods, not a whole-suite rerun. Its upstream
+reservation is modeled, and reader controls reach unchanged malformed-record guards,
+not a complete original-history execution. Separate independent33 controls have a
+narrower AST/memory scope; do not add them to the author's60 as product cases.
 Tiny private-file controls require an actual ordinary UID; root is not an
 acceptable substitute and their modeled native boundaries are not host admission.
 Native Windows provider behavior and actual resolver/cache reuse require

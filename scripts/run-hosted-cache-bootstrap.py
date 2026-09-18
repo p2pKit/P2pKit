@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Dormant bootstrap originals through configuration reservation; NOT a builder.
+"""Dormant bootstrap originals through configuration observations; no public builder.
 
-No workflow, productive budget, producer, export/save,
+No workflow, admitted productive budget, export/save,
 policy installer or uploader exists here. Separate read-only original adoption
 never becomes execution authority. A future trusted workflow must bind the
 actual original prepare-step outcome, not a provisional receipt/digest.
-The internal recipient/initializer parents own native launch/retirement/readback;
-no public operation or workflow calls it. Offline controls are not native,
+The internal original-call parents own native launch/retirement/readback;
+no public operation or workflow calls them. Offline controls are not native,
 custodian, scheduling or encrypted-custody qualification.
 """
 from __future__ import annotations
@@ -14,6 +14,8 @@ from __future__ import annotations
 import argparse
 from collections import namedtuple
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+import hashlib
 import math
 import os
 from pathlib import Path
@@ -38,6 +40,8 @@ import hosted_cache_bootstrap_history as history
 import hosted_cache_bootstrap_identity as bootstrap
 import hosted_cache_bootstrap_initialization as initialization
 import hosted_cache_bootstrap_origin as origin
+import hosted_cache_bootstrap_producer as producer
+import hosted_cache_bootstrap_producer_command as producer_command
 import hosted_cache_bootstrap_service_time as service_time
 import hosted_cache_bootstrap_staging as staging
 import hosted_evidence as posix
@@ -1081,7 +1085,8 @@ def chain_content(owner, private, context_raw, admitted, records, returned, admi
 
 
 def _read_chain(reader, private, context_raw, admitted, records, returned, admission_hashes, *, final):
-    require(type(reader) in (_LegacyOriginalReader, _NewEntryOriginalReader, _RecipientParentReader, _StagingOriginalReader),
+    require(type(reader) in (_LegacyOriginalReader, _NewEntryOriginalReader, _RecipientParentReader,
+                            _StagingOriginalReader, _ProducerOriginalReader),
             "BOOTSTRAP_ORIGINAL_READER_KIND")
     reader.checked()
     owner, past = reader.owner, reader.past
@@ -1367,7 +1372,8 @@ def prepared_content(owner, private, handoff_raw, context_raw, fence):
 
 
 def _read_prepared(reader, private, handoff_raw, context_raw):
-    require(type(reader) in (_LegacyOriginalReader, _NewEntryOriginalReader, _RecipientParentReader, _StagingOriginalReader) and
+    require(type(reader) in (_LegacyOriginalReader, _NewEntryOriginalReader, _RecipientParentReader,
+                            _StagingOriginalReader, _ProducerOriginalReader) and
             reader.first is not None,
             "BOOTSTRAP_ADOPTION_READER")
     reader.checked()
@@ -5895,6 +5901,1642 @@ def _stage_after_initialization(initializer, returned):
         except BaseException:
             pass
         raise first
+
+
+@dataclass(frozen=True)
+class ConfigurationPrefix:
+    """Closed original configuration observations, NOT transferable authority."""
+    raw: bytes = field(repr=False)
+    request_raw: bytes = field(repr=False)
+    start_raw: bytes = field(repr=False)
+    receipt_raw: bytes = field(repr=False)
+    observation_raw: bytes = field(repr=False)
+    checked_ns: int
+    checked_local: float
+
+
+# These prospective limits concern exactly TWO outer files, not the four
+# canonical logs/reports, dependency bytes, a Snapshot, or a kernel disk quota.
+PRODUCER_STREAM_BYTES = 64 * 1024 * 1024 + 65536
+PRODUCER_OUTER_BYTES = 2 * PRODUCER_STREAM_BYTES
+PRODUCER_READ_BLOCK = 65536
+_ProducerPredecessor = namedtuple("_ProducerPredecessor", "sequence frame published phases graph")
+_ProducerLimits = namedtuple("_ProducerLimits", "clock first local_start ends local_ends")
+_ProducerPhase = namedtuple("_ProducerPhase", "name started local_started end local_end")
+_ProducerResource = namedtuple("_ProducerResource", "row label value kind attempted closed")
+_ProducerFile = namedtuple("_ProducerFile", "key directory path identity name maximum raw binding_raw")
+_ProducerCapture = namedtuple("_ProducerCapture", "name stream identity highwater final_stamp synced verified readback")
+_ProducerNative = namedtuple("_ProducerNative", "scope_attempted launch_attempted child child_kind child_pid "
+    "baseline_raw preparer_raw birth_raw leader_raw launch_minimum argv exit_code completed_ns work_accepted "
+    "drain_attempted survivors_raw terminal_raw retired finalized_ns", defaults=(None,) * 19)
+_ProducerFrame = namedtuple("_ProducerFrame", "call transition roots operation state published reservation predecessor "
+    "first limits window owner owner_bindings last local_last phases resources foreign handles files handlers restored "
+    "close_roster original unknown errors descriptor environment outer_invocation native captures "
+    "query_attempted query query_returned cancellation_attempted cancellation_raw cancellation_stamps "
+    "result", defaults=(None,) * 38)
+
+
+def _producer_private_controls():
+    """Keep the original call and cleanup frames outside mutable publications.
+
+    No constructor, returned prefix, copied registry or caller callback selects
+    the reservation operation. Like the existing registries this is finite
+    same-process binding, not protection against arbitrary Python-code changes.
+    """
+    roots = (_ENTRY_ATTEMPTS, _RECIPIENT_ATTEMPTS, _INITIALIZER_ATTEMPTS, _PARENT_CONTROLS, _STAGING_ATTEMPTS)
+    operation, lock = _recipient_after_entry, threading.Lock()
+    attempts, frames, owners, windows_by_id = {}, {}, {}, {}
+
+    def original_roots():
+        require(all(actual is old for actual, old in zip(
+            (_ENTRY_ATTEMPTS, _RECIPIENT_ATTEMPTS, _INITIALIZER_ATTEMPTS, _PARENT_CONTROLS, _STAGING_ATTEMPTS), roots)) and
+            _recipient_after_entry is operation, "BOOTSTRAP_PRODUCER_ORIGINAL_CALL_CHANGED")
+
+    def claim(transition):
+        require(type(transition) is NewEntryTransition, "BOOTSTRAP_PRODUCER_TRANSITION_KIND")
+        original_roots()
+        with lock:
+            require(id(transition) not in attempts, "BOOTSTRAP_PRODUCER_ALREADY_CLAIMED")
+            call = _ProducerParent(transition)
+            attempts[id(transition)] = (transition, call)
+            frames[id(call)] = _ProducerFrame(call=call, transition=transition, roots=roots, operation=operation,
+                state="CLAIMED", published=(call.handles, call.records, call.handlers, call.cancelled), phases=(),
+                resources=(), foreign=(), handles=(), files=(), handlers=(), restored=(), unknown=False, errors=(),
+                captures=(), native=_ProducerNative(scope_attempted=False, launch_attempted=False, work_accepted=False,
+                    drain_attempted=False, retired=False), query_attempted=False, cancellation_attempted=False,
+                cancellation_stamps=())
+        return call
+
+    def frame(call):
+        saved = frames.get(id(call))
+        require(type(saved) is _ProducerFrame and saved.call is call and
+                attempts.get(id(saved.transition)) == (saved.transition, call), "BOOTSTRAP_PRODUCER_NOT_CLAIMED")
+        return saved
+
+    def update(call, **values):
+        saved = frame(call)
+        if "owner" in values:
+            require(saved.owner is None and type(values["owner"]) is _ProducerOwner, "BOOTSTRAP_PRODUCER_OWNER_REENTRY")
+            owners[id(values["owner"])] = call
+        if "window" in values:
+            require(saved.window is None and type(values["window"]) is _ProducerWindow, "BOOTSTRAP_PRODUCER_WINDOW_REENTRY")
+            windows_by_id[id(values["window"])] = call
+        frames[id(call)] = saved._replace(**values)
+        return frames[id(call)]
+
+    def invoke(call):
+        saved = frame(call)
+        original_roots()
+        require(saved.state == "CLAIMED" and saved.reservation is None, "BOOTSTRAP_PRODUCER_RESERVATION_REENTRY")
+        update(call, state="RESERVING")
+        call.state = "RESERVING"
+        # Outside the claim lock. Failure consumes both this intent and any
+        # original recipient claim; a prior direct reservation cannot be adopted.
+        returned = operation(saved.transition, initialize=True, stage=True, reserve=True)
+        update(call, reservation=returned, state="RESERVATION_RETURNED")
+        call.state = "RESERVATION_RETURNED"  # Actual return retained before validation.
+        original_roots()
+        return returned
+
+    def owner_frame(owner):
+        saved = frame(owners.get(id(owner)))
+        require(saved.owner is owner, "BOOTSTRAP_PRODUCER_OWNER_NOT_BOUND")
+        return saved
+
+    def window_frame(window):
+        saved = frame(windows_by_id.get(id(window)))
+        require(type(window) is _ProducerWindow and saved.window is window and window.call is saved.call,
+                "BOOTSTRAP_PRODUCER_WINDOW_NOT_BOUND")
+        return saved
+
+    return claim, frame, update, invoke, original_roots, owner_frame, window_frame
+
+
+(_claim_producer, _producer_frame, _update_producer, _invoke_producer_reservation, _producer_original_roots,
+ _producer_owner_frame, _producer_window_frame) = _producer_private_controls()
+del _producer_private_controls
+
+
+def _producer_closed_phase(parent, frame):
+    """Passive exact closed-frame validation; NEVER call its owner/window."""
+    require(type(parent) is _StagingPhaseParent and _staging_frame(parent) is frame and frame.call is parent and
+            frame.state == parent.state == "COMPLETE" and parent.result is frame.result and
+            frame.original is None and parent.original is None and frame.unknown is False and parent.unknown is False and
+            not frame.foreign_resources and frame.handlers == frame.restored and frame.close_roster is not None and
+            parent.owner is frame.owner and parent.window is frame.window and
+            type(frame.owner) is _StagingFileOwner and frame.owner.closed is True and frame.owner.original is None and
+            frame.owner.unknown is False and frame.owner.errors == [] and frame.owner.resources is frame.owner_bindings[0] and
+            frame.owner.errors is frame.owner_bindings[1] and frame.owner.admissions is frame.owner_bindings[2] and
+            frame.owner.local_end == frame.owner_bindings[3] and frame.owner.fence is frame.window and
+            frame.owner.first is frame.first and frame.owner.cancelled is frame.callback and
+            frame.last == frame.result.checked_ns and frame.local_last == frame.result.checked_local and
+            type(frame.last) is int and type(frame.local_last) in (int, float) and math.isfinite(frame.local_last),
+            "BOOTSTRAP_PRODUCER_PREDECESSOR_NOT_CLOSED")
+    require(len(frame.resources) == len(frame.owner.resources) == len(frame.close_roster),
+            "BOOTSTRAP_PRODUCER_PREDECESSOR_ROSTER")
+    for row, pin, closed in zip(frame.owner.resources, frame.resources, frame.close_roster):
+        require(type(row) is dict and set(row) == {"label", "owner", "attempted", "closed"} and
+                row is pin[0] is closed[0] and row["label"] == pin[1] == closed[1] and
+                row["owner"] is pin[2] is closed[2] and row["attempted"] is row["closed"] is True and
+                pin[3] is pin[4] is True, "BOOTSTRAP_PRODUCER_PREDECESSOR_ROSTER")
+
+
+def _capture_producer_predecessor(call):
+    saved = _producer_frame(call)
+    _producer_original_roots()
+    require(saved.state == "RESERVATION_RETURNED" and type(saved.reservation) is ConfigurationCustodyPrefix,
+            "BOOTSTRAP_PRODUCER_NOT_ORIGINAL_RESERVATION")
+    recipient = saved.roots[1].get(id(saved.transition))
+    require(type(recipient) is tuple and len(recipient) == 7 and recipient[0] is saved.transition and
+            type(recipient[1]) is _RecipientParent and all(flag is True for flag in recipient[4:]),
+            "BOOTSTRAP_PRODUCER_RECIPIENT_INTENT")
+    recipient_frame = _parent_originals(recipient[1])
+    require(recipient_frame[2] is saved.roots[1] and recipient_frame[4] is recipient,
+            "BOOTSTRAP_PRODUCER_RECIPIENT_ORIGINAL")
+    registered = saved.roots[2].get(id(recipient[1]))
+    require(type(registered) is tuple and len(registered) == 6 and registered[0] is saved.transition and
+            type(registered[1]) is _InitializerParent and _parent_originals(registered[1])[4] is registered and
+            registered[1].state == "COMPLETE", "BOOTSTRAP_PRODUCER_INITIALIZER_ORIGINAL")
+    row = saved.roots[4].get(id(registered[1]))
+    require(type(row) is tuple and len(row) == 3 and row[0] is registered[1] and row[1] is registered[1].result and
+            type(row[1]) is InitializationPrefix and type(row[2]) is _StagingSequence,
+            "BOOTSTRAP_PRODUCER_SEQUENCE_ORIGINAL")
+    sequence = row[2]
+    frame = _staging_sequence_checked(sequence)
+    require(frame.record is row and frame.state == "COMPLETE" and frame.original is None and
+            frame.result is saved.reservation and frame.plan == ("dependency-stage", "empty-seed", "custody-prepare") and
+            len(frame.phases) == 3, "BOOTSTRAP_PRODUCER_SEQUENCE_NOT_COMPLETE")
+    phases = tuple((parent, _staging_frame(parent)) for parent in frame.phases)
+    for parent, old in phases:
+        _producer_closed_phase(parent, old)
+    last = phases[-1][1]
+    require(last.result is saved.reservation and last.leaf is saved.reservation.custody_leaf and
+            saved.reservation.staged is phases[1][1].result and
+            saved.reservation.checked_ns == last.last and saved.reservation.checked_local == last.local_last and
+            type(last.request_pin) is _CustodyRequestPin, "BOOTSTRAP_PRODUCER_FINAL_RESERVATION_RETURN")
+    graph = _StagingClosedGraph.capture(*frame.phases, *(old for _parent, old in phases), saved.reservation)
+    result = _ProducerPredecessor(sequence, frame, (sequence.__dict__, tuple(sequence.__dict__.items())), phases, graph)
+    _update_producer(call, predecessor=result, state="RESERVED")
+    call.state = "RESERVED"
+    _producer_predecessor_checked(call)
+
+
+def _producer_predecessor_checked(call):
+    saved = _producer_frame(call)
+    _producer_original_roots()
+    pin = saved.predecessor
+    require(type(pin) is _ProducerPredecessor and _staging_sequence_checked(pin.sequence) is pin.frame and
+            pin.sequence.__dict__ is pin.published[0] and tuple(pin.sequence.__dict__.items()) == pin.published[1] and
+            pin.frame.result is saved.reservation,
+            "BOOTSTRAP_PRODUCER_SEQUENCE_CHANGED")
+    for parent, old in pin.phases:
+        _producer_closed_phase(parent, old)
+    pin.graph.checked()
+    return pin.frame
+
+
+def _producer_set_state(call, state):
+    _update_producer(call, state=state)
+    call.state = state
+
+
+def _producer_native(call, **values):
+    frame = _producer_frame(call)
+    _update_producer(call, native=frame.native._replace(**values))
+
+
+@dataclass(frozen=True)
+class _ProducerWindow:
+    """First600/825/870/900 caps, shortened by each actual phase and LOCAL.
+
+    RETURN is cleanup only; it can never make late WORK successful. A failed
+    start is consumed before clocks, with zero discretionary time on failure.
+    No synchronous supplier is claimed preemptible or a measured job budget.
+    """
+    call: object = field(repr=False, compare=False)
+
+    @property
+    def clock(self):
+        return origin.clocks.ClockIdentity(*_producer_window_frame(self).limits.clock)
+
+    def _raw_local(self, *, strict, minimum=0):
+        frame = _producer_window_frame(self)
+        call = frame.call
+        call.check() if strict else call.cleanup_bindings()
+        local = staging._local(time.monotonic())
+        require(local >= _producer_frame(call).local_last, "BOOTSTRAP_PRODUCER_LOCAL_BACKWARDS")
+        # Keep each actual returned sample with the ORIGINAL call before a
+        # publication recheck. A supplier may replace window.call; it cannot
+        # erase this high-water, update another claim, or select its methods.
+        _update_producer(call, local_last=local)
+        _producer_window_frame(self)
+        observed = origin.clocks.checked_now(origin.clocks.ClockIdentity(*frame.limits.clock),
+            minimum_ns=max(_producer_frame(call).last, origin.integer(minimum)))
+        require(observed >= _producer_frame(call).last, "BOOTSTRAP_PRODUCER_RAW_BACKWARDS")
+        _update_producer(call, last=observed)
+        _producer_window_frame(self)
+        after = staging._local(time.monotonic())
+        require(after >= _producer_frame(call).local_last, "BOOTSTRAP_PRODUCER_LOCAL_BACKWARDS")
+        _update_producer(call, local_last=after)
+        _producer_window_frame(self)
+        call.check() if strict else call.cleanup_bindings()
+        return observed, after
+
+    def sample(self, *, cleanup=False, minimum=0, limit=None):
+        require(type(cleanup) is bool, "BOOTSTRAP_PRODUCER_CLOCK_MODE")
+        frame = _producer_window_frame(self)
+        require(frame.state not in ("COMPLETE", "FAILED") and frame.phases and
+                (cleanup or frame.phases[-1].name in ("WORK", "READ")), "BOOTSTRAP_PRODUCER_PHASE_NOT_LIVE")
+        observed, local = self._raw_local(strict=not cleanup, minimum=minimum)
+        phase = _producer_window_frame(self).phases[-1]
+        end = phase.end if limit is None else min(phase.end, origin.integer(limit))
+        require(observed < end and local < phase.local_end, "BOOTSTRAP_PRODUCER_PHASE_EXPIRED")
+        return observed
+
+    def now(self, *, final=False, minimum=0, limit=None):
+        observed = self.sample(cleanup=final, minimum=minimum, limit=limit)
+        if not final:
+            _producer_window_frame(self).call.cancel()
+            observed = self.sample(minimum=observed, limit=limit)
+        return observed
+
+    def deadline(self, maximum, *, final=False, limit=None):
+        require(type(final) is bool and final is False and type(maximum) in (int, float) and
+                0 < maximum <= 900 and math.isfinite(maximum), "BOOTSTRAP_PRODUCER_ACQUISITION_MODE")
+        frame = _producer_window_frame(self)
+        call = frame.call
+        call.live()
+        local = staging._local(time.monotonic())
+        require(local >= _producer_frame(call).local_last, "BOOTSTRAP_PRODUCER_LOCAL_BACKWARDS")
+        _update_producer(call, local_last=local)
+        _producer_window_frame(self)
+        observed = self.now(limit=limit)
+        phase = _producer_window_frame(self).phases[-1]
+        end = phase.end if limit is None else min(phase.end, origin.integer(limit))
+        return min(phase.local_end, origin.wire._directed_deadline(local, maximum, end, observed))
+
+    def cleanup_deadline(self, maximum):
+        require(type(maximum) in (int, float) and math.isfinite(maximum) and 0 < maximum <= 225,
+                "BOOTSTRAP_PRODUCER_CLEANUP_MAXIMUM")
+        frame = _producer_window_frame(self)
+        require(frame.phases[-1].name in ("RETURN", "FINAL"), "BOOTSTRAP_PRODUCER_CLEANUP_PHASE")
+        call = frame.call
+        local = staging._local(time.monotonic())
+        require(local >= _producer_frame(call).local_last, "BOOTSTRAP_PRODUCER_LOCAL_BACKWARDS")
+        _update_producer(call, local_last=local)
+        _producer_window_frame(self)
+        observed = self.sample(cleanup=True)
+        phase = _producer_window_frame(self).phases[-1]
+        return min(phase.local_end, origin.wire._directed_deadline(local, maximum, phase.end, observed))
+
+    def advance(self, name):
+        frame = _producer_window_frame(self)
+        call = frame.call
+        require(type(name) is str and 0 < len(frame.phases) < 4 and
+                name == ("WORK", "RETURN", "FINAL", "READ")[len(frame.phases)], "BOOTSTRAP_PRODUCER_PHASE_REENTRY")
+        previous = frame.phases[-1]
+        # Immutable sentinel is installed BEFORE any phase-start supplier.
+        _update_producer(call, phases=(*frame.phases, _ProducerPhase(name, None, None, 0, 0.0)))
+        local = observed = None
+        try:
+            # An unavailable/failed start cannot acquire discretionary time by
+            # advancing again with a repaired clock. Known cleanup still runs
+            # with zero grace; ordinary WORK failure after a VALID phase start
+            # does not lose the separately established native cleanup cap.
+            require(previous.started is not None and previous.local_started is not None and
+                    previous.end > 0 and previous.local_end > 0, "BOOTSTRAP_PRODUCER_PRIOR_START_FAILED")
+            if name == "READ":
+                call.live()
+                call.writers_closed()
+            observed, local = self._raw_local(strict=name == "READ")
+            current = _producer_window_frame(self)
+            index, seconds = len(current.phases) - 1, {"RETURN": 225, "FINAL": 45, "READ": 30}[name]
+            end = min(current.limits.ends[index], origin.integer(observed + seconds * origin.NS))
+            local_end = min(current.limits.local_ends[index],
+                origin.wire._directed_deadline(local, seconds, end, observed))
+            if name == "READ":
+                # The previous FINAL cap is pinned separately from the new
+                # consumed READ slot. Its first observation must precede it.
+                require(observed < previous.end and local < previous.local_end, "BOOTSTRAP_PRODUCER_READ_START_EXPIRED")
+            _update_producer(call, phases=(*current.phases[:-1], _ProducerPhase(name, observed, local, end, local_end)))
+            self.sample(cleanup=name != "READ")
+        except BaseException as error:
+            # Preserve valid returned samples, but never leave a reusable or
+            # apparently live failed phase. Its next stage is cleanup only.
+            current = _producer_frame(call)
+            _update_producer(call, phases=(*current.phases[:-1], _ProducerPhase(name, observed, local, 0, 0.0)))
+            call.error("producer-" + name.lower() + "-start", error)
+            raise
+
+    def record(self):
+        frame = _producer_window_frame(self)
+        return {"clock": origin.clock_value(self.clock), "firstNs": frame.limits.first,
+            "globalEndsNs": dict(zip(("WORK", "RETURN", "FINAL", "READ"), frame.limits.ends)),
+            "phases": [{"phase": phase.name, "startedNs": phase.started, "endNs": phase.end} for phase in frame.phases],
+            "budgetAcceptance": "NOT_ADMITTED"}
+
+
+class _ProducerOwner(Owner):
+    """New producer ledger. No general RETURN/FINAL acquisition escape hatch."""
+    def error(self, stage, error, *, unknown=False):
+        _producer_owner_frame(self).call.error(stage, error, unknown=unknown)
+
+    def end(self, *, final=False):
+        require(final is False, "BOOTSTRAP_PRODUCER_NO_FINAL_ACQUISITION")
+        frame = _producer_owner_frame(self)
+        frame.call.live()
+        return frame.window.deadline(45)
+
+    def _retain(self, label, value):
+        frame = _producer_owner_frame(self)
+        require(not any(pin.value is value for pin in frame.resources), "BOOTSTRAP_PRODUCER_DUPLICATE_RESOURCE")
+        row = {"label": label, "owner": value, "attempted": False, "closed": False}
+        pin = _ProducerResource(row, label, value, type(value), False, False)
+        _update_producer(frame.call, resources=(*frame.resources, pin))
+        # The private original survives a changed public list or failed append.
+        frame.owner_bindings[0].append(row)
+        return value
+
+    def acquire(self, label, factory, *, final=False):
+        require(final is False and type(label) is str and label in (
+            "directory", "reader", "writer", "stdout", "stderr", "native-scope", "source-directory"),
+            "BOOTSTRAP_PRODUCER_RESOURCE_LABEL")
+        frame = _producer_owner_frame(self)
+        self.end()
+        require(frame.close_roster is None and (frame.phases[-1].name == "WORK" or label in
+            ("directory", "reader", "source-directory")), "BOOTSTRAP_PRODUCER_RESOURCE_PHASE")
+        try:
+            value = factory()
+        except BaseException as error:
+            frame.call.error(label + "-allocation", error, unknown=True)
+            raise
+        self._retain(label, value)
+        self.end()
+        return value
+
+    def new(self, path):
+        return self.acquire("directory", lambda: staging.files.private_root(path, create=True))
+
+    def open(self, path, *, final=False):
+        require(final is False, "BOOTSTRAP_PRODUCER_NO_FINAL_ACQUISITION")
+        return self.acquire("directory", lambda: staging.files.private_root(path))
+
+    def child(self, parent, name, *, create=False, final=False):
+        require(type(create) is bool and final is False, "BOOTSTRAP_PRODUCER_DIRECTORY_MODE")
+        frame = _producer_owner_frame(self)
+        require(not create or frame.phases[-1].name == "WORK", "BOOTSTRAP_PRODUCER_READ_ONLY_PHASE")
+        end = self.end()
+        return self.acquire("directory", lambda: parent.create_directory(name, deadline=end) if create else
+                            parent.open_directory(name, deadline=end))
+
+    def read(self, parent, name, maximum=LIMIT, *, final=False):
+        require(final is False, "BOOTSTRAP_PRODUCER_NO_FINAL_ACQUISITION")
+        raw, _binding = _producer_owner_frame(self).call.read_file(parent, name, maximum)
+        return raw
+
+    def write(self, parent, name, value, *, final=False):
+        require(final is False, "BOOTSTRAP_PRODUCER_NO_FINAL_ACQUISITION")
+        raw = value if type(value) is bytes else origin.encoded(value)
+        require(0 < len(raw) <= LIMIT, "BOOTSTRAP_PRODUCER_PRIVATE_RECORD_LIMIT")
+        end = self.end()
+        writer = self.acquire("writer", lambda: parent.create_file(name, max_bytes=len(raw), deadline=end))
+        frame = _producer_owner_frame(self)
+        try:
+            offset = 0
+            while offset < len(raw):
+                self.end()
+                part = raw[offset:offset + PRODUCER_READ_BLOCK]
+                count = writer.write(part)
+                require(type(count) is int and 0 < count <= len(part), "BOOTSTRAP_PRODUCER_SHORT_WRITE")
+                offset += count
+                self.end()
+            writer.sync()
+            require(writer.verify().size == len(raw), "BOOTSTRAP_PRODUCER_PRIVATE_WRITE_CHANGED")
+            self.end()
+        except BaseException as error:
+            frame.call.error("producer-write", error)
+        finally:
+            self.close_one(writer)
+        frame.call.raise_first()
+        require(self.read(parent, name) == raw, "BOOTSTRAP_PRODUCER_PRIVATE_READBACK")
+        return raw
+
+    def close_one(self, value):
+        frame = _producer_owner_frame(self)
+        pin = next((pin for pin in frame.resources if pin.value is value), None)
+        if pin is None:
+            frame.call.error("producer-close-foreign", origin.OriginError("BOOTSTRAP_PRODUCER_FOREIGN_RESOURCE"), unknown=True)
+            return
+        if pin.attempted:
+            return
+        try:
+            frame.call.cleanup_bindings()
+            require(type(value) is pin.kind and not frame.unknown, "BOOTSTRAP_PRODUCER_CLOSE_UNKNOWN")
+        except BaseException as error:
+            frame.call.error("producer-close-binding", error, unknown=True)
+            return
+        self.close_fence()
+        frame.call.close_resource(pin)
+        self.close_fence()
+
+    def close_fence(self):
+        frame = _producer_owner_frame(self)
+        try:
+            frame.window.sample(cleanup=True)
+        except BaseException as error:
+            frame.call.error("producer-close-fence", error)
+
+    def close(self):
+        frame = _producer_owner_frame(self)
+        if self.closed:
+            return
+        self.closed = True
+        self.close_fence()
+        for pin in reversed(frame.resources):
+            if _producer_frame(frame.call).unknown:
+                break
+            self.close_one(pin.value)
+        self.close_fence()
+        if _producer_frame(frame.call).unknown:
+            if not any(value is self for value in QUARANTINE):
+                QUARANTINE.append(self)
+            raise origin.OriginError("BOOTSTRAP_PRODUCER_RETIREMENT_UNKNOWN")
+
+
+@dataclass(frozen=True)
+class _ProducerOriginalReader:
+    call: object = field(repr=False, compare=False)
+    owner: object = field(init=False, repr=False, compare=False)
+    current: object = field(init=False, repr=False, compare=False)
+    past: object = field(init=False, repr=False)
+    first: object = field(init=False, repr=False)
+
+    def __post_init__(self):
+        call = self.call
+        require(type(call) is _ProducerParent, "BOOTSTRAP_PRODUCER_READER_CHANGED")
+        frame = call.check()
+        old = frame.transition._attempt.transition
+        for name, value in (("owner", call.live()), ("current", frame.window),
+                ("past", history.snapshot(old._fence)), ("first", old._limits[8])):
+            object.__setattr__(self, name, value)
+
+    def checked(self):
+        call, owner, current = self.call, self.owner, self.current
+        require(type(call) is _ProducerParent and type(owner) is _ProducerOwner and type(current) is _ProducerWindow,
+                "BOOTSTRAP_PRODUCER_READER_CHANGED")
+        # Check passive ORIGINAL window/owner identity before invoking any
+        # published parent. Even a different exact registered parent is not
+        # this view's target and must not have its roster/error state touched.
+        frame = _producer_window_frame(current)
+        require(frame.call is call and frame.owner is owner, "BOOTSTRAP_PRODUCER_READER_CHANGED")
+        frame = call.check()
+        old = frame.transition._attempt.transition
+        require(self.call is call and self.owner is owner and self.current is current and call.live() is owner and
+                current is frame.window and
+                self.first is old._limits[8] and history.checked(self.past) == history.snapshot(old._fence),
+                "BOOTSTRAP_PRODUCER_READER_CHANGED")
+        return self
+
+    def observe(self, *, final, minimum):
+        self.checked()
+        return self.current.now(minimum=minimum)
+
+
+def _producer_stamp(info, role):
+    """Common original direct-sink/readback fields; each supplier checks mode."""
+    if role == "windows-x64":
+        require(type(info) is windows.FileInfo, "BOOTSTRAP_PRODUCER_FILE_INFO")
+        return (tuple(info.identity), info.size, origin.encoded(info.as_dict()))
+    if type(info) is query._PosixInfo:
+        identity = (info.device, info.inode)
+    else:
+        require(type(info) is staging.files.PosixInfo, "BOOTSTRAP_PRODUCER_FILE_INFO")
+        identity = tuple(info.identity)
+    return (identity, info.size, info.mtime_ns, info.ctime_ns)
+
+
+@dataclass(eq=False)
+class _ProducerParent:
+    """One source-owned configuration parent, separate from ordinary FULL.
+
+    The constructor alone has no claim. No public CLI or workflow invokes it.
+    Closed predecessors remain closed; only the separately retained ancestor
+    cancellation callbacks belong to this new call's current obligations.
+    """
+    transition: object = field(repr=False)
+    state: str = "CLAIMED"
+    owner: object = field(default=None, repr=False)
+    window: object = field(default=None, repr=False)
+    handles: dict = field(default_factory=dict, repr=False)
+    records: dict = field(default_factory=dict, repr=False)
+    handlers: dict = field(default_factory=dict, repr=False)
+    cancelled: list = field(default_factory=list, repr=False)
+    original: object = field(default=None, repr=False)
+    unknown: bool = False
+    result: object = field(default=None, repr=False)
+
+    def error(self, stage, error, *, unknown=False):
+        frame = _producer_frame(self)
+        first = frame.original
+        if first is None:
+            first = frame.owner.original if frame.owner is not None and frame.owner.original is not None else error
+        detail = diagnostics._exception_detail(error)
+        uncertain = frame.unknown or unknown or detail["retirementUnknown"] or bool(
+            QUARANTINE or query.QUARANTINE or diagnostics._QUARANTINE)
+        errors = frame.errors
+        if len(errors) < 64:
+            errors = (*errors, origin.encoded({"stage": stage, "detail": detail}))
+        else:
+            uncertain = True
+        _update_producer(self, original=first, unknown=uncertain, errors=errors)
+        self.original, self.unknown = first, uncertain
+        if frame.owner is not None:
+            try:
+                require(frame.owner.errors is frame.owner_bindings[1], "BOOTSTRAP_PRODUCER_ERRORS_CHANGED")
+                Owner.error(frame.owner, stage, error, unknown=uncertain)
+                uncertain |= frame.owner.unknown
+            except BaseException:
+                uncertain = True
+            frame.owner.original, frame.owner.unknown = first, uncertain
+            _update_producer(self, unknown=uncertain)
+            self.unknown = uncertain
+
+    def raise_first(self):
+        frame = _producer_frame(self)
+        if frame.original is not None:
+            raise frame.original
+        if frame.owner is not None and frame.owner.original is not None:
+            self.error("producer-owner-return", frame.owner.original)
+            raise _producer_frame(self).original
+
+    def roster(self):
+        frame = _producer_frame(self)
+        if frame.owner is None:
+            return
+        original_rows = frame.owner_bindings[0]
+        foreign = list(frame.foreign)
+        seen = {(id(pin.row), id(pin.value)) for pin in frame.resources}
+        seen.update((id(row), id(value)) for row, _label, value in foreign)
+        for rows in (original_rows,) if frame.owner.resources is original_rows else (original_rows, frame.owner.resources):
+            if type(rows) is list:
+                for row in rows:
+                    label, value = (row.get("label"), row.get("owner")) if type(row) is dict else (None, None)
+                    if (id(row), id(value)) not in seen:
+                        foreign.append((row, label, value))
+                        seen.add((id(row), id(value)))
+        _update_producer(self, foreign=tuple(foreign))
+        try:
+            require(not foreign and frame.owner.resources is original_rows and type(original_rows) is list and
+                    len(original_rows) == len(frame.resources) <= 4096, "BOOTSTRAP_PRODUCER_ROSTER_CHANGED")
+            for row, pin in zip(original_rows, frame.resources):
+                require(row is pin.row and type(row) is dict and set(row) == {"label", "owner", "attempted", "closed"} and
+                        row["label"] == pin.label and row["owner"] is pin.value and type(pin.value) is pin.kind and
+                        row["attempted"] is pin.attempted and row["closed"] is pin.closed,
+                        "BOOTSTRAP_PRODUCER_ROSTER_CHANGED")
+            if frame.close_roster is not None:
+                require(tuple((id(pin.row), pin.label, id(pin.value)) for pin in frame.resources) == frame.close_roster,
+                        "BOOTSTRAP_PRODUCER_CLOSE_ROSTER_CHANGED")
+        except BaseException as error:
+            self.error("producer-roster", error, unknown=True)
+            raise
+
+    def cleanup_bindings(self):
+        """Actual owner/window pins only; a rejected call alias is not authority."""
+        frame = _producer_frame(self)
+        if frame.owner is not None:
+            owner, bound = frame.owner, frame.owner_bindings
+            self.roster()
+            frame = _producer_frame(self)
+            require(type(owner) is _ProducerOwner and owner.resources is bound[0] and owner.errors is bound[1] and
+                    owner.admissions is bound[2] and type(owner.local_end) is type(bound[3]) and owner.local_end == bound[3] and
+                    owner.first is frame.first and owner.fence is frame.window and owner.cancelled is bound[4] and
+                    owner.work_limit is None and owner.final_limit is None and owner.early_last == frame.limits.first and
+                    type(owner.closed) is bool and type(owner.unknown) is bool,
+                    "BOOTSTRAP_PRODUCER_OWNER_CHANGED")
+        if frame.window is not None:
+            require(type(frame.window) is _ProducerWindow and frame.window.call is self and
+                    _producer_window_frame(frame.window) is frame and type(frame.limits) is _ProducerLimits and
+                    staging._clock(frame.first.clock) == frame.limits.clock and frame.first.nanoseconds == frame.limits.first,
+                    "BOOTSTRAP_PRODUCER_WINDOW_CHANGED")
+        return frame
+
+    def check(self):
+        frame = self.cleanup_bindings()
+        _producer_original_roots()
+        require((PRODUCER_STREAM_BYTES, PRODUCER_OUTER_BYTES, PRODUCER_READ_BLOCK) == (67174400, 134348800, 65536) and
+                all(type(value) is int for value in (PRODUCER_STREAM_BYTES, PRODUCER_OUTER_BYTES, PRODUCER_READ_BLOCK)),
+                "BOOTSTRAP_PRODUCER_CAPTURE_POLICY_CHANGED")
+        require(type(self) is _ProducerParent and self.transition is frame.transition and self.state == frame.state and
+                self.owner is frame.owner and self.window is frame.window and self.original is frame.original and
+                self.unknown is frame.unknown and self.result is frame.result and self.handles is frame.published[0] and
+                self.records is frame.published[1] and self.handlers is frame.published[2] and self.cancelled is frame.published[3],
+                "BOOTSTRAP_PRODUCER_PARENT_CHANGED")
+        require(tuple(self.handles.items()) == tuple((row[0], row[1]) for row in frame.handles) and
+                tuple(self.records.items()) == tuple((row[0], row[6]) for row in frame.files) and
+                tuple(self.handlers.items()) == frame.handlers, "BOOTSTRAP_PRODUCER_PUBLIC_ROSTER_CHANGED")
+        if frame.predecessor is not None:
+            _producer_predecessor_checked(self)
+        require(not QUARANTINE and not query.QUARANTINE and not diagnostics._QUARANTINE, "BOOTSTRAP_PRODUCER_PRIOR_UNKNOWN")
+        return _producer_frame(self)
+
+    def live(self):
+        frame = self.check()
+        self.raise_first()
+        require(frame.state == "RUNNING" and frame.owner is not None and frame.owner.closed is False and
+                frame.unknown is False and frame.owner.unknown is False, "BOOTSTRAP_PRODUCER_NOT_LIVE")
+        return frame.owner
+
+    def cancel(self):
+        frame = self.check()
+        cancellation(frame.published[3])
+        for callback in frame.predecessor.frame.callbacks:
+            callback()
+            self.check()
+        cancellation(frame.published[3])
+
+    def inputs(self):
+        frame = self.check()
+        saved, last = frame.predecessor.frame, frame.predecessor.phases[-1][1]
+        return custody._Inputs(saved.originals, saved.original_pin, last.staged, last.staged_pin)
+
+    def directory(self, key, path, identity=None, *, parent=None, create=False):
+        owner = self.live()
+        frame = _producer_frame(self)
+        found = next((row for row in frame.handles if row[0] == key), None)
+        if found is None:
+            directory = owner.open(path) if parent is None else owner.child(parent, path.name, create=create)
+            actual = tuple(directory_identity(list(directory.identity), frame.limits.clock[0]))
+            row = (key, directory, path, actual)
+            _update_producer(self, handles=(*_producer_frame(self).handles, row))
+            self.handles[key] = directory
+            found = row
+        require(found[2] == path and (identity is None or found[3] == tuple(identity)),
+                "BOOTSTRAP_PRODUCER_DIRECTORY_CHANGED")
+        _new_entry_owned(owner, found[1], path, found[3])
+        self.check()
+        return found[1]
+
+    def read_file(self, directory, name, maximum=LIMIT, *, expected=None, binding=None):
+        """Bounded metadata only; outer streams use their separate hash reader."""
+        owner = self.live()
+        require(type(maximum) is int and 0 < maximum <= producer.LIMIT, "BOOTSTRAP_PRODUCER_METADATA_LIMIT")
+        end = owner.end()
+        reader = owner.acquire("reader", lambda: directory.open_file(name, max_bytes=maximum, deadline=end))
+        raw = retained = None
+        try:
+            before = reader.initial_info
+            require(type(before.size) is int and 0 <= before.size <= maximum, "BOOTSTRAP_PRODUCER_METADATA_SIZE")
+            retained = staging.files._info_binding(before)
+            require(binding is None or retained == binding, "BOOTSTRAP_PRODUCER_ORIGINAL_FILE_REPLACED")
+            data = bytearray()
+            while len(data) < before.size:
+                owner.end()
+                count = min(PRODUCER_READ_BLOCK, before.size - len(data))
+                part = reader.read(count)
+                require(type(part) is bytes and 0 < len(part) <= count, "BOOTSTRAP_PRODUCER_METADATA_SHORT_READ")
+                data.extend(part)
+                owner.end()
+            require(reader.read(1) == b"" and reader.verify() == before, "BOOTSTRAP_PRODUCER_METADATA_CHANGED")
+            raw = bytes(data)
+            require(expected is None or raw == expected, "BOOTSTRAP_PRODUCER_ORIGINAL_BYTES_CHANGED")
+            owner.end()
+        except BaseException as error:
+            self.error("producer-metadata-read", error)
+        finally:
+            owner.close_one(reader)
+        self.raise_first()
+        owner.end()
+        return raw, retained
+
+    def remember(self, key, directory, name, raw, maximum=LIMIT, *, binding=None):
+        frame = self.check()
+        require(type(raw) is bytes and len(raw) <= maximum and not any(row[0] == key for row in frame.files),
+                "BOOTSTRAP_PRODUCER_ORIGINAL_ROSTER")
+        identity = tuple(directory_identity(list(directory.identity), frame.limits.clock[0]))
+        _new_entry_owned(self.live(), directory, directory.path, identity)
+        # A reader's ORIGINAL binding must cross this boundary, especially for
+        # canonical start/receipt. For newly written metadata establish it now;
+        # never regenerate a supplied original binding from a later same-byte
+        # file. The detached encoding cannot be mutated through the caller.
+        if binding is None:
+            _actual, binding = self.read_file(directory, name, maximum, expected=raw)
+        require(staging.files._file_binding(binding), "BOOTSTRAP_PRODUCER_ORIGINAL_FILE_BINDING")
+        retained = origin.encoded(binding)
+        frame = self.check()
+        _update_producer(self, files=(*frame.files,
+            _ProducerFile(key, directory, directory.path, identity, name, maximum, raw, retained)))
+        self.records[key] = raw
+        self.check()
+
+    def reread(self):
+        owner = self.live()
+        for _key, directory, path, identity, name, maximum, raw, binding_raw in _producer_frame(self).files:
+            _new_entry_owned(owner, directory, path, identity)
+            self.read_file(directory, name, maximum, expected=raw, binding=origin.parse(binding_raw))
+        self.check()
+
+    def file_facade(self):
+        """Source-only adapter for unchanged original-file parsers, no owner."""
+        call, owner = self, self.live()
+        directories = {"bootstrap-source", "bootstrap-source-parent", "custody-source-root", "custody-source-scripts",
+                       "dependency-seed-source-root", "dependency-seed-source-parent"}
+        class Reader:
+            @property
+            def unknown(self):
+                return _producer_frame(call).unknown
+
+            def check(self, *, new=False):
+                require(type(new) is bool, "BOOTSTRAP_PRODUCER_FILE_MODE")
+                require(call.live() is owner, "BOOTSTRAP_PRODUCER_FILE_OWNER_CHANGED")
+                owner.end()
+
+            def end(self, *, new=False):
+                self.check(new=new)
+                return owner.end()
+
+            def acquire(self, label, factory):
+                require(label in directories or label in ("reader", "dependency-seed-input"),
+                        "BOOTSTRAP_PRODUCER_SOURCE_LABEL")
+                return owner.acquire("source-directory" if label in directories else "reader", factory)
+
+            def close_one(self, resource):
+                owner.close_one(resource)
+                call.raise_first()
+                require(any(pin.value is resource and pin.attempted and pin.closed for pin in
+                    _producer_frame(call).resources), "BOOTSTRAP_PRODUCER_SOURCE_CLOSE_UNKNOWN")
+
+            def error(self, stage, error, *, unknown=False):
+                call.error(stage, error, unknown=unknown)
+        return Reader()
+
+    def host(self):
+        owner = self.live()
+        owner.end()
+        frame = _producer_frame(self)
+        saved = frame.predecessor.frame
+        entry = frame.transition._attempt.transition._entry
+        context = origin.parse(entry.context_original)
+        require(origin.wire.TOKEN_ENV not in os.environ and os.environ.get(PREPARE_OUTCOME_ENV) == "success" and
+                os.environ.get(PREPARE_HASH_ENV) == origin.digest(entry.handoff_original),
+                "BOOTSTRAP_PRODUCER_PREPARE_OUTCOME_OR_TOKEN")
+        selection, path, event = host_inputs(saved.originals.clock.role)
+        require(path == saved.paths[0] and selection == context["selection"] and event == entry.admitted.original_event and
+                context["runnerName"] == os.environ.get("RUNNER_NAME") and context["inheritedContext"] == query._inherited_context() and
+                os.getpid() != origin.parse(entry.preparation_original)["processIdentity"]["pid"],
+                "BOOTSTRAP_PRODUCER_ACTUAL_HOST_CHANGED")
+        inputs = _parent_originals(saved.record[0])[4][5][0]
+        require(initialization._installed() == inputs.toolchains.originals and canonical._interpreter() == inputs.interpreter and
+                inputs.policy == initialization.properties(inputs.homes), "BOOTSTRAP_PRODUCER_INSTALLED_INPUTS_CHANGED")
+        env = recipient_environment(saved.paths[3])
+        env.update({name: home for name, _supplied, home, _identities in inputs.toolchains.originals})
+        require(tuple(sorted(env.items())) == inputs.environment, "BOOTSTRAP_PRODUCER_INITIAL_ENVIRONMENT_CHANGED")
+        owner.end()
+        return env
+
+    def read_originals(self):
+        owner = self.live()
+        self.host()
+        frame = _producer_frame(self)
+        saved, previous = frame.predecessor.frame, frame.transition._attempt
+        old = previous.transition
+        entry, paths = old._entry, saved.paths
+        value = origin.parse(entry.raw)
+        for key, path, identity in (("original", paths[0], value["preparation"]["sessionIdentity"]),
+                ("adoption", paths[1], value["sessionIdentity"]), ("entry", paths[2], previous.target_identity)):
+            self.directory(key, path, identity)
+        adoption, current = self.handles["adoption"], self.handles["entry"]
+        require(owner.read(adoption, "entry-context.json") == entry.raw and
+                owner.read(adoption, "entry-close-pending.json") == old.pending_raw and
+                owner.read(current, "new-entry-pending.json") == previous.pending_raw,
+                "BOOTSTRAP_PRODUCER_ENTRY_ORIGINAL_CHANGED")
+        for target, admitted, session_raw, returned_raw in (
+                (adoption, entry.admitted, entry.session_original, entry.return_original),
+                (current, previous.admitted, previous.admission_originals[1], previous.admission_originals[2])):
+            directory = self.directory("admission:" + str(target.path), target.path / "admission", parent=target)
+            require(load_admission(owner, directory) == admitted and owner.read(directory, "session-result.json") == session_raw and
+                    owner.read(target, "admission-return.json") == returned_raw, "BOOTSTRAP_PRODUCER_ENTRY_ADMISSION_CHANGED")
+        _admission_history_content(entry.admitted, entry.session_original, entry.return_original, history.snapshot(old._fence))
+        _new_entry_return_content(previous)
+        admitted, _context, prepared = _read_prepared(_ProducerOriginalReader(self), self.handles["original"],
+            entry.handoff_original, entry.context_original)
+        require(admitted == entry.admitted and same_preparation(prepared, origin.parse(entry.preparation_original)) and
+                same_preparation(prepared, origin.parse(previous.preparation)), "BOOTSTRAP_PRODUCER_PREPARATION_CHANGED")
+        service = self.directory("service", paths[0] / "service", parent=self.handles["original"])
+        responses = tuple((name, owner.read(service, name + ".json")) for name in ("attempt", "jobs"))
+        require(responses == old.responses and origin.encoded(_entry_close_proposal(entry, responses)) == old.proposal_raw and
+                old.proposal_raw == saved.originals.proposal_raw, "BOOTSTRAP_PRODUCER_SERVICE_ORIGINALS_CHANGED")
+        files = saved.files + tuple((key, str(path), identity, name, maximum, raw)
+            for _parent, closed in frame.predecessor.phases
+            for key, _directory, path, identity, name, maximum, raw in closed.files)
+        for _key, spelling, identity, name, maximum, raw in files:
+            path = Path(spelling)
+            directory = self.directory("predecessor:" + spelling, path, identity)
+            self.read_file(directory, name, maximum, expected=raw)
+        self.host()
+
+    def state_readback(self, *, before):
+        """Fresh prelaunch baseline and a DIFFERENT narrow postlaunch oracle."""
+        require(type(before) is bool, "BOOTSTRAP_PRODUCER_STATE_MODE")
+        owner, inputs = self.live(), self.inputs()
+        frame = _producer_frame(self)
+        request = origin.parse(frame.predecessor.phases[-1][1].leaf.request_raw)
+        initial = self.directory("initializer", inputs.session, inputs.directories["session"])
+        handles = {"session": initial}
+        for name in staging.DIRECTORIES[1:]:
+            parent = initial if name == "state" else handles["state"]
+            handles[name] = self.directory("canonical:" + name, parent.path / name, inputs.directories[name], parent=parent)
+        for key, directory, name, raw in (("initializer-context", initial, "initializer-context.json", inputs.context_raw),
+                ("canonical-context", handles["state"], "context.json", inputs.canonical_raw),
+                ("properties", handles["gradle-home"], "gradle.properties", inputs.properties_raw)):
+            self.read_file(directory, name, expected=raw, binding=request["fileBindings"][key])
+        leaf = self.file_facade()
+        if before:
+            require(frame.native.launch_attempted is False, "BOOTSTRAP_PRODUCER_PRELAUNCH_AFTER_SPAWN")
+            staging._names(leaf, handles["state"], ("context.json", "gradle-home", "evidence", "cancellations"))
+            staging._names(leaf, handles["gradle-home"], ("gradle.properties",))
+            staging._names(leaf, handles["evidence"], ())
+            staging._names(leaf, handles["cancellations"], ())
+        else:
+            require(frame.native.work_accepted is True and frame.native.retired is True and not frame.cancellation_attempted,
+                    "BOOTSTRAP_PRODUCER_POSTLAUNCH_NOT_SUCCESS")
+            staging._names(leaf, handles["state"], ("context.json", "gradle-home", "evidence", "cancellations", "gradle.lock"))
+            invocation = request["owner"]["productInvocation"]
+            staging._names(leaf, handles["evidence"], (invocation,))
+            staging._names(leaf, handles["cancellations"], ())
+            # Warmed H is not enumerated/copied or called a populated cohort.
+        for name, directory in handles.items():
+            require(tuple(directory.verify().identity) == inputs.directories[name], "BOOTSTRAP_PRODUCER_INITIALIZER_REPLACED")
+        pin = frame.predecessor.phases[-1][1].request_pin
+        directory = self.directory("reservation", Path(pin.path), pin.directory)
+        retained = self.directory("retained", Path(pin.path) / "retained", pin.retained, parent=directory)
+        self.read_file(directory, "request.json", expected=frame.predecessor.phases[-1][1].leaf.request_raw,
+                       binding=staging.files.record(pin.binding_raw))
+        staging._names(leaf, directory, ("request.json", "retained"))
+        staging._names(leaf, retained, ())
+        container = self.directory("stage-container", inputs.container)
+        restore = self.directory("restore-home", inputs.restore, parent=container)
+        custody._stage_readback(leaf, inputs, container, restore)
+        require(custody._sources(leaf, inputs) == {name: request[name] for name in ("inputs", "bootstrapInputs", "custodyInputs")},
+                "BOOTSTRAP_PRODUCER_SOURCE_INPUTS_CHANGED")
+        expected_owner = {"job": inputs.canonical["id"], "productInvocation": request["owner"]["productInvocation"],
+                          "sameHomeStopInvocation": request["owner"]["productInvocation"]}
+        require(request["owner"] == expected_owner and producer._uuid(expected_owner["productInvocation"]) and
+                request["evidenceDirectory"] == str(inputs.state / "evidence" / expected_owner["productInvocation"]),
+                "BOOTSTRAP_PRODUCER_RESERVATION_TARGET")
+        owner.end()
+
+    def admit(self):
+        owner = self.live()
+        frame = _producer_frame(self)
+        require(not frame.query_attempted and frame.phases[-1].name == "WORK", "BOOTSTRAP_PRODUCER_QUERY_REENTRY")
+        _update_producer(self, query_attempted=True)
+        window = frame.window
+        began = window.now()
+        work = min(frame.limits.ends[0], origin.integer(began + 75 * origin.NS))
+        final = min(frame.limits.ends[0], origin.integer(began + 120 * origin.NS))
+        pair = (window.deadline(75, limit=work), window.deadline(120, limit=final))
+        path = self.handles["phase"].path / "admission"
+        supplier = original = result = None
+        try:
+            supplier = query.NativeGitQueries(ROOT, path, check_cancel=lambda: window.now(limit=work), owner_deadlines=pair)
+            _update_producer(self, query=(supplier, type(supplier), pair, work, final))
+            window.now(limit=work)
+            supplier.native_host_matches_actions()
+            result = bootstrap.admit(ROOT, query_runner=supplier, expected=frame.transition._attempt.admitted)
+            supplier.retain_admission(result)
+            window.now(limit=work)
+        except BaseException as error:
+            original = error
+        finally:
+            if supplier is not None:
+                try:
+                    supplier._finalize(original)
+                    _update_producer(self, query_returned=(True, None, None))
+                except BaseException as error:
+                    _update_producer(self, query_returned=(False, None, None))
+                    if original is None:
+                        original = error
+            # Observe exceptional finalizer return as well; it does not erase
+            # an original exception or authorize the provisional session bytes.
+            try:
+                observed = window.now(limit=final)
+                if supplier is not None:
+                    returned = _producer_frame(self).query_returned
+                    _update_producer(self, query_returned=(returned[0], observed, _producer_frame(self).local_last))
+            except BaseException as error:
+                if original is None:
+                    original = error
+            if (supplier is not None and supplier.unknown) or query.QUARANTINE or diagnostics._QUARANTINE:
+                if original is None:
+                    original = origin.OriginError("BOOTSTRAP_PRODUCER_QUERY_UNKNOWN")
+                self.error("producer-query", original, unknown=True)
+        if original is not None:
+            self.error("producer-query-return", original)
+            raise _producer_frame(self).original
+        require(type(result) is I.Admission and result == frame.transition._attempt.admitted and supplier.closed and
+                _producer_frame(self).query_returned[0] is True, "BOOTSTRAP_PRODUCER_READMISSION")
+        directory = self.directory("producer-admission", path)
+        require(load_admission(owner, directory) == result, "BOOTSTRAP_PRODUCER_READMISSION_CHANGED")
+        for name, raw in (("admission.json", result.record), ("original-event.json", result.original_event),
+                ("original-policy.json", result.original_policy), ("recipient-public.asc", result.public_key),
+                ("session-result.json", owner.read(directory, "session-result.json"))):
+            self.remember("admission/" + name, directory, name, raw)
+        session = origin.parse(self.records["admission/session-result.json"])
+        require(set(session) == {"schema", "scope", "job", "queries", "result", "retirement", "firstError", "errors", "readbacks"} and
+                type(session["schema"]) is int and session["schema"] == 1 and session["scope"] == "ORDINARY_GIT_QUERIES_ONLY" and
+                type(session["job"]) is str and re.fullmatch(r"[0-9a-f]{32}", session["job"]) and
+                type(session["queries"]) is list and type(session["readbacks"]) is list and
+                session["result"] == "READY_FOR_CALLER_SEAL" and session["retirement"] == "KNOWN" and
+                session["firstError"] is None and session["errors"] == [],
+                "BOOTSTRAP_PRODUCER_QUERY_RECORD")
+        raw = owner.write(self.handles["phase"], "admission-return.json", {"admissionSha256": origin.digest(result.record),
+            "sessionSha256": origin.digest(self.records["admission/session-result.json"]), "clock": origin.clock_value(window.clock),
+            "returnedNs": _producer_frame(self).query_returned[1], "ownerDeadlineScope": "ORIGINAL_PRODUCER_WORK_ONLY"})
+        self.remember("admission-return", self.handles["phase"], "admission-return.json", raw)
+        window.now(limit=final)
+
+    def command(self, *, first=False):
+        frame = self.check()
+        owner, inputs = self.live(), self.inputs()
+        require(type(first) is bool and frame.phases[-1].name in ("WORK", "READ"), "BOOTSTRAP_PRODUCER_COMMAND_MODE")
+        base = self.host()
+        request = origin.parse(frame.predecessor.phases[-1][1].leaf.request_raw)
+        invocation = request["owner"]["productInvocation"]
+        inherited = processes.ownership_domains(base.get(processes.CHAIN_ENV, ""), base.get(processes.DOMAINS_ENV, ""))
+        require(len(inherited) <= 30 and invocation not in {row["id"] for row in inherited},
+                "BOOTSTRAP_PRODUCER_RESERVED_ANCESTRY_COLLISION")
+        outer = frame.outer_invocation
+        if first:
+            require(frame.descriptor is None and outer is None, "BOOTSTRAP_PRODUCER_COMMAND_REENTRY")
+            selected = uuid.uuid4()
+            require(type(selected) is uuid.UUID and selected.version == 4, "BOOTSTRAP_PRODUCER_UUID_SUPPLIER")
+            outer = selected.hex
+            _update_producer(self, outer_invocation=outer)  # One original allocation; no collision retry.
+        else:
+            require(type(outer) is str and frame.descriptor is not None, "BOOTSTRAP_PRODUCER_COMMAND_NOT_BOUND")
+        saved = frame.predecessor.frame
+        old_invocations = {origin.parse(old[4][1].records["start.json"])["invocation"] for old in saved.registries[6:8]}
+        require(outer not in {invocation, inputs.invocation, inputs.canonical["id"], origin.parse(inputs.context_raw)["job"],
+                             *old_invocations, *(row["id"] for row in inherited)} and invocation not in old_invocations,
+                "BOOTSTRAP_PRODUCER_OUTER_INVOCATION_COLLISION")
+        environment = processes.ownership_environment(base, inputs.canonical["id"], outer, str(inputs.state), str(inputs.home),
+                                                       allow_new_context=True)
+        domains = processes.ownership_domains(environment[processes.CHAIN_ENV], environment[processes.DOMAINS_ENV])
+        require(domains[:-1] == inherited and domains[-1] == {"id": outer, "job": inputs.canonical["id"],
+            "state": str(inputs.state), "home": str(inputs.home)}, "BOOTSTRAP_PRODUCER_DOMAIN_CHANGED")
+        raw = producer_command.command_request(inputs.admitted.record, inputs.canonical_raw,
+            invocation=invocation, ancestor_invocations=tuple(row["id"] for row in domains))
+        if first:
+            _update_producer(self, descriptor=raw, environment=tuple(sorted(environment.items())))
+        else:
+            require(raw == frame.descriptor and tuple(sorted(environment.items())) == frame.environment,
+                    "BOOTSTRAP_PRODUCER_COMMAND_CHANGED")
+        owner.end()
+        return origin.parse(raw), environment
+
+    def resource(self, label):
+        pins = [pin for pin in _producer_frame(self).resources if pin.label == label]
+        require(len(pins) <= 1, "BOOTSTRAP_PRODUCER_RESOURCE_DUPLICATE")
+        return pins[0] if pins else None
+
+    def close_resource(self, pin):
+        """Once-close an actual private return, never a caller's close flag."""
+        frame = _producer_frame(self)
+        actual = next((row for row in frame.resources if row.value is pin.value), None)
+        require(actual is not None and actual.row is pin.row and actual.kind is type(pin.value),
+                "BOOTSTRAP_PRODUCER_CLOSE_BINDING")
+        if actual.attempted:
+            return
+        _update_producer(self, resources=tuple(row._replace(attempted=True) if row.value is pin.value else row
+                                              for row in frame.resources))
+        pin.row["attempted"] = True
+        try:
+            pin.value.close()
+            current = _producer_frame(self)
+            _update_producer(self, resources=tuple(row._replace(closed=True) if row.value is pin.value else row
+                                                  for row in current.resources))
+            pin.row["closed"] = True
+        except BaseException as error:
+            self.error(pin.label + "-close", error, unknown=True)
+
+    def original_file(self, key):
+        rows = [row for row in _producer_frame(self).files if row[0] == key]
+        require(len(rows) == 1, "BOOTSTRAP_PRODUCER_ORIGINAL_MISSING")
+        return rows[0][6]
+
+    def native_scope(self):
+        """Narrow independently known scope, even after unrelated file UNKNOWN."""
+        frame, pin = _producer_frame(self), self.resource("native-scope")
+        require(pin is not None and type(pin.value) is pin.kind and not pin.attempted,
+                "BOOTSTRAP_PRODUCER_SCOPE_NOT_OWNED")
+        start = origin.parse(self.original_file("outer-start"))
+        scope = pin.value
+        if frame.limits.clock[0] == "windows-x64":
+            require(scope.job_id == start["job"] and scope.invocation == start["invocation"],
+                    "BOOTSTRAP_PRODUCER_NATIVE_DOMAIN_CHANGED")
+        else:
+            require((scope.job, scope.invocation, scope.state, scope.home) ==
+                    (start["job"], start["invocation"], start["state"], start["home"]),
+                    "BOOTSTRAP_PRODUCER_NATIVE_DOMAIN_CHANGED")
+        return scope
+
+    def capture_binding(self, capture):
+        frame = _producer_frame(self)
+        pin = self.resource(capture.name)
+        require(pin is not None and pin.value is capture.stream and type(pin.value) is pin.kind and not pin.attempted,
+                "BOOTSTRAP_PRODUCER_CAPTURE_NOT_OWNED")
+        target = next(row for row in frame.handles if row[0] == "capture-output")
+        stream = capture.stream
+        require(stream.path == target[2] / (capture.name + ".log"), "BOOTSTRAP_PRODUCER_CAPTURE_PATH_CHANGED")
+        maximum, end = ((stream.max_bytes, stream._deadline) if frame.limits.clock[0] == "windows-x64" else
+                        (stream.maximum, stream.deadline))
+        require(type(maximum) is int and maximum == 67174400 and type(end) is type(frame.limits.local_ends[2]) and
+                end == frame.limits.local_ends[2], "BOOTSTRAP_PRODUCER_CAPTURE_BOUND_CHANGED")
+        target[1].verify()
+        require(tuple(target[1].identity) == target[3], "BOOTSTRAP_PRODUCER_CAPTURE_DIRECTORY_CHANGED")
+        return stream
+
+    def observe_captures(self, *, cleanup=False):
+        frame = _producer_frame(self)
+        require(type(cleanup) is bool and len(frame.captures) == 2 and
+                tuple(row.name for row in frame.captures) == ("stdout", "stderr") and
+                len({row.identity for row in frame.captures}) == 2, "BOOTSTRAP_PRODUCER_CAPTURE_ROSTER")
+        for capture in frame.captures:
+            frame.window.now(final=cleanup)
+            stream = self.capture_binding(capture)
+            info = stream.observe_live_output() if frame.limits.clock[0] == "windows-x64" else stream.verify()
+            stamp = _producer_stamp(info, frame.limits.clock[0])
+            require(stamp[0] == capture.identity and type(stamp[1]) is int and
+                    capture.highwater <= stamp[1] <= 67174400, "BOOTSTRAP_PRODUCER_CAPTURE_SHRANK_OR_OVERFLOWED")
+            current = _producer_frame(self)
+            _update_producer(self, captures=tuple(row._replace(highwater=stamp[1]) if row.name == capture.name else row
+                                                  for row in current.captures))
+            frame.window.now(final=cleanup)
+        require(sum(row.highwater for row in _producer_frame(self).captures) <= 134348800,
+                "BOOTSTRAP_PRODUCER_OUTER_CAPTURE_AGGREGATE")
+
+    def launch(self):
+        owner, frame = self.live(), _producer_frame(self)
+        window, directory = frame.window, self.handles["phase"]
+        descriptor, environment = self.command()
+        request = origin.parse(descriptor["requestBytes"].encode("ascii"))
+        start = {"schema": 1, "scope": "BOOTSTRAP_CONFIGURATION_PARENT_PRELAUNCH_V1",
+            "contextSha256": descriptor["canonicalContextSha256"], "argv": descriptor["argv"], "cwd": str(ROOT),
+            "role": frame.limits.clock[0], "job": request["jobId"], "invocation": frame.outer_invocation,
+            "state": descriptor["state"], "home": request["gradleHome"],
+            "inheritedContext": {name: environment[name] for name in query._CONTEXT}, "startedNs": frame.limits.first,
+            "workEndNs": frame.limits.ends[0], "finalEndNs": frame.limits.ends[2], "exitCode": None,
+            "launchAttempted": False, "scopeAttempted": False, "retirement": "UNKNOWN"}
+        raw = owner.write(directory, "outer-start.json", start)
+        self.remember("outer-start", directory, "outer-start.json", raw)
+        try:
+            # Only this independently reopened direct-output view owns native
+            # sinks. Seed PosixFile is NOT a fileno-compatible launch sink.
+            output = owner.acquire("directory", lambda: windows.open_private_directory(directory.path)
+                if frame.limits.clock[0] == "windows-x64" else query._PosixDirectory(directory.path))
+            require(tuple(output.identity) == tuple(directory.identity), "BOOTSTRAP_PRODUCER_OUTPUT_DIRECTORY_CHANGED")
+            current = _producer_frame(self)
+            _update_producer(self, handles=(*current.handles, ("capture-output", output, directory.path, tuple(output.identity))))
+            self.handles["capture-output"] = output
+            for name in ("stdout", "stderr"):
+                stream = owner.acquire(name, lambda name=name: output.create_file(name + ".log",
+                    max_bytes=67174400, deadline=frame.limits.local_ends[2]))
+                info = stream.observe_live_output() if frame.limits.clock[0] == "windows-x64" else stream.verify()
+                stamp = _producer_stamp(info, frame.limits.clock[0])
+                require(type(stamp[1]) is int and stamp[1] == 0, "BOOTSTRAP_PRODUCER_NONEMPTY_CAPTURE")
+                capture = _ProducerCapture(name, stream, stamp[0], 0, None, False, False, None)
+                current = _producer_frame(self)
+                _update_producer(self, captures=(*current.captures, capture))
+                window.now()
+            def factory():
+                _producer_native(self, scope_attempted=True)
+                return processes.make_scope(start["job"], start["invocation"], start["state"], start["home"])
+            scope = owner.acquire("native-scope", factory)
+            self.native_scope()
+            identity = preparer_identity(scope, frame.limits.clock[0])
+            _producer_native(self, preparer_raw=origin.encoded(identity))
+            baseline = origin.encoded({"role": frame.limits.clock[0],
+                "baseline": sorted(scope.baseline) if hasattr(scope, "baseline") else None,
+                "kernelJob": frame.limits.clock[0] == "windows-x64"})
+            _producer_native(self, baseline_raw=baseline)
+            baseline_record(baseline, frame.limits.clock[0])
+            self.remember("baseline", directory, "baseline.json", owner.write(directory, "baseline.json", baseline))
+            self.read_originals()
+            self.state_readback(before=True)
+            checked_descriptor, checked_environment = self.command()
+            require(checked_descriptor == descriptor and checked_environment == environment,
+                    "BOOTSTRAP_PRODUCER_LAUNCH_COMMAND_CHANGED")
+            minimum = window.now()
+            _producer_native(self, launch_minimum=minimum, argv=tuple(descriptor["argv"]), launch_attempted=True)
+            child = scope.spawn(descriptor["argv"], str(ROOT), environment,
+                                stdout=self.resource("stdout").value, stderr=self.resource("stderr").value)
+            _producer_native(self, child=child, child_kind=type(child))  # Before pipe, PID, birth, callback or clock checks.
+            require(child.stdout is None and child.stderr is None, "BOOTSTRAP_PRODUCER_PRIVATE_SINKS_REQUIRED")
+            pid = child.pid
+            require(type(pid) is int and 0 < pid <= 2**32 - 1, "BOOTSTRAP_PRODUCER_CHILD_PID")
+            _producer_native(self, child_pid=pid)
+            birth_raw = origin.encoded(scope.description())
+            _producer_native(self, birth_raw=birth_raw)
+            birth = origin.parse(birth_raw)
+            leaders = [item for item in birth.get("startedIdentities", []) if item.get("pid") == pid]
+            require(len(leaders) == 1, "BOOTSTRAP_PRODUCER_NATIVE_BIRTH")
+            native_record(birth, start, leaders[0], descriptor["argv"], terminal=False)
+            require(identity["pid"] != pid, "BOOTSTRAP_PRODUCER_CONTROLLER_IS_PARENT")
+            baseline_value = baseline_record(baseline, frame.limits.clock[0])
+            if baseline_value["baseline"] is not None:
+                leader = lifetime(leaders[0], frame.limits.clock[0])
+                require(list(leader[:4] if frame.limits.clock[0].startswith("macos-") else leader)
+                        not in baseline_value["baseline"], "BOOTSTRAP_PRODUCER_PREEXISTING_LEADER")
+            _producer_native(self, leader_raw=origin.encoded(leaders[0]))  # Credible ORIGINAL birth, not launchAttempted.
+            observed = window.now(minimum=minimum)
+            raw = owner.write(directory, "native-start.json", {"ownership": birth, "leader": leaders[0],
+                "preparerIdentity": identity, "observedNs": observed})
+            self.remember("native-start", directory, "native-start.json", raw)
+            while True:
+                window.now()
+                self.observe_captures()
+                code = child.poll()
+                if code is not None:
+                    _producer_native(self, exit_code=code)  # Actual exit precedes every subsequent check.
+                window.now()
+                require(type(child) is _producer_frame(self).native.child_kind and child.pid == pid,
+                        "BOOTSTRAP_PRODUCER_CHILD_CHANGED")
+                survivors = scope.discover()
+                window.now()
+                self.observe_captures()
+                if code is not None:
+                    require(type(code) is int and code == 0, "BOOTSTRAP_PRODUCER_CANONICAL_EXIT")
+                    require(survivors == [], "BOOTSTRAP_PRODUCER_WORK_DESCENDANTS")
+                    completed = window.now()
+                    _producer_native(self, completed_ns=completed, work_accepted=True)
+                    break
+                time.sleep(.025)
+        except BaseException as error:
+            self.error("producer-native-work", error)
+        finally:
+            self.finish_native()
+        self.raise_first()
+
+    def cancellation_request(self):
+        """Exclusive one-shot RETURN transaction over the original pinned home.
+
+        The unchanged canonical reader accepts these four fields. Unlike the
+        old idempotent writer, this does not adopt an existing/racing file.
+        A visible or read-back request is NOT proof the child cooperated.
+        """
+        frame = _producer_frame(self)
+        require(frame.phases[-1].name == "RETURN" and frame.original is not None and not frame.cancellation_attempted,
+                "BOOTSTRAP_PRODUCER_CANCEL_REENTRY_OR_PHASE")
+        _update_producer(self, cancellation_attempted=True)
+        writer = reader = None
+        try:
+            self.cleanup_bindings()
+            frame = _producer_frame(self)
+            require(not frame.unknown and not frame.owner.unknown and frame.native.leader_raw is not None and
+                    frame.native.child is not None and type(frame.native.child) is frame.native.child_kind and
+                    frame.native.child.pid == frame.native.child_pid, "BOOTSTRAP_PRODUCER_CANCEL_NO_ORIGINAL_CHILD")
+            scope = self.native_scope()
+            start = origin.parse(self.original_file("outer-start"))
+            native_record(origin.parse(frame.native.birth_raw), start, origin.parse(frame.native.leader_raw),
+                          list(frame.native.argv), terminal=False)
+            require(scope is self.resource("native-scope").value, "BOOTSTRAP_PRODUCER_CANCEL_SCOPE_CHANGED")
+            descriptor = origin.parse(frame.descriptor)
+            request = origin.parse(descriptor["requestBytes"].encode("ascii"))
+            directories = {row[0]: row for row in frame.handles}
+            for key in ("canonical:state", "canonical:gradle-home", "canonical:cancellations"):
+                _key, directory, path, identity = directories[key]
+                require(directory.path == path and tuple(directory.verify().identity) == identity,
+                        "BOOTSTRAP_PRODUCER_CANCEL_DIRECTORY_CHANGED")
+            directory = directories["canonical:cancellations"][1]
+            require(directory.path == Path(descriptor["state"]) / "cancellations" and
+                    start["state"] == descriptor["state"] and start["home"] == request["gradleHome"] and
+                    start["job"] == request["jobId"] and request["id"] != start["invocation"],
+                    "BOOTSTRAP_PRODUCER_CANCEL_TARGET_CHANGED")
+            attempted = frame.window.sample(cleanup=True)
+            _update_producer(self, cancellation_stamps=(("attempted", attempted, _producer_frame(self).local_last),))
+            label = datetime.now(timezone.utc).isoformat()
+            producer._utc(label)
+            producer._uuid(request["id"])
+            producer._uuid(request["jobId"])
+            raw = origin.encoded({"schema": 1, "id": request["id"], "jobId": request["jobId"], "requestedUtc": label})
+            require(0 < len(raw) <= 512, "BOOTSTRAP_PRODUCER_CANCEL_BYTES")
+            _update_producer(self, cancellation_raw=raw)
+            end = frame.window.cleanup_deadline(225)
+            # The two source-selected file acquisitions below are NOT exposed
+            # as generic RETURN owner.acquire/read/write or arbitrary callbacks.
+            writer = directory.create_file(request["id"] + ".json", max_bytes=len(raw), deadline=end)
+            frame.owner._retain("cancellation-writer", writer)
+            frame.window.sample(cleanup=True)
+            count = writer.write(raw)
+            require(type(count) is int and count == len(raw), "BOOTSTRAP_PRODUCER_CANCEL_SHORT_WRITE")
+            frame.window.sample(cleanup=True)
+            writer.sync()
+            info = writer.verify()
+            require(info.size == len(raw), "BOOTSTRAP_PRODUCER_CANCEL_WRITE_CHANGED")
+            binding = staging.files._info_binding(info)
+            frame.window.sample(cleanup=True)
+            frame.owner.close_one(writer)
+            pin = self.resource("cancellation-writer")
+            require(pin.attempted and pin.closed and not _producer_frame(self).unknown,
+                    "BOOTSTRAP_PRODUCER_CANCEL_WRITER_NOT_CLOSED")
+            end = frame.window.cleanup_deadline(225)
+            reader = directory.open_file(request["id"] + ".json", max_bytes=len(raw), deadline=end)
+            frame.owner._retain("cancellation-reader", reader)
+            frame.window.sample(cleanup=True)
+            before = reader.initial_info
+            require(staging.files._info_binding(before) == binding and before.size == len(raw),
+                    "BOOTSTRAP_PRODUCER_CANCEL_READBACK_REPLACED")
+            actual = reader.read(len(raw))
+            frame.window.sample(cleanup=True)
+            require(type(actual) is bytes and actual == raw and reader.read(1) == b"" and reader.verify() == before,
+                    "BOOTSTRAP_PRODUCER_CANCEL_READBACK_CHANGED")
+            frame.owner.close_one(reader)
+            pin = self.resource("cancellation-reader")
+            require(pin.attempted and pin.closed and not _producer_frame(self).unknown,
+                    "BOOTSTRAP_PRODUCER_CANCEL_READER_NOT_CLOSED")
+            returned = frame.window.sample(cleanup=True)
+            current = _producer_frame(self)
+            _update_producer(self, cancellation_stamps=(*current.cancellation_stamps,
+                ("readback-returned", returned, current.local_last)))
+        except BaseException as error:
+            self.error("producer-cancellation-request", error)
+        finally:
+            # Actually returned handles already belong to the private ledger;
+            # factory failures create no substitute target or adopted record.
+            for resource in (reader, writer):
+                if resource is not None:
+                    frame.owner.close_one(resource)
+
+    def return_child(self):
+        frame = _producer_frame(self)
+        require(frame.phases[-1].name == "RETURN", "BOOTSTRAP_PRODUCER_RETURN_PHASE")
+        if frame.native.child is None or frame.native.leader_raw is None:
+            return
+        if frame.original is not None and not frame.unknown:
+            self.cancellation_request()
+        # No new product, stop, query, source or directory acquisition here.
+        while not _producer_frame(self).unknown:
+            frame.window.sample(cleanup=True)
+            current = _producer_frame(self)
+            if current.native.exit_code is not None:
+                return
+            child = current.native.child
+            require(type(child) is current.native.child_kind and child.pid == current.native.child_pid,
+                    "BOOTSTRAP_PRODUCER_RETURN_CHILD_CHANGED")
+            self.observe_captures(cleanup=True)
+            code = child.poll()
+            if code is not None:
+                _producer_native(self, exit_code=code)
+            frame.window.sample(cleanup=True)
+            self.native_scope().discover()
+            frame.window.sample(cleanup=True)
+            if code is not None:
+                return  # A late0 is retained, NEVER promoted to work_accepted.
+            time.sleep(.025)
+
+    def finish_native(self):
+        frame = _producer_frame(self)
+        if frame.window is None:
+            return
+        try:
+            frame.window.advance("RETURN")
+            self.return_child()
+        except BaseException as error:
+            self.error("producer-return", error)
+        final_ready = False
+        try:
+            frame.window.advance("FINAL")
+            final_ready = True
+        except BaseException as error:
+            self.error("producer-final", error)
+        pin = self.resource("native-scope")
+        if pin is not None:
+            try:
+                scope = self.native_scope()
+                remaining = 0
+                if final_ready:
+                    try:
+                        end = frame.window.cleanup_deadline(45)
+                        local = staging._local(time.monotonic())
+                        require(local >= _producer_frame(self).local_last, "BOOTSTRAP_PRODUCER_LOCAL_BACKWARDS")
+                        _update_producer(self, local_last=local)
+                        remaining = max(0, end - local)
+                    except BaseException as error:
+                        self.error("producer-drain-fence", error)
+                _producer_native(self, drain_attempted=True)
+                grace = min(5, remaining)
+                survivors = scope.drain(grace=grace, kill_wait=min(5, max(0, remaining - grace)))
+                _producer_native(self, survivors_raw=origin.encoded({"survivors": survivors}))
+                terminal = origin.encoded(scope.description())
+                _producer_native(self, terminal_raw=terminal)
+                require(survivors == [] and origin.parse(terminal).get("discoveryErrors") == [],
+                        "BOOTSTRAP_PRODUCER_NATIVE_DRAIN_UNKNOWN")
+                current = _producer_frame(self)
+                if current.native.preparer_raw is not None:
+                    require(origin.encoded(preparer_identity(scope, frame.limits.clock[0])) == current.native.preparer_raw,
+                            "BOOTSTRAP_PRODUCER_PARENT_LIFETIME_CHANGED")
+                if current.native.leader_raw is not None:
+                    native_record(origin.parse(terminal), origin.parse(self.original_file("outer-start")),
+                        origin.parse(current.native.leader_raw), list(current.native.argv))
+                    require(origin.parse(current.native.birth_raw)["launches"] == origin.parse(terminal)["launches"],
+                            "BOOTSTRAP_PRODUCER_NATIVE_LAUNCH_CHANGED")
+                _producer_native(self, retired=True)
+            except BaseException as error:
+                self.error("producer-native-drain", error, unknown=True)
+            try:
+                # A separately known scope is not abandoned because an
+                # unrelated file/query failed. No rejected public alias is used.
+                self.native_scope()
+                self.close_resource(pin)
+            except BaseException as error:
+                self.error("producer-native-close", error, unknown=True)
+            if not self.resource("native-scope").closed:
+                _producer_native(self, retired=False)
+        elif frame.native.scope_attempted:
+            self.error("producer-native-allocation", origin.OriginError("BOOTSTRAP_PRODUCER_SCOPE_UNKNOWN"), unknown=True)
+        else:
+            _producer_native(self, retired=True)
+        current = _producer_frame(self)
+        if current.native.retired and not current.unknown:
+            for capture in current.captures:
+                try:
+                    frame.window.sample(cleanup=True)
+                    stream = self.capture_binding(capture)
+                    stream.sync()
+                    info = stream.verify()
+                    stamp = _producer_stamp(info, frame.limits.clock[0])
+                    require(stamp[0] == capture.identity and capture.highwater <= stamp[1] <= 67174400,
+                            "BOOTSTRAP_PRODUCER_FINAL_CAPTURE_CHANGED")
+                    now = _producer_frame(self)
+                    _update_producer(self, captures=tuple(row._replace(highwater=stamp[1], final_stamp=stamp,
+                        synced=True, verified=True) if row.name == capture.name else row for row in now.captures))
+                    frame.window.sample(cleanup=True)
+                except BaseException as error:
+                    self.error("producer-capture-final", error)
+                frame.owner.close_one(capture.stream)
+            # A returned capture whose first metadata observation failed is
+            # still in resources even if no _ProducerCapture was constructed.
+            for name in ("stdout", "stderr"):
+                capture_pin = self.resource(name)
+                if capture_pin is not None:
+                    frame.owner.close_one(capture_pin.value)
+        try:
+            finalized = frame.window.sample(cleanup=True)
+            _producer_native(self, finalized_ns=finalized)
+        except BaseException as error:
+            self.error("producer-native-final-return", error)
+
+    def writers_closed(self):
+        frame = self.check()
+        require(frame.native.work_accepted is True and frame.native.retired is True and len(frame.captures) == 2 and
+                all(row.final_stamp is not None and row.synced and row.verified for row in frame.captures),
+                "BOOTSTRAP_PRODUCER_READ_BEFORE_RETIREMENT")
+        for name in ("native-scope", "stdout", "stderr"):
+            pin = self.resource(name)
+            require(pin is not None and pin.attempted and pin.closed, "BOOTSTRAP_PRODUCER_READ_BEFORE_CLOSE")
+
+    def read_capture(self, capture):
+        owner, frame = self.live(), _producer_frame(self)
+        self.writers_closed()
+        require(frame.phases[-1].name == "READ" and capture in frame.captures and capture.readback is None,
+                "BOOTSTRAP_PRODUCER_CAPTURE_READ_REENTRY")
+        directory, end = self.handles["phase"], owner.end()
+        reader = owner.acquire("reader", lambda: directory.open_file(capture.name + ".log", max_bytes=67174400, deadline=end))
+        count, digest = 0, hashlib.sha256()
+        try:
+            before = reader.initial_info
+            require(_producer_stamp(before, frame.limits.clock[0]) == capture.final_stamp,
+                    "BOOTSTRAP_PRODUCER_CLOSED_CAPTURE_REPLACED")
+            while count < before.size:
+                owner.end()
+                maximum = min(65536, before.size - count)
+                part = reader.read(maximum)
+                require(type(part) is bytes and 0 < len(part) <= maximum, "BOOTSTRAP_PRODUCER_CAPTURE_SHORT_READ")
+                count += len(part)
+                require(count <= 67174400, "BOOTSTRAP_PRODUCER_CAPTURE_OVERFLOW")
+                digest.update(part)
+                owner.end()
+            # Positive read even for a zero-byte original: read(0) is not EOF.
+            require(reader.read(1) == b"" and reader.verify() == before and count == before.size,
+                    "BOOTSTRAP_PRODUCER_CAPTURE_READ_CHANGED")
+            owner.end()
+        except BaseException as error:
+            self.error("producer-capture-read", error)
+        finally:
+            owner.close_one(reader)
+        self.raise_first()
+        observed = frame.window.now()
+        current = _producer_frame(self)
+        record = (count, digest.hexdigest(), observed, current.local_last)
+        _update_producer(self, captures=tuple(row._replace(readback=record) if row.name == capture.name else row
+                                              for row in current.captures))
+        return record
+
+    def read_canonical(self):
+        frame = self.check()
+        frame.window.advance("READ")
+        self.writers_closed()
+        self.state_readback(before=False)
+        for capture in _producer_frame(self).captures:
+            self.read_capture(capture)
+        require(sum(row.readback[0] for row in _producer_frame(self).captures) <= 134348800,
+                "BOOTSTRAP_PRODUCER_READBACK_AGGREGATE")
+        inputs = self.inputs()
+        descriptor, _environment = self.command()
+        request_raw = descriptor["requestBytes"].encode("ascii")
+        request = producer.parse(request_raw)
+        evidence = self.handles["canonical:evidence"]
+        directory = self.directory("canonical-invocation", evidence.path / request["id"], parent=evidence)
+        for name in ("start", "receipt"):
+            raw, binding = self.read_file(directory, name + ".json", producer.LIMIT)
+            self.remember("canonical-" + name, directory, name + ".json", raw, producer.LIMIT, binding=binding)
+        start_raw, receipt_raw = self.original_file("canonical-start"), self.original_file("canonical-receipt")
+        for raw in (start_raw, receipt_raw):
+            require(type(producer.parse(raw).get("controllerPid")) is int and
+                    producer.parse(raw)["controllerPid"] == frame.native.child_pid,
+                    "BOOTSTRAP_PRODUCER_CANONICAL_CONTROLLER_CHANGED")
+        observed = producer.observe_canonical(request_raw, inputs.admitted.record, inputs.canonical_raw,
+            start_raw, receipt_raw, original_exit_code=frame.native.exit_code)
+        observation_raw = producer.encoded(observed)
+        self.reread()
+        self.state_readback(before=False)
+        self.read_originals()
+        self.command()
+        frame.window.now()
+        return request_raw, start_raw, receipt_raw, observation_raw
+
+
+def _close_producer(parent):
+    """No postclose writer/owner: known original cleanup and handler obligations."""
+    frame = _producer_frame(parent)
+    owner = frame.owner
+    if owner is not None:
+        _producer_set_state(parent, "CLOSING")
+        if frame.phases[-1].name == "WORK":
+            try:
+                parent.finish_native()
+            except BaseException as error:
+                parent.error("producer-unlaunched-final", error)
+        try:
+            parent.roster()
+            frame = _producer_frame(parent)
+            require(frame.close_roster is None, "BOOTSTRAP_PRODUCER_CLOSE_REENTRY")
+            _update_producer(parent, close_roster=tuple((id(pin.row), pin.label, id(pin.value)) for pin in frame.resources))
+            owner.close()
+        except BaseException as error:
+            parent.error("producer-resource-close", error)
+    for number, handler in _producer_frame(parent).handlers:
+        try:
+            signal.signal(number, handler)
+            require(signal.getsignal(number) == handler, "BOOTSTRAP_PRODUCER_HANDLER_NOT_RESTORED")
+            current = _producer_frame(parent)
+            _update_producer(parent, restored=(*current.restored, (number, handler)))
+        except BaseException as error:
+            parent.error("producer-handler-restore", error)
+    try:
+        parent.roster()
+        frame = _producer_frame(parent)
+        require(owner is None or (owner.closed is True and frame.close_roster is not None and
+                all(pin.attempted and pin.closed for pin in frame.resources)), "BOOTSTRAP_PRODUCER_CLOSE_INCOMPLETE")
+    except BaseException as error:
+        parent.error("producer-close-roster", error, unknown=True)
+
+
+def _run_configuration_producer(parent):
+    frame = parent.check()
+    require(frame.state == "RESERVED" and frame.owner is None and frame.window is None and frame.result is None,
+            "BOOTSTRAP_PRODUCER_RUN_REENTRY")
+    _producer_set_state(parent, "STARTING")  # Consumed even if the first clock fails.
+    returned = None
+    try:
+        previous = frame.predecessor.phases[-1][1]
+        saved = frame.predecessor.frame
+        local = staging._local(time.monotonic())
+        _update_producer(parent, local_last=local)
+        first = origin.clocks.validate_reading(origin.clocks.observe())
+        _update_producer(parent, first=first, last=first.nanoseconds)
+        require(staging._clock(first.clock) == staging._clock(saved.originals.clock) and
+                first.nanoseconds >= previous.last and local >= previous.local_last,
+                "BOOTSTRAP_PRODUCER_PREDECESSOR_CLOCK")
+        proposal = allocation.validate_proposal(saved.originals.proposal_raw, saved.originals.admitted,
+            saved.originals.responses, saved.originals.invocation, saved.originals.clock, saved.originals.runner_name)
+        names, seconds = ("producer-work", "producer-return", "producer-final", "producer-read"), (600, 825, 870, 900)
+        ends = tuple(min(origin.integer(first.nanoseconds + maximum * origin.NS), proposal["phaseFencesNs"][name],
+                         proposal["proposedJobEndNs"]) for name, maximum in zip(names, seconds))
+        require(first.nanoseconds < ends[0] <= ends[1] <= ends[2] <= ends[3], "BOOTSTRAP_PRODUCER_NO_PHASE_INTERVAL")
+        local_ends = tuple(origin.wire._directed_deadline(local, maximum, end, first.nanoseconds)
+                           for maximum, end in zip(seconds, ends))
+        limits = _ProducerLimits(staging._clock(first.clock), first.nanoseconds, local, ends, local_ends)
+        window, callback = _ProducerWindow(parent), parent.cancel
+        _update_producer(parent, limits=limits, window=window,
+            phases=(_ProducerPhase("WORK", first.nanoseconds, local, ends[0], local_ends[0]),))
+        parent.window = window
+        owner = _ProducerOwner(local_ends[3], window, first=first, cancelled=callback)
+        _update_producer(parent, owner=owner,
+            owner_bindings=(owner.resources, owner.errors, owner.admissions, owner.local_end, callback), state="RUNNING")
+        parent.owner, parent.state = owner, "RUNNING"
+        owner.end()
+        for number in (signal.SIGINT, signal.SIGTERM, *([signal.SIGBREAK] if hasattr(signal, "SIGBREAK") else [])):
+            handler = signal.getsignal(number)
+            current = _producer_frame(parent)
+            _update_producer(parent, handlers=(*current.handlers, (number, handler)))
+            parent.handlers[number] = handler  # Original restore duty BEFORE a potentially partial install.
+            signal.signal(number, lambda signum, _frame: _producer_frame(parent).published[3].append(signum))
+            owner.end()
+        parent.read_originals()
+        parent.state_readback(before=True)
+        initial = parent.handles["initializer"]
+        parent.directory("phase", initial.path / "configuration-parent", parent=initial, create=True)
+        parent.admit()
+        parent.read_originals()
+        parent.state_readback(before=True)
+        parent.command(first=True)
+        parent.launch()
+        returned = parent.read_canonical()
+    except BaseException as error:
+        parent.error("producer-parent", error)
+    finally:
+        _close_producer(parent)
+    try:
+        parent.raise_first()
+        frame = parent.check()
+        require(frame.owner is not None and frame.owner.closed and frame.owner.original is None and
+                not frame.unknown and not frame.owner.unknown and not frame.errors and not frame.foreign and
+                frame.handlers == frame.restored and all(pin.attempted and pin.closed for pin in frame.resources) and
+                frame.native.work_accepted is True and frame.native.retired is True and
+                type(frame.native.exit_code) is int and frame.native.exit_code == 0 and returned is not None,
+                "BOOTSTRAP_PRODUCER_FINAL_RETURN_NOT_CLOSED")
+        request_raw, start_raw, receipt_raw, observation_raw = returned
+        require(start_raw == parent.original_file("canonical-start") and receipt_raw == parent.original_file("canonical-receipt") and
+                request_raw == origin.parse(frame.descriptor)["requestBytes"].encode("ascii"),
+                "BOOTSTRAP_PRODUCER_RETURN_ORIGINALS_CHANGED")
+        # No report paths are followed. The unchanged helper's own disclaimers
+        # stay intact alongside separate original enclosing observations.
+        producer.validate_observation(producer.parse(observation_raw), request_raw,
+            frame.predecessor.frame.originals.admitted.record, frame.predecessor.frame.originals.canonical_raw,
+            start_raw, receipt_raw, original_exit_code=frame.native.exit_code)
+        parent.cancel()
+        closed = frame.window.now(minimum=frame.native.finalized_ns)
+        raw = origin.encoded({"schema": 1, "scope": "BOOTSTRAP_CONFIGURATION_PARENT_CLOSED_OBSERVATIONS_V1",
+            "reservationSha256": origin.digest(frame.reservation.raw), "descriptorSha256": origin.digest(frame.descriptor),
+            "requestSha256": origin.digest(request_raw), "canonicalObservationSha256": origin.digest(observation_raw),
+            "window": frame.window.record(), "closedNs": closed, "originalExitCode": frame.native.exit_code,
+            "workCompletedNs": frame.native.completed_ns, "outerNativeRetirement": "KNOWN_ORIGINAL_SCOPE_CLOSE",
+            "outerStartSha256": origin.digest(parent.original_file("outer-start")),
+            "outerBaselineSha256": origin.digest(frame.native.baseline_raw),
+            "outerBirthSha256": origin.digest(frame.native.birth_raw), "outerTerminalSha256": origin.digest(frame.native.terminal_raw),
+            "outerCaptures": {row.name: {"bytes": row.readback[0], "sha256": row.readback[1], "readNs": row.readback[2]}
+                              for row in frame.captures},
+            "outerCaptureScope": "TWO_ORIGINAL_STREAMS_OBSERVED_SIZE_NOT_KERNEL_QUOTA_OR_COMPLETE_CUSTODY",
+            "canonicalFourLogReportCollection": "NOT_PERFORMED", "dependencyPopulation": "NOT_ATTESTED",
+            "parentResourceClose": "KNOWN_RESOURCE_CLOSE_ONLY", "resourceCount": len(frame.resources),
+            "nextPhaseAuthority": False, "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED",
+            "exportSaveAuthority": False})
+        # This final now includes all original callbacks and fresh RAW/LOCAL
+        # observations after them. Only passive graph/bookkeeping follows.
+        checked = frame.window.now(minimum=closed)
+        frame = parent.check()
+        require(frame.last == checked and frame.original is None and frame.owner.original is None and
+                not frame.unknown and frame.handlers == frame.restored and all(pin.attempted and pin.closed for pin in frame.resources),
+                "BOOTSTRAP_PRODUCER_FINAL_BOUNDARY_CHANGED")
+        result = ConfigurationPrefix(raw, request_raw, start_raw, receipt_raw, observation_raw, checked, frame.local_last)
+        _update_producer(parent, result=result, state="COMPLETE")
+        parent.result, parent.state = result, "COMPLETE"
+        return result
+    except BaseException as error:
+        parent.error("producer-final-return", error)
+        _producer_set_state(parent, "FAILED")
+        frame = _producer_frame(parent)
+        if frame.owner is not None and frame.unknown and not any(value is frame.owner for value in QUARANTINE):
+            QUARANTINE.append(frame.owner)
+        try:
+            frame.original.bootstrap_configuration_parent = parent
+            frame.original.bootstrap_configuration_resources = tuple((pin.label, pin.value, pin.attempted, pin.closed)
+                                                                       for pin in frame.resources)
+            frame.original.bootstrap_configuration_custody = "INCOMPLETE" if frame.files else "UNAVAILABLE"
+        except BaseException:
+            pass
+        raise frame.original
+
+
+def configure_after_entry(transition):
+    """INTERNAL original-call configuration; no prefix upgrade or public caller.
+
+    The private intent exists before the fixed tuple7 reservation call. All
+    claims consume failure. COMPLETE predecessor states are never reopened.
+    Configuration-only help supplies no ABI/simulator/transcript acceptance,
+    populated-cache proof, admitted5400 budget, export/save or custody delivery.
+    """
+    parent = _claim_producer(transition)
+    try:
+        _invoke_producer_reservation(parent)
+        _capture_producer_predecessor(parent)
+        return _run_configuration_producer(parent)
+    except BaseException as error:
+        if _producer_frame(parent).original is None:
+            parent.error("producer-configure-intent", error)
+        _producer_set_state(parent, "FAILED")
+        raise _producer_frame(parent).original
 
 
 def guarded(operation):
