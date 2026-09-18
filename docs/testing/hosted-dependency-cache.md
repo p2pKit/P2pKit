@@ -449,8 +449,8 @@ by an arbitrary callback. No original Owner/Fence is prolonged or replaced.
 Original75/local45/original120 failures, latest observations and UNKNOWN remain
 failures even when supplied historical records pass.
 
-This is a prerequisite refactor, **not** a mixed historical/live reader,
-productive transaction or failure-custody executor. The public command surface,
+This historical module is a data-only prerequisite, **not** a productive
+reader, transaction or failure-custody executor. The public command surface,
 entry/close lifecycle, both ordinary activation HOLDs and bootstrap execution
 refusal remain. No producer, seed/export/save/probe or encrypted-custody caller
 is connected. The proposed5,400 seconds remains unadmitted/unmeasured. A later
@@ -468,6 +468,43 @@ custody and manifest/seal adapters, not invented tests or weaker ordinary checks
 UNKNOWN or an exhausted original fence can preclude safe retained/encrypted
 custody; preserve original references and report unavailable/incomplete custody,
 never fabricate a successful failure-delivery path or choose a fallback key.
+
+### Legacy-only reader view, not productive entry
+
+The existing caller now uses a private `_LegacyOriginalReader` to keep
+source-owned historical record checks separate from its **existing** owned I/O
+and clock observations. Construction accepts only the exact original `Owner`
+and its `origin.Fence`; it derives the historical prelude and original adopter's
+first reading from them. There is no input for an arbitrary clock, historical
+frame, adopter-first value, budget or alternate owner kind. The view creates
+no owner, performs no acquisition and grants no new time.
+
+The five public wrapper signatures remain unchanged. Context/start/admission
+record helpers check historical fields and canonical bytes without observing
+the clock, performing owned reads or registering native-query returns.
+The start helper still resolves the **actual source-owned `command()` paths**;
+it is not a filesystem-free pure function or an injected argv validator.
+Historical admission originals still require original75. The original
+adopter's first reading is not replaced by fresh `revalidatedNs`.
+
+Chain/preparation reads use the same actual owner and source checks. The view
+keeps the live observation at the original chain call site and carries the
+actual original fence's high-water, identity, expiry and cancellation behavior.
+That observation is not a new local45 I/O gate: the existing Owner operations
+retain their own original local45/work/final limits. A changed binding/history,
+closed or UNKNOWN owner cannot select a renewed reader; an earlier known error
+still forbids new work. Copying a view does not clone or transfer its owner or
+give independent close responsibility; value equality does not establish owner
+identity.
+
+This view is **not a provenance token**. Existing outer original phase/admission/
+entry registries, trusted prepare-step outcome and exact closed-transition
+checks remain essential. The original Owner, admission, entry/close and public
+command implementations are unchanged. No new productive reader, single-use
+claim, initializer, producer, cache or encrypted-custody caller is added. Both
+ordinary HOLDs stay; proposed5,400 remains unadmitted/unmeasured. A separate
+productive transaction still needs the original closed transition's final
+high-water, new bounded ownership/readmission and honest failure custody.
 
 ### Canonical producer records, not producer execution
 
@@ -656,6 +693,7 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-service-time-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-allocation-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-close-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-history-test.py
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-reader-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
@@ -667,7 +705,7 @@ These use modeled provider/native boundaries and tiny synthetic owned files, no
 dependency download or Gradle. The connected/budget controls are registered in the
 unconditional ordinary CI policy step and both release script entry points.
 The separate bootstrap identity/cohort/producer-record/query-fence/original-acquisition/
-handoff/entry/service-time/allocation-proposal/close/history controls are standalone, not an
+handoff/entry/service-time/allocation-proposal/close/history/legacy-reader controls are standalone, not an
 activated or registered bootstrap workflow.
 Tiny private-file controls require an actual ordinary UID; root is not an
 acceptable substitute and their modeled native boundaries are not host admission.

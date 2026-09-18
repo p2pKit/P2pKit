@@ -892,6 +892,87 @@ No new recipient/owner/formal-review approval appeared. Required checks and
 advisory metadata are unchanged; no scan or exception extension occurred.
 Both ordinary HOLDs remain and audit/release remains **NOT_READY**.
 
+## 18 September: legacy reader separated from historical record checks
+
+The [legacy-only reader view](../testing/hosted-dependency-cache.md#legacy-only-reader-view-not-productive-entry)
+starts from `8b0cd33117f8e6c37ec0a679eba4b92569d9287d`, tree
+`a5361712fdcf3d5036e90b2e59fff608ca44f1da`. The exact existing Owner/Fence
+derive its historical prelude and original adopter-first; no caller-selected
+clock/history/budget or alternate owner is accepted. The private view is not
+a provenance token or productive reader. It creates no resource owner, claim,
+allowance or workflow. Outer original phase/admission/entry/close and trusted
+step-outcome checks remain essential. Only five existing wrapper bodies change;
+their signatures and45 other top-level function/class bodies are AST-identical.
+That is a static comparison, not45 tests or universal malformed-input equivalence.
+
+Historical record helpers retain canonical bytes and source-owned command
+resolution, not supplied argv. They do not observe time, perform owned reads or
+register a native return; command resolution still accesses source paths.
+The actual chain observation remains RAW-only at its old call site; the view
+does not introduce another local45 I/O gate. Existing Owner operations still
+enforce local45/work/final limits. Closed/UNKNOWN/changed owners cannot renew
+them. Original historical adopter-first stays separate from fresh revalidation.
+
+### Executed controls and exact review scope
+
+Linux Python3.12.3, actual UID65534, isolated read-only source copy:
+
+```bash
+timeout --kill-after=5s 90s runuser -u nobody -- \
+  python3 -I -B -S <exact-read-only-source-copy>/scripts/tests/hosted-cache-bootstrap-reader-test.py -v
+```
+
+The first author execution passed **32/32 methods**:16 view methods, plus15
+tiny-file live-fixture methods and one static-signature method in the integration
+class. Inherited tests are explicitly excluded. Actual POSIX reads/closes are
+tiny; native/service/query/hosted identity and clocks remain models. All1,403
+source hashes stayed unchanged in the fixture and repository. The original
+unexecuted draft is preserved; only two method names and comment spacing changed
+before freezing. No failed run or deployed preimage is invented.
+
+Independent controls were frozen before author tests/results were inspected:
+**34/34 first-run PASS**, including four actual tiny-file wrapper controls.
+No control correction or retry occurred. A separate **candidate-only10/10**
+first execution produced10 normalized complete traces equal to the retained
+previous candidate, now the base. That baseline was **not rerun**: all1,402
+source blobs per old/new-base tree and1,407 retained source/control hashes were
+reconciled, with only two already approved documents differing. Reuse is limited
+to those unchanged inputs and the recorded same-host Python/configuration/model
+scope; no retrospective interpreter/system-library binary identity is claimed.
+Normalization covers exact source/runtime-root prefixes and fixture context
+digest, not payload/full-return-dictionary/inode equality or native acceptance.
+All1,408 independent and1,409 differential source/control hashes stayed unchanged.
+The reviewer independently inspected the author originals without replay.
+
+The two-file implementation tree is
+`973185ad2f829aae7d2c722db6ea7ecc336066ee`, patch SHA-256
+`1585c24d18d94027cab7201ee76d9e089a563dffa3d5897562f35e58761a4973`:
+
+| File under `scripts/` | SHA-256 |
+| --- | --- |
+| `run-hosted-cache-bootstrap.py` | `95405096fc483f0f82fc27ab513e3fd3d08642a3d3427d069723b1f3f9008aef` |
+| `tests/hosted-cache-bootstrap-reader-test.py` | `e2bb0b4d9c3a0524b4e4513d2e088331ffc7979004eedc9120d879c054f5b1e9` |
+
+Independent implementation verdict:
+**APPROVE_EXACT_DORMANT_BOOTSTRAP_LEGACY_READER_EXTRACTION_IMPLEMENTATION_SOURCE_OFFLINE_ONLY**,
+report SHA-256 `526b62a417894efd2fe31506aee859d991eac5218e624a1a6801a3fb505bfa98`.
+No remaining blocking source finding. Complete-patch/static/commit bindings
+will be mapped separately in #437/shared #424; agent review is not formal GitHub
+approval. No unchanged legacy suite or accepted build was replayed.
+
+Private packet `20260918-bootstrap-reader-gmdp_o50` retains exact inputs,
+argv/manifests/logs/exits and unexecuted drafts. Complete paginated metadata
+refreshed04:46UTC:78 open issues, seven unchanged dependency proposals, no
+campaign PR or active Actions, and no app Release assets. Only the known8b0
+mapping comments and their linked timeline mirrors changed; no new recipient/
+owner/formal-review approval appeared. Initial overbroad metadata/current-tree
+inspection assertions are separately retained, not source-test failures; their
+corrections used the original metadata and frozen source without test replay.
+Both ordinary HOLDs, old deadlines and bootstrap execution refusal remain.
+Proposed5,400 stays unadmitted/unmeasured. No build/download, held dispatch,
+PR/merge, Release, settings change or issue closure occurred. Audit/release
+remains **NOT_READY**.
+
 ## Next engineering and unchanged authority boundaries
 
 The next bootstrap slice still needs a **separate productive owner/job-budget
