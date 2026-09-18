@@ -968,8 +968,9 @@ authority; budget stays `NOT_ADMITTED` and tests `NOT_PERFORMED`.
 
 The existing allocation must retain work600/return225/final45/read30, with stop120
 included in225 and read30 outside proposed native capture870. These are checked
-proposals, not original live deadlines: canonical `wait_process` starts after
-spawn/stream setup. A future parent must shorten/enforce the original shared-clock,
+proposals, not original live deadlines. The canonical executor now carries a
+local pre-spawn end through stream setup and wait, as described below; it has
+no original shared-clock/job/phase identity. A future parent must enforce those
 job, phase and capture fences and own actual cancellation/retirement.5400 remains
 unadmitted/unmeasured; Windows NativeFile900/Snapshot576MiB are unchanged.
 
@@ -1084,9 +1085,38 @@ across four, the retained failed preimage4, and five AST-only composition passes
 No ordinary native suite, producer or application ran. The per-stream ceiling
 is not a whole-session/nested/custody budget; stricter direct-caller limits remain.
 It does not fit2GiB dependencies into Windows'576MiB Snapshot or qualify900-second
-native capture. Original launch/deadline continuity, the actual shared-clock
-producer/stop/retirement/collection bridge and export/save/probe/custody integration
+native capture. The actual shared-clock producer/stop/retirement/collection bridge
+and export/save/probe/custody integration
 remain unfinished. No workflow HOLD, admission, deadline or test selector changes.
+
+### Shared canonical local deadline, not a shared-clock producer parent
+
+Canonical execute now captures its admitted product/stop allowances once and
+anchors distinct local ends immediately before each spawn. Spawn and both stream
+setups spend that same allowance; stop starts after its existing pre-stop drain
+and lease admission. The optional keyword-only `local_deadline` may shorten or
+equal the wait-entry relative ceiling; enlargement refuses rather than clamps.
+Exact finite builtin numbers, positive timeouts, nondecreasing observations and
+strict now<end precede accepting any exit, including0/expected-red. Original
+poll/discover/callback order and cancellation/capture precedence remain. Known
+expiry invokes that callback but never polls again or reopens after clock recovery.
+Stop retains cancellation-only checks and its one same-home/wrapper attempt.
+
+The [local-deadline record](../maintenance/hosted-canonical-deadline-2026-09-18.md)
+separates25 distinct author passes over two disjoint invocations, retained failed
+preimage5,38 independent passes over four disjoint invocations and7 AST-only
+composition passes. No full native suite or application ran. This local monotonic
+end is not shared RAW/QPC provenance, suspend qualification, a hard watchdog or
+an enclosing job/capture/custody budget. Admission, pre-stop drain/lease and final
+native/stream/report/receipt work keep their separate bounds. The unchanged
+hosted-lock `Command.wait` still has a relative-computation-to-entry gap.
+
+A separate parent still must bind the original shared-clock work/return/final/read
+fences, actual canonical cancellation, producer/stop/native retirement and bounded
+collection before export/freeze/save/probe/custody. Neither local timing nor help
+supplies ordinary ABI/simulator/transcript acceptance. Proposed5400 remains
+unadmitted/unmeasured; Windows NativeFile900/Snapshot576MiB, both ordinary HOLDs,
+exact selectors and all recipient/formal-review/delivery requirements remain.
 
 ## Connected consume and delivery path
 

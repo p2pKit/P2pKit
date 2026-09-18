@@ -125,10 +125,10 @@ class CompositionPolicy(unittest.TestCase):
     def test_canonical_capture_product_error_polling_keeps_stop_separate(self):
         path = "scripts/run-audit-command.py"
         for before, after in (
-            (b'wait_process(scope, child, args.timeout, cancelled, check_product)',
-             b'wait_process(scope, child, args.timeout, cancelled, check_cancel)'),
-            (b'wait_process(scope, stop_child, args.stop_timeout, cancelled, check_cancel, stop=True)',
-             b'wait_process(scope, stop_child, args.stop_timeout, cancelled, check_product, stop=True)'),
+            (b'wait_process(scope, child, product_timeout, cancelled, check_product,',
+             b'wait_process(scope, child, product_timeout, cancelled, check_cancel,'),
+            (b'wait_process(scope, stop_child, stop_timeout, cancelled, check_cancel,',
+             b'wait_process(scope, stop_child, stop_timeout, cancelled, check_product,'),
             (b'check_cancel()\n        require(not errors, "Product stream capture failed")',
              b'require(not errors, "Product stream capture failed")\n        check_cancel()'),
         ):
@@ -139,6 +139,70 @@ class CompositionPolicy(unittest.TestCase):
         path = "scripts/run-audit-command.py"
         for suffix in (b'\nTee._copy = lambda self, remaining: None\n',
                        b'\nMAX_STREAM_BYTES = 128 * 1024 * 1024\n'):
+            with self.subTest(suffix=suffix):
+                changed = dict(self.sources)
+                changed[path] += suffix
+                with self.assertRaisesRegex(ValueError, "ordinary executable composition changed: " + path):
+                    POLICY.check_sources(changed)
+
+    def test_canonical_deadline_numeric_admission_and_no_enlargement_are_required(self):
+        path = "scripts/run-audit-command.py"
+        for before, after in (
+            (b'type(value) in (int, float)', b'True'),
+            (b'finite = math.isfinite(value)', b'finite = True'),
+            (b'require(local_deadline <= deadline,', b'require(True,'),
+            (b'deadline = local_deadline', b'deadline = max(deadline, local_deadline)'),
+        ):
+            with self.subTest(before=before):
+                self.mutate(path, before, after)
+
+    def test_canonical_deadline_original_launch_anchors_and_admitted_budgets_are_required(self):
+        path = "scripts/run-audit-command.py"
+        for before, after in (
+            (b'product_deadline = local_timeout_deadline(time.monotonic(), product_timeout)',
+             b'product_deadline = None'),
+            (b'stop_deadline = local_timeout_deadline(time.monotonic(), stop_timeout)',
+             b'stop_deadline = None'),
+            (b'local_deadline=product_deadline', b'local_deadline=None'),
+            (b'local_deadline=stop_deadline', b'local_deadline=None'),
+            (b'wait_process(scope, child, product_timeout,', b'wait_process(scope, child, args.timeout,'),
+            (b'wait_process(scope, stop_child, stop_timeout,', b'wait_process(scope, stop_child, args.stop_timeout,'),
+        ):
+            with self.subTest(before=before):
+                self.mutate(path, before, after)
+
+    def test_canonical_deadline_strict_observation_and_high_water_cannot_be_bypassed(self):
+        path = "scripts/run-audit-command.py"
+        for before, after in (
+            (b'require(observed < deadline, expired)', b'require(observed <= deadline, expired)'),
+            (b'observed = observe()\n        require(observed < deadline, expired)',
+             b'observed = high_water\n        require(observed < deadline, expired)'),
+            (b'current >= high_water', b'True'),
+            (b'high_water = current', b'high_water = min(high_water, current)'),
+            (b'time.sleep(0.1)\n        observed = observe()',
+             b'time.sleep(0.1)\n        observed = observe()\n        deadline = observed + timeout'),
+        ):
+            with self.subTest(before=before):
+                self.mutate(path, before, after)
+
+    def test_canonical_deadline_expired_admission_and_cancellation_precedence_are_required(self):
+        path = "scripts/run-audit-command.py"
+        for before, after in (
+            (b'if observed >= deadline:', b'if False:'),
+            (b'            check_cancel()\n            if cancelled and not stop:',
+             b'            pass\n            if cancelled and not stop:'),
+            (b'        if cancelled and not stop:\n            raise AuditError("Invocation cancellation requested")',
+             b'        if False:\n            raise AuditError("Invocation cancellation requested")'),
+            (b'            raise AuditError(expired)\n        code = child.poll()',
+             b'            pass\n        code = child.poll()'),
+        ):
+            with self.subTest(before=before):
+                self.mutate(path, before, after)
+
+    def test_canonical_deadline_late_shadowing_cannot_replace_wait_or_end_arithmetic(self):
+        path = "scripts/run-audit-command.py"
+        for suffix in (b'\nwait_process = lambda *args, **kwargs: 0\n',
+                       b'\nlocal_timeout_deadline = lambda started, timeout: float("inf")\n'):
             with self.subTest(suffix=suffix):
                 changed = dict(self.sources)
                 changed[path] += suffix

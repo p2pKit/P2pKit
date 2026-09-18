@@ -2029,6 +2029,501 @@ class CapturePolicyTests(unittest.TestCase):
         self.assertEqual(value.scope.drains, 2)
 
 
+class DeadlinePolicyTests(unittest.TestCase):
+    """Local fake-clock waits and modeled execute, not native/shared-clock evidence."""
+
+    class Clock:
+        def __init__(self, now=100.0):
+            self.now, self.readings, self.sleeps = now, [], []
+
+        def monotonic(self):
+            self.readings.append(self.now)
+            return self.now
+
+        def sleep(self, seconds):
+            self.sleeps.append(seconds)
+            self.now += seconds
+
+    def setUp(self):
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        self.base = Path(self.stack.enter_context(tempfile.TemporaryDirectory(
+            prefix="audit deadline policy ", dir=FIXTURE_PARENT))).resolve()
+        for module, name in ((runner, "make_scope"), (processes, "make_scope"), (runner, "git")):
+            self.stack.enter_context(mock.patch.object(module, name,
+                side_effect=AssertionError("NO_NATIVE_OR_GIT_IN_DEADLINE_MODELS")))
+
+    def wait_model(self, *, code=0, codes=None, clock=None, timeout=1.0, advance=None,
+                   callback=None, cancelled=None, stop=False, options=None, hooks=None):
+        clock = self.Clock() if clock is None else clock
+        calls, advance = [], {} if advance is None else dict(advance)
+        pending = list(codes or [])
+        hooks = dict(hooks or {})
+        self.last_wait = SimpleNamespace(calls=calls, clock=clock)
+
+        def event(name):
+            calls.append(name)
+            if name in advance:
+                clock.now += advance[name]
+            if name in hooks:
+                hooks[name]()
+
+        def poll():
+            event("poll")
+            return pending.pop(0) if pending else code
+
+        def check():
+            event("callback")
+            if callback is not None:
+                callback()
+
+        child = SimpleNamespace(poll=poll)
+        scope = SimpleNamespace(discover=lambda: event("discover"))
+        with mock.patch.object(runner.time, "monotonic", clock.monotonic), \
+                mock.patch.object(runner.time, "sleep", clock.sleep):
+            result = runner.wait_process(scope, child, timeout, [] if cancelled is None else cancelled,
+                                         check, stop=stop, **({} if options is None else options))
+        return SimpleNamespace(result=result, calls=calls, clock=clock)
+
+    def execute_model(self, *, advance=None, hooks=None, product_code=0, stop_code=0,
+                      product_pending=0, stop_pending=0, kind="gradle", timeout=1.0,
+                      stop_timeout=1.0, initial=100.0):
+        """Actual execute/wait/receipt code; scope, Tee, source, lease and clocks modeled."""
+        advance, hooks = dict(advance or {}), dict(hooks or {})
+        clock = self.Clock(initial)
+        root, state = self.base / uuid.uuid4().hex, self.base / uuid.uuid4().hex
+        root.mkdir()
+        (state / "gradle-home").mkdir(parents=True)
+        (state / "evidence").mkdir()
+        (state / "cancellations").mkdir()
+        wrapper = root / ("gradlew.bat" if os.name == "nt" else "gradlew")
+        wrapper.write_bytes(b"OFFLINE_MODEL_NOT_AN_EXECUTABLE_WRAPPER\n")
+        properties = b"# modeled admission, not qualified Java\n"
+        (state / "gradle-home/gradle.properties").write_bytes(properties)
+        source = {"commit": "a" * 40, "tree": "b" * 40, "status": "", "diffSha256": runner.digest(b"")}
+        context = {"id": "c" * 32, "root": str(root), "gradleHome": str(state / "gradle-home"),
+                   "source": source, "gradlePropertiesSha256": runner.digest(properties)}
+        (state / "context.json").write_bytes(runner.json_bytes(context))
+        args = SimpleNamespace(cwd=str(root), wrapper=str(wrapper), id="d" * 32,
+            purpose="offline-deadline-model", kind=kind, argv=["help", "--console=plain"],
+            receipt=None, timeout=timeout, stop_timeout=stop_timeout)
+        calls, waits, streams, children, leases = [], [], [], [], []
+        case = self
+
+        def event(name):
+            calls.append((name, clock.now))
+            if name in advance:
+                clock.now += advance[name]
+            if name in hooks:
+                hooks[name](SimpleNamespace(clock=clock, args=args, calls=calls, waits=waits,
+                                           streams=streams, children=children, scope=scope))
+
+        class Source:
+            def __init__(self, label):
+                self.label, self.closes = label, 0
+
+            def close(self):
+                self.closes += 1
+
+        class Scope:
+            def __init__(self):
+                self.launches, self.drains, self.closed, self.phase = [], 0, False, "product"
+
+            def spawn(self, argv, cwd, env):
+                self.phase = "product" if not self.launches else "stop"
+                phase = self.phase
+                case.assertEqual(cwd, str(root))
+                case.assertEqual(env[processes.STATE_ENV], str(state))
+                case.assertEqual(env["GRADLE_USER_HOME"], context["gradleHome"])
+                expected = ([str(wrapper), "--stop", "--console=plain", "--no-parallel", "--max-workers=2",
+                             "-Dorg.gradle.jvmargs=" + runner.JVM_ARGUMENTS] if phase == "stop" else
+                            [str(wrapper), *runner.gradle_arguments(args.argv)] if kind == "gradle" else args.argv)
+                case.assertEqual(argv, expected)
+                self.launches.append({"requestedArgv": list(argv), "scope": "MODELED_NOT_NATIVE"})
+                event(phase + "-spawn")
+                pending = product_pending if phase == "product" else stop_pending
+                code = product_code if phase == "product" else stop_code
+
+                def poll():
+                    nonlocal pending
+                    event(phase + "-poll")
+                    if pending:
+                        pending -= 1
+                        return None
+                    return code
+
+                child = SimpleNamespace(pid=100 + len(self.launches), poll=poll,
+                    stdout=Source(phase + "-stdout"), stderr=Source(phase + "-stderr"))
+                children.append(child)
+                return child
+
+            def discover(self):
+                event(self.phase + "-discover")
+                return []
+
+            def drain(self):
+                self.drains += 1
+                event("drain-" + str(self.drains))
+                return []
+
+            def description(self):
+                return {"backend": "MODELED_NOT_NATIVE", "launches": self.launches, "discoveryErrors": []}
+
+            def close(self):
+                self.closed = True
+                event("scope-close")
+
+        class Tee:
+            def __init__(self, source, destination, live, errors, start=True):
+                case.assertFalse(start, "Canonical capture must still register before start")
+                self.source, self.starts, self.finishes = source, 0, 0
+                streams.append(self)
+                event(source.label + "-allocate")
+
+            def start(self):
+                self.starts += 1
+                event(self.source.label + "-start")
+
+            def finish(self):
+                self.finishes += 1
+                self.source.close()
+                event(self.source.label + "-finish")
+
+        class Lease:
+            def __init__(self, supplied):
+                case.assertEqual(supplied, state)
+                self.held, self.closes = False, 0
+                leases.append(self)
+
+            def acquire(self, *values, **options):
+                event("lease-acquire")
+                self.held = True
+
+            def close(self):
+                self.closes += 1
+                self.held = False
+                event("lease-close")
+
+        scope = Scope()
+        original_wait = runner.wait_process
+
+        def wait_spy(*values, **options):
+            waits.append({"budget": values[2], "stop": options.get("stop", False),
+                          "localDeadline": options.get("local_deadline"), "entered": clock.now})
+            return original_wait(*values, **options)
+
+        def check_cancel(*_values):
+            event(scope.phase + "-callback")
+
+        messages = lambda: SimpleNamespace(buffer=io.BytesIO(), write=lambda _value: None, flush=lambda: None)
+        interruption = None
+        with ExitStack() as patches:
+            patches.enter_context(mock.patch.dict(os.environ, {processes.STATE_ENV: str(state)}, clear=True))
+            for name, value in (("context_at", lambda _value: (state, context)),
+                                ("source_snapshot", lambda _root: source),
+                                ("host_role", lambda: "MODELED_NOT_HOST_ADMISSION"),
+                                ("report_snapshot", lambda *_values: {}), ("retain_reports", lambda *_values: []),
+                                ("make_scope", lambda *_values: scope), ("Tee", Tee), ("LeafLock", Lease),
+                                ("wait_process", wait_spy), ("cancellation_requested", check_cancel),
+                                ("cancel_nested_leaves", lambda *_values: event("nested-model-only"))):
+                patches.enter_context(mock.patch.object(runner, name, value))
+            patches.enter_context(mock.patch.object(runner.time, "monotonic", clock.monotonic))
+            patches.enter_context(mock.patch.object(runner.time, "sleep", clock.sleep))
+            patches.enter_context(mock.patch.object(signal, "getsignal", return_value=object()))
+            patches.enter_context(mock.patch.object(signal, "signal", side_effect=lambda *_values: event("handler")))
+            patches.enter_context(mock.patch.object(sys, "stdout", messages()))
+            patches.enter_context(mock.patch.object(sys, "stderr", messages()))
+            try:
+                result = runner.execute(args)
+            except BaseException as error:
+                if isinstance(error, Exception):
+                    raise
+                result, interruption = None, error
+        evidence = state / "evidence" / args.id
+        receipt = json.loads((evidence / "receipt.json").read_bytes())
+        self.assertTrue(scope.closed)
+        self.assertTrue(all(stream.finishes == 1 and stream.source.closes == 1 for stream in streams))
+        self.assertTrue(all(lease.closes == 1 and not lease.held for lease in leases))
+        return SimpleNamespace(result=result, receipt=receipt, calls=calls, waits=waits, clock=clock,
+            scope=scope, args=args, streams=streams, children=children, interruption=interruption)
+
+    def test_exact_expiry_cannot_accept_product_zero(self):
+        with self.assertRaisesRegex(runner.AuditError, "Product command timed out"):
+            self.wait_model(advance={"poll": 1.0})
+
+    def test_late_expected_red_exit_cannot_pass(self):
+        with self.assertRaisesRegex(runner.AuditError, "Product command timed out"):
+            self.wait_model(code=7, advance={"poll": 2.0})
+
+    def test_callback_time_cannot_escape_exit_deadline(self):
+        with self.assertRaisesRegex(runner.AuditError, "Product command timed out"):
+            self.wait_model(advance={"callback": 1.0})
+
+    def test_product_spawn_time_cannot_renew_relative_wait(self):
+        value = self.execute_model(advance={"product-spawn": 1.0})
+        self.assertEqual(value.result, 125)
+        self.assertTrue(any("Product command timed out" in error for error in value.receipt["errors"]))
+        self.assertEqual(len(value.scope.launches), 2)
+        self.assertEqual(value.receipt["stopExitCode"], 0)
+
+    def test_stop_stream_setup_cannot_renew_relative_wait(self):
+        value = self.execute_model(advance={"stop-stderr-start": 1.0})
+        self.assertEqual(value.result, 125)
+        self.assertTrue(any("Wrapper stop timed out" in error for error in value.receipt["errors"]))
+        self.assertEqual(len(value.scope.launches), 2)
+        self.assertEqual(value.receipt["productExitCode"], 0)
+
+    def test_legacy_equal_and_shortened_ends_keep_on_time_zero_and_red(self):
+        for code in (0, 7):
+            for options in ({}, {"local_deadline": 101}, {"local_deadline": 100.5}):
+                with self.subTest(code=code, options=options):
+                    value = self.wait_model(code=code, advance={"poll": .25}, options=options)
+                    self.assertEqual(value.result, code)
+                    self.assertEqual(value.calls, ["poll", "discover", "callback"])
+
+    def test_local_end_is_keyword_only(self):
+        with self.assertRaises(TypeError):
+            runner.wait_process(None, None, 1, [], lambda: None, False, 101)
+
+    def test_invalid_numeric_inputs_refuse_before_process_suppliers(self):
+        class IntSubclass(int):
+            pass
+
+        class FloatSubclass(float):
+            pass
+
+        class Coercible:
+            def __float__(self):
+                raise AssertionError("COERCION_MUST_NOT_RUN")
+
+        common = [True, False, "1", Coercible(), IntSubclass(1), FloatSubclass(1),
+                  float("nan"), float("inf"), float("-inf"), 10 ** 10000]
+        for index, value in enumerate([None, 0, -1, *common]):
+            with self.subTest(field="timeout", index=index):
+                with self.assertRaises(runner.AuditError):
+                    self.wait_model(timeout=value)
+                self.assertEqual(self.last_wait.calls, [])
+        for index, value in enumerate(common):
+            with self.subTest(field="local_deadline", index=index):
+                with self.assertRaises(runner.AuditError):
+                    self.wait_model(options={"local_deadline": value})
+                self.assertEqual(self.last_wait.calls, [])
+
+    def test_later_end_is_rejected_not_silently_clamped(self):
+        with self.assertRaises(runner.AuditError):
+            self.wait_model(options={"local_deadline": 101.25})
+        self.assertEqual(self.last_wait.calls, [])
+
+    def test_known_expiry_never_polls_or_reopens_after_callback_clock_recovery(self):
+        for stop in (False, True):
+            with self.subTest(stop=stop):
+                clock = self.Clock()
+                with self.assertRaisesRegex(runner.AuditError, "timed out"):
+                    self.wait_model(clock=clock, stop=stop, options={"local_deadline": 99},
+                                    callback=lambda: setattr(clock, "now", 0.0))
+                self.assertEqual(self.last_wait.calls, ["callback"])
+                self.assertEqual(clock.readings, [100.0])
+
+    def test_product_cancellation_precedes_exit_and_known_expiry_but_stop_ignores_list(self):
+        for code in (0, 7):
+            for options in ({}, {"local_deadline": 99}):
+                with self.subTest(code=code, options=options):
+                    with self.assertRaisesRegex(runner.AuditError, "Invocation cancellation requested"):
+                        self.wait_model(code=code, cancelled=[9], options=options)
+        for code in (0, 7):
+            self.assertEqual(self.wait_model(code=code, cancelled=[9], stop=True).result, code)
+
+    def test_original_callback_failure_identity_precedes_timeout_and_later_bad_clock(self):
+        class FalseyCancel(KeyboardInterrupt):
+            def __bool__(self):
+                return False
+
+        for original in (runner.AuditError("CAPTURE_FIRST"), FalseyCancel(), SystemExit(9)):
+            for stop in (False, True):
+                for options in ({}, {"local_deadline": 99}):
+                    with self.subTest(error=type(original).__name__, stop=stop, options=options):
+                        clock = self.Clock()
+
+                        def fail():
+                            clock.now = float("nan")
+                            raise original
+
+                        try:
+                            self.wait_model(clock=clock, stop=stop, options=options, callback=fail)
+                        except BaseException as actual:
+                            self.assertIs(actual, original)
+                        else:
+                            self.fail("Original callback failure was lost")
+                        self.assertEqual(clock.readings, [100.0])
+
+    def test_discovery_time_is_checked_after_original_callback(self):
+        with self.assertRaisesRegex(runner.AuditError, "Product command timed out"):
+            self.wait_model(advance={"discover": 1.0})
+        self.assertEqual(self.last_wait.calls, ["poll", "discover", "callback"])
+
+    def test_original_poll_and_discovery_exceptions_stop_later_suppliers(self):
+        for stage, expected in (("poll", ["poll"]), ("discover", ["poll", "discover"])):
+            for original in (OSError(errno.EIO, "ORIGINAL_SUPPLIER"), KeyboardInterrupt()):
+                with self.subTest(stage=stage, error=type(original).__name__):
+                    clock = self.Clock()
+
+                    def fail():
+                        clock.now = 101.0
+                        raise original
+
+                    try:
+                        self.wait_model(clock=clock, hooks={stage: fail})
+                    except BaseException as actual:
+                        self.assertIs(actual, original)
+                    else:
+                        self.fail("Original supplier failure was lost")
+                    self.assertEqual(self.last_wait.calls, expected)
+                    self.assertEqual(clock.readings, [100.0])
+
+    def test_invalid_or_backward_observed_clock_is_not_retried(self):
+        class ScriptClock(self.Clock):
+            def __init__(self, values):
+                super().__init__()
+                self.values = list(values)
+
+            def monotonic(self):
+                value = self.values.pop(0)
+                self.readings.append(value)
+                if isinstance(value, BaseException):
+                    raise value
+                return value
+
+        for position in ("entry", "after-callback"):
+            bad_values = [True, None, "100", float("nan"), float("inf"), 10 ** 10000]
+            if position == "after-callback":
+                bad_values.append(99.0)
+            for index, bad in enumerate(bad_values):
+                with self.subTest(position=position, index=index):
+                    clock = ScriptClock([bad, 100.0] if position == "entry" else [100.0, bad, 100.0])
+                    with self.assertRaises(runner.AuditError):
+                        self.wait_model(clock=clock)
+                    self.assertEqual(clock.values, [100.0])
+                    self.assertEqual(self.last_wait.calls, [] if position == "entry" else
+                                     ["poll", "discover", "callback"])
+        original = KeyboardInterrupt()
+        clock = ScriptClock([100.0, original, 100.0])
+        try:
+            self.wait_model(clock=clock)
+        except BaseException as actual:
+            self.assertIs(actual, original)
+        else:
+            self.fail("Original clock interruption was lost")
+        self.assertEqual(clock.values, [100.0])
+
+    def test_equal_negative_origin_and_subminimum_remaining_values_are_admitted(self):
+        self.assertEqual(self.wait_model().result, 0)
+        self.assertEqual(self.wait_model(clock=self.Clock(-5.0),
+                         options={"local_deadline": -4.5}, advance={"poll": .25}).result, 0)
+        self.assertEqual(self.wait_model(timeout=.001).result, 0)
+
+    def test_unrepresentable_future_end_expires_without_epsilon_extension(self):
+        with self.assertRaisesRegex(runner.AuditError, "Product command timed out"):
+            self.wait_model(clock=self.Clock(1e300), timeout=1.0)
+        self.assertEqual(self.last_wait.calls, ["callback"])
+        with self.assertRaises(runner.AuditError):
+            self.wait_model(clock=self.Clock(1e308), timeout=1e308)
+        self.assertEqual(self.last_wait.calls, [])
+
+    def test_none_polls_and_sleep_share_one_end_and_expiry_stops_new_polling(self):
+        value = self.wait_model(codes=[None, None, 0], timeout=.25)
+        self.assertEqual(value.result, 0)
+        self.assertEqual(value.calls, ["poll", "discover", "callback"] * 3)
+        self.assertEqual(value.clock.sleeps, [.1, .1])
+        with self.assertRaisesRegex(runner.AuditError, "Product command timed out"):
+            self.wait_model(codes=[None, 0], timeout=.1)
+        self.assertEqual(self.last_wait.calls, ["poll", "discover", "callback", "callback"])
+        self.assertEqual(self.last_wait.clock.sleeps, [.1])
+
+    def test_remaining_product_and_stop_setup_positions_spend_original_launch_ends(self):
+        for label in ("product-stdout-allocate", "product-stderr-start", "stop-spawn", "stop-stdout-allocate"):
+            with self.subTest(label=label):
+                value = self.execute_model(advance={label: 1.0})
+                self.assertEqual(value.result, 125)
+                self.assertEqual(len(value.scope.launches), 2)
+                expected = "Product command timed out" if label.startswith("product") else "Wrapper stop timed out"
+                self.assertTrue(any(expected in error for error in value.receipt["errors"]))
+                self.assertEqual([row["budget"] for row in value.waits], [1.0, 1.0])
+                self.assertEqual([row["localDeadline"] for row in value.waits], [101.0, 102.0] if
+                                 label.startswith("product") else [101.0, 101.0])
+
+    def test_original_admitted_budgets_are_not_reloaded_after_spawn_mutation(self):
+        def mutate(value):
+            value.args.timeout = 10.0
+            value.args.stop_timeout = 10.0
+
+        value = self.execute_model(advance={"product-spawn": 1.0}, hooks={"product-spawn": mutate})
+        self.assertEqual(value.result, 125)
+        self.assertEqual([row["budget"] for row in value.waits], [1.0, 1.0])
+        self.assertEqual([row["localDeadline"] for row in value.waits], [101.0, 102.0])
+        self.assertEqual(value.receipt["stopExitCode"], 0)
+
+    def test_stop_anchor_is_after_original_pre_stop_drain_and_lease(self):
+        value = self.execute_model(kind="command", advance={
+            "nested-model-only": 3.0, "drain-1": 3.0, "lease-acquire": 2.0})
+        self.assertEqual(value.result, 0)
+        self.assertEqual([row["localDeadline"] for row in value.waits], [101.0, 109.0])
+        self.assertEqual([row["entered"] for row in value.waits], [100.0, 108.0])
+        labels = [label for label, _now in value.calls]
+        self.assertLess(labels.index("drain-1"), labels.index("lease-acquire"))
+        self.assertLess(labels.index("lease-acquire"), labels.index("stop-spawn"))
+
+    def test_expired_product_still_drains_and_runs_one_pending_stop_with_its_own_end(self):
+        value = self.execute_model(advance={"product-spawn": 1.0}, stop_pending=1)
+        self.assertEqual(value.result, 125)
+        self.assertEqual(value.receipt["stopExitCode"], 0)
+        self.assertEqual(len(value.scope.launches), 2)
+        self.assertEqual(value.scope.drains, 2)
+        self.assertEqual([row["localDeadline"] for row in value.waits], [101.0, 102.0])
+        labels = [label for label, _now in value.calls]
+        self.assertLess(labels.index("drain-1"), labels.index("stop-spawn"))
+        self.assertEqual(labels.count("stop-spawn"), 1)
+        self.assertEqual(labels.count("stop-poll"), 2)
+
+    def test_late_stop_final_zero_cannot_erase_timeout(self):
+        value = self.execute_model(advance={"stop-callback": 1.0})
+        self.assertEqual(value.result, 125)
+        self.assertEqual(value.receipt["productExitCode"], 0)
+        self.assertEqual(value.receipt["stopExitCode"], 0)
+        self.assertTrue(any("Wrapper stop timed out" in error for error in value.receipt["errors"]))
+        self.assertEqual(len(value.scope.launches), 2)
+
+    def test_invalid_product_anchor_does_not_fabricate_a_launch_or_stop_attempt(self):
+        value = self.execute_model(hooks={"product-callback": lambda value: setattr(value.clock, "now", False)})
+        self.assertEqual(value.result, 125)
+        self.assertEqual(value.scope.launches, [])
+        self.assertEqual(value.waits, [])
+        self.assertIsNone(value.receipt["productExitCode"])
+        self.assertIsNone(value.receipt["stopExitCode"])
+
+    def test_attempted_spawn_keeps_one_stop_and_original_interruption_through_finalizers(self):
+        class FalseyCancel(KeyboardInterrupt):
+            def __bool__(self):
+                return False
+
+        original = FalseyCancel()
+
+        def fail_spawn(_value):
+            raise original
+
+        def fail_restoration(value):
+            if value.scope.closed:
+                raise OSError(errno.EIO, "MODELED_RESTORATION_FAILURE")
+
+        value = self.execute_model(hooks={"product-spawn": fail_spawn, "handler": fail_restoration})
+        self.assertIs(value.interruption, original)
+        self.assertEqual(value.receipt["finalExitCode"], 125)
+        self.assertEqual(value.receipt["stopExitCode"], 0)
+        self.assertEqual(len(value.scope.launches), 2)
+        labels = [label for label, _now in value.calls]
+        self.assertEqual(labels.count("stop-spawn"), 1)
+        self.assertEqual(value.scope.drains, 2)
+
+
 class DarwinObservationTests(unittest.TestCase):
     """Scripted Darwin API transitions, not native Mach/cleanup acceptance."""
 
@@ -4656,6 +5151,7 @@ def main():
         parser.error("No native ownership fixture suite for this host")
     suite = unittest.TestSuite([unittest.defaultTestLoader.loadTestsFromTestCase(PurePolicyTests),
                                unittest.defaultTestLoader.loadTestsFromTestCase(CapturePolicyTests),
+                               unittest.defaultTestLoader.loadTestsFromTestCase(DeadlinePolicyTests),
                                unittest.defaultTestLoader.loadTestsFromTestCase(DarwinObservationTests),
                                unittest.defaultTestLoader.loadTestsFromTestCase(native)])
     print(f"Running current-host real executor fixtures: {processes.host_role()}; no other-host/native claims", flush=True)

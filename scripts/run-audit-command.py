@@ -13,6 +13,7 @@ import errno
 import hashlib
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -807,19 +808,69 @@ def cancel_nested_leaves(state: Path, context: dict[str, Any], invocation: str,
         errors.append("Nested adapter did not finalize within cooperative cancellation grace")
 
 
+def finite_local_number(value: Any, label: str) -> int | float:
+    """Validate local arithmetic without invoking a caller's numeric coercion."""
+    require(type(value) in (int, float), label + " must be an exact finite int/float")
+    try:
+        finite = math.isfinite(value)
+    except OverflowError:
+        finite = False
+    require(finite, label + " must be an exact finite int/float")
+    return value
+
+
+def local_timeout_deadline(started: Any, timeout: Any) -> int | float:
+    """Same-process monotonic arithmetic, not a shared-clock or job identity."""
+    started = finite_local_number(started, "Local clock")
+    timeout = finite_local_number(timeout, "Local timeout")
+    require(timeout > 0, "Local timeout must be positive")
+    try:
+        deadline = started + timeout
+    except OverflowError as error:
+        raise AuditError("Local deadline arithmetic overflow") from error
+    return finite_local_number(deadline, "Local deadline")
+
+
 def wait_process(scope: Any, child: Any, timeout: float, cancelled: list[int], check_cancel: Any,
-                 *, stop: bool = False) -> int:
-    deadline = time.monotonic() + timeout
+                 *, stop: bool = False, local_deadline: float | None = None) -> int:
+    timeout = finite_local_number(timeout, "Local timeout")
+    require(timeout > 0, "Local timeout must be positive")
+    if local_deadline is not None:
+        local_deadline = finite_local_number(local_deadline, "Local deadline")
+    observed = finite_local_number(time.monotonic(), "Local clock")
+    deadline = local_timeout_deadline(observed, timeout)
+    if local_deadline is not None:
+        require(local_deadline <= deadline, "Local deadline cannot enlarge the relative timeout")
+        deadline = local_deadline
+    high_water = observed
+    expired = "Wrapper stop timed out" if stop else "Product command timed out"
+
+    def observe() -> int | float:
+        nonlocal high_water
+        current = finite_local_number(time.monotonic(), "Local clock")
+        require(current >= high_water, "Local clock moved backwards during wait")
+        high_water = current
+        return current
+
     while True:
+        if observed >= deadline:
+            # Already-known expiry cannot be reopened by a callback or another
+            # sample. Preserve original cancellation/capture failure precedence.
+            check_cancel()
+            if cancelled and not stop:
+                raise AuditError("Invocation cancellation requested")
+            raise AuditError(expired)
         code = child.poll()
         scope.discover()
         check_cancel()
-        if code is not None:
-            return code
         if cancelled and not stop:
             raise AuditError("Invocation cancellation requested")
-        require(time.monotonic() < deadline, "Wrapper stop timed out" if stop else "Product command timed out")
+        observed = observe()
+        require(observed < deadline, expired)
+        if code is not None:
+            return code
         time.sleep(0.1)
+        observed = observe()
 
 
 def finalize_receipts(receipt: dict[str, Any], evidence: Path, optional: Any,
@@ -966,7 +1017,10 @@ def execute(args: argparse.Namespace) -> int:
         expected_wrapper = root / ("gradlew.bat" if os.name == "nt" else "gradlew")
         require(wrapper == expected_wrapper and wrapper.is_file(), "Use the applicable checked-in root wrapper")
         require(original, "Command argv must not be empty")
-        require(0.1 <= args.timeout <= 24 * 60 * 60 and 0.1 <= args.stop_timeout <= 300,
+        product_timeout, stop_timeout = args.timeout, args.stop_timeout
+        product_timeout = finite_local_number(product_timeout, "Command timeout")
+        stop_timeout = finite_local_number(stop_timeout, "Stop timeout")
+        require(0.1 <= product_timeout <= 24 * 60 * 60 and 0.1 <= stop_timeout <= 300,
                 "Invalid bounded command/stop timeout")
         actual = gradle_arguments(original) if args.kind == "gradle" else original
         env = ownership_environment(dict(os.environ), context["id"], invocation, str(state), context["gradleHome"])
@@ -997,6 +1051,7 @@ def execute(args: argparse.Namespace) -> int:
         receipt["executedArgvSemantics"] = "logical-command; exact platform launch is ownership.launches[productLaunchIndex]"
         receipt["productLaunchIndex"] = len(scope.launches)
         receipt["productStartedUtc"] = utc()
+        product_deadline = local_timeout_deadline(time.monotonic(), product_timeout)
         started = True  # A partially failed launch still needs same-home stop.
         child = scope.spawn(command, str(root), env)
         receipt["productPid"] = child.pid
@@ -1006,7 +1061,8 @@ def execute(args: argparse.Namespace) -> int:
             stream = Tee(pipe, evidence / ("product." + name + ".log"), live, errors, False)
             streams.append(stream)
             stream.start()
-        receipt["productExitCode"] = wait_process(scope, child, args.timeout, cancelled, check_product)
+        receipt["productExitCode"] = wait_process(scope, child, product_timeout, cancelled, check_product,
+                                                  local_deadline=product_deadline)
     except BaseException as error:
         record_error("", error)
     finally:
@@ -1035,12 +1091,16 @@ def execute(args: argparse.Namespace) -> int:
                 receipt["stopArgv"] = stop_argv
                 receipt["stopLaunchIndex"] = len(scope.launches)
                 receipt["stopStartedUtc"] = utc()
+                # The stop budget begins after lease admission, not at product
+                # launch or after stop spawn/stream setup has already consumed it.
+                stop_deadline = local_timeout_deadline(time.monotonic(), stop_timeout)
                 stop_child = scope.spawn(stop_argv, str(root), env)
                 for pipe, name in ((stop_child.stdout, "stdout"), (stop_child.stderr, "stderr")):
                     stream = Tee(pipe, evidence / ("stop." + name + ".log"), None, errors, False)
                     streams.append(stream)
                     stream.start()
-                receipt["stopExitCode"] = wait_process(scope, stop_child, args.stop_timeout, cancelled, check_cancel, stop=True)
+                receipt["stopExitCode"] = wait_process(scope, stop_child, stop_timeout, cancelled, check_cancel,
+                                                       stop=True, local_deadline=stop_deadline)
                 if receipt["stopExitCode"] != 0:
                     errors.append("Applicable same-home Gradle wrapper --stop failed")
             except BaseException as error:
