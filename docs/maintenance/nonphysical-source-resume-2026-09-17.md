@@ -435,12 +435,110 @@ HOLDs are unchanged. No production caller invokes `cache.export_snapshot` or
 `cache.save_set`; the separate execution/budget/producer/retirement/provider/
 encrypted-custody path below remains unfinished.
 
+## 18 September: same-call read-only execution entry
+
+The dormant adopter now connects its actual returned re-admission and retained
+preparation originals to an internal execution-entry context/window. The
+[entry contract](../testing/hosted-dependency-cache.md#read-only-execution-entry-context)
+keeps `cache-bootstrap` execution identity separate from Desktop/FULL byte
+cohorts. The schema2 adoption receipt uses that context and binds its exact
+private bytes. No new CLI operation, workflow or productive job allocation is
+added; budget remains `NOT_ADMITTED`, tests `NOT_PERFORMED`, export/save authority
+false. The context cannot authenticate later execution or a new owning call.
+
+The entry carries the original first/pre-frame/readmission high-waters and
+original75 work/original120 final fences. It cannot renew the adopter's local45
+owned-I/O/close ceiling. The accepted post-close public handler/output/flush
+checks still use original120; local45 was not a whole-command completion cap.
+No ordinary selector, credential boundary, deadline, shared executable supplier
+or composition expectation changed. Both ordinary activation HOLDs remain.
+
+### Original WIP findings and executed offline controls
+
+Preliminary nonimplementing review identified two gaps in the unfinished entry
+source, not in a deployed workflow or an accepted app producer:
+
+1. Consuming checks did not reread preparation originals. A changed preparation
+   file during entry/adoption-result retention could escape the final check.
+2. Matching directory paths/native identities did not establish that those
+   actual handles belonged to this owner's unretired resource roster.
+
+The correction retains the actual preparation/adoption directory objects and
+original handoff/context/preparation bytes. Every consuming check verifies the
+live resource bindings and rereads the original chain; only its newly observed
+`revalidatedNs` may advance. It also preserves the exact original preparation
+mapping in the entry. Copies cannot reconstruct that same-call provenance.
+These are bounded point-in-time checks, not atomic freeze/provider proof or a
+sandbox against hostile in-process mutation.
+
+Installed Linux Python3.12.3, actual UID65534, exact read-only source copies:
+
+```bash
+timeout --kill-after=5s 90s runuser -u nobody -- \
+  python3 -I -B -S <exact-read-only-source-copy>/scripts/tests/hosted-cache-bootstrap-entry-test.py -v
+timeout --kill-after=5s 90s runuser -u nobody -- \
+  python3 -I -B -S <exact-read-only-source-copy>/scripts/tests/hosted-cache-bootstrap-handoff-test.py -v
+timeout --kill-after=5s 90s runuser -u nobody -- \
+  python3 -I -B -S <exact-read-only-source-copy>/scripts/tests/hosted-cache-bootstrap-origin-test.py -v
+```
+
+- A selected seven-method desired-state run on the preserved entry WIP had
+  **one pass/six failed assertions, zero errors**. After the two source fixes,
+  the **identical seven-test source passed7/7**. Those original failures remain
+  retained, not reclassified as an earlier success or a native incident.
+- Final author entry suite **44/44 PASS**. Its explicit `load_tests` roster
+  excludes inherited methods rather than claiming the old handoff/origin cases
+  as new tests. Controls cover actual outer `admit()` return with a modeled
+  native supplier, missing/copied returns, directory ownership/retirement,
+  changed/reserialized originals, closed context/window substitutions, source/
+  run/cohort/clock drift, nonrenewable bounds, cancellation, UNKNOWN, exclusive
+  retention and zero producer/cache/provider calls. The final file adds three
+  methods beyond the seven-control freeze and corrects two unexecuted drafted
+  error-reason literals to the actual existing boundary; assertions were not
+  weakened to obtain a pass.
+- Affected handoff compatibility **39/39 PASS**, with only its expected new
+  adoption-scope literal changed. Original-acquisition compatibility **74/74
+  PASS** on its unchanged test file. All three final command fixtures and their
+  corresponding repository source manifests stayed unchanged during execution.
+
+The nonimplementing reviewer issued
+**APPROVE_EXACT_DORMANT_BOOTSTRAP_READ_ONLY_ENTRY_CONTEXT_IMPLEMENTATION_SOURCE_OFFLINE_ONLY**
+against the exact three-file implementation/test tree
+`1fcd15dfeaa41ca15e35f18fe2187132a985737d`, excluding this documentation. Independent
+controls passed **22/22**; the guarded author replay passed **44/44**, overlapping
+the author suite rather than adding distinct coverage. The reviewer independently
+inspected the original seven-test failure/pass and handoff39/origin74 packets;
+those compatibility suites were not replayed by the reviewer. Each independent
+execution retained unchanged hashes for all1,397 source/control files under actual
+UID/EUID65534, with candidate process/network/native API/clock boundaries guarded.
+
+The first independent22-method aggregate had **21 passes/one error/zero assertion
+failures**: replacing the entire preparation root correctly raised the native
+directory reader's `QueryError(QUERY_DIRECTORY_REPLACED)`, while the reviewer test
+incorrectly expected `ValueError`. A new control/fixture changed only that typed
+oracle; candidate source stayed identical, and22/22 then passed. The original
+failure, control and fixture remain retained, not reclassified as a source defect
+or an unchanged first-attempt pass. The implementation report SHA-256 is
+`74879c71eb753e58b0cfdc1fd0f18072b3dc77143a815ff4089d89c95134ee79`.
+
+Only tiny POSIX files/capture descriptors are real. Native process/query, clock,
+HTTP/TLS and different-process identity are explicit models, not hosted/native
+or provider qualification. No app/Java/Gradle build, dependency/SDK download,
+GPG, native process-owner, provider or held CI execution ran. These commands do
+not measure a complete bootstrap schedule, lift a HOLD or approve a recipient.
+
+Private packet `20260918-bootstrap-entry-rcq1jixn` retains the incoming WIP,
+original failures, exact command/exit/log/manifests and frozen review inputs on
+this device. The containing commit and final independent implementation/document
+review bindings belong in #437/shared #424 after successful normal push/readback.
+Agent review remains separate from formal different-account GitHub PR approval.
+
 ## Next engineering and unchanged authority boundaries
 
-The next bootstrap slice still needs a **separate original execution/job-budget
-context**, not ordinary FULL/Desktop with `help` or the evidence-only prelude
-above. Retain and rederive actual source/run/clock and service/native budget
-originals and trusted workflow outcomes; a digest or fresh allowance cannot grant
+The next bootstrap slice still needs a **separate productive owner/job-budget
+context**, not ordinary FULL/Desktop with `help`, the evidence-only prelude or
+the same-call read-only entry above. Retain and rederive actual source/run/clock
+and service/native budget originals and trusted workflow outcomes; a digest or fresh allowance cannot grant
 authority. A future live caller must invoke the canonical configuration-only producer,
 retain its original start/requested/executed argv/same-home stop and independently
 establish complete enclosing native retirement, not infer it from the pure helper;

@@ -240,7 +240,7 @@ class HandoffModels(M.ControllerTests):
             return original(owner, fence, directory, expected=expected)
         with self.adopter(ack), patch.object(S, "admit", side_effect=admit):
             raw, result = self.public_adoption()
-        self.assertEqual(result["scope"], "BOOTSTRAP_READ_ONLY_ADOPTION_PENDING_RETURN_V1")
+        self.assertEqual(result["scope"], "BOOTSTRAP_READ_ONLY_ADOPTION_PENDING_RETURN_V2")
         self.assertEqual(set(result), {"scope", "adoptionSha256", "budgetAcceptance", "testAcceptance", "exportSaveAuthority"})
         self.assertEqual(result["budgetAcceptance"], "NOT_ADMITTED")
         self.assertEqual(result["testAcceptance"], "NOT_PERFORMED")

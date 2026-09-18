@@ -9,7 +9,7 @@ actual original prepare-step outcome, not a provisional receipt/digest.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 import os
 from pathlib import Path
@@ -44,7 +44,14 @@ ACK_SCOPE = "BOOTSTRAP_SERVICE_POST_CLOSE_ACK_V1"
 RESULT_SCOPE = "BOOTSTRAP_ORIGINALS_PENDING_CALLER_RETURN_V2"
 HANDOFF_SCOPE = "BOOTSTRAP_PREPARE_POST_CLOSE_HANDOFF_V1"
 HANDOFF_OUTPUT_SCOPE = "BOOTSTRAP_PREPARE_HANDOFF_PENDING_STEP_RETURN_V1"
-ADOPTION_SCOPE = "BOOTSTRAP_READ_ONLY_ADOPTION_PENDING_RETURN_V1"
+ADOPTION_SCOPE = "BOOTSTRAP_READ_ONLY_ADOPTION_PENDING_RETURN_V2"
+ENTRY_SCOPE = "BOOTSTRAP_READ_ONLY_EXECUTION_ENTRY_V1"
+ENTRY_WINDOW_SCOPE = "BOOTSTRAP_ORIGINAL_PRELUDE_ENTRY_WINDOW_V1"
+ENTRY_FIELDS = {"schema", "scope", "profile", "selection", "cacheCohort", "source", "github", "root", "session",
+    "sessionIdentity", "preparation", "readmission", "prelude", "window", "retirement", "budgetAcceptance",
+    "testAcceptance", "exportSaveAuthority"}
+ENTRY_WINDOW_FIELDS = {"scope", "clock", "adopterFirstNs", "metadataLastNs", "readmissionReturnedNs",
+    "startedNs", "workEndNs", "finalEndNs", "localCeiling"}
 PREPARE_OUTCOME_ENV = "P2PKIT_BOOTSTRAP_PREPARE_OUTCOME"
 PREPARE_HASH_ENV = "P2PKIT_BOOTSTRAP_PREPARE_SHA256"
 DIRECTORIES = ("admission", "control-home", "final-admission", "service", "temporary")
@@ -83,6 +90,23 @@ class OriginalPhase:
     """Immutable returned bytes, also registered by identity on the current owner."""
     context: bytes
     records: tuple
+
+
+@dataclass(frozen=True)
+class OriginalEntry:
+    """Same-call read-only entry; neither a productive owner nor a job budget."""
+    raw: bytes
+    admitted: I.Admission
+    session: str
+    session_original: bytes
+    return_original: bytes
+    handoff_original: bytes = field(repr=False)
+    context_original: bytes = field(repr=False)
+    preparation_original: bytes = field(repr=False)
+    _owner: object = field(repr=False, compare=False)
+    _fence: object = field(repr=False, compare=False)
+    _private: object = field(repr=False, compare=False)
+    _target: object = field(repr=False, compare=False)
 
 
 def require(value, reason):
@@ -166,7 +190,7 @@ class Owner:
         self.first, self.early_last, self.cancelled = first, None if first is None else first.nanoseconds, cancelled
         self.resources, self.errors = [], []
         self.original, self.unknown, self.closed = None, False, False
-        self.phase_originals, self.admissions = None, {}
+        self.phase_originals, self.admissions, self.entry_original = None, {}, None
 
     def error(self, stage, error, *, unknown=False):
         detail = diagnostics._exception_detail(error)
@@ -1099,6 +1123,122 @@ def prepared_content(owner, private, handoff_raw, context_raw, fence):
         "finalAdmissionOriginals": hashes[1], **identities, "processIdentity": process_identity}
 
 
+def entry_directories(owner, target, private):
+    # Equal paths/native identities do not put an unregistered handle inside
+    # this owner's close obligation. Already-attempted resources cannot return.
+    require(all(any(row["label"] == "directory" and row["owner"] is directory and
+                    not row["attempted"] and not row["closed"] for row in owner.resources)
+                for directory in (target, private)), "BOOTSTRAP_ENTRY_DIRECTORY_NOT_OWNED")
+
+
+def same_preparation(current, previous):
+    # Read-only revalidation advances only this observation, not any original
+    # child/native/service clock, source binding, directory identity or hash.
+    require(type(previous) is dict and type(previous.get("originalChain")) is dict,
+            "BOOTSTRAP_ENTRY_PREPARATION_FIELDS")
+    observed = origin.integer(previous["originalChain"].get("revalidatedNs"))
+    return origin.encoded({**current, "originalChain": {**current["originalChain"],
+        "revalidatedNs": observed}}) == origin.encoded(previous)
+
+
+def execution_entry(owner, target, private, handoff_raw, context_raw, admitted, before, fence):
+    """Connect original read-only custody to an internal entry context/window.
+
+    The actual returned re-admission must still belong to this owner. The
+    original preparation chain is reread here, not supplied by a budget digest.
+    This entry is consumed by adoption retention below; it cannot start a
+    canonical initializer, producer, seed, provider, or a longer-lived owner.
+    """
+    require(owner.fence is fence and owner.first is not None and owner.entry_original is None and
+            target.path == private.path.with_name(private.path.name + "-adoption"), "BOOTSTRAP_ENTRY_OWNER")
+    owner.end()
+    entry_directories(owner, target, private)
+    returned, hashes = admission_originals(owner, target, admitted, fence, read_final=False)
+    again, context, after = prepared_content(owner, private, handoff_raw, context_raw, fence)
+    require(again == admitted and same_preparation(after, before),
+            "BOOTSTRAP_ADOPTION_CHANGED_DURING_READMISSION")
+    value = origin.admitted_value(admitted)
+    target.verify()
+    target_identity = directory_identity(list(target.identity), fence.clock.role)
+    started = fence.now(minimum=after["originalChain"]["revalidatedNs"])
+    require(owner.first.nanoseconds <= origin.integer(owner.early_last) <= returned["returnedNs"] <= started,
+            "BOOTSTRAP_ENTRY_PREDECESSOR_CLOCK")
+    raw = origin.encoded({"schema": 1, "scope": ENTRY_SCOPE, "profile": bootstrap.PROFILE,
+        "selection": value["selection"], "cacheCohort": value["cacheCohort"], "source": value["source"],
+        "github": value["github"], "root": context["root"], "session": str(target.path),
+        "sessionIdentity": target_identity, "preparation": after, "readmission": hashes,
+        "prelude": origin.parse(fence.raw), "window": {"scope": ENTRY_WINDOW_SCOPE,
+            "clock": origin.clock_value(fence.clock), "adopterFirstNs": owner.first.nanoseconds,
+            "metadataLastNs": owner.early_last, "readmissionReturnedNs": returned["returnedNs"],
+            "startedNs": started, "workEndNs": fence.work, "finalEndNs": fence.final,
+            "localCeiling": "ORIGINAL_ADOPTER_IO45_ONLY_CAN_SHORTEN"},
+        "retirement": "PENDING_OWNER_CLOSE", "budgetAcceptance": "NOT_ADMITTED",
+        "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False})
+    registered = owner.admissions[str(target.path / "admission")]
+    entry = OriginalEntry(raw, admitted, str(target.path), registered[1], registered[2],
+        handoff_raw, context_raw, origin.encoded(after), owner, fence, private, target)
+    owner.entry_original = entry
+    check_execution_entry(owner, target, entry, fence, retained=False)
+    owner.write(target, "entry-context.json", entry.raw)
+    check_execution_entry(owner, target, entry, fence, retained=True)
+    return entry
+
+
+def check_execution_entry(owner, target, entry, fence, *, retained):
+    """Use the actual entry's original window; never rehydrate its provenance.
+
+    An equal dataclass or consistent disk record is not this owner's entry.
+    Work still uses original75 and the existing local45; original120 is only
+    the enclosing finalization ceiling. None is a productive/job allowance.
+    """
+    require(type(entry) is OriginalEntry and entry._owner is owner and entry._fence is fence and
+            owner.entry_original is entry and owner.fence is fence and
+            owner.first is not None and str(target.path) == entry.session, "BOOTSTRAP_ENTRY_NOT_CURRENT_RETURN")
+    owner.end()
+    require(target is entry._target, "BOOTSTRAP_ENTRY_DIRECTORY_NOT_OWNED")
+    entry_directories(owner, target, entry._private)
+    registered = owner.admissions.get(str(target.path / "admission"))
+    require(registered is not None and registered[0] is entry.admitted and
+            registered[1:] == (entry.session_original, entry.return_original),
+            "BOOTSTRAP_ENTRY_READMISSION_NOT_CURRENT_RETURN")
+    returned, hashes = admission_originals(owner, target, entry.admitted, fence, read_final=False)
+    value, admitted = origin.parse(entry.raw), origin.admitted_value(entry.admitted)
+    require(set(value) == ENTRY_FIELDS and entry.raw == origin.encoded(value) and
+            type(value["schema"]) is int and value["schema"] == 1 and type(value["window"]) is dict and
+            set(value["window"]) == ENTRY_WINDOW_FIELDS, "BOOTSTRAP_ENTRY_CONTEXT_FIELDS")
+    window = value["window"]
+    require(value["profile"] == bootstrap.PROFILE and value["scope"] == ENTRY_SCOPE and value["root"] == str(ROOT) and
+            value["selection"] == admitted["selection"] and value["cacheCohort"] == admitted["cacheCohort"] and
+            value["source"] == admitted["source"] and value["github"] == admitted["github"] and
+            value["session"] == entry.session and value["readmission"] == hashes and
+            value["prelude"] == origin.parse(fence.raw) and window["scope"] == ENTRY_WINDOW_SCOPE and
+            window["clock"] == origin.clock_value(fence.clock) and
+            window["adopterFirstNs"] == owner.first.nanoseconds and window["metadataLastNs"] == owner.early_last and
+            window["readmissionReturnedNs"] == returned["returnedNs"] and
+            window["workEndNs"] == fence.work and window["finalEndNs"] == fence.final and
+            window["localCeiling"] == "ORIGINAL_ADOPTER_IO45_ONLY_CAN_SHORTEN" and
+            value["retirement"] == "PENDING_OWNER_CLOSE" and
+            value["budgetAcceptance"] == "NOT_ADMITTED" and value["testAcceptance"] == "NOT_PERFORMED" and
+            value["exportSaveAuthority"] is False, "BOOTSTRAP_ENTRY_CONTEXT_CHANGED")
+    again, _, after = prepared_content(owner, entry._private, entry.handoff_original, entry.context_original, fence)
+    require(again == entry.admitted and origin.encoded(value["preparation"]) == entry.preparation_original and
+            same_preparation(after, value["preparation"]), "BOOTSTRAP_ENTRY_PREPARATION_CHANGED")
+    times = [window[name] for name in ("adopterFirstNs", "metadataLastNs", "readmissionReturnedNs", "startedNs")]
+    require(all(type(number) is int for number in times) and times == sorted(times) and
+            fence.first <= times[0] <= times[-1] < fence.work and times[2] <=
+            origin.integer(value["preparation"]["originalChain"]["revalidatedNs"]) <= times[-1],
+            "BOOTSTRAP_ENTRY_PREDECESSOR_CLOCK")
+    target.verify()
+    require(directory_identity(list(target.identity), fence.clock.role) == value["sessionIdentity"],
+            "BOOTSTRAP_ENTRY_DIRECTORY_CHANGED")
+    fence.now(minimum=origin.integer(window["startedNs"]), limit=window["workEndNs"])
+    if retained:
+        require(owner.read(target, "entry-context.json") == entry.raw, "BOOTSTRAP_ENTRY_ORIGINAL_CHANGED")
+    entry_directories(owner, target, entry._private)
+    owner.end()
+    return value
+
+
 def adopt_originals(cancelled):
     """Dormant read-only ORIGINAL adoption, not producer or job-budget admission.
 
@@ -1143,18 +1283,18 @@ def adopt_originals(cancelled):
         # Actual native/source/main/policy re-admission is WORK, not a finalizer.
         current, returned = admit(owner, fence, target.path / "admission", expected=admitted)
         owner.write(target, "admission-return.json", returned)
-        _, current_hashes = admission_originals(owner, target, current, fence, read_final=False)
-        again, current_context, after = prepared_content(owner, private, handoff_raw, context_raw, fence)
-        require(again == admitted and current_context == context and
-                origin.encoded({**after, "originalChain": {**after["originalChain"],
-                    "revalidatedNs": before["originalChain"]["revalidatedNs"]}}) == origin.encoded(before),
-                "BOOTSTRAP_ADOPTION_CHANGED_DURING_READMISSION")
-        result_raw = owner.write(target, "adoption-result.json", {"schema": 1, "scope": ADOPTION_SCOPE,
-            "prepareOutcome": "success", "originals": after, "prelude": origin.parse(fence.raw),
-            "clock": origin.clock_value(fence.clock), "beganNs": first.nanoseconds, "metadataLastNs": owner.early_last,
-            "readmission": current_hashes, "readmissionReturnedNs": returned["returnedNs"], "retainedNs": fence.now(),
+        entry = execution_entry(owner, target, private, handoff_raw, context_raw, current, before, fence)
+        entry_value = check_execution_entry(owner, target, entry, fence, retained=True)
+        window = entry_value["window"]
+        result_raw = owner.write(target, "adoption-result.json", {"schema": 2, "scope": ADOPTION_SCOPE,
+            "prepareOutcome": "success", "entryContextSha256": origin.digest(entry.raw),
+            "originals": entry_value["preparation"], "prelude": entry_value["prelude"],
+            "clock": window["clock"], "beganNs": window["adopterFirstNs"], "metadataLastNs": window["metadataLastNs"],
+            "readmission": entry_value["readmission"], "readmissionReturnedNs": window["readmissionReturnedNs"],
+            "retainedNs": fence.now(minimum=window["startedNs"], limit=window["workEndNs"]),
             "retirement": "PENDING_OWNER_CLOSE", "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED",
             "exportSaveAuthority": False})
+        check_execution_entry(owner, target, entry, fence, retained=True)
     except BaseException as error:
         owner.error("adopt-originals", error)
         if target is not None and not owner.unknown:

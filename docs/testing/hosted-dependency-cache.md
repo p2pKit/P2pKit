@@ -219,6 +219,49 @@ records executed offline controls, retained failures and exact independent-revie
 scope. Neither those controls nor this caller lifts either ordinary activation
 HOLD or supplies the missing routine recipient policy.
 
+### Read-only execution-entry context
+
+Inside that same adoption call, an internal entry bridge now binds the actual
+returned re-admission and its original session/return bytes to the preparation
+originals. Its private `entry-context.json` keeps execution profile
+`cache-bootstrap` separate from the byte-routing `cacheCohort`, and binds the
+original source/run, shared-clock identity, directory identities and observation
+high-waters. The schema2 adoption receipt consumes this context and binds its
+exact hash; the public scope is `BOOTSTRAP_READ_ONLY_ADOPTION_PENDING_RETURN_V2`.
+This is not another operation, an admitted job budget or a productive owner.
+
+The entry retains the actual preparation and adoption directory objects. Each
+must still be an unretired resource registered with this owner; matching paths
+or native identities cannot put a different handle inside its close obligation.
+An equal/copied entry, admission, owner or fence is not the original same-call
+return. Disk records never recreate those private references or registries, and
+the entry cannot be used after its owning call closes. These checks do not
+claim protection against arbitrary hostile mutation of the Python process.
+
+Consuming checks reread the original preparation chain, including around entry
+and adoption-result retention. They require the exact original handoff/context
+bytes, preparation binding, directory identities and current re-admission
+originals. Only the new read-only `originalChain.revalidatedNs` observation may
+advance during comparison; original child/service/native times and hashes cannot
+change. These are point-in-time rechecks, not an atomic filesystem freeze or
+proof of any provider's archived bytes. No second HTTP acquisition occurs.
+
+Entry work remains inside **original75**, and its owned reads/writes/close retain
+the original adopter's **local45** ceiling. Remaining **original120** time is
+not a renewed entry allowance. The pre-existing public handler/output/flush
+completion checks use original120 after the owner closes; local45 is not a
+new whole-command deadline. Late work, cancellation or UNKNOWN remains failure
+even when provisional files exist. No source-owned deadline was widened.
+
+Both the context and receipt retain `NOT_ADMITTED`, `NOT_PERFORMED` and export/
+save authority false. No canonical initializer, producer, seed/export/save/probe
+or encrypted-custody caller consumes this entry for execution. A future
+productive owner still needs separate reviewed allocation, original service-
+budget rederivation, trusted workflow outcomes and live native/source admission;
+the proposed5,400 seconds remains unadmitted/unmeasured. The entry cannot make
+configuration-only execution satisfy ordinary FULL ABI/simulator/transcript
+acceptance or lift either ordinary activation HOLD.
+
 ### Canonical producer records, not producer execution
 
 [`hosted_cache_bootstrap_producer.py`](../../scripts/hosted_cache_bootstrap_producer.py)
@@ -401,6 +444,7 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-producer-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-query-fence-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-origin-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-handoff-test.py
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-entry-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
@@ -411,7 +455,7 @@ python3 -I -B -S scripts/tests/hosted-desktop-job-budget-test.py
 These use modeled provider/native boundaries and tiny synthetic owned files, no
 dependency download or Gradle. The connected/budget controls are registered in the
 unconditional ordinary CI policy step and both release script entry points.
-The separate bootstrap identity/cohort/producer-record/query-fence/original-acquisition/handoff
+The separate bootstrap identity/cohort/producer-record/query-fence/original-acquisition/handoff/entry
 controls are standalone, not an activated or registered bootstrap workflow.
 Tiny private-file controls require an actual ordinary UID; root is not an
 acceptable substitute and their modeled native boundaries are not host admission.
