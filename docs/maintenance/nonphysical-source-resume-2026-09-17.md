@@ -1261,18 +1261,163 @@ Apps remain outside repository Releases. The accepted four-platform preview and
 unchanged. No held dispatch, PR/merge, Release, settings change or issue closure
 occurred. Audit/release remains **NOT_READY**.
 
+## 18 September: internal recipient-only parent and bounded cleanup
+
+This later source slice supersedes only the preceding **no-parent** description.
+The accepted standalone-child suite was not replayed or its earlier results
+relabeled as native acceptance. The current parent controls do execute that child
+in-process under modeled suppliers. `run_recipient_after_entry` now once-claims
+the exact registered
+`NewEntryTransition`, retains the original final high-water, and owns the closed
+child argv's native launch, captures, drain/close and post-retirement readback.
+It is **internal / dormant / not publicly or workflow called**. The
+[cache guide](../testing/hosted-dependency-cache.md#internal-recipient-only-parent-not-producercache-execution)
+describes the original work240, actual-final45 and read30 caps, independent LOCAL
+ceilings, unchanged cumulative proposal/job fences and retained resource bindings.
+
+No old owner/fence is renewed. The returned immutable `RecipientPrefix` is
+evidence only: no live Recipient is reconstructed from child JSON, and
+`nextPhaseAuthority` and export/save authority are false. Budget stays
+`NOT_ADMITTED`, tests `NOT_PERFORMED`. Canonical initialization, configuration
+producer, empty-seed/export/freeze, provider save/probe and encrypted custody
+remain separate unfinished integration, not authority conferred by this return.
+
+### Preserved findings and corrections
+
+The initial parent author smoke passed **1/1**. Independent r1's14-method aggregate
+was **12 pass /2 fail**: a final callback could consume the remaining read30 after
+the last sample (F1), and a success-shaped late resource could be learned after
+actual close (F2). A separate method failed all three caller/query/Windows
+quarantine subcases (F3). These are demonstrated source/model defects, not
+observed native incidents, setup failures or passing aggregates.
+
+R2 samples RAW/LOCAL after callbacks, freezes the actual preclose roster once,
+retains suspicious late references without accepting them, and preserves every
+global quarantine after close. Unchanged F1/F2 **2/2**, F3 **1 method/3 subcases**,
+and seven new independent controls passed. Narrow verdict:
+`APPROVE_EXACT_R2_F1_F2_F3_CORRECTIONS_SOURCE_OFFLINE_ONLY`, report SHA-256
+`936cc73d76dfc79635eeaa577f06371145e02aabe545a8a2c4c839d05b474d3e`.
+That was not whole-parent approval.
+
+R3 replaces repeated parsing of the already closed predecessor with exact
+transitive typed/reference/registry/path pins at every intervening boundary.
+Full validation still surrounds original reads and final return. This is not
+test-result reuse or a sandbox against arbitrary Python-process mutation.
+Independent **24/24** passed; narrow verdict
+`APPROVE_EXACT_R3_CLOSED_GRAPH_OPTIMIZATION_SOURCE_OFFLINE_ONLY`, report SHA-256
+`16241e31e477a6547d8f921355a08b642d1fddce222c6eb93669263f9129342f`.
+
+The author r3 six-method graph aggregate remains **FAILED:4 passing methods,
+one failing method, one error-method with five subcases**. It incorrectly expected
+the old full parser to reject equal parsed preparation values after whitespace
+changed, and failed to restore a synthetic resource tuple that the old validator
+intentionally retained before rejecting it. Test-only r3b isolates that state and
+separately requires the stricter original-byte graph refusal; **3/3 passed**.
+No implementation or accepted negative assertion was weakened. Two then-unexecuted
+late-row models received fixture-teardown corrections before their first run.
+
+The original r3c plan stopped at batch15's real owner-rebinding failure. Of75
+authored methods, the reconciled evidence comprises **67 source-applicable
+individual passes, one failure, seven unexecuted**, including eight earlier
+separately bound methods; it is not a75-method passing aggregate. Batches1–14
+passed56/56; batch15 was3 pass/1 fail. Its retained log SHA-256 is
+`f1fb818a18497c27171197ac46c8f117e925b4a6d828096b4f8be80fb2fb82d2`.
+The first owner's execution alias was correctly rejected, but repeating that
+same refusal at every known-resource close saturated the unchanged64-error
+UNKNOWN policy and truncated cleanup. The original49-resource case left17
+unattempted; the independent80-resource case closed31 and left49. Neither
+launched a child or closed the foreign owner. Independent F4 report verdict:
+`REQUEST_CHANGES_EXACT_DORMANT_BOOTSTRAP_RECIPIENT_PARENT_R3C_SOURCE_OFFLINE_ONLY`,
+SHA-256 `3ab91bfaf959b6e642d8260f7a98e751af15e789adc3eab7b1e4945c485fec27`.
+
+R4 separates non-acquiring final/cleanup observation from execution admission.
+Cleanup uses the independently registered original owner/window/frame/roster;
+rejected mutable aliases stay rejected and are never restored. `Owner.end` and
+all acquisition deadlines retain strict entry **and exit** checks, including
+`final=True`. Only already-owned native drain has a separate cleanup deadline.
+Actual bound-frame/high-water/roster corruption still refuses; the64-error/UNKNOWN
+policy is unchanged. Failed final-start stays consumed/expired, and READ cleanup
+keeps its original30 rather than starting another45. Shared Owner/native/GPG
+suppliers, ordinary deadlines/HOLDs and accepted child executable statements do
+not change. Child comments/docstrings do change; full child-byte identity is not
+claimed.
+
+### Exact final source and executed offline controls
+
+The r4b source/tests freeze at base `188d175fea6f9a0ee0efcf4fde604deb020dedf9` has
+tree `a758dcba4c2a1782bc4d1c909b81ba1f1c3be583`, patch SHA-256
+`935a7e2647ea4d6edf60175b8b06ec70a80a89f94d00f75f473b58a0ce5dd1e8`:
+
+| File under `scripts/` | SHA-256 |
+| --- | --- |
+| `run-hosted-cache-bootstrap.py` | `a96b48198d79bb9a794592ac368f15a4bdbaa375671681b04bbe953e4663d3dc` |
+| `tests/hosted-cache-bootstrap-recipient-parent-test.py` | `8092aedae50b19d98619f7b8aa68282c8bc7a1f2087c0306f5b232c6ae15f0d9` |
+
+R4b leaves the r4 implementation and75 previous methods unchanged, adding nine
+focused controls and one helper. **84/84 methods passed across21 disjoint four-method batches**,
+not a single84-method process. Batch1 started09:18:22UTC; batches2–21 ran
+09:31:14–09:40:07UTC. Summed unittest time528.354 seconds. Original argv,
+log hashes/statuses and all per-batch source manifests were reconciled without replay. Actual command
+shape, with each four-method selection retained in the original argv records:
+
+```text
+timeout --kill-after=5s 90s runuser -u nobody -- python3 -I -B -S \
+  <exact-read-only-source-copy>/scripts/tests/hosted-cache-bootstrap-recipient-parent-test.py \
+  ParentModels.<method1> ParentModels.<method2> ParentModels.<method3> ParentModels.<method4> -v
+```
+
+Python3.12.3 /actual UID65534. Tiny POSIX originals/capture descriptors and the
+parent/child/guard wrappers are real; native process/Git/GPG/host/service/clocks
+are modeled or forbidden. Modeled environment labels do not admit this host.
+All1,406 actual source/fixture hashes and rosters remained unchanged per batch.
+The84 names include22 generated original-file mutation controls; inherited
+legacy tests are excluded. This is not a native, GPG, cache, resolver or scheduling
+qualification, and no production or preview build ran.
+
+Independent r4 execution passed **3/3 unchanged F4 desired-state methods**,
+**20/20 newly frozen controls**, and **4/4 targeted graph/default/full boundary
+controls**, in5.206/3.598/1.731 seconds respectively. Each run used actual UID65534
+and an external85-second bound plus5-second kill tail. All source/control
+manifests stayed unchanged. Rebound80 now closes80/80 exactly once, preserves
+one original refusal, closes no foreign owner and does not manufacture UNKNOWN.
+The reviewer froze its own controls before reading the nine new author assertions.
+Its source copy differs from the r4b author copy only in the **unimported** author
+parent-test file; exact implementation/imported fixture bindings were reconciled.
+
+Independent whole-parent implementation verdict:
+**APPROVE_EXACT_DORMANT_BOOTSTRAP_RECIPIENT_PARENT_R4_SOURCE_OFFLINE_ONLY**,
+report SHA-256 `314af544290c205be42881bf827bddb7ac9a62023017af0668b8984eb00d1fb9`.
+This approves the exact complete parent implementation and84 author controls,
+not merely the cleanup delta. The independent original-evidence audit SHA-256 is
+`21252f4f764f247269949480fdce58f7d4a04a4f6f584aa5cd47f18780fa962b`. Earlier narrow r2/r3 approvals and failed
+aggregates retain their exact source scopes. Complete-patch/static/commit bindings
+will be mapped separately in #437/shared #424 after review and remote preservation;
+agent review is not formal different-account GitHub PR approval. Private packet
+`20260918-bootstrap-recipient-parent-VDvbu3Vz` retains original logs, argv,
+manifests, source freezes and adverse reconciliation; raw evidence stays outside Git.
+
+The complete paginated09:42UTC refresh found all29 compared domains unchanged
+from09:13:78 open issues, seven dependency PRs, no campaign PR, no queried active
+Actions, no Release app assets, and unchanged required checks/advisory. The seven
+complete dependency PR conversations/reviews remain dated08:38, not a new review.
+No recipient/custodian/formal approval, scan, remediation or exception extension
+was supplied by those metadata reads. Main and protected release refs stay unchanged.
+
 ## Next engineering and unchanged authority boundaries
 
 The next bootstrap slice still needs a **separate productive owner/job-budget
 context**, not ordinary FULL/Desktop with `help`, the evidence-only prelude,
 same-call read-only entry/close transition, fresh-entry readmission/close,
-standalone recipient child, service-time basis or allocation proposal above.
-The immediate parent slice must once-claim the exact `NewEntryTransition`, retain
-its final high-water and actual owner references, launch the existing child in
-its genuine native240/final45 scope, preserve original captures/return/retirement,
-and enforce separate recipient-read30. The standalone child cannot supply those
-parent facts. Do not bypass that prerequisite with a fictional validated-recipient
-record or a direct unbounded supplier call.
+recipient-only parent, service-time basis or allocation proposal above.
+The internal parent now supplies source wiring for once-claim, native240/final45
+and recipient-read30, not their genuine native qualification. Its terminal
+`RecipientPrefix` cannot authorize another phase or reconstruct a live Recipient.
+Canonical initialization and later producer/custody work require a separately
+reviewed same-live-call extension with distinct pinned phase/Owner/native
+resources, original proposal/job fences and retained failure cleanup. Initializer120
+must not renew recipient first315/read30; cleanup-only observations grant no
+acquisition authority. Do not replace the canonical source-bound loader with an
+unqualified isolated-script import or invent a validated-recipient record.
 Retain and rederive actual source/run/clock and service/native budget originals
 and trusted workflow outcomes;
 a digest or fresh allowance cannot grant authority. A future live caller must invoke the canonical configuration-only producer,

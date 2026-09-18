@@ -576,12 +576,15 @@ activation HOLDs and the missing routine recipient/trusted-base formal approval
 remain. Proposed5,400 is unadmitted/unmeasured; genuine native/provider/resolver/
 custody/scheduling/delivery and normal reviewed main delivery remain necessary.
 
-### Standalone recipient child, not a connected parent transaction
+<a id="standalone-recipient-child-not-a-connected-parent-transaction"></a>
+
+### Recipient child under the internal parent
 
 The caller's closed `_recipient --context-sha256 … --minimum-ns …` entry is
-**DORMANT_EXECUTABLE_RECIPIENT_CHILD_ADAPTER_NOT_PARENT_CONNECTED**. No parent
-claims `NewEntryTransition` or launches it. It is a real supplier-call adapter,
-not a configuration producer, custodian installer or new hosted-identity override.
+the dormant native child of the internal recipient-only parent below. That parent
+once-claims `NewEntryTransition`; no public operation or workflow connects the
+transaction. The child is a real supplier-call adapter, not a configuration
+producer, custodian installer or new hosted-identity override.
 The source-owned argv and separate sanitized installed-tool lookup environment
 admit no acquisition token, arbitrary command, key, path or duration input.
 
@@ -597,7 +600,7 @@ bootstrap windows are source proposals, **not admitted or measured schedules**.
 Before and after actual native-query readmission, the child rechecks the original
 admission/context/attempt/jobs/allocation bytes and native directory identities.
 Its complete bootstrap source/run/clock/prelaunch and inherited native-domain
-checks cannot authenticate the missing parent from consistent supplied records.
+checks cannot attest real parent execution from consistent supplied records.
 Query work75/final120 share their original query start and only shorten against
 the original child cap; a provisional session file cannot replace actual return.
 
@@ -606,8 +609,9 @@ then checks its actual returned object, original work identity, exact key hash,
 full fingerprint, encryption fingerprint and policy lifetime. Their synchronous60
 internals have no caller deadline/cancellation injection. Child checks reject a
 late return but **cannot preempt blocked/native work or prove enclosing descendant
-retirement**. A genuine parent native240/final45 launch/drain/close and separate
-recipient-read30 remain unimplemented and necessary.
+retirement**. The internal parent now supplies native240/final45 launch/drain/close
+and separate recipient-read30 source wiring; its genuine native enforcement and
+retirement still require qualification.
 
 The private child result is provisional until actual child-resource close. A
 small ACK follows successful close and handler restoration; flush, cancellation,
@@ -619,7 +623,7 @@ no new failure file/owner, retry, overwrite or optimistic cleanup is allowed aft
 UNKNOWN/close. Partial supplier originals stay private; failure custody can be
 unavailable/incomplete, not promised encrypted delivery.
 
-This slice supplies no once-claim parent, canonical initializer, productive owner,
+This child supplies no canonical initializer, productive controller,
 producer, seed/export/save/probe, encryption/seal/upload or workflow wiring. Results
 retain `NOT_ADMITTED`, `NOT_PERFORMED` and export/save authority false. The missing
 named custodian/exact key/finite14-day trusted-original-base policy/formal approval,
@@ -627,6 +631,78 @@ both ordinary HOLDs and genuine qualification remain. The
 [source continuation](../maintenance/nonphysical-source-resume-2026-09-17.md#18-september-standalone-recipient-child-not-parent-integration)
 separates executed offline controls, retained failures and independent review from
 native/GPG/hosted acceptance.
+
+### Internal recipient-only parent, not producer/cache execution
+
+`run_recipient_after_entry(transition)` once-claims the exact registered
+`NewEntryTransition`, including after failure; copies, reentry and concurrent
+claims cannot obtain another attempt. This is an internal dormant operation,
+not called by a public command, `adopt-originals` or any workflow. It does not
+reopen, advance or prolong either closed predecessor owner/fence. The new first
+reading retains the complete original clock identity and final entry high-water.
+
+Its separate source-proposed recipient window has work240, finalization capped
+by **both first+285 and actual-final-start+45**, and readback capped by **both
+read-start+30 and first+315**. Every interval also stays within its original
+cumulative allocation/job fence and independently projected LOCAL ceiling.
+Equality expires; failed final-start is once-only and cannot create a replacement45.
+RAW/LOCAL are resampled after cancellation callbacks and their high-waters remain
+retained even when later validation fails. These bounds are **UNADMITTED /
+UNMEASURED**, not a new allowance or scheduling qualification.
+
+The parent rereads the actual preparation/adoption/entry originals through new
+handles, rederives service/allocation inputs, and repeats exact host/source/event,
+trusted prepare-outcome/hash, inherited native-domain and token boundaries. It
+exclusively creates the source-derived private `-productive` sibling and launches
+only the closed recipient argv/environment with the existing native scope supplier.
+Original baseline, native birth/launch, exit, drain/close and capture outcomes are
+retained. Child captures are read only after native and capture retirement;
+consistent child JSON or ACK alone cannot establish that enclosing retirement.
+No live Recipient is reconstructed from the child's serialized supplier record.
+
+The already validated closed predecessor's transitive typed/reference graph is
+pinned once and checked at every intervening boundary, including the original
+registry and path semantics. Full content validation still runs at the claim,
+both sides of original reads, postclose return and before final observation.
+The graph check calls no clock, file, resource method or cancellation supplier.
+Changed nested values, containers, resources, roster or registry refuse; some
+equal replacement containers are rejected more strictly than legacy parsed-value
+validation. This is exact input checking, not reuse of prior test acceptance or
+a sandbox against arbitrary in-process code replacement.
+
+Final-only clock observation uses the independently registered original owner,
+window, first reading, local start and closed predecessor. A rejected execution
+alias cannot redirect cleanup or repeat that same alias error at every known
+resource close until diagnostic capacity is exhausted. This path grants no file
+acquisition or callback authority: `Owner.end` and `deadline` keep strict entry
+and exit checks even with `final=True`. Already-owned native drain uses a separate
+cleanup-only deadline. Actual frame/cap/roster/high-water corruption is still
+rejected, and the unchanged64-error/UNKNOWN policy is not weakened. Cleanup from
+WORK starts actual-final45 once; a failed start stays consumed/expired. Cleanup
+from READ retains the existing read30 and cannot start another45.
+
+Returned resources are independently retained before fallible post-return checks.
+The successful close roster is frozen once before actual owner close; suspicious
+late rows are retained but cannot enlarge that roster. Postclose additions,
+removals, flag regressions and all caller/query/Windows quarantines remain UNKNOWN.
+First exceptions, including falsey exceptions, survive later close/handler errors.
+No extra failure owner, retry or postclose acquisition is allowed. Private failure
+custody may remain unavailable or incomplete, not promised encrypted delivery.
+
+A successful private pending record precedes resource close and cannot attest it.
+The returned immutable `RecipientPrefix` follows close, handler restoration and
+final callback/clock/roster checks. It is evidence only: `nextPhaseAuthority` and
+export/save authority are false, budget `NOT_ADMITTED`, tests `NOT_PERFORMED`.
+Canonical initialization, producer/stop/retirement, empty-seed/export/freeze,
+provider save/probe and encrypted custody still require a reviewed same-live-call
+extension, not a new phase authorized by these closed JSON bytes.
+
+Focused controls use the actual parent and child wrapper with tiny ordinary-UID
+POSIX originals/captures. Native/Git/GPG/host/service/clock suppliers are modeled;
+no native or hosted acceptance follows. The source continuation records the exact
+source scopes, selected executed methods, failed aggregates and independent review.
+Both ordinary HOLDs, Windows NativeFile900/Snapshot576MiB and the missing routine
+custodian/trusted-base formal approval remain unchanged;5400 stays unadmitted.
 
 ### Canonical producer records, not producer execution
 
@@ -818,6 +894,8 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-history-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-reader-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-readmission-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-recipient-test.py
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-recipient-parent-test.py \
+  ParentModels.test_actual_parent_runs_child_and_reads_only_after_native_and_capture_close -v
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
@@ -829,8 +907,10 @@ These use modeled provider/native boundaries and tiny synthetic owned files, no
 dependency download or Gradle. The connected/budget controls are registered in the
 unconditional ordinary CI policy step and both release script entry points.
 The separate bootstrap identity/cohort/producer-record/query-fence/original-acquisition/
-handoff/entry/service-time/allocation-proposal/close/history/legacy-reader/fresh-entry/recipient-child
+handoff/entry/service-time/allocation-proposal/close/history/legacy-reader/fresh-entry/recipient-child/recipient-parent
 controls are standalone, not an activated or registered bootstrap workflow.
+The parent example selects one method; its complete suite was executed in
+externally bounded four-method batches, as recorded in the source continuation.
 Tiny private-file controls require an actual ordinary UID; root is not an
 acceptable substitute and their modeled native boundaries are not host admission.
 Native Windows provider behavior and actual resolver/cache reuse require

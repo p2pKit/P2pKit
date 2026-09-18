@@ -5,8 +5,9 @@ No workflow, productive budget, canonical init/producer, seed/export/save,
 policy installer or uploader exists here. Separate read-only original adoption
 never becomes execution authority. A future trusted workflow must bind the
 actual original prepare-step outcome, not a provisional receipt/digest.
-The separate recipient child has no parent launcher. Its synchronous supplier
-checks cannot replace that missing native parent's deadline/retirement proof.
+The internal recipient-only parent owns its native launch/retirement/readback;
+no public operation or workflow calls it. Offline controls are not native,
+custodian, scheduling or encrypted-custody qualification.
 """
 from __future__ import annotations
 
@@ -105,6 +106,9 @@ RECIPIENT_CONTEXT_FIELDS = {"schema", "scope", "profile", "selection", "cacheCoh
     "root", "session", "originalSession", "originalContextSha256", "admissionSha256", "proposalSha256",
     "clock", "job", "inheritedContext", "runnerName", "previousTransitionSha256", "previousCheckedNs",
     "directories", "budgetAcceptance", "testAcceptance", "exportSaveAuthority"}
+RECIPIENT_PREFIX_SCOPE = "BOOTSTRAP_RECIPIENT_PREFIX_CLOSED_NO_EXECUTION_V1"
+_RECIPIENT_CLAIM_LOCK = threading.Lock()
+_RECIPIENT_ATTEMPTS = {}
 
 
 @dataclass(frozen=True)
@@ -1067,7 +1071,8 @@ def chain_content(owner, private, context_raw, admitted, records, returned, admi
 
 
 def _read_chain(reader, private, context_raw, admitted, records, returned, admission_hashes, *, final):
-    require(type(reader) in (_LegacyOriginalReader, _NewEntryOriginalReader), "BOOTSTRAP_ORIGINAL_READER_KIND")
+    require(type(reader) in (_LegacyOriginalReader, _NewEntryOriginalReader, _RecipientParentReader),
+            "BOOTSTRAP_ORIGINAL_READER_KIND")
     reader.checked()
     owner, past = reader.owner, reader.past
     require(type(records) is dict and set(records) == PHASE_FILES and
@@ -1352,7 +1357,7 @@ def prepared_content(owner, private, handoff_raw, context_raw, fence):
 
 
 def _read_prepared(reader, private, handoff_raw, context_raw):
-    require(type(reader) in (_LegacyOriginalReader, _NewEntryOriginalReader) and reader.first is not None,
+    require(type(reader) in (_LegacyOriginalReader, _NewEntryOriginalReader, _RecipientParentReader) and reader.first is not None,
             "BOOTSTRAP_ADOPTION_READER")
     reader.checked()
     owner, past = reader.owner, reader.past
@@ -2320,7 +2325,7 @@ def adopt_originals(cancelled):
 
 
 def recipient_command(context_hash, minimum=None):
-    """Closed argv only. No parent launches this child yet."""
+    """Closed argv for the dormant internal recipient-only parent."""
     require(type(context_hash) is str and re.fullmatch(r"[0-9a-f]{64}", context_hash), "BOOTSTRAP_RECIPIENT_CONTEXT_HASH")
     result = [str(Path(sys.executable).resolve(strict=True)), "-I", "-B", "-S", str(Path(__file__).resolve()),
               "_recipient", "--context-sha256", context_hash]
@@ -2330,7 +2335,7 @@ def recipient_command(context_hash, minimum=None):
 def recipient_environment(path):
     """Separate narrow installed-tool lookup, never broaden the service child.
 
-    The future native parent must use this environment and add its real domain.
+    The internal native parent uses this environment and adds its real domain.
     This function creates no owner/credential authority and downloads nothing.
     """
     require(origin.wire.TOKEN_ENV not in os.environ, "BOOTSTRAP_RECIPIENT_TOKEN_FORBIDDEN")
@@ -2578,10 +2583,9 @@ def _recipient_supplier_record(recipient, work, admitted, job):
 
 
 def recipient_child(context_hash, minimum, cancelled):
-    """Executable child prerequisite, NOT a connected recipient transaction.
+    """Executable child of the dormant internal recipient-only transaction.
 
-    No parent claims NewEntryTransition or launches this path yet. A supplied
-    context cannot attest that missing parent, native240/final45 or read30.
+    Supplied context alone cannot attest its parent, native240/final45 or read30.
     Validation does not authorize the routine custodian or any producer/cache.
     """
     recipient_command(context_hash, minimum)
@@ -2618,7 +2622,7 @@ def recipient_child(context_hash, minimum, cancelled):
                 "BOOTSTRAP_RECIPIENT_ORIGINALS_CHANGED")
         window.now()
         checked = admission_originals[0]
-        # Both existing suppliers are synchronous60. The absent real native
+        # Both existing suppliers are synchronous60. The enclosing native
         # parent is essential to stop an overrun/descendant. No inline deadline
         # observation or child ACK claims to supply that enclosing enforcement.
         if os.name == "nt":
@@ -2683,6 +2687,1155 @@ def recipient_child(context_hash, minimum, cancelled):
             "terminalSha256": origin.digest(result_raw), "clock": origin.clock_value(window.clock), "closedNs": closed_ns,
             "childResourceClose": "KNOWN_RESOURCE_CLOSE_ONLY", "parentRetirement": "NOT_OBSERVED_HERE",
             "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False}, window, window.final
+
+
+@dataclass(frozen=True)
+class RecipientPrefix:
+    """Private finalized evidence only; no live Recipient or next-phase authority."""
+    raw: bytes = field(repr=False)
+    pending_raw: bytes = field(repr=False)
+    originals: tuple = field(repr=False)
+    checked_ns: int = field(repr=False)
+
+
+@dataclass(frozen=True)
+class _RecipientParentBindings:
+    owner: object
+    window: object
+    first: object
+    callback: object
+    local_start: float
+    local_end: float
+    admissions: object
+    resources: object
+    errors: object
+    # Independent strong references: a callback-replaced row/list cannot erase
+    # a returned resource, or redirect cleanup through call.owner/transition.
+    seen: list = field(default_factory=list)
+    window_state: list = field(default_factory=list)
+    observations: list = field(default_factory=list)
+    files: list = field(default_factory=list)
+    close_roster: list = field(default_factory=list)
+
+
+@dataclass(eq=False)
+class _RecipientResource:
+    row: object
+    label: object
+    resource: object
+    attempted: bool = False
+    closed: bool = False
+
+
+def _recipient_predecessor_pins(transition):
+    previous = transition._attempt
+    return ((transition.raw, transition._preclose_ns, transition._closed_ns, transition._checked_ns,
+             previous.pending_raw, previous.preparation, tuple(previous.target_identity)),
+            (previous, previous.transition, previous.owner, previous.window, previous.admitted,
+             previous.admission_originals, previous.snapshot, previous.first, previous.bindings))
+
+
+@dataclass(frozen=True)
+class _RecipientPredecessorGraph:
+    """Exact closed-graph pins between complete predecessor validations.
+
+    Compile the already validated transitive graph once, then compare EVERY
+    edge at EVERY boundary. This is not a successful-result cache: replacing a
+    nested reference, changing a typed scalar or mutating a container refuses
+    before another supplier. Cycles retain strong references. No clock, file,
+    resource method or cancellation callback is called here.
+
+    Only the known source-owned record/Owner/Fence types are traversed. Opaque
+    callbacks/resources retain identity/type; the path properties actually used
+    by the full validator are independently rechecked with its original path
+    and registry-key semantics. Like the full checker, this is not a sandbox
+    against arbitrary code replacement inside the Python process.
+    """
+    transition: object = field(repr=False)
+    registry: object = field(repr=False)
+    registered: object = field(repr=False)
+    registry_key: int = field(repr=False)
+    paths: tuple = field(repr=False)
+    nodes: tuple = field(repr=False)
+
+    @staticmethod
+    def path_values(transition):
+        attempt, old = transition._attempt, transition._attempt.transition
+        paths = _new_entry_paths(attempt)  # Original equality checks, not string-only replacement.
+        values = (ROOT, old._entry._private.path, old._entry._target.path, *paths)
+        require(all(type(value) is type(ROOT) for value in values), "BOOTSTRAP_RECIPIENT_PREDECESSOR_PATH_KIND")
+        return (tuple((type(value), str(value), tuple(value.parts), value.drive, value.root) for value in values),
+                str(old._entry._target.path / "admission"), str(paths[2] / "admission"))
+
+    @classmethod
+    def capture(cls, transition):
+        registered = _entry_attempt_record(transition._attempt)
+        key = id(transition._attempt.transition)
+        require(type(_ENTRY_ATTEMPTS) is dict and _ENTRY_ATTEMPTS.get(key) is registered,
+                "BOOTSTRAP_RECIPIENT_PREDECESSOR_REGISTRY")
+        traversed = (NewEntryTransition, _EntryAttempt, ClosedEntryTransition, OriginalEntry, OriginalPhase,
+                     Owner, origin.Fence, _NewEntryWindow, I.Admission, origin.clocks.Reading, origin.clocks.ClockIdentity)
+        scalars = (type(None), bool, int, float, str, bytes)
+        pending, seen, nodes = [transition, registered], set(), []
+        while pending:
+            value = pending.pop()
+            kind = type(value)
+            if kind in scalars or id(value) in seen:
+                continue
+            seen.add(id(value))
+            require(len(seen) <= 10000, "BOOTSTRAP_RECIPIENT_PREDECESSOR_GRAPH_LIMIT")
+            if kind is dict:
+                saved = tuple(value.items())
+                require(all(type(key) in scalars for key, _ in saved), "BOOTSTRAP_RECIPIENT_PREDECESSOR_KEY_KIND")
+                pending.extend(item for pair in saved for item in pair)
+                mode = "mapping"
+            elif kind in (list, tuple):
+                saved, mode = tuple(value), "sequence"
+                pending.extend(saved)
+            elif kind in traversed:
+                saved, mode = object.__getattribute__(value, "__dict__"), "record"
+                pending.append(saved)
+            else:
+                saved, mode = None, "opaque"
+            nodes.append((value, kind, mode, saved))
+        result = cls(transition, _ENTRY_ATTEMPTS, registered, key, cls.path_values(transition), tuple(nodes))
+        result.checked(transition)
+        return result
+
+    def checked(self, transition):
+        require(type(self) is _RecipientPredecessorGraph and transition is self.transition and
+                _ENTRY_ATTEMPTS is self.registry and self.registry.get(self.registry_key) is self.registered and
+                _entry_attempt_record(transition._attempt) is self.registered,
+                "BOOTSTRAP_RECIPIENT_PREDECESSOR_REGISTRY")
+        scalars = (type(None), bool, int, float, str, bytes)
+        def same(actual, original):
+            return actual is original or (type(actual) is type(original) and type(original) in scalars and actual == original)
+        for value, kind, mode, saved in self.nodes:
+            require(type(value) is kind, "BOOTSTRAP_RECIPIENT_PREDECESSOR_CHANGED")
+            if mode == "record":
+                valid = object.__getattribute__(value, "__dict__") is saved
+            elif mode == "mapping":
+                valid = len(value) == len(saved) and all(same(key, old_key) and same(item, old_item)
+                    for (key, item), (old_key, old_item) in zip(value.items(), saved))
+            elif mode == "sequence":
+                valid = len(value) == len(saved) and all(same(item, old) for item, old in zip(value, saved))
+            else:
+                valid = mode == "opaque"
+            require(valid, "BOOTSTRAP_RECIPIENT_PREDECESSOR_CHANGED")
+        require(self.path_values(transition) == self.paths, "BOOTSTRAP_RECIPIENT_PREDECESSOR_PATH_CHANGED")
+
+
+def _recipient_parent_registration(call):
+    require(type(call) is _RecipientParent, "BOOTSTRAP_RECIPIENT_NOT_CLAIMED")
+    with _RECIPIENT_CLAIM_LOCK:
+        rows = [row for row in _RECIPIENT_ATTEMPTS.values() if type(row) is tuple and
+                len(row) == 4 and row[1] is call]
+    require(len(rows) == 1, "BOOTSTRAP_RECIPIENT_NOT_CLAIMED")
+    return rows[0]
+
+
+@dataclass(frozen=True)
+class _RecipientParentWindow:
+    """Distinct work240/final45/read30 ownership, never an old entry renewal.
+
+    Finalization is capped by BOTH first+285 and actual-final-start+45.
+    Readback starts only after native/writer close, has its own start+30, and
+    also stays inside first+315 and the original cumulative proposal/job fence.
+    These are unadmitted source caps. Synchronous OS calls are not real-time
+    cancellable; late returns fail and known-owner cleanup is still attempted.
+    """
+    call: object = field(repr=False, compare=False)
+    clock: object = field(init=False)
+    first: int = field(init=False)
+    work: int = field(init=False)
+    native_end: int = field(init=False)
+    prefix_end: int = field(init=False)
+    work_local: float = field(init=False)
+    native_local: float = field(init=False)
+    local_end: float = field(init=False)
+    last: int = field(init=False)
+    local_last: float = field(init=False)
+    phase: str = field(default="WORK", init=False)
+    final_started: object = field(default=None, init=False)
+    final_local_start: object = field(default=None, init=False)
+    final: int = field(init=False)
+    final_local: float = field(init=False)
+    read_started: object = field(default=None, init=False)
+    read_local_start: object = field(default=None, init=False)
+    read_attempted: bool = field(default=False, init=False)
+    read_end: object = field(default=None, init=False)
+    read_local: object = field(default=None, init=False)
+
+    def __post_init__(self):
+        self.call.check()
+        clock, began, work, final, end, work_local, native_local, local_end = self.limits()
+        for name, value in (("clock", clock), ("first", began), ("work", work), ("native_end", final),
+                ("prefix_end", end), ("work_local", work_local), ("native_local", native_local),
+                ("local_end", local_end), ("last", began), ("local_last", self.call.local_start),
+                ("final", final), ("final_local", native_local)):
+            object.__setattr__(self, name, value)
+
+    def limits(self, *, cleanup=False):
+        # Rederive static limits from the exact closed predecessor, not mutable
+        # phase fields. Both RAW and independently projected LOCAL caps apply.
+        registered = _recipient_parent_registration(self.call)
+        bound = registered[3]
+        require(type(cleanup) is bool and (not cleanup or bound is not None),
+                "BOOTSTRAP_RECIPIENT_CLEANUP_NOT_BOUND")
+        first = origin.clocks.validate_reading(bound.first if cleanup else self.call.first)
+        previous = registered[0] if cleanup else self.call.transition
+        require(first.clock == previous._attempt.window.clock and first.nanoseconds >= previous._checked_ns,
+                "BOOTSTRAP_RECIPIENT_PARENT_FIRST_CLOCK")
+        local = bound.local_start if cleanup else self.call.local_start
+        require(type(local) in (int, float) and math.isfinite(local) and local >= 0,
+                "BOOTSTRAP_RECIPIENT_PARENT_LOCAL_CLOCK")
+        proposal = origin.parse(previous._attempt.transition.proposal_raw)
+        fences, job_end = proposal["phaseFencesNs"], proposal["proposedJobEndNs"]
+        began = first.nanoseconds
+        work = min(origin.integer(began + 240 * origin.NS), fences["recipient-validation"], job_end)
+        final = min(origin.integer(began + 285 * origin.NS), fences["recipient-final"], job_end)
+        end = min(origin.integer(began + 315 * origin.NS), fences["recipient-read"], job_end)
+        require(began < work <= final <= end, "BOOTSTRAP_RECIPIENT_PARENT_NO_INTERVAL")
+        return (first.clock, began, work, final, end,
+                origin.wire._directed_deadline(local, 240, work, began),
+                origin.wire._directed_deadline(local, 285, final, began),
+                origin.wire._directed_deadline(local, 315, end, began))
+
+    def phase_state(self):
+        return (self.phase, self.final_started, self.final_local_start, self.final, self.final_local,
+                self.read_attempted, self.read_started, self.read_local_start, self.read_end, self.read_local)
+
+    def remember_phase(self):
+        _recipient_parent_registration(self.call)[3].window_state[:] = [self.phase_state()]
+
+    def checked(self, *, cleanup=False):
+        self.call.check(cleanup=cleanup)  # Retain actual resources BEFORE any clock/callback.
+        bound = _recipient_parent_registration(self.call)[3]
+        actual = (self.clock, self.first, self.work, self.native_end, self.prefix_end,
+                  self.work_local, self.native_local, self.local_end)
+        expected = self.limits(cleanup=cleanup)
+        require(type(self) is _RecipientParentWindow and bound is not None and bound.window is self and
+                (cleanup or self.call.window is self) and
+                all(type(a) is type(b) and a == b for a, b in zip(actual, expected)) and
+                type(self.last) is int and self.first <= self.last <= origin.clocks.UINT64 and
+                type(self.local_last) in (int, float) and math.isfinite(self.local_last) and
+                self.local_last >= bound.local_start and bound.observations == [self.last, self.local_last] and
+                bound.window_state == [self.phase_state()] and self.phase in ("WORK", "FINAL", "READ"),
+                "BOOTSTRAP_RECIPIENT_PARENT_WINDOW_CHANGED")
+        if self.phase == "WORK":
+            expected_final = (None, None, self.native_end, self.native_local)
+            require(self.read_attempted is False, "BOOTSTRAP_RECIPIENT_PARENT_PHASE_CHANGED")
+        elif self.final_started is None:
+            # Failed final-start observation is a permanently expired sentinel,
+            # not a fictional actual start or a renewable cleanup45.
+            expected_final = (None, None, 0, 0.0)
+        else:
+            began = origin.integer(self.final_started, self.first)
+            end = min(self.native_end, origin.integer(began + 45 * origin.NS))
+            expected_final = (began, self.final_local_start, end, min(self.native_local,
+                origin.wire._directed_deadline(self.final_local_start, 45, end, began)))
+        require((self.final_started, self.final_local_start, self.final, self.final_local) == expected_final and
+                type(self.read_attempted) is bool, "BOOTSTRAP_RECIPIENT_PARENT_PHASE_CHANGED")
+        if self.phase == "READ":
+            began = origin.integer(self.read_started, self.final_started)
+            end = min(self.prefix_end, origin.integer(began + 30 * origin.NS))
+            require(self.read_attempted and began < self.final and self.read_local_start < self.final_local and
+                    self.read_end == end and self.read_local == min(self.local_end,
+                        origin.wire._directed_deadline(self.read_local_start, 30, end, began)),
+                    "BOOTSTRAP_RECIPIENT_PARENT_PHASE_CHANGED")
+        else:
+            require((self.read_started, self.read_local_start, self.read_end, self.read_local) == (None,) * 4,
+                    "BOOTSTRAP_RECIPIENT_PARENT_PHASE_CHANGED")
+        return self
+
+    def local_now(self, *, cleanup=False):
+        self.checked(cleanup=cleanup)
+        local = time.monotonic()
+        require(type(local) in (int, float) and math.isfinite(local) and local >= self.local_last,
+                "BOOTSTRAP_RECIPIENT_PARENT_LOCAL_CLOCK")
+        object.__setattr__(self, "local_last", local)
+        _recipient_parent_registration(self.call)[3].observations[1] = local
+        self.checked(cleanup=cleanup)
+        return local
+
+    def raw_now(self, minimum=0, *, cleanup=False):
+        observed = origin.clocks.checked_now(self.clock, minimum_ns=max(self.last, origin.integer(minimum)))
+        object.__setattr__(self, "last", observed)  # Before any later check can fail.
+        _recipient_parent_registration(self.call)[3].observations[0] = observed
+        self.checked(cleanup=cleanup)
+        return observed
+
+    def now(self, *, final=False, minimum=0, limit=None):
+        # Final observations are cleanup-only, never permission to acquire.
+        # Owner.close_fence must still inspect the original known frame after
+        # an execution alias changes; repeating that alias refusal per resource
+        # could otherwise saturate diagnostics and truncate known cleanup.
+        # Owner.end -> deadline keeps STRICT entry/exit checks, even final=True.
+        self.checked(cleanup=final)
+        require(type(final) is bool and self.call.state not in ("COMPLETE", "FAILED") and
+                (self.phase != "FINAL" or final), "BOOTSTRAP_RECIPIENT_PARENT_NOT_LIVE")
+        observed = self.raw_now(minimum, cleanup=final)
+        end = self.read_end if self.phase == "READ" else self.final if final else self.work
+        if limit is not None:
+            end = min(end, origin.integer(limit))
+        require(observed < end, "BOOTSTRAP_RECIPIENT_PARENT_EXPIRED")
+        local = self.local_now(cleanup=final)
+        require(local < (self.read_local if self.phase == "READ" else self.final_local if final else self.work_local),
+                "BOOTSTRAP_RECIPIENT_PARENT_LOCAL_EXPIRED")
+        if not final:
+            self.call.cancel()
+            # Cancellation callbacks are suppliers too. Their successful return
+            # cannot authorize a prefix using observations made before them.
+            # No callback follows these final RAW/LOCAL observations.
+            observed = self.raw_now(minimum=observed)
+            require(observed < end, "BOOTSTRAP_RECIPIENT_PARENT_EXPIRED")
+            local = self.local_now()
+            require(local < (self.read_local if self.phase == "READ" else self.work_local),
+                    "BOOTSTRAP_RECIPIENT_PARENT_LOCAL_EXPIRED")
+        self.checked(cleanup=final)
+        require(self.last == observed, "BOOTSTRAP_RECIPIENT_PARENT_HIGHWATER_CHANGED")
+        return observed
+
+    def deadline(self, maximum, *, final=False, limit=None):
+        require(type(maximum) in (int, float) and 0 < maximum <= 315 and math.isfinite(maximum),
+                "BOOTSTRAP_RECIPIENT_PARENT_MAXIMUM")
+        self.checked()
+        local = self.local_now()
+        observed = self.now(final=final, limit=limit)
+        end = self.read_end if self.phase == "READ" else self.final if final else self.work
+        if limit is not None:
+            end = min(end, origin.integer(limit))
+        cap = self.read_local if self.phase == "READ" else self.final_local if final else self.work_local
+        result = min(cap, origin.wire._directed_deadline(local, maximum, end, observed))
+        self.checked()
+        return result
+
+    def cleanup_deadline(self, maximum):
+        """Only an already-owned native drain; NEVER Owner.end/file admission."""
+        require(type(maximum) in (int, float) and math.isfinite(maximum) and 0 < maximum <= 45,
+                "BOOTSTRAP_RECIPIENT_CLEANUP_MAXIMUM")
+        self.checked(cleanup=True)
+        local = self.local_now(cleanup=True)
+        observed = self.now(final=True)
+        end = self.read_end if self.phase == "READ" else self.final
+        cap = self.read_local if self.phase == "READ" else self.final_local
+        result = min(cap, origin.wire._directed_deadline(local, maximum, end, observed))
+        self.checked(cleanup=True)
+        return result
+
+    def begin_final(self):
+        # Mark once, before suppliers. Failed observation leaves an EXPIRED cap,
+        # never a new45 on the next cleanup attempt or a invented actual start.
+        self.checked(cleanup=True)
+        require(self.phase == "WORK", "BOOTSTRAP_RECIPIENT_FINAL_REENTRY")
+        object.__setattr__(self, "phase", "FINAL")
+        object.__setattr__(self, "final", 0)
+        object.__setattr__(self, "final_local", 0.0)
+        self.remember_phase()
+        local = self.local_now(cleanup=True)
+        observed = self.raw_now(cleanup=True)
+        object.__setattr__(self, "final_started", observed)
+        object.__setattr__(self, "final_local_start", local)
+        end = min(self.native_end, origin.integer(observed + 45 * origin.NS))
+        object.__setattr__(self, "final", end)
+        object.__setattr__(self, "final_local", min(self.native_local,
+            origin.wire._directed_deadline(local, 45, end, observed)))
+        self.remember_phase()
+        self.now(final=True)
+
+    def begin_read(self):
+        self.checked()
+        require(self.phase == "FINAL" and not self.read_attempted and self.call.native_retired and
+                self.call.captures_retired and self.call.original is None and not self.call.unknown,
+                "BOOTSTRAP_RECIPIENT_READ_BEFORE_RETIREMENT")
+        self.call.phase_writers_closed()
+        self.now(final=True)
+        object.__setattr__(self, "read_attempted", True)
+        self.remember_phase()
+        local = self.local_now()
+        observed = self.raw_now()
+        require(observed < self.final and local < self.final_local, "BOOTSTRAP_RECIPIENT_READ_START_EXPIRED")
+        object.__setattr__(self, "read_started", observed)
+        object.__setattr__(self, "read_local_start", local)
+        end = min(self.prefix_end, origin.integer(observed + 30 * origin.NS))
+        object.__setattr__(self, "read_end", end)
+        object.__setattr__(self, "read_local", min(self.local_end,
+            origin.wire._directed_deadline(local, 30, end, observed)))
+        object.__setattr__(self, "phase", "READ")
+        self.remember_phase()
+        self.now()
+
+    def record(self):
+        self.checked()
+        return {"clock": origin.clock_value(self.clock), "firstNs": self.first, "workEndNs": self.work,
+                "nativeEndNs": self.native_end, "prefixEndNs": self.prefix_end,
+                "finalStartedNs": self.final_started, "finalEndNs": self.final,
+                "readStartedNs": self.read_started, "readEndNs": self.read_end,
+                "budgetAcceptance": "NOT_ADMITTED"}
+
+
+@dataclass(frozen=True)
+class _RecipientParentReader:
+    """Historical chain under THIS new live owner, not a disguised old reader."""
+    call: object = field(repr=False, compare=False)
+    owner: object = field(init=False, repr=False, compare=False)
+    current: object = field(init=False, repr=False, compare=False)
+    past: object = field(init=False, repr=False)
+    first: object = field(init=False, repr=False)
+
+    def __post_init__(self):
+        owner = self.call.live()
+        old = self.call.transition._attempt.transition
+        for name, value in (("owner", owner), ("current", self.call.window),
+                            ("past", history.snapshot(old._fence)), ("first", old._limits[8])):
+            object.__setattr__(self, name, value)
+
+    def checked(self):
+        require(self.call.live() is self.owner and self.current is self.call.window and
+                self.first is self.call.transition._attempt.transition._limits[8] and
+                history.checked(self.past) == history.snapshot(self.call.transition._attempt.transition._fence),
+                "BOOTSTRAP_RECIPIENT_READER_CHANGED")
+        return self
+
+    def observe(self, *, final, minimum):
+        self.checked()
+        return self.current.now(final=final, minimum=minimum)
+
+
+@dataclass(eq=False)
+class _RecipientParent:
+    transition: object = field(repr=False)
+    originals: tuple = field(repr=False)
+    state: str = "CLAIMED"
+    local_start: object = None
+    first: object = field(default=None, repr=False)
+    window: object = field(default=None, repr=False)
+    owner: object = field(default=None, repr=False)
+    bindings: object = field(default=None, repr=False)
+    callback: object = field(default=None, repr=False)
+    cancelled: list = field(default_factory=list, repr=False)
+    handlers: dict = field(default_factory=dict, repr=False)
+    handles: dict = field(default_factory=dict, repr=False)
+    identities: dict = field(default_factory=dict, repr=False)
+    records: dict = field(default_factory=dict, repr=False)
+    row: dict = field(default_factory=dict, repr=False)
+    original: object = field(default=None, repr=False)
+    errors: list = field(default_factory=list, repr=False)
+    unknown: bool = False
+    native_retired: bool = False
+    captures_retired: bool = False
+    child_accepted: bool = False
+    pending_raw: object = field(default=None, repr=False)
+    failure_custody: str = "UNAVAILABLE"
+    result: object = field(default=None, repr=False)
+
+    def actual_owner(self):
+        bound = _recipient_parent_registration(self)[3]
+        return None if bound is None else bound.owner
+
+    def roster(self):
+        bound = _recipient_parent_registration(self)[3]
+        if bound is None:
+            return
+        owner = bound.owner
+        try:
+            # Capture returned resources from the original list even if a later
+            # callback has rebound owner.resources. Retain suspicious new rows
+            # too, but never use them to erase earlier close responsibility.
+            seen = {(id(pin.row), id(pin.resource)) for pin in bound.seen}
+            for rows in (bound.resources,) if owner.resources is bound.resources else (bound.resources, owner.resources):
+                if type(rows) is list:
+                    for row in rows:
+                        label, resource = (row.get("label"), row.get("owner")) if type(row) is dict else (None, None)
+                        if (id(row), id(resource)) not in seen:
+                            bound.seen.append(_RecipientResource(row, label, resource))
+                            seen.add((id(row), id(resource)))
+            require(type(owner.resources) is list and owner.resources is bound.resources and
+                    len(owner.resources) == len(bound.seen), "BOOTSTRAP_RECIPIENT_PARENT_ROSTER")
+            # Retain late rows above, but NEVER learn a larger successful roster
+            # during/after close. Flags on an unobserved late row prove nothing.
+            require(len(bound.close_roster) <= 1 and (not owner.closed or len(bound.close_roster) == 1),
+                    "BOOTSTRAP_RECIPIENT_PARENT_CLOSE_ROSTER")
+            if bound.close_roster:
+                frozen = bound.close_roster[0]
+                require(len(owner.resources) == len(frozen) and all(current is row and
+                        row.get("label") == label and row.get("owner") is resource
+                        for current, (row, label, resource) in zip(owner.resources, frozen)),
+                        "BOOTSTRAP_RECIPIENT_PARENT_CLOSE_ROSTER")
+            for current, pin in zip(owner.resources, bound.seen):
+                row = pin.row
+                require(current is row and type(row) is dict and set(row) == {"label", "owner", "attempted", "closed"} and
+                        row["label"] == pin.label and pin.label in ("directory", "writer", "stdout", "stderr", "native-scope") and
+                        row["owner"] is pin.resource and type(row["attempted"]) is bool and type(row["closed"]) is bool and
+                        (not row["closed"] or row["attempted"]) and (not pin.attempted or row["attempted"]) and
+                        (not pin.closed or row["closed"]), "BOOTSTRAP_RECIPIENT_PARENT_ROSTER")
+                pin.attempted, pin.closed = row["attempted"], row["closed"]
+        except BaseException as error:
+            self.error("recipient-roster", error, unknown=True)
+            raise
+
+    def check(self, *, full=False, cleanup=False):
+        require(type(cleanup) is bool, "BOOTSTRAP_RECIPIENT_CHECK_MODE")
+        registered = _recipient_parent_registration(self)
+        self.roster()
+        if QUARANTINE or query.QUARANTINE or diagnostics._QUARANTINE:
+            error = origin.OriginError("BOOTSTRAP_RECIPIENT_PARENT_PRIOR_UNKNOWN")
+            self.error("recipient-global-uncertainty", error, unknown=True)
+            raise self.original
+        if not cleanup:
+            require(registered[0] is self.transition and registered[2] is self.originals and registered[3] is self.bindings,
+                    "BOOTSTRAP_RECIPIENT_PARENT_CLAIM_CHANGED")
+        transition, originals, bound = registered[0], registered[2], registered[3]
+        require(not cleanup or bound is not None, "BOOTSTRAP_RECIPIENT_CLEANUP_NOT_BOUND")
+        # Full parsing repeatedly recursed through the same closed records at
+        # every nested clock/Owner check. Exact transitive typed pins preserve
+        # immediate rejection, without repeatedly parsing unchanged originals.
+        # Full validation still surrounds original reads and final return.
+        originals[2].checked(transition)
+        if full:
+            check_new_entry_transition(transition)  # NEVER advances the closed clock.
+            originals[2].checked(transition)
+        values, references = _recipient_predecessor_pins(transition)
+        require(values == originals[0] and all(a is b for a, b in zip(references, originals[1])),
+                "BOOTSTRAP_RECIPIENT_PARENT_PREDECESSOR_CHANGED")
+        if bound is not None:
+            owner = bound.owner
+            # Cleanup uses only independently registered originals. Rejected
+            # call aliases stay rejected; they are NEVER restored or admitted
+            # for live/deadline/read/record work. Actual owner/frame changes,
+            # roster uncertainty and global quarantine still fail closed.
+            require(owner.fence is bound.window and owner.first is bound.first and
+                    owner.cancelled is bound.callback and owner.local_end == bound.local_end and
+                    owner.work_limit is None and owner.final_limit is None and owner.early_last == bound.first.nanoseconds and
+                    owner.admissions is bound.admissions and owner.errors is bound.errors,
+                    "BOOTSTRAP_RECIPIENT_PARENT_OWNER_CHANGED")
+            if not cleanup:
+                require(self.owner is owner and self.window is bound.window and self.first is bound.first and
+                        self.callback is bound.callback and self.errors is bound.errors and
+                        type(self.local_start) is type(bound.local_start) and self.local_start == bound.local_start,
+                        "BOOTSTRAP_RECIPIENT_PARENT_OWNER_CHANGED")
+        return self
+
+    def freeze_roster(self):
+        self.roster()
+        bound = _recipient_parent_registration(self)[3]
+        require(bound is not None and not bound.owner.closed and not bound.close_roster,
+                "BOOTSTRAP_RECIPIENT_PARENT_CLOSE_REENTRY")
+        bound.close_roster.append(tuple((pin.row, pin.label, pin.resource) for pin in bound.seen))
+
+    def closed_roster(self):
+        # Always inspect even if an earlier exception already exists. A late
+        # removed/unfinished row is UNKNOWN, not a known failure with lost pins.
+        owner = self.actual_owner()
+        if owner is None:
+            return
+        try:
+            self.roster()
+            require(owner.closed is True and all(pin.attempted and pin.closed
+                    for pin in _recipient_parent_registration(self)[3].seen), "BOOTSTRAP_RECIPIENT_PARENT_NOT_CLOSED")
+        except BaseException as error:
+            self.error("recipient-closed-roster", error, unknown=True)
+
+    def cancel(self):
+        self.check()
+        cancellation(self.cancelled)
+        for callback in self.transition._attempt.transition._callbacks:
+            callback()
+            self.check()
+
+    def error(self, stage, error, *, unknown=False):
+        owner = self.actual_owner()
+        if self.original is None:
+            self.original = error if owner is None or owner.original is None else owner.original
+        unknown |= (isinstance(error, diagnostics.WindowsEvidenceError) and error.retirement_unknown is not False)
+        unknown |= bool(query.QUARANTINE or diagnostics._QUARANTINE)
+        if owner is not None:
+            owner.error(stage, error, unknown=unknown)
+            self.unknown |= owner.unknown
+        else:
+            self.unknown |= unknown or diagnostics._exception_detail(error)["retirementUnknown"]
+            if len(self.errors) < 64:
+                self.errors.append({"stage": stage, "detail": diagnostics._exception_detail(error)})
+            else:
+                self.unknown = True
+
+    def live(self):
+        self.check()
+        owner = self.actual_owner()
+        require(self.state == "RUNNING" and owner is not None and not owner.closed and
+                self.original is None and owner.original is None and not self.unknown and not owner.unknown and
+                not QUARANTINE and not query.QUARANTINE and not diagnostics._QUARANTINE,
+                "BOOTSTRAP_RECIPIENT_PARENT_NOT_LIVE")
+        return owner
+
+    def paths(self):
+        old = self.transition._attempt.transition._entry
+        original = Path(origin.parse(old.context_original)["session"])
+        return original, *(original.with_name(original.name + suffix) for suffix in ("-adoption", "-entry", "-productive"))
+
+    def host(self):
+        owner = self.live()
+        owner.end()
+        entry = self.transition._attempt.transition._entry
+        context = origin.parse(entry.context_original)
+        require(origin.wire.TOKEN_ENV not in os.environ and os.environ.get(PREPARE_OUTCOME_ENV) == "success" and
+                os.environ.get(PREPARE_HASH_ENV) == origin.digest(entry.handoff_original),
+                "BOOTSTRAP_RECIPIENT_PREPARE_OUTCOME_OR_TOKEN")
+        selection, path, event = host_inputs(self.first.clock.role)
+        recipient_environment(self.paths()[3])
+        require(path == self.paths()[0] and selection == context["selection"] and event == entry.admitted.original_event and
+                context["runnerName"] == os.environ.get("RUNNER_NAME") and
+                context["inheritedContext"] == query._inherited_context() and
+                os.getpid() != origin.parse(entry.preparation_original)["processIdentity"]["pid"],
+                "BOOTSTRAP_RECIPIENT_PARENT_HOST_CHANGED")
+        owner.end()
+
+    def read_originals(self):
+        self.check(full=True)
+        owner = self.live()
+        self.host()
+        previous, old = self.transition._attempt, self.transition._attempt.transition
+        entry, paths = old._entry, self.paths()
+        value = origin.parse(entry.raw)
+        for name, path, identity in (("original", paths[0], value["preparation"]["sessionIdentity"]),
+                ("adoption", paths[1], value["sessionIdentity"]), ("entry", paths[2], previous.target_identity)):
+            _new_entry_owned(owner, self.handles[name], path, identity)
+        adoption, current = self.handles["adoption"], self.handles["entry"]
+        require(owner.read(adoption, "entry-context.json") == entry.raw and
+                owner.read(adoption, "entry-close-pending.json") == old.pending_raw and
+                owner.read(current, "new-entry-pending.json") == previous.pending_raw,
+                "BOOTSTRAP_RECIPIENT_ENTRY_ORIGINAL_CHANGED")
+        for target, admitted, session, returned in ((adoption, entry.admitted, entry.session_original, entry.return_original),
+                (current, previous.admitted, previous.admission_originals[1], previous.admission_originals[2])):
+            directory = owner.child(target, "admission")
+            require(load_admission(owner, directory) == admitted and owner.read(directory, "session-result.json") == session and
+                    owner.read(target, "admission-return.json") == returned, "BOOTSTRAP_RECIPIENT_ENTRY_ADMISSION_CHANGED")
+        _admission_history_content(entry.admitted, entry.session_original, entry.return_original, history.snapshot(old._fence))
+        _new_entry_return_content(previous)  # Original closed new-entry registry, not fresh admission.
+        admitted, _, prepared = _read_prepared(_RecipientParentReader(self), self.handles["original"],
+                                              entry.handoff_original, entry.context_original)
+        require(admitted == entry.admitted and same_preparation(prepared, origin.parse(entry.preparation_original)) and
+                same_preparation(prepared, origin.parse(previous.preparation)), "BOOTSTRAP_RECIPIENT_PREPARATION_CHANGED")
+        service = owner.child(self.handles["original"], "service")
+        responses = tuple((name, owner.read(service, name + ".json")) for name in ("attempt", "jobs"))
+        require(responses == old.responses and origin.encoded(_entry_close_proposal(entry, responses)) == old.proposal_raw,
+                "BOOTSTRAP_RECIPIENT_SERVICE_ORIGINALS_CHANGED")
+        self.host()
+        self.check(full=True)
+        return prepared
+
+    def private_inputs(self):
+        owner = self.live()
+        for name in ("original", "session", *RECIPIENT_DIRECTORIES):
+            directory = self.handles[name]
+            _new_entry_owned(owner, directory, self.paths()[0] if name == "original" else self.paths()[3] if name == "session"
+                             else self.paths()[3] / name, self.identities[name])
+        for directory, name, key in ((self.handles["session"], "recipient-context.json", "context"),
+                (self.handles["session"], "allocation.json", "proposal"),
+                (self.handles["recipient-validation"], "start.json", "start.json")):
+            require(owner.read(directory, name) == self.records[key], "BOOTSTRAP_RECIPIENT_PARENT_INPUT_CHANGED")
+        self.host()
+
+    def resource(self, label):
+        bound = _recipient_parent_registration(self)[3]
+        rows = [] if bound is None else [pin for pin in bound.seen if pin.label == label]
+        require(len(rows) <= 1, "BOOTSTRAP_RECIPIENT_DUPLICATE_PHASE_RESOURCE")
+        return rows[0].resource if rows else None
+
+    def close_phase_resource(self, label):
+        """Existing Owner close, with original pins retained on every failure."""
+        bound = _recipient_parent_registration(self)[3]
+        try:
+            resource = self.resource(label)
+            if resource is not None:
+                bound.owner.close_one(resource)
+            self.roster()
+        except BaseException as error:
+            self.error("recipient-" + label + "-close-return", error, unknown=True)
+        pins = [pin for pin in bound.seen if pin.label == label]
+        return (len(pins) == 1 and pins[0].attempted, len(pins) == 1 and pins[0].closed)
+
+    def phase_writers_closed(self):
+        self.roster()
+        pins = _recipient_parent_registration(self)[3].seen
+        for name in ("native-scope", "stdout", "stderr"):
+            selected = [pin for pin in pins if pin.label == name]
+            require(len(selected) == 1 and selected[0].attempted and selected[0].closed,
+                    "BOOTSTRAP_RECIPIENT_READ_BEFORE_RETIREMENT")
+
+    def remember_file(self, key, directory, name, raw, maximum=LIMIT):
+        owner = self.live()
+        bound = _recipient_parent_registration(self)[3]
+        require(type(raw) is bytes and len(raw) <= maximum and not any(row[0] == key for row in bound.files),
+                "BOOTSTRAP_RECIPIENT_DUPLICATE_ORIGINAL")
+        identity = tuple(directory_identity(list(directory.identity), self.window.clock.role))
+        _new_entry_owned(owner, directory, directory.path, identity)
+        bound.files.append((key, directory, directory.path, identity, name, maximum, raw))
+        self.records[key] = raw
+        return raw
+
+    def reread_files(self):
+        owner = self.live()
+        self.phase_writers_closed()
+        for key, directory, path, identity, name, maximum, raw in _recipient_parent_registration(self)[3].files:
+            _new_entry_owned(owner, directory, path, identity)
+            require(self.records.get(key) == raw and owner.read(directory, name, maximum) == raw,
+                    "BOOTSTRAP_RECIPIENT_RETAINED_ORIGINAL_CHANGED")
+        self.private_inputs()
+
+    def launch(self):
+        owner, window = self.live(), self.window
+        directory, path = self.handles["recipient-validation"], self.paths()[3]
+        context = origin.parse(self.records["context"])
+        start = origin.parse(self.records["start.json"])
+        self.row = {**start, "captureOutcomes": {name: {"synced": False, "verified": False,
+            "closeAttempted": False, "closed": False, "readback": False} for name in ("stdout", "stderr")}}
+        env = processes.ownership_environment(recipient_environment(path), context["job"], start["invocation"],
+                                               str(path), str(path / "control-home"), allow_new_context=True)
+        require({name: env[name] for name in query._CONTEXT} == start["inheritedContext"],
+                "BOOTSTRAP_RECIPIENT_PARENT_DOMAIN_CHANGED")
+        try:
+            end = window.deadline(285, final=True)
+            for name, maximum in (("stdout", ACK_LIMIT), ("stderr", STDERR_LIMIT)):
+                owner.acquire(name, lambda name=name, maximum=maximum: directory.create_file(name + ".log",
+                                                                                             max_bytes=maximum, deadline=end))
+            def make_scope():
+                self.row["scopeAttempted"] = True  # Actual factory attempt, not acquire's earlier precheck.
+                return processes.make_scope(start["job"], start["invocation"], str(path), str(path / "control-home"))
+            scope = owner.acquire("native-scope", make_scope)
+            self.row["preparerIdentity"] = preparer_identity(scope, window.clock.role)
+            raw = owner.write(directory, "baseline.json", {"role": window.clock.role,
+                "baseline": sorted(scope.baseline) if hasattr(scope, "baseline") else None,
+                "kernelJob": window.clock.role == "windows-x64"})
+            self.remember_file("baseline.json", directory, "baseline.json", raw)
+            baseline_record(self.records["baseline.json"], window.clock.role)
+            self.row["baselineSha256"] = origin.digest(self.records["baseline.json"])
+            self.read_originals()
+            self.private_inputs()
+            self.row["launchMinimumNs"] = window.now()
+            argv = recipient_command(origin.digest(self.records["context"]), self.row["launchMinimumNs"])
+            self.row["launchArgv"] = argv
+            self.row["launchAttempted"] = True
+            child = scope.spawn(argv, str(ROOT), env, stdout=self.resource("stdout"), stderr=self.resource("stderr"))
+            require(child.stdout is None and child.stderr is None, "BOOTSTRAP_RECIPIENT_PRIVATE_SINKS_REQUIRED")
+            birth = origin.parse(origin.encoded(scope.description()))
+            leaders = [item for item in birth.get("startedIdentities", []) if item.get("pid") == child.pid]
+            require(len(leaders) == 1, "BOOTSTRAP_RECIPIENT_NATIVE_BIRTH")
+            self.row["leader"] = leaders[0]
+            native_record(birth, start, leaders[0], argv, terminal=False)
+            raw = owner.write(directory, "native-start.json", {"ownership": birth,
+                "leader": leaders[0], "preparerIdentity": self.row["preparerIdentity"], "observedNs": window.now()})
+            self.remember_file("native-start.json", directory, "native-start.json", raw)
+            self.row["nativeStartSha256"] = origin.digest(self.records["native-start.json"])
+            while True:
+                window.now()
+                for name in ("stdout", "stderr"):
+                    stream = self.resource(name)
+                    stream.observe_live_output() if window.clock.role == "windows-x64" else stream.verify()
+                code = child.poll()
+                if code is not None:
+                    self.row["exitCode"] = code  # Preserve actual return before any fallible observation.
+                observed = window.now()
+                if code is not None:
+                    self.row["completedNs"] = observed
+                    require(type(code) is int and code == 0, "BOOTSTRAP_RECIPIENT_CHILD_FAILED")
+                    require(scope.discover() == [], "BOOTSTRAP_RECIPIENT_LEFT_DESCENDANTS")
+                    break
+                scope.discover()
+                time.sleep(.025)
+        except BaseException as error:
+            self.error("recipient-native", error)
+        finally:
+            try:
+                self.finish_native()
+            except BaseException as error:
+                # A cleanup callback must not erase the original failure or
+                # drop the independently retained scope/capture references.
+                self.error("recipient-native-final-return", error, unknown=True)
+        if self.original is not None:
+            raise self.original
+
+    def finish_native(self):
+        # Independently retained actual bindings survive callback rebinding.
+        bound = _recipient_parent_registration(self)[3]
+        owner, window = bound.owner, bound.window
+        final_ready = False
+        try:
+            window.begin_final()
+            final_ready = True
+        except BaseException as error:
+            self.error("recipient-final-fence", error)
+        try:
+            scope = self.resource("native-scope")
+        except BaseException as error:
+            self.error("recipient-scope-reference", error, unknown=True)
+            return
+        if scope is not None:
+            try:
+                try:
+                    require(final_ready, "BOOTSTRAP_RECIPIENT_FINAL_START_FAILED")
+                    end = window.cleanup_deadline(45)
+                    remaining = max(0, end - window.local_now(cleanup=True))
+                except BaseException as error:
+                    self.error("recipient-drain-fence", error)
+                    remaining = 0
+                grace = min(5, remaining)
+                self.row["survivors"] = scope.drain(grace=grace, kill_wait=min(5, max(0, remaining - grace)))
+                self.row["ownership"] = origin.parse(origin.encoded(scope.description()))
+                require(self.row["survivors"] == [] and self.row["ownership"].get("discoveryErrors") == [],
+                        "BOOTSTRAP_RECIPIENT_NATIVE_DRAIN_UNKNOWN")
+                # A returned scope is registered before acquire's post-return
+                # clock. If that clock failed, these observations may never
+                # have happened. Do not invent them or turn known drain into
+                # UNKNOWN merely because a later assignment was not reached.
+                if "preparerIdentity" in self.row:
+                    require(preparer_identity(scope, window.clock.role) == self.row["preparerIdentity"],
+                            "BOOTSTRAP_RECIPIENT_PARENT_LIFETIME_CHANGED")
+                if "leader" in self.row:
+                    native_record(self.row["ownership"], self.row, self.row["leader"], self.row["launchArgv"])
+                self.native_retired = True
+            except BaseException as error:
+                self.error("recipient-drain", error, unknown=True)
+            attempted, closed = self.close_phase_resource("native-scope")
+            self.row.update(scopeCloseAttempted=attempted, scopeClosed=closed)
+            self.native_retired &= closed
+        elif self.row.get("scopeAttempted"):
+            self.error("recipient-construction", origin.OriginError("BOOTSTRAP_RECIPIENT_SCOPE_UNKNOWN"), unknown=True)
+        else:
+            self.native_retired = True
+        if self.native_retired and not owner.unknown:
+            for name in ("stdout", "stderr"):
+                try:
+                    stream = self.resource(name)
+                    if stream is None:
+                        continue
+                    outcome = self.row["captureOutcomes"][name]
+                    window.now(final=True)
+                    stream.sync()
+                    outcome["synced"] = True
+                    stream.verify()
+                    outcome["verified"] = True
+                    window.now(final=True)
+                except BaseException as error:
+                    self.error("recipient-capture", error)
+                attempted, closed = self.close_phase_resource(name)
+                self.row["captureOutcomes"][name].update(closeAttempted=attempted, closed=closed)
+                if owner.unknown:
+                    break
+            self.captures_retired = all(outcome["closed"] for outcome in self.row["captureOutcomes"].values())
+        try:
+            self.row["finalizedNs"] = window.now(final=True)
+        except BaseException as error:
+            self.error("recipient-final-return", error)
+        if self.original is None and owner.original is not None:
+            self.error("recipient-native-close", owner.original)
+        # An outer drain does not prove a failed/late child's supplier returned
+        # KNOWN. Preserve it conservatively, with no further file acquisitions.
+        if self.row.get("launchAttempted") and self.original is not None:
+            self.error("recipient-child-return", self.original, unknown=True)
+
+    def native_content(self):
+        """Bind original baseline/birth/terminal/captures after actual close."""
+        self.phase_writers_closed()
+        row, window = self.row, self.window
+        start = origin.parse(self.records["start.json"])
+        birth = origin.parse(self.records["native-start.json"])
+        baseline = baseline_record(self.records["baseline.json"], window.clock.role)
+        require(set(row) == TERMINAL_FIELDS and set(birth) == {"ownership", "leader", "preparerIdentity", "observedNs"},
+                "BOOTSTRAP_RECIPIENT_NATIVE_TERMINAL_FIELDS")
+        preparer = closed_lifetime(row["preparerIdentity"], window.clock.role)
+        require(preparer == closed_lifetime(birth["preparerIdentity"], window.clock.role) and
+                preparer["pid"] != row["leader"]["pid"], "BOOTSTRAP_RECIPIENT_NATIVE_PREPARER_CHANGED")
+        for name in set(start) - {"exitCode", "launchAttempted", "scopeAttempted", "retirement"}:
+            require(row[name] == start[name], "BOOTSTRAP_RECIPIENT_NATIVE_START_CHANGED")
+        require(type(row["exitCode"]) is int and row["exitCode"] == 0 and row["launchAttempted"] is True and
+                row["scopeAttempted"] is True and row["scopeCloseAttempted"] is True and row["scopeClosed"] is True and
+                row["retirement"] == "KNOWN" and row["survivors"] == [] and row["errors"] == [] and
+                row["nativeStartSha256"] == origin.digest(self.records["native-start.json"]) and
+                row["baselineSha256"] == origin.digest(self.records["baseline.json"]) and row["leader"] == birth["leader"],
+                "BOOTSTRAP_RECIPIENT_NATIVE_RETURN")
+        argv = recipient_command(origin.digest(self.records["context"]), origin.integer(row["launchMinimumNs"], window.first))
+        require(row["launchArgv"] == argv, "BOOTSTRAP_RECIPIENT_NATIVE_ARGV")
+        native_record(birth["ownership"], start, row["leader"], argv, terminal=False)
+        native_record(row["ownership"], start, row["leader"], argv)
+        require(birth["ownership"]["launches"] == row["ownership"]["launches"], "BOOTSTRAP_RECIPIENT_NATIVE_BIRTH_CHANGED")
+        if baseline["baseline"] is not None:
+            identity = lifetime(row["leader"], window.clock.role)
+            require(list(identity[:4] if window.clock.role.startswith("macos-") else identity) not in baseline["baseline"],
+                    "BOOTSTRAP_RECIPIENT_NATIVE_PREEXISTING_LEADER")
+        times = (window.first, row["launchMinimumNs"], birth["observedNs"], row["completedNs"],
+                 window.final_started, row["finalizedNs"], window.read_started)
+        require(all(type(value) is int and 0 <= value <= origin.clocks.UINT64 for value in times) and
+                list(times) == sorted(times) and row["completedNs"] < window.work and
+                row["finalizedNs"] < window.final, "BOOTSTRAP_RECIPIENT_NATIVE_CHRONOLOGY")
+        require(row["captureOutcomes"] == {name: {"synced": True, "verified": True, "closeAttempted": True,
+                    "closed": True, "readback": True} for name in ("stdout", "stderr")} and
+                all(type(flag) is bool for value in row["captureOutcomes"].values() for flag in value.values()) and
+                row["captures"] == {name: {"sha256": origin.digest(self.records[name + ".log"]),
+                    "bytes": len(self.records[name + ".log"])} for name in ("stdout", "stderr")},
+                "BOOTSTRAP_RECIPIENT_NATIVE_CAPTURES")
+
+    def read_child(self):
+        owner, window = self.live(), self.window
+        window.begin_read()
+        directory = self.handles["recipient-validation"]
+        try:
+            for name, maximum in (("stdout", ACK_LIMIT), ("stderr", STDERR_LIMIT)):
+                self.remember_file(name + ".log", directory, name + ".log", owner.read(directory, name + ".log", maximum), maximum)
+                self.row["captureOutcomes"][name]["readback"] = True
+            self.remember_file("child-result.json", directory, "child-result.json", owner.read(directory, "child-result.json"))
+            child, ack = (origin.parse(self.records[name]) for name in ("child-result.json", "stdout.log"))
+            start, context = origin.parse(self.records["start.json"]), origin.parse(self.records["context"])
+            require(self.records["stderr.log"] == b"" and self.records["child-result.json"] == origin.encoded(child) and
+                    self.records["stdout.log"] == origin.encoded(ack), "BOOTSTRAP_RECIPIENT_CHILD_ORIGINALS")
+            require(set(child) == {"schema", "scope", "contextSha256", "startSha256", "proposalSha256",
+                    "admissionReturnSha256", "recipient", "clock", "invocation", "launchMinimumNs", "beganNs",
+                    "metadataLastNs", "supplierReturnedNs", "completedNs", "supplierReturned", "childResourceClose",
+                    "parentRetirement", "budgetAcceptance", "testAcceptance", "exportSaveAuthority"} and
+                    type(child["schema"]) is int and child["schema"] == 1 and child["scope"] == RECIPIENT_SCOPE and
+                    child["contextSha256"] == origin.digest(self.records["context"]) and
+                    child["startSha256"] == origin.digest(self.records["start.json"]) and
+                    child["proposalSha256"] == origin.digest(self.records["proposal"]) and child["supplierReturned"] is True and
+                    child["childResourceClose"] == "PENDING_CLOSE" and
+                    child["launchMinimumNs"] == self.row["launchMinimumNs"], "BOOTSTRAP_RECIPIENT_CHILD_TERMINAL")
+            require(set(ack) == {"schema", "scope", "invocation", "terminalSha256", "clock", "closedNs",
+                    "childResourceClose", "parentRetirement", "budgetAcceptance", "testAcceptance", "exportSaveAuthority"} and
+                    type(ack["schema"]) is int and ack["schema"] == 1 and ack["scope"] == RECIPIENT_ACK_SCOPE and
+                    ack["terminalSha256"] == origin.digest(self.records["child-result.json"]) and
+                    ack["childResourceClose"] == "KNOWN_RESOURCE_CLOSE_ONLY", "BOOTSTRAP_RECIPIENT_CHILD_ACK")
+            for value in (child, ack):
+                require(value["invocation"] == start["invocation"] and value["clock"] == origin.clock_value(window.clock) and
+                        value["parentRetirement"] == "NOT_OBSERVED_HERE" and value["budgetAcceptance"] == "NOT_ADMITTED" and
+                        value["testAcceptance"] == "NOT_PERFORMED" and value["exportSaveAuthority"] is False,
+                        "BOOTSTRAP_RECIPIENT_CHILD_AUTHORITY")
+            admission = owner.child(self.handles["session"], "recipient-admission")
+            admitted = load_admission(owner, admission)
+            require(admitted == self.transition._attempt.admitted, "BOOTSTRAP_RECIPIENT_CHILD_ADMISSION_CHANGED")
+            for name, raw in (("admission.json", admitted.record), ("original-event.json", admitted.original_event),
+                    ("original-policy.json", admitted.original_policy), ("recipient-public.asc", admitted.public_key)):
+                self.remember_file("recipient-admission/" + name, admission, name, raw)
+            session_raw = owner.read(admission, "session-result.json")
+            returned_raw = owner.read(directory, "admission-return.json")
+            self.remember_file("recipient-admission/session-result.json", admission, "session-result.json", session_raw)
+            self.remember_file("admission-return.json", directory, "admission-return.json", returned_raw)
+            session, returned = origin.parse(session_raw), origin.parse(returned_raw)
+            require(set(session) == {"schema", "scope", "job", "queries", "result", "retirement", "firstError", "errors", "readbacks"} and
+                    type(session["schema"]) is int and session["schema"] == 1 and session["scope"] == "ORDINARY_GIT_QUERIES_ONLY" and
+                    session["result"] == "READY_FOR_CALLER_SEAL" and session["retirement"] == "KNOWN" and
+                    session["firstError"] is None and session["errors"] == [] and type(session["queries"]) is list and
+                    type(session["readbacks"]) is list and type(session["job"]) is str and
+                    re.fullmatch(r"[0-9a-f]{32}", session["job"]), "BOOTSTRAP_RECIPIENT_CHILD_QUERY_SESSION")
+            require(set(returned) == {"admissionSha256", "sessionSha256", "clock", "returnedNs"} and
+                    returned_raw == origin.encoded(returned) and returned["admissionSha256"] == origin.digest(admitted.record) and
+                    returned["sessionSha256"] == origin.digest(session_raw) and returned["clock"] == origin.clock_value(window.clock) and
+                    child["admissionReturnSha256"] == origin.digest(returned_raw), "BOOTSTRAP_RECIPIENT_CHILD_QUERY_RETURN")
+            times = (start["startedNs"], self.row["launchMinimumNs"], child["beganNs"], child["metadataLastNs"],
+                     returned["returnedNs"], child["supplierReturnedNs"], child["completedNs"], ack["closedNs"], self.row["completedNs"])
+            require(all(type(value) is int and 0 <= value <= origin.clocks.UINT64 for value in times) and
+                    list(times) == sorted(times) and child["metadataLastNs"] < child["beganNs"] + 45 * origin.NS and
+                    ack["closedNs"] < min(child["beganNs"] + 210 * origin.NS, window.work) and
+                    self.row["completedNs"] < window.work, "BOOTSTRAP_RECIPIENT_CHILD_CHRONOLOGY")
+            recipient = child["recipient"]
+            fields = {"fingerprint", "encryption_fingerprint", "expires_at", "key_sha256", "work_identity", "executable"}
+            if window.clock.role == "windows-x64":
+                fields |= {"executable_sha256", "job_id"}
+            require(type(recipient) is dict and set(recipient) == fields and
+                    recipient["fingerprint"] == admitted.fingerprint.upper() and recipient["key_sha256"] == admitted.key_sha256 and
+                    recipient["work_identity"] == self.identities["crypto"] and
+                    type(recipient["encryption_fingerprint"]) is str and re.fullmatch(r"[0-9A-F]{40}", recipient["encryption_fingerprint"]) and
+                    type(recipient["expires_at"]) is int and (recipient["expires_at"] == 0 or recipient["expires_at"] >= admitted.expires_at) and
+                    type(recipient["executable"]) is str and 0 < len(recipient["executable"]) <= 32768 and
+                    Path(recipient["executable"]).is_absolute(), "BOOTSTRAP_RECIPIENT_CHILD_KEY_RETURN")
+            if window.clock.role == "windows-x64":
+                require(recipient["job_id"] == context["job"] and type(recipient["executable_sha256"]) is str and
+                        re.fullmatch(r"[0-9a-f]{64}", recipient["executable_sha256"]), "BOOTSTRAP_RECIPIENT_CHILD_WINDOWS_RETURN")
+            for name, expected in (("recipient.asc", admitted.public_key), ("recipient.gpg", posix._public_armor(admitted.public_key))):
+                raw = owner.read(self.handles["crypto"], name, posix.MAX_KEY_BYTES)
+                require(raw == expected, "BOOTSTRAP_RECIPIENT_CHILD_KEY_ORIGINAL_CHANGED")
+                self.remember_file("crypto/" + name, self.handles["crypto"], name, raw, posix.MAX_KEY_BYTES)
+            self.row.update(retirement="KNOWN", captures={name: {"sha256": origin.digest(self.records[name + ".log"]),
+                "bytes": len(self.records[name + ".log"])} for name in ("stdout", "stderr")}, errors=[])
+            self.native_content()
+            self.reread_files()
+            self.read_originals()
+            self.reread_files()
+            window.now()
+            self.child_accepted = True
+        except BaseException as error:
+            self.error("recipient-readback", error, unknown=True)
+            raise self.original
+
+
+def run_recipient_after_entry(transition):
+    """Once-claimed INTERNAL recipient prefix; no public/workflow caller.
+
+    All resources and handlers close in this one call under the ORIGINAL prefix
+    caps. No live Recipient is reconstructed from child JSON; canonical init,
+    producer/cache/custody work needs a later reviewed same-live-call extension.
+    """
+    check_new_entry_transition(transition)
+    pins = (*_recipient_predecessor_pins(transition), _RecipientPredecessorGraph.capture(transition))
+    call = _RecipientParent(transition, pins)
+    with _RECIPIENT_CLAIM_LOCK:
+        require(id(transition) not in _RECIPIENT_ATTEMPTS, "BOOTSTRAP_RECIPIENT_ALREADY_CLAIMED")
+        _RECIPIENT_ATTEMPTS[id(transition)] = (transition, call, pins, None)
+    owner = window = None
+    try:
+        call.local_start = time.monotonic()
+        require(type(call.local_start) in (int, float) and math.isfinite(call.local_start) and call.local_start >= 0,
+                "BOOTSTRAP_RECIPIENT_PARENT_LOCAL_CLOCK")
+        call.first = origin.clocks.observe()
+        call.callback = call.cancel
+        call.window = window = _RecipientParentWindow(call)
+        call.owner = owner = Owner(window.local_end, window, first=call.first, cancelled=call.callback)
+        # Retain the actual return BEFORE another supplier/clock/callback.
+        call.bindings = _RecipientParentBindings(owner, window, call.first, call.callback, call.local_start, owner.local_end,
+            owner.admissions, owner.resources, owner.errors, window_state=[window.phase_state()],
+            observations=[window.last, window.local_last])
+        with _RECIPIENT_CLAIM_LOCK:
+            _RECIPIENT_ATTEMPTS[id(transition)] = (transition, call, pins, call.bindings)
+        call.errors, call.state = owner.errors, "RUNNING"
+        owner.end()
+        for number in (signal.SIGINT, signal.SIGTERM, *([signal.SIGBREAK] if hasattr(signal, "SIGBREAK") else [])):
+            call.handlers[number] = signal.getsignal(number)
+            signal.signal(number, lambda signum, _frame: call.cancelled.append(signum))
+            owner.end()
+        call.host()
+        for name, path in zip(("original", "adoption", "entry"), call.paths()[:3]):
+            call.handles[name] = owner.open(path)
+        call.read_originals()
+        path = call.paths()[3]
+        call.handles["session"] = owner.new(path)
+        for name in RECIPIENT_DIRECTORIES:
+            call.handles[name] = owner.child(call.handles["session"], name, create=True)
+        for name in ("original", "session", *RECIPIENT_DIRECTORIES):
+            call.handles[name].verify()
+            call.identities[name] = directory_identity(list(call.handles[name].identity), window.clock.role)
+            owner.end()
+        old = transition._attempt.transition
+        original, admitted = origin.parse(old._entry.context_original), origin.admitted_value(old._entry.admitted)
+        context = {"schema": 1, "scope": RECIPIENT_CONTEXT_SCOPE, "profile": bootstrap.PROFILE,
+            **{name: admitted[name] for name in ("selection", "cacheCohort", "source", "github")},
+            "root": str(ROOT), "session": str(path), "originalSession": str(call.paths()[0]),
+            "originalContextSha256": origin.digest(old._entry.context_original),
+            "admissionSha256": origin.digest(old._entry.admitted.record), "proposalSha256": origin.digest(old.proposal_raw),
+            "clock": origin.clock_value(window.clock), "job": uuid.uuid4().hex,
+            "inheritedContext": original["inheritedContext"], "runnerName": original["runnerName"],
+            "previousTransitionSha256": origin.digest(transition.raw), "previousCheckedNs": transition._checked_ns,
+            "directories": call.identities, "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED",
+            "exportSaveAuthority": False}
+        call.remember_file("proposal", call.handles["session"], "allocation.json",
+                           owner.write(call.handles["session"], "allocation.json", old.proposal_raw))
+        call.remember_file("context", call.handles["session"], "recipient-context.json",
+                           owner.write(call.handles["session"], "recipient-context.json", context))
+        invocation = uuid.uuid4().hex
+        env = processes.ownership_environment(recipient_environment(path), context["job"], invocation,
+                                               str(path), str(path / "control-home"), allow_new_context=True)
+        start_raw = owner.write(call.handles["recipient-validation"], "start.json", {
+            "schema": 1, "scope": RECIPIENT_START_SCOPE, "contextSha256": origin.digest(call.records["context"]),
+            "argv": recipient_command(origin.digest(call.records["context"])), "cwd": str(ROOT), "role": window.clock.role,
+            "job": context["job"], "invocation": invocation, "state": str(path), "home": str(path / "control-home"),
+            "inheritedContext": {name: env[name] for name in query._CONTEXT}, "startedNs": window.first,
+            "workEndNs": window.work, "finalEndNs": window.native_end, "exitCode": None,
+            "launchAttempted": False, "scopeAttempted": False, "retirement": "UNKNOWN"})
+        call.remember_file("start.json", call.handles["recipient-validation"], "start.json", start_raw)
+        call.launch()
+        call.read_child()
+        call.remember_file("result.json", call.handles["recipient-validation"], "result.json",
+                           owner.write(call.handles["recipient-validation"], "result.json", call.row))
+        call.reread_files()
+        call.pending_raw = owner.write(call.handles["session"], "recipient-prefix-pending.json", {
+            "schema": 1, "scope": "BOOTSTRAP_RECIPIENT_PREFIX_PENDING_RESOURCE_CLOSE_V1",
+            "previousTransitionSha256": origin.digest(transition.raw), "window": window.record(),
+            "originalsSha256": {name: origin.digest(raw) for name, raw in call.records.items()},
+            "childReturn": "VALIDATED_ORIGINALS_AFTER_NATIVE_RETIREMENT", "parentResourceClose": "PENDING_CLOSE",
+            "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False})
+        call.reread_files()
+        call.read_originals()
+        call.reread_files()
+        call.native_content()
+        require(owner.read(call.handles["session"], "recipient-prefix-pending.json") == call.pending_raw and
+                owner.read(call.handles["recipient-validation"], "result.json") == call.records["result.json"],
+                "BOOTSTRAP_RECIPIENT_PREFIX_PENDING_CHANGED")
+        call.cancel()
+        owner.end()
+    except BaseException as error:
+        call.error("recipient-prefix", error, unknown=call.row.get("launchAttempted", False) and not call.child_accepted)
+        # Retain only through the existing live, known owner and original cap.
+        # No crypto, retry, postclose writer, or promise of encrypted delivery.
+        if owner is not None and not owner.closed and not owner.unknown and "session" in call.handles:
+            try:
+                if window.phase == "WORK":
+                    window.begin_final()
+                call.check()
+                call.failure_custody = "INCOMPLETE"
+                owner.write(call.handles["session"], "recipient-prefix-failure.json", {"schema": 1, "result": "HOLD",
+                    "errors": call.errors, "window": window.record(), "parentResourceClose": "PENDING_CLOSE",
+                    "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False}, final=True)
+                call.failure_custody = "PRIVATE_PROVISIONAL_ONLY"
+            except BaseException as secondary:
+                call.error("recipient-prefix-failure-retention", secondary)
+    finally:
+        if owner is not None:
+            call.state = "CLOSING"
+            try:
+                call.freeze_roster()
+            except BaseException as error:
+                call.error("recipient-prefix-close-roster", error, unknown=True)
+            if window.phase == "WORK":
+                try:
+                    window.begin_final()
+                except BaseException as error:
+                    call.error("recipient-prefix-final-start", error)
+            try:
+                call.roster()
+            except BaseException as error:
+                call.error("recipient-prefix-roster", error, unknown=True)
+            try:
+                owner.close()  # Actual strong local reference; never callback-rebound call.owner.
+            except BaseException as error:
+                call.error("recipient-prefix-close", error)
+            if owner.original is not None:
+                call.error("recipient-prefix-owner-return", owner.original)
+        for number, handler in call.handlers.items():
+            try:
+                signal.signal(number, handler)
+            except BaseException as error:
+                call.error("recipient-prefix-handler-restore", error)
+        call.closed_roster()
+    try:
+        if call.original is not None:
+            raise call.original
+        call.check(full=True)
+        require(owner is not None and owner.closed and not owner.unknown and not call.unknown and call.child_accepted and
+                all(row["attempted"] is True and row["closed"] is True for row in owner.resources),
+                "BOOTSTRAP_RECIPIENT_PREFIX_NOT_CLOSED")
+        call.cancel()
+        closed_ns = window.now(minimum=call.row["finalizedNs"])
+        raw = origin.encoded({"schema": 1, "scope": RECIPIENT_PREFIX_SCOPE,
+            "previousTransitionSha256": origin.digest(transition.raw), "pendingSha256": origin.digest(call.pending_raw),
+            "window": window.record(), "closedNs": closed_ns, "resourceCount": len(owner.resources),
+            "parentResourceClose": "KNOWN_RESOURCE_CLOSE_ONLY", "childReturn": "VALIDATED_ORIGINALS_AFTER_NATIVE_RETIREMENT",
+            "nextPhaseAuthority": False, "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED",
+            "exportSaveAuthority": False})
+        call.cancel()
+        call.check(full=True)
+        checked = window.now(minimum=closed_ns)
+        call.check()
+        call.closed_roster()
+        require(window.last == checked and owner.original is None and not owner.unknown and
+                all(row["attempted"] is True and row["closed"] is True for row in owner.resources),
+                "BOOTSTRAP_RECIPIENT_PREFIX_FINAL_STATE_CHANGED")
+        call.result = RecipientPrefix(raw, call.pending_raw, tuple(sorted(call.records.items())), checked)
+        call.state = "COMPLETE"
+        return call.result
+    except BaseException as error:
+        call.error("recipient-prefix-final-return", error)
+        call.closed_roster()
+        call.state = "FAILED"
+        if owner is not None and (owner.unknown or call.unknown) and not any(actual is owner for actual in QUARANTINE):
+            QUARANTINE.append(owner)
+        raise call.original
 
 
 def guarded(operation):
