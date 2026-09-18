@@ -421,6 +421,54 @@ outcomes and complete failure custody. The proposed5,400 seconds remains
 unadmitted/unmeasured. No canonical initializer, producer, seed/export/save/probe
 or encrypted-custody caller is added, and both ordinary activation HOLDs remain.
 
+### Historical chronology, not a live reader or renewed fence
+
+[`hosted_cache_bootstrap_history.py`](../../scripts/hosted_cache_bootstrap_history.py)
+separates immutable **supplied historical data** from the original reader's
+live observations. `HistoricalPrelude` derives the original clock identity and
+first/work/final values from exact canonical prelude bytes. It has no clock
+reader, cancellation callback, owner, high-water, local deadline or job budget.
+Its consistency checks do not authenticate originals; equal copies gain no
+provenance or execution authority. An expired prelude can remain valid data
+without becoming a live allowance.
+
+The small pure checks retain the original context/admission/phase/chain/adopter
+chronology. Context's lower-bound-only check is deliberately distinct from
+admission's **original75** upper bound. Phase maxima are still clamped to the
+original prelude. Native birth may occur concurrently with child work; it is
+not substituted for the prelaunch floor. `chain_minimum` returns only a
+historical minimum, **not** an actual `revalidatedNs` observation. The original
+adopter's first reading remains a historical fact, not a future reader's first.
+
+Existing source-owned wrappers retain the surrounding closed record/byte/argv
+and provenance checks, actual reads/open/verify operations and live clock/
+cancellation boundaries. In particular, the chain still performs its actual
+`fence.now` after the pure minimum. Executable/script path resolution remains
+at the original `command()` call sites, not inside the pure checks or supplied
+by an arbitrary callback. No original Owner/Fence is prolonged or replaced.
+Original75/local45/original120 failures, latest observations and UNKNOWN remain
+failures even when supplied historical records pass.
+
+This is a prerequisite refactor, **not** a mixed historical/live reader,
+productive transaction or failure-custody executor. The public command surface,
+entry/close lifecycle, both ordinary activation HOLDs and bootstrap execution
+refusal remain. No producer, seed/export/save/probe or encrypted-custody caller
+is connected. The proposed5,400 seconds remains unadmitted/unmeasured. A later
+productive transaction must still claim the exact closed transition once,
+carry its final `_checked_ns`, reopen/re-admit original source/native/service
+bindings and own failure custody inside a distinct nonrenewable envelope.
+
+The proposed custody phase names are not yet executable bootstrap adapters.
+The ordinary [transcript collector](../../scripts/test-transcript-custody.py)
+requires real CLI/diagnostics Test tasks, XML and exports; configuration-only
+`help` cannot satisfy it. Likewise the ordinary
+[encrypted manifest](../../scripts/hosted_test_evidence.py) requires ordinary
+profile/suite admission. Bootstrap needs separate canonical/native configuration
+custody and manifest/seal adapters, not invented tests or weaker ordinary checks.
+UNKNOWN or an exhausted original fence can preclude safe retained/encrypted
+custody; preserve original references and report unavailable/incomplete custody,
+never fabricate a successful failure-delivery path or choose a fallback key.
+
 ### Canonical producer records, not producer execution
 
 [`hosted_cache_bootstrap_producer.py`](../../scripts/hosted_cache_bootstrap_producer.py)
@@ -607,6 +655,7 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-entry-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-service-time-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-allocation-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-close-test.py
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-history-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
@@ -618,7 +667,7 @@ These use modeled provider/native boundaries and tiny synthetic owned files, no
 dependency download or Gradle. The connected/budget controls are registered in the
 unconditional ordinary CI policy step and both release script entry points.
 The separate bootstrap identity/cohort/producer-record/query-fence/original-acquisition/
-handoff/entry/service-time/allocation-proposal/close controls are standalone, not an
+handoff/entry/service-time/allocation-proposal/close/history controls are standalone, not an
 activated or registered bootstrap workflow.
 Tiny private-file controls require an actual ordinary UID; root is not an
 acceptable substitute and their modeled native boundaries are not host admission.

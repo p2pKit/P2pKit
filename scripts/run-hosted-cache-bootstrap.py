@@ -27,6 +27,7 @@ ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 import audit_processes as processes
 import hosted_cache_bootstrap_allocation as allocation
+import hosted_cache_bootstrap_history as history
 import hosted_cache_bootstrap_identity as bootstrap
 import hosted_cache_bootstrap_origin as origin
 import hosted_cache_bootstrap_service_time as service_time
@@ -538,7 +539,7 @@ def context_record(raw, admitted, path, fence):
             not any(ord(char) < 32 or ord(char) == 127 for char in value["runnerName"]) and
             type(value["admissionReturnSha256"]) is str and re.fullmatch(r"[0-9a-f]{64}", value["admissionReturnSha256"]),
             "BOOTSTRAP_ORIGINAL_CONTEXT_IDENTITIES")
-    origin.integer(value["admissionReturnedNs"], fence.first)
+    history.context_return(history.snapshot(fence), value["admissionReturnedNs"])
     inherited = value["inheritedContext"]
     require(type(inherited) is dict and set(inherited).issubset(query._CONTEXT) and
             all(type(item) is str for item in inherited.values()) and
@@ -557,11 +558,7 @@ def start_record(raw, context_raw, context, path, fence):
             start["exitCode"] is None and start["launchAttempted"] is False and start["scopeAttempted"] is False and
             start["retirement"] == "UNKNOWN" and type(start["invocation"]) is str and
             re.fullmatch(r"[0-9a-f]{32}", start["invocation"]), "BOOTSTRAP_ORIGINAL_PRELAUNCH")
-    began = origin.integer(start["startedNs"], context["admissionReturnedNs"])
-    require(began < fence.work and type(start["workEndNs"]) is int and type(start["finalEndNs"]) is int and
-            start["workEndNs"] == min(fence.work, began + 45 * origin.NS) and
-            start["finalEndNs"] == min(fence.final, start["workEndNs"] + 45 * origin.NS),
-            "BOOTSTRAP_ORIGINAL_PHASE_FENCES")
+    history.phase_start(history.snapshot(fence), context["admissionReturnedNs"], start)
     expected = processes.ownership_environment(context["inheritedContext"], context["job"], start["invocation"],
         str(path), str(path / "control-home"), allow_new_context=True)
     require(start["inheritedContext"] == {name: expected[name] for name in query._CONTEXT},
@@ -605,7 +602,7 @@ def admission_content(admitted, session, returned, fence):
             set(value) == {"admissionSha256", "sessionSha256", "clock", "returnedNs"} and
             value["admissionSha256"] == origin.digest(admitted.record) and
             value["sessionSha256"] == origin.digest(session) and value["clock"] == origin.clock_value(fence.clock) and
-            fence.first <= origin.integer(value["returnedNs"]) < fence.work, "BOOTSTRAP_ORIGINAL_ADMISSION_RETURN")
+            history.admission_return(history.snapshot(fence), value["returnedNs"]), "BOOTSTRAP_ORIGINAL_ADMISSION_RETURN")
     status = origin.parse(session)
     require(set(status) == {"schema", "scope", "job", "queries", "result", "retirement", "firstError", "errors", "readbacks"} and
             type(status["schema"]) is int and status["schema"] == 1 and status["scope"] == "ORDINARY_GIT_QUERIES_ONLY" and
@@ -876,16 +873,11 @@ def chain_content(owner, private, context_raw, admitted, records, returned, admi
     basis = service_time.derive(admitted, responses, start["invocation"], fence.clock, context["runnerName"])
     service = basis["service"]
     require(child["originalsSha256"] == service["originalsSha256"], "BOOTSTRAP_ORIGINAL_RESPONSES_CHANGED")
-    times = [fence.first, context["admissionReturnedNs"], start["startedNs"], row["launchMinimumNs"],
-             child["beganNs"], child["metadataLastNs"], service["firstNs"],
-             service["lastNs"], child["acquiredNs"], child["completedNs"], ack["closedNs"], row["completedNs"], row["finalizedNs"]]
-    require(all(type(value) is int and 0 <= value <= origin.clocks.UINT64 for value in times) and times == sorted(times) and
-            start["workEndNs"] == min(fence.work, start["startedNs"] + 45 * origin.NS) and
-            start["finalEndNs"] == min(fence.final, start["workEndNs"] + 45 * origin.NS) and
-            row["completedNs"] < start["workEndNs"] and row["finalizedNs"] < start["finalEndNs"] and
-            row["launchMinimumNs"] <= origin.integer(birth["observedNs"]) <= row["completedNs"],
-            "BOOTSTRAP_ORIGINAL_CLOCK_CHAIN")
-    last = fence.now(final=final, minimum=max(*times, birth["observedNs"]))
+    minimum = history.chain_minimum(history.snapshot(fence), context["admissionReturnedNs"],
+                                    start, row, birth, child, service, ack)
+    # This is still the actual owning reader's observation. A pure historical
+    # minimum cannot attest current time, renew a fence or register provenance.
+    last = fence.now(final=final, minimum=minimum)
     return {"service": service, "serviceTimeBasis": basis, "childTerminalSha256": origin.digest(child_raw),
             "phaseSha256": {name: origin.digest(raw) for name, raw in records.items()},
             "admissionOriginals": admission_hashes, "preludeSha256": origin.digest(fence.raw), "revalidatedNs": last,
@@ -1143,9 +1135,8 @@ def prepared_content(owner, private, handoff_raw, context_raw, fence):
             origin.encoded(result["finalAdmission"]) == origin.encoded(returns[1]) and
             origin.encoded(result["finalAdmissionOriginals"]) == origin.encoded(hashes[1]),
             "BOOTSTRAP_ADOPTION_ORIGINAL_CHAIN_CHANGED")
-    require(terminal["finalizedNs"] <= returns[1]["returnedNs"] <= revalidated <=
-            origin.integer(result["retainedNs"]) <= handoff["closedNs"] <= handoff["recordedNs"] <=
-            owner.first.nanoseconds < fence.work, "BOOTSTRAP_ADOPTION_PREDECESSOR_CLOCK")
+    history.adopter_first(history.snapshot(fence), terminal["finalizedNs"], returns[1]["returnedNs"],
+        revalidated, result["retainedNs"], handoff["closedNs"], handoff["recordedNs"], owner.first.nanoseconds)
     require(private_identities(owner, private, final=False) == identities, "BOOTSTRAP_ADOPTION_DIRECTORIES_CHANGED")
     return admitted, context, {"handoffSha256": origin.digest(handoff_raw), "originSha256": origin.digest(raw),
         "contextSha256": origin.digest(context_raw), "originalChain": checked,

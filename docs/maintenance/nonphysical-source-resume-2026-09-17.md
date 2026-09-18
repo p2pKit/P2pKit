@@ -803,6 +803,95 @@ no app assets. No build, download, held dispatch, PR, merge, Release, settings
 change or issue closure occurred. Both ordinary HOLDs and original75/local45/
 original120 remain; proposed5,400 remains unadmitted/unmeasured.
 
+## 18 September: historical chronology separated from live observations
+
+The [historical-data extraction](../testing/hosted-dependency-cache.md#historical-chronology-not-a-live-reader-or-renewed-fence)
+starts from `7831795dd19c0c1d7971a81d3529d404b4ca1012`, tree
+`ee359201ccc1fa06c90b32a9a12054d5ed4bc16b`. It separates original75/120 data
+and pure chronology from the current reader's actual observations, without
+creating another reader, Owner, job fence, callback or execution authority.
+The existing five wrappers still own their record/provenance/command checks,
+I/O and live observations. A pure minimum never replaces `revalidatedNs`;
+consistent or expired historical bytes do not renew original75/local45/120.
+Public preparation/adoption and internal close behavior remain in their old
+scope. No workflow, producer/cache/custody invocation or HOLD change is added.
+
+### Executed offline controls
+
+On Linux Python3.12.3 with actual UID65534:
+
+```bash
+timeout --kill-after=5s 90s runuser -u nobody -- \
+  python3 -I -B -S <exact-read-only-source-copy>/scripts/tests/hosted-cache-bootstrap-history-test.py -v
+```
+
+The first author execution passed **33/33 methods**:25 pure-data controls and
+eight existing-wrapper controls. The explicit loader excludes inherited tests.
+They cover canonical immutable fields, all declared clock roles, integer/type/
+overflow and original temporal boundaries, no-I/O/no-clock data checks, current
+observation after the historical minimum, original-byte/command binding,
+cancellation/expiry and the unchanged close-only result. These are supplied
+native/service/clock models and tiny actual ordinary-UID POSIX files, **not**
+genuine native/provider/resolver/custody/scheduling or configuration execution.
+All1,402 source hashes stayed unchanged in the read-only copy and repository.
+
+Before that first import/execution, static review corrected two draft expiry
+fixtures to assert their separate inherited cleanup outcome: repeated expired
+local45 close fences across the retained roster saturate the unchanged64-error
+cap to UNKNOWN. The initial unexecuted draft is retained, not described as a
+failed run or deployed preimage. Time was not rewound and no implementation
+assertion/deadline was changed. The new data API has no deployed preimage.
+
+The three-file implementation freeze is tree
+`ed98e3ef7d1da7e6845974116f21498068d4650e`, patch SHA-256
+`d8eaa4b93334326b7fee9e35428991e16ab8dade88d532f074f0004b9ba4c43f`:
+
+| File under `scripts/` | SHA-256 |
+| --- | --- |
+| `hosted_cache_bootstrap_history.py` | `f2199af642e5dbf00e212e8c774fec60987956177b94fc8bb0d862d256128c41` |
+| `run-hosted-cache-bootstrap.py` | `b1c192a99a13fe8d1ccde6638a26cd86e815bbe473fe2e740bb4c4a0078c9c97` |
+| `tests/hosted-cache-bootstrap-history-test.py` | `29a2f99c4a48a162b98300646184e2660a6b4d107914fc615431c7d2fde59916` |
+
+Independent controls were frozen before the author suite/results were inspected.
+The original **33-method aggregate was32 pass/1 ERROR** and remains a failed
+aggregate. The error was a reviewer expectation mistake: unchanged local45 expiry
+raises `hosted_evidence.EvidenceError` (`RuntimeError`), not `ValueError`.
+A preserved control-only correction asserts the exact local45 and original75
+exception classes/reasons; the other32 methods and fixture are unchanged.
+**Only that corrected method was rerun:1/1 PASS**, not a new full33/33 run.
+No implementation change, deadline extension or time rewind was made.
+
+A separately frozen independent compatibility supplement then passed **10/10
+cases on the exact base tree and10/10 on the candidate tree**, with all10
+normalized complete event traces equal on their first executions. It uses actual
+ordinary-UID Owner/POSIX directory/stream operations and explicitly modeled
+native/admission/service clocks. It compares operation order/counts, high-waters,
+bounds, finite outcomes and cleanup roster. Normalization is restricted to exact
+source/runtime-root prefixes and the fixture's exact context digest; no payload,
+full-return-dictionary or inode equality is claimed. These are not native tests.
+All original source/control manifests remained unchanged. Separately,45 other
+top-level caller bodies are AST-identical; this is a static comparison, not45 tests.
+
+Independent implementation verdict:
+**APPROVE_EXACT_DORMANT_BOOTSTRAP_HISTORICAL_EXTRACTION_IMPLEMENTATION_SOURCE_OFFLINE_ONLY**,
+no remaining blocking source finding. Report SHA-256:
+`706468dccc9628f7d843d16c52d36db62fe891c1525bcb9796de5dd09e478766`.
+The author33 original packet was independently inspected without replay.
+No unchanged legacy suite or accepted build was replayed. Final complete-patch
+review/static/commit bindings will be mapped separately in #437/shared #424;
+this implementation verdict alone does not approve the documentation or supply
+formal different-account GitHub PR approval.
+
+Private packet `20260918-bootstrap-history-dxqsnmyh` retains source copies,
+manifests, exact argv/log/exit and draft records. Complete paginated metadata
+was refreshed04:10UTC:78 open issues, seven unchanged dependency proposals,
+no campaign PR, zero queried active Actions, and no Release app assets. Only
+the preceding close mappings on #437/#424 were new; embedded repository push
+times and linked comment-count/update mirrors were separately reconciled.
+No new recipient/owner/formal-review approval appeared. Required checks and
+advisory metadata are unchanged; no scan or exception extension occurred.
+Both ordinary HOLDs remain and audit/release remains **NOT_READY**.
+
 ## Next engineering and unchanged authority boundaries
 
 The next bootstrap slice still needs a **separate productive owner/job-budget
