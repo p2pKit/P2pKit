@@ -309,7 +309,8 @@ workflow outcomes remain necessary before any producer/export/provider action.
 ### Allocation proposal and supplied trace, not productive admission
 
 [`hosted_cache_bootstrap_allocation.py`](../../scripts/hosted_cache_bootstrap_allocation.py)
-is a standalone **pure source proposal**, with no caller or workflow wiring.
+is a **pure source proposal**, consumed only by the dormant internal close bridge
+below, with no productive caller or workflow wiring.
 It rederives the exact service-time basis above and computes a proposed end only
 as `jobStartBasisNs + 5400 * 1000000000`. No current observation, new prelude or
 caller-selected duration renews that end. Retained proposals require exact
@@ -365,10 +366,60 @@ All proposal/trace results retain `NOT_ADMITTED`, `NOT_PERFORMED` and export/sav
 authority false. The current read-only entry remains object/registry-bound to
 its original owner and original75/local45; original120 still only covers its
 existing final/public completion. No owner is prolonged or recreated from this
-proposal. The separate same-call close-to-productive-owner bridge, live budget/
-failure-custody integration and genuine qualification remain unfinished. Seed,
+proposal. The internal close-only bridge below does not create the still-missing
+productive owner, live budget/failure custody or genuine qualification. Seed,
 export and save-set still explicitly refuse bootstrap execution; fictional FULL
 ABI fields or an ordinary Desktop context cannot supply that missing bridge.
+
+### Internal read-only-owner close bridge
+
+`close_entry_transition(owner, target, entry, fence)` is an internal dormant
+operation in the original-acquisition caller, **not called by public
+`adopt-originals` or any workflow**. It closes only the actual live read-only
+entry owner. Equal/copied entries, owners, fences, directory handles or
+reconstructed admission registries cannot claim its cleanup responsibility.
+Rejected foreign arguments leave cleanup with their original caller. A valid
+same-call attempt is one-shot, including after failure or reentrant use.
+
+While that owner remains live, the bridge rereads the original chain and actual
+attempt/jobs response bytes, rederives the allocation proposal and compares its
+complete service-time basis with the entry's original basis. It exclusively
+retains private `entry-close-pending.json`, then rereads the chain, entry and
+pending bytes. Only after this I/O does it snapshot the complete resource-list,
+row and owner identities, including already-closed writer rows. The earlier
+file is explicitly provisional; it cannot attest that later roster or close.
+
+The actual old `Owner.close()` must return with every originally captured row
+typed attempted/closed, without an original error, cancellation or UNKNOWN.
+Failure-file acquisition first checks the saved original bindings/local/final
+interval; a rejected or expired frame cannot authorize even failure retention.
+First errors survive later cleanup failures. Uncertainty discovered after close
+retains the original snapshot references in quarantine directly, never through
+a second idempotent close. Error-record saturation remains the existing64-entry
+UNKNOWN policy; it is not a known-complete cleanup claim.
+
+Successful preclose work retains **original75 / local45**; bounded failure
+retention and post-close success checks retain **local45 / original120**.
+There is no renewed deadline or new owner.
+Final callback/clock observations are followed by non-acquiring state/roster/
+binding checks before the exact immutable returned object is registered. Its
+private `_checked_ns` carries the final observed shared-clock high-water beyond
+the earlier raw `closedNs`; a future consumer must not discard that observation.
+
+`check_closed_entry_transition` checks only that exact registered object and
+its retained in-memory consistency. It acquires nothing and observes no current
+source, file, clock or workflow outcome. Copies/disk serialization cannot
+recreate the returned provenance. Repeated validation grants no productive or
+single-use execution authority. The result remains `NOT_ADMITTED`, tests
+`NOT_PERFORMED`, productive owner `NOT_CREATED` and export/save authority false.
+
+This is **old read-only resource-owner close only**, not preparer/process/job
+retirement, an atomic filesystem freeze, command/step success or provider
+custody. The future distinct productive owner still needs live native/source
+readmission, original service-budget rederivation, trusted original workflow
+outcomes and complete failure custody. The proposed5,400 seconds remains
+unadmitted/unmeasured. No canonical initializer, producer, seed/export/save/probe
+or encrypted-custody caller is added, and both ordinary activation HOLDs remain.
 
 ### Canonical producer records, not producer execution
 
@@ -555,6 +606,7 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-handoff-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-entry-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-service-time-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-allocation-test.py
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-close-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
@@ -566,7 +618,7 @@ These use modeled provider/native boundaries and tiny synthetic owned files, no
 dependency download or Gradle. The connected/budget controls are registered in the
 unconditional ordinary CI policy step and both release script entry points.
 The separate bootstrap identity/cohort/producer-record/query-fence/original-acquisition/
-handoff/entry/service-time/allocation-proposal controls are standalone, not an
+handoff/entry/service-time/allocation-proposal/close controls are standalone, not an
 activated or registered bootstrap workflow.
 Tiny private-file controls require an actual ordinary UID; root is not an
 acceptable substitute and their modeled native boundaries are not host admission.

@@ -702,11 +702,113 @@ bridge and live budget/failure-custody integration remain unfinished. The
 read-only entry's original75/local45/original120 contract, bootstrap execution
 refusals, ordinary selectors, credentials and both activation HOLDs are unchanged.
 
+## 18 September: internal read-only-owner close transition
+
+The [close-only bridge](../testing/hosted-dependency-cache.md#internal-read-only-owner-close-bridge)
+closes the actual same-call read-only entry owner before any future separate
+productive owner could exist. It is internal and dormant: public `adopt-originals`
+does not invoke it, and there is no new CLI/workflow or productive/cache caller.
+Original source/run/cohort/clock, actual returned admission, preparation and
+service-response bytes are rebound while the old owner is live. The complete
+service-time basis is rederived, not accepted from a supplied proposal digest.
+
+An exclusive private pending record precedes final original-chain/entry/receipt
+rereads and the actual complete resource snapshot. It does not claim its own
+later close or the final roster. The actual old close must return successfully
+with typed complete row dispositions. Saved original local/work/final bounds,
+first errors/cancellation, final callback state and late UNKNOWN are checked
+before registering the exact returned object. Late uncertainty pins the original
+snapshot directly; no second close, post-close file acquisition or new owner is
+used. The final private observation high-water is retained beyond raw `closedNs`.
+
+The non-acquiring exact-object validator is not a current source/filesystem/
+native/workflow gate. Copies or disk records cannot recreate its registry;
+repeat validation grants no productive single-use authority. All results keep
+`NOT_ADMITTED`, `NOT_PERFORMED`, `NOT_CREATED` productive owner and export/save
+authority false. This is old read-only resource-owner close, not preparer/native
+job retirement, atomic freeze, command/step success or execution acceptance.
+
+### Executed offline controls and original failures
+
+Linux Python3.12.3, actual ordinary UID65534, isolated read-only source copies:
+
+```bash
+timeout --kill-after=5s 90s runuser -u nobody -- \
+  python3 -I -B -S <exact-read-only-source-copy>/scripts/tests/hosted-cache-bootstrap-close-test.py -v
+timeout --kill-after=5s 90s runuser -u nobody -- \
+  python3 -I -B -S <exact-read-only-source-copy>/scripts/tests/hosted-cache-bootstrap-entry-test.py -v
+```
+
+The first close-WIP author run was **42 methods:38 pass/4 fail**, not an accepted
+preimage or a fabricated failure of a previously nonexistent API. Three focused
+regressions reproduced new-WIP defects: failure-file acquisition after rejecting
+changed saved limits, and registration after a late nonraising first error or
+roster mutation. The fix checks saved bindings/time before failure acquisition,
+rechecks in-memory state after final callbacks and directly quarantines late
+uncertainty with the original captured references.
+
+The fourth failure was a fixture expectation error. Continuous close-fence
+expiry across the large retained roster saturates the unchanged64-error cap to
+UNKNOWN; it cannot be asserted as known-complete close. The single-swallowed-error
+fixture now injects exactly one failure inside the actual close-fence supplier.
+A separate control preserves repeated-expiry saturation and the original error.
+No existing `Owner.close`, `error`, deadline or cancellation semantics changed.
+
+Final close suite **43/43 PASS**. It uses a genuinely live fixture owner, the
+actual outer admission/entry wrappers with explicitly modeled native suppliers,
+and tiny actual POSIX file closes; it never resurrects a completed public adopter.
+Coverage includes original-byte/basis/roster binding, one-shot/copy/foreign
+refusal, retained mutations, exclusive writes, first-error/UNKNOWN/cancellation,
+old bounds, final state and non-acquiring validation. An explicit `load_tests`
+excludes inherited cases. The unchanged entry compatibility suite separately
+passed **44/44**, once. All1,400 source hashes stayed unchanged in each fixture
+and repository during those executions. Tiny fixture outputs retired through
+normal test cleanup; source copies, manifests, original logs and exits remain.
+
+Independent controls were drafted/hashed before the new author suite/results
+were inspected. The unchanged41-control draft genuinely ran against original
+caller `b70c8e16` and returned **36 pass/5 fail**, then **41/41 PASS** against
+the corrected `4d378dc1` caller. Its five original failures cover rejected-limit
+and rejected-callback failure acquisition, late nonraising error/roster state,
+and last-callback deadline mutation. No independent fixture correction occurred.
+These are separately reported runs, not a sum of distinct requirements or native
+tests. Both independent runs used actual UID/EUID65534, isolated Python,
+external90s+5s and CPU45s/AS1GiB/file16MiB/512FD guards. Their respective1,401
+and1,402 source/control hashes stayed unchanged. These extra reviewer guards
+are not retroactively claimed for author runs. Native/service/process/clock
+identities remain models; ordinary-UID file
+close is not hosted native/provider/custody/scheduling qualification.
+
+Independent implementation verdict:
+**APPROVE_EXACT_DORMANT_BOOTSTRAP_ENTRY_CLOSE_IMPLEMENTATION_SOURCE_OFFLINE_ONLY**,
+no remaining blocking source finding. Report SHA-256:
+`9e177b46f82e8ca2364a82615e224e2471722b0a600a76a1a80e1c0bd7baa2e5`.
+The reviewer inspected/rehashed the author43 and entry44 original packets
+without replay. Final documentation/static checks and containing commit/tree
+will be mapped in #437/shared #424 after normal push/readback. The two-file implementation tree is
+`4190302cb7c8566b33e3a99d3a58d3b87bf70330`. Complete-patch review additionally
+covers the allocation module's docstring-only caller clarification; no allocation
+executable changes or unchanged allocation39 replay are needed. Existing owner,
+admission, entry and public-adopter bodies are preserved; other legacy suites
+were not replayed. Agent review is not formal different-account GitHub approval.
+
+Private packet `20260918-bootstrap-close-6m1ginmw` retains this device's exact
+inputs, source/log/exit evidence and independent reports. Metadata refreshed
+2026-09-18 03:34UTC, with explicit #437 timeline tail verified:78 open issues,
+seven unchanged dependency proposals, no campaign PR and zero active Actions
+at those observations. Only the preceding allocation mappings were new; no
+recipient/owner/formal-review approval appeared. Required contexts remain
+`complete-gate`, `review`, `scan / osv-scan`, `osv-scanner`; Releases still have
+no app assets. No build, download, held dispatch, PR, merge, Release, settings
+change or issue closure occurred. Both ordinary HOLDs and original75/local45/
+original120 remain; proposed5,400 remains unadmitted/unmeasured.
+
 ## Next engineering and unchanged authority boundaries
 
 The next bootstrap slice still needs a **separate productive owner/job-budget
 context**, not ordinary FULL/Desktop with `help`, the evidence-only prelude,
-same-call read-only entry, service-time basis or allocation proposal above.
+same-call read-only entry/close transition, service-time basis or allocation
+proposal above.
 Retain and rederive actual source/run/clock and service/native budget originals
 and trusted workflow outcomes;
 a digest or fresh allowance cannot grant authority. A future live caller must invoke the canonical configuration-only producer,

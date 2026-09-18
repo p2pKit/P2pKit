@@ -1,6 +1,7 @@
 """Pure bootstrap allocation PROPOSAL and supplied-trace consistency only.
 
-No caller, clock/file reader, workflow, native owner or execution authority.
+No clock/file reader, workflow, native owner or execution authority. The dormant
+internal old-owner-close bridge consumes this proposal, not a productive caller.
 The proposed 5400s is UNADMITTED / UNMEASURED. A complete roster or consistent
 supplied trace is not scheduling fit, original outcome custody or single use.
 In particular this cannot prolong/reconstitute the read-only OriginalEntry.

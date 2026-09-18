@@ -26,6 +26,7 @@ SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 import audit_processes as processes
+import hosted_cache_bootstrap_allocation as allocation
 import hosted_cache_bootstrap_identity as bootstrap
 import hosted_cache_bootstrap_origin as origin
 import hosted_cache_bootstrap_service_time as service_time
@@ -48,6 +49,8 @@ HANDOFF_OUTPUT_SCOPE = "BOOTSTRAP_PREPARE_HANDOFF_PENDING_STEP_RETURN_V1"
 ADOPTION_SCOPE = "BOOTSTRAP_READ_ONLY_ADOPTION_PENDING_RETURN_V2"
 ENTRY_SCOPE = "BOOTSTRAP_READ_ONLY_EXECUTION_ENTRY_V1"
 ENTRY_WINDOW_SCOPE = "BOOTSTRAP_ORIGINAL_PRELUDE_ENTRY_WINDOW_V1"
+ENTRY_CLOSE_PENDING_SCOPE = "BOOTSTRAP_READ_ONLY_ENTRY_PENDING_CLOSE_V1"
+ENTRY_CLOSE_SCOPE = "BOOTSTRAP_READ_ONLY_OWNER_CLOSED_NO_PRODUCTIVE_AUTHORITY_V1"
 ENTRY_FIELDS = {"schema", "scope", "profile", "selection", "cacheCohort", "source", "github", "root", "session",
     "sessionIdentity", "preparation", "readmission", "prelude", "window", "retirement", "budgetAcceptance",
     "testAcceptance", "exportSaveAuthority"}
@@ -108,6 +111,29 @@ class OriginalEntry:
     _fence: object = field(repr=False, compare=False)
     _private: object = field(repr=False, compare=False)
     _target: object = field(repr=False, compare=False)
+
+
+@dataclass(frozen=True)
+class ClosedEntryTransition:
+    """Same-call old-owner close only. Private bytes, no transferable live pins.
+
+    No constructor/disk copy can recreate the owner's exact returned registry
+    entry. This is not productive admission, atomic freeze or command success.
+    """
+    raw: bytes = field(repr=False)
+    pending_raw: bytes = field(repr=False)
+    proposal_raw: bytes = field(repr=False)
+    responses: tuple = field(repr=False)
+    _entry: object = field(repr=False, compare=False)
+    _owner: object = field(repr=False, compare=False)
+    _fence: object = field(repr=False, compare=False)
+    _limits: tuple = field(repr=False)
+    _callbacks: tuple = field(repr=False, compare=False)
+    _snapshot: tuple = field(repr=False, compare=False)
+    _retained_ns: int = field(repr=False)
+    _preclose_ns: int = field(repr=False)
+    _closed_ns: int = field(repr=False)
+    _checked_ns: int = field(repr=False)
 
 
 def require(value, reason):
@@ -192,6 +218,7 @@ class Owner:
         self.resources, self.errors = [], []
         self.original, self.unknown, self.closed = None, False, False
         self.phase_originals, self.admissions, self.entry_original = None, {}, None
+        self.entry_close_attempted, self.entry_close_original, self.entry_close_snapshot = False, None, None
 
     def error(self, stage, error, *, unknown=False):
         detail = diagnostics._exception_detail(error)
@@ -1239,6 +1266,236 @@ def check_execution_entry(owner, target, entry, fence, *, retained):
     entry_directories(owner, target, entry._private)
     owner.end()
     return value
+
+
+def _entry_close_limits(owner, fence):
+    # Local float seconds and shared integer nanoseconds are different domains.
+    # Neither is reconstructed or renewed by the close transition.
+    return (owner.local_end, fence.raw, fence.clock, fence.first, fence.work, fence.final,
+            owner.work_limit, owner.final_limit, owner.first, owner.early_last)
+
+
+def _entry_close_bindings(owner, fence, limits, callbacks):
+    current = _entry_close_limits(owner, fence)
+    require(owner.fence is fence and len(current) == len(limits) and
+            all(type(left) is type(right) and left == right for left, right in zip(current, limits)) and
+            owner.cancelled is callbacks[0] and fence.cancelled is callbacks[1], "BOOTSTRAP_ENTRY_CLOSE_LIMITS_CHANGED")
+
+
+def _entry_close_snapshot(owner):
+    require(type(owner.resources) is list and bool(owner.resources), "BOOTSTRAP_ENTRY_CLOSE_ROSTER")
+    require(all(type(row) is dict and set(row) == {"label", "owner", "attempted", "closed"} and
+                row["label"] in ("directory", "writer") and type(row["attempted"]) is bool and
+                type(row["closed"]) is bool and (not row["closed"] or row["attempted"])
+                for row in owner.resources), "BOOTSTRAP_ENTRY_CLOSE_ROSTER")
+    return (owner.resources, tuple((row, row["label"], row["owner"]) for row in owner.resources))
+
+
+def _entry_close_known(owner, snapshot):
+    require(type(snapshot) is tuple and len(snapshot) == 2 and owner.closed is True and
+            owner.resources is snapshot[0] and type(snapshot[1]) is tuple and bool(snapshot[1]) and
+            len(owner.resources) == len(snapshot[1]), "BOOTSTRAP_ENTRY_CLOSE_ROSTER")
+    for current, (row, label, resource) in zip(owner.resources, snapshot[1]):
+        require(current is row and type(row) is dict and set(row) == {"label", "owner", "attempted", "closed"} and
+                row["label"] == label and row["owner"] is resource and
+                row["attempted"] is True and row["closed"] is True, "BOOTSTRAP_ENTRY_CLOSE_ROSTER")
+
+
+def _entry_close_preserve_uncertainty(owner, snapshot):
+    # A completed close is idempotent; it cannot quarantine later discoveries.
+    # Keep the actual captured rows/owners, even if their mutable registry changed.
+    try:
+        require(owner.entry_close_snapshot is snapshot, "BOOTSTRAP_ENTRY_CLOSE_ROSTER")
+        _entry_close_known(owner, snapshot)
+    except BaseException as error:
+        owner.error("entry-close-roster-return", error, unknown=True)
+    if owner.unknown:
+        owner.entry_close_snapshot = snapshot
+        if not any(value is owner for value in QUARANTINE):
+            QUARANTINE.append(owner)
+
+
+def _entry_close_proposal(entry, responses):
+    require(type(responses) is tuple and len(responses) == 2 and
+            all(type(row) is tuple and len(row) == 2 and type(row[1]) is bytes for row in responses) and
+            tuple(row[0] for row in responses) == ("attempt", "jobs"), "BOOTSTRAP_ENTRY_CLOSE_RESPONSES")
+    value, context = origin.parse(entry.raw), origin.parse(entry.context_original)
+    basis = value["preparation"]["originalChain"]["serviceTimeBasis"]
+    proposal = allocation.derive(entry.admitted, dict(responses), basis["invocation"], entry._fence.clock,
+                                 context["runnerName"])
+    require(origin.encoded(proposal["serviceTimeBasis"]) == origin.encoded(basis),
+            "BOOTSTRAP_ENTRY_CLOSE_BASIS_CHANGED")
+    return proposal
+
+
+def _entry_close_pending(entry, proposal, retained_ns):
+    return {"schema": 1, "scope": ENTRY_CLOSE_PENDING_SCOPE, "entryContextSha256": origin.digest(entry.raw),
+            "proposal": proposal, "retainedNs": retained_ns, "oldOwnerRetirement": "PENDING_CLOSE",
+            "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False}
+
+
+def _entry_close_record(entry, pending, proposal, preclose_ns, closed_ns, count):
+    return {"schema": 1, "scope": ENTRY_CLOSE_SCOPE, "entryContextSha256": origin.digest(entry.raw),
+            "pendingSha256": origin.digest(pending), "proposalSha256": origin.digest(proposal),
+            "clock": origin.clock_value(entry._fence.clock), "preCloseNs": preclose_ns, "closedNs": closed_ns,
+            "resourceCount": count, "oldOwnerRetirement": "KNOWN_RESOURCE_CLOSE_ONLY",
+            "productiveOwner": "NOT_CREATED", "budgetAcceptance": "NOT_ADMITTED",
+            "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False}
+
+
+def _entry_close_state(transition):
+    owner, fence, entry = transition._owner, transition._fence, transition._entry
+    _entry_close_known(owner, transition._snapshot)
+    require(owner.entry_close_attempted is True and owner.entry_original is entry and
+            entry._owner is owner and entry._fence is fence and owner.entry_close_snapshot is transition._snapshot and
+            owner.original is None and owner.errors == [] and owner.unknown is False,
+            "BOOTSTRAP_ENTRY_CLOSE_NOT_SUCCESSFUL")
+    _entry_close_bindings(owner, fence, transition._limits, transition._callbacks)
+
+
+def _entry_close_content(transition):
+    _entry_close_state(transition)
+    owner, fence, entry = transition._owner, transition._fence, transition._entry
+    proposal = _entry_close_proposal(entry, transition.responses)
+    require(transition.proposal_raw == origin.encoded(proposal) and transition.pending_raw ==
+            origin.encoded(_entry_close_pending(entry, proposal, transition._retained_ns)),
+            "BOOTSTRAP_ENTRY_CLOSE_ORIGINAL_CHANGED")
+    window = origin.parse(entry.raw)["window"]
+    times = (window["startedNs"], transition._retained_ns, transition._preclose_ns,
+             transition._closed_ns, transition._checked_ns)
+    require(all(type(value) is int and 0 <= value <= origin.clocks.UINT64 for value in times) and
+            list(times) == sorted(times) and transition._preclose_ns < window["workEndNs"] and
+            transition._checked_ns < window["finalEndNs"] and fence.last == transition._checked_ns,
+            "BOOTSTRAP_ENTRY_CLOSE_CLOCK")
+    value = _entry_close_record(entry, transition.pending_raw, transition.proposal_raw,
+                               transition._preclose_ns, transition._closed_ns, len(transition._snapshot[1]))
+    require(type(transition.raw) is bytes and transition.raw == origin.encoded(value),
+            "BOOTSTRAP_ENTRY_CLOSE_RETURN_CHANGED")
+    return value
+
+
+def check_closed_entry_transition(transition):
+    """Non-acquiring consistency of this exact returned object, not a live gate.
+
+    Repeated validation gives no productive/single-use authority. It observes
+    no current source, filesystem, native clock or workflow outcome. A future
+    distinct owner must re-admit/re-read those, and carry the original job fence
+    plus this object's final observed _checked_ns, not only its earlier raw file.
+    """
+    require(type(transition) is ClosedEntryTransition and type(transition._owner) is Owner and
+            transition._owner.entry_close_original is transition, "BOOTSTRAP_ENTRY_CLOSE_NOT_CURRENT_RETURN")
+    return _entry_close_content(transition)
+
+
+def close_entry_transition(owner, target, entry, fence):
+    """Dormant INTERNAL old-owner close bridge; no public operation calls it.
+
+    Rejected foreign arguments leave cleanup with their original caller. Once
+    this exact live owner claims the one-shot transition, all failures preserve
+    the first error and attempt known cleanup once. No old owner is prolonged,
+    no live handle is transferred, and no productive owner/budget is created.
+    """
+    # Non-I/O provenance gate BEFORE claiming cleanup or invoking any supplier.
+    require(type(owner) is Owner and type(entry) is OriginalEntry and type(fence) is origin.Fence and
+            entry._owner is owner and entry._fence is fence and owner.fence is fence and
+            owner.entry_original is entry and target is entry._target and owner.first is not None and
+            owner.closed is False and owner.phase_originals is None and owner.entry_close_attempted is False and
+            owner.entry_close_original is None and owner.entry_close_snapshot is None,
+            "BOOTSTRAP_ENTRY_CLOSE_NOT_CURRENT_ENTRY")
+    registered = owner.admissions.get(str(target.path / "admission"))
+    require(type(registered) is tuple and len(registered) == 3 and registered[0] is entry.admitted and
+            registered[1:] == (entry.session_original, entry.return_original),
+            "BOOTSTRAP_ENTRY_CLOSE_NOT_CURRENT_ADMISSION")
+    entry_directories(owner, target, entry._private)
+    limits, callbacks = _entry_close_limits(owner, fence), (owner.cancelled, fence.cancelled)
+    owner.entry_close_attempted = True
+    pending_raw = proposal_raw = responses = retained_ns = preclose_ns = None
+    try:
+        check_execution_entry(owner, target, entry, fence, retained=True)
+        directory = owner.child(entry._private, "service")
+        responses = tuple((name, owner.read(directory, name + ".json")) for name in ("attempt", "jobs"))
+        proposal = _entry_close_proposal(entry, responses)
+        proposal_raw = origin.encoded(proposal)
+        retained_ns = fence.now()
+        pending_raw = owner.write(target, "entry-close-pending.json", _entry_close_pending(entry, proposal, retained_ns))
+        check_execution_entry(owner, target, entry, fence, retained=True)
+        require(owner.read(target, "entry-close-pending.json") == pending_raw,
+                "BOOTSTRAP_ENTRY_CLOSE_PENDING_CHANGED")
+        _entry_close_bindings(owner, fence, limits, callbacks)
+        for callback in callbacks:
+            callback()
+        owner.end()
+        _entry_close_bindings(owner, fence, limits, callbacks)
+        preclose_ns = fence.last
+    except BaseException as error:
+        owner.error("entry-close-prepare", error)
+        if not owner.unknown:
+            try:
+                # Failure retention is still new I/O. A rejected/expired frame
+                # cannot grant it time; cancellation itself need not erase the
+                # first failure's original, still-bounded custody opportunity.
+                _entry_close_bindings(owner, fence, limits, callbacks)
+                posix._deadline(limits[0])
+                fence.now(final=True, limit=limits[5])
+                _entry_close_bindings(owner, fence, limits, callbacks)
+                owner.write(target, "entry-close-failure.json", {"schema": 1, "result": "HOLD", "errors": owner.errors,
+                    "oldOwnerRetirement": "PENDING_CLOSE", "budgetAcceptance": "NOT_ADMITTED"}, final=True)
+            except BaseException as secondary:
+                owner.error("entry-close-failure-retention", secondary)
+    finally:
+        # Final revalidation and failure retention may add directory/writer rows.
+        # The earlier private file cannot claim this later roster or its close.
+        try:
+            snapshot = _entry_close_snapshot(owner)
+        except BaseException as error:
+            # Even an invalid list retains immutable references to its rows.
+            snapshot = (owner.resources, tuple(owner.resources) if type(owner.resources) is list else ())
+            owner.error("entry-close-snapshot", error, unknown=True)
+        owner.entry_close_snapshot = snapshot
+        try:
+            owner.close()
+        except BaseException as error:
+            owner.error("entry-close-return", error)
+    _entry_close_preserve_uncertainty(owner, snapshot)
+    if owner.original is not None:
+        raise owner.original
+    try:
+        require(pending_raw is not None and preclose_ns is not None and owner.errors == [] and not owner.unknown,
+                "BOOTSTRAP_ENTRY_CLOSE_INCOMPLETE")
+        _entry_close_bindings(owner, fence, limits, callbacks)
+        for callback in callbacks:
+            callback()
+        posix._deadline(limits[0])
+        closed_ns = fence.now(final=True, minimum=preclose_ns, limit=limits[5])
+        raw = origin.encoded(_entry_close_record(entry, pending_raw, proposal_raw,
+                                                preclose_ns, closed_ns, len(snapshot[1])))
+        arguments = dict(raw=raw, pending_raw=pending_raw, proposal_raw=proposal_raw, responses=responses,
+            _entry=entry, _owner=owner, _fence=fence, _limits=limits, _callbacks=callbacks,
+            _snapshot=snapshot, _retained_ns=retained_ns, _preclose_ns=preclose_ns,
+            _closed_ns=closed_ns, _checked_ns=closed_ns)
+        _entry_close_content(ClosedEntryTransition(**arguments))
+        # Preserve the latest post-validation clock in the actual returned object.
+        # No registered object or post-close file can escape before these checks.
+        for callback in callbacks:
+            callback()
+        posix._deadline(limits[0])
+        checked_ns = fence.now(final=True, minimum=closed_ns, limit=limits[5])
+        _entry_close_bindings(owner, fence, limits, callbacks)
+        for callback in callbacks:
+            callback()
+        posix._deadline(limits[0])
+        result = ClosedEntryTransition(**{**arguments, "_checked_ns": checked_ns})
+        # All final callbacks/clock suppliers have now returned. Recheck only
+        # in-memory state here; no file acquisition or new clock allowance.
+        _entry_close_state(result)
+        require(owner.entry_close_original is None and fence.last == checked_ns,
+                "BOOTSTRAP_ENTRY_CLOSE_FINAL_STATE_CHANGED")
+        owner.entry_close_original = result
+        return result
+    except BaseException as error:
+        owner.error("entry-close-postreturn", error)
+        _entry_close_preserve_uncertainty(owner, snapshot)
+        raise owner.original
 
 
 def adopt_originals(cancelled):
