@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Dormant bootstrap originals and recipient child; NOT a cache builder.
+"""Dormant bootstrap originals, recipient and initializer; NOT a cache builder.
 
-No workflow, productive budget, canonical init/producer, seed/export/save,
+No workflow, productive budget, producer, seed/export/save,
 policy installer or uploader exists here. Separate read-only original adoption
 never becomes execution authority. A future trusted workflow must bind the
 actual original prepare-step outcome, not a provisional receipt/digest.
-The internal recipient-only parent owns its native launch/retirement/readback;
+The internal recipient/initializer parents own native launch/retirement/readback;
 no public operation or workflow calls it. Offline controls are not native,
 custodian, scheduling or encrypted-custody qualification.
 """
@@ -31,8 +31,10 @@ ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 import audit_processes as processes
 import hosted_cache_bootstrap_allocation as allocation
+import hosted_cache_bootstrap_canonical as canonical
 import hosted_cache_bootstrap_history as history
 import hosted_cache_bootstrap_identity as bootstrap
+import hosted_cache_bootstrap_initialization as initialization
 import hosted_cache_bootstrap_origin as origin
 import hosted_cache_bootstrap_service_time as service_time
 import hosted_evidence as posix
@@ -109,6 +111,9 @@ RECIPIENT_CONTEXT_FIELDS = {"schema", "scope", "profile", "selection", "cacheCoh
 RECIPIENT_PREFIX_SCOPE = "BOOTSTRAP_RECIPIENT_PREFIX_CLOSED_NO_EXECUTION_V1"
 _RECIPIENT_CLAIM_LOCK = threading.Lock()
 _RECIPIENT_ATTEMPTS = {}
+_INITIALIZER_CLAIM_LOCK = threading.Lock()
+_INITIALIZER_ATTEMPTS = {}
+_PARENT_CONTROLS = {}
 
 
 @dataclass(frozen=True)
@@ -2716,6 +2721,9 @@ class _RecipientParentBindings:
     observations: list = field(default_factory=list)
     files: list = field(default_factory=list)
     close_roster: list = field(default_factory=list)
+    handler_rows: list = field(default_factory=list)
+    handler_restored: list = field(default_factory=list)
+    initialization: list = field(default_factory=list)
 
 
 @dataclass(eq=False)
@@ -2825,13 +2833,159 @@ class _RecipientPredecessorGraph:
         require(self.path_values(transition) == self.paths, "BOOTSTRAP_RECIPIENT_PREDECESSOR_PATH_CHANGED")
 
 
+@dataclass(frozen=True)
+class _ParentControl:
+    """Published in-call bindings, not the storage of cleanup responsibility.
+
+    A frozen dataclass still exposes mutable fields through __dict__ and
+    object.__setattr__. The separate private tuple below retains the originals;
+    replacing this publication OR one of its fields cannot erase them. This is
+    finite input binding, not a sandbox against Python/closure-code replacement.
+    """
+    call: object
+    registry: object
+    key: int
+    record: tuple
+    handoff_pin: tuple = ()
+    handlers: tuple = ()
+
+
+def _original_parent_controls():
+    """Encapsulate originals; module/call aliases are never cleanup authority.
+
+    No mutable container escapes. Each saved frame is an immutable tuple with
+    separate original record/handoff/handler references, NOT the published
+    dataclass as another mutable holder. Only the existing staged source binds
+    and pre-install handler retention may replace a frame, before suppliers.
+    """
+    originals = {}
+    def register(control):
+        require(type(control) is _ParentControl and id(control.call) not in originals,
+                "BOOTSTRAP_PARENT_CONTROL_ALREADY_REGISTERED")
+        originals[id(control.call)] = (control, control.call, control.registry, control.key,
+                                        control.record, control.handoff_pin, control.handlers)
+    def frame(call):
+        saved = originals.get(id(call))
+        require(type(saved) is tuple and len(saved) == 7 and saved[1] is call,
+                "BOOTSTRAP_RECIPIENT_NOT_CLAIMED")
+        return saved
+    def lookup(call):
+        return frame(call)[0]
+    def unchanged(call, control):
+        saved = frame(call)
+        require(_parent_control(call) is control and saved[0] is control and
+                _PARENT_CONTROLS.get(id(call)) is control and
+                saved[2] is (_RECIPIENT_ATTEMPTS if type(call) is _RecipientParent else _INITIALIZER_ATTEMPTS) and
+                saved[2].get(saved[3]) is saved[4], "BOOTSTRAP_PARENT_CONTROL_CHANGED")
+        return saved
+    def bind(call, control, record):
+        saved = unchanged(call, control)
+        old = saved[4]
+        require(type(record) is tuple and len(record) == len(old) and
+                all(new is previous for new, previous in zip(record[:3], old[:3])),
+                "BOOTSTRAP_PARENT_CONTROL_BINDING")
+        if old[3] is None:
+            require(type(record[3]) is _RecipientParentBindings and record[3] is call.bindings and
+                    all(new is previous for new, previous in zip(record[4:], old[4:])),
+                    "BOOTSTRAP_PARENT_CONTROL_BINDING")
+        else:
+            require(type(call) is _InitializerParent and old[5] is None and record[3] is old[3] and
+                    record[4] is old[4] and type(record[5]) is tuple and len(record[5]) == 2 and
+                    type(record[5][0]) is _InitializationInputs, "BOOTSTRAP_PARENT_CONTROL_BINDING")
+        saved[2][saved[3]] = record
+        object.__setattr__(control, "record", record)
+        originals[id(call)] = (*saved[:4], record, *saved[5:])
+    def handler(call, control, number, previous):
+        saved = unchanged(call, control)
+        numbers = (signal.SIGINT, signal.SIGTERM, *([signal.SIGBREAK] if hasattr(signal, "SIGBREAK") else []))
+        require(len(saved[6]) < len(numbers) and number is numbers[len(saved[6])],
+                "BOOTSTRAP_PARENT_HANDLER_BINDING")
+        handlers = (*saved[6], (number, previous))
+        object.__setattr__(control, "handlers", handlers)
+        originals[id(call)] = (*saved[:6], handlers)
+    return register, lookup, frame, bind, handler
+
+
+(_register_parent_control, _original_parent_control, _original_parent_frame,
+ _bind_parent_control, _retain_parent_handler) = _original_parent_controls()
+del _original_parent_controls
+
+
+def _parent_originals(call):
+    # Closed source-owned pairs only; never virtual/caller-selected registries.
+    if type(call) is _RecipientParent:
+        width = 5
+    elif type(call) is _InitializerParent:
+        width = 6
+    else:
+        raise origin.OriginError("BOOTSTRAP_RECIPIENT_NOT_CLAIMED")
+    saved = _original_parent_frame(call)
+    require(type(saved[2]) is dict and type(saved[4]) is tuple and len(saved[4]) == width and saved[4][1] is call,
+            "BOOTSTRAP_RECIPIENT_NOT_CLAIMED")
+    return saved
+
+
+def _parent_control(call):
+    # Strict published-field validation is for live work ONLY. Cleanup must
+    # not repeat a rejected publication at every resource until error64/UNKNOWN.
+    saved = _parent_originals(call)
+    control = saved[0]
+    require(type(control) is _ParentControl and control.call is saved[1] and control.registry is saved[2] and
+            type(control.key) is type(saved[3]) and control.key == saved[3] and control.record is saved[4] and
+            control.handoff_pin is saved[5] and control.handlers is saved[6],
+            "BOOTSTRAP_PARENT_CONTROL_CHANGED")
+    return control
+
+
 def _recipient_parent_registration(call):
-    require(type(call) is _RecipientParent, "BOOTSTRAP_RECIPIENT_NOT_CLAIMED")
-    with _RECIPIENT_CLAIM_LOCK:
-        rows = [row for row in _RECIPIENT_ATTEMPTS.values() if type(row) is tuple and
-                len(row) == 4 and row[1] is call]
-    require(len(rows) == 1, "BOOTSTRAP_RECIPIENT_NOT_CLAIMED")
-    return rows[0]
+    # Never redirect cleanup through a rejected registry/parent alias. Live
+    # checks separately require the public-in-module registry to match exactly.
+    return _parent_originals(call)[4]
+
+
+def _parent_parameters(call):
+    """No phase/registry/command input and no subclass fallback."""
+    if type(call) is _RecipientParent:
+        return (_RecipientParentWindow, 240, 285, 315,
+                ("recipient-validation", "recipient-final", "recipient-read"))
+    require(type(call) is _InitializerParent, "BOOTSTRAP_RECIPIENT_NOT_CLAIMED")
+    return (_InitializerWindow, 120, 165, 195,
+            ("canonical-init", "canonical-init-final", "canonical-init-read"))
+
+
+def _parent_location(call):
+    call.check()
+    if type(call) is _RecipientParent:
+        result = ("recipient-validation", call.paths()[3])
+    else:
+        require(type(call) is _InitializerParent, "BOOTSTRAP_RECIPIENT_NOT_CLAIMED")
+        result = ("canonical-init", call.paths()[3] / "initializer")
+    call.check()
+    return result
+
+
+def _parent_environment(call):
+    call.check()
+    path = _parent_location(call)[1]
+    result = recipient_environment(path)
+    if type(call) is _InitializerParent:
+        result.update(call.init_inputs().toolchains.environment())
+    call.check()
+    return result
+
+
+def _parent_argv(call, minimum=None):
+    call.check()
+    if type(call) is _RecipientParent:
+        result = recipient_command(origin.digest(call.records["context"]), minimum)
+    else:
+        require(type(call) is _InitializerParent, "BOOTSTRAP_RECIPIENT_NOT_CLAIMED")
+        call.request_unchanged()
+        # Canonical init has no --minimum-ns option. Its outer parent retains
+        # the original launch observation; the command is NOT recipient argv.
+        result = origin.parse(call.init_inputs().request_raw)["argv"]
+    call.check()
+    return result
 
 
 @dataclass(frozen=True)
@@ -2884,22 +3038,26 @@ class _RecipientParentWindow:
                 "BOOTSTRAP_RECIPIENT_CLEANUP_NOT_BOUND")
         first = origin.clocks.validate_reading(bound.first if cleanup else self.call.first)
         previous = registered[0] if cleanup else self.call.transition
-        require(first.clock == previous._attempt.window.clock and first.nanoseconds >= previous._checked_ns,
+        predecessor_ns = previous._checked_ns if type(self.call) is _RecipientParent else registered[4].checked_ns
+        require(first.clock == previous._attempt.window.clock and first.nanoseconds >= predecessor_ns,
                 "BOOTSTRAP_RECIPIENT_PARENT_FIRST_CLOCK")
         local = bound.local_start if cleanup else self.call.local_start
         require(type(local) in (int, float) and math.isfinite(local) and local >= 0,
                 "BOOTSTRAP_RECIPIENT_PARENT_LOCAL_CLOCK")
+        if type(self.call) is _InitializerParent:
+            require(local >= registered[4].local_last, "BOOTSTRAP_INIT_LOCAL_PREDECESSOR")
         proposal = origin.parse(previous._attempt.transition.proposal_raw)
         fences, job_end = proposal["phaseFencesNs"], proposal["proposedJobEndNs"]
         began = first.nanoseconds
-        work = min(origin.integer(began + 240 * origin.NS), fences["recipient-validation"], job_end)
-        final = min(origin.integer(began + 285 * origin.NS), fences["recipient-final"], job_end)
-        end = min(origin.integer(began + 315 * origin.NS), fences["recipient-read"], job_end)
+        _kind, work_seconds, native_seconds, prefix_seconds, names = _parent_parameters(self.call)
+        work = min(origin.integer(began + work_seconds * origin.NS), fences[names[0]], job_end)
+        final = min(origin.integer(began + native_seconds * origin.NS), fences[names[1]], job_end)
+        end = min(origin.integer(began + prefix_seconds * origin.NS), fences[names[2]], job_end)
         require(began < work <= final <= end, "BOOTSTRAP_RECIPIENT_PARENT_NO_INTERVAL")
         return (first.clock, began, work, final, end,
-                origin.wire._directed_deadline(local, 240, work, began),
-                origin.wire._directed_deadline(local, 285, final, began),
-                origin.wire._directed_deadline(local, 315, end, began))
+                origin.wire._directed_deadline(local, work_seconds, work, began),
+                origin.wire._directed_deadline(local, native_seconds, final, began),
+                origin.wire._directed_deadline(local, prefix_seconds, end, began))
 
     def phase_state(self):
         return (self.phase, self.final_started, self.final_local_start, self.final, self.final_local,
@@ -2914,7 +3072,7 @@ class _RecipientParentWindow:
         actual = (self.clock, self.first, self.work, self.native_end, self.prefix_end,
                   self.work_local, self.native_local, self.local_end)
         expected = self.limits(cleanup=cleanup)
-        require(type(self) is _RecipientParentWindow and bound is not None and bound.window is self and
+        require(type(self) is _parent_parameters(self.call)[0] and bound is not None and bound.window is self and
                 (cleanup or self.call.window is self) and
                 all(type(a) is type(b) and a == b for a, b in zip(actual, expected)) and
                 type(self.last) is int and self.first <= self.last <= origin.clocks.UINT64 and
@@ -2997,7 +3155,7 @@ class _RecipientParentWindow:
         return observed
 
     def deadline(self, maximum, *, final=False, limit=None):
-        require(type(maximum) in (int, float) and 0 < maximum <= 315 and math.isfinite(maximum),
+        require(type(maximum) in (int, float) and 0 < maximum <= _parent_parameters(self.call)[3] and math.isfinite(maximum),
                 "BOOTSTRAP_RECIPIENT_PARENT_MAXIMUM")
         self.checked()
         local = self.local_now()
@@ -3183,10 +3341,18 @@ class _RecipientParent:
             self.error("recipient-global-uncertainty", error, unknown=True)
             raise self.original
         if not cleanup:
-            require(registered[0] is self.transition and registered[2] is self.originals and registered[3] is self.bindings,
+            control = _parent_control(self)
+            registry = _RECIPIENT_ATTEMPTS if type(self) is _RecipientParent else _INITIALIZER_ATTEMPTS
+            require(_PARENT_CONTROLS.get(id(self)) is control and control.registry is registry and
+                    registry.get(control.key) is registered and registered[0] is self.transition and
+                    registered[2] is self.originals and registered[3] is self.bindings,
                     "BOOTSTRAP_RECIPIENT_PARENT_CLAIM_CHANGED")
         transition, originals, bound = registered[0], registered[2], registered[3]
         require(not cleanup or bound is not None, "BOOTSTRAP_RECIPIENT_CLEANUP_NOT_BOUND")
+        if type(self) is _InitializerParent:
+            registered[4].checked(self, cleanup=cleanup)
+        else:
+            require(type(registered[4]) is bool, "BOOTSTRAP_RECIPIENT_INTENT_CHANGED")
         # Full parsing repeatedly recursed through the same closed records at
         # every nested clock/Owner check. Exact transitive typed pins preserve
         # immediate rejection, without repeatedly parsing unchanged originals.
@@ -3214,6 +3380,8 @@ class _RecipientParent:
                         self.callback is bound.callback and self.errors is bound.errors and
                         type(self.local_start) is type(bound.local_start) and self.local_start == bound.local_start,
                         "BOOTSTRAP_RECIPIENT_PARENT_OWNER_CHANGED")
+                require(tuple(self.handlers.items()) == tuple(bound.handler_rows) == _parent_control(self).handlers,
+                        "BOOTSTRAP_PARENT_HANDLER_ROSTER_CHANGED")
         return self
 
     def freeze_roster(self):
@@ -3385,17 +3553,18 @@ class _RecipientParent:
 
     def launch(self):
         owner, window = self.live(), self.window
-        directory, path = self.handles["recipient-validation"], self.paths()[3]
+        phase, path = _parent_location(self)
+        directory = self.handles[phase]
         context = origin.parse(self.records["context"])
         start = origin.parse(self.records["start.json"])
         self.row = {**start, "captureOutcomes": {name: {"synced": False, "verified": False,
             "closeAttempted": False, "closed": False, "readback": False} for name in ("stdout", "stderr")}}
-        env = processes.ownership_environment(recipient_environment(path), context["job"], start["invocation"],
+        env = processes.ownership_environment(_parent_environment(self), context["job"], start["invocation"],
                                                str(path), str(path / "control-home"), allow_new_context=True)
         require({name: env[name] for name in query._CONTEXT} == start["inheritedContext"],
                 "BOOTSTRAP_RECIPIENT_PARENT_DOMAIN_CHANGED")
         try:
-            end = window.deadline(285, final=True)
+            end = window.deadline(_parent_parameters(self)[2], final=True)
             for name, maximum in (("stdout", ACK_LIMIT), ("stderr", STDERR_LIMIT)):
                 owner.acquire(name, lambda name=name, maximum=maximum: directory.create_file(name + ".log",
                                                                                              max_bytes=maximum, deadline=end))
@@ -3413,7 +3582,12 @@ class _RecipientParent:
             self.read_originals()
             self.private_inputs()
             self.row["launchMinimumNs"] = window.now()
-            argv = recipient_command(origin.digest(self.records["context"]), self.row["launchMinimumNs"])
+            argv = _parent_argv(self, self.row["launchMinimumNs"])
+            self.private_inputs()
+            require(processes.ownership_environment(_parent_environment(self), context["job"], start["invocation"],
+                    str(path), str(path / "control-home"), allow_new_context=True) == env,
+                    "BOOTSTRAP_PARENT_LAUNCH_ENVIRONMENT_CHANGED")
+            window.now(minimum=self.row["launchMinimumNs"])
             self.row["launchArgv"] = argv
             self.row["launchAttempted"] = True
             child = scope.spawn(argv, str(ROOT), env, stdout=self.resource("stdout"), stderr=self.resource("stderr"))
@@ -3554,7 +3728,7 @@ class _RecipientParent:
                 row["nativeStartSha256"] == origin.digest(self.records["native-start.json"]) and
                 row["baselineSha256"] == origin.digest(self.records["baseline.json"]) and row["leader"] == birth["leader"],
                 "BOOTSTRAP_RECIPIENT_NATIVE_RETURN")
-        argv = recipient_command(origin.digest(self.records["context"]), origin.integer(row["launchMinimumNs"], window.first))
+        argv = _parent_argv(self, origin.integer(row["launchMinimumNs"], window.first))
         require(row["launchArgv"] == argv, "BOOTSTRAP_RECIPIENT_NATIVE_ARGV")
         native_record(birth["ownership"], start, row["leader"], argv, terminal=False)
         native_record(row["ownership"], start, row["leader"], argv)
@@ -3670,15 +3844,84 @@ def run_recipient_after_entry(transition):
     """Once-claimed INTERNAL recipient prefix; no public/workflow caller.
 
     All resources and handlers close in this one call under the ORIGINAL prefix
-    caps. No live Recipient is reconstructed from child JSON; canonical init,
-    producer/cache/custody work needs a later reviewed same-live-call extension.
+    caps. No live Recipient is reconstructed from child JSON; this wrapper never
+    selects initialization. Producer/cache/custody remains separate unfinished work.
     """
+    return _recipient_after_entry(transition, initialize=False)
+
+
+def initialize_after_entry(transition):
+    """INTERNAL same-call recipient + initialization, never Prefix authority.
+
+    No public CLI or workflow calls this operation. The original shared claim
+    fixes its intent before any clock/native/file supplier and consumes failure.
+    Initialization yields evidence only, not producer/cache permission.
+    """
+    return _recipient_after_entry(transition, initialize=True)
+
+
+def _install_parent_handlers(call, control):
+    owner = call.live()
+    require(_parent_control(call) is control, "BOOTSTRAP_PARENT_CONTROL_CHANGED")
+    bound = control.record[3]
+    for number in (signal.SIGINT, signal.SIGTERM, *([signal.SIGBREAK] if hasattr(signal, "SIGBREAK") else [])):
+        handler = signal.getsignal(number)
+        call.handlers[number] = handler
+        bound.handler_rows.append((number, handler))
+        # Retain the original pair in the actual locally held control BEFORE
+        # installation: even a failed/partially effective signal() owes restore.
+        _retain_parent_handler(call, control, number, handler)
+        signal.signal(number, lambda signum, _frame: call.cancelled.append(signum))
+        owner.end()
+
+
+def _close_parent(call, owner, window, control):
+    """Known close with the actual local holder, never its registry alias."""
+    saved = _parent_originals(call)
+    require(saved[0] is control, "BOOTSTRAP_PARENT_CONTROL_CHANGED")
+    bound = saved[4][3]
+    if owner is not None:
+        call.state = "CLOSING"
+        try:
+            call.freeze_roster()
+        except BaseException as error:
+            call.error("recipient-prefix-close-roster", error, unknown=True)
+        if window.phase == "WORK":
+            try:
+                window.begin_final()
+            except BaseException as error:
+                call.error("recipient-prefix-final-start", error)
+        try:
+            call.roster()
+        except BaseException as error:
+            call.error("recipient-prefix-roster", error, unknown=True)
+        try:
+            owner.close()  # Actual strong local reference, not an execution alias.
+        except BaseException as error:
+            call.error("recipient-prefix-close", error)
+        if owner.original is not None:
+            call.error("recipient-prefix-owner-return", owner.original)
+    for number, handler in saved[6]:
+        try:
+            signal.signal(number, handler)
+            require(signal.getsignal(number) == handler, "BOOTSTRAP_PARENT_HANDLER_NOT_RESTORED")
+            bound.handler_restored.append((number, handler))
+        except BaseException as error:
+            call.error("recipient-prefix-handler-restore", error)
+    call.closed_roster()
+
+
+def _recipient_after_entry(transition, *, initialize):
+    require(type(initialize) is bool, "BOOTSTRAP_RECIPIENT_INTENT")
     check_new_entry_transition(transition)
     pins = (*_recipient_predecessor_pins(transition), _RecipientPredecessorGraph.capture(transition))
     call = _RecipientParent(transition, pins)
     with _RECIPIENT_CLAIM_LOCK:
         require(id(transition) not in _RECIPIENT_ATTEMPTS, "BOOTSTRAP_RECIPIENT_ALREADY_CLAIMED")
-        _RECIPIENT_ATTEMPTS[id(transition)] = (transition, call, pins, None)
+        _RECIPIENT_ATTEMPTS[id(transition)] = (transition, call, pins, None, initialize)
+        control = _ParentControl(call, _RECIPIENT_ATTEMPTS, id(transition), _RECIPIENT_ATTEMPTS[id(transition)])
+        _register_parent_control(control)
+        _PARENT_CONTROLS[id(call)] = control
     owner = window = None
     try:
         call.local_start = time.monotonic()
@@ -3693,13 +3936,10 @@ def run_recipient_after_entry(transition):
             owner.admissions, owner.resources, owner.errors, window_state=[window.phase_state()],
             observations=[window.last, window.local_last])
         with _RECIPIENT_CLAIM_LOCK:
-            _RECIPIENT_ATTEMPTS[id(transition)] = (transition, call, pins, call.bindings)
+            _bind_parent_control(call, control, (transition, call, pins, call.bindings, initialize))
         call.errors, call.state = owner.errors, "RUNNING"
         owner.end()
-        for number in (signal.SIGINT, signal.SIGTERM, *([signal.SIGBREAK] if hasattr(signal, "SIGBREAK") else [])):
-            call.handlers[number] = signal.getsignal(number)
-            signal.signal(number, lambda signum, _frame: call.cancelled.append(signum))
-            owner.end()
+        _install_parent_handlers(call, control)
         call.host()
         for name, path in zip(("original", "adoption", "entry"), call.paths()[:3]):
             call.handles[name] = owner.open(path)
@@ -3776,33 +4016,7 @@ def run_recipient_after_entry(transition):
             except BaseException as secondary:
                 call.error("recipient-prefix-failure-retention", secondary)
     finally:
-        if owner is not None:
-            call.state = "CLOSING"
-            try:
-                call.freeze_roster()
-            except BaseException as error:
-                call.error("recipient-prefix-close-roster", error, unknown=True)
-            if window.phase == "WORK":
-                try:
-                    window.begin_final()
-                except BaseException as error:
-                    call.error("recipient-prefix-final-start", error)
-            try:
-                call.roster()
-            except BaseException as error:
-                call.error("recipient-prefix-roster", error, unknown=True)
-            try:
-                owner.close()  # Actual strong local reference; never callback-rebound call.owner.
-            except BaseException as error:
-                call.error("recipient-prefix-close", error)
-            if owner.original is not None:
-                call.error("recipient-prefix-owner-return", owner.original)
-        for number, handler in call.handlers.items():
-            try:
-                signal.signal(number, handler)
-            except BaseException as error:
-                call.error("recipient-prefix-handler-restore", error)
-        call.closed_roster()
+        _close_parent(call, owner, window, control)
     try:
         if call.original is not None:
             raise call.original
@@ -3826,11 +4040,561 @@ def run_recipient_after_entry(transition):
         require(window.last == checked and owner.original is None and not owner.unknown and
                 all(row["attempted"] is True and row["closed"] is True for row in owner.resources),
                 "BOOTSTRAP_RECIPIENT_PREFIX_FINAL_STATE_CHANGED")
-        call.result = RecipientPrefix(raw, call.pending_raw, tuple(sorted(call.records.items())), checked)
+        registered = _recipient_parent_registration(call)
+        require(registered[4] is initialize and registered[3].handler_restored == registered[3].handler_rows,
+                "BOOTSTRAP_RECIPIENT_INTENT_OR_HANDLERS_CHANGED")
+        if not initialize:
+            call.result = RecipientPrefix(raw, call.pending_raw, tuple(sorted(call.records.items())), checked)
+            call.state = "COMPLETE"
+            return call.result
+        call.state = "HANDED_OFF"
+        handoff = _InitializerPredecessor.capture(call, raw, checked)
+        next_call = _InitializerParent(transition, pins)
+        with _INITIALIZER_CLAIM_LOCK:
+            require(id(call) not in _INITIALIZER_ATTEMPTS, "BOOTSTRAP_INIT_ALREADY_CLAIMED")
+            _INITIALIZER_ATTEMPTS[id(call)] = (transition, next_call, pins, None, handoff, None)
+            next_control = _ParentControl(next_call,
+                _INITIALIZER_ATTEMPTS, id(call), _INITIALIZER_ATTEMPTS[id(call)], handoff_pin=handoff.pin())
+            _register_parent_control(next_control)
+            _PARENT_CONTROLS[id(next_call)] = next_control
+    except BaseException as error:
+        call.error("recipient-prefix-final-return", error)
+        call.closed_roster()
+        call.state = "FAILED"
+        if owner is not None and (owner.unknown or call.unknown) and not any(actual is owner for actual in QUARANTINE):
+            QUARANTINE.append(owner)
+        raise call.original
+    # Outside the recipient failure handler: neither initializer success nor
+    # failure reopens/advances/errors its already-closed predecessor.
+    return _initialize_claimed(next_call)
+
+
+@dataclass(frozen=True)
+class _InitializerPredecessor:
+    """Original in-call intent and CLOSED recipient, never a returned Prefix.
+
+    Checks inspect only retained graph/path values, not old resource methods,
+    callbacks, clocks or files. All original bytes are separately reread using
+    the initializer's new owner. No initializer can retrofit recipient intent.
+    """
+    recipient: object = field(repr=False)
+    registry: object = field(repr=False)
+    registered: object = field(repr=False)
+    nodes: tuple = field(repr=False)
+    paths: tuple = field(repr=False)
+    files: tuple = field(repr=False)
+    raw: bytes = field(repr=False)
+    checked_ns: int
+    local_last: float
+
+    @staticmethod
+    def path_values(call):
+        return tuple((key, type(value), str(value.path), tuple(value.path.parts), value.path.drive, value.path.root,
+                      tuple(value.identity)) for key, value in call.handles.items())
+
+    def pin(self):
+        return (self, self.recipient, self.registry, self.registered, self.nodes, self.paths, self.files,
+                self.raw, self.checked_ns, self.local_last)
+
+    @classmethod
+    def capture(cls, call, raw, checked):
+        registered = _recipient_parent_registration(call)
+        bound = registered[3]
+        require(type(call) is _RecipientParent and registered[4] is True and call.state == "HANDED_OFF" and
+                call.result is None and call.original is None and not call.unknown and call.child_accepted and
+                bound.owner.closed and not bound.owner.unknown and bound.owner.original is None and
+                len(bound.close_roster) == 1 and all(pin.attempted and pin.closed for pin in bound.seen) and
+                bound.handler_rows == bound.handler_restored and bound.window.last == checked and
+                bound.window.phase == "READ", "BOOTSTRAP_INIT_NOT_ORIGINAL_HANDOFF")
+        traversed = (_RecipientParent, _RecipientParentWindow, _RecipientParentBindings, _RecipientResource, _ParentControl,
+                     Owner, origin.clocks.Reading, origin.clocks.ClockIdentity)
+        scalars = (type(None), bool, int, float, str, bytes, signal.Signals)
+        pending, seen, nodes = [call, registered, _parent_control(call)], set(), []
+        while pending:
+            value = pending.pop()
+            kind = type(value)
+            if kind in scalars or id(value) in seen:
+                continue
+            seen.add(id(value))
+            require(len(seen) <= 10000, "BOOTSTRAP_INIT_PREDECESSOR_GRAPH_LIMIT")
+            if kind is dict:
+                saved, mode = tuple(value.items()), "mapping"
+                require(all(type(key) in scalars for key, _ in saved), "BOOTSTRAP_INIT_PREDECESSOR_KEY")
+                pending.extend(item for pair in saved for item in pair)
+            elif kind in (list, tuple):
+                saved, mode = tuple(value), "sequence"
+                pending.extend(saved)
+            elif kind in traversed:
+                saved, mode = object.__getattribute__(value, "__dict__"), "record"
+                pending.append(saved)
+            else:
+                saved, mode = None, "opaque"
+            nodes.append((value, kind, mode, saved))
+        files = tuple((key, str(path), identity, name, maximum, original)
+            for key, _directory, path, identity, name, maximum, original in bound.files)
+        files += (("pending", str(call.paths()[3]), tuple(call.identities["session"]),
+                   "recipient-prefix-pending.json", LIMIT, call.pending_raw),)
+        return cls(call, _RECIPIENT_ATTEMPTS, registered, tuple(nodes), cls.path_values(call),
+                   files, raw, checked, bound.window.local_last)
+
+    def checked(self, current, *, cleanup=False):
+        registered = _recipient_parent_registration(current)
+        original = _parent_originals(current)[5]
+        actual = self.pin()
+        require(len(original) == len(actual) and all(a is b for a, b in zip(actual[:7], original[:7])) and
+                all(type(a) is type(b) and a == b for a, b in zip(actual[7:], original[7:])),
+                "BOOTSTRAP_INIT_HANDOFF_CHANGED")
+        require(type(self) is _InitializerPredecessor and type(current) is _InitializerParent and
+                self.registry is _RECIPIENT_ATTEMPTS and
+                self.registry.get(id(self.recipient.transition)) is self.registered and self.registered[4] is True and
+                registered[0] is self.registered[0] and registered[2] is self.registered[2] and
+                (cleanup or (current.transition is self.registered[0] and current.originals is self.registered[2])),
+                "BOOTSTRAP_INIT_HANDOFF_REGISTRY_CHANGED")
+        scalars = (type(None), bool, int, float, str, bytes, signal.Signals)
+        def same(actual, original):
+            return actual is original or (type(actual) is type(original) and type(original) in scalars and actual == original)
+        for value, kind, mode, saved in self.nodes:
+            require(type(value) is kind, "BOOTSTRAP_INIT_CLOSED_PREDECESSOR_CHANGED")
+            if mode == "record":
+                valid = object.__getattribute__(value, "__dict__") is saved
+            elif mode == "mapping":
+                valid = len(value) == len(saved) and all(same(key, old_key) and same(item, old_item)
+                    for (key, item), (old_key, old_item) in zip(value.items(), saved))
+            elif mode == "sequence":
+                valid = len(value) == len(saved) and all(same(item, old) for item, old in zip(value, saved))
+            else:
+                valid = mode == "opaque"
+            require(valid, "BOOTSTRAP_INIT_CLOSED_PREDECESSOR_CHANGED")
+        require(self.path_values(self.recipient) == self.paths and
+                self.registered[3].window.last == self.checked_ns and
+                self.registered[3].window.local_last == self.local_last, "BOOTSTRAP_INIT_CLOSED_PREDECESSOR_CHANGED")
+
+
+@dataclass(frozen=True)
+class _InitializerWindow(_RecipientParentWindow):
+    """Fixed work120/native165/prefix195 using the nonvirtual shared mechanics."""
+
+
+@dataclass(frozen=True)
+class _InitializationInputs:
+    request_raw: bytes = field(repr=False)
+    interpreter: tuple = field(repr=False)
+    toolchains: object = field(repr=False)
+    environment: tuple = field(repr=False)
+    homes: tuple = field(repr=False)
+    policy: bytes = field(repr=False)
+
+
+def _initializer_names(owner, directory):
+    """Bounded complete listing under the existing native/private owner."""
+    end = owner.end()
+    directory.verify()
+    if owner.first.clock.role == "windows-x64":
+        names = directory.names(max_names=32, deadline=end)
+    else:
+        names = []
+        with os.scandir(directory.path) as entries:
+            for entry in entries:
+                require(len(names) < 32, "BOOTSTRAP_INIT_DIRECTORY_LIMIT")
+                names.append(entry.name)
+    require(len(names) == len(set(name.casefold() for name in names)), "BOOTSTRAP_INIT_DIRECTORY_ALIASES")
+    directory.verify()
+    owner.end()
+    return tuple(sorted(names))
+
+
+def _initializer_outputs_absent(owner):
+    """Canonical output baseline, independently checked without executing Git."""
+    owner.end()
+    pinned = {}
+    def stamp(info, contents):
+        identity = (info.st_dev, info.st_ino, info.st_mode, getattr(info, "st_file_attributes", 0))
+        return identity + ((info.st_mtime_ns, info.st_ctime_ns) if contents else ())
+    def pin(path, info=None, *, contents=True):
+        info = path.lstat() if info is None else info
+        require(stat.S_ISDIR(info.st_mode) and not getattr(info, "st_file_attributes", 0) & 0x400,
+                "BOOTSTRAP_INIT_SOURCE_DIRECTORY")
+        pinned[path] = (contents, stamp(info, contents))
+    # Shared ancestors (e.g. /tmp) are identity/type/mode pins, not source
+    # content pins. Unrelated siblings may change their directory timestamps.
+    # ROOT and every enumerated source directory retain the stronger check.
+    for path in ROOT.parents:
+        pin(path, contents=False)
+    for path in (ROOT, ROOT / "buildSrc", ROOT / "library", ROOT / "samples", ROOT / "samples/iosApp"):
+        pin(path)
+    paths = [ROOT / "build", ROOT / "buildSrc/build", ROOT / "samples/iosApp/p2pkit-sample.xcodeproj"]
+    for parent in (ROOT / "library", ROOT / "samples"):
+        try:
+            with os.scandir(parent) as entries:
+                for count, entry in enumerate(entries, start=1):
+                    owner.end()
+                    require(count <= 20000, "BOOTSTRAP_INIT_SOURCE_DIRECTORY_LIMIT")
+                    info = entry.stat(follow_symlinks=False)
+                    if stat.S_ISDIR(info.st_mode) and not getattr(info, "st_file_attributes", 0) & 0x400:
+                        pin(Path(entry.path), info)
+                        paths.append(Path(entry.path) / "build")
+        except BaseException as error:
+            owner.error("initializer-output-enumeration", error, unknown=True)
+            raise
+    for path in paths:
+        owner.end()
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            raise origin.OriginError("BOOTSTRAP_INIT_PREEXISTING_OUTPUTS")
+    for path, (contents, original) in pinned.items():
+        owner.end()
+        info = path.lstat()
+        require(stamp(info, contents) == original and
+                not getattr(info, "st_file_attributes", 0) & 0x400, "BOOTSTRAP_INIT_SOURCE_DIRECTORY_CHANGED")
+    owner.end()
+
+
+@dataclass(eq=False)
+class _InitializerParent(_RecipientParent):
+    """Second exact parent kind; no override of clocks/roster/close/native engine."""
+
+    def init_inputs(self):
+        self.check()
+        registered = _recipient_parent_registration(self)
+        bound, pin = registered[3], registered[5]
+        require(bound is not None and len(bound.initialization) == 1 and
+                type(pin) is tuple and len(pin) == 2 and bound.initialization[0] is pin[0] and
+                type(pin[0]) is _InitializationInputs, "BOOTSTRAP_INIT_INPUTS_NOT_BOUND")
+        inputs = pin[0]
+        require((inputs.request_raw, inputs.interpreter, inputs.environment, inputs.homes, inputs.policy) == pin[1][:5] and
+                inputs.toolchains is pin[1][5] and inputs.toolchains.originals == pin[1][6],
+                "BOOTSTRAP_INIT_INPUTS_CHANGED")
+        return bound.initialization[0]
+
+    def request_unchanged(self):
+        owner = self.live()
+        owner.end()
+        inputs = self.init_inputs()
+        environment = recipient_environment(_parent_location(self)[1])
+        environment.update(inputs.toolchains.environment())
+        require(tuple(sorted(environment.items())) == inputs.environment and
+                canonical._interpreter() == inputs.interpreter and inputs.homes == inputs.toolchains.homes() and
+                inputs.policy == initialization.properties(inputs.homes), "BOOTSTRAP_INIT_INPUTS_CHANGED")
+        require(canonical.init_request(state=str(_parent_location(self)[1] / "state"),
+                expected_commit=origin.parse(self.transition._attempt.admitted.record)["source"]["commit"],
+                role=self.first.clock.role) == inputs.request_raw, "BOOTSTRAP_INIT_REQUEST_CHANGED")
+        owner.end()
+
+    def host(self):
+        _RecipientParent.host(self)
+        bound = _recipient_parent_registration(self)[3]
+        if bound is not None and bound.initialization:
+            self.request_unchanged()
+
+    def recipient_originals(self):
+        owner = self.live()
+        handoff = _recipient_parent_registration(self)[4]
+        for _key, spelling, identity, name, maximum, raw in handoff.files:
+            path = Path(spelling)
+            key = "recipient:" + str(path)
+            if key not in self.handles:
+                self.handles[key] = owner.open(path)
+            directory = self.handles[key]
+            _new_entry_owned(owner, directory, path, identity)
+            require(owner.read(directory, name, maximum) == raw, "BOOTSTRAP_INIT_RECIPIENT_ORIGINAL_CHANGED")
+        self.check()
+
+    def absent_state(self):
+        owner = self.live()
+        require("state" not in {name.casefold() for name in _initializer_names(owner, self.handles["session"])},
+                "BOOTSTRAP_INIT_STATE_ALREADY_EXISTS")
+
+    def private_inputs(self):
+        owner = self.live()
+        phase, path = _parent_location(self)
+        for name in ("session", phase, "control-home", "temporary"):
+            _new_entry_owned(owner, self.handles[name], path if name == "session" else path / name,
+                             self.identities[name])
+        self.recipient_originals()
+        for key, directory, target, identity, name, maximum, raw in _recipient_parent_registration(self)[3].files:
+            _new_entry_owned(owner, directory, target, identity)
+            require(self.records.get(key) == raw and owner.read(directory, name, maximum) == raw,
+                    "BOOTSTRAP_INIT_RETAINED_ORIGINAL_CHANGED")
+        self.request_unchanged()
+        if not self.row.get("launchAttempted"):
+            self.absent_state()
+
+    def admit(self):
+        """Fresh real query supplier; all of its finalization stays in work120.
+
+        Do not mutate Owner limits or borrow native/read reservations. The one
+        immutable supplier pair intersects original75/120 with remaining work;
+        setup and its actual close/return never restart this parent's allowance.
+        """
+        owner, window = self.live(), self.window
+        directory = _parent_location(self)[1] / "admission"
+        supplier = original = result = None
+        began = window.now()
+        work = min(window.work, origin.integer(began + 75 * origin.NS))
+        final = min(window.work, origin.integer(began + 120 * origin.NS))
+        pair = (window.deadline(75, limit=work), window.deadline(120, limit=final))
+        try:
+            supplier = query.NativeGitQueries(ROOT, directory, check_cancel=lambda: window.now(limit=work),
+                                              owner_deadlines=pair)
+            supplier.native_host_matches_actions()
+            result = bootstrap.admit(ROOT, query_runner=supplier, expected=self.transition._attempt.admitted)
+            supplier.retain_admission(result)
+            window.now(limit=work)
+        except BaseException as error:
+            original = error
+        finally:
+            if supplier is not None:
+                try:
+                    supplier._finalize(original)
+                except BaseException as error:
+                    if original is None:
+                        original = error
+            if (supplier is not None and supplier.unknown) or query.QUARANTINE or diagnostics._QUARANTINE:
+                if original is None:
+                    original = origin.OriginError("BOOTSTRAP_INIT_QUERY_UNKNOWN")
+                self.error("initializer-native-query", original, unknown=True)
+        if original is not None:
+            raise original
+        window.now(limit=final)
+        require(type(result) is I.Admission and result == self.transition._attempt.admitted,
+                "BOOTSTRAP_INIT_READMISSION")
+        retained = owner.open(directory)
+        require(load_admission(owner, retained) == result, "BOOTSTRAP_INIT_READMISSION_CHANGED")
+        for name, raw in (("admission.json", result.record), ("original-event.json", result.original_event),
+                ("original-policy.json", result.original_policy), ("recipient-public.asc", result.public_key),
+                ("session-result.json", owner.read(retained, "session-result.json"))):
+            self.remember_file("admission/" + name, retained, name, raw)
+        session = origin.parse(self.records["admission/session-result.json"])
+        require(set(session) == {"schema", "scope", "job", "queries", "result", "retirement", "firstError", "errors", "readbacks"} and
+                type(session["schema"]) is int and session["schema"] == 1 and session["scope"] == "ORDINARY_GIT_QUERIES_ONLY" and
+                type(session["job"]) is str and re.fullmatch(r"[0-9a-f]{32}", session["job"]) and
+                type(session["queries"]) is list and type(session["readbacks"]) is list and
+                session["result"] == "READY_FOR_CALLER_SEAL" and session["retirement"] == "KNOWN" and
+                session["firstError"] is None and session["errors"] == [], "BOOTSTRAP_INIT_QUERY_RETURN")
+        returned = {"admissionSha256": origin.digest(result.record),
+            "sessionSha256": origin.digest(self.records["admission/session-result.json"]),
+            "clock": origin.clock_value(window.clock), "returnedNs": window.now(limit=final)}
+        target = self.handles["canonical-init"]
+        self.remember_file("admission-return.json", target, "admission-return.json",
+                           owner.write(target, "admission-return.json", returned))
+        window.now(limit=final)
+
+    def initialized_state(self, *, first=False):
+        owner = self.live()
+        self.phase_writers_closed()
+        path = _parent_location(self)[1] / "state"
+        for name in ("state", "gradle-home", "evidence", "cancellations"):
+            key = "state:" + name
+            if first:
+                self.handles[key] = owner.child(self.handles["session"] if name == "state" else self.handles["state:state"], name)
+                self.identities[key] = directory_identity(list(self.handles[key].identity), self.first.clock.role)
+            _new_entry_owned(owner, self.handles[key], path if name == "state" else path / name, self.identities[key])
+            expected = (("cancellations", "context.json", "evidence", "gradle-home") if name == "state" else
+                        ("gradle.properties",) if name == "gradle-home" else ())
+            require(_initializer_names(owner, self.handles[key]) == expected, "BOOTSTRAP_INIT_STATE_ROSTER_CHANGED")
+        context = owner.read(self.handles["state:state"], "context.json")
+        policy = owner.read(self.handles["state:gradle-home"], "gradle.properties", 16384)
+        inputs = self.init_inputs()
+        value = initialization.context_record(context, admitted_raw=self.transition._attempt.admitted.record,
+            root=str(ROOT), state=str(path), role=self.first.clock.role,
+            outer_job=origin.parse(self.records["context"])["job"], homes=inputs.homes, policy_raw=policy)
+        require(value["id"] != origin.parse(_recipient_parent_registration(self)[4].recipient.records["context"])["job"],
+                "BOOTSTRAP_INIT_CONTEXT_JOB")
+        if first:
+            self.remember_file("canonical-context.json", self.handles["state:state"], "context.json", context)
+            self.remember_file("gradle.properties", self.handles["state:gradle-home"], "gradle.properties", policy, 16384)
+        else:
+            require(context == self.records["canonical-context.json"] and policy == self.records["gradle.properties"],
+                    "BOOTSTRAP_INIT_CONTEXT_OR_POLICY_CHANGED")
+        _initializer_outputs_absent(owner)
+
+    def read_child(self):
+        owner, window = self.live(), self.window
+        window.begin_read()
+        directory = self.handles["canonical-init"]
+        try:
+            for name, maximum in (("stdout", ACK_LIMIT), ("stderr", STDERR_LIMIT)):
+                raw = owner.read(directory, name + ".log", maximum)
+                self.remember_file(name + ".log", directory, name + ".log", raw, maximum)
+                self.row["captureOutcomes"][name]["readback"] = True
+            expected = initialization.stdout_path(str(_parent_location(self)[1] / "state"), window.clock.role)
+            require(self.records["stdout.log"] == expected and self.records["stderr.log"] == b"",
+                    "BOOTSTRAP_INIT_STDOUT_CONTEXT_PATH")
+            self.initialized_state(first=True)
+            self.row.update(retirement="KNOWN", captures={name: {"sha256": origin.digest(self.records[name + ".log"]),
+                "bytes": len(self.records[name + ".log"])} for name in ("stdout", "stderr")}, errors=[])
+            self.native_content()
+            self.reread_files()
+            self.read_originals()
+            self.initialized_state()
+            self.reread_files()
+            window.now()
+            self.child_accepted = True
+        except BaseException as error:
+            self.error("initializer-readback", error, unknown=True)
+            raise self.original
+
+
+@dataclass(frozen=True)
+class InitializationPrefix:
+    """Closed initialization evidence only. No producer/export/save authority."""
+    raw: bytes = field(repr=False)
+    pending_raw: bytes = field(repr=False)
+    originals: tuple = field(repr=False)
+    checked_ns: int = field(repr=False)
+
+
+def _initialize_claimed(call):
+    require(type(call) is _InitializerParent and call.state == "CLAIMED", "BOOTSTRAP_INIT_ALREADY_CLAIMED")
+    saved = _parent_originals(call)
+    control, registered = saved[0], saved[4]
+    call.state = "STARTING"  # Consumed before the first fallible supplier.
+    owner = window = None
+    try:
+        call.check()
+        call.local_start = time.monotonic()
+        call.first = origin.clocks.observe()
+        call.callback = call.cancel
+        call.window = window = _InitializerWindow(call)
+        call.owner = owner = Owner(window.local_end, window, first=call.first, cancelled=call.callback)
+        call.bindings = _RecipientParentBindings(owner, window, call.first, call.callback, call.local_start, owner.local_end,
+            owner.admissions, owner.resources, owner.errors, window_state=[window.phase_state()],
+            observations=[window.last, window.local_last])
+        with _INITIALIZER_CLAIM_LOCK:
+            _bind_parent_control(call, control, (*registered[:3], call.bindings, *registered[4:]))
+        call.errors, call.state = owner.errors, "RUNNING"
+        owner.end()
+        _install_parent_handlers(call, control)
+        call.host()
+        for name, path in zip(("original", "adoption", "entry"), call.paths()[:3]):
+            call.handles[name] = owner.open(path)
+        call.read_originals()
+        call.recipient_originals()
+        phase, path = _parent_location(call)
+        initialization.stdout_path(str(path / "state"), window.clock.role)
+        call.handles["session"] = owner.new(path)
+        for name in (phase, "control-home", "temporary"):
+            call.handles[name] = owner.child(call.handles["session"], name, create=True)
+        for name in ("session", phase, "control-home", "temporary"):
+            call.handles[name].verify()
+            call.identities[name] = directory_identity(list(call.handles[name].identity), window.clock.role)
+            owner.end()
+        call.absent_state()  # Canonical initialize(), not this parent, creates it.
+        call.remember_file("recipient-closed.json", call.handles["session"], "recipient-closed.json",
+                           owner.write(call.handles["session"], "recipient-closed.json", registered[4].raw))
+        toolchains = initialization.installed_toolchains()
+        owner.end()
+        interpreter = canonical._interpreter()
+        request_raw = canonical.init_request(state=str(path / "state"),
+            expected_commit=origin.parse(call.transition._attempt.admitted.record)["source"]["commit"], role=window.clock.role)
+        owner.end()
+        environment = recipient_environment(path)
+        environment.update(toolchains.environment())
+        homes = toolchains.homes()
+        inputs = _InitializationInputs(request_raw, interpreter, toolchains,
+            tuple(sorted(environment.items())), homes, initialization.properties(homes))
+        call.bindings.initialization.append(inputs)
+        with _INITIALIZER_CLAIM_LOCK:
+            current = _INITIALIZER_ATTEMPTS[id(registered[4].recipient)]
+            require(current[5] is None, "BOOTSTRAP_INIT_INPUTS_ALREADY_BOUND")
+            _bind_parent_control(call, control, (*current[:5], (inputs,
+                (inputs.request_raw, inputs.interpreter, inputs.environment, inputs.homes, inputs.policy,
+                 inputs.toolchains, inputs.toolchains.originals))))
+        call.request_unchanged()
+        call.remember_file("request.json", call.handles[phase], "request.json",
+                           owner.write(call.handles[phase], "request.json", request_raw))
+        call.admit()
+        call.read_originals()
+        call.recipient_originals()
+        # Readmission is a supplier boundary too. Reject an unexpected state
+        # before preparing any native initializer scope/captures, while keeping
+        # the later immediate prelaunch absence checks as well.
+        call.absent_state()
+        _initializer_outputs_absent(owner)
+        context = {"schema": 1, "scope": "BOOTSTRAP_INITIALIZER_PARENT_CONTEXT_V1", "job": uuid.uuid4().hex,
+            "previousSha256": origin.digest(registered[4].raw), "requestSha256": origin.digest(request_raw),
+            "admissionSha256": origin.digest(call.transition._attempt.admitted.record),
+            "clock": origin.clock_value(window.clock), "directories": call.identities,
+            "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False}
+        call.remember_file("context", call.handles["session"], "initializer-context.json",
+                           owner.write(call.handles["session"], "initializer-context.json", context))
+        invocation = uuid.uuid4().hex
+        environment = processes.ownership_environment(_parent_environment(call), context["job"], invocation,
+            str(path), str(path / "control-home"), allow_new_context=True)
+        start = {"schema": 1, "scope": "BOOTSTRAP_INITIALIZER_PARENT_PRELAUNCH_V1",
+            "contextSha256": origin.digest(call.records["context"]), "argv": _parent_argv(call),
+            "cwd": str(ROOT), "role": window.clock.role, "job": context["job"], "invocation": invocation,
+            "state": str(path), "home": str(path / "control-home"),
+            "inheritedContext": {name: environment[name] for name in query._CONTEXT}, "startedNs": window.first,
+            "workEndNs": window.work, "finalEndNs": window.native_end, "exitCode": None,
+            "launchAttempted": False, "scopeAttempted": False, "retirement": "UNKNOWN"}
+        call.remember_file("start.json", call.handles[phase], "start.json", owner.write(call.handles[phase], "start.json", start))
+        call.launch()
+        call.read_child()
+        call.remember_file("result.json", call.handles[phase], "result.json", owner.write(call.handles[phase], "result.json", call.row))
+        call.pending_raw = owner.write(call.handles["session"], "initializer-prefix-pending.json", {
+            "schema": 1, "scope": "BOOTSTRAP_INITIALIZER_PREFIX_PENDING_RESOURCE_CLOSE_V1",
+            "recipientClosedSha256": origin.digest(registered[4].raw), "window": window.record(),
+            "originalsSha256": {name: origin.digest(raw) for name, raw in call.records.items()},
+            "childReturn": "INITIALIZED_CONTEXT_NOT_PRODUCT_RECEIPT", "parentResourceClose": "PENDING_CLOSE",
+            "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False})
+        call.reread_files()
+        call.read_originals()
+        call.initialized_state()
+        call.reread_files()
+        call.native_content()
+        require(owner.read(call.handles["session"], "initializer-prefix-pending.json") == call.pending_raw,
+                "BOOTSTRAP_INIT_PENDING_CHANGED")
+        call.cancel()
+        owner.end()
+    except BaseException as error:
+        call.error("initializer-prefix", error, unknown=call.row.get("launchAttempted", False) and not call.child_accepted)
+        if owner is not None and not owner.closed and not owner.unknown and "session" in call.handles:
+            try:
+                if window.phase == "WORK":
+                    window.begin_final()
+                call.check()
+                call.failure_custody = "INCOMPLETE"
+                owner.write(call.handles["session"], "initializer-prefix-failure.json", {"schema": 1, "result": "HOLD",
+                    "errors": call.errors, "window": window.record(), "parentResourceClose": "PENDING_CLOSE",
+                    "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False}, final=True)
+                call.failure_custody = "PRIVATE_PROVISIONAL_ONLY"
+            except BaseException as secondary:
+                call.error("initializer-failure-retention", secondary)
+    finally:
+        _close_parent(call, owner, window, control)
+    try:
+        if call.original is not None:
+            raise call.original
+        call.check(full=True)
+        require(owner is not None and owner.closed and not owner.unknown and not call.unknown and call.child_accepted and
+                call.bindings.handler_restored == call.bindings.handler_rows and
+                all(row["attempted"] is True and row["closed"] is True for row in owner.resources),
+                "BOOTSTRAP_INIT_PREFIX_NOT_CLOSED")
+        call.cancel()
+        closed = window.now(minimum=call.row["finalizedNs"])
+        raw = origin.encoded({"schema": 1, "scope": "BOOTSTRAP_INITIALIZER_PREFIX_CLOSED_NO_EXECUTION_V1",
+            "recipientClosedSha256": origin.digest(registered[4].raw), "pendingSha256": origin.digest(call.pending_raw),
+            "window": window.record(), "closedNs": closed, "resourceCount": len(owner.resources),
+            "parentResourceClose": "KNOWN_RESOURCE_CLOSE_ONLY", "childReturn": "INITIALIZED_CONTEXT_NOT_PRODUCT_RECEIPT",
+            "nextPhaseAuthority": False, "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED",
+            "exportSaveAuthority": False})
+        call.cancel()
+        call.check(full=True)
+        checked = window.now(minimum=closed)
+        call.check()
+        call.closed_roster()
+        require(window.last == checked and owner.original is None and not owner.unknown and
+                all(row["attempted"] is True and row["closed"] is True for row in owner.resources),
+                "BOOTSTRAP_INIT_FINAL_STATE_CHANGED")
+        call.result = InitializationPrefix(raw, call.pending_raw, tuple(sorted(call.records.items())), checked)
         call.state = "COMPLETE"
         return call.result
     except BaseException as error:
-        call.error("recipient-prefix-final-return", error)
+        call.error("initializer-final-return", error)
         call.closed_roster()
         call.state = "FAILED"
         if owner is not None and (owner.unknown or call.unknown) and not any(actual is owner for actual in QUARANTINE):

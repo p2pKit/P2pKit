@@ -5,6 +5,8 @@ activation HOLDs**. That wiring is not an activated cache, a successful hosted
 run, provider qualification or measured download savings. Dependency bootstrap,
 H-to-S snapshot export and save/probe orchestration remain dormant; source or
 offline-model success cannot lift either HOLD.
+The internal bootstrap recipient/initializer now has source implementation and
+focused offline controls, but no public command or workflow invokes that path.
 [`hosted_dependency_cache.py`](../../scripts/hosted_dependency_cache.py) has no
 CLI, action runner, downloader, extraction, deletion or subprocess entry point.
 The connected caller is
@@ -211,8 +213,10 @@ returns succeed. Adoption remains `NOT_ADMITTED`, tests `NOT_PERFORMED`, and
 export/save authority false. No canonical initializer, producer, cache/provider
 execution, admitted job budget or encrypted custody/seal is added by this reader.
 
-There is still no canonical initializer/producer launcher, seed/export/save/probe
-caller, encrypted export/seal/upload, or productive/job-budget acceptance here.
+This original-acquisition/adoption slice has no canonical initializer/producer
+launcher; the later internal initializer below is a separate same-call extension,
+not authority supplied by adoption JSON. Seed/export/save/probe callers, encrypted
+export/seal/upload and productive/job-budget acceptance remain unfinished.
 No production caller invokes `cache.export_snapshot` or `cache.save_set`.
 The [source continuation](../maintenance/nonphysical-source-resume-2026-09-17.md)
 records executed offline controls, retained failures and exact independent-review
@@ -693,9 +697,10 @@ A successful private pending record precedes resource close and cannot attest it
 The returned immutable `RecipientPrefix` follows close, handler restoration and
 final callback/clock/roster checks. It is evidence only: `nextPhaseAuthority` and
 export/save authority are false, budget `NOT_ADMITTED`, tests `NOT_PERFORMED`.
-Canonical initialization, producer/stop/retirement, empty-seed/export/freeze,
-provider save/probe and encrypted custody still require a reviewed same-live-call
-extension, not a new phase authorized by these closed JSON bytes.
+The recipient-only wrapper still ends here. The separate internal operation
+below selects initialization before the shared claim, never from this returned
+prefix. Producer/stop/retirement, empty-seed/export/freeze, provider save/probe and
+encrypted custody remain unfinished, not authorized by these closed JSON bytes.
 
 Focused controls use the actual parent and child wrapper with tiny ordinary-UID
 POSIX originals/captures. Native/Git/GPG/host/service/clock suppliers are modeled;
@@ -734,16 +739,75 @@ state directory, remain **unattested**, not proof of state absence or ownership.
 The descriptor never imports the ordinary controller, executes its generated
 command, calls an initializer, creates a state/home or consumes `RecipientPrefix`.
 It returns `NOT_ATTESTED_HERE`, `NOT_ACQUIRED_OR_ATTESTED`, `NOT_ADMITTED` and
-`NOT_PERFORMED`, with next-phase/export/save authority false. No public command,
-workflow or productive transaction calls it. A future same-live-call extension
-still needs distinct pinned initialization resources, actual source/native
-readmission, original proposal/job fences and failure custody. Initializer120
+`NOT_PERFORMED`, with next-phase/export/save authority false. The internal parent
+below now consumes this descriptor as checked input, not admission or execution
+authority. No public command or workflow invokes that parent. Initializer120
 cannot renew recipient first315/read30 or resurrect a closed owner. Both ordinary
 HOLDs and the unadmitted/unmeasured5400 proposal remain unchanged.
 
 The [dated shared-source record](../maintenance/hosted-canonical-source-2026-09-18.md)
 separates actual focused offline passes, original failed aggregates and independent
-review from still-unexecuted canonical initialization and hosted qualification.
+review at that earlier descriptor-only milestone. The later initialization source
+and its limited offline execution scope are recorded separately below.
+
+### Internal same-call initialization, not producer/cache execution
+
+`initialize_after_entry(transition)` is an internal, single-argument operation;
+no public CLI, `adopt-originals` or workflow invokes it. Its shared once-claim
+fixes recipient-plus-initializer intent before suppliers, including failure.
+The existing recipient-only wrapper cannot be upgraded by replaying its input
+or consuming a returned `RecipientPrefix`. Initialization begins only after all
+original recipient resources, handlers and final checks close successfully.
+
+The second exact parent has distinct Owner/window/native/capture resources. Its
+fixed caps are **work120 / native165 / prefix195**, intersected with original
+cumulative allocation/job fences and independent LOCAL ceilings. Native final
+work is additionally capped by **actual-final-start+45**; readback by
+**read-start+30**. RAW/LOCAL high-waters remain monotonic; equality expires.
+Fresh source/native query readmission receives one immutable work/final pair
+wholly inside work120, including the supplier's actual finalizer return. It
+neither mutates Owner limits nor spends native/read reserve on admission.
+
+The canonical command has no recipient `--minimum-ns` argument. Its descriptor,
+interpreter and explicit installed `JAVA_HOME`/`P2PKIT_AUDIT_JDK21` identities are
+pinned and rechecked around launch. Java is never executed or version-qualified
+by those metadata checks. State must be absent; canonical initialization creates
+`-productive/initializer/state`, not a supplied existing home. Captures live in
+`-productive/initializer/canonical-init`. Original source and recipient records
+are reread with new handles; the closed predecessor's methods/clocks/callbacks
+are not called. `recipient-closed.json` retains its original closed evidence.
+
+[`hosted_cache_bootstrap_initialization.py`](../../scripts/hosted_cache_bootstrap_initialization.py)
+independently validates exact context/source/job/home/property fields. Native
+and capture retirement precede all canonical context/property reads. The complete
+state roster must contain only the context, properties-only Gradle home and
+empty evidence/cancellation directories. Stdout must be the exact ASCII context
+path with native LF/CRLF; Unicode state paths refuse before launch rather than
+assuming a Windows redirected-stdout encoding. A recipient ACK or product receipt
+cannot substitute. Original-byte changes, extra files and late reads fail closed.
+
+Known-resource cleanup and handler restoration retain their own immutable tuple
+frame in a private closure map, separate from the published frozen dataclass.
+Direct publication-field replacement is rejected for live work but cannot erase
+original close/restoration obligations. Rejected publication is never repaired
+as authority. Actual cap/frame/roster corruption still refuses; the unchanged
+64-diagnostic/UNKNOWN policy remains. This is not a Python-code sandbox.
+
+Successful `InitializationPrefix` is evidence only, after actual resource close,
+handler restoration and final callback/clock/roster checks. Its next-phase/export/
+save authority remains false, budget `NOT_ADMITTED`, tests `NOT_PERFORMED`.
+No producer, stop, seed/export/save/provider, encrypted custody or public caller
+is added. Shared-ancestor pins tolerate timestamp-only unrelated sibling churn;
+source directories keep stronger content/timestamp checks. Neither these
+point-in-time observations nor a context readback is an atomic filesystem freeze.
+
+The [initialization continuation](../maintenance/hosted-bootstrap-initialization-2026-09-18.md)
+separates exact-source review, executed controls, retained failed originals and
+remaining acceptance. Tiny-file tests call canonical `initialize()` in process;
+they never run the generated initializer argv, Java, Gradle or native suppliers.
+They do not qualify installed toolchains, real hosted identity/retirement,
+scheduling, a populated cache or delivery. Both ordinary HOLDs, unadmitted5400,
+Windows NativeFile900/Snapshot576MiB and the missing custodian policy remain.
 
 ### Canonical producer records, not producer execution
 
@@ -938,6 +1002,8 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-recipient-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-recipient-parent-test.py \
   ParentModels.test_actual_parent_runs_child_and_reads_only_after_native_and_capture_close -v
 python3 -I -B -S scripts/tests/hosted-canonical-python-test.py
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-initialization-test.py \
+  InitModels.test_same_live_parent_initializes_only_after_recipient_closure -v
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
@@ -953,10 +1019,13 @@ generated initializer, controller, native, network and child execution. Their
 actual tiny POSIX source reads and modeled Windows reparse checks do not qualify
 native Windows source custody or a productive bootstrap phase.
 The separate bootstrap identity/cohort/producer-record/query-fence/original-acquisition/
-handoff/entry/service-time/allocation-proposal/close/history/legacy-reader/fresh-entry/recipient-child/recipient-parent
+handoff/entry/service-time/allocation-proposal/close/history/legacy-reader/fresh-entry/recipient-child/recipient-parent/initialization
 controls are standalone, not an activated or registered bootstrap workflow.
 The parent example selects one method; its complete suite was executed in
 externally bounded four-method batches, as recorded in the source continuation.
+The initializer example also selects one method. Its disjoint selected executions
+are separately source-bound; do not call a selected pass a complete-file aggregate
+or select inherited historical classes as if they contained only new tests.
 Tiny private-file controls require an actual ordinary UID; root is not an
 acceptable substitute and their modeled native boundaries are not host admission.
 Native Windows provider behavior and actual resolver/cache reuse require
