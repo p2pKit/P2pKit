@@ -617,12 +617,98 @@ static checks and containing commit/tree belong in #437/shared #424 after normal
 push/readback. These source/offline results do not supply formal GitHub approval
 or current native/provider/custody/delivery acceptance. Apps are not in Releases.
 
+## 18 September: separate allocation proposal and supplied trace
+
+The [allocation contract](../testing/hosted-dependency-cache.md#allocation-proposal-and-supplied-trace-not-productive-admission)
+is standalone source, not a productive owner or workflow. It rederives the exact
+original service-time basis, then proposes a fixed 5,400-second job end. The
+closed 48-phase roster totals 4,650 seconds; the 750-second difference is only
+arithmetic setup headroom. Earlier setup, acquisition/adoption and service-clock
+charges still consume the same original job. None of these proposed caps is
+admitted, measured scheduling fit, or an extension of an existing deadline.
+
+The roster names entry/admission, recipient/canonical setup, staging/empty seed,
+custody preparation/collection/uninstall, producer/retirement/readback, dependency
+export and before/after save-set checks, standalone save/probe, intervening owner
+returns/readmission/transitions, evidence freeze/encryption/verification, separate
+seal and bounded upload/guards. Producer work600, inclusive canonical return225
+and native final45 total 870 seconds; stop120 is inside return225, not added again.
+Windows NativeFile900 remains unchanged. The 512MiB/file, 2GiB aggregate and
+streamed-not-Snapshot strategy are declared constraints, not byte observations.
+
+Supplied trace checks bind exact original observation bytes, their predecessor
+hashes, full clock identity, ordered phase caps and high-waters. Native capture
+groups retain their first work anchor across gaps; a delayed return/final cannot
+renew 225/45 seconds. Copy-phase new work is before90 and return before120, also
+clamped by the original phase fence. Stop120 and byte limits are **not enforced
+by this trace grammar**, which has neither stop intervals nor byte inventories.
+
+Complete, partial and failed traces describe only supplied consistency. Coherent
+copies/replays and opaque predecessor records cannot establish original native
+close, trusted workflow outcomes, actual single use, same host/boot or provider
+storage. The first adverse observation retains its exact hash/values/reasons;
+the trace cannot continue after failure/cancellation/UNKNOWN. This is not a
+failed-custody executor: retaining failed originals under the original reserved
+caps remains a separate live caller obligation. All results keep `NOT_ADMITTED`,
+`NOT_PERFORMED` and export/save authority false.
+
+### Executed offline controls
+
+Installed Linux Python3.12.3, actual UID65534, exact read-only source copy:
+
+```bash
+timeout --kill-after=5s 90s runuser -u nobody -- \
+  python3 -I -B -S <exact-read-only-source-copy>/scripts/tests/hosted-cache-bootstrap-allocation-test.py -v
+```
+
+Author suite **39/39 PASS**:16 proposal and23 trace methods, with an explicit
+`load_tests` roster excluding inherited original-acquisition methods. Controls
+cover all six cohorts, fixed arithmetic/uint64/precision/zero, exact original
+bytes and policy, phase/capture/copy fences, failure preservation, replay and
+non-authority, and pure no-I/O boundaries. The first complete execution passed;
+no failed preimage is invented for this previously nonexistent API. All 1,399
+source hashes stayed unchanged in its fixture and repository during execution.
+No existing compatibility suites were replayed: this new module has no caller
+and no existing executable supplier changed.
+
+Independent verdict:
+**APPROVE_EXACT_DORMANT_BOOTSTRAP_ALLOCATION_PROPOSAL_IMPLEMENTATION_SOURCE_OFFLINE_ONLY**,
+with no findings against two-file implementation/test tree
+`eca0b507a37cd18fd2da68303a2397ff3f08b815`, excluding this documentation.
+Independent **29/29 PASS**, first execution with no failed aggregate or fixture
+correction. The control draft was hashed before inspection of the new author
+tests/results. Its cases include every phase hard-cap boundary, all seven
+original capture anchors, decisive delayed return/final825/870 cases, four
+copy90/120 windows and expired-prefix/replay non-authority. Actual UID/EUID65534,
+isolated Python, external90s plus5s kill grace, CPU45s/AS1GiB and audit/native/
+clock guards were retained; all 1,401 source/control hashes remained unchanged.
+The unittest modeled time is not a measured native schedule.
+
+The reviewer inspected the original author39 packet and rehashed all 1,399
+fixture files against the exact implementation worktree, without replaying
+author or legacy suites. These are two separately reported runs, not 68 distinct
+requirements or native tests. Implementation report SHA-256:
+`4567adce6ccde268c04e2675a6bba3fb177296af05ea45ace29a3dd7f25def90`.
+Final complete-patch/document review, static checks, containing commit/tree and
+remote readback belong in #437/shared #424 after normal push/readback. Agent
+review does not supply formal different-account GitHub approval.
+
+Private packet `20260918-bootstrap-allocation-ripuca6n` retains the exact source,
+commands/exits/logs/manifests and review inputs on this device. These synthetic
+records do not qualify native clocks/owners, provider/resolver behavior, actual
+custody/delivery or scheduling. No build, SDK/dependency download, cache/provider
+action or held dispatch occurred. A separate same-call close-to-productive-owner
+bridge and live budget/failure-custody integration remain unfinished. The
+read-only entry's original75/local45/original120 contract, bootstrap execution
+refusals, ordinary selectors, credentials and both activation HOLDs are unchanged.
+
 ## Next engineering and unchanged authority boundaries
 
 The next bootstrap slice still needs a **separate productive owner/job-budget
 context**, not ordinary FULL/Desktop with `help`, the evidence-only prelude,
-same-call read-only entry or service-time basis above. Retain and rederive actual
-source/run/clock and service/native budget originals and trusted workflow outcomes;
+same-call read-only entry, service-time basis or allocation proposal above.
+Retain and rederive actual source/run/clock and service/native budget originals
+and trusted workflow outcomes;
 a digest or fresh allowance cannot grant authority. A future live caller must invoke the canonical configuration-only producer,
 retain its original start/requested/executed argv/same-home stop and independently
 establish complete enclosing native retirement, not infer it from the pure helper;

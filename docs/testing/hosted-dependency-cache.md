@@ -306,6 +306,70 @@ The proposed5,400 seconds is still unadmitted/unmeasured. A separate productive
 owner and complete bounded allocation, live native qualification and trusted
 workflow outcomes remain necessary before any producer/export/provider action.
 
+### Allocation proposal and supplied trace, not productive admission
+
+[`hosted_cache_bootstrap_allocation.py`](../../scripts/hosted_cache_bootstrap_allocation.py)
+is a standalone **pure source proposal**, with no caller or workflow wiring.
+It rederives the exact service-time basis above and computes a proposed end only
+as `jobStartBasisNs + 5400 * 1000000000`. No current observation, new prelude or
+caller-selected duration renews that end. Retained proposals require exact
+canonical bytes and rederivation from the two original responses. Overflow
+refuses without clamping; integer nanoseconds retain their precision.
+
+Its closed48-phase roster totals4,650 seconds. The750-second difference is only
+**arithmetic setup headroom**, not an available or fresh allowance: elapsed
+checkout/toolchain/setup, original acquisition/adoption and service-clock charges
+still consume the same original job. Every phase has a fixed proposed cumulative
+fence and maximum; earlier unused time cannot enlarge a later operation's cap.
+This is roster accounting, **not demonstrated complete scheduling fit**. The
+5,400-second job, provider and workflow-transition caps remain **UNADMITTED /
+UNMEASURED**, not a change to any ordinary or original-prelude deadline.
+
+The roster includes future live entry/admission, recipient and canonical init,
+staging/empty seed, custody preparation, configuration producer/return/native
+final/readback, collect/uninstall, positive dependency export, before/after save-set
+observations, standalone save and exact probe, intervening re-admission/outcome/
+owner-return steps, evidence freeze/encryption/verification, separate seal and
+encrypted upload/guards. It includes no ordinary ABI, simulator or sample build.
+The proposed canonical return225 **includes** same-home stop120 and canonical
+tail, rather than adding120 again. Capture work600 + return225 + native final45
+totals870, below the unchanged Windows NativeFile900 lifetime; readback has a
+separate30-second slot. Other native captures have their own smaller spans.
+These are proposed resource constraints, not measured canonical/native behavior.
+
+`derive_trace`/`validate_trace` check only a supplied linear prefix of exact
+observation bytes and an opaque predecessor's bytes/shared-clock reading. They
+bind the proposal, full clock identity, previous-original hash, ordered phases
+and observation high-waters. Each phase is clamped to its original proposed
+fence and operation maximum. Capture groups additionally retain their **first
+work observation**: delayed return/finalization cannot start another225/45 seconds
+for the same stream. Copy-phase new work is before90 seconds, return before120,
+both also clamped by the original phase fence. Equality is expired.
+
+Complete/prefix/failed **supplied-trace** dispositions never certify execution.
+The first adverse observation retains its original hash, values and finite
+failure reasons, including cancellation/UNKNOWN; the trace cannot advance after
+it. This is not a failed-custody executor. Actual failure custody must separately
+preserve originals within the reserved custody caps; UNKNOWN cannot authorize
+more acquisitions. Backwards observations, changed fields or hash links refuse.
+Opaque predecessors, coherent observations and replayed copies cannot attest
+native close, trusted workflow outcomes, same host/boot, or actual single use.
+
+Same-home stop120,512MiB/file and2GiB aggregate/streaming are **declared proposal
+constraints**, not measured or independently checked by this trace grammar:
+observations contain no stop interval or byte inventory. A future live caller
+must enforce them with the canonical and streamed file suppliers. Do not use
+Windows'576MiB aggregate Snapshot for that dependency cohort.
+
+All proposal/trace results retain `NOT_ADMITTED`, `NOT_PERFORMED` and export/save
+authority false. The current read-only entry remains object/registry-bound to
+its original owner and original75/local45; original120 still only covers its
+existing final/public completion. No owner is prolonged or recreated from this
+proposal. The separate same-call close-to-productive-owner bridge, live budget/
+failure-custody integration and genuine qualification remain unfinished. Seed,
+export and save-set still explicitly refuse bootstrap execution; fictional FULL
+ABI fields or an ordinary Desktop context cannot supply that missing bridge.
+
 ### Canonical producer records, not producer execution
 
 [`hosted_cache_bootstrap_producer.py`](../../scripts/hosted_cache_bootstrap_producer.py)
@@ -490,6 +554,7 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-origin-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-handoff-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-entry-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-service-time-test.py
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-allocation-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
@@ -501,8 +566,8 @@ These use modeled provider/native boundaries and tiny synthetic owned files, no
 dependency download or Gradle. The connected/budget controls are registered in the
 unconditional ordinary CI policy step and both release script entry points.
 The separate bootstrap identity/cohort/producer-record/query-fence/original-acquisition/
-handoff/entry/service-time controls are standalone, not an activated or registered
-bootstrap workflow.
+handoff/entry/service-time/allocation-proposal controls are standalone, not an
+activated or registered bootstrap workflow.
 Tiny private-file controls require an actual ordinary UID; root is not an
 acceptable substitute and their modeled native boundaries are not host admission.
 Native Windows provider behavior and actual resolver/cache reuse require
