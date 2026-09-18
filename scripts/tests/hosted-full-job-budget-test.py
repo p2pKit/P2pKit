@@ -504,6 +504,248 @@ class HttpModels(unittest.TestCase):
                 J.acquire(model_admission(), "e" * 32, token, lambda *args: self.fail("NO_RETENTION"))
         self.assertEqual(self.connections, [])
 
+    def _framed_response(self, frame, body=b'{"synthetic":true}'):
+        raw = header(body, length=frame == "length")
+        if frame == "chunked":
+            raw = raw.replace(b"Connection: close", b"Transfer-Encoding: chunked\r\nConnection: close")
+            return raw + hex(len(body))[2:].encode() + b"\r\n" + body + b"\r\n0\r\n\r\n"
+        self.assertIn(frame, ("length", "eof"))
+        return raw + body
+
+    def _close_fixture(self, reader_error):
+        """Actual stdlib parser, modeled stream/connection ownership only."""
+        streams = []
+
+        class Stream:
+            def __init__(self, raw):
+                self.buffer, self.close_calls = io.BytesIO(raw), 0
+            def read(self, amount):
+                return self.buffer.read(amount)
+            def readline(self, amount):
+                return self.buffer.readline(amount)
+            def flush(self):
+                pass
+            def close(self):
+                self.close_calls += 1
+                if reader_error is not None:
+                    raise reader_error
+                self.buffer.close()
+
+        def connection(*args, **kwargs):
+            value = self.connection(*args, **kwargs)
+            def makefile(mode):
+                self.assertEqual(mode, "rb")
+                stream = Stream(value.original_sock.raw)
+                value.original_sock.stream = stream
+                streams.append(stream)
+                return stream
+            value.original_sock.makefile = makefile
+            close = value.close
+            value.close_calls = 0
+            def finish():
+                value.close_calls += 1
+                close()
+            value.close = finish
+            return value
+        return streams, patch.object(J.http.client, "HTTPSConnection", side_effect=connection)
+
+    def _request_once(self, **kwargs):
+        return J._request(J.paths(model_admission())["attempt"], TOKEN, "e" * 32, **kwargs)
+
+    def _original_owner(self, error):
+        # No allocation/native calls: exercise the actual ordinary owner's
+        # diagnostic boundary instead of a synthetic UNKNOWN string predicate.
+        spec = importlib.util.spec_from_file_location("ordinary_http_owner_model", ROOT / "scripts/run-hosted-test-custody.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        owner = module.PrivateOwner()
+        owner.error("modeled-job-time", error)
+        return owner
+
+    def test_implicit_eof_close_failure_is_unknown_for_all_body_frames(self):
+        for frame in ("length", "chunked", "eof"):
+            with self.subTest(frame=frame):
+                self.responses.append(self._framed_response(frame))
+                streams, fixture = self._close_fixture(OSError("SYNTHETIC_READER_CLOSE"))
+                with fixture:
+                    raw, error = self._request_once()
+                value = J.parse(raw)
+                self.assertIsInstance(error, J.BudgetError)
+                self.assertIs(value["complete"], False)
+                self.assertEqual(value["retirement"], "UNKNOWN")
+                self.assertEqual(streams[0].close_calls, 1)
+                self.assertEqual(self.connections[-1].close_calls, 1)
+                self.assertTrue(self._original_owner(error).unknown)
+                self.assertNotIn(TOKEN.encode(), raw)
+
+    def test_implicit_close_cancellation_preserves_original_object_and_unknown(self):
+        cancellation = KeyboardInterrupt("SYNTHETIC_PRIVATE_CANCELLATION")
+        self.responses.append(self._framed_response("length"))
+        streams, fixture = self._close_fixture(cancellation)
+        with fixture:
+            raw, error = self._request_once()
+        self.assertIs(error, cancellation)
+        self.assertIs(J.parse(raw)["complete"], False)
+        self.assertEqual(J.parse(raw)["retirement"], "UNKNOWN")
+        self.assertEqual(streams[0].close_calls, 1)
+        self.assertTrue(self._original_owner(error).unknown)
+        self.assertNotIn(b"SYNTHETIC_PRIVATE_CANCELLATION", raw)
+
+    def test_explicit_connection_close_uncertainty_reaches_original_owner(self):
+        self.close_failure = OSError("SYNTHETIC_CONNECTION_CLOSE")
+        self.responses.append(self._framed_response("length"))
+        raw, error = self._request_once()
+        self.assertIsInstance(error, J.BudgetError)
+        self.assertIs(J.parse(raw)["complete"], False)
+        self.assertEqual(J.parse(raw)["retirement"], "UNKNOWN")
+        owner = self._original_owner(error)
+        self.assertIs(owner.original, error)
+        self.assertTrue(owner.unknown)
+
+    def test_parser_failure_keeps_first_reason_when_both_closes_fail(self):
+        self.close_failure = OSError("SYNTHETIC_CONNECTION_CLOSE")
+        self.responses.append(self._framed_response("length").replace(b"200 OK", b"302 Found"))
+        streams, fixture = self._close_fixture(OSError("SYNTHETIC_READER_CLOSE"))
+        with fixture:
+            raw, error = self._request_once()
+        self.assertEqual(str(error), "JOB_TIME_HTTP_STATUS")
+        self.assertEqual(J.parse(raw)["error"], "JOB_TIME_HTTP_STATUS")
+        self.assertEqual(J.parse(raw)["retirement"], "UNKNOWN")
+        self.assertEqual(streams[0].close_calls, 1)
+        self.assertEqual(self.connections[-1].close_calls, 1)
+        self.assertTrue(self._original_owner(error).unknown)
+
+    def test_request_cancellation_is_preserved_without_inventing_unknown(self):
+        self.failure = KeyboardInterrupt("SYNTHETIC_PRIVATE_CANCELLATION")
+        self.responses.append(self._framed_response("length"))
+        raw, error = self._request_once()
+        self.assertIs(error, self.failure)
+        self.assertIs(J.parse(raw)["complete"], False)
+        self.assertEqual(J.parse(raw)["retirement"], "KNOWN")
+        self.assertTrue(self.connections[0].closed)
+        self.assertFalse(self._original_owner(error).unknown)
+        self.assertNotIn(b"SYNTHETIC_PRIVATE_CANCELLATION", raw)
+
+    def test_close_cancellation_preserves_identity_and_unknown(self):
+        self.close_failure = KeyboardInterrupt("SYNTHETIC_PRIVATE_CLOSE_CANCELLATION")
+        self.responses.append(self._framed_response("length"))
+        raw, error = self._request_once()
+        self.assertIs(error, self.close_failure)
+        self.assertEqual(J.parse(raw)["retirement"], "UNKNOWN")
+        self.assertTrue(self._original_owner(error).unknown)
+        self.assertNotIn(b"SYNTHETIC_PRIVATE_CLOSE_CANCELLATION", raw)
+
+    def test_private_exception_text_never_becomes_a_response_reason_code(self):
+        for kind in (J.BudgetError, KeyboardInterrupt, SystemExit):
+            with self.subTest(kind=kind.__name__):
+                self.failure = kind(TOKEN)
+                self.responses.append(self._framed_response("length"))
+                raw, error = self._request_once()
+                self.assertIs(error, self.failure)
+                value = J.parse(raw)
+                self.assertFalse(value["complete"])
+                self.assertEqual(value["retirement"], "KNOWN")
+                self.assertEqual(value["error"], "JOB_TIME_HTTP_FAILED")
+                self.assertNotIn(TOKEN.encode(), raw)
+
+    def test_final_clock_cancellation_cannot_be_normalized_into_another_error(self):
+        cancellation = KeyboardInterrupt("SYNTHETIC_PRIVATE_CLOCK_CANCELLATION")
+        before = J.raw_now
+        def clock(*args, **kwargs):
+            if self.connections and self.connections[-1].closed:
+                raise cancellation
+            return before(*args, **kwargs)
+        self.responses.append(self._framed_response("length"))
+        with patch.object(J, "raw_now", side_effect=clock):
+            raw, error = self._request_once()
+        self.assertIs(error, cancellation)
+        self.assertIsNone(J.parse(raw)["finishedRawNs"])
+        self.assertIs(J.parse(raw)["complete"], False)
+        self.assertEqual(J.parse(raw)["retirement"], "KNOWN")
+        self.assertNotIn(b"SYNTHETIC_PRIVATE_CLOCK_CANCELLATION", raw)
+
+    def test_failed_response_retention_does_not_replace_first_http_failure(self):
+        self.failure = OSError("SYNTHETIC_FIRST_NETWORK_FAILURE")
+        self.responses.append(self._framed_response("length"))
+        secondary = RuntimeError("SYNTHETIC_LATER_RETENTION_FAILURE")
+        observed, retained, before = [], {}, J._request
+        def request(*args, **kwargs):
+            result = before(*args, **kwargs)
+            observed.append(result)
+            return result
+        def retain(label, raw):
+            retained[label] = raw
+            raise secondary
+        with patch.object(J, "_request", side_effect=request), self.assertRaises(BaseException) as caught:
+            J.acquire(model_admission(), "e" * 32, TOKEN, retain)
+        self.assertIs(caught.exception, observed[0][1])
+        self.assertIsInstance(caught.exception, J.BudgetError)
+        self.assertIs(caught.exception.__cause__, self.failure)
+        self.assertIs(caught.exception.__context__, secondary)
+        self.assertEqual(list(retained), ["attempt"])
+        self.assertEqual(len(self.requests), 1)
+        self.assertFalse(J.parse(retained["attempt"])["complete"])
+
+    def test_retention_failure_preserves_original_cancellation_and_close_unknown(self):
+        cancellation = KeyboardInterrupt("SYNTHETIC_PRIVATE_CANCELLED_READER")
+        self.responses.append(self._framed_response("length"))
+        streams, fixture = self._close_fixture(cancellation)
+        secondary = RuntimeError("SYNTHETIC_LATER_RETENTION_FAILURE")
+        def retain(label, raw):
+            self.assertEqual(label, "attempt")
+            self.assertFalse(J.parse(raw)["complete"])
+            raise secondary
+        with fixture, self.assertRaises(BaseException) as caught:
+            J.acquire(model_admission(), "e" * 32, TOKEN, retain)
+        self.assertIs(caught.exception, cancellation)
+        self.assertIs(caught.exception.__context__, secondary)
+        self.assertTrue(self._original_owner(caught.exception).unknown)
+        self.assertEqual(streams[0].close_calls, 1)
+        self.assertEqual(len(self.requests), 1)
+
+    def test_sole_retention_failure_stays_original_and_never_starts_second_get(self):
+        self.responses.append(self._framed_response("length"))
+        failure = RuntimeError("SYNTHETIC_RETENTION_ONLY_FAILURE")
+        def retain(label, raw):
+            self.assertEqual(label, "attempt")
+            self.assertTrue(J.parse(raw)["complete"])
+            raise failure
+        with self.assertRaises(RuntimeError) as caught:
+            J.acquire(model_admission(), "e" * 32, TOKEN, retain)
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(len(self.requests), 1)
+
+    def test_successful_frames_close_once_and_preserve_exact_returned_bytes(self):
+        for frame in ("length", "chunked", "eof"):
+            with self.subTest(frame=frame):
+                body = b'{"synthetic":true}'
+                self.responses.append(self._framed_response(frame, body))
+                streams, fixture = self._close_fixture(None)
+                with fixture:
+                    raw, error = self._request_once()
+                value = J.parse(raw)
+                self.assertIsNone(error)
+                self.assertIs(value["complete"], True)
+                self.assertEqual(value["retirement"], "KNOWN")
+                self.assertEqual(base64.b64decode(value["bodyBase64"]), body)
+                self.assertEqual(streams[0].close_calls, 1)
+                self.assertTrue(streams[0].buffer.closed)
+                self.assertEqual(self.connections[-1].close_calls, 1)
+
+    def test_close_failure_keeps_returned_prefix_without_reconstructing_lost_tail(self):
+        body = b"a" * (65536 + 4)
+        self.responses.append(self._framed_response("length", body))
+        streams, fixture = self._close_fixture(OSError("SYNTHETIC_LAST_CHUNK_CLOSE_FAILURE"))
+        with fixture:
+            raw, error = self._request_once()
+        value = J.parse(raw)
+        self.assertIsInstance(error, J.BudgetError)
+        self.assertEqual(base64.b64decode(value["headersBase64"]), header(body))
+        self.assertEqual(base64.b64decode(value["bodyBase64"]), body[:65536])
+        self.assertIs(value["complete"], False)
+        self.assertEqual(value["retirement"], "UNKNOWN")
+        self.assertEqual(streams[0].close_calls, 1)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

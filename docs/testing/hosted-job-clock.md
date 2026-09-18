@@ -95,12 +95,36 @@ existing evidence upload remains three minutes and requires that original
 allowance. Separate bounded windows are not additive extra job time. Exhaustion
 fails the relevant gate; a timeout is not proof of cancellation or retirement.
 
+### Failed HTTP originals and ownership
+
+The ordinary HTTP response reader keeps its original close disposition even
+when the standard parser detaches it before an implicit EOF close. A failed
+reader, response or connection close remains **UNKNOWN** and reaches the actual
+`PrivateOwner.error` boundary through an explicit exception carrier. Repeated
+wrapper close calls do not retry an ambiguous underlying reader close. A later
+successful wrapper close cannot turn the earlier uncertainty into KNOWN.
+
+The first failure remains primary, including `KeyboardInterrupt` and `SystemExit`.
+If retaining its response also fails, the original HTTP cause and secondary
+retention context both remain available to the private owner. This preserves
+failure evidence, not successful retention. Response reason fields contain only
+closed source-owned codes, never arbitrary exception/cancellation text; the
+separate private diagnostic graph must still never be published raw.
+
+Failed observations retain only bounded header/body bytes actually returned
+through the supplier. A final parser/close exception can prevent some bytes from
+returning; those bytes are not reconstructed or claimed as a full wire capture.
+This correction adds no retry, alternate clock or renewed allowance. The shared
+reader implementation, parser high-water check, 45-second acquisition, 15-second
+request, 5-second socket and original FULL/Desktop job fences are unchanged.
+
 ## Verification and unfinished qualification
 
 Focused offline commands (recipes, not execution claims):
 
 ```bash
 python3 -I -B -S scripts/tests/hosted-job-clock-test.py
+python3 -I -B -S scripts/tests/hosted-full-job-budget-test.py
 python3 -I -B -S scripts/tests/hosted-desktop-job-budget-test.py
 python3 -I -B -S scripts/tests/hosted-consume-delivery-test.py
 ```
@@ -116,9 +140,12 @@ paired-process native admission remains necessary before a new role is used.
 Still required: independent review of the connected revision, genuine original
 service/native timing admission, exact cache and changed-source product
 acceptance, retained separate-seal/delivery evidence and measured budget fit.
-The connected/budget models are registered in the unconditional ordinary CI
+The Desktop/connected models are registered in the unconditional ordinary CI
 controls and release-workflow/release-gate checks. Their successful execution
 does not establish any of that native/hosted acceptance.
+The standalone FULL-budget suite is not newly registered by this correction.
+Exact executed controls, failed preimages and independent source-review scope
+are recorded in the [source continuation](../maintenance/nonphysical-source-resume-2026-09-17.md).
 
 Historical milestone: the initial clock helper was dormant. The earlier Desktop
 1,500-second controller plus 120-second seal and 180-second evidence upload

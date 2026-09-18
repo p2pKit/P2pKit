@@ -37,6 +37,17 @@ JOB_SECONDS = 3600
 ACQUIRE_SECONDS, REQUEST_SECONDS, SOCKET_SECONDS = 45, 15, 5
 BODY_LIMIT, HEADER_LIMIT, HEADER_LINE_LIMIT = 1024 * 1024, 16 * 1024, 2048
 RECORD_LIMIT = 2 * 1024 * 1024
+# Only source-owned reasons may enter the response record's diagnostic field.
+# Original exception objects/causes stay in the private owner's separate graph.
+HTTP_ERROR_CODES = frozenset({
+    "JOB_TIME_INTEGER", "JOB_TIME_RAW_DOMAIN", "JOB_TIME_HEADERS", "JOB_TIME_HTTP_STATUS",
+    "JOB_TIME_HEADER_DUPLICATE", "JOB_TIME_HTTP_TYPE", "JOB_TIME_REQUEST_ID",
+    "JOB_TIME_STALE_OR_INTERMEDIARY", "JOB_TIME_CACHE_POLICY", "JOB_TIME_HTTP_DATE",
+    "JOB_TIME_HTTP_TIMEOUT", "JOB_TIME_HTTP_SOCKET", "JOB_TIME_HTTP_WIRE_LIMIT",
+    "JOB_TIME_HTTP_HEADERS_LIMIT", "JOB_TIME_HTTP_LINE", "JOB_TIME_HTTP_READ_BOUND",
+    "JOB_TIME_HTTP_LENGTH", "JOB_TIME_HTTP_TRANSFER", "JOB_TIME_HTTP_BODY_LIMIT",
+    "JOB_TIME_HTTP_TRUNCATED", "JOB_TIME_HTTP_FAILED", "JOB_TIME_HTTP_CLOSE_FAILED", "JOB_TIME_CLOCK_FAILED",
+})
 UPLOAD_SECONDS, TRANSITION_SECONDS, SEAL_SECONDS = 180, 30, 120
 # Request no-cache/max-age=0 and direct verified TLS disallow local/proxy reuse.
 # The service currently advertises up to 60s private freshness. Charge that whole
@@ -607,7 +618,41 @@ def _request(path, token, invocation, *, profile="full", clock=None, minimum=0):
     start = raw_now(minimum, clock=clock)
     connection = response = reader = None
     body, header, status, complete = bytearray(), b"", None, False
-    error, retired = None, True
+    error, error_code, close_resources = None, None, []
+
+    def remember(caught, code, *, preserve_budget=False):
+        nonlocal error, error_code
+        if error is not None:
+            return
+        error = caught if isinstance(caught, (KeyboardInterrupt, SystemExit)) or \
+            preserve_budget and isinstance(caught, BudgetError) else BudgetError(code)
+        if error is not caught:
+            error.__cause__ = caught
+        error_code = (caught.args[0] if preserve_budget and type(caught) is BudgetError and
+            len(caught.args) == 1 and type(caught.args[0]) is str and caught.args[0] in HTTP_ERROR_CODES else code)
+
+    def close_unknown(label):
+        close_resources.append({"phase": "ordinary-job-time-http-close", "resource": label,
+                                "status": "UNKNOWN", "error": "JOB_TIME_HTTP_CLOSE_FAILED"})
+
+    class Reader(_Reader):
+        close_attempted, close_error = False, None
+
+        def close(self):
+            # HTTPResponse detaches fp before implicit EOF close. The outer
+            # response.close() cannot recover that disposition or retry it.
+            if self.close_attempted:
+                if self.close_error is not None:
+                    raise self.close_error
+                return
+            self.close_attempted = True
+            try:
+                super().close()
+            except BaseException as caught:
+                self.close_error = caught
+                close_unknown("response-reader")
+                raise
+
     try:
         # http.client has no proxy/environment redirect/retry facility. One fixed
         # origin with default certificate/hostname verification, never urllib's
@@ -618,7 +663,7 @@ def _request(path, token, invocation, *, profile="full", clock=None, minimum=0):
             def __init__(self, sock, **kwargs):
                 nonlocal reader
                 super().__init__(sock, **kwargs)
-                reader = _Reader(self.fp, sock, start + REQUEST_SECONDS * NS, start, clock=clock)
+                reader = Reader(self.fp, sock, start + REQUEST_SECONDS * NS, start, clock=clock)
                 self.fp = reader
 
         connection.response_class = Response
@@ -650,36 +695,43 @@ def _request(path, token, invocation, *, profile="full", clock=None, minimum=0):
     except BaseException as caught:
         if isinstance(caught, http.client.IncompleteRead) and type(caught.partial) is bytes:
             body.extend(caught.partial[:max(0, BODY_LIMIT - len(body))])
-        error = caught if isinstance(caught, BudgetError) else BudgetError("JOB_TIME_HTTP_FAILED")
+        remember(caught, "JOB_TIME_HTTP_FAILED", preserve_budget=True)
     finally:
         if reader is not None:
             header = bytes(reader.header)
-        for value in (response if response is not None else reader, connection):
+        for label, value in (("response", response if response is not None else reader), ("connection", connection)):
             if value is not None:
                 try:
                     value.close()
-                except BaseException:
-                    retired = False
-                    error = error or BudgetError("JOB_TIME_HTTP_CLOSE_FAILED")
+                except BaseException as caught:
+                    close_unknown(label)
+                    remember(caught, "JOB_TIME_HTTP_CLOSE_FAILED")
+        if reader is not None and reader.close_error is not None:
+            remember(reader.close_error, "JOB_TIME_HTTP_CLOSE_FAILED")
     try:
         # A final reading above request start can still move backwards from a
         # successful parser sample. Keep that high-water mark through both closes.
         final_minimum = max(start, reader.last) if reader is not None else start
         finish = raw_now(final_minimum, clock=clock)
         if finish - start > REQUEST_SECONDS * NS:
-            error = error or BudgetError("JOB_TIME_HTTP_TIMEOUT")
-    except BaseException:
+            remember(BudgetError("JOB_TIME_HTTP_TIMEOUT"), "JOB_TIME_HTTP_TIMEOUT")
+    except BaseException as caught:
         # Preserve bytes already observed even when no valid final RAW sample
         # exists. Null + failed completion CANNOT be used by observation/derive;
         # this is failure evidence, never a substitute clock or extra allowance.
         finish = None
-        error = error or BudgetError("JOB_TIME_CLOCK_FAILED")
+        remember(caught, "JOB_TIME_CLOCK_FAILED")
+    if close_resources and getattr(error, "_p2pkit_retirement", None) is None:
+        # A response label alone is not enough: the real PrivateOwner.error()
+        # consumes this carrier, including when failure retention also throws.
+        # Never overwrite an earlier carrier (even a malformed one is UNKNOWN).
+        error._p2pkit_retirement = {"status": "UNKNOWN", "resources": close_resources, "omitted": 0}
     value = {"schema": 1, "scope": "PRIVATE_ACTIONS_JOB_TIME_RESPONSE", "origin": ORIGIN, "method": "GET", "path": path,
              "invocation": invocation, "clockDomain": RAW_CLOCK_DOMAIN if clock is None else clock.domain,
              "startedRawNs": start, "finishedRawNs": finish,
              "status": status, "headersBase64": base64.b64encode(header[:HEADER_LIMIT]).decode("ascii"),
              "bodyBase64": base64.b64encode(bytes(body[:BODY_LIMIT])).decode("ascii"), "complete": complete and error is None,
-             "retirement": "KNOWN" if retired else "UNKNOWN", "error": None if error is None else str(error)}
+             "retirement": "UNKNOWN" if close_resources else "KNOWN", "error": error_code}
     if clock is not None:
         value.update(schema=2, profile=profile, clock=clock_value(clock))
     return encoded(value), error
@@ -704,7 +756,15 @@ def acquire(admitted, invocation, token, retain, *, clock=None, minimum=0):
         last = raw_now(last, clock=clock)
         require(last < start + ACQUIRE_SECONDS * NS, "JOB_TIME_HTTP_TIMEOUT")
         raw, error = _request(expected[label], token, invocation, profile=profile, clock=clock, minimum=last)
-        retain(label, raw)
+        try:
+            retain(label, raw)
+        except BaseException:
+            if error is not None:
+                # The first HTTP failure/cancellation remains primary. Implicit
+                # context retains this later retention failure without replacing
+                # the original HTTP __cause__ (both reach PrivateOwner.error).
+                raise error
+            raise
         if error is not None:
             raise error
         observed, _, _ = observation(raw, expected[label], invocation, profile=profile, clock=clock)

@@ -419,6 +419,53 @@ class DesktopHttpModels(unittest.TestCase):
     def test_legacy_full_final_backward_sample_keeps_failed_first_original_and_never_retries(self):
         self.terminal_clock_above_start_must_refuse("full")
 
+    def test_desktop_implicit_close_unknown_reaches_owner_with_exact_clock(self):
+        for role in HOSTS:
+            with self.subTest(role=role):
+                self.exact = clock(role)
+                admitted, retained, before = admission(role), {}, len(self.requests)
+                self.responses.append(F.HttpModels._framed_response(self, "chunked"))
+                streams, fixture = F.HttpModels._close_fixture(self, OSError("SYNTHETIC_DESKTOP_READER_CLOSE"))
+                with fixture, self.assertRaises(J.BudgetError) as caught:
+                    J.acquire(admitted, "e" * 32, F.TOKEN, lambda name, raw: retained.update({name: raw}),
+                              clock=self.exact, minimum=self.now)
+                self.assertEqual(set(retained), {"attempt"})
+                value = J.parse(retained["attempt"])
+                self.assertEqual(value["clock"], J.clock_value(self.exact))
+                self.assertEqual(value["clockDomain"], self.exact.domain)
+                self.assertEqual(value["profile"], "desktop")
+                self.assertFalse(value["complete"])
+                self.assertEqual(value["retirement"], "UNKNOWN")
+                self.assertTrue(F.HttpModels._original_owner(self, caught.exception).unknown)
+                self.assertEqual(streams[0].close_calls, 1)
+                self.assertEqual(self.connections[-1].close_calls, 1)
+                self.assertEqual(len(self.requests), before + 1)
+
+    def test_desktop_failed_retention_preserves_cancellation_and_unknown(self):
+        for kind in (KeyboardInterrupt, SystemExit):
+            with self.subTest(kind=kind.__name__):
+                cancellation = kind("SYNTHETIC_PRIVATE_DESKTOP_CANCELLATION")
+                secondary = RuntimeError("SYNTHETIC_SECONDARY_RETENTION_FAILURE")
+                retained, before = {}, len(self.requests)
+                self.responses.append(F.HttpModels._framed_response(self, "length"))
+                streams, fixture = F.HttpModels._close_fixture(self, cancellation)
+                def retain(name, raw):
+                    retained[name] = raw
+                    raise secondary
+                with fixture, self.assertRaises(BaseException) as caught:
+                    J.acquire(admission(), "e" * 32, F.TOKEN, retain, clock=self.exact, minimum=self.now)
+                self.assertIs(caught.exception, cancellation)
+                self.assertIs(caught.exception.__context__, secondary)
+                self.assertTrue(F.HttpModels._original_owner(self, caught.exception).unknown)
+                self.assertEqual(set(retained), {"attempt"})
+                value = J.parse(retained["attempt"])
+                self.assertEqual(value["clock"], J.clock_value(self.exact))
+                self.assertFalse(value["complete"])
+                self.assertEqual(value["retirement"], "UNKNOWN")
+                self.assertNotIn(b"SYNTHETIC_PRIVATE_DESKTOP_CANCELLATION", retained["attempt"])
+                self.assertEqual(streams[0].close_calls, 1)
+                self.assertEqual(len(self.requests), before + 1)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

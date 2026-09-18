@@ -3589,8 +3589,8 @@ class WholeControllerModels(Base):
     def test_full_service_run_attempt_replay_refuses_before_crypto(self):
         self.use_full()
         modeled = self.model_job_time_response
-        def replay(path, token, invocation):
-            raw, error = modeled(path, token, invocation)
+        def replay(path, token, invocation, *, profile, clock, minimum):
+            raw, error = modeled(path, token, invocation, profile=profile, clock=clock, minimum=minimum)
             if path.endswith("/jobs?per_page=100&page=1"):
                 raw = JOB_MODELS.replace_body(raw, lambda row: row["jobs"][0].update(run_attempt=2))
             return raw, error
@@ -3602,14 +3602,17 @@ class WholeControllerModels(Base):
     def test_full_api_failure_preserves_original_and_never_calls_second_get(self):
         self.use_full()
         modeled = self.model_job_time_response
-        def fail(path, token, invocation):
-            raw, _ = modeled(path, token, invocation)
+        def fail(path, token, invocation, *, profile, clock, minimum):
+            raw, _ = modeled(path, token, invocation, profile=profile, clock=clock, minimum=minimum)
             value = C.job_time.parse(raw)
             value.update(complete=False, error="JOB_TIME_HTTP_FAILED")
             return C.job_time.encoded(value), C.job_time.BudgetError("JOB_TIME_HTTP_FAILED")
         with patch.object(C.job_time, "_request", side_effect=fail):
             controller = self.assert_full_stopped_before_crypto()
         self.assertEqual(len(self.job_time_calls), 1)
+        self.assertEqual(len(self.job_time_child_errors), 1)
+        self.assertIsInstance(self.job_time_child_errors[0], C.job_time.BudgetError)
+        self.assertEqual(str(self.job_time_child_errors[0]), "JOB_TIME_HTTP_FAILED")
         original = C.parse((controller.path / "evidence/job-time/attempt.json").read_bytes())
         self.assertFalse(original["complete"])
         self.assertFalse((controller.path / "evidence/job-time/jobs.json").exists())

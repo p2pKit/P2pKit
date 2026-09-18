@@ -271,6 +271,74 @@ must not be confused with the unavailable previous-Mac originals or with genuine
 native/HTTP/provider evidence. Public hashes are navigation, not replacements
 for any necessary private originals.
 
+## Adjacent ordinary HTTP failure-custody correction
+
+Later inspection found a separate ordinary supplier defect, not a recurrence of
+the accepted #455 parser-clock repair or a reason to redo the bootstrap caller.
+The standard HTTP parser could detach its reader before a failed implicit EOF
+close; the ordinary response then incorrectly reported KNOWN retirement. Explicit
+close failures reported UNKNOWN in the response but did not carry that state to
+the actual private owner. Cancellation was normalized, and a later failure to
+retain the failed response could replace the first HTTP error.
+
+The narrow correction in
+[`hosted_full_job_budget.py`](../../scripts/hosted_full_job_budget.py) keeps a
+local sticky reader-close disposition, passes UNKNOWN to the real owner and
+preserves original cancellation/first failure plus the HTTP-cause/retention-context
+graph. Response diagnostic fields use finite source-owned codes. The shared
+`_Reader`, accepted bootstrap executable bytes, six composition expectations,
+ordinary workflow files/HOLDs and all original clocks/fences remain unchanged.
+The [clock guide](../testing/hosted-job-clock.md#failed-http-originals-and-ownership)
+describes the bounded returned-byte and private-diagnostic limits.
+
+Author controls use installed Linux Python3.12.3, `-I -B -S`, actual UID65534
+and exact read-only source fixtures under a 90-second external timeout. HTTP/TLS,
+native ownership, shared clocks and service identity are models; the ordinary
+controller/custody fixtures use only tiny synthetic POSIX files. No application,
+provider, dependency, GPG or native process-owner execution is supplied.
+
+| Executed author check | Result |
+| --- | --- |
+| FULL HTTP/budget suite | 39/39 PASS |
+| Desktop HTTP/budget suite | 24/24 PASS |
+| Connected consume/delivery compatibility suite | 54/54 PASS |
+| Explicitly selected ordinary controller controls | 5/5 PASS, not the whole suite |
+| Composition negative controls | 16/16 PASS |
+
+The selected controller methods are
+`WholeControllerModels.test_full_api_failure_preserves_original_and_never_calls_second_get`,
+`test_full_token_is_acquisition_only_and_original_budget_inputs_are_frozen`,
+`test_full_original_job_time_child_return_mismatch_refuses_before_crypto`,
+`test_full_raw_job_time_close_overrun_cannot_use_provisional_success`, and
+`test_full_service_run_attempt_replay_refuses_before_crypto`. All use explicit
+model boundaries; neither the historical incomplete controller aggregate nor
+genuine hosted HTTP/clock/retirement acceptance is promoted by these passes.
+
+Original failures remain private and separately labelled:
+
+- Unchanged-supplier author preimages: the 38-method FULL aggregate had12 failed
+  assertions, Desktop24 had6, and the subsequently added one-method reason-code
+  regression had3 failed subcases. There were no fixture errors in those runs.
+- The initial selected-controller4 compatibility aggregate had3 passes/1 failure.
+  Two old HTTP overrides still accepted only three positional arguments although
+  the preserved supplier already forwarded `profile`, `clock` and `minimum`.
+  Both selected controls failed on unchanged `fb83ff60` too. The test-only fix
+  forwards those exact keywords to the existing asserting model and additionally
+  verifies the original child `BudgetError`; it does not change production
+  behavior or weaken an assertion.
+- The independent frozen17-method oracle had3 passing controls/14 failing
+  controls (21 failed subcases), and its separate exception-graph3 had3 failures.
+  The same unchanged independent oracles then passed17/17 and3/3 against the
+  corrected supplier, including actual `job_time_phase`/`PrivateOwner` code
+  with modeled native boundaries. Overlapping author replays are not new tests.
+
+Exact full-patch implementation verdict, source/test hashes, static checks,
+containing commit/tree and remote readbacks are mapped in #437 and shared #424.
+Private packet `20260917-ordinary-http-close-lc_u3bnu` retains command/exit/log/
+manifest originals on this device; independent reviewer originals remain
+separate. This is source/offline evidence, not formal GitHub approval, measured
+scheduling, native/provider qualification, cache population or Release delivery.
+
 ## Next engineering and unchanged authority boundaries
 
 The next bootstrap slice still needs a **separate original execution/job-budget
