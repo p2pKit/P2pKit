@@ -1413,6 +1413,15 @@ was supplied by those metadata reads. Main and protected release refs stay uncha
 
 ## Next engineering and unchanged authority boundaries
 
+The later [producer-command descriptor increment](hosted-bootstrap-producer-command-2026-09-18.md)
+connects the existing strict bootstrap request to the fixed isolated canonical
+loader as private data only. Its separate28 own-class offline controls run no
+canonical command, native owner, provider or build; interpreter observations and
+the original pre-Python recorder failure are retained explicitly. It constructs
+no environment/domain chain and grants no budget or execution authority. The
+linked dated record carries exact review/evidence and remaining custody/producer
+integration scope; no ordinary selector or HOLD changes.
+
 The later [shared canonical-source increment](hosted-canonical-source-2026-09-18.md)
 extracts the existing isolated two-supplier argv loader and adds a dormant init
 request descriptor. It is source/offline preparation, **not initializer execution**;

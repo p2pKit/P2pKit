@@ -945,6 +945,39 @@ binding, known complete enclosing retirement, positive empty-seed export,
 freeze/provider/custody integration and separate sealing remain necessary.
 No caller invokes this helper in production.
 
+### Fixed producer-command descriptor, not a launcher
+
+[`hosted_cache_bootstrap_producer_command.py`](../../scripts/hosted_cache_bootstrap_producer_command.py)
+joins the existing strict producer request to the unchanged source-bound isolated
+two-supplier loader. Immutable admission/context bytes and exact invocation/ancestor
+grammar produce detached request bytes before suppliers. Original source location,
+cwd/applicable wrapper, both canonical sources, helper and current interpreter are
+checked before returning private JSON. Interpreter checks observe metadata, not
+executable bytes; neither source labels nor point-in-time rechecks admit a host,
+state or original owner. No ordinary controller, CLI or workflow invokes it.
+
+Its fixed runtime suffix is `--cwd … --wrapper … --purpose cache-bootstrap-configuration
+--kind gradle --id … --timeout 600 --stop-timeout 120 -- help --console=plain
+--no-configure-on-demand`, without an execution subcommand, runtime `--state`,
+optional `--receipt` or duplicate enforcement vector. No environment/domain chain
+is synthesized: `NOT_BUILT_OR_ADMITTED`. Real original domains, toolchains and
+credential screens remain future-parent obligations. Nothing launches or creates
+a state/home. Repeatable descriptors grant no single-use/next-phase/export/save
+authority; budget stays `NOT_ADMITTED` and tests `NOT_PERFORMED`.
+
+The existing allocation must retain work600/return225/final45/read30, with stop120
+included in225 and read30 outside proposed native capture870. These are checked
+proposals, not original live deadlines: canonical `wait_process` starts after
+spawn/stream setup. A future parent must shorten/enforce the original shared-clock,
+job, phase and capture fences and own actual cancellation/retirement.5400 remains
+unadmitted/unmeasured; Windows NativeFile900/Snapshot576MiB are unchanged.
+
+The [descriptor continuation](../maintenance/hosted-bootstrap-producer-command-2026-09-18.md)
+separates actual focused offline source/helper controls from modeled inputs and
+unexecuted canonical/native/provider/custody work. Separate configuration custody,
+source-owned producer/stop/complete enclosing retirement, export/freeze/save/probe
+and encrypted custody/seal remain unfinished. Both ordinary HOLDs stay in force.
+
 ## Connected consume and delivery path
 
 After the unchanged HOLD and native/source admission, `prepare-consume` binds
