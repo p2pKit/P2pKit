@@ -7,8 +7,9 @@ H-to-S snapshot export and save/probe orchestration remain dormant; source or
 offline-model success cannot lift either HOLD.
 The internal bootstrap recipient/initializer and separate staging/empty-seed
 leaf and same-call parents now have source implementation and focused offline
-controls, but no public command or workflow invokes that path. Configuration
-producer/custody integration remains separate unfinished work.
+controls, as does the separate file-only configuration-custody reservation leaf.
+No public command or workflow invokes that path. Configuration-custody parent,
+producer and collection integration remain separate unfinished work.
 [`hosted_dependency_cache.py`](../../scripts/hosted_dependency_cache.py) has no
 CLI, action runner, downloader, extraction, deletion or subprocess entry point.
 The connected caller is
@@ -978,6 +979,47 @@ unexecuted canonical/native/provider/custody work. Separate configuration custod
 source-owned producer/stop/complete enclosing retirement, export/freeze/save/probe
 and encrypted custody/seal remain unfinished. Both ordinary HOLDs stay in force.
 
+### Configuration-custody reservation leaf, not its source-owned parent
+
+[`hosted_cache_bootstrap_custody.py`](../../scripts/hosted_cache_bootstrap_custody.py)
+adds `reserve_configuration(parent, originals, phase, staged)`. Strict supplied
+seed/parent counterparts distinguish leaf ancestry from parent ancestry and bind
+the final seed-parent RAW/LOCAL high-waters. Matching copied records remain data,
+not authenticated original returns or single-use authority. Actual source/context/
+properties/stage identities and bytes, properties-only H and empty S/evidence/
+cancellation directories are rechecked using unchanged bounded staging readers.
+
+The leaf exclusively creates `configuration-custody/request.json` and empty
+`configuration-custody/retained` under the initializer session. Existing paths
+refuse without adoption/deletion. One UUIDv4 binds the eventual product and same-home
+stop to the canonical context job, not the initializer outer job. No canonical
+`state/evidence/<id>` directory is allocated here, no Test loader installed, and no
+ancestor chain or executable descriptor fabricated. Caller ID/path/command/key/
+deadline overrides are absent. Only this module joins its separate custody roster;
+ordinary source/key inputs, suppliers and selectors stay unchanged.
+
+All work, readback, close and final checks share **custody-prepare at most120**,
+shortened by original proposed cumulative/job and independent LOCAL fences. No
+prepare-final/read allowance is borrowed or recorded as executed. First failures,
+partial files and actual resource references remain; UNKNOWN grants no new owner.
+Returned reservation/request bytes leave budget `NOT_ADMITTED`, tests
+`NOT_PERFORMED` and successor/export/save authority false. No stage/seed replay,
+initializer, producer, collector, uninstall, dependency copy, encryption or provider
+operation occurs. The separate source-owned parent remains unfinished.
+
+The [reservation continuation](../maintenance/hosted-bootstrap-configuration-custody-2026-09-18.md)
+records40 author and16 independent individual method passes across3 and2 invocations,
+respectively, **not passing whole-suite aggregates**. Original author39 and
+independent16 aggregates remain FAILED; corrections were fixture-only. These run
+the actual leaf/shared readers and tiny POSIX files over modeled predecessors,
+not native/hosted authority. A future caller must pin actual returns and complete
+private frames; existing `_StagingClosedGraph` treats `StagingPrefix` and
+`_StagingSequence` as opaque. Original producer/stop/outer-retirement/capture,
+bounded collection and honest no-loader observation still precede export/freeze/
+save/probe and encrypted custody/seal. No ordinary acceptance is inferred from help.
+Both HOLDs, missing recipient authority, unadmitted5400 and NativeFile900/
+Snapshot576MiB remain unchanged.
+
 ## Connected consume and delivery path
 
 After the unchanged HOLD and native/source admission, `prepare-consume` binds
@@ -1141,6 +1183,7 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-initialization-test.py \
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-staging-test.py LeafModels -v
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-staging-parent-test.py \
   ParentModels.test_actual_new_parents_and_leaves_close_distinct_owners_with_complete_original_reads -v
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-custody-test.py ReservationModels -v
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
@@ -1156,7 +1199,7 @@ generated initializer, controller, native, network and child execution. Their
 actual tiny POSIX source reads and modeled Windows reparse checks do not qualify
 native Windows source custody or a productive bootstrap phase.
 The separate bootstrap identity/cohort/producer-record/query-fence/original-acquisition/
-handoff/entry/service-time/allocation-proposal/close/history/legacy-reader/fresh-entry/recipient-child/recipient-parent/initialization/staging-leaf/staging-parent
+handoff/entry/service-time/allocation-proposal/close/history/legacy-reader/fresh-entry/recipient-child/recipient-parent/initialization/staging-leaf/staging-parent/configuration-custody-reservation
 controls are standalone, not an activated or registered bootstrap workflow.
 The recipient-parent example selects one method; its complete suite was executed in
 externally bounded four-method batches, as recorded in the source continuation.
@@ -1166,6 +1209,9 @@ or select inherited historical classes as if they contained only new tests.
 The staging-parent example also selects one method; its40 own methods passed in
 17 disjoint bounded invocations, not a whole-file aggregate. Neither its modeled
 closed initializer nor a shared-intent probe is actual canonical initialization.
+The custody example names only its own class; the actual40 individual passes
+were assembled from three selected invocations, not that whole-class command.
+Its fixtures call no staging leaf, initializer, native producer or collector.
 Tiny private-file controls require an actual ordinary UID; root is not an
 acceptable substitute and their modeled native boundaries are not host admission.
 Native Windows provider behavior and actual resolver/cache reuse require

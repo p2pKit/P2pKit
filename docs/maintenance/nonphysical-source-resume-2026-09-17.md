@@ -9,7 +9,8 @@ Exact containing commits, review verdicts and remote readbacks are mapped in
 Later18 September source increments have separate records for
 [canonical initialization](hosted-bootstrap-initialization-2026-09-18.md),
 [staging/empty-seed leaves](hosted-bootstrap-staging-2026-09-18.md), and their
-[same-call file-only parents](hosted-bootstrap-staging-parent-2026-09-18.md).
+[same-call file-only parents](hosted-bootstrap-staging-parent-2026-09-18.md), and the
+[separate configuration-custody reservation leaf](hosted-bootstrap-configuration-custody-2026-09-18.md).
 Those exact-source/offline results supersede the older "next source work" wording
 below only within their recorded scope. They do not supply current composed
 native/hosted qualification, lift either ordinary HOLD or deliver apps to Releases.
@@ -1412,6 +1413,17 @@ No recipient/custodian/formal approval, scan, remediation or exception extension
 was supplied by those metadata reads. Main and protected release refs stay unchanged.
 
 ## Next engineering and unchanged authority boundaries
+
+The later [configuration-custody reservation increment](hosted-bootstrap-configuration-custody-2026-09-18.md)
+adds only a file-owned reservation, not its source-owned parent, producer or
+collector. It binds distinct leaf/parent ancestry and final parent RAW/LOCAL
+floors, reserves one canonical product/stop ID outside canonical evidence/H, and
+installs no loader. Its40 author and16 independent individual method passes span
+3 and2 invocations; original failed aggregates and fixture-only corrections remain
+explicit. Supplied matching records cannot authorize execution. The next parent
+must bind actual same-call returns and original private frames without reopening
+old owners; bounded producer capture/collection and honest no-loader semantics
+remain separate. Both ordinary HOLDs and all actual delivery prerequisites remain.
 
 The later [producer-command descriptor increment](hosted-bootstrap-producer-command-2026-09-18.md)
 connects the existing strict bootstrap request to the fixed isolated canonical
