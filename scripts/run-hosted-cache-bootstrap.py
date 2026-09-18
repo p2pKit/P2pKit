@@ -2,9 +2,9 @@
 """Dormant, evidence-only bootstrap original acquisition; NOT a cache builder.
 
 No workflow, productive budget, canonical init/producer, seed/export/save,
-policy installer, uploader or standalone execution-adoption entry exists here.
-The only public operation is prepare-originals. A future workflow must bind its
-actual original step outcome, not this process's provisional receipt/digest.
+policy installer or uploader exists here. Separate read-only original adoption
+never becomes execution authority. A future trusted workflow must bind the
+actual original prepare-step outcome, not a provisional receipt/digest.
 """
 from __future__ import annotations
 
@@ -41,7 +41,13 @@ CONTEXT_SCOPE = "BOOTSTRAP_ORIGINAL_ACQUISITION_CONTEXT_V1"
 PHASE_SCOPE = "BOOTSTRAP_ORIGINAL_NATIVE_PHASE_V1"
 CHILD_SCOPE = "BOOTSTRAP_SERVICE_CHILD_PROVISIONAL_V1"
 ACK_SCOPE = "BOOTSTRAP_SERVICE_POST_CLOSE_ACK_V1"
-RESULT_SCOPE = "BOOTSTRAP_ORIGINALS_PENDING_CALLER_RETURN_V1"
+RESULT_SCOPE = "BOOTSTRAP_ORIGINALS_PENDING_CALLER_RETURN_V2"
+HANDOFF_SCOPE = "BOOTSTRAP_PREPARE_POST_CLOSE_HANDOFF_V1"
+HANDOFF_OUTPUT_SCOPE = "BOOTSTRAP_PREPARE_HANDOFF_PENDING_STEP_RETURN_V1"
+ADOPTION_SCOPE = "BOOTSTRAP_READ_ONLY_ADOPTION_PENDING_RETURN_V1"
+PREPARE_OUTCOME_ENV = "P2PKIT_BOOTSTRAP_PREPARE_OUTCOME"
+PREPARE_HASH_ENV = "P2PKIT_BOOTSTRAP_PREPARE_SHA256"
+DIRECTORIES = ("admission", "control-home", "final-admission", "service", "temporary")
 CONTEXT_FIELDS = {"schema", "scope", "prelude", "selection", "cacheCohort", "source", "github", "root", "session",
                   "job", "inheritedContext", "runnerName", "admissionSha256", "admissionReturnSha256",
                   "admissionReturnedNs", "budgetAcceptance", "exportSaveAuthority"}
@@ -51,7 +57,17 @@ START_FIELDS = {"schema", "scope", "contextSha256", "argv", "cwd", "role", "job"
 PHASE_FILES = {"start.json", "baseline.json", "result.json", "native-start.json", "stdout.log", "stderr.log"}
 TERMINAL_FIELDS = START_FIELDS | {"captureOutcomes", "baselineSha256", "launchMinimumNs", "launchArgv", "leader",
     "nativeStartSha256", "completedNs", "survivors", "ownership", "scopeCloseAttempted", "scopeClosed",
-    "finalizedNs", "captures", "errors"}
+    "finalizedNs", "captures", "errors", "preparerIdentity"}
+RESULT_FIELDS = {"schema", "scope", "contextSha256", "originalChain", "finalAdmission",
+    "finalAdmissionOriginals", "retainedNs", "budgetAcceptance", "testAcceptance", "exportSaveAuthority",
+    "sessionIdentity", "directories", "processIdentity"}
+HANDOFF_FIELDS = {"schema", "scope", "originSha256", "contextSha256", "clock", "closedNs", "recordedNs",
+    "processIdentity", "budgetAcceptance", "testAcceptance", "exportSaveAuthority"}
+LIFETIME_FIELDS = {
+    "linux-x64": ("pid", "startTicks"), "windows-x64": ("pid", "creationFileTime"),
+    **{role: ("pid", "uniqueId", "startSeconds", "startMicroseconds", "pidVersion")
+       for role in ("macos-arm64", "macos-x64")},
+}
 IDENTITY_ENV = (
     "GITHUB_ACTIONS", "GITHUB_REPOSITORY", "GITHUB_SHA", "GITHUB_REF", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT",
     "GITHUB_EVENT_NAME", "GITHUB_WORKFLOW_REF", "GITHUB_WORKFLOW_SHA", "GITHUB_WORKSPACE", "GITHUB_EVENT_PATH",
@@ -353,6 +369,60 @@ def lifetime(value, role):
     return values
 
 
+def closed_lifetime(value, role):
+    require(type(value) is dict and role in LIFETIME_FIELDS and set(value) == set(LIFETIME_FIELDS[role]),
+            "BOOTSTRAP_PREPARER_LIFETIME")
+    lifetime(value, role)
+    return value
+
+
+def preparer_identity(scope, role):
+    """Read this process through the already-admitted native service scope.
+
+    Windows uses the current-process pseudo-handle, never an acquired handle
+    or a PID-based OpenProcess lookup. There is nothing extra to close. POSIX
+    uses the scope's existing admitted native identity reader, not a new census.
+    """
+    require(scope.name == BACKENDS[role], "BOOTSTRAP_PREPARER_BACKEND")
+    pid = os.getpid()
+    if role == "windows-x64":
+        value = scope.api.identity(processes.PTR(-1), pid)
+    else:
+        value = scope._identity(pid, required=True) if role.startswith("macos-") else scope._identity(pid)
+        require(type(value) is dict and value.get("live") is True, "BOOTSTRAP_PREPARER_NOT_OBSERVED")
+    require(type(value) is dict and type(value.get("pid")) is int and value["pid"] == pid,
+            "BOOTSTRAP_PREPARER_NOT_OBSERVED")
+    return closed_lifetime({name: value.get(name) for name in LIFETIME_FIELDS[role]}, role)
+
+
+def directory_identity(value, role):
+    require(type(value) is list and len(value) == 2 and type(value[0]) is int and
+            0 <= value[0] <= origin.clocks.UINT64, "BOOTSTRAP_ORIGINAL_DIRECTORY_IDENTITY")
+    if role == "windows-x64":
+        require(type(value[1]) is str and re.fullmatch(r"[0-9a-f]{32}", value[1]),
+                "BOOTSTRAP_ORIGINAL_DIRECTORY_IDENTITY")
+    else:
+        origin.integer(value[1], 1)
+    return value
+
+
+def private_identities(owner, private, *, final=True):
+    """Observe original native directory IDs, never infer them from path names."""
+    role = owner.fence.clock.role
+    owner.end(final=final)
+    private.verify()
+    identity = directory_identity(list(private.identity), role)
+    directories = {}
+    for name in DIRECTORIES:
+        child = owner.child(private, name, final=final)
+        child.verify()
+        directories[name] = directory_identity(list(child.identity), role)
+        owner.end(final=final)
+    private.verify()
+    owner.end(final=final)
+    return {"sessionIdentity": identity, "directories": directories}
+
+
 def native_record(value, start, leader, argv, *, terminal=True):
     role = start["role"]
     require(type(value) is dict and value.get("backend") == BACKENDS[role] and
@@ -464,17 +534,23 @@ def baseline_record(raw, role):
     return value
 
 
-def admission_originals(owner, private, admitted, fence, *, final=False):
+def admission_originals(owner, private, admitted, fence, *, final=False, read_final=True):
     name = "final-admission" if final else "admission"
     registered = owner.admissions.get(str(private.path / name))
     require(registered is not None and registered[0] is admitted, "BOOTSTRAP_ADMISSION_NOT_CURRENT_RETURN")
-    directory = owner.child(private, name, final=True)
-    require(load_admission(owner, directory, final=True) == admitted, "BOOTSTRAP_ORIGINAL_ADMISSION_CHANGED")
-    session = owner.read(directory, "session-result.json", final=True)
-    returned = owner.read(private, name + "-return.json", final=True)
+    directory = owner.child(private, name, final=read_final)
+    require(load_admission(owner, directory, final=read_final) == admitted, "BOOTSTRAP_ORIGINAL_ADMISSION_CHANGED")
+    session = owner.read(directory, "session-result.json", final=read_final)
+    returned = owner.read(private, name + "-return.json", final=read_final)
     require(session == registered[1] and returned == registered[2], "BOOTSTRAP_ORIGINAL_ADMISSION_RETURN_CHANGED")
+    return admission_content(admitted, session, returned, fence)
+
+
+def admission_content(admitted, session, returned, fence):
+    """Record consistency only; never registers a supplied native-query return."""
     value = origin.parse(returned)
-    require(set(value) == {"admissionSha256", "sessionSha256", "clock", "returnedNs"} and
+    require(returned == origin.encoded(value) and
+            set(value) == {"admissionSha256", "sessionSha256", "clock", "returnedNs"} and
             value["admissionSha256"] == origin.digest(admitted.record) and
             value["sessionSha256"] == origin.digest(session) and value["clock"] == origin.clock_value(fence.clock) and
             fence.first <= origin.integer(value["returnedNs"]) < fence.work, "BOOTSTRAP_ORIGINAL_ADMISSION_RETURN")
@@ -485,8 +561,8 @@ def admission_originals(owner, private, admitted, fence, *, final=False):
             status["firstError"] is None and status["errors"] == [] and type(status["queries"]) is list and
             type(status["readbacks"]) is list and type(status["job"]) is str and re.fullmatch(r"[0-9a-f]{32}", status["job"]),
             "BOOTSTRAP_ORIGINAL_QUERY_SESSION")
-    # This label is deliberately insufficient on its own. The registry is only
-    # populated after the original supplier's actual _finalize returned.
+    # This label is deliberately insufficient on its own. Current-call use has
+    # the registry above; later use needs the original trusted workflow outcome.
     return value, {"admissionSha256": origin.digest(admitted.record), "sessionSha256": origin.digest(session),
                    "returnSha256": origin.digest(returned)}
 
@@ -530,6 +606,7 @@ def phase(owner, private, context_raw, token, fence):
         row["scopeAttempted"] = True
         scope = owner.acquire("native-scope", lambda: processes.make_scope(context["job"], invocation,
             str(private.path), str(private.path / "control-home")))
+        row["preparerIdentity"] = preparer_identity(scope, fence.clock.role)
         baseline_raw = owner.write(directory, "baseline.json", {"role": fence.clock.role,
             "baseline": sorted(scope.baseline) if hasattr(scope, "baseline") else None,
             "kernelJob": fence.clock.role == "windows-x64"})
@@ -549,7 +626,8 @@ def phase(owner, private, context_raw, token, fence):
         row["leader"] = dict(leaders[0])
         lifetime(row["leader"], fence.clock.role)
         birth_raw = owner.write(directory, "native-start.json", {"ownership": birth,
-            "leader": row["leader"], "observedNs": fence.now(limit=work_end)})
+            "leader": row["leader"], "preparerIdentity": row["preparerIdentity"],
+            "observedNs": fence.now(limit=work_end)})
         row["nativeStartSha256"] = origin.digest(birth_raw)
         while True:
             fence.now(limit=work_end)
@@ -594,6 +672,8 @@ def phase(owner, private, context_raw, token, fence):
                 require(row["survivors"] == [], "BOOTSTRAP_SERVICE_SURVIVORS")
                 row["ownership"] = scope.description()
                 require(row["ownership"].get("discoveryErrors") == [], "BOOTSTRAP_SERVICE_DISCOVERY_UNKNOWN")
+                require(preparer_identity(scope, fence.clock.role) == row["preparerIdentity"],
+                        "BOOTSTRAP_PREPARER_LIFETIME_CHANGED")
                 native_known = True
             except BaseException as error:
                 owner.error("service-drain", error, unknown=True)
@@ -653,7 +733,7 @@ def revalidate(owner, private, context_raw, admitted, originals, fence):
     """Repeatable READ-ONLY revalidation inside the current original owning call.
 
     `originals` comes from this call's returned native phase, not a public success
-    flag or digest. No separate adoption CLI, refreshed query/API or new fence.
+    flag or digest. Disk content validation below never populates this registry.
     """
     require(type(originals) is OriginalPhase and owner.phase_originals is originals and owner.fence is fence and
             originals.context == context_raw and any(item["owner"] is private and not item["attempted"]
@@ -673,11 +753,30 @@ def revalidate(owner, private, context_raw, admitted, originals, fence):
     for name, raw in records.items():
         maximum = ACK_LIMIT if name == "stdout.log" else STDERR_LIMIT if name == "stderr.log" else LIMIT
         require(owner.read(directory, name, maximum, final=True) == raw, "BOOTSTRAP_ORIGINAL_PHASE_CHANGED")
+    return chain_content(owner, private, context_raw, admitted, records, returned, admission_hashes, fence, final=True)
+
+
+def chain_content(owner, private, context_raw, admitted, records, returned, admission_hashes, fence, *, final):
+    """Read-only record consistency, NOT a returned phase or admission owner.
+
+    Current-call provenance is enforced by revalidate above. A cross-process
+    reader instead needs the original handoff hash AND trusted step outcome;
+    rehydrating these bytes never registers an OriginalPhase/native return.
+    """
+    require(type(records) is dict and set(records) == PHASE_FILES and
+            all(type(raw) is bytes for raw in records.values()), "BOOTSTRAP_ORIGINAL_PHASE_FILES")
+    context = context_record(context_raw, admitted, private.path, fence)
+    require(context["admissionReturnSha256"] == admission_hashes["returnSha256"] and
+            context["admissionReturnedNs"] == returned["returnedNs"], "BOOTSTRAP_ORIGINAL_CONTEXT_RETURN_CHANGED")
+    directory = owner.child(private, "service", final=final)
     start = start_record(records["start.json"], context_raw, context, private.path, fence)
     row, birth = (origin.parse(records[name]) for name in ("result.json", "native-start.json"))
     baseline_record(records["baseline.json"], fence.clock.role)
-    require(set(row) == TERMINAL_FIELDS and set(birth) == {"ownership", "leader", "observedNs"},
+    require(set(row) == TERMINAL_FIELDS and set(birth) == {"ownership", "leader", "preparerIdentity", "observedNs"},
             "BOOTSTRAP_ORIGINAL_TERMINAL_FIELDS")
+    preparer = closed_lifetime(row["preparerIdentity"], fence.clock.role)
+    require(preparer == closed_lifetime(birth["preparerIdentity"], fence.clock.role) and
+            preparer["pid"] != row["leader"]["pid"], "BOOTSTRAP_ORIGINAL_PREPARER_CHANGED")
     for name in set(start) - {"exitCode", "launchAttempted", "scopeAttempted", "retirement"}:
         require(row.get(name) == start[name], "BOOTSTRAP_ORIGINAL_START_CHANGED")
     require(type(row.get("exitCode")) is int and row["exitCode"] == 0 and row.get("launchAttempted") is True and
@@ -705,7 +804,7 @@ def revalidate(owner, private, context_raw, admitted, originals, fence):
         raw = records[name + ".log"]
         require(row["captures"].get(name) == {"sha256": origin.digest(raw), "bytes": len(raw)},
                 "BOOTSTRAP_ORIGINAL_CAPTURE_CHANGED")
-    child_raw = owner.read(directory, "child-result.json", final=True)
+    child_raw = owner.read(directory, "child-result.json", final=final)
     child, ack = origin.parse(child_raw), origin.parse(records["stdout.log"])
     require(records["stdout.log"] == origin.encoded(ack) and set(ack) ==
             {"schema", "scope", "invocation", "terminalSha256", "clock", "closedNs"} and
@@ -721,7 +820,7 @@ def revalidate(owner, private, context_raw, admitted, originals, fence):
             child["clock"] == origin.clock_value(fence.clock) and child["returned"] is True and
             child["retirement"] == "KNOWN" and child["errors"] == [] and
             child["launchMinimumNs"] == row["launchMinimumNs"], "BOOTSTRAP_ORIGINAL_CHILD_TERMINAL")
-    responses = {name: owner.read(directory, name + ".json", final=True) for name in ("attempt", "jobs")}
+    responses = {name: owner.read(directory, name + ".json", final=final) for name in ("attempt", "jobs")}
     service = origin.service_identity(admitted, responses, start["invocation"], fence.clock, context["runnerName"])
     require(child["originalsSha256"] == service["originalsSha256"], "BOOTSTRAP_ORIGINAL_RESPONSES_CHANGED")
     times = [fence.first, context["admissionReturnedNs"], start["startedNs"], row["launchMinimumNs"],
@@ -733,7 +832,7 @@ def revalidate(owner, private, context_raw, admitted, originals, fence):
             row["completedNs"] < start["workEndNs"] and row["finalizedNs"] < start["finalEndNs"] and
             row["launchMinimumNs"] <= origin.integer(birth["observedNs"]) <= row["completedNs"],
             "BOOTSTRAP_ORIGINAL_CLOCK_CHAIN")
-    last = fence.now(final=True, minimum=max(*times, birth["observedNs"]))
+    last = fence.now(final=final, minimum=max(*times, birth["observedNs"]))
     return {"service": service, "childTerminalSha256": origin.digest(child_raw),
             "phaseSha256": {name: origin.digest(raw) for name, raw in records.items()},
             "admissionOriginals": admission_hashes, "preludeSha256": origin.digest(fence.raw), "revalidatedNs": last,
@@ -850,9 +949,12 @@ def prepare_originals(cancelled):
         # Recheck the original chain after the final actual admission as well;
         # this is read-only repetition, not a second API acquisition/adoption.
         checked = revalidate(owner, private, context_raw, admitted, originals, fence)
+        identities = private_identities(owner, private)
+        process_identity = origin.parse(dict(originals.records)["result.json"])["preparerIdentity"]
         result_raw = owner.write(private, "origin-result.json", {"schema": 1, "scope": RESULT_SCOPE,
             "contextSha256": origin.digest(context_raw), "originalChain": checked,
             "finalAdmission": final_admission, "finalAdmissionOriginals": final_hashes, "retainedNs": fence.now(final=True),
+            **identities, "processIdentity": process_identity,
             "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False}, final=True)
     except BaseException as error:
         owner.error("prepare-originals", error)
@@ -871,10 +973,208 @@ def prepare_originals(cancelled):
     if owner.original is not None:
         raise owner.original
     require(result_raw is not None and not owner.unknown, "BOOTSTRAP_ORIGINALS_INCOMPLETE")
+    closed = fence.now(final=True)
+    cancellation(cancelled)
+    handoff = prepare_handoff(path, result_raw, context_raw, identities, process_identity, closed, fence, cancelled)
+    return public_result(HANDOFF_OUTPUT_SCOPE, "handoffSha256", handoff), fence, fence.final
+
+
+def public_result(scope, hash_name, raw):
+    # Native lifetimes, paths, runner records and clock observations stay in
+    # private files. This digest is provisional until the command/step returns.
+    return {"scope": scope, hash_name: origin.digest(raw), "budgetAcceptance": "NOT_ADMITTED",
+            "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False}
+
+
+def prepare_handoff(path, result_raw, context_raw, identities, process_identity, closed, fence, cancelled):
+    """Retain the real post-original-owner-close floor using a fresh small owner.
+
+    This does NOT observe its own subsequent writer/owner close or step return.
+    It only uses the remaining ORIGINAL prelude final fence, never fresh work.
+    """
+    owner = Owner(fence.deadline(45, final=True), fence)
+    raw = None
+    try:
+        cancellation(cancelled)
+        private = owner.open(path, final=True)
+        require(private_identities(owner, private) == identities and
+                owner.read(private, "origin-result.json", final=True) == result_raw and
+                owner.read(private, "context.json", final=True) == context_raw and
+                owner.read(private, "prelude.json", final=True) == fence.raw, "BOOTSTRAP_HANDOFF_ORIGINALS_CHANGED")
+        raw = owner.write(private, "prepare-handoff.json", {"schema": 1, "scope": HANDOFF_SCOPE,
+            "originSha256": origin.digest(result_raw), "contextSha256": origin.digest(context_raw),
+            "clock": origin.clock_value(fence.clock), "closedNs": closed, "recordedNs": fence.now(final=True, minimum=closed),
+            "processIdentity": process_identity, "budgetAcceptance": "NOT_ADMITTED",
+            "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False}, final=True)
+        require(private_identities(owner, private) == identities, "BOOTSTRAP_HANDOFF_DIRECTORIES_CHANGED")
+    except BaseException as error:
+        owner.error("prepare-handoff", error)
+    finally:
+        try:
+            owner.close()
+        except BaseException as error:
+            owner.error("handoff-close", error)
+    if owner.original is not None:
+        raise owner.original
+    require(raw is not None and not owner.unknown, "BOOTSTRAP_HANDOFF_INCOMPLETE")
+    posix._deadline(owner.local_end)
     fence.now(final=True)
     cancellation(cancelled)
-    return {"scope": RESULT_SCOPE, "provisionalSha256": origin.digest(result_raw), "budgetAcceptance": "NOT_ADMITTED",
-            "exportSaveAuthority": False}, fence, fence.final
+    return raw
+
+
+def handoff_record(raw, clock):
+    value = origin.parse(raw)
+    require(set(value) == HANDOFF_FIELDS and raw == origin.encoded(value) and
+            type(value["schema"]) is int and value["schema"] == 1 and value["scope"] == HANDOFF_SCOPE and
+            value["clock"] == origin.clock_value(clock) and value["budgetAcceptance"] == "NOT_ADMITTED" and
+            value["testAcceptance"] == "NOT_PERFORMED" and value["exportSaveAuthority"] is False,
+            "BOOTSTRAP_ORIGINAL_HANDOFF")
+    for name in ("originSha256", "contextSha256"):
+        require(type(value[name]) is str and re.fullmatch(r"[0-9a-f]{64}", value[name]), "BOOTSTRAP_HANDOFF_HASH")
+    require(origin.integer(value["closedNs"]) <= origin.integer(value["recordedNs"]), "BOOTSTRAP_HANDOFF_CLOCK")
+    closed_lifetime(value["processIdentity"], clock.role)
+    return value
+
+
+def prepared_content(owner, private, handoff_raw, context_raw, fence):
+    """Read the original private chain without manufacturing in-call provenance.
+
+    The caller must separately bind a trusted original prepare-step outcome,
+    first clock observation, actual hosted inputs and fresh native re-admission.
+    This function does not turn disk data into returned owner objects.
+    """
+    require(owner.fence is fence and owner.first is not None, "BOOTSTRAP_ADOPTION_READER")
+    owner.end()
+    handoff = handoff_record(handoff_raw, fence.clock)
+    require(owner.read(private, "prepare-handoff.json") == handoff_raw and
+            owner.read(private, "context.json") == context_raw and
+            origin.digest(context_raw) == handoff["contextSha256"] and
+            owner.read(private, "prelude.json") == fence.raw, "BOOTSTRAP_ADOPTION_ORIGINALS_CHANGED")
+    raw = owner.read(private, "origin-result.json")
+    require(origin.digest(raw) == handoff["originSha256"], "BOOTSTRAP_ADOPTION_ORIGIN_CHANGED")
+    result = origin.parse(raw)
+    require(set(result) == RESULT_FIELDS and raw == origin.encoded(result) and
+            type(result["schema"]) is int and result["schema"] == 1 and result["scope"] == RESULT_SCOPE and
+            result["contextSha256"] == origin.digest(context_raw) and result["budgetAcceptance"] == "NOT_ADMITTED" and
+            result["testAcceptance"] == "NOT_PERFORMED" and result["exportSaveAuthority"] is False and
+            type(result["directories"]) is dict and set(result["directories"]) == set(DIRECTORIES),
+            "BOOTSTRAP_ADOPTION_PARENT_RESULT")
+    identities = {"sessionIdentity": directory_identity(result["sessionIdentity"], fence.clock.role),
+        "directories": {name: directory_identity(value, fence.clock.role) for name, value in result["directories"].items()}}
+    require(private_identities(owner, private, final=False) == identities, "BOOTSTRAP_ADOPTION_DIRECTORIES_CHANGED")
+    admitted_values, returns, hashes = [], [], []
+    for name in ("admission", "final-admission"):
+        directory = owner.child(private, name)
+        admitted = load_admission(owner, directory)
+        returned, bound = admission_content(admitted, owner.read(directory, "session-result.json"),
+            owner.read(private, name + "-return.json"), fence)
+        admitted_values.append(admitted)
+        returns.append(returned)
+        hashes.append(bound)
+    admitted = admitted_values[0]
+    require(admitted_values[1] == admitted, "BOOTSTRAP_ADOPTION_FINAL_ADMISSION_CHANGED")
+    context = context_record(context_raw, admitted, private.path, fence)
+    directory = owner.child(private, "service")
+    records = {name: owner.read(directory, name,
+        ACK_LIMIT if name == "stdout.log" else STDERR_LIMIT if name == "stderr.log" else LIMIT) for name in sorted(PHASE_FILES)}
+    checked = chain_content(owner, private, context_raw, admitted, records, returns[0], hashes[0], fence, final=False)
+    terminal = origin.parse(records["result.json"])
+    process_identity = closed_lifetime(result["processIdentity"], fence.clock.role)
+    require(process_identity == terminal["preparerIdentity"] == handoff["processIdentity"],
+            "BOOTSTRAP_ADOPTION_PREPARER_CHANGED")
+    original_chain = result["originalChain"]
+    require(type(original_chain) is dict, "BOOTSTRAP_ADOPTION_ORIGINAL_CHAIN")
+    revalidated = origin.integer(original_chain.get("revalidatedNs"))
+    require(origin.encoded(original_chain) == origin.encoded({**checked, "revalidatedNs": revalidated}) and
+            origin.encoded(result["finalAdmission"]) == origin.encoded(returns[1]) and
+            origin.encoded(result["finalAdmissionOriginals"]) == origin.encoded(hashes[1]),
+            "BOOTSTRAP_ADOPTION_ORIGINAL_CHAIN_CHANGED")
+    require(terminal["finalizedNs"] <= returns[1]["returnedNs"] <= revalidated <=
+            origin.integer(result["retainedNs"]) <= handoff["closedNs"] <= handoff["recordedNs"] <=
+            owner.first.nanoseconds < fence.work, "BOOTSTRAP_ADOPTION_PREDECESSOR_CLOCK")
+    require(private_identities(owner, private, final=False) == identities, "BOOTSTRAP_ADOPTION_DIRECTORIES_CHANGED")
+    return admitted, context, {"handoffSha256": origin.digest(handoff_raw), "originSha256": origin.digest(raw),
+        "contextSha256": origin.digest(context_raw), "originalChain": checked,
+        "finalAdmissionOriginals": hashes[1], **identities, "processIdentity": process_identity}
+
+
+def adopt_originals(cancelled):
+    """Dormant read-only ORIGINAL adoption, not producer or job-budget admission.
+
+    The two environment inputs must eventually come from the fixed trusted
+    prepare step's ORIGINAL outcome/hash. No workflow wires that authority yet.
+    Fresh readmission records go in a separate exclusive sibling; preparation
+    originals are never modified. Every operation shares the original prelude.
+    """
+    local_end = time.monotonic() + 45
+    first = origin.clocks.validate_reading(origin.clocks.observe())
+    owner = Owner(local_end, first=first, cancelled=lambda: cancellation(cancelled))
+    fence = target = result_raw = None
+    try:
+        require(not QUARANTINE and not query.QUARANTINE and not diagnostics._QUARANTINE, "BOOTSTRAP_PRIOR_UNKNOWN")
+        require(origin.wire.TOKEN_ENV not in os.environ, "BOOTSTRAP_ADOPTION_TOKEN_FORBIDDEN")
+        require(os.environ.get(PREPARE_OUTCOME_ENV) == "success", "BOOTSTRAP_PREPARE_ORIGINAL_OUTCOME")
+        expected_hash = os.environ.get(PREPARE_HASH_ENV)
+        require(type(expected_hash) is str and re.fullmatch(r"[0-9a-f]{64}", expected_hash), "BOOTSTRAP_PREPARE_ORIGINAL_HASH")
+        owner.end()
+        selection, path, event = host_inputs(first.clock.role)
+        inherited = query._inherited_context()
+        child_environment(path)  # Same execution-override refusal; never forwards the prepare inputs.
+        owner.end()
+        private = owner.open(path)
+        handoff_raw = owner.read(private, "prepare-handoff.json")
+        require(origin.digest(handoff_raw) == expected_hash, "BOOTSTRAP_PREPARE_ORIGINAL_HASH_CHANGED")
+        handoff = handoff_record(handoff_raw, first.clock)
+        # Never replace the earliest observation with a later recovered clock.
+        require(first.nanoseconds >= handoff["recordedNs"], "BOOTSTRAP_ADOPTER_PRECEDES_HANDOFF")
+        # Conservative same-PID refusal is not a native liveness/retirement proof.
+        require(os.getpid() != handoff["processIdentity"]["pid"], "BOOTSTRAP_ADOPTER_SAME_PROCESS")
+        context_raw = owner.read(private, "context.json")
+        prelude_raw = owner.read(private, "prelude.json")
+        fence = origin.Fence(origin.parse(prelude_raw), minimum=first.nanoseconds, cancelled=lambda: cancellation(cancelled))
+        require(first.clock == fence.clock and prelude_raw == fence.raw, "BOOTSTRAP_ADOPTION_CLOCK_CHANGED")
+        owner.bind(fence, work_limit=fence.work, final_limit=fence.final)
+        admitted, context, before = prepared_content(owner, private, handoff_raw, context_raw, fence)
+        require(context["selection"] == selection and admitted.original_event == event and
+                context["runnerName"] == os.environ.get("RUNNER_NAME") and context["inheritedContext"] == inherited,
+                "BOOTSTRAP_ADOPTION_HOST_INPUTS_CHANGED")
+        target = owner.new(path.with_name(path.name + "-adoption"))
+        # Actual native/source/main/policy re-admission is WORK, not a finalizer.
+        current, returned = admit(owner, fence, target.path / "admission", expected=admitted)
+        owner.write(target, "admission-return.json", returned)
+        _, current_hashes = admission_originals(owner, target, current, fence, read_final=False)
+        again, current_context, after = prepared_content(owner, private, handoff_raw, context_raw, fence)
+        require(again == admitted and current_context == context and
+                origin.encoded({**after, "originalChain": {**after["originalChain"],
+                    "revalidatedNs": before["originalChain"]["revalidatedNs"]}}) == origin.encoded(before),
+                "BOOTSTRAP_ADOPTION_CHANGED_DURING_READMISSION")
+        result_raw = owner.write(target, "adoption-result.json", {"schema": 1, "scope": ADOPTION_SCOPE,
+            "prepareOutcome": "success", "originals": after, "prelude": origin.parse(fence.raw),
+            "clock": origin.clock_value(fence.clock), "beganNs": first.nanoseconds, "metadataLastNs": owner.early_last,
+            "readmission": current_hashes, "readmissionReturnedNs": returned["returnedNs"], "retainedNs": fence.now(),
+            "retirement": "PENDING_OWNER_CLOSE", "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED",
+            "exportSaveAuthority": False})
+    except BaseException as error:
+        owner.error("adopt-originals", error)
+        if target is not None and not owner.unknown:
+            try:
+                owner.write(target, "adoption-failure.json", {"schema": 1, "result": "HOLD", "errors": owner.errors,
+                    "retirement": "PENDING_OWNER_CLOSE", "budgetAcceptance": "NOT_ADMITTED"}, final=True)
+            except BaseException as secondary:
+                owner.error("adoption-failure-retention", secondary)
+    finally:
+        try:
+            owner.close()
+        except BaseException as error:
+            owner.error("adoption-close", error)
+    if owner.original is not None:
+        raise owner.original
+    require(result_raw is not None and not owner.unknown and fence is not None, "BOOTSTRAP_ADOPTION_INCOMPLETE")
+    posix._deadline(owner.local_end)
+    fence.now(final=True)
+    cancellation(cancelled)
+    return public_result(ADOPTION_SCOPE, "adoptionSha256", result_raw), fence, fence.final
 
 
 def guarded(operation):
@@ -913,6 +1213,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="operation", required=True)
     commands.add_parser("prepare-originals")
+    commands.add_parser("adopt-originals")
     child = commands.add_parser("_service")
     child.add_argument("--context-sha256", required=True)
     child.add_argument("--minimum-ns", required=True)
@@ -922,6 +1223,8 @@ def main():
                 "BOOTSTRAP_ISOLATED_INTERPRETER_REQUIRED")
         if args.operation == "prepare-originals":
             guarded(prepare_originals)
+        elif args.operation == "adopt-originals":
+            guarded(adopt_originals)
         else:
             require(re.fullmatch(r"0|[1-9][0-9]{0,19}", args.minimum_ns), "BOOTSTRAP_LAUNCH_MINIMUM")
             minimum = origin.integer(int(args.minimum_ns))

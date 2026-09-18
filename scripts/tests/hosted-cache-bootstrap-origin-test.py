@@ -807,8 +807,11 @@ class ControllerTests(HttpFixtures, OfflineCase):
     def make_scope(self, job, invocation, state, home):
         case = self
         class Scope:
+            name = "linux-proc-pidfd"
             baseline = set()
             def __init__(self): self.launches, self.closed, self.descriptions = [], False, 0
+            def _identity(self, pid):
+                return {"pid": pid, "startTicks": 9012, "live": True}
             def spawn(self, argv, cwd, env, *, stdout, stderr):
                 case.child_envs.append(dict(env))
                 case.assertEqual(env[O.wire.TOKEN_ENV], TOKEN)
@@ -873,7 +876,7 @@ class ControllerTests(HttpFixtures, OfflineCase):
     def test_complete_actual_source_composition_retains_originals_without_product_authority(self):
         result, fence, end = S.prepare_originals(self.cancelled)
         self.assertFalse(self.child_errors, self.child_errors)
-        self.assertEqual(result["scope"], "BOOTSTRAP_ORIGINALS_PENDING_CALLER_RETURN_V1")
+        self.assertEqual(result["scope"], "BOOTSTRAP_PREPARE_HANDOFF_PENDING_STEP_RETURN_V1")
         self.assertEqual(result["budgetAcceptance"], "NOT_ADMITTED")
         self.assertIs(result["exportSaveAuthority"], False)
         self.assertEqual(end, fence.first + 120 * O.NS)
@@ -882,8 +885,9 @@ class ControllerTests(HttpFixtures, OfflineCase):
         self.assertEqual(len(self.requests), 2)
         self.assertEqual(len(self.admissions), 2)
         path = self.admissions[0].parent
-        receipt = (path / "origin-result.json").read_bytes()
-        self.assertEqual(O.digest(receipt), result["provisionalSha256"])
+        handoff_raw = (path / "prepare-handoff.json").read_bytes()
+        self.assertEqual(O.digest(handoff_raw), result["handoffSha256"])
+        self.assertEqual(O.parse(handoff_raw)["originSha256"], O.digest((path / "origin-result.json").read_bytes()))
         self.assertNotIn(TOKEN.encode(), b"".join(p.read_bytes() for p in path.rglob("*") if p.is_file()))
         self.assertFalse((path / "state").exists())
         self.assertNotIn(O.wire.TOKEN_ENV, os.environ)

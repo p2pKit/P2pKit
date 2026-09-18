@@ -207,8 +207,9 @@ The final source/main/policy admission is an actual caller step, not a digest
 comparison. Native query and HTTP suppliers are **modeled**, not executed, by
 the tests below.
 
-The public operation is only `prepare-originals`. There is no independent
-cross-process adoption CLI or trusted workflow yet. Child/parent outputs stay
+At this increment the public operation was only `prepare-originals`; the later
+18 September read-only handoff/adoption slice below is separate. No trusted
+workflow exists yet. Child/parent outputs stay
 provisional until their actual calls return; any later adopter must bind the
 trusted workflow's **exact original prepare-step outcome**, not a caller flag
 or normalized conclusion. No original can attest its own later close/return.
@@ -338,6 +339,101 @@ Private packet `20260917-ordinary-http-close-lc_u3bnu` retains command/exit/log/
 manifest originals on this device; independent reviewer originals remain
 separate. This is source/offline evidence, not formal GitHub approval, measured
 scheduling, native/provider qualification, cache population or Release delivery.
+
+## 18 September: private handoff and read-only adoption
+
+The separate bootstrap caller now has a private post-original-owner-close
+handoff and a dormant `adopt-originals` operation. It does **not** create a
+workflow, productive controller or admitted job budget. The
+[maintained handoff contract](../testing/hosted-dependency-cache.md#private-handoff-and-read-only-adoption)
+distinguishes the actual original-call registries from later supplied-record
+validation. Disk data never repopulates a returned native-phase/admission registry.
+
+The preparer records original native directory identities and its native lifetime
+through the existing service scope. A fresh, small owner exclusively writes the
+private handoff only after the original preparation owner successfully closes.
+The original120-second final fence still applies, with a local45-second writer
+ceiling; no new work/job allowance is created. Only finite non-authority fields
+and a hash reach public preparation output, not raw clock/native/path records.
+The handoff cannot observe its own later writer close, handler restoration,
+output flush or successful command/step return.
+
+The adopter requires the exact original prepare outcome and handoff hash at a
+**dormant, not-workflow-wired input boundary**. A future reviewed workflow must
+provide the fixed prepare step's `outcome`, never its normalized `conclusion`.
+Matching environment values or self-consistent files do not attest a real GitHub
+caller. Same-PID refusal is conservative policy, not native retirement proof.
+
+The reader retains its earliest shared-clock observation and all metadata
+high-waters; a later recovered reading cannot hide a first read before the
+private handoff. Initial metadata I/O is capped at45 seconds and can only be
+shortened when binding the original prelude. Actual native/source/main/policy
+re-admission is **work inside the original75-second cutoff**, not finalization.
+New admission/reader receipts go into a separate exclusive sibling; original
+preparation records and directory identities are reread unchanged before/after
+that admission. No second HTTP acquisition or acquisition-token inheritance
+occurs. Both receipt/hash outputs stay provisional through their actual return.
+
+### Executed offline controls and retained intermediate outcomes
+
+Installed Linux Python3.12.3, actual UID65534, exact read-only source fixtures:
+
+```bash
+timeout --kill-after=5s 90s runuser -u nobody -- \
+  python3 -I -B -S <exact-read-only-source-copy>/scripts/tests/hosted-cache-bootstrap-handoff-test.py -v
+timeout --kill-after=5s 90s runuser -u nobody -- \
+  python3 -I -B -S <exact-read-only-source-copy>/scripts/tests/hosted-cache-bootstrap-origin-test.py -v
+```
+
+The first implementation-review freeze passed **39/39 handoff methods** and
+**74/74 affected original-acquisition methods**, with unchanged before/after
+source manifests. Native process/query, shared clock and HTTP/TLS suppliers are
+models; only tiny POSIX private files/capture descriptors are real. The modeled
+different PID does not execute or attest a second native process. No Git child,
+GPG, provider/cache, Java/Gradle/application, dependency or SDK execution ran.
+
+- The incoming four-method draft had **four failed assertions, zero errors**
+  before completion. Its initial public-clock design was deliberately discarded
+  in favor of a private handoff. It is **not an unchanged final regression oracle**.
+- The first coherent33-method aggregate had **two failures/two errors**. New
+  tests expected `ValueError` where the unchanged private-file supplier returns
+  `EvidenceError`; a changed-attempt fixture correctly failed with missing-path
+  `FileNotFoundError`, then its shared next subcase hit the existing conservative
+  UNKNOWN quarantine. The tests now assert the actual typed boundary and isolate
+  the changed-attempt episode. No production guard, deadline or assertion was
+  relaxed to admit those cases. That failed aggregate remains retained.
+- Six additional methods cover the isolated attempt, closed handoff records,
+  environment non-inheritance, late public flush, cancellation after receipt and
+  failed handler restoration. The final39/74 commands above ran after these
+  additions; the earlier33 is not a separately accepted aggregate.
+
+The nonimplementing reviewer issued
+**APPROVE_EXACT_DORMANT_BOOTSTRAP_PRIVATE_HANDOFF_READ_ONLY_ADOPTION_SOURCE_OFFLINE_ONLY**
+against the exact three-file implementation/test patch. Independent controls
+passed **18/18**, plus overlapping guarded author replays **39/39 and 74/74**;
+replays are not additional distinct coverage. The reviewer exercised the actual
+outer `admit()` wrapper with a modeled native supplier. The guarded fixture used
+actual UID/EUID65534, prohibited real process/network/native API/clock operations
+and retained unchanged hashes for all 1,396 source/control files.
+
+The first independent launch exited2 before opening the Python runner because
+root's umask077 left the fixture directories0700. Its logs/manifest remain
+retained; only read/traverse permissions were corrected before the unchanged
+controls ran. It is not an implementation failure or an earlier test pass.
+
+After normal push/readback, record the exact complete-patch/report hashes, final
+document review, static checks and containing commit/tree in #437/shared #424.
+No formal GitHub PR approval, hosted/provider/native acceptance, scheduling
+measurement or Release delivery follows from this source/offline approval.
+
+Private packet `20260918-bootstrap-adoption-2mpPieEG` retains the unfinished
+incoming snapshot, discarded draft, all commands/exits/logs/manifests and frozen
+review inputs. These are modeled source-test originals on this device, not the
+unavailable previous-Mac runtime originals. Protected instructions, shared
+executable suppliers/composition expectations, workflows and both activation
+HOLDs are unchanged. No production caller invokes `cache.export_snapshot` or
+`cache.save_set`; the separate execution/budget/producer/retirement/provider/
+encrypted-custody path below remains unfinished.
 
 ## Next engineering and unchanged authority boundaries
 

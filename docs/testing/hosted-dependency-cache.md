@@ -112,9 +112,10 @@ as executions at that checkpoint.
 [`run-hosted-cache-bootstrap.py`](../../scripts/run-hosted-cache-bootstrap.py)
 and [`hosted_cache_bootstrap_origin.py`](../../scripts/hosted_cache_bootstrap_origin.py)
 add a **dormant, not-workflow-wired original-acquisition slice**. Its sole public
-operation is `prepare-originals`; `_service` is the closed native-child entry,
-not a local identity override or standalone adoption command. No environment
-impersonation or execution is authorized by this documentation.
+acquisition operation is `prepare-originals`; the later `adopt-originals` operation
+only revalidates retained originals. `_service` is the closed native-child entry,
+not a local identity override. No environment impersonation or execution is
+authorized by this documentation.
 
 The source-proposed prelude caps are **120 seconds final /75 seconds new work**,
 explicitly **UNMEASURED / NOT_ADMITTED**, not part of an admitted 5,400-second
@@ -154,14 +155,61 @@ original phase final fence, not a newly started or prematurely ending IO45
 allowance; their allocation still checks the original work cutoff.
 
 The chain is acyclic: child provisional terminal → post-close ACK → separately
-observed native return/retirement → parent provisional receipt. Internal
+observed native return/retirement → parent provisional receipt → private
+post-original-owner-close handoff. Internal
 revalidation is **repeatable read-only within that owning call**. It requires
 that owner's original returned phase/admission objects and exact retained
 prelude/session/baseline/response bytes; copied data or a caller success flag
-does not create provenance. No cross-process execution-adoption entry exists.
+does not create provenance. The separate reader below never populates those
+original-call registries from disk. No cross-process **execution** adoption exists.
 A future trusted workflow must bind the **exact original prepare-step outcome**,
 not its normalized conclusion or the provisional receipt/digest, before any
 downstream adoption. No receipt can observe its own later successful return.
+
+### Private handoff and read-only adoption
+
+Preparation binds the original native session/child-directory identities and
+native preparer lifetime, not merely paths or a PID. The existing service scope
+observes that preparer before launch and before its close; Windows uses a
+nonowning current-process pseudo-handle, not another acquired process handle.
+The parent receipt retains those bindings. After its original owner actually
+closes successfully, a fresh small owner reopens only those original directories
+and exclusively writes private `prepare-handoff.json`. It records the original
+post-close clock observation and original receipt/context hashes.
+
+That handoff writer has at most45 seconds, shortened by the **remaining original
+120-second final fence**. It grants no new work/job allowance. Its own subsequent
+close and command/step return are still unobserved by its file; a later failure
+cannot be rehabilitated from provisional bytes. Public preparation output
+contains only a closed scope, handoff hash and explicit non-authority fields,
+**not private native, clock, path or runner records**.
+
+The dormant `adopt-originals` input boundary requires
+`P2PKIT_BOOTSTRAP_PREPARE_OUTCOME == success` and the original handoff hash in
+`P2PKIT_BOOTSTRAP_PREPARE_SHA256`. These must eventually be supplied by a fixed,
+reviewed workflow from the actual prepare step's **outcome**, never its normalized
+conclusion. **No workflow currently establishes that trusted wiring.** Environment
+values, matching digests and consistent supplied records cannot authorize
+themselves; offline models do not attest a GitHub caller.
+
+The reader carries its **first** shared-clock observation and every pre-frame
+metadata high-water into the original prelude. A first observation preceding
+the handoff fails even if a later clock recovers. Initial metadata I/O has a
+local45-second ceiling which frame binding can only shorten. Readmission is
+**work inside the original75-second cutoff**, not an extension using the final
+120-second cleanup interval. Actual source/main/policy/native re-admission uses
+the existing owned query supplier. It records new originals in a separate
+exclusive sibling episode; it never modifies preparation originals, reacquires
+the two HTTP responses, or inherits the acquisition token. The entire original
+chain and directory identities are reread before and after that admission.
+
+Same-PID adoption is conservatively refused; this is **not** native proof of
+preparer liveness, absence or complete retirement. The proposed workflow's actual
+successful original step outcome remains essential. The adoption receipt/public
+hash are themselves provisional until their own close/handler/output/command
+returns succeed. Adoption remains `NOT_ADMITTED`, tests `NOT_PERFORMED`, and
+export/save authority false. No canonical initializer, producer, cache/provider
+execution, admitted job budget or encrypted custody/seal is added by this reader.
 
 There is still no canonical initializer/producer launcher, seed/export/save/probe
 caller, encrypted export/seal/upload, or productive/job-budget acceptance here.
@@ -352,6 +400,7 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-cohort-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-producer-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-query-fence-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-origin-test.py
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-handoff-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
@@ -362,7 +411,7 @@ python3 -I -B -S scripts/tests/hosted-desktop-job-budget-test.py
 These use modeled provider/native boundaries and tiny synthetic owned files, no
 dependency download or Gradle. The connected/budget controls are registered in the
 unconditional ordinary CI policy step and both release script entry points.
-The separate bootstrap identity/cohort/producer-record/query-fence/original-acquisition
+The separate bootstrap identity/cohort/producer-record/query-fence/original-acquisition/handoff
 controls are standalone, not an activated or registered bootstrap workflow.
 Tiny private-file controls require an actual ordinary UID; root is not an
 acceptable substitute and their modeled native boundaries are not host admission.
