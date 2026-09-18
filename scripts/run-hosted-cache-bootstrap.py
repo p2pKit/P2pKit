@@ -18,6 +18,7 @@ import signal
 import stat
 import subprocess
 import sys
+import threading
 import time
 import uuid
 
@@ -88,6 +89,11 @@ IDENTITY_ENV = (
 )
 BACKENDS = {"linux-x64": "linux-proc-pidfd", "windows-x64": "windows-job-list-suspended",
             "macos-arm64": "darwin-libproc-audit-token", "macos-x64": "darwin-libproc-audit-token"}
+NEW_ENTRY_SCOPE = "BOOTSTRAP_NEW_ENTRY_READMISSION_CLOSED_NO_EXECUTION_V1"
+NEW_ENTRY_PENDING_SCOPE = "BOOTSTRAP_NEW_ENTRY_READMISSION_PENDING_CLOSE_V1"
+NEW_ENTRY_WINDOW_SCOPE = "BOOTSTRAP_NEW_ENTRY_SOURCE_CAP_NOT_JOB_ADMISSION_V1"
+_ENTRY_CLAIM_LOCK = threading.Lock()
+_ENTRY_ATTEMPTS = {}
 
 
 @dataclass(frozen=True)
@@ -132,6 +138,49 @@ class ClosedEntryTransition:
     _callbacks: tuple = field(repr=False, compare=False)
     _snapshot: tuple = field(repr=False, compare=False)
     _retained_ns: int = field(repr=False)
+    _preclose_ns: int = field(repr=False)
+    _closed_ns: int = field(repr=False)
+    _checked_ns: int = field(repr=False)
+
+
+@dataclass(eq=False)
+class _EntryAttempt:
+    """Strong, once-claimed in-call references, including unsuccessful attempts."""
+    transition: object = field(repr=False)
+    originals: tuple = field(repr=False)
+    state: str = "CLAIMED"
+    first: object = field(default=None, repr=False)
+    window: object = field(default=None, repr=False)
+    owner: object = field(default=None, repr=False)
+    callback: object = field(default=None, repr=False)
+    bindings: object = field(default=None, repr=False)
+    local_start: object = field(default=None, repr=False)
+    local_end: object = field(default=None, repr=False)
+    target: object = field(default=None, repr=False)
+    private: object = field(default=None, repr=False)
+    previous_target: object = field(default=None, repr=False)
+    admitted: object = field(default=None, repr=False)
+    returned: object = field(default=None, repr=False)
+    admission_originals: object = field(default=None, repr=False)
+    preparation: object = field(default=None, repr=False)
+    target_identity: object = field(default=None, repr=False)
+    retained_ns: object = field(default=None, repr=False)
+    pending_raw: object = field(default=None, repr=False)
+    failure_raw: object = field(default=None, repr=False)
+    resources: tuple = field(default=(), repr=False)
+    snapshot: object = field(default=None, repr=False)
+    original: object = field(default=None, repr=False)
+    errors: list = field(default_factory=list, repr=False)
+    unknown: bool = False
+    failure_custody: str = "UNAVAILABLE"
+    result: object = field(default=None, repr=False)
+
+
+@dataclass(frozen=True)
+class NewEntryTransition:
+    """Returned new-entry resource close only, NOT producer or job admission."""
+    raw: bytes = field(repr=False)
+    _attempt: object = field(repr=False, compare=False)
     _preclose_ns: int = field(repr=False)
     _closed_ns: int = field(repr=False)
     _checked_ns: int = field(repr=False)
@@ -392,6 +441,140 @@ class _LegacyOriginalReader:
                 (final or self.owner.original is None), "BOOTSTRAP_LEGACY_READER_NOT_LIVE")
         # Keep this actual observation at the old call site. Data validation
         # cannot replace it or transfer any local/current high-water to history.
+        return self.current.now(final=final, minimum=minimum)
+
+
+@dataclass(frozen=True)
+class _NewEntryWindow:
+    """Only this claimed entry's inclusive120/75+45 cap; no job authority.
+
+    This is deliberately NOT origin.Fence and contains no reissued prelude.
+    The fixed work/final fields also constrain the existing native admit()
+    supplier itself, not merely the outer Owner's I/O or cancellation callback.
+    """
+    attempt: object = field(repr=False, compare=False)
+    clock: object = field(init=False, repr=False)
+    first: int = field(init=False, repr=False)
+    work: int = field(init=False, repr=False)
+    final: int = field(init=False, repr=False)
+    phase_end: int = field(init=False, repr=False)
+    last: int = field(init=False, repr=False, compare=False)
+    cancelled: object = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self):
+        _entry_claim_identity(self.attempt)
+        require(self.attempt.state == "CLAIMED" and self.attempt.window is None,
+                "BOOTSTRAP_NEW_ENTRY_WINDOW_ALREADY_CREATED")
+        clock, first, work, final, phase_end = _new_entry_limits(self.attempt)
+        for name, value in (("clock", clock), ("first", first), ("work", work),
+                             ("final", final), ("phase_end", phase_end), ("last", first)):
+            object.__setattr__(self, name, value)
+        require(callable(self.attempt.callback), "BOOTSTRAP_NEW_ENTRY_CALLBACK")
+        object.__setattr__(self, "cancelled", self.attempt.callback)
+
+    def checked(self):
+        _entry_claim_identity(self.attempt)
+        require(type(self) is _NewEntryWindow and self.attempt.window is self and
+                self.attempt.state in ("CLAIMED", "READING", "CLOSING", "COMPLETE", "FAILED"),
+                "BOOTSTRAP_NEW_ENTRY_WINDOW_NOT_CURRENT")
+        expected = _new_entry_limits(self.attempt)
+        actual = (self.clock, self.first, self.work, self.final, self.phase_end)
+        require(all(type(a) is type(b) and a == b for a, b in zip(actual, expected)) and
+                origin.integer(self.last, self.first) == self.last and self.cancelled is self.attempt.callback,
+                "BOOTSTRAP_NEW_ENTRY_WINDOW_CHANGED")
+        owner = self.attempt.owner
+        if owner is not None:
+            _new_entry_roster(self.attempt)
+            require(type(owner) is Owner and owner is not self.attempt.transition._owner and
+                    owner.fence is self and owner.first is self.attempt.first and
+                    type(owner.local_end) is float and owner.local_end == self.attempt.local_end and
+                    owner.work_limit is None and owner.final_limit is None and
+                    owner.cancelled is self.cancelled and
+                    owner.early_last == self.first and type(self.attempt.bindings) is tuple and
+                    len(self.attempt.bindings) == 8 and
+                    all(a is b for a, b in zip((owner, self, self.attempt.first, self.cancelled),
+                                               self.attempt.bindings[:4])) and
+                    owner.local_end == self.attempt.bindings[4] and
+                    all(a is b for a, b in zip((owner.admissions, owner.resources, owner.errors),
+                                               self.attempt.bindings[5:])), "BOOTSTRAP_NEW_ENTRY_OWNER_CHANGED")
+        return self
+
+    def now(self, *, final=False, minimum=0, limit=None):
+        self.checked()
+        require(type(final) is bool and self.attempt.state not in ("COMPLETE", "FAILED"),
+                "BOOTSTRAP_NEW_ENTRY_NOT_LIVE")
+        now = origin.clocks.checked_now(self.clock, minimum_ns=max(self.last, origin.integer(minimum)))
+        # Keep the actual observation BEFORE expiry, cancellation or conversion.
+        object.__setattr__(self, "last", now)
+        ceiling = self.final if final else self.work
+        if limit is not None:
+            ceiling = min(ceiling, origin.integer(limit))
+        require(now < ceiling, "BOOTSTRAP_NEW_ENTRY_FENCE_EXPIRED")
+        if not final:
+            self.cancelled()
+        self.checked()
+        require(self.last == now, "BOOTSTRAP_NEW_ENTRY_HIGHWATER_CHANGED")
+        return now
+
+    def deadline(self, maximum, *, final=False, limit=None):
+        require(type(maximum) in (int, float), "BOOTSTRAP_OPERATION_MAXIMUM")
+        try:
+            maximum = float(maximum)
+        except (ValueError, OverflowError):
+            raise origin.OriginError("BOOTSTRAP_OPERATION_MAXIMUM") from None
+        require(math.isfinite(maximum) and maximum > 0, "BOOTSTRAP_OPERATION_MAXIMUM")
+        # Owner.acquire registered any just-returned resource before end().
+        # Capture it before even the LOCAL clock supplier can fail or mutate.
+        self.checked()
+        local = time.monotonic()
+        now = self.now(final=final, limit=limit)
+        ceiling = self.final if final else self.work
+        if limit is not None:
+            ceiling = min(ceiling, origin.integer(limit))
+        result = origin.wire._directed_deadline(local, maximum, ceiling, now)
+        self.checked()
+        require(self.last == now, "BOOTSTRAP_NEW_ENTRY_HIGHWATER_CHANGED")
+        return result
+
+    def record(self):
+        self.checked()
+        return {"scope": NEW_ENTRY_WINDOW_SCOPE, "clock": origin.clock_value(self.clock),
+                "firstNs": self.first, "workEndNs": self.work, "finalEndNs": self.final,
+                "originalPhaseEndNs": self.phase_end, "maximumSeconds": 120,
+                "newWorkSeconds": 75, "reservedCleanupSeconds": 45,
+                "budgetAcceptance": "NOT_ADMITTED"}
+
+
+@dataclass(frozen=True)
+class _NewEntryOriginalReader:
+    """Only the exact in-progress claim can view originals under its NEW owner."""
+    attempt: object = field(repr=False, compare=False)
+    owner: object = field(init=False, repr=False, compare=False)
+    current: object = field(init=False, repr=False, compare=False)
+    past: object = field(init=False, repr=False)
+    first: object = field(init=False, repr=False)
+
+    def __post_init__(self):
+        _new_entry_live(self.attempt)
+        transition = self.attempt.transition
+        for name, value in (("owner", self.attempt.owner), ("current", self.attempt.window),
+                             ("past", history.snapshot(transition._fence)),
+                             ("first", transition._owner.first)):
+            object.__setattr__(self, name, value)
+
+    def checked(self):
+        _new_entry_live(self.attempt)
+        transition = self.attempt.transition
+        require(type(self) is _NewEntryOriginalReader and self.owner is self.attempt.owner and
+                self.current is self.attempt.window and self.first is transition._limits[8] and
+                self.first is transition._owner.first and self.first is not self.owner.first and
+                history.checked(self.past) == history.snapshot(transition._fence),
+                "BOOTSTRAP_NEW_ENTRY_READER_CHANGED")
+        self.current.checked()
+        return self
+
+    def observe(self, *, final, minimum):
+        self.checked()
         return self.current.now(final=final, minimum=minimum)
 
 
@@ -873,7 +1056,7 @@ def chain_content(owner, private, context_raw, admitted, records, returned, admi
 
 
 def _read_chain(reader, private, context_raw, admitted, records, returned, admission_hashes, *, final):
-    require(type(reader) is _LegacyOriginalReader, "BOOTSTRAP_ORIGINAL_READER_KIND")
+    require(type(reader) in (_LegacyOriginalReader, _NewEntryOriginalReader), "BOOTSTRAP_ORIGINAL_READER_KIND")
     reader.checked()
     owner, past = reader.owner, reader.past
     require(type(records) is dict and set(records) == PHASE_FILES and
@@ -1158,7 +1341,8 @@ def prepared_content(owner, private, handoff_raw, context_raw, fence):
 
 
 def _read_prepared(reader, private, handoff_raw, context_raw):
-    require(type(reader) is _LegacyOriginalReader and reader.first is not None, "BOOTSTRAP_ADOPTION_READER")
+    require(type(reader) in (_LegacyOriginalReader, _NewEntryOriginalReader) and reader.first is not None,
+            "BOOTSTRAP_ADOPTION_READER")
     reader.checked()
     owner, past = reader.owner, reader.past
     owner.end()
@@ -1559,6 +1743,491 @@ def close_entry_transition(owner, target, entry, fence):
         owner.error("entry-close-postreturn", error)
         _entry_close_preserve_uncertainty(owner, snapshot)
         raise owner.original
+
+
+def _new_entry_original_pins(transition):
+    entry = transition._entry
+    first = transition._owner.first
+    return ((transition.raw, transition.pending_raw, transition.proposal_raw, transition.responses,
+             transition._retained_ns, transition._preclose_ns, transition._closed_ns, transition._checked_ns,
+             entry.raw, entry.session, entry.session_original, entry.return_original, entry.handoff_original,
+             entry.context_original, entry.preparation_original, first.nanoseconds,
+             (first.clock.role, first.clock.domain, first.clock.ticks_per_second)),
+            (entry, transition._owner, transition._fence, transition._limits, transition._callbacks,
+             transition._snapshot, entry.admitted, entry._private, entry._target, entry._owner, entry._fence,
+             first, transition._owner.admissions, transition._owner.admissions.get(str(entry._target.path / "admission"))))
+
+
+def _entry_attempt_record(attempt):
+    """Find the actual retained claim without trusting mutable attempt fields.
+
+    In particular, rejection/cleanup must not look up the owner through a
+    changed transition. Value-equal/copied attempts cannot select this record.
+    """
+    require(type(attempt) is _EntryAttempt, "BOOTSTRAP_NEW_ENTRY_NOT_CLAIMED")
+    # Never hold this lock across a clock, callback, parsing or owned operation.
+    with _ENTRY_CLAIM_LOCK:
+        matches = [record for record in _ENTRY_ATTEMPTS.values() if type(record) is tuple and
+                   len(record) == 4 and record[1] is attempt]
+    require(len(matches) == 1, "BOOTSTRAP_NEW_ENTRY_NOT_CLAIMED")
+    return matches[0]
+
+
+def _entry_claim_identity(attempt):
+    registered = _entry_attempt_record(attempt)
+    require(type(registered) is tuple and len(registered) == 4 and registered[0] is attempt.transition and
+            registered[1] is attempt and registered[2] is attempt.originals and registered[3] is attempt.bindings,
+            "BOOTSTRAP_NEW_ENTRY_NOT_CLAIMED")
+    if registered[3] is not None:
+        pins = registered[3]
+        require(all(a is b for a, b in zip((attempt.owner, attempt.window, attempt.first, attempt.callback), pins[:4])) and
+                type(attempt.local_end) is float and attempt.local_end == pins[4], "BOOTSTRAP_NEW_ENTRY_OWNER_CHANGED")
+    transition = attempt.transition
+    require(transition._owner.entry_close_original is transition, "BOOTSTRAP_ENTRY_CLOSE_NOT_CURRENT_RETURN")
+    values, references = _new_entry_original_pins(transition)
+    require(all(type(a) is type(b) and a == b for a, b in zip(values, attempt.originals[0])) and
+            all(a is b for a, b in zip(references, attempt.originals[1])), "BOOTSTRAP_NEW_ENTRY_ORIGINAL_CHANGED")
+    _entry_close_state(transition)
+    history.snapshot(transition._fence)
+    require(transition._fence.last == transition._checked_ns and
+            transition._limits[8] is transition._owner.first, "BOOTSTRAP_NEW_ENTRY_ORIGINAL_CLOCK_CHANGED")
+    return attempt
+
+
+def _claim_closed_entry(transition):
+    # Invalid/foreign inputs cannot consume the original or assume its cleanup.
+    check_closed_entry_transition(transition)
+    require(type(transition._entry) is OriginalEntry and type(transition._fence) is origin.Fence and
+            type(transition._limits) is tuple and len(transition._limits) == 10 and
+            type(transition._callbacks) is tuple and len(transition._callbacks) == 2 and
+            all(callable(callback) for callback in transition._callbacks), "BOOTSTRAP_NEW_ENTRY_ORIGINAL_KIND")
+    first = origin.clocks.validate_reading(transition._limits[8])
+    require(first is transition._owner.first and first.clock == transition._fence.clock and
+            first.nanoseconds == origin.parse(transition._entry.raw)["window"]["adopterFirstNs"],
+            "BOOTSTRAP_NEW_ENTRY_ORIGINAL_FIRST")
+    entry = transition._entry
+    registered = transition._owner.admissions.get(str(entry._target.path / "admission"))
+    require(type(registered) is tuple and len(registered) == 3 and registered[0] is entry.admitted and
+            registered[1:] == (entry.session_original, entry.return_original) and
+            all(any(resource is directory for _, _, resource in transition._snapshot[1])
+                for directory in (entry._private, entry._target)), "BOOTSTRAP_NEW_ENTRY_ORIGINAL_REGISTRY")
+    phase_end = origin.integer(origin.parse(transition.proposal_raw)["phaseFencesNs"]["productive-entry"])
+    pins = (*_new_entry_original_pins(transition), phase_end)
+    attempt = _EntryAttempt(transition, pins)
+    with _ENTRY_CLAIM_LOCK:
+        require(id(transition) not in _ENTRY_ATTEMPTS, "BOOTSTRAP_NEW_ENTRY_ALREADY_CLAIMED")
+        _ENTRY_ATTEMPTS[id(transition)] = (transition, attempt, pins, None)
+    return attempt
+
+
+def _new_entry_owner(attempt):
+    # Cleanup uses the independently retained actual constructor return, never
+    # a changed attempt.owner or equal/copy owner supplied by a callback.
+    registered = _entry_attempt_record(attempt)
+    return None if registered[3] is None else registered[3][0]
+
+
+def _new_entry_limits(attempt):
+    _entry_claim_identity(attempt)
+    first = origin.clocks.validate_reading(attempt.first)
+    transition = attempt.transition
+    require(first is not transition._owner.first and first.clock == transition._fence.clock and
+            first.nanoseconds >= transition._checked_ns, "BOOTSTRAP_NEW_ENTRY_FIRST_CLOCK")
+    # The proposal is already rederived by the original close check; its bytes
+    # and this extracted end are pinned to this claim. Live originals are also
+    # reread/rederived below. No allocationStartBasisNs wait or renewed job end.
+    phase_end = attempt.originals[2]
+    final = min(origin.integer(first.nanoseconds + 120 * origin.NS), phase_end)
+    work = min(origin.integer(first.nanoseconds + 75 * origin.NS),
+               origin.integer(final - 45 * origin.NS))
+    require(first.nanoseconds < work, "BOOTSTRAP_NEW_ENTRY_NO_WORK_INTERVAL")
+    return first.clock, first.nanoseconds, work, final, phase_end
+
+
+def _new_entry_cancel(attempt):
+    _entry_claim_identity(attempt)
+    for callback in attempt.transition._callbacks:
+        callback()
+        _entry_claim_identity(attempt)
+        if attempt.window is not None:
+            attempt.window.checked()
+
+
+def _new_entry_live(attempt):
+    _entry_claim_identity(attempt)
+    require(attempt.state == "READING" and type(attempt.owner) is Owner and
+            attempt.owner.closed is False and attempt.owner.unknown is False and attempt.owner.original is None and
+            attempt.owner.errors == [] and attempt.owner.phase_originals is None and
+            attempt.owner.entry_original is None and attempt.owner.entry_close_attempted is False and
+            attempt.owner.entry_close_original is None and attempt.owner.entry_close_snapshot is None and
+            not QUARANTINE and not query.QUARANTINE and not diagnostics._QUARANTINE,
+            "BOOTSTRAP_NEW_ENTRY_NOT_LIVE")
+    attempt.window.checked()
+    return attempt.owner
+
+
+def _new_entry_paths(attempt):
+    entry = attempt.transition._entry
+    context = origin.parse(entry.context_original)
+    path = Path(context["session"])
+    previous, target = (path.with_name(path.name + suffix) for suffix in ("-adoption", "-entry"))
+    require(context["root"] == str(ROOT) and entry._private.path == path and entry._target.path == previous and
+            entry.session == str(previous), "BOOTSTRAP_NEW_ENTRY_PATH_CHANGED")
+    return path, previous, target
+
+
+def _new_entry_host(attempt):
+    owner = _new_entry_live(attempt)
+    owner.end()
+    require(not QUARANTINE and not query.QUARANTINE and not diagnostics._QUARANTINE, "BOOTSTRAP_PRIOR_UNKNOWN")
+    require(origin.wire.TOKEN_ENV not in os.environ, "BOOTSTRAP_ADOPTION_TOKEN_FORBIDDEN")
+    require(os.environ.get(PREPARE_OUTCOME_ENV) == "success", "BOOTSTRAP_PREPARE_ORIGINAL_OUTCOME")
+    entry = attempt.transition._entry
+    require(os.environ.get(PREPARE_HASH_ENV) == origin.digest(entry.handoff_original),
+            "BOOTSTRAP_PREPARE_ORIGINAL_HASH_CHANGED")
+    selection, path, event = host_inputs(attempt.first.clock.role)
+    context, admitted = origin.parse(entry.context_original), origin.admitted_value(entry.admitted)
+    inherited = query._inherited_context()
+    child_environment(path)
+    require(path == _new_entry_paths(attempt)[0] and selection == context["selection"] == admitted["selection"] and
+            event == entry.admitted.original_event and context["runnerName"] == os.environ.get("RUNNER_NAME") and
+            context["inheritedContext"] == inherited, "BOOTSTRAP_NEW_ENTRY_HOST_CHANGED")
+    require(os.getpid() != origin.parse(entry.preparation_original)["processIdentity"]["pid"],
+            "BOOTSTRAP_ADOPTER_SAME_PROCESS")
+    _entry_claim_identity(attempt)
+    owner.end()
+
+
+def _new_entry_owned(owner, directory, path, identity, *, final=False):
+    require(directory is not None and directory.path == path and any(row["label"] == "directory" and
+            row["owner"] is directory and row["attempted"] is False and row["closed"] is False
+            for row in owner.resources), "BOOTSTRAP_NEW_ENTRY_DIRECTORY_NOT_OWNED")
+    owner.end(final=final)
+    directory.verify()
+    require(directory_identity(list(directory.identity), owner.fence.clock.role) == list(identity),
+            "BOOTSTRAP_NEW_ENTRY_DIRECTORY_CHANGED")
+    owner.end(final=final)
+
+
+def _new_entry_read_originals(attempt):
+    owner = _new_entry_live(attempt)
+    transition, entry = attempt.transition, attempt.transition._entry
+    value, paths = origin.parse(entry.raw), _new_entry_paths(attempt)
+    _new_entry_host(attempt)
+    for directory, path, identity in ((attempt.private, paths[0], value["preparation"]["sessionIdentity"]),
+            (attempt.previous_target, paths[1], value["sessionIdentity"]),
+            (attempt.target, paths[2], attempt.target_identity)):
+        _new_entry_owned(owner, directory, path, identity)
+    previous = attempt.previous_target
+    require(owner.read(previous, "entry-context.json") == entry.raw and
+            owner.read(previous, "entry-close-pending.json") == transition.pending_raw,
+            "BOOTSTRAP_NEW_ENTRY_ADOPTION_CHANGED")
+    directory = owner.child(previous, "admission")
+    admitted = load_admission(owner, directory)
+    session, returned = owner.read(directory, "session-result.json"), owner.read(previous, "admission-return.json")
+    require(admitted == entry.admitted and session == entry.session_original and returned == entry.return_original,
+            "BOOTSTRAP_NEW_ENTRY_OLD_ADMISSION_CHANGED")
+    _admission_history_content(admitted, session, returned, history.snapshot(transition._fence))
+    reader = _NewEntryOriginalReader(attempt)
+    again, context, prepared = _read_prepared(reader, attempt.private, entry.handoff_original, entry.context_original)
+    require(again == entry.admitted and same_preparation(prepared, origin.parse(entry.preparation_original)),
+            "BOOTSTRAP_NEW_ENTRY_PREPARATION_CHANGED")
+    directory = owner.child(attempt.private, "service")
+    responses = tuple((name, owner.read(directory, name + ".json")) for name in ("attempt", "jobs"))
+    require(responses == transition.responses and
+            origin.encoded(_entry_close_proposal(entry, responses)) == transition.proposal_raw,
+            "BOOTSTRAP_NEW_ENTRY_SERVICE_ORIGINALS_CHANGED")
+    _new_entry_host(attempt)
+    _new_entry_live(attempt)
+    return prepared
+
+
+def _new_entry_return_content(attempt):
+    """Current actual-return registry/window only; historical original75 stays closed."""
+    owner, window = attempt.owner, attempt.window
+    window.checked()
+    registered = owner.admissions.get(str(_new_entry_paths(attempt)[2] / "admission"))
+    require(type(registered) is tuple and len(registered) == 3 and registered is attempt.admission_originals and
+            type(attempt.admitted) is I.Admission and registered[0] is attempt.admitted and
+            attempt.admitted == attempt.transition._entry.admitted and type(attempt.returned) is dict and
+            origin.encoded(attempt.returned) == registered[2], "BOOTSTRAP_NEW_ENTRY_NOT_CURRENT_ADMISSION")
+    session, raw = registered[1:]
+    value = origin.parse(raw)
+    require(raw == origin.encoded(value) and set(value) == {"admissionSha256", "sessionSha256", "clock", "returnedNs"} and
+            value["admissionSha256"] == origin.digest(attempt.admitted.record) and
+            value["sessionSha256"] == origin.digest(session) and value["clock"] == origin.clock_value(window.clock) and
+            window.first <= origin.integer(value["returnedNs"]) <= window.last and value["returnedNs"] < window.work,
+            "BOOTSTRAP_NEW_ENTRY_ADMISSION_RETURN")
+    status = origin.parse(session)
+    require(set(status) == {"schema", "scope", "job", "queries", "result", "retirement", "firstError", "errors", "readbacks"} and
+            type(status["schema"]) is int and status["schema"] == 1 and status["scope"] == "ORDINARY_GIT_QUERIES_ONLY" and
+            status["result"] == "READY_FOR_CALLER_SEAL" and status["retirement"] == "KNOWN" and
+            status["firstError"] is None and status["errors"] == [] and type(status["queries"]) is list and
+            type(status["readbacks"]) is list and type(status["job"]) is str and re.fullmatch(r"[0-9a-f]{32}", status["job"]),
+            "BOOTSTRAP_NEW_ENTRY_QUERY_SESSION")
+    return {"admissionSha256": origin.digest(attempt.admitted.record), "sessionSha256": origin.digest(session),
+            "returnSha256": origin.digest(raw)}
+
+
+def _new_entry_read_admission(attempt):
+    owner = _new_entry_live(attempt)
+    hashes = _new_entry_return_content(attempt)
+    _new_entry_owned(owner, attempt.target, _new_entry_paths(attempt)[2], attempt.target_identity)
+    directory = owner.child(attempt.target, "admission")
+    require(load_admission(owner, directory) == attempt.admitted and
+            owner.read(directory, "session-result.json") == attempt.admission_originals[1] and
+            owner.read(attempt.target, "admission-return.json") == attempt.admission_originals[2],
+            "BOOTSTRAP_NEW_ENTRY_READMISSION_CHANGED")
+    require(_new_entry_return_content(attempt) == hashes, "BOOTSTRAP_NEW_ENTRY_READMISSION_CHANGED")
+    return hashes
+
+
+def _new_entry_pending(attempt):
+    entry, window = attempt.transition._entry, attempt.window
+    return {"schema": 1, "scope": NEW_ENTRY_PENDING_SCOPE,
+            "previousTransitionSha256": origin.digest(attempt.transition.raw),
+            "entryContextSha256": origin.digest(entry.raw), "proposalSha256": origin.digest(attempt.transition.proposal_raw),
+            "session": str(_new_entry_paths(attempt)[2]), "sessionIdentity": list(attempt.target_identity),
+            "preparation": origin.parse(attempt.preparation), "readmission": _new_entry_return_content(attempt),
+            "originalAdopterFirstNs": attempt.transition._limits[8].nanoseconds,
+            "previousCheckedNs": attempt.transition._checked_ns, "window": window.record(),
+            "retainedNs": attempt.retained_ns, "newOwnerRetirement": "PENDING_CLOSE",
+            "productiveOwner": "NOT_CREATED", "budgetAcceptance": "NOT_ADMITTED",
+            "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False}
+
+
+def _new_entry_error(attempt, stage, error, *, unknown=False):
+    if attempt.original is None:
+        attempt.original = error
+    owner = _new_entry_owner(attempt)
+    if owner is not None:
+        owner.error(stage, error, unknown=unknown)
+        attempt.unknown |= owner.unknown
+    else:
+        detail = diagnostics._exception_detail(error)
+        attempt.unknown |= unknown or detail["retirementUnknown"]
+        if len(attempt.errors) < 64:
+            attempt.errors.append({"stage": stage, "detail": detail})
+        else:
+            attempt.unknown = True
+
+
+def _new_entry_roster(attempt):
+    """Retain all observed row/resource identities before any fallible supplier.
+
+    Append-only ownership, not append-only close flags: writers can already be
+    closed. A replaced/removed/reordered row or list cannot erase a known pin.
+    Even a newly observed malformed replacement remains referenced on failure.
+    """
+    owner = _new_entry_owner(attempt)
+    require(type(owner) is Owner and type(owner.resources) is list and type(attempt.resources) is tuple,
+            "BOOTSTRAP_NEW_ENTRY_ROSTER")
+    seen = {id(row): resource for row, _, resource in attempt.resources}
+    additions = []
+    for row in owner.resources:
+        label, resource = (row.get("label"), row.get("owner")) if type(row) is dict else (None, None)
+        if id(row) not in seen or seen[id(row)] is not resource:
+            additions.append((row, label, resource))
+            seen[id(row)] = resource
+    attempt.resources += tuple(additions)
+    bindings = _entry_attempt_record(attempt)[3]
+    require(owner.resources is bindings[6] and len(owner.resources) == len(attempt.resources),
+            "BOOTSTRAP_NEW_ENTRY_ROSTER")
+    for current, (row, label, resource) in zip(owner.resources, attempt.resources):
+        require(current is row and type(row) is dict and set(row) == {"label", "owner", "attempted", "closed"} and
+                row["label"] == label and label in ("directory", "writer") and row["owner"] is resource and
+                type(row["attempted"]) is bool and type(row["closed"]) is bool and
+                (not row["closed"] or row["attempted"]), "BOOTSTRAP_NEW_ENTRY_ROSTER")
+
+
+def _new_entry_snapshot(attempt):
+    # Unlike the successful old close bridge, a failed new entry may not yet
+    # have acquired anything. An actually empty new roster still must close.
+    _new_entry_roster(attempt)
+    return _new_entry_owner(attempt).resources, attempt.resources
+
+
+def _new_entry_known(attempt):
+    owner, snapshot = _new_entry_owner(attempt), attempt.snapshot
+    require(type(snapshot) is tuple and len(snapshot) == 2 and type(snapshot[1]) is tuple and owner.closed is True and
+            owner.resources is snapshot[0] and len(owner.resources) == len(snapshot[1]), "BOOTSTRAP_NEW_ENTRY_ROSTER")
+    for current, (row, label, resource) in zip(owner.resources, snapshot[1]):
+        require(current is row and type(row) is dict and set(row) == {"label", "owner", "attempted", "closed"} and
+                row["label"] == label and row["owner"] is resource and row["attempted"] is True and
+                row["closed"] is True, "BOOTSTRAP_NEW_ENTRY_ROSTER")
+
+
+def _new_entry_preserve(attempt):
+    owner = _new_entry_owner(attempt)
+    if owner is None:
+        return
+    try:
+        _new_entry_known(attempt)
+    except BaseException as error:
+        _new_entry_error(attempt, "new-entry-roster-return", error, unknown=True)
+    attempt.original = attempt.original or owner.original
+    attempt.unknown |= owner.unknown
+    if owner.unknown and not any(value is owner for value in QUARANTINE):
+        QUARANTINE.append(owner)
+    # attempt.snapshot retains the captured rows even if the owner list changed.
+
+
+def _new_entry_failure_retention(attempt):
+    owner = _new_entry_owner(attempt)
+    if owner is None or owner.closed or owner.unknown or attempt.target is None or attempt.target_identity is None:
+        return
+    try:
+        require(not QUARANTINE and not query.QUARANTINE and not diagnostics._QUARANTINE, "BOOTSTRAP_PRIOR_UNKNOWN")
+        attempt.window.checked()
+        posix._deadline(attempt.local_end)
+        attempt.window.now(final=True)
+        _new_entry_owned(owner, attempt.target, _new_entry_paths(attempt)[2], attempt.target_identity, final=True)
+        attempt.failure_custody = "INCOMPLETE"
+        attempt.failure_raw = owner.write(attempt.target, "new-entry-failure.json", {"schema": 1, "result": "HOLD",
+            "previousTransitionSha256": origin.digest(attempt.transition.raw), "window": attempt.window.record(),
+            "errors": attempt.errors, "newOwnerRetirement": "PENDING_CLOSE", "budgetAcceptance": "NOT_ADMITTED",
+            "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False}, final=True)
+        attempt.failure_custody = "PRIVATE_PROVISIONAL_ONLY"
+    except BaseException as error:
+        _new_entry_error(attempt, "new-entry-failure-retention", error)
+
+
+def _new_entry_record(attempt, preclose_ns, closed_ns):
+    return {"schema": 1, "scope": NEW_ENTRY_SCOPE,
+            "previousTransitionSha256": origin.digest(attempt.transition.raw),
+            "pendingSha256": origin.digest(attempt.pending_raw), "window": attempt.window.record(),
+            "preCloseNs": preclose_ns, "closedNs": closed_ns, "resourceCount": len(attempt.snapshot[1]),
+            "newOwnerRetirement": "KNOWN_RESOURCE_CLOSE_ONLY", "productiveOwner": "NOT_CREATED",
+            "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False}
+
+
+def _new_entry_result_content(result):
+    attempt = _entry_claim_identity(result._attempt)
+    owner, window = attempt.owner, attempt.window
+    window.checked()
+    _new_entry_known(attempt)
+    require(attempt.state in ("CLOSING", "COMPLETE") and attempt.original is None and attempt.unknown is False and
+            owner.original is None and owner.errors == [] and owner.unknown is False and
+            owner.phase_originals is None and owner.entry_original is None and owner.entry_close_attempted is False and
+            owner.entry_close_original is None and owner.entry_close_snapshot is None and
+            set(owner.admissions) == {str(_new_entry_paths(attempt)[2] / "admission")} and
+            attempt.pending_raw == origin.encoded(_new_entry_pending(attempt)), "BOOTSTRAP_NEW_ENTRY_NOT_SUCCESSFUL")
+    prepared = origin.parse(attempt.preparation)
+    times = (window.first, attempt.returned["returnedNs"], prepared["originalChain"]["revalidatedNs"],
+             attempt.retained_ns, result._preclose_ns, result._closed_ns, result._checked_ns)
+    require(all(type(value) is int and 0 <= value <= origin.clocks.UINT64 for value in times) and
+            list(times) == sorted(times) and result._preclose_ns < window.work and result._checked_ns < window.final and
+            window.last == result._checked_ns, "BOOTSTRAP_NEW_ENTRY_RETURN_CLOCK")
+    value = _new_entry_record(attempt, result._preclose_ns, result._closed_ns)
+    require(type(result.raw) is bytes and result.raw == origin.encoded(value), "BOOTSTRAP_NEW_ENTRY_RETURN_CHANGED")
+    return value
+
+
+def check_new_entry_transition(result):
+    """Exact registered closed entry only; no current read or producer authority."""
+    require(type(result) is NewEntryTransition and type(result._attempt) is _EntryAttempt and
+            result._attempt.state == "COMPLETE" and result._attempt.result is result,
+            "BOOTSTRAP_NEW_ENTRY_NOT_CURRENT_RETURN")
+    return _new_entry_result_content(result)
+
+
+def readmit_closed_entry(transition):
+    """Dormant INTERNAL once-claimed entry/readmission transaction, not a producer.
+
+    It NEVER advances/reopens the old Owner/Fence/handles. Only fresh entry
+    resources are acquired and closed here; the result has no execution or
+    export/save authority. No public operation/workflow calls this function.
+    """
+    attempt = _claim_closed_entry(transition)
+    owner = preclose_ns = None
+    try:
+        attempt.local_start = local = time.monotonic()
+        require(type(local) in (int, float) and math.isfinite(local) and local >= 0, "BOOTSTRAP_NEW_ENTRY_LOCAL_CLOCK")
+        # Retain the actual return before validation or any later fallible work.
+        attempt.first = origin.clocks.observe()
+        attempt.callback = lambda: _new_entry_cancel(attempt)
+        attempt.window = _NewEntryWindow(attempt)
+        attempt.local_end = origin.wire._directed_deadline(local, 120, attempt.window.final, attempt.window.first)
+        attempt.owner = owner = Owner(attempt.local_end, attempt.window, first=attempt.first, cancelled=attempt.callback)
+        attempt.bindings = (attempt.owner, attempt.window, attempt.first, attempt.callback, attempt.local_end,
+                            attempt.owner.admissions, attempt.owner.resources, attempt.owner.errors)
+        with _ENTRY_CLAIM_LOCK:
+            registered = _ENTRY_ATTEMPTS[id(transition)]
+            _ENTRY_ATTEMPTS[id(transition)] = (*registered[:3], attempt.bindings)
+        attempt.errors = attempt.owner.errors
+        attempt.state = "READING"
+        owner = _new_entry_live(attempt)
+        owner.end()
+        _new_entry_host(attempt)
+        path, previous, target = _new_entry_paths(attempt)
+        attempt.private = owner.open(path)
+        attempt.previous_target = owner.open(previous)
+        value = origin.parse(transition._entry.raw)
+        _new_entry_owned(owner, attempt.private, path, value["preparation"]["sessionIdentity"])
+        _new_entry_owned(owner, attempt.previous_target, previous, value["sessionIdentity"])
+        attempt.target = owner.new(target)  # Exclusive source-derived sibling; no retry or overwrite.
+        attempt.target_identity = tuple(directory_identity(list(attempt.target.identity), attempt.window.clock.role))
+        before = _new_entry_read_originals(attempt)
+        attempt.admitted, attempt.returned = admit(owner, attempt.window, target / "admission", expected=transition._entry.admitted)
+        attempt.admission_originals = owner.admissions.get(str(target / "admission"))
+        _new_entry_return_content(attempt)
+        owner.write(attempt.target, "admission-return.json", attempt.admission_originals[2])
+        _new_entry_read_admission(attempt)
+        after = _new_entry_read_originals(attempt)
+        require(same_preparation(after, before), "BOOTSTRAP_NEW_ENTRY_CHANGED_DURING_READMISSION")
+        attempt.preparation = origin.encoded(after)
+        attempt.retained_ns = attempt.window.now(minimum=after["originalChain"]["revalidatedNs"])
+        attempt.pending_raw = owner.write(attempt.target, "new-entry-pending.json", _new_entry_pending(attempt))
+        _new_entry_read_admission(attempt)
+        last = _new_entry_read_originals(attempt)
+        require(same_preparation(last, after) and owner.read(attempt.target, "new-entry-pending.json") == attempt.pending_raw,
+                "BOOTSTRAP_NEW_ENTRY_PENDING_CHANGED")
+        _new_entry_cancel(attempt)
+        owner.end()
+        _new_entry_live(attempt)
+        preclose_ns = attempt.window.last
+    except BaseException as error:
+        _new_entry_error(attempt, "new-entry-readmission", error)
+        _new_entry_failure_retention(attempt)
+    finally:
+        if owner is not None:
+            attempt.state = "CLOSING"
+            try:
+                attempt.snapshot = _new_entry_snapshot(attempt)
+            except BaseException as error:
+                attempt.snapshot = (owner.resources, attempt.resources)
+                _new_entry_error(attempt, "new-entry-snapshot", error, unknown=True)
+            try:
+                owner.close()
+            except BaseException as error:
+                _new_entry_error(attempt, "new-entry-close-return", owner.original or error)
+    _new_entry_preserve(attempt)
+    if attempt.original is not None:
+        attempt.state = "FAILED"
+        raise attempt.original
+    try:
+        require(attempt.pending_raw is not None and preclose_ns is not None, "BOOTSTRAP_NEW_ENTRY_INCOMPLETE")
+        _new_entry_cancel(attempt)
+        posix._deadline(attempt.local_end)
+        closed_ns = attempt.window.now(final=True, minimum=preclose_ns)
+        raw = origin.encoded(_new_entry_record(attempt, preclose_ns, closed_ns))
+        _new_entry_result_content(NewEntryTransition(raw, attempt, preclose_ns, closed_ns, closed_ns))
+        _new_entry_cancel(attempt)
+        posix._deadline(attempt.local_end)
+        checked_ns = attempt.window.now(final=True, minimum=closed_ns)
+        _new_entry_cancel(attempt)
+        posix._deadline(attempt.local_end)
+        result = NewEntryTransition(raw, attempt, preclose_ns, closed_ns, checked_ns)
+        _new_entry_result_content(result)  # Non-acquiring final state/roster check after every callback/clock.
+        require(attempt.result is None, "BOOTSTRAP_NEW_ENTRY_RESULT_ALREADY_REGISTERED")
+        attempt.result, attempt.state = result, "COMPLETE"
+        return result
+    except BaseException as error:
+        # Already closed: retain references, never reopen or allocate failure custody.
+        _new_entry_error(attempt, "new-entry-postreturn", error)
+        _new_entry_preserve(attempt)
+        attempt.state = "FAILED"
+        raise attempt.original
 
 
 def adopt_originals(cancelled):

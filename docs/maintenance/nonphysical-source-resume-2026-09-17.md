@@ -973,12 +973,145 @@ Proposed5,400 stays unadmitted/unmeasured. No build/download, held dispatch,
 PR/merge, Release, settings change or issue closure occurred. Audit/release
 remains **NOT_READY**.
 
+## 18 September: separate fresh-entry readmission and resource close
+
+The [internal fresh-entry transaction](../testing/hosted-dependency-cache.md#internal-fresh-entry-readmission-not-producer-execution)
+starts from `16f3740a69a4fc6fa75ce10e0fd0ac5e750ee2c1`, tree
+`0a765f8b2d798dcd6f7cb9ed6008bb964b16f7b8`. It once-claims only the exact old
+closed transition, including unsuccessful attempts, and creates a distinct
+entry owner/window. It never prolongs the old Owner/Fence, calls the old clock
+or reopens the old handles.
+No public command or workflow calls it. Configuration, canonical initialization,
+seed/export/save/probe and encrypted custody remain unconnected.
+
+The fresh first reading must match the complete original clock identity and be
+at or after the old return's final `_checked_ns`; it cannot replace the original
+historical adopter-first. The source-proposed new entry cap is the earlier of
+fresh120 and the original proposed productive-entry end. Work is the earlier
+of fresh75 and that final cap minus45; no work interval means refusal. The
+separately sampled local120 can only shorten it. No wait, extra cleanup tail,
+new5,400 allowance or ordinary deadline change is introduced. All these bootstrap
+allowances remain **UNADMITTED / UNMEASURED**.
+
+New handles recheck original preparation/adoption directory identities, original
+bytes, complete service basis/allocation and trusted prepare-outcome/hash/host
+boundaries. Fresh native/source/main/recipient readmission has its own exact
+current-return registry/window; it does not rewrite historical original75
+admission. Original/current records are reread around pending retention. Only
+actual successful entry-resource close and final callbacks/clock/roster checks
+can register the immutable in-memory result. A serialized file cannot recreate
+that provenance. No process/job retirement or provider acceptance follows from
+resource close, and failure custody can be unavailable/incomplete.
+
+### Executed controls, adverse result and narrow correction
+
+Linux Python3.12.3, actual UID65534, isolated read-only source copies:
+
+```bash
+timeout --kill-after=5s 90s runuser -u nobody -- \
+  python3 -I -B -S <exact-read-only-source-copy>/scripts/tests/hosted-cache-bootstrap-readmission-test.py -v
+```
+
+The initial r3 author run passed **46/46** methods in22.619 seconds. Its
+source/tests tree was `c30bf85cc3031ec0ccf930b287d808f509f921f5`; caller SHA-256
+`9ab006ab67658484c05e65fb142832bd122410619b1e2fded78a514d4e07fd51`.
+An inert conditional context manager was removed from the unexecuted draft
+before that freeze/run; the draft is preserved, not a failed execution.
+
+Independent r3 controls were frozen before author tests/results inspection.
+The disjoint smoke/claim-window/transaction executions passed **1/13/17** methods,
+**31 unique passes**, not a passing32-method aggregate. Two earlier smoke
+**setup ERRORs** remain: a synthetic context had stale start-context/hash argv,
+then its synthetic service basis omitted five allocation pass-through fields.
+Both occurred before `readmit_closed_entry` was reached. Fixture-only corrections
+left assertion methods unchanged; those errors are not implementation failures.
+
+A separately frozen independent rebinding control then **FAILED on r3**. After
+a real first directory returned, a modeled callback copied/rebound the attempt's
+transition. Claim validation correctly rejected it, but cleanup looked up the owner
+through the same mutable field, replaced the first exception and escaped before
+actual close. Observed state was CLOSING, close-call count0, owner.closed false,
+unknown false, one unattempted/unclosed resource and no quarantine. This is a
+confirmed source defect, not a fixture omission; the failure is preserved.
+
+The r4 correction adds identity-only lookup of the independently retained actual
+attempt, and uses that record for claim validation and cleanup owner/roster.
+Changed transitions remain rejected; they cannot redirect or skip actual close.
+No registry repair, retry, authority or time extension is added. Three author
+regressions cover copied/missing transitions after return and a pre-acquisition
+rebind with an original failure.
+
+The corrected candidate's first author run passed **49/49** in24.913 seconds
+(25.668915293 seconds recorder), including the three new methods. This was a
+fresh run of changed claim/cleanup source, not reuse of the r3 passes. All1,404
+source hashes/rosters remained unchanged in each fixture/repository; no extra
+files appeared. `load_tests` selects only this class's methods, not inherited
+legacy tests. Tiny actual POSIX files are real; host/native/service/query/clock
+boundaries remain models. Neither run is hosted/native/provider qualification.
+
+Independent corrected-source controls passed **1/1** unchanged failing oracle
+and **4/4** separately frozen changed-helper methods. The oracle now preserves
+the exact first exception, reaches FAILED and closes the actual owner once with
+the retained row attempted/closed. The new methods cover canonical exact-attempt
+lookup without suppliers, rebind at first RAW before any owner, constructor-time
+rebind and post-close rebind. All1,403 Git blobs and1,409 source/control hashes
+were unchanged. The original31 methods remain r3-scoped; they were **not replayed
+or relabeled as an r4 aggregate**. The separate r3 source FAIL and two reviewer
+setup ERRORs remain part of the evidence account.
+
+The corrected source/tests freeze is tree
+`83823f5deda8bb6ae144b5fbd81ee371bf58afd9`, patch SHA-256
+`f74fa4774cf1749d67bd87518bbe8686c2ff26c883049a9ac6af84f7cfe8dcff`:
+
+| File under `scripts/` | SHA-256 |
+| --- | --- |
+| `run-hosted-cache-bootstrap.py` | `3b56263c5a59ce40034b2479591d15067f16b6168e5c316d852b830ffc1bd93c` |
+| `tests/hosted-cache-bootstrap-readmission-test.py` | `0fc679287b95d6891a1a7cd75289be2ab70afd7b9d0cf075213040f68578500e` |
+
+Static comparison with the committed base finds54 existing top-level bodies
+unchanged. Only the two private reader type predicates additionally accept the
+new claim-derived view;29 definitions are new. Relative to r3, only three helper
+bodies change and one lookup helper is added. These are AST/body counts, **not
+test counts**. No unchanged legacy suite, product build or old artifact was
+replayed.
+
+Independent implementation verdict:
+**APPROVE_EXACT_DORMANT_BOOTSTRAP_NEW_ENTRY_READMISSION_IMPLEMENTATION_R4_SOURCE_OFFLINE_ONLY**,
+report SHA-256 `d2b04f669402d11380a4f7f1ee7dd06e04fc343e2e497e29a3249f538731eeb3`.
+No remaining concrete source finding in that bounded scope. Both author packets
+were independently inspected without replay; the current packet's one then-draft
+guide differs from the source/tests-only tree, not from its actual full-fixture
+manifests. No runtime-tree equality or approval of that older guide is inferred.
+
+Private packet `20260918-bootstrap-entry-transaction-cvdasdrc` retains the source
+freezes, drafts, argv/manifests/logs/exits and separate adverse evidence bindings.
+Complete paginated metadata refreshed05:46UTC:78 open issues, seven unchanged
+dependency proposals, no campaign PR, no queried active Actions and no Release
+app assets. All23 common metadata domains were unchanged from05:15. The earlier
+05:15/04:46 recursive delta was separately completed: only the known16f3740a
+mapping comments and repository/candidate push metadata plus linked mirrors
+changed. No new custodian/recipient/formal approval appeared. Required checks
+and advisory metadata were unchanged; no scan or exception extension occurred.
+A further complete paginated06:00UTC refresh found all29 common domains
+unchanged from05:46, including the complete #143/#144 conversations. Their
+existing repairs are not repeated; genuine branch-submission/scheduled-full-path
+acceptance remains separate.
+
+The exact independent implementation/complete-patch verdict and final static,
+commit/push bindings will be mapped separately in #437/shared #424. Agent source
+review is not formal different-account GitHub PR approval.
+
+This result remains `NOT_ADMITTED`, tests `NOT_PERFORMED`, productive owner
+`NOT_CREATED` and export/save authority false. Both ordinary HOLDs and all
+trusted-base/native/provider/resolver/custody/scheduling/delivery/formal-review
+requirements remain. Audit/release is **NOT_READY**.
+
 ## Next engineering and unchanged authority boundaries
 
 The next bootstrap slice still needs a **separate productive owner/job-budget
 context**, not ordinary FULL/Desktop with `help`, the evidence-only prelude,
-same-call read-only entry/close transition, service-time basis or allocation
-proposal above.
+same-call read-only entry/close transition, fresh-entry readmission/close,
+service-time basis or allocation proposal above.
 Retain and rederive actual source/run/clock and service/native budget originals
 and trusted workflow outcomes;
 a digest or fresh allowance cannot grant authority. A future live caller must invoke the canonical configuration-only producer,

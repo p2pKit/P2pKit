@@ -506,6 +506,76 @@ ordinary HOLDs stay; proposed5,400 remains unadmitted/unmeasured. A separate
 productive transaction still needs the original closed transition's final
 high-water, new bounded ownership/readmission and honest failure custody.
 
+### Internal fresh-entry readmission, not producer execution
+
+`readmit_closed_entry(transition)` is a separate **internal, dormant transaction**.
+Neither a public command nor a workflow calls it. It once-claims only the exact
+registered old-owner close return, including after a failed attempt; copies,
+reentry and concurrent claims cannot obtain another attempt. The claim lock is
+not held across clocks, callbacks or I/O. Strong original references survive
+failure. This is not a sandbox against arbitrary mutation of the Python process.
+
+The transaction creates a new entry resource owner, never reopens or advances the
+old Owner/Fence/handles. Its fresh first reading must match the complete original
+clock identity and be at or after the closed transition's final `_checked_ns`. The old
+adopter-first remains the exact historical reading; it is not replaced by this
+fresh first or a later `revalidatedNs`. Original historical admissions still
+require original75, even when current readmission occurs after original120.
+
+The new **source-proposed, UNADMITTED / UNMEASURED** entry window is:
+
+```text
+final = min(fresh_first + 120 seconds, original proposed productive-entry end)
+work  = min(fresh_first + 75 seconds, final - 45 seconds)
+require fresh_first < work
+```
+
+The separately sampled local120 ceiling can only shorten it. There is no wait
+for the proposed allocation start, extra45 tail or renewed5,400-second job end.
+The new fence itself bounds the actual query supplier's work/final pair and
+cancellation callback, not just outer file I/O. Actual RAW high-waters survive
+expiry, cancellation and later conversion failure. No existing original75,
+local45, original120 or ordinary job/operation deadline changes.
+
+Under new handles, the reader rechecks the original preparation/adoption native
+directory identities, handoff/prelude/entry/pending/admission bytes and original
+attempt/jobs responses. It rederives the service basis/allocation, and repeats
+the host/event/source-owned path and trusted prepare-outcome/hash boundary.
+The acquisition token and ambient execution overrides remain forbidden. Actual
+fresh native/source/main/recipient admission is retained in a distinct exclusive
+source-derived `-entry` sibling; only its exact returned object/registry and
+current window validate that return. It is not relabeled historical admission.
+Originals and current admission are reread around provisional retention. No
+second HTTP acquisition or transfer of old owner registries occurs.
+
+The private `new-entry-pending.json` cannot attest later resource close or command
+success. Returned resources are registered before fallible post-return clocks;
+list/row/resource replacement cannot erase the separately retained references.
+Successful return requires the actual new owner to close inside the same final
+cap before final callback/clock/roster checks register an immutable in-memory
+result. `check_new_entry_transition`
+validates only that exact returned object without current I/O or clock reads;
+serialized bytes cannot recreate it. Known resource close is not preparer,
+process/job retirement, an atomic filesystem freeze or provider custody.
+
+Failure keeps the first exception, actual references and existing UNKNOWN/
+quarantine/error-saturation policy. Cleanup selects the independently retained
+actual attempt/owner by identity, not a callback-rebound transition or owner
+field; rejection must not redirect or skip that owner's close. This does not
+repair or reauthorize the changed claim. A private provisional failure record is
+attempted only when its already-owned target, known ownership and remaining
+original entry-final interval permit it. Custody can remain `UNAVAILABLE` or
+`INCOMPLETE`; no fallback recipient, encryption/delivery guarantee, postclose
+failure owner or retry is created.
+
+The result remains `NOT_ADMITTED`, tests `NOT_PERFORMED`, productive owner
+`NOT_CREATED` and export/save authority false. This completes only fresh entry
+readmission/resource close, not canonical initialization, configuration producer,
+empty seed/export/freeze/save/probe or encrypted-custody integration. Both ordinary
+activation HOLDs and the missing routine recipient/trusted-base formal approval
+remain. Proposed5,400 is unadmitted/unmeasured; genuine native/provider/resolver/
+custody/scheduling/delivery and normal reviewed main delivery remain necessary.
+
 ### Canonical producer records, not producer execution
 
 [`hosted_cache_bootstrap_producer.py`](../../scripts/hosted_cache_bootstrap_producer.py)
@@ -694,6 +764,7 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-allocation-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-close-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-history-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-reader-test.py
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-readmission-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
@@ -705,8 +776,8 @@ These use modeled provider/native boundaries and tiny synthetic owned files, no
 dependency download or Gradle. The connected/budget controls are registered in the
 unconditional ordinary CI policy step and both release script entry points.
 The separate bootstrap identity/cohort/producer-record/query-fence/original-acquisition/
-handoff/entry/service-time/allocation-proposal/close/history/legacy-reader controls are standalone, not an
-activated or registered bootstrap workflow.
+handoff/entry/service-time/allocation-proposal/close/history/legacy-reader/fresh-entry
+controls are standalone, not an activated or registered bootstrap workflow.
 Tiny private-file controls require an actual ordinary UID; root is not an
 acceptable substitute and their modeled native boundaries are not host admission.
 Native Windows provider behavior and actual resolver/cache reuse require
