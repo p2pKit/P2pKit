@@ -720,6 +720,37 @@ def report_snapshot(root: Path, state: Path, original: list[str]) -> dict[str, d
     return result
 
 
+def retained_report_parent(evidence: Path, parent: Path) -> None:
+    """Create only private descendants of the existing evidence anchor.
+
+    Path.mkdir(parents=True) applies mode only to its last component. Do not
+    change the process umask or repair/adopt broad existing directories instead.
+    These path checks are not atomic same-UID custody or Windows ACL admission.
+    """
+    require(evidence.is_absolute() and parent.is_absolute() and within(parent, evidence) and
+            ".." not in parent.parts, "Retained report parent is outside its evidence anchor")
+    reject_symlinks(evidence)
+
+    def validate(path: Path) -> None:
+        info = existing_lstat(path)
+        require(info is not None and stat.S_ISDIR(info.st_mode) and
+                not (getattr(info, "st_file_attributes", 0) & 0x400),
+                "Retained report parent is not a physical directory")
+        if os.name == "posix":
+            require(info.st_uid == os.getuid() and not info.st_mode & 0o077,
+                    "Retained report parent is not private to the current user")
+
+    validate(evidence)  # Never create an absent anchor or inspect /tmp as private.
+    current = evidence
+    for name in parent.relative_to(evidence).parts:
+        current = current / name
+        try:
+            current.mkdir(mode=0o700)
+        except FileExistsError:
+            pass  # Existing/racing paths must pass the same checks before descent.
+        validate(current)
+
+
 def retain_reports(root: Path, state: Path, original: list[str], before: dict[str, Any],
                    evidence: Path) -> list[dict[str, Any]]:
     after = report_snapshot(root, state, original)
@@ -730,7 +761,7 @@ def retain_reports(root: Path, state: Path, original: list[str], before: dict[st
         row = {"source": label, **item, "classification": "preexisting-unchanged" if unchanged else "changed-since-admission"}
         if not unchanged:
             destination = evidence / "reports" / label
-            destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            retained_report_parent(evidence, destination.parent)
             with paths[label].open("rb") as source, new_file(destination) as target:
                 shutil.copyfileobj(source, target, length=1024 * 1024)
                 target.flush()

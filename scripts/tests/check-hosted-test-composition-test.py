@@ -209,6 +209,84 @@ class CompositionPolicy(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "ordinary executable composition changed: " + path):
                     POLICY.check_sources(changed)
 
+    def test_canonical_retained_parents_anchor_and_descent_are_required(self):
+        POLICY.check_sources(self.sources)
+        path = "scripts/run-audit-command.py"
+        for before, after in (
+            (b'evidence.is_absolute() and parent.is_absolute() and within(parent, evidence) and\n'
+             b'            ".." not in parent.parts', b'True'),
+            (b'    reject_symlinks(evidence)\n\n    def validate(path: Path)',
+             b'    pass\n\n    def validate(path: Path)'),
+            (b'    validate(evidence)  # Never create an absent anchor or inspect /tmp as private.',
+             b'    pass  # bypass the original evidence anchor'),
+            (b'        validate(current)\n\n\ndef retain_reports',
+             b'        pass\n\n\ndef retain_reports'),
+        ):
+            with self.subTest(before=before):
+                self.assertEqual(self.sources[path].count(before), 1)
+                self.mutate(path, before, after)
+
+    def test_canonical_retained_parents_type_current_owner_and_private_mode_are_required(self):
+        POLICY.check_sources(self.sources)
+        path = "scripts/run-audit-command.py"
+        for before, after in (
+            (b'require(info is not None and stat.S_ISDIR(info.st_mode) and\n'
+             b'                not (getattr(info, "st_file_attributes", 0) & 0x400),',
+             b'require(info is not None and True and\n'
+             b'                not (getattr(info, "st_file_attributes", 0) & 0x400),'),
+            (b'not (getattr(info, "st_file_attributes", 0) & 0x400),\n'
+             b'                "Retained report parent is not a physical directory")',
+             b'True,\n                "Retained report parent is not a physical directory")'),
+            (b'if os.name == "posix":\n            require(info.st_uid == os.getuid()',
+             b'if False:\n            require(info.st_uid == os.getuid()'),
+            (b'require(info.st_uid == os.getuid() and not info.st_mode & 0o077,',
+             b'require(True and not info.st_mode & 0o077,'),
+            (b'require(info.st_uid == os.getuid() and not info.st_mode & 0o077,',
+             b'require(info.st_uid == os.getuid() and True,'),
+        ):
+            with self.subTest(before=before):
+                self.assertEqual(self.sources[path].count(before), 1)
+                self.mutate(path, before, after)
+
+    def test_canonical_retained_parents_private_creation_and_narrow_race_handling_are_required(self):
+        POLICY.check_sources(self.sources)
+        path = "scripts/run-audit-command.py"
+        for before, after in (
+            (b'current.mkdir(mode=0o700)', b'current.mkdir(mode=0o755)'),
+            (b'current.mkdir(mode=0o700)', b'current.mkdir(parents=True, mode=0o700)'),
+            (b'except FileExistsError:\n'
+             b'            pass  # Existing/racing paths must pass the same checks before descent.',
+             b'except OSError:\n'
+             b'            pass  # suppress unrelated errors'),
+            (b'current.mkdir(mode=0o700)',
+             b'current.mkdir(mode=0o700)\n            current.chmod(0o700)'),
+        ):
+            with self.subTest(before=before):
+                self.assertEqual(self.sources[path].count(before), 1)
+                self.mutate(path, before, after)
+
+    def test_canonical_retained_parents_actual_report_call_cannot_be_replaced(self):
+        POLICY.check_sources(self.sources)
+        path = "scripts/run-audit-command.py"
+        before = b'retained_report_parent(evidence, destination.parent)'
+        self.assertEqual(self.sources[path].count(before), 1)
+        for after in (b'destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)',
+                      b'pass # retained_report_parent(evidence, destination.parent)'):
+            with self.subTest(after=after):
+                self.mutate(path, before, after)
+
+    def test_canonical_retained_parents_late_shadowing_cannot_replace_validation(self):
+        POLICY.check_sources(self.sources)
+        path = "scripts/run-audit-command.py"
+        for suffix in (b'\nretained_report_parent = lambda evidence, parent: None\n',
+                       b'\nretain_reports = lambda *args, **kwargs: []\n'):
+            with self.subTest(suffix=suffix):
+                changed = dict(self.sources)
+                changed[path] += suffix
+                with self.assertRaisesRegex(ValueError, "ordinary executable composition changed: " + path):
+                    POLICY.check_sources(changed)
+
+
     def test_shared_helper_is_an_additional_required_program_not_a_replacement(self):
         self.assertEqual(set(POLICY.EXPECTED), {
             "scripts/run-hosted-test-custody.py", "scripts/hosted_full_supplements.py",

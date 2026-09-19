@@ -1231,6 +1231,35 @@ HOLDs, exact selectors, unadmitted5400, NativeFile900/Snapshot576MiB and recipie
 trusted-base/formal-review/native/provider/resolver/scheduling/delivery requirements
 are unchanged. No production `cache.export_snapshot`/`cache.save_set` caller exists.
 
+### Shared canonical retained-report parents, not a file collector
+
+Canonical `retain_reports` now creates each selected parent separately with
+mode0700 below the existing evidence root. Previously Python's recursive mkdir
+applied0700 only to its last component; intermediate0755/0775 directories under
+ordinary umasks conflicted with the unchanged strict POSIX private reader.
+The already-private evidence root protected traversal; no outside-user disclosure
+was observed. Root/selected children must remain physical directories without
+symlink/reparse metadata; POSIX also requires current UID and zero group/other
+mode bits. New and FileExists-raced paths are revalidated before descent. Broad
+existing directories and other I/O failures refuse, without chmod, global umask
+changes, replacement or deletion. Exclusive files, report labels/classification
+and original512MiB/20,000-entry/depth256 limits stay unchanged.
+
+The [retained-parent continuation](../maintenance/hosted-canonical-report-parents-2026-09-19.md)
+records the original failed preimage,18/18 author and13/13 independent focused
+passes, scoped source approval and6/6 selected AST composition passes. These are
+tiny ordinary-UID POSIX/model and static controls, not the full native/current-host
+suite, same-UID atomic custody or Windows ACL qualification. Only the reviewed
+canonical AST pin changes; all six other supplier pins, selectors and HOLDs stay.
+
+This is a shared source prerequisite, not original producer/file collection.
+A separate once-claimed collection phase still needs NEW handles after original
+producer close, honest no-loader observations and bounded streamed evidence.
+No old owner/READ30 revival, live checkout recollection, provider/export/save
+caller or new execution authority follows. Recipient/trusted-base/formal-review,
+native/provider/resolver/custody/scheduling/delivery qualification remains required;
+proposed5400 is unadmitted/unmeasured and NativeFile900/Snapshot576MiB are unchanged.
+
 ## Connected consume and delivery path
 
 After the unchanged HOLD and native/source admission, `prepare-consume` binds

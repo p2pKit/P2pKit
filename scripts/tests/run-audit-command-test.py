@@ -1194,6 +1194,358 @@ class PurePolicyTests(unittest.TestCase):
                 (24, 24, 104, 112, 64, 48, 144))
 
 
+class ReportRetentionPosixTests(unittest.TestCase):
+    """Tiny retained-report files, not native owners or a product invocation.
+
+    These POSIX-only controls are a separate current-host selection. They do not
+    change or stand in for the Windows native ACL/backend controls. Keep their
+    originals in the fixture evidence root, including after a failed assertion.
+    """
+
+    def setUp(self):
+        self.assertEqual(os.name, "posix", "This class requires an actual POSIX filesystem")
+        self.base = Path(tempfile.mkdtemp(prefix="report-parent-", dir=EVIDENCE_ROOT or FIXTURE_PARENT)).resolve()
+        self.payload = b"SYNTHETIC report bytes; no application execution\n"
+
+    def case(self, name, *, label="build/reports/one/two/result.xml", evidence=True):
+        base = self.base / name
+        base.mkdir(mode=0o700)
+        root, state, retained = base / "source", base / "state", base / "evidence"
+        root.mkdir(mode=0o700)
+        state.mkdir(mode=0o700)
+        if evidence:
+            retained.mkdir(mode=0o700)
+        output = root / label
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(self.payload)
+        return root, state, retained, output
+
+    def retain(self, root, state, evidence, before=None, original=None):
+        # Only the fixture may set a process-local umask or prepare permissions.
+        # Production must create private parents without changing either.
+        with mock.patch.object(os, "umask", side_effect=AssertionError("production changed umask")), \
+                mock.patch.object(os, "chmod", side_effect=AssertionError("production changed mode")), \
+                mock.patch.object(os, "fchmod", side_effect=AssertionError("production changed fd mode")):
+            return runner.retain_reports(root, state, original or ["help", "--console=plain"],
+                                         {} if before is None else before, evidence)
+
+    def private_parents(self, evidence, relative):
+        current = evidence
+        directories = [current]
+        for name in Path(relative).parts[:-1]:
+            current = current / name
+            current.mkdir(mode=0o700)
+            directories.append(current)
+        return directories
+
+    def unchanged(self, path):
+        info = path.lstat()
+        return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_size,
+                info.st_mtime_ns, info.st_ctime_ns)
+
+    def assert_private_readback(self, evidence, row, payload):
+        import hosted_dependency_seed_files as files
+        current = evidence
+        for name in (None, *Path(row["retained"]).parts[:-1]):
+            if name is not None:
+                current = current / name
+            info = current.lstat()
+            self.assertTrue(stat.S_ISDIR(info.st_mode))
+            self.assertEqual(stat.S_IMODE(info.st_mode), 0o700)
+            self.assertEqual(info.st_uid, os.getuid())
+        path = evidence / row["retained"]
+        self.assertEqual(stat.S_IMODE(path.lstat().st_mode), 0o600)
+        self.assertEqual(path.read_bytes(), payload)
+        self.assertEqual(row["bytes"], len(payload))
+        self.assertEqual(row["sha256"], runner.digest(payload))
+        handles = []
+        deadline = time.monotonic() + 5
+        try:
+            directory = files.private_root(evidence)
+            handles.append(directory)
+            for name in Path(row["retained"]).parts[:-1]:
+                directory = directory.open_directory(name, deadline=deadline)
+                handles.append(directory)
+            reader = directory.open_file(path.name, max_bytes=len(payload), deadline=deadline)
+            handles.append(reader)
+            self.assertEqual(reader.read(len(payload)), payload)
+            self.assertEqual(reader.read(1), b"")
+            self.assertEqual(reader.verify(), reader.initial_info)
+        finally:
+            for handle in reversed(handles):
+                handle.close()
+        self.assertTrue(all(handle.closed for handle in handles))
+
+    def test_nested_reports_are_private_and_strictly_readable_under_original_umasks(self):
+        for mask in (0o000, 0o002, 0o022, 0o077):
+            with self.subTest(umask=oct(mask)):
+                root, state, evidence, output = self.case("mask-" + format(mask, "03o"))
+                previous = os.umask(mask)
+                try:
+                    rows = self.retain(root, state, evidence)
+                finally:
+                    observed = os.umask(previous)
+                self.assertEqual(observed, mask)
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0]["classification"], "changed-since-admission")
+                self.assertEqual(rows[0]["source"], output.relative_to(root).as_posix())
+                self.assert_private_readback(evidence, rows[0], self.payload)
+
+    def test_unchanged_reports_are_metadata_only_without_retained_parents(self):
+        root, state, evidence, _output = self.case("unchanged")
+        before = runner.report_snapshot(root, state, ["help"])
+        rows = self.retain(root, state, evidence, before)
+        self.assertEqual(rows, [{"source": name, **item, "classification": "preexisting-unchanged"}
+                                for name, item in before.items()])
+        self.assertFalse((evidence / "reports").exists())
+        self.assertEqual(runner.read_json(evidence / "report-manifest.json")["records"], rows)
+
+    def test_mixed_rows_keep_original_labels_bytes_classifications_and_manifest(self):
+        root, state, evidence, output = self.case("mixed")
+        stable = output.with_name("stable.xml")
+        stable.write_bytes(b"unchanged synthetic bytes")
+        before = runner.report_snapshot(root, state, ["help"])
+        output.write_bytes(self.payload + b"changed")
+        added = output.with_name("added.xml")
+        added.write_bytes(b"new synthetic bytes")
+        rows = self.retain(root, state, evidence, before)
+        self.assertEqual([row["source"] for row in rows], sorted(row["source"] for row in rows))
+        self.assertEqual(len(rows), 3)
+        for row in rows:
+            source = root / row["source"]
+            self.assertEqual(row["bytes"], source.stat().st_size)
+            self.assertEqual(row["sha256"], runner.digest(source.read_bytes()))
+            if source == stable:
+                self.assertEqual(row["classification"], "preexisting-unchanged")
+                self.assertNotIn("retained", row)
+                self.assertFalse((evidence / "reports" / row["source"]).exists())
+            else:
+                self.assertEqual(row["classification"], "changed-since-admission")
+                self.assertEqual(row["retained"], "reports/" + row["source"])
+                self.assert_private_readback(evidence, row, source.read_bytes())
+        self.assertEqual(runner.read_json(evidence / "report-manifest.json"), {
+            "schema": 1, "records": rows,
+            "limitation": "Changed bytes are not proof of test execution; use the unchanged product assessor."})
+
+    def test_existing_private_parents_keep_identity_and_mode(self):
+        root, state, evidence, output = self.case("private-existing")
+        relative = "reports/" + output.relative_to(root).as_posix()
+        directories = self.private_parents(evidence, relative)
+        original = [(path, self.unchanged(path)[:4]) for path in directories]
+        rows = self.retain(root, state, evidence)
+        self.assertEqual([(path, self.unchanged(path)[:4]) for path in directories], original)
+        self.assert_private_readback(evidence, rows[0], self.payload)
+
+    def test_broad_anchor_is_refused_before_creating_any_report_parent(self):
+        root, state, evidence, _output = self.case("broad-anchor")
+        evidence.chmod(0o750)
+        original = self.unchanged(evidence)
+        with self.assertRaises(runner.AuditError):
+            self.retain(root, state, evidence)
+        self.assertEqual(self.unchanged(evidence), original)
+        self.assertEqual(list(evidence.iterdir()), [])
+
+    def test_broad_selected_intermediate_is_refused_without_mutation(self):
+        for mode in (0o701, 0o710, 0o750, 0o775):
+            with self.subTest(mode=oct(mode)):
+                root, state, evidence, _output = self.case("broad-" + format(mode, "03o"))
+                (evidence / "reports").mkdir(mode=0o700)
+                broad = evidence / "reports/build"
+                broad.mkdir(mode=0o700)
+                broad.chmod(mode)
+                original = self.unchanged(broad)
+                with self.assertRaises(runner.AuditError):
+                    self.retain(root, state, evidence)
+                self.assertEqual(self.unchanged(broad), original)
+                self.assertEqual(list(broad.iterdir()), [])
+                self.assertFalse((evidence / "report-manifest.json").exists())
+
+    def test_symlink_intermediate_is_refused_before_writing_into_its_target(self):
+        root, state, evidence, _output = self.case("linked-intermediate")
+        outside = self.base / "outside-intermediate"
+        outside.mkdir(mode=0o700)
+        sentinel = outside / "sentinel"
+        sentinel.write_bytes(b"must remain untouched")
+        linked = evidence / "reports"
+        linked.symlink_to(outside, target_is_directory=True)
+        before = self.unchanged(outside), self.unchanged(sentinel), self.unchanged(linked)
+        with self.assertRaises(runner.AuditError):
+            self.retain(root, state, evidence)
+        self.assertEqual((self.unchanged(outside), self.unchanged(sentinel), self.unchanged(linked)), before)
+        self.assertEqual([path.name for path in outside.iterdir()], ["sentinel"])
+        self.assertEqual(sentinel.read_bytes(), b"must remain untouched")
+
+    def test_symlink_anchor_is_not_followed_or_replaced(self):
+        root, state, evidence, _output = self.case("linked-anchor", evidence=False)
+        outside = self.base / "outside-anchor"
+        outside.mkdir(mode=0o700)
+        evidence.symlink_to(outside, target_is_directory=True)
+        before = self.unchanged(outside), self.unchanged(evidence)
+        with self.assertRaises(runner.AuditError):
+            self.retain(root, state, evidence)
+        self.assertEqual((self.unchanged(outside), self.unchanged(evidence)), before)
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_non_directory_intermediate_is_refused_without_replacement(self):
+        root, state, evidence, _output = self.case("file-intermediate")
+        path = evidence / "reports"
+        path.write_bytes(b"preserve existing file")
+        before = self.unchanged(path)
+        with self.assertRaises(runner.AuditError):
+            self.retain(root, state, evidence)
+        self.assertEqual(self.unchanged(path), before)
+        self.assertEqual(path.read_bytes(), b"preserve existing file")
+
+    def test_missing_evidence_anchor_is_not_created(self):
+        root, state, evidence, _output = self.case("missing-anchor", evidence=False)
+        with self.assertRaises(runner.AuditError):
+            self.retain(root, state, evidence)
+        self.assertFalse(evidence.exists())
+
+    def test_wrong_owner_observation_refuses_without_impersonating_getuid(self):
+        root, state, evidence, _output = self.case("wrong-owner-model")
+        real_lstat = Path.lstat
+
+        def observe(path):
+            info = real_lstat(path)
+            if path == evidence:
+                return SimpleNamespace(st_mode=info.st_mode, st_uid=os.getuid() + 1)
+            return info
+
+        with mock.patch.object(Path, "lstat", new=observe), self.assertRaises(runner.AuditError):
+            self.retain(root, state, evidence)
+        self.assertEqual(list(evidence.iterdir()), [])
+
+    def test_mkdir_permission_error_is_preserved_without_retry(self):
+        root, state, evidence, _output = self.case("mkdir-failure")
+        target = evidence / "reports"
+        original = PermissionError("synthetic mkdir refusal")
+        real_mkdir = Path.mkdir
+        calls = []
+
+        def create(path, *args, **kwargs):
+            if path == target:
+                calls.append(path)
+                raise original
+            return real_mkdir(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "mkdir", new=create), self.assertRaises(PermissionError) as caught:
+            self.retain(root, state, evidence)
+        self.assertIs(caught.exception, original)
+        self.assertEqual(calls, [target])
+        self.assertEqual(list(evidence.iterdir()), [])
+
+    def test_lstat_permission_error_is_not_treated_as_absence(self):
+        root, state, evidence, _output = self.case("lstat-failure")
+        original = PermissionError("synthetic lstat refusal")
+        real_lstat = Path.lstat
+
+        def observe(path):
+            if path == evidence:
+                raise original
+            return real_lstat(path)
+
+        with mock.patch.object(Path, "lstat", new=observe), self.assertRaises(PermissionError) as caught:
+            self.retain(root, state, evidence)
+        self.assertIs(caught.exception, original)
+        self.assertEqual(list(evidence.iterdir()), [])
+
+    def test_file_exists_race_is_revalidated_before_descent(self):
+        for kind in ("private", "broad", "file", "link"):
+            with self.subTest(kind=kind):
+                root, state, evidence, _output = self.case("race-" + kind)
+                target = evidence / "reports"
+                outside = self.base / ("race-target-" + kind)
+                outside.mkdir(mode=0o700)
+                real_mkdir = Path.mkdir
+                real_chmod = os.chmod
+                calls = []
+
+                def create(path, *args, **kwargs):
+                    if path == target:
+                        calls.append(path)
+                        if kind in ("private", "broad"):
+                            real_mkdir(path, mode=0o700)
+                            if kind == "broad":
+                                # Fixture-injected racing mode, independent of
+                                # the incoming umask; production chmod stays forbidden.
+                                real_chmod(path, 0o755)
+                        elif kind == "file":
+                            path.write_bytes(b"racing existing file")
+                        else:
+                            path.symlink_to(outside, target_is_directory=True)
+                        raise FileExistsError("synthetic exclusive mkdir race")
+                    return real_mkdir(path, *args, **kwargs)
+
+                with mock.patch.object(Path, "mkdir", new=create):
+                    if kind == "private":
+                        rows = self.retain(root, state, evidence)
+                        self.assert_private_readback(evidence, rows[0], self.payload)
+                    else:
+                        with self.assertRaises(runner.AuditError):
+                            self.retain(root, state, evidence)
+                        self.assertFalse((evidence / "report-manifest.json").exists())
+                self.assertEqual(calls, [target])
+                self.assertEqual(list(outside.iterdir()), [])
+                if kind == "broad":
+                    self.assertEqual(list(target.iterdir()), [])
+                if kind == "file":
+                    self.assertEqual(target.read_bytes(), b"racing existing file")
+
+    def test_existing_payload_is_never_replaced(self):
+        root, state, evidence, output = self.case("payload-collision")
+        relative = "reports/" + output.relative_to(root).as_posix()
+        self.private_parents(evidence, relative)
+        target = evidence / relative
+        target.write_bytes(b"earlier retained bytes")
+        before = self.unchanged(target)
+        with self.assertRaises(FileExistsError):
+            self.retain(root, state, evidence)
+        self.assertEqual(self.unchanged(target), before)
+        self.assertEqual(target.read_bytes(), b"earlier retained bytes")
+        self.assertFalse((evidence / "report-manifest.json").exists())
+
+    def test_existing_manifest_is_never_replaced(self):
+        root, state, evidence, _output = self.case("manifest-collision")
+        target = evidence / "report-manifest.json"
+        target.write_bytes(b"earlier original manifest")
+        before = self.unchanged(target)
+        with self.assertRaises(FileExistsError):
+            self.retain(root, state, evidence)
+        self.assertEqual(self.unchanged(target), before)
+        self.assertEqual(target.read_bytes(), b"earlier original manifest")
+
+    def test_report_depth_keeps_output_prefixes_outside_original_256_limit(self):
+        for depth in (256, 257):
+            with self.subTest(depth=depth):
+                label = "library/demo/build/reports/" + "d/" * depth + "result.xml"
+                root, state, evidence, _output = self.case("depth-" + str(depth), label=label)
+                if depth == 257:
+                    with self.assertRaisesRegex(runner.AuditError, "directory depth exceeds"):
+                        self.retain(root, state, evidence)
+                    self.assertEqual(list(evidence.iterdir()), [])
+                else:
+                    rows = self.retain(root, state, evidence)
+                    self.assertEqual(len(rows), 1)
+                    self.assertEqual(rows[0]["source"], label)
+                    self.assertEqual(rows[0]["retained"], "reports/" + label)
+                    self.assertEqual((evidence / rows[0]["retained"]).read_bytes(), self.payload)
+                    # No assertion of the separate native reader's depth/member
+                    # admission, and no descriptor per directory for this case.
+
+    def test_external_owned_project_retention_keeps_its_original_label(self):
+        root, state, evidence, output = self.case("external", label="not-a-report.txt")
+        fixture = state / "work/consumer"
+        report = fixture / "build/test-results/test/result.xml"
+        report.parent.mkdir(parents=True)
+        report.write_bytes(self.payload)
+        rows = self.retain(root, state, evidence, original=["help", "-p", str(fixture)])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["source"], "external/work/consumer/build/test-results/test/result.xml")
+        self.assert_private_readback(evidence, rows[0], self.payload)
+        self.assertEqual(output.read_bytes(), self.payload)
+
+
 class CapturePolicyTests(unittest.TestCase):
     """Tiny streams/threads and modeled execute ownership; never native/product evidence."""
 
@@ -5154,6 +5506,8 @@ def main():
                                unittest.defaultTestLoader.loadTestsFromTestCase(DeadlinePolicyTests),
                                unittest.defaultTestLoader.loadTestsFromTestCase(DarwinObservationTests),
                                unittest.defaultTestLoader.loadTestsFromTestCase(native)])
+    if os.name == "posix":
+        suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(ReportRetentionPosixTests))
     print(f"Running current-host real executor fixtures: {processes.host_role()}; no other-host/native claims", flush=True)
     print(f"Retained fixture receipts/logs: {EVIDENCE_ROOT}", flush=True)
     return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1
