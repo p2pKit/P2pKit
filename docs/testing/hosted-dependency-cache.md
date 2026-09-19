@@ -9,9 +9,11 @@ The internal bootstrap recipient/initializer and separate staging/empty-seed
 leaf and same-call parents now have source implementation and focused offline
 controls, as do the file-only configuration-custody reservation leaf and its
 same-call third parent. A separate internal original-call configuration producer
-now has source implementation and focused offline controls. No public command
-or workflow invokes that path. Four-log/report collection, no-loader observation,
-export/freeze/save/probe and encrypted-custody integration remain unfinished.
+now has source implementation and focused offline controls. A separate supplied-
+original file-copy leaf also has source and focused controls; it is not the
+original-call collection parent. No public command or workflow invokes either
+path. Original-call collection, no-loader observation, export/freeze/save/probe
+and encrypted-custody integration remain unfinished.
 [`hosted_dependency_cache.py`](../../scripts/hosted_dependency_cache.py) has no
 CLI, action runner, downloader, extraction, deletion or subprocess entry point.
 The connected caller is
@@ -1260,6 +1262,42 @@ caller or new execution authority follows. Recipient/trusted-base/formal-review,
 native/provider/resolver/custody/scheduling/delivery qualification remains required;
 proposed5400 is unadmitted/unmeasured and NativeFile900/Snapshot576MiB are unchanged.
 
+### Supplied-original file-copy leaf, not original-call collection
+
+[`hosted_cache_bootstrap_collect_files.py`](../../scripts/hosted_cache_bootstrap_collect_files.py)
+rederives the inventory from six supplied original byte records and a supplied
+exit, with evidence/retained directory identities and metadata-file bindings.
+It derives the canonical evidence source and existing
+`configuration-custody/retained` destination, not an arbitrary output or live
+checkout report path. It copies three original metadata files, four canonical
+logs and already-retained changed reports; it never reruns `retain_reports`.
+A supplied identity/binding is not a raw reservation or original-call permit.
+
+Metadata preflight precedes output. Positive64KiB reads, same-reader prehash/
+rewind/copy, full exact write acknowledgments, sync/verify/close and new readback
+precede success. Source/destination membership, identity/stamp/hash/size and final
+rechecks remain strict. Partial files/errors are retained. One local120 only
+shortens caller deadlines; basename128/alnum-first, depth64,10,000 observed-member
+and4,096 cumulative resource limits remain narrower than inventory grammar.
+No aggregate Snapshot is used. Windows declared-size exhaustion is explicitly
+not kernel EOF; unchanged same-descriptor verification remains essential.
+
+Known leaf-resource close is not enclosing retirement. The owner stays open;
+new-row labels are diagnostic rather than original-call identities. Output
+denies original-call/single-use, no-loader, population/test and export/save
+authority. The [file-copy continuation](../maintenance/hosted-bootstrap-file-collection-2026-09-19.md)
+separates R2 author39/independent4 from R4 focused author10 and independent2/3/9
+passes. Earlier failed preimages remain failed; R3 superseded proposals never
+ran. The47 authored methods have no whole47 execution. These offline controls
+and source review are not original-call, native or hosted qualification.
+
+The future parent must once-claim before invoking the original producer, require
+actual close and final RAW/LOCAL high-waters, and use NEW owner/handles under the
+original allocation. It must not adopt a returned prefix or revive old READ30.
+No-loader/export/freeze/save/probe/encrypted custody and delivery remain separate.
+Both HOLDs, unadmitted/unmeasured5400, NativeFile900/Snapshot576MiB and missing
+recipient/trusted-base/formal-review/native/provider/scheduling requirements stay.
+
 ## Connected consume and delivery path
 
 After the unchanged HOLD and native/source admission, `prepare-consume` binds
@@ -1429,6 +1467,8 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-custody-parent-test.py \
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-producer-parent-test.py \
   ProducerParentModels.test_whole_parent_uses_modeled_closed_prefix_but_real_new_owner_files_and_record_reader -v
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-collection-test.py InventoryModels -v
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-collect-files-test.py \
+  FileLeafControls.test_copies_only_seven_original_files_and_changed_retained_reports -v
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
@@ -1444,7 +1484,7 @@ generated initializer, controller, native, network and child execution. Their
 actual tiny POSIX source reads and modeled Windows reparse checks do not qualify
 native Windows source custody or a productive bootstrap phase.
 The separate bootstrap identity/cohort/producer-record/query-fence/original-acquisition/
-handoff/entry/service-time/allocation-proposal/close/history/legacy-reader/fresh-entry/recipient-child/recipient-parent/initialization/staging-leaf/staging-parent/configuration-custody-reservation/configuration-custody-parent/configuration-producer-parent/configuration-report-inventory
+handoff/entry/service-time/allocation-proposal/close/history/legacy-reader/fresh-entry/recipient-child/recipient-parent/initialization/staging-leaf/staging-parent/configuration-custody-reservation/configuration-custody-parent/configuration-producer-parent/configuration-report-inventory/configuration-file-copy
 controls are standalone, not an activated or registered bootstrap workflow.
 The recipient-parent example selects one method; its complete suite was executed in
 externally bounded four-method batches, as recorded in the source continuation.
@@ -1472,6 +1512,11 @@ record. Its38 author methods have passes across the retained failed38
 Independent original33 likewise remains FAILED (32passed/one errored method);
 a strict corrected1 passed separately. These are pure supplied-record checks,
 not filesystem collection, original execution authentication or native tests.
+The file-copy example selects one method, not the entire47-method author class.
+Its R2 original39 and R4 focused10 passes are separately source-bound in the
+continuation; no full47-method execution is claimed. Supplied
+producer records/owner models plus tiny actual POSIX files are not an original
+producer-to-collection call, native process/Windows or hosted acceptance.
 Tiny private-file controls require an actual ordinary UID; root is not an
 acceptable substitute and their modeled native boundaries are not host admission.
 Native Windows provider behavior and actual resolver/cache reuse require
