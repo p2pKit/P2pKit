@@ -5934,6 +5934,7 @@ _ProducerFrame = namedtuple("_ProducerFrame", "call transition roots operation s
     "close_roster original unknown errors descriptor environment outer_invocation native captures "
     "query_attempted query query_returned cancellation_attempted cancellation_raw cancellation_stamps "
     "result", defaults=(None,) * 38)
+_ProducerResultPin = namedtuple("_ProducerResultPin", "frame result dictionary fields records graph graph_pin")
 
 
 def _producer_private_controls():
@@ -5945,7 +5946,8 @@ def _producer_private_controls():
     """
     roots = (_ENTRY_ATTEMPTS, _RECIPIENT_ATTEMPTS, _INITIALIZER_ATTEMPTS, _PARENT_CONTROLS, _STAGING_ATTEMPTS)
     operation, lock = _recipient_after_entry, threading.Lock()
-    attempts, frames, owners, windows_by_id = {}, {}, {}, {}
+    attempts, frames, owners, windows_by_id, results = {}, {}, {}, {}, {}
+    result_attempted = set()
 
     def original_roots():
         require(all(actual is old for actual, old in zip(
@@ -5975,13 +5977,42 @@ def _producer_private_controls():
 
     def update(call, **values):
         saved = frame(call)
+        result_fields = result_dictionary = None
+        if "result" in values:
+            result = values["result"]
+            require(saved.result is None and id(call) not in result_attempted, "BOOTSTRAP_PRODUCER_RESULT_REENTRY")
+            result_attempted.add(id(call))  # Failed capture/publication is also consumed.
+            require(type(result) is ConfigurationPrefix and values.get("state") == "COMPLETE",
+                    "BOOTSTRAP_PRODUCER_RESULT_ORIGINALS")
+            # Retain immutable originals at the ORIGINAL producer publication,
+            # not from mutable dataclass fields first seen by a later consumer.
+            result_dictionary = object.__getattribute__(result, "__dict__")
+            result_fields = tuple(result_dictionary[name] for name in
+                ("raw", "request_raw", "start_raw", "receipt_raw", "observation_raw", "checked_ns", "checked_local"))
+            require(set(result_dictionary) == {"raw", "request_raw", "start_raw", "receipt_raw", "observation_raw",
+                    "checked_ns", "checked_local"} and
+                    all(type(raw) is bytes and 0 < len(raw) <= 4194304 for raw in result_fields[:5]) and
+                    type(result_fields[5]) is int and type(result_fields[6]) in (int, float) and
+                    math.isfinite(result_fields[6]), "BOOTSTRAP_PRODUCER_RESULT_ORIGINALS")
         if "owner" in values:
             require(saved.owner is None and type(values["owner"]) is _ProducerOwner, "BOOTSTRAP_PRODUCER_OWNER_REENTRY")
             owners[id(values["owner"])] = call
         if "window" in values:
             require(saved.window is None and type(values["window"]) is _ProducerWindow, "BOOTSTRAP_PRODUCER_WINDOW_REENTRY")
             windows_by_id[id(values["window"])] = call
-        frames[id(call)] = saved._replace(**values)
+        updated = saved._replace(**values)
+        if result_fields is not None:
+            # These original containers must be pinned BEFORE returning to the
+            # enclosing call. A later first snapshot cannot recover erased query
+            # rows or graph witnesses. The parent's public result/state are the
+            # only remaining bookkeeping and are deliberately not captured here.
+            selected = (updated.owner, updated.window, updated.result, updated.query[0],
+                        *(row.stream for row in updated.captures))
+            records, graph = _capture_producer_graph(updated, selected)
+            graph_pin = (object.__getattribute__(graph, "__dict__"), graph.nodes, graph.paths)
+            results[id(call)] = _ProducerResultPin(updated, values["result"], result_dictionary, result_fields,
+                                                   records, graph, graph_pin)
+        frames[id(call)] = updated
         return frames[id(call)]
 
     def invoke(call):
@@ -6009,11 +6040,37 @@ def _producer_private_controls():
                 "BOOTSTRAP_PRODUCER_WINDOW_NOT_BOUND")
         return saved
 
-    return claim, frame, update, invoke, original_roots, owner_frame, window_frame
+    def original_call(transition):
+        """Passive same-process lookup, NOT a prefix/adoption or execution API."""
+        require(type(transition) is NewEntryTransition, "BOOTSTRAP_PRODUCER_TRANSITION_KIND")
+        original_roots()
+        row = attempts.get(id(transition))
+        require(type(row) is tuple and len(row) == 2 and row[0] is transition and
+                type(row[1]) is _ProducerParent, "BOOTSTRAP_PRODUCER_NOT_ORIGINAL_CALL")
+        saved = frame(row[1])
+        require(saved.transition is transition and saved.call is row[1] and saved.roots is roots and
+                saved.operation is operation, "BOOTSTRAP_PRODUCER_NOT_ORIGINAL_CALL")
+        return row[1]
+
+    def original_result(call):
+        original_roots()
+        saved, pin = frame(call), results.get(id(call))
+        require(type(pin) is _ProducerResultPin and pin.frame is saved and pin.result is saved.result and
+                type(pin.result) is ConfigurationPrefix and
+                object.__getattribute__(pin.result, "__dict__") is pin.dictionary,
+                "BOOTSTRAP_PRODUCER_RESULT_NOT_ORIGINAL")
+        names = ("raw", "request_raw", "start_raw", "receipt_raw", "observation_raw", "checked_ns", "checked_local")
+        require(set(pin.dictionary) == set(names) and all(type(pin.dictionary[name]) is type(old) and
+                pin.dictionary[name] == old for name, old in zip(names, pin.fields)),
+                "BOOTSTRAP_PRODUCER_RESULT_ORIGINALS_CHANGED")
+        _check_producer_result_graph(pin)
+        return pin
+
+    return claim, frame, update, invoke, original_roots, owner_frame, window_frame, original_call, original_result
 
 
 (_claim_producer, _producer_frame, _update_producer, _invoke_producer_reservation, _producer_original_roots,
- _producer_owner_frame, _producer_window_frame) = _producer_private_controls()
+ _producer_owner_frame, _producer_window_frame, _producer_original_call, _producer_original_result) = _producer_private_controls()
 del _producer_private_controls
 
 
@@ -7537,6 +7594,486 @@ def configure_after_entry(transition):
             parent.error("producer-configure-intent", error)
         _producer_set_state(parent, "FAILED")
         raise _producer_frame(parent).original
+
+
+@dataclass(eq=False)
+class _CollectionOrigin:
+    """Private in-call binding component; no collection owner or public return.
+
+    Constructing this record cannot claim a transition. The future enclosing
+    collector must start its NEW owner under the original cumulative allocation
+    before returning collection evidence. This component neither opens files nor
+    supplies a transferable ConfigurationPrefix-to-execution upgrade.
+    """
+    transition: object = field(repr=False)
+    state: str = "CLAIMED"
+    producer: object = field(default=None, repr=False)
+    returned: object = field(default=None, repr=False)
+    original: object = field(default=None, repr=False)
+
+
+_CollectionOriginFrame = namedtuple("_CollectionOriginFrame", "call transition state producer returned "
+    "producer_frame records graph graph_pin original", defaults=(None,) * 10)
+
+
+def _collection_origin_controls():
+    """Once-claim BEFORE the original producer call, including failed attempts.
+
+    Registry/function-object identity is finite in-process binding, not a Python
+    sandbox or hosted identity. No selector, callback, prefix or file path can
+    substitute a producer operation. No lock is held across its invocation.
+    """
+    operation, lookup, result_lookup = configure_after_entry, _producer_original_call, _producer_original_result
+    attempts, frames, lock = {}, {}, threading.Lock()
+
+    def roots():
+        require(configure_after_entry is operation and _producer_original_call is lookup and
+                _producer_original_result is result_lookup,
+                "BOOTSTRAP_COLLECTION_ORIGINAL_OPERATION_CHANGED")
+        _producer_original_roots()
+
+    def claim(transition):
+        require(type(transition) is NewEntryTransition, "BOOTSTRAP_COLLECTION_TRANSITION_KIND")
+        roots()
+        with lock:
+            require(id(transition) not in attempts, "BOOTSTRAP_COLLECTION_ALREADY_CLAIMED")
+            call = _CollectionOrigin(transition)
+            attempts[id(transition)] = (transition, call)
+            frames[id(call)] = _CollectionOriginFrame(call=call, transition=transition, state="CLAIMED")
+        return call
+
+    def frame(call):
+        saved = frames.get(id(call))
+        require(type(call) is _CollectionOrigin and type(saved) is _CollectionOriginFrame and saved.call is call,
+                "BOOTSTRAP_COLLECTION_NOT_CLAIMED")
+        row = attempts.get(id(saved.transition))
+        require(type(row) is tuple and len(row) == 2 and row[0] is saved.transition and row[1] is call,
+                "BOOTSTRAP_COLLECTION_NOT_CLAIMED")
+        return saved
+
+    def update(call, **values):
+        saved = frame(call)
+        frames[id(call)] = saved._replace(**values)
+        return frames[id(call)]
+
+    def invoke(call):
+        saved = frame(call)
+        roots()
+        require(saved.state == call.state == "CLAIMED" and call.transition is saved.transition and
+                saved.producer is call.producer is None and saved.returned is call.returned is None and
+                saved.original is call.original is None, "BOOTSTRAP_COLLECTION_PRODUCER_REENTRY")
+        update(call, state="INVOKING")
+        call.state = "INVOKING"
+        returned = operation(saved.transition)
+        # Retain the actual return BEFORE a fallible root/lookup/closed check.
+        update(call, returned=returned, state="RETURNED")
+        call.returned, call.state = returned, "RETURNED"
+        roots()
+        producer_call = lookup(saved.transition)
+        update(call, producer=producer_call)
+        call.producer = producer_call
+        return producer_call, returned
+
+    return claim, frame, update, invoke, roots
+
+
+(_claim_collection_origin, _collection_origin_frame, _update_collection_origin,
+ _invoke_collection_producer, _collection_origin_roots) = _collection_origin_controls()
+del _collection_origin_controls
+
+
+def _collection_producer_original_bytes(frame, returned):
+    """Pure comparisons of retained records, not native/source rederivation.
+
+    In particular command_request/init_request/host/read_originals are NOT pure
+    record checks. The separate original result pin preserves all five exact
+    encodings before this comparison; parsing does not mint original bytes.
+    """
+    files = {row.key: row for row in frame.files}
+    require(len(files) == len(frame.files) and {"outer-start", "baseline", "native-start",
+            "canonical-start", "canonical-receipt"}.issubset(files), "BOOTSTRAP_COLLECTION_PRODUCER_ORIGINAL_FILES")
+    native, descriptor = frame.native, origin.parse(frame.descriptor)
+    request = producer.parse(returned.request_raw)
+    original = frame.predecessor.frame.originals
+    producer.validate_observation(producer.parse(returned.observation_raw), returned.request_raw,
+        original.admitted.record, original.canonical_raw, returned.start_raw, returned.receipt_raw,
+        original_exit_code=native.exit_code)
+    require(type(descriptor["argv"]) is list and type(native.argv) is tuple and tuple(descriptor["argv"]) == native.argv and
+            descriptor["role"] == request["host"] == frame.limits.clock[0] and
+            descriptor["root"] == request["cwd"] and descriptor["gradleHome"] == request["gradleHome"] and
+            descriptor["requestSha256"] == origin.digest(returned.request_raw) and
+            descriptor["admissionSha256"] == origin.digest(original.admitted.record) and
+            descriptor["canonicalContextSha256"] == origin.digest(original.canonical_raw) and
+            descriptor["requestBytes"].encode("ascii") == returned.request_raw and
+            all(type(producer.parse(raw).get("controllerPid")) is int and
+                producer.parse(raw)["controllerPid"] == native.child_pid for raw in (returned.start_raw, returned.receipt_raw)),
+            "BOOTSTRAP_COLLECTION_PRODUCER_DESCRIPTOR_BINDING")
+    environment = dict(frame.environment)
+    outer = {"schema": 1, "scope": "BOOTSTRAP_CONFIGURATION_PARENT_PRELAUNCH_V1",
+        "contextSha256": descriptor["canonicalContextSha256"], "argv": descriptor["argv"], "cwd": descriptor["root"],
+        "role": frame.limits.clock[0], "job": request["jobId"], "invocation": frame.outer_invocation,
+        "state": descriptor["state"], "home": request["gradleHome"],
+        "inheritedContext": {name: environment[name] for name in query._CONTEXT}, "startedNs": frame.limits.first,
+        "workEndNs": frame.limits.ends[0], "finalEndNs": frame.limits.ends[2], "exitCode": None,
+        "launchAttempted": False, "scopeAttempted": False, "retirement": "UNKNOWN"}
+    require(files["outer-start"].raw == origin.encoded(outer) and files["baseline"].raw == native.baseline_raw,
+            "BOOTSTRAP_COLLECTION_PRODUCER_OUTER_START_CHANGED")
+    scope = next(row.value for row in frame.resources if row.label == "native-scope")
+    if frame.limits.clock[0] == "windows-x64":
+        actual_scope, expected_scope = (scope.job_id, scope.invocation), (outer["job"], outer["invocation"])
+    else:
+        actual_scope = (scope.job, scope.invocation, scope.state, scope.home)
+        expected_scope = (outer["job"], outer["invocation"], outer["state"], outer["home"])
+    require(all(type(value) is str for value in actual_scope) and actual_scope == expected_scope,
+            "BOOTSTRAP_COLLECTION_PRODUCER_SCOPE_CHANGED")
+    supplier = frame.query[0]
+    phase = next(row for row in frame.handles if row[0] == "phase")
+    require(type(supplier.root) is type(Path(descriptor["root"])) and supplier.root == Path(descriptor["root"]) and
+            type(supplier.path) is type(phase[2]) and supplier.path == phase[2] / "admission",
+            "BOOTSTRAP_COLLECTION_PRODUCER_QUERY_LOCATION_CHANGED")
+    leader, birth, terminal = (origin.parse(raw) for raw in (native.leader_raw, native.birth_raw, native.terminal_raw))
+    baseline = baseline_record(native.baseline_raw, frame.limits.clock[0])
+    preparer = closed_lifetime(origin.parse(native.preparer_raw), frame.limits.clock[0])
+    native_record(birth, outer, leader, list(native.argv), terminal=False)
+    native_record(terminal, outer, leader, list(native.argv))
+    require(leader["pid"] == native.child_pid and preparer["pid"] != native.child_pid and
+            birth["launches"] == terminal["launches"], "BOOTSTRAP_COLLECTION_PRODUCER_NATIVE_RECORD_CHANGED")
+    if baseline["baseline"] is not None:
+        identity = lifetime(leader, frame.limits.clock[0])
+        require(list(identity[:4] if frame.limits.clock[0].startswith("macos-") else identity) not in baseline["baseline"],
+                "BOOTSTRAP_COLLECTION_PRODUCER_PREEXISTING_LEADER")
+    born = origin.parse(files["native-start"].raw)
+    require(set(born) == {"ownership", "leader", "preparerIdentity", "observedNs"} and
+            origin.encoded(born["ownership"]) == native.birth_raw and origin.encoded(born["leader"]) == native.leader_raw and
+            origin.encoded(born["preparerIdentity"]) == native.preparer_raw and
+            native.launch_minimum <= origin.integer(born["observedNs"]) <= native.completed_ns,
+            "BOOTSTRAP_COLLECTION_PRODUCER_NATIVE_START_CHANGED")
+    value = origin.parse(returned.raw)
+    closed = origin.integer(value.get("closedNs"))
+    require(max(native.finalized_ns, *(row.readback[2] for row in frame.captures)) <= closed <= frame.last,
+            "BOOTSTRAP_COLLECTION_PRODUCER_CLOSED_CHRONOLOGY")
+    expected = {"schema": 1, "scope": "BOOTSTRAP_CONFIGURATION_PARENT_CLOSED_OBSERVATIONS_V1",
+        "reservationSha256": origin.digest(frame.reservation.raw), "descriptorSha256": origin.digest(frame.descriptor),
+        "requestSha256": origin.digest(returned.request_raw), "canonicalObservationSha256": origin.digest(returned.observation_raw),
+        "window": {"clock": origin.clock_value(frame.first.clock), "firstNs": frame.limits.first,
+            "globalEndsNs": dict(zip(("WORK", "RETURN", "FINAL", "READ"), frame.limits.ends)),
+            "phases": [{"phase": phase.name, "startedNs": phase.started, "endNs": phase.end} for phase in frame.phases],
+            "budgetAcceptance": "NOT_ADMITTED"}, "closedNs": closed, "originalExitCode": native.exit_code,
+        "workCompletedNs": native.completed_ns, "outerNativeRetirement": "KNOWN_ORIGINAL_SCOPE_CLOSE",
+        "outerStartSha256": origin.digest(files["outer-start"].raw), "outerBaselineSha256": origin.digest(native.baseline_raw),
+        "outerBirthSha256": origin.digest(native.birth_raw), "outerTerminalSha256": origin.digest(native.terminal_raw),
+        "outerCaptures": {row.name: {"bytes": row.readback[0], "sha256": row.readback[1], "readNs": row.readback[2]}
+                          for row in frame.captures},
+        "outerCaptureScope": "TWO_ORIGINAL_STREAMS_OBSERVED_SIZE_NOT_KERNEL_QUOTA_OR_COMPLETE_CUSTODY",
+        "canonicalFourLogReportCollection": "NOT_PERFORMED", "dependencyPopulation": "NOT_ATTESTED",
+        "parentResourceClose": "KNOWN_RESOURCE_CLOSE_ONLY", "resourceCount": len(frame.resources),
+        "nextPhaseAuthority": False, "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED",
+        "exportSaveAuthority": False}
+    require(returned.raw == origin.encoded(expected), "BOOTSTRAP_COLLECTION_PRODUCER_CLOSED_RECORD_CHANGED")
+
+
+def _collection_closed_producer(parent, returned):
+    """Passive closed-return binding: NEVER call producer.check/roster/owners.
+
+    Those live methods can update a frame or record errors. Refusal here cannot
+    reopen, advance, cancel or assume cleanup of the already returned producer.
+    No current clock, file, provider or native observation occurs here.
+    """
+    require(type(parent) is _ProducerParent and type(returned) is ConfigurationPrefix,
+            "BOOTSTRAP_COLLECTION_PRODUCER_RETURN_KIND")
+    frame = _producer_frame(parent)
+    require(_producer_original_result(parent).frame is frame, "BOOTSTRAP_COLLECTION_PRODUCER_NOT_ORIGINAL_RESULT")
+    _producer_predecessor_checked(parent)
+    require(frame.state == parent.state == "COMPLETE" and frame.result is parent.result is returned and
+            frame.transition is parent.transition and frame.original is parent.original is None and
+            frame.unknown is parent.unknown is False and frame.errors == () and frame.foreign == () and
+            type(frame.published) is tuple and len(frame.published) == 4 and
+            parent.handles is frame.published[0] and parent.records is frame.published[1] and
+            parent.handlers is frame.published[2] and parent.cancelled is frame.published[3] and
+            type(parent.cancelled) is list and not parent.cancelled,
+            "BOOTSTRAP_COLLECTION_PRODUCER_NOT_COMPLETE")
+    owner, window, bindings = frame.owner, frame.window, frame.owner_bindings
+    require(type(owner) is _ProducerOwner and type(window) is _ProducerWindow and
+            type(bindings) is tuple and len(bindings) == 5 and type(frame.limits) is _ProducerLimits and
+            parent.owner is owner and parent.window is window and window.call is parent and
+            _producer_owner_frame(owner) is frame and _producer_window_frame(window) is frame and
+            owner.closed is True and owner.original is None and owner.unknown is False and
+            owner.resources is bindings[0] and owner.errors is bindings[1] and owner.admissions is bindings[2] and
+            owner.errors == [] and type(owner.local_end) is type(bindings[3]) and owner.local_end == bindings[3] and
+            owner.cancelled is bindings[4] and owner.first is frame.first and owner.fence is window and
+            owner.work_limit is owner.final_limit is None and owner.early_last == frame.limits.first and
+            frame.first.nanoseconds == frame.limits.first and staging._clock(frame.first.clock) == frame.limits.clock and
+            owner.local_end == frame.limits.local_ends[-1],
+            "BOOTSTRAP_COLLECTION_PRODUCER_OWNER_NOT_CLOSED")
+    require(type(frame.resources) is tuple and type(owner.resources) is list and
+            len(frame.resources) == len(owner.resources) <= 4096 and type(frame.close_roster) is tuple and
+            len(frame.close_roster) == len(frame.resources) and frame.handlers == frame.restored and
+            tuple(parent.handlers.items()) == frame.handlers and
+            len({id(row.row) for row in frame.resources}) == len(frame.resources) and
+            len({id(row.value) for row in frame.resources}) == len(frame.resources),
+            "BOOTSTRAP_COLLECTION_PRODUCER_CLOSE_ROSTER")
+    for row, pin, closed in zip(owner.resources, frame.resources, frame.close_roster):
+        require(type(pin) is _ProducerResource and type(row) is dict and
+                set(row) == {"label", "owner", "attempted", "closed"} and row is pin.row and
+                type(pin.label) is str and pin.label in
+                ("directory", "reader", "writer", "stdout", "stderr", "native-scope", "source-directory") and
+                type(row["label"]) is str and row["label"] == pin.label and row["owner"] is pin.value and
+                type(pin.value) is pin.kind and row["attempted"] is row["closed"] is pin.attempted is pin.closed is True and
+                closed == (id(row), pin.label, id(pin.value)), "BOOTSTRAP_COLLECTION_PRODUCER_CLOSE_ROSTER")
+    required = {name: tuple(row for row in frame.resources if row.label == name)
+                for name in ("native-scope", "stdout", "stderr")}
+    require(all(len(rows) == 1 for rows in required.values()), "BOOTSTRAP_COLLECTION_PRODUCER_REQUIRED_CLOSE")
+    require(type(frame.handles) is tuple and type(frame.files) is tuple and
+            all(type(row) is tuple and len(row) == 4 for row in frame.handles) and
+            all(type(row) is _ProducerFile and type(row.raw) is bytes and type(row.binding_raw) is bytes for row in frame.files) and
+            tuple(parent.handles.items()) == tuple((row[0], row[1]) for row in frame.handles) and
+            tuple(parent.records.items()) == tuple((row.key, row.raw) for row in frame.files),
+            "BOOTSTRAP_COLLECTION_PRODUCER_RECORD_ROSTER")
+    for _key, directory, path, identity in frame.handles:
+        require(type(directory.path) is type(path) and directory.path == path and tuple(directory.identity) == identity,
+                "BOOTSTRAP_COLLECTION_PRODUCER_DIRECTORY_CHANGED")
+    for row in frame.files:
+        require(type(row.directory.path) is type(row.path) and row.directory.path == row.path and
+                tuple(row.directory.identity) == row.identity,
+                "BOOTSTRAP_COLLECTION_PRODUCER_FILE_DIRECTORY_CHANGED")
+    require(type(frame.phases) is tuple and len(frame.phases) == 4 and
+            all(type(phase) is _ProducerPhase for phase in frame.phases) and
+            tuple(phase.name for phase in frame.phases) == ("WORK", "RETURN", "FINAL", "READ") and
+            type(frame.last) is int and frame.last == returned.checked_ns and
+            type(returned.checked_ns) is int and origin.integer(frame.last) < frame.phases[-1].end and
+            type(frame.local_last) in (int, float) and math.isfinite(frame.local_last) and
+            type(returned.checked_local) is type(frame.local_last) and
+            staging._local(frame.local_last) == returned.checked_local < frame.phases[-1].local_end,
+            "BOOTSTRAP_COLLECTION_PRODUCER_FINAL_HIGHWATER")
+    require(type(frame.limits.ends) is tuple and type(frame.limits.local_ends) is tuple and
+            len(frame.limits.ends) == len(frame.limits.local_ends) == 4 and
+            all(type(value) is int for value in frame.limits.ends) and
+            all(type(value) in (int, float) and math.isfinite(value) for value in frame.limits.local_ends) and
+            frame.limits.first < frame.limits.ends[0] <= frame.limits.ends[1] <= frame.limits.ends[2] <= frame.limits.ends[3] and
+            staging._local(frame.limits.local_start) < frame.limits.local_ends[0] <= frame.limits.local_ends[1] <=
+                frame.limits.local_ends[2] <= frame.limits.local_ends[3], "BOOTSTRAP_COLLECTION_PRODUCER_PHASE_LIMITS")
+    previous_raw, previous_local = frame.limits.first, frame.limits.local_start
+    for index, (phase, maximum) in enumerate(zip(frame.phases, (600, 225, 45, 30))):
+        require(previous_raw <= origin.integer(phase.started) <= frame.last and
+                previous_local <= staging._local(phase.local_started) <= frame.local_last and
+                phase.started < origin.integer(phase.end) <= min(frame.limits.ends[index], phase.started + maximum * origin.NS) and
+                phase.local_started < staging._local(phase.local_end) <=
+                    min(frame.limits.local_ends[index], phase.local_started + maximum),
+                "BOOTSTRAP_COLLECTION_PRODUCER_PHASE_CHRONOLOGY")
+        previous_raw, previous_local = phase.started, phase.local_started
+    require(frame.phases[0] == _ProducerPhase("WORK", frame.limits.first, frame.limits.local_start,
+                frame.limits.ends[0], frame.limits.local_ends[0]) and
+            frame.phases[-1].started < frame.phases[-2].end and
+            frame.phases[-1].local_started < frame.phases[-2].local_end,
+            "BOOTSTRAP_COLLECTION_PRODUCER_PHASE_CHRONOLOGY")
+    native = frame.native
+    require(type(native) is _ProducerNative and native.scope_attempted is native.launch_attempted is True and
+            native.work_accepted is native.drain_attempted is native.retired is True and
+            native.child is not None and type(native.child) is native.child_kind and
+            type(native.child_pid) is int and 0 < native.child_pid <= (1 << 32) - 1 and
+            type(native.child.pid) is int and native.child.pid == native.child_pid and
+            native.child.stdout is native.child.stderr is None and
+            type(native.exit_code) is int and native.exit_code == 0 and
+            frame.limits.first <= origin.integer(native.launch_minimum) <= origin.integer(native.completed_ns) <=
+                frame.phases[1].started and native.completed_ns < frame.phases[0].end and
+            frame.phases[2].started <= origin.integer(native.finalized_ns) <= frame.phases[3].started and
+            native.finalized_ns < frame.phases[2].end and
+            all(type(raw) is bytes and 0 < len(raw) <= 4194304 for raw in
+                (native.baseline_raw, native.preparer_raw, native.birth_raw, native.leader_raw,
+                 native.survivors_raw, native.terminal_raw)) and
+            origin.parse(native.survivors_raw) == {"survivors": []} and
+            origin.parse(native.terminal_raw).get("discoveryErrors") == [] and
+            frame.cancellation_attempted is False and frame.cancellation_raw is None and frame.cancellation_stamps == () and
+            frame.query_attempted is True and type(frame.query_returned) is tuple and len(frame.query_returned) == 3 and
+            frame.query_returned[0] is True and frame.limits.first <= origin.integer(frame.query_returned[1]) <= native.launch_minimum and
+            frame.limits.local_start <= staging._local(frame.query_returned[2]) <= frame.local_last,
+            "BOOTSTRAP_COLLECTION_PRODUCER_ORIGINAL_RETIREMENT")
+    require(type(frame.query) is tuple and len(frame.query) == 5, "BOOTSTRAP_COLLECTION_PRODUCER_QUERY_NOT_CLOSED")
+    supplier, kind, pair, work, final = frame.query
+    require(type(supplier) is kind and supplier.closed is True and supplier.unknown is supplier.failed is supplier.active is False and
+            supplier.first_error is supplier.cancellation is None and type(supplier.errors) is list and not supplier.errors and
+            type(supplier.resources) is list and type(supplier.records) is list and type(supplier.readbacks) is list and
+            all(type(row) is dict and set(row) == {"label", "owner", "closeAttempted", "closed"} and
+                type(row["label"]) is str and row["owner"] is not None and
+                row["closeAttempted"] is row["closed"] is True for row in supplier.resources) and
+            type(pair) is tuple and len(pair) == 2 and supplier._owner_deadlines is pair and
+            staging._local(pair[0]) <= staging._local(pair[1]) <= frame.phases[0].local_end and
+            frame.query_returned[2] < frame.phases[0].local_end and
+            origin.integer(work) <= origin.integer(final) <= frame.phases[0].end and frame.query_returned[1] < final,
+            "BOOTSTRAP_COLLECTION_PRODUCER_QUERY_NOT_CLOSED")
+    # The supplier's fixed pair governed its own finalizer operations. The later
+    # outer query_returned sample is NOT that supplier's final LOCAL sample: the
+    # original producer bounds it by RAW final and the enclosing WORK LOCAL cap.
+    # Pinning terminal facts cannot invent a missing earlier observation.
+    query_required = {name: tuple(row for row in supplier.resources if row["label"] == name)
+                      for name in ("private-root", "query-home", "session-result.json")}
+    require(all(len(rows) == 1 for rows in query_required.values()) and
+            query_required["private-root"][0]["owner"] is supplier.private and
+            query_required["query-home"][0]["owner"] is supplier.home and
+            len({id(row) for row in supplier.resources}) == len(supplier.resources) and
+            len({id(row["owner"]) for row in supplier.resources}) == len(supplier.resources),
+            "BOOTSTRAP_COLLECTION_PRODUCER_QUERY_ROSTER")
+    require(type(frame.captures) is tuple and len(frame.captures) == 2 and
+            all(type(row) is _ProducerCapture for row in frame.captures) and
+            tuple(row.name for row in frame.captures) == ("stdout", "stderr") and
+            all(row.final_stamp is not None and row.synced is row.verified is True and
+                type(row.readback) is tuple and len(row.readback) == 4 and
+                type(row.readback[0]) is int and 0 <= row.readback[0] <= 67174400 and
+                type(row.readback[1]) is str and re.fullmatch(r"[0-9a-f]{64}", row.readback[1]) and
+                frame.phases[3].started <= origin.integer(row.readback[2]) <= frame.last and
+                frame.phases[3].local_started <= staging._local(row.readback[3]) <= frame.local_last
+                for row in frame.captures), "BOOTSTRAP_COLLECTION_PRODUCER_CAPTURE_NOT_READ")
+    outputs = tuple(row for row in frame.handles if row[0] == "capture-output")
+    require(len(outputs) == 1, "BOOTSTRAP_COLLECTION_PRODUCER_CAPTURE_DIRECTORY")
+    for capture in frame.captures:
+        stream = capture.stream
+        require(stream is required[capture.name][0].value and type(capture.identity) is tuple and
+                type(capture.final_stamp) is tuple and len(capture.final_stamp) ==
+                    (3 if frame.limits.clock[0] == "windows-x64" else 4) and
+                capture.final_stamp[0] == capture.identity and type(capture.final_stamp[1]) is int and
+                type(capture.highwater) is int and capture.highwater == capture.final_stamp[1] == capture.readback[0] and
+                type(stream.path) is type(outputs[0][2]) and stream.path == outputs[0][2] / (capture.name + ".log"),
+                "BOOTSTRAP_COLLECTION_PRODUCER_CAPTURE_BINDING")
+        maximum, end = ((stream.max_bytes, stream._deadline) if frame.limits.clock[0] == "windows-x64" else
+                        (stream.maximum, stream.deadline))
+        require(type(maximum) is int and maximum == 67174400 and type(end) is type(frame.limits.local_ends[2]) and
+                end == frame.limits.local_ends[2], "BOOTSTRAP_COLLECTION_PRODUCER_CAPTURE_BOUNDS")
+    require(frame.captures[0].identity != frame.captures[1].identity and
+            frame.captures[0].readback[2] <= frame.captures[1].readback[2] and
+            frame.captures[0].readback[3] <= frame.captures[1].readback[3],
+            "BOOTSTRAP_COLLECTION_PRODUCER_CAPTURE_CHRONOLOGY")
+    for key, raw in (("canonical-start", returned.start_raw), ("canonical-receipt", returned.receipt_raw)):
+        matches = tuple(row for row in frame.files if row.key == key)
+        require(len(matches) == 1 and type(raw) is bytes and matches[0].raw == raw,
+                "BOOTSTRAP_COLLECTION_PRODUCER_ORIGINAL_BYTES")
+    require(type(returned.raw) is bytes and type(returned.observation_raw) is bytes and
+            type(returned.request_raw) is bytes and type(frame.descriptor) is bytes and
+            origin.parse(frame.descriptor)["requestBytes"].encode("ascii") == returned.request_raw,
+            "BOOTSTRAP_COLLECTION_PRODUCER_REQUEST_CHANGED")
+    require(not QUARANTINE and not query.QUARANTINE and not diagnostics._QUARANTINE,
+            "BOOTSTRAP_COLLECTION_PRIOR_UNKNOWN")
+    _collection_producer_original_bytes(frame, returned)
+    return frame
+
+
+def _capture_producer_graph(frame, selected):
+    """Finite passive snapshot, including witnesses rather than trusting them.
+
+    The original publication excludes the producer parent's dictionary because
+    its result/state bookkeeping has not returned yet. All selected query,
+    stream, owner and older witness containers are already final. The later
+    collection snapshot additionally selects the returned parent. Neither
+    snapshot reopens or invokes a closed resource, callback or clock.
+    """
+    # The staging graph intentionally treats producer records as opaque. Pin
+    # each producer dictionary pointer explicitly and flatten the exact immutable
+    # producer tuple families; do not silently rely on unknown-type traversal.
+    tuples = (_ProducerFrame, _ProducerPredecessor, _ProducerLimits, _ProducerNative,
+              _ProducerPhase, _ProducerResource, _ProducerFile, _ProducerCapture, _StagingSequenceFrame)
+    special = (_ProducerOwner, _ProducerWindow, ConfigurationPrefix, _StagingSequence, _StagingClosedGraph)
+    records, roots, seen = [], [], set()
+    pending = [frame, *selected]
+    while pending:
+        value = pending.pop()
+        kind = type(value)
+        if kind in (type(None), bool, int, float, str, bytes, signal.Signals):
+            continue
+        if id(value) in seen:
+            continue
+        seen.add(id(value))
+        require(len(seen) <= 10000, "BOOTSTRAP_COLLECTION_GRAPH_LIMIT")
+        if kind in special or any(value is item for item in selected):
+            original = object.__getattribute__(value, "__dict__")
+            records.append((value, kind, original))
+            roots.append(original)
+            pending.append(original)
+        elif kind in tuples:
+            flattened = tuple(value)  # Only the explicitly named exact tuple families.
+            roots.append(flattened)
+            pending.extend(flattened)
+        elif kind is dict:
+            pending.extend(value.values())
+        elif kind in (list, tuple, _StagingFrame, _StagingLimits, _CustodyRequestPin):
+            pending.extend(value)
+        # No generic __dict__/iterable/native backend introspection. Old graph
+        # dictionaries/nodes/paths are found through these finite typed roots.
+    records = tuple(records)
+    graph = _StagingClosedGraph.capture(*roots)
+    paths = tuple((directory, type(directory), path, identity) for _key, directory, path, identity in frame.handles)
+    paths += tuple((row.directory, type(row.directory), row.path, row.identity) for row in frame.files)
+    graph = _StagingClosedGraph(graph.nodes, (*graph.paths, *paths))
+    graph.checked()
+    return records, graph
+
+
+def _check_producer_result_graph(pin):
+    require(type(pin.graph) is _StagingClosedGraph and type(pin.graph_pin) is tuple and len(pin.graph_pin) == 3 and
+            object.__getattribute__(pin.graph, "__dict__") is pin.graph_pin[0] and
+            set(pin.graph_pin[0]) == {"nodes", "paths"} and pin.graph.nodes is pin.graph_pin[1] and
+            pin.graph.paths is pin.graph_pin[2], "BOOTSTRAP_PRODUCER_RESULT_GRAPH_CHANGED")
+    for value, kind, original in pin.records:
+        require(type(value) is kind and object.__getattribute__(value, "__dict__") is original,
+                "BOOTSTRAP_PRODUCER_RESULT_DICTIONARY_CHANGED")
+    pin.graph.checked()
+
+
+def _capture_collection_producer(parent, returned):
+    frame = _collection_closed_producer(parent, returned)
+    selected = (parent, frame.owner, frame.window, returned, frame.query[0], *(row.stream for row in frame.captures))
+    records, graph = _capture_producer_graph(frame, selected)
+    require(_collection_closed_producer(parent, returned) is frame, "BOOTSTRAP_COLLECTION_PRODUCER_FRAME_CHANGED")
+    return frame, records, graph
+
+
+def _checked_collection_origin(call):
+    """Passive read of this exact claim, not a live collection/next-phase permit."""
+    saved = _collection_origin_frame(call)
+    _collection_origin_roots()
+    require(call.transition is saved.transition and call.state == saved.state and
+            call.producer is saved.producer and call.returned is saved.returned and call.original is saved.original,
+            "BOOTSTRAP_COLLECTION_ORIGIN_CHANGED")
+    require(saved.state == "BOUND" and saved.original is None and saved.graph is not None,
+            "BOOTSTRAP_COLLECTION_ORIGIN_NOT_BOUND")
+    require(type(saved.graph) is _StagingClosedGraph and type(saved.graph_pin) is tuple and len(saved.graph_pin) == 3 and
+            object.__getattribute__(saved.graph, "__dict__") is saved.graph_pin[0] and
+            set(saved.graph_pin[0]) == {"nodes", "paths"} and saved.graph.nodes is saved.graph_pin[1] and
+            saved.graph.paths is saved.graph_pin[2], "BOOTSTRAP_COLLECTION_GRAPH_CHANGED")
+    require(_producer_original_call(saved.transition) is saved.producer and
+            _collection_closed_producer(saved.producer, saved.returned) is saved.producer_frame,
+            "BOOTSTRAP_COLLECTION_PRODUCER_FRAME_CHANGED")
+    for value, kind, original in saved.records:
+        require(type(value) is kind and object.__getattribute__(value, "__dict__") is original,
+                "BOOTSTRAP_COLLECTION_PRODUCER_DICTIONARY_CHANGED")
+    saved.graph.checked()
+    return saved
+
+
+def _begin_collection_after_entry(transition):
+    """INTERNAL binding component only; no CLI, file-owner or leaf invocation.
+
+    This original-call claim must enclose future collection, not be reconstructed
+    from returned data. No current file/source/manifest/clock readmission occurs
+    after producer return yet. BOUND is NOT collection or execution acceptance.
+    """
+    call = _claim_collection_origin(transition)
+    try:
+        parent, returned = _invoke_collection_producer(call)
+        frame, records, graph = _capture_collection_producer(parent, returned)
+        graph_pin = (object.__getattribute__(graph, "__dict__"), graph.nodes, graph.paths)
+        _update_collection_origin(call, state="BOUND", producer_frame=frame, records=records, graph=graph, graph_pin=graph_pin)
+        call.state = "BOUND"
+        _checked_collection_origin(call)
+        return call
+    except BaseException as error:
+        saved = _collection_origin_frame(call)
+        first = error if saved.original is None else saved.original
+        _update_collection_origin(call, state="FAILED", original=first)
+        call.state, call.original = "FAILED", first
+        try:
+            first.bootstrap_collection_origin = call
+        except BaseException:
+            pass  # Private claim retains the first error/actual returned objects.
+        raise first
 
 
 def guarded(operation):
