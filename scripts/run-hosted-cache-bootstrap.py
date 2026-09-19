@@ -35,6 +35,7 @@ sys.path.insert(0, str(SCRIPTS))
 import audit_processes as processes
 import hosted_cache_bootstrap_allocation as allocation
 import hosted_cache_bootstrap_canonical as canonical
+import hosted_cache_bootstrap_collect_files as collect_files
 import hosted_cache_bootstrap_custody as custody
 import hosted_cache_bootstrap_history as history
 import hosted_cache_bootstrap_identity as bootstrap
@@ -1086,7 +1087,7 @@ def chain_content(owner, private, context_raw, admitted, records, returned, admi
 
 def _read_chain(reader, private, context_raw, admitted, records, returned, admission_hashes, *, final):
     require(type(reader) in (_LegacyOriginalReader, _NewEntryOriginalReader, _RecipientParentReader,
-                            _StagingOriginalReader, _ProducerOriginalReader),
+                            _StagingOriginalReader, _ProducerOriginalReader, _CollectionPhaseReader),
             "BOOTSTRAP_ORIGINAL_READER_KIND")
     reader.checked()
     owner, past = reader.owner, reader.past
@@ -1373,7 +1374,7 @@ def prepared_content(owner, private, handoff_raw, context_raw, fence):
 
 def _read_prepared(reader, private, handoff_raw, context_raw):
     require(type(reader) in (_LegacyOriginalReader, _NewEntryOriginalReader, _RecipientParentReader,
-                            _StagingOriginalReader, _ProducerOriginalReader) and
+                            _StagingOriginalReader, _ProducerOriginalReader, _CollectionPhaseReader) and
             reader.first is not None,
             "BOOTSTRAP_ADOPTION_READER")
     reader.checked()
@@ -8074,6 +8075,1495 @@ def _begin_collection_after_entry(transition):
         except BaseException:
             pass  # Private claim retains the first error/actual returned objects.
         raise first
+
+
+@dataclass(frozen=True)
+class CollectionPrefix:
+    """Closed file-collection observations, never transferable execution rights."""
+    raw: bytes = field(repr=False)
+    leaf: object = field(repr=False)
+    manifest_raw: bytes = field(repr=False)
+    checked_ns: int
+    checked_local: float
+
+
+_CollectionPhaseLimits = namedtuple("_CollectionPhaseLimits", "clock first local_start ends local_ends")
+_CollectionPhaseStep = namedtuple("_CollectionPhaseStep", "name started local_started end local_end")
+_CollectionPhaseResource = namedtuple("_CollectionPhaseResource", "row label value kind attempted closed")
+_CollectionPhaseFile = namedtuple("_CollectionPhaseFile", "key directory path identity name maximum raw binding_raw")
+_CollectionPhaseQueryOrigin = namedtuple("_CollectionPhaseQueryOrigin", "dictionary root path roots resources records readbacks")
+_CollectionPhaseQueryBefore = namedtuple("_CollectionPhaseQueryBefore", "rows readbacks graph graph_pin")
+_CollectionPhaseFrame = namedtuple("_CollectionPhaseFrame", "call transition state binding bound predecessor published "
+    "first limits window owner owner_bindings last local_last phases resources foreign handles files handlers restored "
+    "close_roster original unknown errors query_attempted query query_returned query_pin borrowed source_pin "
+    "manifest_attempted manifest_pin leaf_attempted leaf_originals leaf_originals_pin leaf leaf_pin leaf_began "
+    "pending_raw result owner_closed expired_closes query_result query_errors result_pin source_attempted "
+    "query_origin query_preclose query_final_attempted", defaults=(None,) * 50)
+
+
+def _collection_phase_controls():
+    """The outer intent exists BEFORE the original binding/producer call.
+
+    A returned BOUND object, constructor or copied prefix is not an entry point.
+    These finite same-process pins are not a sandbox against code replacement.
+    """
+    begin, checked = _begin_collection_after_entry, _checked_collection_origin
+    module, operation = collect_files, collect_files.collect_inventory
+    input_kind, result_kind = collect_files.FileOriginals, collect_files.FileCollectionEvidence
+    capture, inputs, grammar = collect_files._capture, collect_files._Inputs, collect_files.inventory
+    describe = grammar.describe_inventory
+    attempts, frames, owners, windows_by_id, lock = {}, {}, {}, {}, threading.Lock()
+
+    def roots():
+        require(_begin_collection_after_entry is begin and _checked_collection_origin is checked and
+                collect_files is module and collect_files.collect_inventory is operation and
+                collect_files.FileOriginals is input_kind and collect_files.FileCollectionEvidence is result_kind and
+                collect_files._capture is capture and collect_files._Inputs is inputs and
+                collect_files.inventory is grammar and grammar.describe_inventory is describe,
+                "BOOTSTRAP_COLLECTION_PHASE_OPERATION_CHANGED")
+        _collection_origin_roots()
+
+    def claim(transition):
+        require(type(transition) is NewEntryTransition, "BOOTSTRAP_COLLECTION_PHASE_TRANSITION_KIND")
+        roots()
+        with lock:
+            require(id(transition) not in attempts, "BOOTSTRAP_COLLECTION_PHASE_ALREADY_CLAIMED")
+            call = _CollectionPhaseParent(transition)
+            attempts[id(transition)] = (transition, call)
+            frames[id(call)] = _CollectionPhaseFrame(call=call, transition=transition, state="CLAIMED",
+                published=(call.handles, call.records, call.handlers, call.cancelled), phases=(), resources=(),
+                foreign=(), handles=(), files=(), handlers=(), restored=(), unknown=False, errors=(),
+                query_attempted=False, manifest_attempted=False, leaf_attempted=False, owner_closed=False,
+                expired_closes=(), query_errors=(), source_attempted=False, query_final_attempted=False)
+        return call
+
+    def frame(call):
+        saved = frames.get(id(call))
+        require(type(call) is _CollectionPhaseParent and type(saved) is _CollectionPhaseFrame and saved.call is call,
+                "BOOTSTRAP_COLLECTION_PHASE_NOT_CLAIMED")
+        row = attempts.get(id(saved.transition))
+        require(type(row) is tuple and len(row) == 2 and row[0] is saved.transition and row[1] is call,
+                "BOOTSTRAP_COLLECTION_PHASE_NOT_CLAIMED")
+        return saved
+
+    def update(call, **values):
+        saved = frame(call)
+        if "owner" in values:
+            require(saved.owner is None and type(values["owner"]) is _CollectionPhaseOwner,
+                    "BOOTSTRAP_COLLECTION_PHASE_OWNER_REENTRY")
+            owners[id(values["owner"])] = call
+        if "window" in values:
+            require(saved.window is None and type(values["window"]) is _CollectionPhaseWindow,
+                    "BOOTSTRAP_COLLECTION_PHASE_WINDOW_REENTRY")
+            windows_by_id[id(values["window"])] = call
+        frames[id(call)] = saved._replace(**values)
+        return frames[id(call)]
+
+    def invoke(call):
+        saved = frame(call)
+        roots()
+        require(saved.state == call.state == "CLAIMED" and call.transition is saved.transition and
+                saved.binding is None and saved.original is call.original is None,
+                "BOOTSTRAP_COLLECTION_PHASE_BEGIN_REENTRY")
+        update(call, state="BINDING")
+        call.state = "BINDING"
+        returned = begin(saved.transition)  # No claim lock is held across execution.
+        update(call, binding=returned, state="BINDING_RETURNED")
+        call.state = "BINDING_RETURNED"  # Actual return retained before lookup/checks.
+        roots()
+        bound = checked(returned)
+        require(bound.transition is saved.transition, "BOOTSTRAP_COLLECTION_PHASE_FOREIGN_BINDING")
+        borrowed = frozenset(id(row[0]) for row in bound.graph.nodes) | frozenset(
+            id(row[0]) for row in bound.records) | frozenset((id(returned), id(bound.producer), id(bound.returned)))
+        update(call, bound=bound, predecessor=bound.producer_frame.predecessor, borrowed=borrowed, state="BOUND")
+        call.state = "BOUND"
+
+    def owner_frame(owner):
+        saved = frame(owners.get(id(owner)))
+        require(type(owner) is _CollectionPhaseOwner and saved.owner is owner,
+                "BOOTSTRAP_COLLECTION_PHASE_OWNER_NOT_BOUND")
+        return saved
+
+    def window_frame(window):
+        saved = frame(windows_by_id.get(id(window)))
+        require(type(window) is _CollectionPhaseWindow and saved.window is window and window.call is saved.call,
+                "BOOTSTRAP_COLLECTION_PHASE_WINDOW_NOT_BOUND")
+        return saved
+
+    def leaf(call, originals):
+        saved = call.check()
+        roots()
+        require(saved.state == "RUNNING" and saved.phases[-1].name == "WORK" and not saved.leaf_attempted and
+                saved.manifest_pin is not None, "BOOTSTRAP_COLLECTION_PHASE_LEAF_REENTRY")
+        update(call, leaf_attempted=True)  # Failure never earns a second copy.
+        captured = capture(originals)
+        update(call, leaf_originals=originals, leaf_originals_pin=captured)
+        began = saved.window.now()
+        update(call, leaf_began=(began, frame(call).local_last))
+        returned = operation(saved.owner, originals)
+        update(call, leaf=returned)  # Even malformed returns precede any fallible validation.
+        require(type(returned) is result_kind, "BOOTSTRAP_COLLECTION_PHASE_LEAF_KIND")
+        dictionary = object.__getattribute__(returned, "__dict__")
+        require(set(dictionary) == {"raw", "inventory_raw", "local_started", "checked_local"},
+                "BOOTSTRAP_COLLECTION_PHASE_LEAF_FIELDS")
+        pin = (dictionary, returned.raw, returned.inventory_raw, returned.local_started, returned.checked_local)
+        require(all(type(raw) is bytes and 0 < len(raw) <= 4194304 for raw in pin[1:3]),
+                "BOOTSTRAP_COLLECTION_PHASE_LEAF_BYTES")
+        staging._local(pin[3])
+        staging._local(pin[4])
+        update(call, leaf_pin=pin)
+        call.check()
+        call.validate_leaf()
+        saved.window.now()
+        current = call.check()
+        require(current.leaf_began[1] <= pin[3] <= pin[4] <= current.local_last,
+                "BOOTSTRAP_COLLECTION_PHASE_LEAF_RETURN_LOCAL")
+        return returned
+
+    return claim, frame, update, invoke, roots, owner_frame, window_frame, leaf
+
+
+(_claim_collection_phase, _collection_phase_frame, _update_collection_phase, _invoke_collection_phase_begin,
+ _collection_phase_roots, _collection_phase_owner_frame, _collection_phase_window_frame,
+ _invoke_collection_phase_leaf) = _collection_phase_controls()
+del _collection_phase_controls
+
+
+def _collection_phase_state(call, state):
+    _update_collection_phase(call, state=state)
+    call.state = state
+
+
+def _collection_phase_query_identity(frame):
+    """Original NEW query location/roots/pair, not a post-close baseline."""
+    supplier, kind, pair, work, final = frame.query
+    pin = frame.query_origin
+    require(type(supplier) is kind is query.NativeGitQueries and type(pin) is _CollectionPhaseQueryOrigin and
+            object.__getattribute__(supplier, "__dict__") is pin.dictionary and
+            type(pair) is tuple and len(pair) == 2 and supplier._owner_deadlines is pair and
+            staging._local(pair[0]) <= staging._local(pair[1]) <= frame.phases[0].local_end and
+            origin.integer(work) <= origin.integer(final) <= frame.phases[0].end and
+            type(supplier.root) is type(pin.root) and supplier.root == pin.root and
+            type(supplier.path) is type(pin.path) and supplier.path == pin.path and
+            supplier.resources is pin.resources and type(pin.resources) is list and
+            supplier.records is pin.records and type(pin.records) is list and
+            supplier.readbacks is pin.readbacks and type(pin.readbacks) is list,
+            "BOOTSTRAP_COLLECTION_PHASE_QUERY_ORIGIN_CHANGED")
+    for actual, (directory, expected_kind, path, identity) in zip((supplier.private, supplier.home), pin.roots):
+        require(actual is directory and type(actual) is expected_kind and type(actual.path) is type(path) and
+                actual.path == path and tuple(actual.identity) == identity,
+                "BOOTSTRAP_COLLECTION_PHASE_QUERY_ROOT_CHANGED")
+    return supplier, pin
+
+
+def _collection_phase_query_rows(rows, *, closed):
+    require(type(rows) is list and 2 <= len(rows) <= 4096 and
+            all(type(row) is dict and set(row) == {"label", "owner", "closeAttempted", "closed"} and
+                type(row["label"]) is str and row["owner"] is not None and
+                type(row["closeAttempted"]) is type(row["closed"]) is bool and
+                row["closeAttempted"] is row["closed"] and (not closed or row["closed"] is True) for row in rows) and
+            len({id(row) for row in rows}) == len(rows) and len({id(row["owner"]) for row in rows}) == len(rows),
+            "BOOTSTRAP_COLLECTION_PHASE_QUERY_ROSTER")
+
+
+def _collection_phase_query_before(parent):
+    """Pin the actual pre-final roster, including non-required original rows.
+
+    This bounded pre-final-to-terminal custody does not prove no row was lost
+    earlier. Failure retains these references and forbids finalizer dispatch.
+    """
+    frame = _collection_phase_frame(parent)
+    supplier, original = _collection_phase_query_identity(frame)
+    require(frame.query_preclose is None and frame.query_final_attempted is False and
+            supplier.closed is supplier.unknown is supplier.active is False,
+            "BOOTSTRAP_COLLECTION_PHASE_QUERY_FINAL_STATE")
+    require(len(original.resources) <= 4096 and len(original.records) <= 64 and len(original.readbacks) <= 4096,
+            "BOOTSTRAP_COLLECTION_PHASE_QUERY_BEFORE_LIMIT")
+    # Retain actual row/value references BEFORE validating their current flags.
+    rows = tuple(_CollectionPhaseResource(row, row.get("label"), row.get("owner"), type(row.get("owner")),
+                row.get("closeAttempted"), row.get("closed")) if type(row) is dict else
+                _CollectionPhaseResource(row, None, None, type(None), None, None) for row in original.resources)
+    before = _CollectionPhaseQueryBefore(rows, tuple(original.readbacks), None, None)
+    _update_collection_phase(parent, query_preclose=before)
+    _collection_phase_query_rows(original.resources, closed=False)
+    required = {name: tuple(row for row in rows if row.label == name) for name in ("private-root", "query-home")}
+    require(all(len(value) == 1 for value in required.values()) and
+            required["private-root"][0].value is original.roots[0][0] and
+            required["query-home"][0].value is original.roots[1][0] and
+            not any(row.label == "session-result.json" for row in rows),
+            "BOOTSTRAP_COLLECTION_PHASE_QUERY_INITIAL_ROSTER")
+    graph = _StagingClosedGraph.capture(original.records, before.readbacks)
+    pin = (object.__getattribute__(graph, "__dict__"), graph.nodes, graph.paths)
+    _update_collection_phase(parent, query_preclose=before._replace(graph=graph, graph_pin=pin))
+
+
+def _collection_phase_query_pin(frame, result):
+    supplier, original = _collection_phase_query_identity(frame)
+    before = frame.query_preclose
+    require(type(before) is _CollectionPhaseQueryBefore and frame.query_final_attempted is True and
+            frame.query_returned[0] is True, "BOOTSTRAP_COLLECTION_PHASE_QUERY_NOT_RETURNED")
+    require(type(supplier) is query.NativeGitQueries and supplier.closed is True and supplier.unknown is False and
+            supplier.failed is False and supplier.active is False and supplier.first_error is None and
+            supplier.cancellation is None and type(supplier.errors) is list and supplier.errors == [],
+            "BOOTSTRAP_COLLECTION_PHASE_QUERY_NOT_CLOSED")
+    _collection_phase_query_rows(original.resources, closed=True)
+    require(len(original.resources) == len(before.rows) + 1 and
+            all(row is pin.row and row["label"] == pin.label and row["owner"] is pin.value and
+                type(row["owner"]) is pin.kind for row, pin in zip(original.resources, before.rows)) and
+            original.resources[-1]["label"] == "session-result.json",
+            "BOOTSTRAP_COLLECTION_PHASE_QUERY_FINAL_ROSTER")
+    graph, pin = before.graph, before.graph_pin
+    require(type(graph) is _StagingClosedGraph and object.__getattribute__(graph, "__dict__") is pin[0] and
+            set(pin[0]) == {"nodes", "paths"} and graph.nodes is pin[1] and graph.paths is pin[2],
+            "BOOTSTRAP_COLLECTION_PHASE_QUERY_BEFORE_GRAPH_CHANGED")
+    graph.checked()
+    # Successful close appends exactly its session receipt's readback. The
+    # earlier query/receipt records remain the actual pre-final originals.
+    require(len(original.readbacks) == len(before.readbacks) + 1 and
+            all(row is old for row, old in zip(original.readbacks, before.readbacks)),
+            "BOOTSTRAP_COLLECTION_PHASE_QUERY_READBACK_ROSTER")
+    tail = original.readbacks[-1]
+    require(type(tail) is dict and set(tail) == {"parent", "name", "maximum", "retirement", "result", "bytes"} and
+            tail["parent"] == str(original.path) and tail["name"] == "session-result.json" and
+            tail["retirement"] == "KNOWN" and tail["result"] == "RETAINED" and
+            type(tail["maximum"]) is type(tail["bytes"]) is int and 0 < tail["bytes"] == tail["maximum"] <= LIMIT,
+            "BOOTSTRAP_COLLECTION_PHASE_QUERY_FINAL_READBACK")
+    dictionary = object.__getattribute__(supplier, "__dict__")
+    graph = _StagingClosedGraph.capture(dictionary, result)
+    graph = _StagingClosedGraph(graph.nodes, (*graph.paths, *original.roots))
+    graph.checked()
+    return dictionary, graph, object.__getattribute__(graph, "__dict__"), graph.nodes, graph.paths
+
+
+def _collection_phase_query_checked(frame):
+    if frame.query_pin is None:
+        return
+    supplier = frame.query[0]
+    dictionary, graph, graph_dictionary, nodes, paths = frame.query_pin
+    require(type(supplier) is query.NativeGitQueries and object.__getattribute__(supplier, "__dict__") is dictionary and
+            type(graph) is _StagingClosedGraph and object.__getattribute__(graph, "__dict__") is graph_dictionary and
+            set(graph_dictionary) == {"nodes", "paths"} and graph.nodes is nodes and graph.paths is paths,
+            "BOOTSTRAP_COLLECTION_PHASE_QUERY_PIN_CHANGED")
+    graph.checked()
+
+
+@dataclass(frozen=True)
+class _CollectionPhaseWindow:
+    """NEW file work120/close45/return30; every cap intersects original allocation.
+
+    READ is only post-close return accounting here, not a file-read execution.
+    It cannot reopen this owner or any predecessor; all I/O stays in WORK.
+    """
+    call: object = field(repr=False, compare=False)
+
+    @property
+    def clock(self):
+        return origin.clocks.ClockIdentity(*_collection_phase_window_frame(self).limits.clock)
+
+    def _raw_local(self, *, strict, minimum=0):
+        frame = _collection_phase_window_frame(self)
+        call = frame.call
+        call.check() if strict else call.cleanup_bindings()
+        local = staging._local(time.monotonic())
+        require(local >= _collection_phase_frame(call).local_last, "BOOTSTRAP_COLLECTION_PHASE_LOCAL_BACKWARDS")
+        _update_collection_phase(call, local_last=local)
+        _collection_phase_window_frame(self)
+        observed = origin.clocks.checked_now(origin.clocks.ClockIdentity(*frame.limits.clock),
+            minimum_ns=max(_collection_phase_frame(call).last, origin.integer(minimum)))
+        require(observed >= _collection_phase_frame(call).last, "BOOTSTRAP_COLLECTION_PHASE_RAW_BACKWARDS")
+        _update_collection_phase(call, last=observed)
+        _collection_phase_window_frame(self)
+        after = staging._local(time.monotonic())
+        require(after >= _collection_phase_frame(call).local_last, "BOOTSTRAP_COLLECTION_PHASE_LOCAL_BACKWARDS")
+        _update_collection_phase(call, local_last=after)
+        _collection_phase_window_frame(self)
+        call.check() if strict else call.cleanup_bindings()
+        return observed, after
+
+    def sample(self, *, cleanup=False, minimum=0, limit=None):
+        require(type(cleanup) is bool, "BOOTSTRAP_COLLECTION_PHASE_CLOCK_MODE")
+        frame = _collection_phase_window_frame(self)
+        require(frame.state not in ("COMPLETE", "FAILED") and frame.phases and
+                (cleanup or frame.phases[-1].name in ("WORK", "READ")),
+                "BOOTSTRAP_COLLECTION_PHASE_NOT_LIVE")
+        observed, local = self._raw_local(strict=not cleanup, minimum=minimum)
+        phase = _collection_phase_window_frame(self).phases[-1]
+        end = phase.end if limit is None else min(phase.end, origin.integer(limit))
+        require(observed < end and local < phase.local_end, "BOOTSTRAP_COLLECTION_PHASE_EXPIRED")
+        return observed
+
+    def now(self, *, final=False, minimum=0, limit=None):
+        observed = self.sample(cleanup=final, minimum=minimum, limit=limit)
+        if not final:
+            _collection_phase_window_frame(self).call.cancel()
+            observed = self.sample(minimum=observed, limit=limit)
+        return observed
+
+    def deadline(self, maximum, *, final=False, limit=None):
+        require(final is False and type(maximum) in (int, float) and math.isfinite(maximum) and 0 < maximum <= 120,
+                "BOOTSTRAP_COLLECTION_PHASE_ACQUISITION_MODE")
+        frame = _collection_phase_window_frame(self)
+        call = frame.call
+        call.live()
+        local = staging._local(time.monotonic())
+        require(local >= _collection_phase_frame(call).local_last, "BOOTSTRAP_COLLECTION_PHASE_LOCAL_BACKWARDS")
+        _update_collection_phase(call, local_last=local)
+        _collection_phase_window_frame(self)
+        observed = self.now(limit=limit)
+        phase = _collection_phase_window_frame(self).phases[-1]
+        end = phase.end if limit is None else min(phase.end, origin.integer(limit))
+        return min(phase.local_end, origin.wire._directed_deadline(local, maximum, end, observed))
+
+    def advance(self, name):
+        frame = _collection_phase_window_frame(self)
+        call = frame.call
+        require(type(name) is str and 0 < len(frame.phases) < 3 and
+                name == ("WORK", "FINAL", "READ")[len(frame.phases)],
+                "BOOTSTRAP_COLLECTION_PHASE_STEP_REENTRY")
+        previous = frame.phases[-1]
+        _update_collection_phase(call, phases=(*frame.phases, _CollectionPhaseStep(name, None, None, 0, 0.0)))
+        observed = local = None
+        try:
+            require(previous.started is not None and previous.local_started is not None and
+                    previous.end > 0 and previous.local_end > 0, "BOOTSTRAP_COLLECTION_PHASE_PRIOR_START_FAILED")
+            if name == "READ":
+                call.closed()
+            observed, local = self._raw_local(strict=name == "READ")
+            current = _collection_phase_window_frame(self)
+            index, seconds = len(current.phases) - 1, 45 if name == "FINAL" else 30
+            end = min(current.limits.ends[index], origin.integer(observed + seconds * origin.NS))
+            local_end = min(current.limits.local_ends[index],
+                origin.wire._directed_deadline(local, seconds, end, observed))
+            if name == "READ":
+                require(observed < previous.end and local < previous.local_end,
+                        "BOOTSTRAP_COLLECTION_PHASE_RETURN_START_EXPIRED")
+            _update_collection_phase(call, phases=(*current.phases[:-1],
+                _CollectionPhaseStep(name, observed, local, end, local_end)))
+            self.sample(cleanup=name == "FINAL")
+        except BaseException as error:
+            current = _collection_phase_frame(call)
+            _update_collection_phase(call, phases=(*current.phases[:-1],
+                _CollectionPhaseStep(name, observed, local, 0, 0.0)))
+            call.error("collection-phase-" + name.lower() + "-start", error)
+            raise
+
+    def record(self):
+        frame = _collection_phase_window_frame(self)
+        return {"clock": origin.clock_value(self.clock), "firstNs": frame.limits.first,
+            "globalEndsNs": dict(zip(("WORK", "FINAL", "READ"), frame.limits.ends)),
+            "phases": [{"phase": row.name, "startedNs": row.started, "endNs": row.end} for row in frame.phases],
+            "readSlotScope": "POST_CLOSE_RETURN_OBSERVATIONS_ONLY_NO_FILE_READ_EXECUTION",
+            "budgetAcceptance": "NOT_ADMITTED"}
+
+
+class _CollectionPhaseOwner(Owner):
+    """Distinct file-only ledger; no WORK acquisition after close/final/return."""
+    def error(self, stage, error, *, unknown=False):
+        _collection_phase_owner_frame(self).call.error(stage, error, unknown=unknown)
+
+    def end(self, *, final=False):
+        require(final is False, "BOOTSTRAP_COLLECTION_PHASE_NO_FINAL_ACQUISITION")
+        frame = _collection_phase_owner_frame(self)
+        frame.call.live()
+        return frame.window.deadline(45)
+
+    def _retain(self, label, value):
+        frame = _collection_phase_owner_frame(self)
+        require(id(value) not in frame.borrowed and not any(pin.value is value for pin in frame.resources), "BOOTSTRAP_COLLECTION_PHASE_DUPLICATE_RESOURCE")
+        row = {"label": label, "owner": value, "attempted": False, "closed": False}
+        pin = _CollectionPhaseResource(row, label, value, type(value), False, False)
+        _update_collection_phase(frame.call, resources=(*frame.resources, pin))
+        # The private original survives a changed public list or failed append.
+        frame.owner_bindings[0].append(row)
+        return value
+
+    def acquire(self, label, factory, *, final=False):
+        require(final is False and type(label) is str and label in (
+            "directory", "reader", "writer", "source-directory", "bootstrap-collection-root",
+            "bootstrap-collection-reader", "bootstrap-collection-writer", "bootstrap-collection-directory"),
+            "BOOTSTRAP_COLLECTION_PHASE_RESOURCE_LABEL")
+        frame = _collection_phase_owner_frame(self)
+        self.end()
+        require(frame.close_roster is None and frame.phases[-1].name == "WORK" and len(frame.resources) < 4096, "BOOTSTRAP_COLLECTION_PHASE_RESOURCE_PHASE")
+        try:
+            value = factory()
+        except BaseException as error:
+            frame.call.error(label + "-allocation", error, unknown=True)
+            raise
+        self._retain(label, value)
+        self.end()
+        return value
+
+    def new(self, path):
+        return self.acquire("directory", lambda: staging.files.private_root(path, create=True))
+
+    def open(self, path, *, final=False):
+        require(final is False, "BOOTSTRAP_COLLECTION_PHASE_NO_FINAL_ACQUISITION")
+        return self.acquire("directory", lambda: staging.files.private_root(path))
+
+    def child(self, parent, name, *, create=False, final=False):
+        require(type(create) is bool and final is False, "BOOTSTRAP_COLLECTION_PHASE_DIRECTORY_MODE")
+        frame = _collection_phase_owner_frame(self)
+        require(not create or frame.phases[-1].name == "WORK", "BOOTSTRAP_COLLECTION_PHASE_READ_ONLY_PHASE")
+        end = self.end()
+        return self.acquire("directory", lambda: parent.create_directory(name, deadline=end) if create else
+                            parent.open_directory(name, deadline=end))
+
+    def read(self, parent, name, maximum=LIMIT, *, final=False):
+        require(final is False, "BOOTSTRAP_COLLECTION_PHASE_NO_FINAL_ACQUISITION")
+        raw, _binding = _collection_phase_owner_frame(self).call.read_file(parent, name, maximum)
+        return raw
+
+    def write(self, parent, name, value, *, final=False):
+        require(final is False, "BOOTSTRAP_COLLECTION_PHASE_NO_FINAL_ACQUISITION")
+        raw = value if type(value) is bytes else origin.encoded(value)
+        require(0 < len(raw) <= LIMIT, "BOOTSTRAP_COLLECTION_PHASE_PRIVATE_RECORD_LIMIT")
+        end = self.end()
+        writer = self.acquire("writer", lambda: parent.create_file(name, max_bytes=len(raw), deadline=end))
+        frame = _collection_phase_owner_frame(self)
+        try:
+            offset = 0
+            while offset < len(raw):
+                self.end()
+                part = raw[offset:offset + 65536]
+                count = writer.write(part)
+                require(type(count) is int and 0 < count <= len(part), "BOOTSTRAP_COLLECTION_PHASE_SHORT_WRITE")
+                offset += count
+                self.end()
+            writer.sync()
+            require(writer.verify().size == len(raw), "BOOTSTRAP_COLLECTION_PHASE_PRIVATE_WRITE_CHANGED")
+            self.end()
+        except BaseException as error:
+            frame.call.error("collection-phase-write", error)
+        finally:
+            self.close_one(writer)
+        frame.call.raise_first()
+        require(self.read(parent, name) == raw, "BOOTSTRAP_COLLECTION_PHASE_PRIVATE_READBACK")
+        return raw
+
+    def close_one(self, value):
+        frame = _collection_phase_owner_frame(self)
+        pin = next((pin for pin in frame.resources if pin.value is value), None)
+        if pin is None:
+            frame.call.error("collection-phase-close-foreign", origin.OriginError("BOOTSTRAP_COLLECTION_PHASE_FOREIGN_RESOURCE"), unknown=True)
+            return
+        if pin.attempted:
+            return
+        try:
+            frame.call.cleanup_bindings()
+            require(type(value) is pin.kind and not frame.unknown, "BOOTSTRAP_COLLECTION_PHASE_CLOSE_UNKNOWN")
+        except BaseException as error:
+            frame.call.error("collection-phase-close-binding", error, unknown=True)
+            return
+        self.close_fence()
+        frame.call.close_resource(pin)
+        self.close_fence()
+
+    def close_fence(self):
+        frame = _collection_phase_owner_frame(self)
+        try:
+            observed, local = frame.window._raw_local(strict=False)
+            current = _collection_phase_owner_frame(self)
+            phase = current.phases[-1]
+            if observed >= phase.end or local >= phase.local_end:
+                # Every close is sampled. Re-observing one fixed expired cap
+                # is not a new event that may exhaust the finite error ledger.
+                index = len(current.phases) - 1
+                if index not in current.expired_closes:
+                    _update_collection_phase(frame.call, expired_closes=(*current.expired_closes, index))
+                    frame.call.error("collection-phase-close-expired",
+                        origin.OriginError("BOOTSTRAP_COLLECTION_PHASE_EXPIRED"))
+        except BaseException as error:
+            frame.call.error("collection-phase-close-fence", error)
+
+    def close(self):
+        frame = _collection_phase_owner_frame(self)
+        if self.closed:
+            return
+        _update_collection_phase(frame.call, owner_closed=True)
+        self.closed = True
+        self.close_fence()
+        for pin in reversed(frame.resources):
+            if _collection_phase_frame(frame.call).unknown:
+                break
+            self.close_one(pin.value)
+        self.close_fence()
+        if _collection_phase_frame(frame.call).unknown:
+            if not any(value is self for value in QUARANTINE):
+                QUARANTINE.append(self)
+            raise origin.OriginError("BOOTSTRAP_COLLECTION_PHASE_RETIREMENT_UNKNOWN")
+
+
+@dataclass(frozen=True)
+class _CollectionPhaseReader:
+    call: object = field(repr=False, compare=False)
+    owner: object = field(init=False, repr=False, compare=False)
+    current: object = field(init=False, repr=False, compare=False)
+    past: object = field(init=False, repr=False)
+    first: object = field(init=False, repr=False)
+
+    def __post_init__(self):
+        call = self.call
+        require(type(call) is _CollectionPhaseParent, "BOOTSTRAP_COLLECTION_PHASE_READER_CHANGED")
+        frame = call.check()
+        old = frame.transition._attempt.transition
+        for name, value in (("owner", call.live()), ("current", frame.window),
+                ("past", history.snapshot(old._fence)), ("first", old._limits[8])):
+            object.__setattr__(self, name, value)
+
+    def checked(self):
+        call, owner, current = self.call, self.owner, self.current
+        require(type(call) is _CollectionPhaseParent and type(owner) is _CollectionPhaseOwner and type(current) is _CollectionPhaseWindow,
+                "BOOTSTRAP_COLLECTION_PHASE_READER_CHANGED")
+        # Check passive ORIGINAL window/owner identity before invoking any
+        # published parent. Even a different exact registered parent is not
+        # this view's target and must not have its roster/error state touched.
+        frame = _collection_phase_window_frame(current)
+        require(frame.call is call and frame.owner is owner, "BOOTSTRAP_COLLECTION_PHASE_READER_CHANGED")
+        frame = call.check()
+        old = frame.transition._attempt.transition
+        require(self.call is call and self.owner is owner and self.current is current and call.live() is owner and
+                current is frame.window and
+                self.first is old._limits[8] and history.checked(self.past) == history.snapshot(old._fence),
+                "BOOTSTRAP_COLLECTION_PHASE_READER_CHANGED")
+        return self
+
+    def observe(self, *, final, minimum):
+        self.checked()
+        return self.current.now(minimum=minimum)
+
+
+
+@dataclass(eq=False)
+class _CollectionPhaseParent:
+    """Once-claimed NEW parent. Its constructor and returned data grant no rights."""
+    transition: object = field(repr=False)
+    state: str = "CLAIMED"
+    owner: object = field(default=None, repr=False)
+    window: object = field(default=None, repr=False)
+    handles: dict = field(default_factory=dict, repr=False)
+    records: dict = field(default_factory=dict, repr=False)
+    handlers: dict = field(default_factory=dict, repr=False)
+    cancelled: list = field(default_factory=list, repr=False)
+    original: object = field(default=None, repr=False)
+    unknown: bool = False
+    result: object = field(default=None, repr=False)
+
+    def cleanup_bindings(self):
+        frame = _collection_phase_frame(self)
+        if frame.owner is not None:
+            owner, pin = frame.owner, frame.owner_bindings
+            self.roster()
+            frame = _collection_phase_frame(self)
+            require(type(owner) is _CollectionPhaseOwner and owner.resources is pin[0] and owner.errors is pin[1] and
+                    owner.admissions is pin[2] and type(owner.local_end) is type(pin[3]) and owner.local_end == pin[3] and
+                    owner.first is frame.first and owner.fence is frame.window and owner.cancelled is pin[4] and
+                    owner.work_limit is None and owner.final_limit is None and owner.early_last == frame.limits.first and
+                    type(owner.closed) is bool and owner.closed is frame.owner_closed and type(owner.unknown) is bool,
+                    "BOOTSTRAP_COLLECTION_PHASE_OWNER_CHANGED")
+        if frame.window is not None:
+            require(type(frame.window) is _CollectionPhaseWindow and frame.window.call is self and
+                    _collection_phase_window_frame(frame.window) is frame and type(frame.limits) is _CollectionPhaseLimits and
+                    staging._clock(frame.first.clock) == frame.limits.clock and frame.first.nanoseconds == frame.limits.first,
+                    "BOOTSTRAP_COLLECTION_PHASE_WINDOW_CHANGED")
+        return frame
+
+    def check(self):
+        frame = self.cleanup_bindings()
+        _collection_phase_roots()
+        require(self.transition is frame.transition and self.state == frame.state and self.owner is frame.owner and
+                self.window is frame.window and self.original is frame.original and self.unknown is frame.unknown and
+                self.result is frame.result and self.handles is frame.published[0] and self.records is frame.published[1] and
+                self.handlers is frame.published[2] and self.cancelled is frame.published[3],
+                "BOOTSTRAP_COLLECTION_PHASE_PARENT_CHANGED")
+        require(tuple(self.handles.items()) == tuple((row[0], row[1]) for row in frame.handles) and
+                tuple(self.records.items()) == tuple((row[0], row[6]) for row in frame.files) and
+                tuple(self.handlers.items()) == frame.handlers, "BOOTSTRAP_COLLECTION_PHASE_PUBLIC_ROSTER_CHANGED")
+        require(frame.bound is not None and _checked_collection_origin(frame.binding) is frame.bound and
+                frame.bound.transition is frame.transition and frame.predecessor is frame.bound.producer_frame.predecessor,
+                "BOOTSTRAP_COLLECTION_PHASE_PREDECESSOR_CHANGED")
+        _collection_phase_query_checked(frame)
+        if frame.leaf_originals is not None:
+            require(collect_files._capture(frame.leaf_originals) == frame.leaf_originals_pin,
+                    "BOOTSTRAP_COLLECTION_PHASE_LEAF_INPUT_CHANGED")
+        if frame.leaf_pin is not None:
+            leaf, pin = frame.leaf, frame.leaf_pin
+            require(type(leaf) is collect_files.FileCollectionEvidence and object.__getattribute__(leaf, "__dict__") is pin[0] and
+                    set(pin[0]) == {"raw", "inventory_raw", "local_started", "checked_local"} and
+                    all(type(value) is type(old) and value == old for value, old in zip(
+                        (leaf.raw, leaf.inventory_raw, leaf.local_started, leaf.checked_local), pin[1:])),
+                    "BOOTSTRAP_COLLECTION_PHASE_LEAF_RETURN_CHANGED")
+        if frame.result_pin is not None:
+            result, pin = frame.result, frame.result_pin
+            require(type(result) is CollectionPrefix and object.__getattribute__(result, "__dict__") is pin[0] and
+                    set(pin[0]) == {"raw", "leaf", "manifest_raw", "checked_ns", "checked_local"} and
+                    result.leaf is frame.leaf and all(type(value) is type(old) and value == old for value, old in zip(
+                        (result.raw, result.manifest_raw, result.checked_ns, result.checked_local), pin[1:])),
+                    "BOOTSTRAP_COLLECTION_PHASE_RESULT_CHANGED")
+        require(not QUARANTINE and not query.QUARANTINE and not diagnostics._QUARANTINE,
+                "BOOTSTRAP_COLLECTION_PHASE_PRIOR_UNKNOWN")
+        return _collection_phase_frame(self)
+
+    def live(self):
+        frame = self.check()
+        self.raise_first()
+        require(frame.state == "RUNNING" and frame.phases[-1].name == "WORK" and frame.owner is not None and
+                frame.owner.closed is False and not frame.unknown and not frame.owner.unknown,
+                "BOOTSTRAP_COLLECTION_PHASE_NOT_LIVE")
+        return frame.owner
+
+    def cancel(self):
+        frame = self.check()
+        cancellation(frame.published[3])
+        for callback in frame.predecessor.frame.callbacks:
+            callback()
+            self.check()
+        cancellation(frame.published[3])
+
+    def closed(self):
+        self.raise_first()
+        frame = self.check()
+        require(frame.owner is not None and frame.owner.closed is True and frame.owner_closed is True and
+                frame.owner.original is None and not frame.owner.unknown and not frame.unknown and not frame.errors and
+                not frame.foreign and frame.close_roster is not None and frame.handlers == frame.restored and
+                all(pin.attempted and pin.closed for pin in frame.resources) and frame.leaf_pin is not None and
+                frame.query_pin is not None and frame.query_returned[0] is True,
+                "BOOTSTRAP_COLLECTION_PHASE_NOT_CLOSED")
+        return frame
+
+    def error(self, stage, error, *, unknown=False):
+        frame = _collection_phase_frame(self)
+        first = frame.original
+        if first is None:
+            first = frame.owner.original if frame.owner is not None and frame.owner.original is not None else error
+        detail = diagnostics._exception_detail(error)
+        uncertain = frame.unknown or unknown or detail["retirementUnknown"] or bool(
+            QUARANTINE or query.QUARANTINE or diagnostics._QUARANTINE)
+        errors = frame.errors
+        if len(errors) < 64:
+            errors = (*errors, origin.encoded({"stage": stage, "detail": detail}))
+        else:
+            uncertain = True
+        _update_collection_phase(self, original=first, unknown=uncertain, errors=errors)
+        self.original, self.unknown = first, uncertain
+        if frame.owner is not None:
+            try:
+                require(frame.owner.errors is frame.owner_bindings[1], "BOOTSTRAP_COLLECTION_PHASE_ERRORS_CHANGED")
+                Owner.error(frame.owner, stage, error, unknown=uncertain)
+                uncertain |= frame.owner.unknown
+            except BaseException:
+                uncertain = True
+            frame.owner.original, frame.owner.unknown = first, uncertain
+            _update_collection_phase(self, unknown=uncertain)
+            self.unknown = uncertain
+
+    def raise_first(self):
+        frame = _collection_phase_frame(self)
+        if frame.original is not None:
+            raise frame.original
+        if frame.owner is not None and frame.owner.original is not None:
+            self.error("collection-phase-owner-return", frame.owner.original)
+            raise _collection_phase_frame(self).original
+
+    def roster(self):
+        frame = _collection_phase_frame(self)
+        if frame.owner is None:
+            return
+        original_rows = frame.owner_bindings[0]
+        foreign = list(frame.foreign)
+        seen = {(id(pin.row), id(pin.value)) for pin in frame.resources}
+        seen.update((id(row), id(value)) for row, _label, value in foreign)
+        for rows in (original_rows,) if frame.owner.resources is original_rows else (original_rows, frame.owner.resources):
+            if type(rows) is list:
+                for row in rows:
+                    label, value = (row.get("label"), row.get("owner")) if type(row) is dict else (None, None)
+                    if (id(row), id(value)) not in seen:
+                        foreign.append((row, label, value))
+                        seen.add((id(row), id(value)))
+        _update_collection_phase(self, foreign=tuple(foreign))
+        try:
+            require(not foreign and frame.owner.resources is original_rows and type(original_rows) is list and
+                    len(original_rows) == len(frame.resources) <= 4096, "BOOTSTRAP_COLLECTION_PHASE_ROSTER_CHANGED")
+            for row, pin in zip(original_rows, frame.resources):
+                require(row is pin.row and type(row) is dict and set(row) == {"label", "owner", "attempted", "closed"} and
+                        row["label"] == pin.label and row["owner"] is pin.value and type(pin.value) is pin.kind and
+                        row["attempted"] is pin.attempted and row["closed"] is pin.closed,
+                        "BOOTSTRAP_COLLECTION_PHASE_ROSTER_CHANGED")
+            if frame.close_roster is not None:
+                require(tuple((id(pin.row), pin.label, id(pin.value)) for pin in frame.resources) == frame.close_roster,
+                        "BOOTSTRAP_COLLECTION_PHASE_CLOSE_ROSTER_CHANGED")
+        except BaseException as error:
+            self.error("collection-phase-roster", error, unknown=True)
+            raise
+
+    def inputs(self):
+        frame = self.check()
+        saved, last = frame.predecessor.frame, frame.predecessor.phases[-1][1]
+        return custody._Inputs(saved.originals, saved.original_pin, last.staged, last.staged_pin)
+
+    def directory(self, key, path, identity=None, *, parent=None, create=False):
+        owner = self.live()
+        frame = _collection_phase_frame(self)
+        found = next((row for row in frame.handles if row[0] == key), None)
+        if found is None:
+            directory = owner.open(path) if parent is None else owner.child(parent, path.name, create=create)
+            actual = tuple(directory_identity(list(directory.identity), frame.limits.clock[0]))
+            row = (key, directory, path, actual)
+            _update_collection_phase(self, handles=(*_collection_phase_frame(self).handles, row))
+            self.handles[key] = directory
+            found = row
+        require(found[2] == path and (identity is None or found[3] == tuple(identity)),
+                "BOOTSTRAP_COLLECTION_PHASE_DIRECTORY_CHANGED")
+        _new_entry_owned(owner, found[1], path, found[3])
+        self.check()
+        return found[1]
+
+    def read_file(self, directory, name, maximum=LIMIT, *, expected=None, binding=None):
+        """Bounded metadata only; outer streams use their separate hash reader."""
+        owner = self.live()
+        require(type(maximum) is int and 0 < maximum <= producer.LIMIT, "BOOTSTRAP_COLLECTION_PHASE_METADATA_LIMIT")
+        end = owner.end()
+        reader = owner.acquire("reader", lambda: directory.open_file(name, max_bytes=maximum, deadline=end))
+        raw = retained = None
+        try:
+            before = reader.initial_info
+            require(type(before.size) is int and 0 <= before.size <= maximum, "BOOTSTRAP_COLLECTION_PHASE_METADATA_SIZE")
+            retained = staging.files._info_binding(before)
+            require(binding is None or retained == binding, "BOOTSTRAP_COLLECTION_PHASE_ORIGINAL_FILE_REPLACED")
+            data = bytearray()
+            while len(data) < before.size:
+                owner.end()
+                count = min(65536, before.size - len(data))
+                part = reader.read(count)
+                require(type(part) is bytes and 0 < len(part) <= count, "BOOTSTRAP_COLLECTION_PHASE_METADATA_SHORT_READ")
+                data.extend(part)
+                owner.end()
+            require(reader.read(1) == b"" and reader.verify() == before, "BOOTSTRAP_COLLECTION_PHASE_METADATA_CHANGED")
+            raw = bytes(data)
+            require(expected is None or raw == expected, "BOOTSTRAP_COLLECTION_PHASE_ORIGINAL_BYTES_CHANGED")
+            owner.end()
+        except BaseException as error:
+            self.error("collection-phase-metadata-read", error)
+        finally:
+            owner.close_one(reader)
+        self.raise_first()
+        owner.end()
+        return raw, retained
+
+    def remember(self, key, directory, name, raw, maximum=LIMIT, *, binding=None):
+        frame = self.check()
+        require(type(raw) is bytes and len(raw) <= maximum and not any(row[0] == key for row in frame.files),
+                "BOOTSTRAP_COLLECTION_PHASE_ORIGINAL_ROSTER")
+        identity = tuple(directory_identity(list(directory.identity), frame.limits.clock[0]))
+        _new_entry_owned(self.live(), directory, directory.path, identity)
+        # A reader's ORIGINAL binding must cross this boundary, especially for
+        # canonical start/receipt. For newly written metadata establish it now;
+        # never regenerate a supplied original binding from a later same-byte
+        # file. The detached encoding cannot be mutated through the caller.
+        if binding is None:
+            _actual, binding = self.read_file(directory, name, maximum, expected=raw)
+        require(staging.files._file_binding(binding), "BOOTSTRAP_COLLECTION_PHASE_ORIGINAL_FILE_BINDING")
+        retained = origin.encoded(binding)
+        frame = self.check()
+        _update_collection_phase(self, files=(*frame.files,
+            _CollectionPhaseFile(key, directory, directory.path, identity, name, maximum, raw, retained)))
+        self.records[key] = raw
+        self.check()
+
+    def reread(self):
+        owner = self.live()
+        for _key, directory, path, identity, name, maximum, raw, binding_raw in _collection_phase_frame(self).files:
+            _new_entry_owned(owner, directory, path, identity)
+            self.read_file(directory, name, maximum, expected=raw, binding=origin.parse(binding_raw))
+        self.check()
+
+    def file_facade(self):
+        """Source-only adapter for unchanged original-file parsers, no owner."""
+        call, owner = self, self.live()
+        directories = {"bootstrap-source", "bootstrap-source-parent", "custody-source-root", "custody-source-scripts",
+                       "dependency-seed-source-root", "dependency-seed-source-parent"}
+        class Reader:
+            @property
+            def unknown(self):
+                return _collection_phase_frame(call).unknown
+
+            def check(self, *, new=False):
+                require(type(new) is bool, "BOOTSTRAP_COLLECTION_PHASE_FILE_MODE")
+                require(call.live() is owner, "BOOTSTRAP_COLLECTION_PHASE_FILE_OWNER_CHANGED")
+                owner.end()
+
+            def end(self, *, new=False):
+                self.check(new=new)
+                return owner.end()
+
+            def acquire(self, label, factory):
+                require(label in directories or label in ("reader", "dependency-seed-input"),
+                        "BOOTSTRAP_COLLECTION_PHASE_SOURCE_LABEL")
+                return owner.acquire("source-directory" if label in directories else "reader", factory)
+
+            def close_one(self, resource):
+                owner.close_one(resource)
+                call.raise_first()
+                require(any(pin.value is resource and pin.attempted and pin.closed for pin in
+                    _collection_phase_frame(call).resources), "BOOTSTRAP_COLLECTION_PHASE_SOURCE_CLOSE_UNKNOWN")
+
+            def error(self, stage, error, *, unknown=False):
+                call.error(stage, error, unknown=unknown)
+        return Reader()
+
+    def host(self):
+        owner = self.live()
+        owner.end()
+        frame = _collection_phase_frame(self)
+        saved = frame.predecessor.frame
+        entry = frame.transition._attempt.transition._entry
+        context = origin.parse(entry.context_original)
+        require(origin.wire.TOKEN_ENV not in os.environ and os.environ.get(PREPARE_OUTCOME_ENV) == "success" and
+                os.environ.get(PREPARE_HASH_ENV) == origin.digest(entry.handoff_original),
+                "BOOTSTRAP_COLLECTION_PHASE_PREPARE_OUTCOME_OR_TOKEN")
+        selection, path, event = host_inputs(saved.originals.clock.role)
+        require(path == saved.paths[0] and selection == context["selection"] and event == entry.admitted.original_event and
+                context["runnerName"] == os.environ.get("RUNNER_NAME") and context["inheritedContext"] == query._inherited_context() and
+                os.getpid() != origin.parse(entry.preparation_original)["processIdentity"]["pid"],
+                "BOOTSTRAP_COLLECTION_PHASE_ACTUAL_HOST_CHANGED")
+        inputs = _parent_originals(saved.record[0])[4][5][0]
+        require(initialization._installed() == inputs.toolchains.originals and canonical._interpreter() == inputs.interpreter and
+                inputs.policy == initialization.properties(inputs.homes), "BOOTSTRAP_COLLECTION_PHASE_INSTALLED_INPUTS_CHANGED")
+        env = recipient_environment(saved.paths[3])
+        env.update({name: home for name, _supplied, home, _identities in inputs.toolchains.originals})
+        require(tuple(sorted(env.items())) == inputs.environment, "BOOTSTRAP_COLLECTION_PHASE_INITIAL_ENVIRONMENT_CHANGED")
+        owner.end()
+        return env
+
+    def read_originals(self):
+        owner = self.live()
+        self.host()
+        frame = _collection_phase_frame(self)
+        saved, previous = frame.predecessor.frame, frame.transition._attempt
+        old = previous.transition
+        entry, paths = old._entry, saved.paths
+        value = origin.parse(entry.raw)
+        for key, path, identity in (("original", paths[0], value["preparation"]["sessionIdentity"]),
+                ("adoption", paths[1], value["sessionIdentity"]), ("entry", paths[2], previous.target_identity)):
+            self.directory(key, path, identity)
+        adoption, current = self.handles["adoption"], self.handles["entry"]
+        require(owner.read(adoption, "entry-context.json") == entry.raw and
+                owner.read(adoption, "entry-close-pending.json") == old.pending_raw and
+                owner.read(current, "new-entry-pending.json") == previous.pending_raw,
+                "BOOTSTRAP_COLLECTION_PHASE_ENTRY_ORIGINAL_CHANGED")
+        for target, admitted, session_raw, returned_raw in (
+                (adoption, entry.admitted, entry.session_original, entry.return_original),
+                (current, previous.admitted, previous.admission_originals[1], previous.admission_originals[2])):
+            directory = self.directory("admission:" + str(target.path), target.path / "admission", parent=target)
+            require(load_admission(owner, directory) == admitted and owner.read(directory, "session-result.json") == session_raw and
+                    owner.read(target, "admission-return.json") == returned_raw, "BOOTSTRAP_COLLECTION_PHASE_ENTRY_ADMISSION_CHANGED")
+        _admission_history_content(entry.admitted, entry.session_original, entry.return_original, history.snapshot(old._fence))
+        _new_entry_return_content(previous)
+        admitted, _context, prepared = _read_prepared(_CollectionPhaseReader(self), self.handles["original"],
+            entry.handoff_original, entry.context_original)
+        require(admitted == entry.admitted and same_preparation(prepared, origin.parse(entry.preparation_original)) and
+                same_preparation(prepared, origin.parse(previous.preparation)), "BOOTSTRAP_COLLECTION_PHASE_PREPARATION_CHANGED")
+        service = self.directory("service", paths[0] / "service", parent=self.handles["original"])
+        responses = tuple((name, owner.read(service, name + ".json")) for name in ("attempt", "jobs"))
+        require(responses == old.responses and origin.encoded(_entry_close_proposal(entry, responses)) == old.proposal_raw and
+                old.proposal_raw == saved.originals.proposal_raw, "BOOTSTRAP_COLLECTION_PHASE_SERVICE_ORIGINALS_CHANGED")
+        files = saved.files + tuple((key, str(path), identity, name, maximum, raw)
+            for _parent, closed in frame.predecessor.phases
+            for key, _directory, path, identity, name, maximum, raw in closed.files)
+        for _key, spelling, identity, name, maximum, raw in files:
+            path = Path(spelling)
+            directory = self.directory("predecessor:" + spelling, path, identity)
+            self.read_file(directory, name, maximum, expected=raw)
+        self.host()
+        # New handles compare the closed producer's ORIGINAL bindings. Even a
+        # same-byte replacement is not an original metadata file.
+        for row in self.check().bound.producer_frame.files:
+            directory = self.directory("producer-record:" + str(row.path), row.path, row.identity)
+            self.read_file(directory, row.name, row.maximum, expected=row.raw,
+                           binding=origin.parse(row.binding_raw))
+        self.host()
+
+    def close_resource(self, pin):
+        """Recheck AFTER the pre-close clock, then once-close the private return.
+
+        Mere expiry preserves known cleanup. Newly UNKNOWN ownership or changed
+        bindings must neither dispatch close nor mark the original attempted.
+        """
+        try:
+            frame = self.cleanup_bindings()
+            require(not frame.unknown and frame.owner.unknown is False,
+                    "BOOTSTRAP_COLLECTION_PHASE_CLOSE_UNKNOWN")
+            actual = next((row for row in frame.resources if row.value is pin.value), None)
+            require(actual is not None and actual.row is pin.row and actual.kind is type(pin.value),
+                    "BOOTSTRAP_COLLECTION_PHASE_CLOSE_BINDING")
+            if actual.attempted:
+                return
+        except BaseException as error:
+            self.error("collection-phase-close-dispatch", error, unknown=True)
+            return
+        _update_collection_phase(self, resources=tuple(row._replace(attempted=True) if row.value is pin.value else row
+                                              for row in frame.resources))
+        pin.row["attempted"] = True
+        try:
+            pin.value.close()
+            current = _collection_phase_frame(self)
+            _update_collection_phase(self, resources=tuple(row._replace(closed=True) if row.value is pin.value else row
+                                                  for row in current.resources))
+            pin.row["closed"] = True
+        except BaseException as error:
+            self.error(pin.label + "-close", error, unknown=True)
+
+    def source_inputs(self, *, first=False):
+        """Separate current file bindings, not an expanded stage/cache roster.
+
+        The first read precedes NEW native clean-source admission; later reads
+        must match its actual file bindings and bytes. This is not loaded-code
+        or uninterrupted source-directory/atomic-snapshot qualification.
+        """
+        require(type(first) is bool, "BOOTSTRAP_COLLECTION_PHASE_SOURCE_MODE")
+        owner, frame = self.live(), self.check()
+        require((first and not frame.source_attempted and frame.source_pin is None) or
+                (not first and frame.source_pin is not None), "BOOTSTRAP_COLLECTION_PHASE_SOURCE_REENTRY")
+        if first:
+            _update_collection_phase(self, source_attempted=True)
+        opened, rows, result = [], [], None
+        try:
+            root = owner.acquire("source-directory", lambda: staging.files.public_root(ROOT))
+            opened.append(root)
+            end = owner.end()
+            scripts = owner.acquire("source-directory", lambda: root.open_directory("scripts", deadline=end))
+            opened.append(scripts)
+            before = tuple(directory.verify() for directory in opened)
+            for name in ("hosted_cache_bootstrap_collection.py", "hosted_cache_bootstrap_collect_files.py"):
+                raw, binding = self.read_file(scripts, name, 4194304)
+                rows.append(("scripts/" + name, raw, origin.encoded(binding)))
+            result = (tuple(tuple(info.identity) for info in before), tuple(rows))
+            if first:
+                _update_collection_phase(self, source_pin=result)  # Actual reads precede callbacks/close.
+            require(result == self.check().source_pin and
+                    all(directory.verify() == info for directory, info in zip(opened, before)),
+                    "BOOTSTRAP_COLLECTION_PHASE_SOURCE_CHANGED")
+            owner.end()
+        except BaseException as error:
+            self.error("collection-phase-source", error)
+        finally:
+            for directory in reversed(opened):
+                owner.close_one(directory)
+        self.raise_first()
+        return result
+
+    def admit(self):
+        """A NEW supplier's actual return, not its provisional session JSON.
+
+        Both query75/final120 are shortened by WORK120. The actual supplier
+        LOCAL pair and the later outer RAW-final/WORK-LOCAL sample are distinct.
+        No second HTTP service acquisition or recipient-policy installation.
+        """
+        owner, frame = self.live(), self.check()
+        require(not frame.query_attempted and frame.phases[-1].name == "WORK" and frame.source_pin is not None,
+                "BOOTSTRAP_COLLECTION_PHASE_QUERY_REENTRY")
+        _update_collection_phase(self, query_attempted=True)
+        window = frame.window
+        began = window.now()
+        work = min(frame.limits.ends[0], origin.integer(began + 75 * origin.NS))
+        final = min(frame.limits.ends[0], origin.integer(began + 120 * origin.NS))
+        pair = (window.deadline(75, limit=work), window.deadline(120, limit=final))
+        path = self.handles["phase"].path / "admission"
+        supplier = result = None
+        owned = False
+        try:
+            supplier = query.NativeGitQueries(ROOT, path, check_cancel=lambda: window.now(limit=work), owner_deadlines=pair)
+            _update_collection_phase(self, query=(supplier, type(supplier), pair, work, final))
+            require(type(supplier) is query.NativeGitQueries and id(supplier) not in frame.borrowed,
+                    "BOOTSTRAP_COLLECTION_PHASE_QUERY_BORROWED")
+            owned = True
+            roots = tuple((directory, type(directory), expected,
+                tuple(directory_identity(list(directory.identity), frame.limits.clock[0]))) for directory, expected in
+                ((supplier.private, path), (supplier.home, path / "query-home")))
+            _update_collection_phase(self, query_origin=_CollectionPhaseQueryOrigin(
+                object.__getattribute__(supplier, "__dict__"), ROOT, path, roots,
+                supplier.resources, supplier.records, supplier.readbacks))
+            _collection_phase_query_identity(_collection_phase_frame(self))
+            window.now(limit=work)
+            supplier.native_host_matches_actions()
+            result = bootstrap.admit(ROOT, query_runner=supplier, expected=frame.transition._attempt.admitted)
+            _update_collection_phase(self, query_result=result)  # Before retention or post-return checks.
+            require(type(result) is I.Admission and result == frame.transition._attempt.admitted,
+                    "BOOTSTRAP_COLLECTION_PHASE_READMISSION")
+            supplier.retain_admission(result)
+            window.now(limit=work)
+        except BaseException as error:
+            current = _collection_phase_frame(self)
+            _update_collection_phase(self, query_errors=(*current.query_errors, ("body", error)))
+            self.error("collection-phase-query-body", error)
+        finally:
+            if owned:
+                try:
+                    _collection_phase_query_before(self)
+                except BaseException as error:
+                    current = _collection_phase_frame(self)
+                    _update_collection_phase(self, query_errors=(*current.query_errors, ("pre-final", error)))
+                    if not any(value is supplier for value in query.QUARANTINE):
+                        query.QUARANTINE.append(supplier)
+                    self.error("collection-phase-query-before-final", error, unknown=True)
+                else:
+                    _update_collection_phase(self, query_final_attempted=True)
+                    try:
+                        supplier._finalize(_collection_phase_frame(self).original)
+                        _update_collection_phase(self, query_returned=(True, None, None))
+                        _update_collection_phase(self, query_pin=_collection_phase_query_pin(_collection_phase_frame(self), result))
+                    except BaseException as error:
+                        current = _collection_phase_frame(self)
+                        # A returned finalizer with failed post-return validation
+                        # is not a thrown finalizer. Keep the actual fact distinct.
+                        if current.query_returned is None:
+                            _update_collection_phase(self, query_returned=(False, None, None))
+                        _update_collection_phase(self, query_errors=(*current.query_errors, ("final", error)))
+                        uncertain = current.query_returned is not None and current.query_returned[0] is True
+                        if uncertain and not any(value is supplier for value in query.QUARANTINE):
+                            query.QUARANTINE.append(supplier)
+                        self.error("collection-phase-query-final", error, unknown=uncertain or supplier.unknown)
+            try:
+                observed = window.now(limit=final)
+                current = _collection_phase_frame(self)
+                if current.query_returned is not None:
+                    _update_collection_phase(self, query_returned=(current.query_returned[0], observed, current.local_last))
+            except BaseException as error:
+                current = _collection_phase_frame(self)
+                _update_collection_phase(self, query_errors=(*current.query_errors, ("outer-return", error)))
+                self.error("collection-phase-query-return", error)
+            if (owned and supplier.unknown) or query.QUARANTINE or diagnostics._QUARANTINE:
+                self.error("collection-phase-query-unknown",
+                    origin.OriginError("BOOTSTRAP_COLLECTION_PHASE_QUERY_UNKNOWN"), unknown=True)
+        self.raise_first()
+        frame = self.check()
+        require(owned and frame.query_pin is not None and frame.query_returned[0] is True and
+                frame.query_returned[1] is not None and frame.query_returned[2] is not None and
+                frame.query_result is result, "BOOTSTRAP_COLLECTION_PHASE_READMISSION")
+        directory = self.directory("collection-admission", path)
+        require(load_admission(owner, directory) == result, "BOOTSTRAP_COLLECTION_PHASE_READMISSION_CHANGED")
+        for name, raw in (("admission.json", result.record), ("original-event.json", result.original_event),
+                ("original-policy.json", result.original_policy), ("recipient-public.asc", result.public_key),
+                ("session-result.json", owner.read(directory, "session-result.json"))):
+            self.remember("admission/" + name, directory, name, raw)
+        session = origin.parse(self.records["admission/session-result.json"])
+        require(set(session) == {"schema", "scope", "job", "queries", "result", "retirement", "firstError", "errors", "readbacks"} and
+                type(session["schema"]) is int and session["schema"] == 1 and session["scope"] == "ORDINARY_GIT_QUERIES_ONLY" and
+                type(session["job"]) is str and re.fullmatch(r"[0-9a-f]{32}", session["job"]) and
+                type(session["queries"]) is list and type(session["readbacks"]) is list and
+                session["result"] == "READY_FOR_CALLER_SEAL" and session["retirement"] == "KNOWN" and
+                session["firstError"] is None and session["errors"] == [] and
+                origin.encoded(session["queries"]) == origin.encoded(frame.query_origin.records) and
+                origin.encoded(session["readbacks"]) == origin.encoded(frame.query_preclose.readbacks),
+                "BOOTSTRAP_COLLECTION_PHASE_QUERY_RECORD")
+        raw = owner.write(self.handles["phase"], "admission-return.json", {"admissionSha256": origin.digest(result.record),
+            "sessionSha256": origin.digest(self.records["admission/session-result.json"]), "clock": origin.clock_value(window.clock),
+            "returnedNs": frame.query_returned[1], "ownerDeadlineScope": "ORIGINAL_COLLECTION_WORK_ONLY"})
+        self.remember("admission-return", self.handles["phase"], "admission-return.json", raw)
+        window.now(limit=final)
+
+    def state_readback(self, *, after):
+        """Warmed H throughout; retained/ is empty BEFORE copy, exact AFTER.
+
+        Never call the old producer's empty-retained postlaunch oracle after
+        copying. Current descendant lifetimes are not leaf-time baselines.
+        """
+        require(type(after) is bool, "BOOTSTRAP_COLLECTION_PHASE_STATE_MODE")
+        owner, inputs, frame = self.live(), self.inputs(), self.check()
+        require((after and frame.leaf_pin is not None) or (not after and not frame.leaf_attempted),
+                "BOOTSTRAP_COLLECTION_PHASE_STATE_ORDER")
+        closed = frame.predecessor.phases[-1][1]
+        request = origin.parse(closed.leaf.request_raw)
+        initial = self.directory("initializer", inputs.session, inputs.directories["session"])
+        handles = {"session": initial}
+        for name in staging.DIRECTORIES[1:]:
+            parent = initial if name == "state" else handles["state"]
+            handles[name] = self.directory("canonical:" + name, parent.path / name, inputs.directories[name], parent=parent)
+        for key, directory, name, raw in (("initializer-context", initial, "initializer-context.json", inputs.context_raw),
+                ("canonical-context", handles["state"], "context.json", inputs.canonical_raw),
+                ("properties", handles["gradle-home"], "gradle.properties", inputs.properties_raw)):
+            self.read_file(directory, name, expected=raw, binding=request["fileBindings"][key])
+        facade = self.file_facade()
+        staging._names(facade, handles["state"], ("context.json", "gradle-home", "evidence", "cancellations", "gradle.lock"))
+        invocation = request["owner"]["productInvocation"]
+        staging._names(facade, handles["evidence"], (invocation,))
+        staging._names(facade, handles["cancellations"], ())
+        # No H enumeration/population claim: the original producer warmed it.
+        for name, directory in handles.items():
+            require(tuple(directory.verify().identity) == inputs.directories[name],
+                    "BOOTSTRAP_COLLECTION_PHASE_INITIALIZER_REPLACED")
+        pin = closed.request_pin
+        directory = self.directory("reservation", Path(pin.path), pin.directory)
+        retained = self.directory("retained", Path(pin.path) / "retained", pin.retained, parent=directory)
+        self.read_file(directory, "request.json", expected=closed.leaf.request_raw,
+                       binding=staging.files.record(pin.binding_raw))
+        staging._names(facade, directory, ("request.json", "retained"))
+        if not after:
+            staging._names(facade, retained, ())
+        container = self.directory("stage-container", inputs.container)
+        restore = self.directory("restore-home", inputs.restore, parent=container)
+        custody._stage_readback(facade, inputs, container, restore)
+        require(custody._sources(facade, inputs) == {name: request[name] for name in ("inputs", "bootstrapInputs", "custodyInputs")},
+                "BOOTSTRAP_COLLECTION_PHASE_SOURCE_INPUTS_CHANGED")
+        require(request["owner"] == {"job": inputs.canonical["id"], "productInvocation": invocation,
+                "sameHomeStopInvocation": invocation} and producer._uuid(invocation) and
+                request["evidenceDirectory"] == str(inputs.state / "evidence" / invocation),
+                "BOOTSTRAP_COLLECTION_PHASE_RESERVATION_TARGET")
+        if after:
+            self.current_membership()
+        owner.end()
+
+    def manifest(self):
+        owner, frame = self.live(), self.check()
+        require(not frame.manifest_attempted and frame.query_pin is not None, "BOOTSTRAP_COLLECTION_PHASE_MANIFEST_REENTRY")
+        _update_collection_phase(self, manifest_attempted=True)
+        files = frame.bound.producer_frame.files
+        rows = tuple(tuple(row for row in files if row.key == "canonical-" + name) for name in ("start", "receipt"))
+        require(all(len(row) == 1 for row in rows), "BOOTSTRAP_COLLECTION_PHASE_PRODUCER_METADATA_MISSING")
+        start, receipt = (row[0] for row in rows)
+        require(start.path == receipt.path and start.identity == receipt.identity and start.directory is receipt.directory,
+                "BOOTSTRAP_COLLECTION_PHASE_PRODUCER_INVOCATION_CHANGED")
+        directory = self.directory("canonical-invocation", start.path, start.identity, parent=self.handles["canonical:evidence"])
+        for row in (start, receipt):
+            self.read_file(directory, row.name, row.maximum, expected=row.raw, binding=origin.parse(row.binding_raw))
+            self.remember(row.key, directory, row.name, row.raw, row.maximum, binding=origin.parse(row.binding_raw))
+        raw, binding = self.read_file(directory, "report-manifest.json", 4194304)
+        _update_collection_phase(self, manifest_pin=(directory, start.path, start.identity, raw, origin.encoded(binding)))
+        self.remember("manifest", directory, "report-manifest.json", raw, 4194304, binding=binding)
+        current, inputs = self.check(), self.inputs()
+        original = current.bound.returned
+        require(original.start_raw == start.raw and original.receipt_raw == receipt.raw,
+                "BOOTSTRAP_COLLECTION_PHASE_PRODUCER_METADATA_CHANGED")
+        bindings = {row.name: origin.parse(row.binding_raw) for row in (start, receipt)}
+        bindings["report-manifest.json"] = origin.parse(current.manifest_pin[4])
+        value = collect_files.FileOriginals(original.request_raw, inputs.admitted.record, inputs.canonical_raw,
+            start.raw, receipt.raw, raw, current.bound.producer_frame.native.exit_code, start.identity,
+            current.predecessor.phases[-1][1].request_pin.retained, origin.encoded(bindings))
+        owner.end()
+        return value
+
+    def validate_leaf(self):
+        """Check the original return's data scope, never reconstruct a leaf run."""
+        frame = self.check()
+        require(frame.leaf_pin is not None, "BOOTSTRAP_COLLECTION_PHASE_LEAF_MISSING")
+        inputs = collect_files._Inputs(frame.leaf_originals)
+        raw, inventory_raw, began, checked = frame.leaf_pin[1:]
+        require(inventory_raw == inputs.inventory_raw, "BOOTSTRAP_COLLECTION_PHASE_INVENTORY_CHANGED")
+        value = staging.files.record(raw)
+        fixed = {"schema": 1, "scope": "BOOTSTRAP_CONFIGURATION_FILE_COPY_LEAF_V1",
+            "inventorySha256": origin.digest(inventory_raw), "inputProvenance": "SUPPLIED_RECORDS_NOT_ORIGINAL_CALL",
+            "collectionState": "COPIED_AND_READ_BACK", "completed": True, "leafHandleClose": "KNOWN",
+            "enclosingOwnerRetirement": "NOT_OBSERVED_HERE", "noLoaderObservation": "NOT_OBSERVED",
+            "dependencyPopulation": "NOT_ATTESTED", "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED",
+            "nextPhaseAuthority": False, "exportSaveAuthority": False,
+            "readBoundary": "WINDOWS_DECLARED_SIZE_AND_SAME_DESCRIPTOR_VERIFY" if inputs.role == "windows-x64" else
+                            "POSIX_POSITIVE_READ_EMPTY_AND_SAME_DESCRIPTOR_VERIFY",
+            "sourceDirectory": str(inputs.source), "retainedDirectory": str(inputs.target),
+            "directoryBindings": {name: list(identity) for name, identity in inputs.identities.items()}}
+        require(set(value) == {*fixed, "counts", "files", "localWindow"} and staging.files.encoded(value) == raw and
+                origin.encoded({key: value[key] for key in fixed}) == origin.encoded(fixed),
+                "BOOTSTRAP_COLLECTION_PHASE_LEAF_RECORD")
+        expected = {}
+        def members(tree, prefix=""):
+            for name, member in sorted(tree.items()):
+                path = prefix + ("/" if prefix else "") + name
+                if type(member) is dict:
+                    members(member, path)
+                else:
+                    require(type(member) is collect_files._Member, "BOOTSTRAP_COLLECTION_PHASE_MEMBER_KIND")
+                    expected[path] = member
+        members(inputs.tree)
+        rows = value["files"]
+        require(type(rows) is list and len(rows) == len(expected) and
+                all(type(row) is dict and set(row) == {"path", "bytes", "sha256", "sourceBinding", "destinationBinding"}
+                    for row in rows) and [row["path"] for row in rows] == list(expected),
+                "BOOTSTRAP_COLLECTION_PHASE_LEAF_ROSTER")
+        aliases, total = set(inputs.identities.values()), 0
+        for row in rows:
+            member = expected[row["path"]]
+            require(type(row["bytes"]) is int and 0 <= row["bytes"] <= member.maximum and
+                    (member.size is None or row["bytes"] == member.size) and type(row["sha256"]) is str and
+                    re.fullmatch(r"[0-9a-f]{64}", row["sha256"]) and
+                    (row["bytes"] != 0 or row["sha256"] == origin.digest(b"")) and
+                    (member.sha256 is None or row["sha256"] == member.sha256),
+                    "BOOTSTRAP_COLLECTION_PHASE_LEAF_FILE")
+            for side in ("source", "destination"):
+                binding = row[side + "Binding"]
+                require(staging.files._file_binding(binding) and
+                        type(binding["identity"][1]) is (str if inputs.role == "windows-x64" else int),
+                        "BOOTSTRAP_COLLECTION_PHASE_LEAF_FILE_BINDING")
+                identity = tuple(binding["identity"])
+                require(identity not in aliases, "BOOTSTRAP_COLLECTION_PHASE_LEAF_FILE_ALIAS")
+                aliases.add(identity)
+            require(member.binding_raw is None or staging.files.encoded(row["sourceBinding"]) == member.binding_raw,
+                    "BOOTSTRAP_COLLECTION_PHASE_ORIGINAL_METADATA_BINDING")
+            total += row["bytes"]
+        require(total <= collect_files.MAX_BYTES, "BOOTSTRAP_COLLECTION_PHASE_LEAF_PAYLOAD_LIMIT")
+        metadata_bytes = sum(expected[name].size for name in collect_files.METADATA)
+        counts = {"sourceReadBytes": 2 * total + metadata_bytes, "destinationReadBytes": total,
+            "outputBytesRequested": total, "outputBytesAcknowledged": total,
+            **{name: inputs.members for name in ("sourceMembers", "destinationMembers", "sourceFinalMembers", "destinationFinalMembers")}}
+        require(origin.encoded(value["counts"]) == origin.encoded(counts), "BOOTSTRAP_COLLECTION_PHASE_LEAF_COUNTS")
+        window = value["localWindow"]
+        require(type(window) is dict and set(window) == {"started", "end", "observed", "scope"} and
+                type(window["started"]) is type(began) and window["started"] == began and
+                type(window["end"]) in (int, float) and window["end"] == staging._local(began + 120) and
+                window["scope"] == "LOCAL120_SHORTENS_CALLER_NOT_SHARED_CLOCK_OR_JOB_ADMISSION" and
+                frame.leaf_began[1] <= began <= staging._local(window["observed"]) <= checked < window["end"],
+                "BOOTSTRAP_COLLECTION_PHASE_LEAF_LOCAL_WINDOW")
+        return value, inputs, expected
+
+    def current_membership(self):
+        """Current complete membership/root/file bindings, not an atomic freeze.
+
+        Descendant directories verify their OWN newly opened lifetime. The leaf
+        does not export earlier descendant bindings: do not invent continuity.
+        No payload rehash/copy, loader operation, or FINAL/READ file work.
+        """
+        owner = self.live()
+        value, inputs, expected = self.validate_leaf()
+        rows = {row["path"]: row for row in value["files"]}
+        aliases, counts = {}, {(side, final): 0 for side in ("source", "destination") for final in (False, True)}
+        def info(binding_info, side, path, directory):
+            kind = windows.FileInfo if inputs.role == "windows-x64" else staging.files.PosixInfo
+            require(type(binding_info) is kind and binding_info.is_directory is directory,
+                    "BOOTSTRAP_COLLECTION_PHASE_CURRENT_FILE_KIND")
+            binding = staging.files._info_binding(binding_info)
+            require(staging.files._file_binding(binding), "BOOTSTRAP_COLLECTION_PHASE_CURRENT_FILE_BINDING")
+            identity, key = tuple(binding["identity"]), (side, path)
+            require(identity not in aliases or aliases[identity] == key, "BOOTSTRAP_COLLECTION_PHASE_CURRENT_ALIAS")
+            aliases[identity] = key
+            return binding
+        def names(directory, tree, side, final):
+            end = owner.end()
+            actual = directory.names(max_names=10000, deadline=end)
+            require(type(actual) is tuple and all(type(name) is str for name in actual),
+                    "BOOTSTRAP_COLLECTION_PHASE_CURRENT_NAMES")
+            counts[(side, final)] += len(actual)
+            require(counts[(side, final)] <= 10000 and actual == tuple(sorted(tree)),
+                    "BOOTSTRAP_COLLECTION_PHASE_CURRENT_MEMBERS")
+            owner.end()
+        def walk(directory, tree, side, prefix=""):
+            before = directory.verify()
+            original = info(before, side, prefix, True)
+            if not prefix:
+                require(tuple(original["identity"]) == inputs.identities[side],
+                        "BOOTSTRAP_COLLECTION_PHASE_CURRENT_ROOT_CHANGED")
+            names(directory, tree, side, False)
+            for name, member in sorted(tree.items()):
+                path = prefix + ("/" if prefix else "") + name
+                end = owner.end()
+                resource = owner.acquire("directory" if type(member) is dict else "reader", lambda:
+                    directory.open_directory(name, deadline=end) if type(member) is dict else
+                    directory.open_file(name, max_bytes=expected[path].maximum, deadline=end))
+                try:
+                    if type(member) is dict:
+                        walk(resource, member, side, path)
+                    else:
+                        first = resource.initial_info
+                        require(info(first, side, path, False) == rows[path][side + "Binding"] and
+                                first.size == rows[path]["bytes"] and resource.verify() == first,
+                                "BOOTSTRAP_COLLECTION_PHASE_CURRENT_FILE_CHANGED")
+                    owner.end()
+                except BaseException as error:
+                    self.error("collection-phase-current-member", error)
+                finally:
+                    owner.close_one(resource)
+                self.raise_first()
+            names(directory, tree, side, True)
+            require(directory.verify() == before, "BOOTSTRAP_COLLECTION_PHASE_CURRENT_DIRECTORY_CHANGED")
+            owner.end()
+        for side, key in (("source", "canonical-invocation"), ("destination", "retained")):
+            walk(self.handles[key], inputs.tree, side)
+        require(all(count == inputs.members for count in counts.values()), "BOOTSTRAP_COLLECTION_PHASE_CURRENT_MEMBER_COUNT")
+        return {"scope": "CURRENT_MEMBERSHIP_ROOT_AND_FILE_BINDINGS_NOT_DESCENDANT_CONTINUITY_OR_FREEZE",
+                "membersPerSide": inputs.members, "files": len(rows)}
+
+    def pending(self):
+        owner, frame = self.live(), self.check()
+        require(frame.pending_raw is None and frame.leaf_pin is not None and frame.source_pin is not None,
+                "BOOTSTRAP_COLLECTION_PHASE_PENDING_REENTRY")
+        raw = owner.write(self.handles["phase"], "collection-pending.json", {"schema": 1,
+            "scope": "BOOTSTRAP_COLLECTION_PENDING_PARENT_CLOSE_NOT_RETURN_V1",
+            "producerSha256": origin.digest(frame.bound.returned.raw),
+            "manifestSha256": origin.digest(frame.manifest_pin[3]), "leafSha256": origin.digest(frame.leaf_pin[1]),
+            "inventorySha256": origin.digest(frame.leaf_pin[2]),
+            "collectionInputs": {name: origin.digest(raw) for name, raw, _binding in frame.source_pin[1]},
+            "sourceBindingScope": "NEW_FILE_BYTES_AND_BINDINGS_AROUND_NATIVE_CLEAN_ADMISSION_NOT_LOADED_CODE_PROOF",
+            "noLoaderObservation": "NOT_OBSERVED", "parentClose": "PENDING", "window": frame.window.record(),
+            "nextPhaseAuthority": False, "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED",
+            "exportSaveAuthority": False})
+        _update_collection_phase(self, pending_raw=raw)
+        self.remember("collection-pending", self.handles["phase"], "collection-pending.json", raw)
+
+def _close_collection_phase(parent):
+    """Known NEW obligations only. Expiry forbids acquisition, not known close."""
+    frame = _collection_phase_frame(parent)
+    owner, window = frame.owner, frame.window
+    if owner is not None:
+        _collection_phase_state(parent, "CLOSING")
+        if frame.phases[-1].name == "WORK":
+            try:
+                window.advance("FINAL")
+            except BaseException as error:
+                parent.error("collection-phase-final-start", error)
+        try:
+            parent.roster()
+            frame = _collection_phase_frame(parent)
+            require(frame.close_roster is None, "BOOTSTRAP_COLLECTION_PHASE_CLOSE_REENTRY")
+            _update_collection_phase(parent,
+                close_roster=tuple((id(pin.row), pin.label, id(pin.value)) for pin in frame.resources))
+            owner.close()
+        except BaseException as error:
+            parent.error("collection-phase-resource-close", error)
+    for number, handler in _collection_phase_frame(parent).handlers:
+        try:
+            window.sample(cleanup=True)
+        except BaseException as error:
+            parent.error("collection-phase-pre-restore-clock", error)
+        try:
+            signal.signal(number, handler)
+            require(signal.getsignal(number) is handler, "BOOTSTRAP_COLLECTION_PHASE_HANDLER_NOT_RESTORED")
+            current = _collection_phase_frame(parent)
+            _update_collection_phase(parent, restored=(*current.restored, (number, handler)))
+        except BaseException as error:
+            parent.error("collection-phase-handler-restore", error)
+        try:
+            window.sample(cleanup=True)
+        except BaseException as error:
+            parent.error("collection-phase-post-restore-clock", error)
+    try:
+        parent.roster()
+        frame = _collection_phase_frame(parent)
+        require(owner is None or (owner.closed is True and frame.owner_closed is True and frame.close_roster is not None and
+                all(pin.attempted and pin.closed for pin in frame.resources)), "BOOTSTRAP_COLLECTION_PHASE_CLOSE_INCOMPLETE")
+    except BaseException as error:
+        parent.error("collection-phase-close-roster", error, unknown=True)
+
+
+def _run_collection_phase(parent):
+    frame = parent.check()
+    require(frame.state == "BOUND" and frame.owner is None and frame.window is None and frame.result is None,
+            "BOOTSTRAP_COLLECTION_PHASE_RUN_REENTRY")
+    _collection_phase_state(parent, "STARTING")  # Consumed BEFORE the first clock.
+    try:
+        previous, saved = frame.bound.returned, frame.predecessor.frame
+        local = staging._local(time.monotonic())
+        _update_collection_phase(parent, local_last=local)
+        first = origin.clocks.validate_reading(origin.clocks.observe())
+        _update_collection_phase(parent, first=first, last=first.nanoseconds)
+        require(staging._clock(first.clock) == staging._clock(saved.originals.clock) and
+                first.nanoseconds >= previous.checked_ns and local >= previous.checked_local,
+                "BOOTSTRAP_COLLECTION_PHASE_PREDECESSOR_CLOCK")
+        parent.check()
+        proposal = allocation.validate_proposal(saved.originals.proposal_raw, saved.originals.admitted,
+            saved.originals.responses, saved.originals.invocation, saved.originals.clock, saved.originals.runner_name)
+        names, seconds = ("custody-collect", "custody-collect-final", "custody-collect-read"), (120, 165, 195)
+        ends = tuple(min(origin.integer(first.nanoseconds + maximum * origin.NS), proposal["phaseFencesNs"][name],
+                         proposal["proposedJobEndNs"]) for name, maximum in zip(names, seconds))
+        require(first.nanoseconds < ends[0] <= ends[1] <= ends[2], "BOOTSTRAP_COLLECTION_PHASE_NO_INTERVAL")
+        local_ends = tuple(origin.wire._directed_deadline(local, maximum, end, first.nanoseconds)
+                           for maximum, end in zip(seconds, ends))
+        limits = _CollectionPhaseLimits(staging._clock(first.clock), first.nanoseconds, local, ends, local_ends)
+        window, callback = _CollectionPhaseWindow(parent), parent.cancel
+        _update_collection_phase(parent, limits=limits, window=window,
+            phases=(_CollectionPhaseStep("WORK", first.nanoseconds, local, ends[0], local_ends[0]),))
+        parent.window = window
+        owner = _CollectionPhaseOwner(local_ends[2], window, first=first, cancelled=callback)
+        _update_collection_phase(parent, owner=owner,
+            owner_bindings=(owner.resources, owner.errors, owner.admissions, owner.local_end, callback), state="RUNNING")
+        parent.owner, parent.state = owner, "RUNNING"
+        owner.end()
+        for number in (signal.SIGINT, signal.SIGTERM, *([signal.SIGBREAK] if hasattr(signal, "SIGBREAK") else [])):
+            handler = signal.getsignal(number)
+            current = _collection_phase_frame(parent)
+            _update_collection_phase(parent, handlers=(*current.handlers, (number, handler)))
+            parent.handlers[number] = handler  # Restore duty precedes the possibly partial install.
+            signal.signal(number, lambda signum, _frame: _collection_phase_frame(parent).published[3].append(signum))
+            owner.end()
+        parent.read_originals()
+        parent.state_readback(after=False)
+        initial = parent.handles["initializer"]
+        parent.directory("phase", initial.path / "configuration-collection-parent", parent=initial, create=True)
+        parent.source_inputs(first=True)
+        parent.admit()
+        parent.source_inputs()
+        parent.read_originals()
+        parent.state_readback(after=False)
+        originals = parent.manifest()
+        _invoke_collection_phase_leaf(parent, originals)
+        parent.state_readback(after=True)
+        parent.source_inputs()
+        parent.read_originals()
+        parent.pending()
+        parent.reread()
+        parent.host()
+        window.now()  # All file/admission/copy/pending work must actually return in WORK.
+    except BaseException as error:
+        parent.error("collection-phase-body", error)
+    finally:
+        _close_collection_phase(parent)
+    try:
+        frame = parent.closed()
+        # The reserved READ slot is used only for post-close clock/return
+        # accounting. It is explicitly NOT a native/file read phase.
+        frame.window.advance("READ")
+        closed = frame.window.now()
+        frame = parent.closed()
+        require(frame.pending_raw is not None, "BOOTSTRAP_COLLECTION_PHASE_PENDING_MISSING")
+        raw = origin.encoded({"schema": 1, "scope": "BOOTSTRAP_COLLECTION_PARENT_CLOSED_OBSERVATIONS_V1",
+            "producerSha256": origin.digest(frame.bound.returned.raw), "producerCheckedNs": frame.bound.returned.checked_ns,
+            "manifestSha256": origin.digest(frame.manifest_pin[3]), "leafSha256": origin.digest(frame.leaf_pin[1]),
+            "inventorySha256": origin.digest(frame.leaf_pin[2]), "pendingSha256": origin.digest(frame.pending_raw),
+            "window": frame.window.record(), "closedNs": closed, "parentResourceClose": "KNOWN_RESOURCE_CLOSE_ONLY",
+            "resourceCount": len(frame.resources),
+            "currentFileObservation": "MEMBERSHIP_ROOT_AND_FILE_BINDINGS_NOT_DESCENDANT_CONTINUITY_OR_FREEZE",
+            "noLoaderObservation": "NOT_OBSERVED", "dependencyPopulation": "NOT_ATTESTED",
+            "nextPhaseAuthority": False, "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED",
+            "exportSaveAuthority": False})
+        checked = frame.window.now(minimum=closed)
+        frame = parent.closed()
+        require(frame.last == checked, "BOOTSTRAP_COLLECTION_PHASE_FINAL_BOUNDARY_CHANGED")
+        result = CollectionPrefix(raw, frame.leaf, frame.manifest_pin[3], checked, frame.local_last)
+        result_pin = (object.__getattribute__(result, "__dict__"), raw, frame.manifest_pin[3], checked, frame.local_last)
+        _update_collection_phase(parent, result=result, result_pin=result_pin, state="COMPLETE")
+        parent.result, parent.state = result, "COMPLETE"
+        parent.check()  # Passive; no post-close resource or predecessor call.
+        return result
+    except BaseException as error:
+        parent.error("collection-phase-final-return", error)
+        _collection_phase_state(parent, "FAILED")
+        frame = _collection_phase_frame(parent)
+        if frame.owner is not None and frame.unknown and not any(value is frame.owner for value in QUARANTINE):
+            QUARANTINE.append(frame.owner)
+        raise frame.original
+
+
+def collect_after_entry(transition):
+    """INTERNAL original-call producer/collection; never a prefix adoption API.
+
+    No CLI or workflow invokes this dormant path. All claims consume failure.
+    Neither a successful copy nor a configuration-only producer establishes
+    no-loader, cache population, tests, admitted5400 or export/save authority.
+    """
+    parent = _claim_collection_phase(transition)
+    try:
+        _invoke_collection_phase_begin(parent)
+        return _run_collection_phase(parent)
+    except BaseException as error:
+        if _collection_phase_frame(parent).original is None:
+            parent.error("collection-phase-intent", error)
+        _collection_phase_state(parent, "FAILED")
+        frame = _collection_phase_frame(parent)
+        try:
+            frame.original.bootstrap_collection_parent = parent
+            frame.original.bootstrap_collection_resources = tuple((pin.label, pin.value, pin.attempted, pin.closed)
+                                                                    for pin in frame.resources)
+            frame.original.bootstrap_collection_custody = "INCOMPLETE" if frame.files else "UNAVAILABLE"
+        except BaseException:
+            pass
+        raise frame.original
+
 
 
 def guarded(operation):

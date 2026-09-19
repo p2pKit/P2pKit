@@ -12,9 +12,12 @@ same-call third parent. A separate internal original-call configuration producer
 now has source implementation and focused offline controls. A separate supplied-
 original file-copy leaf also has source and focused controls. A private binding
 prefix now claims before the original producer call and retains its closed
-return; it creates no collection owner or result. No public command or workflow
-invokes either path. Original-call NEW-owner collection, no-loader observation,
-export/freeze/save/probe and encrypted-custody integration remain unfinished.
+return; that binding alone creates no collection owner or result. The separate
+original-call NEW-owner collection parent now has independently reviewed source,
+focused author controls and separately authored independent memory controls.
+No public command or workflow invokes either path. No-loader observation,
+export/freeze/save/probe and
+encrypted-custody integration remain unfinished.
 [`hosted_dependency_cache.py`](../../scripts/hosted_dependency_cache.py) has no
 CLI, action runner, downloader, extraction, deletion or subprocess entry point.
 The connected caller is
@@ -1293,9 +1296,10 @@ ran. The47 authored methods have no whole47 execution. These offline controls
 and source review are not original-call, native or hosted qualification.
 
 The private binding prefix below once-claims before invoking the original producer
-and retains its closed return and final RAW/LOCAL high-waters. NEW owner/handles
-under the original allocation remain separate unfinished work. The parent must
-not adopt a returned prefix or revive old READ30.
+and retains its closed return and final RAW/LOCAL high-waters. The separate parent
+below now supplies NEW owner/handles under the original allocation in dormant
+source; genuine composed/native qualification remains outstanding. It does not
+adopt a returned prefix or revive old READ30.
 No-loader/export/freeze/save/probe/encrypted custody and delivery remain separate.
 Both HOLDs, unadmitted/unmeasured5400, NativeFile900/Snapshot576MiB and missing
 recipient/trusted-base/formal-review/native/provider/scheduling requirements stay.
@@ -1347,13 +1351,56 @@ execution follows. Exact independent verdicts and complete-patch static/review
 records are separately bound in the continuation and its issue mapping; the
 author result does not grant approval or execution authority.
 
-The next distinct NEW-owner phase still needs live source/native/service/recipient
-readmission, the first manifest read, actual leaf and honest no-loader observation
-inside the original cumulative allocation. Export/freeze/save/probe/encrypted
-custody/seal/delivery remain unfinished. Both HOLDs, exact selectors, credentials,
+The distinct NEW-owner source below supplies the next collection adapter, not
+genuine source/native/service/recipient or file qualification. Honest no-loader
+observation and export/freeze/save/probe/encrypted custody/seal/delivery remain
+unfinished. Both HOLDs, exact selectors, credentials,
 deadlines, missing routine recipient/trusted-base/formal approval and genuine
 native/provider/resolver/custody/scheduling/delivery requirements stay unchanged.
 Proposed5400 remains unadmitted/unmeasured; NativeFile900/Snapshot576MiB remain.
+
+### Original-call NEW-owner collection, not no-loader/cache acceptance
+
+Internal `collect_after_entry(transition)` claims before the original binding
+call and retains its actual return before fallible checks. BOUND/COMPLETE
+predecessors stay closed; no returned prefix, constructor or repeated attempt
+creates execution authority. A distinct owner/reader/window uses WORK120,
+FINAL≤actual-start45/first165 and READ≤actual-start30/first195, intersecting the
+original cumulative/job and LOCAL caps. READ is post-close return accounting
+only, **not file-read execution**; all new admission/file/copy work is in WORK.
+
+New handles compare producer start/receipt bytes and original bindings; the
+first manifest read is explicitly4MiB. Two extra collection-source file bindings
+surround NEW native readmission without widening shared stage/cache/source
+rosters. The actual once-only leaf return is retained before validation. Empty
+retained/ before copy and complete current membership after copy are distinct
+oracles. Warmed H is not an attested cohort. Descendant handles verify their own
+current lifetime, **not earlier descendant continuity or an atomic freeze**.
+Pending metadata uses an exclusive initializer sibling, not retained/, H or S.
+
+Current private ownership is rechecked after pre-close observations; UNKNOWN
+retains unattempted resources, while mere expiry still permits known cleanup.
+NEW query original roots/pair/list identities and pre-final row/owner references
+survive terminal refusal. Only source-selected successful session-writer/readback
+additions are allowed. Pre-final uncertainty quarantines without a finalizer;
+actual returned-finalizer facts remain separate from failed terminal validation.
+This cannot prove no query row disappeared before the pre-final snapshot.
+
+The [collection-parent continuation](../maintenance/hosted-bootstrap-collection-parent-2026-09-19.md)
+records R1's two independent findings, failed setup and12-failure/2-pass aggregate,
+and R2's78 distinct author AST/memory passes in five disjoint invocations.
+Separate independent25 close/query memory controls passed in one bounded
+invocation; source-only approval and the original-result clarification are
+separately bound. Eight source-only gate results are recorded there; the
+containing commit's issue mapping supplies the distinct final documentation
+checks and complete-patch review, not implied by these control counts.
+The new historical/host boundaries, inventory/copy operation, upstream/native
+suppliers and filesystem are explicit models; no real native/file/hosted or
+provider qualification follows. No-loader remains NOT_OBSERVED; population,
+test, admitted-budget and next-phase/export/save authority remain nonaccepting.
+Both HOLDs, unadmitted5400, NativeFile900/Snapshot576MiB and recipient/trusted-base/
+formal-review/native/provider/resolver/custody/scheduling/delivery prerequisites
+remain unchanged. No bootstrap workflow or export/save caller is added.
 
 ## Connected consume and delivery path
 
@@ -1527,6 +1574,8 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-collection-test.py Invento
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-collect-files-test.py \
   FileLeafControls.test_copies_only_seven_original_files_and_changed_retained_reports -v
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-collection-origin-test.py BindingModels -v
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-collection-parent-test.py \
+  ReviewBoundaryModels QueryCustodyModels -v
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
@@ -1542,7 +1591,7 @@ generated initializer, controller, native, network and child execution. Their
 actual tiny POSIX source reads and modeled Windows reparse checks do not qualify
 native Windows source custody or a productive bootstrap phase.
 The separate bootstrap identity/cohort/producer-record/query-fence/original-acquisition/
-handoff/entry/service-time/allocation-proposal/close/history/legacy-reader/fresh-entry/recipient-child/recipient-parent/initialization/staging-leaf/staging-parent/configuration-custody-reservation/configuration-custody-parent/configuration-producer-parent/configuration-report-inventory/configuration-file-copy/producer-to-collection-binding
+handoff/entry/service-time/allocation-proposal/close/history/legacy-reader/fresh-entry/recipient-child/recipient-parent/initialization/staging-leaf/staging-parent/configuration-custody-reservation/configuration-custody-parent/configuration-producer-parent/configuration-report-inventory/configuration-file-copy/producer-to-collection-binding/original-call-collection-parent
 controls are standalone, not an activated or registered bootstrap workflow.
 The recipient-parent example selects one method; its complete suite was executed in
 externally bounded four-method batches, as recorded in the source continuation.
@@ -1581,6 +1630,11 @@ predecessor, canonical observation and scalar/parser boundaries are models;
 Windows/macOS layouts are data, not platform execution. Their UID0 memory run
 supplies no private-file qualification. Independent outcomes and source bindings
 belong to the linked continuation, not a combined product-suite count.
+The collection-parent example selects21 of78 new methods. Its five disjoint
+author invocations and one separate25-control independent invocation are
+AST/memory-only, not a full runner import or original producer/file execution.
+Original-chain/host/admission/native/inventory/copy/file suppliers are explicit
+model seams. Source-only review does not supply no-loader or export/save authority.
 Tiny private-file controls require an actual ordinary UID; root is not an
 acceptable substitute and their modeled native boundaries are not host admission.
 Native Windows provider behavior and actual resolver/cache reuse require
