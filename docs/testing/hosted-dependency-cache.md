@@ -1183,6 +1183,54 @@ Both ordinary HOLDs, missing recipient/trusted-base/formal approval, unadmitted5
 and NativeFile900/Snapshot576MiB remain. Collection → no-loader observation →
 export/freeze/save/probe → encrypted custody/seal/delivery are still separate work.
 
+### Configuration report-inventory grammar, not file collection
+
+[`hosted_cache_bootstrap_collection.py`](../../scripts/hosted_cache_bootstrap_collection.py)
+provides `describe_inventory` / `validate_inventory` for six supplied original
+byte records and a separately supplied original exit. The unchanged producer
+observer checks configuration consistency; the new grammar checks the canonical
+manifest and exact ordered receipt roster. This is private data only, never
+original-call, file/native/custody, next-phase or export/save authority.
+
+All six inputs and the returned compact inventory are exact nonempty bytes,
+at most4MiB each. The outer byte/type/size envelope raises `CollectionError`,
+including oversized producer raws; deeper producer consistency/identity/exit
+failures propagate unchanged `ProducerError`. The report manifest rejects
+duplicate/nonfinite JSON, UTF16/32 reinterpretation and BOM/NUL. Its closed row
+grammar and typed receipt comparison reject loose fields and bool/int coercion.
+Pretty original hashes are preserved, not replaced by compact rewrites.
+
+Sorted unique report sources use fixed-help output-root families only. The
+portable ASCII subset permits internal spaces/$ but rejects unsafe components,
+Windows device stems (also spaces before extensions), ancestor case aliases and
+file/directory conflicts. Changed rows have exact `reports/source` retained paths;
+unchanged rows are metadata-only but still consume the512MiB declared report
+allowance. Zero-byte rows require SHA256(empty); equal hashes never deduplicate
+bytes or entries. Component255/source4096/depth256 and the20,000-entry cap on the
+minimum declared report-tree count are metadata grammar, not native admission.
+Unseen empty directories/deleted outputs and actual archive membership are unknown.
+
+Four canonical product/stop logs are fixed64MiB-each `NOT_READ` requirements;
+no length/hash/existence is fabricated. Declared payload may reach768MiB before
+metadata/outer files/readback traffic, exceeding Snapshot576MiB. Output retains
+collection `NOT_PERFORMED`, no-loader/native retirement unobserved, population
+`NOT_ATTESTED`, budget `NOT_ADMITTED`, tests `NOT_PERFORMED`, and both authority
+flags false. Empty/changed/unchanged inventories do not prove test execution,
+nonexecution, dependency population or original file preservation.
+
+The [inventory continuation](../maintenance/hosted-bootstrap-report-inventory-2026-09-18.md)
+records exact scoped author/independent original outcomes and retained failures.
+No live report path, producer or old suite is executed. Future collection must
+follow the actual closed original producer through its own once-claimed phase,
+NEW handles and original high-waters; never reopen its owner/reader/READ30 or
+write into retained/ before it returns. Existing native readers have narrower
+name/member/depth limits; this parser does not widen them. Failed originals still
+need separate failure custody. Collection → honest no-loader observation →
+export/freeze/save/probe → encrypted custody/seal remain unfinished. Both ordinary
+HOLDs, exact selectors, unadmitted5400, NativeFile900/Snapshot576MiB and recipient/
+trusted-base/formal-review/native/provider/resolver/scheduling/delivery requirements
+are unchanged. No production `cache.export_snapshot`/`cache.save_set` caller exists.
+
 ## Connected consume and delivery path
 
 After the unchanged HOLD and native/source admission, `prepare-consume` binds
@@ -1351,6 +1399,7 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-custody-parent-test.py \
   CustodyParentModels.test_third_parent_reserves_with_exact_originals_one_window_and_known_close -v
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-producer-parent-test.py \
   ProducerParentModels.test_whole_parent_uses_modeled_closed_prefix_but_real_new_owner_files_and_record_reader -v
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-collection-test.py InventoryModels -v
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
@@ -1366,7 +1415,7 @@ generated initializer, controller, native, network and child execution. Their
 actual tiny POSIX source reads and modeled Windows reparse checks do not qualify
 native Windows source custody or a productive bootstrap phase.
 The separate bootstrap identity/cohort/producer-record/query-fence/original-acquisition/
-handoff/entry/service-time/allocation-proposal/close/history/legacy-reader/fresh-entry/recipient-child/recipient-parent/initialization/staging-leaf/staging-parent/configuration-custody-reservation/configuration-custody-parent/configuration-producer-parent
+handoff/entry/service-time/allocation-proposal/close/history/legacy-reader/fresh-entry/recipient-child/recipient-parent/initialization/staging-leaf/staging-parent/configuration-custody-reservation/configuration-custody-parent/configuration-producer-parent/configuration-report-inventory
 controls are standalone, not an activated or registered bootstrap workflow.
 The recipient-parent example selects one method; its complete suite was executed in
 externally bounded four-method batches, as recorded in the source continuation.
@@ -1388,6 +1437,12 @@ invocations cover all60 final-source methods, not a whole-suite rerun. Its upstr
 reservation is modeled, and reader controls reach unchanged malformed-record guards,
 not a complete original-history execution. Separate independent33 controls have a
 narrower AST/memory scope; do not add them to the author's60 as product cases.
+The inventory example is only a standalone command, not the actual execution
+record. Its38 author methods have passes across the retained failed38
+(37passed/1failed) and a separate corrected1; no successful whole38 ran.
+Independent original33 likewise remains FAILED (32passed/one errored method);
+a strict corrected1 passed separately. These are pure supplied-record checks,
+not filesystem collection, original execution authentication or native tests.
 Tiny private-file controls require an actual ordinary UID; root is not an
 acceptable substitute and their modeled native boundaries are not host admission.
 Native Windows provider behavior and actual resolver/cache reuse require
