@@ -25,11 +25,13 @@ The internal export successor now connects bounded H-to-S copying under a NEW
 file-only owner, followed by a separate original-call before-save set check.
 A supplied-original after-save leaf reuses that set checker; the fixed post-save
 command below now connects it under NEW ownership and fresh admission. A separate internal handoff retains the original
-producer-to-before-save chain, using the existing private writer. Provider
-save/probe and encrypted-custody integration remain unfinished.
+producer-to-before-save chain, using the existing private writer. Fixed lookup-only
+probe preparation and its post-guard now have dormant source below. Actual provider
+execution and encrypted-custody integration remain unfinished.
 The [producer-command composition](#fixed-producer-command-and-original-function-return)
 and [save preparation](#fixed-save-preparation-not-provider-execution)
 and [post-save guard](#fixed-post-save-guard-not-provider-enforcement)
+and [lookup-only probe commands](#fixed-lookup-only-probe-preparation-and-guard)
 below are the current source status. Earlier slice sections retain their dated
 test/review scope; their former no-CLI/caller statements are not the current
 command graph. CLI availability grants no execution authority.
@@ -1749,7 +1751,8 @@ scope and nonacceptance fields. A future trusted workflow must supply its
 **original `steps.producer.outcome`** and those command-exported hashes; neither
 file content nor a conclusion can substitute. The save-preparation command below
 now consumes this return record and performs fresh save readmission. The post-save
-command below connects the after-save check; provider-save/probe and encrypted custody remain unconnected. The bootstrap workflow
+command below connects the after-save check; fixed probe commands now follow it.
+Provider execution and encrypted custody remain unconnected. The bootstrap workflow
 and recipient policy are still absent.
 
 **25 new focused methods PASS** (`CompositionModels`10, `CompletionModels`15),
@@ -1893,8 +1896,8 @@ This guard **does not stop a provider at its absolute end or establish provider
 retirement**. A timeout calculated before Actions scheduling cannot enforce that
 end; a late post-guard can only reject acceptance. No provider runner/watchdog,
 `GITHUB_OUTPUT`, cache action or workflow is added. Actual provider deadline
-enforcement, exact lookup-only probe and bounded encrypted custody remain separate
-work; provider/native/resolver/scheduling/delivery qualification is outstanding.
+enforcement and bounded encrypted custody remain separate work. The fixed probe
+commands below do not supply provider/native/resolver/scheduling/delivery qualification.
 
 **40 focused methods PASS** in one isolated Python3.12 invocation of
 [`hosted-cache-bootstrap-after-save-command-test.py`](../../scripts/tests/hosted-cache-bootstrap-after-save-command-test.py):
@@ -1913,6 +1916,60 @@ unchanged, own process group was absent and guard denials0. UID0/audit hooks are
 not a kernel sandbox. Exact originals and independent review belong to #437's
 containing-commit mapping. Both HOLDs, missing recipient/trusted-base/formal
 approval, proposed5400 UNADMITTED/UNMEASURED and NativeFile900/Snapshot576MiB remain.
+
+### Fixed lookup-only probe preparation and guard
+
+Dormant `prepare-probe` and `after-probe` reuse the original package/plan readers,
+NEW owners, native admission composition and existing lookup classifier. No workflow,
+provider runner or generic execution framework is added; accepted after-save records
+are unchanged. Preparation requires the previous original claims plus
+`P2PKIT_BOOTSTRAP_AFTER_SAVE_OUTCOME=success` and the original exported
+`P2PKIT_BOOTSTRAP_AFTER_SAVE_SHA256`. Fixed historical after-save files, claims,
+source/cohort, complete byte-set record and previous-owner chronology are checked.
+The old save descriptor is validated against its retained **post-save** RAW bound,
+not today's probe time. Historical LOCAL values remain old-process data.
+
+Preparation spends original `probe-transition`30 including fresh admission,
+rederivation, private retention, known close and guarded output. The exclusive
+`-probe/probe-preparation.json` retains the exact pinned restore request, same
+path/key, lookup-only true, no fallback keys, cross-OS false and fail-on-miss true.
+Its end is `min(issue+180s, original provider-probe cap, original job end)`;
+issue is **not actual provider start**. No `GITHUB_OUTPUT` or minute timeout is emitted.
+
+The post-guard requires original `PROBE_PREPARE_OUTCOME`, `PROBE_PREPARATION_SHA256`,
+`PROBE_OUTCOME`, `PROBE_PRIMARY_KEY`, `PROBE_MATCHED_KEY` and `PROBE_HIT`, all with the
+`P2PKIT_BOOTSTRAP_` prefix. Only future trusted workflow glue can supply these
+originals; file/environment declarations do not authenticate themselves. Earliest
+entry RAW is a post-action upper bound below the **original** probe end. Later
+readmission has its own original120 cap; it cannot renew180. After actual known
+readmission closure, lookup classification and private retention spend observation30.
+Only literal success/true and both byte-equal exact keys can report presence.
+False/blank/inexact hits do not prove absence. The final writer/step return stays
+PENDING; its own close and guarded output must finish in that same30, not a new45.
+
+**41 focused methods passed across11 disjoint bounded invocations**, not a successful
+whole-suite process:17 preparation,22 post-guard and two CLI controls in
+[`hosted-cache-bootstrap-probe-test.py`](../../scripts/tests/hosted-cache-bootstrap-probe-test.py).
+Selected actual command/Owner/reader/validator/classifier code runs over memory
+models. The fixture constructs after-save bytes using its selected actual command;
+no previous test suite is replayed. Native admission, allocation, source acquisition,
+clocks and files remain modeled. No full runner import, native/provider/Gradle or
+hosted execution occurred. Earlier2 smoke passes overlap these cases. The attempted
+41 aggregate ended by signal9 at10.06s under CPU10/wall20 limits:17 methods had passed,
+two had failed and22 had not completed. A focused two-case run identified incorrect
+expected rejection codes; only those assertions changed, not implementation bytes.
+These failed originals remain retained, not intentional preimage regressions.
+Every final batch kept timeout20/kill2, CPU10/AS512MiB/FD64/core0 and1MiB regular
+outputs; bindings stayed unchanged and owned process groups were absent. UID0/audit
+hooks are not a kernel sandbox. Exact original results and independent review are
+mapped with the containing commit in #437.
+
+This is success-only source composition, not complete encrypted failure custody.
+Neither command stops a provider at an absolute deadline, establishes retirement,
+identifies the cache producer/contents/durability, nor proves resolver reuse.
+Provider enforcement, encrypted custody/seal/delivery and genuine hosted scheduling
+qualification remain. Both HOLDs, recipient/trusted-base/formal approval and all
+deadlines remain;5400 is UNADMITTED/UNMEASURED, NativeFile900/Snapshot576MiB unchanged.
 
 ## Connected consume and delivery path
 
@@ -2102,6 +2159,8 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-prepare-save-test.py \
   PrepareModels SuppliedDataModels AdmissionAndCliModels -v
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-after-save-command-test.py \
   CommandModels DescriptorModels MappingAndWindowModels -v
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-probe-test.py \
+  ProbeModels.test_actual_post_guard_classifies_exact_lookup_under_new30_with_no_extra45 -v
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py

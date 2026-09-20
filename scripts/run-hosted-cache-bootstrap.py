@@ -12341,6 +12341,525 @@ def after_save_originals(cancelled):
     return public_result("BOOTSTRAP_AFTER_SAVE_PENDING_ORIGINAL_STEP_RETURN_V1", "afterSaveSha256", result_raw), fence, fence.hard_end
 
 
+def _probe_after_save_records(owner, directory, expected_hash, claims, admitted, index, blobs, producer_raw,
+                              proposal, first, prepared_directory):
+    """Read the fixed hash-bound historical result, not a live old owner/clock."""
+    raw = owner.read(directory, "after-save-return.json")
+    require(origin.digest(raw) == expected_hash, "BOOTSTRAP_PROBE_AFTER_SAVE_HASH")
+    returned = origin.parse(raw)
+    require(type(returned) is dict and set(returned) == {"schema", "scope", "directory", "directoryIdentity", "clock",
+            "originalClaims", "observationsSha256", "observationOwnerReturn", "returnWindow", "writerReturn",
+            "providerStorage", "providerDeadlineEnforcement", "providerRetirement", "budgetAcceptance", "testAcceptance",
+            "exportSaveAuthority"} and type(returned["schema"]) is int and returned["schema"] == 1 and
+            raw == origin.encoded(returned) and returned["scope"] == "BOOTSTRAP_AFTER_SAVE_PENDING_ORIGINAL_STEP_RETURN_V1",
+            "BOOTSTRAP_PROBE_AFTER_SAVE_RECORD")
+    _new_entry_owned(owner, directory, directory.path, returned["directoryIdentity"])
+    require(returned["directory"] == str(directory.path) and returned["providerStorage"] == "UNPROVEN",
+            "BOOTSTRAP_PROBE_AFTER_SAVE_DIRECTORY")
+    old_claims = {name: claims[name] for name in ("PRODUCER_OUTCOME", "HANDOFF_SHA256", "PRODUCER_RETURN_SHA256",
+                                               "SAVE_PREPARE_OUTCOME", "SAVE_PREPARATION_SHA256", "SAVE_OUTCOME")}
+    clock = origin.clock_value(first.clock)
+
+    def nonacceptance(value):
+        require(value["writerReturn"] == "PENDING_NOT_OBSERVABLE_BY_THIS_FILE" and
+                value["providerDeadlineEnforcement"] == "NOT_ESTABLISHED" and value["providerRetirement"] == "NOT_OBSERVED"
+                and value["budgetAcceptance"] == "NOT_ADMITTED" and value["testAcceptance"] == "NOT_PERFORMED" and
+                value["exportSaveAuthority"] is False and origin.encoded(value["clock"]) == origin.encoded(clock) and
+                origin.encoded(value["originalClaims"]) == origin.encoded(old_claims),
+                "BOOTSTRAP_PROBE_AFTER_SAVE_CLAIMS")
+
+    nonacceptance(returned)
+    observations_raw = owner.read(directory, "save-observations.json")
+    require(origin.digest(observations_raw) == returned["observationsSha256"], "BOOTSTRAP_PROBE_OBSERVATIONS_HASH")
+    observations = origin.parse(observations_raw)
+    require(type(observations) is dict and set(observations) == {"schema", "scope", "source", "github", "selection",
+            "cacheCohort", "originalClaims", "planSha256", "clock", "firstPostProviderNs", "firstPostProviderLocal",
+            "providerEndNs", "providerTimeScope", "providerDeadlineEnforcement", "providerRetirement", "files",
+            "writerReturn", "budgetAcceptance", "testAcceptance", "exportSaveAuthority"} and
+            type(observations["schema"]) is int and observations["schema"] == 1 and
+            observations_raw == origin.encoded(observations) and observations["scope"] ==
+            "BOOTSTRAP_AFTER_SAVE_OBSERVATIONS_PENDING_WRITER_RETURN_V1" and observations["providerTimeScope"] ==
+            "POST_ACTION_UPPER_BOUND_ONLY_REQUIRES_TRUSTED_SEQUENTIAL_ORIGINAL_OUTCOME" and
+            observations["planSha256"] == origin.digest(origin.encoded(index["plan"])),
+            "BOOTSTRAP_PROBE_OBSERVATIONS_RECORD")
+    nonacceptance(observations)
+    for name in ("source", "github", "selection", "cacheCohort"):
+        require(origin.encoded(observations[name]) == origin.encoded(index[name]) ==
+                origin.encoded(origin.admitted_value(admitted)[name]), "BOOTSTRAP_PROBE_OBSERVATIONS_IDENTITY")
+    names = ("after-leaf.json", "save-preparation.json", "provider-save.json", "readmission-close.json",
+             "after-parent-close.json")
+    require(type(observations["files"]) is dict and set(observations["files"]) == set(names),
+            "BOOTSTRAP_PROBE_OBSERVATIONS_ROSTER")
+    retained = {name: owner.read(directory, name) for name in names}
+    for name, value in retained.items():
+        require(origin.digest(value) == observations["files"][name], "BOOTSTRAP_PROBE_OBSERVATION_CHANGED")
+    post_ns = origin.integer(observations["firstPostProviderNs"])
+    post_local = staging._local(observations["firstPostProviderLocal"])
+    require(post_ns <= first.nanoseconds, "BOOTSTRAP_PROBE_AFTER_SAVE_BACKWARDS")
+    # This is historical data, not today's observation or a renewed save window.
+    prepared = _save_preparation_record(retained["save-preparation.json"], claims["SAVE_PREPARATION_SHA256"], admitted,
+        origin.encoded(index), producer_raw, proposal, origin.clocks.Reading(first.clock, post_ns), prepared_directory)
+    require(observations["providerEndNs"] == prepared["providerWindow"]["hardEndNs"] and
+            owner.read(prepared_directory, "save-preparation.json") == retained["save-preparation.json"],
+            "BOOTSTRAP_PROBE_ORIGINAL_SAVE_PREPARATION_CHANGED")
+    provider = origin.parse(retained["provider-save.json"])
+    require(retained["provider-save.json"] == origin.encoded(staging.cache.provider_observation(
+            index["plan"], "save", original_outcome=claims["SAVE_OUTCOME"], outputs={})) and
+            provider["status"] == "SAVE_SUCCEEDED_STORAGE_UNPROVEN", "BOOTSTRAP_PROBE_ORIGINAL_SAVE_OUTCOME")
+    before, after = origin.parse(blobs["before-leaf.json"]), origin.parse(retained["after-leaf.json"])
+    require(type(after) is dict and set(after) == set(before) and retained["after-leaf.json"] == origin.encoded(after) and
+            after["scope"] == dependency_save_set.AFTER_SCOPE and after["phase"] == "after-save" and
+            after["status"] == "KNOWN_UNCHANGED" and after["beforeSaveSha256"] == origin.digest(blobs["before-leaf.json"])
+            and origin.encoded(before) == origin.encoded({**after, "scope": dependency_save_set.SCOPE,
+                "phase": "before-save", "status": "KNOWN_FROZEN", "beforeSaveSha256": None, "window": before["window"]}),
+            "BOOTSTRAP_PROBE_AFTER_SAVE_SET_CHANGED")
+    readmission, parent = (origin.parse(retained[name]) for name in ("readmission-close.json", "after-parent-close.json"))
+    previous_ns, previous_local = post_ns, post_local
+    common = {"phase", "clock", "firstNs", "hardEndNs", "localStarted", "localScope"}
+    closed = {"closedNs", "closedLocal", "resourceCount", "parentResourceClose"}
+    for value, phase, seconds, extra in (
+            (readmission, "save-readmission", 120, {"admissionReturn", "finalAdmissionReturn"}),
+            (parent, "save-set-after", 120, {"softEndNs", "leafSha256", "leafCheckedNs", "leafCheckedLocal",
+                "beforeParentSha256", "historicalBeforeCheckedNs", "historicalBeforeCheckedLocal", "historicalLocalScope"}),
+            (returned["observationOwnerReturn"], "save-observation", 30, set()),
+            (returned["returnWindow"], "save-owner-return", 45, set())):
+        has_close = phase != "save-owner-return"
+        require(type(value) is dict and set(value) == common | extra | (closed if has_close else set()) and
+                value["phase"] == phase and value["localScope"] == "THIS_COMMAND_ONLY" and
+                origin.encoded(value["clock"]) == origin.encoded(clock), "BOOTSTRAP_PROBE_AFTER_SAVE_WINDOW")
+        began, hard = origin.integer(value["firstNs"]), origin.integer(value["hardEndNs"])
+        local = staging._local(value["localStarted"])
+        require(previous_ns <= began < hard == min(origin.integer(began + seconds * staging.NS),
+                proposal["phaseFencesNs"][phase], proposal["proposedJobEndNs"]) and previous_local <= local,
+                "BOOTSTRAP_PROBE_AFTER_SAVE_CHRONOLOGY")
+        if has_close:
+            require(began <= origin.integer(value["closedNs"]) < hard and local <= staging._local(value["closedLocal"]) and
+                    type(value["resourceCount"]) is int and origin.integer(value["resourceCount"]) > 0 and
+                    value["parentResourceClose"] == "KNOWN_RESOURCE_CLOSE_ONLY", "BOOTSTRAP_PROBE_AFTER_SAVE_CLOSE")
+            previous_ns, previous_local = value["closedNs"], value["closedLocal"]
+        else:
+            # Real original after-save step success, not this file, attests its final writer return.
+            require(began <= first.nanoseconds, "BOOTSTRAP_PROBE_AFTER_SAVE_BACKWARDS")
+    require(readmission["firstNs"] == post_ns and readmission["localStarted"] == post_local,
+            "BOOTSTRAP_PROBE_AFTER_SAVE_FIRST")
+    prior = post_ns
+    for name in ("admissionReturn", "finalAdmissionReturn"):
+        value = readmission[name]
+        require(type(value) is dict and set(value) == {"admissionSha256", "sessionSha256", "clock", "returnedNs"} and
+                value["admissionSha256"] == origin.digest(admitted.record) and staging.cache._sha(value["sessionSha256"])
+                and origin.encoded(value["clock"]) == origin.encoded(clock) and
+                prior <= origin.integer(value["returnedNs"]) <= readmission["closedNs"],
+                "BOOTSTRAP_PROBE_AFTER_SAVE_ADMISSION_RETURN")
+        prior = value["returnedNs"]
+    window, previous = after["window"], index["chain"]["returns"]["before"]
+    require(type(window) is dict and set(window) == {"phase", "clock", "firstNs", "hardEndNs", "softEndNs",
+            "lastNewWorkNs", "finishedNs", "predecessorSha256", "predecessorCheckedNs", "proposalSha256"} and
+            window["phase"] == "save-set-after" and window["predecessorSha256"] == origin.digest(blobs["before-parent.json"])
+            and window["predecessorCheckedNs"] == previous["checkedNs"] and
+            window["proposalSha256"] == origin.digest(blobs["allocation-proposal.json"]),
+            "BOOTSTRAP_PROBE_AFTER_LEAF_WINDOW")
+    for name in ("clock", "firstNs", "hardEndNs", "softEndNs"):
+        require(origin.encoded(window[name]) == origin.encoded(parent[name]), "BOOTSTRAP_PROBE_AFTER_LEAF_WINDOW")
+    require(parent["softEndNs"] == min(parent["hardEndNs"], parent["firstNs"] + 90 * staging.NS) and
+            previous["checkedNs"] <= window["firstNs"] <= origin.integer(window["lastNewWorkNs"]) <=
+            origin.integer(window["finishedNs"]) <= origin.integer(parent["leafCheckedNs"]) <= parent["closedNs"] and
+            window["lastNewWorkNs"] < parent["softEndNs"] and
+            parent["leafSha256"] == origin.digest(retained["after-leaf.json"]) and
+            parent["beforeParentSha256"] == origin.digest(blobs["before-parent.json"]) and
+            parent["historicalBeforeCheckedNs"] == previous["checkedNs"] and
+            staging._local(parent["historicalBeforeCheckedLocal"]) == staging._local(previous["checkedLocal"]) and
+            parent["historicalLocalScope"] == "ORIGINAL_PRODUCER_PROCESS_ONLY_NOT_COMPARED_WITH_THIS_COMMAND" and
+            parent["localStarted"] <= staging._local(parent["leafCheckedLocal"]) <= parent["closedLocal"],
+            "BOOTSTRAP_PROBE_AFTER_LEAF_RETURN")
+    return raw, {**retained, "save-observations.json": observations_raw, "after-save-return.json": raw}
+
+
+def _probe_preparation_record(raw, expected_hash, claims, admitted, plan, proposal, first, directory):
+    """Validate supplied original lookup issuance; never compute a fresh provider end."""
+    require(type(raw) is bytes and 0 < len(raw) <= LIMIT and origin.digest(raw) == expected_hash,
+            "BOOTSTRAP_PROBE_PREPARATION_HASH")
+    value = origin.parse(raw)
+    require(type(value) is dict and set(value) == {"schema", "scope", "source", "github", "selection", "cacheCohort",
+            "directory", "directoryIdentity", "originalClaims", "admissionSha256", "admissionReturn",
+            "finalAdmissionReturn", "proposalSha256", "plan", "planSha256", "clock", "firstNs", "hardEndNs",
+            "providerWindow", "providerRequest", "writerReturn", "providerExecution", "budgetAcceptance",
+            "testAcceptance", "exportSaveAuthority"} and type(value["schema"]) is int and value["schema"] == 1 and
+            raw == origin.encoded(value) and value["scope"] == "BOOTSTRAP_PROBE_PREPARATION_PENDING_ORIGINAL_STEP_RETURN_V1"
+            and value["writerReturn"] == "PENDING_NOT_OBSERVABLE_BY_THIS_FILE" and
+            value["providerExecution"] == value["testAcceptance"] == "NOT_PERFORMED" and
+            value["budgetAcceptance"] == "NOT_ADMITTED" and value["exportSaveAuthority"] is False,
+            "BOOTSTRAP_PROBE_PREPARATION_RECORD")
+    base_claims = {name: claims[name] for name in ("PRODUCER_OUTCOME", "HANDOFF_SHA256", "PRODUCER_RETURN_SHA256",
+        "SAVE_PREPARE_OUTCOME", "SAVE_PREPARATION_SHA256", "SAVE_OUTCOME", "AFTER_SAVE_OUTCOME", "AFTER_SAVE_SHA256")}
+    for name in ("source", "github", "selection", "cacheCohort"):
+        require(origin.encoded(value[name]) == origin.encoded(origin.admitted_value(admitted)[name]),
+                "BOOTSTRAP_PROBE_PREPARATION_IDENTITY")
+    require(value["directory"] == str(directory.path) and
+            directory_identity(value["directoryIdentity"], first.clock.role) == list(directory.identity) and
+            origin.encoded(value["originalClaims"]) == origin.encoded(base_claims) and
+            value["admissionSha256"] == origin.digest(admitted.record) and
+            value["proposalSha256"] == origin.digest(origin.encoded(proposal)) and
+            origin.encoded(value["plan"]) == origin.encoded(plan) and value["planSha256"] == origin.digest(origin.encoded(plan))
+            and origin.encoded(value["clock"]) == origin.encoded(origin.clock_value(first.clock)),
+            "BOOTSTRAP_PROBE_PREPARATION_BINDING")
+    began, hard = origin.integer(value["firstNs"]), origin.integer(value["hardEndNs"])
+    require(began < hard == min(origin.integer(began + 30 * staging.NS), proposal["phaseFencesNs"]["probe-transition"],
+            proposal["proposedJobEndNs"]), "BOOTSTRAP_PROBE_PREPARATION_WINDOW")
+    previous = began
+    for name in ("admissionReturn", "finalAdmissionReturn"):
+        returned = value[name]
+        require(type(returned) is dict and set(returned) == {"admissionSha256", "sessionSha256", "clock", "returnedNs"} and
+                returned["admissionSha256"] == value["admissionSha256"] and staging.cache._sha(returned["sessionSha256"])
+                and origin.encoded(returned["clock"]) == origin.encoded(value["clock"]) and
+                previous <= origin.integer(returned["returnedNs"]) < hard, "BOOTSTRAP_PROBE_PREPARATION_ADMISSION_RETURN")
+        previous = returned["returnedNs"]
+    window = value["providerWindow"]
+    require(type(window) is dict and set(window) == {"issuedNs", "hardEndNs", "actualProviderStart"} and
+            window["actualProviderStart"] == "NOT_OBSERVED", "BOOTSTRAP_PROBE_PROVIDER_WINDOW")
+    issued, provider_end = origin.integer(window["issuedNs"]), origin.integer(window["hardEndNs"])
+    require(previous <= issued < hard and issued < provider_end == min(origin.integer(issued + 180 * staging.NS),
+            proposal["phaseFencesNs"]["provider-probe"], proposal["proposedJobEndNs"]) and
+            issued <= first.nanoseconds < provider_end, "BOOTSTRAP_PROBE_PROVIDER_RETURN_BOUND")
+    require(origin.encoded(value["providerRequest"]) == origin.encoded({"action": plan["provider"]["restore"],
+            "path": plan["path"], "key": plan["key"], "lookupOnly": True, "restoreKeys": [], "failOnCacheMiss": True,
+            "enableCrossOsArchive": False, "scope": "PRIVATE_DESCRIPTOR_NOT_EXECUTION"}), "BOOTSTRAP_PROBE_PROVIDER_REQUEST")
+    return value
+
+
+def _probe_command(cancelled, *, after):
+    """Two fixed dormant commands. Neither executes nor enforces a provider lifecycle."""
+    require(type(after) is bool, "BOOTSTRAP_PROBE_COMMAND")
+    local_start = staging._local(time.monotonic())
+    first = origin.clocks.validate_reading(origin.clocks.observe())
+    last, local_last = first.nanoseconds, local_start
+    proposal = owner = fence = result_raw = None
+    failure = None
+    base_names = ("PRODUCER_OUTCOME", "HANDOFF_SHA256", "PRODUCER_RETURN_SHA256", "SAVE_PREPARE_OUTCOME",
+                  "SAVE_PREPARATION_SHA256", "SAVE_OUTCOME", "AFTER_SAVE_OUTCOME", "AFTER_SAVE_SHA256")
+    names = base_names + (("PROBE_PREPARE_OUTCOME", "PROBE_PREPARATION_SHA256", "PROBE_OUTCOME") if after else ())
+    claims = {name: os.environ.get("P2PKIT_BOOTSTRAP_" + name) for name in names}
+    outputs = ({name: os.environ.get("P2PKIT_BOOTSTRAP_PROBE_" + suffix) for name, suffix in
+               (("cache-primary-key", "PRIMARY_KEY"), ("cache-matched-key", "MATCHED_KEY"), ("cache-hit", "HIT"))}
+               if after else {})
+
+    def environment():
+        require(origin.wire.TOKEN_ENV not in os.environ and
+                all(os.environ.get("P2PKIT_BOOTSTRAP_" + name) == value for name, value in claims.items()),
+                "BOOTSTRAP_PROBE_ENVIRONMENT_CHANGED")
+        require(all(value == "success" for name, value in claims.items() if name.endswith("OUTCOME")),
+                "BOOTSTRAP_PROBE_ORIGINAL_OUTCOMES")
+        require(all(type(value) is str and re.fullmatch(r"[0-9a-f]{64}", value)
+                    for name, value in claims.items() if name.endswith("SHA256")), "BOOTSTRAP_PROBE_ORIGINAL_HASHES")
+        if after:
+            require(all(type(outputs[name]) is str and len(outputs[name]) <= 512 and
+                    all(32 <= ord(c) < 127 for c in outputs[name]) and
+                    os.environ.get("P2PKIT_BOOTSTRAP_PROBE_" + suffix) == outputs[name]
+                    for name, suffix in (("cache-primary-key", "PRIMARY_KEY"), ("cache-matched-key", "MATCHED_KEY"),
+                                         ("cache-hit", "HIT"))), "BOOTSTRAP_PROBE_ORIGINAL_OUTPUTS")
+        cancellation(cancelled)
+
+    def phase_fence(name, began, local):
+        seconds = {"probe-transition": 30, "custody-readmission": 120, "provider-observation": 30}[name]
+        require(began.clock == first.clock and began.nanoseconds >= last and local >= local_last,
+                "BOOTSTRAP_PROBE_PHASE_BACKWARDS")
+        hard = origin.integer(began.nanoseconds + seconds * staging.NS)
+        local_end = origin.wire._directed_deadline(local, seconds, hard, began.nanoseconds)
+
+        class Fence:
+            __slots__ = ()
+            clock = first.clock
+            hard_end = property(lambda self: hard)
+            local_end = property(lambda self: local_end)
+
+            def shorten(self, value):
+                nonlocal hard, local_end
+                hard = min(hard, origin.integer(value["phaseFencesNs"][name]), origin.integer(value["proposedJobEndNs"]))
+                local_end = min(local_end, origin.wire._directed_deadline(local, seconds, hard, began.nanoseconds))
+                self.now()
+
+            def now(self, *, final=False, minimum=0, limit=None):
+                nonlocal last, local_last, local_end
+                if not final:
+                    environment()
+                before = staging._local(time.monotonic())
+                require(before >= local_last, "BOOTSTRAP_PROBE_LOCAL_BACKWARDS")
+                local_last = before
+                observed = origin.clocks.validate_reading(origin.clocks.observe())
+                require(observed.clock == first.clock and observed.nanoseconds >= max(last, origin.integer(minimum)),
+                        "BOOTSTRAP_PROBE_RAW_BACKWARDS")
+                last = observed.nanoseconds
+                local = staging._local(time.monotonic())
+                require(local >= local_last, "BOOTSTRAP_PROBE_LOCAL_BACKWARDS")
+                local_last = local
+                cap = hard if limit is None else min(hard, origin.integer(limit))
+                local_end = min(local_end, origin.wire._directed_deadline(before, seconds, cap, last))
+                require(last < cap and local_last < local_end, "BOOTSTRAP_PROBE_PHASE_EXPIRED")
+                if not final:
+                    environment()
+                    return self.now(final=True, minimum=last, limit=cap)
+                return last
+
+            def deadline(self, maximum, *, final=False, limit=None):
+                require(type(maximum) in (int, float) and math.isfinite(maximum) and maximum > 0,
+                        "BOOTSTRAP_PROBE_MAXIMUM")
+                self.now(final=final, limit=limit)
+                return min(local_end, local_last + min(seconds, maximum))
+
+            def record(self):
+                return {"phase": name, "clock": origin.clock_value(first.clock), "firstNs": began.nanoseconds,
+                        "hardEndNs": hard, "localStarted": local, "localScope": "THIS_COMMAND_ONLY"}
+
+        result = Fence()
+        if proposal is not None:
+            result.shorten(proposal)
+        return result
+
+    def close_known():
+        nonlocal owner
+        active, ledger, errors = owner, owner.resources, owner.errors
+        roster = tuple((row, row["label"], row["owner"]) for row in ledger)
+        active.close()
+        if active.original is not None:
+            raise active.original
+        require(type(active) is Owner and active.fence is fence and active.closed is True and not active.unknown and
+                not errors and active.resources is ledger and active.errors is errors and len(ledger) == len(roster) and
+                all(row is old and set(row) == {"label", "owner", "attempted", "closed"} and row["label"] == label and
+                    row["owner"] is resource and row["attempted"] is row["closed"] is True
+                    for row, (old, label, resource) in zip(ledger, roster)) and
+                not QUARANTINE and not query.QUARANTINE and not diagnostics._QUARANTINE,
+                "BOOTSTRAP_PROBE_OWNER_CLOSE_INCOMPLETE")
+        closed = fence.now(final=True)
+        result = {**fence.record(), "closedNs": closed, "closedLocal": local_last, "resourceCount": len(roster),
+                  "parentResourceClose": "KNOWN_RESOURCE_CLOSE_ONLY"}
+        owner = None
+        environment()
+        fence.now(final=True)
+        return result
+
+    class BoundReader:
+        __slots__ = ()
+
+        def end(self, *, new=False):
+            return owner.end()
+
+        def check(self):
+            owner.end()
+
+        def acquire(self, label, factory):
+            return owner.acquire(label, factory)
+
+        def error(self, stage, error):
+            owner.error(stage, error)
+
+        def close_one(self, value):
+            if owner.unknown:
+                if owner.original is not None:
+                    raise owner.original
+                raise origin.OriginError("BOOTSTRAP_PROBE_READER_UNKNOWN")
+            owner.close_one(value)
+            if owner.original is not None:
+                raise owner.original
+            require(not owner.unknown, "BOOTSTRAP_PROBE_READER_UNKNOWN")
+
+    try:
+        environment()
+        require(not QUARANTINE and not query.QUARANTINE and not diagnostics._QUARANTINE, "BOOTSTRAP_PROBE_PRIOR_UNKNOWN")
+        fence = phase_fence("custody-readmission" if after else "probe-transition", first, local_start)
+        selection, original_path, event = host_inputs(first.clock.role)
+        child_environment(original_path)
+        runner_name = os.environ.get("RUNNER_NAME")
+        session = original_path.with_name(original_path.name + "-productive") / "initializer"
+        path = original_path.with_name(original_path.name + ("-after-probe" if after else "-probe"))
+        owner = Owner(fence.local_end, fence, first=first, cancelled=environment)
+        initializer = owner.open(session)
+        directory = owner.child(initializer, "dependency-save-handoff")
+        after_directory = owner.open(original_path.with_name(original_path.name + "-after-save"))
+        original_after = owner.read(after_directory, "after-save-return.json")
+        require(origin.digest(original_after) == claims["AFTER_SAVE_SHA256"], "BOOTSTRAP_PROBE_AFTER_SAVE_HASH")
+        probe_directory = probe_raw = None
+        if after:
+            probe_directory = owner.open(original_path.with_name(original_path.name + "-probe"))
+            probe_raw = owner.read(probe_directory, "probe-preparation.json")
+            require(origin.digest(probe_raw) == claims["PROBE_PREPARATION_SHA256"], "BOOTSTRAP_PROBE_PREPARATION_HASH")
+            require(first.nanoseconds < origin.integer(origin.parse(probe_raw)["providerWindow"]["hardEndNs"]),
+                    "BOOTSTRAP_PROBE_PROVIDER_RETURN_BOUND")
+        handoff_raw = owner.read(directory, "save-handoff.json")
+        require(origin.digest(handoff_raw) == claims["HANDOFF_SHA256"], "BOOTSTRAP_PROBE_HANDOFF_HASH")
+        index = origin.parse(handoff_raw)
+        proposal_raw = owner.read(directory, "allocation-proposal.json")
+        row = index["blobs"]["allocation-proposal.json"]
+        require(type(row["bytes"]) is int and row["bytes"] == len(proposal_raw) and
+                row["sha256"] == origin.digest(proposal_raw), "BOOTSTRAP_PROBE_PROPOSAL_HASH")
+        fence.shorten(origin.parse(proposal_raw))  # Original caps only deny early; no authority from serialized claims.
+        producer_raw = owner.read(initializer, "producer-function-return.json")
+        _producer_return_record(producer_raw, handoff_raw, claims["PRODUCER_RETURN_SHA256"], first, initializer, directory)
+        target = owner.new(path)
+        target_identity = directory_identity(list(target.identity), first.clock.role)
+        admitted, admission_return = admit(owner, fence, path / "admission")
+        require(admitted.original_event == event, "BOOTSTRAP_PROBE_EVENT_CHANGED")
+        owner.write(target, "admission-return.json", owner.admissions[str(path / "admission")][2])
+        actual_raw, blobs = _read_save_handoff(owner, initializer, directory, admitted,
+            producer_outcome=claims["PRODUCER_OUTCOME"], expected_sha256=claims["HANDOFF_SHA256"])
+        blobs = dict(blobs)
+        require(actual_raw == handoff_raw and blobs["allocation-proposal.json"] == proposal_raw,
+                "BOOTSTRAP_PROBE_PACKAGE_CHANGED")
+        originals = []
+
+        def reference(directory_, label, name, *, bound):
+            value = index["references"][label]
+            require(type(value) is dict and set(value) == {"directory", "directoryIdentity", "name", "maximumBytes",
+                    "bytes", "sha256", "fileBinding", "bindingScope"} and value["directory"] == str(directory_.path) and
+                    value["name"] == name and type(value["maximumBytes"]) is int and value["maximumBytes"] == LIMIT and
+                    type(value["bytes"]) is int and 0 < value["bytes"] <= LIMIT and staging.cache._sha(value["sha256"]),
+                    "BOOTSTRAP_PROBE_REFERENCE")
+            _new_entry_owned(owner, directory_, directory_.path, value["directoryIdentity"])
+            if bound:
+                require(value["fileBinding"] is not None and value["bindingScope"] == "ORIGINAL_FILE_BINDING",
+                        "BOOTSTRAP_PROBE_REFERENCE_BINDING")
+                raw, _ = staging._read(BoundReader(), directory_, name, binding=value["fileBinding"], maximum=value["bytes"])
+            else:
+                require(value["fileBinding"] is None and value["bindingScope"] ==
+                        "ORIGINAL_DIRECTORY_AND_BYTES_OR_HASH_ONLY_NOT_FILE_IDENTITY", "BOOTSTRAP_PROBE_REFERENCE_BINDING")
+                raw = owner.read(directory_, name, value["bytes"])
+            require(len(raw) == value["bytes"] and origin.digest(raw) == value["sha256"], "BOOTSTRAP_PROBE_REFERENCE_CHANGED")
+            originals.append((directory_, name, value, raw, bound))
+            return raw
+
+        service = owner.open(original_path / "service")
+        responses = {name: reference(service, "service/" + name, name + ".json", bound=False) for name in ("attempt", "jobs")}
+        require(index["binding"]["runnerName"] == runner_name, "BOOTSTRAP_PROBE_RUNNER_CHANGED")
+        proposal = allocation.validate_proposal(proposal_raw, admitted, responses,
+            index["binding"]["invocation"], first.clock, runner_name)
+        fence.shorten(proposal)
+        source_inputs, compiled = staging.files.source_inputs(owner, ROOT, owner.end(), owner.end)
+        profile, role = bootstrap.cache_cohort(admitted.record)
+        container_path = staging.files.stage_path(session, profile, role)
+        container = owner.acquire("directory", lambda: staging.files.private_root(container_path))
+        staging_raw = reference(container, "staging/staging", "staging.json", bound=True)
+        end = owner.end()
+        source = owner.acquire("probe-stage", lambda: container.open_directory("restore-home", deadline=end))
+        stage = origin.parse(staging_raw)
+        staging.files.validate_stage(stage, admitted.record, profile, role, container_path,
+                                     container.verify(), source.verify(), source_inputs)
+        plan = staging.cache.validate_plan(index["plan"], admitted.record, staging_raw, compiled, source_inputs,
+                                          session=session, profile=profile, role=role, mode="bootstrap")
+        _save_original_inventory(index, blobs, compiled, stage, index["references"]["staging/staging"]["fileBinding"], proposal)
+        prepared_directory = owner.open(original_path.with_name(original_path.name + "-save"))
+        after_raw, after_originals = _probe_after_save_records(owner, after_directory, claims["AFTER_SAVE_SHA256"],
+            claims, admitted, index, blobs, producer_raw, proposal, first, prepared_directory)
+        require(after_raw == original_after, "BOOTSTRAP_PROBE_AFTER_SAVE_CHANGED")
+        prepared = (_probe_preparation_record(probe_raw, claims["PROBE_PREPARATION_SHA256"], claims, admitted,
+                    plan, proposal, first, probe_directory) if after else None)
+        if prepared is not None:
+            require(origin.parse(after_raw)["returnWindow"]["firstNs"] <= prepared["firstNs"],
+                    "BOOTSTRAP_PROBE_PREPARATION_PRECEDES_AFTER_SAVE")
+        final_admitted, final_return = admit(owner, fence, path / "final-admission", expected=admitted)
+        require(final_admitted == admitted and host_inputs(role) == (selection, original_path, event) and
+                os.environ.get("RUNNER_NAME") == runner_name, "BOOTSTRAP_PROBE_FINAL_ADMISSION_CHANGED")
+        environment()
+        child_environment(original_path)
+        owner.write(target, "final-admission-return.json", owner.admissions[str(path / "final-admission")][2])
+        for directory_, name, raw in ((directory, "save-handoff.json", handoff_raw),
+                (initializer, "producer-function-return.json", producer_raw),
+                (prepared_directory, "save-preparation.json", after_originals["save-preparation.json"])):
+            require(owner.read(directory_, name) == raw, "BOOTSTRAP_PROBE_FINAL_ORIGINALS_CHANGED")
+        _new_entry_owned(owner, after_directory, after_directory.path, origin.parse(after_raw)["directoryIdentity"])
+        for name, raw in after_originals.items():
+            require(owner.read(after_directory, name) == raw, "BOOTSTRAP_PROBE_FINAL_AFTER_SAVE_CHANGED")
+        for directory_, name, value, raw, bound in originals:
+            _new_entry_owned(owner, directory_, directory_.path, value["directoryIdentity"])
+            if bound:
+                staging._read(BoundReader(), directory_, name, expected=raw, binding=value["fileBinding"], maximum=len(raw))
+            else:
+                require(owner.read(directory_, name) == raw, "BOOTSTRAP_PROBE_FINAL_REFERENCE_CHANGED")
+        if not after:
+            issued = fence.now()
+            provider_end = min(origin.integer(issued + 180 * staging.NS), proposal["phaseFencesNs"]["provider-probe"],
+                               proposal["proposedJobEndNs"])
+            require(issued < provider_end, "BOOTSTRAP_PROBE_PROVIDER_WINDOW_EXHAUSTED")
+            result_raw = owner.write(target, "probe-preparation.json", {
+                "schema": 1, "scope": "BOOTSTRAP_PROBE_PREPARATION_PENDING_ORIGINAL_STEP_RETURN_V1",
+                **{name: index[name] for name in ("source", "github", "selection", "cacheCohort")},
+                "directory": str(path), "directoryIdentity": target_identity, "originalClaims": claims,
+                "admissionSha256": origin.digest(admitted.record), "admissionReturn": admission_return,
+                "finalAdmissionReturn": final_return, "proposalSha256": origin.digest(proposal_raw), "plan": plan,
+                "planSha256": origin.digest(origin.encoded(plan)), "clock": origin.clock_value(first.clock),
+                "firstNs": first.nanoseconds, "hardEndNs": fence.hard_end,
+                "providerWindow": {"issuedNs": issued, "hardEndNs": provider_end, "actualProviderStart": "NOT_OBSERVED"},
+                "providerRequest": {"action": plan["provider"]["restore"], "path": plan["path"], "key": plan["key"],
+                    "lookupOnly": True, "restoreKeys": [], "failOnCacheMiss": True, "enableCrossOsArchive": False,
+                    "scope": "PRIVATE_DESCRIPTOR_NOT_EXECUTION"},
+                "writerReturn": "PENDING_NOT_OBSERVABLE_BY_THIS_FILE", "providerExecution": "NOT_PERFORMED",
+                "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False})
+            close_known()
+        else:
+            _new_entry_owned(owner, probe_directory, probe_directory.path, prepared["directoryIdentity"])
+            require(owner.read(probe_directory, "probe-preparation.json") == probe_raw, "BOOTSTRAP_PROBE_FINAL_PREPARATION_CHANGED")
+            readmission_close = close_known()
+            local = staging._local(time.monotonic())
+            began = origin.clocks.validate_reading(origin.clocks.observe())
+            fence = phase_fence("provider-observation", began, local)
+            owner = Owner(fence.local_end, fence, first=began, cancelled=environment)
+            # Classification, retention, this writer's close and guarded output all spend observation30.
+            provider = staging.cache.provider_observation(plan, "lookup", original_outcome=claims["PROBE_OUTCOME"], outputs=outputs)
+            owner.end()
+            target = owner.open(path)
+            _new_entry_owned(owner, target, path, target_identity)
+            provider_raw = owner.write(target, "provider-probe.json", provider)
+            require(provider["status"] == "REPORTED_EXACT_HIT", "BOOTSTRAP_PROBE_NO_QUALIFIED_EXACT_HIT")
+            originals_raw = owner.write(target, "probe-preparation.json", probe_raw)
+            close_raw = owner.write(target, "readmission-close.json", {**readmission_close,
+                "admissionReturn": admission_return, "finalAdmissionReturn": final_return})
+            result_raw = owner.write(target, "probe-result.json", {
+                "schema": 1, "scope": "BOOTSTRAP_PROBE_PENDING_ORIGINAL_STEP_RETURN_V1",
+                **{name: index[name] for name in ("source", "github", "selection", "cacheCohort")},
+                "directory": str(path), "directoryIdentity": target_identity, "originalClaims": claims,
+                "planSha256": origin.digest(origin.encoded(plan)), "proposalSha256": origin.digest(proposal_raw),
+                "clock": origin.clock_value(first.clock), "firstPostProviderNs": first.nanoseconds,
+                "firstPostProviderLocal": local_start, "providerEndNs": prepared["providerWindow"]["hardEndNs"],
+                "providerTimeScope": "POST_ACTION_UPPER_BOUND_ONLY_REQUIRES_TRUSTED_SEQUENTIAL_ORIGINAL_OUTCOME",
+                "observationWindow": fence.record(), "files": {"provider-probe.json": origin.digest(provider_raw),
+                    "probe-preparation.json": origin.digest(originals_raw), "readmission-close.json": origin.digest(close_raw)},
+                "status": "REPORTED_EXACT_HIT_PRESENCE_ONLY", "cacheContents": "NOT_PROVEN", "resolverReuse": "NOT_PROVEN",
+                "providerDeadlineEnforcement": "NOT_ESTABLISHED", "providerRetirement": "NOT_OBSERVED",
+                "writerReturn": "PENDING_NOT_OBSERVABLE_BY_THIS_FILE", "budgetAcceptance": "NOT_ADMITTED",
+                "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False})
+            close_known()  # There is deliberately no new probe-owner-return45 allocation.
+    except BaseException as error:
+        failure = owner.original if owner is not None and owner.original is not None else error
+        if owner is not None:
+            try:
+                owner.error("after-probe" if after else "prepare-probe", error)
+            except BaseException:
+                owner.unknown = True
+    finally:
+        if owner is not None:
+            try:
+                owner.close()
+                if failure is None and owner.original is not None:
+                    failure = owner.original
+            except BaseException as error:
+                if failure is None:
+                    failure = owner.original if owner.original is not None else error
+            if owner.unknown and not any(value is owner for value in QUARANTINE):
+                QUARANTINE.append(owner)
+    if failure is not None:
+        raise failure
+    require(result_raw is not None and owner is None, "BOOTSTRAP_PROBE_NOT_RETURNED")
+    fence.now(final=True)
+    environment()
+    scope = "BOOTSTRAP_PROBE_PENDING_ORIGINAL_STEP_RETURN_V1" if after else "BOOTSTRAP_PROBE_PREPARATION_PENDING_ORIGINAL_STEP_RETURN_V1"
+    return public_result(scope, "probeSha256" if after else "probePreparationSha256", result_raw), fence, fence.hard_end
+
+
+def prepare_probe(cancelled):
+    return _probe_command(cancelled, after=False)
+
+
+def after_probe_originals(cancelled):
+    return _probe_command(cancelled, after=True)
+
+
 def guarded(operation):
     handlers, cancelled, original, result = {}, [], None, None
     try:
@@ -12382,6 +12901,8 @@ def main():
     commands.add_parser("produce-originals")
     commands.add_parser("prepare-save")
     commands.add_parser("after-save")
+    commands.add_parser("prepare-probe")
+    commands.add_parser("after-probe")
     for name in ("_service", "_recipient"):
         child = commands.add_parser(name)
         child.add_argument("--context-sha256", required=True)
@@ -12400,6 +12921,10 @@ def main():
             guarded(prepare_save)
         elif args.operation == "after-save":
             guarded(after_save_originals)
+        elif args.operation == "prepare-probe":
+            guarded(prepare_probe)
+        elif args.operation == "after-probe":
+            guarded(after_probe_originals)
         else:
             require(re.fullmatch(r"0|[1-9][0-9]{0,19}", args.minimum_ns), "BOOTSTRAP_LAUNCH_MINIMUM")
             minimum = origin.integer(int(args.minimum_ns))
