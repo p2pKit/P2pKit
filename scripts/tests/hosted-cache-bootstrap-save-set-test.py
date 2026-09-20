@@ -203,8 +203,9 @@ class World(old["World"]):
 
         self.save.before_save = freeze
         self.namespace["dependency_save_set"] = self.save
-        self.run, self.before = self.namespace["_bootstrap_export_controls"]()
-        self.namespace.update(export_after_entry=self.run, before_save_after_entry=self.before)
+        self.run, self.before, self.checked_before = self.namespace["_bootstrap_export_controls"]()
+        self.namespace.update(export_after_entry=self.run, before_save_after_entry=self.before,
+                              _checked_before_save_parent_return=self.checked_before)
 
     def node(self, data=None):
         self.next_identity += 1
@@ -509,6 +510,160 @@ class BeforeSaveModels(unittest.TestCase):
         self.assertNotIn("provider_observation", vars(world.staging.cache))
         self.assertNotIn("dependencySeed", vars(world.freeze_inputs))
         self.assertNotIn("primaryAbiAccounting", vars(world.freeze_inputs))
+
+
+class BeforeReturnModels(unittest.TestCase):
+    """Actual private publication checks; not disk handoff or provider authority."""
+
+    def test_original_before_return_is_passive_repeatable_and_has_no_new_authority(self):
+        world = World()
+        result = world.before(world.transition)
+        before = (len(world.opened), [item.closes for item in world.opened], list(world.events),
+                  world.original_calls, world.copy_calls, world.freeze_calls, dict(world.signals))
+        def forbidden(*args):
+            self.fail("closed return performed a clock/callback/file/owner/signal operation")
+        world.clock_hook = world.local_hook = world.callback_hook = world.read_hook = forbidden
+        world.close_hook = world.names_hook = world.verify_hook = world.signal_hook = forbidden
+        self.assertIs(world.checked_before(world.transition, result), world.bound)
+        self.assertIs(world.checked_before(world.transition, result), world.bound)
+        self.assertEqual(before, (len(world.opened), [item.closes for item in world.opened], list(world.events),
+                         world.original_calls, world.copy_calls, world.freeze_calls, dict(world.signals)))
+        value = json.loads(result.raw)
+        self.assertFalse(value["nextPhaseAuthority"] or value["exportSaveAuthority"])
+        self.assertEqual((value["budgetAcceptance"], value["testAcceptance"]), ("NOT_ADMITTED", "NOT_PERFORMED"))
+
+    def test_missing_before_claim_and_export_only_return_refuse(self):
+        world = World()
+        with self.assertRaises(Refusal):
+            world.checked_before(world.transition, None)
+        exported = world.run(world.transition)
+        with self.assertRaises(Refusal):
+            world.checked_before(world.transition, exported)
+        self.assertEqual(world.freeze_calls, 0)
+
+    def test_pending_before_return_cannot_be_adopted(self):
+        world = World()
+        seen = []
+        def pending(*args):
+            self.assertIsNone(world.before_state()["result"])
+            with self.assertRaises(Refusal):
+                world.checked_before(world.transition, None)
+            seen.append(True)
+        world.before_hook = pending
+        result = world.before(world.transition)
+        self.assertEqual(seen, [True])
+        self.assertIs(world.checked_before(world.transition, result), world.bound)
+
+    def test_failed_before_return_preserves_falsey_failure_and_original_claim(self):
+        world = World()
+        failure = world.initial_failure = FalseyFailure()
+        with self.assertRaises(FalseyFailure) as caught:
+            world.before(world.transition)
+        self.assertIs(caught.exception, failure)
+        with self.assertRaises(Refusal):
+            world.checked_before(world.transition, None)
+        with self.assertRaises(Refusal):
+            world.before(world.transition)
+        self.assertIs(world.before_state()["original"], failure)
+        self.assertEqual((world.original_calls, world.freeze_calls), (1, 0))
+
+    def test_first_consumer_refuses_equal_copy_export_prefix_and_other_transition(self):
+        for variant in ("copy", "export", "transition"):
+            with self.subTest(variant=variant):
+                world = World()
+                result = world.before(world.transition)
+                returned = (type(result)(result.raw, result.leaf, result.checked_ns, result.checked_local)
+                            if variant == "copy" else world.state()["result"] if variant == "export" else result)
+                transition = type(world.transition)() if variant == "transition" else world.transition
+                with self.assertRaises(Refusal):
+                    world.checked_before(transition, returned)
+
+    def test_first_consumer_refuses_replaced_parent_dictionary(self):
+        world = World()
+        result = world.before(world.transition)
+        object.__setattr__(result, "__dict__", vars(result).copy())
+        with self.assertRaises(Refusal):
+            world.checked_before(world.transition, result)
+
+    def test_first_consumer_refuses_changed_raw_and_typed_return_clocks(self):
+        for name in ("raw", "checked_ns", "checked_local"):
+            with self.subTest(field=name):
+                world = World()
+                result = world.before(world.transition)
+                changed = {"raw": result.raw + b" ", "checked_ns": float(result.checked_ns),
+                           "checked_local": int(result.checked_local)}
+                object.__setattr__(result, name, changed[name])
+                with self.assertRaises(Refusal):
+                    world.checked_before(world.transition, result)
+
+    def test_first_consumer_refuses_leaf_copy_dictionary_and_bytes(self):
+        for variant in ("copy", "dictionary", "bytes"):
+            with self.subTest(variant=variant):
+                world = World()
+                result = world.before(world.transition)
+                leaf = result.leaf
+                if variant == "copy":
+                    object.__setattr__(result, "leaf", type(leaf)(leaf.raw, leaf.checked_ns,
+                                                                leaf.local_started, leaf.checked_local))
+                elif variant == "dictionary":
+                    object.__setattr__(leaf, "__dict__", vars(leaf).copy())
+                else:
+                    object.__setattr__(leaf, "raw", leaf.raw + b" ")
+                with self.assertRaises(Refusal):
+                    world.checked_before(world.transition, result)
+
+    def test_changed_original_export_return_is_not_recaptured(self):
+        world = World()
+        result = world.before(world.transition)
+        predecessor = world.state()["result"]
+        object.__setattr__(predecessor, "checked_ns", predecessor.checked_ns + 1)
+        with self.assertRaises(Refusal):
+            world.checked_before(world.transition, result)
+
+    def test_late_cancellation_unknown_and_quarantine_refuse(self):
+        for variant in ("cancelled", "unknown", "quarantine"):
+            with self.subTest(variant=variant):
+                world = World()
+                result = world.before(world.transition)
+                if variant == "cancelled":
+                    world.before_state()["cancelled"].append(2)
+                elif variant == "unknown":
+                    world.before_state()["unknown"] = True
+                else:
+                    world.quarantine.append(object())
+                before = [item.closes for item in world.opened]
+                with self.assertRaises(Refusal):
+                    world.checked_before(world.transition, result)
+                self.assertEqual(before, [item.closes for item in world.opened])
+
+    def test_changed_closed_roster_and_handler_restoration_refuse(self):
+        for variant in ("closed", "roster", "restored"):
+            with self.subTest(variant=variant):
+                world = World()
+                result = world.before(world.transition)
+                state = world.before_state()
+                if variant == "closed":
+                    state["closed"] = False
+                elif variant == "roster":
+                    state["resources"][0]["closed"] = False
+                else:
+                    state["restored"].pop()
+                with self.assertRaises(Refusal):
+                    world.checked_before(world.transition, result)
+
+    def test_replaced_before_source_or_public_operation_refuses(self):
+        for variant in ("source", "prefix", "before", "checker"):
+            with self.subTest(variant=variant):
+                world = World()
+                result = world.before(world.transition)
+                if variant == "source":
+                    world.save.before_save = lambda *args: None
+                else:
+                    name = {"prefix": "BootstrapSaveSetPrefix", "before": "before_save_after_entry",
+                            "checker": "_checked_before_save_parent_return"}[variant]
+                    world.namespace[name] = object()
+                with self.assertRaises(Refusal):
+                    world.checked_before(world.transition, result)
 
 
 class AfterWorld(World):

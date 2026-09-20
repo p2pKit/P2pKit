@@ -1600,8 +1600,15 @@ enumerates every ancestor/member, hashes each file and rechecks the complete
 roster and file stamps after early readers close. A positive partial export may
 qualify only as its exact complete subset; empty/zero-byte or incompletely checked
 sets refuse. There is no truncated freeze, aggregate Snapshot or atomic snapshot.
-Original before-save bytes remain in the closure for the eventual provider path;
-no provider, after-save parent, probe, seal or workflow caller is connected here.
+Original before-save bytes remain in the closure. Internal
+`_checked_before_save_parent_return` reuses the export return check to authenticate
+those exact publication pins, including the original export and closed-owner
+roster. Repeat reads sample no clock, reopen no owner and establish no new
+baseline. Reconstructed returns, changed bytes/types, late cancellation, UNKNOWN
+or replaced operations refuse. This same-process check is for the eventual
+handoff writer; it is not persisted-record authentication, a new lease or provider
+authority. No provider, after-save parent, probe, seal or workflow caller is
+connected here.
 
 **55 focused methods PASS:**31 new `BeforeSaveModels` and24 existing
 `ExportModels` covering the changed shared driver. Unchanged eight no-loader
@@ -1613,6 +1620,16 @@ timeout20/kill2, CPU10/AS512MiB/FD64/core0 and1MiB regular output limits were us
 actual UID0/audit guard is not a kernel sandbox. The containing commit's #437
 mapping binds original results and independent source review. Both HOLDs,
 recipient/trusted-base/formal approval and all existing deadlines remain.
+
+The additional original-return increment passed **43 focused methods**:12 new
+`BeforeReturnModels` and31 affected `BeforeSaveModels`. The selected actual
+checker/driver/leaf definitions use memory originals; native/clock/admission
+boundaries remain models. Unchanged after-save/export/no-loader suites were not
+selected. Python3.12 isolation, timeout20/kill2, CPU10/AS512MiB/FD64/core0 and1MiB
+regular output limits were retained, with no guard denials. UID0/audit guards
+are not a kernel sandbox or persisted-handoff/provider qualification. Original
+results and exact-source independent review are mapped with the containing
+commit in #437; no new execution authority follows.
 
 ### Supplied-original after-save recheck
 
@@ -1825,7 +1842,7 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-no-loader-parent-test.py \
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-export-test.py \
   OriginalReturnModels ExportModels -v
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-save-set-test.py \
-  BeforeSaveModels AfterSaveModels -v
+  BeforeSaveModels BeforeReturnModels AfterSaveModels -v
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py

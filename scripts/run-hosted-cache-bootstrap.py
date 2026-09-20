@@ -10432,11 +10432,12 @@ def _bootstrap_export_controls():
                 custody._Inputs is input_kind and BootstrapExportPrefix is prefix_kind,
                 "BOOTSTRAP_EXPORT_OPERATION_CHANGED")
 
-    def closed_export_return(transition, returned):
+    def closed_return(transition, returned, before_save):
         roots()
-        state = calls.get(id(transition))
+        claims, kind = (before_calls, save_prefix) if before_save else (calls, prefix_kind)
+        state = claims.get(id(transition))
         require(state is not None and state["transition"] is transition and state["result"] is returned and
-                type(returned) is prefix_kind and state["original"] is None and state["unknown"] is False and
+                type(returned) is kind and state["original"] is None and state["unknown"] is False and
                 state["closed"] is True and state["errors"] == [] and state["handlers"] == state["restored"],
                 "BOOTSTRAP_EXPORT_RETURN_NOT_ORIGINAL")
         for check in state["closed_check"]:
@@ -10450,6 +10451,13 @@ def _bootstrap_export_controls():
                 all(row[4] is row[5] is True for row in state["pins"]), "BOOTSTRAP_EXPORT_RETURN_CHANGED")
         return state["bound"]
 
+    def closed_export_return(transition, returned):
+        return closed_return(transition, returned, False)
+
+    def closed_before_return(transition, returned):
+        """Read original same-process pins, not a persisted handoff or save permit."""
+        return closed_return(transition, returned, True)
+
     def drive(transition, before_save):
         # Only the two lexical wrappers below select a phase. No public mode,
         # supplied predecessor, owner factory or caller-selected operation.
@@ -10460,7 +10468,8 @@ def _bootstrap_export_controls():
                         save_module._Window is save_window and save_module.SaveSetEvidence is save_result and
                         save_module.SCOPE is save_scope and save_module.STATUSES is save_statuses and
                         BootstrapSaveSetPrefix is save_prefix and export_after_entry is execute and
-                        before_save_after_entry is before, "BOOTSTRAP_SAVE_OPERATION_CHANGED")
+                        before_save_after_entry is before and _checked_before_save_parent_return is closed_before_return,
+                        "BOOTSTRAP_SAVE_OPERATION_CHANGED")
 
         phase_roots()
         run_previous, check_previous = (execute, closed_export_return) if before_save else (operation, predecessor)
@@ -10744,10 +10753,10 @@ def _bootstrap_export_controls():
     def before(transition):
         return drive(transition, True)
 
-    return execute, before
+    return execute, before, closed_before_return
 
 
-export_after_entry, before_save_after_entry = _bootstrap_export_controls()
+export_after_entry, before_save_after_entry, _checked_before_save_parent_return = _bootstrap_export_controls()
 del _bootstrap_export_controls
 
 

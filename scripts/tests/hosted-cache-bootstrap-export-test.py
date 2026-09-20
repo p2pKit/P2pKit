@@ -186,8 +186,9 @@ class World:
             "cancellation": lambda flags: require(not flags, "CANCELLED")}
         exec(PARENT, namespace)
         self.namespace = namespace
-        self.run, self.before = namespace["_bootstrap_export_controls"]()
-        namespace.update(export_after_entry=self.run, before_save_after_entry=self.before)
+        self.run, self.before, self.checked_before = namespace["_bootstrap_export_controls"]()
+        namespace.update(export_after_entry=self.run, before_save_after_entry=self.before,
+                         _checked_before_save_parent_return=self.checked_before)
 
     def encode(self, value):
         self.encode_hook(value)
