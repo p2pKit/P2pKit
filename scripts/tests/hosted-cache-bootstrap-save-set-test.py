@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Before-save driver/leaf controls using memory-backed files, never native I/O.
+"""Pre/post save-set controls using memory-backed files, never native I/O.
 
 The changed shared driver, new leaf and shared read/hash/roster definitions run.
 Original admission/predecessor/source/native/copy suppliers remain explicit
 models. Imported export classes cover the changed driver, not a hosted rerun.
+Post checks use an explicit NEW memory owner and supplied before-save records;
+there is no original-call after-save parent or provider execution in this fixture.
 """
 import ast
 from dataclasses import dataclass, field
@@ -20,7 +22,8 @@ old = runpy.run_path(str(ROOT / "tests/hosted-cache-bootstrap-export-test.py"), 
 selected, require = old["selected"], old["require"]
 Refusal, FalseyFailure = old["Refusal"], old["FalseyFailure"]
 OriginalReturnModels, ExportModels = old["OriginalReturnModels"], old["ExportModels"]
-SAVE = selected(ROOT / "hosted_cache_bootstrap_save_set.py", {"SaveSetEvidence", "_Window", "before_save"})
+SAVE = selected(ROOT / "hosted_cache_bootstrap_save_set.py",
+    {"SaveSetEvidence", "_Window", "_AfterWindow", "before_save", "after_save", "_observe"})
 READ = selected(ROOT / "hosted_cache_bootstrap_staging.py", {"_read"})
 FILES = selected(ROOT / "hosted_dependency_seed_files.py", {"_info_binding", "_hash"})
 ROSTER = selected(ROOT / "hosted_dependency_cache.py", {"_save_roster"})
@@ -146,6 +149,7 @@ class World(old["World"]):
         def inputs_init(value, *args):
             original_init(value, *args)
             value.proposal["phaseFencesNs"]["save-set-before"] = 850 * old["NS_SECOND"]
+            value.proposal["phaseFencesNs"]["save-set-after"] = 880 * old["NS_SECOND"]
             value.stage["containerIdentity"] = list(world.ids["container"])
             for key, directory, name in (("initializer-context", "session", "initializer-context.json"),
                     ("canonical-context", "state", "context.json"), ("properties", "gradle-home", "gradle.properties"),
@@ -180,9 +184,12 @@ class World(old["World"]):
         copy_namespace["_copy_candidate"] = copy_candidate
         namespace = {"dataclass": dataclass, "field": field, "custody": self.custody, "staging": self.staging,
             "files": self.files, "origin": self.origin, "dependency_export": self.export,
-            "SCOPE": "BOOTSTRAP_SAVE_SET_BEFORE_LEAF_V1", "STATUSES": ("KNOWN_FROZEN",)}
+            "SCOPE": "BOOTSTRAP_SAVE_SET_BEFORE_LEAF_V1", "STATUSES": ("KNOWN_FROZEN",),
+            "AFTER_SCOPE": "BOOTSTRAP_SAVE_SET_AFTER_LEAF_V1", "AFTER_STATUS": "KNOWN_UNCHANGED"}
         exec(SAVE, namespace)
-        self.save = NS(**{name: namespace[name] for name in ("SaveSetEvidence", "_Window", "SCOPE", "STATUSES")})
+        self.save_namespace = namespace
+        self.save = NS(**{name: namespace[name] for name in
+            ("SaveSetEvidence", "_Window", "_AfterWindow", "after_save", "SCOPE", "STATUSES", "AFTER_SCOPE", "AFTER_STATUS")})
         actual = namespace["before_save"]
 
         def freeze(owner, inputs, window, raw):
@@ -502,6 +509,296 @@ class BeforeSaveModels(unittest.TestCase):
         self.assertNotIn("provider_observation", vars(world.staging.cache))
         self.assertNotIn("dependencySeed", vars(world.freeze_inputs))
         self.assertNotIn("primaryAbiAccounting", vars(world.freeze_inputs))
+
+
+class AfterWorld(World):
+    """Supplied-record leaf model; deliberately not the future provider parent."""
+    def __init__(self):
+        super().__init__()
+        self.frozen = self.before(self.transition)
+        self.frozen_raw, self.previous_raw = self.frozen.leaf.raw, self.frozen.raw
+        self.phase, self.seconds = "after", self.seconds + 1.0
+        self.after_hook = lambda *args: None
+        self.after_cancelled = False
+        world = self
+
+        class MemoryOwner:
+            def __init__(self):
+                self.resources, self.original = [], None
+                self.closed = self.unknown = False
+                self.cancelled = lambda: require(not world.after_cancelled, "MODELED_AFTER_CANCELLED")
+
+            def error(self, stage, failure, *, unknown=False):
+                if self.original is None:
+                    self.original = failure
+                self.unknown |= unknown
+
+            def end(self):
+                require(not self.closed and not self.unknown, "MODELED_AFTER_NOT_LIVE")
+                self.cancelled()
+                return world.after_window.local_hard
+
+            def acquire(self, label, factory):
+                self.end()
+                value = factory()
+                self.resources.append({"owner": value, "attempted": False, "closed": False})
+                return value
+
+            def close_one(self, value):
+                row = next(row for row in self.resources if row["owner"] is value)
+                if row["attempted"]:
+                    return
+                require(not self.unknown, "MODELED_AFTER_UNKNOWN")
+                row["attempted"] = True
+                try:
+                    value.close()
+                    row["closed"] = True
+                except BaseException as failure:
+                    self.error("close", failure, unknown=True)
+                    raise
+
+        self.after_owner = MemoryOwner()
+
+    def change_frozen(self, change, *, rebind=True):
+        value = json.loads(self.frozen_raw)
+        change(value)
+        self.frozen_raw = self.encode(value)
+        if rebind:
+            # Deliberately coherent supplied records reach semantic guards.
+            # This is not a claim that the original-call parent would adopt them.
+            previous = json.loads(self.previous_raw)
+            previous["leafSha256"] = self.origin.digest(self.frozen_raw)
+            self.previous_raw = self.encode(previous)
+
+    def recheck(self):
+        phase = self.staging.PhaseStart(self.observe(), self.monotonic())
+        self.after_window = self.save._AfterWindow(self.freeze_inputs, phase,
+            (self.previous_raw, self.frozen.checked_ns, self.frozen.checked_local))
+        self.after_hook(self.after_window)
+        return self.save.after_save(self.after_owner, self.freeze_inputs, self.after_window,
+                                    self.export_raw, self.frozen_raw)
+
+
+class AfterSaveModels(unittest.TestCase):
+    def test_complete_positive_subset_matches_original_before_bytes(self):
+        world = AfterWorld()
+        result = world.recheck()
+        value, before = json.loads(result.raw), json.loads(world.frozen_raw)
+        self.assertEqual((value["scope"], value["status"], value["phase"]),
+                         (world.save.AFTER_SCOPE, "KNOWN_UNCHANGED", "after-save"))
+        self.assertEqual(value["beforeSaveSha256"], world.origin.digest(world.frozen_raw))
+        for name in ("container", "stagingFile", "directories", "files", "counts", "saveSetInputs"):
+            self.assertEqual(value[name], before[name])
+        self.assertFalse(value["atomicSnapshot"] or value["exportSaveAuthority"] or value["nextPhaseAuthority"])
+        self.assertEqual((value["budgetAcceptance"], value["testAcceptance"]), ("NOT_ADMITTED", "NOT_PERFORMED"))
+        self.assertIsNot(world.freeze_owner, world.after_owner)
+        self.assertGreater(world.after_window.first, world.frozen.checked_ns)
+        self.assertGreater(world.after_window.local_start, world.frozen.checked_local)
+        self.assertTrue(all(item.closes == 1 for item in world.opened))
+
+    def test_after_cannot_reuse_before_window(self):
+        world = AfterWorld()
+        with self.assertRaises(Refusal):
+            world.save.after_save(world.after_owner, world.freeze_inputs, world.freeze_window,
+                                  world.export_raw, world.frozen_raw)
+        self.assertEqual(world.after_owner.resources, [])
+
+    def test_before_cannot_accept_after_window(self):
+        world = AfterWorld()
+        def refuse(window):
+            with self.assertRaises(Refusal):
+                world.save_namespace["before_save"](world.after_owner, world.freeze_inputs, window, world.export_raw)
+        world.after_hook = refuse
+        world.recheck()
+
+    def test_original_before_bytes_are_required(self):
+        for raw in (None, b"", {}, bytearray(b"{}")):
+            with self.subTest(kind=type(raw).__name__):
+                world = AfterWorld()
+                world.frozen_raw = raw
+                with self.assertRaises(Refusal):
+                    world.recheck()
+                self.assertEqual(world.after_owner.resources, [])
+
+    def test_changed_before_bytes_cannot_replace_original_digest(self):
+        world = AfterWorld()
+        world.change_frozen(lambda value: value.update(extra=True), rebind=False)
+        with self.assertRaisesRegex(Refusal, "BOOTSTRAP_SAVE_EXPORT_PREDECESSOR"):
+            world.recheck()
+        self.assertEqual(world.after_owner.resources, [])
+
+    def test_failed_or_wrong_phase_before_record_cannot_qualify(self):
+        for field, value in (("status", "FAILED"), ("completed", False), ("retirement", "UNKNOWN"),
+                ("errors", ["failure"]), ("phase", "after-save"), ("beforeSaveSha256", "f" * 64)):
+            with self.subTest(field=field):
+                world = AfterWorld()
+                world.change_frozen(lambda record: record.update({field: value}))
+                with self.assertRaises(Refusal):
+                    world.recheck()
+                self.assertEqual(world.after_owner.resources, [])
+
+    def test_coherent_supplied_before_cannot_change_input_or_authority(self):
+        for field, value in (("binding", {}), ("plan", {}), ("exportSha256", "f" * 64),
+                ("schema", True), ("exportSaveAuthority", True), ("budgetAcceptance", "ADMITTED")):
+            with self.subTest(field=field):
+                world = AfterWorld()
+                world.change_frozen(lambda record: record.update({field: value}))
+                with self.assertRaises(Refusal):
+                    world.recheck()
+                self.assertEqual(world.after_owner.resources, [])
+
+    def test_coherent_supplied_before_cannot_change_complete_roster(self):
+        for field, value in (("directories", []), ("files", []), ("counts", {}), ("saveSetInputs", {})):
+            with self.subTest(field=field):
+                world = AfterWorld()
+                world.change_frozen(lambda record: record.update({field: value}))
+                with self.assertRaisesRegex(Refusal, "BOOTSTRAP_SAVE_FROZEN_SET_CHANGED"):
+                    world.recheck()
+                self.assertTrue(all(item.closes == 1 for item in world.opened))
+
+    def test_before_window_scope_clock_fence_and_types_are_rederived(self):
+        for field, value in (("phase", "save-set-after"), ("clock", {}), ("proposalSha256", "f" * 64),
+                ("predecessorSha256", "f" * 64), ("firstNs", True), ("hardEndNs", 999 * old["NS_SECOND"]),
+                ("softEndNs", 999 * old["NS_SECOND"]), ("finishedNs", 999 * old["NS_SECOND"]),
+                ("lastNewWorkNs", 999 * old["NS_SECOND"]), ("predecessorCheckedNs", 999 * old["NS_SECOND"])):
+            with self.subTest(field=field):
+                world = AfterWorld()
+                world.change_frozen(lambda record: record["window"].update({field: value}))
+                with self.assertRaises(Refusal):
+                    world.recheck()
+                self.assertEqual(world.after_owner.resources, [])
+
+    def test_before_parent_must_match_its_original_fences_and_close(self):
+        for field, value in (("scope", "BOOTSTRAP_EXPORT_PARENT_CLOSED_OBSERVATIONS_V1"),
+                ("closedNs", 999 * old["NS_SECOND"]), ("softEndNs", 999 * old["NS_SECOND"])):
+            with self.subTest(field=field):
+                world = AfterWorld()
+                previous = json.loads(world.previous_raw)
+                previous[field] = value
+                world.previous_raw = world.encode(previous)
+                with self.assertRaises(Refusal):
+                    world.recheck()
+
+    def test_same_identity_ancestor_stamp_change_cannot_be_new_baseline(self):
+        world = AfterWorld()
+        world.nodes["restore-home"].children["caches"].stamp += 1
+        with self.assertRaisesRegex(Refusal, "BOOTSTRAP_SAVE_FROZEN_SET_CHANGED"):
+            world.recheck()
+
+    def test_extra_empty_directory_cannot_be_ignored(self):
+        world = AfterWorld()
+        world.nodes["restore-home"].children["extra"] = world.node()
+        with self.assertRaises(Refusal):
+            world.recheck()
+
+    def test_missing_member_cannot_be_a_partial_after_check(self):
+        world = AfterWorld()
+        world.nodes["restore-home"].children.clear()
+        with self.assertRaises(Refusal):
+            world.recheck()
+
+    def test_changed_bytes_with_unchanged_model_stamp_fail_hash(self):
+        world = AfterWorld()
+        world.exported_file().data = b"bad"
+        with self.assertRaisesRegex(Refusal, "BOOTSTRAP_SAVE_BYTES_CHANGED"):
+            world.recheck()
+
+    def test_replaced_file_identity_or_staging_stamp_refuses(self):
+        for target in ("file", "staging"):
+            with self.subTest(target=target):
+                world = AfterWorld()
+                if target == "file":
+                    world.exported_file().identity = (1, 99999)
+                else:
+                    world.nodes["container"].children["staging.json"].stamp += 1
+                with self.assertRaises(Refusal):
+                    world.recheck()
+
+    def test_changed_save_checker_source_cannot_replace_original_source(self):
+        world = AfterWorld()
+        world.nodes["scripts"].children["hosted_cache_bootstrap_save_set.py"].data = b"changed"
+        with self.assertRaisesRegex(Refusal, "BOOTSTRAP_SAVE_FROZEN_SET_CHANGED"):
+            world.recheck()
+
+    def test_late_extra_member_is_caught_by_complete_reenumeration(self):
+        world = AfterWorld()
+        def late(reader):
+            if reader.name == "artifact.jar":
+                world.nodes["restore-home"].children["late"] = world.node()
+        world.read_hook = late
+        with self.assertRaises(Refusal):
+            world.recheck()
+
+    def test_raw90_refuses_new_work_without_partial_success(self):
+        world = AfterWorld()
+        world.after_hook = lambda window: setattr(world, "seconds", world.seconds + 90.0)
+        with self.assertRaises(Refusal):
+            world.recheck()
+        self.assertEqual(world.after_owner.resources, [])
+
+    def test_local90_alone_refuses_new_work(self):
+        world = AfterWorld()
+        world.after_hook = lambda window: setattr(world, "local_extra", 90.0)
+        with self.assertRaises(Refusal):
+            world.recheck()
+        self.assertEqual(world.after_window.last, world.after_window.first)
+
+    def test_hard120_in_final_serialization_cannot_publish(self):
+        world = AfterWorld()
+        def late(value):
+            if type(value) is dict and value.get("scope") == world.save.AFTER_SCOPE and value.get("completed") is True:
+                world.seconds = world.after_window.local_start - 100.0 + 120.0
+        world.encode_hook = late
+        with self.assertRaises(Refusal):
+            world.recheck()
+        self.assertTrue(all(item.closes == 1 for item in world.opened))
+
+    def test_original_shorter_after_fence_is_not_replaced_by120(self):
+        world = AfterWorld()
+        world.freeze_inputs.proposal["phaseFencesNs"]["save-set-after"] = 600 * old["NS_SECOND"]
+        world.after_hook = lambda window: setattr(world, "seconds", 100.0)
+        with self.assertRaises(Refusal):
+            world.recheck()
+        self.assertEqual(world.after_window.hard, 600 * old["NS_SECOND"])
+
+    def test_falsey_first_read_failure_survives_known_cleanup(self):
+        world = AfterWorld()
+        failure = FalseyFailure()
+        def fail(reader):
+            if reader.name == "artifact.jar":
+                raise failure
+        world.read_hook = fail
+        with self.assertRaises(FalseyFailure) as caught:
+            world.recheck()
+        self.assertIs(caught.exception, failure)
+        self.assertTrue(all(item.closes == 1 for item in world.opened))
+
+    def test_unknown_close_stops_following_owner_operations(self):
+        world = AfterWorld()
+        failure = Refusal("MODELED_AFTER_CLOSE_UNKNOWN")
+        world.close_hook = lambda value: (_ for _ in ()).throw(failure)
+        with self.assertRaises(Refusal) as caught:
+            world.recheck()
+        self.assertIs(caught.exception, failure)
+        self.assertTrue(world.after_owner.unknown)
+        self.assertTrue(all(item.closes <= 1 for item in world.opened))
+
+    def test_final_cancellation_cannot_publish(self):
+        world = AfterWorld()
+        def cancel(value):
+            if type(value) is dict and value.get("scope") == world.save.AFTER_SCOPE and value.get("completed") is True:
+                world.after_cancelled = True
+        world.encode_hook = cancel
+        with self.assertRaises(Refusal):
+            world.recheck()
+
+    def test_observation_has_no_provider_or_ordinary_context(self):
+        world = AfterWorld()
+        world.recheck()
+        self.assertNotIn("provider_observation", vars(world.staging.cache))
+        self.assertNotIn("save_set", vars(world.staging.cache))
+        self.assertNotIn("primaryAbiAccounting", vars(world.freeze_inputs))
+        self.assertFalse(world.after_owner.closed)  # Leaf close is not enclosing-owner retirement.
 
 
 if __name__ == "__main__":

@@ -1,7 +1,8 @@
-"""Bootstrap before-save observation; no provider, workflow or atomic snapshot.
+"""Bootstrap pre/post save observations; no provider, workflow or atomic snapshot.
 
-The same-call parent must supply its original successful export return. These
-supplied-data checks do not authenticate that return or grant save authority.
+The caller must retain the original successful export and before-save bytes.
+These supplied-data checks do not authenticate them or grant save authority.
+The post check does not establish that a provider ran between observations.
 Ordinary cache.save_set and its bootstrap-refusal guards remain unchanged.
 """
 from __future__ import annotations
@@ -15,6 +16,8 @@ custody = dependency_export.custody
 staging, files, origin = custody.staging, custody.files, custody.origin
 SCOPE = "BOOTSTRAP_SAVE_SET_BEFORE_LEAF_V1"
 STATUSES = ("KNOWN_FROZEN",)
+AFTER_SCOPE = "BOOTSTRAP_SAVE_SET_AFTER_LEAF_V1"
+AFTER_STATUS = "KNOWN_UNCHANGED"
 
 
 @dataclass(frozen=True)
@@ -33,20 +36,49 @@ class _Window(staging._Window):
         self.local_soft = origin.wire._directed_deadline(self.local_start, 90, self.soft, self.first)
 
 
+class _AfterWindow(staging._Window):
+    def __init__(self, inputs, phase, previous):
+        super().__init__(inputs, phase, staging._capture_phase(phase), previous, "save-set-after")
+        self.soft = min(self.hard, origin.integer(self.first + 90 * origin.NS))
+        self.local_soft = origin.wire._directed_deadline(self.local_start, 90, self.soft, self.first)
+
+
 def before_save(parent, inputs, window, export_raw):
+    """Observe the complete original export, under its own before-save window."""
+    return _observe(parent, inputs, window, export_raw, None)
+
+
+def after_save(parent, inputs, window, export_raw, frozen_raw):
+    """Recheck original before-save bytes, not a substituted live baseline.
+
+    The caller still owes original provider outcomes, NEW ownership and custody.
+    A consistent supplied predecessor is not original-call or provider authority.
+    """
+    origin.require(type(frozen_raw) is bytes and 0 < len(frozen_raw) <= files.RECEIPT_LIMIT,
+                   "BOOTSTRAP_SAVE_BEFORE_BYTES_REQUIRED")
+    return _observe(parent, inputs, window, export_raw, frozen_raw)
+
+
+def _observe(parent, inputs, window, export_raw, frozen_raw):
     """Check every original exported file and ancestor; never a partial freeze.
 
 Streams per-file hashes with depth-bounded handles. No Windows aggregate
 Snapshot, deletion, provider call or ordinary execution context is used.
 """
-    origin.require(type(inputs) is custody._Inputs and type(window) is _Window and window.inputs is inputs and
+    after = frozen_raw is not None
+    origin.require(type(inputs) is custody._Inputs and type(window) is (_AfterWindow if after else _Window) and
+                   window.inputs is inputs and
                    type(export_raw) is bytes and 0 < len(export_raw) <= files.RECEIPT_LIMIT,
                    "BOOTSTRAP_SAVE_INPUT_WINDOW")
     leaf = staging._Leaf(parent, window)
     exported = origin.parse(export_raw)
-    result = {"schema": 1, "scope": SCOPE, "binding": inputs.binding(), "predecessors": inputs.predecessors(),
-        "exportSha256": files.digest(export_raw), "plan": inputs.stage_value["plan"], "phase": "before-save",
-        "beforeSaveSha256": None, "status": "FAILED", "completed": False, "retirement": "PENDING", "errors": [],
+    frozen = origin.parse(frozen_raw) if after else None
+    result = {"schema": 1, "scope": AFTER_SCOPE if after else SCOPE,
+        "binding": inputs.binding(), "predecessors": inputs.predecessors(),
+        "exportSha256": files.digest(export_raw), "plan": inputs.stage_value["plan"],
+        "phase": "after-save" if after else "before-save",
+        "beforeSaveSha256": files.digest(frozen_raw) if after else None,
+        "status": "FAILED", "completed": False, "retirement": "PENDING", "errors": [],
         "container": None, "stagingFile": None, "directories": [], "files": [],
         "counts": {"hashedBytes": 0, "verifiedFiles": 0, "members": 0},
         "inputProvenance": "SUPPLIED_RECORDS_NOT_ORIGINAL_CALL", "atomicSnapshot": False,
@@ -157,10 +189,39 @@ Snapshot, deletion, provider call or ordinary execution context is used.
         files._validate_inventory(exported, compiled, statuses=dependency_export.STATUSES,
                                   destination_identity=inputs.stage["sourceIdentity"])
         previous = origin.parse(window.previous_raw)
-        origin.require(previous.get("scope") == "BOOTSTRAP_EXPORT_PARENT_CLOSED_OBSERVATIONS_V1" and
-                       previous.get("leafSha256") == files.digest(export_raw) and
+        previous_scope = ("BOOTSTRAP_SAVE_SET_PARENT_CLOSED_OBSERVATIONS_V1" if after else
+                          "BOOTSTRAP_EXPORT_PARENT_CLOSED_OBSERVATIONS_V1")
+        origin.require(previous.get("scope") == previous_scope and
+                       previous.get("leafSha256") == files.digest(frozen_raw if after else export_raw) and
                        origin.integer(exported["window"]["finishedNs"]) <= window.previous_ns <= window.first,
                        "BOOTSTRAP_SAVE_EXPORT_PREDECESSOR")
+        if after:
+            origin.require(type(frozen) is dict and set(frozen) == set(result) | {"saveSetInputs", "window"} and
+                           frozen["scope"] == SCOPE and frozen["phase"] == "before-save" and
+                           frozen["beforeSaveSha256"] is None and frozen["status"] == STATUSES[0] and
+                           frozen["completed"] is True and frozen["retirement"] == "KNOWN" and frozen["errors"] == [],
+                           "BOOTSTRAP_SAVE_BEFORE_NOT_KNOWN")
+            for name in ("schema", "binding", "predecessors", "exportSha256", "plan", "inputProvenance",
+                         "atomicSnapshot", "nextPhaseAuthority", "budgetAcceptance", "testAcceptance", "exportSaveAuthority"):
+                custody._equal(frozen[name], result[name], "BOOTSTRAP_SAVE_BEFORE_BINDING")
+            original = frozen["window"]
+            origin.require(type(original) is dict and set(original) == set(window.record()) and
+                           original["phase"] == "save-set-before" and
+                           original["proposalSha256"] == files.digest(inputs.proposal_raw) and
+                           original["predecessorSha256"] == previous["exportParentSha256"],
+                           "BOOTSTRAP_SAVE_BEFORE_WINDOW")
+            custody._equal(original["clock"], origin.clock_value(inputs.clock), "BOOTSTRAP_SAVE_BEFORE_CLOCK")
+            first, hard, soft, last_new, finished, prior = (origin.integer(original[name]) for name in
+                ("firstNs", "hardEndNs", "softEndNs", "lastNewWorkNs", "finishedNs", "predecessorCheckedNs"))
+            origin.require(hard == min(origin.integer(first + 120 * origin.NS),
+                           inputs.proposal["phaseFencesNs"]["save-set-before"], inputs.proposal["proposedJobEndNs"]) and
+                           soft == min(hard, origin.integer(first + 90 * origin.NS)) and
+                           exported["window"]["finishedNs"] <= prior <= first <= last_new <= finished < hard and
+                           last_new < soft and finished <= origin.integer(previous["closedNs"]) <=
+                           origin.integer(window.previous_ns) < hard,
+                           "BOOTSTRAP_SAVE_BEFORE_WINDOW")
+            for name in ("clock", "firstNs", "softEndNs", "hardEndNs"):
+                custody._equal(previous[name], original[name], "BOOTSTRAP_SAVE_BEFORE_PARENT_WINDOW")
         origin.require(0 < exported["counts"]["outputBytes"] <= files.TOTAL_LIMIT,
                        "BOOTSTRAP_SAVE_POSITIVE_EXPORT_REQUIRED")
         directories, selected = staging.cache._save_roster(exported)
@@ -208,7 +269,13 @@ Snapshot, deletion, provider call or ordinary execution context is used.
         leaf.check()
         leaf.close()
         leaf.check()
-        result.update(status=STATUSES[0], completed=True, retirement="KNOWN", window=window.record())
+        result.update(status=AFTER_STATUS if after else STATUSES[0], completed=True,
+                      retirement="KNOWN", window=window.record())
+        if after:
+            expected = {**result, "scope": SCOPE, "phase": "before-save", "beforeSaveSha256": None,
+                        "status": STATUSES[0], "window": frozen["window"]}
+            custody._equal(frozen, expected, "BOOTSTRAP_SAVE_FROZEN_SET_CHANGED")
+            leaf.check()
         raw = files.encoded(result)
         leaf.check()
         return SaveSetEvidence(raw, window.last, window.local_start, window.local_last)

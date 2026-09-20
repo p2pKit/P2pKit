@@ -22,7 +22,9 @@ That private binding is not itself an owner. The directory-only parent below now
 connects the absence leaf under NEW ownership and original allocation fences.
 The internal export successor now connects bounded H-to-S copying under a NEW
 file-only owner, followed by a separate original-call before-save set check.
-Provider save/after-save/probe and encrypted-custody integration remain unfinished.
+A supplied-original after-save leaf now reuses that set checker; its original-call
+parent is not connected. Provider save/probe and encrypted-custody integration
+remain unfinished.
 [`hosted_dependency_cache.py`](../../scripts/hosted_dependency_cache.py) has no
 CLI, action runner, downloader, extraction, deletion or subprocess entry point.
 The connected caller is
@@ -1599,7 +1601,7 @@ roster and file stamps after early readers close. A positive partial export may
 qualify only as its exact complete subset; empty/zero-byte or incompletely checked
 sets refuse. There is no truncated freeze, aggregate Snapshot or atomic snapshot.
 Original before-save bytes remain in the closure for the eventual provider path;
-no provider, after-save, probe, seal or workflow caller is connected here.
+no provider, after-save parent, probe, seal or workflow caller is connected here.
 
 **55 focused methods PASS:**31 new `BeforeSaveModels` and24 existing
 `ExportModels` covering the changed shared driver. Unchanged eight no-loader
@@ -1611,6 +1613,36 @@ timeout20/kill2, CPU10/AS512MiB/FD64/core0 and1MiB regular output limits were us
 actual UID0/audit guard is not a kernel sandbox. The containing commit's #437
 mapping binds original results and independent source review. Both HOLDs,
 recipient/trusted-base/formal approval and all existing deadlines remain.
+
+### Supplied-original after-save recheck
+
+`after_save` reuses the same complete traversal as `before_save`, with a distinct
+`save-set-after`120/90 window. Given a positive export, before-save bytes and
+their closed-parent predecessor supplied as originals, it rederives the original
+before-save RAW bounds and checks its clock, proposal and parent linkage. The
+entire newly observed set must match the retained before-save record, including
+source hashes, container/staging bindings, every directory stamp and complete
+file roster/counts. A mismatch with the retained record, a same-identity changed
+directory or an incompletely checked set cannot establish a new baseline.
+
+This is a **supplied-record leaf, not an original-call parent or provider path**.
+The eventual caller must retain the actual original bytes, establish NEW live
+ownership, and bind genuine intervening provider outcomes and readmission.
+`KNOWN_UNCHANGED` does not prove a provider ran, what it archived, an atomic
+snapshot, a populated cache, resolver reuse or enclosing-owner retirement.
+No CLI/workflow invokes this leaf; ordinary save-set/bootstrap guards are untouched.
+
+**56 focused methods PASS:**31 affected `BeforeSaveModels` and25 new
+`AfterSaveModels`. The shared traversal changed, so its before-save regressions
+were rerun; unchanged export/no-loader suites were not selected. Actual selected
+driver/leaf/read/hash/roster definitions use memory files. The after-save owner,
+admission, source/native boundaries and original upstream chain remain models;
+there is no provider or full-controller/native execution. The isolated Python3.12
+run retained timeout20/kill2, CPU10/AS512MiB/FD64/core0 and1MiB output limits;
+UID0/audit guards are not a kernel sandbox. Exact source, original results and
+independent review belong to the containing commit's #437 mapping. Both HOLDs,
+recipient/trusted-base/formal approval and deadlines remain;5400 is still
+UNADMITTED/UNMEASURED and NativeFile900/Snapshot576MiB unchanged.
 
 ## Connected consume and delivery path
 
@@ -1793,7 +1825,7 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-no-loader-parent-test.py \
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-export-test.py \
   OriginalReturnModels ExportModels -v
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-save-set-test.py \
-  ExportModels BeforeSaveModels -v
+  BeforeSaveModels AfterSaveModels -v
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
