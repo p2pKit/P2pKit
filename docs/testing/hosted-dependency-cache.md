@@ -2210,6 +2210,51 @@ and scheduling acceptance remain. No additional bundle/dependency download or
 execution is authorized by this design review. Proposed5400 remains
 UNADMITTED/UNMEASURED; NativeFile900/Snapshot576MiB are unchanged.
 
+### Dormant Windows provider command-file capability
+
+The later [exact-bundle inspection](https://github.com/p2pKit/P2pKit/issues/437#issuecomment-5751599572)
+confirmed that the pinned provider reopens `GITHUB_OUTPUT` by pathname to append.
+`PrivateDirectory.create_provider_command_file` now offers a **separate,
+unwired** capability for fixed `provider-output.txt`, not a relaxed ordinary
+`NativeFile`. It exclusively creates a protected read-access handle with
+read/write sharing and **no delete sharing**, retaining the original ancestors.
+The explicit accepted-byte bound is at most **4KiB**; zero is permitted for the
+standalone save's empty output protocol. No operation adopts, deletes or retries
+an old file. The original deadline is mandatory and cannot be renewed.
+
+Live observations use the existing strict identity/ACL/path/unnamed-stream
+inspector with bounded nondecreasing sizes. They do not expose a reader, writer,
+borrowed handle, final snapshot or provider-success result. Compatible writers
+can overwrite, shrink/regrow between observations or temporarily exceed a bound:
+this is **not append-only enforcement or a kernel write quota**.
+
+After the **future supervisor** establishes actual whole-domain writer retirement,
+`freeze()` acquires an ordinary read/share-read-only handle while the original
+read handle remains open. It compares full final information through both pins,
+rechecks ancestors and transfers a strict `NativeFile` with the same deadline
+before releasing the original. The capability's creation/observe/freeze/close
+operations reject late returns; sharing conflict, changed originals, cancellation
+or unknown close fails without an early-close/retry fallback. The returned
+**ordinary reader is unchanged**: `NativeFile.close()` checks before verification
+and release, not after the final native close. It can return after the end without
+raising. The supervisor must register that reader before another fallible action,
+read/verify/close it and **postcheck the same original end** before accepting
+capture finalization. No complete final-reader deadline enforcement is claimed
+until that caller is connected and reviewed. This file lock does not itself prove
+process retirement, absence of writable mappings, power-loss durability, supplier
+trust or cache storage.
+
+[Focused call/sharing controls](../../scripts/tests/hosted-windows-provider-command-test.py)
+are offline models. They preserve ordinary share1/file/reader behavior and model
+two-way sharing, overlap ownership, strict/live inspection, failures and cutoffs.
+They are not actual NTFS/Node24/libuv/provider execution. The command-file parser,
+provider-specific credential/lifecycle controller and failure-aware custody/seal/
+delivery integration remain separate work. There is no production caller yet.
+Both activation HOLDs, original180-second provider end, NativeFile900/Snapshot576MiB
+and proposed5400's UNADMITTED/UNMEASURED status remain. The real recipient policy
+is prepared on the branch, **not delivered to trusted main or currently admitted**;
+completed owner key/recovery/environment setup is not reopened.
+
 ## Verification and remaining qualification
 
 Focused offline commands (not a claim they ran on a particular host):
@@ -2266,6 +2311,7 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-probe-test.py \
   ProbeModels.test_actual_post_guard_classifies_exact_lookup_under_new30_with_no_extra45 -v
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
+python3 -I -B -S scripts/tests/hosted-windows-provider-command-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
 python3 -I -B -S scripts/tests/hosted-consume-delivery-test.py
 python3 -I -B -S scripts/tests/hosted-desktop-job-budget-test.py

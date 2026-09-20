@@ -9,8 +9,11 @@ The expected owner is the token's default owner (user or Builtin Administrators)
 SYSTEM, administrators/privileged OS components, and malicious same-user code
 are NOT sandboxed. This does not resolve the separate hostile-source #120 policy.
 
-Handles deny write/delete sharing and pin every ancestor until the last dependent
-object closes. An inherited descendant ACL is accepted only below a verified
+Ordinary handles deny write/delete sharing and pin every ancestor until the last
+dependent object closes. The separate fixed provider command-file capability
+permits pathname writes until an overlapping deny-write reader locks the file;
+it does not prove append-only history, a kernel byte quota or writer retirement.
+An inherited descendant ACL is accepted only below a verified
 private root and only when it is the exact recognized user+SYSTEM inheritance.
 No operation deletes evidence. Callers must stop writers before snapshotting.
 Deadlines are checked between bounded synchronous native calls; an OS/disk hang
@@ -41,6 +44,8 @@ MAX_DEPTH = 64
 MAX_SECONDS = 900
 CHUNK = 64 * 1024
 MAX_READ_BYTES = 16 * 1024 * 1024
+PROVIDER_COMMAND_NAME = "provider-output.txt"
+MAX_PROVIDER_COMMAND_BYTES = 4 * 1024
 SYSTEM_SID = "S-1-5-18"
 ADMINISTRATORS_SID = "S-1-5-32-544"
 FILE_ALL_ACCESS = 0x001F01FF
@@ -433,8 +438,18 @@ class _WinApi:
         return handle
 
     def child(self, parent, name, *, directory, create=False, writable=False):
+        return self._child(parent, name, directory=directory, create=create, writable=writable, sharing=1)
+
+    def provider_command_file(self, parent):
+        # A READ-access original can overlap the later ordinary read/share1 pin.
+        # A WRITE-access original could not; closing it first would create a gap.
+        return self._child(parent, PROVIDER_COMMAND_NAME, directory=False, create=True, writable=False, sharing=3)
+
+    def _child(self, parent, name, *, directory, create, writable, sharing):
         component(name)
         require(not writable or create and not directory, "Only exclusive newly created files are writable")
+        require(type(sharing) is int and (sharing == 1 or sharing == 3 and name == PROVIDER_COMMAND_NAME and
+                directory is False and create is True and writable is False), "Unsupported native sharing policy")
         security = PTR()
         handle = PTR()
         try:
@@ -451,7 +466,7 @@ class _WinApi:
                 status = _IoStatus()
                 access = 0x00120080 | (0 if directory is None else 0x21 if directory else 0x2 if writable else 0x1)
                 result = self.NtCreateFile(ctypes.byref(handle), access, ctypes.byref(attributes), ctypes.byref(status),
-                                           None, 0x80, 1, 2 if create else 1,
+                                           None, 0x80, sharing, 2 if create else 1,
                                            0x00200020 | (0 if directory is None else 0x1 if directory else 0x40), None, 0)
                 require(result == 0, f"Windows NtCreateFile failed (error {self.RtlNtStatusToDosError(result)})")
                 require(handle.value not in (None, INVALID_HANDLE) and status.information == (2 if create else 1),
@@ -785,6 +800,40 @@ class PrivateDirectory:
         return self._relative(relative, directory=False, create=create, writable=create,
                               max_bytes=max_bytes, deadline=deadline)
 
+    @_locked
+    def create_provider_command_file(self, *, max_bytes, deadline):
+        """Create one externally mutable command file, never adopt an old output.
+
+        This separate capability is not a NativeFile writer or snapshot. The
+        caller must register it before any fallible post-return operation and
+        retain it until actual native writer retirement and final reader close.
+        """
+        self._live()
+        _bound(max_bytes, MAX_PROVIDER_COMMAND_BYTES, "provider command bytes", zero=True)
+        require(deadline is not None, "Provider command file requires its original deadline")
+        end = _end(deadline)
+        self.verify()
+        _check_time(end)
+        parent = self._pins[-1]
+        path = parent.path + "\\" + PROVIDER_COMMAND_NAME
+        require(len(self._pins) <= MAX_DEPTH and len(path.encode("utf-16-le")) < 65500,
+                "Provider command path exceeds its depth/length bound")
+        handle = self._api.provider_command_file(parent.handle)
+        pins = []
+        with _on_exit(lambda: _close_native(self._api, handle), lambda: _release(pins)):
+            _check_time(end)
+            info = self._api.inspect(handle, path, directory=False, private=True)
+            _check_time(end)
+            require(info.identity[0] == self.identity[0] and info.size == 0,
+                    "Provider command creation crossed a volume or was not empty")
+            pins = _acquire(self._pins)
+            pins.append(_Pin(self._api, handle, path, info, private=True))
+            handle = None
+            owner = _ProviderCommandFile(self._api, pins, max_bytes=max_bytes, deadline=end)
+            _check_time(end)
+            pins = []
+            return owner
+
     def read_bytes(self, relative, *, max_bytes, deadline=None):
         _bound(max_bytes, MAX_READ_BYTES, "in-memory read", zero=True)
         with self.open_file(relative, max_bytes=max_bytes, deadline=deadline) as stream:
@@ -800,6 +849,115 @@ class PrivateDirectory:
         self._closed = True
         pins, self._pins = self._pins, []
         _release(pins)
+
+
+class _ProviderCommandFile:
+    """Fixed private path, mutable until freeze; no read/write/handle interface.
+
+    Compatible pathname writers can overwrite or temporarily exceed the bound.
+    Observations reject witnessed shrink/overflow, not unobserved history. The
+    caller must establish whole-domain writer retirement before freeze(); a
+    successful write-denying open alone does not prove that process fact or
+    absence of writable mappings. No flush/durability claim is made by this
+    read-access original. Failure is terminal; close never deletes/retries.
+    """
+    def __init__(self, api, pins, *, max_bytes, deadline):
+        self._operation_lock = threading.RLock()
+        self._api, self._pins = api, pins
+        self.path, self.identity = Path(pins[-1].path), pins[-1].info.identity
+        self.max_bytes, self._deadline = max_bytes, deadline
+        self._size = 0
+        self._closed = self._failed = False
+        self._failed_pins = ()
+
+    def _live(self):
+        require(not self._closed and not self._failed, "Provider command owner is closed or failed")
+        _check_time(self._deadline)
+
+    def _ancestors(self):
+        for pin in self._pins[:-1]:
+            _check_time(self._deadline)
+            pin.observe()
+            _check_time(self._deadline)
+
+    @_locked
+    def observe(self):
+        try:
+            self._live()
+            self._ancestors()
+            pin = self._pins[-1]
+            info = self._api.inspect(pin.handle, pin.path, directory=False, private=True,
+                live_output_max_bytes=self.max_bytes, live_output_min_bytes=self._size)
+            _check_time(self._deadline)
+            require(info.identity == self.identity, "Provider command original identity changed")
+            require(self._size <= info.size <= self.max_bytes, "Provider command size shrank or exceeded bound")
+            self._size = info.size
+            return info
+        except BaseException:
+            self._failed = True
+            raise
+
+    @_locked
+    def freeze(self):
+        """One overlapping strict-reader handoff, not native retirement evidence.
+
+        The returned ordinary NativeFile is unchanged. Its caller must register
+        it, read/verify/close it and postcheck this same original deadline;
+        NativeFile.close() alone is not a timely-finalization oracle.
+        """
+        handle, pins, reader = None, [], None
+        try:
+            self._live()
+            self._ancestors()
+            parent, original = self._pins[-2:]
+            handle = self._api.child(parent.handle, PROVIDER_COMMAND_NAME, directory=False)
+            _check_time(self._deadline)
+            info = self._api.inspect(handle, original.path, directory=False, private=True)
+            _check_time(self._deadline)
+            current = self._api.inspect(original.handle, original.path, directory=False, private=True)
+            _check_time(self._deadline)
+            require(info == current and info.identity == self.identity and self._size <= info.size <= self.max_bytes,
+                    "Provider command final identity/info/size changed")
+            self._ancestors()
+            pins = _acquire(self._pins[:-1])
+            pins.append(_Pin(self._api, handle, original.path, info, private=True))
+            handle = None
+            reader = NativeFile(self._api, pins, max_bytes=self.max_bytes, writable=False, deadline=self._deadline)
+            pins = []
+            _check_time(self._deadline)
+            self.close()  # The new strict pin and all its ancestors are already held.
+            _check_time(self._deadline)
+            return reader
+        except BaseException as error:
+            self._failed = True
+            # Keep failed ownership references for the outer owner's quarantine;
+            # a failed close is never permission to retry a possibly reused handle.
+            self._failed_pins += tuple(pins) + tuple(reader._pins if reader is not None else ())
+            _cleanup((lambda: _close_native(self._api, handle), lambda: _release(pins),
+                      lambda: reader.close() if reader is not None else None), error)
+            raise
+
+    @_locked
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        pins, self._pins = self._pins, []
+        failure = None
+        try:
+            _check_time(self._deadline)
+        except BaseException as error:
+            failure = error
+        try:
+            if failure is not None:
+                _cleanup((lambda: _release(pins),), failure)
+                raise failure
+            _release(pins)
+            _check_time(self._deadline)
+        except BaseException:
+            self._failed = True
+            self._failed_pins += tuple(pins)
+            raise
 
 
 class NativeFile(io.RawIOBase):
