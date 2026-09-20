@@ -767,6 +767,13 @@ class ControllerTests(HttpFixtures, OfflineCase):
         self.stack.enter_context(patch.object(S.signal, "getsignal", return_value=None))
         self.stack.enter_context(patch.object(S.signal, "signal", return_value=None))
         self.scopes, self.admissions, self.child_errors, self.child_envs, self.drains = [], [], [], [], []
+        self.deadline_conversions = []
+        directed = O.wire._directed_deadline
+        def converted(local, seconds, fence, now):
+            end = directed(local, seconds, fence, now)
+            self.deadline_conversions.append((local, seconds, fence, now, end))
+            return end
+        self.stack.enter_context(patch.object(O.wire, "_directed_deadline", converted))
         self.close_scope_error = self.child_exit = self.ack_transform = None
         self.birth_transform = self.terminal_transform = None
         self.before_child = lambda argv: None
@@ -858,12 +865,17 @@ class ControllerTests(HttpFixtures, OfflineCase):
                     transform(value)
                 return value
             def discover(self): return []
-            def drain(self, **kwargs):
+            def drain(self, *, grace, kill_wait, deadline):
                 final = O.parse((Path(state) / "service/start.json").read_bytes())["finalEndNs"]
-                remaining = max(0, (final - case.nanoseconds) / O.NS)
-                grace = min(5, remaining)
-                case.assertEqual(kwargs, {"grace": grace, "kill_wait": min(5, max(0, remaining - grace))})
-                case.drains.append(kwargs)
+                # The actual conversion samples LOCAL before RAW. Later RAW
+                # observations cannot be used to reconstruct that saved end.
+                local, maximum, ceiling, observed, expected = case.deadline_conversions[-1]
+                case.assertEqual((maximum, ceiling), (45, final))
+                case.assertLess(local, observed / O.NS)
+                case.assertEqual(deadline, expected)
+                remaining = max(0, deadline - case.nanoseconds / O.NS)
+                case.assertEqual((grace, kill_wait), (min(5, remaining), min(5, max(0, remaining - grace))))
+                case.drains.append({"grace": grace, "kill_wait": kill_wait, "deadline": deadline})
                 case.after_drain()
                 return []
             def close(self):
@@ -955,7 +967,59 @@ class ControllerTests(HttpFixtures, OfflineCase):
         self.assertTrue(self.scopes[0].closed)
         self.assertFalse(self.child_errors)
         self.assertEqual(len(self.admissions), 1)
-        self.assertEqual(self.drains, [{"grace": 0, "kill_wait": 0}])
+        self.assertEqual(self.drains, [])
+
+    def test_raw_expiry_after_drain_cannot_accept_native_retirement(self):
+        def late():
+            local = self.nanoseconds / O.NS
+            self.nanoseconds = 1120 * O.NS
+            self.stack.enter_context(patch.object(S.time, "monotonic", return_value=local))
+        self.after_drain = late
+        with self.assertRaises(O.OriginError):
+            S.prepare_originals([])
+        self.assertEqual(len(self.drains), 1)
+        self.assertTrue(self.scopes[0].closed)
+        self.assertFalse(self.child_errors)
+
+    def test_bound_failure_skips_drain_and_preserves_original_error_and_close(self):
+        first = O.OriginError("MODELED_DRAIN_BOUND_FAILURE")
+        original, armed = O.Fence.deadline, [False]
+        self.after_child = lambda: armed.__setitem__(0, True)
+        def deadline(fence, maximum, **kwargs):
+            if maximum == 45 and kwargs.get("limit") is not None and kwargs.get("final") and armed[0]:
+                raise first
+            return original(fence, maximum, **kwargs)
+        with patch.object(O.Fence, "deadline", deadline), self.assertRaises(O.OriginError) as caught:
+            S.prepare_originals([])
+        self.assertIs(caught.exception, first)
+        self.assertEqual(self.drains, [])
+        self.assertTrue(self.scopes[0].closed)
+
+    def test_postclose_raw_observation_cannot_cross_the_saved_local_drain_end(self):
+        close, observe = S.Owner.close_one, O.clocks.observe
+        state = {"armed": False, "crossed": False}
+        def closed(owner, resource):
+            result = close(owner, resource)
+            if resource in self.scopes and self.drains and not state["crossed"]:
+                state["armed"] = True
+            return result
+        def later():
+            if state["armed"]:
+                state.update(armed=False, crossed=True)
+                self.nanoseconds = math.ceil(self.drains[-1]["deadline"] * O.NS)
+                self.assertLess(self.nanoseconds, 1090 * O.NS)
+            return observe()
+        with patch.object(S.Owner, "close_one", closed), \
+                patch.object(O.clocks, "observe", side_effect=later), self.assertRaises(S.posix.EvidenceError):
+            S.prepare_originals([])
+        self.assertTrue(state["crossed"])
+        self.assertTrue(self.scopes[0].closed)
+        self.assertTrue(S.QUARANTINE)
+        owner = S.QUARANTINE[-1]
+        self.assertTrue(owner.unknown)
+        captures = [row for row in owner.resources if row["label"] in ("stdout", "stderr")]
+        self.assertEqual(len(captures), 2)
+        self.assertTrue(all(not row["attempted"] and not row["closed"] for row in captures))
 
     def test_near_work_return_keeps_original_capture_lifetime_through_known_drain(self):
         def approach_work():

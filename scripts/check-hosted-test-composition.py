@@ -41,13 +41,16 @@ from pathlib import Path
 # The 2026-09-20 actual-main-merge marker and typed Desktop packaging intent
 # received independent exact implementation review before this controller-only
 # update. All six ordinary tasks and FULL/custody/HOLD requirements remain.
+# The separately reviewed 19b4f480 bootstrap/consume path alignment requires
+# this seed-only expectation update; its original omission failed this gate.
+# No supplier behavior, other pin or runtime/HOLD acceptance changes here.
 EXPECTED = {
     "scripts/run-hosted-test-custody.py": "e0c4a4aa8c742643253a8e9e47928f8c249837b00f3ffcd2fd8329d0cf29aee2",
     "scripts/hosted_full_supplements.py": "9f5c6a0f410c00ee7531664e95dab233c0febc6740dd6a8b1005e3fc3a64310c",
     "scripts/hosted_primary_abi.py": "ff168e70c31bc23b1c6e545a32d0c4217f9a212f7244a2c34571eee09f761553",
     "scripts/run-platform-tests.py": "1a3e6f093abe3a79bfbc2d3f426f26e71db77c6f72034effeb2e296dc833c271",
     "scripts/run-audit-command.py": "bba4d4137571c32205fbf0bc1ff3d7d4682eff6d0f6ed5a6e92af8d6415cc639",
-    "scripts/hosted_dependency_seed_files.py": "93991406fab4cc91d09a8920a971244956f2180c99a2aa2076a41a9ab65dd8cd",
+    "scripts/hosted_dependency_seed_files.py": "f7f430ddb95fa1b13a487d48101ccdc46ff88e2ae8789a1a90772f0b6cb78968",
     "scripts/hosted_canonical_python.py": "e93b7d0cb32b847d8cca57b074c9a9afae902ef5d0e2e0e5991c599ef772a2b0",
 }
 LIMIT = 1024 * 1024

@@ -2259,9 +2259,9 @@ completed owner key/recovery/environment setup is not reopened.
 
 [`audit_processes.py`](../../scripts/audit_processes.py) offers a separate
 keyword-only `drain(..., deadline=original_monotonic_end)` route. Calls without
-that keyword, including current bootstrap callers, retain their existing
-behavior; this API alone does **not** fix their timing acceptance or retire a
-provider. The caller must conservatively bind the supplied end to its original
+that keyword retain their existing behavior; this API alone does **not** fix
+caller timing acceptance or retire a provider. The caller must conservatively
+bind the supplied end to its original
 admitted clock domain, never create a fresh allowance.
 
 Explicit mode validates finite nonboolean inputs and nonnegative durations,
@@ -2291,6 +2291,45 @@ and postcheck that same end before accepting custody. No bare `scope.close()` or
 file lock proves writer retirement. The [focused fake-clock/native-call controls](../../scripts/tests/audit-process-drain-deadline-test.py)
 are standalone offline models, not native/process/provider execution or automatic
 CI registration. Both HOLDs, NativeFile900/Snapshot576MiB and unadmitted5400 remain.
+
+### Dormant bootstrap drain callers
+
+The original service-acquisition phase, recipient/initializer finalizer and
+configuration-producer finalizer now pass their saved, conservatively converted
+**LOCAL monotonic end** to the optional drain route. Existing `Fence.deadline`
+and `cleanup_deadline(45)` conversions intersect the original RAW phase/job
+fences and original LOCAL caps; no RAW nanoseconds, remaining duration or new
+`now + remaining` value is substituted. Missing/failed final admission no longer
+falls back to an unbounded `drain(0, 0)`. It skips native drain, preserves the
+first failure/UNKNOWN, and still attempts the independently known scope's once-
+only close. A skipped producer drain is not recorded as attempted or retired.
+
+After drain and scope close, the same saved LOCAL end and original RAW phase are
+checked again before retirement can be accepted. The saved LOCAL comparison
+follows the RAW/window sample: time spent obtaining that sample cannot escape
+the tighter original conversion merely by fitting a broader phase cap.
+Late closure retains its real
+close flags without becoming successful retirement; UNKNOWN still blocks capture
+readback. Existing final capture/owner closure checks and original errors remain.
+`NativeGitQueries` opts in only for queries begun with the existing owner-fence
+pair, using their already fixed `final_end`. Work expiry/cancellation does not
+replace valid final cleanup with a new work-admission check. No-owner queries
+keep the exact old two-keyword drain route. This supplies neither credentials to
+Git queries nor a new query/phase/job allowance.
+
+Focused controls reuse the existing tiny-file bootstrap/query fixtures with
+modeled native scopes, deliberate deadline arguments, missing-start refusals and
+late RAW/LOCAL drain/close cases. Their positive producer composition exposed a
+separate original path-binding mismatch: a requested `PurePath` was retained
+where the closed graph requires the native opener's exact `Path` type. The
+producer now pins the originally acquired backend path while still checking its
+value/identity against the requested route. The graph's exact type/value/identity
+checks are unchanged; post-close replacements still refuse. This is a source
+composition correction, not a native provider observation.
+These are not native execution or a provider
+supervisor. Both ordinary HOLDs, provider180, NativeFile900/Snapshot576MiB and
+proposed5400's UNADMITTED/UNMEASURED status remain. No workflow dispatch or genuine
+provider/retirement/custody/scheduling qualification follows from this wiring.
 
 ## Verification and remaining qualification
 

@@ -239,7 +239,10 @@ class ParentModels(R.ReadmissionModels):
             def discover(self):
                 return case.parent_descendants
 
-            def drain(self, *, grace, kill_wait):
+            def drain(self, *, grace, kill_wait, deadline):
+                self.drain_deadline = deadline
+                window = case.parent().window
+                case.assertTrue(window.local_last < deadline <= window.final_local)
                 case.parent_events.append("drain")
                 case.assertTrue(0 <= grace <= 5 and 0 <= kill_wait <= 5)
                 case.parent_after_drain()
@@ -631,7 +634,41 @@ class ParentModels(R.ReadmissionModels):
             self.failed(O.OriginError, "PARENT_EXPIRED")
             self.assertTrue(self.parent_scopes[0].closed)
             self.assertTrue(self.parent().unknown)
+            self.assertFalse(self.parent().native_retired)
             self.assertNotIn("read:stdout.log", self.parent_events)
+
+    def test_local_drain_return_equality_is_not_retirement_even_with_timely_raw(self):
+        with self.prepared():
+            def late():
+                self.stack.enter_context(patch.object(S.time, "monotonic",
+                    return_value=self.parent_scopes[0].drain_deadline))
+            self.parent_after_drain = late
+            self.failed(Exception)
+            self.assertFalse(self.parent().native_retired)
+            self.assertTrue(self.parent().unknown)
+            self.assertEqual(self.parent_scopes[0].close_count, 1)
+            self.assertNotIn("read:stdout.log", self.parent_events)
+
+    def test_local_scope_close_equality_keeps_close_but_refuses_retirement(self):
+        with self.prepared():
+            def late():
+                self.stack.enter_context(patch.object(S.time, "monotonic",
+                    return_value=self.parent_scopes[0].drain_deadline))
+            self.parent_scope_close = late
+            self.failed(Exception)
+            self.assertFalse(self.parent().native_retired)
+            self.assertTrue(self.parent().row["scopeClosed"])
+            self.assertEqual(self.parent_scopes[0].close_count, 1)
+            self.assertNotIn("read:stdout.log", self.parent_events)
+
+    def test_missing_final_start_skips_drain_preserves_first_error_and_known_close(self):
+        first = FalseyFailure("MODELED_MISSING_FINAL_START")
+        with self.prepared(), patch.object(S._RecipientParentWindow, "begin_final", side_effect=first):
+            self.assertIs(self.failed(FalseyFailure), first)
+            self.assertNotIn("drain", self.parent_events)
+            self.assertEqual(self.parent_scopes[0].close_count, 1)
+            self.assertFalse(self.parent().native_retired)
+            self.assertTrue(self.parent().unknown)
 
     def test_delayed_final_start_cannot_renew_first285(self):
         def probe(parent):

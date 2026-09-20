@@ -78,6 +78,54 @@ class OwnerFenceTests(unittest.TestCase):
         owner.close()
         self.assertEqual(owner.io_deadline, 146.0)
 
+    def test_drain_receives_fixed_query_final_end_not_remaining_time_or_new_allowance(self):
+        for pair, expected in (((105.0, 112.0), 112.0), ((1000.0, 2000.0), 160.0)):
+            with self.subTest(pair=pair):
+                self.state = self.base / ("bounded-" + str(expected))
+                owner = self.owner(pair)
+                self.assertEqual(self.query(owner), self.out)
+                scope = next(row["owner"] for row in owner.resources if row["label"] == "native-scope")
+                self.assertEqual(scope.drain_deadline, expected)
+                owner.close()
+
+    def test_default_drain_keeps_exact_no_deadline_keyword_shape(self):
+        owner, calls = self.owner(None), []
+        original = MODELS.Scope.drain
+        def drain(scope, **kwargs):
+            calls.append(dict(kwargs))
+            return original(scope, **kwargs)
+        with patch.object(MODELS.Scope, "drain", drain):
+            self.assertEqual(self.query(owner), self.out)
+        self.assertEqual(calls, [{"grace": 0, "kill_wait": 5}])
+        owner.close()
+
+    def test_query_cannot_change_bounded_drain_into_default_or_replace_its_saved_end(self):
+        owner = self.owner()
+        def change():
+            owner._owner_deadlines = None
+            owner.io_deadline = 10000.0
+            return 0
+        self.poll_callback = change
+        self.assertEqual(self.query(owner), self.out)
+        scope = next(row["owner"] for row in owner.resources if row["label"] == "native-scope")
+        self.assertEqual(scope.drain_deadline, 112.0)
+        owner.close()
+
+    def test_late_bounded_empty_drain_is_unknown_not_readback_permission(self):
+        owner = self.owner()
+        original = MODELS.Scope.drain
+        def late(scope, **kwargs):
+            result = original(scope, **kwargs)
+            self.clock.now = kwargs["deadline"]
+            return result
+        with patch.object(MODELS.Scope, "drain", late), self.assertRaises(Q.QueryError):
+            self.query(owner)
+        self.assertTrue(owner.unknown)
+        self.assertEqual(owner.records[0]["retirement"], "UNKNOWN")
+        scope = next(row["owner"] for row in owner.resources if row["label"] == "native-scope")
+        self.assertTrue(scope.closed)
+        self.close_failed(owner)
+
     def test_work_fence_stops_polling_without_renewing_final_window(self):
         self.exit_code = None
         owner = self.owner((100.05, 101.0))
@@ -255,7 +303,7 @@ class OwnerFenceTests(unittest.TestCase):
         self.assertFalse((self.base / 'late').exists())
         self.close_failed(owner)
 
-    def test_late_native_drain_keeps_failure_and_closes_original_resources(self):
+    def test_late_native_drain_closes_known_scope_but_quarantines_uncertain_writer_pins(self):
         owner = self.owner()
         drain = MODELS.Scope.drain
         def delayed_drain(scope, **kwargs):
@@ -267,7 +315,14 @@ class OwnerFenceTests(unittest.TestCase):
         self.assertEqual(owner.records[0]['result'], 'HOLD')
         self.assertTrue(any(event[0] == 'scope-close' for event in self.events))
         self.close_failed(owner)
-        self.assertTrue(all(row['closed'] for row in owner.resources))
+        self.assertTrue(owner.unknown)
+        self.assertIn(owner, Q.QUARANTINE)
+        self.assertEqual(owner.records[0]['retirement'], 'UNKNOWN')
+        scope = next(row for row in owner.resources if row['label'] == 'native-scope')
+        self.assertTrue(scope['closeAttempted'] and scope['closed'])
+        captures = [row for row in owner.resources if row['label'] in ('stdout', 'stderr')]
+        self.assertEqual(len(captures), 2)
+        self.assertTrue(all(not row['closeAttempted'] and not row['closed'] for row in captures))
         self.assertFalse((self.state / 'session-result.json').exists())
 
     def test_unknown_retirement_still_quarantines_instead_of_forced_cleanup(self):

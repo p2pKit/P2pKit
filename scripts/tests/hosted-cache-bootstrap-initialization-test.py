@@ -145,7 +145,10 @@ class InitModels(P.ParentModels):
             def discover(self):
                 return []
 
-            def drain(self, *, grace, kill_wait):
+            def drain(self, *, grace, kill_wait, deadline):
+                self.drain_deadline = deadline
+                window = case.initializer().window
+                case.assertTrue(window.local_last < deadline <= window.final_local)
                 case.assertTrue(0 <= grace <= 5 and 0 <= kill_wait <= 5)
                 case.init_events.append("drain")
                 case.init_drain()
@@ -347,6 +350,19 @@ class InitModels(P.ParentModels):
             self.failed_init("PARENT_EXPIRED")
             self.assertEqual(self.initializer().window.phase, "FINAL")
             self.assertTrue(self.init_scopes[0].closed)
+            self.assertFalse(self.initializer().native_retired)
+
+    def test_initializer_local_scope_close_equality_refuses_retirement_and_readback(self):
+        with self.prepared():
+            def late():
+                self.stack.enter_context(patch.object(S.time, "monotonic",
+                    return_value=self.init_scopes[0].drain_deadline))
+            self.init_close = late
+            self.failed_init()
+            self.assertFalse(self.initializer().native_retired)
+            self.assertTrue(self.initializer().row["scopeClosed"])
+            self.assertEqual(self.init_scopes[0].close_count, 1)
+            self.assertIsNone(self.initializer().result)
 
     def test_read30_equality_cannot_retain_successful_pending(self):
         with self.prepared():

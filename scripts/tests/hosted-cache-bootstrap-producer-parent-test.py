@@ -21,7 +21,7 @@ import importlib.util
 import inspect
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import signal
 import sys
 from types import SimpleNamespace
@@ -286,6 +286,12 @@ class ProducerParentModels(unittest.TestCase):
         parent.live().end()
         self.events.append("modeled-query-return")
         self.on_admit(parent)
+        # The later original-result graph pins the CLOSED query supplier too.
+        # Reuse the real admission parent's existing modeled supplier, rather
+        # than inventing a query tuple or omitting it from production's graph.
+        with patch.object(self.s.query, "NativeGitQueries", self.modeled_query_supplier()), \
+                patch.object(self.s.bootstrap, "admit", return_value=self.f.admitted):
+            self.actual_admit(parent)
         parent.live().end()
 
     def model_descriptor(self, admission, canonical, *, invocation, ancestor_invocations):
@@ -358,8 +364,10 @@ class ProducerParentModels(unittest.TestCase):
             def discover(self):
                 test.events.append("modeled-discover")
                 return test.survivors
-            def drain(self, *, grace, kill_wait):
-                self.drains.append((grace, kill_wait))
+            def drain(self, *, grace, kill_wait, deadline):
+                frame = test.frame()
+                test.assertTrue(frame.local_last < deadline <= frame.phases[-1].local_end)
+                self.drains.append((grace, kill_wait, deadline))
                 test.events.append("modeled-drain")
                 test.on_drain(self)
                 return []
@@ -412,6 +420,29 @@ class ProducerParentModels(unittest.TestCase):
         self.assertFalse(frame.cancellation_attempted)
         self.assertEqual(tuple((self.h.directory / "retained").iterdir()), ())
         s._producer_predecessor_checked(self.parent)
+
+    def test_original_result_pins_native_path_type_and_refuses_closed_path_mutations(self):
+        self.run_parent()
+        s, frame = self.s, self.frame()
+        pin = s._producer_original_result(self.parent)
+        directory = next(row[1] for row in frame.handles if row[0] == "initializer")
+        self.assertTrue(directory.closed)
+        self.assertIs(type(directory.path), type(self.f.session))
+        self.assertIs(next(row[2] for row in frame.handles if row[0] == "initializer"), directory.path)
+        self.assertTrue(all(type(row[2]) is type(row[1].path) and row[2] == row[1].path for row in frame.handles))
+        # The real grammar supplies a PurePath; equal path values must not make
+        # a later type replacement become the original native witness.
+        pure = PurePosixPath(directory.path)
+        self.assertEqual(pure, directory.path)
+        self.assertIsNot(type(pure), type(directory.path))
+        mutations = (("path", pure), ("path", directory.path.with_name("changed-model-path")),
+                     ("identity", (directory.identity[0], directory.identity[1] + 1)))
+        for field, value in mutations:
+            with self.subTest(field=field, value_type=type(value).__name__), \
+                    patch.object(directory, field, value), \
+                    self.assertRaisesRegex(O.OriginError, "^BOOTSTRAP_STAGING_CLOSED_PATH_CHANGED$"):
+                s._producer_original_result(self.parent)
+        self.assertIs(s._producer_original_result(self.parent), pin)
 
     def test_original_claim_precedes_fixed_tuple7_intent_without_extending_initializer_tuple6(self):
         p = self.reserve_model()
@@ -803,8 +834,94 @@ class ProducerParentModels(unittest.TestCase):
             return advance(window, name)
         with patch.object(self.s._ProducerWindow, "advance", failed_return):
             self.assertIs(self.failed(kind=FalseyFailure), first)
-        self.assertEqual(self.scopes[0].drains, [(0, 0)])
+        self.assertEqual(self.scopes[0].drains, [])
+        self.assertFalse(self.frame().native.drain_attempted)
+        self.assertEqual(self.scopes[0].close_count, 1)
         self.assertFalse(self.frame().result)
+
+    def test_original_drain_local_end_rejects_late_empty_result_with_timely_raw(self):
+        def late(scope):
+            self.f.local = scope.drains[-1][2]
+        self.on_drain = late
+        self.failed()
+        self.assertFalse(self.frame().native.retired)
+        self.assertTrue(self.frame().unknown)
+        self.assertEqual(self.scopes[0].close_count, 1)
+        self.assertFalse(any(capture.readback is not None for capture in self.frame().captures))
+
+    def test_original_drain_raw_end_rejects_late_empty_result_with_timely_local(self):
+        self.on_drain = lambda _scope: setattr(self.f, "ns", self.frame().phases[-1].end)
+        self.failed("PHASE_EXPIRED")
+        self.assertFalse(self.frame().native.retired)
+        self.assertTrue(self.frame().unknown)
+        self.assertEqual(self.scopes[0].close_count, 1)
+
+    def test_late_scope_close_preserves_actual_once_close_but_not_retirement(self):
+        close = self.s._ProducerParent.close_resource
+        def late(parent, pin):
+            result = close(parent, pin)
+            if pin.label == "native-scope":
+                self.f.local = self.scopes[0].drains[-1][2]
+            return result
+        with patch.object(self.s._ProducerParent, "close_resource", late):
+            self.failed()
+        self.assertEqual(self.scopes[0].close_count, 1)
+        self.assertTrue(self.parent.resource("native-scope").closed)
+        self.assertFalse(self.frame().native.retired)
+        self.assertTrue(self.frame().unknown)
+
+    def saved_end_crossing(self, *, after_close):
+        s = self.s
+        cleanup, close, observe = s._ProducerWindow.cleanup_deadline, s._ProducerParent.close_resource, O.clocks.observe
+        state = {"converting": False, "shortened": False, "armed": False, "crossed": False}
+        def reading():
+            if state["converting"] and not state["shortened"]:
+                # Real converter, modeled one-second RAW observation cost.
+                self.f.local += 1
+                self.f.ns += NS
+                state["shortened"] = True
+            if state["armed"]:
+                state.update(armed=False, crossed=True)
+                self.f.local = state["end"]
+            return observe()
+        def converted(window, maximum):
+            state["converting"] = True
+            try:
+                end = cleanup(window, maximum)
+            finally:
+                state["converting"] = False
+            state["end"] = end
+            self.assertLess(end, self.frame().phases[-1].local_end)
+            return end
+        def closed(parent, pin):
+            result = close(parent, pin)
+            if after_close and pin.label == "native-scope" and not state["crossed"]:
+                state["armed"] = True
+            return result
+        if not after_close:
+            self.on_drain = lambda _scope: state.update(armed=True)
+        failure = None
+        with patch.object(s._ProducerWindow, "cleanup_deadline", converted), \
+                patch.object(s._ProducerParent, "close_resource", closed), \
+                patch.object(O.clocks, "observe", side_effect=reading):
+            try:
+                self.run_parent()
+            except BaseException as error:
+                failure = error
+        self.assertTrue(state["shortened"] and state["crossed"])
+        self.assertFalse(self.frame().native.retired)
+        self.assertTrue(self.frame().unknown)
+        self.assertEqual(self.scopes[0].close_count, 1)
+        self.assertFalse(any(capture.readback is not None for capture in self.frame().captures))
+        self.assertIsInstance(failure, s.posix.EvidenceError)
+        self.assertIs(self.frame().original, failure)
+        self.assertEqual(self.frame().state, "FAILED")
+
+    def test_postdrain_raw_sample_cannot_cross_saved_local_end_inside_broader_phase(self):
+        self.saved_end_crossing(after_close=False)
+
+    def test_postclose_raw_sample_cannot_cross_saved_local_end_inside_broader_phase(self):
+        self.saved_end_crossing(after_close=True)
 
     def test_same_byte_canonical_replacement_after_first_read_cannot_supply_original_custody(self):
         reread, replaced = self.s._ProducerParent.reread, []

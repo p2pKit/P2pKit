@@ -83,7 +83,8 @@ class Scope:
             raise self.case.discovery_error
         return self.case.live
 
-    def drain(self, *, grace, kill_wait):
+    def drain(self, *, grace, kill_wait, deadline=None):
+        self.drain_deadline = deadline
         self.case.events.append(("drain", self, grace, kill_wait))
         if self.case.drain_error is not None:
             raise self.case.drain_error

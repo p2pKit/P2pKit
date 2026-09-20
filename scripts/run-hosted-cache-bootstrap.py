@@ -985,24 +985,35 @@ def phase(owner, private, context_raw, token, fence):
             scope = next((item["owner"] for item in owner.resources[resource_start:]
                           if item["label"] == "native-scope"), None)
         if scope is not None:
+            drain_end = None
             try:
                 try:
-                    remaining = (final_end - fence.now(final=True, limit=final_end)) / origin.NS
+                    drain_end = min(owner.local_end, fence.deadline(45, final=True, limit=final_end))
+                    remaining = max(0, drain_end - time.monotonic())
                 except BaseException as error:
                     owner.error("drain-fence", error)
-                    remaining = 0
+                    raise
                 grace = min(5, remaining)
                 kill_wait = min(5, max(0, remaining - grace))
-                row["survivors"] = scope.drain(grace=grace, kill_wait=kill_wait)
+                row["survivors"] = scope.drain(grace=grace, kill_wait=kill_wait, deadline=drain_end)
                 require(row["survivors"] == [], "BOOTSTRAP_SERVICE_SURVIVORS")
                 row["ownership"] = scope.description()
                 require(row["ownership"].get("discoveryErrors") == [], "BOOTSTRAP_SERVICE_DISCOVERY_UNKNOWN")
                 require(preparer_identity(scope, fence.clock.role) == row["preparerIdentity"],
                         "BOOTSTRAP_PREPARER_LIFETIME_CHANGED")
+                fence.now(final=True, limit=final_end)
+                posix._deadline(drain_end)  # Include time spent observing the original RAW fence.
                 native_known = True
             except BaseException as error:
                 owner.error("service-drain", error, unknown=True)
             owner.close_one(scope)
+            if drain_end is not None:
+                try:
+                    fence.now(final=True, limit=final_end)
+                    posix._deadline(drain_end)
+                except BaseException as error:
+                    native_known = False
+                    owner.error("service-drain-close-fence", error, unknown=True)
             row["scopeCloseAttempted"] = next(item["attempted"] for item in owner.resources if item["owner"] is scope)
             row["scopeClosed"] = next(item["closed"] for item in owner.resources if item["owner"] is scope)
         elif row["scopeAttempted"]:
@@ -3709,16 +3720,18 @@ class _RecipientParent:
             self.error("recipient-scope-reference", error, unknown=True)
             return
         if scope is not None:
+            drain_end = None
             try:
                 try:
                     require(final_ready, "BOOTSTRAP_RECIPIENT_FINAL_START_FAILED")
-                    end = window.cleanup_deadline(45)
-                    remaining = max(0, end - window.local_now(cleanup=True))
+                    drain_end = window.cleanup_deadline(45)
+                    remaining = max(0, drain_end - window.local_now(cleanup=True))
                 except BaseException as error:
                     self.error("recipient-drain-fence", error)
-                    remaining = 0
+                    raise
                 grace = min(5, remaining)
-                self.row["survivors"] = scope.drain(grace=grace, kill_wait=min(5, max(0, remaining - grace)))
+                self.row["survivors"] = scope.drain(grace=grace, kill_wait=min(5, max(0, remaining - grace)),
+                                                   deadline=drain_end)
                 self.row["ownership"] = origin.parse(origin.encoded(scope.description()))
                 require(self.row["survivors"] == [] and self.row["ownership"].get("discoveryErrors") == [],
                         "BOOTSTRAP_RECIPIENT_NATIVE_DRAIN_UNKNOWN")
@@ -3731,12 +3744,21 @@ class _RecipientParent:
                             "BOOTSTRAP_RECIPIENT_PARENT_LIFETIME_CHANGED")
                 if "leader" in self.row:
                     native_record(self.row["ownership"], self.row, self.row["leader"], self.row["launchArgv"])
+                window.now(final=True)
+                posix._deadline(drain_end)
                 self.native_retired = True
             except BaseException as error:
                 self.error("recipient-drain", error, unknown=True)
             attempted, closed = self.close_phase_resource("native-scope")
             self.row.update(scopeCloseAttempted=attempted, scopeClosed=closed)
             self.native_retired &= closed
+            if drain_end is not None:
+                try:
+                    window.now(final=True)
+                    posix._deadline(drain_end)
+                except BaseException as error:
+                    self.native_retired = False
+                    self.error("recipient-drain-close-fence", error, unknown=True)
         elif self.row.get("scopeAttempted"):
             self.error("recipient-construction", origin.OriginError("BOOTSTRAP_RECIPIENT_SCOPE_UNKNOWN"), unknown=True)
         else:
@@ -6673,7 +6695,10 @@ class _ProducerParent:
         if found is None:
             directory = owner.open(path) if parent is None else owner.child(parent, path.name, create=create)
             actual = tuple(directory_identity(list(directory.identity), frame.limits.clock[0]))
-            row = (key, directory, path, actual)
+            # The requested grammar may use PurePath; the native opener returns
+            # Path. Pin the ORIGINAL backend path, not the request's type. The
+            # value/ownership checks below still bind it to the requested route.
+            row = (key, directory, directory.path, actual)
             _update_producer(self, handles=(*_producer_frame(self).handles, row))
             self.handles[key] = directory
             found = row
@@ -7318,21 +7343,22 @@ class _ProducerParent:
             self.error("producer-final", error)
         pin = self.resource("native-scope")
         if pin is not None:
+            drain_end = None
             try:
                 scope = self.native_scope()
-                remaining = 0
-                if final_ready:
-                    try:
-                        end = frame.window.cleanup_deadline(45)
-                        local = staging._local(time.monotonic())
-                        require(local >= _producer_frame(self).local_last, "BOOTSTRAP_PRODUCER_LOCAL_BACKWARDS")
-                        _update_producer(self, local_last=local)
-                        remaining = max(0, end - local)
-                    except BaseException as error:
-                        self.error("producer-drain-fence", error)
+                try:
+                    require(final_ready, "BOOTSTRAP_PRODUCER_FINAL_START_FAILED")
+                    drain_end = frame.window.cleanup_deadline(45)
+                    local = staging._local(time.monotonic())
+                    require(local >= _producer_frame(self).local_last, "BOOTSTRAP_PRODUCER_LOCAL_BACKWARDS")
+                    _update_producer(self, local_last=local)
+                    remaining = max(0, drain_end - local)
+                except BaseException as error:
+                    self.error("producer-drain-fence", error)
+                    raise
                 _producer_native(self, drain_attempted=True)
                 grace = min(5, remaining)
-                survivors = scope.drain(grace=grace, kill_wait=min(5, max(0, remaining - grace)))
+                survivors = scope.drain(grace=grace, kill_wait=min(5, max(0, remaining - grace)), deadline=drain_end)
                 _producer_native(self, survivors_raw=origin.encoded({"survivors": survivors}))
                 terminal = origin.encoded(scope.description())
                 _producer_native(self, terminal_raw=terminal)
@@ -7347,6 +7373,8 @@ class _ProducerParent:
                         origin.parse(current.native.leader_raw), list(current.native.argv))
                     require(origin.parse(current.native.birth_raw)["launches"] == origin.parse(terminal)["launches"],
                             "BOOTSTRAP_PRODUCER_NATIVE_LAUNCH_CHANGED")
+                frame.window.sample(cleanup=True)
+                posix._deadline(drain_end)
                 _producer_native(self, retired=True)
             except BaseException as error:
                 self.error("producer-native-drain", error, unknown=True)
@@ -7359,6 +7387,13 @@ class _ProducerParent:
                 self.error("producer-native-close", error, unknown=True)
             if not self.resource("native-scope").closed:
                 _producer_native(self, retired=False)
+            if drain_end is not None:
+                try:
+                    frame.window.sample(cleanup=True)
+                    posix._deadline(drain_end)
+                except BaseException as error:
+                    _producer_native(self, retired=False)
+                    self.error("producer-drain-close-fence", error, unknown=True)
         elif frame.native.scope_attempted:
             self.error("producer-native-allocation", origin.OriginError("BOOTSTRAP_PRODUCER_SCOPE_UNKNOWN"), unknown=True)
         else:

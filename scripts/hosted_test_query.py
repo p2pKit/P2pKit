@@ -481,6 +481,7 @@ class NativeGitQueries:
             self._error(None, "query-input", error)
             self._raise_failure()
         invocation, started = uuid.uuid4().hex, time.monotonic()
+        bounded_drain = self._owner_deadlines is not None
         end = self._cap(started + timeout_seconds, final=False)
         final_end = self._cap(started + timeout_seconds + FINALIZATION_SECONDS, final=True)
         self.io_deadline = final_end
@@ -541,8 +542,13 @@ class NativeGitQueries:
             native_known = not row["scopeAttempted"]
             if scope is not None:
                 try:
-                    survivors = scope.drain(grace=0, kill_wait=5)
+                    if bounded_drain:
+                        survivors = scope.drain(grace=0, kill_wait=5, deadline=final_end)
+                    else:
+                        survivors = scope.drain(grace=0, kill_wait=5)
                     row["ownedSurvivors"] = survivors
+                    if bounded_drain:
+                        posix_files._deadline(final_end)
                     require(survivors == [], "QUERY_SURVIVORS")
                     native_known = True
                 except BaseException as error:
