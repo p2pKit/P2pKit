@@ -8,9 +8,10 @@ even when supplied otherwise coherent ordinary Desktop/FULL receipt models.
 """
 from __future__ import annotations
 
+import ast
 import copy
 import importlib.util
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import sys
 from types import SimpleNamespace
 import unittest
@@ -32,7 +33,7 @@ SPEC.loader.exec_module(I)
 class BootstrapCohort(I.OfflineCase):
     def setUp(self):
         super().setUp()
-        self.session = ROOT.parent / "synthetic-no-directory" / "session"
+        self.runner_temp = ROOT.parent / "synthetic-no-directory"
         self.bytes = b"synthetic allowlisted bytes, not a dependency"
         self.xml = ('<?xml version="1.0" encoding="UTF-8"?><verification-metadata xmlns="' +
             S.authority.NAMESPACE + '" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
@@ -55,14 +56,17 @@ class BootstrapCohort(I.OfflineCase):
         self.env.update(RUNNER_OS=system, RUNNER_ARCH=arch)
         self.event["inputs"]["selection"] = name
         self.raw = self.admit().record
+        self.session = self.runner_temp / ("p2pkit-cache-originals-" + self.env["GITHUB_RUN_ID"] + "-" +
+            self.env["GITHUB_RUN_ATTEMPT"] + "-" + name + "-productive") / "initializer"
 
     def stage(self, raw=None, profile=None, role=None):
         raw = self.raw if raw is None else raw
         profile, role = profile or self.profile, role or self.role
-        path = S.stage_path(self.session, profile, role)
         # Independently shaped records let negative controls reach every real
         # validator without an earlier helper filtering out the bad input.
         value = S.record(raw)
+        parent = self.session.parent.parent if value.get("scope") == B.SCOPE else self.session.parent
+        path = parent / ("p2pkit-dependency-seed-" + profile + "-" + role)
         return {"schema": 1, "scope": "DEPENDENCY_SEED_STAGING_V1", "profile": profile, "role": role,
                 "source": value["source"], "github": value["github"], "admissionSha256": S.digest(raw),
                 "container": str(path), "restoreHome": str(path / "restore-home"),
@@ -142,6 +146,111 @@ class BootstrapCohort(I.OfflineCase):
                 self.assertEqual(S.record(self.raw)["profile"], "cache-bootstrap")
                 self.assertNotIn("jobBudgetSha256", plan)
                 self.assertNotIn("primaryAbiAccounting", plan)
+
+    def test_all_six_bootstrap_and_ordinary_plans_share_the_literal_provider_path(self):
+        for row in I.SELECTIONS:
+            with self.subTest(selection=row[0]):
+                self.configure(row)
+                bootstrap_plan = self.plan()
+                self.assertEqual(S.stage_path(self.session, self.profile, self.role, admitted_raw=self.raw),
+                                 Path(self.stage()["container"]))
+                ordinary = S.encoded({"source": S.record(self.raw)["source"],
+                                      "github": {"runId": "123", "runAttempt": "1"}})
+                self.session = self.runner_temp / ("p2pkit-test-" + self.profile + "-123-1-" + self.role)
+                ordinary_plan = self.plan(self.stage(ordinary), ordinary, mode="consume")
+                expected = self.runner_temp / ("p2pkit-dependency-seed-" + self.profile + "-" + self.role)
+                self.assertEqual(ordinary_plan["path"], str(expected / "restore-home/caches/modules-2/files-2.1"))
+                for key in ("path", "restoreHome", "key", "provider"):
+                    self.assertEqual(bootstrap_plan[key], ordinary_plan[key])
+                for key in ("session", "admissionSha256", "stagingSha256"):
+                    self.assertNotEqual(bootstrap_plan[key], ordinary_plan[key])
+
+    def test_new_runs_keep_the_byte_target_not_the_original_provenance(self):
+        for row in I.SELECTIONS:
+            self.env.update(GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="1")
+            self.configure(row)
+            original_session, original_stage, original_plan = self.session, self.stage(), self.plan()
+            for run, attempt in (("124", "1"), ("123", "2")):
+                with self.subTest(selection=row[0], run=run, attempt=attempt):
+                    self.env.update(GITHUB_RUN_ID=run, GITHUB_RUN_ATTEMPT=attempt)
+                    self.configure(row)
+                    changed = self.plan()
+                    self.assertEqual(changed["path"], original_plan["path"])
+                    self.assertEqual(changed["key"], original_plan["key"])
+                    for key in ("session", "github", "admissionSha256", "stagingSha256"):
+                        self.assertNotEqual(changed[key], original_plan[key])
+                    with self.assertRaisesRegex(S.SeedError, "BOOTSTRAP_SESSION"):
+                        S.stage_path(original_session, self.profile, self.role, admitted_raw=self.raw)
+                    with self.assertRaisesRegex(S.SeedError, "STAGING_RECORD_CHANGED"):
+                        self.plan(original_stage)
+
+    def test_explicit_admission_not_a_filename_selects_the_bootstrap_parent(self):
+        target = "p2pkit-dependency-seed-" + self.profile + "-" + self.role
+        ordinary = S.encoded({"source": S.record(self.raw)["source"],
+                              "github": {"runId": "123", "runAttempt": "1"}})
+        self.assertEqual(S.stage_path(self.session, self.profile, self.role), self.session.parent / target)
+        self.assertEqual(S.stage_path(self.session, self.profile, self.role, admitted_raw=ordinary),
+                         self.session.parent / target)
+        self.assertEqual(S.stage_path(self.session, self.profile, self.role, admitted_raw=self.raw),
+                         self.runner_temp / target)
+        with self.assertRaisesRegex(S.SeedError, "BOOTSTRAP"):
+            S.stage_path(self.session, self.profile, self.role, admitted_raw=b"")
+
+    def test_bootstrap_session_requires_exact_run_attempt_selection_and_initializer(self):
+        parent = self.session.parent.name
+        invalid = (self.session.with_name("other"), self.runner_temp / parent / "extra/initializer",
+            self.runner_temp / parent.replace("123-1-", "124-1-") / "initializer",
+            self.runner_temp / parent.replace("123-1-", "123-2-") / "initializer",
+            self.runner_temp / parent.replace(self.event["inputs"]["selection"], "desktop-windows-x64") / "initializer",
+            self.runner_temp / parent.removesuffix("-productive") / "initializer",
+            Path("relative") / parent / "initializer", Path("/") / parent / "initializer",
+            self.runner_temp / ".." / parent / "initializer",
+            str(self.runner_temp) + "/./" + parent + "/initializer")
+        for session in invalid:
+            with self.subTest(session=str(session)), self.assertRaisesRegex(S.SeedError, "BOOTSTRAP_SESSION"):
+                S.stage_path(session, self.profile, self.role, admitted_raw=self.raw)
+
+    def test_bootstrap_run_identifiers_cannot_become_path_components(self):
+        for key in ("runId", "runAttempt"):
+            for bad in (None, True, 1, "", "0", "01", "1" * 21, "1/..", "1\\..", "1\n"):
+                value = S.record(self.raw)
+                value["github"][key] = bad
+                with self.subTest(key=key, bad=bad), self.assertRaisesRegex(S.SeedError, "BOOTSTRAP_RUN"):
+                    S.stage_path(self.session, self.profile, self.role, admitted_raw=S.encoded(value))
+
+    def test_old_nested_staging_is_rejected_not_migrated(self):
+        old = self.stage()
+        path = S.stage_path(self.session, self.profile, self.role)  # The former nested bootstrap location.
+        old.update(container=str(path), restoreHome=str(path / "restore-home"))
+        before = S.encoded(old)
+        with self.assertRaisesRegex(S.SeedError, "STAGING_RECORD_CHANGED"):
+            self.plan(old)
+        self.assertEqual(S.encoded(old), before)
+
+    def test_windows_spelling_model_matches_without_resolving_or_native_execution(self):
+        self.configure(I.SELECTIONS[1])
+        root = PureWindowsPath("D:/a/_temp")
+        session = root / self.session.parent.name / "initializer"
+        with patch.object(S, "Path", PureWindowsPath):
+            actual = S.stage_path(session, self.profile, self.role, admitted_raw=self.raw)
+            ordinary = S.stage_path(root / "p2pkit-test-desktop-123-1-windows-x64", self.profile, self.role)
+            self.assertEqual(str(actual), str(ordinary))
+            self.assertEqual(str(actual), "D:\\a\\_temp\\p2pkit-dependency-seed-desktop-windows-x64")
+            with self.assertRaisesRegex(S.SeedError, "BOOTSTRAP_SESSION"):
+                S.stage_path(PureWindowsPath("D:") / session.relative_to(session.anchor),
+                             self.profile, self.role, admitted_raw=self.raw)
+
+    def test_bootstrap_call_sites_pass_original_admission_instead_of_filename_inference(self):
+        for name, count, expected in (("run-hosted-cache-bootstrap.py", 4, "admitted.record"),
+                ("hosted_cache_bootstrap_staging.py", 1, "self.admitted.record"),
+                ("hosted_dependency_cache.py", 1, "admitted_raw")):
+            tree = ast.parse((ROOT / "scripts" / name).read_text())
+            calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and
+                     isinstance(node.func, ast.Attribute) and node.func.attr == "stage_path"]
+            self.assertEqual(len(calls), count, name)
+            for call in calls:
+                self.assertEqual({kw.arg: ast.unparse(kw.value) for kw in call.keywords},
+                                 {"admitted_raw": expected}, name)
 
     def test_cross_profile_and_role_rejected_at_every_pre_budget_boundary(self):
         for row in I.SELECTIONS:

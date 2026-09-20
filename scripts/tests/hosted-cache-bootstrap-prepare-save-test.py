@@ -62,7 +62,7 @@ class World(prior["World"]):
         self.native_expected, self.source_calls, self.proposal_calls = [], [], []
         self.original_path = self.session.parent.with_name(self.session.parent.name.removesuffix("-productive"))
         self.save_path = self.original_path.with_name(self.original_path.name + "-save")
-        self.container_path = self.files.stage_path(self.session, profile, role)
+        self.container_path = self.files.stage_path(self.session, profile, role, admitted_raw=self.admitted.record)
         self.ids = lambda number: (1, format(number, "032x") if role == "windows-x64" else number)
         self.env = {"RUNNER_NAME": "modeled-runner", "P2PKIT_BOOTSTRAP_PRODUCER_OUTCOME": "success"}
         self.event = b"modeled-original-dispatch"

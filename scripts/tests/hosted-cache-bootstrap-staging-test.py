@@ -128,7 +128,7 @@ class LeafModels(unittest.TestCase):
             self.stack.enter_context(patch.object(target, name, side_effect=AssertionError("NO_NATIVE_NETWORK_OR_DEPENDENCY_WRITER")))
         self.owner = S.Owner(self.local + 1000, cancelled=lambda: self.callback())
         self.addCleanup(self.retire_tiny_fixtures)
-        self.container = F.stage_path(self.session, "desktop", "linux-x64")
+        self.container = F.stage_path(self.session, "desktop", "linux-x64", admitted_raw=self.admitted.record)
         self.restore = self.container / "restore-home"
 
     def retire_tiny_fixtures(self):
@@ -213,11 +213,14 @@ class LeafModels(unittest.TestCase):
 
     def test_seed_is_read_only_complete_absence_not_budget_omission_or_provider_result(self):
         stage = self.stage()
-        before = {str(path): (path.read_bytes(), self.identity(path)) for path in self.session.parent.rglob("*") if path.is_file()}
+        before = {str(path): (path.read_bytes(), self.identity(path))
+                  for root in (self.session.parent, self.container) for path in root.rglob("*") if path.is_file()}
+        self.assertIn(str(self.container / "staging.json"), before)
         phase = self.phase()
         result = self.seed(stage, phase=phase)
         value = F.record(result.raw)
-        after = {str(path): (path.read_bytes(), self.identity(path)) for path in self.session.parent.rglob("*") if path.is_file()}
+        after = {str(path): (path.read_bytes(), self.identity(path))
+                 for root in (self.session.parent, self.container) for path in root.rglob("*") if path.is_file()}
         self.assertEqual(before, after)
         self.assertEqual(value["scope"], "BOOTSTRAP_KNOWN_EMPTY_SEED_LEAF_V1")
         self.assertEqual(value["counts"], {key: 0 for key in B.COUNTERS})

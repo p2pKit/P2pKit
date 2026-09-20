@@ -11389,7 +11389,7 @@ def _read_save_handoff(owner, initializer, directory, admitted, *, producer_outc
         same(value["directoryIdentity"], directory_id)
         plan, binding = value["plan"], value["binding"]
         staging.cache._plan_shape(plan)  # Structural only; validate_plan/source rederivation remains outstanding.
-        container = staging.files.stage_path(session, profile, role)
+        container = staging.files.stage_path(session, profile, role, admitted_raw=admitted.record)
         for name, expected in (("mode", "bootstrap"), ("profile", profile), ("role", role),
                 ("source", admission["source"]), ("github", admission["github"]),
                 ("admissionSha256", origin.digest(admitted.record)), ("session", str(session)),
@@ -11750,7 +11750,7 @@ def prepare_save(cancelled):
         shorten(proposal)
         inputs, compiled = staging.files.source_inputs(owner, ROOT, checked(), checked)
         profile, role = bootstrap.cache_cohort(admitted.record)
-        container_path = staging.files.stage_path(session, profile, role)
+        container_path = staging.files.stage_path(session, profile, role, admitted_raw=admitted.record)
         container = owner.acquire("directory", lambda: staging.files.private_root(container_path))
         reference = original(container, "staging/staging", "staging.json")
         require(reference["fileBinding"] is not None and reference["bindingScope"] == "ORIGINAL_FILE_BINDING",
@@ -12172,7 +12172,7 @@ def after_save_originals(cancelled):
             handoff_raw, producer_raw, proposal, first, prepared_directory)
         source_inputs, compiled = staging.files.source_inputs(owner, ROOT, owner.end(), owner.end)
         profile, role = bootstrap.cache_cohort(admitted.record)
-        container_path = staging.files.stage_path(session, profile, role)
+        container_path = staging.files.stage_path(session, profile, role, admitted_raw=admitted.record)
         container = owner.acquire("directory", lambda: staging.files.private_root(container_path))
         staging_raw = read_reference(container, "staging/staging", "staging.json", bound=True)
         end = owner.end()
@@ -12733,7 +12733,7 @@ def _probe_command(cancelled, *, after):
         fence.shorten(proposal)
         source_inputs, compiled = staging.files.source_inputs(owner, ROOT, owner.end(), owner.end)
         profile, role = bootstrap.cache_cohort(admitted.record)
-        container_path = staging.files.stage_path(session, profile, role)
+        container_path = staging.files.stage_path(session, profile, role, admitted_raw=admitted.record)
         container = owner.acquire("directory", lambda: staging.files.private_root(container_path))
         staging_raw = reference(container, "staging/staging", "staging.json", bound=True)
         end = owner.end()

@@ -158,7 +158,7 @@ class _Inputs:
         self.session = original.with_name(original.name + "-productive") / "initializer"
         self.state, self.home = self.session / "state", self.session / "state/gradle-home"
         self.root = str(ROOT)
-        self.container = files.stage_path(self.session, self.profile, self.role)
+        self.container = files.stage_path(self.session, self.profile, self.role, admitted_raw=self.admitted.record)
         self.restore = self.container / "restore-home"
         context = origin.parse(self.context_raw)
         require(set(context) == {"schema", "scope", "job", "previousSha256", "requestSha256",

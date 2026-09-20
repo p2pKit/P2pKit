@@ -85,7 +85,7 @@ def make_plan(admitted_raw, staging_raw, compiled, inputs, *, session, profile, 
             type(github) is dict and all(type(github.get(key)) is str and
             re.fullmatch(r"[1-9][0-9]{0,19}", github[key]) for key in ("runId", "runAttempt")),
             "CACHE_ORIGINAL_SOURCE_RUN")
-    home = files.stage_path(session, profile, role) / "restore-home"
+    home = files.stage_path(session, profile, role, admitted_raw=admitted_raw) / "restore-home"
     return files.record(files.encoded({
         "schema": 1, "scope": PLAN_SCOPE, "mode": mode, "profile": profile, "role": role,
         "source": source, "github": github, "admissionSha256": files.digest(admitted_raw),

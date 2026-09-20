@@ -48,8 +48,8 @@ bypass the HOLD or restore an entire Gradle home to use it.
 14-day Actions-only encrypted retention and two manual owner approvals for
 development sample publication. The [custodian procedure](evidence-custodian.md)
 and [dated implementation record](../maintenance/sample-release-owner-policy-2026-09-20.md)
-separate these decisions from missing key generation, trusted-original-base
-policy bootstrap, environment protection and genuine qualification. Older
+separate these decisions and completed public-key preparation from outstanding
+trusted-original-base policy bootstrap and genuine qualification. Older
 sections' missing-owner/nonauthor-review wording is historical to those slices,
 not a new requirement for another person. Neither ordinary HOLD is lifted.
 
@@ -78,6 +78,43 @@ Plans are private, path-bearing records, not public evidence companions. A pure
 `make_plan` or `validate_plan` call only checks supplied data. The connected
 consume path separately requires the exact admitted source, stage and original
 action outcomes; those requirements still need genuine hosted qualification.
+
+### Shared literal staging path
+
+The exact pinned distribution inspection recorded in
+[#437](https://github.com/p2pKit/P2pKit/issues/437#issuecomment-5751599572)
+confirmed a source interoperability defect: the provider hashes its **literal
+input paths** into the cache version. Bootstrap previously retained its
+run-specific productive parent in that input, unlike ordinary consume. This
+was not an observed provider miss; no provider was executed in the inspection.
+
+For the same canonical runner-temp root T, both paths now select:
+
+```text
+T/p2pkit-dependency-seed-{profile}-{role}/restore-home/caches/modules-2/files-2.1
+```
+
+The shared `stage_path` helper keeps ordinary pre-admission allocation unchanged.
+Only explicit original bootstrap admission selects the adjusted parent, after
+cohort, run/attempt and exact productive/initializer layout checks. Staging,
+plan validation, handoff reading, save preparation, post-save and probe rederive
+the same location. The configuration session and H are unchanged. No path is
+inferred merely from a filename, mode or ambient environment; the pure helper
+does not authenticate T or a native host.
+
+S is still exclusively created and never adopted, cleared, migrated or retried
+at another path. A stale or competing allocation for the same T/cohort fails.
+Old nested stage/plan/handoff records are rejected, not rewritten. Original
+source/run/attempt, admission/staging hashes and native file/directory bindings
+remain distinct even when successive attempts use the same provider target.
+
+Focused offline controls cover six cohorts, run/attempt changes, malformed
+sessions/identifiers, explicit-admission routing, old-record refusal, caller
+bindings and existing-target preservation. Windows spelling is a PurePath
+model, not Windows execution. Equal input paths repair this source mismatch;
+actual hosted T spelling, compression, archive geometry, branch visibility,
+provider/native retirement, resolver reuse and scheduling remain unqualified.
+No workflow, HOLD, credential boundary, key or deadline changes with this fix.
 
 ## Separate bootstrap identity (dormant)
 

@@ -115,9 +115,15 @@ class World:
         integer = {"require": require, "clocks": self.clocks}
         exec(INTEGER, integer)
         self.origin.integer = integer["integer"]
-        files = {"require": require, "Path": Path}
-        exec(FILES, files)
-        self.files = NS(**files, PREFIX=("caches", "modules-2", "files-2.1"), encoded=encoded)
+        def modeled_cohort(raw, selected_profile, selected_role):
+            # Deliberately not full hosted admission. Exact identity negatives
+            # belong to the independently admitted cohort suite.
+            require(self.origin.parse(raw)["cacheCohort"] ==
+                    {"profile": selected_profile, "role": selected_role}, "MODEL_COHORT_BINDING")
+            return selected_profile, selected_role
+        self.files = NS(require=require, Path=Path, re=re, record=self.origin.parse,
+            validate_cohort=modeled_cohort, PREFIX=("caches", "modules-2", "files-2.1"), encoded=encoded)
+        exec(FILES, self.files.__dict__)
         cache = {"require": require, "re": re, "files": self.files}
         exec(CACHE, cache)
         local = {"require": require, "math": math}
@@ -204,7 +210,7 @@ class World:
         self.initializer, self.directory = Directory(session, identity(10)), Directory(self.path, identity(11))
         for directory in (self.initializer, self.directory):
             self.owner.resources.append({"label": "directory", "owner": directory, "attempted": False, "closed": False})
-        container = self.files.stage_path(session, profile, role)
+        container = self.files.stage_path(session, profile, role, admitted_raw=self.admitted.record)
         clock = self.origin.clock_value(self.clock)
         self.proposal = {**deepcopy(self.admission), "schema": 1, "scope": self.proposal_scope, "clock": clock,
             "phaseFencesNs": {"producer-owner-return": 1050 * SECOND}, "proposedJobEndNs": 1100 * SECOND,
@@ -353,6 +359,18 @@ class ReaderModels(unittest.TestCase):
             world.reindex()
             with self.subTest(key=key), self.assertRaisesRegex(Refusal, "READ_BINDING"):
                 world.run()
+
+    def test_former_nested_target_is_rejected_before_any_repeated_leaf_is_read(self):
+        world = World()
+        old = world.session.parent / "p2pkit-dependency-seed-desktop-linux-x64"
+        world.plan.update(restoreHome=str(old / "restore-home"),
+                          path=str(old / "restore-home/caches/modules-2/files-2.1"))
+        world.binding.update(container=str(old), restoreHome=world.plan["restoreHome"])
+        world.value["planSha256"] = digest(encoded(world.plan))
+        world.reindex()
+        with self.assertRaisesRegex(Refusal, "READ_BINDING"):
+            world.run()
+        self.assertEqual([name for _path, name, _maximum in world.reads], ["save-handoff.json"])
 
     def test_existing_plan_shape_guard_keeps_provider_key_and_cohort_policy(self):
         for change in (lambda plan: plan.update(key="other"),

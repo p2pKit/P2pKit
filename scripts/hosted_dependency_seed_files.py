@@ -518,11 +518,31 @@ def source_inputs(parent, root, end, check):
     return bound, compiled
 
 
-def stage_path(session, profile, role):
+def stage_path(session, profile, role, *, admitted_raw=None):
+    """One literal provider target per runner-temp/cohort, not run provenance.
+
+    Ordinary allocation precedes admission and keeps its original default.
+    Only explicit bootstrap admission permits dropping its productive parent;
+    the original session/run binding must still agree before that adjustment.
+    This pure path calculation does not authenticate a runner-temp root.
+    """
     require(profile in ("desktop", "full") and role in
             ("macos-arm64", "macos-x64", "linux-x64", "windows-x64") and
             (profile != "full" or role.startswith("macos-")), "SEED_PROFILE_ROLE")
-    return Path(session).parent / ("p2pkit-dependency-seed-" + profile + "-" + role)
+    path = Path(session)
+    parent = path.parent
+    if admitted_raw is not None and validate_cohort(admitted_raw, profile, role) is not None:
+        admitted = record(admitted_raw)
+        github = admitted["github"]
+        require(all(type(github.get(name)) is str and re.fullmatch(r"[1-9][0-9]{0,19}", github[name])
+                    for name in ("runId", "runAttempt")), "SEED_BOOTSTRAP_RUN")
+        expected = ("p2pkit-cache-originals-" + github["runId"] + "-" + github["runAttempt"] + "-" +
+                    admitted["selection"] + "-productive")
+        require(path.is_absolute() and ".." not in path.parts and len(path.parts) > 3 and
+                str(path) == str(session) and path.name == "initializer" and parent.name == expected,
+                "SEED_BOOTSTRAP_SESSION_PATH")
+        parent = parent.parent
+    return parent / ("p2pkit-dependency-seed-" + profile + "-" + role)
 
 
 def _bootstrap_cohort(admitted_raw):
@@ -574,7 +594,7 @@ def validate_retained_stage(stage, admitted_raw, context, inputs):
     require(type(stage) is dict and _identity(stage.get("containerIdentity")) and
             _identity(stage.get("sourceIdentity")) and stage["containerIdentity"] != stage["sourceIdentity"],
             "SEED_STAGING_IDENTITY_GRAMMAR")
-    path = stage_path(context["session"], context["profile"], context["role"])
+    path = stage_path(context["session"], context["profile"], context["role"], admitted_raw=admitted_raw)
     admitted = record(admitted_raw)
     expected = {"schema": 1, "scope": "DEPENDENCY_SEED_STAGING_V1", "profile": context["profile"],
                 "role": context["role"], "source": admitted["source"], "github": admitted["github"],

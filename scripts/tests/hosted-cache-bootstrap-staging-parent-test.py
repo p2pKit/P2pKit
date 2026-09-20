@@ -374,7 +374,8 @@ class ParentModels(R.ReadmissionModels):
             self.assertTrue(all(row["reason"] == "ABSENT" for row in seed_value["misses"]))
             home = self.init.handles["state:gradle-home"].path
             self.assertEqual({p.name for p in home.iterdir()}, {"gradle.properties"})
-            container = B.files.stage_path(self.init.handles["session"].path, "desktop", "linux-x64")
+            container = B.files.stage_path(self.init.handles["session"].path, "desktop", "linux-x64",
+                                          admitted_raw=self.init.transition._attempt.admitted.record)
             self.assertEqual({p.name for p in container.iterdir()}, {"restore-home", "staging.json"})
             self.assertEqual(list((container / "restore-home").iterdir()), [])
             self.assert_predecessors_closed()
@@ -491,12 +492,16 @@ class ParentModels(R.ReadmissionModels):
 
     def test_existing_stage_container_is_never_adopted(self):
         with self.prepared():
-            path = B.files.stage_path(self.init.handles["session"].path, "desktop", "linux-x64")
+            path = B.files.stage_path(self.init.handles["session"].path, "desktop", "linux-x64",
+                                     admitted_raw=self.init.transition._attempt.admitted.record)
             path.mkdir(mode=0o700)
+            (path / "stale-original.txt").write_bytes(b"prior allocation must not be adopted or removed")
             before = self.identity(path)
             self.refused(kind=FileExistsError)
             self.assertEqual(self.identity(path), before)
-            self.assertEqual(list(path.iterdir()), [])
+            self.assertEqual({item.name for item in path.iterdir()}, {"stale-original.txt"})
+            self.assertEqual((path / "stale-original.txt").read_bytes(),
+                             b"prior allocation must not be adopted or removed")
 
     def test_closed_old_owners_and_windows_are_never_called_again(self):
         with self.prepared():
