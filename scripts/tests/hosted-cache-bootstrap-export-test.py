@@ -25,7 +25,8 @@ def selected(path, names):
     return compile(ast.Module(body=nodes, type_ignores=[]), str(path), "exec", dont_inherit=True)
 
 
-PARENT = selected(ROOT / "run-hosted-cache-bootstrap.py", {"BootstrapExportPrefix", "_bootstrap_export_controls"})
+PARENT = selected(ROOT / "run-hosted-cache-bootstrap.py",
+    {"BootstrapExportPrefix", "BootstrapSaveSetPrefix", "_bootstrap_export_controls"})
 NO_LOADER = selected(ROOT / "run-hosted-cache-bootstrap.py", {"NoLoaderPrefix", "_no_loader_parent_controls"})
 EXPORT = selected(ROOT / "hosted_cache_bootstrap_export.py", {"ExportEvidence", "_Window", "export_snapshot"})
 SHARED = selected(ROOT / "hosted_cache_bootstrap_staging.py", {"_Window", "_Leaf"})
@@ -176,6 +177,7 @@ class World:
         namespace = {"__name__": "export_parent_memory", "dataclass": dataclass, "field": field,
             "threading": threading, "require": require, "origin": self.origin, "staging": self.staging,
             "custody": self.custody, "dependency_export": self.export, "NewEntryTransition": Transition,
+            "dependency_save_set": NS(before_save=None, _Window=None, SaveSetEvidence=None, SCOPE=None, STATUSES=None),
             "observe_no_loader_after_entry": self.original, "_checked_no_loader_parent_return": self.checked,
             "diagnostics": NS(_exception_detail=lambda failure: {"retirementUnknown": False}, _QUARANTINE=[]),
             "query": NS(QUARANTINE=[]), "QUARANTINE": self.quarantine, "time": NS(monotonic=self.monotonic),
@@ -183,7 +185,9 @@ class World:
             "windows": NS(PrivateDirectory=Directory, DependencySourceDirectory=Directory, NativeFile=File),
             "cancellation": lambda flags: require(not flags, "CANCELLED")}
         exec(PARENT, namespace)
-        self.namespace, self.run = namespace, namespace["_bootstrap_export_controls"]()
+        self.namespace = namespace
+        self.run, self.before = namespace["_bootstrap_export_controls"]()
+        namespace.update(export_after_entry=self.run, before_save_after_entry=self.before)
 
     def encode(self, value):
         self.encode_hook(value)
@@ -191,6 +195,8 @@ class World:
 
     def state(self):
         cells = dict(zip(self.run.__code__.co_freevars, self.run.__closure__))
+        driver = cells["drive"].cell_contents
+        cells = dict(zip(driver.__code__.co_freevars, driver.__closure__))
         return cells["calls"].cell_contents[id(self.transition)]
 
     def original(self, transition):

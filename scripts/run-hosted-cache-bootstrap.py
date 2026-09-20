@@ -38,6 +38,7 @@ import hosted_cache_bootstrap_canonical as canonical
 import hosted_cache_bootstrap_collect_files as collect_files
 import hosted_cache_bootstrap_custody as custody
 import hosted_cache_bootstrap_export as dependency_export
+import hosted_cache_bootstrap_save_set as dependency_save_set
 import hosted_cache_bootstrap_history as history
 import hosted_cache_bootstrap_identity as bootstrap
 import hosted_cache_bootstrap_initialization as initialization
@@ -10403,14 +10404,26 @@ class BootstrapExportPrefix:
     checked_local: float
 
 
+@dataclass(frozen=True)
+class BootstrapSaveSetPrefix:
+    """Original before-save return; no provider or archived-byte authority."""
+    raw: bytes = field(repr=False)
+    leaf: object = field(repr=False)
+    checked_ns: int
+    checked_local: float
+
+
 def _bootstrap_export_controls():
-    """Fixed same-call successor, with a NEW file-only owner and no workflow."""
+    """Two fixed siblings share owner code, never an already-closed owner."""
     operation, predecessor = observe_no_loader_after_entry, _checked_no_loader_parent_return
     module, copy = dependency_export, dependency_export.export_snapshot
     input_kind, window_kind = custody._Inputs, dependency_export._Window
     result_kind, prefix_kind = dependency_export.ExportEvidence, BootstrapExportPrefix
     scope, statuses = dependency_export.SCOPE, dependency_export.STATUSES
-    calls, lock = {}, threading.Lock()
+    save_module, save_copy = dependency_save_set, dependency_save_set.before_save
+    save_window, save_result, save_prefix = dependency_save_set._Window, dependency_save_set.SaveSetEvidence, BootstrapSaveSetPrefix
+    save_scope, save_statuses = dependency_save_set.SCOPE, dependency_save_set.STATUSES
+    calls, before_calls, lock = {}, {}, threading.Lock()
 
     def roots():
         require(observe_no_loader_after_entry is operation and _checked_no_loader_parent_return is predecessor and
@@ -10419,16 +10432,50 @@ def _bootstrap_export_controls():
                 custody._Inputs is input_kind and BootstrapExportPrefix is prefix_kind,
                 "BOOTSTRAP_EXPORT_OPERATION_CHANGED")
 
-    def execute(transition):
+    def closed_export_return(transition, returned):
         roots()
+        state = calls.get(id(transition))
+        require(state is not None and state["transition"] is transition and state["result"] is returned and
+                type(returned) is prefix_kind and state["original"] is None and state["unknown"] is False and
+                state["closed"] is True and state["errors"] == [] and state["handlers"] == state["restored"],
+                "BOOTSTRAP_EXPORT_RETURN_NOT_ORIGINAL")
+        for check in state["closed_check"]:
+            check()  # No old-owner operation, new baseline or clock sample.
+        cancellation(state["cancelled"])
+        pin = state["result_pin"]
+        require(object.__getattribute__(returned, "__dict__") is pin[0] and len(pin[0]) == 4 and
+                set(pin[0]) == {"raw", "leaf", "checked_ns", "checked_local"} and returned.leaf is pin[2] and
+                all(type(a) is type(b) and a == b for a, b in zip(
+                    (returned.raw, returned.checked_ns, returned.checked_local), (pin[1], pin[3], pin[4]))) and
+                all(row[4] is row[5] is True for row in state["pins"]), "BOOTSTRAP_EXPORT_RETURN_CHANGED")
+        return state["bound"]
+
+    def drive(transition, before_save):
+        # Only the two lexical wrappers below select a phase. No public mode,
+        # supplied predecessor, owner factory or caller-selected operation.
+        def phase_roots():
+            roots()
+            if before_save:
+                require(dependency_save_set is save_module and save_module.before_save is save_copy and
+                        save_module._Window is save_window and save_module.SaveSetEvidence is save_result and
+                        save_module.SCOPE is save_scope and save_module.STATUSES is save_statuses and
+                        BootstrapSaveSetPrefix is save_prefix and export_after_entry is execute and
+                        before_save_after_entry is before, "BOOTSTRAP_SAVE_OPERATION_CHANGED")
+
+        phase_roots()
+        run_previous, check_previous = (execute, closed_export_return) if before_save else (operation, predecessor)
+        phase_window, phase_result, phase_prefix = ((save_window, save_result, save_prefix) if before_save else
+                                                   (window_kind, result_kind, prefix_kind))
+        phase_module, phase_copy = (save_module, save_copy) if before_save else (module, copy)
+        claims = before_calls if before_save else calls
         require(type(transition) is NewEntryTransition, "BOOTSTRAP_EXPORT_TRANSITION")
         with lock:
-            require(id(transition) not in calls, "BOOTSTRAP_EXPORT_ALREADY_CLAIMED")
+            require(id(transition) not in claims, "BOOTSTRAP_EXPORT_ALREADY_CLAIMED")
             state = {"transition": transition, "previous": None, "bound": None, "inputs": None, "window": None,
                 "leaf": None, "result": None, "original": None, "errors": [], "error_refs": [], "unknown": False,
                 "closed": False, "resources": [], "pins": [], "returns": [], "cancelled": [],
                 "handlers": [], "restored": [], "expired": False}
-            calls[id(transition)] = state  # Includes failed/reentrant original calls.
+            claims[id(transition)] = state  # Includes failed/reentrant original calls.
         ledger, pins, owned = state["resources"], state["pins"], set()
         bound = inputs = window = owner = None
         fixed, issued_end, borrowed, kinds = (), None, frozenset(), ()
@@ -10473,15 +10520,15 @@ def _bootstrap_export_controls():
 
         def leaf_unchanged():
             leaf, pin = state["leaf"], state["leaf_pin"]
-            require(type(leaf) is result_kind and object.__getattribute__(leaf, "__dict__") is pin[0] and
+            require(type(leaf) is phase_result and object.__getattribute__(leaf, "__dict__") is pin[0] and
                     len(pin[0]) == 4 and set(pin[0]) == {"raw", "checked_ns", "local_started", "checked_local"} and
                     all(type(a) is type(b) and a == b for a, b in zip(
                         (leaf.raw, leaf.checked_ns, leaf.local_started, leaf.checked_local), pin[1:])),
                     "BOOTSTRAP_EXPORT_LEAF_CHANGED")
 
         def check():
-            roots()
-            require(bound is not None and predecessor(transition, state["previous"]) is bound,
+            phase_roots()
+            require(bound is not None and check_previous(transition, state["previous"]) is bound,
                     "BOOTSTRAP_EXPORT_PREDECESSOR_CHANGED")
             inputs.unchanged()
             roster()
@@ -10597,18 +10644,22 @@ def _bootstrap_export_controls():
                 close_clock()
 
         try:
-            state["previous"] = operation(transition)
-            bound = state["bound"] = predecessor(transition, state["previous"])
+            state["previous"] = run_previous(transition)
+            bound = state["bound"] = check_previous(transition, state["previous"])
             previous = state["previous"]
             saved, last = bound.pin.frame.predecessor.frame, bound.pin.frame.predecessor.phases[-1][1]
             inputs = state["inputs"] = input_kind(saved.originals, saved.original_pin, last.staged, last.staged_pin)
             local = staging._local(time.monotonic())
             first = origin.clocks.validate_reading(origin.clocks.observe())
             phase = staging.PhaseStart(first, local)
-            window = state["window"] = window_kind(inputs, phase, (previous.raw, previous.checked_ns, previous.checked_local))
+            window = state["window"] = phase_window(inputs, phase, (previous.raw, previous.checked_ns, previous.checked_local))
             fixed = (window.first, window.soft, window.hard, window.local_start, window.local_soft, window.local_hard)
             issued_end = window.local_hard
             borrowed = frozenset(id(row[0]) for row in bound.pin.graph.nodes)
+            if before_save:
+                prior = calls[id(transition)]
+                borrowed |= frozenset(id(value) for value in prior["returns"])
+                borrowed |= frozenset(id(pin[2]) for pin in prior["pins"])
             kinds = ((windows.PrivateDirectory, windows.DependencySourceDirectory, windows.NativeFile)
                      if inputs.role == "windows-x64" else
                      (staging.files.PosixPrivateDirectory, staging.files.PosixSourceDirectory, staging.files.PosixFile))
@@ -10619,9 +10670,10 @@ def _bootstrap_export_controls():
                 state["handlers"].append((number, handler))
                 signal.signal(number, lambda signum, _frame: state["cancelled"].append(signum))
                 owner.end()
-            state["leaf"] = copy(owner, inputs, window)
+            state["leaf"] = (phase_copy(owner, inputs, window, previous.leaf.raw) if before_save else
+                             phase_copy(owner, inputs, window))
             leaf = state["leaf"]
-            require(type(leaf) is result_kind and type(leaf.raw) is bytes and 0 < len(leaf.raw) <= staging.files.RECEIPT_LIMIT and
+            require(type(leaf) is phase_result and type(leaf.raw) is bytes and 0 < len(leaf.raw) <= staging.files.RECEIPT_LIMIT and
                     window.first <= origin.integer(leaf.checked_ns) <= window.last and
                     type(leaf.local_started) is type(leaf.checked_local) is float and
                     leaf.local_started == window.local_start and
@@ -10632,8 +10684,8 @@ def _bootstrap_export_controls():
             leaf_unchanged()
             owner.end()
             value = origin.parse(leaf.raw)
-            require(value.get("scope") == module.SCOPE and value.get("completed") is True and
-                    value.get("retirement") == "KNOWN" and value.get("status") in module.STATUSES and
+            require(value.get("scope") == phase_module.SCOPE and value.get("completed") is True and
+                    value.get("retirement") == "KNOWN" and value.get("status") in phase_module.STATUSES and
                     value.get("nextPhaseAuthority") is value.get("exportSaveAuthority") is False and
                     value.get("budgetAcceptance") == "NOT_ADMITTED" and value.get("testAcceptance") == "NOT_PERFORMED",
                     "BOOTSTRAP_EXPORT_LEAF_DISPOSITION")
@@ -10664,8 +10716,10 @@ def _bootstrap_export_controls():
             leaf_unchanged()
             cancel()
             sample()
-            raw = origin.encoded({"schema": 1, "scope": "BOOTSTRAP_EXPORT_PARENT_CLOSED_OBSERVATIONS_V1",
-                "noLoaderSha256": origin.digest(previous.raw), "leafSha256": origin.digest(leaf.raw),
+            raw = origin.encoded({"schema": 1, "scope": ("BOOTSTRAP_SAVE_SET_PARENT_CLOSED_OBSERVATIONS_V1" if before_save
+                                                       else "BOOTSTRAP_EXPORT_PARENT_CLOSED_OBSERVATIONS_V1"),
+                ("exportParentSha256" if before_save else "noLoaderSha256"): origin.digest(previous.raw),
+                "leafSha256": origin.digest(leaf.raw),
                 "clock": origin.clock_value(first.clock), "firstNs": fixed[0], "softEndNs": fixed[1],
                 "hardEndNs": fixed[2], "closedNs": window.last, "resourceCount": len(pins),
                 "parentResourceClose": "KNOWN_RESOURCE_CLOSE_ONLY", "nextPhaseAuthority": False,
@@ -10673,7 +10727,8 @@ def _bootstrap_export_controls():
             cancel()
             sample()
             cancellation(state["cancelled"])
-            result = prefix_kind(raw, leaf, window.last, window.local_last)
+            result = phase_prefix(raw, leaf, window.last, window.local_last)
+            state["closed_check"] = (check, leaf_unchanged)
             state["result"] = result
             state["result_pin"] = (object.__getattribute__(result, "__dict__"), raw, leaf, window.last, window.local_last)
             return result
@@ -10683,10 +10738,16 @@ def _bootstrap_export_controls():
                 QUARANTINE.append(state)
             raise state["original"]
 
-    return execute
+    def execute(transition):
+        return drive(transition, False)
+
+    def before(transition):
+        return drive(transition, True)
+
+    return execute, before
 
 
-export_after_entry = _bootstrap_export_controls()
+export_after_entry, before_save_after_entry = _bootstrap_export_controls()
 del _bootstrap_export_controls
 
 

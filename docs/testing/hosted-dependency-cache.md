@@ -21,7 +21,8 @@ collection-return binding now has separately reviewed source and focused memory 
 That private binding is not itself an owner. The directory-only parent below now
 connects the absence leaf under NEW ownership and original allocation fences.
 The internal export successor now connects bounded H-to-S copying under a NEW
-file-only owner. Freeze/save/probe and encrypted-custody integration remain unfinished.
+file-only owner, followed by a separate original-call before-save set check.
+Provider save/after-save/probe and encrypted-custody integration remain unfinished.
 [`hosted_dependency_cache.py`](../../scripts/hosted_dependency_cache.py) has no
 CLI, action runner, downloader, extraction, deletion or subprocess entry point.
 The connected caller is
@@ -1579,6 +1580,38 @@ results and exact-source independent review are bound in the containing commit's
 #437 mapping. Both HOLDs, recipient/trusted-base/formal approval, proposed5400
 UNADMITTED/UNMEASURED and NativeFile900/Snapshot576MiB remain unchanged.
 
+### Original-call before-save set check
+
+Internal `before_save_after_entry` claims before calling the original export,
+then checks its original closed publication pins without sampling an old clock.
+A separately called export cannot be adopted. Two fixed lexical siblings share
+the file-owner code, not an owner instance: each gets its own claim map, state,
+resources and window. No public phase/configuration or owner factory is exposed.
+The before-save owner cannot borrow the original export's handles.
+
+[`hosted_cache_bootstrap_save_set.py`](../../scripts/hosted_cache_bootstrap_save_set.py)
+uses unchanged roster/hash/native suppliers, leaving ordinary `save_set` and its
+bootstrap guards unchanged. Its separate original `save-set-before`120/90 window
+begins after the export's final returned RAW/LOCAL observations. It requires
+positive exported bytes, verifies original S/container/staging identities, freshly
+enumerates every ancestor/member, hashes each file and rechecks the complete
+roster and file stamps after early readers close. A positive partial export may
+qualify only as its exact complete subset; empty/zero-byte or incompletely checked
+sets refuse. There is no truncated freeze, aggregate Snapshot or atomic snapshot.
+Original before-save bytes remain in the closure for the eventual provider path;
+no provider, after-save, probe, seal or workflow caller is connected here.
+
+**55 focused methods PASS:**31 new `BeforeSaveModels` and24 existing
+`ExportModels` covering the changed shared driver. Unchanged eight no-loader
+return controls and the old38-method no-loader suite were not replayed. The new
+driver/leaf and shared read/hash/roster definitions execute against memory-backed
+files; upstream originals, admission, source/native/candidate-copy suppliers
+remain models. This is not native or hosted qualification. Python3.12 isolation,
+timeout20/kill2, CPU10/AS512MiB/FD64/core0 and1MiB regular output limits were used;
+actual UID0/audit guard is not a kernel sandbox. The containing commit's #437
+mapping binds original results and independent source review. Both HOLDs,
+recipient/trusted-base/formal approval and all existing deadlines remain.
+
 ## Connected consume and delivery path
 
 After the unchanged HOLD and native/source admission, `prepare-consume` binds
@@ -1759,6 +1792,8 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-no-loader-parent-test.py \
   ParentModels ReviewBoundaryModels -v
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-export-test.py \
   OriginalReturnModels ExportModels -v
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-save-set-test.py \
+  ExportModels BeforeSaveModels -v
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
