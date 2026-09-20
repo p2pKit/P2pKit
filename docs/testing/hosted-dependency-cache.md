@@ -23,12 +23,13 @@ That private binding is not itself an owner. The directory-only parent below now
 connects the absence leaf under NEW ownership and original allocation fences.
 The internal export successor now connects bounded H-to-S copying under a NEW
 file-only owner, followed by a separate original-call before-save set check.
-A supplied-original after-save leaf now reuses that set checker; its original-call
-parent is not connected. A separate internal handoff now retains the original
+A supplied-original after-save leaf reuses that set checker; the fixed post-save
+command below now connects it under NEW ownership and fresh admission. A separate internal handoff retains the original
 producer-to-before-save chain, using the existing private writer. Provider
 save/probe and encrypted-custody integration remain unfinished.
 The [producer-command composition](#fixed-producer-command-and-original-function-return)
 and [save preparation](#fixed-save-preparation-not-provider-execution)
+and [post-save guard](#fixed-post-save-guard-not-provider-enforcement)
 below are the current source status. Earlier slice sections retain their dated
 test/review scope; their former no-CLI/caller statements are not the current
 command graph. CLI availability grants no execution authority.
@@ -1747,8 +1748,8 @@ Public command output contains only `handoffSha256`, `producerReturnSha256`,
 scope and nonacceptance fields. A future trusted workflow must supply its
 **original `steps.producer.outcome`** and those command-exported hashes; neither
 file content nor a conclusion can substitute. The save-preparation command below
-now consumes this return record and performs fresh save readmission. Provider-save/
-after-save/probe and encrypted custody remain unconnected. The bootstrap workflow
+now consumes this return record and performs fresh save readmission. The post-save
+command below connects the after-save check; provider-save/probe and encrypted custody remain unconnected. The bootstrap workflow
 and recipient policy are still absent.
 
 **25 new focused methods PASS** (`CompositionModels`10, `CompletionModels`15),
@@ -1838,7 +1839,8 @@ The eventual caller must retain the actual original bytes, establish NEW live
 ownership, and bind genuine intervening provider outcomes and readmission.
 `KNOWN_UNCHANGED` does not prove a provider ran, what it archived, an atomic
 snapshot, a populated cache, resolver reuse or enclosing-owner retirement.
-No CLI/workflow invokes this leaf; ordinary save-set/bootstrap guards are untouched.
+The fixed command below now invokes this leaf, but no workflow invokes that
+command. Ordinary save-set/bootstrap guards remain untouched.
 
 **56 focused methods PASS:**31 affected `BeforeSaveModels` and25 new
 `AfterSaveModels`. The shared traversal changed, so its before-save regressions
@@ -1851,6 +1853,66 @@ UID0/audit guards are not a kernel sandbox. Exact source, original results and
 independent review belong to the containing commit's #437 mapping. Both HOLDs,
 recipient/trusted-base/formal approval and deadlines remain;5400 is still
 UNADMITTED/UNMEASURED and NativeFile900/Snapshot576MiB unchanged.
+
+### Fixed post-save guard, not provider enforcement
+
+Dormant `after-save` in
+[`run-hosted-cache-bootstrap.py`](../../scripts/run-hosted-cache-bootstrap.py)
+requires the original producer, save-preparation and save outcomes to be literal
+`success`, plus the three original command-exported hashes. The new environment
+bindings are `P2PKIT_BOOTSTRAP_SAVE_PREPARE_OUTCOME`,
+`P2PKIT_BOOTSTRAP_SAVE_PREPARATION_SHA256` and `P2PKIT_BOOTSTRAP_SAVE_OUTCOME`;
+the producer bindings are unchanged. Only future fixed trusted workflow glue
+can supply genuine original outcomes and hashes. Declarations, conclusions and
+self-computed file hashes cannot authenticate themselves.
+
+The earliest command-entry RAW/LOCAL pair is a **post-action upper bound**, not
+an actual provider start or return. It must precede the unchanged original
+provider end. Later validation spends a distinct original `save-readmission`120
+cap; it does not renew180 or require that later work finish inside the already
+observed provider interval. Fixed descriptor/package paths, original directory/
+file bindings, fresh native admission, original allocation and current plan inputs
+are rechecked. The existing `Originals`/`StagedEvidence` constructors validate
+the exact retained context, canonical, properties and stage/seed bytes; no old
+live owner, capability or private execution graph is reconstructed.
+
+One NEW file-only owner invokes the existing complete `after_save` traversal
+once under120/90. Its after-only reentry option retains historical before-parent
+LOCAL solely as old-process data; a distinct current-process readmission-close
+RAW/LOCAL floor constrains this new phase. Same-process defaults remain. Known
+parent closure requires the original complete owned roster, no retained failure
+or UNKNOWN, and a timely actual post-close observation—not merely `closed=True`.
+The next save-observation30 writer retains that previous close and the existing
+save classification (**STORAGE_UNPROVEN**); a separate save-owner-return45 writer
+retains the observation owner's actual close. Its own return remains PENDING.
+Only the final guarded digest escapes publicly, provisional until actual command
+and future original step success. This is success-only composition, not guaranteed
+encrypted delivery of failed/unknown provider or leaf evidence.
+
+This guard **does not stop a provider at its absolute end or establish provider
+retirement**. A timeout calculated before Actions scheduling cannot enforce that
+end; a late post-guard can only reject acceptance. No provider runner/watchdog,
+`GITHUB_OUTPUT`, cache action or workflow is added. Actual provider deadline
+enforcement, exact lookup-only probe and bounded encrypted custody remain separate
+work; provider/native/resolver/scheduling/delivery qualification is outstanding.
+
+**40 focused methods PASS** in one isolated Python3.12 invocation of
+[`hosted-cache-bootstrap-after-save-command-test.py`](../../scripts/tests/hosted-cache-bootstrap-after-save-command-test.py):
+26 command, six descriptor and eight mapping/window controls. Selected actual
+Owner/admission composition, supplied-input/canonical validators, mapper, bound
+readers, after-save traversal and private writers use memory files. Native admission,
+source allowlist acquisition, allocation and elapsed clocks remain models; the
+isolated timing case also models mapper/leaf returns. No full runner import,
+native/private-file/provider, Gradle or hosted execution occurred. The first smoke
+remains0pass/3errors (fixture treated a named tuple as a dataclass); corrected3
+passed. The first35 aggregate remains34pass/1failure (wrong expected refusal code),
+not an intentional preimage regression. Fixture corrections changed no implementation
+bytes. Final40 is separate, not an added total. The bounded run retained
+timeout20/kill2, CPU10/AS512MiB/FD64/core0 and1MiB regular outputs; bindings stayed
+unchanged, own process group was absent and guard denials0. UID0/audit hooks are
+not a kernel sandbox. Exact originals and independent review belong to #437's
+containing-commit mapping. Both HOLDs, missing recipient/trusted-base/formal
+approval, proposed5400 UNADMITTED/UNMEASURED and NativeFile900/Snapshot576MiB remain.
 
 ## Connected consume and delivery path
 
@@ -2038,6 +2100,8 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-save-handoff-test.py Hando
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-save-reader-test.py ReaderModels -v
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-prepare-save-test.py \
   PrepareModels SuppliedDataModels AdmissionAndCliModels -v
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-after-save-command-test.py \
+  CommandModels DescriptorModels MappingAndWindowModels -v
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py

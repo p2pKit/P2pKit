@@ -37,10 +37,40 @@ class _Window(staging._Window):
 
 
 class _AfterWindow(staging._Window):
-    def __init__(self, inputs, phase, previous):
-        super().__init__(inputs, phase, staging._capture_phase(phase), previous, "save-set-after")
+    def __init__(self, inputs, phase, previous, *, current_process_floor=None):
+        # Default supplied same-process chronology is unchanged. A new command
+        # supplies its own actual first pair, not a replacement historical LOCAL.
+        self.current_process_floor = current_process_floor
+        self.current_process_snapshot = (None if current_process_floor is None else
+                                         staging._capture_phase(current_process_floor))
+        snapshot = staging._capture_phase(phase)
+        if current_process_floor is None:
+            super().__init__(inputs, phase, snapshot, previous, "save-set-after")
+        else:
+            self.inputs, self.phase, self.phase_snapshot = inputs, phase, snapshot
+            self.name, (clock, self.first, self.local_start) = "save-set-after", snapshot
+            self.previous_raw, self.previous_ns, self.previous_local = previous
+            # Retain/validate the old scalar only as data from its old process.
+            staging._local(self.previous_local)
+            start_clock, start_ns, start_local = self.current_process_snapshot
+            origin.require(clock == start_clock == staging._clock(inputs.clock) and
+                           origin.integer(self.previous_ns) <= start_ns <= self.first and
+                           start_local <= self.local_start, "BOOTSTRAP_SAVE_AFTER_NEW_PROCESS_CLOCK")
+            self.hard = min(origin.integer(self.first + 120 * origin.NS),
+                            inputs.proposal["phaseFencesNs"]["save-set-after"], inputs.proposal["proposedJobEndNs"])
+            self.local_hard = origin.wire._directed_deadline(self.local_start, 120, self.hard, self.first)
+            self.last, self.local_last, self.last_new = self.first, self.local_start, self.first
         self.soft = min(self.hard, origin.integer(self.first + 90 * origin.NS))
+        origin.require(self.first < self.soft, "BOOTSTRAP_SEED_ORIGINAL_PHASE_EXPIRED")
         self.local_soft = origin.wire._directed_deadline(self.local_start, 90, self.soft, self.first)
+
+    def sample(self, *, new=False):
+        if self.current_process_snapshot is not None:
+            origin.require(staging._capture_phase(self.current_process_floor) == self.current_process_snapshot,
+                           "BOOTSTRAP_SAVE_AFTER_NEW_PROCESS_CHANGED")
+        else:
+            origin.require(self.current_process_floor is None, "BOOTSTRAP_SAVE_AFTER_NEW_PROCESS_CHANGED")
+        super().sample(new=new)
 
 
 def before_save(parent, inputs, window, export_raw):
