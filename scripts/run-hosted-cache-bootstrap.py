@@ -8938,7 +8938,9 @@ class _CollectionPhaseParent:
         if found is None:
             directory = owner.open(path) if parent is None else owner.child(parent, path.name, create=create)
             actual = tuple(directory_identity(list(directory.identity), frame.limits.clock[0]))
-            row = (key, directory, path, actual)
+            # Match the file roster's original backend path, not a PurePath
+            # request type. Requested route/identity and ownership still bind.
+            row = (key, directory, directory.path, actual)
             _update_collection_phase(self, handles=(*_collection_phase_frame(self).handles, row))
             self.handles[key] = directory
             found = row

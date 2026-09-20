@@ -1444,6 +1444,16 @@ oracles. Warmed H is not an attested cohort. Descendant handles verify their own
 current lifetime, **not earlier descendant continuity or an atomic freeze**.
 Pending metadata uses an exclusive initializer sibling, not retained/, H or S.
 
+The collection directory roster pins the **original backend path**, as its
+file roster already does. A requested `PurePath` and the opener's equal-valued
+native `Path` must not become conflicting type witnesses in the closed return
+graph. Requested route, expected identity and independently owned acquisition
+checks remain; no graph assertion is relaxed. Focused `DirectoryPathModels`
+controls in the existing collection-parent test use a memory-only opener with
+that conversion and execute the unchanged return-graph path checker. Full graph
+capture/publication and upstream producer/native/file authority are not provided
+by those models; post-close path-type/value/identity changes still refuse.
+
 Current private ownership is rechecked after pre-close observations; UNKNOWN
 retains unattempted resources, while mere expiry still permits known cleanup.
 NEW query original roots/pair/list identities and pre-final row/owner references

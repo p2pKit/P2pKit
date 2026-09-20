@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 import hashlib
 import json
 import math
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import signal
 import sys
@@ -101,7 +101,8 @@ def selected(path, keep):
 RUNNER = selected(SCRIPTS / "run-hosted-cache-bootstrap.py", lambda name:
     name.startswith(("_CollectionPhase", "_collection_phase", "_claim_collection_phase", "_update_collection_phase",
                      "_invoke_collection_phase", "_run_collection_phase", "_close_collection_phase")) or
-    name in {"CollectionPrefix", "collect_after_entry", "Owner", "_StagingClosedGraph", "NewEntryTransition", "_new_entry_owned"})
+    name in {"CollectionPrefix", "collect_after_entry", "Owner", "_StagingClosedGraph", "_CollectionReturnGraph",
+             "NewEntryTransition", "_new_entry_owned"})
 LEAF_RECORDS = selected(SCRIPTS / "hosted_cache_bootstrap_collect_files.py", lambda name:
     name in {"FileOriginals", "FileCollectionEvidence", "_Member", "_capture"})
 FILE_RECORDS = selected(SCRIPTS / "hosted_dependency_seed_files.py", lambda name: name in {"_identity", "_file_binding"})
@@ -956,6 +957,83 @@ class ReviewBoundaryModels(unittest.TestCase):
 
     def test_terminal_query_replaced_original_row_refuses(self):
         self.query_refuses(lambda supplier: supplier.resources.__setitem__(2, dict(supplier.resources[2])))
+
+
+class DirectoryPathModels(unittest.TestCase):
+    """Original acquisition plus exact return-graph path checks; no graph capture.
+
+    The memory opener converts a PurePath request to Path, like the POSIX
+    backend. Earlier producer authority and return publication remain modeled.
+    """
+    def completed(self):
+        model = Model()
+        model.inputs.session = PurePosixPath(model.session)
+        parents, publish = [], model.n["_publish_collection_phase"]
+        def observed(parent, returned):
+            result = publish(parent, returned)
+            parents.append(parent)
+            return result
+        model.n["_publish_collection_phase"] = observed
+        model.run()
+        self.assertEqual(len(parents), 1)
+        model.parent = parents[0]
+        frame = model.frame()
+        directory = next(row[1] for row in frame.handles if row[0] == "initializer")
+        graph = model.n["_CollectionReturnGraph"]((), tuple(
+            (value, type(value), path, identity) for _key, value, path, identity in frame.handles))
+        return model, directory, graph
+
+    def test_pure_session_request_retains_original_backend_path(self):
+        model, directory, graph = self.completed()
+        row = next(row for row in model.frame().handles if row[0] == "initializer")
+        self.assertIs(type(model.inputs.session), PurePosixPath)
+        self.assertIs(row[2], directory.path)
+        self.assertEqual(row[2], model.inputs.session)
+        self.assertTrue(directory.closed)
+        graph.checked()
+        # The file roster also pins this original backend path, not a conflicting
+        # equal-valued request type. Do not fabricate a later common baseline.
+        for file in model.frame().files:
+            self.assertIs(type(file.path), type(file.directory.path))
+            self.assertEqual(file.path, file.directory.path)
+
+    def test_closed_backend_path_type_value_and_identity_remain_required(self):
+        _model, directory, graph = self.completed()
+        graph.checked()
+        for name, value in (("path", PurePosixPath(directory.path)),
+                            ("path", directory.path.with_name("changed")),
+                            ("identity", (directory.identity[0], directory.identity[1] + 1))):
+            original = getattr(directory, name)
+            with self.subTest(field=name, kind=type(value).__name__):
+                setattr(directory, name, value)
+                try:
+                    with self.assertRaisesRegex(Refusal, "^BOOTSTRAP_COLLECTION_RETURN_PATH_CHANGED$"):
+                        graph.checked()
+                finally:
+                    setattr(directory, name, original)
+        graph.checked()
+
+    def test_existing_key_cannot_change_requested_route_or_expected_identity(self):
+        for change in ("route", "identity"):
+            with self.subTest(change=change):
+                model = Model()
+                parent = model.live()
+                directory = parent.directory("initializer", PurePosixPath(model.session))
+                path = model.state if change == "route" else model.session
+                identity = directory.identity if change == "route" else (1, directory.identity[1] + 1)
+                with self.assertRaisesRegex(Refusal, "^BOOTSTRAP_COLLECTION_PHASE_DIRECTORY_CHANGED$"):
+                    parent.directory("initializer", path, identity)
+
+    def test_wrong_original_backend_route_is_not_accepted(self):
+        model = Model()
+        parent, open_original = model.live(), model.open
+        def wrong(path, **kwargs):
+            directory = open_original(path, **kwargs)
+            directory.path = directory.path.with_name("wrong-returned-route")
+            return directory
+        model.open = wrong
+        with self.assertRaises(Refusal):
+            parent.directory("initializer", PurePosixPath(model.session))
 
 
 class OriginalModels(unittest.TestCase):
