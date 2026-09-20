@@ -736,3 +736,19 @@ def export_test_encrypted(evidence, output, recipient: Recipient, *, profile, ro
                    lambda: ordinary._bound_manifest(recipient, profile=profile, root=root,
                                                      admission=admission, query_runner=query_runner),
                    max_bytes=max_bytes, max_members=max_members, timeout_seconds=timeout_seconds)
+
+
+def export_bootstrap_encrypted(evidence, output, recipient: Recipient, *, root, admission, query_runner,
+                               timeout_seconds, max_bytes=portable.MAX_BYTES, max_members=portable.MAX_MEMBERS):
+    """Dormant schema-3 bootstrap entry; no ordinary/manual identity fallback.
+
+    Borrowed NEW native owners, original absolute fences, known writer retirement
+    and actual enclosing return/seal remain caller obligations. The unchanged
+    native backend rechecks this closed identity before ciphertext publication;
+    it cannot turn a dependency Snapshot or UNKNOWN custody into evidence.
+    """
+    ordinary._bootstrap_bounds(max_bytes, max_members, timeout_seconds)
+    return _export(evidence, output, recipient,
+                   lambda: ordinary._bound_bootstrap_manifest(recipient, root=root, admission=admission,
+                                                               query_runner=query_runner),
+                   max_bytes=max_bytes, max_members=max_members, timeout_seconds=timeout_seconds)

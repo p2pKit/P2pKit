@@ -2294,6 +2294,45 @@ claimed as original provider output. Whole-domain retirement, the original
 credentials, actual enclosing returns and custody/delivery remain the future
 supervisor's obligations. Both HOLDs and all existing limits remain unchanged.
 
+### Dormant bootstrap encrypted-export identity adapter
+
+[`hosted_test_evidence.export_bootstrap_encrypted`](../../scripts/hosted_test_evidence.py)
+and the [native Windows counterpart](../../scripts/hosted_windows_evidence.py)
+provide separate **closed entry points**, not a bootstrap custody controller.
+They require the original immutable Admission and re-run the maintained bootstrap
+admission with `expected=original`, including its trusted-original-main policy
+requirement. An ordinary admission, absent original policy, changed source/event/
+policy, mismatched validated recipient fingerprint/armor hash or a policy beyond
+the key's lifetime cannot authorize this export. There is no supplied public
+manifest, new recipient, manual-identity fallback or ordinary-profile relabeling.
+
+The public manifest has schema3 and distinct scope
+`ENCRYPTED_PRIVATE_CACHE_BOOTSTRAP_EVIDENCE`. It binds the admitted source/run/
+policy and the separate bootstrap profile, selection, cache cohort and fixed
+configuration-only request. It retains `testAcceptance=NOT_PERFORMED`, never
+ordinary suites, ABI/simulator acceptance or provider success. The existing
+schema1 manual and schema2 ordinary entries and encryption mechanisms are
+unchanged. Windows retains the existing backend's repeated identity check;
+the POSIX mechanism still needs its caller's separate post-return seal.
+
+The caller must supply an explicit relative timeout of at most the existing
+proposed **custody-encrypt240 seconds**, and no more than the unchanged512MiB /
+10,000-member evidence bounds. This does **not** create or renew an original
+absolute fence, admit the5400 proposal or give re-admission uncharged time.
+Native/private readers, crypto workers, cleanup and enclosing return still need
+the future owner's original custody/final/read caps and genuine retirement.
+
+Only a NEW frozen **evidence-only** tree belongs here: never H/S, dependency
+bytes, provider archives or credentials. The adapter does not collect/freeze
+that tree, establish its no-writer premise, authorize an UNKNOWN/failed owner,
+preserve every failure or supply a seal/upload guard. Backend errors and UNKNOWN
+remain errors; ciphertext presence is not actual successful enclosing return.
+There is no production caller or bootstrap workflow. Focused additions to the
+existing [closed-entry controls](../../scripts/tests/hosted-test-evidence-test.py)
+use synthetic admission/query/crypto/native boundaries, not the custodian key,
+real encryption, native Windows or hosted qualification. Both HOLDs and all
+trusted-main/provider/resolver/custody/delivery/scheduling prerequisites remain.
+
 ### Optional absolute native-drain acceptance
 
 [`audit_processes.py`](../../scripts/audit_processes.py) offers a separate
@@ -2427,6 +2466,7 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-probe-test.py \
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/hosted-windows-provider-command-test.py
+python3 -I -B -S scripts/tests/hosted-test-evidence-test.py
 python3 -I -B -S scripts/tests/audit-process-drain-deadline-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
 python3 -I -B -S scripts/tests/hosted-consume-delivery-test.py
