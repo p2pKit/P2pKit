@@ -11129,6 +11129,187 @@ def _bootstrap_export_controls():
 del _bootstrap_export_controls
 
 
+def _read_save_handoff(owner, initializer, directory, admitted, *, producer_outcome, expected_sha256):
+    """Read supplied package consistency, NOT trusted step/provider admission.
+
+    The caller supplies its live bounded Owner and registered directories. This
+    function neither creates/extends that owner nor closes borrowed resources.
+    Its byte tuple returns with enclosing-owner close PENDING. No original-call
+    registry is reconstructed. A future fixed workflow must bind the actual
+    producer outcome/hash, never conclusion or a digest read from the package.
+    The final writer-return high-water was not persisted and is not invented.
+    """
+    require(type(producer_outcome) is str and producer_outcome == "success",
+            "BOOTSTRAP_SAVE_READ_PRODUCER_OUTCOME")
+    require(type(expected_sha256) is str and re.fullmatch(r"[0-9a-f]{64}", expected_sha256),
+            "BOOTSTRAP_SAVE_READ_ORIGINAL_HASH")
+    require(type(owner) is Owner and owner.first is not None and owner.fence is not None,
+            "BOOTSTRAP_SAVE_READ_OWNER")
+    first, fence, ledger, local_end = owner.first, owner.fence, owner.resources, owner.local_end
+    cancelled = owner.cancelled
+    limits = (owner.work_limit, owner.final_limit)
+    origin.clocks.validate_reading(first)
+    clock_raw, first_ns = origin.encoded(origin.clock_value(first.clock)), origin.integer(first.nanoseconds)
+
+    def checked():
+        require(type(owner) is Owner and owner.first is first and owner.fence is fence and owner.resources is ledger and
+                owner.cancelled is cancelled and
+                type(owner.local_end) is float and owner.local_end == local_end and
+                (owner.work_limit, owner.final_limit) == limits and
+                first.nanoseconds == first_ns and origin.encoded(origin.clock_value(first.clock)) == clock_raw and
+                origin.encoded(origin.clock_value(fence.clock)) == clock_raw,
+                "BOOTSTRAP_SAVE_READ_OWNER_CHANGED")
+        require(not QUARANTINE and not query.QUARANTINE and not diagnostics._QUARANTINE,
+                "BOOTSTRAP_SAVE_READ_PRIOR_UNKNOWN")
+        owner.end()
+        # A bound fence need not forward the borrowed owner's cancellation.
+        cancelled()
+
+    def same(actual, expected, reason="BOOTSTRAP_SAVE_READ_BINDING"):
+        require(origin.encoded(actual) == origin.encoded(expected), reason)
+
+    names = (
+        "before-parent.json", "before-leaf.json", "export-parent.json", "export-leaf.json",
+        "no-loader-parent.json", "no-loader-leaf.json", "collection-parent.json", "collection-leaf.json",
+        "collection-inventory.json", "producer-parent.json", "producer-request.json", "producer-observation.json",
+        "producer-command.json", "producer-birth.json", "producer-leader.json", "producer-preparer.json",
+        "producer-terminal.json", "producer-survivors.json", "custody-parent.json", "custody-leaf.json",
+        "seed-parent.json", "stage-parent.json", "stage-leaf.json", "seed-leaf.json", "initializer-parent.json",
+        "recipient-parent.json", "allocation-proposal.json", "entry-parent.json", "adoption-parent.json",
+        "adoption-preparation.json", "entry-preparation.json",
+    )
+    try:
+        checked()
+        admission = origin.admitted_value(admitted)  # Supplied-data check, NOT fresh native admission.
+        profile, role = bootstrap.cache_cohort(admitted.record)
+        require(role == first.clock.role and initializer.path.is_absolute() and ".." not in initializer.path.parts and
+                initializer.path.name == "initializer" and initializer.path.parent.name ==
+                "p2pkit-cache-originals-" + admission["github"]["runId"] + "-" + admission["github"]["runAttempt"] +
+                "-" + admission["selection"] + "-productive" and
+                directory.path == initializer.path / "dependency-save-handoff", "BOOTSTRAP_SAVE_READ_LAYOUT")
+        session, path = initializer.path, directory.path
+        parent_id = directory_identity(list(initializer.identity), role)
+        directory_id = directory_identity(list(directory.identity), role)
+        require(parent_id != directory_id, "BOOTSTRAP_SAVE_READ_DIRECTORY_ALIAS")
+
+        def locations():
+            checked()
+            _new_entry_owned(owner, initializer, session, parent_id)
+            _new_entry_owned(owner, directory, path, directory_id)
+            checked()
+
+        locations()
+        raw = owner.read(directory, "save-handoff.json")
+        require(type(raw) is bytes and 0 < len(raw) <= LIMIT and origin.digest(raw) == expected_sha256,
+                "BOOTSTRAP_SAVE_READ_HASH_CHANGED")
+        value = origin.parse(raw)
+        require(type(value) is dict and set(value) == {"schema", "scope", "binding", "source", "github", "selection",
+                "cacheCohort", "plan", "planSha256", "directory", "directoryIdentity", "blobs", "references", "chain",
+                "window", "writerReturn", "providerExecution", "nextPhaseAuthority", "budgetAcceptance", "testAcceptance",
+                "exportSaveAuthority"} and raw == origin.encoded(value) and type(value["schema"]) is int and
+                value["schema"] == 1 and value["scope"] == "BOOTSTRAP_SAVE_HANDOFF_PENDING_ORIGINAL_STEP_RETURN_V1" and
+                value["writerReturn"] == "PENDING_NOT_OBSERVABLE_BY_THIS_FILE" and value["providerExecution"] == "NOT_PERFORMED" and
+                value["budgetAcceptance"] == "NOT_ADMITTED" and value["testAcceptance"] == "NOT_PERFORMED" and
+                value["nextPhaseAuthority"] is value["exportSaveAuthority"] is False and
+                type(value["references"]) is dict and type(value["chain"]) is dict,
+                "BOOTSTRAP_SAVE_READ_INDEX")
+        for name in ("source", "github", "selection", "cacheCohort"):
+            same(value[name], admission[name])
+        same(value["directory"], str(path))
+        same(value["directoryIdentity"], directory_id)
+        plan, binding = value["plan"], value["binding"]
+        staging.cache._plan_shape(plan)  # Structural only; validate_plan/source rederivation remains outstanding.
+        container = staging.files.stage_path(session, profile, role)
+        for name, expected in (("mode", "bootstrap"), ("profile", profile), ("role", role),
+                ("source", admission["source"]), ("github", admission["github"]),
+                ("admissionSha256", origin.digest(admitted.record)), ("session", str(session)),
+                ("restoreHome", str(container / "restore-home")),
+                ("path", str((container / "restore-home").joinpath(*staging.files.PREFIX)))):
+            same(plan[name], expected)
+        same(value["planSha256"], origin.digest(origin.encoded(plan)))
+        require(type(binding) is dict, "BOOTSTRAP_SAVE_READ_BINDING")
+        for name, expected in (("admissionSha256", plan["admissionSha256"]), ("session", str(session)),
+                ("state", str(session / "state")), ("home", str(session / "state/gradle-home")),
+                ("container", str(container)), ("restoreHome", plan["restoreHome"]),
+                ("clock", origin.clock_value(first.clock))):
+            same(binding[name], expected)
+        same(binding["initializerDirectories"]["session"], parent_id)
+        require(type(value["blobs"]) is dict and set(value["blobs"]) == set(names), "BOOTSTRAP_SAVE_READ_BLOB_ROSTER")
+        roster = tuple(sorted((*names, "save-handoff.json")))
+        require(_initializer_names(owner, directory) == roster, "BOOTSTRAP_SAVE_READ_DIRECTORY_ROSTER")
+        blobs = {}
+        for name in names:  # Never traverse reference paths or JSON-selected filenames.
+            locations()
+            row = value["blobs"][name]
+            require(type(row) is dict and set(row) == {"bytes", "sha256"} and type(row["bytes"]) is int and
+                    0 < row["bytes"] <= LIMIT and staging.cache._sha(row["sha256"]), "BOOTSTRAP_SAVE_READ_BLOB_BINDING")
+            blob = owner.read(directory, name, row["bytes"])
+            require(type(blob) is bytes and len(blob) == row["bytes"] and origin.digest(blob) == row["sha256"],
+                    "BOOTSTRAP_SAVE_READ_BLOB_CHANGED")
+            blobs[name] = blob
+
+        proposal, before, exported = (origin.parse(blobs[name]) for name in
+            ("allocation-proposal.json", "before-parent.json", "export-parent.json"))
+        same(binding["proposalSha256"], origin.digest(blobs["allocation-proposal.json"]))
+        for name in ("source", "github", "selection", "cacheCohort"):
+            same(proposal[name], admission[name])
+        same(proposal["clock"], origin.clock_value(first.clock))
+        require(proposal["scope"] == allocation.SCOPE and proposal["budgetAcceptance"] == "NOT_ADMITTED" and
+                proposal["testAcceptance"] == "NOT_PERFORMED" and proposal["exportSaveAuthority"] is False,
+                "BOOTSTRAP_SAVE_READ_PROPOSAL")
+        for name, scope in (("before-leaf.json", dependency_save_set.SCOPE), ("export-leaf.json", dependency_export.SCOPE),
+                            ("stage-leaf.json", staging.STAGE_SCOPE), ("seed-leaf.json", staging.SEED_SCOPE)):
+            leaf = origin.parse(blobs[name])
+            require(leaf["scope"] == scope, "BOOTSTRAP_SAVE_READ_LEAF_SCOPE")
+            same(leaf["binding"], binding)
+            same(leaf["plan"], plan)
+        for parent, scope, leaf_name in ((before, "BOOTSTRAP_SAVE_SET_PARENT_CLOSED_OBSERVATIONS_V1", "before-leaf.json"),
+                (exported, "BOOTSTRAP_EXPORT_PARENT_CLOSED_OBSERVATIONS_V1", "export-leaf.json")):
+            require(parent["scope"] == scope and parent["parentResourceClose"] == "KNOWN_RESOURCE_CLOSE_ONLY" and
+                    parent["nextPhaseAuthority"] is parent["exportSaveAuthority"] is False and
+                    parent["budgetAcceptance"] == "NOT_ADMITTED" and parent["testAcceptance"] == "NOT_PERFORMED",
+                    "BOOTSTRAP_SAVE_READ_PARENT")
+            same(parent["clock"], origin.clock_value(first.clock))
+            same(parent["leafSha256"], origin.digest(blobs[leaf_name]))
+        same(before["exportParentSha256"], origin.digest(blobs["export-parent.json"]))
+        frozen = origin.parse(blobs["before-leaf.json"])
+        same(frozen["exportSha256"], origin.digest(blobs["export-leaf.json"]))
+        window, returned = value["window"], value["chain"]["returns"]["before"]
+        require(type(window) is dict and set(window) == {"phase", "clock", "firstNs", "hardEndNs",
+                "predecessorCheckedNs", "predecessorSha256"} and window["phase"] == "producer-owner-return",
+                "BOOTSTRAP_SAVE_READ_WINDOW")
+        same(window["clock"], origin.clock_value(first.clock))
+        same(window["predecessorSha256"], origin.digest(blobs["before-parent.json"]))
+        same(window["predecessorCheckedNs"], origin.integer(returned["checkedNs"]))
+        staging._local(returned["checkedLocal"])  # Historical only; not a new process's LOCAL floor.
+        began, hard = origin.integer(window["firstNs"]), origin.integer(window["hardEndNs"])
+        require(origin.integer(before["firstNs"]) <= origin.integer(before["closedNs"]) <=
+                window["predecessorCheckedNs"] < origin.integer(before["hardEndNs"]) and
+                window["predecessorCheckedNs"] <= began < hard == min(origin.integer(began + 45 * staging.NS),
+                    origin.integer(proposal["phaseFencesNs"]["producer-owner-return"]),
+                    origin.integer(proposal["proposedJobEndNs"])) and first_ns >= began,
+                "BOOTSTRAP_SAVE_READ_RECORDED_CHRONOLOGY")
+        # Only the retained before floor and writer's first observation exist
+        # here, NOT the writer's final checked_ns/checked_local or step return.
+        require(_initializer_names(owner, directory) == roster, "BOOTSTRAP_SAVE_READ_DIRECTORY_ROSTER")
+        for name in names:
+            locations()
+            require(owner.read(directory, name, len(blobs[name])) == blobs[name], "BOOTSTRAP_SAVE_READ_REREAD_CHANGED")
+        require(owner.read(directory, "save-handoff.json") == raw, "BOOTSTRAP_SAVE_READ_INDEX_CHANGED")
+        require(_initializer_names(owner, directory) == roster, "BOOTSTRAP_SAVE_READ_DIRECTORY_ROSTER")
+        locations()
+        return raw, tuple((name, blobs[name]) for name in names)
+    except BaseException as error:
+        # The caller still owns cleanup. Preserve a prior/falsey cause and let
+        # the existing owner quarantine an uncertain reader/close normally.
+        original = owner.original if owner.original is not None else error
+        try:
+            owner.error("save-handoff-read", error)
+        except BaseException:
+            owner.unknown = True
+        raise original
+
+
 def guarded(operation):
     handlers, cancelled, original, result = {}, [], None, None
     try:

@@ -1677,6 +1677,43 @@ a kernel sandbox or native/provider qualification. Exact source, original result
 and independent review are mapped in the containing commit's #437 record.
 Both HOLDs and the unadmitted/unmeasured5400 proposal remain unchanged.
 
+### Borrowed-owner save-package reader, not provider admission
+
+Internal `_read_save_handoff` reads the supplied index and its31 fixed blobs
+through an existing live `Owner` and registered initializer/handoff directories.
+It requires separately supplied literal producer `success` and an exact index
+SHA-256, then checks canonical index shape, non-authority flags, source/run/cohort,
+structural bootstrap plan/path, selected repeated leaf bindings and recorded
+before/export/proposal links. Complete directory enumeration and byte rereads
+detect changed/missing/extra/aliased members. Reference paths are never traversed.
+The32-name/2MiB bounds remain; no new owner, window, write or provider call exists.
+The reader pins and invokes the borrowed cancellation callback even when its
+bound fence only checks deadlines. Original failures and UNKNOWN remain failures;
+the caller still owns cleanup and the returned bytes have owner close **PENDING**.
+
+This is **exact-byte package and selected consistency checking only**. Supplied
+outcome/hash are not authentication of a GitHub step. References and unselected
+blob semantics stay opaque, not revalidated original-call capabilities. Structural
+`_plan_shape` is not fresh source/native admission or `validate_plan` rederivation.
+The index retains the before-return floor and writer start, but **not the final
+writer-return RAW/LOCAL high-water**. A later trusted wrapper must retain the real
+post-return observation; this reader does not invent it or compare historical
+LOCAL values across processes. No CLI or workflow invokes this reader yet.
+
+**37 focused `ReaderModels` methods PASS** in one isolated Python3.12 invocation.
+An independent source review found the missing bound-owner cancellation call;
+the unchanged preimage smoke ran two methods: one positive PASS and the desired
+cancellation control FAIL. That same control passes after the minimal fix.
+Actual selected reader/Owner/directory, JSON/clock-data and plan-shape code runs
+against memory files and supplied-record fixtures; admission and elapsed clocks
+remain models. No accepted writer suite or native/provider execution was replayed.
+Timeout20/kill2, CPU10/AS512MiB/FD64/core0 and1MiB regular output limits were used;
+all input bindings were unchanged, owned process group absent and guard denials0.
+UID0/audit guards are not a kernel sandbox. Exact original results and independent
+final review are mapped with the containing commit in #437. Both HOLDs, recipient/
+trusted-base/formal approval,5400 UNADMITTED/UNMEASURED and NativeFile900/
+Snapshot576MiB remain unchanged.
+
 ### Supplied-original after-save recheck
 
 `after_save` reuses the same complete traversal as `before_save`, with a distinct
@@ -1890,6 +1927,7 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-export-test.py \
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-save-set-test.py \
   BeforeSaveModels BeforeReturnModels AfterSaveModels -v
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-save-handoff-test.py HandoffModels -v
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-save-reader-test.py ReaderModels -v
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
