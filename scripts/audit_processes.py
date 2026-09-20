@@ -13,6 +13,7 @@ import ctypes
 import errno
 import io
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -36,6 +37,85 @@ SIG_KILL = 9
 
 class OwnershipError(RuntimeError):
     """Ownership cannot be established or finalized safely."""
+
+
+class DrainDeadlineExceeded(OwnershipError):
+    """An explicit retirement phase expired; never evidence of disappearance."""
+
+
+def _finite_number(value: Any) -> bool:
+    try:
+        return type(value) in (int, float) and math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _drain_phase_ends(grace: float, kill_wait: float, deadline: float) -> tuple[float, float, float]:
+    if not all(_finite_number(value) for value in (grace, kill_wait, deadline)) or grace < 0 or kill_wait < 0:
+        raise OwnershipError("Explicit native drain requires finite nonboolean end and nonnegative durations")
+    started = time.monotonic()
+    if not _finite_number(started):
+        raise OwnershipError("Invalid native drain monotonic observation")
+    if deadline <= started:
+        raise DrainDeadlineExceeded("Native drain absolute end is already expired")
+    # Fix both ends before any discovery or signaling. A slow TERM phase never
+    # creates a fresh KILL grace or extends the caller's original monotonic end.
+    return started, min(started + grace, deadline), min(started + grace + kill_wait, deadline)
+
+
+def _check_drain_deadline(deadline: float | None) -> None:
+    if deadline is None:
+        return  # The existing no-keyword route does not acquire a new clock.
+    if not _finite_number(deadline):
+        raise OwnershipError("Invalid native drain absolute phase end")
+    now = time.monotonic()
+    if not _finite_number(now):
+        raise OwnershipError("Invalid native drain monotonic observation")
+    if now >= deadline:
+        raise DrainDeadlineExceeded("Native drain absolute phase end exhausted")
+
+
+def _bounded_drain(scope: Any, grace: float, kill_wait: float, deadline: float, *,
+                   quiet_required: int, repeat_signals: bool = True) -> list[dict[str, Any]]:
+    """Bound acceptance, not synchronous kernel latency; an outer watchdog is required.
+
+    Existing discover() inner loops/native calls retain their original bounds.
+    A call already entered can finish late; its result cannot authorize success
+    or new signals. Callers must also postcheck their end and resource closure.
+    Darwin uses its own pending-lifetime reconciliation loop below.
+    """
+    _, term_end, kill_end = _drain_phase_ends(grace, kill_wait, deadline)
+    live = []
+    for signum, end in ((SIG_TERM, term_end), (SIG_KILL, kill_end)):
+        quiet, sent = 0, False
+        try:
+            while True:
+                _check_drain_deadline(end)
+                observed = scope.discover()
+                _check_drain_deadline(end)
+                live = observed  # Only completed timely observations may be returned.
+                if not live and not scope.discovery_errors and not getattr(scope, "pending_discoveries", None):
+                    quiet += 1
+                    if quiet >= quiet_required:
+                        _check_drain_deadline(end)
+                        return []
+                else:
+                    quiet = 0
+                    if repeat_signals or not sent:
+                        scope.signal_all(signum, deadline=end)
+                        _check_drain_deadline(end)
+                        sent = True
+                remaining = end - time.monotonic()
+                if remaining <= 0:
+                    break
+                time.sleep(min(0.1, remaining))
+        except DrainDeadlineExceeded:
+            # Escalation, if any, spends only the already fixed second phase.
+            # No quiet count, late observation or late signal result is accepted.
+            continue
+    if live:
+        return live  # Conservative last timely census, not a new late discovery.
+    raise DrainDeadlineExceeded("Native drain did not establish timely quiet retirement within its absolute bounds")
 
 
 MAX_RETIREMENT_ERRORS = 256
@@ -330,7 +410,7 @@ class PosixScope:
     def _acquire(self, identity: dict[str, Any]) -> Any:
         raise NotImplementedError
 
-    def _send(self, identity: dict[str, Any], handle: Any, signum: int) -> None:
+    def _send(self, identity: dict[str, Any], handle: Any, signum: int, *, deadline: float | None = None) -> None:
         raise NotImplementedError
 
     def _release(self, handle: Any) -> None:
@@ -443,15 +523,26 @@ class PosixScope:
         self.discover()
         return process
 
-    def signal_all(self, signum: int) -> None:
-        for identity in self.discover():
+    def signal_all(self, signum: int, *, deadline: float | None = None) -> None:
+        _check_drain_deadline(deadline)
+        live = self.discover()
+        _check_drain_deadline(deadline)
+        for identity in live:
+            _check_drain_deadline(deadline)
             key = self._key(identity)
             try:
-                self._send(identity, self.handles[key], signum)
+                if deadline is None:
+                    self._send(identity, self.handles[key], signum)
+                else:
+                    self._send(identity, self.handles[key], signum, deadline=deadline)
             except ProcessLookupError:
                 pass
+            _check_drain_deadline(deadline)
 
-    def drain(self, grace: float = 5.0, kill_wait: float = 5.0) -> list[dict[str, Any]]:
+    def drain(self, grace: float = 5.0, kill_wait: float = 5.0, *,
+              deadline: float | None = None) -> list[dict[str, Any]]:
+        if deadline is not None:
+            return _bounded_drain(self, grace, kill_wait, deadline, quiet_required=3)
         if self.discover():
             self.signal_all(SIG_TERM)
         end = time.monotonic() + grace
@@ -555,8 +646,10 @@ class LinuxScope(PosixScope):
             raise ProcessLookupError(identity["pid"])
         return handle
 
-    def _send(self, identity: dict[str, Any], handle: int, signum: int) -> None:
+    def _send(self, identity: dict[str, Any], handle: int, signum: int, *, deadline: float | None = None) -> None:
+        _check_drain_deadline(deadline)
         signal.pidfd_send_signal(handle, signum)
+        _check_drain_deadline(deadline)
 
     def _release(self, handle: int) -> None:
         os.close(handle)
@@ -817,44 +910,76 @@ class DarwinScope(PosixScope):
         return {**super().description(), "observationReconciliations": self.observation_reconciliations,
                 "drainReconciliations": self.drain_reconciliations}
 
-    def _send(self, identity: dict[str, Any], handle: AuditToken, signum: int) -> None:
+    def _send(self, identity: dict[str, Any], handle: AuditToken, signum: int, *,
+              deadline: float | None = None) -> None:
         # A real token is reacquired after exec-version changes; never os.kill(pid).
+        _check_drain_deadline(deadline)
         token = self._acquire(identity)
+        # Token acquisition retains its existing bounded observation/Mach-right
+        # cleanup. A token returned late must never reach the actual signal API.
+        _check_drain_deadline(deadline)
         result = self.proc.proc_signal_with_audittoken(ctypes.byref(token), signum)
+        if result not in (0, errno.ESRCH):
+            # A real native denial stays fatal even if the call consumed this
+            # phase. Turning it into normal phase expiry could hide the failure
+            # behind a later KILL/quiet census and incorrectly accept retirement.
+            raise OwnershipError(f"Darwin identity-scoped signal failed: errno {result}")
+        _check_drain_deadline(deadline)
         if result == errno.ESRCH:
             raise ProcessLookupError(identity["pid"])
-        if result != 0:
-            raise OwnershipError(f"Darwin identity-scoped signal failed: errno {result}")
 
-    def _reconcile_drain_signals(self) -> None:
+    def _reconcile_drain_signals(self, *, deadline: float | None = None) -> None:
         for key, record in list(self.active_drain["pending"].items()):
             # A filtered/empty census, changed credentials, or a stale token's
             # ESRCH is not retirement of this already-owned lifetime.
+            _check_drain_deadline(deadline)
             current = self._identity(record["identity"]["pid"], required=True)
+            _check_drain_deadline(deadline)
             record["lastIdentity"] = current
             if current is None or not current["live"] or self._key(current) != key:
                 record["outcome"] = "absent" if current is None else "nonrunning" if not current["live"] else "replaced"
                 self.active_drain["pending"].pop(key)
 
-    def signal_all(self, signum: int) -> None:
+    def signal_all(self, signum: int, *, deadline: float | None = None) -> None:
         if self.active_drain is None:
-            return super().signal_all(signum)
+            if deadline is None:
+                return super().signal_all(signum)
+            return super().signal_all(signum, deadline=deadline)
         active = self.active_drain
-        if time.monotonic() >= active["deadline"]:
+        if deadline is not None:
+            if deadline != active["deadline"]:
+                raise OwnershipError("Native signal end differs from its active drain phase")
+            _check_drain_deadline(deadline)
+        elif time.monotonic() >= active["deadline"]:
             return
         live = self.discover()
-        self._reconcile_drain_signals()
+        _check_drain_deadline(deadline)
+        if deadline is None:
+            self._reconcile_drain_signals()
+        else:
+            self._reconcile_drain_signals(deadline=deadline)
+        _check_drain_deadline(deadline)
         for identity in live:
             # Do not start another signal observation after this phase. An
             # in-flight census/_observe/kernel call retains its existing bounds.
-            if time.monotonic() >= active["deadline"]:
+            if deadline is not None:
+                _check_drain_deadline(deadline)
+            elif time.monotonic() >= active["deadline"]:
                 break
             key = self._key(identity)
             first_observation = len(self.observation_reconciliations)
             try:
-                self._send(identity, self.handles[key], signum)
+                if deadline is None:
+                    self._send(identity, self.handles[key], signum)
+                else:
+                    self._send(identity, self.handles[key], signum, deadline=deadline)
+                _check_drain_deadline(deadline)
             except ProcessLookupError:
-                self._reconcile_drain_signals()
+                _check_drain_deadline(deadline)
+                if deadline is None:
+                    self._reconcile_drain_signals()
+                else:
+                    self._reconcile_drain_signals(deadline=deadline)
             except DarwinObservationExhausted as error:
                 record = active["pending"].get(key)
                 if record is None:
@@ -867,6 +992,7 @@ class DarwinScope(PosixScope):
                 record.update(lastIdentity=dict(identity), lastFailure=str(error), lastSignal=signum,
                               lastObservation=len(self.observation_reconciliations) - 1,
                               failures=record["failures"] + 1)
+                _check_drain_deadline(deadline)
             else:
                 record = active["pending"].pop(key, None)
                 if record is not None:
@@ -874,39 +1000,64 @@ class DarwinScope(PosixScope):
                     # Ordinary known-lifetime/quiet checks still govern retirement.
                     record.update(outcome="signal-succeeded", lastSignal=signum, lastIdentity=dict(identity),
                                   lastObservation=len(self.observation_reconciliations) - 1)
+            _check_drain_deadline(deadline)
 
-    def drain(self, grace: float = 5.0, kill_wait: float = 5.0) -> list[dict[str, Any]]:
+    def drain(self, grace: float = 5.0, kill_wait: float = 5.0, *,
+              deadline: float | None = None) -> list[dict[str, Any]]:
         if self.active_drain is not None:
             raise OwnershipError("Darwin drain is already active")
         if len(self.drain_reconciliations) >= 1024:
             raise OwnershipError("Darwin drain evidence exceeds its bound")
-        started = time.monotonic()
+        if deadline is None:
+            started = time.monotonic()
+            term_end, kill_end = started + grace, started + grace + kill_wait
+        else:
+            started, term_end, kill_end = _drain_phase_ends(grace, kill_wait, deadline)
         record = {"startedMonotonic": started, "graceSeconds": grace, "killWaitSeconds": kill_wait,
                   "phases": [], "signalReconciliations": [], "outcome": "unresolved"}
+        if deadline is not None:
+            record["absoluteDeadlineMonotonic"] = deadline
         self.drain_reconciliations.append(record)
         self.active_drain = {"record": record, "pending": {}, "deadline": started}
-        live = []
+        live, primary = [], None
         try:
             # Both deadlines are fixed before any failed signal/census. No new
             # retry window is added for an exhausted 0.25-second observation.
-            for signum, deadline in ((SIG_TERM, started + grace), (SIG_KILL, started + grace + kill_wait)):
-                self.active_drain["deadline"] = deadline
-                record["phases"].append({"signal": signum, "deadlineMonotonic": deadline})
+            for signum, phase_end in ((SIG_TERM, term_end), (SIG_KILL, kill_end)):
+                self.active_drain["deadline"] = phase_end
+                record["phases"].append({"signal": signum, "deadlineMonotonic": phase_end})
                 quiet = 0
-                while time.monotonic() < deadline:
-                    live = self.discover()
-                    self._reconcile_drain_signals()
-                    if not live and not self.active_drain["pending"]:
-                        quiet += 1
-                        if quiet >= 3:
-                            record["outcome"] = "retired"
-                            return []
-                    else:
-                        quiet = 0
-                        self.signal_all(signum)
-                    remaining = deadline - time.monotonic()
-                    if remaining > 0:
-                        time.sleep(min(0.1, remaining))
+                try:
+                    while time.monotonic() < phase_end:
+                        _check_drain_deadline(phase_end if deadline is not None else None)
+                        observed = self.discover()
+                        _check_drain_deadline(phase_end if deadline is not None else None)
+                        live = observed
+                        if deadline is None:
+                            self._reconcile_drain_signals()
+                        else:
+                            self._reconcile_drain_signals(deadline=phase_end)
+                        _check_drain_deadline(phase_end if deadline is not None else None)
+                        unknown = deadline is not None and (self.discovery_errors or self.pending_discoveries)
+                        if not live and not self.active_drain["pending"] and not unknown:
+                            quiet += 1
+                            if quiet >= 3:
+                                _check_drain_deadline(phase_end if deadline is not None else None)
+                                record["outcome"] = "retired"
+                                return []
+                        else:
+                            quiet = 0
+                            if deadline is None:
+                                self.signal_all(signum)
+                            else:
+                                self.signal_all(signum, deadline=phase_end)
+                        remaining = phase_end - time.monotonic()
+                        if remaining > 0:
+                            time.sleep(min(0.1, remaining))
+                except DrainDeadlineExceeded:
+                    if deadline is None:
+                        raise
+                    record["phases"][-1]["outcome"] = "deadline-exhausted"
             if self.active_drain["pending"]:
                 raise DarwinObservationExhausted("Darwin known-token drain remains unresolved within its phase bounds")
             if live:
@@ -916,14 +1067,31 @@ class DarwinScope(PosixScope):
                 return live
             raise OwnershipError("Darwin drain did not establish three quiet censuses within its phase bounds")
         except BaseException as error:
+            primary = error
             record["error"] = str(error)
             record["outcome"] = "unresolved" if isinstance(error, DarwinObservationExhausted) else "failed"
             raise
         finally:
-            record["finishedMonotonic"] = time.monotonic()
-            # Per-drain records are terminal. A later product-final drain cannot
-            # rewrite an unresolved pre-stop observation into successful custody.
-            self.active_drain = None
+            if deadline is None:
+                record["finishedMonotonic"] = time.monotonic()
+                self.active_drain = None
+            else:
+                try:
+                    finished = time.monotonic()
+                    record["finishedMonotonic"] = finished
+                    if not _finite_number(finished):
+                        raise OwnershipError("Invalid native drain final monotonic observation")
+                    if record["outcome"] == "retired" and finished >= self.active_drain["deadline"]:
+                        raise DrainDeadlineExceeded("Native drain retirement returned after its absolute phase end")
+                except BaseException as error:
+                    if primary is None:
+                        record.update(error=str(error), outcome="failed")
+                        raise
+                    record["finalizationError"] = str(error)
+                finally:
+                    # Earlier terminal/failed records are never rewritten by a
+                    # later drain; even a late-return failure retires active state.
+                    self.active_drain = None
 
 
 class SecurityAttributes(ctypes.Structure):
@@ -1385,17 +1553,25 @@ class WindowsScope:
         streams.clear()  # Transfer only after every fallible launch finalizer succeeded.
         return child
 
-    def signal_all(self, signum: int) -> None:
+    def signal_all(self, signum: int, *, deadline: float | None = None) -> None:
+        _check_drain_deadline(deadline)
         if signum == SIG_KILL:
             self.api.check(self.api.TerminateJobObject(self.job, 125), "TerminateJobObject")
+            _check_drain_deadline(deadline)
             return
         # A best-effort scoped CTRL_BREAK may be unavailable for detached leaders.
         # Hard cleanup below always uses the proven job, never a process-group0 signal.
         for child in self.leaders:
+            _check_drain_deadline(deadline)
             if child.pid > 0 and child.poll() is None:
+                _check_drain_deadline(deadline)
                 self.api.GenerateConsoleCtrlEvent(1, child.pid)
+            _check_drain_deadline(deadline)
 
-    def drain(self, grace: float = 5.0, kill_wait: float = 5.0) -> list[dict[str, Any]]:
+    def drain(self, grace: float = 5.0, kill_wait: float = 5.0, *,
+              deadline: float | None = None) -> list[dict[str, Any]]:
+        if deadline is not None:
+            return _bounded_drain(self, grace, kill_wait, deadline, quiet_required=1, repeat_signals=False)
         if self.discover():
             self.signal_all(SIG_TERM)
         deadline = time.monotonic() + grace

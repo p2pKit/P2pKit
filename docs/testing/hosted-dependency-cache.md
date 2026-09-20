@@ -2255,6 +2255,43 @@ and proposed5400's UNADMITTED/UNMEASURED status remain. The real recipient polic
 is prepared on the branch, **not delivered to trusted main or currently admitted**;
 completed owner key/recovery/environment setup is not reopened.
 
+### Optional absolute native-drain acceptance
+
+[`audit_processes.py`](../../scripts/audit_processes.py) offers a separate
+keyword-only `drain(..., deadline=original_monotonic_end)` route. Calls without
+that keyword, including current bootstrap callers, retain their existing
+behavior; this API alone does **not** fix their timing acceptance or retire a
+provider. The caller must conservatively bind the supplied end to its original
+admitted clock domain, never create a fresh allowance.
+
+Explicit mode validates finite nonboolean inputs and nonnegative durations,
+then fixes both `min(start + grace, end)` and
+`min(start + grace + kill_wait, end)` before any census/signal. Slow work cannot
+renew KILL grace. Each signal is checked before/after; Darwin also checks after
+fresh token acquisition immediately before its native signal, and Windows checks
+after `poll()` before CTRL_BREAK and around Job termination. Deadline failure
+cannot become ESRCH or successful token reconciliation. A native signal denial
+remains fatal even when its return crosses a phase end; it cannot be hidden as
+normal escalation followed by a successful quiet census.
+
+Only timely completed observations count: POSIX/Darwin still require **three
+quiet censuses**, Windows its **completed empty kernel-Job census**. Discovery
+errors/pending lifetimes block empty success; phase expiry resets quiet counting.
+No final late census is made. A returned survivor list is conservative, not a
+new observation or retirement. Darwin retains original pending/failure records
+and refuses a late final record instead of leaving it marked retired.
+
+This bounds **acceptance, not synchronous native latency**. Existing census
+inner loops and Darwin's 0.25-second observation window retain their own bounds;
+they can finish late, but late results cannot authorize successful retirement or
+another signal. An external native/invocation watchdog remains mandatory. The
+future provider supervisor must reserve drain/finalization time inside its
+original180 seconds, retain failures/UNKNOWN resources, close the actual owners
+and postcheck that same end before accepting custody. No bare `scope.close()` or
+file lock proves writer retirement. The [focused fake-clock/native-call controls](../../scripts/tests/audit-process-drain-deadline-test.py)
+are standalone offline models, not native/process/provider execution or automatic
+CI registration. Both HOLDs, NativeFile900/Snapshot576MiB and unadmitted5400 remain.
+
 ## Verification and remaining qualification
 
 Focused offline commands (not a claim they ran on a particular host):
@@ -2312,6 +2349,7 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-probe-test.py \
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/hosted-windows-provider-command-test.py
+python3 -I -B -S scripts/tests/audit-process-drain-deadline-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
 python3 -I -B -S scripts/tests/hosted-consume-delivery-test.py
 python3 -I -B -S scripts/tests/hosted-desktop-job-budget-test.py
