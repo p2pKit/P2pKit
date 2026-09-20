@@ -116,6 +116,48 @@ def _plan_shape(plan):
     files.encoded(plan)
 
 
+def provider_command_outputs(raw, *, phase, role):
+    """Parse only the pinned action's private command-file framing.
+
+    Missing output is not an empty output. Preserve exactly the emitted roster;
+    provider_observation separately requires completeness, original success and
+    exact keys. This pure parser proves no writer retirement or provider result.
+    """
+    require(type(raw) is bytes and len(raw) <= 4096, "CACHE_PROVIDER_COMMAND_BYTES")
+    require(type(phase) is str and phase in ("save", "restore", "lookup"), "CACHE_PROVIDER_COMMAND_PHASE")
+    require(type(role) is str and role in ("linux-x64", "windows-x64", "macos-arm64", "macos-x64"),
+            "CACHE_PROVIDER_COMMAND_ROLE")
+    if phase == "save":
+        require(raw == b"", "CACHE_PROVIDER_SAVE_COMMAND_NOT_EMPTY")
+        return {}
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise files.SeedError("CACHE_PROVIDER_COMMAND_UTF8") from None
+    if not text:
+        return {}
+    eol = "\r\n" if role == "windows-x64" else "\n"
+    remainder = text.replace(eol, "")
+    require("\r" not in remainder and "\n" not in remainder and text.endswith(eol),
+            "CACHE_PROVIDER_COMMAND_EOL")
+    lines = text.split(eol)[:-1]
+    require(len(lines) in (3, 6, 9), "CACHE_PROVIDER_COMMAND_RECORDS")
+    outputs = {}
+    for offset in range(0, len(lines), 3):
+        header, value, closing = lines[offset:offset + 3]
+        parts = header.split("<<")
+        require(len(parts) == 2 and parts[0] in RESTORE_OUTPUTS and parts[0] not in outputs,
+                "CACHE_PROVIDER_COMMAND_NAME")
+        name, delimiter = parts
+        require(re.fullmatch(r"ghadelimiter_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+                             delimiter) is not None and closing == delimiter and delimiter not in value,
+                "CACHE_PROVIDER_COMMAND_DELIMITER")
+        require(len(value) <= 512 and all(32 <= ord(char) < 127 for char in value),
+                "CACHE_PROVIDER_COMMAND_VALUE")
+        outputs[name] = value
+    return outputs
+
+
 def provider_observation(plan, phase, *, original_outcome, outputs):
     """Classify declarations; never invoke a provider or authorize its execution.
 

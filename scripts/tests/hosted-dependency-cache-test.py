@@ -26,6 +26,120 @@ F = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(F)
 
 
+class ProviderCommandOutputs(unittest.TestCase):
+    """Synthetic command-file bytes only, not original provider observations."""
+    roles = ("linux-x64", "windows-x64", "macos-arm64", "macos-x64")
+    delimiter = "ghadelimiter_01234567-89ab-4cde-8f01-23456789abcd"
+
+    @classmethod
+    def framed(cls, pairs, role="linux-x64"):
+        eol = "\r\n" if role == "windows-x64" else "\n"
+        return "".join(name + "<<" + cls.delimiter + eol + value + eol + cls.delimiter + eol
+                       for name, value in pairs).encode("utf-8")
+
+    def parsed(self, raw, *, phase="lookup", role="linux-x64"):
+        return K.provider_command_outputs(raw, phase=phase, role=role)
+
+    def test_empty_is_an_empty_roster_for_every_explicit_phase_and_role(self):
+        for phase in ("save", "restore", "lookup"):
+            for role in self.roles:
+                with self.subTest(phase=phase, role=role):
+                    self.assertEqual(self.parsed(b"", phase=phase, role=role), {})
+
+    def test_complete_native_records_preserve_exact_values_and_emitted_order(self):
+        pairs = [("cache-primary-key", "model-key"), ("cache-matched-key", "model-key"), ("cache-hit", "true")]
+        for role in self.roles:
+            for phase in ("restore", "lookup"):
+                for order in (pairs, list(reversed(pairs))):
+                    with self.subTest(role=role, phase=phase, order=order):
+                        result = self.parsed(self.framed(order, role), phase=phase, role=role)
+                        self.assertEqual(list(result.items()), order)
+
+    def test_missing_keys_are_not_filled_with_explicit_empty_values(self):
+        for pairs in ([("cache-hit", "false")], [("cache-primary-key", "model-key")],
+                      [("cache-primary-key", "")], [("cache-primary-key", ""), ("cache-hit", "")]):
+            with self.subTest(pairs=pairs):
+                self.assertEqual(self.parsed(self.framed(pairs)), dict(pairs))
+        self.assertNotEqual(self.parsed(b""), self.parsed(self.framed([("cache-hit", "")])))
+
+    def test_save_refuses_every_nonempty_command_file(self):
+        for raw in (b"\n", b"\r\n", b"arbitrary", self.framed([("cache-hit", "true")])):
+            with self.subTest(raw=raw), self.assertRaisesRegex(S.SeedError, "SAVE_COMMAND_NOT_EMPTY"):
+                self.parsed(raw, phase="save")
+
+    def test_closed_argument_types_phases_roles_and_byte_limit(self):
+        class ByteSubclass(bytes):
+            pass
+        for raw in ("", None, bytearray(), memoryview(b""), ByteSubclass(), b"x" * 4097):
+            with self.subTest(kind=type(raw).__name__), self.assertRaisesRegex(S.SeedError, "COMMAND_BYTES"):
+                self.parsed(raw)
+        for phase in (None, True, [], "", "Restore", "probe"):
+            with self.subTest(phase=phase), self.assertRaisesRegex(S.SeedError, "COMMAND_PHASE"):
+                self.parsed(b"", phase=phase)
+        for role in (None, True, [], "", "Windows", "macos", "linux-arm64"):
+            with self.subTest(role=role), self.assertRaisesRegex(S.SeedError, "COMMAND_ROLE"):
+                self.parsed(b"", role=role)
+
+    def test_unknown_duplicate_and_excess_records_are_rejected(self):
+        for pairs in ([("cache-id", "1")], [("cache-hit", "true"), ("cache-hit", "true")],
+                      [("cache-hit", "true")] * 4):
+            with self.subTest(pairs=pairs), self.assertRaises(S.SeedError):
+                self.parsed(self.framed(pairs))
+
+    def test_legacy_stdout_equal_sign_and_whitespace_headers_are_rejected(self):
+        valid = self.framed([("cache-hit", "true")])
+        for raw in (b"cache-hit=true\n", b"::set-output name=cache-hit::true\n",
+                    valid.replace(b"cache-hit<<", b" cache-hit<<"),
+                    valid.replace(b"cache-hit<<", b"cache-hit <<"),
+                    valid.replace(b"cache-hit<<", b"cache-hit<<<")):
+            with self.subTest(raw=raw), self.assertRaises(S.SeedError):
+                self.parsed(raw)
+
+    def test_delimiter_must_be_exact_lowercase_uuid4_and_match_terminator(self):
+        valid = self.framed([("cache-hit", "true")])
+        old = self.delimiter.encode("ascii")
+        for delimiter in (old.upper(), old.replace(b"-4cde-", b"-1cde-"),
+                          old.replace(b"-8f01-", b"-cf01-"), b"ghadelimiter_short", b"EOF", b""):
+            with self.subTest(delimiter=delimiter), self.assertRaisesRegex(S.SeedError, "COMMAND_DELIMITER"):
+                self.parsed(valid.replace(old, delimiter))
+        with self.assertRaisesRegex(S.SeedError, "COMMAND_DELIMITER"):
+            self.parsed(valid[:-len(old) - 1] + b"ghadelimiter_01234567-89ab-4cde-8f01-23456789abce\n")
+        with self.assertRaisesRegex(S.SeedError, "COMMAND_DELIMITER"):
+            self.parsed(self.framed([("cache-primary-key", "contains-" + self.delimiter + "-inside")]))
+
+    def test_final_eol_and_exact_record_roster_are_required(self):
+        valid = self.framed([("cache-hit", "true")])
+        for raw in (valid[:-1], valid + b"\n", b"\n" + valid, valid + b"trailer\n",
+                    valid.split(b"\n", 1)[0] + b"\n", b"\n", b"x" * 4096):
+            with self.subTest(length=len(raw)), self.assertRaises(S.SeedError):
+                self.parsed(raw)
+
+    def test_native_newlines_cannot_be_substituted_or_mixed(self):
+        pairs = [("cache-hit", "true")]
+        lf, crlf = self.framed(pairs), self.framed(pairs, "windows-x64")
+        for role, raw in (("windows-x64", lf), ("linux-x64", crlf), ("macos-arm64", crlf),
+                          ("windows-x64", crlf.replace(b"\r\n", b"\n", 1)),
+                          ("linux-x64", lf.replace(b"\n", b"\r", 1))):
+            with self.subTest(role=role, raw=raw), self.assertRaisesRegex(S.SeedError, "COMMAND_EOL"):
+                self.parsed(raw, role=role)
+
+    def test_printable_values_are_not_stripped_or_semantically_promoted(self):
+        for value in ("", " ", " model-key ", "x" * 512, "TRUE", "false"):
+            with self.subTest(value=value):
+                self.assertEqual(self.parsed(self.framed([("cache-hit", value)])), {"cache-hit": value})
+
+    def test_oversized_nonascii_and_control_values_are_rejected(self):
+        for value in ("x" * 513, "é", "\x00", "\x7f", "\t", "two\nlines", "\r"):
+            with self.subTest(value=value), self.assertRaises(S.SeedError):
+                self.parsed(self.framed([("cache-primary-key", value)]))
+
+    def test_invalid_utf8_and_bom_are_not_ignored(self):
+        valid = self.framed([("cache-hit", "true")])
+        for raw in (b"\xff", b"\xed\xa0\x80", b"\xef\xbb\xbf" + valid):
+            with self.subTest(raw=raw), self.assertRaises(S.SeedError):
+                self.parsed(raw)
+
+
 class DependencyCache(unittest.TestCase):
     def setUp(self):
         self.fixture = F.SeedFiles()
@@ -153,6 +267,26 @@ class DependencyCache(unittest.TestCase):
             observed = K.provider_observation(plan, "restore", original_outcome="success",
                                               outputs=self.outputs(plan, **changes))
             self.assertEqual(observed["status"], "NO_QUALIFIED_EXACT_HIT")
+
+    def test_parsed_command_records_do_not_supply_completeness_or_original_success(self):
+        for mode, phase in (("consume", "restore"), ("bootstrap", "lookup")):
+            plan = self.plan_for(mode)
+            for pairs in ([], [("cache-hit", "false")], [("cache-primary-key", plan["key"])],
+                          [("cache-hit", "")]):
+                raw = ProviderCommandOutputs.framed(pairs, "macos-arm64")
+                outputs = K.provider_command_outputs(raw, phase=phase, role="macos-arm64")
+                self.assertEqual(outputs, dict(pairs))
+                with self.assertRaisesRegex(S.SeedError, "OUTPUT_ROSTER"):
+                    K.provider_observation(plan, phase, original_outcome="success", outputs=outputs)
+            raw = ProviderCommandOutputs.framed(list(self.outputs(plan).items()), "macos-arm64")
+            outputs = K.provider_command_outputs(raw, phase=phase, role="macos-arm64")
+            self.assertEqual(K.provider_observation(plan, phase, original_outcome="failure", outputs=outputs)["status"],
+                             "STEP_NOT_SUCCESSFUL")
+            self.assertEqual(K.provider_observation(plan, phase, original_outcome="success", outputs=outputs)["status"],
+                             "REPORTED_EXACT_HIT")
+        outputs = K.provider_command_outputs(b"", phase="save", role="macos-arm64")
+        self.assertEqual(K.provider_observation(self.plan, "save", original_outcome="success", outputs=outputs)["status"],
+                         "SAVE_SUCCEEDED_STORAGE_UNPROVEN")
 
     def test_empty_false_and_inexact_outputs_are_not_proven_backend_misses(self):
         plan = self.plan_for("consume")

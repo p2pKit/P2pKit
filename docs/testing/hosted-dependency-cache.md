@@ -2257,13 +2257,42 @@ trust or cache storage.
 [Focused call/sharing controls](../../scripts/tests/hosted-windows-provider-command-test.py)
 are offline models. They preserve ordinary share1/file/reader behavior and model
 two-way sharing, overlap ownership, strict/live inspection, failures and cutoffs.
-They are not actual NTFS/Node24/libuv/provider execution. The command-file parser,
-provider-specific credential/lifecycle controller and failure-aware custody/seal/
-delivery integration remain separate work. There is no production caller yet.
+They are not actual NTFS/Node24/libuv/provider execution. The pure parser below
+does not supply the provider-specific credential/lifecycle controller or
+failure-aware custody/seal/delivery integration. There is no production caller yet.
 Both activation HOLDs, original180-second provider end, NativeFile900/Snapshot576MiB
 and proposed5400's UNADMITTED/UNMEASURED status remain. The real recipient policy
 is prepared on the branch, **not delivered to trusted main or currently admitted**;
 completed owner key/recovery/environment setup is not reopened.
+
+### Dormant provider command-file parser
+
+`hosted_dependency_cache.provider_command_outputs(raw, phase=..., role=...)`
+parses at most **4KiB of exact bytes**, with closed save/restore/lookup and native
+role selections. It performs no file open, provider call or outcome acquisition.
+The pinned toolkit emits native LF or Windows CRLF records with
+`name<<ghadelimiter_<lowercase UUIDv4>`, one value line, matching delimiter and a
+final native EOL. The parser rejects mixed/non-native newlines, legacy commands,
+unknown/duplicate names, mismatched delimiters, invalid UTF-8/BOM, extra lines,
+control/non-ASCII values and values above512 characters. Like the pinned
+formatter, it rejects the record's delimiter appearing inside its value.
+It never strips, normalizes, synthesizes or defaults output values.
+
+Standalone save must produce **empty command bytes** and yields an empty roster.
+Restore/lookup preserve exactly zero to three emitted keys, including the
+distinction between missing output and an explicitly empty value. Feature-
+unavailable, miss and error paths can emit incomplete rosters. Parsing those
+bytes is not cache success: the unchanged `provider_observation` still requires
+all three exact fields, original step success and byte-equal primary/matched
+keys plus literal `true`. Save success remains storage-unproven; lookup remains
+reported presence only, not contents/resolver qualification.
+
+The existing dependency-cache test contains synthetic byte/negative controls and
+a tiny-fixture composition with the unchanged classifier. No recorded bytes are
+claimed as original provider output. Whole-domain retirement, the original
+180-second end through Windows frozen-reader/ancestor closure, provider-only
+credentials, actual enclosing returns and custody/delivery remain the future
+supervisor's obligations. Both HOLDs and all existing limits remain unchanged.
 
 ### Optional absolute native-drain acceptance
 
