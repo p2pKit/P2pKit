@@ -23,8 +23,9 @@ connects the absence leaf under NEW ownership and original allocation fences.
 The internal export successor now connects bounded H-to-S copying under a NEW
 file-only owner, followed by a separate original-call before-save set check.
 A supplied-original after-save leaf now reuses that set checker; its original-call
-parent is not connected. Provider save/probe and encrypted-custody integration
-remain unfinished.
+parent is not connected. A separate internal handoff now retains the original
+producer-to-before-save chain, using the existing private writer. Provider
+save/probe and encrypted-custody integration remain unfinished.
 [`hosted_dependency_cache.py`](../../scripts/hosted_dependency_cache.py) has no
 CLI, action runner, downloader, extraction, deletion or subprocess entry point.
 The connected caller is
@@ -1606,7 +1607,7 @@ those exact publication pins, including the original export and closed-owner
 roster. Repeat reads sample no clock, reopen no owner and establish no new
 baseline. Reconstructed returns, changed bytes/types, late cancellation, UNKNOWN
 or replaced operations refuse. This same-process check is for the eventual
-handoff writer; it is not persisted-record authentication, a new lease or provider
+handoff writer below; it is not persisted-record authentication, a new lease or provider
 authority. No provider, after-save parent, probe, seal or workflow caller is
 connected here.
 
@@ -1630,6 +1631,51 @@ regular output limits were retained, with no guard denials. UID0/audit guards
 are not a kernel sandbox or persisted-handoff/provider qualification. Original
 results and exact-source independent review are mapped with the containing
 commit in #437; no new execution authority follows.
+
+### Private producer-to-save handoff, not provider authority
+
+Internal `save_handoff_after_entry` calls the original before-save path once;
+it cannot adopt an independently run export or before-save result. It retains
+31 exact small memory records and one hash-linked index using the existing
+`Owner`'s exclusive writer, sync, readback and known-close policy. A new
+`initializer/dependency-save-handoff` directory is a sibling of canonical state,
+outside the cache container, S, H and canonical evidence.
+The existing32-name roster and2MiB per-record/index bounds are not widened.
+This does not promise support for every nominal4MiB leaf receipt.
+
+The index links the exact producer/request/native retirement, collection
+inventory, no-loader, export and before-save returns, original return high-waters,
+plan/proposal, source/run/cohort and preparation/admission/service originals.
+Existing logs/reports remain references, not another copied audit packet.
+Original file bindings are retained where recorded. Older directory+byte/hash
+references explicitly have no file binding; hash-only originals do not gain
+invented bytes or lengths. Recipient and initializer references keep separate
+original roster namespaces; duplicate keys within either group still refuse.
+No operation runs on a closed predecessor owner.
+
+One NEW `producer-owner-return`45 interval is shortened by the original
+proposal/job fences and before-return RAW/LOCAL floors. It neither renews the
+expired preparation prelude nor uses staging's120-second window. Known expiry
+still attempts known cleanup; UNKNOWN stops acquisition and is quarantined.
+The index remains `PENDING_NOT_OBSERVABLE_BY_THIS_FILE` through later writer
+close, signal restoration and original command/step return. No provider, budget
+or test authority follows from the file, its digest or a constructed return.
+Trusted workflow original outcome/hash and fresh provider readmission are still
+required; no CLI or workflow invokes this handoff.
+
+**31 focused `HandoffModels` methods PASS** on the corrected revision. Independent
+review found that the first revision's single-row fixture missed legitimate
+recipient/initializer key overlap. The new overlap regression failed that
+unchanged source before the group-boundary correction. Earlier29 passing methods
+and the overlapping positive smoke remain scoped to their earlier fixture.
+Selected actual handoff/Owner/listing and
+export/before definitions execute with memory files; upstream originals,
+admission/native/source/clock suppliers remain models. Python3.12 isolation,
+timeout20/kill2, CPU10/AS512MiB/FD64/core0 and1MiB regular output bounds were used,
+with unchanged source bindings and zero guard denials. UID0/audit guards are not
+a kernel sandbox or native/provider qualification. Exact source, original results
+and independent review are mapped in the containing commit's #437 record.
+Both HOLDs and the unadmitted/unmeasured5400 proposal remain unchanged.
 
 ### Supplied-original after-save recheck
 
@@ -1843,6 +1889,7 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-export-test.py \
   OriginalReturnModels ExportModels -v
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-save-set-test.py \
   BeforeSaveModels BeforeReturnModels AfterSaveModels -v
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-save-handoff-test.py HandoffModels -v
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py

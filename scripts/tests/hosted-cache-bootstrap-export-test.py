@@ -26,7 +26,8 @@ def selected(path, names):
 
 
 PARENT = selected(ROOT / "run-hosted-cache-bootstrap.py",
-    {"BootstrapExportPrefix", "BootstrapSaveSetPrefix", "_bootstrap_export_controls"})
+    {"Owner", "_initializer_names", "BootstrapExportPrefix", "BootstrapSaveSetPrefix", "BootstrapSaveHandoffPrefix",
+     "_bootstrap_export_controls"})
 NO_LOADER = selected(ROOT / "run-hosted-cache-bootstrap.py", {"NoLoaderPrefix", "_no_loader_parent_controls"})
 EXPORT = selected(ROOT / "hosted_cache_bootstrap_export.py", {"ExportEvidence", "_Window", "export_snapshot"})
 SHARED = selected(ROOT / "hosted_cache_bootstrap_staging.py", {"_Window", "_Leaf"})
@@ -174,7 +175,7 @@ class World:
 
         self.export.export_snapshot = copy
         self.install_copier()
-        namespace = {"__name__": "export_parent_memory", "dataclass": dataclass, "field": field,
+        namespace = {"__name__": "export_parent_memory", "dataclass": dataclass, "field": field, "LIMIT": 2 * 1024 * 1024,
             "threading": threading, "require": require, "origin": self.origin, "staging": self.staging,
             "custody": self.custody, "dependency_export": self.export, "NewEntryTransition": Transition,
             "dependency_save_set": NS(before_save=None, _Window=None, SaveSetEvidence=None, SCOPE=None, STATUSES=None),
@@ -186,9 +187,9 @@ class World:
             "cancellation": lambda flags: require(not flags, "CANCELLED")}
         exec(PARENT, namespace)
         self.namespace = namespace
-        self.run, self.before, self.checked_before = namespace["_bootstrap_export_controls"]()
+        self.run, self.before, self.checked_before, self.handoff = namespace["_bootstrap_export_controls"]()
         namespace.update(export_after_entry=self.run, before_save_after_entry=self.before,
-                         _checked_before_save_parent_return=self.checked_before)
+                         _checked_before_save_parent_return=self.checked_before, save_handoff_after_entry=self.handoff)
 
     def encode(self, value):
         self.encode_hook(value)

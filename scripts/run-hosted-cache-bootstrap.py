@@ -10413,6 +10413,14 @@ class BootstrapSaveSetPrefix:
     checked_local: float
 
 
+@dataclass(frozen=True)
+class BootstrapSaveHandoffPrefix:
+    """Private pending handoff, NOT an original workflow outcome or save permit."""
+    raw: bytes = field(repr=False)
+    checked_ns: int
+    checked_local: float
+
+
 def _bootstrap_export_controls():
     """Two fixed siblings share owner code, never an already-closed owner."""
     operation, predecessor = observe_no_loader_after_entry, _checked_no_loader_parent_return
@@ -10423,6 +10431,7 @@ def _bootstrap_export_controls():
     save_module, save_copy = dependency_save_set, dependency_save_set.before_save
     save_window, save_result, save_prefix = dependency_save_set._Window, dependency_save_set.SaveSetEvidence, BootstrapSaveSetPrefix
     save_scope, save_statuses = dependency_save_set.SCOPE, dependency_save_set.STATUSES
+    handoff_owner, handoff_names, handoff_prefix = Owner, _initializer_names, BootstrapSaveHandoffPrefix
     calls, before_calls, lock = {}, {}, threading.Lock()
 
     def roots():
@@ -10753,10 +10762,370 @@ def _bootstrap_export_controls():
     def before(transition):
         return drive(transition, True)
 
-    return execute, before, closed_before_return
+    def handoff_records(transition, returned, bound, inputs):
+        """Fixed original-byte inventory, not serialization of an owner graph.
+
+        Older file rows did not retain file stamps. Their references explicitly
+        keep that absence; a new observation cannot invent an original binding.
+        Large existing logs/reports are linked, never copied into this metadata.
+        """
+        exported = before_calls[id(transition)]["previous"]
+        absence = calls[id(transition)]["previous"]
+        collection_frame, collected = bound.pin.frame, bound.returned
+        producer_frame, produced = collection_frame.bound.producer_frame, collection_frame.bound.returned
+        predecessor = producer_frame.predecessor
+        saved, reserved, native = predecessor.frame, producer_frame.reservation, producer_frame.native
+        recipient = saved.registries[6][4][4]
+        previous, old = transition._attempt, transition._attempt.transition
+        entry = old._entry
+        stage = inputs.staged_capture
+        blobs = (
+            ("before-parent.json", returned.raw), ("before-leaf.json", returned.leaf.raw),
+            ("export-parent.json", exported.raw), ("export-leaf.json", exported.leaf.raw),
+            ("no-loader-parent.json", absence.raw), ("no-loader-leaf.json", absence.leaf.raw),
+            ("collection-parent.json", collected.raw), ("collection-leaf.json", collected.leaf.raw),
+            ("collection-inventory.json", collected.leaf.inventory_raw),
+            ("producer-parent.json", produced.raw), ("producer-request.json", produced.request_raw),
+            ("producer-observation.json", produced.observation_raw), ("producer-command.json", producer_frame.descriptor),
+            ("producer-birth.json", native.birth_raw), ("producer-leader.json", native.leader_raw),
+            ("producer-preparer.json", native.preparer_raw), ("producer-terminal.json", native.terminal_raw),
+            ("producer-survivors.json", native.survivors_raw),
+            ("custody-parent.json", reserved.raw), ("custody-leaf.json", reserved.custody_leaf.raw),
+            ("seed-parent.json", stage[0]), ("stage-parent.json", stage[1]),
+            ("stage-leaf.json", stage[2][0]), ("seed-leaf.json", stage[3][0]),
+            ("initializer-parent.json", inputs.closed_raw), ("recipient-parent.json", recipient.raw),
+            ("allocation-proposal.json", inputs.proposal_raw), ("entry-parent.json", transition.raw),
+            ("adoption-parent.json", old.raw), ("adoption-preparation.json", entry.preparation_original),
+            ("entry-preparation.json", previous.preparation),
+        )
+        references = {}
+
+        def reference(group, key, path, identity, name, maximum, blob=None, *, sha256=None, binding=None):
+            label = group + "/" + key
+            require(label not in references and (blob is None or type(blob) is bytes and len(blob) <= maximum),
+                    "BOOTSTRAP_SAVE_HANDOFF_REFERENCE_CHANGED")
+            require(blob is not None or type(sha256) is str and re.fullmatch(r"[0-9a-f]{64}", sha256),
+                    "BOOTSTRAP_SAVE_HANDOFF_REFERENCE_HASH")
+            references[label] = {"directory": str(path), "directoryIdentity": list(identity), "name": name,
+                "maximumBytes": maximum, "bytes": None if blob is None else len(blob),
+                "sha256": sha256 if blob is None else origin.digest(blob), "fileBinding": binding,
+                "bindingScope": "ORIGINAL_FILE_BINDING" if binding is not None else
+                                "ORIGINAL_DIRECTORY_AND_BYTES_OR_HASH_ONLY_NOT_FILE_IDENTITY"}
+
+        for group, frame in (("producer", producer_frame), ("collector", collection_frame)):
+            for row in frame.files:
+                reference(group, row.key, row.path, row.identity, row.name, row.maximum, row.raw,
+                          binding=origin.parse(row.binding_raw))
+        # Staging retains the recipient roster followed by the initializer's.
+        # They legitimately share keys; preserve their original group boundary.
+        require(saved.files[:len(recipient.files)] == recipient.files,
+                "BOOTSTRAP_SAVE_HANDOFF_RECIPIENT_ROSTER_CHANGED")
+        for group, rows in (("recipient", recipient.files), ("initializer", saved.files[len(recipient.files):])):
+            for key, path, identity, name, maximum, blob in rows:
+                reference(group, key, path, identity, name, maximum, blob)
+        for _parent, frame in predecessor.phases:
+            for key, _directory, path, identity, name, maximum, blob in frame.files:
+                reference(frame.name, key, path, identity, name, maximum, blob)
+
+        prepared, original, adopted, current = origin.parse(entry.preparation_original), *saved.paths[:3]
+        original_id = prepared["sessionIdentity"]
+        adopted_id = origin.parse(entry.raw)["sessionIdentity"]
+        current_id = previous.target_identity
+        for key, blob in (("prepare-handoff.json", entry.handoff_original), ("context.json", entry.context_original),
+                          ("prelude.json", old._fence.raw)):
+            reference("preparation", key, original, original_id, key, LIMIT, blob)
+        reference("preparation", "origin-result.json", original, original_id, "origin-result.json", LIMIT,
+                  sha256=prepared["originSha256"])
+        service = original / "service"
+        service_id, original_chain = prepared["directories"]["service"], prepared["originalChain"]
+        for name, digest in original_chain["phaseSha256"].items():
+            maximum = ACK_LIMIT if name == "stdout.log" else STDERR_LIMIT if name == "stderr.log" else LIMIT
+            reference("service", name, service, service_id, name, maximum, sha256=digest)
+        reference("service", "child-result.json", service, service_id, "child-result.json", LIMIT,
+                  sha256=original_chain["childTerminalSha256"])
+        for name, blob in inputs.responses.items():
+            reference("service", name, service, service_id, name + ".json", LIMIT, blob)
+        for name, hashes in (("admission", original_chain["admissionOriginals"]),
+                             ("final-admission", prepared["finalAdmissionOriginals"])):
+            path, identity = original / name, prepared["directories"][name]
+            reference("preparation", name + "-return", original, original_id, name + "-return.json", LIMIT,
+                      sha256=hashes["returnSha256"])
+            reference("preparation/" + name, "session-result", path, identity, "session-result.json", LIMIT,
+                      sha256=hashes["sessionSha256"])
+            for filename, blob in (("admission.json", entry.admitted.record), ("original-event.json", entry.admitted.original_event),
+                    ("original-policy.json", entry.admitted.original_policy), ("recipient-public.asc", entry.admitted.public_key)):
+                reference("preparation/" + name, filename, path, identity, filename, LIMIT, blob)
+        for group, path, identity, records in (
+                ("adoption", adopted, adopted_id, (("entry-context.json", entry.raw),
+                    ("entry-close-pending.json", old.pending_raw), ("admission-return.json", entry.return_original))),
+                ("entry", current, current_id, (("new-entry-pending.json", previous.pending_raw),
+                    ("admission-return.json", previous.admission_originals[2])))):
+            for name, blob in records:
+                reference(group, name, path, identity, name, LIMIT, blob)
+        # These admission-directory identities were captured by the original
+        # producer's readback, not looked up through closed directory methods.
+        for group, path, admitted, session in (("adoption", adopted, entry.admitted, entry.session_original),
+                ("entry", current, previous.admitted, previous.admission_originals[1])):
+            path = path / "admission"
+            matches = [identity for _key, _directory, spelling, identity in producer_frame.handles if spelling == path]
+            require(len(matches) == 1, "BOOTSTRAP_SAVE_HANDOFF_ADMISSION_DIRECTORY")
+            for name, blob in (("admission.json", admitted.record), ("original-event.json", admitted.original_event),
+                    ("original-policy.json", admitted.original_policy), ("recipient-public.asc", admitted.public_key),
+                    ("session-result.json", session)):
+                reference(group + "/admission", name, path, matches[0], name, LIMIT, blob)
+        last = predecessor.phases[-1][1]
+        reference("reservation", "request", last.request_pin.path, last.request_pin.directory, "request.json", LIMIT,
+                  reserved.custody_leaf.request_raw, binding=origin.parse(last.request_pin.binding_raw))
+        reference("staging", "staging", inputs.container, inputs.stage["containerIdentity"], "staging.json", LIMIT,
+                  inputs.staging_raw, binding=inputs.stage_value["fileBindings"]["staging"])
+        original_request = origin.parse(reserved.custody_leaf.request_raw)
+        for key, path, identity, name, blob in (
+                ("initializer-context", inputs.session, inputs.directories["session"], "initializer-context.json", inputs.context_raw),
+                ("canonical-context", inputs.state, inputs.directories["state"], "context.json", inputs.canonical_raw),
+                ("properties", inputs.home, inputs.directories["gradle-home"], "gradle.properties", inputs.properties_raw)):
+            reference("initializer-actual", key, path, identity, name, LIMIT, blob,
+                      binding=original_request["fileBindings"][key])
+        phase = next(row for row in producer_frame.handles if row[0] == "phase")
+        captures = {}
+        for capture in producer_frame.captures:
+            reference("producer-capture", capture.name, phase[2], phase[3], capture.name + ".log",
+                      PRODUCER_STREAM_BYTES, sha256=capture.readback[1])
+            stamp = capture.final_stamp
+            captures[capture.name] = {"identity": list(capture.identity), "bytes": capture.readback[0],
+                "sha256": capture.readback[1], "readNs": capture.readback[2],
+                "nativeStamp": {"identity": list(stamp[0]), "size": stamp[1],
+                    **({"nativeInfoBytes": stamp[2].decode("utf-8")} if inputs.role == "windows-x64" else
+                       {"mtimeNs": stamp[2], "ctimeNs": stamp[3]})}}
+        request = origin.parse(produced.request_raw)
+        def returned_fields(value):
+            return {"checkedNs": value.checked_ns, "checkedLocal": value.checked_local}
+        def leaf_fields(value):
+            return {**returned_fields(value), "localStarted": value.local_started}
+        chain = {"producerJob": request["jobId"], "producerInvocation": request["id"],
+            "producerOuterInvocation": producer_frame.outer_invocation, "producerCaptures": captures,
+            "producerNative": {"launchMinimumNs": native.launch_minimum, "completedNs": native.completed_ns,
+                "finalizedNs": native.finalized_ns, "executedArgv": list(native.argv), "originalExitCode": native.exit_code,
+                "originalRetired": native.retired},
+            "collectionManifestSha256": origin.digest(collected.manifest_raw),
+            "returns": {"adoption": {"checkedNs": old._checked_ns}, "entry": {"checkedNs": transition._checked_ns},
+                "recipient": {"checkedNs": recipient.checked_ns, "checkedLocal": recipient.local_last},
+                "initializer": {"checkedNs": inputs.previous_ns, "checkedLocal": inputs.previous_local},
+                **{frame.name: {"parent": returned_fields(frame.result), "leaf": leaf_fields(frame.leaf)}
+                   for _parent, frame in predecessor.phases},
+                "producer": returned_fields(produced), "collection": returned_fields(collected),
+                "collectionLeaf": {"localStarted": collected.leaf.local_started, "checkedLocal": collected.leaf.checked_local},
+                "noLoader": returned_fields(absence),
+                "noLoaderLeaf": {"localStarted": absence.leaf.local_started, "checkedLocal": absence.leaf.checked_local},
+                "export": returned_fields(exported), "exportLeaf": leaf_fields(exported.leaf),
+                "before": returned_fields(returned), "beforeLeaf": leaf_fields(returned.leaf)},
+            "referenceScope": "RETAINED_ORIGINAL_BINDINGS_NOT_A_FRESH_FILE_OBSERVATION_OR_PROVIDER_RESULT"}
+        return blobs, references, chain
+
+    def handoff(transition):
+        """Retain the original same-call chain under one NEW return45 owner.
+
+        Nothing supplied by a caller becomes an export, plan or return. The
+        original before() claim also refuses a prior separately-run producer.
+        Files remain provisional through close, handler restoration and return;
+        no file can attest its own later successful workflow step.
+        """
+        owner = fence = returned = bound = inputs = None
+        handlers, restored, cancelled = [], [], []
+        failure = raw = None
+        last = local_last = issued_end = None
+
+        def roots_and_originals():
+            roots()
+            require(save_handoff_after_entry is handoff and before_save_after_entry is before and
+                    _checked_before_save_parent_return is closed_before_return and Owner is handoff_owner and
+                    _initializer_names is handoff_names and BootstrapSaveHandoffPrefix is handoff_prefix and
+                    LIMIT == 2 * 1024 * 1024, "BOOTSTRAP_SAVE_HANDOFF_OPERATION_CHANGED")
+            if returned is not None:
+                require(closed_before_return(transition, returned) is bound,
+                        "BOOTSTRAP_SAVE_HANDOFF_PREDECESSOR_CHANGED")
+            if inputs is not None:
+                inputs.unchanged()
+            require(not QUARANTINE and not query.QUARANTINE and not diagnostics._QUARANTINE,
+                    "BOOTSTRAP_SAVE_HANDOFF_PRIOR_UNKNOWN")
+
+        def cancel():
+            roots_and_originals()
+            cancellation(cancelled)
+            if bound is not None:
+                for callback in bound.pin.frame.predecessor.frame.callbacks:
+                    callback()
+                    roots_and_originals()
+                    cancellation(cancelled)
+
+        def remember_failure(error):
+            nonlocal failure
+            if failure is None:
+                failure = owner.original if owner is not None and owner.original is not None else error
+            if owner is not None:
+                try:
+                    owner.error("save-handoff", error)
+                except BaseException:
+                    # Failure to describe an error cannot replace its cause or
+                    # grant further ownership operations.
+                    owner.unknown = True
+
+        try:
+            roots_and_originals()
+            for number in (signal.SIGINT, signal.SIGTERM, *([signal.SIGBREAK] if hasattr(signal, "SIGBREAK") else [])):
+                handler = signal.getsignal(number)
+                handlers.append((number, handler))  # Duty precedes fallible installation.
+                signal.signal(number, lambda signum, _frame: cancelled.append(signum))
+            returned = before(transition)
+            bound = closed_before_return(transition, returned)
+            local_start = staging._local(time.monotonic())
+            first = origin.clocks.validate_reading(origin.clocks.observe())
+            saved, staged = bound.pin.frame.predecessor.frame, bound.pin.frame.predecessor.phases[-1][1]
+            inputs = input_kind(saved.originals, saved.original_pin, staged.staged, staged.staged_pin)
+            require(first.clock == inputs.clock and first.nanoseconds >= returned.checked_ns and
+                    local_start >= returned.checked_local, "BOOTSTRAP_SAVE_HANDOFF_PREDECESSOR_CLOCK")
+            hard = min(origin.integer(first.nanoseconds + 45 * staging.NS),
+                       inputs.proposal["phaseFencesNs"]["producer-owner-return"], inputs.proposal["proposedJobEndNs"])
+            require(first.nanoseconds < hard, "BOOTSTRAP_SAVE_HANDOFF_EXPIRED")
+            local_end = origin.wire._directed_deadline(local_start, 45, hard, first.nanoseconds)
+            last, local_last, issued_end = first.nanoseconds, local_start, local_end
+
+            class ReturnFence:
+                __slots__ = ()
+
+                def now(self, *, final=False, minimum=None, limit=None):
+                    nonlocal last, local_last, issued_end
+                    # Cleanup samples only the original clocks: rejection of a
+                    # predecessor cannot redirect or repeatedly block known closes.
+                    if not final:
+                        cancel()
+                    before_raw = staging._local(time.monotonic())
+                    require(before_raw >= local_last, "BOOTSTRAP_SAVE_HANDOFF_LOCAL_BACKWARDS")
+                    local_last = before_raw  # Retain even if the RAW supplier fails.
+                    observed = origin.clocks.validate_reading(origin.clocks.observe())
+                    require(observed.clock == first.clock and observed.nanoseconds >= last and
+                            (minimum is None or observed.nanoseconds >= minimum),
+                            "BOOTSTRAP_SAVE_HANDOFF_RAW_BACKWARDS")
+                    last = observed.nanoseconds
+                    after_raw = staging._local(time.monotonic())
+                    require(after_raw >= local_last, "BOOTSTRAP_SAVE_HANDOFF_LOCAL_BACKWARDS")
+                    local_last = after_raw
+                    cap = hard if limit is None else min(hard, origin.integer(limit))
+                    issued_end = min(issued_end, origin.wire._directed_deadline(before_raw, 45, cap, last))
+                    require(last < cap and local_last < issued_end, "BOOTSTRAP_SAVE_HANDOFF_EXPIRED")
+                    if not final:
+                        cancel()
+                        # A callback itself may return late. Sample after it,
+                        # without running another callback or granting new time.
+                        return self.now(final=True, minimum=last, limit=cap)
+                    return last
+
+                def deadline(self, seconds, *, final=False, limit=None):
+                    self.now(final=final, limit=limit)
+                    return min(issued_end, local_last + min(45, seconds))
+
+            fence = ReturnFence()
+            fence.now()
+            blobs, references, chain = handoff_records(transition, returned, bound, inputs)
+            require(0 < len(blobs) < 32 and len({name.casefold() for name, _blob in blobs}) == len(blobs) and
+                    all(type(blob) is bytes and 0 < len(blob) <= LIMIT for _name, blob in blobs),
+                    "BOOTSTRAP_SAVE_HANDOFF_RECORD_LIMIT")
+            fence.now()
+            owner = handoff_owner(local_end, fence, first=first, cancelled=cancel)
+            ledger, errors = owner.resources, owner.errors
+            parent = owner.open(inputs.session)
+            parent_identity = tuple(directory_identity(list(parent.identity), inputs.role))
+            require(parent_identity == inputs.directories["session"], "BOOTSTRAP_SAVE_HANDOFF_INITIALIZER_CHANGED")
+            directory = owner.child(parent, "dependency-save-handoff", create=True)
+            directory_identity_ = tuple(directory_identity(list(directory.identity), inputs.role))
+            require(directory_identity_ not in inputs.directories.values() and
+                    directory_identity_ not in (tuple(inputs.stage["containerIdentity"]),
+                                                tuple(inputs.stage["sourceIdentity"])) and
+                    not handoff_names(owner, directory), "BOOTSTRAP_SAVE_HANDOFF_DIRECTORY_ALIAS_OR_NONEMPTY")
+            path = inputs.session / "dependency-save-handoff"
+
+            def pins():
+                roots_and_originals()
+                require(type(owner) is handoff_owner and owner.fence is fence and owner.first is first and
+                        owner.cancelled is cancel and owner.resources is ledger and owner.errors is errors and
+                        type(owner.local_end) is float and owner.local_end == local_end and
+                        owner.work_limit is owner.final_limit is None and not owner.unknown and owner.original is None,
+                        "BOOTSTRAP_SAVE_HANDOFF_OWNER_CHANGED")
+                require(parent.path == inputs.session and directory.path == path and
+                        tuple(parent.identity) == parent_identity and tuple(directory.identity) == directory_identity_,
+                        "BOOTSTRAP_SAVE_HANDOFF_DIRECTORY_CHANGED")
+
+            value = {"schema": 1, "scope": "BOOTSTRAP_SAVE_HANDOFF_PENDING_ORIGINAL_STEP_RETURN_V1",
+                "binding": inputs.binding(), "source": inputs.admission["source"], "github": inputs.admission["github"],
+                "selection": inputs.admission["selection"], "cacheCohort": {"profile": inputs.profile, "role": inputs.role},
+                "plan": inputs.stage_value["plan"],
+                "planSha256": origin.digest(staging.files.encoded(inputs.stage_value["plan"])),
+                "directory": str(path), "directoryIdentity": list(directory_identity_),
+                "blobs": {name: {"bytes": len(blob), "sha256": origin.digest(blob)} for name, blob in blobs},
+                "references": references, "chain": chain,
+                "window": {"phase": "producer-owner-return", "clock": origin.clock_value(first.clock),
+                    "firstNs": first.nanoseconds, "hardEndNs": hard, "predecessorCheckedNs": returned.checked_ns,
+                    "predecessorSha256": origin.digest(returned.raw)},
+                "writerReturn": "PENDING_NOT_OBSERVABLE_BY_THIS_FILE", "providerExecution": "NOT_PERFORMED",
+                "nextPhaseAuthority": False, "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED",
+                "exportSaveAuthority": False}
+            raw = origin.encoded(value)
+            require(type(raw) is bytes and 0 < len(raw) <= LIMIT, "BOOTSTRAP_SAVE_HANDOFF_INDEX_LIMIT")
+            records = (*blobs, ("save-handoff.json", raw))
+            for name, blob in records:
+                pins()
+                require(owner.write(directory, name, blob) == blob, "BOOTSTRAP_SAVE_HANDOFF_WRITE_RETURN")
+                pins()
+                fence.now()
+            require(handoff_names(owner, directory) == tuple(sorted(name for name, _blob in records)),
+                    "BOOTSTRAP_SAVE_HANDOFF_ROSTER_CHANGED")
+            for name, blob in records:
+                require(owner.read(directory, name) == blob, "BOOTSTRAP_SAVE_HANDOFF_READBACK_CHANGED")
+                pins()
+            require(handoff_names(owner, directory) == tuple(sorted(name for name, _blob in records)),
+                    "BOOTSTRAP_SAVE_HANDOFF_ROSTER_CHANGED")
+            parent.verify()
+            directory.verify()
+            pins()
+            fence.now()
+            close_roster = tuple((row, row["label"], row["owner"]) for row in ledger)
+        except BaseException as error:
+            remember_failure(error)
+        finally:
+            if owner is not None:
+                try:
+                    owner.close()
+                    if owner.original is not None:
+                        remember_failure(owner.original)
+                except BaseException as error:
+                    remember_failure(error)
+                if owner.unknown and not any(value is owner for value in QUARANTINE):
+                    QUARANTINE.append(owner)
+            for number, handler in handlers:
+                try:
+                    signal.signal(number, handler)
+                    require(signal.getsignal(number) is handler, "BOOTSTRAP_SAVE_HANDOFF_HANDLER_NOT_RESTORED")
+                    restored.append((number, handler))
+                except BaseException as error:
+                    remember_failure(error)
+        if failure is not None:
+            raise failure
+        pins()
+        require(owner.closed is True and owner.unknown is False and handlers == restored and
+                len(ledger) == len(close_roster) and all(row is old and row["label"] == label and
+                    row["owner"] is resource and row["attempted"] is row["closed"] is True
+                    for row, (old, label, resource) in zip(ledger, close_roster)),
+                "BOOTSTRAP_SAVE_HANDOFF_CLOSE_INCOMPLETE")
+        cancel()
+        fence.now(final=True)
+        pins()
+        cancellation(cancelled)
+        return handoff_prefix(raw, last, local_last)
+
+    return execute, before, closed_before_return, handoff
 
 
-export_after_entry, before_save_after_entry, _checked_before_save_parent_return = _bootstrap_export_controls()
+(export_after_entry, before_save_after_entry, _checked_before_save_parent_return,
+ save_handoff_after_entry) = _bootstrap_export_controls()
 del _bootstrap_export_controls
 
 

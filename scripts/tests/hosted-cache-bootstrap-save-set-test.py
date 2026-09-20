@@ -203,9 +203,9 @@ class World(old["World"]):
 
         self.save.before_save = freeze
         self.namespace["dependency_save_set"] = self.save
-        self.run, self.before, self.checked_before = self.namespace["_bootstrap_export_controls"]()
+        self.run, self.before, self.checked_before, self.handoff = self.namespace["_bootstrap_export_controls"]()
         self.namespace.update(export_after_entry=self.run, before_save_after_entry=self.before,
-                              _checked_before_save_parent_return=self.checked_before)
+                              _checked_before_save_parent_return=self.checked_before, save_handoff_after_entry=self.handoff)
 
     def node(self, data=None):
         self.next_identity += 1
