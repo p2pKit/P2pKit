@@ -11866,8 +11866,7 @@ def prepare_save(cancelled):
             "producerObservedAfterReturnNs": producer_return["observedAfterReturnNs"],
             "providerWindow": {"issuedNs": issued, "hardEndNs": provider_end,
                                "actualProviderStart": "NOT_OBSERVED"},
-            "providerRequest": {"action": plan["provider"]["save"], "path": plan["path"], "key": plan["key"],
-                                "enableCrossOsArchive": False, "scope": "PRIVATE_DESCRIPTOR_NOT_EXECUTION"},
+            "providerRequest": staging.cache.bootstrap_provider_contract(plan, "save")["request"],
             "writerReturn": "PENDING_NOT_OBSERVABLE_BY_THIS_FILE", "providerExecution": "NOT_PERFORMED",
             "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False})
         checked()
@@ -11957,9 +11956,9 @@ def _save_preparation_record(raw, expected_sha256, admitted, handoff_raw, produc
     require(previous <= issued < hard and issued < provider_end == min(origin.integer(issued + 180 * staging.NS),
             proposal["phaseFencesNs"]["provider-save"], proposal["proposedJobEndNs"]) and
             issued <= first.nanoseconds < provider_end, "BOOTSTRAP_AFTER_SAVE_PROVIDER_RETURN_BOUND")
-    require(origin.encoded(value["providerRequest"]) == origin.encoded({"action": index["plan"]["provider"]["save"],
-            "path": index["plan"]["path"], "key": index["plan"]["key"], "enableCrossOsArchive": False,
-            "scope": "PRIVATE_DESCRIPTOR_NOT_EXECUTION"}), "BOOTSTRAP_AFTER_SAVE_PROVIDER_REQUEST")
+    require(origin.encoded(value["providerRequest"]) == origin.encoded(
+            staging.cache.bootstrap_provider_contract(index["plan"], "save")["request"]),
+            "BOOTSTRAP_AFTER_SAVE_PROVIDER_REQUEST")
     return value
 
 
@@ -12557,9 +12556,8 @@ def _probe_preparation_record(raw, expected_hash, claims, admitted, plan, propos
     require(previous <= issued < hard and issued < provider_end == min(origin.integer(issued + 180 * staging.NS),
             proposal["phaseFencesNs"]["provider-probe"], proposal["proposedJobEndNs"]) and
             issued <= first.nanoseconds < provider_end, "BOOTSTRAP_PROBE_PROVIDER_RETURN_BOUND")
-    require(origin.encoded(value["providerRequest"]) == origin.encoded({"action": plan["provider"]["restore"],
-            "path": plan["path"], "key": plan["key"], "lookupOnly": True, "restoreKeys": [], "failOnCacheMiss": True,
-            "enableCrossOsArchive": False, "scope": "PRIVATE_DESCRIPTOR_NOT_EXECUTION"}), "BOOTSTRAP_PROBE_PROVIDER_REQUEST")
+    require(origin.encoded(value["providerRequest"]) == origin.encoded(
+            staging.cache.bootstrap_provider_contract(plan, "lookup")["request"]), "BOOTSTRAP_PROBE_PROVIDER_REQUEST")
     return value
 
 
@@ -12823,9 +12821,7 @@ def _probe_command(cancelled, *, after):
                 "planSha256": origin.digest(origin.encoded(plan)), "clock": origin.clock_value(first.clock),
                 "firstNs": first.nanoseconds, "hardEndNs": fence.hard_end,
                 "providerWindow": {"issuedNs": issued, "hardEndNs": provider_end, "actualProviderStart": "NOT_OBSERVED"},
-                "providerRequest": {"action": plan["provider"]["restore"], "path": plan["path"], "key": plan["key"],
-                    "lookupOnly": True, "restoreKeys": [], "failOnCacheMiss": True, "enableCrossOsArchive": False,
-                    "scope": "PRIVATE_DESCRIPTOR_NOT_EXECUTION"},
+                "providerRequest": staging.cache.bootstrap_provider_contract(plan, "lookup")["request"],
                 "writerReturn": "PENDING_NOT_OBSERVABLE_BY_THIS_FILE", "providerExecution": "NOT_PERFORMED",
                 "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False})
             close_known()

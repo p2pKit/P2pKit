@@ -116,6 +116,62 @@ def _plan_shape(plan):
     files.encoded(plan)
 
 
+def bootstrap_provider_contract(plan, phase):
+    """Closed public inputs for the future fixed provider, not launch authority.
+
+    The caller must first rederive the original admitted plan/staging and bind
+    actual preparation/step returns. This structural map reads no environment,
+    credentials, files or clock; it neither acquires nor executes the supplier.
+    Only request is retained by today's dormant prepare/after guards. The input
+    roster is NOT a complete provider environment or a trusted runtime bridge.
+    """
+    require(type(phase) is str and phase in ("save", "lookup"), "CACHE_BOOTSTRAP_PROVIDER_PHASE")
+    require(type(plan) is dict, "CACHE_PLAN_GRAMMAR")
+    # Use the SAME native Path spelling as make_plan. Do not normalize a new
+    # supplier glob spelling: literal path bytes participate in cache version.
+    for name in ("restoreHome", "path"):
+        value = plan.get(name)
+        require(type(value) is str and 0 < len(value) <= 4096 and
+                all(32 <= ord(char) < 127 and char not in "!*?[]{}()" for char in value),
+                "CACHE_BOOTSTRAP_PROVIDER_LITERAL_PATH")
+        path = Path(value)
+        require(path.is_absolute() and str(path) == value and ".." not in path.parts and
+                all(part == part.strip() for part in path.parts) and
+                (not path.drive or re.fullmatch(r"[A-Za-z]:", path.drive) is not None),
+                "CACHE_BOOTSTRAP_PROVIDER_LITERAL_PATH")
+        require(not path.drive or all(":" not in part and not part.endswith(".") for part in path.parts[1:]),
+                "CACHE_BOOTSTRAP_PROVIDER_LITERAL_PATH")
+        # Pinned glob treats POSIX backslashes as escapes and collapses '//'.
+        # Native pathlib preserves those spellings, so its roundtrip is not enough.
+        require(bool(path.drive) or (path.anchor == "/" and "\\" not in value),
+                "CACHE_BOOTSTRAP_PROVIDER_LITERAL_PATH")
+    _plan_shape(plan)
+    require(plan["mode"] == "bootstrap", "CACHE_BOOTSTRAP_PROVIDER_MODE")
+    pin = "caa296126883cff596d87d8935842f9db880ef25"
+    require(ACTION_PIN == pin, "CACHE_BOOTSTRAP_PROVIDER_BUNDLE_PIN")
+    home = Path(plan["restoreHome"])
+    require(home.name == "restore-home" and
+            home.parent.name == "p2pkit-dependency-seed-" + plan["profile"] + "-" + plan["role"] and
+            plan["path"] == str(home.joinpath(*files.PREFIX)), "CACHE_BOOTSTRAP_PROVIDER_PATH_BINDING")
+    request = {"action": plan["provider"]["save" if phase == "save" else "restore"],
+               "path": plan["path"], "key": plan["key"], "enableCrossOsArchive": False,
+               "scope": "PRIVATE_DESCRIPTOR_NOT_EXECUTION"}
+    inputs = {"INPUT_KEY": plan["key"], "INPUT_PATH": plan["path"], "INPUT_ENABLECROSSOSARCHIVE": "false"}
+    if phase == "lookup":
+        request.update(lookupOnly=True, restoreKeys=[], failOnCacheMiss=True)
+        # Pinned core.getInput uppercases names but does NOT replace hyphens.
+        inputs.update({"INPUT_RESTORE-KEYS": "", "INPUT_FAIL-ON-CACHE-MISS": "true", "INPUT_LOOKUP-ONLY": "true"})
+    source, length, sha256 = {
+        "save": ("dist/save-only/index.js", 3202441,
+                 "7fb63f90f06ce6a10f39d40a113f99791bffdedad5394cdad5b4dfaa644559cb"),
+        "lookup": ("dist/restore-only/index.js", 3202022,
+                   "6255afaa3956351b8cfefc1e82f026b4db418a10678a8eaddf3d6c55f81744de"),
+    }[phase]
+    return {"request": request, "inputs": inputs,
+            "bundle": {"url": "https://raw.githubusercontent.com/actions/cache/" + pin + "/" + source,
+                       "bytes": length, "sha256": sha256, "basename": "provider.cjs"}}
+
+
 def provider_command_outputs(raw, *, phase, role):
     """Parse only the pinned action's private command-file framing.
 

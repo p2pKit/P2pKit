@@ -2294,6 +2294,56 @@ claimed as original provider output. Whole-domain retirement, the original
 credentials, actual enclosing returns and custody/delivery remain the future
 supervisor's obligations. Both HOLDs and all existing limits remain unchanged.
 
+### Fixed bootstrap provider request and input mapping
+
+`hosted_dependency_cache.bootstrap_provider_contract(plan, phase)` is a pure,
+bootstrap-only map for **save** or **lookup**, not an executor or credential
+bridge. The existing save/probe preparation and post-guards now share its
+unchanged `PRIVATE_DESCRIPTOR_NOT_EXECUTION` request. Their canonical descriptor
+bytes, `NOT_PERFORMED`/`NOT_ADMITTED` status, original180 issuance and absence of
+provider-retirement proof are unchanged. Original admission, staging/plan
+rederivation, actual prior step outcomes and native ownership are still required;
+structural validation cannot authenticate supplied records.
+
+The separate input roster uses the exact pinned supplier names:
+
+| Environment input | Save | Lookup-only probe |
+| --- | --- | --- |
+| `INPUT_KEY`, `INPUT_PATH` | Original key and literal path | Same |
+| `INPUT_ENABLECROSSOSARCHIVE` | `false` | `false` |
+| `INPUT_RESTORE-KEYS` | Absent | Empty string |
+| `INPUT_FAIL-ON-CACHE-MISS` | Absent | `true` |
+| `INPUT_LOOKUP-ONLY` | Absent | `true` |
+
+Hyphens are not replaced with underscores. No fallback keys, upload tuning,
+post-save state or ambient environment is accepted. Native literal paths must
+already be canonical, absolute, single-line, non-globbing and exactly match the
+cohort's restore-home/filestore spelling. There is no normalization or claim of
+native file identity, absence of every platform alias, or runner-temp authority.
+POSIX backslashes and double-leading slashes are refused explicitly: the pinned
+glob unescapes/collapses them even though native `pathlib` preserves their spelling.
+
+The contract also pins the retained supplier bundles' exact raw GitHub URLs,
+lengths and SHA-256 values at `caa296126883cff596d87d8935842f9db880ef25`:
+save-only **3202441 bytes** / `7fb63f90f06ce6a10f39d40a113f99791bffdedad5394cdad5b4dfaa644559cb`;
+lookup's restore-only **3202022 bytes** / `6255afaa3956351b8cfefc1e82f026b4db418a10678a8eaddf3d6c55f81744de`.
+The proposed fixed local basename is `provider.cjs`, preserving CommonJS without
+borrowing a candidate package's module mode. No download, executable observation,
+hash-at-launch, frozen bundle owner or supplier execution is implemented here.
+The input/bundle portions have **no production caller**.
+
+The future provider needs a fresh closed runtime environment, legitimate original
+runner service credentials, observed Node24/native-tool provenance, bounded
+credential-free acquisition and external original-domain cancellation. Credentials
+must never enter ordinary query/producer records, argv or public logs. The pinned
+provider's trusted tar/compression descendants inherit its environment, and its
+authenticated HTTP client follows redirects; this input map proves neither
+leader-only token access nor initial-origin token confinement. V2's fixed64MiB /
+8-worker upload behavior is not demonstrated to obey environment tuning.
+Neither static supplier inspection nor the [focused model controls](../../scripts/tests/hosted-cache-provider-contract-test.py)
+qualifies provider/native/custody/scheduling execution. Both HOLDs and every
+existing deadline remain; proposed5400 is still UNADMITTED/UNMEASURED.
+
 ### Dormant bootstrap encrypted-export identity adapter
 
 [`hosted_test_evidence.export_bootstrap_encrypted`](../../scripts/hosted_test_evidence.py)
@@ -2464,6 +2514,7 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-after-save-command-test.py
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-probe-test.py \
   ProbeModels.test_actual_post_guard_classifies_exact_lookup_under_new30_with_no_extra45 -v
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
+python3 -I -B -S scripts/tests/hosted-cache-provider-contract-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/hosted-windows-provider-command-test.py
 python3 -I -B -S scripts/tests/hosted-test-evidence-test.py

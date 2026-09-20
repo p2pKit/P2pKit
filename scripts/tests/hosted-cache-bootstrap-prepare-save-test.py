@@ -34,7 +34,8 @@ FILES = selected("hosted_dependency_seed_files.py", {"MIB", "FILE_LIMIT", "TOTAL
     "VERSION_LIMIT", "MEMBER_LIMIT", "RECEIPT_LIMIT", "HARD_SECONDS", "SOFT_SECONDS", "WRAPPER", "POLICY", "KNOWN",
     "_identity", "_file_binding", "_info_binding", "policy", "_validate_inventory", "stage_record", "validate_stage",
     "validate_retained_stage", "validate_cohort", "_bootstrap_cohort"})
-PLAN = selected("hosted_dependency_cache.py", {"_inputs", "make_plan", "validate_plan", "_save_roster"})
+PLAN = selected("hosted_dependency_cache.py", {"_inputs", "make_plan", "validate_plan", "_save_roster",
+                                            "bootstrap_provider_contract"})
 BOUND_READER = selected("hosted_cache_bootstrap_staging.py", {"_read"})
 DIRECTED = selected("hosted_full_job_budget.py", {"_directed_deadline"})
 AUTHORITY = selected("hosted_dependency_seed.py", {"Artifact", "Allowlist"})
