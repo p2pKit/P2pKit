@@ -227,6 +227,118 @@ identity, GPG, encryption/decryption, GitHub Actions or any product build.
 The containing commit's #437 record binds the final source review and checks;
 it is not personal PR authorization or approval of future evidence.
 
+### Initial-recipient exception preparation — 20 September 2026
+
+The owner has now authorized **preparing a separately reviewed, one-time initial
+recipient exception for both cache bootstrap and the first ordinary PR**. This
+supersedes only the earlier *preparation-permission* blocker. It does not approve
+a final source/attestation, acquire trusted originals, lift a HOLD, start CI, open
+a PR, authorize merge/publication or grant private-key access.
+
+The dormant [statement matcher](../../scripts/hosted_initial_recipient_exception.py)
+and [offline controls](../../scripts/tests/hosted-initial-recipient-exception-test.py)
+are a **supplied-record contract only**. There is no CLI, workflow, network/Git
+reader, ordinary `Admission`, production caller or installed exception record.
+The ordinary/bootstrap identity and export paths are unchanged and still refuse
+the absent original-base policy. This source slice alone does not solve the
+delivery cycle.
+
+The proposed external authority is a new, personally posted, **unedited #437
+comment**, separate from both existing manual approvals. Its exact command prefix
+is `/p2pkit authorize-initial-recipient ` followed by one canonical, sorted-key,
+compact ASCII JSON object, with no Markdown/prose or trailing whitespace. The
+matcher checks the exact selected comment ID, API/web/issue locations, body hash,
+owner login **and** numeric ID/type, and `created_at == updated_at`. It never
+searches for the latest convenient comment. An agent-posted progress record is
+not that owner action. Authenticated account metadata cannot itself prove that
+a person rather than automation using the same account posted a comment.
+
+No actual authorization command or placeholder record is generated here. Once
+the final implementation and safe acquisition are reviewed, the owner must be
+shown the real complete values before personally posting. The statement fields
+are closed:
+
+| Field | Required binding |
+| --- | --- |
+| `schema`, `scope`, `repository` | `1`, `P2PKIT_INITIAL_RECIPIENT_EXCEPTION_V1`, `p2pKit/P2pKit` |
+| `base` | Commit `3bc76f956f8f47447b51a62474fc878b9c43173c`, tree `2a1105fde1d1ac299448489501e29d7a0d4a407a` |
+| `reviewed` | Final independently reviewed full head commit and tree; not an embedded self-referential commit SHA |
+| `sourceRef` | `refs/heads/work/nonphysical-integration-20260915-022112` |
+| `policySha256` | Exact prepared-policy SHA-256 `2e90a1ed038d5bb6759d8d22e1bb5468331b49274a6956df470c1e785691f521` |
+| `notBefore`, `expiresAt` | Explicit integer UTC window contained in the existing 21 September–5 October policy window; no automatic renewal |
+| `bootstrap` | Closed selection/run-ID/run-attempt entries; at most the six supported selections, each at most once, covering every ordinary cohort below |
+| `firstPullRequest` | One exact PR number, synthetic merge commit/tree, and exactly four profile/role/run-ID/run-attempt entries: three Desktop hosts and one FULL Mac host |
+
+Desktop's Linux/Windows/one exact Mac architecture share one run/attempt; FULL
+has a distinct run/attempt and exact Mac architecture. Each selected bootstrap
+has its own distinct run ID and exact attempt. No wildcards, empty reservations,
+duplicate slots, cross-cohort substitution or implicit retry authority exist.
+This is **attempt-bound, idempotent eligibility**, not an exactly-once execution
+ledger: the same tuple must be rechecked during admission/sealing. It neither
+proves a slot was executed/consumed nor prevents another process within the same
+attempt. A failed attempt is not automatically transferable to a new one.
+
+The future caller must supply fresh, retained original Git/API observations:
+
+- Actual original main must still match the pinned base commit/tree. Only exact
+  empty stdout from a **successful, complete, bounded** policy `ls-tree` query
+  counts as absence. Do not catch `MISSING_TRUSTED_RECIPIENT_POLICY`: that existing
+  error also covers malformed/wrong-mode tree entries. Empty bytes supplied to
+  this pure matcher cannot prove successful acquisition by themselves.
+- The base must be an ancestor of the reviewed head. Candidate policy must be
+  an exact regular `100644` Git blob at its real head, with its original blob and
+  policy SHA-256 verified. The matcher records its origin as **head**, never main.
+  The maintained native public-recipient validation is still required at use.
+- Bootstrap executes the reviewed head/tree. Ordinary PR execution is the
+  separately named **synthetic merge**, with exact parents `[base, head]` and a
+  tree equal to the reviewed head tree. Never relabel the merge as the head.
+  A changed merge tree needs new review/authority, not automatic acceptance.
+  Fresh PR metadata must still be open/unmerged, owner-authored, same repository,
+  expected main base/head branch, exact merge SHA and without auto-merge. This
+  applies to **bootstrap slots too**: the joint exception retires on PR closure,
+  merge or head change, not just on a later ordinary admission.
+- Original event/ref/workflow/job/host/run/attempt must match the finite slot.
+  Real hosted admission is separate; a supplied record is not a trusted event.
+  The owner's comment must predate the caller-owned original `firstUseAt`;
+  resetting that time during rereads is forbidden. Current time and first use
+  must remain inside the explicit exception/policy window.
+- Reread the authority and eligibility at required boundaries. Missing/edited
+  comments, changed source/policy/main/PR/attempt or expiry refuse. Compare stable
+  authoritative fields/body hash, not incidental REST reaction/avatar metadata;
+  retain every complete original response separately. Old captured responses
+  are not proof of present availability. A `Match` result is not original custody.
+
+**Remaining integration blockers:** the combined finite roster needs actual
+bootstrap and first-PR run IDs before any exception-dependent side effect. Those
+IDs do not yet exist. No reviewed pre-use creation/acquisition/gating choreography
+exists; placeholders, retrospective approval, unbounded waiting, or opening a PR
+that starts currently held builds are not a solution. The original-main trust
+reader, explicit exception-bearing identity/schema, repeated export/seal checks
+and complete original-response custody still need separate review. In particular,
+the current bootstrap cohort schema must not be tricked by recording candidate
+policy as original main. Keep all existing selectors, deadlines, credential
+boundaries, required checks and both ordinary HOLDs unchanged.
+
+Author command `python3 -I -B -S scripts/tests/hosted-initial-recipient-exception-test.py -v`
+passed **44/44 offline controls** on the revised matcher. Independent R2 remains
+**25 methods / 24 PASS / 1 FAIL / 0 errors**: a malformed `Match.record` could
+override dataclass equality. Rechecks now require exact immutable `bytes` before
+explicit byte comparison; the wrapper type alone is not provenance. Two added
+author regression methods produced **four expected failing subtests** on that
+preimage (bytearray, memoryview, comparison-overriding object/bytes subclass),
+then passed in the final 44-method suite. Original failures are retained.
+
+Earlier author 41/42-pass aggregates belong to earlier source, not additional
+final coverage; the 42-method revision first applied joint PR retirement to
+bootstrap too. The process/network/native-loader audit guard was installed
+before project imports. These controls use synthetic source/run/PR/comment
+records and explicit model clocks with the committed **public-only** policy,
+never the private custodian directory or GPG. The containing commit's issue
+record must bind the exact final independent source review; author passes do not
+supply it. Neither these models nor the preparation permission are a final
+attestation, hosted/native/cache/custody/scheduling qualification or Release
+readiness.
+
 ### What enforces 14-day evidence retention
 
 The ordinary upload steps already contain the following settings in
