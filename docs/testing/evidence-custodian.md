@@ -67,11 +67,42 @@ The owner independently confirms the public fingerprint before trusting it.
 
 The real ASCII-armored public key, uppercase primary fingerprint and SHA-256 of
 the exact armor bytes belong in **`.github/test-evidence-recipient.json`**.
-The file does not yet exist; do not create placeholder keys or identities.
+The [real public-only policy](../../.github/test-evidence-recipient.json) is now
+prepared on the integration branch, **not delivered to trusted main or admitted**.
+It contains no placeholder key or assumed approval.
 Private material belongs only in the dedicated restricted VPS directory and
 the owner's secure private copy, never Git, Actions, chat or Telegram.
 
-## Private key-generation procedure — not executed by this document
+### Completed setup, with separate evidence scopes — 20 September 2026
+
+The actual public export passed the maintained `validate_recipient` backend at
+source **`44ded2041cd077d9f98c880d58c020adb2bf4360`** on
+**`2026-09-20T16:29:19Z–16:29:20Z`**. The exact export and backend source hashes
+were rechecked unchanged when preparing the policy; that completed validation
+was not rerun or promoted to hosted qualification.
+
+| Public property | Validated value |
+| --- | --- |
+| Primary fingerprint | `0A996D2BC19518FB50071A95D3FDADA57CFB7E1F` |
+| Encryption-subkey fingerprint | `4D7CF63A16AFC0BDDC82F3E686D7D3D9A7B44350` |
+| UID | `P2pKit CI evidence (Apdelrahman1911)` |
+| Algorithm/capability | RSA4096 certification-only primary; usable RSA4096 encryption-only subkey |
+| Both expiries | `1821484800` = `2027-09-21T00:00:00Z` |
+| Exact public armor | 3,155 bytes; SHA-256 `5dcb108725ffb2a9c99f4e61e35c3473d34776530effca7385282faf62b86aaf` |
+| Public packet tags | `6,13,2,14,2`; no secret-key packets |
+
+Public-validation result SHA-256:
+`2d0aa5105cc57fb3f034687652d212a1a260172eafb136c982743a8ec9bffafd`.
+This binds the retained local validation record, not a hosted custody result.
+
+The owner separately confirmed: **private backup restore/decrypt passed;
+fingerprints matched; fresh pinentry succeeded; secure personal backup retained**.
+That is **owner-confirmed recovery, not agent-observed execution**. The agent
+checked only backup existence/permissions before confirmation and did not run
+the recovery helper or read the secret export, revocation contents or passphrase.
+Do not repeat the completed setup or publish its private recovery material.
+
+## Private key-generation procedure — reference, not a request to regenerate
 
 The owner explicitly designated this VPS as the trusted generation environment.
 The inspected installed tools are GPG **2.4.4** and `pinentry-curses`. No existing
@@ -87,9 +118,10 @@ nonempty passphrase only into pinentry. Never use a passphrase argument,
 environment variable, file, loopback input, empty-passphrase fallback or shell
 tracing. No private passphrase channel is established in the agent session.
 
-The inspected unused destination was
-**`/root/.local/share/p2pkit/evidence-custodian/2026-09-20/`**. Recheck it before
-use; do not overwrite/adopt an existing directory. In that private terminal:
+The owner used
+**`/root/.local/share/p2pkit/evidence-custodian/2026-09-20/`**. It now exists;
+do not overwrite it or rerun these generation commands. The exclusive directory
+creation below records the original private-terminal procedure:
 
 ```bash
 set +x
@@ -126,8 +158,9 @@ find "$KEY_DIR" -type d -exec chmod 0700 {} +
 find "$KEY_DIR" -type f -exec chmod 0600 {} +
 ```
 
-These are **instructions, not an executed key-generation result**. Installed
-GnuPG's `OpenPGP Key Management` documentation supports `YYYYMMDDThhmmss` for
+These are **reference instructions**; the completed public validation and
+owner-confirmed recovery are recorded separately above. Installed GnuPG's
+`OpenPGP Key Management` documentation supports `YYYYMMDDThhmmss` for
 both quick-generation expiry arguments; a date-only value is not used. After
 generation, independently check the public listing has exactly the intended
 primary/subkey, full fingerprints, UID, RSA4096 capabilities and expiry field
@@ -150,21 +183,24 @@ it does not erase the key or automatically destroy old ciphertext.
 [`hosted_test_identity.py`](../../scripts/hosted_test_identity.py) already
 requires the following exact policy fields (no additional assumed approvals):
 
-| Field | Owner-authorized value or pending real input |
+| Field | Prepared owner-authorized value |
 | --- | --- |
 | `schema` | `1` |
 | `repository` | `p2pKit/P2pKit` |
 | `purpose` | `P2PKIT_TEST_TRANSCRIPTS` |
 | `retrievalOwner` | `Apdelrahman1911` |
 | `retentionDays` | `14` |
-| `notBefore` | Proposed inclusive `1789948800` = `2026-09-21T00:00:00Z` |
-| `expiresAt` | Proposed exclusive `1791158400` = `2026-10-05T00:00:00Z` |
-| `recipient.publicKey` | Actual generated ASCII public armor, including exact newlines; pending |
-| `recipient.fingerprint` | Actual uppercase 40-hex primary fingerprint; pending |
-| `recipient.sha256` | Actual lowercase SHA-256 of those exact armor bytes; pending |
+| `notBefore` | Inclusive `1789948800` = `2026-09-21T00:00:00Z` |
+| `expiresAt` | Exclusive `1791158400` = `2026-10-05T00:00:00Z` |
+| `recipient.publicKey` | Exact validated 3,155-byte ASCII public armor, including original newlines |
+| `recipient.fingerprint` | `0A996D2BC19518FB50071A95D3FDADA57CFB7E1F` |
+| `recipient.sha256` | `5dcb108725ffb2a9c99f4e61e35c3473d34776530effca7385282faf62b86aaf` |
 
-This **announced, unapplied admission window** is separate from the one-year key
-lifetime and from each artifact's retention. It must not be backdated or silently
+This **prepared, not-yet-active admission window** is separate from the one-year
+key lifetime and from each artifact's retention. Preparation on 20 September
+does not admit execution: the real clock is still before `notBefore`. Explicit
+timestamp boundary tests of the pure parser are offline models, not live admission.
+The window must not be backdated or silently
 rolled forward if prerequisites miss the window. Reannounce any replacement
 before applying it. Admission requires `notBefore <= now < expiresAt`; the
 exporter also prevents policy validity from exceeding validated key lifetime.
@@ -179,6 +215,17 @@ or a public key alone does not resolve that bootstrap path. Do not weaken scope
 classification, use a force/admin merge, fabricate a check or remove a HOLD to
 put it into main. Record the eventual real policy commit/blob/hash, owner
 authorization and successful normal delivery before using it as trusted input.
+
+The prepared JSON is **3,631 bytes**, SHA-256
+`2e90a1ed038d5bb6759d8d22e1bb5468331b49274a6956df470c1e785691f521`.
+Its decoded armor is byte-identical to the validated export. **25/25 focused
+author offline controls passed**: exact public input/backend bindings, pure
+parser start/end boundaries, closed-schema/hash/field/duplicate/size refusals,
+and the expected real-clock refusal before the window. The separate scope
+classification returned **`full`**. These controls did not invoke hosted
+identity, GPG, encryption/decryption, GitHub Actions or any product build.
+The containing commit's #437 record binds the final source review and checks;
+it is not personal PR authorization or approval of future evidence.
 
 ### What enforces 14-day evidence retention
 
@@ -292,10 +339,13 @@ Required environment configuration: sole required reviewer `Apdelrahman1911`
 (`104788132`), `prevent_self_review: false`, custom deployment branch **`main`**
 only, **`can_admins_bypass: false`**. Disabling self-review prevention is intentional
 so the owner can approve their own triggered deployment; it does not remove
-the required reviewer. The last readback still has `can_admins_bypass: true`.
-The owner must turn off **Settings → Environments → sample-development-release
-→ Allow administrators to bypass configured protection rules**. A successful
-API readback of `false` is required; the publisher refuses the current setting.
+the required reviewer. The owner disabled administrator bypass; API readback
+on **20 September 2026, refreshed at 16:52 UTC**, confirms all these settings,
+environment ID **`22338522000`**, and the sole `main` branch policy
+**`60503975`**. The environment-configuration blocker is resolved, not the
+execution or publication prerequisites. The publisher rechecks the real settings
+and refuses any later nonconforming configuration. The original resolution is
+[recorded in #437](https://github.com/p2pKit/P2pKit/issues/437#issuecomment-5751072195).
 
 These protections cover the maintained workflow paths, not an impossible
 guarantee that a repository administrator cannot later rewrite policy outside
@@ -305,8 +355,8 @@ them. Such rewriting/direct publication is not authorized by this procedure.
 
 | Step | Owner | Agent/source | GitHub/CI and independent verification |
 | --- | --- | --- | --- |
-| Custodian/key | Own the role; privately enter passphrase and retain secure backup | Provide the inspected procedure; record only real public metadata | Independently validate public key, fingerprint, expiry and private recovery; no CI private key |
-| Trusted policy | Confirm actual public fingerprint/window and authorize exact policy PR | Add only the real public JSON after legitimate bootstrap is resolved | Original-base admission, required checks and normal merge; currently blocked |
+| Custodian/key | Owner has confirmed private recovery and secure personal backup | Actual public validation recorded; no secret access or repeated recovery | Public backend validation passed; recovery is owner-confirmed, not agent-observed; no CI private key |
+| Trusted policy | Public identity/window authorized; eventual exact-head PR authorization still required | Real public JSON prepared, not trusted or admitted; no PR or CI started | Legitimate original-base bootstrap, required checks and normal delivery remain blocked; candidate cannot authorize itself |
 | PR | Personally post exact-head authorization after checks; manually merge with `[release ci]` | Never auto-approve/merge; preserve required gates | Check identity/history; comment is validated by publisher, not native self-review |
 | Build/evidence | Do not waive HOLDs or qualification | Complete/review remaining bounded provider/custody prerequisites | Once admitted, run actual hosted tasks, retire writers, seal/encrypt and upload for 14 days |
 | Review | Retrieve/decrypt/inspect originals before expiry; record redacted decision | Prepare source/run/hash-bound public request, not fake evidence | Independent source/runtime evidence checks and artifact availability remain mandatory |
