@@ -28,7 +28,8 @@ parent is not connected. A separate internal handoff now retains the original
 producer-to-before-save chain, using the existing private writer. Provider
 save/probe and encrypted-custody integration remain unfinished.
 The [producer-command composition](#fixed-producer-command-and-original-function-return)
-below is the current source status. Earlier slice sections retain their dated
+and [save preparation](#fixed-save-preparation-not-provider-execution)
+below are the current source status. Earlier slice sections retain their dated
 test/review scope; their former no-CLI/caller statements are not the current
 command graph. CLI availability grants no execution authority.
 [`hosted_dependency_cache.py`](../../scripts/hosted_dependency_cache.py) has no
@@ -1704,7 +1705,7 @@ The index retains the before-return floor and writer start, but **not the final
 writer-return RAW/LOCAL high-water**. The fixed producer below now retains a
 separate real post-return observation. This reader does not consume that sidecar,
 invent its observation or compare historical LOCAL values across processes.
-No CLI or workflow invokes this reader yet.
+The fixed save-preparation command below now invokes this reader; no workflow does.
 
 **37 focused `ReaderModels` methods PASS** in one isolated Python3.12 invocation.
 An independent source review found the missing bound-owner cancellation call;
@@ -1745,9 +1746,10 @@ The record's own writer-return and producer-step outcome remain **PENDING**.
 Public command output contains only `handoffSha256`, `producerReturnSha256`,
 scope and nonacceptance fields. A future trusted workflow must supply its
 **original `steps.producer.outcome`** and those command-exported hashes; neither
-file content nor a conclusion can substitute. Return-record consumption, fresh
-save readmission, provider-save/after-save/probe and encrypted custody remain
-unconnected. The bootstrap workflow and recipient policy are still absent.
+file content nor a conclusion can substitute. The save-preparation command below
+now consumes this return record and performs fresh save readmission. Provider-save/
+after-save/probe and encrypted custody remain unconnected. The bootstrap workflow
+and recipient policy are still absent.
 
 **25 new focused methods PASS** (`CompositionModels`10, `CompletionModels`15),
 plus a separate **31 affected `HandoffModels` regressions PASS**. The actual
@@ -1764,6 +1766,61 @@ Bounded isolated Python3.12 used timeout20/kill2, CPU10/AS512MiB/FD64/core0 and
 results and independent final review are mapped with the containing commit in
 #437. Neither CLI availability nor these tests lift either HOLD, admit/measure
 5400, alter NativeFile900/Snapshot576MiB or qualify cache/Release delivery.
+
+### Fixed save preparation, not provider execution
+
+Dormant `prepare-save` in
+[`run-hosted-cache-bootstrap.py`](../../scripts/run-hosted-cache-bootstrap.py)
+requires the original producer step's literal `success` outcome and both original
+command-exported hashes through `P2PKIT_BOOTSTRAP_PRODUCER_OUTCOME`,
+`P2PKIT_BOOTSTRAP_HANDOFF_SHA256` and `P2PKIT_BOOTSTRAP_PRODUCER_RETURN_SHA256`.
+A future trusted workflow must supply these; environment declarations or a file
+cannot authenticate their own provenance. The service token, ambient execution
+overrides and caller-selected paths/keys/commands/durations are not accepted.
+
+One NEW closure-owned **first30-second RAW/LOCAL fence** covers bounded original
+reads, fresh native admission, rederivation, private writes/readbacks, known
+cleanup and guarded output. Recorded save-transition/job caps can only shorten
+it, and deny expired originals before native admission. No old owner, capability
+or LOCAL epoch is restored. Historical producer LOCAL values are ordered only
+within that process; the new first RAW observation must follow the original
+return on the same clock. Clock labels alone are not machine/boot authentication.
+The shared admission wrapper now clamps its earlier work deadline to a later
+shorter final deadline, never extending either native allowance.
+
+The command uses fixed service references, current nine-file `source_inputs`,
+original staging-file binding and current container/S identities to rederive the
+allocation and whole bootstrap plan. Shared inventory/roster checks require a
+positive complete exported subset and consistent original before-save counts,
+files, directory bindings and chronology. Final staging reread retains the
+original file identity even for identical replacement bytes. These are supplied
+original-consistency checks, **not another 2GiB traversal, an atomic snapshot or
+fresh observation of every provider-path member**. Unselected upstream package
+semantics remain opaque; original producer provenance still belongs to the caller.
+
+An exclusive derived `-save` sibling retains private `save-preparation.json`.
+Its proposed provider window ends at the minimum of descriptor issue+180 seconds,
+the original provider-save cap and original job end. Issue time is **not actual
+provider start**; later scheduling spends this fixed cap, not a new allowance.
+There is no provider call, `GITHUB_OUTPUT` write or exported minute timeout.
+Only a digest and nonacceptance fields reach stdout. Writer/step return remains
+PENDING in the file; output is provisional through close, handler restoration,
+flush and final clock/cancellation checks. UNKNOWN remains quarantined.
+
+**35 focused methods PASS** in one isolated Python3.12 invocation of
+[`hosted-cache-bootstrap-prepare-save-test.py`](../../scripts/tests/hosted-cache-bootstrap-prepare-save-test.py).
+Selected actual Owner/admission composition, package/sidecar/bound-file readers,
+stage/plan/inventory validators and CLI/guarded output execute over explicit
+native-admission, source-acquisition, allocation, elapsed-clock and memory-file
+models. No full runner import, native/private-file/provider or Gradle execution
+occurred. The first smoke remains0pass/2errors (missing fixture `dataclasses`
+namespace); its correction changed no implementation bytes. Later2/32 passes
+remain separate from the final35, not extra test cases. Bounded execution used
+timeout20/kill2, CPU10/AS512MiB/FD64/core0 and1MiB regular outputs; bindings were
+unchanged, owned process group absent and guard denials0. UID0/audit guards are
+not a kernel sandbox. Exact evidence and independent review are mapped in #437.
+Both HOLDs, absent recipient/trusted-base formal approval, proposed5400
+UNADMITTED/UNMEASURED and NativeFile900/Snapshot576MiB remain unchanged.
 
 ### Supplied-original after-save recheck
 
@@ -1979,6 +2036,8 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-save-set-test.py \
   BeforeSaveModels BeforeReturnModels AfterSaveModels -v
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-save-handoff-test.py HandoffModels -v
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-save-reader-test.py ReaderModels -v
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-prepare-save-test.py \
+  PrepareModels SuppliedDataModels AdmissionAndCliModels -v
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
