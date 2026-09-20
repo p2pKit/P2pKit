@@ -147,7 +147,7 @@ class World:
             "query": NS(QUARANTINE=[]), "QUARANTINE": self.quarantine,
             "cancellation": lambda values: require(not values, "CANCELLED"), "LIMIT": 2 * 1024 * 1024}
         exec(CODE, self.namespace)
-        self.run = self.namespace["_no_loader_parent_controls"]()
+        self.run, self.closed_return = self.namespace["_no_loader_parent_controls"]()
 
     def state(self):
         cells = dict(zip(self.run.__code__.co_freevars, self.run.__closure__))

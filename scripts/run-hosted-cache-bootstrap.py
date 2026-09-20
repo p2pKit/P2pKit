@@ -37,6 +37,7 @@ import hosted_cache_bootstrap_allocation as allocation
 import hosted_cache_bootstrap_canonical as canonical
 import hosted_cache_bootstrap_collect_files as collect_files
 import hosted_cache_bootstrap_custody as custody
+import hosted_cache_bootstrap_export as dependency_export
 import hosted_cache_bootstrap_history as history
 import hosted_cache_bootstrap_identity as bootstrap
 import hosted_cache_bootstrap_initialization as initialization
@@ -10350,6 +10351,7 @@ def _no_loader_parent_controls():
             leaf_unchanged()
             cancellation(state["cancelled"])  # Final flag check adds no callback or renewed clock.
             result = prefix_kind(raw, state["leaf"], last, local_last)
+            state["closed_check"] = (check, leaf_unchanged)
             state["result"], state["complete"] = result, True
             state["result_pin"] = (object.__getattribute__(result, "__dict__"), raw, result.leaf, last, local_last)
             return result
@@ -10364,11 +10366,328 @@ def _no_loader_parent_controls():
                 pass
             raise state["original"]
 
+    def closed_return(transition, returned):
+        """Read original private publication pins; never capture a replacement baseline."""
+        roots()
+        state = calls.get(id(transition))
+        require(state is not None and state["transition"] is transition and state["complete"] is True and
+                state["original"] is None and state["unknown"] is False and state["closed"] is True and
+                state["result"] is returned and type(returned) is prefix_kind and
+                state["handlers"] == state["restored"] and state["errors"] == [],
+                "BOOTSTRAP_NO_LOADER_RETURN_NOT_ORIGINAL")
+        for check in state["closed_check"]:
+            check()  # Closed data only: no predecessor owner/clock operation.
+        cancellation(state["cancelled"])
+        pin = state["result_pin"]
+        require(object.__getattribute__(returned, "__dict__") is pin[0] and len(pin[0]) == 4 and
+                set(pin[0]) == {"raw", "leaf", "checked_ns", "checked_local"} and returned.leaf is pin[2] and
+                all(type(value) is type(old) and value == old for value, old in zip(
+                    (returned.raw, returned.checked_ns, returned.checked_local), (pin[1], pin[3], pin[4]))) and
+                all(row[4] is row[5] is True for row in state["pins"]),
+                "BOOTSTRAP_NO_LOADER_RETURN_CHANGED")
+        return state["bound"]
+
+    return execute, closed_return
+
+
+observe_no_loader_after_entry, _checked_no_loader_parent_return = _no_loader_parent_controls()
+del _no_loader_parent_controls
+
+
+@dataclass(frozen=True)
+class BootstrapExportPrefix:
+    """Original bounded copy return; no frozen set or provider/save authority."""
+    raw: bytes = field(repr=False)
+    leaf: object = field(repr=False)
+    checked_ns: int
+    checked_local: float
+
+
+def _bootstrap_export_controls():
+    """Fixed same-call successor, with a NEW file-only owner and no workflow."""
+    operation, predecessor = observe_no_loader_after_entry, _checked_no_loader_parent_return
+    module, copy = dependency_export, dependency_export.export_snapshot
+    input_kind, window_kind = custody._Inputs, dependency_export._Window
+    result_kind, prefix_kind = dependency_export.ExportEvidence, BootstrapExportPrefix
+    scope, statuses = dependency_export.SCOPE, dependency_export.STATUSES
+    calls, lock = {}, threading.Lock()
+
+    def roots():
+        require(observe_no_loader_after_entry is operation and _checked_no_loader_parent_return is predecessor and
+                dependency_export is module and module.export_snapshot is copy and module._Window is window_kind and
+                module.ExportEvidence is result_kind and module.SCOPE is scope and module.STATUSES is statuses and
+                custody._Inputs is input_kind and BootstrapExportPrefix is prefix_kind,
+                "BOOTSTRAP_EXPORT_OPERATION_CHANGED")
+
+    def execute(transition):
+        roots()
+        require(type(transition) is NewEntryTransition, "BOOTSTRAP_EXPORT_TRANSITION")
+        with lock:
+            require(id(transition) not in calls, "BOOTSTRAP_EXPORT_ALREADY_CLAIMED")
+            state = {"transition": transition, "previous": None, "bound": None, "inputs": None, "window": None,
+                "leaf": None, "result": None, "original": None, "errors": [], "error_refs": [], "unknown": False,
+                "closed": False, "resources": [], "pins": [], "returns": [], "cancelled": [],
+                "handlers": [], "restored": [], "expired": False}
+            calls[id(transition)] = state  # Includes failed/reentrant original calls.
+        ledger, pins, owned = state["resources"], state["pins"], set()
+        bound = inputs = window = owner = None
+        fixed, issued_end, borrowed, kinds = (), None, frozenset(), ()
+
+        def error(stage, failure, *, unknown=False):
+            if state["original"] is None:
+                state["original"] = failure
+            state["unknown"] |= unknown
+            try:
+                detail = diagnostics._exception_detail(failure)
+                state["unknown"] |= detail["retirementUnknown"]
+                if any(stage == old_stage and failure is old for old_stage, old in state["error_refs"]):
+                    return  # Repeated propagation is not another distinct failure.
+                require(len(state["errors"]) < 64, "BOOTSTRAP_EXPORT_ERROR_LIMIT")
+                state["error_refs"].append((stage, failure))
+                state["errors"].append(origin.encoded({"stage": stage, "detail": detail}))
+            except BaseException:
+                state["unknown"] = True
+
+        def raise_first():
+            if state["original"] is not None:
+                raise state["original"]
+
+        def roster():
+            try:
+                require(len(ledger) == len(pins) == len(owned) <= 65536, "BOOTSTRAP_EXPORT_RESOURCE_LIMIT")
+                for row, pin in zip(ledger, pins):
+                    saved, label, value, kind, attempted, closed = pin
+                    require(row is saved and type(row) is dict and len(row) == 4 and
+                            set(row) == {"label", "owner", "attempted", "closed"} and row["label"] == label and
+                            type(row["label"]) is str and row["owner"] is value and type(value) is kind and
+                            row["attempted"] is attempted and row["closed"] is closed,
+                            "BOOTSTRAP_EXPORT_ROSTER_CHANGED")
+            except BaseException as failure:
+                error("roster", failure, unknown=True)
+                raise
+
+        def fences():
+            actual = (window.first, window.soft, window.hard, window.local_start, window.local_soft, window.local_hard)
+            require(window.inputs is inputs and all(type(a) is type(b) and a == b for a, b in zip(actual, fixed)),
+                    "BOOTSTRAP_EXPORT_FENCE_CHANGED")
+
+        def leaf_unchanged():
+            leaf, pin = state["leaf"], state["leaf_pin"]
+            require(type(leaf) is result_kind and object.__getattribute__(leaf, "__dict__") is pin[0] and
+                    len(pin[0]) == 4 and set(pin[0]) == {"raw", "checked_ns", "local_started", "checked_local"} and
+                    all(type(a) is type(b) and a == b for a, b in zip(
+                        (leaf.raw, leaf.checked_ns, leaf.local_started, leaf.checked_local), pin[1:])),
+                    "BOOTSTRAP_EXPORT_LEAF_CHANGED")
+
+        def check():
+            roots()
+            require(bound is not None and predecessor(transition, state["previous"]) is bound,
+                    "BOOTSTRAP_EXPORT_PREDECESSOR_CHANGED")
+            inputs.unchanged()
+            roster()
+            fences()
+            if "leaf_pin" in state:
+                leaf_unchanged()
+            require(not QUARANTINE and not query.QUARANTINE and not diagnostics._QUARANTINE,
+                    "BOOTSTRAP_EXPORT_PRIOR_UNKNOWN")
+
+        def cancel():
+            check()
+            cancellation(state["cancelled"])
+            for callback in bound.pin.frame.predecessor.frame.callbacks:
+                callback()
+                check()
+            cancellation(state["cancelled"])
+
+        def sample(*, cleanup=False):
+            if not cleanup:
+                check()
+            fences()
+            before = staging._local(time.monotonic())
+            require(before >= window.local_last, "BOOTSTRAP_EXPORT_LOCAL_BACKWARDS")
+            window.local_last = before
+            window.sample()
+            fences()
+            if not cleanup:
+                check()
+            return before
+
+        def close_clock():
+            try:
+                sample(cleanup=True)
+            except BaseException as failure:
+                expired = (type(failure) is staging.files.SeedError and
+                           failure.args == ("BOOTSTRAP_SEED_ORIGINAL_PHASE_EXPIRED",))
+                if not expired or not state["expired"]:
+                    state["expired"] |= expired
+                    error("close-clock", failure)
+
+        class FileOwner:
+            __slots__ = ()
+            resources = property(lambda self: ledger)
+            original = property(lambda self: state["original"])
+            unknown = property(lambda self: state["unknown"])
+            closed = property(lambda self: state["closed"])
+            cancelled = property(lambda self: cancel)
+
+            def error(self, stage, failure, *, unknown=False):
+                error(stage, failure, unknown=unknown)
+
+            def end(self):
+                nonlocal issued_end
+                raise_first()
+                require(not self.closed and not self.unknown, "BOOTSTRAP_EXPORT_NOT_LIVE")
+                cancel()
+                local = sample()
+                issued_end = min(issued_end, origin.wire._directed_deadline(local, 120, fixed[2], window.last))
+                require(window.local_last < issued_end, "BOOTSTRAP_EXPORT_EXPIRED")
+                return issued_end
+
+            def acquire(self, label, factory):
+                self.end()
+                require(type(label) is str and 0 < len(label) <= 256 and len(pins) < 65536,
+                        "BOOTSTRAP_EXPORT_RESOURCE_LIMIT")
+                try:
+                    value = factory()
+                except BaseException as failure:
+                    error("allocation", failure, unknown=True)
+                    raise
+                state["returns"].append(value)  # Before kind/borrow/registration checks.
+                if type(value) not in kinds or id(value) in owned or id(value) in borrowed:
+                    failure = origin.OriginError("BOOTSTRAP_EXPORT_BORROWED_RESOURCE")
+                    error("allocation-return", failure, unknown=True)
+                    raise failure
+                row = {"label": label, "owner": value, "attempted": False, "closed": False}
+                pins.append((row, label, value, type(value), False, False))
+                owned.add(id(value))
+                ledger.append(row)
+                self.end()
+                return value
+
+            def close_one(self, value):
+                index = next((i for i, pin in enumerate(pins) if pin[2] is value), None)
+                if index is None:
+                    error("foreign-close", origin.OriginError("BOOTSTRAP_EXPORT_FOREIGN_RESOURCE"), unknown=True)
+                    return
+                pin = pins[index]
+                if pin[4]:
+                    return
+                try:
+                    roster()
+                    require(not self.unknown, "BOOTSTRAP_EXPORT_UNKNOWN")
+                    close_clock()
+                    roster()
+                    require(not self.unknown and not QUARANTINE and not query.QUARANTINE and
+                            not diagnostics._QUARANTINE, "BOOTSTRAP_EXPORT_UNKNOWN")
+                    if pins[index][4]:
+                        return
+                    require(pins[index] is pin, "BOOTSTRAP_EXPORT_CLOSE_CHANGED")
+                except BaseException as failure:
+                    error("close-binding", failure, unknown=True)
+                    return
+                pins[index] = (*pin[:4], True, False)
+                pin[0]["attempted"] = True
+                try:
+                    value.close()
+                    pins[index] = (*pin[:4], True, True)
+                    pin[0]["closed"] = True
+                    roster()
+                except BaseException as failure:
+                    error("close", failure, unknown=True)
+                close_clock()
+
+        try:
+            state["previous"] = operation(transition)
+            bound = state["bound"] = predecessor(transition, state["previous"])
+            previous = state["previous"]
+            saved, last = bound.pin.frame.predecessor.frame, bound.pin.frame.predecessor.phases[-1][1]
+            inputs = state["inputs"] = input_kind(saved.originals, saved.original_pin, last.staged, last.staged_pin)
+            local = staging._local(time.monotonic())
+            first = origin.clocks.validate_reading(origin.clocks.observe())
+            phase = staging.PhaseStart(first, local)
+            window = state["window"] = window_kind(inputs, phase, (previous.raw, previous.checked_ns, previous.checked_local))
+            fixed = (window.first, window.soft, window.hard, window.local_start, window.local_soft, window.local_hard)
+            issued_end = window.local_hard
+            borrowed = frozenset(id(row[0]) for row in bound.pin.graph.nodes)
+            kinds = ((windows.PrivateDirectory, windows.DependencySourceDirectory, windows.NativeFile)
+                     if inputs.role == "windows-x64" else
+                     (staging.files.PosixPrivateDirectory, staging.files.PosixSourceDirectory, staging.files.PosixFile))
+            owner = FileOwner()
+            owner.end()
+            for number in (signal.SIGINT, signal.SIGTERM, *([signal.SIGBREAK] if hasattr(signal, "SIGBREAK") else [])):
+                handler = signal.getsignal(number)
+                state["handlers"].append((number, handler))
+                signal.signal(number, lambda signum, _frame: state["cancelled"].append(signum))
+                owner.end()
+            state["leaf"] = copy(owner, inputs, window)
+            leaf = state["leaf"]
+            require(type(leaf) is result_kind and type(leaf.raw) is bytes and 0 < len(leaf.raw) <= staging.files.RECEIPT_LIMIT and
+                    window.first <= origin.integer(leaf.checked_ns) <= window.last and
+                    type(leaf.local_started) is type(leaf.checked_local) is float and
+                    leaf.local_started == window.local_start and
+                    leaf.local_started <= staging._local(leaf.checked_local) <= window.local_last,
+                    "BOOTSTRAP_EXPORT_LEAF_RETURN")
+            state["leaf_pin"] = (object.__getattribute__(leaf, "__dict__"), leaf.raw, leaf.checked_ns,
+                                 leaf.local_started, leaf.checked_local)
+            leaf_unchanged()
+            owner.end()
+            value = origin.parse(leaf.raw)
+            require(value.get("scope") == module.SCOPE and value.get("completed") is True and
+                    value.get("retirement") == "KNOWN" and value.get("status") in module.STATUSES and
+                    value.get("nextPhaseAuthority") is value.get("exportSaveAuthority") is False and
+                    value.get("budgetAcceptance") == "NOT_ADMITTED" and value.get("testAcceptance") == "NOT_PERFORMED",
+                    "BOOTSTRAP_EXPORT_LEAF_DISPOSITION")
+            require(all(pin[4] and pin[5] for pin in pins), "BOOTSTRAP_EXPORT_LEAF_NOT_CLOSED")
+        except BaseException as failure:
+            error("body", failure)
+        finally:
+            if owner is not None:
+                state["closed"] = True
+                for pin in reversed(pins):
+                    if state["unknown"]:
+                        break
+                    owner.close_one(pin[2])
+            for number, handler in state["handlers"]:
+                close_clock()
+                try:
+                    signal.signal(number, handler)
+                    require(signal.getsignal(number) is handler, "BOOTSTRAP_EXPORT_HANDLER_NOT_RESTORED")
+                    state["restored"].append((number, handler))
+                except BaseException as failure:
+                    error("handler-restore", failure)
+                close_clock()
+        try:
+            raise_first()
+            check()
+            require(state["closed"] and not state["unknown"] and state["handlers"] == state["restored"] and
+                    all(pin[4] and pin[5] for pin in pins), "BOOTSTRAP_EXPORT_CLOSE_INCOMPLETE")
+            leaf_unchanged()
+            cancel()
+            sample()
+            raw = origin.encoded({"schema": 1, "scope": "BOOTSTRAP_EXPORT_PARENT_CLOSED_OBSERVATIONS_V1",
+                "noLoaderSha256": origin.digest(previous.raw), "leafSha256": origin.digest(leaf.raw),
+                "clock": origin.clock_value(first.clock), "firstNs": fixed[0], "softEndNs": fixed[1],
+                "hardEndNs": fixed[2], "closedNs": window.last, "resourceCount": len(pins),
+                "parentResourceClose": "KNOWN_RESOURCE_CLOSE_ONLY", "nextPhaseAuthority": False,
+                "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False})
+            cancel()
+            sample()
+            cancellation(state["cancelled"])
+            result = prefix_kind(raw, leaf, window.last, window.local_last)
+            state["result"] = result
+            state["result_pin"] = (object.__getattribute__(result, "__dict__"), raw, leaf, window.last, window.local_last)
+            return result
+        except BaseException as failure:
+            error("return", failure)
+            if state["unknown"] and not any(value is state for value in QUARANTINE):
+                QUARANTINE.append(state)
+            raise state["original"]
+
     return execute
 
 
-observe_no_loader_after_entry = _no_loader_parent_controls()
-del _no_loader_parent_controls
+export_after_entry = _bootstrap_export_controls()
+del _bootstrap_export_controls
 
 
 def guarded(operation):

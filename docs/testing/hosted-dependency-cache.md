@@ -20,7 +20,8 @@ absence leaf below now has source and focused offline controls; its original-cal
 collection-return binding now has separately reviewed source and focused memory controls.
 That private binding is not itself an owner. The directory-only parent below now
 connects the absence leaf under NEW ownership and original allocation fences.
-Export/freeze/save/probe and encrypted-custody integration remain unfinished.
+The internal export successor now connects bounded H-to-S copying under a NEW
+file-only owner. Freeze/save/probe and encrypted-custody integration remain unfinished.
 [`hosted_dependency_cache.py`](../../scripts/hosted_dependency_cache.py) has no
 CLI, action runner, downloader, extraction, deletion or subprocess entry point.
 The connected caller is
@@ -1540,6 +1541,44 @@ review and final source gates are bound in the containing commit's #437 mapping.
 Both HOLDs, recipient/trusted-base/formal approval, proposed5400
 UNADMITTED/UNMEASURED and NativeFile900/Snapshot576MiB remain unchanged.
 
+### Original-call bounded bootstrap export
+
+Internal `export_after_entry` claims before calling the original no-loader
+parent. Its private return check reads that parent's original publication pins;
+a copied return or first-consumer replacement cannot establish authority.
+[`hosted_cache_bootstrap_export.py`](../../scripts/hosted_cache_bootstrap_export.py)
+then uses the original bootstrap inputs and empty S with a NEW file-only owner.
+It reuses the shared allowlisted copier and inventory checks, not ordinary
+`cache.export_snapshot` or a fabricated Desktop/FULL context. Ordinary bootstrap
+refusal guards remain unchanged. No CLI or workflow invokes this successor.
+
+One shared export interval retains the original allocation/job fences and
+120-second hard/90-second new-candidate bounds. Already-started copy/readback
+may finish after90, but no later candidate starts. LOCAL expiry can shorten the
+RAW candidate cutoff without inventing a clock reading. Separate source hashes
+bind the export/custody/cache modules without changing dependency-key inputs.
+The file-only ledger retains actual returns before fallible checks, closes each
+known obligation at most once and quarantines UNKNOWN. There is no aggregate
+Windows Snapshot. Empty/partial/exported observations grant no freeze, save,
+provider, test or budget acceptance; live/native behavior remains unqualified.
+
+Focused `OriginalReturnModels`/`ExportModels` execute selected new parent/leaf
+definitions and the shared window, leaf, copy loop and inventory checker.
+Upstream originals/admission, source reads, native files and candidate copy/hash
+operations are explicit memory models. **R2:32 methods PASS**, no failures,
+errors or guard denials. R1 remains **FAILED:23 pass/1 fail**: repeated propagation
+of the same expiry error exhausted the diagnostic limit and skipped known closes.
+R2 de-duplicates only the same stage/exception object, while still checking each
+propagation for UNKNOWN. The old no-loader38-method suite was not replayed;
+its fixture's return unpacking changed, not its historical result scope.
+
+The bounded isolated Python3.12 run used timeout20/kill2, CPU10, AS512MiB, FD64,
+core0 and1MiB regular stdout/stderr limits; actual UID0 and an audit guard are
+not an ordinary-user/kernel sandbox or native/provider qualification. Original
+results and exact-source independent review are bound in the containing commit's
+#437 mapping. Both HOLDs, recipient/trusted-base/formal approval, proposed5400
+UNADMITTED/UNMEASURED and NativeFile900/Snapshot576MiB remain unchanged.
+
 ## Connected consume and delivery path
 
 After the unchanged HOLD and native/source admission, `prepare-consume` binds
@@ -1718,6 +1757,8 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-no-loader-origin-test.py \
   PublicationModels -v
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-no-loader-parent-test.py \
   ParentModels ReviewBoundaryModels -v
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-export-test.py \
+  OriginalReturnModels ExportModels -v
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
