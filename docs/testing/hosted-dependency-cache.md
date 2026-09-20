@@ -15,9 +15,9 @@ prefix now claims before the original producer call and retains its closed
 return; that binding alone creates no collection owner or result. The separate
 original-call NEW-owner collection parent now has independently reviewed source,
 focused author controls and separately authored independent memory controls.
-No public command or workflow invokes either path. No-loader observation,
-export/freeze/save/probe and
-encrypted-custody integration remain unfinished.
+No public command or workflow invokes either path. The separate exact-loader
+absence leaf below now has source and focused offline controls; its original-call
+parent, export/freeze/save/probe and encrypted-custody integration remain unfinished.
 [`hosted_dependency_cache.py`](../../scripts/hosted_dependency_cache.py) has no
 CLI, action runner, downloader, extraction, deletion or subprocess entry point.
 The connected caller is
@@ -1401,6 +1401,41 @@ test, admitted-budget and next-phase/export/save authority remain nonaccepting.
 Both HOLDs, unadmitted5400, NativeFile900/Snapshot576MiB and recipient/trusted-base/
 formal-review/native/provider/resolver/custody/scheduling/delivery prerequisites
 remain unchanged. No bootstrap workflow or export/save caller is added.
+
+### Exact-loader absence leaf, not uninstall or original-call authority
+
+[`hosted_cache_bootstrap_no_loader.py`](../../scripts/hosted_cache_bootstrap_no_loader.py)
+observes only `init.d/p2pkit-test-transcript-custody.gradle` under the supplied
+canonical H. Configuration reservation never installed that ordinary Test loader;
+ordinary uninstall requires its own installed original and cannot honestly be
+substituted. The new leaf neither reads file contents nor writes/deletes anything.
+
+It rederives the exact configuration request, opens NEW read-only H/optional
+`init.d` handles, and compares two bounded H listings and, if present, two init
+listings with same-handle bindings. Original H identity, same volume, unique
+identities, exact paths/kinds, membership and selected-name aliases are checked.
+Other names, including dotfiles, are counted but not opened. These observations
+are neither atomic/historical absence nor proof that another initializer did not
+execute. The supplied parent remains open and owns enclosing failure custody.
+
+Both inherited local ceilings narrow to90, never120. Child-open dispatch checks
+the latest nonrenewable caller ceiling **inside** its acquisition factory. Known
+expiry still permits once-only known cleanup; UNKNOWN retains unattempted pins.
+The root supplier has no native deadline parameter; surrounding checks are not
+a filesystem watchdog or RAW/job admission. All results deny original producer/
+collection return, enclosing retirement, population/tests/budget and next-phase/
+export/save authority. This repeatable supplied-data leaf has no parent or
+workflow caller; the proposed original-call uninstall90/final45/read30 adapter
+remains unfinished, unadmitted and unmeasured.
+
+The [no-loader continuation](../maintenance/hosted-bootstrap-no-loader-2026-09-19.md)
+records the independent stale-deadline finding, R1's3-pass/1-fail aggregate and
+R2's49 distinct author memory-method passes. Entire frozen modules were loaded;
+parent/clocks/directories remain explicit models, not real native/hosted evidence.
+Separate implementation/control and complete-patch reviews retain their exact
+scope in that record and its issue mapping. Both ordinary HOLDs, recipient/trusted-
+base/formal approval, unadmitted5400, NativeFile900/Snapshot576MiB and genuine
+native/provider/resolver/custody/scheduling/delivery requirements remain unchanged.
 
 ## Connected consume and delivery path
 
