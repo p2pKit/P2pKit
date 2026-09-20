@@ -7,6 +7,9 @@ producer binding, historical-chain readmission, host/toolchain/domain checks,
 native Git, allocation rederivation, inventory grammar and file-copy operation
 are explicit models. The new manifest/read/binding/current-membership/query-
 return logic runs over memory-only files. No old suite/fixture is imported.
+The later original-return publication is an explicit model here; its separate
+no-loader-origin controls own that boundary. Historical results for this fixture
+are not executions of this later fixture revision or that publication code.
 
 No actual producer, private/native file, Git query, clock, loader, provider,
 Gradle, application, network, subprocess, or hosted identity is exercised.
@@ -344,6 +347,9 @@ class Model:
                     model.query_after_hook(self)
         namespace["query"] = Box(NativeGitQueries=NativeQuery, QUARANTINE=[])
         exec(RUNNER, namespace)
+        namespace["_publish_collection_phase"] = lambda parent, returned: (
+            require(parent.result is returned and parent.state == "COMPLETE", "MODEL_COLLECTION_PUBLICATION"),
+            self.events.append("MODELED_COLLECTION_PUBLICATION"))
         self.Parent = namespace["_CollectionPhaseParent"]
         # ONLY these explicitly historical/host boundaries are replaced. The
         # new source/state/manifest/query/read/copy-return/close code still runs.

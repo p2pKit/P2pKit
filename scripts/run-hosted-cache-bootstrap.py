@@ -8093,6 +8093,7 @@ _CollectionPhaseResource = namedtuple("_CollectionPhaseResource", "row label val
 _CollectionPhaseFile = namedtuple("_CollectionPhaseFile", "key directory path identity name maximum raw binding_raw")
 _CollectionPhaseQueryOrigin = namedtuple("_CollectionPhaseQueryOrigin", "dictionary root path roots resources records readbacks")
 _CollectionPhaseQueryBefore = namedtuple("_CollectionPhaseQueryBefore", "rows readbacks graph graph_pin")
+_CollectionPhaseResultPin = namedtuple("_CollectionPhaseResultPin", "frame result dictionary fields graph graph_pin")
 _CollectionPhaseFrame = namedtuple("_CollectionPhaseFrame", "call transition state binding bound predecessor published "
     "first limits window owner owner_bindings last local_last phases resources foreign handles files handlers restored "
     "close_roster original unknown errors query_attempted query query_returned query_pin borrowed source_pin "
@@ -8113,6 +8114,7 @@ def _collection_phase_controls():
     capture, inputs, grammar = collect_files._capture, collect_files._Inputs, collect_files.inventory
     describe = grammar.describe_inventory
     attempts, frames, owners, windows_by_id, lock = {}, {}, {}, {}, threading.Lock()
+    results, result_attempted = {}, set()
 
     def roots():
         require(_begin_collection_after_entry is begin and _checked_collection_origin is checked and
@@ -8220,12 +8222,56 @@ def _collection_phase_controls():
                 "BOOTSTRAP_COLLECTION_PHASE_LEAF_RETURN_LOCAL")
         return returned
 
-    return claim, frame, update, invoke, roots, owner_frame, window_frame, leaf
+    def publish(call, returned):
+        # Called only AFTER the last parent.check() and public COMPLETE/result
+        # bookkeeping. check() can replace the private frame even when closed.
+        saved = frame(call)
+        require(id(call) not in result_attempted, "BOOTSTRAP_COLLECTION_PHASE_PUBLICATION_REENTRY")
+        result_attempted.add(id(call))  # A failed capture never earns a new baseline.
+        roots()
+        require(_collection_phase_closed_return(call, returned) is saved,
+                "BOOTSTRAP_COLLECTION_PHASE_PUBLICATION_CHANGED")
+        dictionary = object.__getattribute__(returned, "__dict__")
+        fields = tuple(dictionary[name] for name in ("raw", "leaf", "manifest_raw", "checked_ns", "checked_local"))
+        graph = _CollectionReturnGraph.capture(saved)
+        pin = _CollectionPhaseResultPin(saved, returned, dictionary, fields, graph,
+            (object.__getattribute__(graph, "__dict__"), graph.nodes, graph.paths))
+        # The registry is deliberately outside its own captured graph. No
+        # post-publication parent/frame mutation, file I/O or clock observation.
+        results[id(call)] = pin
+        return original_result(call)
+
+    def original_call(transition):
+        roots()
+        require(type(transition) is NewEntryTransition, "BOOTSTRAP_COLLECTION_PHASE_TRANSITION_KIND")
+        row = attempts.get(id(transition))
+        require(type(row) is tuple and len(row) == 2 and row[0] is transition and
+                type(row[1]) is _CollectionPhaseParent and frame(row[1]).transition is transition,
+                "BOOTSTRAP_COLLECTION_PHASE_NOT_ORIGINAL_CALL")
+        return row[1]
+
+    def original_result(call):
+        roots()
+        saved, pin = frame(call), results.get(id(call))
+        require(type(pin) is _CollectionPhaseResultPin and pin.frame is saved and
+                pin.result is saved.result and type(pin.result) is CollectionPrefix and
+                object.__getattribute__(pin.result, "__dict__") is pin.dictionary,
+                "BOOTSTRAP_COLLECTION_PHASE_RESULT_NOT_PUBLISHED")
+        names = ("raw", "leaf", "manifest_raw", "checked_ns", "checked_local")
+        require(len(pin.dictionary) == len(names) and set(pin.dictionary) == set(names) and pin.dictionary["leaf"] is pin.fields[1] and
+                all(type(pin.dictionary[name]) is type(old) and pin.dictionary[name] == old
+                    for name, old in zip(names, pin.fields) if name != "leaf"),
+                "BOOTSTRAP_COLLECTION_PHASE_PUBLISHED_FIELDS_CHANGED")
+        _check_collection_return_graph(pin)
+        return pin
+
+    return claim, frame, update, invoke, roots, owner_frame, window_frame, leaf, publish, original_call, original_result
 
 
 (_claim_collection_phase, _collection_phase_frame, _update_collection_phase, _invoke_collection_phase_begin,
  _collection_phase_roots, _collection_phase_owner_frame, _collection_phase_window_frame,
- _invoke_collection_phase_leaf) = _collection_phase_controls()
+ _invoke_collection_phase_leaf, _publish_collection_phase, _collection_phase_original_call,
+ _collection_phase_original_result) = _collection_phase_controls()
 del _collection_phase_controls
 
 
@@ -9529,6 +9575,7 @@ def _run_collection_phase(parent):
         _update_collection_phase(parent, result=result, result_pin=result_pin, state="COMPLETE")
         parent.result, parent.state = result, "COMPLETE"
         parent.check()  # Passive; no post-close resource or predecessor call.
+        _publish_collection_phase(parent, result)
         return result
     except BaseException as error:
         parent.error("collection-phase-final-return", error)
@@ -9563,6 +9610,384 @@ def collect_after_entry(transition):
         except BaseException:
             pass
         raise frame.original
+
+
+@dataclass(frozen=True)
+class _CollectionReturnGraph:
+    """Finite passive original-return snapshot, not native-resource inspection.
+
+    Pin the selected exact record/tuple families and the older witnesses
+    themselves. Bound edges BEFORE materializing containers: a node counter
+    alone does not bound a huge scalar-only list. Composed capacity remains
+    unqualified; exhaustion refuses, never widens an earlier graph's limits.
+    These limits do not cap the preceding retained-predecessor validators.
+    """
+    nodes: tuple = field(repr=False)
+    paths: tuple = field(repr=False)
+
+    @classmethod
+    def capture(cls, frame):
+        records = (NewEntryTransition, _EntryAttempt, ClosedEntryTransition, OriginalEntry, OriginalPhase,
+            Owner, _StagingFileOwner, origin.Fence, _NewEntryWindow, I.Admission,
+            origin.clocks.Reading, origin.clocks.ClockIdentity, _RecipientParent, _InitializerParent,
+            _RecipientParentWindow, _InitializerWindow, _RecipientParentBindings, _RecipientResource,
+            _ParentControl, _RecipientPredecessorGraph, _InitializerPredecessor, _InitializationInputs,
+            initialization.InstalledToolchains, InitializationPrefix, _StagingPhaseParent, _StagingWindow,
+            _StagingPhaseReturn, StagingPrefix, custody.StagedEvidence, custody.ReservationEvidence,
+            ConfigurationCustodyPrefix, staging.Originals, staging.PhaseStart, staging.LeafEvidence,
+            _StagingSequence, _StagingClosedGraph, _ProducerParent, _ProducerWindow, _ProducerOwner,
+            ConfigurationPrefix, _CollectionOrigin, _CollectionPhaseParent, _CollectionPhaseOwner,
+            _CollectionPhaseWindow, CollectionPrefix, collect_files.FileOriginals,
+            collect_files.FileCollectionEvidence, query.NativeGitQueries)
+        sequences = (list, tuple, _StagingFrame, _StagingLimits, _CustodyRequestPin, _StagingSequenceFrame,
+            _ProducerFrame, _ProducerPredecessor, _ProducerLimits, _ProducerNative, _ProducerPhase,
+            _ProducerResource, _ProducerFile, _ProducerCapture, _CollectionOriginFrame,
+            _CollectionPhaseFrame, _CollectionPhaseLimits, _CollectionPhaseStep, _CollectionPhaseResource,
+            _CollectionPhaseFile, _CollectionPhaseQueryOrigin, _CollectionPhaseQueryBefore)
+        scalars = (type(None), bool, int, float, str, bytes, signal.Signals)
+        require(type(frame) is _CollectionPhaseFrame, "BOOTSTRAP_COLLECTION_RETURN_GRAPH_KIND")
+        pending, seen, nodes, paths, path_ids = [frame], set(), [], [], {}
+        edges = 0
+
+        def path_pin(directory, kind, path, identity):
+            require(type(identity) is tuple and len(identity) == 2, "BOOTSTRAP_COLLECTION_RETURN_PATH_IDENTITY")
+            # Preserve this runner's original role grammar (including Windows
+            # string file IDs), not a different backend's tighter byte grammar.
+            directory_identity(list(identity), frame.limits.clock[0])
+            old = path_ids.get(id(directory))
+            pin = (directory, kind, path, identity)
+            if old is not None:
+                require(old[0] is directory and old[1] is kind and type(old[2]) is type(path) and
+                        old[2] == path and all(type(item) is type(prior) and item == prior
+                            for item, prior in zip(identity, old[3])), "BOOTSTRAP_COLLECTION_RETURN_PATH_ALIAS")
+                return
+            require(len(paths) < 10000, "BOOTSTRAP_COLLECTION_RETURN_PATH_LIMIT")
+            path_ids[id(directory)] = pin
+            paths.append(pin)
+
+        require(type(frame.handles) is type(frame.files) is tuple and
+                len(frame.handles) + len(frame.files) <= 10000, "BOOTSTRAP_COLLECTION_RETURN_PATH_LIMIT")
+        for _key, directory, path, identity in frame.handles:
+            path_pin(directory, type(directory), path, identity)
+        for row in frame.files:
+            require(type(row) is _CollectionPhaseFile, "BOOTSTRAP_COLLECTION_RETURN_FILE_KIND")
+            path_pin(row.directory, type(row.directory), row.path, row.identity)
+        while pending:
+            value = pending.pop()
+            kind = type(value)
+            if kind in scalars or id(value) in seen:
+                continue
+            seen.add(id(value))
+            require(len(seen) <= 10000, "BOOTSTRAP_COLLECTION_RETURN_NODE_LIMIT")
+            if kind is dict:
+                edges += 2 * len(value)
+                require(edges <= 10000, "BOOTSTRAP_COLLECTION_RETURN_EDGE_LIMIT")
+                saved, mode = tuple(value.items()), "mapping"
+                require(all(type(key) in scalars for key, _item in saved), "BOOTSTRAP_COLLECTION_RETURN_GRAPH_KEY")
+                pending.extend(item for pair in saved for item in pair)
+            elif kind in sequences:
+                edges += len(value)
+                require(edges <= 10000, "BOOTSTRAP_COLLECTION_RETURN_EDGE_LIMIT")
+                saved, mode = tuple(value), "sequence"
+                pending.extend(saved)
+            elif kind in records:
+                edges += 1
+                require(edges <= 10000, "BOOTSTRAP_COLLECTION_RETURN_EDGE_LIMIT")
+                saved, mode = object.__getattribute__(value, "__dict__"), "record"
+                pending.append(saved)
+                if kind is _StagingClosedGraph:
+                    # Use its ORIGINAL path witnesses, not a late baseline of
+                    # whatever attributes its old resource now exposes.
+                    require(type(value.paths) is tuple and len(value.paths) <= 10000,
+                            "BOOTSTRAP_COLLECTION_RETURN_PATH_LIMIT")
+                    for row in value.paths:
+                        require(type(row) is tuple and len(row) == 4, "BOOTSTRAP_COLLECTION_RETURN_PATH_KIND")
+                        path_pin(*row)
+            else:
+                saved, mode = None, "opaque"
+            nodes.append((value, kind, mode, saved))
+        graph = cls(tuple(nodes), tuple(paths))
+        graph.checked()
+        return graph
+
+    def checked(self):
+        scalars = (type(None), bool, int, float, str, bytes, signal.Signals)
+        def same(actual, old):
+            return actual is old or (type(actual) is type(old) and type(old) in scalars and actual == old)
+        require(type(self.nodes) is type(self.paths) is tuple and len(self.nodes) <= 10000 and len(self.paths) <= 10000,
+                "BOOTSTRAP_COLLECTION_RETURN_GRAPH_LIMIT")
+        for value, kind, mode, saved in self.nodes:
+            require(type(value) is kind, "BOOTSTRAP_COLLECTION_RETURN_GRAPH_CHANGED")
+            if mode == "record":
+                valid = object.__getattribute__(value, "__dict__") is saved
+            elif mode == "mapping":
+                valid = len(value) == len(saved) and all(same(key, old_key) and same(item, old_item)
+                    for (key, item), (old_key, old_item) in zip(value.items(), saved))
+            elif mode == "sequence":
+                valid = len(value) == len(saved) and all(same(item, old) for item, old in zip(value, saved))
+            else:
+                valid = mode == "opaque"
+            require(valid, "BOOTSTRAP_COLLECTION_RETURN_GRAPH_CHANGED")
+        for directory, kind, path, identity in self.paths:
+            require(type(directory) is kind, "BOOTSTRAP_COLLECTION_RETURN_PATH_CHANGED")
+            actual = directory.identity
+            require(type(directory.path) is type(path) and directory.path == path and
+                    type(actual) in (tuple, list) and len(actual) == 2 and
+                    all(type(item) is type(prior) and item == prior for item, prior in zip(actual, identity)),
+                    "BOOTSTRAP_COLLECTION_RETURN_PATH_CHANGED")
+
+
+def _check_collection_return_graph(pin):
+    graph, original = pin.graph, pin.graph_pin
+    require(type(graph) is _CollectionReturnGraph and type(original) is tuple and len(original) == 3 and
+            object.__getattribute__(graph, "__dict__") is original[0] and len(original[0]) == 2 and
+            set(original[0]) == {"nodes", "paths"} and
+            graph.nodes is original[1] and graph.paths is original[2], "BOOTSTRAP_COLLECTION_RETURN_WITNESS_CHANGED")
+    graph.checked()
+
+
+def _collection_phase_closed_return(parent, returned):
+    """Compare retained data only; no closed check/roster/owner/query/clock call.
+
+    The original publication supplies authority for WHICH return this is, not a
+    new native observation. In particular query pre-final coverage, descendant
+    continuity and current H contents cannot be retroactively strengthened.
+    """
+    frame = _collection_phase_frame(parent)
+    # Bound these projections before allocating tuples/sets. Native/leaf work
+    # already has narrower bounds; this is not authority to grow its rosters.
+    require(type(frame.published) is tuple and len(frame.published) == 4 and
+            type(frame.handles) is type(frame.files) is type(frame.close_roster) is tuple and
+            len(frame.handles) <= 4096 and len(frame.files) <= 4096 and len(frame.close_roster) <= 4096 and
+            type(frame.handlers) is type(frame.restored) is tuple and len(frame.handlers) <= 3 and
+            all(type(value) is dict and len(value) <= 4096 for value in (parent.handles, parent.records, parent.handlers)) and
+            type(frame.result_pin) is tuple and len(frame.result_pin) == 5 and
+            type(frame.manifest_pin) is tuple and len(frame.manifest_pin) == 5 and
+            type(frame.leaf_pin) is tuple and len(frame.leaf_pin) == 5,
+            "BOOTSTRAP_COLLECTION_RETURN_CONTAINER_LIMIT")
+    require(type(parent) is _CollectionPhaseParent and type(returned) is CollectionPrefix and
+            parent.transition is frame.transition and parent.state == frame.state == "COMPLETE" and
+            parent.result is frame.result is returned and parent.original is frame.original is None and
+            parent.unknown is frame.unknown is False and frame.errors == frame.foreign == frame.expired_closes == () and
+            parent.owner is frame.owner and parent.window is frame.window and
+            parent.handles is frame.published[0] and parent.records is frame.published[1] and
+            parent.handlers is frame.published[2] and parent.cancelled is frame.published[3] and
+            type(parent.cancelled) is list and parent.cancelled == [], "BOOTSTRAP_COLLECTION_RETURN_NOT_COMPLETE")
+    require(_checked_collection_origin(frame.binding) is frame.bound and frame.bound.transition is frame.transition and
+            frame.predecessor is frame.bound.producer_frame.predecessor,
+            "BOOTSTRAP_COLLECTION_RETURN_PREDECESSOR_CHANGED")
+    owner, window, bindings = frame.owner, frame.window, frame.owner_bindings
+    require(type(owner) is _CollectionPhaseOwner and type(window) is _CollectionPhaseWindow and
+            window.call is parent and _collection_phase_owner_frame(owner) is frame and
+            _collection_phase_window_frame(window) is frame and type(bindings) is tuple and len(bindings) == 5 and
+            owner.closed is frame.owner_closed is True and owner.original is None and owner.unknown is False and
+            owner.resources is bindings[0] and owner.errors is bindings[1] and owner.admissions is bindings[2] and
+            owner.errors == [] and type(owner.local_end) is type(bindings[3]) and owner.local_end == bindings[3] and
+            owner.cancelled is bindings[4] and owner.first is frame.first and owner.fence is window and
+            owner.work_limit is owner.final_limit is None and owner.early_last == frame.limits.first and
+            owner.local_end == frame.limits.local_ends[-1], "BOOTSTRAP_COLLECTION_RETURN_OWNER_NOT_CLOSED")
+    require(type(frame.resources) is tuple and type(owner.resources) is list and
+            len(frame.resources) == len(owner.resources) == len(frame.close_roster) <= 4096 and
+            len({id(pin.row) for pin in frame.resources}) == len(frame.resources) and
+            len({id(pin.value) for pin in frame.resources}) == len(frame.resources) and
+            frame.handlers == frame.restored and tuple(parent.handlers.items()) == frame.handlers and
+            tuple(parent.handles.items()) == tuple((row[0], row[1]) for row in frame.handles) and
+            tuple(parent.records.items()) == tuple((row.key, row.raw) for row in frame.files),
+            "BOOTSTRAP_COLLECTION_RETURN_ROSTER")
+    for row, pin, closed in zip(owner.resources, frame.resources, frame.close_roster):
+        require(type(pin) is _CollectionPhaseResource and type(row) is dict and len(row) == 4 and
+                set(row) == {"label", "owner", "attempted", "closed"} and row is pin.row and
+                type(pin.label) is str and row["label"] == pin.label and row["owner"] is pin.value and
+                type(pin.value) is pin.kind and row["attempted"] is row["closed"] is pin.attempted is pin.closed is True and
+                closed == (id(row), pin.label, id(pin.value)), "BOOTSTRAP_COLLECTION_RETURN_ROSTER")
+    require(type(frame.limits) is _CollectionPhaseLimits and type(frame.phases) is tuple and len(frame.phases) == 3 and
+            all(type(row) is _CollectionPhaseStep for row in frame.phases) and
+            tuple(row.name for row in frame.phases) == ("WORK", "FINAL", "READ") and
+            staging._clock(frame.first.clock) == frame.limits.clock and frame.first.nanoseconds == frame.limits.first and
+            frame.limits.first >= origin.integer(frame.bound.returned.checked_ns) and
+            frame.limits.local_start >= staging._local(frame.bound.returned.checked_local) and
+            type(frame.last) is type(returned.checked_ns) is int and frame.last == returned.checked_ns and
+            type(frame.local_last) is type(returned.checked_local) and
+            staging._local(frame.local_last) == staging._local(returned.checked_local),
+            "BOOTSTRAP_COLLECTION_RETURN_HIGHWATER")
+    require(type(frame.limits.ends) is type(frame.limits.local_ends) is tuple and
+            len(frame.limits.ends) == len(frame.limits.local_ends) == 3 and
+            frame.limits.first < frame.limits.ends[0] <= frame.limits.ends[1] <= frame.limits.ends[2] and
+            frame.limits.local_start < frame.limits.local_ends[0] <= frame.limits.local_ends[1] <= frame.limits.local_ends[2],
+            "BOOTSTRAP_COLLECTION_RETURN_LIMITS")
+    raw_previous, local_previous = frame.limits.first, frame.limits.local_start
+    for index, (phase, maximum) in enumerate(zip(frame.phases, (120, 45, 30))):
+        require(raw_previous <= origin.integer(phase.started) <= frame.last < frame.phases[-1].end and
+                local_previous <= staging._local(phase.local_started) <= frame.local_last < frame.phases[-1].local_end and
+                phase.started < origin.integer(phase.end) <= min(origin.integer(frame.limits.ends[index]),
+                    phase.started + maximum * origin.NS) and
+                phase.local_started < staging._local(phase.local_end) <= min(staging._local(frame.limits.local_ends[index]),
+                    phase.local_started + maximum), "BOOTSTRAP_COLLECTION_RETURN_CHRONOLOGY")
+        raw_previous, local_previous = phase.started, phase.local_started
+    require(frame.phases[0] == _CollectionPhaseStep("WORK", frame.limits.first, frame.limits.local_start,
+                frame.limits.ends[0], frame.limits.local_ends[0]) and frame.phases[-1].started < frame.phases[-2].end and
+            frame.phases[-1].local_started < frame.phases[-2].local_end,
+            "BOOTSTRAP_COLLECTION_RETURN_CHRONOLOGY")
+    require(frame.query_attempted is frame.query_final_attempted is True and frame.query_errors == () and
+            type(frame.query_returned) is tuple and len(frame.query_returned) == 3 and frame.query_returned[0] is True and
+            frame.query_pin is not None and frame.query_result is not None and
+            frame.phases[0].started <= origin.integer(frame.query_returned[1]) < frame.query[4] <= frame.phases[0].end and
+            frame.phases[0].local_started <= staging._local(frame.query_returned[2]) < frame.phases[0].local_end,
+            "BOOTSTRAP_COLLECTION_RETURN_QUERY_NOT_CLOSED")
+    _collection_phase_query_identity(frame)
+    _collection_phase_query_checked(frame)
+    require(frame.manifest_attempted is frame.leaf_attempted is frame.source_attempted is True and
+            frame.source_pin is not None and frame.leaf_pin is not None and
+            type(frame.leaf_originals) is collect_files.FileOriginals and
+            collect_files._capture(frame.leaf_originals) == frame.leaf_originals_pin and
+            type(frame.leaf) is collect_files.FileCollectionEvidence and returned.leaf is frame.leaf and
+            object.__getattribute__(frame.leaf, "__dict__") is frame.leaf_pin[0] and
+            len(frame.leaf_pin[0]) == 4 and set(frame.leaf_pin[0]) == {"raw", "inventory_raw", "local_started", "checked_local"} and
+            all(type(value) is type(old) and value == old for value, old in zip(
+                (frame.leaf.raw, frame.leaf.inventory_raw, frame.leaf.local_started, frame.leaf.checked_local), frame.leaf_pin[1:])) and
+            returned.manifest_raw == frame.manifest_pin[3] == frame.leaf_originals.manifest_raw,
+            "BOOTSTRAP_COLLECTION_RETURN_LEAF_CHANGED")
+    require(type(returned.raw) is type(returned.manifest_raw) is type(frame.pending_raw) is bytes and
+            all(0 < len(raw) <= 4194304 for raw in (returned.raw, returned.manifest_raw, frame.pending_raw)) and
+            object.__getattribute__(returned, "__dict__") is frame.result_pin[0] and
+            len(frame.result_pin[0]) == 5 and set(frame.result_pin[0]) == {"raw", "leaf", "manifest_raw", "checked_ns", "checked_local"} and
+            all(type(value) is type(old) and value == old for value, old in zip(
+                (returned.raw, returned.manifest_raw, returned.checked_ns, returned.checked_local), frame.result_pin[1:])),
+            "BOOTSTRAP_COLLECTION_RETURN_RESULT_CHANGED")
+    value = origin.parse(returned.raw)
+    closed = origin.integer(value.get("closedNs"))
+    require(frame.phases[-1].started <= closed <= frame.last, "BOOTSTRAP_COLLECTION_RETURN_CLOSED_TIME")
+    expected = {"schema": 1, "scope": "BOOTSTRAP_COLLECTION_PARENT_CLOSED_OBSERVATIONS_V1",
+        "producerSha256": origin.digest(frame.bound.returned.raw), "producerCheckedNs": frame.bound.returned.checked_ns,
+        "manifestSha256": origin.digest(frame.manifest_pin[3]), "leafSha256": origin.digest(frame.leaf_pin[1]),
+        "inventorySha256": origin.digest(frame.leaf_pin[2]), "pendingSha256": origin.digest(frame.pending_raw),
+        "window": {"clock": origin.clock_value(frame.first.clock), "firstNs": frame.limits.first,
+            "globalEndsNs": dict(zip(("WORK", "FINAL", "READ"), frame.limits.ends)),
+            "phases": [{"phase": row.name, "startedNs": row.started, "endNs": row.end} for row in frame.phases],
+            "readSlotScope": "POST_CLOSE_RETURN_OBSERVATIONS_ONLY_NO_FILE_READ_EXECUTION", "budgetAcceptance": "NOT_ADMITTED"},
+        "closedNs": closed, "parentResourceClose": "KNOWN_RESOURCE_CLOSE_ONLY", "resourceCount": len(frame.resources),
+        "currentFileObservation": "MEMBERSHIP_ROOT_AND_FILE_BINDINGS_NOT_DESCENDANT_CONTINUITY_OR_FREEZE",
+        "noLoaderObservation": "NOT_OBSERVED", "dependencyPopulation": "NOT_ATTESTED", "nextPhaseAuthority": False,
+        "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False}
+    require(returned.raw == origin.encoded(expected), "BOOTSTRAP_COLLECTION_RETURN_RECORD_CHANGED")
+    require(not QUARANTINE and not query.QUARANTINE and not diagnostics._QUARANTINE,
+            "BOOTSTRAP_COLLECTION_RETURN_PRIOR_UNKNOWN")
+    return frame
+
+
+@dataclass(eq=False)
+class _NoLoaderOrigin:
+    """Private in-call binding only; no new owner, absence call or public token."""
+    transition: object = field(repr=False)
+    state: str = "CLAIMED"
+    collection: object = field(default=None, repr=False)
+    returned: object = field(default=None, repr=False)
+    original: object = field(default=None, repr=False)
+
+
+_NoLoaderOriginFrame = namedtuple("_NoLoaderOriginFrame", "call transition state collection returned pin original",
+                                defaults=(None,) * 7)
+
+
+def _no_loader_origin_controls():
+    operation, lookup, result_lookup = collect_after_entry, _collection_phase_original_call, _collection_phase_original_result
+    attempts, frames, lock = {}, {}, threading.Lock()
+
+    def roots():
+        require(collect_after_entry is operation and _collection_phase_original_call is lookup and
+                _collection_phase_original_result is result_lookup, "BOOTSTRAP_NO_LOADER_ORIGINAL_OPERATION_CHANGED")
+        _collection_phase_roots()
+
+    def claim(transition):
+        roots()
+        require(type(transition) is NewEntryTransition, "BOOTSTRAP_NO_LOADER_TRANSITION_KIND")
+        with lock:
+            require(id(transition) not in attempts, "BOOTSTRAP_NO_LOADER_ALREADY_CLAIMED")
+            call = _NoLoaderOrigin(transition)
+            attempts[id(transition)] = (transition, call)
+            frames[id(call)] = _NoLoaderOriginFrame(call=call, transition=transition, state="CLAIMED")
+        return call
+
+    def frame(call):
+        saved = frames.get(id(call))
+        require(type(call) is _NoLoaderOrigin and type(saved) is _NoLoaderOriginFrame and saved.call is call,
+                "BOOTSTRAP_NO_LOADER_NOT_CLAIMED")
+        row = attempts.get(id(saved.transition))
+        require(type(row) is tuple and len(row) == 2 and row[0] is saved.transition and row[1] is call,
+                "BOOTSTRAP_NO_LOADER_NOT_CLAIMED")
+        return saved
+
+    def update(call, **values):
+        frames[id(call)] = frame(call)._replace(**values)
+        return frames[id(call)]
+
+    def invoke(call):
+        saved = frame(call)
+        roots()
+        require(saved.state == call.state == "CLAIMED" and call.transition is saved.transition and
+                call.collection is saved.collection is None and call.returned is saved.returned is None and
+                call.original is saved.original is None, "BOOTSTRAP_NO_LOADER_COLLECTION_REENTRY")
+        update(call, state="INVOKING")
+        call.state = "INVOKING"
+        returned = operation(saved.transition)  # No claim lock held during the fixed original call.
+        update(call, returned=returned, state="RETURNED")
+        call.returned, call.state = returned, "RETURNED"  # Preserve actual return BEFORE fallible lookup.
+        roots()
+        parent = lookup(saved.transition)
+        update(call, collection=parent)
+        call.collection = parent
+        pin = result_lookup(parent)
+        update(call, pin=pin)
+        require(pin.result is returned and _collection_phase_closed_return(parent, returned) is pin.frame,
+                "BOOTSTRAP_NO_LOADER_NOT_ORIGINAL_COLLECTION_RETURN")
+
+    return claim, frame, update, invoke, roots
+
+
+(_claim_no_loader_origin, _no_loader_origin_frame, _update_no_loader_origin,
+ _invoke_no_loader_collection, _no_loader_origin_roots) = _no_loader_origin_controls()
+del _no_loader_origin_controls
+
+
+def _checked_no_loader_origin(call):
+    saved = _no_loader_origin_frame(call)
+    _no_loader_origin_roots()
+    require(call.transition is saved.transition and call.state == saved.state == "BOUND" and
+            call.collection is saved.collection and call.returned is saved.returned and
+            call.original is saved.original is None and type(saved.pin) is _CollectionPhaseResultPin,
+            "BOOTSTRAP_NO_LOADER_ORIGIN_NOT_BOUND")
+    require(_collection_phase_original_call(saved.transition) is saved.collection and
+            _collection_phase_original_result(saved.collection) is saved.pin and saved.pin.result is saved.returned and
+            _collection_phase_closed_return(saved.collection, saved.returned) is saved.pin.frame,
+            "BOOTSTRAP_NO_LOADER_COLLECTION_CHANGED")
+    return saved
+
+
+def _begin_no_loader_after_entry(transition):
+    """INTERNAL once-claimed binding, NOT a no-loader owner or execution step.
+
+    Never adopts supplied CollectionPrefix data or a prior direct collector.
+    Original return pins stay closed; no method/clock on a predecessor is called.
+    A later NEW-owner adapter must stay inside this original enclosing call and
+    supply its own admission/fences. No CLI, leaf, export/save or workflow caller.
+    """
+    call = _claim_no_loader_origin(transition)
+    try:
+        _invoke_no_loader_collection(call)
+        _update_no_loader_origin(call, state="BOUND")
+        call.state = "BOUND"
+        _checked_no_loader_origin(call)
+        return call
+    except BaseException as error:
+        saved = _no_loader_origin_frame(call)
+        first = error if saved.original is None else saved.original
+        _update_no_loader_origin(call, state="FAILED", original=first)
+        call.state, call.original = "FAILED", first
+        try:
+            first.bootstrap_no_loader_origin = call
+        except BaseException:
+            pass  # Private claim keeps actual return/references and the first error.
+        raise first
 
 
 

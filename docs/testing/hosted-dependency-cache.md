@@ -17,7 +17,9 @@ original-call NEW-owner collection parent now has independently reviewed source,
 focused author controls and separately authored independent memory controls.
 No public command or workflow invokes either path. The separate exact-loader
 absence leaf below now has source and focused offline controls; its original-call
-parent, export/freeze/save/probe and encrypted-custody integration remain unfinished.
+collection-return binding now has separately reviewed source and focused memory controls.
+That private binding is not the NEW-owner no-loader parent, which remains
+unfinished, as do export/freeze/save/probe and encrypted-custody integration.
 [`hosted_dependency_cache.py`](../../scripts/hosted_dependency_cache.py) has no
 CLI, action runner, downloader, extraction, deletion or subprocess entry point.
 The connected caller is
@@ -1437,6 +1439,58 @@ scope in that record and its issue mapping. Both ordinary HOLDs, recipient/trust
 base/formal approval, unadmitted5400, NativeFile900/Snapshot576MiB and genuine
 native/provider/resolver/custody/scheduling/delivery requirements remain unchanged.
 
+### Original collection return binding, not a no-loader parent
+
+The collection parent now publishes its original return only **after** its final
+frame-changing check and public COMPLETE/result bookkeeping. An out-of-band
+registry retains that exact frame, result/dictionary/typed fields and bounded
+closed graph. Publication attempts are consumed before fallible capture; neither
+a failed attempt nor a later first consumer gets a replacement baseline.
+
+The selected exact collection/producer/staging record and tuple families include
+old graph witnesses and query/leaf records, not just their opaque frame identities.
+Dictionary identities, sequence/mapping contents and original native path/identity
+pins remain checked. The new graph bounds nodes, edges and paths independently
+at10,000, charging container entries before copying/expanding them. Existing
+earlier validators run before that capture; these are not new global bounds over
+their cost. Composed capacity/cost is unqualified and exhaustion refuses. Native
+identity components retain the existing runner's role grammar and exact original
+types/values; normalized tuple/list values do not pin the original container kind.
+These are passive in-process pins, not a Python-code-replacement sandbox,
+original native observation, atomic freeze or stronger pre-final query history.
+
+Internal `_begin_no_loader_after_entry` claims before the fixed
+`collect_after_entry` call without holding its claim lock across that operation.
+It retains the actual return before fallible roots/original-result lookup, and
+keeps falsey first failures even if annotation fails. Prior direct calls, copied
+returns/transitions, repeated attempts and constructed bindings cannot be adopted.
+Successful private **BOUND** creates no new owner/window/deadline or absence-leaf
+call. Closed predecessor methods and live clocks are never invoked by this lookup.
+The earlier serialized closed time is not relabelled as the final high-water.
+
+The [return-binding continuation](../maintenance/hosted-bootstrap-no-loader-origin-2026-09-20.md)
+records R1's55 passes and later2-pass/7-fail boundary aggregate, followed by R2's
+64 distinct author AST/memory-method passes across disjoint9/55 invocations.
+New publication/lookup/graph/binding code and the original selected return-tail
+statements execute; earlier collection, the final frame-replacing check, producer,
+predecessor, host, query, leaf and scalar/encoding boundaries are explicit models.
+No full controller import, original producer/collector, native file or hosted
+execution follows. The older collection fixture has an explicit modeled new-
+publication seam; its historical78 results do not qualify that changed fixture.
+The two independently identified new-source gaps were typed native identity
+substitution and resource-row set expansion before its key-count check. R2 keeps
+component types and checks length before projection; existing helpers are not
+rewritten. The independent R2 implementation/control/original-result-scope
+approval and separate complete-patch review boundary are recorded in that
+continuation and its issue mapping; no reviewer test execution is implied.
+
+The separate NEW-owner no-loader parent must supply fresh RAW/LOCAL observations
+inside the original allocation/job fences. It cannot reopen closed owners or
+borrow old WORK/FINAL/READ slots. Both ordinary HOLDs, recipient/trusted-base/formal
+approval, proposed5400 UNADMITTED/UNMEASURED, NativeFile900/Snapshot576MiB and genuine
+native/provider/resolver/custody/scheduling/delivery prerequisites are unchanged.
+There is still no bootstrap workflow or production export/save caller.
+
 ## Connected consume and delivery path
 
 After the unchanged HOLD and native/source admission, `prepare-consume` binds
@@ -1611,6 +1665,8 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-collect-files-test.py \
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-collection-origin-test.py BindingModels -v
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-collection-parent-test.py \
   ReviewBoundaryModels QueryCustodyModels -v
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-no-loader-origin-test.py \
+  PublicationModels -v
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
@@ -1670,6 +1726,11 @@ author invocations and one separate25-control independent invocation are
 AST/memory-only, not a full runner import or original producer/file execution.
 Original-chain/host/admission/native/inventory/copy/file suppliers are explicit
 model seams. Source-only review does not supply no-loader or export/save authority.
+The no-loader-origin example selects8 publication controls, not all64 new methods.
+The actual two disjoint externally bounded invocations also cover original-call,
+graph and closed-record controls. Their modeled final check replaces the private
+frame while actual selected return-tail/publication statements execute; no prior
+collector suite or native operation is replayed. This is not no-loader execution.
 Tiny private-file controls require an actual ordinary UID; root is not an
 acceptable substitute and their modeled native boundaries are not host admission.
 Native Windows provider behavior and actual resolver/cache reuse require
