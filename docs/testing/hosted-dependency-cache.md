@@ -18,8 +18,9 @@ focused author controls and separately authored independent memory controls.
 No public command or workflow invokes either path. The separate exact-loader
 absence leaf below now has source and focused offline controls; its original-call
 collection-return binding now has separately reviewed source and focused memory controls.
-That private binding is not the NEW-owner no-loader parent, which remains
-unfinished, as do export/freeze/save/probe and encrypted-custody integration.
+That private binding is not itself an owner. The directory-only parent below now
+connects the absence leaf under NEW ownership and original allocation fences.
+Export/freeze/save/probe and encrypted-custody integration remain unfinished.
 [`hosted_dependency_cache.py`](../../scripts/hosted_dependency_cache.py) has no
 CLI, action runner, downloader, extraction, deletion or subprocess entry point.
 The connected caller is
@@ -1426,9 +1427,9 @@ expiry still permits once-only known cleanup; UNKNOWN retains unattempted pins.
 The root supplier has no native deadline parameter; surrounding checks are not
 a filesystem watchdog or RAW/job admission. All results deny original producer/
 collection return, enclosing retirement, population/tests/budget and next-phase/
-export/save authority. This repeatable supplied-data leaf has no parent or
-workflow caller; the proposed original-call uninstall90/final45/read30 adapter
-remains unfinished, unadmitted and unmeasured.
+export/save authority. The separate original-call parent below now invokes this
+repeatable supplied-data leaf. No workflow calls it; its proposed observation90/
+final45/read30 intervals remain unadmitted and unmeasured, not uninstall evidence.
 
 The [no-loader continuation](../maintenance/hosted-bootstrap-no-loader-2026-09-19.md)
 records the independent stale-deadline finding, R1's3-pass/1-fail aggregate and
@@ -1484,12 +1485,60 @@ rewritten. The independent R2 implementation/control/original-result-scope
 approval and separate complete-patch review boundary are recorded in that
 continuation and its issue mapping; no reviewer test execution is implied.
 
-The separate NEW-owner no-loader parent must supply fresh RAW/LOCAL observations
+The separate NEW-owner no-loader parent below supplies fresh RAW/LOCAL observations
 inside the original allocation/job fences. It cannot reopen closed owners or
 borrow old WORK/FINAL/READ slots. Both ordinary HOLDs, recipient/trusted-base/formal
 approval, proposed5400 UNADMITTED/UNMEASURED, NativeFile900/Snapshot576MiB and genuine
 native/provider/resolver/custody/scheduling/delivery prerequisites are unchanged.
 There is still no bootstrap workflow or production export/save caller.
+
+### Original-call directory-only no-loader parent
+
+Internal `observe_no_loader_after_entry` claims before invoking the original
+binding above, then calls the unchanged absence leaf once. Its small closure-
+owned protocol exposes only cancellation, deadline, error and directory acquire/
+close operations. No writable owner flags, file writer or module-level owner constructor
+is exposed. At most two NEW source directories are retained independently of
+the leaf-visible ledger; borrowed/duplicate resources refuse. This is not a
+generalized controller or another producer/collection implementation.
+
+Fresh RAW/LOCAL readings must follow the original collection return. The original
+proposal/job fences intersect cumulative90/135/165-second caps and individual
+WORK90/FINAL45/READ30 caps. Existing `custody-uninstall*` allocation names remain,
+but the operation is explicitly **observation, not uninstall**. READ is only
+post-close return accounting. Valid readings survive later clock failures;
+deadlines cannot renew. Known expiry still attempts known cleanup. UNKNOWN
+quarantines originals rather than dispatching another close. Signal-restoration
+duties precede installation; actual returns and falsey first failures survive
+fallible validation/annotation. Success grants no next-phase/export/save rights.
+
+The parent uses the actual original producer request, admission/canonical bytes
+and H identity through the reviewed collection binding. It does not perform a
+new Git/source/native-host admission, inspect other initializers, supply atomic
+freeze or attest historical absence. Predecessor data checks are unchanged and
+their composed cost remains unqualified. No native, hosted or provider operation
+was executed to qualify this parent.
+
+New focused controls in `hosted-cache-bootstrap-no-loader-parent-test.py` execute
+only the new parent AST definitions. Binding, leaf, allocation, clock, signal and
+directory boundaries are explicit memory models; the accepted leaf and earlier
+suites are not replayed. R1's initial32 methods passed. Six later desired-state
+methods failed in two disjoint R1 invocations:2 failures, then4 failed methods/
+5 failure events (one method has two subtests). These aggregates remain FAILED.
+The findings were stale preclose binding/knownness/reentry after a clock,
+unretained LOCAL before a failing RAW observation, and late cancellation.
+R2 rechecks current close duty/roster/global quarantine after the clock, retains
+LOCAL immediately and checks cancellation through the final return boundary.
+**R2:38 distinct methods PASS**, zero failures/errors/skips/guard denials.
+
+The isolated Python3.12 invocation used timeout20/kill2, CPU10, AS512MiB, FD64,
+core0 and exclusive regular stdout/stderr files limited to1MiB each. The audit
+guard and explicit model namespace are not a kernel sandbox. Actual UID0,
+source/stdlib reads and compilation/output writes supply no ordinary-user or
+native evidence. Original results, exact source/harness hashes, independent
+review and final source gates are bound in the containing commit's #437 mapping.
+Both HOLDs, recipient/trusted-base/formal approval, proposed5400
+UNADMITTED/UNMEASURED and NativeFile900/Snapshot576MiB remain unchanged.
 
 ## Connected consume and delivery path
 
@@ -1667,6 +1716,8 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-collection-parent-test.py 
   ReviewBoundaryModels QueryCustodyModels -v
 python3 -I -B -S scripts/tests/hosted-cache-bootstrap-no-loader-origin-test.py \
   PublicationModels -v
+python3 -I -B -S scripts/tests/hosted-cache-bootstrap-no-loader-parent-test.py \
+  ParentModels ReviewBoundaryModels -v
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
@@ -1731,6 +1782,8 @@ The actual two disjoint externally bounded invocations also cover original-call,
 graph and closed-record controls. Their modeled final check replaces the private
 frame while actual selected return-tail/publication statements execute; no prior
 collector suite or native operation is replayed. This is not no-loader execution.
+The no-loader-parent example selects38 new AST/memory methods, not a full
+controller import, accepted-leaf execution or a hosted/native run.
 Tiny private-file controls require an actual ordinary UID; root is not an
 acceptable substitute and their modeled native boundaries are not host admission.
 Native Windows provider behavior and actual resolver/cache reuse require

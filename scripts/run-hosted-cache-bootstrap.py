@@ -40,6 +40,7 @@ import hosted_cache_bootstrap_custody as custody
 import hosted_cache_bootstrap_history as history
 import hosted_cache_bootstrap_identity as bootstrap
 import hosted_cache_bootstrap_initialization as initialization
+import hosted_cache_bootstrap_no_loader as no_loader
 import hosted_cache_bootstrap_origin as origin
 import hosted_cache_bootstrap_producer as producer
 import hosted_cache_bootstrap_producer_command as producer_command
@@ -9989,6 +9990,385 @@ def _begin_no_loader_after_entry(transition):
             pass  # Private claim keeps actual return/references and the first error.
         raise first
 
+
+
+@dataclass(frozen=True)
+class NoLoaderPrefix:
+    """Original same-call observation, not uninstall, freeze or export authority."""
+    raw: bytes = field(repr=False)
+    leaf: object = field(repr=False)
+    checked_ns: int
+    checked_local: float
+
+
+def _no_loader_parent_controls():
+    """One small, directory-only owner around the accepted absence leaf.
+
+    Mutable ownership state stays in the original call's closure. The leaf gets
+    only its existing owner protocol, not a constructor, deadline setter, file
+    writer or predecessor owner. Retained calls are private failure custody,
+    not a code-replacement sandbox or encrypted evidence delivery.
+    """
+    begin, checked = _begin_no_loader_after_entry, _checked_no_loader_origin
+    module, operation = no_loader, no_loader.observe_absence
+    input_kind, result_kind, inputs_kind = no_loader.HomeOriginals, no_loader.AbsenceEvidence, no_loader._Inputs
+    prefix_kind, capture = NoLoaderPrefix, no_loader._capture
+    calls, lock = {}, threading.Lock()
+
+    def roots():
+        require(_begin_no_loader_after_entry is begin and _checked_no_loader_origin is checked and
+                no_loader is module and module.observe_absence is operation and
+                module.HomeOriginals is input_kind and module.AbsenceEvidence is result_kind and
+                module._Inputs is inputs_kind and module._capture is capture and NoLoaderPrefix is prefix_kind,
+                "BOOTSTRAP_NO_LOADER_PARENT_OPERATION_CHANGED")
+        _no_loader_origin_roots()
+
+    def execute(transition):
+        roots()
+        require(type(transition) is NewEntryTransition, "BOOTSTRAP_NO_LOADER_PARENT_TRANSITION")
+        with lock:
+            require(id(transition) not in calls, "BOOTSTRAP_NO_LOADER_PARENT_ALREADY_CLAIMED")
+            state = {"transition": transition, "binding": None, "bound": None, "owner": None,
+                "leaf": None, "leaf_pin": None, "result": None, "result_pin": None,
+                "original": None, "unknown": False, "closed": False, "complete": False,
+                "resources": [], "pins": [], "returns": [], "errors": [], "handlers": [],
+                "restored": [], "cancelled": [], "phases": [], "expired": set()}
+            calls[id(transition)] = state  # Claim BEFORE the fixed original collection call.
+        ledger, pins = state["resources"], state["pins"]
+        owner = bound = originals = inputs = None
+        first = last = local_last = None
+        ends = local_ends = ()
+        phase = -1
+        issued_end = None
+        expiry = None
+
+        def error(stage, failure, *, unknown=False):
+            state["complete"] = False
+            if state["original"] is None:
+                state["original"] = failure
+            state["unknown"] |= unknown
+            try:
+                detail = diagnostics._exception_detail(failure)
+                state["unknown"] |= detail["retirementUnknown"]
+                require(len(state["errors"]) < 64, "BOOTSTRAP_NO_LOADER_PARENT_ERROR_LIMIT")
+                state["errors"].append(origin.encoded({"stage": stage, "detail": detail}))
+            except BaseException:
+                state["unknown"] = True  # Never replace an unannotatable/falsey first failure.
+
+        def raise_first():
+            if state["original"] is not None:
+                raise state["original"]
+
+        def roster():
+            try:
+                require(len(ledger) == len(pins) <= 2, "BOOTSTRAP_NO_LOADER_PARENT_ROSTER")
+                for row, pin in zip(ledger, pins):
+                    saved, label, value, kind, attempted, closed = pin
+                    require(row is saved and type(row) is dict and len(row) == 4 and
+                            set(row) == {"label", "owner", "attempted", "closed"} and
+                            type(row["label"]) is str and row["label"] == label and
+                            row["owner"] is value and type(value) is kind and
+                            row["attempted"] is attempted and row["closed"] is closed,
+                            "BOOTSTRAP_NO_LOADER_PARENT_ROSTER")
+            except BaseException as failure:
+                error("roster", failure, unknown=True)
+                raise
+
+        def check():
+            roots()
+            require(bound is not None and checked(state["binding"]) is bound and
+                    bound.transition is transition, "BOOTSTRAP_NO_LOADER_PARENT_PREDECESSOR_CHANGED")
+            roster()
+            require(not QUARANTINE and not query.QUARANTINE and not diagnostics._QUARANTINE,
+                    "BOOTSTRAP_NO_LOADER_PARENT_PRIOR_UNKNOWN")
+            if inputs is not None:
+                inputs.unchanged()
+
+        def cancel():
+            check()
+            cancellation(state["cancelled"])
+            for callback in bound.pin.frame.predecessor.frame.callbacks:
+                callback()
+                check()
+            cancellation(state["cancelled"])
+
+        def sample(*, cleanup=False):
+            nonlocal last, local_last, expiry
+            expiry = None
+            if not cleanup:
+                check()
+            before = staging._local(time.monotonic())
+            require(before >= local_last, "BOOTSTRAP_NO_LOADER_PARENT_LOCAL_BACKWARDS")
+            local_last = before
+            observed = origin.clocks.checked_now(first.clock, minimum_ns=last)
+            require(observed >= last, "BOOTSTRAP_NO_LOADER_PARENT_RAW_BACKWARDS")
+            last = observed
+            after = staging._local(time.monotonic())
+            require(after >= local_last, "BOOTSTRAP_NO_LOADER_PARENT_LOCAL_BACKWARDS")
+            local_last = after
+            current = state["phases"][-1]
+            if observed >= current[2] or after >= current[3]:
+                expiry = origin.OriginError("BOOTSTRAP_NO_LOADER_PARENT_EXPIRED")
+                raise expiry
+            return before, observed
+
+        def close_clock():
+            try:
+                sample(cleanup=True)
+            except BaseException as failure:
+                if failure is not expiry or phase not in state["expired"]:
+                    if failure is expiry:
+                        state["expired"].add(phase)
+                    error("close-clock", failure)
+
+        def advance():
+            nonlocal phase, last, local_last
+            phase += 1  # Consumed even when the first observation fails.
+            require(phase in (1, 2), "BOOTSTRAP_NO_LOADER_PARENT_PHASE_REENTRY")
+            previous = state["phases"][-1]
+            state["phases"].append((None, None, 0, 0.0))
+            # Known cleanup still proceeds if an observation/fence fails.
+            local = staging._local(time.monotonic())
+            require(local >= local_last, "BOOTSTRAP_NO_LOADER_PARENT_LOCAL_BACKWARDS")
+            local_last = local  # Retain this actual reading even if RAW then fails.
+            observed = origin.clocks.checked_now(first.clock, minimum_ns=last)
+            require(observed >= last, "BOOTSTRAP_NO_LOADER_PARENT_RAW_BACKWARDS")
+            last = observed
+            if phase == 2:
+                require(observed < previous[2] and local < previous[3], "BOOTSTRAP_NO_LOADER_PARENT_RETURN_EXPIRED")
+            seconds = 45 if phase == 1 else 30
+            end = min(ends[phase], origin.integer(observed + seconds * origin.NS))
+            local_end = min(local_ends[phase], origin.wire._directed_deadline(local, seconds, end, observed))
+            state["phases"][-1] = (observed, local, end, local_end)
+            sample(cleanup=phase == 1)
+
+        class DirectoryOwner:
+            __slots__ = ()  # No mutable public flags or alternate operations.
+            resources = property(lambda self: ledger)
+            original = property(lambda self: state["original"])
+            unknown = property(lambda self: state["unknown"])
+            closed = property(lambda self: state["closed"])
+            cancelled = property(lambda self: cancel)
+
+            def error(self, stage, failure, *, unknown=False):
+                error(stage, failure, unknown=unknown)
+
+            def end(self):
+                nonlocal issued_end
+                raise_first()
+                require(phase == 0 and not self.closed and not self.unknown,
+                        "BOOTSTRAP_NO_LOADER_PARENT_NOT_LIVE")
+                cancel()
+                local, observed = sample()
+                issued_end = min(issued_end, origin.wire._directed_deadline(local, 90, ends[0], observed))
+                require(local_last < issued_end, "BOOTSTRAP_NO_LOADER_PARENT_EXPIRED")
+                return issued_end
+
+            def acquire(self, label, factory):
+                self.end()
+                require(type(label) is str and label in (
+                    "bootstrap-collection-no-loader-home", "bootstrap-collection-no-loader-init") and
+                    len(pins) < 2 and len(state["returns"]) < 2, "BOOTSTRAP_NO_LOADER_PARENT_RESOURCE")
+                try:
+                    value = factory()
+                except BaseException as failure:
+                    error("allocation", failure, unknown=True)
+                    raise
+                state["returns"].append(value)  # Retain BEFORE fallible kind/borrow/roster checks.
+                try:
+                    require(type(value) is inputs.kind and not any(value is pin[2] for pin in pins) and
+                            not any(value is row[0] for row in bound.pin.graph.nodes),
+                            "BOOTSTRAP_NO_LOADER_PARENT_BORROWED_RESOURCE")
+                except BaseException as failure:
+                    error("resource-return", failure, unknown=True)
+                    raise
+                row = {"label": label, "owner": value, "attempted": False, "closed": False}
+                pins.append((row, label, value, type(value), False, False))
+                ledger.append(row)
+                self.end()
+                return value
+
+            def close_one(self, value):
+                index = next((i for i, pin in enumerate(pins) if pin[2] is value), None)
+                if index is None:
+                    error("foreign-close", origin.OriginError("BOOTSTRAP_NO_LOADER_PARENT_FOREIGN_RESOURCE"), unknown=True)
+                    return
+                pin = pins[index]
+                if pin[4]:
+                    return
+                try:
+                    roster()
+                    require(not self.unknown, "BOOTSTRAP_NO_LOADER_PARENT_UNKNOWN")
+                except BaseException as failure:
+                    error("close-binding", failure, unknown=True)
+                    return
+                close_clock()
+                try:
+                    # The clock/diagnostic boundary can change knownness or
+                    # reenter a close. Never dispatch using the earlier pin.
+                    roster()
+                    require(not self.unknown and not QUARANTINE and not query.QUARANTINE and
+                            not diagnostics._QUARANTINE, "BOOTSTRAP_NO_LOADER_PARENT_UNKNOWN")
+                    if pins[index][4]:
+                        return  # A known inner close already consumed this duty.
+                    require(pins[index] is pin, "BOOTSTRAP_NO_LOADER_PARENT_CLOSE_CHANGED")
+                except BaseException as failure:
+                    error("post-clock-close-binding", failure, unknown=True)
+                    return
+                pins[index] = (*pin[:4], True, False)
+                pin[0]["attempted"] = True
+                try:
+                    value.close()
+                    pins[index] = (*pin[:4], True, True)
+                    pin[0]["closed"] = True
+                    roster()
+                except BaseException as failure:
+                    error("directory-close", failure, unknown=True)
+                close_clock()
+
+        def leaf_pin():
+            value = state["leaf"]
+            require(type(value) is result_kind, "BOOTSTRAP_NO_LOADER_PARENT_LEAF_KIND")
+            dictionary = object.__getattribute__(value, "__dict__")
+            require(len(dictionary) == 3 and set(dictionary) == {"raw", "local_started", "checked_local"},
+                    "BOOTSTRAP_NO_LOADER_PARENT_LEAF_FIELDS")
+            require(type(value.raw) is bytes and 0 < len(value.raw) <= LIMIT,
+                    "BOOTSTRAP_NO_LOADER_PARENT_LEAF_BYTES")
+            staging._local(value.local_started)
+            staging._local(value.checked_local)
+            return dictionary, value.raw, value.local_started, value.checked_local
+
+        def leaf_unchanged():
+            current, original = leaf_pin(), state["leaf_pin"]
+            require(current[0] is original[0] and all(type(a) is type(b) and a == b
+                    for a, b in zip(current[1:], original[1:])), "BOOTSTRAP_NO_LOADER_PARENT_LEAF_CHANGED")
+
+        try:
+            state["binding"] = begin(transition)  # No lock across the original operation.
+            bound = state["bound"] = checked(state["binding"])
+            check()
+            saved = bound.pin.frame.predecessor.frame.originals
+            local_last = staging._local(time.monotonic())
+            first = origin.clocks.validate_reading(origin.clocks.observe())
+            last = first.nanoseconds
+            require(staging._clock(first.clock) == staging._clock(saved.clock) and
+                    last >= bound.returned.checked_ns and local_last >= bound.returned.checked_local,
+                    "BOOTSTRAP_NO_LOADER_PARENT_PREDECESSOR_CLOCK")
+            proposal = allocation.validate_proposal(saved.proposal_raw, saved.admitted, saved.responses,
+                                                    saved.invocation, saved.clock, saved.runner_name)
+            names = ("custody-uninstall", "custody-uninstall-final", "custody-uninstall-read")
+            spans = (90, 135, 165)
+            ends = tuple(min(origin.integer(last + seconds * origin.NS), proposal["phaseFencesNs"][name],
+                             proposal["proposedJobEndNs"]) for name, seconds in zip(names, spans))
+            require(last < ends[0] <= ends[1] <= ends[2], "BOOTSTRAP_NO_LOADER_PARENT_NO_INTERVAL")
+            local_ends = tuple(origin.wire._directed_deadline(local_last, seconds, end, last)
+                               for seconds, end in zip(spans, ends))
+            phase, issued_end = 0, local_ends[0]
+            state["phases"].append((last, local_last, ends[0], local_ends[0]))
+            original_producer = bound.pin.frame.bound.returned
+            originals = input_kind(original_producer.request_raw, saved.admitted.record, saved.canonical_raw,
+                                   tuple(saved.directories["gradle-home"]))
+            inputs = inputs_kind(originals)
+            owner = state["owner"] = DirectoryOwner()
+            owner.end()
+            for number in (signal.SIGINT, signal.SIGTERM, *([signal.SIGBREAK] if hasattr(signal, "SIGBREAK") else [])):
+                handler = signal.getsignal(number)
+                state["handlers"].append((number, handler))  # Duty precedes a possibly partial install.
+                signal.signal(number, lambda signum, _frame: state["cancelled"].append(signum))
+                owner.end()
+            began = local_last
+            state["leaf"] = operation(owner, originals)  # Actual return BEFORE fallible validation.
+            state["leaf_pin"] = leaf_pin()
+            owner.end()
+            raw = origin.parse(state["leaf"].raw)
+            expected = {"schema": 1, "scope": module.SCOPE, "binding": inputs.binding(), "completed": True,
+                "observationState": "EXACT_TARGET_ABSENT_AT_LISTINGS", "inputProvenance": "SUPPLIED_RECORDS_NOT_ORIGINAL_CALL",
+                "leafHandleClose": "KNOWN", "enclosingOwnerRetirement": "NOT_OBSERVED_HERE",
+                "producerAndCollectionReturn": "NOT_OBSERVED_HERE", "historicalLoaderExecution": "NOT_OBSERVED",
+                "otherInitializerContents": "NOT_INSPECTED", "deletionPerformed": False, "fileContentsRead": False,
+                "observationBoundary": "PINNED_LISTINGS_AND_SAME_HANDLE_VERIFY_NOT_ATOMIC_OR_HISTORICAL_ABSENCE",
+                "dependencyPopulation": "NOT_ATTESTED", "budgetAcceptance": "NOT_ADMITTED",
+                "testAcceptance": "NOT_PERFORMED", "nextPhaseAuthority": False, "exportSaveAuthority": False}
+            require(type(raw) is dict and len(raw) == len(expected) + 3 and
+                    raw.get("initDirectory") in ("OBSERVED_DIRECTORY", "ABSENT_IN_HOME_LISTINGS") and
+                    len(pins) == (2 if raw["initDirectory"] == "OBSERVED_DIRECTORY" else 1) and
+                    type(raw.get("listings")) is list and len(raw["listings"]) == 2 * len(pins) and
+                    origin.encoded(raw) == origin.encoded({**expected, **{key: raw[key]
+                        for key in ("initDirectory", "listings", "localWindow")}}),
+                    "BOOTSTRAP_NO_LOADER_PARENT_LEAF_DISPOSITION")
+            leaf = state["leaf"]
+            window = raw["localWindow"]
+            require(type(window) is dict and len(window) == 4 and
+                    origin.encoded(window) == origin.encoded({"started": leaf.local_started,
+                        "end": staging._local(leaf.local_started + 90), "observed": window.get("observed"),
+                        "scope": "LOCAL90_SHORTENS_CALLER_NOT_SHARED_CLOCK_OR_JOB_ADMISSION"}) and
+                    began <= leaf.local_started <= staging._local(window["observed"]) <= leaf.checked_local <= local_last and
+                    leaf.checked_local < window["end"], "BOOTSTRAP_NO_LOADER_PARENT_LEAF_CHRONOLOGY")
+            leaf_unchanged()
+            owner.end()
+        except BaseException as failure:
+            error("body", failure)
+        finally:
+            if owner is not None:
+                try:
+                    advance()
+                except BaseException as failure:
+                    error("final-start", failure)
+                state["closed"] = True
+                for pin in reversed(pins):
+                    if state["unknown"]:
+                        break
+                    owner.close_one(pin[2])
+            for number, handler in state["handlers"]:
+                close_clock()
+                try:
+                    signal.signal(number, handler)
+                    require(signal.getsignal(number) is handler, "BOOTSTRAP_NO_LOADER_PARENT_HANDLER_NOT_RESTORED")
+                    state["restored"].append((number, handler))
+                except BaseException as failure:
+                    error("handler-restore", failure)
+                close_clock()
+        try:
+            raise_first()
+            check()
+            require(state["closed"] and not state["unknown"] and state["handlers"] == state["restored"] and
+                    all(pin[4] and pin[5] for pin in pins), "BOOTSTRAP_NO_LOADER_PARENT_CLOSE_INCOMPLETE")
+            leaf_unchanged()
+            advance()  # READ is post-close accounting only; never reopens a handle.
+            cancel()
+            sample()
+            raw = origin.encoded({"schema": 1, "scope": "BOOTSTRAP_NO_LOADER_PARENT_CLOSED_OBSERVATIONS_V1",
+                "collectionSha256": origin.digest(bound.returned.raw), "leafSha256": origin.digest(state["leaf"].raw),
+                "clock": origin.clock_value(first.clock), "firstNs": first.nanoseconds,
+                "globalEndsNs": dict(zip(names, ends)), "phases": state["phases"], "closedNs": last,
+                "parentResourceClose": "KNOWN_RESOURCE_CLOSE_ONLY", "resourceCount": len(pins),
+                "operation": "OBSERVE_EXACT_LOADER_NOT_UNINSTALL", "nextPhaseAuthority": False,
+                "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False})
+            cancel()
+            sample()
+            check()
+            leaf_unchanged()
+            cancellation(state["cancelled"])  # Final flag check adds no callback or renewed clock.
+            result = prefix_kind(raw, state["leaf"], last, local_last)
+            state["result"], state["complete"] = result, True
+            state["result_pin"] = (object.__getattribute__(result, "__dict__"), raw, result.leaf, last, local_last)
+            return result
+        except BaseException as failure:
+            error("return", failure)
+            if state["unknown"] and not any(value is state for value in QUARANTINE):
+                QUARANTINE.append(state)
+            try:
+                state["original"].bootstrap_no_loader_parent = owner
+                state["original"].bootstrap_no_loader_resources = tuple(pins)
+            except BaseException:
+                pass
+            raise state["original"]
+
+    return execute
+
+
+observe_no_loader_after_entry = _no_loader_parent_controls()
+del _no_loader_parent_controls
 
 
 def guarded(operation):
