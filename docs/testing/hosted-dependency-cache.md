@@ -27,7 +27,9 @@ A supplied-original after-save leaf reuses that set checker; the fixed post-save
 command below now connects it under NEW ownership and fresh admission. A separate internal handoff retains the original
 producer-to-before-save chain, using the existing private writer. Fixed lookup-only
 probe preparation and its post-guard now have dormant source below. Actual provider
-execution and encrypted-custody integration remain unfinished.
+execution and encrypted-custody integration remain unfinished; the
+[provider execution gap](#provider-execution-gap--20-september-2026) below records
+the next concrete prerequisite, not another implemented wrapper.
 The [producer-command composition](#fixed-producer-command-and-original-function-return)
 and [save preparation](#fixed-save-preparation-not-provider-execution)
 and [post-save guard](#fixed-post-save-guard-not-provider-enforcement)
@@ -2106,6 +2108,57 @@ output roster. It never reads workflow environment variables or calls Actions.
 
 Each observation binds the whole original plan hash, so a reusable key is not
 permission to reuse another source/run/attempt's result.
+
+### Provider execution gap — 20 September 2026
+
+The read-only design review at `4d3db850b15681ed9f60666eeb89f7a84dbc4fd0`
+found a plausible small fixed supervisor, **not an implementation ready for
+workflow wiring**. Nine small upstream source/metadata files at the unchanged
+provider pin were inspected and hash-bound. No compiled bundle, toolkit dependency,
+provider or native execution was inspected or run in that investigation.
+
+Before implementing the provider-to-custody connection, resolve these boundaries:
+
+- **Exact supplier behavior:** the pinned standalone manifests select Node24 and
+  `dist/save-only/index.js` / `dist/restore-only/index.js`. Their source explicitly
+  calls `process.exit`, so importing the provider into its supervising process
+  would terminate the supervisor. Package dependency ranges and TypeScript source
+  do not establish the exact bundled environment, child processes or command-file
+  behavior. The existing [POSIX owner](../../scripts/audit_processes.py) covers
+  controlled marker-inheriting descendants, not arbitrary delegated work.
+- **Windows command files:** [native file creation](../../scripts/hosted_windows_files.py)
+  allows only read-sharing while the file is pinned. An Action output writer that
+  reopens a pathname to append cannot write through that live pin. Duplicated
+  stdout/stderr handles do not solve `GITHUB_OUTPUT` ownership. The exact bundled
+  output protocol and a compatible narrow capture path must be established;
+  closing pins early or globally enabling write-sharing is not an accepted fix.
+- **Credentials:** any supervisor constructing the provider environment belongs
+  inside the provider-only trusted boundary. Never pass runtime credentials through
+  [NativeGitQueries](../../scripts/hosted_test_query.py): its `start.json` serializes
+  the supplied environment. Fixed executable/source/input provenance and private
+  captures must not be replaced with blind ambient inheritance or command replay.
+- **Lifecycle and custody:** original launch/exit/drain/close, cancellation, UNKNOWN
+  and enclosing step return must be retained on success and failure. Provider work
+  and finalization must fit inside the **original180-second end**; a retirement
+  reservation spends that interval, not an additional allowance. Current post-guards
+  can refuse lateness but cannot stop the provider or prove retirement. The
+  [export contract](../../scripts/hosted_test_evidence.py) requires all evidence
+  writers retired; ciphertext or a consistent snapshot cannot supply that fact.
+
+The conditional direction is a fixed Node24 shim using its actual runner-selected
+executable and a provider-only supervisor reusing native process control, not a new
+cache client. It remains **unimplemented and unqualified**. Do not append a seal to
+the current success-only records or introduce a guessed supplier adapter merely
+to obtain modeled passes. Preserve save's `STORAGE_UNPROVEN` and the existing
+byte-exact lookup checks. Independent verdict:
+`CONDITIONALLY_FEASIBLE_FIXED_PROVIDER_SUPERVISOR_DESIGN_ONLY_NOT_IMPLEMENTATION_OR_RUNTIME_APPROVAL`.
+The containing commit's #437 mapping records the private report hash.
+
+Both activation HOLDs, the absent recipient policy and bootstrap workflow,
+trusted-original-base/formal approval, genuine native/provider/resolver/delivery
+and scheduling acceptance remain. No additional bundle/dependency download or
+execution is authorized by this design review. Proposed5400 remains
+UNADMITTED/UNMEASURED; NativeFile900/Snapshot576MiB are unchanged.
 
 ## Verification and remaining qualification
 
