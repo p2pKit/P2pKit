@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Dormant bootstrap originals through configuration observations; no public builder.
+"""Dormant configuration-bootstrap commands; no provider or Release execution.
 
-No workflow, admitted productive budget, export/save,
+No workflow, admitted productive budget, provider save,
 policy installer or uploader exists here. Separate read-only original adoption
 never becomes execution authority. A future trusted workflow must bind the
 actual original prepare-step outcome, not a provisional receipt/digest.
-The internal original-call parents own native launch/retirement/readback;
-no public operation or workflow calls them. Offline controls are not native,
+The fixed producer command composes the original-call parents; no workflow
+invokes it and CLI availability does not lift any execution HOLD.
+Offline controls are not native,
 custodian, scheduling or encrypted-custody qualification.
 """
 from __future__ import annotations
@@ -1672,7 +1673,7 @@ def check_closed_entry_transition(transition):
 
 
 def close_entry_transition(owner, target, entry, fence):
-    """Dormant INTERNAL old-owner close bridge; no public operation calls it.
+    """Old-owner close bridge used by the dormant fixed producer command.
 
     Rejected foreign arguments leave cleanup with their original caller. Once
     this exact live owner claims the one-shot transition, all failures preserve
@@ -2173,7 +2174,7 @@ def readmit_closed_entry(transition):
 
     It NEVER advances/reopens the old Owner/Fence/handles. Only fresh entry
     resources are acquired and closed here; the result has no execution or
-    export/save authority. No public operation/workflow calls this function.
+    export/save authority. The fixed producer command calls it; no workflow does.
     """
     attempt = _claim_closed_entry(transition)
     owner = preclose_ns = None
@@ -2267,13 +2268,14 @@ def readmit_closed_entry(transition):
         raise attempt.original
 
 
-def adopt_originals(cancelled):
-    """Dormant read-only ORIGINAL adoption, not producer or job-budget admission.
+def _prepare_adoption(cancelled):
+    """Shared fixed live-entry preparation; the successful caller owns its close.
 
     The two environment inputs must eventually come from the fixed trusted
     prepare step's ORIGINAL outcome/hash. No workflow wires that authority yet.
     Fresh readmission records go in a separate exclusive sibling; preparation
     originals are never modified. Every operation shares the original prelude.
+    Failure before returning the live entry keeps this helper's cleanup duty.
     """
     local_end = time.monotonic() + 45
     first = origin.clocks.validate_reading(origin.clocks.observe())
@@ -2324,18 +2326,30 @@ def adopt_originals(cancelled):
             "exportSaveAuthority": False})
         check_execution_entry(owner, target, entry, fence, retained=True)
     except BaseException as error:
-        owner.error("adopt-originals", error)
-        if target is not None and not owner.unknown:
-            try:
-                owner.write(target, "adoption-failure.json", {"schema": 1, "result": "HOLD", "errors": owner.errors,
-                    "retirement": "PENDING_OWNER_CLOSE", "budgetAcceptance": "NOT_ADMITTED"}, final=True)
-            except BaseException as secondary:
-                owner.error("adoption-failure-retention", secondary)
-    finally:
         try:
-            owner.close()
-        except BaseException as error:
-            owner.error("adoption-close", error)
+            owner.error("adopt-originals", error)
+            if target is not None and not owner.unknown:
+                try:
+                    owner.write(target, "adoption-failure.json", {"schema": 1, "result": "HOLD", "errors": owner.errors,
+                        "retirement": "PENDING_OWNER_CLOSE", "budgetAcceptance": "NOT_ADMITTED"}, final=True)
+                except BaseException as secondary:
+                    owner.error("adoption-failure-retention", secondary)
+        finally:
+            try:
+                owner.close()
+            except BaseException as secondary:
+                owner.error("adoption-close", secondary)
+        raise owner.original if owner.original is not None else error
+    return owner, target, entry, fence, result_raw
+
+
+def adopt_originals(cancelled):
+    """Read-only command: never selects the productive successor."""
+    owner, _target, _entry, fence, result_raw = _prepare_adoption(cancelled)
+    try:
+        owner.close()
+    except BaseException as error:
+        owner.error("adoption-close", error)
     if owner.original is not None:
         raise owner.original
     require(result_raw is not None and not owner.unknown and fence is not None, "BOOTSTRAP_ADOPTION_INCOMPLETE")
@@ -2343,6 +2357,35 @@ def adopt_originals(cancelled):
     fence.now(final=True)
     cancellation(cancelled)
     return public_result(ADOPTION_SCOPE, "adoptionSha256", result_raw), fence, fence.final
+
+
+def produce_originals(cancelled):
+    """Fixed dormant composition, not an admitted budget or provider operation.
+
+    No returned transition is reconstructed from disk. Once the old close
+    returns, its graph/fence is immutable: later failures belong to their NEW
+    owners, never to adoption's old failure-retention or completion tail.
+    """
+    owner, target, entry, fence, _raw = _prepare_adoption(cancelled)
+    try:
+        closed = close_entry_transition(owner, target, entry, fence)
+    except BaseException as error:
+        # A rejected pre-claim close leaves responsibility with this caller.
+        # The bridge already handles claimed/closed failures; do not mutate it.
+        if not owner.closed:
+            try:
+                owner.error("producer-entry-close", error)
+            finally:
+                try:
+                    owner.close()
+                except BaseException as secondary:
+                    owner.error("producer-entry-close-return", secondary)
+        raise owner.original if owner.original is not None else error
+    current = readmit_closed_entry(closed)
+    returned = save_handoff_after_entry(current)
+    # This private original-call continuation retains the handoff function's
+    # actual return under its SAME remaining fence, then hands it to guarded.
+    return returned._complete(returned)
 
 
 def recipient_command(context_hash, minimum=None):
@@ -3859,7 +3902,7 @@ class _RecipientParent:
 
 
 def run_recipient_after_entry(transition):
-    """Once-claimed INTERNAL recipient prefix; no public/workflow caller.
+    """Once-claimed standalone recipient prefix; no workflow activation.
 
     All resources and handlers close in this one call under the ORIGINAL prefix
     caps. No live Recipient is reconstructed from child JSON; this wrapper never
@@ -3891,7 +3934,7 @@ def reserve_configuration_after_entry(transition):
     """INTERNAL one-claim prefix through file-only configuration reservation.
 
     The original claim fixes reserve => stage => initialize before suppliers.
-    No CLI/workflow calls this operation; no producer or collection is launched.
+    The dormant producer uses this prefix; this function launches no producer.
     """
     return _recipient_after_entry(transition, initialize=True, stage=True, reserve=True)
 
@@ -6480,7 +6523,7 @@ def _producer_stamp(info, role):
 class _ProducerParent:
     """One source-owned configuration parent, separate from ordinary FULL.
 
-    The constructor alone has no claim. No public CLI or workflow invokes it.
+    The constructor alone has no claim; the dormant producer owns its call.
     Closed predecessors remain closed; only the separately retained ancestor
     cancellation callbacks belong to this new call's current obligations.
     """
@@ -7581,7 +7624,7 @@ def _run_configuration_producer(parent):
 
 
 def configure_after_entry(transition):
-    """INTERNAL original-call configuration; no prefix upgrade or public caller.
+    """Original-call configuration under the dormant producer; no prefix upgrade.
 
     The private intent exists before the fixed tuple7 reservation call. All
     claims consume failure. COMPLETE predecessor states are never reopened.
@@ -8053,11 +8096,11 @@ def _checked_collection_origin(call):
 
 
 def _begin_collection_after_entry(transition):
-    """INTERNAL binding component only; no CLI, file-owner or leaf invocation.
+    """Internal binding component, not itself a file owner or collection leaf.
 
-    This original-call claim must enclose future collection, not be reconstructed
-    from returned data. No current file/source/manifest/clock readmission occurs
-    after producer return yet. BOUND is NOT collection or execution acceptance.
+    Its original-call claim encloses the collection parent; it cannot be
+    reconstructed from returned data. The parent supplies fresh readmission.
+    BOUND is NOT collection or execution acceptance.
     """
     call = _claim_collection_origin(transition)
     try:
@@ -9592,7 +9635,7 @@ def _run_collection_phase(parent):
 def collect_after_entry(transition):
     """INTERNAL original-call producer/collection; never a prefix adoption API.
 
-    No CLI or workflow invokes this dormant path. All claims consume failure.
+    The dormant producer calls this path; no workflow does. Claims consume failure.
     Neither a successful copy nor a configuration-only producer establishes
     no-loader, cache population, tests, admitted5400 or export/save authority.
     """
@@ -9971,8 +10014,8 @@ def _begin_no_loader_after_entry(transition):
 
     Never adopts supplied CollectionPrefix data or a prior direct collector.
     Original return pins stay closed; no method/clock on a predecessor is called.
-    A later NEW-owner adapter must stay inside this original enclosing call and
-    supply its own admission/fences. No CLI, leaf, export/save or workflow caller.
+    The directory-only parent stays inside this original enclosing call and
+    supplies NEW ownership/admission/fences. No workflow invokes this chain.
     """
     call = _claim_no_loader_origin(transition)
     try:
@@ -10419,6 +10462,7 @@ class BootstrapSaveHandoffPrefix:
     raw: bytes = field(repr=False)
     checked_ns: int
     checked_local: float
+    _complete: object = field(repr=False, compare=False)
 
 
 def _bootstrap_export_controls():
@@ -11109,17 +11153,139 @@ def _bootstrap_export_controls():
                     remember_failure(error)
         if failure is not None:
             raise failure
-        pins()
-        require(owner.closed is True and owner.unknown is False and handlers == restored and
-                len(ledger) == len(close_roster) and all(row is old and row["label"] == label and
-                    row["owner"] is resource and row["attempted"] is row["closed"] is True
-                    for row, (old, label, resource) in zip(ledger, close_roster)),
-                "BOOTSTRAP_SAVE_HANDOFF_CLOSE_INCOMPLETE")
+        def closed_pins():
+            pins()
+            require(owner.closed is True and owner.unknown is False and handlers == restored and
+                    len(ledger) == len(close_roster) and all(row is old and row["label"] == label and
+                        row["owner"] is resource and row["attempted"] is row["closed"] is True
+                        for row, (old, label, resource) in zip(ledger, close_roster)),
+                    "BOOTSTRAP_SAVE_HANDOFF_CLOSE_INCOMPLETE")
+
+        closed_pins()
         cancel()
         fence.now(final=True)
         pins()
         cancellation(cancelled)
-        return handoff_prefix(raw, last, local_last)
+        checked_ns, checked_local = last, local_last
+        completion_started, result = False, None
+
+        def complete(original):
+            """Caller-only retention after handoff return, within SAME return45.
+
+            This closure retains the original fence/issued LOCAL end. No disk
+            record, copied prefix or caller-selected path can recreate it.
+            The new file cannot attest its own writer/command/step return.
+            """
+            nonlocal completion_started
+            require(original is result, "BOOTSTRAP_PRODUCER_NOT_ORIGINAL_HANDOFF")
+            with lock:
+                require(not completion_started, "BOOTSTRAP_PRODUCER_COMPLETION_ALREADY_CLAIMED")
+                completion_started = True
+
+            def returned_pins():
+                closed_pins()  # Passive checks only; never reopen the closed owner.
+                require(type(result) is handoff_prefix and result.raw is raw and result._complete is complete and
+                        type(result.checked_ns) is int and result.checked_ns == checked_ns and
+                        type(result.checked_local) is float and result.checked_local == checked_local,
+                        "BOOTSTRAP_PRODUCER_HANDOFF_RETURN_CHANGED")
+
+            def boundary():
+                returned_pins()
+                fence.now(minimum=checked_ns, limit=hard)
+                returned_pins()
+
+            current_owner, record_raw, first_error = None, None, None
+
+            def failed(error):
+                nonlocal first_error
+                if first_error is None:
+                    first_error = (current_owner.original if current_owner is not None and
+                                   current_owner.original is not None else error)
+                if current_owner is not None:
+                    try:
+                        current_owner.error("producer-function-return", error)
+                    except BaseException:
+                        current_owner.unknown = True
+
+            try:
+                boundary()
+                observed_ns, observed_local = last, local_last
+                # deadline() can only shorten the handoff's original issued_end.
+                end = fence.deadline(45, limit=hard)
+                current_owner = handoff_owner(end, fence, first=first, cancelled=cancel)
+                current_ledger, current_errors = current_owner.resources, current_owner.errors
+                initializer = current_owner.open(inputs.session)
+                index_directory = current_owner.child(initializer, "dependency-save-handoff")
+
+                def current_pins():
+                    returned_pins()
+                    require(type(current_owner) is handoff_owner and current_owner.fence is fence and
+                            current_owner.first is first and current_owner.cancelled is cancel and
+                            current_owner.resources is current_ledger and current_owner.errors is current_errors and
+                            type(current_owner.local_end) is float and current_owner.local_end == end and
+                            current_owner.work_limit is current_owner.final_limit is None and
+                            current_owner.original is None and current_owner.unknown is False,
+                            "BOOTSTRAP_PRODUCER_RETURN_OWNER_CHANGED")
+                    require(initializer.path == inputs.session and tuple(initializer.identity) == parent_identity and
+                            index_directory.path == path and tuple(index_directory.identity) == directory_identity_,
+                            "BOOTSTRAP_PRODUCER_RETURN_DIRECTORY_CHANGED")
+
+                current_pins()
+                initializer.verify()
+                index_directory.verify()
+                require(current_owner.read(index_directory, "save-handoff.json") == raw,
+                        "BOOTSTRAP_PRODUCER_HANDOFF_INDEX_CHANGED")
+                boundary()
+                record_raw = current_owner.write(initializer, "producer-function-return.json", {
+                    "schema": 1, "scope": "BOOTSTRAP_HANDOFF_FUNCTION_RETURN_PENDING_COMMAND_V1",
+                    "handoffSha256": origin.digest(raw), "handoffDirectory": str(path),
+                    "handoffDirectoryIdentity": list(directory_identity_), "initializerIdentity": list(parent_identity),
+                    "clock": origin.clock_value(first.clock), "firstNs": first.nanoseconds, "hardEndNs": hard,
+                    "handoffReturnedNs": checked_ns, "handoffReturnedLocal": checked_local,
+                    "observedAfterReturnNs": observed_ns, "observedAfterReturnLocal": observed_local,
+                    "observationScope": "HANDOFF_FUNCTION_RETURN_ONLY",
+                    "recordWriterReturn": "PENDING_NOT_OBSERVABLE_BY_THIS_FILE",
+                    "producerStepOutcome": "PENDING_NOT_OBSERVABLE_BY_THIS_FILE",
+                    "providerExecution": "NOT_PERFORMED", "budgetAcceptance": "NOT_ADMITTED",
+                    "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False})
+                current_pins()
+                require(current_owner.read(index_directory, "save-handoff.json") == raw and
+                        current_owner.read(initializer, "producer-function-return.json") == record_raw,
+                        "BOOTSTRAP_PRODUCER_RETURN_READBACK_CHANGED")
+                initializer.verify()
+                index_directory.verify()
+                boundary()
+                current_pins()
+                current_roster = tuple((row, row["label"], row["owner"]) for row in current_ledger)
+            except BaseException as error:
+                failed(error)
+            finally:
+                if current_owner is not None:
+                    try:
+                        current_owner.close()
+                        if current_owner.original is not None:
+                            failed(current_owner.original)
+                    except BaseException as error:
+                        failed(error)
+                    if current_owner.unknown and not any(value is current_owner for value in QUARANTINE):
+                        QUARANTINE.append(current_owner)
+            if first_error is not None:
+                raise first_error
+            current_pins()
+            require(current_owner.closed is True and len(current_ledger) == len(current_roster) and
+                    all(row is old and row["label"] == label and row["owner"] is resource and
+                        row["attempted"] is row["closed"] is True
+                        for row, (old, label, resource) in zip(current_ledger, current_roster)),
+                    "BOOTSTRAP_PRODUCER_RETURN_CLOSE_INCOMPLETE")
+            boundary()
+            current_pins()
+            value = public_result("BOOTSTRAP_PRODUCER_PENDING_ORIGINAL_STEP_RETURN_V1",
+                                  "producerReturnSha256", record_raw)
+            value["handoffSha256"] = origin.digest(raw)
+            return value, fence, hard
+
+        result = handoff_prefix(raw, checked_ns, checked_local, complete)
+        return result
 
     return execute, before, closed_before_return, handoff
 
@@ -11137,7 +11303,8 @@ def _read_save_handoff(owner, initializer, directory, admitted, *, producer_outc
     Its byte tuple returns with enclosing-owner close PENDING. No original-call
     registry is reconstructed. A future fixed workflow must bind the actual
     producer outcome/hash, never conclusion or a digest read from the package.
-    The final writer-return high-water was not persisted and is not invented.
+    The index lacks the final writer-return high-water; this reader does not
+    consume the separate producer-return sidecar.
     """
     require(type(producer_outcome) is str and producer_outcome == "success",
             "BOOTSTRAP_SAVE_READ_PRODUCER_OUTCOME")
@@ -11348,6 +11515,7 @@ def main():
     commands = parser.add_subparsers(dest="operation", required=True)
     commands.add_parser("prepare-originals")
     commands.add_parser("adopt-originals")
+    commands.add_parser("produce-originals")
     for name in ("_service", "_recipient"):
         child = commands.add_parser(name)
         child.add_argument("--context-sha256", required=True)
@@ -11360,6 +11528,8 @@ def main():
             guarded(prepare_originals)
         elif args.operation == "adopt-originals":
             guarded(adopt_originals)
+        elif args.operation == "produce-originals":
+            guarded(produce_originals)
         else:
             require(re.fullmatch(r"0|[1-9][0-9]{0,19}", args.minimum_ns), "BOOTSTRAP_LAUNCH_MINIMUM")
             minimum = origin.integer(int(args.minimum_ns))

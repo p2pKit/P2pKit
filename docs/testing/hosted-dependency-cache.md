@@ -15,7 +15,8 @@ prefix now claims before the original producer call and retains its closed
 return; that binding alone creates no collection owner or result. The separate
 original-call NEW-owner collection parent now has independently reviewed source,
 focused author controls and separately authored independent memory controls.
-No public command or workflow invokes either path. The separate exact-loader
+The dormant fixed producer command now composes these paths; no workflow invokes
+it. The separate exact-loader
 absence leaf below now has source and focused offline controls; its original-call
 collection-return binding now has separately reviewed source and focused memory controls.
 That private binding is not itself an owner. The directory-only parent below now
@@ -26,6 +27,10 @@ A supplied-original after-save leaf now reuses that set checker; its original-ca
 parent is not connected. A separate internal handoff now retains the original
 producer-to-before-save chain, using the existing private writer. Provider
 save/probe and encrypted-custody integration remain unfinished.
+The [producer-command composition](#fixed-producer-command-and-original-function-return)
+below is the current source status. Earlier slice sections retain their dated
+test/review scope; their former no-CLI/caller statements are not the current
+command graph. CLI availability grants no execution authority.
 [`hosted_dependency_cache.py`](../../scripts/hosted_dependency_cache.py) has no
 CLI, action runner, downloader, extraction, deletion or subprocess entry point.
 The connected caller is
@@ -1696,9 +1701,10 @@ outcome/hash are not authentication of a GitHub step. References and unselected
 blob semantics stay opaque, not revalidated original-call capabilities. Structural
 `_plan_shape` is not fresh source/native admission or `validate_plan` rederivation.
 The index retains the before-return floor and writer start, but **not the final
-writer-return RAW/LOCAL high-water**. A later trusted wrapper must retain the real
-post-return observation; this reader does not invent it or compare historical
-LOCAL values across processes. No CLI or workflow invokes this reader yet.
+writer-return RAW/LOCAL high-water**. The fixed producer below now retains a
+separate real post-return observation. This reader does not consume that sidecar,
+invent its observation or compare historical LOCAL values across processes.
+No CLI or workflow invokes this reader yet.
 
 **37 focused `ReaderModels` methods PASS** in one isolated Python3.12 invocation.
 An independent source review found the missing bound-owner cancellation call;
@@ -1713,6 +1719,51 @@ UID0/audit guards are not a kernel sandbox. Exact original results and independe
 final review are mapped with the containing commit in #437. Both HOLDs, recipient/
 trusted-base/formal approval,5400 UNADMITTED/UNMEASURED and NativeFile900/
 Snapshot576MiB remain unchanged.
+
+### Fixed producer command and original function return
+
+Dormant `produce-originals` in
+[`run-hosted-cache-bootstrap.py`](../../scripts/run-hosted-cache-bootstrap.py)
+now connects the existing chain through before-save and the private handoff.
+It shares fixed live-entry preparation with read-only `adopt-originals`, then
+passes the actual old-owner close return to fresh readmission and that actual
+return to the producer chain. No mode, command, path, key or duration override is
+added. After old-owner close, downstream failure never mutates or reopens that
+closed owner's graph, or samples its old fence. Read-only adoption stays read-only.
+
+The handoff's one-use private completion retains its actual function return in
+`initializer/producer-function-return.json`, outside the fixed32-member package,
+S, H and canonical evidence. A NEW small writer borrows only the remainder of
+the **same original45-second fence**, including its issued LOCAL end and original
+job/proposal cap; it never starts another45. The record binds the exact index
+hash/directory identities, final handoff RAW/LOCAL high-waters and subsequent
+caller observation. Copies, replay, replacement, expiry, cancellation or failed
+close cannot become a successful command. Existing `guarded` uses that same
+fence through final output/handler restoration.
+
+The record's own writer-return and producer-step outcome remain **PENDING**.
+Public command output contains only `handoffSha256`, `producerReturnSha256`,
+scope and nonacceptance fields. A future trusted workflow must supply its
+**original `steps.producer.outcome`** and those command-exported hashes; neither
+file content nor a conclusion can substitute. Return-record consumption, fresh
+save readmission, provider-save/after-save/probe and encrypted custody remain
+unconnected. The bootstrap workflow and recipient policy are still absent.
+
+**25 new focused methods PASS** (`CompositionModels`10, `CompletionModels`15),
+plus a separate **31 affected `HandoffModels` regressions PASS**. The actual
+selected preparation/composer/CLI/guarded/completion and handoff/Owner code
+executes over explicit entry/admission/clock/upstream models and memory files.
+No full runner import, real private files, native/provider or Gradle execution
+occurred. The earlier smoke remains1pass/1error (missing modeled component
+guard); the first25-method aggregate remains24pass/1failed method(two subtests,
+fixture diagnostic serialization). Both fixture defects were corrected without
+changing implementation bytes. Later caller-wording edits changed docstrings
+only, with executable-AST equality checked against the25-method source.
+Bounded isolated Python3.12 used timeout20/kill2, CPU10/AS512MiB/FD64/core0 and
+1MiB regular output limits; UID0/audit guards are not a kernel sandbox. Exact
+results and independent final review are mapped with the containing commit in
+#437. Neither CLI availability nor these tests lift either HOLD, admit/measure
+5400, alter NativeFile900/Snapshot576MiB or qualify cache/Release delivery.
 
 ### Supplied-original after-save recheck
 
