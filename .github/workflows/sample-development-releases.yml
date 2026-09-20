@@ -31,6 +31,7 @@ permissions:
   actions: read
   checks: read
   pull-requests: read
+  deployments: read
 
 # This is not a Gradle/build job; it never occupies the shared heavy-job lease
 # while waiting for other gates. Each completion rechecks readiness, without a build.
@@ -99,16 +100,60 @@ jobs:
         if: ${{ always() && steps.evidence.outcome == 'success' }}
         run: python3 -I -B -S scripts/publish-sample-release.py cleanup
 
-  publish:
+  prepare-review:
     needs: admit
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.operation == 'publish' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      request_sha256: ${{ steps.prepare.outputs.request_sha256 }}
+      artifact_id: ${{ steps.evidence.outputs.artifact-id }}
+    steps:
+      - name: Check out trusted main review preparation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Inspect apps and bind existing main evidence for owner review
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE: ${{ needs.admit.outputs.source }}
+          PRODUCER: ${{ needs.admit.outputs.producer }}
+          ATTEMPT: ${{ needs.admit.outputs.attempt }}
+        run: python3 -I -B -S scripts/publish-sample-release.py prepare-review --source "$SOURCE" --producer "$PRODUCER" --attempt "$ATTEMPT"
+      - name: Retain the immutable public review request, never private evidence
+        id: evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sample-release-review-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/p2pkit-sample-release/receipt.json
+            ${{ runner.temp }}/p2pkit-sample-release/sample-release.json
+            ${{ runner.temp }}/p2pkit-sample-release/SHA256SUMS
+            ${{ runner.temp }}/p2pkit-sample-release/review-request.json
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false
+      - name: Retire only owned temporary metadata after retention
+        if: ${{ always() && steps.evidence.outcome == 'success' }}
+        run: python3 -I -B -S scripts/publish-sample-release.py cleanup
+
+  publish:
+    needs: [admit, prepare-review]
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.operation == 'publish' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Only the owner may approve, after privately reviewing the exact main-run
+    # evidence. Python also binds the approval comment to this run/attempt/hash;
+    # reusing an old environment approval on rerun is not sufficient.
+    environment: sample-development-release
     permissions:
       contents: write
       actions: read
       checks: read
       pull-requests: read
+      deployments: read
     steps:
       - name: Check out trusted main publisher
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -122,7 +167,9 @@ jobs:
           SOURCE: ${{ needs.admit.outputs.source }}
           PRODUCER: ${{ needs.admit.outputs.producer }}
           ATTEMPT: ${{ needs.admit.outputs.attempt }}
-        run: python3 -I -B -S scripts/publish-sample-release.py publish --source "$SOURCE" --producer "$PRODUCER" --attempt "$ATTEMPT"
+          REVIEW_ARTIFACT: ${{ needs.prepare-review.outputs.artifact_id }}
+          REVIEW_REQUEST: ${{ needs.prepare-review.outputs.request_sha256 }}
+        run: python3 -I -B -S scripts/publish-sample-release.py publish --source "$SOURCE" --producer "$PRODUCER" --attempt "$ATTEMPT" --review-artifact "$REVIEW_ARTIFACT" --review-request "$REVIEW_REQUEST"
       - name: Retain only public publication provenance
         id: evidence
         if: ${{ always() }}
@@ -133,6 +180,8 @@ jobs:
             ${{ runner.temp }}/p2pkit-sample-release/receipt.json
             ${{ runner.temp }}/p2pkit-sample-release/sample-release.json
             ${{ runner.temp }}/p2pkit-sample-release/SHA256SUMS
+            ${{ runner.temp }}/p2pkit-sample-release/review-request.json
+            ${{ runner.temp }}/p2pkit-sample-release/approval-receipt.json
           if-no-files-found: warn
           retention-days: 14
           overwrite: false

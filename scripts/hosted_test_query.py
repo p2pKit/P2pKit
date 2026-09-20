@@ -250,7 +250,7 @@ def _allowed_suffix(arguments):
     if len(arguments) == 3 and arguments[:2] == ("rev-parse", "--verify"):
         return bool(re.fullmatch(r"(?:HEAD|refs/remotes/origin/main|[0-9a-f]{40})\^\{commit\}|"
                                  r"[0-9a-f]{40}\^\{tree\}", arguments[2]))
-    if len(arguments) == 4 and arguments[:3] == ("show", "-s", "--format=%P"):
+    if len(arguments) == 4 and arguments[:3] in (("show", "-s", "--format=%P"), ("show", "-s", "--format=%B")):
         return bool(identity.SHA.fullmatch(arguments[3]))
     if len(arguments) == 5 and arguments[:2] == ("ls-tree", "-z") and arguments[3] == "--" and \
             arguments[4] in (identity.POLICY_PATH, *identity.abi.BASELINES):

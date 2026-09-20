@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 import hashlib
 import importlib.util
 import json
@@ -45,6 +46,7 @@ class ModelGit:
         self.dirty = False
         self.root_correct = True
         self.parent_set = [BASE, HEAD]
+        self.commit_message = b"Synthetic ordinary merge, no Release request\n"
         self.policies = {SOURCE: H.encoded(policy()), BASE: H.encoded(policy())}
         self.requested = []
 
@@ -56,6 +58,9 @@ class ModelGit:
 
     def parents(self, _):
         return self.parent_set
+
+    def message(self, _):
+        return self.commit_message
 
     def clean(self):
         return not self.dirty
@@ -146,6 +151,64 @@ class IdentityTests(unittest.TestCase):
             "number": 17, "base": BASE, "head": HEAD, "headRepository": "fixture-fork/P2pKit"})
         self.assertEqual(record["source"]["commit"], SOURCE)
         self.assertEqual(record["policy"]["commit"], BASE)
+
+    def test_exact_main_merge_marker_alone_requests_packaging(self):
+        self.assertFalse(H.sample_packaging_required(self.admit()))
+        self.git.commit_message = b"Synthetic merge\n\n[release ci]\n"
+        value = self.admit()
+        self.assertTrue(H.sample_packaging_required(value))
+        detail = json.loads(value.record)["github"]["eventBinding"]
+        self.assertEqual(detail["releaseMessageSha256"], hashlib.sha256(self.git.commit_message).hexdigest())
+        self.assertEqual(detail["releaseParents"], [BASE, HEAD])
+        self.assertNotIn("Synthetic merge", value.record.decode())
+
+    def test_marker_case_spacing_or_payload_only_do_not_request_packaging(self):
+        self.event["head_commit"] = {"message": "[release ci]"}
+        self.event["commits"] = [{"message": "[release ci]"}]
+        for message in (b"ordinary", b"[Release ci]", b"[release CI]", b"[release  ci]", b"release ci", b""):
+            with self.subTest(message=message):
+                self.git.commit_message = message
+                self.assertFalse(H.sample_packaging_required(self.admit()))
+
+    def test_marked_nonmerge_push_keeps_normal_ci_without_packaging(self):
+        self.git.commit_message = b"[release ci]\n"
+        for parents in ([], [BASE], [BASE, HEAD, TREE]):
+            with self.subTest(parents=parents):
+                self.git.parent_set = parents
+                self.assertFalse(H.sample_packaging_required(self.admit()))
+
+    def test_pr_and_manual_source_markers_never_request_release_packaging(self):
+        self.git.commit_message = b"[release ci]\n"
+        self.pr()
+        self.event["pull_request"]["body"] = "[release ci]"
+        self.assertFalse(H.sample_packaging_required(self.admit()))
+        self.manual()
+        self.assertFalse(H.sample_packaging_required(self.admit()))
+
+    def test_full_check_does_not_gain_packaging_from_marker(self):
+        self.git.commit_message = b"[release ci]\n"
+        self.full()
+        value = self.admit()
+        self.assertFalse(H.sample_packaging_required(value))
+        self.assertNotIn("samplePackagingRequired", json.loads(value.record))
+
+    def test_absent_or_nonboolean_admitted_intent_fails_closed(self):
+        original = self.admit()
+        for value in (None, "true", "false", 0, 1, [], {}):
+            record = json.loads(original.record)
+            if value is None:
+                record.pop("samplePackagingRequired")
+            else:
+                record["samplePackagingRequired"] = value
+            with self.subTest(value=value), self.assertRaisesRegex(H.AdmissionError, "IDENTITY_SAMPLE_INTENT"):
+                H.sample_packaging_required(replace(original, record=H.encoded(record)))
+
+    def test_unavailable_or_oversized_commit_message_cannot_request_packaging(self):
+        for value in ("[release ci]", b"x" * (H.MESSAGE_LIMIT + 1)):
+            self.git.commit_message = value
+            self.rejected("IDENTITY_COMMIT_MESSAGE")
+        self.git.message = Mock(side_effect=H.AdmissionError("IDENTITY_GIT_QUERY_FAILED"))
+        self.rejected("IDENTITY_GIT_QUERY_FAILED")
 
     def test_absent_pr_base_policy_does_not_fall_back_to_candidate(self):
         self.pr()
@@ -365,6 +428,16 @@ class GitReaderTests(unittest.TestCase):
         self.assertEqual(view.policy(BASE), (expected, raw))
         self.assertEqual(view.query.call_args_list[0].args, ("ls-tree", "-z", BASE, "--", H.POLICY_PATH))
         self.assertEqual(view.query.call_args_list[-1].args, ("cat-file", "blob", expected))
+
+    def test_commit_message_query_is_exact_immutable_and_bounded(self):
+        view = self.view([b"[release ci]\n"])
+        self.assertEqual(view.message(SOURCE), b"[release ci]\n")
+        view.query.assert_called_once_with("show", "-s", "--format=%B", SOURCE, limit=65536)
+        for ref in ("HEAD", "main", SOURCE[:12], SOURCE + "~1"):
+            view = self.view([])
+            with self.subTest(ref=ref), self.assertRaisesRegex(H.AdmissionError, "IDENTITY_FULL_SHA"):
+                view.message(ref)
+            view.query.assert_not_called()
 
     def test_all_eight_abi_references_are_exact_full_sha_regular_blobs(self):
         for path in H.abi.BASELINES:

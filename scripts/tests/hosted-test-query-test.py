@@ -280,6 +280,7 @@ class QueryTests(unittest.TestCase):
                     ("rev-parse", "--verify", SOURCE + "^{commit}"),
                     ("rev-parse", "--verify", SOURCE + "^{tree}"),
                     ("show", "-s", "--format=%P", SOURCE),
+                    ("show", "-s", "--format=%B", SOURCE),
                     ("ls-tree", "-z", SOURCE, "--", Q.identity.POLICY_PATH),
                     ("cat-file", "-s", SOURCE), ("cat-file", "blob", SOURCE)]
         owner = self.owner()
@@ -287,6 +288,17 @@ class QueryTests(unittest.TestCase):
             with self.subTest(suffix=suffix):
                 self.assertEqual(self.query(owner, *suffix), self.out)
         owner.close()
+
+    def test_message_query_accepts_no_mutable_ref_format_or_extra_argument(self):
+        for suffix in (("show", "-s", "--format=%B", "HEAD"),
+                       ("show", "-s", "--format=%B", SOURCE[:12]),
+                       ("show", "-s", "--format=%B", SOURCE, "--"),
+                       ("show", "-s", "--format=%B%x00%N", SOURCE),
+                       ("show", "--format=%B", SOURCE)):
+            with self.subTest(suffix=suffix):
+                self.assertFalse(Q._allowed_suffix(suffix))
+        self.assertTrue(Q._allowed_suffix(("show", "-s", "--format=%B", SOURCE)))
+        self.assertEqual(Q.FINALIZATION_SECONDS, 45)
 
     def test_only_the_eight_exact_abi_paths_extend_ls_tree_admission(self):
         for path in Q.identity.abi.BASELINES:
@@ -747,6 +759,10 @@ class QueryTests(unittest.TestCase):
                 return SOURCE.encode() + b"\n", b""
             if suffix == ("rev-parse", "--verify", SOURCE + "^{tree}"):
                 return TREE.encode() + b"\n", b""
+            if suffix == ("show", "-s", "--format=%B", SOURCE):
+                return b"SYNTHETIC ordinary merge\n", b""
+            if suffix == ("show", "-s", "--format=%P", SOURCE):
+                return (BEFORE + " " + TREE + "\n").encode(), b""
             if suffix == ("ls-tree", "-z", SOURCE, "--", Q.identity.POLICY_PATH):
                 return ((b"100644 blob " + blob.encode() + b"\t" + Q.identity.POLICY_PATH.encode() + b"\0")
                         if policy_present else b""), b""
@@ -789,10 +805,31 @@ class QueryTests(unittest.TestCase):
 
     def test_main_success_message_is_only_admission_not_workflow_acceptance(self):
         out = io.StringIO()
-        with patch.object(Q, "admit_hosted", return_value=object()), patch.object(sys, "stdout", out):
-            self.assertEqual(ENTRY.main(["--profile", "desktop", "--root", str(self.root),
-                                        "--evidence-directory", str(self.state)]), 0)
+        output = self.base / "outputs"
+        output.write_bytes(b"")
+        os.environ["GITHUB_OUTPUT"] = str(output)
+        for required in (False, True):
+            value = Q.identity.Admission(Q.identity.encoded({"profile": "desktop", "samplePackagingRequired": required}),
+                                         b"synthetic", b"synthetic", b"synthetic", "A" * 40, "b" * 64, 3000)
+            with patch.object(Q, "admit_hosted", return_value=value), patch.object(sys, "stdout", out):
+                self.assertEqual(ENTRY.main(["--profile", "desktop", "--root", str(self.root),
+                                            "--evidence-directory", str(self.state)]), 0)
         self.assertIn("no crypto validation, tests, export or upload", out.getvalue())
+        self.assertEqual(output.read_bytes(), b"sample_packaging_required=false\nsample_packaging_required=true\n")
+
+    def test_cli_output_sync_failure_cannot_grant_step_success(self):
+        value = Q.identity.Admission(Q.identity.encoded({"profile": "desktop", "samplePackagingRequired": True}),
+                                     b"synthetic", b"synthetic", b"synthetic", "A" * 40, "b" * 64, 3000)
+        output = self.base / "outputs"
+        output.write_bytes(b"")
+        os.environ["GITHUB_OUTPUT"] = str(output)
+        with patch.object(Q, "admit_hosted", return_value=value), \
+                patch.object(ENTRY.os, "fsync", side_effect=OSError("PRIVATE-OUTPUT-FAILURE")), \
+                patch.object(sys, "stderr", io.StringIO()) as err:
+            self.assertEqual(ENTRY.main(["--profile", "desktop", "--root", str(self.root),
+                                        "--evidence-directory", str(self.state)]), 125)
+        self.assertNotIn("PRIVATE-OUTPUT-FAILURE", err.getvalue())
+
 
 
 if __name__ == "__main__":

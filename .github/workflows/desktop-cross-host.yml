@@ -178,7 +178,7 @@ jobs:
 
       - name: Bind fresh ordinary sample outputs to this run
         id: ordinary-output
-        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') }}
+        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-admission.outcome == 'success' && steps.ordinary-admission.outputs.sample_packaging_required == 'true' }}
         shell: bash
         run: |
           python_bin=python3
@@ -277,7 +277,7 @@ jobs:
 
       - name: Install Android compile platforms for the Linux APK producer
         id: sample-sdk
-        if: runner.os == 'Linux'
+        if: ${{ success() && runner.os == 'Linux' && ((github.event_name == 'workflow_dispatch' && inputs.operation == 'sample-apps') || (steps.ordinary-admission.outcome == 'success' && steps.ordinary-admission.outputs.sample_packaging_required == 'true')) }}
         shell: bash
         run: |
           "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37.0'
@@ -416,7 +416,6 @@ jobs:
           DEPENDENCY_RESTORE_GUARD: ${{ steps.dependency-restore-guard.outcome }}
           JAVA: ${{ steps.java.outcome }}
           ORDINARY_JDK21: ${{ steps.ordinary-jdk21.outcome }}
-          ORDINARY_OUTPUT: ${{ steps.ordinary-output.outcome }}
           ORDINARY_WRAPPER: ${{ steps.ordinary-wrapper.outcome }}
           ORDINARY_RUN: ${{ steps.ordinary-run.outcome }}
           ORDINARY_SEAL: ${{ steps.ordinary-seal.outcome }}
@@ -429,6 +428,8 @@ jobs:
           PROFILE_PASSED: ${{ steps.ordinary-seal.outputs.profile_passed }}
           UPLOAD_COMPLETE: ${{ steps.ordinary-upload-after.outputs.upload_complete }}
           SDK_OUTCOME: ${{ steps.sample-sdk.outcome }}
+          ORDINARY_OUTPUT: ${{ steps.ordinary-output.outcome }}
+          SAMPLE_PACKAGING_REQUIRED: ${{ steps.ordinary-admission.outputs.sample_packaging_required }}
         run: |
           test "$ORDINARY_ACTIVATION" = success
           test "$ORDINARY_ADMISSION" = success
@@ -437,7 +438,6 @@ jobs:
           test "$DEPENDENCY_RESTORE_GUARD" = success
           test "$JAVA" = success
           test "$ORDINARY_JDK21" = success
-          test "$ORDINARY_OUTPUT" = success
           test "$ORDINARY_WRAPPER" = success
           test "$ORDINARY_RUN" = success
           test "$ORDINARY_SEAL" = success
@@ -449,9 +449,20 @@ jobs:
           test "$ARTIFACTS_READY" = true
           test "$PROFILE_PASSED" = true
           test "$UPLOAD_COMPLETE" = true
-          case "$RUNNER_OS" in
-            Linux) test "$SDK_OUTCOME" = success ;;
-            Windows|macOS) test "$SDK_OUTCOME" = skipped ;;
+          case "$SAMPLE_PACKAGING_REQUIRED" in
+            true)
+              test "$ORDINARY_OUTPUT" = success
+              case "$RUNNER_OS" in
+                Linux) test "$SDK_OUTCOME" = success ;;
+                Windows|macOS) test "$SDK_OUTCOME" = skipped ;;
+                *) exit 1 ;;
+              esac
+              ;;
+            false)
+              test "$ORDINARY_OUTPUT" = skipped
+              test "$SDK_OUTCOME" = skipped
+              case "$RUNNER_OS" in Linux|Windows|macOS) ;; *) exit 1 ;; esac
+              ;;
             *) exit 1 ;;
           esac
 
@@ -490,7 +501,7 @@ jobs:
 
       - name: Verify original packaged samples before delivery
         id: ordinary-package
-        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-required.outcome == 'success' }}
+        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-admission.outcome == 'success' && steps.ordinary-admission.outputs.sample_packaging_required == 'true' && steps.ordinary-required.outcome == 'success' }}
         timeout-minutes: 1
         shell: bash
         env:
@@ -505,7 +516,7 @@ jobs:
 
       - name: Admit the original desktop sample upload window
         id: ordinary-desktop-before
-        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-required.outcome == 'success' && steps.ordinary-package.outcome == 'success' && steps.ordinary-package.outputs.packaging_ready == 'true' }}
+        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-admission.outcome == 'success' && steps.ordinary-admission.outputs.sample_packaging_required == 'true' && steps.ordinary-required.outcome == 'success' && steps.ordinary-package.outcome == 'success' && steps.ordinary-package.outputs.packaging_ready == 'true' }}
         shell: bash
         env:
           P2PKIT_HOSTED_TEST_RUN_OUTCOME: ${{ steps.ordinary-run.outcome }}
@@ -521,7 +532,7 @@ jobs:
 
       - name: Upload ordinary native Desktop development apps
         id: ordinary-desktop-apps
-        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-desktop-before.outcome == 'success' && steps.ordinary-desktop-before.outputs.upload_ready == 'true' && (steps.ordinary-desktop-before.outputs.upload_timeout_minutes == '1' || steps.ordinary-desktop-before.outputs.upload_timeout_minutes == '2' || steps.ordinary-desktop-before.outputs.upload_timeout_minutes == '3') }}
+        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-admission.outcome == 'success' && steps.ordinary-admission.outputs.sample_packaging_required == 'true' && steps.ordinary-desktop-before.outcome == 'success' && steps.ordinary-desktop-before.outputs.upload_ready == 'true' && (steps.ordinary-desktop-before.outputs.upload_timeout_minutes == '1' || steps.ordinary-desktop-before.outputs.upload_timeout_minutes == '2' || steps.ordinary-desktop-before.outputs.upload_timeout_minutes == '3') }}
         timeout-minutes: ${{ fromJSON(steps.ordinary-desktop-before.outputs.upload_timeout_minutes) }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -535,7 +546,7 @@ jobs:
 
       - name: Verify desktop sample upload inside the original window
         id: ordinary-desktop-after
-        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-desktop-before.outcome == 'success' && steps.ordinary-desktop-before.outputs.upload_ready == 'true' }}
+        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-admission.outcome == 'success' && steps.ordinary-admission.outputs.sample_packaging_required == 'true' && steps.ordinary-desktop-before.outcome == 'success' && steps.ordinary-desktop-before.outputs.upload_ready == 'true' }}
         shell: bash
         env:
           P2PKIT_HOSTED_TEST_RUN_OUTCOME: ${{ steps.ordinary-run.outcome }}
@@ -553,7 +564,7 @@ jobs:
 
       - name: Admit the original android sample upload window
         id: ordinary-android-before
-        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-required.outcome == 'success' && steps.ordinary-package.outcome == 'success' && steps.ordinary-package.outputs.packaging_ready == 'true' && runner.os == 'Linux' && steps.ordinary-desktop-after.outcome == 'success' && steps.ordinary-desktop-after.outputs.upload_complete == 'true' }}
+        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-admission.outcome == 'success' && steps.ordinary-admission.outputs.sample_packaging_required == 'true' && steps.ordinary-required.outcome == 'success' && steps.ordinary-package.outcome == 'success' && steps.ordinary-package.outputs.packaging_ready == 'true' && runner.os == 'Linux' && steps.ordinary-desktop-after.outcome == 'success' && steps.ordinary-desktop-after.outputs.upload_complete == 'true' }}
         shell: bash
         env:
           P2PKIT_HOSTED_TEST_RUN_OUTCOME: ${{ steps.ordinary-run.outcome }}
@@ -570,7 +581,7 @@ jobs:
 
       - name: Upload ordinary Android development APK
         id: ordinary-android-apps
-        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-android-before.outcome == 'success' && steps.ordinary-android-before.outputs.upload_ready == 'true' && (steps.ordinary-android-before.outputs.upload_timeout_minutes == '1' || steps.ordinary-android-before.outputs.upload_timeout_minutes == '2' || steps.ordinary-android-before.outputs.upload_timeout_minutes == '3') && runner.os == 'Linux' }}
+        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-admission.outcome == 'success' && steps.ordinary-admission.outputs.sample_packaging_required == 'true' && steps.ordinary-android-before.outcome == 'success' && steps.ordinary-android-before.outputs.upload_ready == 'true' && (steps.ordinary-android-before.outputs.upload_timeout_minutes == '1' || steps.ordinary-android-before.outputs.upload_timeout_minutes == '2' || steps.ordinary-android-before.outputs.upload_timeout_minutes == '3') && runner.os == 'Linux' }}
         timeout-minutes: ${{ fromJSON(steps.ordinary-android-before.outputs.upload_timeout_minutes) }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -584,7 +595,7 @@ jobs:
 
       - name: Verify android sample upload inside the original window
         id: ordinary-android-after
-        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-android-before.outcome == 'success' && steps.ordinary-android-before.outputs.upload_ready == 'true' && runner.os == 'Linux' }}
+        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-admission.outcome == 'success' && steps.ordinary-admission.outputs.sample_packaging_required == 'true' && steps.ordinary-android-before.outcome == 'success' && steps.ordinary-android-before.outputs.upload_ready == 'true' && runner.os == 'Linux' }}
         shell: bash
         env:
           P2PKIT_HOSTED_TEST_RUN_OUTCOME: ${{ steps.ordinary-run.outcome }}
@@ -603,7 +614,7 @@ jobs:
 
       - name: Require complete ordinary sample delivery inside its original deadline
         id: ordinary-delivery
-        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') }}
+        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop') && steps.ordinary-admission.outcome == 'success' && steps.ordinary-admission.outputs.sample_packaging_required == 'true' }}
         shell: bash
         env:
           P2PKIT_HOSTED_TEST_RUN_OUTCOME: ${{ steps.ordinary-run.outcome }}

@@ -25,6 +25,8 @@ REPOSITORY = "p2pKit/P2pKit"
 POLICY_PATH = ".github/test-evidence-recipient.json"
 POLICY_LIMIT = 96 * 1024
 EVENT_LIMIT = 2 * 1024 * 1024
+MESSAGE_LIMIT = 64 * 1024
+RELEASE_MARKER = b"[release ci]"
 PROFILES = {
     "desktop": (".github/workflows/desktop-cross-host.yml", "verify", ("cli",)),
     "full": (".github/workflows/ci.yml", "complete-gate", ("cli", "diagnostics")),
@@ -164,6 +166,9 @@ class GitView:
         values = self.query("show", "-s", "--format=%P", sha(commit)).decode("ascii").strip().split()
         return [sha(value) for value in values]
 
+    def message(self, commit):
+        return self.query("show", "-s", "--format=%B", sha(commit), limit=MESSAGE_LIMIT)
+
     def clean(self):
         return self.query("status", "--porcelain=v1", "--untracked-files=all", limit=EVENT_LIMIT) == b""
 
@@ -270,6 +275,7 @@ def _admit(profile, env, event_raw, git, now):
     repo = mapping(event.get("repository"))
     require(repo.get("full_name") == REPOSITORY and repo.get("default_branch") == "main", "IDENTITY_REPOSITORY")
     detail = {}
+    sample_required = False
     if event_name == "pull_request":
         pr = mapping(event.get("pull_request"))
         number = event.get("number")
@@ -291,6 +297,13 @@ def _admit(profile, env, event_raw, git, now):
         require(ref == event.get("ref") == "refs/heads/main" and event.get("after") == source and
                 event.get("deleted") is False, "IDENTITY_PUSH")
         detail = {"before": sha(event.get("before"))}
+        if profile == "desktop":
+            # Only the actual admitted main merge commit can request Release
+            # packaging. PR text, earlier commits and manual inputs do not count.
+            message, parents = git.message(source), git.parents(source)
+            require(type(message) is bytes and len(message) <= MESSAGE_LIMIT, "IDENTITY_COMMIT_MESSAGE")
+            sample_required = len(parents) == 2 and RELEASE_MARKER in message
+            detail.update(releaseMessageSha256=hashlib.sha256(message).hexdigest(), releaseParents=parents)
         policy_commit = source
     elif event_name == "schedule":
         require(profile == "full" and ref == "refs/heads/main" and event.get("schedule") == "17 4 * * 1",
@@ -328,8 +341,27 @@ def _admit(profile, env, event_raw, git, now):
                    "sha256": hashlib.sha256(policy_raw).hexdigest(), "fingerprint": recipient["fingerprint"],
                    "keySha256": recipient["sha256"], "expiresAt": policy["expiresAt"], "retentionDays": 14},
     }
+    if profile == "desktop":
+        record["samplePackagingRequired"] = sample_required
     return Admission(encoded(record), event_raw, policy_raw, key, recipient["fingerprint"],
                      recipient["sha256"], policy["expiresAt"])
+
+
+def sample_packaging_required(admitted):
+    """Read the source-derived decision, not an environment/caller override.
+
+    The controller and each post-return guard must still re-admit the original
+    Admission. This accessor is not independent source or publication approval.
+    """
+    require(type(admitted) is Admission, "IDENTITY_ADMISSION_REQUIRED")
+    record = parse(admitted.record, EVENT_LIMIT)
+    require(record.get("profile") in PROFILES, "IDENTITY_PROFILE")
+    if record["profile"] == "full":
+        require("samplePackagingRequired" not in record, "IDENTITY_SAMPLE_INTENT")
+        return False
+    required = record.get("samplePackagingRequired")
+    require(type(required) is bool, "IDENTITY_SAMPLE_INTENT")
+    return required
 
 
 def admit(profile, root, *, query_runner, expected=None):

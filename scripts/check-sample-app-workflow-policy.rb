@@ -147,9 +147,13 @@ module SampleAppWorkflowPolicy
 
     def self.ordinary_package
         {"name" => "Verify original packaged samples before delivery", "id" => "ordinary-package",
-         "if" => CUSTODY.when_profile("desktop", "steps.ordinary-required.outcome == 'success'"),
+         "if" => when_samples("steps.ordinary-required.outcome == 'success'"),
          "timeout-minutes" => 1, "shell" => "bash", "env" => delivery_environment(package: false),
          "run" => CUSTODY.python("desktop", "package-samples")}
+    end
+
+    def self.when_samples(extra = nil, always: false)
+        CUSTODY.when_profile("desktop", CUSTODY::SAMPLE_INTENT + (extra ? " && " + extra : ""), always: always)
     end
 
     def self.ordinary_before(kind)
@@ -160,7 +164,7 @@ module SampleAppWorkflowPolicy
             environment["P2PKIT_SAMPLE_DESKTOP_AFTER_OUTCOME"] = "${{ steps.ordinary-desktop-after.outcome }}"
         end
         {"name" => "Admit the original #{kind} sample upload window", "id" => "ordinary-#{kind}-before",
-         "if" => CUSTODY.when_profile("desktop", extra), "shell" => "bash", "env" => environment,
+         "if" => when_samples(extra), "shell" => "bash", "env" => environment,
          "run" => CUSTODY.python("desktop", "sample-upload-guard before --platform #{kind}")}
     end
 
@@ -170,7 +174,7 @@ module SampleAppWorkflowPolicy
             "(steps.#{id}.outputs.upload_timeout_minutes == '1' || steps.#{id}.outputs.upload_timeout_minutes == '2' || steps.#{id}.outputs.upload_timeout_minutes == '3')"
         extra += " && runner.os == 'Linux'" if kind == "android"
         upload(kind).merge("name" => kind == "android" ? "Upload ordinary Android development APK" : "Upload ordinary native Desktop development apps",
-            "id" => "ordinary-#{kind}-apps", "if" => CUSTODY.when_profile("desktop", extra),
+            "id" => "ordinary-#{kind}-apps", "if" => when_samples(extra),
             "timeout-minutes" => "${{ fromJSON(steps.#{id}.outputs.upload_timeout_minutes) }}")
     end
 
@@ -182,7 +186,7 @@ module SampleAppWorkflowPolicy
         environment["P2PKIT_SAMPLE_UPLOAD_OUTCOME"] = "${{ steps.ordinary-#{kind}-apps.outcome }}"
         environment["P2PKIT_SAMPLE_UPLOAD_GUARD_SHA256"] = "${{ steps.ordinary-#{kind}-before.outputs.upload_guard_sha256 }}"
         {"name" => "Verify #{kind} sample upload inside the original window", "id" => "ordinary-#{kind}-after",
-         "if" => CUSTODY.when_profile("desktop", extra, always: true), "shell" => "bash", "env" => environment,
+         "if" => when_samples(extra, always: true), "shell" => "bash", "env" => environment,
          "run" => CUSTODY.python("desktop", "sample-upload-guard after --platform #{kind}")}
     end
 
@@ -222,7 +226,7 @@ module SampleAppWorkflowPolicy
             esac
         SH
         {"name" => "Require complete ordinary sample delivery inside its original deadline", "id" => "ordinary-delivery",
-         "if" => CUSTODY.when_profile("desktop", nil, always: true), "shell" => "bash", "env" => environment,
+         "if" => when_samples(nil, always: true), "shell" => "bash", "env" => environment,
          "run" => body + CUSTODY.python("desktop", "sample-delivery-guard")}
     end
 
@@ -233,7 +237,7 @@ module SampleAppWorkflowPolicy
             {"name" => "Check out repository", "uses" => CHECKOUT, "with" => {"fetch-depth" => 0, "persist-credentials" => false}},
             CUSTODY.activation("desktop"), CUSTODY.admission("desktop"),
             {"name" => "Bind fresh ordinary sample outputs to this run", "id" => "ordinary-output",
-             "if" => CUSTODY.when_profile("desktop"), "shell" => "bash", "run" => helper("prepare")},
+             "if" => when_samples, "shell" => "bash", "run" => helper("prepare")},
             {"name" => "Bind fresh sample outputs and Gradle home to this run", "id" => "preview-output",
              "if" => CUSTODY::PREVIEW, "shell" => "bash",
              "run" => helper("prepare") + OWNED_HOME},
@@ -244,7 +248,8 @@ module SampleAppWorkflowPolicy
              "with" => {"gradle-home-cache-excludes" => "caches/build-cache-1"}},
             {"name" => "Verify the ordinary source wrapper", "id" => "ordinary-wrapper",
              "if" => CUSTODY.when_profile("desktop"), "shell" => "bash", "run" => "scripts/check-gradle-wrapper.sh"},
-            {"name" => "Install Android compile platforms for the Linux APK producer", "id" => "sample-sdk", "if" => "runner.os == 'Linux'",
+            {"name" => "Install Android compile platforms for the Linux APK producer", "id" => "sample-sdk",
+             "if" => "${{ success() && runner.os == 'Linux' && ((github.event_name == 'workflow_dispatch' && inputs.operation == 'sample-apps') || (#{CUSTODY::SAMPLE_INTENT})) }}",
              "shell" => "bash", "run" => SDK},
             {"name" => "Verify CLI, Desktop runtime, tests, Hot Reload tooling, and application images",
              "id" => "sample-build", "if" => CUSTODY::PREVIEW, "shell" => "bash",

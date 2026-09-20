@@ -50,6 +50,7 @@ mutations = {
     "missing SDK37" => ->(v) { step(v, "sample-sdk")["run"].sub!("'platforms;android-37.0'", "") },
     "nonliteral SDK37 admission" => ->(v) { step(v, "sample-sdk")["run"].gsub!("grep -Fxq", "grep -xq") },
     "Android SDK on every host" => ->(v) { step(v, "sample-sdk").delete("if") },
+    "Android SDK for an unmarked ordinary commit" => ->(v) { step(v, "sample-sdk")["if"] = "runner.os == 'Linux'" },
     "Android on every host" => ->(v) { step(v, "sample-build")["run"].sub!('[[ "$RUNNER_OS" == Linux ]]', "true") },
     "build-only enabled for required verification" => ->(v) { step(v, "sample-build")["env"]["P2PKIT_SAMPLE_ONLY"] = "true" },
     "build-only outside explicit operation" => ->(v) { step(v, "sample-build")["env"]["P2PKIT_SAMPLE_ONLY"] = "${{ github.event_name == 'push' }}" },
@@ -124,6 +125,15 @@ end
     mutations["#{kind} after no original guard hash"] = ->(v) { step(v, after)["env"].delete("P2PKIT_SAMPLE_UPLOAD_GUARD_SHA256") }
     mutations["#{kind} after forged action success"] = ->(v) { step(v, after)["env"]["P2PKIT_SAMPLE_UPLOAD_OUTCOME"] = "success" }
     mutations["#{kind} terminal uses conclusion"] = ->(v) { step(v, "ordinary-delivery")["env"]["P2PKIT_SAMPLE_#{kind.upcase}_UPLOAD_OUTCOME"] = "${{ steps.#{action}.conclusion }}" }
+end
+%w[ordinary-output ordinary-package ordinary-desktop-before ordinary-desktop-apps ordinary-desktop-after
+   ordinary-android-before ordinary-android-apps ordinary-android-after ordinary-delivery].each do |id|
+    mutations["#{id} bypasses admitted release intent"] = ->(v) {
+        step(v, id)["if"].sub!(" && " + P::CUSTODY::SAMPLE_INTENT, "")
+    }
+    mutations["#{id} trusts provisional release intent"] = ->(v) {
+        step(v, id)["if"].sub!("steps.ordinary-admission.outcome == 'success' && ", "")
+    }
 end
 mutations["Android loses shared-window predecessor"] = ->(v) {
     step(v, "ordinary-android-before")["env"].delete("P2PKIT_SAMPLE_DESKTOP_AFTER_OUTCOME")

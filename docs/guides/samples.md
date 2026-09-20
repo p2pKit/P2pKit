@@ -261,6 +261,10 @@ promotes successful, reviewed **main** builds to the repository's
 [Releases page](https://github.com/p2pKit/P2pKit/releases). Its introduction is
 source work, not evidence that a sample prerelease has already been published.
 The current strict-lock, custody, build and review prerequisites still apply.
+The [owner/custodian procedure](../testing/evidence-custodian.md) defines the
+two manual approvals and the separate encrypted-evidence channel. Release apps
+are **public, unencrypted assets**; downloading them needs neither an evidence
+private key nor access to an Actions artifact.
 
 Development prereleases use **`samples-<full-source-SHA>`**, never `v*` library
 tags. They do not change the snapshot version, published RC history or Maven/Store
@@ -288,23 +292,54 @@ requires a separate authorized signing/notarization process.
 
 The publisher executes no artifact contents, compiler, Gradle, signing or app
 launch. Its read-only admission requires the normal merged PR's preserved final
-head, independent formal approval, all applicable PR checks, and genuine main
-CI/OSV plus one complete three-host producer attempt. All four protected PR checks,
+head, the owner's exact-head authorization, all applicable PR checks, and genuine
+main CI/OSV plus one complete three-host producer attempt. All four protected PR checks,
 including `review` and Code Scanning's `osv-scanner` result, are required on that
 reviewed PR head. Main separately requires its exact-source `complete-gate` and
 `scan / osv-scan` workflow checks, not a second copy of PR-only results.
 Missing/failed/ambiguous checks
 or expired artifacts leave **HOLD**, not a partial release. Squash/rebase merges
 need separately reviewed equivalence support; this lane currently admits the
-normal history-preserving merge only.
+normal history-preserving merge only. The required owner sequence is:
+
+1. `Apdelrahman1911` creates the PR. After its final head's required checks pass,
+   the owner personally posts a **new, unedited** PR comment containing exactly
+   `/p2pkit approve-pr <full-final-head-SHA>`. A changed head or later required
+   check needs a fresh authorization. This is the owner-approved replacement for
+   GitHub's unavailable self-`Approve` review, not a fabricated native review.
+2. The owner manually makes a normal preserving merge whose **actual main merge
+   commit message** contains the exact case-sensitive marker **`[release ci]`**.
+   A marker in a PR description or an earlier branch commit does not count.
+3. Qualified main CI, OSV and the three-host producer complete, with original
+   encrypted FULL/Desktop evidence available. Neither approval lifts execution
+   HOLDs or supplies missing qualification.
+4. `prepare-review` inspects the app bundles and retains
+   `sample-release-review-<publisher-run>-<attempt>`. The owner retrieves and
+   privately decrypts/reviews the four evidence artifacts identified in its
+   `review-request.json`, then approves the protected
+   `sample-development-release` environment using the **exact generated**
+   `APPROVE_EVIDENCE <publisher-run>/<attempt> <review-request-sha256>` comment.
+5. Only then may the publisher recheck all bindings and publish the development
+   prerelease. No automatic PR approval or merge is implemented. Missing, edited,
+   stale or wrong-head PR authorization and missing/wrong-attempt evidence
+   approval refuse publication. Manual publication and reruns use the same gate.
+
+The PR comment is a mandatory **publisher admission** check; it is not a new
+GitHub native merge-protection rule. Existing required checks and thread-resolution
+rules are unchanged. The agent must never post either owner approval on the
+owner's behalf. Environment administrator bypass must be disabled; the publisher
+refuses a configuration that still allows it.
 
 Main Desktop push and CI/OSV push, scheduled or manual completions re-evaluate
 readiness without occupying the build queue or dispatching another build. A newer
 failed check is never hidden by an older success. A failed readiness run can precede the remaining
 checks; later completion or exact manual resumption rechecks them. No old result
-is relabeled as proof for a changed source. Every ordinary push to `main`, including
-publisher-only/documentation changes, starts the sample build automatically; no tag
-or manual dispatch is needed.
+is relabeled as proof for a changed source. Ordinary main pushes still request
+normal required CI, but **only an admitted marked main merge requests Release
+APK/installer packaging and ordinary sample uploads**. Unmarked Desktop runs keep
+all six normal verification tasks and encrypted-evidence custody. A readiness
+workflow may be notified of an unmarked completion; it refuses Release admission
+without starting another build.
 For a **no-publication** rehearsal, after the workflow is merged and prerequisites
 are satisfied:
 
@@ -314,12 +349,15 @@ gh workflow run sample-development-releases.yml --repo p2pKit/P2pKit --ref main 
   -f producer_run=EXACT_RUN_ID -f producer_attempt=EXACT_ATTEMPT
 ```
 
-`verify` has no repository-write permission. The separately isolated `publish`
-operation, also used by eligible main completions, copies only the four explicitly
+`verify` has no repository-write permission and cannot approve publication. The
+separately isolated `publish` operation, also used by eligible marked-main
+completions **after the protected evidence approval**, copies only the four explicitly
 validated package members (never a general archive extraction), verifies their
 original hashes, and uploads those existing bytes plus notices/provenance to a draft
 prerelease. It checks the complete remote asset digests before
-publication/read-back. A same-source tag freezes its first accepted producer and
+publication/read-back, followed by credential-free one-byte download probes of
+every public asset. These probes check anonymous access, not a second full-file
+hash verification. A same-source tag freezes its first accepted producer and
 manifest. Matching partial drafts can resume missing assets; wrong hashes,
 unknown assets, collisions and incomplete published releases fail closed. No
 overwrite, deletion or tag movement is performed. Do not use reruns to replace
@@ -328,17 +366,21 @@ expired output with a rebuilt artifact under an existing release identity.
 Read-only implementation tests are not a real no-publication rehearsal or
 publication result. The [source milestone](../maintenance/sample-app-workflows-2026-09-15.md)
 and [#437](https://github.com/p2pKit/P2pKit/issues/437) retain execution/review holds.
-Private test transcripts are excluded from both app bundles and publisher evidence;
-the Releases request does not authorize their upload.
+Raw test transcripts never enter app bundles, publisher review artifacts or
+Releases. Only the separate recipient-admitted ordinary evidence artifacts retain
+encrypted originals; app distribution does not authorize raw evidence upload.
 
 ### Download development apps from Actions
 
-The **Desktop cross-host** workflow runs on **every push to `main`** and on
-relevant sample/library/build pull-request changes. Its ordinary manual operation
-remains `desktop`, but normal main pushes need no manual action. The existing native
-Ubuntu, Windows and macOS jobs run serially; the Ubuntu job also assembles the
-Android sample APK in the same Gradle invocation. Required library/full CI gates
-remain separate and are not replaced by these downloadable samples.
+The **Desktop cross-host** workflow requests verification on **every push to
+`main`** and relevant sample/library/build pull-request changes; the current
+activation HOLD still prevents ordinary execution. Its ordinary manual operation
+remains `desktop`. The native Ubuntu, Windows and macOS jobs run serially. On an
+admitted main merge containing `[release ci]`, packaging tasks are added to the
+same six-task verification batch; Ubuntu also assembles the Android APK. Without
+that marker, ordinary verification retains `installDist`/`createDistributable`
+checks but does not request Release installers/APK or upload sample bundles.
+Required library/full CI gates remain separate and are not replaced by apps.
 
 For an explicit build-only preview, select the manual **`sample-apps`** operation.
 It compiles/packages the same Android and Desktop outputs but does not run the
@@ -346,7 +388,9 @@ CLI/UI test suites. Ordinary `desktop`, PR and main verification retain their
 existing tests. A preview is not a required-check or runtime pass, and a work-branch
 preview is retained in Actions rather than published as a main development Release.
 
-After a **successful** run, its Actions page provides these 14-day artifacts:
+After a **successful marked-main producer or explicit preview**, its Actions
+page provides these 14-day artifacts. Actions downloads require GitHub sign-in
+and repository read access; the eventual public Release assets above do not:
 
 | Artifact name prefix | Contents |
 | --- | --- |
@@ -378,7 +422,7 @@ Keep the full extracted directory together. Unix tar archives preserve executabl
 permissions and internal links that a raw Actions directory upload would lose.
 
 These are **development test harnesses**, not a production release. Each native
-host builds one existing installer format in the same Gradle batch: Linux DEB,
+packaging host builds one existing installer format in the same Gradle batch: Linux DEB,
 Windows MSI or macOS DMG. UI runtime images and CLI archives are retained too.
 Android uses the debug build task, not a Store signing key.
 Desktop has no production signing/notarization step; OS trust checks may reject
@@ -395,11 +439,14 @@ signer identity. None of these checks launches an app or proves LAN, UI, phone,
 independent-interoperability or release acceptance. The existing sample warnings
 and permission/consent requirements still apply.
 
-Dependency/wrapper caches are retained through the pinned Gradle setup action;
-the affected Kotlin build cache remains excluded. Each host uses its own job-owned
-home, two workers, no parallel Gradle and strict verification. Both Java 17 and 21
-are installed explicitly. Cache hits reduce downloads; they do not guarantee zero
-transfer or excuse stale dependency locks. Failed builds/stops/packaging do not
+The explicit preview uses the pinned Gradle setup action's dependency/wrapper
+caches, excluding the affected Kotlin build cache. Ordinary Desktop instead
+requires the [qualified consume-only dependency path](../testing/hosted-dependency-cache.md):
+exact admitted dependency bytes, no whole-home restore or silent cold fallback.
+Each host uses its own job-owned home, two workers, no parallel Gradle and strict
+verification. Both Java 17 and 21 are installed explicitly. Cache hits can reduce
+downloads; they do not prove resolver reuse, guarantee zero transfer or excuse
+stale dependency locks. Failed builds/stops/packaging do not
 publish application artifacts. The existing CLI test execution additionally needs
 the [subprocess custody prerequisites](../testing/local.md#subprocess-transcript-custody-on-failure);
 app artifact retention is not a replacement for that private test-evidence contract.

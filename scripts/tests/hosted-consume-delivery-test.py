@@ -66,7 +66,7 @@ class ConnectedBase(M.Base):
         forbid_external_operations(self.stack)
         self.role = "linux-x64"
         self.exact_clock = D.clock(self.role)
-        self.admitted = D.admission(self.role)
+        self.admitted = D.admission(self.role, package_samples=True)
         self.budget = J.derive(self.admitted, D.originals(self.admitted, self.exact_clock),
                               D.F.provenance(), clock=self.exact_clock)
         self.stack.enter_context(patch.object(C.processes, "host_role", side_effect=lambda: self.role))
@@ -91,7 +91,7 @@ class ConnectedBase(M.Base):
 
     def sample_fixture(self, role=None):
         role = role or self.role
-        admitted = D.admission(role)
+        admitted = D.admission(role, package_samples=True)
         original = C.parse(admitted.record)
         github = original["github"]
         platform = "linux" if role == "linux-x64" else "windows" if role == "windows-x64" else "macos"
@@ -131,13 +131,18 @@ class ConnectedBase(M.Base):
         return C.sample_snapshot(self.owner(), C.session_path("desktop", self.role),
                                  admitted or self.admitted, self.role, 1000., lambda: None)
 
-    def delivery_fixture(self):
+    def delivery_fixture(self, *, package_samples=True):
         """Synthetic already-sealed producer; not a substitute for seal tests.
 
         Retained admission/service results are explicit inputs. All downstream
         guard reads, originals/copies/hashes, clocks and outcome predicates run.
         """
-        self.sample_output, self.admitted = self.sample_fixture()
+        if package_samples:
+            self.sample_output, self.admitted = self.sample_fixture()
+        else:
+            self.sample_output, self.admitted = None, D.admission(self.role, package_samples=False)
+        self.budget = J.derive(self.admitted, D.originals(self.admitted, self.exact_clock),
+                              D.F.provenance(), clock=self.exact_clock)
         owner = self.owner()
         private = owner.new(C.session_path("desktop", self.role))
         evidence = owner.child(private, "evidence", 1000., create=True)
@@ -145,7 +150,8 @@ class ConnectedBase(M.Base):
         context = {"schema": 1, "profile": "desktop", "role": self.role, "source": source,
             "root": str(self.root), "session": str(private.path), "canonicalSources": C.canonical_bindings(),
             "admissionSha256": C.digest(self.admitted.record), "jobBudgetSha256": self.budget.sha256,
-            "samplePackagingRequired": True, "dependencyCache": {"scope": "SYNTHETIC_ALREADY_ADMITTED_CACHE"}}
+            "samplePackagingRequired": package_samples, "dependencyCache": {"scope": "SYNTHETIC_ALREADY_ADMITTED_CACHE"}}
+        context["kind"], context["command"] = C.profile_command("desktop", self.role, package_samples=package_samples)
         context_raw = self.write(private.path / "run-context.json", context)
         original_admission = evidence.path / "admission"
         for name, raw in (("admission.json", self.admitted.record), ("original-event.json", self.admitted.original_event),
@@ -153,7 +159,8 @@ class ConnectedBase(M.Base):
             self.write(original_admission / name, raw)
         phases = [{"phase": label, "exitCode": 0, "launchAttempted": True, "scopeAttempted": True,
                    "retirement": "KNOWN", "errors": [], "survivors": [], "ownership": {"discoveryErrors": []},
-                   "jobBudgetSha256": self.budget.sha256, "completedRawNs": 10001 * J.NS} for label in C.DESKTOP_ORDER]
+                   "jobBudgetSha256": self.budget.sha256, "completedRawNs": 10001 * J.NS} for label in C.DESKTOP_ORDER
+                  if package_samples or label != "sample-packaging"]
         hashes = {row["phase"]: C.digest(C.encoded(row)) for row in phases}
         result = {"schema": 1, "scope": "ORDINARY_PROFILE_CUSTODY_ONLY", "profile": "desktop", "role": self.role,
             "source": source, "contextSha256": C.digest(context_raw), "retirement": "KNOWN", "encrypted": True,
@@ -164,22 +171,25 @@ class ConnectedBase(M.Base):
             "jobBudget": {"sha256": self.budget.sha256, "productiveCutoffRawNs": self.budget.fence("productive"),
                           "terminalRawNs": 10010 * J.NS, "exhausted": False, "cutoffObservation": None,
                           "cooperativeCancellation": None}}
-        packaged = next(row for row in phases if row["phase"] == "sample-packaging")
-        report = {"schema": 1, "scope": "ORIGINAL_PACKAGED_SAMPLES", "source": source,
-            "contextSha256": C.digest(context_raw), "role": self.role, "phaseSha256": hashes["sample-packaging"],
-            "snapshot": self.snapshot(self.admitted)}
-        report_raw = self.write(evidence.path / "sample-packaging.json", report)
-        result["samplePackaging"] = {"required": True, "status": "PASS", "manifestSha256": C.digest(report_raw)}
-        before = copy.deepcopy(result)
-        before.update(encrypted=False, phases=phases[:-1], phaseSha256={k: v for k, v in hashes.items() if k != "export"})
-        self.write(evidence.path / "profile-result-before-export.json", before)
-        for name, raw in (("start.json", C.encoded(packaged)), ("result.json", C.encoded(packaged)),
-                          ("baseline.json", C.encoded({"scope": "SYNTHETIC"})),
-                          ("stdout.log", b"SYNTHETIC PACKAGING LOG\n"), ("stderr.log", b"")):
-            self.write(evidence.path / "commands/sample-packaging" / name, raw)
-        C.copy_tree(owner, evidence, private.path / "frozen-evidence", 1000.)
-        frozen = C.frozen_package_packet(owner, private, 1000., lambda: None)
-        result["exportReturn"] = {"result": {"samplePackagingFrozen": frozen}}
+        report = None
+        result["exportReturn"] = {"result": {}}
+        if package_samples:
+            packaged = next(row for row in phases if row["phase"] == "sample-packaging")
+            report = {"schema": 1, "scope": "ORIGINAL_PACKAGED_SAMPLES", "source": source,
+                "contextSha256": C.digest(context_raw), "role": self.role, "phaseSha256": hashes["sample-packaging"],
+                "snapshot": self.snapshot(self.admitted)}
+            report_raw = self.write(evidence.path / "sample-packaging.json", report)
+            result["samplePackaging"] = {"required": True, "status": "PASS", "manifestSha256": C.digest(report_raw)}
+            before = copy.deepcopy(result)
+            before.update(encrypted=False, phases=phases[:-1], phaseSha256={k: v for k, v in hashes.items() if k != "export"})
+            self.write(evidence.path / "profile-result-before-export.json", before)
+            for name, raw in (("start.json", C.encoded(packaged)), ("result.json", C.encoded(packaged)),
+                              ("baseline.json", C.encoded({"scope": "SYNTHETIC"})),
+                              ("stdout.log", b"SYNTHETIC PACKAGING LOG\n"), ("stderr.log", b"")):
+                self.write(evidence.path / "commands/sample-packaging" / name, raw)
+            C.copy_tree(owner, evidence, private.path / "frozen-evidence", 1000.)
+            frozen = C.frozen_package_packet(owner, private, 1000., lambda: None)
+            result["exportReturn"] = {"result": {"samplePackagingFrozen": frozen}}
         result["profilePassed"] = C.profile_passed(result)
         self.assertTrue(result["profilePassed"])
         result_raw = self.write(private.path / "controller-result.json", result)
@@ -352,6 +362,47 @@ class SnapshotModels(ConnectedBase):
 
 
 class DeliveryModels(ConnectedBase):
+    def test_unmarked_run_delivers_encrypted_evidence_without_sample_outputs(self):
+        self.delivery_fixture(package_samples=False)
+        self.evidence_uploaded()
+        self.assertFalse((self.runner_temp / "p2pkit-sample-apps").exists())
+        self.assertNotIn("samplePackaging", self.result)
+        self.assertEqual(self.context["command"], [*C.DESKTOP_TASKS, "--console=plain"])
+        with self.assertRaisesRegex(C.ControllerError, "SAMPLES_REQUIRE_PASSING_PROFILE"):
+            self.guard(C.package_samples_guard, "desktop")
+        self.assertEqual(self.calls, [])
+
+    def test_marked_delivery_cannot_drop_required_packaging(self):
+        self.delivery_fixture()
+        self.context["samplePackagingRequired"] = False
+        raw = self.write(self.session / "run-context.json", self.context)
+        self.result["contextSha256"] = C.digest(raw)
+        self.result.pop("samplePackaging")
+        self.write(self.session / "controller-result.json", self.result)
+        with self.assertRaisesRegex(C.ControllerError, "DELIVERY_SAMPLE_INTENT_CHANGED"):
+            self.guard(C.upload_guard, "before", "desktop")
+        self.assertEqual(self.output.read_bytes(), b"")
+
+    def test_unmarked_delivery_cannot_forge_packaging_with_matching_context_hash(self):
+        self.delivery_fixture(package_samples=False)
+        self.context["samplePackagingRequired"] = True
+        raw = self.write(self.session / "run-context.json", self.context)
+        self.result["contextSha256"] = C.digest(raw)
+        self.result["samplePackaging"] = {"required": True, "status": "PASS", "manifestSha256": "a" * 64}
+        self.write(self.session / "controller-result.json", self.result)
+        with self.assertRaisesRegex(C.ControllerError, "DELIVERY_SAMPLE_INTENT_CHANGED"):
+            self.guard(C.upload_guard, "before", "desktop")
+        self.assertEqual(self.output.read_bytes(), b"")
+
+    def test_unmarked_delivery_cannot_keep_a_release_installer_command(self):
+        self.delivery_fixture(package_samples=False)
+        self.context["command"] = C.profile_command("desktop", self.role, package_samples=True)[1]
+        raw = self.write(self.session / "run-context.json", self.context)
+        self.result["contextSha256"] = C.digest(raw)
+        self.write(self.session / "controller-result.json", self.result)
+        with self.assertRaisesRegex(C.ControllerError, "DELIVERY_SAMPLE_INTENT_CHANGED"):
+            self.guard(C.upload_guard, "before", "desktop")
+
     def test_successful_linux_chain_uses_original_package_and_one_sample_window(self):
         self.delivery_fixture()
         self.package_ready()
@@ -493,11 +544,31 @@ class DeliveryModels(ConnectedBase):
 
 
 class PackagingModels(ConnectedBase):
+    def test_setup_derives_packaging_after_admission_not_from_environment(self):
+        for required in (False, True):
+            with self.subTest(required=required):
+                controller = C.Controller("desktop", consume_dependencies=True)
+                self.owners.append(controller)
+                self.assertFalse(controller.sample_required)
+                admitted = D.admission(self.role, package_samples=required)
+                def adopt(value):
+                    value.admitted = admitted
+                with patch.object(C, "adopt_preparation", side_effect=adopt), \
+                        patch.object(C, "canonical_bindings", side_effect=RuntimeError("MODEL_STOP_BEFORE_CRYPTO")), \
+                        patch.dict(os.environ, {"P2PKIT_SAMPLE_PACKAGING_REQUIRED": str(not required).lower()}), \
+                        self.assertRaisesRegex(RuntimeError, "MODEL_STOP_BEFORE_CRYPTO"):
+                    controller.setup()
+                self.assertIs(controller.sample_required, required)
+                self.assertEqual((controller.kind, controller.command),
+                                 C.profile_command("desktop", self.role, package_samples=required))
+        self.assertEqual(self.calls, [])
+
     def prepared_controller(self):
         controller = C.Controller("desktop", consume_dependencies=True)
         self.owners.append(controller)
         controller.allocate()
         controller.admitted, controller.budget, controller.clock = self.admitted, self.budget, self.exact_clock
+        controller.sample_required = C.identity.sample_packaging_required(self.admitted)
         controller.last_raw = 10010 * J.NS
         context = {"profile": "desktop", "role": self.role, "source": C.parse(self.admitted.record)["source"],
                    "samplePackagingRequired": True}

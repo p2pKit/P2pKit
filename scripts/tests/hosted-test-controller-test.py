@@ -231,7 +231,7 @@ class Base(unittest.TestCase):
 class ContractModels(Base):
     def test_closed_commands_keep_all_six_tasks_and_host_installer(self):
         for role, installer in C.INSTALLERS.items():
-            kind, command = C.profile_command("desktop", role)
+            kind, command = C.profile_command("desktop", role, package_samples=True)
             self.assertEqual(kind, "gradle")
             self.assertEqual(command[:6], list(C.DESKTOP_TASKS))
             self.assertEqual(command[-2:], [installer, "--console=plain"])
@@ -241,6 +241,16 @@ class ContractModels(Base):
         for profile, role in (("arbitrary", "macos-arm64"), ("full", "linux-x64"), ("desktop", "linux-arm64")):
             with self.assertRaises(C.ControllerError):
                 C.profile_command(profile, role)
+
+    def test_unmarked_commands_keep_all_six_checks_without_release_packages(self):
+        for role in C.INSTALLERS:
+            self.assertEqual(C.profile_command("desktop", role),
+                             ("gradle", [*C.DESKTOP_TASKS, "--console=plain"]))
+        for value in ("true", "false", 0, 1, None):
+            with self.assertRaises(C.ControllerError):
+                C.profile_command("desktop", "linux-x64", package_samples=value)
+        with self.assertRaises(C.ControllerError):
+            C.profile_command("full", "macos-arm64", package_samples=True)
 
     def test_windows_original_capture_envelope_stays_below_900_without_renewal(self):
         self.assertEqual(C.PRODUCT_SECONDS["desktop"], 600)
@@ -785,7 +795,7 @@ class WholeControllerModels(Base):
             (self.root / "library" / module).mkdir(mode=0o755)
         self.public_key = b"SYNTHETIC PUBLIC KEY; NOT CRYPTOGRAPHIC MATERIAL"
         event, policy = C.encoded({"model": "event"}), C.encoded({"model": "policy"})
-        record = {"source": self.source, "profile": self.profile, "suites": ["cli"],
+        record = {"source": self.source, "profile": self.profile, "suites": ["cli"], "samplePackagingRequired": False,
                   "github": {"eventSha256": C.digest(event), "runId": "123", "runAttempt": "1"},
                   "policy": {"sha256": C.digest(policy), "keySha256": C.digest(self.public_key),
                              "fingerprint": "A" * 40, "expiresAt": 2000000000}}
@@ -2716,6 +2726,7 @@ class WholeControllerModels(Base):
         self.profile = "full"
         record = C.parse(self.admitted.record)
         record.update(profile="full", suites=["cli", "diagnostics"])
+        record.pop("samplePackagingRequired")
         self.admitted = C.identity.Admission(C.encoded(record), self.admitted.original_event,
             self.admitted.original_policy, self.public_key, "A" * 40, C.digest(self.public_key), 2000000000)
         os.environ.pop("P2PKIT_ACTIONS_READ_TOKEN", None)

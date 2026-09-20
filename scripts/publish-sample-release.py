@@ -2,11 +2,13 @@
 """Promote existing, reviewed main sample artifacts to a development prerelease.
 
 No compiler, Gradle, signing, cache, app execution or library publication here.
-admit is read-only. publish repeats admission before any mutation, downloads
-only four named producer ZIPs, and never replaces tags/releases/assets.
+admit/verify/prepare-review are read-only. publish requires a fresh protected
+environment approval of the exact review request, repeats admission before any
+mutation, and never replaces tags/releases/assets. No private evidence is opened.
 """
 
 import argparse
+import datetime
 import hashlib
 import importlib.util
 import json
@@ -39,6 +41,11 @@ REQUIRED = {"complete-gate", "review", "scan / osv-scan", "osv-scanner"}
 # review and Code Scanning's PR result are not duplicate postmerge checks;
 # main must pass the real CI and fail-closed OSV workflow jobs for its exact SHA.
 MAIN_REQUIRED = {"complete-gate", "scan / osv-scan"}
+OWNER_LOGIN, OWNER_ID = "Apdelrahman1911", 104788132
+ENVIRONMENT = "sample-development-release"
+RELEASE_MARKER = "[release ci]"
+APPROVE_PR = "/p2pkit approve-pr "
+RETENTION_SECONDS = 14 * 24 * 60 * 60
 CHECK_WORKFLOWS = {"complete-gate": ".github/workflows/ci.yml",
                    "review": ".github/workflows/dependency-review.yml",
                    "scan / osv-scan": ".github/workflows/osv-scanner.yml"}
@@ -75,6 +82,21 @@ def parsed(raw):
 def number(value):
     need(re.fullmatch(r"[1-9][0-9]{0,19}", str(value)) is not None, "Invalid GitHub numeric identity")
     return int(value)
+
+
+def timestamp(value):
+    need(type(value) is str and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", value),
+         "Missing exact GitHub UTC timestamp")
+    try:
+        return int(datetime.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=datetime.timezone.utc).timestamp())
+    except ValueError:
+        raise Hold("Invalid GitHub UTC timestamp") from None
+
+
+def is_owner(user):
+    return (type(user) is dict and type(user.get("id")) is int and user["id"] == OWNER_ID and
+            user.get("login") == OWNER_LOGIN and user.get("type") == "User")
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -164,8 +186,37 @@ class Api:
                 digest.update(block)
         need(count == size and digest.hexdigest() == expected, "Downloaded artifact differs from GitHub digest/size")
 
+    def public_probe(self, tag, asset):
+        """Anonymous one-byte access probe, not a second full byte-hash claim.
 
-def hosted_context(env):
+        Remote API digests are checked separately. Never forward the token to a
+        browser download URL or its signed storage redirect; never log that URL.
+        """
+        url = "https://github.com/" + REPO + "/releases/download/" + urllib.parse.quote(tag, safe="") + "/" + \
+              urllib.parse.quote(asset["file"], safe="")
+        for _ in range(3):
+            target = urllib.parse.urlsplit(url)
+            need(target.scheme == "https" and target.hostname in ("github.com", "release-assets.githubusercontent.com") and
+                 target.username is None and target.password is None and target.port in (None, 443) and not target.fragment,
+                 "Unexpected public asset destination")
+            request = urllib.request.Request(url, headers={"User-Agent": "P2pKit-development-samples", "Range": "bytes=0-0"})
+            try:
+                response = self.opener.open(request, timeout=30)
+            except urllib.error.HTTPError as error:
+                need(error.code in (301, 302, 303, 307, 308), "Anonymous Release download failed")
+                url = error.headers.get("Location", "")
+                error.close()
+                continue
+            with response:
+                need((response.status == 206 and response.headers.get("Content-Range") == f"bytes 0-0/{asset['bytes']}") or
+                     (response.status == 200 and response.headers.get("Content-Length") == str(asset["bytes"])),
+                     "Anonymous Release response size differs")
+                need(len(response.read(1)) == 1, "Anonymous Release download is empty")
+            return
+        raise Hold("Anonymous Release redirect bound exceeded")
+
+
+def hosted_context(env, operation=None):
     need(env.get("GITHUB_ACTIONS") == "true" and env.get("RUNNER_ENVIRONMENT") == "github-hosted" and
          env.get("GITHUB_REPOSITORY") == REPO and env.get("GITHUB_REF") == "refs/heads/main" and
          env.get("GITHUB_SERVER_URL") == "https://github.com" and env.get("GITHUB_API_URL") == API and
@@ -176,6 +227,10 @@ def hosted_context(env):
     need(env.get("GITHUB_EVENT_NAME") in ("workflow_run", "workflow_dispatch"), "Unsupported publisher event")
     for key in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"):
         number(env.get(key, ""))
+    if operation is not None:
+        jobs = {"admit": "admit", "verify": "verify-only", "prepare-review": "prepare-review", "publish": "publish"}
+        need(operation == "cleanup" and env.get("GITHUB_JOB") in ("verify-only", "prepare-review", "publish") or
+             operation in jobs and env.get("GITHUB_JOB") == jobs[operation], "Wrong publisher operation/job")
     return {"source": sha, "run": int(env["GITHUB_RUN_ID"]), "attempt": int(env["GITHUB_RUN_ATTEMPT"])}
 
 
@@ -228,6 +283,8 @@ def checks(api, sha, contexts, event, pull_number=None):
                          for x in run.get("pull_requests", [])), "Check does not bind the reviewed PR head")
         result.append({"id": row["id"], "name": name, "sha": sha, "app": app,
                        "completedAt": row["completed_at"], "url": row["details_url"]})
+        if app == "github-actions":
+            result[-1]["run"] = {"id": number(run["id"]), "attempt": number(run["run_attempt"]), "workflow": path}
     return result
 
 
@@ -243,23 +300,77 @@ def approved_pull(api, sha, commit):
          pull.get("head", {}).get("repo", {}).get("full_name") == REPO and
          [x["sha"] for x in commit.get("parents", [])][1:] == [head],
          "Require the normal history-preserving merge of the reviewed final head")
+    need(is_owner(pull.get("user")) and is_owner(pull.get("merged_by")) and pull.get("auto_merge") is None,
+         "Require the owner's PR and manual owner merge, never automatic approval/merge")
     reviews = api.pages(f"/pulls/{pull['number']}/reviews")
     decisive = {}
     for review in sorted(reviews, key=lambda x: number(x["id"])):
         if review.get("state") in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED"):
             decisive[review["user"]["login"]] = review
     need(not any(x["state"] == "CHANGES_REQUESTED" for x in decisive.values()), "Unresolved formal change request")
-    approved = [x for user, x in decisive.items() if user != pull["user"]["login"] and
-                x["user"].get("type") == "User" and x.get("author_association") in ("OWNER", "MEMBER", "COLLABORATOR") and
-                x["state"] == "APPROVED" and x.get("commit_id") == head and
-                x.get("submitted_at", "~") <= pull["merged_at"]]
-    need(approved, "Missing independent formal approval of the final head before merge")
     required = checks(api, head, REQUIRED, "pull_request", pull["number"])
-    need(all(x["completedAt"] and x["completedAt"] <= pull["merged_at"] for x in required),
+    merged = timestamp(pull["merged_at"])
+    need(all(timestamp(x["completedAt"]) <= merged for x in required),
          "PR check evidence is not pre-merge")
+    # GitHub cannot accept a native APPROVED review from the PR's own author.
+    # This is the explicitly owner-authorized replacement, not a fabricated review.
+    comments = api.pages(f"/issues/{pull['number']}/comments")
+    approval = latest([x for x in comments if is_owner(x.get("user")) and type(x.get("body")) is str and
+                       x["body"].strip().startswith(APPROVE_PR.rstrip())], "Missing manual owner PR authorization")
+    need(approval["body"].strip() == APPROVE_PR + head, "Owner authorization is not for the exact final PR head")
+    created, updated = timestamp(approval.get("created_at")), timestamp(approval.get("updated_at"))
+    # REST identifies the original author, not the editor of a changed body.
+    # Require a newly posted, recorded-unedited command; corrections need a new
+    # owner comment rather than attributing an unknown editor's text to them.
+    need(max(timestamp(x["completedAt"]) for x in required) <= created == updated <= merged,
+         "Owner authorization must be unedited, follow required PR checks and precede merge")
+    comment_id = number(approval["id"])
+    link = f"https://github.com/{REPO}/pull/{pull['number']}#issuecomment-{comment_id}"
+    need(approval.get("html_url") == link, "Owner authorization comment does not belong to this PR")
     return {"number": pull["number"], "head": head, "merge": sha, "mergedAt": pull["merged_at"],
-            "reviews": [{"id": x["id"], "reviewer": x["user"]["login"], "commit": head} for x in approved],
+            "ownerAuthorization": {"id": comment_id, "owner": OWNER_LOGIN, "ownerId": OWNER_ID, "commit": head,
+                "createdAt": approval["created_at"], "updatedAt": approval["updated_at"], "url": link,
+                "bodySha256": hashlib.sha256(approval["body"].encode("utf-8")).hexdigest()},
             "checks": required}
+
+
+def artifact_identity(item, run_id, sha):
+    need(item.get("expired") is False and DIGEST.fullmatch(item.get("digest", "")) and
+         type(item.get("size_in_bytes")) is int and 0 < item["size_in_bytes"] <= ARCHIVE_LIMIT and
+         item.get("workflow_run", {}).get("id") == run_id and
+         item["workflow_run"].get("head_sha") == sha and item["workflow_run"].get("head_branch") == "main",
+         "Expired/unbound artifact or unavailable digest")
+    created, expires = timestamp(item.get("created_at")), timestamp(item.get("expires_at"))
+    need(created <= time.time() < expires <= created + RETENTION_SECONDS,
+         "Artifact is expired or exceeds the fourteen-day retention policy")
+    number(item["id"])
+    return {key: item[key] for key in ("id", "name", "size_in_bytes", "digest", "created_at", "expires_at")}
+
+
+def evidence_set(api, source, producer, artifacts, applications, main_checks):
+    """Bind original encrypted uploads, not their plaintext or a test verdict.
+
+    The owner must retrieve/decrypt these exact artifacts and check the internal
+    source/policy/receipts before approving. Merely naming an upload is not that
+    inspection. No ciphertext is duplicated into the Release or review artifact.
+    """
+    result = []
+    for application in applications:
+        if application["platform"] == "android":
+            continue  # Android packaging shares the Linux Desktop invocation.
+        runner = {"linux": "Linux", "windows": "Windows", "macos": "macOS"}[application["platform"]]
+        name = f"ordinary-desktop-evidence-{runner}-{application['architecture'].upper()}-{source}-{producer['id']}-{producer['attempt']}"
+        found = [x for x in artifacts if x.get("name") == name]
+        need(len(found) == 1, "Missing/ambiguous original Desktop encrypted evidence")
+        result.append({**artifact_identity(found[0], producer["id"], source), "profile": "desktop",
+                       "run": {"id": producer["id"], "attempt": producer["attempt"], "workflow": PRODUCER}})
+    full = next(x["run"] for x in main_checks if x["name"] == "complete-gate")
+    names = [f"ordinary-full-evidence-macOS-{arch}-{source}-{full['id']}-{full['attempt']}" for arch in ("ARM64", "X64")]
+    found = [x for x in api.pages(f"/actions/runs/{full['id']}/artifacts", "artifacts") if x.get("name") in names]
+    need(len(found) == 1, "Missing/ambiguous original FULL encrypted evidence")
+    result.append({**artifact_identity(found[0], full["id"], source), "profile": "full", "run": full})
+    need(len({x["id"] for x in result + applications}) == len(result + applications), "Evidence/application artifact IDs overlap")
+    return result
 
 
 def admit(api, sha, producer_id=None, attempt=None):
@@ -267,10 +378,15 @@ def admit(api, sha, producer_id=None, attempt=None):
     rules = api.json("/rules/branches/main")
     names = {check["context"] for rule in rules if rule.get("type") == "required_status_checks"
              for check in rule.get("parameters", {}).get("required_status_checks", [])}
-    need(names == REQUIRED and any(x.get("type") == "pull_request" for x in rules),
+    need(names == REQUIRED and any(x.get("type") == "pull_request" for x in rules) and
+         any(x.get("type") == "required_status_checks" and x.get("parameters", {}).get("strict_required_status_checks_policy") is True
+             for x in rules),
          "Required-check/protected-PR policy changed; review it, do not bypass it")
     commit = api.json("/commits/" + sha)
     need(commit.get("sha") == sha, "Commit lookup mismatch")
+    message = commit.get("commit", {}).get("message")
+    need(type(message) is str and len(message.encode("utf-8")) <= 65536 and RELEASE_MARKER in message,
+         "Actual main merge commit lacks the exact case-sensitive [release ci] marker")
     tree = commit.get("commit", {}).get("tree", {}).get("sha", "")
     need(SHA.fullmatch(tree), "Missing exact source tree")
     main = api.json("/git/ref/heads/main")["object"]["sha"]
@@ -306,21 +422,118 @@ def admit(api, sha, producer_id=None, attempt=None):
             x for x in artifacts if x["name"] in [prefix + arch + suffix for arch in ("X64", "ARM64")]]
         need(len(matches) == 1, "Missing/ambiguous same-attempt sample artifact: " + platform)
         item = matches[0]
-        need(item.get("expired") is False and DIGEST.fullmatch(item.get("digest", "")) and
-             type(item.get("size_in_bytes")) is int and 0 < item["size_in_bytes"] <= ARCHIVE_LIMIT and
-             item.get("workflow_run", {}).get("id") == producer_id and
-             item["workflow_run"].get("head_sha") == sha and item["workflow_run"].get("head_branch") == "main",
-             "Expired/unbound artifact or unavailable digest")
         arch = "apk-abis-not-inspected" if platform == "android" else (
             "arm64" if item["name"].startswith(prefix + "ARM64-") else "x64")
-        selected.append({key: item[key] for key in ("id", "name", "size_in_bytes", "digest")} |
-                        {"platform": platform, "architecture": arch})
+        selected.append({**artifact_identity(item, producer_id, sha), "platform": platform, "architecture": arch})
     need(len({x["id"] for x in selected}) == 4 and sum(x["size_in_bytes"] for x in selected) <= TRANSFER_LIMIT,
          "Artifact set duplicates/exceeds transfer budget")
-    return {"schema": 1, "source": {"commit": sha, "tree": tree}, "tag": "samples-" + sha,
-            "producer": {"id": producer_id, "attempt": selected_attempt, "workflowId": run["workflow_id"],
-                         "workflowPath": PRODUCER, "jobs": [{"id": x["id"], "name": x["name"]} for x in jobs if x["name"] in hosts]},
-            "pullRequest": pull, "mainChecks": main_checks, "artifacts": selected, "scope": PACK.SCOPE}
+    producer = {"id": producer_id, "attempt": selected_attempt, "workflowId": run["workflow_id"],
+                "workflowPath": PRODUCER, "jobs": [{"id": x["id"], "name": x["name"]} for x in jobs if x["name"] in hosts]}
+    return {"schema": 2, "source": {"commit": sha, "tree": tree}, "tag": "samples-" + sha, "producer": producer,
+            "pullRequest": pull, "mainChecks": main_checks, "artifacts": selected, "scope": PACK.SCOPE,
+            "evidence": evidence_set(api, sha, producer, artifacts, selected, main_checks)}
+
+
+def publication_environment(api):
+    environment = api.json("/environments/" + ENVIRONMENT)
+    need(environment.get("name") == ENVIRONMENT and environment.get("can_admins_bypass") is False and
+         environment.get("deployment_branch_policy") == {"protected_branches": False, "custom_branch_policies": True},
+         "Sample publication environment protections differ")
+    rules = environment.get("protection_rules", [])
+    need(len(rules) == 2 and sorted(x.get("type", "") for x in rules) == ["branch_policy", "required_reviewers"],
+         "Missing/unreviewed sample deployment protection rules")
+    rule = next(x for x in rules if x["type"] == "required_reviewers")
+    reviewers = rule.get("reviewers", [])
+    need(rule.get("prevent_self_review") is False and len(reviewers) == 1 and reviewers[0].get("type") == "User" and
+         is_owner(reviewers[0].get("reviewer")), "Require the owner as sole manual deployment reviewer")
+    branches = api.pages("/environments/" + ENVIRONMENT + "/deployment-branch-policies", "branch_policies")
+    need(len(branches) == 1 and branches[0].get("name") == "main" and branches[0].get("type") == "branch",
+         "Only main may use the sample publication environment")
+    return {"id": number(environment["id"]), "name": ENVIRONMENT, "reviewer": {"login": OWNER_LOGIN, "id": OWNER_ID},
+            "preventSelfReview": False, "canAdminsBypass": False, "branch": "main"}
+
+
+def publisher_run(api, context):
+    run = api.json(f"/actions/runs/{context['run']}")
+    workflow = api.json("/actions/workflows/sample-development-releases.yml")
+    need(run.get("id") == context["run"] and run.get("run_attempt") == context["attempt"] and
+         run.get("path") == workflow.get("path") == WORKFLOW and run.get("workflow_id") == workflow.get("id") and
+         run.get("head_sha") == context["source"] and run.get("head_branch") == "main" and
+         run.get("repository", {}).get("full_name") == REPO and run.get("head_repository", {}).get("full_name") == REPO and
+         run.get("event") in ("workflow_run", "workflow_dispatch") and run.get("status") == "in_progress",
+         "Review must bind the original running main publisher attempt")
+
+
+def make_review_request(api, plan, context, manifest_hash):
+    publisher_run(api, context)
+    need(re.fullmatch(r"[0-9a-f]{64}", manifest_hash) is not None, "Missing inspected application manifest hash")
+    return {"schema": 1, "scope": "P2PKIT_SAMPLE_POST_BUILD_OWNER_REVIEW", "publisher": context,
+            "preparedAt": int(time.time()), "environment": publication_environment(api),
+            "qualification": plan, "releaseManifestSha256": manifest_hash}
+
+
+def approval_line(request):
+    context = request["publisher"]
+    return f"APPROVE_EVIDENCE {context['run']}/{context['attempt']} {hashlib.sha256(encoded(request)).hexdigest()}"
+
+
+def load_review_request(api, descriptor, directory, context):
+    need(type(descriptor) is tuple and len(descriptor) == 2 and type(descriptor[1]) is str and
+         re.fullmatch(r"[0-9a-f]{64}", descriptor[1]), "Missing exact review artifact/request binding")
+    item = api.json(f"/actions/artifacts/{number(descriptor[0])}")
+    artifact = artifact_identity(item, context["run"], context["source"])
+    need(artifact["name"] == f"sample-release-review-{context['run']}-{context['attempt']}" and
+         artifact["size_in_bytes"] <= 4 * JSON_LIMIT, "Not this publisher attempt's bounded public review artifact")
+    path = directory / "review-request.zip"
+    api.download(artifact, path)
+    try:
+        need(PACK.file_hash(path, 4 * JSON_LIMIT) == {"bytes": artifact["size_in_bytes"],
+             "sha256": artifact["digest"].removeprefix("sha256:")}, "Review artifact bytes differ")
+        with PACK.zip_input(path) as archive:
+            items = archive.infolist()
+            need(len(items) == 4 and {x.filename for x in items} ==
+                 {"review-request.json", "receipt.json", "sample-release.json", "SHA256SUMS"} and
+                 all(not x.is_dir() and not x.flag_bits & 1 and stat.S_IFMT(x.external_attr >> 16) in (0, stat.S_IFREG) and
+                     0 < x.file_size <= JSON_LIMIT for x in items), "Unapproved review artifact member")
+            raw = archive.read("review-request.json")
+            need(hashlib.sha256(raw).hexdigest() == descriptor[1], "Review request hash differs from preparation")
+            request = parsed(raw)
+            need(raw == encoded(request) and hashlib.sha256(archive.read("sample-release.json")).hexdigest() ==
+                 request.get("releaseManifestSha256"), "Review manifest is not the inspected application manifest")
+        (directory / "review-request.json").write_bytes(raw)
+        return {"request": request, "artifact": artifact}
+    finally:
+        path.unlink()  # Only this exclusively created, public metadata download.
+
+
+def require_publication_approval(api, plan, authorization, context):
+    request, artifact = authorization["request"], authorization["artifact"]
+    need(set(request) == {"schema", "scope", "publisher", "preparedAt", "environment", "qualification", "releaseManifestSha256"} and
+         type(request["schema"]) is int and request["schema"] == 1 and
+         request["scope"] == "P2PKIT_SAMPLE_POST_BUILD_OWNER_REVIEW" and request["publisher"] == context and
+         request["qualification"] == plan and type(request["preparedAt"]) is int and 0 < request["preparedAt"] <= time.time(),
+         "Approval request does not bind this exact publisher/source/evidence attempt")
+    publisher_run(api, context)
+    need(publication_environment(api) == request["environment"], "Deployment protection changed after preparation")
+    need(artifact_identity(api.json(f"/actions/artifacts/{artifact['id']}"), context["run"], context["source"]) == artifact,
+         "Public review artifact changed or expired")
+    history = api.json(f"/actions/runs/{context['run']}/approvals")
+    need(type(history) is list and len(history) <= 1000, "Unexpected deployment review history")
+    # GitHub does not supply an attempt binding in these approval records. The
+    # exact, owner-entered challenge supplies it; a reused environment approval
+    # without the current challenge never authorizes a rerun.
+    line = approval_line(request)
+    matches = [x for x in history if type(x.get("comment")) is str and x["comment"].strip() == line]
+    need(len(matches) == 1, "Missing/ambiguous fresh post-build owner evidence approval")
+    approval = matches[0]
+    environments = approval.get("environments", [])
+    need(approval.get("state") == "approved" and is_owner(approval.get("user")) and len(environments) == 1 and
+         environments[0].get("id") == request["environment"]["id"] and environments[0].get("name") == ENVIRONMENT,
+         "Evidence approval is not the owner's approval of this protected environment")
+    return {"schema": 1, "scope": "OWNER_EVIDENCE_REVIEW_ATTESTATION_NOT_AUTOMATED_DECRYPTION", "publisher": context,
+            "owner": {"login": OWNER_LOGIN, "id": OWNER_ID}, "environment": request["environment"],
+            "reviewArtifactId": artifact["id"], "reviewRequestSha256": hashlib.sha256(encoded(request)).hexdigest(),
+            "comment": line, "state": "approved"}
 
 
 def inspect_bundle(path, artifact, plan):
@@ -416,9 +629,15 @@ def release_body(plan, manifest_hash):
             f"Manifest SHA-256: `{manifest_hash}`.\n")
 
 
-def publish(api, plan, directory, mutate):
+def publish(api, plan, directory, mutate, review=None):
     need(directory.is_dir() and {p.name for p in directory.iterdir()} <= {".owner.json"},
          "Publisher workspace must be exclusively allocated and empty")
+    authorization, approval, context = None, None, None
+    if mutate:
+        context = hosted_context(os.environ, "publish")
+        authorization = load_review_request(api, review, directory, context)
+        approval = require_publication_approval(api, plan, authorization, context)
+        (directory / "approval-receipt.json").write_bytes(encoded(approval))
     assets, notices = [], None
     for artifact in plan["artifacts"]:
         label = artifact["platform"] + ("-" + artifact["architecture"] if artifact["platform"] != "android" else "")
@@ -447,6 +666,10 @@ def publish(api, plan, directory, mutate):
     body = release_body(plan, assets[-2]["sha256"])
     if not mutate:
         return {"result": "VERIFIED_NOT_PUBLISHED", "source": plan["source"], "assets": assets}
+    need(assets[-2]["sha256"] == authorization["request"]["releaseManifestSha256"],
+         "Inspected application manifest differs from the owner's evidence review request")
+    need(require_publication_approval(api, plan, authorization, context) == approval,
+         "Owner evidence approval changed before Release mutation")
     tag = plan["tag"]
     need(tag == "samples-" + plan["source"]["commit"] and not tag.startswith("v"), "Unapproved release namespace")
     # The tag endpoint promises published releases, not draft visibility. Search
@@ -480,11 +703,15 @@ def publish(api, plan, directory, mutate):
     found = roster()
     need(release.get("draft") is True or found == set(expected), "Published release is incomplete; do not modify it")
     for name in sorted(set(expected) - found):
+        need(require_publication_approval(api, plan, authorization, context) == approval,
+             "Owner evidence approval changed before asset upload")
         api.json(f"/releases/{release['id']}/assets?name=" + urllib.parse.quote(name, safe=""), upload=directory / name)
     need(roster() == set(expected), "Remote asset roster/digests incomplete")
     if release.get("draft") is True:
         need(admit(api, plan["source"]["commit"], plan["producer"]["id"], plan["producer"]["attempt"]) == plan,
              "Admission changed before draft publication")
+        need(require_publication_approval(api, plan, authorization, context) == approval,
+             "Owner evidence approval changed before draft publication")
         current_tag = api.json("/git/ref/tags/" + tag, missing=True)
         need(current_tag is None or (current_tag.get("object", {}).get("type") == "commit" and
              current_tag["object"].get("sha") == plan["source"]["commit"]), "Tag changed before publication")
@@ -495,20 +722,26 @@ def publish(api, plan, directory, mutate):
     need(final.get("draft") is False and final.get("prerelease") is True and final.get("body") == body and
          final.get("tag_name") == tag and ref.get("object", {}).get("type") == "commit" and
          ref["object"].get("sha") == plan["source"]["commit"] and roster() == set(expected), "Publication read-back differs")
+    for asset in assets:
+        api.public_probe(tag, asset)
     return {"result": "PUBLISHED_DEVELOPMENT_PRERELEASE", "source": plan["source"], "releaseId": release["id"],
-            "url": final["html_url"], "assets": assets}
+            "url": final["html_url"], "assets": assets, "publicDownloadProbed": True, "ownerEvidenceApproval": approval}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("admit", "verify", "publish", "cleanup"))
+    parser.add_argument("operation", choices=("admit", "verify", "prepare-review", "publish", "cleanup"))
     parser.add_argument("--source", default="")
     parser.add_argument("--producer", default="")
     parser.add_argument("--attempt", default="")
+    parser.add_argument("--review-artifact", default="")
+    parser.add_argument("--review-request", default="")
     args = parser.parse_args()
     directory, result, code = None, {"result": "HOLD"}, 1
     try:
-        context = hosted_context(os.environ)
+        context = hosted_context(os.environ, args.operation)
+        need(args.operation == "publish" or not args.review_artifact and not args.review_request,
+             "Review authorization arguments are publication-only")
         parent = Path(os.environ["RUNNER_TEMP"])
         PACK.physical_directory(parent)
         candidate = parent / "p2pkit-sample-release"
@@ -520,7 +753,7 @@ def main():
             info = candidate.stat()
             need(parsed((candidate / ".owner.json").read_bytes()) ==
                  {"context": context, "device": info.st_dev, "inode": info.st_ino}, "Cleanup ownership differs")
-            allowed = {".owner.json", "receipt.json", "sample-release.json", "SHA256SUMS"}
+            allowed = {".owner.json", "receipt.json", "sample-release.json", "SHA256SUMS", "review-request.json", "approval-receipt.json"}
             paths = list(candidate.iterdir())
             need({p.name for p in paths} <= allowed and all(p.is_file() and not p.is_symlink() and
                  p.stat().st_nlink == 1 for p in paths), "Unknown publisher cleanup content")
@@ -548,7 +781,17 @@ def main():
             directory = candidate  # Set only after this invocation's exclusive creation.
             info = directory.stat()
             (directory / ".owner.json").write_bytes(encoded({"context": context, "device": info.st_dev, "inode": info.st_ino}))
-            result = publish(api, plan, directory, args.operation == "publish")
+            result = publish(api, plan, directory, args.operation == "publish",
+                             (args.review_artifact, args.review_request) if args.operation == "publish" else None)
+            if args.operation == "prepare-review":
+                request = make_review_request(api, plan, context, hashlib.sha256((directory / "sample-release.json").read_bytes()).hexdigest())
+                raw = encoded(request)
+                (directory / "review-request.json").write_bytes(raw)
+                request_hash = hashlib.sha256(raw).hexdigest()
+                with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                    output.write("request_sha256=" + request_hash + "\n")
+                result = {"result": "READY_FOR_OWNER_EVIDENCE_REVIEW_NOT_PUBLICATION", "request": request,
+                          "requestSha256": request_hash, "ownerApprovalComment": approval_line(request)}
             code = 0
     except (ValueError, KeyError, TypeError, OSError, RuntimeError, subprocess.SubprocessError) as error:
         # Exception details can contain private signed URLs; print only safe type.

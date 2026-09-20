@@ -166,6 +166,17 @@ end
         end
     end
     if profile == "desktop"
+        %w[Linux Windows macOS].each do |host|
+            unmarked = good.merge("RUNNER_OS" => host, "SAMPLE_PACKAGING_REQUIRED" => "false",
+                                  "SDK_OUTCOME" => "skipped", "ORDINARY_OUTPUT" => "skipped")
+            raise "unmarked ordinary #{host} verification failed" unless shell_result(terminal.fetch("run"), unmarked).first == 0
+            checks += 1
+            {"ORDINARY_OUTPUT" => "success", "SDK_OUTCOME" => "success", "ORDINARY_RUN" => "skipped",
+             "ORDINARY_EVIDENCE" => "skipped", "PROFILE_PASSED" => "false", "SAMPLE_PACKAGING_REQUIRED" => ""}.each do |key, bad|
+                raise "unmarked ordinary #{host} admitted #{key}=#{bad}" if shell_result(terminal.fetch("run"), unmarked.merge(key => bad)).first == 0
+                checks += 1
+            end
+        end
         %w[Windows macOS].each do |host|
             native = good.merge("RUNNER_OS" => host, "SDK_OUTCOME" => "skipped")
             raise "synthetic #{host} terminal positive failed" unless shell_result(terminal.fetch("run"), native).first == 0

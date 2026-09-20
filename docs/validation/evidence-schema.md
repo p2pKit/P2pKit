@@ -3,7 +3,38 @@
 This is the canonical schema for real-world, interoperability, and audit
 results. The repository stores only redacted summaries and hash manifests.
 Large or sensitive originals remain in owner-controlled private immutable
-storage with versioning and retention enabled.
+storage with versioning and retention enabled, except for the explicitly scoped
+ordinary hosted-CI policy below.
+
+## Ordinary hosted-CI retention exception
+
+The owner/custodian `Apdelrahman1911` authorized **14-day GitHub Actions-only
+retention** for ordinary FULL/Desktop CI evidence and its development-sample
+qualification. See the [custodian procedure](../testing/evidence-custodian.md)
+for exact source/configuration, key handling, access model and approvals.
+
+For this scope only, the original packet is retained as `evidence.tar.gz.gpg`
+plus its public `manifest.json`, under an immutable Actions artifact identity
+with `retention-days: 14` and `overwrite: false`. Record repository, run/attempt,
+artifact ID, service `created_at`/`expires_at`, ZIP digest, ciphertext digest and
+review decision instead of promising a permanent private immutable URI. The
+owner must retrieve/decrypt/inspect the originals while available. Public hashes
+and redacted review records outlive the artifact; they cannot recreate it or
+substitute for an inspection that never occurred.
+
+GitHub access to ciphertext is **not owner-only** in this public repository.
+Only the owner-held decryption key provides the intended plaintext confidentiality.
+There is no separate long-term evidence backup or guarantee against authorized
+early artifact deletion. Expiry is service-managed, not proof of exact-second
+physical erasure or deletion of copies already downloaded. Local review copies
+need the owner's private handling and disposal; the workflow cannot delete them.
+
+This exception does **not** waive original-byte integrity, failure preservation,
+native custody/retirement, required checks or either execution HOLD. It does not
+change physical, hostile-network, independent-interoperability or other external
+evidence requirements. The private custodian key/backup is not CI evidence and
+must never be put in an Actions artifact. Public development app assets are a
+separate, unencrypted distribution channel, not evidence-retention backups.
 
 ## Directory and identity
 
@@ -69,5 +100,6 @@ samples' anonymized identifiers and synthetic fixtures. Retain an unedited
 private original when an OS log requires redaction for sharing.
 
 Create a SHA-256 manifest over every raw evidence file. The committed summary
-records the private immutable URI, manifest hash, and review timestamp without
-embedding access credentials. Any hash mismatch invalidates the run.
+records the private immutable URI (or the scoped Actions identity above), manifest
+hash, and review timestamp without embedding access credentials. Any hash
+mismatch invalidates the run.

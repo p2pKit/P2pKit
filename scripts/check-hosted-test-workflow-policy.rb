@@ -13,6 +13,7 @@ module HostedTestWorkflowPolicy
     RESTORE = "actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25"
     FULL = "steps.scope.outputs.full == 'true'"
     DESKTOP = "github.event_name != 'workflow_dispatch' || inputs.operation == 'desktop'"
+    SAMPLE_INTENT = "steps.ordinary-admission.outcome == 'success' && steps.ordinary-admission.outputs.sample_packaging_required == 'true'"
     PREVIEW = "${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'sample-apps' }}"
     CONTROL_NAME = "Verify ordinary custody caller policy"
     CONTROL_COMMANDS = ["ruby scripts/tests/check-hosted-test-workflow-policy-test.rb",
@@ -227,7 +228,7 @@ module HostedTestWorkflowPolicy
 
     def self.terminal(profile)
         outcomes = %w[ordinary-activation ordinary-admission dependency-stage dependency-restore dependency-restore-guard java ordinary-jdk21]
-        outcomes += profile == "full" ? %w[ordinary-xcodegen ordinary-sdk ordinary-entrypoints] : %w[ordinary-output ordinary-wrapper]
+        outcomes += profile == "full" ? %w[ordinary-xcodegen ordinary-sdk ordinary-entrypoints] : %w[ordinary-wrapper]
         outcomes += %w[ordinary-run ordinary-seal ordinary-evidence]
         outcomes += %w[ordinary-upload-before ordinary-upload-after]
         environment = outcomes.to_h { |id| [id.upcase.tr("-", "_"), "${{ steps.#{id}.outcome }}"] }
@@ -241,10 +242,23 @@ module HostedTestWorkflowPolicy
         body += "test \"$UPLOAD_COMPLETE\" = true\n"
         if profile == "desktop"
             environment["SDK_OUTCOME"] = "${{ steps.sample-sdk.outcome }}"
+            environment["ORDINARY_OUTPUT"] = "${{ steps.ordinary-output.outcome }}"
+            environment["SAMPLE_PACKAGING_REQUIRED"] = "${{ steps.ordinary-admission.outputs.sample_packaging_required }}"
             body += <<~'SH'
-                case "$RUNNER_OS" in
-                  Linux) test "$SDK_OUTCOME" = success ;;
-                  Windows|macOS) test "$SDK_OUTCOME" = skipped ;;
+                case "$SAMPLE_PACKAGING_REQUIRED" in
+                  true)
+                    test "$ORDINARY_OUTPUT" = success
+                    case "$RUNNER_OS" in
+                      Linux) test "$SDK_OUTCOME" = success ;;
+                      Windows|macOS) test "$SDK_OUTCOME" = skipped ;;
+                      *) exit 1 ;;
+                    esac
+                    ;;
+                  false)
+                    test "$ORDINARY_OUTPUT" = skipped
+                    test "$SDK_OUTCOME" = skipped
+                    case "$RUNNER_OS" in Linux|Windows|macOS) ;; *) exit 1 ;; esac
+                    ;;
                   *) exit 1 ;;
                 esac
             SH

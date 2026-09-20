@@ -250,15 +250,18 @@ def canonical_python(executable, bindings, *args):
                                        encoded(bindings).decode("ascii").strip(), *args)
 
 
-def profile_command(profile, role):
-    require(profile in PRODUCT_SECONDS and role in INSTALLERS, "CONTROLLER_PROFILE")
+def profile_command(profile, role, *, package_samples=False):
+    require(profile in PRODUCT_SECONDS and role in INSTALLERS and type(package_samples) is bool,
+            "CONTROLLER_PROFILE")
     if profile == "full":
-        require(role.startswith("macos-"), "FULL_REQUIRES_NATIVE_MAC")
+        require(role.startswith("macos-") and not package_samples, "FULL_REQUIRES_NATIVE_MAC")
         return "command", ["python3", "scripts/run-platform-tests.py", "full"]
     tasks = list(DESKTOP_TASKS)
-    if role == "linux-x64":
-        tasks.append(":p2p-sample-android:assembleDebug")
-    return "gradle", [*tasks, INSTALLERS[role], "--console=plain"]
+    if package_samples:
+        if role == "linux-x64":
+            tasks.append(":p2p-sample-android:assembleDebug")
+        tasks.append(INSTALLERS[role])
+    return "gradle", [*tasks, "--console=plain"]
 
 
 def session_path(profile, role):
@@ -1478,7 +1481,7 @@ class Controller(PrivateOwner):
                 "SEED_OPTION_MUST_BE_BOOLEAN")
         require(not preflight or not (seed_dependencies or consume_dependencies), "PREFLIGHT_EXECUTION_SCOPE")
         self.consume_requested, self.preflight = consume_dependencies, preflight
-        self.sample_required = profile == "desktop" and consume_dependencies
+        self.sample_required = False  # Derive only after original source admission.
         self.sample_result = {"required": True, "status": "NOT_ATTEMPTED", "manifestSha256": None}
         self.sample_attempted = False
         seed_dependencies |= consume_dependencies
@@ -1842,6 +1845,9 @@ class Controller(PrivateOwner):
             require(resolved is not None and Path(resolved).resolve(strict=True) == Path(sys.executable).resolve(strict=True),
                     "FULL_PYTHON_DIFFERS_FROM_NATIVE_CONTROLLER")
         original = parse(self.admitted.record)
+        self.sample_required = identity.sample_packaging_required(self.admitted)
+        require(not self.sample_required or self.consume_requested, "SAMPLE_REQUIRES_QUALIFIED_CONSUME")
+        self.kind, self.command = profile_command(self.profile, self.role, package_samples=self.sample_required)
         self.canonical_sources = canonical_bindings()
         if self.profile == "full" and self.budget is None:
             self.acquire_job_time()
@@ -1858,8 +1864,8 @@ class Controller(PrivateOwner):
                            developerDir=self.environment.get("DEVELOPER_DIR"),
                            ancestorInvocationIds=self.environment.get(processes.CHAIN_ENV, "").split(":")
                            if self.environment.get(processes.CHAIN_ENV) else [])
-        if self.sample_required:
-            context["samplePackagingRequired"] = True
+        if self.profile == "desktop":
+            context["samplePackagingRequired"] = self.sample_required
         if self.profile == "full":
             context.update(primarySimulatorRequired=True, primaryAbiRequired=True,
                            fullSupplementIntent=self.full.intent(),
@@ -3896,7 +3902,10 @@ def validate_public(profile, *, cancelled=None):
                 ("dependencySeedFrozen" in returned), "SEED_SEALED_REQUIRED_DISPOSITION_MISSING")
         require(("dependencyCache" in context) == ("dependencyCache" in result) ==
                 ("dependencyCacheFrozen" in returned), "CACHE_SEALED_REQUIRED_DISPOSITION_MISSING")
-        require((context.get("samplePackagingRequired") is True) == ("samplePackaging" in result) and
+        sample_required = identity.sample_packaging_required(checked)
+        require(context.get("samplePackagingRequired", False) is sample_required and
+                (not sample_required or type(context.get("dependencyCache")) is dict) and
+                sample_required == ("samplePackaging" in result) and
                 (result.get("samplePackaging", {}).get("status") == "PASS") == ("samplePackagingFrozen" in returned),
                 "SAMPLE_SEALED_REQUIRED_DISPOSITION_MISSING")
         if budget is not None:
@@ -3910,7 +3919,8 @@ def validate_public(profile, *, cancelled=None):
             "custody": {"profile": record["profile"], "suites": record["suites"]}, "artifact": actual}
         require(manifest == expected_manifest and result["source"] == context["source"] == record["source"],
                 "SEALED_MANIFEST_DIFFERS")
-        require((context["kind"], context["command"]) == profile_command(profile, role), "SEALED_SELECTOR_CHANGED")
+        require((context["kind"], context["command"]) ==
+                profile_command(profile, role, package_samples=sample_required), "SEALED_SELECTOR_CHANGED")
         verify_phase_bindings(owner, private, result, context, end, budget)
         seed_frozen = None
         if "dependencySeed" in context:
@@ -4107,7 +4117,7 @@ def delivery_inputs(owner, end):
     context, result = parse(context_raw), parse(result_raw)
     require(context.get("profile") == result.get("profile") == "desktop" and context.get("role") == result.get("role") == role and
             context.get("root") == str(ROOT) and context.get("session") == str(private.path) and
-            context.get("canonicalSources") == canonical_bindings() and context.get("samplePackagingRequired") is True and
+            context.get("canonicalSources") == canonical_bindings() and
             type(context.get("dependencyCache")) is dict and result.get("contextSha256") == digest(context_raw) and
             result.get("retirement") == "KNOWN" and result.get("encrypted") is True and
             result.get("readyForPostReturnSeal") is True, "DELIVERY_ORIGINAL_CONTEXT_CHANGED")
@@ -4115,6 +4125,11 @@ def delivery_inputs(owner, end):
     admitted = load_admission(owner, owner.child(evidence, "admission", end), end)
     require(digest(admitted.record) == context["admissionSha256"] and
             parse(admitted.record)["source"] == context["source"] == result["source"], "DELIVERY_ORIGINAL_SOURCE_CHANGED")
+    sample_required = identity.sample_packaging_required(admitted)
+    require(context.get("samplePackagingRequired") is sample_required and
+            sample_required == ("samplePackaging" in result) and
+            (context.get("kind"), context.get("command")) ==
+            profile_command("desktop", role, package_samples=sample_required), "DELIVERY_SAMPLE_INTENT_CHANGED")
     budget = load_job_budget(owner, private, admitted, context, end)
     fence = desktop_delivery_end(budget, result)
     sealed = owner.child(private, "post-return-validation", end)
@@ -4246,7 +4261,8 @@ def successful_sample_inputs(owner, end):
     require(all(os.environ.get("P2PKIT_HOSTED_TEST_" + name + "_OUTCOME") == "success"
                 for name in ("UPLOAD", "UPLOAD_AFTER")), "SAMPLES_REQUIRE_ORIGINAL_EVIDENCE_UPLOAD")
     data = delivery_inputs(owner, end)
-    require(data["result"]["profilePassed"] is True and
+    require(data["context"].get("samplePackagingRequired") is True and
+            data["result"]["profilePassed"] is True and
             data["result"].get("samplePackaging", {}).get("status") == "PASS", "SAMPLES_REQUIRE_PASSING_PROFILE")
     _, after_raw = desktop_upload_pair(owner, data, end)
     data["uploadAfterRaw"] = after_raw

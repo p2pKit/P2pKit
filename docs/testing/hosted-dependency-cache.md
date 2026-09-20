@@ -43,6 +43,16 @@ The connected caller is
 [`run-hosted-test-custody.py`](../../scripts/run-hosted-test-custody.py). Do not
 bypass the HOLD or restore an entire Gradle home to use it.
 
+**Owner-policy update, 20 September 2026:** routine custody is assigned to
+`Apdelrahman1911`; the owner authorized a new VPS-generated evidence key,
+14-day Actions-only encrypted retention and two manual owner approvals for
+development sample publication. The [custodian procedure](evidence-custodian.md)
+and [dated implementation record](../maintenance/sample-release-owner-policy-2026-09-20.md)
+separate these decisions from missing key generation, trusted-original-base
+policy bootstrap, environment protection and genuine qualification. Older
+sections' missing-owner/nonauthor-review wording is historical to those slices,
+not a new requirement for another person. Neither ordinary HOLD is lifted.
+
 ## Reuse bytes, not old test results
 
 The explicit modes are:
@@ -1997,7 +2007,10 @@ not refreshed allowances. FULL has no cache save or change to Central's final
 credential screen or `post_screen_addition` inventory.
 
 For ordinary Desktop, successful product retirement and custody collection/
-uninstallation precede the owned sample-packaging phase. Packaging runs **before
+uninstallation precede the owned sample-packaging phase **only when admission
+binds `[release ci]` in the actual two-parent main merge commit**. PR/manual or
+unmarked ordinary verification keeps all six tasks and encrypted custody but
+does not request Release APK/installer packaging or sample uploads. Packaging runs **before
 the one evidence freeze/export**, so its command/retirement records and package
 hashes are retained in that packet. The later `package-samples` entry point only
 revalidates those original application/package bytes and writes guard metadata;
@@ -2307,7 +2320,8 @@ provider/source/outcome caller. The later consume-only wiring addresses that
 source integration; it does not retroactively qualify the earlier models or
 demonstrate cache execution/download savings.
 
-Routine custodian/recipient policy and trusted-original-base approval, genuine
-current required CI checks, formal nonauthor PR review and normal main delivery
-remain separate requirements. No sample Release, issue closure or release-ready
-claim follows from these helpers. Physical-phone work stays deferred.
+The owner's real recipient key/policy and trusted-original-base approval, genuine
+current required CI checks, exact-head manual owner PR authorization, marked
+normal main merge and post-build owner evidence approval remain separate
+requirements. No sample Release, issue closure or release-ready claim follows
+from these helpers. Physical-phone work stays deferred.

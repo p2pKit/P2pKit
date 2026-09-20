@@ -7,12 +7,14 @@ This command is not an ordinary full/desktop build controller or a required gate
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import sys
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hosted_test_query
+import hosted_test_identity
 
 
 def main(argv=None):
@@ -22,7 +24,18 @@ def main(argv=None):
     parser.add_argument("--evidence-directory", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
-        hosted_test_query.admit_hosted(args.profile, args.root, args.evidence_directory)
+        admitted = hosted_test_query.admit_hosted(args.profile, args.root, args.evidence_directory)
+        if args.profile == "desktop":
+            required = hosted_test_identity.sample_packaging_required(admitted)
+            # Only a fixed boolean is public. Step success is also required by
+            # every workflow consumer; a partial append cannot grant packaging.
+            target = Path(os.environ["GITHUB_OUTPUT"])
+            hosted_test_identity.require(target.is_absolute() and target == target.resolve(strict=True),
+                                         "IDENTITY_OUTPUT_PATH")
+            with target.open("a", encoding="ascii") as stream:
+                stream.write("sample_packaging_required=" + str(required).lower() + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
     except BaseException:
         print("Ordinary hosted admission HOLD; preserve private records; no products started", file=sys.stderr)
         return 125

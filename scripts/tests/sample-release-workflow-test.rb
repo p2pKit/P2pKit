@@ -6,7 +6,7 @@ require "json"
 ROOT = File.expand_path("../..", __dir__)
 CHECKOUT = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
 UPLOAD = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
-READ = {"contents" => "read", "actions" => "read", "checks" => "read", "pull-requests" => "read"}.freeze
+READ = {"contents" => "read", "actions" => "read", "checks" => "read", "pull-requests" => "read", "deployments" => "read"}.freeze
 COMMAND = "python3 -I -B -S scripts/publish-sample-release.py"
 ARGS = ' --source "$SOURCE" --producer "$PRODUCER" --attempt "$ATTEMPT"'
 ADMIT_IF = %q!${{ github.repository == 'p2pKit/P2pKit' && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || (contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event.workflow_run.event) && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success')) }}!
@@ -30,33 +30,55 @@ def check(workflow)
          inputs["operation"]["options"] == %w[verify publish] && inputs["operation"]["default"] == "verify",
          "manual default must not publish or accept an unbound producer")
     jobs = workflow["jobs"]
-    need(jobs.keys.sort == %w[admit publish verify-only], "unexpected publisher job")
+    need(jobs.keys.sort == %w[admit prepare-review publish verify-only], "unexpected publisher job")
     need(jobs["admit"]["if"] == ADMIT_IF && !jobs["admit"].key?("permissions"), "read-only admission guard changed")
     need(jobs["verify-only"]["if"] == "${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'verify' }}" &&
          !jobs["verify-only"].key?("permissions"), "verify may not receive write permission")
     need(jobs["publish"]["if"] == "${{ github.event_name != 'workflow_dispatch' || inputs.operation == 'publish' }}" &&
          jobs["publish"]["permissions"] == READ.merge("contents" => "write"), "isolate only the sample publisher's write token")
+    need(jobs["prepare-review"]["if"] == jobs["publish"]["if"] && !jobs["prepare-review"].key?("permissions"),
+         "manual and automatic publication must both prepare a read-only evidence review")
+    need(jobs["admit"]["outputs"] == %w[source producer attempt].to_h { |x| [x, "${{ steps.admit.outputs.#{x} }}"] } &&
+         jobs["prepare-review"]["outputs"] == {"request_sha256" => "${{ steps.prepare.outputs.request_sha256 }}",
+                                               "artifact_id" => "${{ steps.evidence.outputs.artifact-id }}"},
+         "bind downstream jobs to original admission and the immutable review upload")
     jobs.each do |name, job|
         need(job["runs-on"] == "ubuntu-latest" && job["timeout-minutes"] == (name == "admit" ? 5 : 20), "bounded hosted job required")
-        need(!job.key?("environment") && !job.key?("env") && !job.key?("defaults") && !job.key?("continue-on-error"),
-             "no publisher environments, ambient credentials or failure bypass")
-        need(name == "admit" || job["needs"] == "admit", "publication must depend on successful admission")
+        need((name == "publish" ? job["environment"] == "sample-development-release" : !job.key?("environment")) &&
+             !job.key?("env") && !job.key?("defaults") && !job.key?("continue-on-error"),
+             "only publication may enter the exact protected environment; no ambient credentials or failure bypass")
+        need(name == "admit" || job["needs"] == (name == "publish" ? %w[admit prepare-review] : "admit"),
+             "publication must depend on successful admission and original evidence review preparation")
         steps = job.fetch("steps")
         need(steps.length == (name == "admit" ? 2 : 4), "extra/missing publisher step")
         need(steps[0]["uses"] == CHECKOUT && steps[0]["with"] == {"ref" => "${{ github.workflow_sha }}", "persist-credentials" => false},
              "never execute producer/artifact/fork code with publication credentials")
         operation = name == "verify-only" ? "verify" : name
-        need(steps[1]["run"] == COMMAND + " " + operation + ARGS && !steps[1].key?("if") &&
+        review_args = name == "publish" ? ' --review-artifact "$REVIEW_ARTIFACT" --review-request "$REVIEW_REQUEST"' : ""
+        need(steps[1]["run"] == COMMAND + " " + operation + ARGS + review_args && !steps[1].key?("if") &&
              !steps[1].key?("continue-on-error"), "exact fail-closed publisher command required")
+        need(steps[1]["id"] == "admit", "original admission outputs required") if name == "admit"
+        need(steps[1]["id"] == "prepare", "original review outputs required") if name == "prepare-review"
         expected_env = {"GH_TOKEN" => "${{ github.token }}"}
         %w[SOURCE PRODUCER ATTEMPT].zip(%w[source_sha producer_run producer_attempt], %w[source producer attempt]).each do |key, input, output|
             expected_env[key] = name == "admit" ? "${{ inputs.#{input} }}" : "${{ needs.admit.outputs.#{output} }}"
         end
+        if name == "publish"
+            expected_env["REVIEW_ARTIFACT"] = "${{ needs.prepare-review.outputs.artifact_id }}"
+            expected_env["REVIEW_REQUEST"] = "${{ needs.prepare-review.outputs.request_sha256 }}"
+        end
         need(steps[1]["env"] == expected_env, "do not interpolate untrusted inputs into code or add credentials")
         next if name == "admit"
         upload, cleanup = steps[2], steps[3]
-        need(upload["uses"] == UPLOAD && upload["id"] == "evidence" && upload["if"] == "${{ always() }}" &&
-             upload["with"]["path"].lines.map(&:strip) == %w[receipt.json sample-release.json SHA256SUMS].map { |x|
+        files = %w[receipt.json sample-release.json SHA256SUMS]
+        files << "review-request.json" unless name == "verify-only"
+        files << "approval-receipt.json" if name == "publish"
+        purpose = {"verify-only" => "verification", "prepare-review" => "review", "publish" => "publication"}.fetch(name)
+        need(upload["uses"] == UPLOAD && upload["id"] == "evidence" &&
+             (name == "prepare-review" ? !upload.key?("if") : upload["if"] == "${{ always() }}") &&
+             upload["with"]["name"] == "sample-release-#{purpose}-${{ github.run_id }}-${{ github.run_attempt }}" &&
+             upload["with"]["if-no-files-found"] == (name == "prepare-review" ? "error" : "warn") &&
+             upload["with"]["path"].lines.map(&:strip) == files.map { |x|
                  "${{ runner.temp }}/p2pkit-sample-release/#{x}"
              } && upload["with"]["retention-days"] == 14 && upload["with"]["overwrite"] == false,
              "only fixed public provenance may be uploaded")
@@ -81,6 +103,15 @@ mutations = [
     ->(x) { x["jobs"]["admit"].delete("if") },
     ->(x) { x["jobs"]["verify-only"]["permissions"] = READ.merge("contents" => "write") },
     ->(x) { x["jobs"]["publish"].delete("needs") },
+    ->(x) { x["jobs"]["publish"]["needs"] = "admit" },
+    ->(x) { x["jobs"]["publish"].delete("environment") },
+    ->(x) { x["jobs"]["publish"]["environment"] = "maven-central" },
+    ->(x) { x["jobs"]["prepare-review"]["environment"] = "sample-development-release" },
+    ->(x) { x["jobs"]["prepare-review"]["permissions"] = READ.merge("contents" => "write") },
+    ->(x) { x["jobs"]["prepare-review"]["outputs"]["request_sha256"] = "${{ inputs.source_sha }}" },
+    ->(x) { x["jobs"]["prepare-review"]["steps"][2]["with"]["if-no-files-found"] = "warn" },
+    ->(x) { x["jobs"]["prepare-review"]["steps"][2]["with"]["overwrite"] = true },
+    ->(x) { x["jobs"]["publish"]["steps"][1]["run"] = COMMAND + " publish" + ARGS },
     ->(x) { x["jobs"]["publish"]["permissions"]["id-token"] = "write" },
     ->(x) { x["jobs"]["publish"]["steps"][0]["with"]["ref"] = "${{ github.event.workflow_run.head_sha }}" },
     ->(x) { x["jobs"]["publish"]["steps"][0]["with"]["persist-credentials"] = true },

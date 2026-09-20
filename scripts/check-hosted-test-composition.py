@@ -38,8 +38,11 @@ from pathlib import Path
 # Canonical retained-report private-parent creation and its canonical-only AST
 # expectation received separate independent source/offline approval. This does
 # not qualify atomic same-UID custody, Windows ACLs or bootstrap collection.
+# The 2026-09-20 actual-main-merge marker and typed Desktop packaging intent
+# received independent exact implementation review before this controller-only
+# update. All six ordinary tasks and FULL/custody/HOLD requirements remain.
 EXPECTED = {
-    "scripts/run-hosted-test-custody.py": "eed36ef0e3b814ccdf4e1755ea4162a7ebd5caeb20833ab9a5ed326f8f2c116b",
+    "scripts/run-hosted-test-custody.py": "e0c4a4aa8c742643253a8e9e47928f8c249837b00f3ffcd2fd8329d0cf29aee2",
     "scripts/hosted_full_supplements.py": "9f5c6a0f410c00ee7531664e95dab233c0febc6740dd6a8b1005e3fc3a64310c",
     "scripts/hosted_primary_abi.py": "ff168e70c31bc23b1c6e545a32d0c4217f9a212f7244a2c34571eee09f761553",
     "scripts/run-platform-tests.py": "1a3e6f093abe3a79bfbc2d3f426f26e71db77c6f72034effeb2e296dc833c271",

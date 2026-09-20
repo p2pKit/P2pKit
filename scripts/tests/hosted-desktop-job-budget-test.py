@@ -38,11 +38,11 @@ def clock(role):
     return C.ClockIdentity(role, C.DOMAINS[role], 10_000_000 if role == "windows-x64" else C.NS)
 
 
-def admission(role="windows-x64", event="push"):
+def admission(role="windows-x64", event="push", *, package_samples=False):
     original = F.model_admission(event)
     value = J.parse(original.record)
     host, arch, _ = HOSTS[role]
-    value.update(profile="desktop", suites=["cli"])
+    value.update(profile="desktop", suites=["cli"], samplePackagingRequired=package_samples)
     value["github"].update(workflow=I.PROFILES["desktop"][0], job="verify", runnerOS=host, runnerArch=arch)
     return replace(original, record=I.encoded(value))
 
