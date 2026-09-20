@@ -2344,6 +2344,46 @@ Neither static supplier inspection nor the [focused model controls](../../script
 qualifies provider/native/custody/scheduling execution. Both HOLDs and every
 existing deadline remain; proposed5400 is still UNADMITTED/UNMEASURED.
 
+### Supplied runtime-service fragment, not a runner bridge
+
+[`hosted_cache_provider_environment.runtime_service_fragment`](../../scripts/hosted_cache_provider_environment.py)
+validates only an explicit three-field mapping: `ACTIONS_RUNTIME_TOKEN`,
+`ACTIONS_RESULTS_URL` and `ACTIONS_CACHE_SERVICE_V2`. Values are nonempty bounded
+ASCII strings (at most4096 characters); the HTTPS URL has no userinfo, query,
+fragment, escapes or control characters. Accepted spelling is retained exactly.
+An explicit original-authority/host/decimal-port binding does not rely on a later
+Python bracket-parser patch. Bracketed hosts must be IPv6, never IPvFuture or a
+loosely parsed prefix/suffix; leading-zero/signed port aliases are not normalized.
+Missing/extra fields, case aliases, v1 fallbacks, API/OIDC credential fields and
+ambient loader/proxy/debug/tuning additions refuse. Returned values are fresh,
+**sensitive in-memory inputs only**: no acquisition, logging, serialization,
+token hash, provider environment or production caller is added.
+
+The exact flag **`True`** is grounded in the inspected runner's `bool.TrueString`,
+not the pinned supplier's loose truthiness (where even `false` selects v2).
+Read-only upstream source observation: `actions/runner` release `v2.337.0`,
+commit `397b032cbf865e9c3ddfab89d533ec19325e1273`,
+[`NodeScriptActionHandler.cs`](https://github.com/actions/runner/blob/397b032cbf865e9c3ddfab89d533ec19325e1273/src/Runner.Worker/Handlers/NodeScriptActionHandler.cs),
+9722 bytes, SHA-256 `eefddd78888f2b359ea4bd6a69d788ac0a72817c13bb05860c64e52baec5142e`.
+This small source inspection did not install or execute a runner or provider.
+It is not the version/provenance of a qualified hosted run.
+
+The runner's URL/flag setters are conditional and do not clear prior values.
+Therefore this helper cannot authenticate service origin, tokens or endpoints;
+it supplies no host allowlist or redirect confinement. The eventual caller still
+needs genuine GitHub.com admission, original runtime-service provenance, a fresh
+closed environment, actual native-owned paths and complete ownership markers.
+Do not widen the existing query/recipient/producer environments to carry secrets.
+In particular, the Git-query runner serializes its environment into `start.json`.
+
+Startup safety remains separate: the inspected handler removes only
+`NODE_ICU_DATA`, may add `--no-maglev`, and can report forced completion before
+the process closes. Neither `process.execPath` nor runner step success proves
+safe startup, actual child close or whole-domain retirement. Trusted tool PATH,
+original cancellation, frozen capture/read/close and enclosing-return checks
+are still unimplemented. The [focused synthetic controls](../../scripts/tests/hosted-cache-provider-environment-test.py)
+exercise only the supplied-field grammar; all execution HOLDs and limits remain.
+
 ### Dormant bootstrap encrypted-export identity adapter
 
 [`hosted_test_evidence.export_bootstrap_encrypted`](../../scripts/hosted_test_evidence.py)
@@ -2515,6 +2555,7 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-probe-test.py \
   ProbeModels.test_actual_post_guard_classifies_exact_lookup_under_new30_with_no_extra45 -v
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-cache-provider-contract-test.py
+python3 -I -B -S scripts/tests/hosted-cache-provider-environment-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/hosted-windows-provider-command-test.py
 python3 -I -B -S scripts/tests/hosted-test-evidence-test.py
