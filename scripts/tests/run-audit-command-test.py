@@ -3113,8 +3113,11 @@ class DarwinObservationTests(unittest.TestCase):
 
         self.scope.system.task_name_for_pid.side_effect = task_name
         self.scope.system.mach_port_deallocate.side_effect = failed_release
-        with self.clock(), self.assertRaisesRegex(processes.OwnershipError, "Cannot release"):
+        with self.clock(), self.assertRaisesRegex(processes.DarwinObservationError, "task-name access unavailable") as caught:
             self.scope._acquire(self.identity)
+        detail = processes.retirement_details(caught.exception)
+        self.assertEqual(detail["status"], "UNKNOWN")
+        self.assertIn("Cannot release", detail["resources"][0]["error"])
         self.assertEqual(self.elapsed, 0)
         self.assertEqual(self.scope.system.task_name_for_pid.call_count, 1)
         self.assertEqual(self.scope.system.mach_port_deallocate.call_count, 1)
@@ -3496,11 +3499,22 @@ class DarwinObservationTests(unittest.TestCase):
                     self.scope.observation_reconciliations = [{} for _ in range(1024)]
                 with self.clock(), self.assertRaises(processes.OwnershipError) as failure_context:
                     self.scope.drain()
-                self.assertNotIsInstance(failure_context.exception, processes.DarwinObservationExhausted)
+                if failure == "observation-overflow":
+                    self.assertIsInstance(failure_context.exception, processes.DarwinObservationExhausted)
+                    self.assertEqual(processes.retirement_details(failure_context.exception)["status"], "UNKNOWN")
+                else:
+                    self.assertNotIsInstance(failure_context.exception, processes.DarwinObservationExhausted)
                 first = json.loads(json.dumps(self.scope.description()["drainReconciliations"][-1]))
                 self.current = None
                 with self.clock():
-                    self.assertEqual(self.scope.drain(), [])
+                    if failure in ("port-release", "observation-overflow"):
+                        with self.assertRaises(processes.OwnershipError) as repeated:
+                            self.scope.drain()
+                        self.assertIs(repeated.exception, failure_context.exception)
+                        self.assertEqual(processes.retirement_details(repeated.exception)["status"], "UNKNOWN")
+                        self.assertEqual(len(self.scope.drain_reconciliations), 1)
+                    else:
+                        self.assertEqual(self.scope.drain(), [])
                 self.assertEqual(self.scope.description()["drainReconciliations"][0], first)
                 self.assertEqual(first["outcome"], "failed")
 

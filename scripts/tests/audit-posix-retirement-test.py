@@ -354,5 +354,288 @@ class PosixRetirementModels(unittest.TestCase):
         self.assertEqual(detail["nodes"][0]["retirement"], [{"error": "<uninspectable resource>"}])
 
 
+class DarwinTokenRetirementModels(unittest.TestCase):
+    """Opaque-token/Mach-call models, never a Darwin/native execution."""
+
+    caught = PosixRetirementModels.caught
+    unknown = PosixRetirementModels.unknown
+
+    def setUp(self):
+        self.addCleanup(patch.stopall)
+        self.clock = SimpleNamespace(value=100.0)
+        self.sleep = Mock(side_effect=lambda duration: setattr(self.clock, "value", self.clock.value + duration))
+        self.monotonic = Mock(side_effect=lambda: self.clock.value)
+        patch.object(P, "time", SimpleNamespace(monotonic=self.monotonic, sleep=self.sleep)).start()
+        patch.object(P, "os", SimpleNamespace(getpid=lambda: 1, getuid=lambda: 1000)).start()
+        self.identity = {"pid": 7, "uid": 1000, "live": True, "uniqueId": 11,
+                         "startSeconds": 12, "startMicroseconds": 13, "pidVersion": 14}
+
+    def scope(self):
+        with patch.object(P.DarwinScope, "_admit"), patch.object(P.DarwinScope, "_pids", return_value=[]):
+            scope = P.DarwinScope("MODEL_JOB", "MODEL_INVOCATION", "/model/state", "/model/home")
+        scope.observation_reconciliations, scope.drain_reconciliations, scope.active_drain = [], [], None
+        scope.self_port = 3
+
+        def task_name(_self, _pid, port):
+            port._obj.value = 71  # Synthetic port number; token contents remain opaque.
+            return 0
+
+        scope.system = SimpleNamespace(task_name_for_pid=Mock(side_effect=task_name),
+            task_info=Mock(return_value=0), mach_port_deallocate=Mock(return_value=0))
+        scope.proc = SimpleNamespace(proc_signal_with_audittoken=Mock(return_value=0))
+        scope._identity = Mock(side_effect=lambda _pid, **_kw: dict(self.identity))
+        scope._pids = Mock(return_value=[7])
+        return scope
+
+    def fail_unknown(self, scope, original):
+        # Explicit fault injection through the actual carrier producer, not a
+        # fabricated successful syscall or native-retirement observation.
+        scope._retire_resources([("MODEL_RESOURCE", Mock(side_effect=OSError("MODEL_CLOSE_UNKNOWN")))],
+                                "model-route", original=original)
+        raise original
+
+    def test_success_keeps_opaque_token_and_exact_native_call_order(self):
+        scope = self.scope()
+        events = []
+
+        def name(task, pid, output):
+            events.append(("name", task, pid))
+            output._obj.value = 71
+            return 0
+
+        def info(port, flavor, token, count):
+            self.assertIs(type(token._obj), P.AuditToken)
+            events.append(("info", port.value, flavor, count._obj.value))
+            return 0
+
+        scope.system.task_name_for_pid.side_effect = name
+        scope.system.task_info.side_effect = info
+        scope.system.mach_port_deallocate.side_effect = lambda task, port: events.append(("close", task, port.value)) or 0
+        self.assertIs(type(scope._acquire_once(self.identity)), P.AuditToken)
+        self.assertEqual(events, [("name", 3, 7), ("info", 71, 15, 8), ("close", 3, 71)])
+        scope.close()
+        self.assertEqual(scope.system.mach_port_deallocate.call_count, 1)
+
+    def test_zero_port_failure_never_deallocates_an_unowned_right(self):
+        scope = self.scope()
+        scope.system.task_name_for_pid.side_effect = lambda *_args: 5
+        error = self.caught(lambda: scope._acquire_once(self.identity))
+        self.assertIsInstance(error, P.DarwinObservationError)
+        self.assertEqual(P.retirement_details(error), {})
+        scope.system.task_info.assert_not_called()
+        scope.system.mach_port_deallocate.assert_not_called()
+
+    def test_partial_task_name_allocation_preserves_falsey_cancellation(self):
+        scope = self.scope()
+        original = FalseyCancellation("MODEL_TASK_NAME_CANCEL")
+        original.__cause__ = ValueError("MODEL_PRIOR_CAUSE")
+        cause, args = original.__cause__, original.args
+
+        def name(_task, _pid, output):
+            output._obj.value = 71
+            raise original
+
+        scope.system.task_name_for_pid.side_effect = name
+        scope.system.mach_port_deallocate.side_effect = OSError("MODEL_RELEASE_AMBIGUOUS")
+        self.assertIs(self.caught(lambda: scope._acquire_once(self.identity)), original)
+        self.assertIs(original.__cause__, cause)
+        self.assertEqual(original.args, args)
+        self.unknown(original)
+        scope.system.task_info.assert_not_called()
+        self.assertIs(self.caught(scope.close), original)
+        scope.system.mach_port_deallocate.assert_called_once()
+
+    def test_failed_task_info_or_size_with_known_close_still_recovers(self):
+        for failure in ("result", "size"):
+            with self.subTest(failure=failure):
+                scope = self.scope()
+
+                def info(_port, _flavor, _token, count):
+                    if scope.system.task_info.call_count == 1:
+                        if failure == "result":
+                            return 5
+                        count._obj.value = 7
+                    return 0
+
+                scope.system.task_info.side_effect = info
+                self.assertIs(type(scope._acquire(self.identity)), P.AuditToken)
+                self.assertEqual(scope.system.mach_port_deallocate.call_count, 2)
+                self.assertEqual(scope.observation_reconciliations[-1]["outcome"], "recovered")
+                self.assertEqual(scope.observation_reconciliations[-1]["attempts"], 2)
+
+    def test_ambiguous_deallocation_preserves_primary_and_never_retries(self):
+        for released in (False, True):
+            with self.subTest(released=released):
+                scope = self.scope()
+                original = P.DarwinObservationError("MODEL_TASK_INFO_FAILURE")
+                scope.system.task_info.side_effect = original
+                physical = []
+
+                def deallocate(*_args):
+                    if released:
+                        physical.append("MODEL_RIGHT_RELEASED")
+                    raise FalseyFailure("MODEL_RELEASE_UNKNOWN")
+
+                scope.system.mach_port_deallocate.side_effect = deallocate
+                self.assertIs(self.caught(lambda: scope._acquire(self.identity)), original)
+                self.unknown(original)
+                self.assertEqual(physical, ["MODEL_RIGHT_RELEASED"] if released else [])
+                self.assertIs(self.caught(lambda: scope._acquire(self.identity)), original)
+                self.assertIs(self.caught(scope.close), original)
+                scope.system.task_name_for_pid.assert_called_once()
+                scope.system.mach_port_deallocate.assert_called_once()
+                self.sleep.assert_not_called()
+
+    def test_nonzero_deallocation_result_cannot_release_a_successful_token(self):
+        scope = self.scope()
+        scope.system.mach_port_deallocate.return_value = 5
+        error = self.caught(lambda: scope._send(self.identity, None, 15))
+        self.assertIsInstance(error, P.OwnershipError)
+        self.unknown(error)
+        self.assertIs(self.caught(lambda: scope._acquire_once(self.identity)), error)
+        scope.system.mach_port_deallocate.assert_called_once()
+        scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_incoming_unknown_refuses_before_stringification_or_clock(self):
+        class Unprintable(P.DarwinObservationError):
+            def __str__(self):
+                raise AssertionError("MODEL_UNKNOWN_MUST_NOT_BE_STRINGIFIED")
+
+        scope = self.scope()
+        original = Unprintable()
+        row = {"phase": "posix-model-route", "resource": "MODEL_RESOURCE", "status": "UNKNOWN", "error": "MODEL_CLOSE"}
+        P._finish_retirement([(row, OSError("MODEL_CLOSE"))], original)
+        action = Mock()
+        self.assertIs(self.caught(lambda: scope._observe(self.identity, "MODEL", action, initial_error=original)), original)
+        self.monotonic.assert_not_called()
+        action.assert_not_called()
+        self.assertIs(self.caught(scope.close), original)
+
+    def test_first_pass_success_still_needs_no_observation_record(self):
+        scope = self.scope()
+        scope.observation_reconciliations = [{} for _ in range(1024)]
+        token = P.AuditToken()
+        self.assertIs(scope._observe(self.identity, "MODEL", lambda _identity: token), token)
+        self.assertEqual(len(scope.observation_reconciliations), 1024)
+
+    def test_record_append_failure_preserves_primary_cancellation_before_or_after_append(self):
+        for appended in (False, True):
+            with self.subTest(appended=appended):
+                scope = self.scope()
+                original, secondary = FalseyCancellation("MODEL_ACTION_CANCEL"), OSError("MODEL_RECORD_UNKNOWN")
+                original.__cause__ = ValueError("MODEL_PRIOR_CAUSE")
+                cause, args = original.__cause__, original.args
+
+                class Records(list):
+                    calls = 0
+                    def append(self, row):
+                        self.calls += 1
+                        if appended:
+                            super().append(row)
+                        raise secondary
+
+                records = scope.observation_reconciliations = Records()
+                action = Mock(side_effect=[P.DarwinObservationError("MODEL_TRANSIENT"), original])
+                self.assertIs(self.caught(lambda: scope._observe(self.identity, "MODEL", action)), original)
+                details = self.unknown(original)
+                self.assertEqual(details["resources"][0]["phase"], "posix-darwin-observation-record")
+                self.assertIs(original.__cause__, cause)
+                self.assertEqual(original.args, args)
+                self.assertEqual((records.calls, len(records), action.call_count), (1, int(appended), 2))
+                self.assertIs(self.caught(lambda: scope._observe(self.identity, "MODEL", action)), original)
+                self.assertEqual(records.calls, 1)
+
+    def test_record_failure_after_recovery_is_fatal_without_fabricated_return(self):
+        scope = self.scope()
+        original = FalseyFailure("MODEL_RECORD_FAILURE")
+
+        class Records(list):
+            def append(self, _row):
+                raise original
+
+        scope.observation_reconciliations = Records()
+        action = Mock(side_effect=[P.DarwinObservationError("MODEL_TRANSIENT"), P.AuditToken()])
+        self.assertIs(self.caught(lambda: scope._observe(self.identity, "MODEL", action)), original)
+        self.unknown(original)
+        self.assertIs(self.caught(scope.close), original)
+
+    def test_record_cap_preserves_exhaustion_and_is_not_a_new_retry_allowance(self):
+        scope = self.scope()
+        scope.observation_reconciliations = [{} for _ in range(1024)]
+        action = Mock(side_effect=P.DarwinObservationError("MODEL_ACCESS_DENIED"))
+        error = self.caught(lambda: scope._observe(self.identity, "MODEL", action))
+        self.assertIsInstance(error, P.DarwinObservationExhausted)
+        self.unknown(error)
+        self.assertEqual(len(scope.observation_reconciliations), 1024)
+        self.assertLessEqual(action.call_count, 26)
+        self.assertLessEqual(self.clock.value, 100.25)
+        self.assertIs(self.caught(scope.close), error)
+
+    def test_discovery_cannot_swallow_any_supported_unknown_environment_error(self):
+        for kind in (PermissionError, P.OwnershipError, P.DarwinObservationExhausted, ProcessLookupError):
+            with self.subTest(kind=kind.__name__):
+                scope, original = self.scope(), kind("MODEL_ENVIRONMENT_PRIMARY")
+                scope._inspect_environment = Mock(side_effect=lambda _identity: self.fail_unknown(scope, original))
+                self.assertIs(self.caught(scope.discover), original)
+                self.assertEqual(scope.discovery_errors, set())
+                self.assertEqual(scope.pending_discoveries, {})
+                scope.system.task_name_for_pid.assert_not_called()
+
+    def test_identity_reconciliation_cannot_convert_unknown_to_absence(self):
+        scope, original = self.scope(), ProcessLookupError("MODEL_IDENTITY_PRIMARY")
+        scope._observe = Mock(side_effect=lambda *_a, **_kw: self.fail_unknown(scope, original))
+        self.assertIs(self.caught(lambda: scope._reconcile_identity(self.identity, P.DarwinObservationError())), original)
+
+    def test_active_signal_drain_cannot_defer_unknown_or_reconcile_it_to_exit(self):
+        for kind in (ProcessLookupError, P.DarwinObservationExhausted):
+            with self.subTest(kind=kind.__name__):
+                scope, original = self.scope(), kind("MODEL_SIGNAL_PRIMARY")
+                scope.discover = Mock(return_value=[dict(self.identity)])
+                scope.handles = {scope._key(self.identity): P.AuditToken()}
+                scope.active_drain = {"deadline": 101.0, "pending": {}, "record": {"signalReconciliations": []}}
+                scope._reconcile_drain_signals = Mock()
+                scope._send = Mock(side_effect=lambda *_a, **_kw: self.fail_unknown(scope, original))
+                self.assertIs(self.caught(lambda: scope.signal_all(15, deadline=101.0)), original)
+                scope._reconcile_drain_signals.assert_called_once()
+                self.assertEqual(scope.active_drain["pending"], {})
+                self.assertEqual(scope.active_drain["record"]["signalReconciliations"], [])
+
+    def test_neither_drain_implementation_can_escalate_an_unknown_deadline_error(self):
+        for darwin in (False, True):
+            with self.subTest(darwin=darwin):
+                scope, original = self.scope(), P.DrainDeadlineExceeded("MODEL_DEADLINE_PRIMARY")
+                scope.discover = Mock(side_effect=lambda: self.fail_unknown(scope, original))
+                call = (lambda: scope.drain(0.1, 0.1, deadline=100.2)) if darwin else (
+                    lambda: P._bounded_drain(scope, 0.1, 0.1, 100.2, quiet_required=3))
+                self.assertIs(self.caught(call), original)
+                scope.discover.assert_called_once()
+                if darwin:
+                    self.assertEqual(scope.drain_reconciliations[-1]["outcome"], "failed")
+                    self.assertEqual(len(scope.drain_reconciliations[-1]["phases"]), 1)
+                    self.assertIsNone(scope.active_drain)
+
+    def test_closed_token_helpers_refuse_before_new_clock_or_native_work(self):
+        scope = self.scope()
+        scope.close()
+        for call in (lambda: scope._acquire(self.identity), lambda: scope._acquire_once(self.identity),
+                     lambda: scope._observe(self.identity, "MODEL", Mock())):
+            self.assertIsInstance(self.caught(call), P.OwnershipError)
+        self.monotonic.assert_not_called()
+        scope._identity.assert_not_called()
+        scope.system.task_name_for_pid.assert_not_called()
+
+    def test_drain_record_cannot_mask_unprintable_unknown_primary(self):
+        class Unprintable(P.DarwinObservationExhausted):
+            def __str__(self):
+                raise AssertionError("MODEL_UNKNOWN_STRING_UNAVAILABLE")
+
+        scope, original = self.scope(), Unprintable()
+        scope.discover = Mock(side_effect=lambda: self.fail_unknown(scope, original))
+        self.assertIs(self.caught(lambda: scope.drain(0.1, 0.1, deadline=100.2)), original)
+        self.assertEqual(scope.drain_reconciliations[-1]["outcome"], "failed")
+        self.assertIn("<exception message unavailable>", scope.drain_reconciliations[-1]["error"])
+        self.assertIsNone(scope.active_drain)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -109,7 +109,9 @@ def _bounded_drain(scope: Any, grace: float, kill_wait: float, deadline: float, 
                 if remaining <= 0:
                     break
                 time.sleep(min(0.1, remaining))
-        except DrainDeadlineExceeded:
+        except DrainDeadlineExceeded as error:
+            if retirement_details(error):
+                raise  # An expired operation cannot erase UNKNOWN resource cleanup.
             # Escalation, if any, spends only the already fixed second phase.
             # No quiet count, late observation or late signal result is accepted.
             continue
@@ -500,9 +502,13 @@ class PosixScope:
             try:
                 environment = self._inspect_environment(identity)
             except (PermissionError, OwnershipError) as error:
+                if retirement_details(error):
+                    raise
                 self._discovery_failed(identity, error)
                 continue
-            except ProcessLookupError:
+            except ProcessLookupError as error:
+                if retirement_details(error):
+                    raise
                 self._discovery_resolved(pid, "lifetime-ended")
                 continue
             if not self._ours(environment):
@@ -874,7 +880,9 @@ class DarwinScope(PosixScope):
         # privileged exec. Required rechecks are raw and cannot recurse here.
         try:
             return self._observe(previous, "identity", lambda current: current, initial_error=failure)
-        except ProcessLookupError:
+        except ProcessLookupError as error:
+            if retirement_details(error):
+                raise
             return None  # Observed exit/replacement, never permission denial alone.
 
     def _key(self, identity: dict[str, Any]) -> tuple[int, ...]:
@@ -884,6 +892,10 @@ class DarwinScope(PosixScope):
 
     def _observe(self, identity: dict[str, Any], operation: str, action: Any,
                  *, initial_error: DarwinObservationError | None = None) -> Any:
+        self._ensure_open()
+        if initial_error is not None and retirement_details(initial_error):
+            self._retirement_error = initial_error
+            raise initial_error
         # libproc's zombie-list lookup can still return a non-SZOMB INEXIT proc
         # after Mach/procargs lookup loses it. INEXIT is pending, not completion.
         # Reconcile only failed observations; do not slow every process census or
@@ -891,6 +903,7 @@ class DarwinScope(PosixScope):
         deadline = time.monotonic() + 0.25
         first_error = last_error = None if initial_error is None else str(initial_error)
         current, outcome, attempts = identity, "unresolved", 0
+        primary = None
 
         def recheck():
             nonlocal current, outcome
@@ -911,6 +924,8 @@ class DarwinScope(PosixScope):
                     outcome = "recovered"
                     return result
                 except DarwinObservationError as error:
+                    if retirement_details(error):
+                        raise  # A failed Mach-right release is not a retryable observation.
                     last_error = str(error)
                     if first_error is None:
                         first_error = last_error
@@ -919,13 +934,21 @@ class DarwinScope(PosixScope):
                     break
                 time.sleep(min(0.01, remaining))
             raise DarwinObservationExhausted(f"Darwin {operation} unresolved after bounded observation: {last_error}")
+        except BaseException as error:
+            primary = error
+            raise
         finally:
             if first_error is not None:
-                if len(self.observation_reconciliations) >= 1024:
-                    raise OwnershipError("Darwin observation evidence exceeds its bound")
-                self.observation_reconciliations.append({"operation": operation, "identity": identity,
-                    "lastIdentity": current, "attempts": attempts, "firstFailure": first_error,
-                    "lastFailure": last_error, "outcome": outcome})
+                def record_observation():
+                    if len(self.observation_reconciliations) >= 1024:
+                        raise OwnershipError("Darwin observation evidence exceeds its bound")
+                    self.observation_reconciliations.append({"operation": operation, "identity": identity,
+                        "lastIdentity": current, "attempts": attempts, "firstFailure": first_error,
+                        "lastFailure": last_error, "outcome": outcome})
+                # This action retains metadata, not a Mach-right close. Its
+                # failure is terminal but cannot replace an in-flight primary.
+                self._retire_resources([("observation-record", record_observation)],
+                    "darwin-observation-record", original=primary)
 
     def _inspect_environment(self, identity: dict[str, Any]) -> dict[bytes, bytes]:
         return self._observe(identity, "environment", lambda before: self._environment(before["pid"]))
@@ -949,7 +972,14 @@ class DarwinScope(PosixScope):
         return self._observe(identity, "task token", self._acquire_once)
 
     def _acquire_once(self, identity: dict[str, Any]) -> AuditToken:
+        self._ensure_open()
         port = U32()
+        original = None
+
+        def release_port():
+            if self.system.mach_port_deallocate(self.self_port, port) != 0:
+                raise OwnershipError("Cannot release the owned Darwin task-name port")
+
         try:
             result = self.system.task_name_for_pid(self.self_port, identity["pid"], ctypes.byref(port))
             if result != 0 or not port.value:
@@ -960,10 +990,12 @@ class DarwinScope(PosixScope):
             if result != 0 or count.value != 8:
                 raise DarwinObservationError(f"Darwin TASK_AUDIT_TOKEN unavailable: Mach result {result}")
             return token
+        except BaseException as error:
+            original = error
+            raise
         finally:
-            if port.value and self.system.mach_port_deallocate(self.self_port, port) != 0:
-                # Never catch/retry a leaked right as an ordinary observation error.
-                raise OwnershipError("Cannot release the owned Darwin task-name port")
+            if port.value:
+                self._retire_resources([("task-name-port", release_port)], "darwin-token", original=original)
 
     def description(self) -> dict[str, Any]:
         return {**super().description(), "observationReconciliations": self.observation_reconciliations,
@@ -1034,13 +1066,17 @@ class DarwinScope(PosixScope):
                 else:
                     self._send(identity, self.handles[key], signum, deadline=deadline)
                 _check_drain_deadline(deadline)
-            except ProcessLookupError:
+            except ProcessLookupError as error:
+                if retirement_details(error):
+                    raise
                 _check_drain_deadline(deadline)
                 if deadline is None:
                     self._reconcile_drain_signals()
                 else:
                     self._reconcile_drain_signals(deadline=deadline)
             except DarwinObservationExhausted as error:
+                if retirement_details(error):
+                    raise
                 record = active["pending"].get(key)
                 if record is None:
                     if sum(len(row["signalReconciliations"]) for row in self.drain_reconciliations) >= 1024:
@@ -1115,7 +1151,9 @@ class DarwinScope(PosixScope):
                         remaining = phase_end - time.monotonic()
                         if remaining > 0:
                             time.sleep(min(0.1, remaining))
-                except DrainDeadlineExceeded:
+                except DrainDeadlineExceeded as error:
+                    if retirement_details(error):
+                        raise
                     if deadline is None:
                         raise
                     record["phases"][-1]["outcome"] = "deadline-exhausted"
@@ -1129,8 +1167,9 @@ class DarwinScope(PosixScope):
             raise OwnershipError("Darwin drain did not establish three quiet censuses within its phase bounds")
         except BaseException as error:
             primary = error
-            record["error"] = str(error)
-            record["outcome"] = "unresolved" if isinstance(error, DarwinObservationExhausted) else "failed"
+            unknown = bool(retirement_details(error))
+            record["error"] = format_ownership_error(error) if unknown else str(error)
+            record["outcome"] = "unresolved" if isinstance(error, DarwinObservationExhausted) and not unknown else "failed"
             raise
         finally:
             if deadline is None:

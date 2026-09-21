@@ -3380,8 +3380,9 @@ carrier bytes and its existing native file-custody implementation are unchanged.
 This remains a **serialized, non-reentrant controller**. Close is not concurrent
 cancellation or proof that writers retired; the caller must drain the original
 domain first. The provisional-pidfd reentry guard does not establish generic
-spawn/reentry safety. Darwin token acquisition, ownership selectors, deadlines,
-the external watchdog requirement and both execution HOLDs remain unchanged.
+spawn/reentry safety. That increment left Darwin token acquisition unchanged;
+the later port-specific repair below is separately scoped. Ownership selectors,
+deadlines, the external watchdog requirement and both execution HOLDs remain.
 
 The [focused syscall models](../../scripts/tests/audit-posix-retirement-test.py)
 passed **22/22 methods**, with separate **38/38** deadline and **4/4** Windows
@@ -3392,6 +3393,46 @@ the independently found/fixed carrier-integration failure remain preserved;
 the exact independent verdict is bound in the containing #437 commit record.
 These passes do not accept the complete1066 WIP or supply provider integration,
 native retirement, hosted qualification, budget admission or Release acceptance.
+
+### Darwin task-name rights and observation-record finalization
+
+The later Darwin repair in the same [process owner](../../scripts/audit_processes.py)
+retains a nonzero task-name port through the original opaque-token acquisition
+and attempts its deallocation exactly once, including a partially failed
+task-name call. A failed release cannot replace the original task-info failure,
+falsey exception or cancellation. A zero port creates no deallocation attempt;
+the native call order/arguments, flavor15/count8 and opaque token are unchanged.
+
+The existing observation retry handles only ordinary observation errors, never
+an error carrying UNKNOWN cleanup. Its26-attempt/0.25-second limits, positive
+lifetime checks and ordinary recovery remain. Discovery, identity/signal
+reconciliation and both drain phase handlers propagate cleanup-bearing originals
+instead of interpreting their types as absence, deferred access or deadline
+escalation. Failed/closed scopes cannot acquire another token. A carrier-bearing
+exhaustion is a failed drain, not a later-reconcilable observation; its safe
+diagnostics cannot obscure an unprintable original error.
+
+Observation-record finalization retains its original conditional single append
+and1024-record cap. Cap/append failure stays fatal and terminal, but is secondary
+to an already propagating primary. The maintained four-field carrier labels this
+**metadata-record failure**, separately from the attempted Mach-right release.
+A first-pass success still creates no observation record. No port/token retry,
+extra grace, unbounded append or UNKNOWN-to-success recovery is introduced.
+
+Executed author controls were **39/39** focused POSIX methods (22 retained-scope
+methods plus17 new Darwin methods), **32/32** scripted Darwin observation methods,
+and **38/38** absolute-drain methods, in three separate bounded UID65534 processes.
+Each returned exit0, guard4, unexpected-denials0 and ResourceWarnings0. Desired-
+state preimages remain recorded: the new17 methods had20 failure entries; the two
+updated legacy methods had two assertion failures and one wrong-exception error.
+Those two legacy expectations now require primary preservation and terminal
+UNKNOWN; unrelated ordinary recovery assertions remain. The containing #437
+commit record binds the exact independent verdict and final source hashes.
+
+These are **mocked syscall/clock models**, not native Darwin, Mach token, provider,
+custodian-key or complete1066 execution. The graph stays dormant WIP. Serialized
+ownership, the external watchdog, both HOLDs and all original native/provider/
+job limits remain; no hosted qualification, delivery or Release acceptance follows.
 
 ## Verification and remaining qualification
 
