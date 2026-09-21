@@ -48,6 +48,9 @@ class WorkerLaunch:
     """Original child and immutable actual request, not a provider result."""
     child: object = field(repr=False)
     request: bytes = field(repr=False)
+    argv: tuple = field(repr=False)
+    cwd: str = field(repr=False)
+    pid: int
 
 
 @dataclass(frozen=True, repr=False)
@@ -380,6 +383,7 @@ class SupervisorLaunch:
             child_env.update(services)
             self.worker_environment, self.worker_argv = child_env, argv
             original_environment, original_argv = _environment_values(child_env), tuple(argv)
+            original_cwd = str(SCRIPTS.parent)
             request = original_argv[-1].encode("ascii")
             cancelled()
             self._healthy()
@@ -397,16 +401,17 @@ class SupervisorLaunch:
             self.attempted.add("child")
             # Pass the immutable vector itself. The later diagnostic argv list
             # cannot replace the bytes handed to the actual native spawn.
-            child = scope.spawn(original_argv, str(SCRIPTS.parent), child_env, stdout=self.stdout, stderr=self.stderr)
+            child = scope.spawn(original_argv, original_cwd, child_env, stdout=self.stdout, stderr=self.stderr)
             self._owners["child"] = child
             self.child = child
             self.spawn_returned = True
-            returned = WorkerLaunch(child, request)
+            returned = WorkerLaunch(child, request, original_argv, original_cwd, child.pid)
             self._launch_return = returned
             self.window.check(work=True)
             self._healthy()
             _leader(scope, child, role)
-            require(self._launch_return is returned and returned.child is child and returned.request is request,
+            require(self._launch_return is returned and returned.child is child and returned.request is request and
+                    type(returned.pid) is int and returned.pid > 0 and child.pid == returned.pid,
                     "PROVIDER_ORIGINAL_LAUNCH_RETURN_CHANGED")
             return returned  # Never provider/step/retirement success.
         except BaseException as error:

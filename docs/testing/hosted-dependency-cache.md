@@ -3980,6 +3980,104 @@ qualification and Stage2/trusted-main delivery. Both ordinary HOLDs, whole-JVM
 interlock and all original limits remain. Packet encoding/write/ACK/retirement/
 decoding spend existing ends, never an extra45 or an admitted bootstrap5400.
 
+### Original outer-native file and post-close ACK, not asynchronous runner return
+
+The later [supervisor](../../scripts/hosted_cache_provider_supervisor.py) now
+retains its previously memory-only native description in one exclusive private
+**`supervisor-retirement.json`**, at most the existing **2MiB**. This occurs
+after actual original scope drain/known close, but before closing the original
+enclosing directory. The actual writer is registered before callbacks, then
+written, synced, verified and closed once. Lost acquisition, ambiguous write/
+sync/verification/close or expiry remains UNKNOWN; distinct roots stay pinned.
+There is no new native scope, filename selector, sharing exception or late reopen.
+
+The frozen actual launch carrier now retains the original argv tuple, cwd and
+returned PID as well as the child/request. The serialized native description's
+single actual launch must match backend, API, PID, creation/output mode and the
+fixed seven-argument worker vector; requested/resolved tails and native Windows
+framing must agree. The complete resolved vector, including its executable,
+must equal the frozen original vector: this launch passes a canonical absolute
+executable, which the maintained native resolver does not substitute. The exact
+final `requestedArgv` string, ASCII-encoded, must
+equal the original request bytes. A later reader can recover those same bytes
+from this retained file; no second request file, JSON reconstruction or Windows
+command-line reverse parsing is needed. Mutable diagnostic argv/PID/description
+slots cannot choose a replacement. This is binding to an original modeled/native
+supplier call, not pre-start installed-source authentication.
+
+During their original qualified reads, the supervisor retains immutable size,
+SHA-256 and stable-identity references to stdout/stderr and any actually read
+worker packet. Their existing bytes are not recopied. The new
+[outer codec](../../scripts/hosted_cache_provider_supervisor_return.py) encodes
+these fixed slots and the native-file reference in a separate **4KiB** ACK.
+The earlier worker ACK remains1024 bytes, packet6MiB and both logs1MiB. The outer
+invocation is frozen from the original arguments before launch; its digest is
+distinct from, and never selected from, the later worker-request digest.
+
+The dormant internal `run_and_send` owns the actual `run()` return/raise. It
+requires its exact completed transcript/error and unchanged original close/
+failure boundary before writing the ACK. All original readers/writers/roots
+close first. The prelaunch original stdout/buffer and exact integer fd1 remain
+bound through one full write, buffer flush and final checks. A pipe is **not**
+fsynced; flush proves neither receiver consumption nor durable storage.
+Substitution, short/boolean/absent counts, broken pipe, swallowed reentry, late
+construction or late flush cannot publish a completed-send receipt or retry.
+The first actual run exception remains the failure, including on later send
+failure. An opaque known-closed failed transcript can be transported without
+parsing failed command bytes as successful provider output.
+
+Once-only `exit_code` permits0 only for the exact completed success,65 only for
+its exact completed failure; every other classification raises. **No actual
+outer CLI/main or Node caller exists yet.** That future original entry must
+normalize incomplete paths to66 and the original asynchronous Node child must
+observe matching ACK/exit and actual `close`. The supplied ACK parser cannot
+observe these events, retire a lost supervisor or establish timely enclosing
+return. Its output retains Node/runner outcome NOT_OBSERVED and provider
+acceptance NOT_ESTABLISHED. No workflow or execution admission is added.
+
+R2 author offline checks passed separately: the
+[new suite](../../scripts/tests/hosted-cache-provider-supervisor-return-test.py)
+**43/43** (eight supplied-codec methods,33 Windows/native/service/pipe models,
+two tiny actual POSIX-file methods; test0.528s/wall1.08s); changed supervisor
+**50/50** (0.623s/1.13s), launcher **40/40** (1.303s/1.74s), and inner-return
+**35/35** (0.516s/0.98s). R1's39 pass missed jointly altered child/description
+PID slots; the new desired-state control **failed1/1 on that unchanged preimage**.
+The actual PID is now frozen before callbacks; that same oracle is in final43.
+Earlier R1 passes/failure remain separate, not rewritten into a whole pass.
+Independent implementation/document review belongs to the exact containing
+commit's issue record, not these author results.
+
+Independent R1 then retained **16 PASS / 2 FAIL** in18 new controls. Jointly
+changing `resolvedArgv[0]` and the Windows application/command-line fields, or
+the POSIX executable field, still allowed a native record to be persisted.
+The earlier comparison bound only the vector's tail. R3 now compares the
+complete resolved vector with the already frozen original; disagreement is
+UNKNOWN before native-file publication, with distinct owners pinned. The two
+new author regressions cover both paths. These are model/file-control findings,
+not actual provider incidents or a claim of installed-executable authentication.
+
+R3 author results: **45/45 outer-return methods PASS** (test0.565s/wall1.141s;
+eight supplied-codec,34 Windows/native/service/pipe models, three tiny actual
+POSIX-file methods) and changed supervisor **50/50 PASS** (0.604s/1.079s).
+The earlier R2 launcher40 and inner-return35 results remain separately retained,
+not replayed or relabelled as new R3 invocations. One R3 timing-wrapper setup
+failed with exit127 before Python ran because `/usr/bin/time` was absent; the
+executed commands used Bash's built-in timer with unchanged limits. That setup
+failure and the independent failed aggregate remain preserved. Final independent
+implementation review is still separately bound to the containing commit.
+
+Every invocation used UID/GID65534, cleared environment/groups, no-new-privs,
+frozen read-only source, CPU20/512MiB/file32MiB/FD128/core0/wall30+kill2 and
+pre-project filesystem/process/network/native-loader/pidfd/signal guards:
+guard4, unexpected denials0, ResourceWarnings0; frozen inputs unchanged.
+Complete1066 access was explicitly prohibited in the harness. No native process,
+Node, provider, crypto, cache or application/toolchain build ran. All original
+provider180/final45, native/file/job limits and HOLDs remain unchanged.
+Enclosing Node/runner and pre-Node/source/tool/service admission, complete1066/
+current receiving authority, productive/repeated bootstrap, full encrypted
+custody/workflow integration, genuine qualification and trusted-main delivery
+remain unfinished. Bootstrap5400 remains UNADMITTED/UNMEASURED.
+
 ## Verification and remaining qualification
 
 Focused offline commands (not a claim they ran on a particular host):
@@ -4041,6 +4139,7 @@ python3 -I -B -S scripts/tests/hosted-cache-provider-lifecycle-test.py
 python3 -I -B -S scripts/tests/hosted-cache-provider-launch-test.py
 python3 -I -B -S scripts/tests/hosted-cache-provider-supervisor-test.py
 python3 -I -B -S scripts/tests/hosted-cache-provider-return-test.py
+python3 -I -B -S scripts/tests/hosted-cache-provider-supervisor-return-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/hosted-windows-provider-command-test.py
 python3 -I -B -S scripts/tests/hosted-test-evidence-test.py

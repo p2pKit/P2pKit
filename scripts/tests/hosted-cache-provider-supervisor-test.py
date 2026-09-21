@@ -58,11 +58,17 @@ class SupervisorModels(unittest.TestCase):
     def tearDown(self):
         # Model-only disposal, after assertions. Not a recovery procedure for
         # UNKNOWN live providers. Earlier fixture TestCase methods never run.
+        self.fixture.extra.extend((self.owner._retirement_writer, self.owner._retirement_owner))
         self.fixture.tearDown()
         S.QUARANTINE.clear()
 
     def spawn(self, *args, **kwargs):
         child = self.fixture.spawn(self.fixture.outer, *args, **kwargs)
+        # Explicit native-description model, not an actual CreateProcessW call.
+        argv = list(args[0])
+        self.fixture.outer.launches[-1].update(api="CreateProcessW", requestedArgv=argv,
+            resolvedArgv=argv.copy(), cwd=args[1], outputMode="caller-owned-native-files", resumed=True,
+            batch=False, applicationName=argv[0], commandLine=L.subprocess.list2cmdline(argv))
         if self.model_stdout is None:
             self.model_stdout = (b"" if self.packet_from_worker else
                 model_packet(self.fixture.root, args[0][-1].encode("ascii"), self.model.raw))
@@ -113,7 +119,7 @@ class SupervisorModels(unittest.TestCase):
         self.assertEqual((result.stdout, result.stderr), (self.model_stdout, self.model_stderr))
         self.assertEqual(json.loads(result.request), self.owner.launch.frame)
         self.assertEqual(json.loads(result.native_retirement)["invocation"], "2" * 32)
-        self.assertEqual(set(result.closed_resources), (set(S._NAMES) - {"child"}) | {"packet-reader"})
+        self.assertEqual(set(result.closed_resources), (set(S._NAMES) - {"child"}) | {"packet-reader", "retirement-writer"})
         self.assertEqual(result.closed_resources[0], "scope")
         self.assertEqual(result.provider_control_return, "TRANSPORTED_OBSERVATION_ONLY")
         self.assertIs(type(result.provider_return), L.transport.TransportedProvider)
@@ -326,7 +332,7 @@ class SupervisorModels(unittest.TestCase):
     def test_launch_carrier_replacement_after_wait_refuses_transcript(self):
         def mutate():
             returned = self.owner.launch._launch_return
-            self.owner.launch._launch_return = L.WorkerLaunch(returned.child, returned.request)
+            self.owner.launch._launch_return = L.WorkerLaunch(returned.child, returned.request, returned.argv, returned.cwd, returned.pid)
         self.on_wait = mutate
         self.assertRegex(str(caught(self.run_owner)), "SUPERVISOR_ORIGINAL_OWNERS_CHANGED")
         self.pinned()
@@ -564,6 +570,8 @@ class PosixTranscriptModels(unittest.TestCase):
                     reader.close()
                 except BaseException:
                     pass
+        if self.owner._retirement_owner is not None:
+            self.owner._retirement_owner.close()
         for owner in self.owner.launch._owners.values():
             if owner is not None and not isinstance(owner, L.processes.PosixProcess):
                 try:
@@ -578,10 +586,11 @@ class PosixTranscriptModels(unittest.TestCase):
         # controls above execute the actual fixed launch under supplier models.
         original = self.owner.launch
         original.window = L._Window(first, values["issued_ns"], values["hard_end_ns"], values["hard_end_ns"])
-        original.frame = {"role": self.model.clock.role, "phase": "save", "job": "1" * 32,
-            "outerId": "2" * 32, "innerId": "4" * 32, "issuedNs": str(values["issued_ns"]),
-            "workerCutoffNs": str(values["worker_cutoff_ns"])}
-        original.worker_argv = ["MODEL_LAUNCH", L._json(original.frame)]
+        original.frame = {key: value for key, value in json.loads(self.owner._invocation.request).items()
+                          if key != "firstNs"}
+        original.frame["schema"] = 1
+        original.worker_argv = ["/model/python3", "-I", "-B", "-S", "/model/hosted_cache_provider_worker.py",
+                                "{}", L._json(original.frame)]
         self.model_ack = model_packet(self.model.root, original.worker_argv[-1].encode("ascii"), self.model.raw)
         for name, value in (("capture_directory", self.model.root.create_directory("capture", deadline=280.0)),
                             ("scope", self.model.scope)):
@@ -597,9 +606,12 @@ class PosixTranscriptModels(unittest.TestCase):
         child = L.processes.PosixProcess(process)
         original._owners["child"] = original.child = child
         self.model.scope.leaders.append(child)
-        self.model.scope.launches.append({"api": "MODEL_NO_PROCESS", "created": True, "pid": 41})
+        # Supplied launch-description shape; the upstream launch is still mocked.
+        self.model.scope.launches.append({"api": "subprocess.Popen", "created": True, "pid": 41,
+            "requestedArgv": list(original.worker_argv), "resolvedArgv": list(original.worker_argv),
+            "cwd": "/model", "shell": False, "executable": original.worker_argv[0], "outputMode": "caller-owned-files"})
         original.spawn_returned = True
-        original._launch_return = L.WorkerLaunch(child, original.worker_argv[-1].encode("ascii"))
+        original._launch_return = L.WorkerLaunch(child, original.worker_argv[-1].encode("ascii"), tuple(original.worker_argv), "/model", child.pid)
         return original._launch_return
 
     def run_owner(self):
