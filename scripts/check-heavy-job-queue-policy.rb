@@ -8,6 +8,19 @@ module HeavyJobQueuePolicy
 
     GROUP = "p2pkit-nonphysical-heavy"
     QUEUE = {"group" => GROUP, "queue" => "max", "cancel-in-progress" => false}.freeze
+    # Fail-only source interlock, NOT a productive/approval gate. It owns no
+    # heavy lease and requests no environment or credential. The real Stage2
+    # caller needs separate review/activation, not an echo-success edit.
+    INITIAL_JOB = "initial-recipient-gate"
+    INITIAL_HOLD = <<~'SH'
+        echo 'INITIAL_RECIPIENT_STAGE2=HOLD; WHOLE_JVM_JOB_ADMISSION_REQUIRED' >&2
+        exit 125
+    SH
+    INITIAL_INTERLOCK = {
+        "permissions" => {}, "runs-on" => "ubuntu-latest", "timeout-minutes" => 1,
+        "steps" => [{"name" => "Hold whole JVM jobs until initial-recipient admission is implemented",
+                     "shell" => "bash", "run" => INITIAL_HOLD}],
+    }.freeze
     JOBS = {
         "ci.yml" => {"jvm-library-checks" => "JVM libraries (${{ matrix.os }})", "complete-gate" => nil},
         "desktop-cross-host.yml" => {"verify" => "${{ matrix.os }}", "windows-directory-fsync-control" => "windows-directory-fsync-control",
@@ -86,16 +99,22 @@ module HeavyJobQueuePolicy
             require_policy(expected_concurrency ? workflow["concurrency"] == expected_concurrency :
                 !workflow.key?("concurrency"), "#{path}: preserve separate workflow concurrency/supersession")
             jobs = workflow["jobs"]
-            require_policy(jobs.is_a?(Hash) && jobs.keys.sort == expected_jobs.keys.sort,
+            expected_ids = expected_jobs.keys + (path == "ci.yml" ? [INITIAL_JOB] : [])
+            require_policy(jobs.is_a?(Hash) && jobs.keys.sort == expected_ids.sort,
                            "#{path}: participating job IDs changed; review queue coverage")
+            if path == "ci.yml"
+                require_policy(jobs[INITIAL_JOB] == INITIAL_INTERLOCK,
+                               "#{path}: preserve fail-only whole-JVM interlock without acquisition/lease/approval")
+            end
             expected_jobs.each do |id, name|
                 job = jobs[id]
                 label = "#{path}: jobs.#{id}"
                 require_policy(job.is_a?(Hash) && job["concurrency"] == QUEUE,
                                "#{label}: require exact job-level group, queue:max and boolean cancel-in-progress:false")
                 require_policy(name ? job["name"] == name : !job.key?("name"), "#{label}: preserve job/check name")
-                dependent = path == "ci.yml" && id == "complete-gate"
-                require_policy(dependent ? job["needs"] == "jvm-library-checks" : !job.key?("needs"),
+                prerequisite = path == "ci.yml" ? {"jvm-library-checks" => INITIAL_JOB,
+                                                  "complete-gate" => "jvm-library-checks"}[id] : nil
+                require_policy(prerequisite ? job["needs"] == prerequisite : !job.key?("needs"),
                                "#{label}: preserve acyclic job dependencies")
                 condition = CONDITIONS[[path, id]]
                 require_policy(condition ? job["if"] == condition : !job.key?("if"),

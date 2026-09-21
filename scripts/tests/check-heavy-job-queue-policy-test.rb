@@ -53,6 +53,23 @@ original = Marshal.dump(workflows)
 POLICY.check(workflows)
 checks = 1
 mutations = {}
+%w[permissions runs-on timeout-minutes steps].each do |field|
+    mutations["initial interlock missing #{field}"] = ["whole-JVM interlock", ->(w) {
+        w["ci.yml"]["jobs"][POLICY::INITIAL_JOB].delete(field)
+    }]
+end
+{"continue-on-error" => true, "if" => "${{ always() }}", "environment" => "initial-recipient-execution",
+ "concurrency" => POLICY::QUEUE, "env" => {"P2PKIT_ACTIONS_READ_TOKEN" => "${{ github.token }}"}}.each do |field, value|
+    mutations["initial interlock gains #{field}"] = ["whole-JVM interlock", ->(w) {
+        w["ci.yml"]["jobs"][POLICY::INITIAL_JOB][field] = value
+    }]
+end
+mutations["initial interlock forged success"] = ["whole-JVM interlock", ->(w) {
+    w["ci.yml"]["jobs"][POLICY::INITIAL_JOB]["steps"][0]["run"] = "echo authorized\n"
+}]
+mutations["JVM loses initial interlock dependency"] = ["acyclic job dependencies", ->(w) {
+    w["ci.yml"]["jobs"]["jvm-library-checks"].delete("needs")
+}]
 POLICY::JOBS.each do |path, jobs|
     mutations["missing #{path}"] = ["missing participating workflow", ->(w) { w.delete(path) }]
     mutations["extra #{path} job"] = ["participating job IDs", ->(w) { w[path]["jobs"]["extra"] = {} }]

@@ -157,12 +157,40 @@ checks do not inspect or qualify evidence. Fresh complete original acquisition,
 actual source/host admission, whole-job dependencies, worker reacquisition and
 original custody remain necessary before this can be connected to execution.
 
+### Temporary whole-JVM fail-only interlock
+
+The prepared [CI workflow](../../.github/workflows/ci.yml) now places a separate
+`initial-recipient-gate` before the **entire** JVM matrix job. Its only command
+prints `INITIAL_RECIPIENT_STAGE2=HOLD; WHOLE_JVM_JOB_ADMISSION_REQUIRED` and exits
+125. It requests no permissions, environment, checkout, setup, acquisition or
+heavy-job lease. A failed step inside JVM would not stop its `always()` Gradle
+cleanup; the whole-job dependency avoids admitting that job at all.
+
+This deliberately blocks **every invocation of this edited CI workflow**. It is
+not the operational Stage2 gate, an approved environment, a suspended authorized
+run or permission to create a PR. `complete-gate` keeps its existing dependency,
+`always()` condition and first-step failed/skipped-JVM result guard; neither an
+ordinary HOLD nor a required check is removed. Connecting the real gate needs
+separate implementation review and activation authority, not replacing exit125
+with success.
+
+Author offline checks passed separately: heavy-queue and FULL source policies;
+JVM policy **41 controls**, heavy-queue policy **324**, hosted workflow policy
+**557**. The shell checks execute only the fixed refusal/result guards with
+synthetic inputs, not the GitHub scheduler. Commands used UID65534/Ruby3.2.3,
+read-only source, CPU20/512MiB/wall30+kill2 bounds. Original traces show only
+Ruby/Bash children and failed local name-service socket lookups, no Internet
+sockets. A post-test zero-socket assertion failed and remains recorded; the
+unchanged traces resolved that analysis error without rerunning or changing the
+tests. This is not syscall-sandbox or hosted/native qualification. Exact
+independent review belongs to the containing commit's #437 record.
+
 ## Remaining implementation and authorization boundaries
 
 | Increment | Required work; current boundary |
 | --- | --- |
 | Staged contracts | Separate schemas/history/reference binding and focused offline tests; implementation review belongs to the exact containing commit's issue record, not the design recommendation. |
-| Pre-use gate | Approval challenge, bounded original acquisition/custody, actual environment checks and whole-job dependency integration; no active caller yet. Coordinated controls in `check-heavy-job-queue-policy.rb`, `check-hosted-test-workflow-policy.rb`, `check-jvm-cross-host-policy-test.rb` and affected workflow tests must remain load-bearing. |
+| Pre-use gate | Approval challenge and bounded original acquisition/custody have dormant source; the whole-JVM dependency is fail-only, not an active gate caller. Actual environment/gate integration remains. Coordinated controls in `check-heavy-job-queue-policy.rb`, `check-hosted-test-workflow-policy.rb`, `check-jvm-cross-host-policy-test.rb` and affected workflow tests must remain load-bearing. |
 | Bootstrap identity/evidence | The [worker-only identity/cohort and original-return binding](../testing/hosted-dependency-cache.md#explicit-stage1-worker-identity-not-productive-admission) is source preparation, not productive `Admission`. Original-response retention is enclosed by the separate native controller. Productive identity/export contracts, actual repeated readmission, separate seal/upload and bootstrap workflow remain. Current trusted-main-only entries refuse absent policy and the distinct initial identity. |
 | Provider/custody | Trusted runner-selected Node24/service bridge, fixed supplier, Windows output freeze/read/final-close, bounded cancellation/drain/whole-domain retirement and original enclosing returns; then genuine save/probe/custody qualification. |
 | Hosted qualification | Requires reviewed executable source, safe registration, legitimate owner-controlled gate and **separate exact-source execution authorization**. No local app/toolchain build or dependency download. Bootstrap5400 remains UNADMITTED/UNMEASURED. |

@@ -124,6 +124,9 @@ end
     end
     if profile == "full"
         mutations.merge!({
+            "JVM setup bypasses initial prerequisite" => ->(v) { v["jobs"]["jvm-library-checks"].delete("needs") },
+            "JVM always-cleanup bypasses initial failure" => ->(v) { v["jobs"]["jvm-library-checks"]["if"] = "${{ always() }}" },
+            "initial interlock claims success" => ->(v) { v["jobs"][HeavyJobQueuePolicy::INITIAL_JOB]["steps"][0]["run"] = "true\n" },
             "no JVM prerequisite" => ->(v) { ordinary_job(v, profile).delete("needs") },
             "longer job deadline" => ->(v) { ordinary_job(v, profile)["timeout-minutes"] = 90 },
             "hidden acquisition in prefix" => ->(v) { ordinary_job(v, profile)["steps"].find { |s| s["run"] }["run"] += "\n./gradlew check\n" },
@@ -152,6 +155,20 @@ end
     raise "literal activation did not fail before acquisition" unless status == 125 &&
         output == "ORDINARY_TEST_ACTIVATION=HOLD; QUALIFIED_DEPENDENCY_CACHE_REQUIRED\n"
     checks += 1
+    if profile == "full"
+        status, output = shell_result(ci.fetch("jobs").fetch(HeavyJobQueuePolicy::INITIAL_JOB).fetch("steps").first.fetch("run"), {})
+        raise "initial interlock must fail without claiming admission" unless status == 125 &&
+            output == "INITIAL_RECIPIENT_STAGE2=HOLD; WHOLE_JVM_JOB_ADMISSION_REQUIRED\n"
+        checks += 1
+        # Actual fixed result-guard shell, not a GitHub scheduler simulation.
+        # A skipped JVM job must not turn the required complete-gate green.
+        guard = ordinary_job(ci, profile).fetch("steps").first.fetch("run")
+        %w[success failure cancelled skipped true].push("").each do |outcome|
+            code, text = shell_result(guard, {"JVM_CHECK_RESULT" => outcome})
+            raise "required gate hid failed/skipped JVM dependency" unless (code == 0) == (outcome == "success") && text.empty?
+            checks += 1
+        end
+    end
     terminal = ordinary_step(workflow, profile, "ordinary-required")
     good = terminal.fetch("env").to_h { |key, value| [key, value.end_with?(".outcome }}") ? "success" : "true"] }
     good["RUNNER_OS"] = profile == "full" ? "macOS" : "Linux"

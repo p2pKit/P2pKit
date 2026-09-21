@@ -18,8 +18,23 @@ concurrency:
   cancel-in-progress: ${{ github.event_name != 'schedule' }}
 
 jobs:
+  initial-recipient-gate:
+    # Fail-only preparation interlock. No environment, token, checkout or
+    # acquisition is requested until the real Stage2 gate is reviewed/authorized.
+    # A failed step inside the JVM job would still allow its always() cleanup.
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Hold whole JVM jobs until initial-recipient admission is implemented
+        shell: bash
+        run: |
+          echo 'INITIAL_RECIPIENT_STAGE2=HOLD; WHOLE_JVM_JOB_ADMISSION_REQUIRED' >&2
+          exit 125
+
   jvm-library-checks:
     name: JVM libraries (${{ matrix.os }})
+    needs: initial-recipient-gate
     concurrency:
       group: p2pkit-nonphysical-heavy
       queue: max

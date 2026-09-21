@@ -280,6 +280,11 @@ module HostedTestWorkflowPolicy
     def self.check_full(workflow)
         need(workflow["permissions"] == {"contents" => "read"} && !workflow.key?("env") && !workflow.key?("defaults"),
              "ordinary FULL keeps global read-only permissions and no execution overrides")
+        jobs = workflow.fetch("jobs")
+        jvm = jobs.fetch("jvm-library-checks")
+        need(jobs[HeavyJobQueuePolicy::INITIAL_JOB] == HeavyJobQueuePolicy::INITIAL_INTERLOCK &&
+             jvm["needs"] == HeavyJobQueuePolicy::INITIAL_JOB && !jvm.key?("if") && !jvm.key?("continue-on-error"),
+             "whole JVM job including always-cleanup must wait for the fail-only initial-recipient interlock")
         job = workflow.fetch("jobs").fetch("complete-gate")
         need(job.keys.sort == %w[concurrency if needs permissions runs-on steps timeout-minutes] &&
              job["permissions"] == {"contents" => "read", "actions" => "read"} &&
