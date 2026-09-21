@@ -3465,13 +3465,31 @@ exception/cancellation and private diagnostics survive; no retry is authorized.
 
 Only after qualifying native retirement may Windows command freeze return its
 strict reader. The reader and original command-close state are registered before
-post-return observations. Fixed stdout/stderr readers and the last separate
-directory owner also require close and final fences. Windows diagnostic log reopen
-binds the same identity/size and the new strict-reader interval, **not immutable
-transcript continuity across the unpinned close/reopen gap**; a same-file/same-size
-overwrite there is not detected. POSIX reads use no-follow/nonblocking opens,
-original stat equality and bounded reads. These file checks cannot prove an
-absence of outside writers or authenticate the producer.
+post-return observations. Windows stdout/stderr now use the original writer's
+fixed byte-only `read_provider_log()` operation, **before that writer closes**.
+Only `provider-stdout.log` and `provider-stderr.log` may open a temporary
+READ/shareREAD|WRITE handle; the original WRITE/shareREAD handle and ancestors
+remain pinned through its read, strict metadata checks and once-only close.
+The temporary handle never escapes the backend. Ordinary sharing is unchanged,
+and no close/reopen fallback exists. Full original information, byte bounds and
+the same RAW/LOCAL ends are checked before the caller releases the original writer.
+The command reader and last separate directory still require their own close and
+final fences. The two outer Windows log-reader slots are **never allocated or
+counted as closed**; the backend owns its temporary readers instead. POSIX keeps
+its close, no-follow/nonblocking reopen, original stat equality and bounded-read
+sequence. These checks do not authenticate the producer, establish native writer
+retirement or exclude privileged/same-user interference and writable mappings.
+
+After pure shape admission, every unsuccessful Windows log-readback supplier/check
+episode conservatively retains the original writer as UNKNOWN. An opener may have
+acquired an unreturned handle, and supplier notes/causes cannot establish complete
+retirement. A returned temporary reader still gets its one independent close attempt;
+known temporary closure is distinct from the original owner's UNKNOWN status. The
+first exception/cancellation survives even failed diagnostic attachment. The caller
+unconditionally quarantines every readback exception **before any distinct file
+owner can close**, without relying on a diagnostic classifier. This withholds
+qualification; it does not claim that a real handle necessarily leaked. Retrying
+or using the retained UNKNOWN writer remains forbidden.
 
 A successfully constructed immutable private result retains exact capture bytes,
 the native description and closed-slot coverage, but explicitly says
@@ -3480,8 +3498,8 @@ and `provider_acceptance=NOT_ESTABLISHED`. It never invokes the provider-outcome
 classifier as successful. Failures retain owners, exceptions and existing files;
 they do **not** supply completed failure-custody packets or encrypted delivery.
 
-The [focused controls](../../scripts/tests/hosted-cache-provider-lifecycle-test.py)
-passed **57/57 author methods**:44 Windows sharing/native-scope models and13 tiny
+The original leaf's [focused controls](../../scripts/tests/hosted-cache-provider-lifecycle-test.py)
+at `2aac2255` passed **57/57 author methods**:44 Windows sharing/native-scope models and13 tiny
 actual POSIX-file controls with modeled clocks/process scopes. Six selected
 desired-state regressions failed on the unchanged saved WIP and are included in
 the final57, not extra product coverage. The original57 aggregate remains FAILED
@@ -3500,6 +3518,34 @@ CPU20/512MiB/file32MiB/FD128/core0/wall30+kill2, frozen read-only source and
 pre-project filesystem/process/network/native-loader/pidfd/signal guards. Both
 reported guard4, unexpected-denials0 and ResourceWarnings0. The containing #437
 commit record separately binds independent review and executed independent checks.
+
+The subsequent log-readback increment has separate author results:
+
+- [Fixed log controls](../../scripts/tests/hosted-windows-provider-log-test.py)
+  **25/25 PASS**; command-file controls **38/38 PASS**; portable file controls
+  **75/75 PASS**, in three separate bounded processes. Four selected new log
+  methods failed against the saved original readback WIP (eight subtest failure
+  entries); they are included in the final25, not extra coverage.
+- Initial log aggregate **24 PASS / 1 FAIL** remains retained. Its new unreturned-
+  opener control incorrectly assumed that the existing model's failing close
+  left its handle present; that model actually releases before raising. The
+  corrected control explicitly models both pre-release and post-release failure,
+  separately checking actual disposition, once-only attempt and retained UNKNOWN.
+  No shared model semantics, implementation assertion or deadline was relaxed.
+- Composed capture controls **62/62 PASS**:49 Windows models and13 actual tiny
+  POSIX-file methods with modeled process/clock suppliers. The old Windows
+  close/reopen controls now check real readback/pin/final-reader events; five new
+  methods cover unnotable failure, uncertain temporary close, RAW/LOCAL expiry
+  and full-metadata return binding. Six selected desired-state methods all failed
+  against the unchanged `2aac2255` caller with the final backend/test inputs;
+  these six are included in the final62, not additional product coverage.
+
+Those six final/preimage invocations and the retained initial failure all kept
+the bounds/UID/guards above, with guard4, unexpected-denials0 and ResourceWarnings0.
+The backend received exact source-only independent review before caller integration;
+the containing #437 record separately binds the complete increment's review and
+any independently executed controls. Neither these models nor source review is
+native Windows/NTFS/Node24/provider qualification.
 
 Still missing: authenticated original180 acquisition, successful original spawn
 return with exact sink/command routing and complete POSIX marker inheritance,

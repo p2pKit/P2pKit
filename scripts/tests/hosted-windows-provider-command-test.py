@@ -51,6 +51,13 @@ class ShareApi(base.ModelApi):
         self.events.append(("create-with-protected-acl", path, self.policy.sddl(False)))
         return self.shared_open(node, 1, 3)
 
+    def provider_log_reader(self, parent, name):
+        files.require(type(name) is str and name in files.PROVIDER_LOG_NAMES, "Modeled provider log name")
+        directory = self.handles[parent][0]
+        path = directory.path + "\\" + name
+        files.require(path in self.nodes and not self.nodes[path].directory, "Modeled provider log missing/wrong-kind")
+        return self.shared_open(self.nodes[path], 1, 3)
+
     def close(self, handle):
         try:
             super().close(handle)

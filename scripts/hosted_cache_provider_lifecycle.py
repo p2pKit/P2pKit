@@ -387,22 +387,27 @@ class ProviderCapture:
 
     def _capture(self, name, expected, maximum):
         directory = self._slots["directory"].owner
-        filename = "provider-output.txt" if name == "command" else "provider-" + name + ".log"
-        slot_name = name + "-reader"
         if self._clock.role == "windows-x64":
-            reader = self._acquire(slot_name, lambda: directory.open_file(filename,
-                max_bytes=maximum, deadline=self._local_end), final=True)
-            before = reader.verify()
+            require(name in ("stdout", "stderr") and maximum == LOG_BYTES, "PROVIDER_LOG_CAPTURE_NAME")
+            writer = self._slots[name].owner
+            try:
+                raw = writer.read_provider_log()
+            except BaseException as error:
+                # Fail closed before ANY distinct outer owner can close. This
+                # conservative policy does not depend on exception notes (their
+                # attachment/classification may itself fail) or assert a leak.
+                self._failed(name + "-readback", error, unknown=True)
+                raise
             self._check(final=True)
-            # Windows may defer timestamps until the writer closes. This binds
-            # identity/size and the new strict-reader interval, NOT an immutable
-            # transcript across the close/reopen gap or same-size overwrite.
-            require(before.identity == expected.identity and before.size == expected.size, "PROVIDER_CAPTURE_REPLACED")
-            raw = reader.read()
+            before = writer.verify()
             self._check(final=True)
-            require(reader.verify() == before, "PROVIDER_CAPTURE_CHANGED")
+            require(before == expected, "PROVIDER_CAPTURE_CHANGED")
+            # The backend closed its temporary reader before returning bytes;
+            # the original writer is STILL pinned. No outer log-reader slot is
+            # allocated or counted as closed on this route.
         else:
-            reader = self._acquire(slot_name, lambda: files._posix_stream(directory.path / filename,
+            filename = "provider-output.txt" if name == "command" else "provider-" + name + ".log"
+            reader = self._acquire(name + "-reader", lambda: files._posix_stream(directory.path / filename,
                 os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, "rb"), final=True)
             before = files._file_info(directory.path / filename, reader, maximum)
             self._check(final=True)
@@ -482,10 +487,13 @@ class ProviderCapture:
                         self._check(final=True)
                         info = stream.verify()
                         self._check(final=True)
+                        maximum = (0 if self._phase == "save" else COMMAND_BYTES) if name == "command" else LOG_BYTES
+                        if self._clock.role == "windows-x64":
+                            raw = self._capture(name, info, maximum)
                         self._close(name)
                         require(not self._unknown and self._primary is None, "PROVIDER_CAPTURE_CLOSE_FAILED")
-                        maximum = (0 if self._phase == "save" else COMMAND_BYTES) if name == "command" else LOG_BYTES
-                        raw = self._capture(name, info, maximum)
+                        if self._clock.role != "windows-x64":
+                            raw = self._capture(name, info, maximum)
                         if name == "stdout":
                             out = raw
                         elif name == "stderr":

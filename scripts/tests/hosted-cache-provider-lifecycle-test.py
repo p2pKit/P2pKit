@@ -80,6 +80,13 @@ class ProviderLifecycleModels(unittest.TestCase):
         for capture in self.captures:
             for name in reversed(capture._NAMES):
                 slot = capture._slots[name]
+                if type(slot.owner) is files.NativeFile:
+                    # Synthetic disposal ONLY, after UNKNOWN/pin assertions.
+                    reader = slot.owner._provider_log_reader
+                    if reader in self.api.handles:
+                        self.api.close(reader)
+                    slot.owner._provider_log_reader = None
+                    slot.owner._provider_log_unknown = slot.owner._provider_log_active = False
                 if slot.owner is not None and not slot.close_attempted:
                     try:
                         slot.owner.close()
@@ -189,7 +196,11 @@ class ProviderLifecycleModels(unittest.TestCase):
         self.assertEqual(result.original_step_outcome, "NOT_OBSERVED")
         self.assertEqual(result.enclosing_owner_retirement, "NOT_OBSERVED")
         self.assertEqual(result.provider_acceptance, "NOT_ESTABLISHED")
-        self.assertEqual(set(result.closed_resources), set(capture._NAMES))
+        self.assertEqual(set(result.closed_resources), set(capture._NAMES) - {"stdout-reader", "stderr-reader"})
+        for name in ("stdout-reader", "stderr-reader"):
+            slot = capture._slots[name]
+            self.assertIsNone(slot.owner)
+            self.assertFalse(slot.attempted or slot.close_attempted or slot.closed)
         self.assertIn(b"MODEL_ONLY_NO_PROCESS", result.native_retirement)
         self.assertNotIn("MODEL_PRIVATE", repr(result))
         with self.assertRaises(FrozenInstanceError):
@@ -538,31 +549,34 @@ class ProviderLifecycleModels(unittest.TestCase):
         self.assertIsNone(capture._slots["command-reader"].owner)
         self.assert_capture_owners_quarantined(capture)
 
-    def test_failed_reader_open_quarantines_prior_readers_and_separate_directory(self):
+    def test_failed_log_readback_open_quarantines_original_writer_prior_reader_and_directory(self):
         capture, original = self.capture(), FalseyFailure("MODEL_READER_OPEN_FAILED")
-        with patch.object(self.root, "open_file", side_effect=original):
+        with patch.object(self.api, "provider_log_reader", side_effect=original):
             self.assertIs(caught(lambda: self.run_ok(capture)), original)
         self.assertTrue(capture.unknown)
-        self.assertTrue(capture._slots["stdout"].closed)
-        self.assertTrue(capture._slots["stdout-reader"].attempted)
+        self.assertFalse(capture._slots["stdout"].close_attempted)
+        self.assertTrue(capture._slots["stdout"].owner._provider_log_unknown)
+        self.assertFalse(capture._slots["stdout-reader"].attempted)
         self.assertIsNotNone(capture._slots["command-reader"].owner)
         self.assertFalse(capture._slots["command-reader"].close_attempted)
         self.assertFalse(capture._slots["stderr"].close_attempted)
         self.assertFalse(capture._slots["directory"].close_attempted)
         self.assert_no_result(capture)
 
-    def test_failed_reader_close_stops_later_distinct_owner_closes(self):
+    def test_failed_command_reader_close_stops_later_distinct_owner_closes(self):
         capture, original = self.capture(), FalseyCancellation("MODEL_READER_CLOSE_FAILED")
         close = files.NativeFile.close
         def fail(reader):
-            if not reader._writable and str(reader.path).endswith("provider-stderr.log"):
+            if not reader._writable and str(reader.path).endswith("provider-output.txt"):
                 raise original
             return close(reader)
         with patch.object(files.NativeFile, "close", fail):
             self.assertIs(caught(lambda: self.run_ok(capture)), original)
         self.assertTrue(capture.unknown)
-        self.assertTrue(capture._slots["stderr-reader"].close_attempted)
-        for name in ("stdout-reader", "command-reader", "directory"):
+        self.assertTrue(capture._slots["command-reader"].close_attempted)
+        self.assertFalse(capture._slots["command-reader"].closed)
+        self.assertTrue(capture._slots["stdout"].closed and capture._slots["stderr"].closed)
+        for name in ("stdout-reader", "stderr-reader", "directory"):
             self.assertFalse(capture._slots[name].close_attempted, name)
         self.assert_no_result(capture)
 
@@ -571,14 +585,16 @@ class ProviderLifecycleModels(unittest.TestCase):
         original.add_note("MODEL_SUPPLIER_RETIREMENT_UNKNOWN")
         check = capture._postcheck
         def fence(stage):
-            if stage == "stderr-reader-preclose":
+            if stage == "stdout-preclose":
                 capture._failed(stage, original)
                 return False
             return check(stage)
         capture._postcheck = fence
         self.assertIs(caught(lambda: self.run_ok(capture)), original)
         self.assertTrue(capture.unknown)
-        self.assertFalse(capture._slots["stderr-reader"].close_attempted)
+        self.assertFalse(capture._slots["stdout"].close_attempted)
+        self.assertFalse(capture._slots["stderr"].close_attempted)
+        self.assertFalse(capture._slots["command-reader"].close_attempted)
         self.assertFalse(capture._slots["directory"].close_attempted)
         self.assert_no_result(capture)
 
@@ -675,25 +691,146 @@ class ProviderLifecycleModels(unittest.TestCase):
             if str(reader.path).endswith("provider-output.txt"):
                 self.raw = 280 * clocks.NS
             return raw
-        with patch.object(files.NativeFile, "read", late):
+        with patch.object(files.NativeFile, "read", late), \
+                patch.object(self.api, "provider_log_reader", wraps=self.api.provider_log_reader) as log_reader:
             self.assertRegex(str(caught(lambda: self.run_ok(capture))), "PROVIDER_RAW_EXPIRED")
-        self.assertFalse(capture._slots["stdout-reader"].attempted)
+        log_reader.assert_not_called()
+        self.assertFalse(capture._slots["stdout"].owner._provider_log_started)
         self.assert_no_result(capture)
 
-    def test_windows_log_reopen_proves_new_interval_not_old_same_size_content(self):
-        capture, open_file = self.capture(), self.root.open_file
-        changed = b"x" * len(b"MODEL_PRIVATE_STDOUT")
-        def reopen(name, **kwargs):
-            if name == "provider-stdout.log":
-                node = self.api.nodes[r"C:\work\private\provider-stdout.log"]
-                node.content = changed
-                node.version += 1
-            return open_file(name, **kwargs)
-        with patch.object(self.root, "open_file", side_effect=reopen):
+    def test_windows_log_readback_keeps_original_writer_through_temporary_close(self):
+        capture, opener, pairs = self.capture(), self.api.provider_log_reader, []
+        def pinned(parent, filename):
+            name = "stdout" if filename == "provider-stdout.log" else "stderr"
+            writer = capture._slots[name].owner
+            original = writer.native_handle
+            self.assertTrue(capture._slots["scope"].closed)
+            self.assertEqual(self.scope.drain.call_count, 1)
+            self.assertFalse(writer.closed)
+            self.assertEqual(self.api.modes[original], (2, 1))
+            node = self.api.nodes[str(writer.path)]
+            # A same-size overwrite needs a conflicting writer: the old
+            # close/reopen interval no longer exists in this sharing model.
+            with self.assertRaisesRegex(files.FilesystemError, "sharing"):
+                self.api.shared_open(node, 2, 7)
+            reader = opener(parent, filename)
+            pairs.append((original, reader))
+            return reader
+        close = self.api.close
+        def ordered(handle):
+            for original, reader in pairs:
+                if handle == reader:
+                    self.assertIn(original, self.api.handles)
+                elif handle == original:
+                    self.assertNotIn(reader, self.api.handles)
+            close(handle)
+        with patch.object(self.root, "open_file", side_effect=AssertionError("MODEL_CLOSE_REOPEN_FORBIDDEN")) as ordinary, \
+                patch.object(self.api, "provider_log_reader", pinned), patch.object(self.api, "close", ordered):
             result = self.run_ok(capture)
-        self.assertEqual(result.stdout, changed)
+        ordinary.assert_not_called()
+        self.assertEqual(result.stdout, b"MODEL_PRIVATE_STDOUT")
+        self.assertEqual(result.stderr, b"MODEL_PRIVATE_STDERR")
+        self.assertEqual(len(pairs), 2)
+        for original, reader in pairs:
+            closes = [row[1] for row in self.api.events if row[0] == "close"]
+            self.assertEqual(closes.count(original), 1)
+            self.assertEqual(closes.count(reader), 1)
+            self.assertLess(closes.index(reader), closes.index(original))
         self.assertEqual(result.provider_acceptance, "NOT_ESTABLISHED")
         self.never_classifier.assert_not_called()
+
+    def test_unnotable_readback_failure_quarantines_before_any_distinct_file_owner_close(self):
+        diagnostic = RuntimeError("MODEL_NOTE_FAILED")
+        class Unnotable(FalseyCancellation):
+            def add_note(self, _message):
+                raise diagnostic
+        capture, original = self.capture(), Unnotable("MODEL_LOG_READ_FAILED")
+        read = self.api.read
+        def failure(handle, count):
+            if self.api.handles[handle][0].path.endswith("provider-stdout.log"):
+                raise original
+            return read(handle, count)
+        with patch.object(self.api, "read", failure), \
+                patch.object(lifecycle.diagnostics, "_exception_detail", return_value={"retirementUnknown": False}):
+            self.assertIs(caught(lambda: self.run_ok(capture)), original)
+        self.assertFalse(hasattr(original, "__notes__"))
+        writer = capture._slots["stdout"].owner
+        self.assertTrue(capture.unknown and writer._provider_log_unknown)
+        self.assertIn(diagnostic, writer._provider_log_secondary)
+        self.assertIsNone(writer._provider_log_reader)  # Actual temporary close is separately known.
+        self.assertIn(writer._pins[-1].handle, self.api.handles)
+        for name in ("stdout", "stderr", "command-reader", "directory"):
+            self.assertFalse(capture._slots[name].close_attempted, name)
+        self.assertFalse(capture._slots["stderr"].owner._provider_log_started)
+        before = list(self.api.events)
+        self.assertIs(caught(lambda: capture.__exit__(None, None, None)), original)
+        self.assertEqual(self.api.events, before)
+        self.assert_no_result(capture)
+
+    def test_failed_temporary_log_reader_close_retains_writer_and_other_owners(self):
+        capture, original = self.capture(), FalseyCancellation("MODEL_TEMP_READER_CLOSE_FAILED")
+        close, attempts = self.api.close, []
+        def fail(handle):
+            if self.api.modes[handle] == (1, 3) and self.api.handles[handle][0].path.endswith("provider-stderr.log"):
+                attempts.append(handle)
+                raise original
+            return close(handle)
+        with patch.object(self.api, "close", fail):
+            self.assertIs(caught(lambda: self.run_ok(capture)), original)
+        self.assertEqual(len(attempts), 1)
+        writer = capture._slots["stderr"].owner
+        self.assertEqual(writer._provider_log_reader, attempts[0])
+        self.assertIn(attempts[0], self.api.handles)
+        self.assertTrue(capture.unknown and writer._provider_log_unknown)
+        self.assertTrue(capture._slots["stdout"].closed)
+        for name in ("stderr", "command-reader", "directory"):
+            self.assertFalse(capture._slots[name].close_attempted, name)
+        self.assert_no_result(capture)
+
+    def late_temporary_log_close(self, domain):
+        capture, close, closed = self.capture(), self.api.close, []
+        def late(handle):
+            target = self.api.modes[handle] == (1, 3) and self.api.handles[handle][0].path.endswith("provider-stdout.log")
+            close(handle)
+            if target:
+                closed.append(handle)
+                if domain == "raw":
+                    self.raw = 280 * clocks.NS
+                else:
+                    self.local = 270.0
+        with patch.object(self.api, "close", late):
+            error = caught(lambda: self.run_ok(capture))
+        self.assertEqual(len(closed), 1)
+        self.assertNotIn(closed[0], self.api.handles)
+        self.assertIsNone(capture._slots["stdout"].owner._provider_log_reader)
+        self.assertFalse(capture._slots["stderr"].owner._provider_log_started)
+        self.assertEqual(capture._local_end, 270.0)
+        self.assertEqual(capture._raw_end, 280 * clocks.NS)
+        self.assert_no_result(capture)
+        return capture, error
+
+    def test_temporary_log_close_crossing_raw_end_is_not_successful_capture(self):
+        capture, error = self.late_temporary_log_close("raw")
+        self.assertRegex(str(error), "PROVIDER_RAW_EXPIRED")
+        self.assertTrue(capture._slots["stdout"].closed)
+
+    def test_temporary_log_close_crossing_local_end_keeps_original_writer_unknown(self):
+        capture, error = self.late_temporary_log_close("local")
+        self.assertRegex(str(error), "deadline")
+        self.assertTrue(capture.unknown and capture._slots["stdout"].owner._provider_log_unknown)
+        for name in ("stdout", "stderr", "command-reader", "directory"):
+            self.assertFalse(capture._slots[name].close_attempted, name)
+
+    def test_log_readback_return_rechecks_full_original_metadata_not_only_size(self):
+        capture, readback = self.capture(), files.NativeFile.read_provider_log
+        def changed(writer):
+            raw = readback(writer)
+            self.api.nodes[str(writer.path)].version += 1
+            return raw
+        with patch.object(files.NativeFile, "read_provider_log", changed):
+            self.assertRegex(str(caught(lambda: self.run_ok(capture))), "PROVIDER_CAPTURE_CHANGED")
+        self.assertFalse(capture._slots["stderr"].owner._provider_log_started)
+        self.assert_no_result(capture)
 
 
 class ProviderPosixLifecycleModels(unittest.TestCase):

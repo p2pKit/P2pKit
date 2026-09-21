@@ -13,6 +13,9 @@ Ordinary handles deny write/delete sharing and pin every ancestor until the last
 dependent object closes. The separate fixed provider command-file capability
 permits pathname writes until an overlapping deny-write reader locks the file;
 it does not prove append-only history, a kernel byte quota or writer retirement.
+The two fixed provider logs have a byte-only overlapping readback: their original
+deny-write/delete writer stays pinned until the temporary reader has closed.
+That reader never escapes the operation, and ordinary sharing is unchanged.
 An inherited descendant ACL is accepted only below a verified
 private root and only when it is the exact recognized user+SYSTEM inheritance.
 No operation deletes evidence. Callers must stop writers before snapshotting.
@@ -46,6 +49,8 @@ CHUNK = 64 * 1024
 MAX_READ_BYTES = 16 * 1024 * 1024
 PROVIDER_COMMAND_NAME = "provider-output.txt"
 MAX_PROVIDER_COMMAND_BYTES = 4 * 1024
+PROVIDER_LOG_NAMES = ("provider-stdout.log", "provider-stderr.log")
+MAX_PROVIDER_LOG_BYTES = 1024 * 1024
 SYSTEM_SID = "S-1-5-18"
 ADMINISTRATORS_SID = "S-1-5-32-544"
 FILE_ALL_ACCESS = 0x001F01FF
@@ -445,11 +450,19 @@ class _WinApi:
         # A WRITE-access original could not; closing it first would create a gap.
         return self._child(parent, PROVIDER_COMMAND_NAME, directory=False, create=True, writable=False, sharing=3)
 
+    def provider_log_reader(self, parent, name):
+        # The caller must KEEP the original WRITE/shareREAD pin throughout this
+        # temporary READ/shareREAD|WRITE handle's life, including its close.
+        require(type(name) is str and name in PROVIDER_LOG_NAMES, "Unsupported provider log name")
+        return self._child(parent, name, directory=False, create=False, writable=False, sharing=3)
+
     def _child(self, parent, name, *, directory, create, writable, sharing):
         component(name)
         require(not writable or create and not directory, "Only exclusive newly created files are writable")
-        require(type(sharing) is int and (sharing == 1 or sharing == 3 and name == PROVIDER_COMMAND_NAME and
-                directory is False and create is True and writable is False), "Unsupported native sharing policy")
+        require(type(sharing) is int and (sharing == 1 or sharing == 3 and type(name) is str and
+                directory is False and writable is False and
+                (name == PROVIDER_COMMAND_NAME and create is True or name in PROVIDER_LOG_NAMES and create is False)),
+                "Unsupported native sharing policy")
         security = PTR()
         handle = PTR()
         try:
@@ -983,24 +996,27 @@ class NativeFile(io.RawIOBase):
         self._live_output_size = self.initial_info.size
         self.final_info = None
         self._retired = False
+        self._provider_log_started = self._provider_log_active = self._provider_log_unknown = False
+        self._provider_log_failure = self._provider_log_reader = None
+        self._provider_log_secondary = ()
 
     @property
     @_locked
     def native_handle(self):
-        require(not self.closed and not self._retired, "Native file is closed")
+        require(not self.closed and not self._retired and not self._provider_log_unknown, "Native file is closed or UNKNOWN")
         return self._pins[-1].handle
 
     @_locked
     def readable(self):
-        return not self.closed and not self._retired and not self._writable
+        return not self.closed and not self._retired and not self._provider_log_unknown and not self._writable
 
     @_locked
     def writable(self):
-        return not self.closed and not self._retired and self._writable
+        return not self.closed and not self._retired and not self._provider_log_unknown and self._writable
 
     @_locked
     def seekable(self):
-        return not self.closed and not self._retired
+        return not self.closed and not self._retired and not self._provider_log_unknown
 
     @_locked
     def tell(self):
@@ -1072,7 +1088,9 @@ class NativeFile(io.RawIOBase):
 
         Ancestors stay strict. Only this exclusive private file pin permits
         monotonic growth across the separate size queries; both sizes are bounded.
-        No final_info is published: post-drain verify/close/reopen remain mandatory.
+        No final_info is published: post-drain verification/readback remains
+        mandatory. Ordinary readers still require close/reopen; the two provider
+        logs may use their separate original-writer-pinned byte-only readback.
         """
         _check_time(self._deadline)
         require(self.writable(), "Native file is not an exclusive writer")
@@ -1086,9 +1104,115 @@ class NativeFile(io.RawIOBase):
         return current
 
     @_locked
+    def read_provider_log(self):
+        """One bounded byte-only read while the ORIGINAL writer denies sharing.
+
+        The caller must first establish whole-domain writer retirement; this
+        method cannot prove it. No permissive reader/handle is returned.
+        Any failed supplier/check episode is conservatively UNKNOWN, even when
+        the temporary reader's close is known. Retain the original owner and any
+        unresolved private reader reference; never retry.
+        """
+        if self._provider_log_failure is not None:
+            raise self._provider_log_failure
+        try:
+            require(not self._provider_log_started, "Provider log readback is one-use only")
+        except BaseException as error:
+            self._provider_log_failure = error
+            raise
+        self._provider_log_started = self._provider_log_active = True
+        api, pins, end, maximum = self._api, self._pins, self._deadline, self.max_bytes
+        originals, raw, admitted = tuple(pins), None, False
+
+        def failed(error, *, unknown=False):
+            # An opener may fail before returning its acquired handle; notes or
+            # causes cannot establish that every provisional obligation retired.
+            self._provider_log_unknown |= admitted or unknown
+            if self._provider_log_failure is None:
+                self._provider_log_failure = error
+            elif error is not self._provider_log_failure:
+                self._provider_log_secondary += (error,)
+
+        def checked():
+            if self._provider_log_failure is not None:
+                raise self._provider_log_failure
+            require(self._api is api and self._pins is pins and len(pins) == len(originals) and
+                    all(pin is original for pin, original in zip(pins, originals)) and
+                    self._deadline == end and type(self._deadline) is type(end) and
+                    type(self.max_bytes) is int and self.max_bytes == maximum and self.writable(),
+                    "Provider log original writer changed")
+            _check_time(end)
+
+        try:
+            require(type(self) is NativeFile and len(pins) >= 2 and pins[-1].private and pins[-1].writable and
+                    not pins[-1].info.is_directory, "Provider log requires its original private writer")
+            _bound(maximum, MAX_PROVIDER_LOG_BYTES, "provider log bytes", zero=True)
+            name = pins[-1].path.rsplit("\\", 1)[-1]
+            require(name in PROVIDER_LOG_NAMES and str(self.path) == pins[-1].path and
+                    self.identity == pins[-1].info.identity, "Provider log original path differs")
+            admitted = True  # Pure shape rejection above performs no native work.
+            checked()
+            self.sync()
+            checked()
+            before = self.verify()
+            checked()
+            # Save the actual handle before any post-return callback/check.
+            self._provider_log_reader = api.provider_log_reader(pins[-2].handle, name)
+            checked()
+            require(api.inspect(self._provider_log_reader, pins[-1].path, directory=False, private=True) == before,
+                    "Provider log readback identity or metadata differs")
+            checked()
+            require(api.seek(self._provider_log_reader, 0, 0) == 0, "Provider log readback position differs")
+            checked()
+            output = bytearray()
+            while len(output) < before.size:
+                checked()
+                count = min(CHUNK, before.size - len(output))
+                part = api.read(self._provider_log_reader, count)
+                checked()
+                require(type(part) is bytes and 0 < len(part) <= count, "Provider log readback was truncated or oversized")
+                output.extend(part)
+            checked()  # Last growth (or empty allocation) precedes the next native inspect.
+            require(api.inspect(self._provider_log_reader, pins[-1].path, directory=False, private=True) == before,
+                    "Provider log changed during readback")
+            checked()
+            require(self.verify() == before, "Provider log original changed during readback")
+            checked()
+            raw = bytes(output)
+            checked()
+        except BaseException as error:
+            failed(error)
+        finally:
+            if self._provider_log_reader is not None:
+                try:
+                    # This is the successfully returned original handle. Keep
+                    # its first close failure even if attaching a note fails.
+                    api.close(self._provider_log_reader)
+                except BaseException as error:
+                    failed(error, unknown=True)
+                else:
+                    self._provider_log_reader = None
+            try:
+                _check_time(end)  # The temporary reader close spends the ORIGINAL end too.
+                checked()
+                require(self.verify() == before, "Provider log original changed before reader retirement")
+                checked()
+            except BaseException as error:
+                failed(error)
+            self._provider_log_active = False
+        if self._provider_log_unknown:
+            try:
+                _note(self._provider_log_failure, "Native provider log readback retirement UNKNOWN; retain original writer")
+            except BaseException as detail:
+                failed(detail, unknown=True)
+        if self._provider_log_failure is not None:
+            raise self._provider_log_failure
+        return raw
+
+    @_locked
     def verify(self):
         _check_time(self._deadline)
-        require(not self.closed and not self._retired, "Native file is closed")
+        require(not self.closed and not self._retired and not self._provider_log_unknown, "Native file is closed or UNKNOWN")
         for pin in self._pins:
             current = pin.observe()
         require(current.size <= self.max_bytes and (self._writable or current == self.initial_info),
@@ -1105,6 +1229,12 @@ class NativeFile(io.RawIOBase):
 
     @_locked
     def close(self):
+        if self._provider_log_active:
+            if self._provider_log_failure is None:
+                self._provider_log_failure = FilesystemError("Provider log readback is active")
+            raise self._provider_log_failure
+        if self._provider_log_unknown:
+            raise self._provider_log_failure
         if self.closed or self._retired:
             return
         errors = []
