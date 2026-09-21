@@ -137,7 +137,8 @@ def retirement_details(error: BaseException) -> dict[str, Any]:
 
 
 def _retirement_text(row: dict[str, Any]) -> str:
-    return f"Windows resource retirement UNKNOWN ({row['phase']}/{row['resource']}): {row['error']}"
+    backend = "POSIX" if row["phase"].startswith("posix-") else "Windows"
+    return f"{backend} resource retirement UNKNOWN ({row['phase']}/{row['resource']}): {row['error']}"
 
 
 def format_ownership_error(error: BaseException) -> str:
@@ -178,7 +179,9 @@ def _finish_retirement(failures: list[Any], original: BaseException | None = Non
     cancellation = next((error for _, error in failures if not isinstance(error, Exception)), None)
     failure = original if original is not None else cancellation
     if failure is None:
-        failure = OwnershipError("Windows resource retirement UNKNOWN; all remaining resources attempted; " +
+        backend = "POSIX" if rows[0]["phase"].startswith("posix-") else "Windows"
+        failure = OwnershipError(f"{backend} resource retirement UNKNOWN; "
+                                 "all remaining resources attempted; " +
                                  "; ".join(_retirement_text(row) for row in rows[:MAX_RETIREMENT_ERRORS]))
     prior = retirement_details(failure)
     combined = [*prior.get("resources", []), *rows]
@@ -365,6 +368,11 @@ class PosixProcess:
 
 
 class PosixScope:
+    """Serialized, non-reentrant controller; close is not concurrent cancellation.
+
+    Callers must drain their writer domain before handle finalization. Closing
+    descriptors or polling leaders alone does not prove process retirement.
+    """
     name = "abstract"
 
     def __init__(self, job: str, invocation: str, state: str, home: str):
@@ -377,6 +385,8 @@ class PosixScope:
         self.pending_discoveries: dict[int, dict[str, Any]] = {}
         self.discovery_reconciliations: list[dict[str, Any]] = []
         self.baseline: set[tuple[int, ...]] = set()
+        self._closed = False
+        self._retirement_error: BaseException | None = None
         self._admit()
         for pid in self._pids():
             identity = self._identity(pid)
@@ -416,6 +426,25 @@ class PosixScope:
     def _release(self, handle: Any) -> None:
         pass
 
+    def _ensure_open(self) -> None:
+        failure = getattr(self, "_retirement_error", None)
+        if failure is not None:
+            raise failure
+        if getattr(self, "_closed", False):
+            raise OwnershipError("POSIX process owner is closed")
+
+    def _retire_resources(self, actions: list[Any], phase: str, *, original: BaseException | None = None) -> None:
+        # Preserve the closed four-field carrier consumed by private custody.
+        _, failures = _retire_actions(actions, "posix-" + phase)
+        if not failures:
+            return
+        prior = getattr(self, "_retirement_error", None)
+        primary = prior if prior is not None else original if original is not None else failures[0][1]
+        self._retirement_error = primary  # UNKNOWN remains terminal, even after a later successful close.
+        _finish_retirement(failures, primary)
+        if original is None:
+            raise primary
+
     def _ours(self, environment: dict[bytes, bytes]) -> bool:
         def value(key: str) -> bytes | None:
             return environment.get(key.encode())
@@ -447,6 +476,7 @@ class PosixScope:
             self.discovery_errors.discard(record["message"])
 
     def discover(self) -> list[dict[str, Any]]:
+        self._ensure_open()
         for leader in self.leaders:
             leader.poll()  # Reap our children; a zombie is not a running worker.
         # A missing census entry is not exit evidence for an unresolved lifetime.
@@ -483,7 +513,9 @@ class PosixScope:
                 # the handle. A separate eligibility read here could hide denial
                 # as absence before this positively owned process is registered.
                 handle = self._acquire(identity)
-            except ProcessLookupError:
+            except ProcessLookupError as error:
+                if retirement_details(error):
+                    raise  # A vanished lifetime does not resolve an uncertain pidfd close.
                 self._discovery_resolved(pid, "lifetime-ended")
                 continue
             self.known[key] = identity
@@ -499,6 +531,7 @@ class PosixScope:
 
     def spawn(self, argv: list[str], cwd: str, env: dict[str, str], *,
               stdout: Any = None, stderr: Any = None) -> PosixProcess:
+        self._ensure_open()
         # Optional privately owned sinks avoid an additional pipe/thread owner.
         # The caller retains both sinks until complete scope retirement, bounds
         # live output size, and verifies/syncs them before accepting a result.
@@ -524,6 +557,7 @@ class PosixScope:
         return process
 
     def signal_all(self, signum: int, *, deadline: float | None = None) -> None:
+        self._ensure_open()
         _check_drain_deadline(deadline)
         live = self.discover()
         _check_drain_deadline(deadline)
@@ -535,12 +569,14 @@ class PosixScope:
                     self._send(identity, self.handles[key], signum)
                 else:
                     self._send(identity, self.handles[key], signum, deadline=deadline)
-            except ProcessLookupError:
-                pass
+            except ProcessLookupError as error:
+                if retirement_details(error):
+                    raise
             _check_drain_deadline(deadline)
 
     def drain(self, grace: float = 5.0, kill_wait: float = 5.0, *,
               deadline: float | None = None) -> list[dict[str, Any]]:
+        self._ensure_open()
         if deadline is not None:
             return _bounded_drain(self, grace, kill_wait, deadline, quiet_required=3)
         if self.discover():
@@ -581,11 +617,24 @@ class PosixScope:
                 "discoveryErrors": sorted(self.discovery_errors)}
 
     def close(self) -> None:
-        for handle in self.handles.values():
-            self._release(handle)
+        if getattr(self, "_closed", False):
+            failure = getattr(self, "_retirement_error", None)
+            if failure is not None:
+                raise failure
+            return
+        # Prepare the complete once-only roster before any native close. A close
+        # can raise after releasing its descriptor; retrying may hit a reused fd.
+        actions = [(f"handle:{index}", lambda handle=handle: self._release(handle))
+                   for index, handle in enumerate(self.handles.values())]
+        actions += [(f"leader:{index}", lambda process=process: process.close())
+                    for index, process in enumerate(self.leaders)]
+        self._closed = True
         self.handles.clear()
-        for process in self.leaders:
-            process.close()
+        self.leaders.clear()
+        self._retire_resources(actions, "scope-close")
+        failure = getattr(self, "_retirement_error", None)
+        if failure is not None:
+            raise failure
 
 
 class LinuxScope(PosixScope):
@@ -598,10 +647,14 @@ class LinuxScope(PosixScope):
         if identity is None:
             raise OwnershipError("Cannot inspect the Linux controller identity")
         handle = self._acquire(identity)
+        original = None
         try:
             signal.pidfd_send_signal(handle, 0)
+        except BaseException as error:
+            original = error
+            raise
         finally:
-            os.close(handle)
+            self._retire_resources([("pidfd", lambda: os.close(handle))], "admission-probe", original=original)
 
     def _pids(self) -> list[int]:
         pids = [int(entry.name) for entry in Path("/proc").iterdir() if entry.name.isdecimal()]
@@ -639,14 +692,20 @@ class LinuxScope(PosixScope):
             raise ProcessLookupError(pid) from error
 
     def _acquire(self, identity: dict[str, Any]) -> int:
+        self._ensure_open()
         handle = os.pidfd_open(identity["pid"], 0)
-        current = self._identity(identity["pid"])
-        if current is None or not current["live"] or self._key(current) != self._key(identity):
-            os.close(handle)
-            raise ProcessLookupError(identity["pid"])
+        try:
+            current = self._identity(identity["pid"])
+            if current is None or not current["live"] or self._key(current) != self._key(identity):
+                raise ProcessLookupError(identity["pid"])
+            self._ensure_open()
+        except BaseException as error:
+            self._retire_resources([("pidfd", lambda: os.close(handle))], "acquire", original=error)
+            raise
         return handle
 
     def _send(self, identity: dict[str, Any], handle: int, signum: int, *, deadline: float | None = None) -> None:
+        self._ensure_open()
         _check_drain_deadline(deadline)
         signal.pidfd_send_signal(handle, signum)
         _check_drain_deadline(deadline)
@@ -941,6 +1000,7 @@ class DarwinScope(PosixScope):
                 self.active_drain["pending"].pop(key)
 
     def signal_all(self, signum: int, *, deadline: float | None = None) -> None:
+        self._ensure_open()
         if self.active_drain is None:
             if deadline is None:
                 return super().signal_all(signum)
@@ -1004,6 +1064,7 @@ class DarwinScope(PosixScope):
 
     def drain(self, grace: float = 5.0, kill_wait: float = 5.0, *,
               deadline: float | None = None) -> list[dict[str, Any]]:
+        self._ensure_open()
         if self.active_drain is not None:
             raise OwnershipError("Darwin drain is already active")
         if len(self.drain_reconciliations) >= 1024:

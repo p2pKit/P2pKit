@@ -3358,6 +3358,41 @@ supervisor. Both ordinary HOLDs, provider180, NativeFile900/Snapshot576MiB and
 proposed5400's UNADMITTED/UNMEASURED status remain. No workflow dispatch or genuine
 provider/retirement/custody/scheduling qualification follows from this wiring.
 
+### POSIX provisional-handle retirement, not provider cancellation
+
+The existing [native process owner](../../scripts/audit_processes.py) now keeps a
+new Linux pidfd provisionally owned through its fallible identity/key checks.
+Failure or cancellation attempts its close once without replacing the original
+exception. Admission's separate signal-zero probe follows the same rule, including
+constructor failure before a scope can be returned. An uncertain close cannot be
+swallowed as ordinary `ProcessLookupError` disappearance or quiet retirement.
+
+POSIX scope close prepares the complete known handle/leader roster, detaches it
+before attempting releases, and attempts every entry despite earlier errors.
+Close failures remain UNKNOWN; the first exception (including a falsey one) and
+secondary diagnostics survive. Later close calls never retry potentially reused
+descriptors; a failed scope keeps raising its original failure and cannot resume
+discovery, launch, signaling or drain. The maintained four-field retirement
+carrier is unchanged: `posix-*` phase labels identify these failures, and the
+actual private-evidence reader retains their structured rows. Windows default
+carrier bytes and its existing native file-custody implementation are unchanged.
+
+This remains a **serialized, non-reentrant controller**. Close is not concurrent
+cancellation or proof that writers retired; the caller must drain the original
+domain first. The provisional-pidfd reentry guard does not establish generic
+spawn/reentry safety. Darwin token acquisition, ownership selectors, deadlines,
+the external watchdog requirement and both execution HOLDs remain unchanged.
+
+The [focused syscall models](../../scripts/tests/audit-posix-retirement-test.py)
+passed **22/22 methods**, with separate **38/38** deadline and **4/4** Windows
+carrier regressions. These three bounded UID65534 invocations reported zero
+unexpected guard denials or ResourceWarnings. No pidfd, native signal, process
+census, provider or private key was used. Original desired-state preimages and
+the independently found/fixed carrier-integration failure remain preserved;
+the exact independent verdict is bound in the containing #437 commit record.
+These passes do not accept the complete1066 WIP or supply provider integration,
+native retirement, hosted qualification, budget admission or Release acceptance.
+
 ## Verification and remaining qualification
 
 Focused offline commands (not a claim they ran on a particular host):
