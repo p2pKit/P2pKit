@@ -3877,7 +3877,8 @@ ResourceWarnings0. Frozen inputs remained unchanged. These are not provider/nati
 timing qualifications. Final independent implementation/document review and its
 executed scope are separately bound in #437, not inferred from author passes.
 
-Still missing: bounded worker control-return and inner failure-byte transport,
+At this opaque-only increment's boundary, still missing: bounded worker
+control-return and inner failure-byte transport,
 full failure custody/export/seal/upload, enclosing asynchronous Node/runner
 returns, pre-Node/source/tool/service admission, complete1066/one canonical-init120
 receiving authority, productive/repeated bootstrap and operational gate/workflow.
@@ -3885,6 +3886,99 @@ Genuine native/provider/cache/resolver/custody/scheduling qualification and
 Stage2/trusted-main delivery remain held. Both ordinary HOLDs and the whole-JVM
 interlock, NativeFile900/Snapshot576MiB, FULL3600/Desktop1800 and proposed5400's
 UNADMITTED/UNMEASURED status are unchanged. Opaque logs do not make Releases ready.
+
+### Fixed worker packet and failure transport, not Node/runner custody
+
+The later dormant [return codec](../../scripts/hosted_cache_provider_return.py)
+now connects the actual inner capture worker to the outer supervisor above.
+It uses one exclusively created private **`worker-return.json`** at the outer
+root and one small exact stdout ACK. It introduces no workflow caller, generic
+path selector, provider client, credential or new native sharing capability.
+The worker's fixed hashed source roster includes the codec; neither that roster
+nor its offline controls supply the still-missing installed-source/tool admission.
+
+The separate packet ceiling is **6MiB**. Raw command remains at4096 bytes,
+stdout/stderr at1MiB each, native description at2MiB; maximum base64 payload is
+5,597,876 bytes, with strictly bounded metadata. The existing query encoder's
+2MiB cap, bootstrap record parser's16KiB cap and both worker log caps are
+unchanged. Exact schema, duplicate-key refusal, canonical ASCII JSON/base64,
+individual decoded limits and exact request/phase/identity bindings are required.
+No exception text, token or environment is added to the packet.
+
+The sender takes only the actual capture's guarded successful result or
+**known-closed failed capture** after its original context exit. The existing
+worker `_check()` remains failure-sticky; a separate known-capture finalization
+boundary pins the actual result, request, owner roster and first-error history.
+It does not clean up or invent a return for partial/UNKNOWN capture. The packet
+writer is retained before post-return callbacks, exclusively written, synced,
+verified and closed; the worker's bundle/home/root owners then close once.
+Only afterward may the bounded ACK be written/flushed to the original stdout.
+Its exact request digest, size/hash and original **stable file identity** bind
+the packet. Pre-close Windows timestamps are not treated as final readback times.
+
+A completed send receipt is published only after ACK finalization and the
+original cutoff fences. The actual bootstrap accepts **exit0 for completed
+success**, or **exit65 for a completed failed capture with its unchanged original
+exception/finalization boundary**. Exit65 remains execution failure, never a
+successful provider/step result. Every incomplete bootstrap/worker exit,
+including `SystemExit(0/65)` or normal return without that exact receipt,
+normalizes to66. Exit classification is once-only and sticky; a failed final
+observation cannot be retried as success. First exceptions remain first.
+
+The outer wait now retains a separate qualified observation only after its
+actual post-poll binding and original cutoff checks. A late poll's0/65 may remain
+in an opaque failed transcript but cannot authorize the control return. After
+known original outer native drain/close, the receiver reads the ACK and the
+fixed packet **before its final enclosing-owner close loop**. It registers the
+actual reader before callbacks, compares the creation identity and size/hash,
+and checks one reader's metadata before/after bounded reading. POSIX opens are
+no-follow/nonblocking. Windows uses ordinary `open_file` after the exclusive
+writer closes, not the narrow provider-log readback capability.
+
+Missing/partial/duplicate ACK, mismatched request/file/packet, unqualified or
+contradictory worker exit cannot provide control-return authority. Ambiguous
+I/O/acquisition/close remains UNKNOWN with distinct enclosing owners pinned.
+Pure framing/interpretation failure can retain a known-closed **opaque failed
+transcript**, not a successful run. Decoding creates a distinct immutable
+**`TransportedProvider`**, never a reconstructed in-process `CapturedProvider`.
+Failed command bytes never enter the success parser/classifier. Even a correctly
+transported successful capture leaves provider acceptance, original runner/step
+outcome, installed-source admission and enclosing custody unestablished.
+
+Final author offline commands passed separately on this transport revision:
+
+| Command under `python3 -I -B -S scripts/tests/` | Executed result |
+| --- | --- |
+| `hosted-cache-provider-return-test.py` | **35/35 PASS**:10 supplied-codec methods,12 worker/entry models,10 outer Windows models and3 tiny actual POSIX-file methods; test0.542s, wall1.04s. |
+| `hosted-cache-provider-supervisor-test.py` | **50/50 PASS** on the changed transport inputs/fixtures; test0.568s, wall1.01s. Not reuse of the earlier opaque-only50 result. |
+| `hosted-cache-provider-launch-test.py` | **40/40 PASS**, including current fixed-source loading; test1.307s, wall1.76s. Not native/provider launch qualification. |
+
+The initial transport aggregate remains **31 PASS/3 FAIL**: three Windows
+fault-injection selectors incorrectly used Linux `Path.name` on Windows-spelled
+model paths, so the intended faults never fired. They now use `PureWindowsPath`;
+assertions were not weakened. The following34-method pass is preserved separately.
+The first changed supervisor aggregate remains **49 PASS/1 FAIL**: its
+late-constructor double did not accept the new keyword argument and therefore
+missed the intended expiry injection; forwarding that argument restores the
+unchanged oracle. A new exit-retry oracle separately **failed1/1 before** the
+once-only/sticky correction and passes in the final35. No failed aggregate is
+relabeled as a whole pass.
+
+Every invocation used UID/GID65534, cleared environment/groups, no-new-privs,
+read-only frozen source, CPU20/512MiB/file32MiB/FD128/core0/wall30+kill2 and
+pre-project filesystem/process/network/native-loader/pidfd/signal guards:
+guard4, unexpected-denials0, ResourceWarnings0; frozen inputs unchanged.
+These are offline controls, not native process, Node, provider, crypto, cache,
+or timing acceptance. Exact independent implementation/document review is
+separately mapped in #437, not inferred from author passes.
+
+Still missing: enclosing asynchronous Node/runner returns and pre-Node/source/
+tool/service admission; complete1066/current authority within one canonical-init120;
+productive/repeated bootstrap, full export/freeze/seal/upload and operational
+gate/workflow; genuine native/provider/cache/resolver/custody/scheduling
+qualification and Stage2/trusted-main delivery. Both ordinary HOLDs, whole-JVM
+interlock and all original limits remain. Packet encoding/write/ACK/retirement/
+decoding spend existing ends, never an extra45 or an admitted bootstrap5400.
 
 ## Verification and remaining qualification
 
@@ -3946,6 +4040,7 @@ python3 -I -B -S scripts/tests/hosted-cache-provider-environment-test.py
 python3 -I -B -S scripts/tests/hosted-cache-provider-lifecycle-test.py
 python3 -I -B -S scripts/tests/hosted-cache-provider-launch-test.py
 python3 -I -B -S scripts/tests/hosted-cache-provider-supervisor-test.py
+python3 -I -B -S scripts/tests/hosted-cache-provider-return-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/hosted-windows-provider-command-test.py
 python3 -I -B -S scripts/tests/hosted-test-evidence-test.py

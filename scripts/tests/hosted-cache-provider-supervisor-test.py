@@ -26,6 +26,22 @@ L, clocks, files = S.launch, S.launch.clocks, S.launch.files.windows_files
 caught, Failure, Cancel = F.F.caught, F.F.FalseyFailure, F.F.FalseyCancellation
 
 
+def model_packet(directory, request, observed_ns):
+    """Explicit supplied-capture model, not an original worker/provider execution."""
+    frame = json.loads(request)
+    names = L.lifecycle.ProviderCapture._NAMES
+    capture = L.lifecycle.CapturedProvider(frame["phase"], 0, b"", b"MODEL_INNER_STDOUT", b"MODEL_INNER_STDERR",
+        b'{"model":"native-retirement-not-executed"}\n', (), observed_ns,
+        names[:-2] if frame["role"] == "windows-x64" else names)
+    raw = L.transport.encode(capture, request)
+    writer = directory.create_file(L.transport.PACKET_NAME, max_bytes=L.transport.PACKET_BYTES, deadline=280.0)
+    assert writer.write(raw) == len(raw)
+    writer.sync()
+    identity = L.transport.file_identity(writer.verify(), frame["role"])
+    writer.close()
+    return L.transport.acknowledge(raw, identity, request)
+
+
 class SupervisorModels(unittest.TestCase):
     def setUp(self):
         self.fixture = F.LaunchSites()
@@ -35,7 +51,8 @@ class SupervisorModels(unittest.TestCase):
         self.owner = S.ProviderSupervisor()
         self.fixture.parents.append(self.owner.launch)
         self.on_wait = None
-        self.model_stdout, self.model_stderr = b"MODEL_WORKER_STDOUT\x00", b"MODEL_WORKER_STDERR\r\n"
+        self.model_stdout, self.model_stderr = None, b"MODEL_WORKER_STDERR\r\n"
+        self.packet_from_worker = False
         self.fixture.outer.spawn.side_effect = self.spawn
 
     def tearDown(self):
@@ -46,6 +63,9 @@ class SupervisorModels(unittest.TestCase):
 
     def spawn(self, *args, **kwargs):
         child = self.fixture.spawn(self.fixture.outer, *args, **kwargs)
+        if self.model_stdout is None:
+            self.model_stdout = (b"" if self.packet_from_worker else
+                model_packet(self.fixture.root, args[0][-1].encode("ascii"), self.model.raw))
         self.model.api.write(kwargs["stdout"].native_handle, self.model_stdout)
         self.model.api.write(kwargs["stderr"].native_handle, self.model_stderr)
         return child
@@ -93,9 +113,10 @@ class SupervisorModels(unittest.TestCase):
         self.assertEqual((result.stdout, result.stderr), (self.model_stdout, self.model_stderr))
         self.assertEqual(json.loads(result.request), self.owner.launch.frame)
         self.assertEqual(json.loads(result.native_retirement)["invocation"], "2" * 32)
-        self.assertEqual(set(result.closed_resources), set(S._NAMES) - {"child"})
+        self.assertEqual(set(result.closed_resources), (set(S._NAMES) - {"child"}) | {"packet-reader"})
         self.assertEqual(result.closed_resources[0], "scope")
-        self.assertEqual(result.provider_control_return, "NOT_OBSERVED")
+        self.assertEqual(result.provider_control_return, "TRANSPORTED_OBSERVATION_ONLY")
+        self.assertIs(type(result.provider_return), L.transport.TransportedProvider)
         self.assertEqual(result.enclosing_step_outcome, "NOT_OBSERVED")
         self.assertEqual(result.provider_acceptance, "NOT_ESTABLISHED")
         self.assertNotIn("MODEL_WORKER", repr(result))
@@ -109,19 +130,28 @@ class SupervisorModels(unittest.TestCase):
 
     def test_outer_and_inner_use_same_fixed_names_in_distinct_original_directories(self):
         workers = []
-        self.on_wait = lambda: workers.append(self.fixture.worker(self.owner.launch)) if not workers else None
+        self.packet_from_worker = True
+        def run_worker():
+            if not workers:
+                with patch.object(L, "_write_ack", lambda raw: self.model.api.write(self.owner.launch.stdout.native_handle, raw)):
+                    workers.append(self.fixture.worker(self.owner.launch))
+        self.on_wait = run_worker
         result = self.run_owner()
         worker = workers[0]
         self.assertEqual(PureWindowsPath(self.owner.launch.stdout.path).name, "provider-stdout.log")
         self.assertNotEqual(self.owner.launch.stdout.path, worker.capture._slots["stdout"].owner.path)
-        self.assertEqual(result.stdout, self.model_stdout)
         self.assertEqual(worker.capture_return.stdout, b"MODEL_PRIVATE_STDOUT")
-        self.assertEqual(result.provider_control_return, "NOT_OBSERVED")
+        self.assertEqual(result.provider_return.stdout, worker.capture_return.stdout)
+        self.assertNotEqual(result.stdout, result.provider_return.stdout)
+        self.assertEqual(result.provider_control_return, "TRANSPORTED_OBSERVATION_ONLY")
 
     def test_zero_exit_and_plausible_command_text_do_not_run_provider_parser(self):
         self.model_stdout = b'{"cache-hit":"true","success":true}\n'
         with patch.object(L.cache, "provider_command_outputs", side_effect=AssertionError("MODEL_NO_PARSER")) as parser:
-            result = self.run_owner(phase="lookup")
+            self.assertIsInstance(caught(lambda: self.run_owner(phase="lookup")), L.transport.ProviderReturnError)
+        result = self.owner.transcript
+        self.assertTrue(result.failed)
+        self.assertIsNone(result.provider_return)
         self.assertEqual(result.stdout, self.model_stdout)
         self.assertEqual(result.provider_acceptance, "NOT_ESTABLISHED")
         parser.assert_not_called()
@@ -439,8 +469,8 @@ class SupervisorModels(unittest.TestCase):
 
     def test_late_transcript_construction_cannot_publish_a_result(self):
         original = S.WorkerTranscript
-        def late(*args):
-            value = original(*args)
+        def late(*args, **kwargs):
+            value = original(*args, **kwargs)
             self.model.raw = 280 * clocks.NS
             return value
         with patch.object(S, "WorkerTranscript", side_effect=late):
@@ -548,8 +578,11 @@ class PosixTranscriptModels(unittest.TestCase):
         # controls above execute the actual fixed launch under supplier models.
         original = self.owner.launch
         original.window = L._Window(first, values["issued_ns"], values["hard_end_ns"], values["hard_end_ns"])
-        original.frame = {"workerCutoffNs": str(values["worker_cutoff_ns"])}
-        original.worker_argv = ["MODEL_LAUNCH", json.dumps(original.frame)]
+        original.frame = {"role": self.model.clock.role, "phase": "save", "job": "1" * 32,
+            "outerId": "2" * 32, "innerId": "4" * 32, "issuedNs": str(values["issued_ns"]),
+            "workerCutoffNs": str(values["worker_cutoff_ns"])}
+        original.worker_argv = ["MODEL_LAUNCH", L._json(original.frame)]
+        self.model_ack = model_packet(self.model.root, original.worker_argv[-1].encode("ascii"), self.model.raw)
         for name, value in (("capture_directory", self.model.root.create_directory("capture", deadline=280.0)),
                             ("scope", self.model.scope)):
             original._owners[name] = value
@@ -559,7 +592,7 @@ class PosixTranscriptModels(unittest.TestCase):
             writer = self.model.root.create_file("provider-" + name + ".log", max_bytes=L.lifecycle.LOG_BYTES, deadline=280.0)
             original._owners[name] = writer
             setattr(original, name, writer)
-            os.write(writer.fileno(), ("MODEL_POSIX_WORKER_" + name).encode())
+            os.write(writer.fileno(), self.model_ack if name == "stdout" else b"MODEL_POSIX_WORKER_stderr")
         process = SimpleNamespace(pid=41, stdout=None, stderr=None, poll=lambda: self.code)
         child = L.processes.PosixProcess(process)
         original._owners["child"] = original.child = child
@@ -577,13 +610,13 @@ class PosixTranscriptModels(unittest.TestCase):
 
     def test_actual_tiny_posix_transcript_readers_are_bounded_no_follow_and_closed(self):
         result = self.run_owner()
-        self.assertEqual((result.stdout, result.stderr), (b"MODEL_POSIX_WORKER_stdout", b"MODEL_POSIX_WORKER_stderr"))
+        self.assertEqual((result.stdout, result.stderr), (self.model_ack, b"MODEL_POSIX_WORKER_stderr"))
         readers = [row for row in self.model.opens if row[2] == "rb"]
-        self.assertEqual([row[0] for row in readers], ["provider-stdout.log", "provider-stderr.log"])
+        self.assertEqual([row[0] for row in readers], ["provider-stdout.log", "provider-stderr.log", L.transport.PACKET_NAME])
         self.assertTrue(all(row[1] == os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK for row in readers))
         self.assertTrue(all(stream.closed for stream in self.model.streams))
         self.assertIn("stdout-reader", result.closed_resources)
-        self.assertEqual(result.provider_control_return, "NOT_OBSERVED")
+        self.assertEqual(result.provider_control_return, "TRANSPORTED_OBSERVATION_ONLY")
         self.assertFalse(self.owner.unknown)
 
     def test_nonzero_posix_worker_retains_failure_bytes_without_parser(self):
@@ -591,7 +624,7 @@ class PosixTranscriptModels(unittest.TestCase):
         self.assertRegex(str(caught(self.run_owner)), "SUPERVISOR_WORKER_FAILED")
         self.assertEqual(self.owner.transcript.worker_exit_code, 29)
         self.assertTrue(self.owner.transcript.failed)
-        self.assertEqual(self.owner.transcript.stdout, b"MODEL_POSIX_WORKER_stdout")
+        self.assertEqual(self.owner.transcript.stdout, self.model_ack)
         self.model.never_classifier.assert_not_called()
 
     def test_darwin_selection_uses_posix_files_without_native_execution(self):

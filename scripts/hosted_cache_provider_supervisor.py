@@ -1,8 +1,8 @@
-"""Dormant original outer retirement and opaque worker transcripts, NOT admission.
+"""Dormant original retirement, worker transcripts and private result transport.
 
-No control-return parser, provider result, enclosing Node/runner outcome or
-seal/upload is supplied here. In particular a zero worker exit is NOT provider
-acceptance. The original supervisor must survive: losing it is terminal UNKNOWN.
+No enclosing Node/runner outcome or seal/upload is supplied here. In particular
+a transported capture or zero worker exit is NOT provider acceptance. The
+original supervisor must survive: losing it is terminal UNKNOWN.
 All work spends the launcher's original180/shared final45; no timeout is renewed.
 """
 from __future__ import annotations
@@ -29,7 +29,8 @@ class WorkerTranscript:
     observed_ns: int
     closed_resources: tuple
     failed: bool
-    scope: str = "OPAQUE_WORKER_TRANSCRIPT_ONLY_V1"
+    provider_return: launch.transport.TransportedProvider | None = field(default=None, repr=False)
+    scope: str = "WORKER_TRANSCRIPT_WITH_OPTIONAL_TRANSPORT_V1"
     provider_control_return: str = "NOT_OBSERVED"
     enclosing_step_outcome: str = "NOT_OBSERVED"
     provider_acceptance: str = "NOT_ESTABLISHED"
@@ -58,8 +59,9 @@ class ProviderSupervisor:
         self._request = self._cutoff = self._worker_local_end = None
         self._exit_code = self._transcript = None
         self._wait_return = None
+        self._qualified_wait = None
         self._wait_started = False
-        self._readers = {"stdout-reader": None, "stderr-reader": None}
+        self._readers = {"stdout-reader": None, "stderr-reader": None, "packet-reader": None}
         self._attempted = set()
         self._closed = []
         self._raw = {}
@@ -115,7 +117,7 @@ class ProviderSupervisor:
         return value
 
     def _fence(self, boundary):
-        primary, errors, prefix, observed_wait = boundary
+        primary, errors, prefix, observed_wait, qualified_wait = boundary
         def same():
             launch.require(not self._unknown and self._primary is primary and self._errors is errors and
                 len(errors) == len(prefix) and all(actual is prior for actual, prior in zip(errors, prefix)),
@@ -123,7 +125,8 @@ class ProviderSupervisor:
             request, cutoff, local_end, code = observed_wait
             launch.require(self._wait_return is observed_wait and self._request is request and
                 self._cutoff == cutoff and self._worker_local_end == local_end and
-                type(self._exit_code) is type(code) and self._exit_code == code,
+                type(self._exit_code) is type(code) and self._exit_code == code and
+                self._qualified_wait is qualified_wait and (qualified_wait is None or qualified_wait is observed_wait),
                 "SUPERVISOR_OBSERVATION_CHANGED")
         same()
         observed = self._check()
@@ -162,6 +165,7 @@ class ProviderSupervisor:
         self._wait_started = True
         request, cutoff, local_end = self._request, self._cutoff, self._worker_local_end
         observed_code = None
+        qualified = False
         def checked():
             if self._primary is not None:
                 raise self._primary
@@ -190,7 +194,9 @@ class ProviderSupervisor:
                 self._exit_code = observed_code
                 checked()
                 if observed_code is not None:
-                    launch.require(type(observed_code) is int and observed_code == 0, "SUPERVISOR_WORKER_FAILED")
+                    launch.require(type(observed_code) is int, "SUPERVISOR_WORKER_FAILED")
+                    qualified = True  # Only AFTER original post-poll cutoff/binding checks.
+                    launch.require(observed_code == 0, "SUPERVISOR_WORKER_FAILED")
                     return
                 original.scope.discover()
                 checked()
@@ -201,6 +207,7 @@ class ProviderSupervisor:
             # No callback follows this write: later retirement receives actual
             # local observations, not mutable diagnostic slots or a supplied code.
             self._wait_return = (request, cutoff, local_end, observed_code)
+            self._qualified_wait = self._wait_return if qualified else None
 
     def _read(self, name, writer, boundary):
         try:
@@ -238,11 +245,43 @@ class ProviderSupervisor:
             self._failed(name + "-readback", error, unknown=True)
             raise
 
+    def _read_packet(self, ack, boundary):
+        try:
+            self._fence(boundary)
+            directory = dict(self._owners)["directory"]
+            role = self._window.clock.role
+            launch.require(self._readers["packet-reader"] is None, "SUPERVISOR_DUPLICATE_READER")
+            path = directory.path / launch.transport.PACKET_NAME
+            reader = (directory.open_file(launch.transport.PACKET_NAME, max_bytes=launch.transport.PACKET_BYTES,
+                deadline=self._window.local_end) if role == "windows-x64" else
+                launch.files._posix_stream(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, "rb"))
+            self._readers["packet-reader"] = reader  # Actual return, before callbacks.
+            self._fence(boundary)
+            def info():
+                return reader.verify() if role == "windows-x64" else launch.files._file_info(path, reader, launch.transport.PACKET_BYTES)
+            before = info()
+            self._fence(boundary)
+            launch.require(before.size == ack.packet_bytes and
+                launch.transport.file_identity(before, role) == ack.packet_identity, "SUPERVISOR_PACKET_REPLACED")
+            raw = reader.read(launch.transport.PACKET_BYTES + 1)
+            self._raw["packet"] = raw
+            self._fence(boundary)
+            launch.require(info() == before and type(raw) is bytes and len(raw) == before.size and
+                launch.hashlib.sha256(raw).hexdigest() == ack.packet_sha256, "SUPERVISOR_PACKET_CHANGED")
+            directory.verify()
+            self._fence(boundary)
+            self._close("packet-reader", reader)
+            self._fence(boundary)
+            return raw
+        except BaseException as error:
+            self._failed("packet-readback", error, unknown=True)
+            raise
+
     def _finish(self):
         owners = dict(self._owners)
         scope = owners["scope"]
         observed_wait = self._wait_return
-        boundary = (self._primary, self._errors, tuple(self._errors), observed_wait)
+        boundary = (self._primary, self._errors, tuple(self._errors), observed_wait, self._qualified_wait)
         retired, native = False, None
         if scope is not None:
             try:
@@ -270,16 +309,31 @@ class ProviderSupervisor:
         if not retired:
             self._unknown = True
             return
-        out = err = None
+        out = err = provider_return = control_error = None
         try:
             if self._wait_started:
                 self._fence(boundary)
                 out = self._read("stdout", owners["stdout"], boundary)
                 err = self._read("stderr", owners["stderr"], boundary)
+                try:
+                    self._fence(boundary)
+                    launch.require(boundary[4] is observed_wait and observed_wait[3] in (0, launch.transport.FAILED_CAPTURE_EXIT),
+                                   "SUPERVISOR_RETURN_WAIT_UNQUALIFIED")
+                    ack = launch.transport.read_ack(out, observed_wait[0])
+                    self._fence(boundary)
+                    raw = self._read_packet(ack, boundary)
+                    provider_return = launch.transport.decode(raw, ack, observed_wait[0], observed_wait[3])
+                    now = self._fence(boundary)
+                    launch.require(provider_return.observed_ns <= now, "SUPERVISOR_RETURN_FUTURE_CAPTURE")
+                except BaseException as error:
+                    provider_return, control_error = None, error
+                    # Pure framing/interpretation failures still permit known
+                    # original closes and an opaque failed transcript. I/O
+                    # ambiguity has already latched UNKNOWN in _read_packet.
         except BaseException as error:
             self._failed("capture", error)
         finally:
-            for name in ("stderr-reader", "stdout-reader", "stderr", "stdout", "bundle", "capture_directory", "home", "directory"):
+            for name in ("packet-reader", "stderr-reader", "stdout-reader", "stderr", "stdout", "bundle", "capture_directory", "home", "directory"):
                 if self._unknown:
                     break
                 owner = self._readers[name] if name in self._readers else owners[name]
@@ -295,9 +349,12 @@ class ProviderSupervisor:
         launch.require(set(self._closed) == expected and all(type(raw) is bytes for raw in (out, err, native)) and
             (self._exit_code is None or type(self._exit_code) is int), "SUPERVISOR_CLOSE_INCOMPLETE")
         transcript = WorkerTranscript(observed_wait[3], observed_wait[0], out, err, native, observed,
-                                      tuple(self._closed), boundary[0] is not None)
+            tuple(self._closed), boundary[0] is not None or control_error is not None, provider_return,
+            provider_control_return="TRANSPORTED_OBSERVATION_ONLY" if provider_return is not None else "NOT_OBSERVED")
         self._fence(boundary)  # Construction and final checks spend the original end.
         self._transcript = transcript
+        if control_error is not None:
+            self._failed("control-return", control_error)
 
     def run(self, first, *, issued_ns, hard_end_ns, worker_cutoff_ns, phase, job, invocation, inner_invocation,
             plan, node, tool_path, cancelled):

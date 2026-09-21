@@ -89,6 +89,8 @@ class LaunchSites(unittest.TestCase):
         self.provider_code = self.worker_code = 0
         self.fail_outer = self.fail_inner = None
         self.command_bytes = b""
+        self.acks = []
+        self.patch(L, "_write_ack", self.acks.append)  # No actual stdout descriptor write.
 
     def patch(self, obj, name, value):
         binding = patch.object(obj, name, value)
@@ -160,7 +162,8 @@ class LaunchSites(unittest.TestCase):
         return parent
 
     def worker(self, parent, env=None, frame=None):
-        worker = L._CaptureWorker(copy.deepcopy(parent.frame) if frame is None else frame)
+        frame = copy.deepcopy(parent.frame) if frame is None else frame
+        worker = L._CaptureWorker(frame, L._json(frame).encode("ascii"))
         self.workers.append(worker)
         with patch.dict(os.environ, parent.worker_environment if env is None else env, clear=True):
             worker.run()
@@ -175,7 +178,7 @@ class LaunchSites(unittest.TestCase):
         for worker in self.workers:
             if worker.capture is not None:
                 owners += [slot.owner for slot in worker.capture._slots.values()]
-            owners += [getattr(worker, name, None) for name in ("bundle", "capture_directory", "home", "directory")]
+            owners += [getattr(worker, name, None) for name in ("packet", "bundle", "capture_directory", "home", "directory")]
         for parent in self.parents:
             owners += [getattr(parent, name, None) for name in ("bundle", "stdout", "stderr", "capture_directory", "scope")]
             owners += list(getattr(parent, "_owners", {}).values())
@@ -452,8 +455,10 @@ class LaunchSites(unittest.TestCase):
         worker = self.workers[-1]
         self.assertEqual(worker.capture.failure_capture.exit_code, 9)
         self.assertEqual(worker.capture.failure_capture.stdout, b"MODEL_PRIVATE_STDOUT")
-        self.assertIsNone(worker.capture_return)
-        self.assertEqual(worker.closed, [])
+        self.assertIs(worker.capture_return, worker.capture.failure_capture)
+        self.assertEqual(worker.closed, ["packet", "bundle", "home", "directory"])
+        self.assertEqual(worker.exit_code(None, worker.original_error), L.transport.FAILED_CAPTURE_EXIT)
+        self.assertEqual(len(self.acks), 1)
         self.assertIn(worker, L.QUARANTINE)
 
     def test_worker_uses_shorter_local_cutoff_not_a_fresh180_or_second45(self):
@@ -515,7 +520,7 @@ class FixedSourceBootstrap(unittest.TestCase):
                 for name in (*W.NAMES, "uuid"):
                     sys.modules.pop(name, None)
                 with self.assertRaisesRegex(RuntimeError, "^PROVIDER_LAUNCH_FRAME$"):
-                    W.bootstrap()
+                    W.bootstrap().run()
                 self.assertIs(sys.path, isolated_path)
                 self.assertEqual(tuple(sys.path), path_values)
                 for name in W.names(role):

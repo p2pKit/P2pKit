@@ -26,7 +26,7 @@ NAMES = (
     "hosted_dependency_seed_files", "hosted_dependency_cache",
     "hosted_lock_resources", "hosted_job_clock", "hosted_evidence",
     "hosted_test_query", "hosted_test_evidence", "hosted_windows_evidence",
-    "hosted_cache_provider_environment", "hosted_cache_provider_lifecycle",
+    "hosted_cache_provider_environment", "hosted_cache_provider_lifecycle", "hosted_cache_provider_return",
     "hosted_cache_provider_worker", "hosted_cache_provider_launch",
 )
 STAMP = ("st_dev", "st_ino", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns", "st_file_attributes")
@@ -124,12 +124,27 @@ def bootstrap():
         sys.modules[name] = module
         exec(code[name], module.__dict__)
         require(sys.path is original_path and tuple(sys.path) == path_values)
-    # Retain only in-process original state. No success record/step outcome is
-    # manufactured: enclosing control-return/custody is NOT implemented here.
-    worker = sys.modules["hosted_cache_provider_launch"]._CaptureWorker(frame)
+    # Return the actual new worker, not a replay selected from the diagnostic
+    # roster. main() normalizes every incomplete exit, including SystemExit.
+    worker = sys.modules["hosted_cache_provider_launch"]._CaptureWorker(frame, sys.argv[2].encode("ascii"))
     sys.modules["hosted_cache_provider_launch"]._WORKERS.append(worker)
-    worker.run()
+    return worker
+
+
+def main():
+    try:
+        worker = bootstrap()
+        require(type(worker) is sys.modules["hosted_cache_provider_launch"]._CaptureWorker)
+        try:
+            result = worker.run()
+        except BaseException as error:
+            return worker.exit_code(None, error)
+        return worker.exit_code(result, None)
+    except BaseException:
+        # Neither a bare return nor an exception's own code can mint0/65. Do
+        # not print original exceptions, credentials or private capture bytes.
+        return 66  # Fixed incomplete transport; provider-return.INCOMPLETE_EXIT.
 
 
 if __name__ == "__main__":
-    bootstrap()
+    raise SystemExit(main())

@@ -1,7 +1,7 @@
 """Dormant fixed native launch sites, NOT an admitted provider bridge.
 
 There is no admitted CLI/workflow caller, pre-Node/environment/tool authority,
-return protocol or custody/seal/upload in this module. Standalone start() leaves
+admission or custody/seal/upload in this module. Standalone start() leaves
 original owners live on both return and failure. The separate original outer
 supervisor must finish them under the SAME180/final45; never infer retirement
 from child exit, an in-process quarantine, or a success-shaped supplied record.
@@ -23,6 +23,7 @@ import time
 import audit_processes as processes
 import hosted_cache_provider_environment as environment
 import hosted_cache_provider_lifecycle as lifecycle
+import hosted_cache_provider_return as transport
 import hosted_cache_provider_worker as worker_source
 import hosted_dependency_cache as cache
 import hosted_job_clock as clocks
@@ -47,6 +48,23 @@ class WorkerLaunch:
     """Original child and immutable actual request, not a provider result."""
     child: object = field(repr=False)
     request: bytes = field(repr=False)
+
+
+@dataclass(frozen=True, repr=False)
+class _WorkerSend:
+    capture: object = field(repr=False)
+    error: BaseException | None = field(repr=False)
+    acknowledgement: bytes = field(repr=False)
+    check: object = field(repr=False)
+
+
+def _write_ack(raw):
+    # Descriptor1 is the original fixed native stdout sink, not an arbitrary
+    # destination/stream supplied by a caller. One unbuffered bounded write;
+    # partial/ambiguous write or flush never receives a completed send receipt.
+    count = os.write(1, raw)
+    require(type(count) is int and count == len(raw), "PROVIDER_RETURN_ACK_WRITE")
+    os.fsync(1)
 
 
 def require(value, reason):
@@ -397,14 +415,24 @@ class SupervisorLaunch:
 
 
 class _CaptureWorker:
-    def __init__(self, frame):
-        self.frame = frame
+    def __init__(self, frame, request):
+        self.frame, self.request = frame, request
         self.directory = self.home = self.bundle = self.capture_directory = self.capture = self.child = None
+        self.packet = None
         self.window = self.provider_environment = self.provider_argv = None
         self.capture_return = self.original_error = None
         self.closed = []
         self.attempted, self.started = set(), False
-        self._owners = {name: None for name in ("directory", "home", "bundle", "capture_directory", "capture", "child")}
+        self._errors, self._send_receipt = [], None
+        self._send_started = self._exit_started = False
+        self._owners = {name: None for name in ("directory", "home", "bundle", "capture_directory", "capture", "child", "packet")}
+
+    def _failed(self, stage, error):
+        if self.original_error is None:
+            self.original_error = error
+        self._errors.append((stage, error))
+        if not any(item is self for item in QUARANTINE):
+            QUARANTINE.append(self)
 
     def _check(self, *, work=True):
         if self.original_error is not None:
@@ -425,7 +453,90 @@ class _CaptureWorker:
         self._check()
         return owner
 
+    def _send_return(self, capture, result, error, request):
+        """Only after the actual capture exit/property return, including known failure.
+
+        This separate boundary never relaxes _check() or cleans up a partial
+        capture. Any new ambiguous operation leaves its owners for the original
+        enclosing scope to retire; it cannot retry or emit a completed ACK.
+        """
+        require(not self._send_started and self._send_receipt is None, "PROVIDER_RETURN_ONE_SEND")
+        self._send_started = True
+        frame, window, roster, errors = self.frame, self.window, self._owners, self._errors
+        owners, prefix = tuple(roster.items()), tuple(errors)
+        attempts, prior_attempts = self.attempted, frozenset(self.attempted)
+        closed, expected_closed = self.closed, []
+        packet = receipt = None
+        def same():
+            require(self.frame is frame and self.request is request and _json(frame).encode("ascii") == request and
+                self.window is window and self._owners is roster and tuple(roster) == tuple(name for name, _ in owners) and
+                all(roster[name] is (packet if name == "packet" else owner) and
+                    getattr(self, name) is roster[name] for name, owner in owners) and self.capture is capture and
+                self.capture_return is result and self.original_error is error and self._errors is errors and
+                len(errors) == len(prefix) and all(actual is prior for actual, prior in zip(errors, prefix)) and
+                self.attempted is attempts and attempts == prior_attempts and
+                self.closed is closed and closed == expected_closed and self._send_receipt is receipt,
+                "PROVIDER_RETURN_ORIGINAL_BOUNDARY_CHANGED")
+            require((capture.result if error is None else capture.failure_capture) is result,
+                    "PROVIDER_RETURN_ORIGINAL_CAPTURE_CHANGED")
+        def checked():
+            same()
+            observed = window.check(work=False)
+            same()
+            return observed
+        checked()
+        raw = transport.encode(result, request)
+        checked()
+        require("packet" not in attempts and roster["packet"] is None, "PROVIDER_RETURN_DUPLICATE_PACKET")
+        attempts.add("packet")
+        prior_attempts = frozenset(attempts)
+        packet = self.directory.create_file(transport.PACKET_NAME, max_bytes=transport.PACKET_BYTES, deadline=window.local_end)
+        roster["packet"] = packet  # First action on actual return, before callbacks.
+        self.packet = packet
+        require(packet is not None, "PROVIDER_RETURN_PACKET_NOT_RETURNED")
+        checked()
+        initial = packet.verify()
+        identity = transport.file_identity(initial, window.clock.role)
+        checked()
+        count = packet.write(raw)
+        checked()
+        require(type(count) is int and count == len(raw), "PROVIDER_RETURN_PACKET_WRITE")
+        packet.sync()
+        checked()
+        final = packet.verify()
+        checked()
+        require(initial.size == 0 and final.size == len(raw) and
+                transport.file_identity(final, window.clock.role) == identity, "PROVIDER_RETURN_PACKET_CHANGED")
+        ack = transport.acknowledge(raw, identity, request)
+        checked()
+        for name in ("packet", "bundle", "home", "directory"):
+            checked()
+            roster[name].close()
+            closed.append(name)
+            expected_closed.append(name)
+            checked()
+        _write_ack(ack)
+        checked()  # ACK write/flush and all construction spend the original cutoff.
+        receipt = _WorkerSend(result, error, ack, checked)
+        self._send_receipt = receipt  # No callback follows this final return publication.
+
+    def exit_code(self, result, error):
+        """Only the actual bootstrap may classify its original run return/raise."""
+        try:
+            require(not self._exit_started, "PROVIDER_RETURN_EXIT_ONCE")
+            self._exit_started = True
+            receipt = self._send_receipt
+            require(type(receipt) is _WorkerSend and ((error is None and result is receipt.capture and receipt.error is None) or
+                    (error is not None and result is None and error is receipt.error)), "PROVIDER_RETURN_INCOMPLETE")
+            receipt.check()
+            require(self._send_receipt is receipt, "PROVIDER_RETURN_RECEIPT_CHANGED")
+            return 0 if error is None else transport.FAILED_CAPTURE_EXIT
+        except BaseException as secondary:
+            self._failed("exit", secondary)
+            raise self.original_error
+
     def run(self):
+        capture_error = None
         try:
             require(not self.started, "PROVIDER_WORKER_ONE_USE")
             self.started = True
@@ -433,6 +544,8 @@ class _CaptureWorker:
             value = self.frame
             clock, issued, end, cut, contract = _frame(value)
             original_frame = _json(value)
+            request = self.request
+            require(type(request) is bytes and request == original_frame.encode("ascii"), "PROVIDER_RETURN_REQUEST_CHANGED")
             role = clock.role
             require(original == (tuple(map(tuple, value["prefix"])), value["home"]), "PROVIDER_WORKER_PREFIX_LOST")
             first = clocks.observe()
@@ -445,52 +558,52 @@ class _CaptureWorker:
                 require(tuple(owner.identity) == _identity(value[name + "Identity"], role), "PROVIDER_WORKER_ROOT_CHANGED")
             self._acquire("bundle", lambda: _open_bundle(self.directory, role, self.window.local_end, contract["bundle"]["bytes"]))
             _bundle_bytes(self.bundle, self.directory, role, contract)
-            self._acquire("capture", lambda: lifecycle.ProviderCapture(first, issued_ns=issued, hard_end_ns=end,
+            capture = self._acquire("capture", lambda: lifecycle.ProviderCapture(first, issued_ns=issued, hard_end_ns=end,
                 local_end=self.window.local_end, phase=value["phase"], job=value["job"], invocation=value["innerId"],
                 home=value["home"], cancelled=lambda: self._check(work=False)))
-            with self.capture as capture:
-                self._acquire("capture_directory", lambda: _open_directory(str(_path(value["directory"], role) / "capture"), role))
-                capture.take_directory(self.capture_directory)
-                self.capture_directory.verify()
-                require(tuple(self.capture_directory.identity) == _identity(value["captureIdentity"], role),
-                        "PROVIDER_WORKER_CAPTURE_CHANGED")
-                capture.prepare()
-                scope, stdout, stderr, command = capture.scope, capture.stdout, capture.stderr, str(capture.command_path)
-                state = str(self.capture_directory.path)
-                _scope_binding(scope, role, value["job"], value["innerId"], state, value["home"])
-                child_env, prefix = _append(_base(value), inherited, original, value["job"], value["innerId"], state, value["home"])
-                child_env.update(contract["inputs"], GITHUB_OUTPUT=command)
-                services = _service()
-                child_env.update(services)
-                argv = [value["node"], str(_path(value["directory"], role) / "provider.cjs")]
-                self.provider_environment, self.provider_argv = child_env, argv
-                original_environment, original_argv = _environment_values(child_env), tuple(argv)
-                self._check()
-                require(_ambient_markers()[1] == original and _service() == services and
-                        _markers({name: child_env[name] for name in MARKERS}) == prefix and
-                        _environment_values(child_env) == original_environment and tuple(argv) == original_argv and
-                        self.provider_environment is child_env and self.provider_argv is argv and
-                        _json(value) == original_frame, "PROVIDER_INNER_HANDOFF_CHANGED")
-                _scope_binding(scope, role, value["job"], value["innerId"], state, value["home"])
-                self.attempted.add("child")
-                child = scope.spawn(argv, str(SCRIPTS.parent), child_env, stdout=stdout, stderr=stderr)
-                self._owners["child"] = child
-                self.child = child  # Retained before wait/admission/clock callbacks.
-                capture.wait(child)
-            self.capture_return = capture.result
-            self._check(work=False)
-            # These are this worker's separate readers/roots, not outer owners.
-            for name in ("bundle", "home", "directory"):
-                self._check(work=False)
-                getattr(self, name).close()
-                self.closed.append(name)
-                self._check(work=False)
-            return self.capture_return
+            try:
+                with capture:
+                    self._acquire("capture_directory", lambda: _open_directory(str(_path(value["directory"], role) / "capture"), role))
+                    capture.take_directory(self.capture_directory)
+                    self.capture_directory.verify()
+                    require(tuple(self.capture_directory.identity) == _identity(value["captureIdentity"], role),
+                            "PROVIDER_WORKER_CAPTURE_CHANGED")
+                    capture.prepare()
+                    scope, stdout, stderr, command = capture.scope, capture.stdout, capture.stderr, str(capture.command_path)
+                    state = str(self.capture_directory.path)
+                    _scope_binding(scope, role, value["job"], value["innerId"], state, value["home"])
+                    child_env, prefix = _append(_base(value), inherited, original, value["job"], value["innerId"], state, value["home"])
+                    child_env.update(contract["inputs"], GITHUB_OUTPUT=command)
+                    services = _service()
+                    child_env.update(services)
+                    argv = [value["node"], str(_path(value["directory"], role) / "provider.cjs")]
+                    self.provider_environment, self.provider_argv = child_env, argv
+                    original_environment, original_argv = _environment_values(child_env), tuple(argv)
+                    self._check()
+                    require(_ambient_markers()[1] == original and _service() == services and
+                            _markers({name: child_env[name] for name in MARKERS}) == prefix and
+                            _environment_values(child_env) == original_environment and tuple(argv) == original_argv and
+                            self.provider_environment is child_env and self.provider_argv is argv and
+                            _json(value) == original_frame, "PROVIDER_INNER_HANDOFF_CHANGED")
+                    _scope_binding(scope, role, value["job"], value["innerId"], state, value["home"])
+                    self.attempted.add("child")
+                    child = scope.spawn(argv, str(SCRIPTS.parent), child_env, stdout=stdout, stderr=stderr)
+                    self._owners["child"] = child
+                    self.child = child  # Retained before wait/admission/clock callbacks.
+                    capture.wait(child)
+            except BaseException as error:
+                capture_error = error
+                self._failed("capture", error)
+                result = capture.failure_capture  # Only its actual guarded, closed failure return.
+            else:
+                result = capture.result
+            self.capture_return = result
+            self._send_return(capture, result, capture_error, request)
         except BaseException as error:
-            if self.original_error is None:
-                self.original_error = error
+            self._failed("worker", error)
             # No retry or guessed cleanup after incomplete acquisition/UNKNOWN.
             # The original OUTER supervisor must observe retirement independently.
-            if not any(item is self for item in QUARANTINE):
-                QUARANTINE.append(self)
             raise self.original_error
+        if capture_error is not None:
+            raise capture_error  # The intended original raise does not become a secondary error.
+        return result
