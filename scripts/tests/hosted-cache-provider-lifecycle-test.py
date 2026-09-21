@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError
 import importlib.util
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -296,6 +296,269 @@ class ProviderLifecycleModels(unittest.TestCase):
         self.assertIs(caught(call), remembered[0])
         self.assertEqual(capture._exit_code, 7)
         self.assertTrue(capture._slots["scope"].closed)
+        self.assert_no_result(capture)
+
+    def test_failed_lookup_retains_private_bytes_after_close_without_parsing_outputs(self):
+        capture, reads = self.capture("lookup"), []
+        self.codes = [7]
+        command = b"MODEL_MALFORMED_BUT_BOUNDED_COMMAND\r\n"
+        readback = files.NativeFile.read_provider_log
+        def read(writer):
+            reads.append(PureWindowsPath(writer.path).name)
+            return readback(writer)
+        with patch.object(files.NativeFile, "read_provider_log", read), patch.object(
+                lifecycle.cache, "provider_command_outputs", side_effect=AssertionError("MODEL_NO_FAILURE_PARSER")) as parser:
+            error = caught(lambda: self.run_ok(capture, command))
+        self.assertEqual(reads, ["provider-stdout.log", "provider-stderr.log"], "MODEL_FAILURE_LOGS_NOT_RETAINED")
+        self.assertIs(error, capture._primary)
+        self.assertRegex(str(error), "PROVIDER_CHILD_FAILED")
+        result = capture.failure_capture
+        self.assertIs(type(result), lifecycle.FailedProviderCapture)
+        self.assertEqual((result.exit_code, result.command), (7, command))
+        self.assertEqual((result.stdout, result.stderr), (b"MODEL_PRIVATE_STDOUT", b"MODEL_PRIVATE_STDERR"))
+        self.assertEqual(result.original_step_outcome, "NOT_OBSERVED")
+        self.assertEqual(result.enclosing_owner_retirement, "NOT_OBSERVED")
+        self.assertEqual(result.provider_acceptance, "NOT_ESTABLISHED")
+        self.assertNotIn("MODEL_PRIVATE", repr(result))
+        self.assertEqual(set(result.closed_resources), set(capture._NAMES) - {"stdout-reader", "stderr-reader"})
+        self.assertEqual(self.api.handles, {})
+        with self.assertRaises(FrozenInstanceError):
+            result.exit_code = 0
+        parser.assert_not_called()
+        self.assert_no_result(capture)
+
+    def test_failed_cancellation_before_poll_retains_none_exit_and_original_falsey_cause(self):
+        original = FalseyCancellation("MODEL_CANCEL_BEFORE_POLL")
+        cause = original.__cause__ = ValueError("MODEL_ORIGINAL_CAUSE")
+        def cancel():
+            if capture._child is not None:
+                raise original
+        capture = self.capture(cancelled=cancel)
+        self.assertIs(caught(lambda: self.run_ok(capture)), original)
+        self.assertIs(original.__cause__, cause)
+        self.assertFalse(any(row[0] == "poll" for row in self.events))
+        self.assertIsNone(capture.failure_capture.exit_code)
+        self.assertEqual(capture.failure_capture.stdout, b"MODEL_PRIVATE_STDOUT")
+        self.assertEqual((capture._raw_end, capture._local_end), (280 * clocks.NS, 270.0))
+        self.assert_no_result(capture)
+
+    def test_exit_zero_followed_by_cancellation_is_failure_evidence_not_success(self):
+        original = FalseyCancellation("MODEL_CANCEL_AFTER_ZERO_EXIT")
+        def cancel():
+            if capture._exit_code is not None:
+                raise original
+        capture = self.capture(cancelled=cancel)
+        self.assertIs(caught(lambda: self.run_ok(capture)), original)
+        self.assertEqual(capture.failure_capture.exit_code, 0)
+        self.assertFalse(capture._waited)
+        self.assert_no_result(capture)
+
+    def test_new_caught_reentry_during_failed_retirement_prevents_any_failure_read(self):
+        capture = self.capture()
+        self.codes = [7]
+        def drain(**kwargs):
+            self.assertRegex(str(caught(capture.prepare)), "PROVIDER_OPERATION_REENTRY")
+            return []
+        self.scope.drain.side_effect = drain
+        error = caught(lambda: self.run_ok(capture))
+        self.assertRegex(str(error), "PROVIDER_CHILD_FAILED")
+        self.assertIs(error, capture._primary)
+        self.assertEqual(capture._raw_captures, {})
+        self.assertFalse(capture._slots["command-reader"].attempted)
+        self.assertTrue(capture._slots["scope"].closed)
+        self.assertIsInstance(caught(lambda: capture.failure_capture), lifecycle.ProviderLifecycleError)
+        self.assert_no_result(capture)
+
+    def test_failed_wait_still_rechecks_the_original_single_leader(self):
+        capture, remembered = self.capture(), []
+        self.codes = [7]
+        def call():
+            with capture:
+                self.prepare(capture)
+                remembered.append(caught(lambda: capture.wait(self.launch(capture))))
+                self.scope.leaders.append(self.scope.leaders[0])
+        self.assertIs(caught(call), remembered[0])
+        self.assertEqual(capture._raw_captures, {})
+        self.assertIsInstance(caught(lambda: capture.failure_capture), lifecycle.ProviderLifecycleError)
+        self.assert_no_result(capture)
+
+    def test_failed_child_admission_cannot_qualify_empty_provider_captures(self):
+        capture = self.capture()
+        def call():
+            with capture:
+                self.prepare(capture)
+                child = self.launch(capture)
+                self.scope.leaders.append(child)
+                capture.wait(child)
+        error = caught(call)
+        self.assertRegex(str(error), "PROVIDER_ORIGINAL_LEADER")
+        self.assertIsNone(capture._child)
+        self.assertEqual(capture._raw_captures, {})
+        self.assertTrue(capture._slots["scope"].closed)
+        self.assertIsInstance(caught(lambda: capture.failure_capture), lifecycle.ProviderLifecycleError)
+        self.assert_no_result(capture)
+
+    def test_body_cancellation_before_wait_is_not_an_admitted_provider_return(self):
+        capture, original = self.capture(), FalseyCancellation("MODEL_BEFORE_ANY_WAIT")
+        def call():
+            with capture:
+                self.prepare(capture)
+                raise original
+        self.assertIs(caught(call), original)
+        self.assertTrue(capture._slots["scope"].closed)
+        self.assertEqual(capture._raw_captures, {})
+        self.assertIsInstance(caught(lambda: capture.failure_capture), lifecycle.ProviderLifecycleError)
+        self.assert_no_result(capture)
+
+    def test_late_staging_mutation_never_replaces_actual_failure_byte_returns(self):
+        capture, changed = self.capture(), []
+        self.codes = [7]
+        def replace_staging():
+            if capture._slots["directory"].closed and not changed:
+                changed.append(capture._raw_captures["stdout"])
+                capture._raw_captures["stdout"] = b"MODEL_NOT_RETURNED_FROM_READ"
+        self.on_raw = replace_staging
+        error = caught(lambda: self.run_ok(capture))
+        self.assertRegex(str(error), "PROVIDER_CHILD_FAILED")
+        self.assertEqual(changed, [b"MODEL_PRIVATE_STDOUT"])
+        self.assertEqual(capture.failure_capture.stdout, b"MODEL_PRIVATE_STDOUT")
+        self.assert_no_result(capture)
+
+    def test_exit_diagnostics_cannot_rewrite_original_failure_observations(self):
+        capture, saved = self.capture(), []
+        self.codes = [7]
+        classify = lifecycle.diagnostics._exception_detail
+        def replace_fields(error):
+            if capture._failure_capture_ready and not saved:
+                saved.append((capture._native_retirement,
+                    tuple(name for name, slot in capture._slots.items() if slot.owner is not None and slot.closed)))
+                capture._raw_captures["command"] = b"MODEL_NOT_AN_EMPTY_SAVE_RETURN"
+                capture._native_retirement = b"MODEL_NOT_ORIGINAL_NATIVE_RETIREMENT"
+                capture._slots["directory"].closed = False
+                capture._phase, capture._exit_code = "lookup", 0
+            return classify(error)
+        with patch.object(lifecycle.diagnostics, "_exception_detail", replace_fields):
+            error = caught(lambda: self.run_ok(capture))
+        self.assertRegex(str(error), "PROVIDER_CHILD_FAILED")
+        result = capture.failure_capture
+        self.assertEqual((result.phase, result.exit_code, result.command), ("save", 7, b""))
+        self.assertEqual((result.native_retirement, result.closed_resources), saved[0])
+        self.assert_no_result(capture)
+
+    def test_failed_command_read_return_is_staged_before_late_postcheck(self):
+        capture = self.capture("lookup")
+        self.codes = [7]
+        read = files.NativeFile.read
+        command = b"MODEL_BOUNDED_FAILURE_COMMAND"
+        def late(reader, *args):
+            raw = read(reader, *args)
+            self.raw = 280 * clocks.NS
+            return raw
+        with patch.object(files.NativeFile, "read", late):
+            error = caught(lambda: self.run_ok(capture, command))
+        self.assertRegex(str(error), "PROVIDER_CHILD_FAILED")
+        self.assertEqual(capture._raw_captures, {"command": command})
+        self.assertEqual(capture._verified_captures, set())
+        self.assertIsInstance(caught(lambda: capture.failure_capture), lifecycle.ProviderLifecycleError)
+        self.assert_no_result(capture)
+
+    def test_failed_log_bytes_remain_private_when_later_writer_close_is_unknown(self):
+        capture = self.capture()
+        self.codes = [7]
+        close = files.NativeFile.close
+        def ambiguous(writer):
+            name = PureWindowsPath(writer.path).name
+            close(writer)
+            if name == "provider-stdout.log":
+                raise FalseyFailure("MODEL_POST_RELEASE_UNKNOWN")
+        with patch.object(files.NativeFile, "close", ambiguous):
+            error = caught(lambda: self.run_ok(capture))
+        self.assertRegex(str(error), "PROVIDER_CHILD_FAILED")
+        self.assertTrue(capture.unknown)
+        self.assertEqual(capture._raw_captures, {"command": b"", "stdout": b"MODEL_PRIVATE_STDOUT"})
+        self.assertEqual(capture._verified_captures, {"command", "stdout"})
+        self.assertFalse(capture._slots["stderr"].close_attempted)
+        self.assertIsInstance(caught(lambda: capture.failure_capture), lifecycle.ProviderLifecycleError)
+        self.assert_no_result(capture)
+
+    def test_failed_backend_without_return_cannot_invent_partial_stdout(self):
+        capture = self.capture()
+        self.codes = [7]
+        readback = files.NativeFile.read_provider_log
+        def no_return(writer):
+            readback(writer)
+            raise FalseyFailure("MODEL_READ_NEVER_RETURNED_TO_CALLER")
+        with patch.object(files.NativeFile, "read_provider_log", no_return):
+            error = caught(lambda: self.run_ok(capture))
+        self.assertRegex(str(error), "PROVIDER_CHILD_FAILED")
+        self.assertEqual(capture._raw_captures, {"command": b""})
+        self.assertTrue(capture.unknown)
+        self.assertIsInstance(caught(lambda: capture.failure_capture), lifecycle.ProviderLifecycleError)
+        self.assert_no_result(capture)
+
+    def test_exit_classification_cannot_replace_equal_failure_prefix_rows(self):
+        capture = self.capture()
+        self.codes = [7]
+        classify = lifecycle.diagnostics._exception_detail
+        def replace_prefix(error):
+            if capture._failure_capture_ready:
+                saved = capture._errors[0]
+                capture._errors[0] = tuple(list(saved))
+                self.assertIsNot(capture._errors[0], saved)
+            return classify(error)
+        with patch.object(lifecycle.diagnostics, "_exception_detail", replace_prefix):
+            error = caught(lambda: self.run_ok(capture))
+        self.assertRegex(str(error), "PROVIDER_CHILD_FAILED")
+        self.assertEqual(capture._verified_captures, {"command", "stdout", "stderr"})
+        self.assertIsInstance(caught(lambda: capture.failure_capture), lifecycle.ProviderLifecycleError)
+        self.assert_no_result(capture)
+
+    def test_exit_classification_itself_spends_the_original_failure_capture_end(self):
+        capture = self.capture()
+        self.codes = [7]
+        classify = lifecycle.diagnostics._exception_detail
+        def late(error):
+            if capture._failure_capture_ready:
+                self.local = 280.0
+            return classify(error)
+        with patch.object(lifecycle.diagnostics, "_exception_detail", late):
+            error = caught(lambda: self.run_ok(capture))
+        self.assertRegex(str(error), "PROVIDER_CHILD_FAILED")
+        self.assertEqual(capture._verified_captures, {"command", "stdout", "stderr"})
+        self.assertTrue(all(slot.closed for slot in capture._slots.values() if slot.owner is not None))
+        self.assertIsInstance(caught(lambda: capture.failure_capture), lifecycle.ProviderLifecycleError)
+        self.assert_no_result(capture)
+
+    def test_unknown_exit_classification_blocks_otherwise_complete_failure_capture(self):
+        capture = self.capture()
+        self.codes = [7]
+        classify = lifecycle.diagnostics._exception_detail
+        def unknown(error):
+            if capture._failure_capture_ready:
+                raise FalseyFailure("MODEL_EXIT_DIAGNOSTIC_UNKNOWN")
+            return classify(error)
+        with patch.object(lifecycle.diagnostics, "_exception_detail", unknown):
+            error = caught(lambda: self.run_ok(capture))
+        self.assertRegex(str(error), "PROVIDER_CHILD_FAILED")
+        self.assertTrue(capture.unknown)
+        self.assertIn(capture, lifecycle.QUARANTINE)
+        self.assertIsInstance(caught(lambda: capture.failure_capture), lifecycle.ProviderLifecycleError)
+        self.assert_no_result(capture)
+
+    def test_failure_result_construction_and_later_reentry_cannot_requalify_bytes(self):
+        capture = self.capture()
+        self.codes = [7]
+        construct = lifecycle.FailedProviderCapture
+        def late(*args, **kwargs):
+            result = construct(*args, **kwargs)
+            self.raw = 280 * clocks.NS
+            return result
+        with patch.object(lifecycle, "FailedProviderCapture", late):
+            error = caught(lambda: self.run_ok(capture))
+        self.assertRegex(str(error), "PROVIDER_CHILD_FAILED")
+        self.assertIsInstance(caught(lambda: capture.failure_capture), lifecycle.ProviderLifecycleError)
+        self.assertIs(caught(lambda: capture.__exit__(None, None, None)), error)
+        self.assertIsInstance(caught(lambda: capture.failure_capture), lifecycle.ProviderLifecycleError)
         self.assert_no_result(capture)
 
     def test_exit_observation_precedes_a_late_local_check(self):
@@ -943,6 +1206,41 @@ class ProviderPosixLifecycleModels(unittest.TestCase):
         self.assertEqual(dict(result.outputs)["cache-hit"], "true")
         self.assertEqual(result.original_step_outcome, "NOT_OBSERVED")
         self.never_classifier.assert_not_called()
+
+    def test_failed_posix_provider_retains_actual_tiny_files_without_output_parser(self):
+        capture = self.capture("lookup")
+        raw = b"MODEL_MALFORMED_FAILURE_COMMAND\n"
+        with patch.object(processes.PosixProcess, "poll", return_value=9), patch.object(
+                lifecycle.cache, "provider_command_outputs", side_effect=AssertionError("MODEL_NO_FAILURE_PARSER")) as parser:
+            error = caught(lambda: self.run_capture(capture, raw))
+        self.assertEqual([row[0] for row in self.opens if row[2] == "rb"],
+            ["provider-stdout.log", "provider-stderr.log", "provider-output.txt"], "MODEL_FAILURE_LOGS_NOT_RETAINED")
+        self.assertRegex(str(error), "PROVIDER_CHILD_FAILED")
+        result = capture.failure_capture
+        self.assertEqual((result.exit_code, result.command), (9, raw))
+        self.assertEqual((result.stdout, result.stderr), (b"MODEL_POSIX_STDOUT", b"MODEL_POSIX_STDERR"))
+        self.assertEqual(set(result.closed_resources), set(capture._NAMES))
+        self.assertTrue(all(stream.closed for stream in self.streams))
+        parser.assert_not_called()
+        self.assert_failed(capture)
+
+    def test_failed_posix_read_return_stays_unqualified_after_new_local_expiry(self):
+        capture = self.capture()
+        def wrap(path, stream):
+            def read(maximum):
+                raw = stream.read(maximum)
+                self.local = 280.0
+                return raw
+            return SimpleNamespace(fileno=stream.fileno, read=read, close=stream.close)
+        self.reader_wrap = wrap
+        with patch.object(processes.PosixProcess, "poll", return_value=9):
+            error = caught(lambda: self.run_capture(capture))
+        self.assertRegex(str(error), "PROVIDER_CHILD_FAILED")
+        self.assertEqual(capture._raw_captures, {"stdout": b"MODEL_POSIX_STDOUT"})
+        self.assertEqual(capture._verified_captures, set())
+        self.assertFalse(capture._slots["stderr-reader"].attempted)
+        self.assertIsInstance(caught(lambda: capture.failure_capture), lifecycle.ProviderLifecycleError)
+        self.assert_failed(capture)
 
     def test_darwin_role_uses_same_posix_reader_route_with_modeled_native_scope(self):
         self.clock = clocks.ClockIdentity("macos-arm64", clocks.DARWIN_DOMAIN, clocks.NS)

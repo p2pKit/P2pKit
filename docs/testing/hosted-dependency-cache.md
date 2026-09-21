@@ -3600,8 +3600,8 @@ A successfully constructed immutable private result retains exact capture bytes,
 the native description and closed-slot coverage, but explicitly says
 `original_step_outcome=NOT_OBSERVED`, `enclosing_owner_retirement=NOT_OBSERVED`
 and `provider_acceptance=NOT_ESTABLISHED`. It never invokes the provider-outcome
-classifier as successful. Failures retain owners, exceptions and existing files;
-they do **not** supply completed failure-custody packets or encrypted delivery.
+classifier as successful. The separate failed-byte result described below does
+**not** supply a completed enclosing failure-custody packet or encrypted delivery.
 
 The original leaf's [focused controls](../../scripts/tests/hosted-cache-provider-lifecycle-test.py)
 at `2aac2255` passed **57/57 author methods**:44 Windows sharing/native-scope models and13 tiny
@@ -3651,6 +3651,50 @@ The backend received exact source-only independent review before caller integrat
 the containing #437 record separately binds the complete increment's review and
 any independently executed controls. Neither these models nor source review is
 native Windows/NTFS/Node24/provider qualification.
+
+#### Original failure-byte capture, not enclosing failure custody
+
+An actual nonzero exit or cancellation after original child admission can now
+retain a separate immutable private `FailedProviderCapture`. It preserves the
+observed exit code (`None` if no poll returned), command/stdout/stderr bytes,
+original native description and actual closed-resource coverage. Ordinary
+`.result` stays unavailable and the exact original exception is rethrown. No
+command-output parser or provider-success classifier runs on these failure bytes.
+Preparation alone, rejected child admission or cancellation before `wait` cannot
+produce a completed provider capture; the original leader is rechecked at exit.
+
+The capture fence pins the primary exception and complete error-prefix identities
+**before retirement**. Only that prior failure is allowed: new errors, caught
+reentry, UNKNOWN or either expired original end stop readback/qualification.
+Each actual raw return is staged before later callbacks, but partial staging is
+unqualified and is never used as authority for the completed result. Existing
+Windows/POSIX reads, bounds and conservative UNKNOWN rules are unchanged.
+
+The completed failure value uses an immutable tuple of actual local byte/native
+returns, saved phase/exit and close coverage. The exit path retains that tuple
+before diagnostic callbacks; substituted staging or later slot flags cannot
+replace its observations. Only the exact expected exit diagnostic row is allowed,
+and tuple identity is checked around final fences/construction and on retrieval.
+Original owner closes, diagnostics and result construction spend the same
+original180/final45. No failed read is reconstructed or retried. Enclosing-owner
+retirement, original step outcome and provider acceptance remain unestablished.
+
+The final author suite passed **80/80 methods** (65 Windows models;15 actual tiny
+POSIX-file methods with modeled clocks/process scopes). It used the same bounded
+UID65534/read-only/guarded harness above: guard4, unexpected-denials0 and
+ResourceWarnings0; test0.214s, process wall0.640s/user0.588s/system0.052s.
+Three desired-state controls first failed against the retained R2 implementation:
+unadmitted-child reads, substituted failure stdout and exit-diagnostic observation
+replacement. They are included in the80, not additional product coverage.
+
+Earlier author R1 remains **74 PASS / 2 FAIL**: two new tests incorrectly used
+Linux `Path.name` for Windows-model paths. Only those fixture bindings changed to
+`PureWindowsPath`; the next author suite passed76/76. Independent review then
+found the return-binding/admission defects above (**2 PASS / 3 FAIL** in its five
+controls), so that author pass did not approve R2. All original failures remain
+retained. The containing #437 record separately binds the final independent
+implementation/document verdict and controls. This is dormant source/model
+evidence, not native provider execution, complete failure custody or delivery.
 
 Still missing: authenticated original180 acquisition, successful original spawn
 return with exact sink/command routing and complete POSIX marker inheritance,
