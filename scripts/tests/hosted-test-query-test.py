@@ -193,6 +193,123 @@ class QueryTests(unittest.TestCase):
         owner.close()
         self.assertTrue(all(item["closed"] for item in owner.resources))
 
+    def test_successful_readbacks_hash_exact_metadata_and_capture_bytes(self):
+        owner = self.owner()
+        self.assertEqual(self.query(owner), self.out)
+        directory = self.state / ("query-" + owner.records[0]["id"])
+        expected = [(self.state, "owner.json"), *((directory, name) for name in
+            ("start.json", "baseline.json", "stdout.log", "stderr.log", "result.json"))]
+        self.assertEqual([(Path(row["parent"]), row["name"]) for row in owner.readbacks], expected)
+        for row, (parent, name) in zip(owner.readbacks, expected):
+            with self.subTest(name=name):
+                raw = (parent / name).read_bytes()
+                self.assertEqual(set(row), {"parent", "name", "maximum", "retirement", "result", "bytes", "sha256"})
+                self.assertEqual((row["retirement"], row["result"]), ("KNOWN", "RETAINED"))
+                self.assertEqual(row["bytes"], len(raw))
+                self.assertEqual(row["maximum"], 4096 if name.endswith(".log") else max(1, len(raw)))
+                self.assertEqual(row["sha256"], hashlib.sha256(raw).hexdigest())
+        owner.close()
+
+    def test_zero_byte_captures_retain_the_empty_digest_not_an_absent_hash(self):
+        self.out = self.err = b""
+        owner = self.owner()
+        self.assertEqual(self.query(owner), b"")
+        captures = [row for row in owner.readbacks if row["name"].endswith(".log")]
+        self.assertEqual([row["name"] for row in captures], ["stdout.log", "stderr.log"])
+        for row in captures:
+            self.assertEqual((row["bytes"], row["maximum"]), (0, 4096))
+            self.assertEqual(row["sha256"], hashlib.sha256(b"").hexdigest())
+        owner.close()
+
+    def test_session_encodes_prior_hashes_but_not_its_own_readback_tail(self):
+        owner = self.owner()
+        self.query(owner)
+        prior = [dict(row) for row in owner.readbacks]
+        owner.close()
+        raw = (self.state / "session-result.json").read_bytes()
+        session = json.loads(raw)
+        self.assertEqual(session["readbacks"], prior)
+        self.assertTrue(all("sha256" in row for row in session["readbacks"]))
+        self.assertFalse(any(row["name"] == "session-result.json" for row in session["readbacks"]))
+        self.assertEqual(owner.readbacks[:-1], prior)
+        self.assertEqual(owner.readbacks[-1], {"parent": str(self.state), "name": "session-result.json",
+            "maximum": len(raw), "retirement": "KNOWN", "result": "RETAINED", "bytes": len(raw),
+            "sha256": hashlib.sha256(raw).hexdigest()})
+        self.assertTrue(all(row["closed"] for row in owner.resources))
+
+    def test_failed_delegated_reader_keeps_unknown_and_no_success_hash(self):
+        owner = self.owner()
+        read = Q._PosixDirectory.read_bytes
+        original = OSError("MODELED_ORIGINAL_READBACK_FAILURE")
+        original.__notes__ = ["MODELED_READER_RETIREMENT_UNKNOWN"]
+        def fail_read(directory, name, **kwargs):
+            if name == "stdout.log":
+                raise original
+            return read(directory, name, **kwargs)
+        with patch.object(Q._PosixDirectory, "read_bytes", new=fail_read), self.assertRaises(Q.QueryError):
+            self.query(owner)
+        failed = [row for row in owner.readbacks if row["name"] == "stdout.log"]
+        self.assertEqual(len(failed), 1)
+        self.assertEqual((failed[0]["retirement"], failed[0]["result"]), ("UNKNOWN", "HOLD"))
+        self.assertNotIn("sha256", failed[0])
+        self.assertNotIn("bytes", failed[0])
+        self.assertIn("MODELED_ORIGINAL_READBACK_FAILURE", failed[0]["error"])
+        self.assertEqual(failed[0]["notes"], original.__notes__)
+        self.assertIs(owner.first_error, original)
+        self.assertTrue(owner.unknown)
+        self.assertIn(owner, Q.QUARANTINE)
+        self.close_failed(owner)
+
+    def test_readback_digest_work_cannot_outlive_its_original_deadline(self):
+        owner = self.owner()
+        raw = (self.state / "owner.json").read_bytes()
+        expected, end, calls = hashlib.sha256(raw).hexdigest(), owner.io_deadline, []
+        sha256 = Q.hashlib.sha256
+        def late_digest(value):
+            self.assertEqual(value, raw)
+            actual = sha256(value)
+            def hexdigest():
+                calls.append(self.clock.now)
+                self.clock.now = end
+                return actual.hexdigest()
+            return SimpleNamespace(hexdigest=hexdigest)
+        with patch.object(Q.hashlib, "sha256", side_effect=late_digest):
+            with self.assertRaisesRegex(Q.posix_files.EvidenceError, "exceeded its deadline"):
+                owner._readback(owner.private, "owner.json", len(raw), end)
+        self.assertEqual(calls, [100.0])
+        self.assertEqual(owner.io_deadline, end)
+        self.assertEqual(self.clock.now, end)
+        self.assertEqual(owner.readbacks[-1]["sha256"], expected)
+        self.assertEqual(owner.readbacks[-1]["retirement"], "KNOWN")
+        # Retained bytes are not timely success; this direct leaf test did not
+        # enter an enclosing query. Its separate session-close phase is unchanged.
+        owner.close()
+
+    def test_final_receipt_hash_expiry_prevents_query_success(self):
+        owner = self.owner()
+        read, sha256 = Q._PosixDirectory.read_bytes, Q.hashlib.sha256
+        target, hashed = [], []
+        def observe_read(directory, name, **kwargs):
+            raw = read(directory, name, **kwargs)
+            if name == "result.json":
+                target.append(raw)
+            return raw
+        def late_digest(raw):
+            actual = sha256(raw)
+            if target and raw == target[0]:
+                hashed.append(raw)
+                self.clock.now = owner.io_deadline
+            return actual
+        with patch.object(Q._PosixDirectory, "read_bytes", new=observe_read), \
+                patch.object(Q.hashlib, "sha256", side_effect=late_digest), self.assertRaises(Q.QueryError):
+            self.query(owner)
+        self.assertEqual(len(hashed), 1)
+        self.assertEqual((self.clock.now, owner.io_deadline), (160.0, 160.0))
+        self.assertEqual(owner.records[0]["result"], "HOLD")
+        self.assertFalse(owner.unknown)  # The actual reader did return and close.
+        self.assertTrue(any(row["phase"] == "original-query-receipt" for row in owner.errors))
+        self.close_failed(owner)
+
     def test_each_query_has_its_own_real_backend_domain_and_original_baseline(self):
         owner = self.owner()
         self.query(owner)

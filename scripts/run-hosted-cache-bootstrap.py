@@ -8504,9 +8504,10 @@ def _collection_phase_query_pin(frame, result):
             all(row is old for row, old in zip(original.readbacks, before.readbacks)),
             "BOOTSTRAP_COLLECTION_PHASE_QUERY_READBACK_ROSTER")
     tail = original.readbacks[-1]
-    require(type(tail) is dict and set(tail) == {"parent", "name", "maximum", "retirement", "result", "bytes"} and
+    require(type(tail) is dict and set(tail) == {"parent", "name", "maximum", "retirement", "result", "bytes", "sha256"} and
             tail["parent"] == str(original.path) and tail["name"] == "session-result.json" and
             tail["retirement"] == "KNOWN" and tail["result"] == "RETAINED" and
+            type(tail["sha256"]) is str and re.fullmatch(r"[0-9a-f]{64}", tail["sha256"]) and
             type(tail["maximum"]) is type(tail["bytes"]) is int and 0 < tail["bytes"] == tail["maximum"] <= LIMIT,
             "BOOTSTRAP_COLLECTION_PHASE_QUERY_FINAL_READBACK")
     dictionary = object.__getattribute__(supplier, "__dict__")
@@ -9330,6 +9331,7 @@ class _CollectionPhaseParent:
                 ("session-result.json", owner.read(directory, "session-result.json"))):
             self.remember("admission/" + name, directory, name, raw)
         session = origin.parse(self.records["admission/session-result.json"])
+        session_sha256 = origin.digest(self.records["admission/session-result.json"])
         require(set(session) == {"schema", "scope", "job", "queries", "result", "retirement", "firstError", "errors", "readbacks"} and
                 type(session["schema"]) is int and session["schema"] == 1 and session["scope"] == "ORDINARY_GIT_QUERIES_ONLY" and
                 type(session["job"]) is str and re.fullmatch(r"[0-9a-f]{32}", session["job"]) and
@@ -9337,10 +9339,11 @@ class _CollectionPhaseParent:
                 session["result"] == "READY_FOR_CALLER_SEAL" and session["retirement"] == "KNOWN" and
                 session["firstError"] is None and session["errors"] == [] and
                 origin.encoded(session["queries"]) == origin.encoded(frame.query_origin.records) and
-                origin.encoded(session["readbacks"]) == origin.encoded(frame.query_preclose.readbacks),
+                origin.encoded(session["readbacks"]) == origin.encoded(frame.query_preclose.readbacks) and
+                session_sha256 == frame.query_origin.readbacks[-1]["sha256"],
                 "BOOTSTRAP_COLLECTION_PHASE_QUERY_RECORD")
         raw = owner.write(self.handles["phase"], "admission-return.json", {"admissionSha256": origin.digest(result.record),
-            "sessionSha256": origin.digest(self.records["admission/session-result.json"]), "clock": origin.clock_value(window.clock),
+            "sessionSha256": session_sha256, "clock": origin.clock_value(window.clock),
             "returnedNs": frame.query_returned[1], "ownerDeadlineScope": "ORIGINAL_COLLECTION_WORK_ONLY"})
         self.remember("admission-return", self.handles["phase"], "admission-return.json", raw)
         window.now(limit=final)

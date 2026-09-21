@@ -410,7 +410,7 @@ class NativeGitQueries:
             outcome["notes"] = list(getattr(error, "__notes__", ()))[:64]
             self._error(row, name + "-reader", error, unknown=True)
             raise
-        outcome.update(retirement="KNOWN", result="RETAINED", bytes=len(raw))
+        outcome.update(retirement="KNOWN", result="RETAINED", bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
         posix_files._deadline(deadline)
         return raw
 

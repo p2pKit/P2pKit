@@ -343,7 +343,7 @@ class Model:
                 self.closed, self.failed, self.first_error = True, original is not None, original
                 raw = model.nodes[self.private.path / "session-result.json"].raw if original is None else b"FAILED_MODEL"
                 self.readbacks.append({"parent": str(self.path), "name": "session-result.json", "maximum": len(raw),
-                                      "retirement": "KNOWN", "result": "RETAINED", "bytes": len(raw)})
+                                      "retirement": "KNOWN", "result": "RETAINED", "bytes": len(raw), "sha256": digest(raw)})
                 if model.query_after_hook:
                     model.query_after_hook(self)
         namespace["query"] = Box(NativeGitQueries=NativeQuery, QUARANTINE=[])
@@ -1248,6 +1248,40 @@ class QueryCustodyModels(unittest.TestCase):
     def test_boolean_tail_byte_count_is_not_an_integer_receipt(self):
         self.terminal_refuses(lambda supplier: supplier.readbacks[-1].__setitem__("bytes", True), "QUERY_FINAL_READBACK")
 
+    def test_missing_tail_digest_is_not_a_hashless_compatibility_fallback(self):
+        self.terminal_refuses(lambda supplier: supplier.readbacks[-1].pop("sha256"), "QUERY_FINAL_READBACK")
+
+    def test_tail_digest_requires_exact_lowercase_sha256(self):
+        for value in (None, True, 0, b"f" * 64, "f" * 63, "f" * 65, "F" * 64, "g" * 64, "f" * 64 + "\n"):
+            with self.subTest(value=value):
+                self.terminal_refuses(lambda supplier: supplier.readbacks[-1].__setitem__("sha256", value),
+                    "QUERY_FINAL_READBACK")
+
+    def test_extra_tail_digest_alias_is_not_adopted(self):
+        self.terminal_refuses(lambda supplier: supplier.readbacks[-1].__setitem__("digest", "f" * 64),
+            "QUERY_FINAL_READBACK")
+
+    def test_valid_looking_wrong_session_digest_refuses_actual_readback(self):
+        m = Model()
+        parent = m.prepare(query=False)
+        m.query_after_hook = lambda supplier: supplier.readbacks[-1].__setitem__("sha256", digest(b"WRONG_MODEL_BYTES"))
+        with self.assertRaisesRegex(Refusal, "QUERY_RECORD"):
+            parent.admit()
+        frame = m.frame()
+        self.assertTrue(frame.query_returned[0])
+        self.assertIsNotNone(frame.query_pin, "shape-valid tail must first pass the strict finalizer pin")
+        raw = parent.records["admission/session-result.json"]
+        self.assertNotEqual(digest(raw), m.queries[0].readbacks[-1]["sha256"])
+        self.assertNotIn("admission-return", parent.records)
+        self.assertEqual(m.leaf_calls, 0)
+
+    def test_pinned_tail_digest_mutation_is_still_a_closed_graph_failure(self):
+        m = Model()
+        parent = m.prepare()
+        m.queries[0].readbacks[-1]["sha256"] = digest(b"CHANGED_AFTER_PIN")
+        with self.assertRaisesRegex(Refusal, "CLOSED_GRAPH_CHANGED"):
+            parent.check()
+
     def test_original_query_record_mutation_during_finalizer_refuses(self):
         self.terminal_refuses(lambda supplier: supplier.records[0]["nested"].append("changed"), "CLOSED_GRAPH_CHANGED",
             body=lambda supplier: supplier.records.append({"nested": ["original"]}))
@@ -1264,7 +1298,10 @@ class QueryCustodyModels(unittest.TestCase):
         m.query_body_hook = originals
         parent = m.prepare()
         self.assertIs(m.frame().query_preclose.readbacks[0], m.queries[0].readbacks[0])
-        self.assertEqual(parse(parent.records["admission/session-result.json"])["queries"], m.queries[0].records)
+        raw = parent.records["admission/session-result.json"]
+        self.assertEqual(parse(raw)["queries"], m.queries[0].records)
+        self.assertEqual(parse(raw)["readbacks"], m.queries[0].readbacks[:-1])
+        self.assertEqual(m.queries[0].readbacks[-1]["sha256"], digest(raw))
         parent.check()
 
 

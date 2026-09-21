@@ -212,10 +212,13 @@ The complete receiver must charge original reads, fresh authority acquisition
 and its actual closes, plus initialization to **one canonical-init120 interval**
 from the same LOCAL-before-RAW anchor. It cannot mint another120 after receiving.
 Sender `retainedNs` is not its final post-return high-water, and matching clock
-labels do not attest the same boot. The later original-custody reader also needs
-an explicit binding for native query owner/start/baseline bytes, which current
-query session rows do not transitively hash. These remain requirements, not
-accepted observations or reasons to reinterpret narrow sender/reader checks.
+labels do not attest the same boot. The shared query now supplies
+[retained readback digests](../testing/hosted-dependency-cache.md#native-git-readback-digests-not-complete-receiver-acceptance)
+for newly observed owner/start/baseline/result bytes through its session, with
+strict collection-tail content binding. The full receiver still must acquire
+and authenticate that original graph; older hashless evidence is not upgraded.
+Neither the hashes nor narrow sender/reader checks establish the missing
+receiving authority, timing continuity or complete original custody.
 
 Pre-init authority does not also satisfy the later producer, after-save or
 sealing rechecks. Each required recheck needs its own legitimate credential

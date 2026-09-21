@@ -806,12 +806,10 @@ one canonical-init120 interval with one LOCAL-before-RAW anchor. It cannot spend
 120 on receiving and start another120 for initialization. No current budget or
 5400 proposal is admitted by this source.
 
-The complete-custody design also identifies a remaining provenance distinction:
-native Git session rows bind query results and stdout/stderr lengths/hashes,
-but do not transitively hash their original `owner.json`, `start.json` or
-`baseline.json`. Existence/structural checks of those files are not original-byte
-authentication. That later prerequisite does not invalidate the accepted narrow
-sender scope or authorize reconstructing missing observations.
+The complete-custody design also identified a query-metadata digest gap at this
+reader checkpoint. The next subsection addresses that prerequisite for newly
+retained originals only; it neither widens this narrow package-reader scope nor
+authorizes reconstructing missing observations in older evidence.
 
 The [focused reader tests](../../scripts/tests/hosted-initial-recipient-reader-test.py)
 passed **38/38 own lightweight methods** (0.149s), plus **one separately executed
@@ -833,6 +831,58 @@ preserved. Exact independent final review belongs to the containing #437 commit
 record, not these author passes. No actual native/GPG/Git/HTTP/provider or hosted
 qualification is implied. Both ordinary HOLDs, the whole-JVM interlock and manual
 owner approvals remain.
+
+#### Native Git readback digests, not complete receiver acceptance
+
+[`NativeGitQueries._readback`](../../scripts/hosted_test_query.py) now retains
+the SHA-256 of the actual successful reader bytes, alongside their length and
+known reader retirement, **before** its existing final deadline check. This
+covers `owner.json`, each query's `start.json`/`baseline.json`/`result.json`,
+captures (including SHA-256 of zero bytes), and other existing metadata writes.
+The writer still requires readback equality to its immutable original bytes.
+No new read, phase, cap, native scope or authority is acquired. A failed delegated
+reader remains UNKNOWN with its original diagnostic and no successful digest.
+Retaining a digest after the interval expires cannot grant a timely return.
+
+The existing session serializes the preceding readbacks, including their new
+hashes. Its **own** readback is appended only after session encoding, so that
+tail digest stays in supplier memory, not inside the session itself. It is not
+a self-hash, proof of the session writer/owner close, or original step success.
+All actual enclosing returns are still required. This is a nested-record schema
+addition; old hashless observations are not silently promoted or rewritten.
+
+The [collection parent](../../scripts/run-hosted-cache-bootstrap.py) requires
+exactly the new successful session-tail keys and a lowercase64 digest. It then
+compares that pinned digest to the actual session bytes already retained by its
+existing reader. The original closed-graph, roster, byte-count and close checks
+remain load-bearing. Missing/malformed hashes, unknown extra fields, wrong-content
+hashes and mutation after pinning refuse; no hashless fallback is accepted.
+
+Four separate bounded author invocations passed:
+
+| Executed source controls | Result |
+| --- | --- |
+| [Native-query adapter](../../scripts/tests/hosted-test-query-test.py), including six new digest methods | 50/50 methods, 0.467s |
+| [Collection query/closed-custody controls](../../scripts/tests/hosted-cache-bootstrap-collection-parent-test.py), selected29 including five new methods | 29/29 methods, 3.244s |
+| [Windows caller models](../../scripts/tests/hosted-test-query-windows-model-test.py) | 10/10 methods, 0.048s |
+| [Original shortening-only fences](../../scripts/tests/hosted-cache-bootstrap-query-fence-test.py), selected13 | 13/13 methods, 0.114s |
+
+The two preimage invocations remain failed: one query method had six missing-hash
+subtest failures; one updated collection-fixture method was refused by the old
+exact-key consumer. These demonstrate the coordinated schema change, not native
+failures. Only tiny ordinary-UID POSIX files are real. Collection files and native,
+Git, Windows and clock suppliers are models. Each invocation used UID/GID65534,
+Python3.12.3 `-I -B -S`, cleared environment/groups, no-new-privs, read-only source,
+CPU20/512MiB/file32MiB/FD128/wall30+kill2 and pre-project filesystem/process/network/
+native-loader guards: four synthetic guard controls, zero unexpected denials or
+ResourceWarnings. Exact independent implementation review remains separately
+bound to the containing #437 commit record, not these author results.
+
+A complete recipient receiver still must traverse and authenticate the bounded
+original graph through a NEW owner, preserve original timing/proposal bindings,
+reacquire current Stage1 authority and initialize within the single canonical120.
+These digests alone implement none of that receiver or its trusted step transport.
+No workflow, HOLD, credential boundary, private key or execution permission changes.
 
 #### Stage1 canonical-context reader, not initialization authority
 
