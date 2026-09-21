@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 
 import hosted_cache_bootstrap_producer as producer
+import hosted_initial_recipient_bootstrap_identity as initial_identity
 
 
 def require(value, reason):
@@ -108,13 +109,15 @@ def stdout_path(state, role):
     return path.encode("ascii") + (b"\r\n" if role == "windows-x64" else b"\n")
 
 
-def context_record(raw, *, admitted_raw, root, state, role, outer_job, homes, policy_raw):
-    """Strict supplied-byte check; real parent must read after native close."""
-    value, admitted = producer.parse(raw), producer.parse(admitted_raw)
+def _context_values(raw, identity_raw):
+    value, admitted = producer.parse(raw), producer.parse(identity_raw)
     require(set(value) == producer.CONTEXT_FIELDS and type(value["schema"]) is int and value["schema"] == 1,
             "BOOTSTRAP_INIT_CONTEXT_FIELDS")
-    require(type(root) is str and type(state) is str and type(role) is str and
-            producer.bootstrap.cache_cohort(admitted_raw)[1] == role, "BOOTSTRAP_INIT_CONTEXT_ROLE")
+    return value, admitted
+
+
+def _context_fields(value, admitted, *, root, state, role, outer_job, homes, policy_raw):
+    """Common canonical grammar only; the fixed public entries own their routes."""
     root_path, state_path = producer._path(root, role), producer._path(state, role)
     require(root_path != state_path and root_path not in state_path.parents and state_path not in root_path.parents,
             "BOOTSTRAP_INIT_CONTEXT_PATHS")
@@ -139,3 +142,30 @@ def context_record(raw, *, admitted_raw, root, state, role, outer_job, homes, po
         raise producer.ProducerError("BOOTSTRAP_INIT_CONTEXT_UTC") from None
     # Timestamp is a label only. No RAW/LOCAL budget or ordering is inferred.
     return value
+
+
+def context_record(raw, *, admitted_raw, root, state, role, outer_job, homes, policy_raw):
+    """Strict trusted-main supplied-byte check; read only after native close."""
+    value, admitted = _context_values(raw, admitted_raw)
+    require(type(root) is str and type(state) is str and type(role) is str and
+            producer.bootstrap.cache_cohort(admitted_raw)[1] == role, "BOOTSTRAP_INIT_CONTEXT_ROLE")
+    return _context_fields(value, admitted, root=root, state=state, role=role, outer_job=outer_job,
+                           homes=homes, policy_raw=policy_raw)
+
+
+def initial_recipient_context_record(raw, *, worker_raw, root, state, role, outer_job, homes, policy_raw):
+    """Stage1-only supplied-context check, not original custody or live authority.
+
+    No Admission is constructed and no old identity route is widened. The future
+    owner must independently acquire current authority and original output after
+    native/capture retirement. Matching or repeated bytes do not supply those
+    facts, validate the recipient, or admit initialization/producer execution.
+    """
+    require(type(raw) is bytes and type(worker_raw) is bytes, "BOOTSTRAP_INIT_INITIAL_RECIPIENT_BYTES")
+    value, worker = _context_values(raw, worker_raw)
+    cohort = initial_identity.cache_cohort(worker_raw)
+    require(cohort is not None, "BOOTSTRAP_INIT_INITIAL_RECIPIENT_REQUIRED")
+    require(type(root) is str and type(state) is str and type(role) is str and cohort[1] == role,
+            "BOOTSTRAP_INIT_CONTEXT_ROLE")
+    return _context_fields(value, worker, root=root, state=state, role=role, outer_job=outer_job,
+                           homes=homes, policy_raw=policy_raw)

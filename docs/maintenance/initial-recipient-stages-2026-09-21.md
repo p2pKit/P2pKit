@@ -185,6 +185,34 @@ unchanged traces resolved that analysis error without rerunning or changing the
 tests. This is not syscall-sandbox or hosted/native qualification. Exact
 independent review belongs to the containing commit's #437 record.
 
+### Initialization transition design, not an implemented handoff
+
+The closed Stage1 recipient-validation result is historical only. It cannot
+enter the trusted-main initializer's original `_RecipientParent` handoff or
+become ordinary `Admission`, a live Recipient or a current remote-authority
+lease. Its owning token has been cleared before crypto; do not preserve a parent
+alias, restore the environment or turn an earlier observation into later authority.
+
+The smallest next execution design uses a **new trusted step in the same
+`populate` job/run/attempt/selection/runner**, not another job. That step will
+need the predecessor's actual original `outcome`, emitted hashes and complete
+closed originals through a fixed reviewed handoff. None of that cross-process
+handoff exists yet. A NEW owner must reread originals and acquire current native/
+source/HTTP Stage1 authority with the runner's fresh step-scoped token, then
+discard it before the fixed canonical initializer. Original firstUseAt, service
+job/start, runner and clock/proposal fences cannot reset at this boundary.
+
+Pre-init authority does not also satisfy the later producer, after-save or
+sealing rechecks. Each required recheck needs its own legitimate credential
+episode or a separately specified/reviewed fixed transaction. Merely splitting
+internal steps does not change custodian policy or authorize execution; final
+exact-source owner approval, workflow review and all HOLDs remain mandatory.
+
+The [explicit Stage1 canonical-context checker](../testing/hosted-dependency-cache.md#stage1-canonical-context-reader-not-initialization-authority)
+provides only shared output grammar for this future native readback. It creates
+no handoff, owner, current authority, workflow or execution entry. Reuse the
+maintained canonical request and initializer, not a copied productive controller.
+
 ## Remaining implementation and authorization boundaries
 
 | Increment | Required work; current boundary |

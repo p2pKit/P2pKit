@@ -693,6 +693,44 @@ HOLDs, Provider180, NativeFile900/Snapshot576MiB, FULL3600/Desktop1800 and all
 required checks/manual owner approvals remain unchanged. No private material,
 actual crypto, build/download, dispatch, activation, merge or publication ran.
 
+#### Stage1 canonical-context reader, not initialization authority
+
+The separate fixed `initial_recipient_context_record()` in
+[`hosted_cache_bootstrap_initialization.py`](../../scripts/hosted_cache_bootstrap_initialization.py)
+now checks supplied canonical-context bytes against the complete Stage1 worker
+declaration. It explicitly refuses the identity reader's non-Stage1 fallback.
+Only the private canonical grammar is shared: exact source/role, separate
+source/state paths, distinct job ID, fixed properties/declared homes, empty
+output baseline and UTC label. The existing `context_record()` and trusted-main
+cohort reader still reject Stage1. No `Admission` is cast or constructed.
+
+This is a necessary **readback prerequisite**, not a new initializer, original
+file reader, authority acquirer or productive connection. Copied/repeated bytes
+remain data. The UTC field is only a label; policy currency, original timing,
+installed-tool identity and actual native/output retirement belong to the future
+owner. No clock, filesystem, OpenPGP or authority acquisition runs in this checker.
+
+The [focused offline controls](../../scripts/tests/hosted-initial-recipient-init-context-test.py)
+passed **14/14 methods** in0.065s, including all six Stage1 cohorts, unchanged
+trusted-main routing, cross-route/scope refusal, malformed worker bindings,
+context/path/job/properties mutations, exact byte types and no-acquisition
+controls. The preimage remains **0/1 method PASS**, with six missing-entry
+`AttributeError` subtest errors; it establishes an absent prerequisite, not a
+regression in the deliberately restricted legacy route. Final14 includes that
+corrected method, not additional coverage. Execution used the existing
+UID/GID65534/Python3.12.3 isolated guard, read-only source, CPU20/512MiB/file32MiB/
+FD128/wall30+kill2, four synthetic guard controls, zero unexpected denials or
+ResourceWarnings. Only the committed public policy and synthetic declarations
+were read; no initializer, toolchain, native or provider execution occurred.
+
+The [next transition](../maintenance/initial-recipient-stages-2026-09-21.md#initialization-transition-design-not-an-implemented-handoff)
+needs a fresh trusted step in the **same** authorized `populate` job, original
+predecessor outcome/hash custody and new current authority before initialization.
+The closed recipient result cannot provide that authority or a cross-process
+capability. Its token is not preserved/restored. Later producer/after-save/seal
+rechecks need their own legitimate fresh credential episode too. These are
+unimplemented requirements; both HOLDs and all existing limits remain unchanged.
+
 ### Private handoff and read-only adoption
 
 Preparation binds the original native session/child-directory identities and
