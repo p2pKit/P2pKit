@@ -199,11 +199,23 @@ need the predecessor's actual original `outcome`, emitted hashes and complete
 closed originals through a fixed reviewed handoff. The
 [file-only sender](../testing/hosted-dependency-cache.md#stage1-recipient-sender-not-receiving-authority)
 now retains the two original memory-only returns and emits only a provisional
-manifest digest, within the original actual read caps. The receiving half and
-authenticated step/hash transport do not exist yet. A NEW owner must reread originals and acquire current native/
+manifest digest, within the original actual read caps. The
+[borrowed-owner three-file reader](../testing/hosted-dependency-cache.md#stage1-recipient-package-reader-not-a-receiving-initializer)
+checks supplied package consistency only, not the references' complete originals
+or authenticated step/hash transport. The receiving NEW owner and current
+authority still do not exist. A NEW owner must reread originals and acquire current native/
 source/HTTP Stage1 authority with the runner's fresh step-scoped token, then
 discard it before the fixed canonical initializer. Original firstUseAt, service
 job/start, runner and clock/proposal fences cannot reset at this boundary.
+
+The complete receiver must charge original reads, fresh authority acquisition
+and its actual closes, plus initialization to **one canonical-init120 interval**
+from the same LOCAL-before-RAW anchor. It cannot mint another120 after receiving.
+Sender `retainedNs` is not its final post-return high-water, and matching clock
+labels do not attest the same boot. The later original-custody reader also needs
+an explicit binding for native query owner/start/baseline bytes, which current
+query session rows do not transitively hash. These remain requirements, not
+accepted observations or reasons to reinterpret narrow sender/reader checks.
 
 Pre-init authority does not also satisfy the later producer, after-save or
 sealing rechecks. Each required recheck needs its own legitimate credential
@@ -222,7 +234,7 @@ maintained canonical request and initializer, not a copied productive controller
 | --- | --- |
 | Staged contracts | Separate schemas/history/reference binding and focused offline tests; implementation review belongs to the exact containing commit's issue record, not the design recommendation. |
 | Pre-use gate | Approval challenge and bounded original acquisition/custody have dormant source; the whole-JVM dependency is fail-only, not an active gate caller. Actual environment/gate integration remains. Coordinated controls in `check-heavy-job-queue-policy.rb`, `check-hosted-test-workflow-policy.rb`, `check-jvm-cross-host-policy-test.rb` and affected workflow tests must remain load-bearing. |
-| Bootstrap identity/evidence | The [worker-only identity/cohort and original-return binding](../testing/hosted-dependency-cache.md#explicit-stage1-worker-identity-not-productive-admission) is source preparation, not productive `Admission`. Original-response retention is enclosed by the separate native controller. The file-only recipient sender does not supply a receiver or current authority. Productive identity/export contracts, actual repeated readmission, separate seal/upload and bootstrap workflow remain. Current trusted-main-only entries refuse absent policy and the distinct initial identity. |
+| Bootstrap identity/evidence | The [worker-only identity/cohort and original-return binding](../testing/hosted-dependency-cache.md#explicit-stage1-worker-identity-not-productive-admission) is source preparation, not productive `Admission`. Original-response retention is enclosed by the separate native controller. The recipient sender and borrowed-owner package reader do not supply a receiving initializer or current authority. Productive identity/export contracts, actual repeated readmission, separate seal/upload and bootstrap workflow remain. Current trusted-main-only entries refuse absent policy and the distinct initial identity. |
 | Provider/custody | Trusted runner-selected Node24/service bridge, fixed supplier, Windows output freeze/read/final-close, bounded cancellation/drain/whole-domain retirement and original enclosing returns; then genuine save/probe/custody qualification. |
 | Hosted qualification | Requires reviewed executable source, safe registration, legitimate owner-controlled gate and **separate exact-source execution authorization**. No local app/toolchain build or dependency download. Bootstrap5400 remains UNADMITTED/UNMEASURED. |
 | Ordinary/main delivery | Fresh reviewed H2, actual compatible qualification and Stage 2 authority; both ordinary HOLDs require their own genuine resolution. All four required checks, exact-head personal PR comment, manual marked merge, main evidence generation, owner review and post-build environment approval remain. |

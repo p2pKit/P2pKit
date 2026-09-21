@@ -3117,6 +3117,196 @@ def validate_recipient(cancelled):
     return _retain_recipient_validation(_prepare_and_validate_recipient(cancelled))
 
 
+def _read_recipient_sender(owner, directory, *, recipient_outcome, expected_sha256):
+    """SUPPLIED_PACKAGE_CONSISTENCY_ONLY; enclosing OWNER_CLOSE_PENDING.
+
+    Borrow the live bounded Owner and its already registered sender directory.
+    Return only immutable bytes, never an original-call capability or authority.
+    The future trusted caller must supply the actual step outcome and separately
+    transported hash. This helper cannot authenticate either input. References
+    are NOT traversed: complete originals/current authority remain unestablished.
+    Historical clock labels do not attest host/boot; LOCAL history is not a new
+    deadline, and retainedNs is not the sender's final return high-water.
+    """
+    require(type(recipient_outcome) is str and recipient_outcome == "success", "RECIPIENT_READ_STEP_OUTCOME")
+    require(type(expected_sha256) is str and re.fullmatch(r"[0-9a-f]{64}", expected_sha256),
+            "RECIPIENT_READ_ORIGINAL_HASH")
+    require(type(owner) is native.Owner and owner.first is not None and owner.fence is not None and
+            type(owner.resources) is list and type(owner.errors) is list, "RECIPIENT_READ_OWNER")
+    first, fence, ledger, errors = owner.first, owner.fence, owner.resources, owner.errors
+    cancelled, local_end, limits = owner.cancelled, owner.local_end, (owner.work_limit, owner.final_limit)
+    O.clocks.validate_reading(first)
+    first_ns, clock_raw = first.nanoseconds, O.encoded(O.clock_value(first.clock))
+    require(callable(cancelled) and type(local_end) is float and math.isfinite(local_end), "RECIPIENT_READ_OWNER")
+    require(all(type(row) is dict and set(row) == {"label", "owner", "attempted", "closed"} and
+        type(row["label"]) is str and row["label"] in ("directory", "writer", "stdout", "stderr", "native-scope") and
+        type(row["attempted"]) is bool and type(row["closed"]) is bool and (not row["closed"] or row["attempted"])
+        for row in ledger), "RECIPIENT_READ_RESOURCE_ROSTER")
+    rows = tuple((row, row["label"], row["owner"], row["attempted"], row["closed"]) for row in ledger)
+    require(len({id(row) for row, *_rest in rows}) == len(rows) ==
+        len({id(resource) for _row, _label, resource, _attempted, _closed in rows}), "RECIPIENT_READ_RESOURCE_ALIAS")
+
+    def roster():
+        return owner.resources is ledger and len(ledger) == len(rows) and all(
+            row is saved and type(row) is dict and set(row) == {"label", "owner", "attempted", "closed"} and
+            type(row["label"]) is str and row["label"] == label and row["owner"] is resource and
+            row["attempted"] is attempted and row["closed"] is closed
+            for row, (saved, label, resource, attempted, closed) in zip(ledger, rows))
+
+    def pins():
+        require(type(owner) is native.Owner and owner.first is first and owner.fence is fence and
+            owner.resources is ledger and owner.errors is errors and owner.cancelled is cancelled and
+            type(owner.local_end) is float and owner.local_end == local_end and
+            all(type(a) is type(b) and a == b for a, b in zip((owner.work_limit, owner.final_limit), limits)) and
+            type(first.nanoseconds) is int and first.nanoseconds == first_ns and
+            O.encoded(O.clock_value(first.clock)) == clock_raw == O.encoded(O.clock_value(fence.clock)),
+            "RECIPIENT_READ_OWNER_CHANGED")
+        require(roster(), "RECIPIENT_READ_ROSTER_CHANGED")
+        require(owner.closed is False and owner.unknown is False and owner.original is None and errors == [],
+            "RECIPIENT_READ_OWNER_NOT_LIVE")
+        require(not native.QUARANTINE and not Q.QUARANTINE and not native.diagnostics._QUARANTINE,
+            "RECIPIENT_READ_PRIOR_UNKNOWN")
+
+    def checked():
+        pins()
+        cancelled()  # A bound fence need not forward the borrowed cancellation.
+        pins()
+        owner.end()
+        pins()
+        cancelled()
+        pins()
+        owner.end()  # The cancellation callback also spends the ORIGINAL interval.
+        pins()
+
+    def call(function, *args):
+        checked()
+        value = function(*args)
+        checked()
+        return value
+
+    def same(actual, expected):
+        require(O.encoded(actual) == O.encoded(expected), "RECIPIENT_READ_BINDING")
+
+    def hashes(value, names):
+        require(all(type(value[name]) is str and re.fullmatch(r"[0-9a-f]{64}", value[name]) for name in names),
+            "RECIPIENT_READ_RECORD_HASHES")
+
+    def record(raw, fields, scope):
+        value = O.parse(raw)
+        require(type(value) is dict and set(value) == fields and raw == O.encoded(value) and
+            type(value["schema"]) is int and value["schema"] == 1 and value["scope"] == scope and
+            value["retirement"] == "KNOWN_RESOURCE_CLOSE_ONLY" and value["budgetAcceptance"] == "NOT_ADMITTED" and
+            value["exportSaveAuthority"] is False, "RECIPIENT_READ_RETURN")
+        O.integer(value["resourceCount"], 1)
+        return value
+
+    try:
+        recipient_path = call(_recipient_path)
+        path = recipient_path.with_name(recipient_path.name + "-output")
+        entry_path = recipient_path.with_name(recipient_path.name.removesuffix("-recipient") + "-entry")
+        require(directory is not None and directory.path == path, "RECIPIENT_READ_LAYOUT")
+        directory_id = tuple(native.directory_identity(list(directory.identity), first.clock.role))
+
+        def locations():
+            call(native._new_entry_owned, owner, directory, path, directory_id)
+
+        names = ("readmission-return.json", "recipient-return.json")
+        expected_roster = tuple(sorted((*names, "sender-pending.json")))
+        locations()
+        raw = call(owner.read, directory, "sender-pending.json")
+        require(type(raw) is bytes and 0 < len(raw) <= native.LIMIT and O.digest(raw) == expected_sha256,
+            "RECIPIENT_READ_HASH_CHANGED")
+        value = O.parse(raw)
+        require(type(value) is dict and set(value) == {"schema", "scope", "directory", "directoryIdentity", "records",
+            "originalReferences", "readWindow", "writerReturn", "originalStepOutcome", "completeOriginals",
+            "liveRecipient", "currentRemoteAuthority", "budgetAcceptance", "testAcceptance", "exportSaveAuthority"} and
+            raw == O.encoded(value) and type(value["schema"]) is int and value["schema"] == 1 and
+            value["scope"] == RECIPIENT_SENDER_SCOPE and value["writerReturn"] == "PENDING_NOT_OBSERVABLE_BY_THIS_FILE" and
+            value["originalStepOutcome"] == "NOT_OBSERVED" and value["completeOriginals"] == "NOT_ESTABLISHED_BY_THIS_BUNDLE" and
+            value["liveRecipient"] == "NOT_TRANSFERRED" and value["currentRemoteAuthority"] == "NOT_GRANTED_BY_HISTORY" and
+            value["budgetAcceptance"] == "NOT_ADMITTED" and value["testAcceptance"] == "NOT_PERFORMED" and
+            value["exportSaveAuthority"] is False, "RECIPIENT_READ_INDEX")
+        require(value["directory"] == str(path) and native.directory_identity(value["directoryIdentity"], first.clock.role) ==
+            list(directory_id), "RECIPIENT_READ_DIRECTORY")
+        references = value["originalReferences"]
+        require(type(references) is dict and set(references) == {"recipientSession", "readmissionSession", "scope",
+            "workerIdentitySha256", "serviceTimeBasisSha256", "originalProposalSha256"} and
+            references["recipientSession"] == str(recipient_path) and references["readmissionSession"] == str(entry_path) and
+            references["scope"] == "PINNED_CONTEXT_REFERENCES_NOT_CURRENT_FILESYSTEM_OBSERVATIONS", "RECIPIENT_READ_REFERENCES")
+        require(type(value["records"]) is dict and set(value["records"]) == set(names), "RECIPIENT_READ_RECORD_ROSTER")
+        require(call(native._initializer_names, owner, directory) == expected_roster, "RECIPIENT_READ_ROSTER")
+        blobs = {}
+        for name in names:
+            locations()
+            row = value["records"][name]
+            require(type(row) is dict and set(row) == {"bytes", "sha256"} and type(row["bytes"]) is int and
+                0 < row["bytes"] <= native.LIMIT and type(row["sha256"]) is str and
+                re.fullmatch(r"[0-9a-f]{64}", row["sha256"]), "RECIPIENT_READ_RECORD_BINDING")
+            blob = call(owner.read, directory, name, row["bytes"])
+            require(type(blob) is bytes and len(blob) == row["bytes"] and O.digest(blob) == row["sha256"],
+                "RECIPIENT_READ_RECORD_CHANGED")
+            blobs[name] = blob
+        common = {"schema", "scope", "window", "workerIdentitySha256", "pendingSha256", "preCloseNs", "closedNs",
+            "resourceCount", "retirement", "budgetAcceptance", "exportSaveAuthority"}
+        entry = record(blobs[names[0]], common | {"originalPreparationSha256", "serviceTimeBasisSha256",
+            "allocationProposalSha256", "firstUseAt", "workerAdmission", "qualificationAcceptance"}, READMISSION_SCOPE)
+        recipient = record(blobs[names[1]], common | {"originalReadmissionSha256", "authoritySha256",
+            "liveRecipient", "currentRemoteAuthority", "testAcceptance"}, RECIPIENT_RETURN_SCOPE)
+        require(entry["workerAdmission"] == "NOT_PERFORMED" and entry["qualificationAcceptance"] == "NOT_ESTABLISHED" and
+            recipient["liveRecipient"] == "NOT_TRANSFERRED" and recipient["currentRemoteAuthority"] == "NOT_GRANTED_BY_HISTORY" and
+            recipient["testAcceptance"] == "NOT_PERFORMED", "RECIPIENT_READ_RETURN")
+        hashes(entry, ("originalPreparationSha256", "workerIdentitySha256", "pendingSha256",
+            "serviceTimeBasisSha256", "allocationProposalSha256"))
+        hashes(recipient, ("originalReadmissionSha256", "workerIdentitySha256", "authoritySha256", "pendingSha256"))
+        eframe, _eclock, efirst, ework, efinal = _entry_frame(O.encoded(entry["window"]))
+        rframe, _rclock, rfirst, rends = _recipient_frame(O.encoded(recipient["window"]))
+        same(entry["originalPreparationSha256"], eframe["originalPreparationSha256"])
+        same(entry["workerIdentitySha256"], eframe["workerIdentitySha256"])
+        same(entry["firstUseAt"], eframe["firstUseAt"])
+        same(entry["allocationProposalSha256"], eframe["originalProposalSha256"])
+        same(rframe["originalProposedJobEndNs"], eframe["originalProposedJobEndNs"])
+        same(rframe["firstUseAt"], entry["firstUseAt"])
+        same(rframe["previousNs"], entry["closedNs"])
+        for supplied in (rframe["originalReadmissionSha256"], recipient["originalReadmissionSha256"]):
+            same(supplied, O.digest(blobs[names[0]]))
+        for supplied in (rframe["workerIdentitySha256"], recipient["workerIdentitySha256"], references["workerIdentitySha256"]):
+            same(supplied, entry["workerIdentitySha256"])
+        for supplied in (rframe["originalProposalSha256"], references["originalProposalSha256"]):
+            same(supplied, entry["allocationProposalSha256"])
+        same(references["serviceTimeBasisSha256"], entry["serviceTimeBasisSha256"])
+        window = value["readWindow"]
+        require(type(window) is dict and set(window) == {"clock", "previousNs", "previousLocal", "readEndNs",
+            "readLocalCeiling", "retainedNs"}, "RECIPIENT_READ_WINDOW")
+        for clock in (eframe["clock"], rframe["clock"], window["clock"]):
+            require(O.encoded(clock) == clock_raw, "RECIPIENT_READ_CLOCK")  # Labels only, not same-host proof.
+        same(window["previousNs"], recipient["closedNs"])
+        ep, ec, rp, rc, retained, end = (O.integer(number) for number in (entry["preCloseNs"], entry["closedNs"],
+            recipient["preCloseNs"], recipient["closedNs"], window["retainedNs"], window["readEndNs"]))
+        require(efirst <= ep < ework and ep <= ec < efinal and ec <= rfirst <= rp <= rc <= retained < end <= rends[2],
+            "RECIPIENT_READ_CHRONOLOGY")
+        previous_local, ceiling = window["previousLocal"], window["readLocalCeiling"]
+        require(type(previous_local) in (int, float) and type(ceiling) is float and
+            math.isfinite(previous_local) and math.isfinite(ceiling) and 0 <= previous_local < ceiling,
+            "RECIPIENT_READ_LOCAL_RECORD")
+        # Never observe old owners or adopt their historical RAW/LOCAL fences.
+        require(call(native._initializer_names, owner, directory) == expected_roster, "RECIPIENT_READ_ROSTER")
+        for name in names:
+            locations()
+            require(call(owner.read, directory, name, len(blobs[name])) == blobs[name], "RECIPIENT_READ_REREAD_CHANGED")
+        require(call(owner.read, directory, "sender-pending.json") == raw, "RECIPIENT_READ_INDEX_CHANGED")
+        require(call(native._initializer_names, owner, directory) == expected_roster, "RECIPIENT_READ_ROSTER")
+        locations()
+        checked()
+        return raw, tuple((name, blobs[name]) for name in names)
+    except BaseException as error:
+        original = owner.original if owner.original is not None else error
+        try:
+            owner.error("recipient-sender-read", error, unknown=not roster())
+        except BaseException:
+            owner.unknown = True
+        raise original  # The caller retains every borrowed resource and owns cleanup.
+
+
 def _prepare_and_readmit_worker(cancelled):
     """Dormant two-acquisition stack; never a workflow/CLI execution entry."""
     token = os.environ.pop(O.wire.TOKEN_ENV, None)

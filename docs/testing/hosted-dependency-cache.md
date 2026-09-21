@@ -764,12 +764,75 @@ first closed-history rejection. The implementation was unchanged; the exact
 error oracle and retry check then passed in the corrected3/3 batch. This does
 not relabel the original failed aggregate or reuse it as a passed suite.
 
-The receiving NEW owner, original step/hash custody and **fresh current Stage1
-authority in the same `populate` job** are still unimplemented. So are productive
+The small borrowed-owner reader below checks supplied package consistency only.
+The receiving NEW owner, authenticated step/hash custody and **fresh current
+Stage1 authority in the same `populate` job** are still unimplemented. So are productive
 Stage1/repeated/after-save integration, operational workflow, provider/custody
 and actual hosted qualification. Both ordinary HOLDs, the whole-JVM interlock,
 all existing limits and manual owner approvals remain unchanged. No private key,
 actual native/GPG/provider execution, build/download or CI dispatch was used.
+
+#### Stage1 recipient package reader, not a receiving initializer
+
+Internal `_read_recipient_sender` borrows an existing live `native.Owner` and
+its already registered sender directory. It requires separately supplied exact
+step outcome `success` and lowercase manifest SHA-256; neither comes from the
+package. It cannot authenticate those supplied values. The source-derived
+`-recipient-output` path, current private-directory identity, exact three-name
+roster, canonical schemas, finite sizes/hashes and selected cross-record links
+are checked and the bytes reread. References are never used as file selectors.
+
+The reader retains the original owner/first reading/fence/cancellation, LOCAL
+ceiling, work/final limit pair, error list and complete borrowed resource roster.
+Cancellation is explicit even when the borrowed fence checks only deadlines.
+It neither allocates nor closes an owner/directory, changes a budget, acquires
+authority nor populates an original-return registry. Returned data is only
+`(manifest_bytes, ((fixed_name, bytes), ...))`, with **enclosing-owner close
+PENDING**. Prior/falsey failures and uncertain resource custody remain failures.
+
+Both embedded historical frames use their maintained supplied-data grammars.
+Readmission/recipient links, original identity/proposal/service-basis hashes,
+firstUseAt, nominal-versus-actual read limits and chronology must agree. Old
+LOCAL values are checked for finite ordering only: they are not a current
+deadline or cross-process epoch. Matching RAW clock labels do not prove the
+same machine/boot. The manifest's `retainedNs` predates its own write/close and
+step return; this reader does not invent a final sender high-water.
+
+Complete original custody, the actual step/hash transport, a NEW receiving
+owner, original proposal rederivation and fresh Stage1 authority remain
+unimplemented. A future full receiver must spend original traversal, fresh
+source/HTTP acquisition **and its closes**, then canonical initialization inside
+one canonical-init120 interval with one LOCAL-before-RAW anchor. It cannot spend
+120 on receiving and start another120 for initialization. No current budget or
+5400 proposal is admitted by this source.
+
+The complete-custody design also identifies a remaining provenance distinction:
+native Git session rows bind query results and stdout/stderr lengths/hashes,
+but do not transitively hash their original `owner.json`, `start.json` or
+`baseline.json`. Existence/structural checks of those files are not original-byte
+authentication. That later prerequisite does not invalidate the accepted narrow
+sender scope or authorize reconstructing missing observations.
+
+The [focused reader tests](../../scripts/tests/hosted-initial-recipient-reader-test.py)
+passed **38/38 own lightweight methods** (0.149s), plus **one separately executed
+sender-to-reader composed method** (3.370s). Only tiny ordinary-UID POSIX files
+are real; historical records/clocks and the composed test's upstream
+Git/HTTP/native/GPG suppliers are models. Each invocation used UID/GID65534,
+Python3.12.3 `-I -B -S`, cleared environment/groups, no-new-privs,
+CPU20/512MiB/file32MiB/FD128/wall30+kill2, read-only source and pre-project
+filesystem/process/network/native-loader guards: four synthetic guard controls,
+zero unexpected denials or ResourceWarnings.
+
+The absent-entry preimage failed its one focused assertion. Earlier author35
+passed but missed a deadline-ordering defect: independent R1 had **4 PASS /1
+FAIL**, because the final cancellation callback could consume the remaining
+LOCAL interval after the last deadline check. The correction checks the same
+borrowed owner deadline after that callback; it creates no new cap. The38 include
+LOCAL-equality and borrowed RAW-expiry regressions. Failed originals remain
+preserved. Exact independent final review belongs to the containing #437 commit
+record, not these author passes. No actual native/GPG/Git/HTTP/provider or hosted
+qualification is implied. Both ordinary HOLDs, the whole-JVM interlock and manual
+owner approvals remain.
 
 #### Stage1 canonical-context reader, not initialization authority
 
