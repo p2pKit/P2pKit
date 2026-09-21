@@ -89,6 +89,11 @@ class NativeModels(unittest.TestCase):
         Q.QUARANTINE.clear()
         S.diagnostics._QUARANTINE.clear()
         N._PREPARED_RETURNS.clear()
+        N._WORKER_USES.clear()
+        N._WORKER_CLAIMS.clear()
+        N._ENTRY_WINDOWS.clear()
+        N._READMISSION_RETURNS.clear()
+        N._READMISSION_ATTEMPTS.clear()
 
     def choose(self, kind, selection):
         self.fixture.choose(kind, selection)
@@ -178,7 +183,9 @@ class NativeModels(unittest.TestCase):
                 code = 0
                 try:
                     with patch.dict(os.environ, env, clear=True), patch.object(S.sys, "stdout", output):
-                        S.guarded(lambda cancelled: N.service_child(argv[-3], int(argv[-1]), cancelled))
+                        case.assertIn(argv[5], ("_service", "_service-entry"))
+                        S.guarded(lambda cancelled: N.service_child(argv[-3], int(argv[-1]), cancelled,
+                            entry=argv[5] == "_service-entry"))
                 except BaseException as error:
                     case.child_errors.append(error)
                     os.write(stderr.fileno(), b"SYNTHETIC_CHILD_FAILURE\n")

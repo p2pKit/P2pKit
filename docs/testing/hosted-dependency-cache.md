@@ -522,6 +522,83 @@ A future trusted workflow must bind the **exact original prepare-step outcome**,
 not its normalized conclusion or the provisional receipt/digest, before any
 downstream adoption. No receipt can observe its own later successful return.
 
+#### First Stage1 readmission, not productive admission
+
+The later dormant internal `_prepare_and_readmit_worker()` now connects the
+original worker preparation to **one fresh acquisition**. Public
+`prepare-originals` remains pending-step evidence only. The metadata-read token
+stays in the owning stack across both calls and is cleared from local references
+on exit; it is never serialized, placed in a claim/registry or passed to Git.
+This is not memory erasure or protection from hostile same-user code.
+
+An exact-original use reservation excludes simultaneous reads and claims. The
+short registry lock performs no parsing, clock, callback or I/O work. A claim
+is irreversible even if live validation fails; a separate attempt reservation
+also prevents retry after failure before allocating the new owner. Gate/copy
+inputs cannot consume a worker. After transfer the old owner/fence is checked
+as retained history only, never reopened or observed again.
+
+The distinct readmission window is neither `O.Fence` nor `Admission`. It samples
+LOCAL before RAW and saves one conservative LOCAL ceiling. Its source caps are:
+
+```text
+final = min(newFirst + 120s, originalProductiveEntryEnd, originalProposedJobEnd)
+work  = min(newFirst + 75s, final - 45s)
+require newFirst < work
+```
+
+Equality expires. These caps and the original5,400-second proposal remain
+**UNADMITTED / UNMEASURED**. There is no new job basis, allocation-start wait or
+renewed original prelude. An exclusive fixed `-entry` sibling, distinct context,
+`_service-entry` command and ACK separate this episode from initial preparation.
+Only the maintained native phase can select its narrower phase limits.
+
+The child reacquires all eight current originals with the **original
+`BootstrapMatch` and `firstUseAt`**. Source-before/source-after, native capture,
+retirement and original-return checks still apply. The selected job must keep
+its original numeric ID, start, runner name and numeric runner ID. Step progress
+and fresh response Date/START may change, but cannot replace the first retained
+service basis or allocation proposal. Actual source/phase returns, complete
+response/child/session bytes and original resource references are retained before
+owner close, not represented solely by hashes.
+
+Only actual successful close followed by final policy/RAW/LOCAL/cancellation and
+data-only original-binding checks can register the closed nonproductive return.
+The final data check also requires the original cancellation list to remain
+empty. First failure, clock high-water, uncertain resources and once-only
+cleanup remain fail-closed. `check_readmission_return()` checks that exact
+historical in-call return; it grants no live authority or time renewal.
+
+Author offline commands on the same final code ran separately: the
+[new focused controls](../../scripts/tests/hosted-initial-recipient-readmission-test.py)
+**39/39 PASS** (12.054s); existing Stage1 native models **81/81 PASS** (4.881s);
+one selected legacy original-basis chain method **1/1 PASS** (0.071s), not its
+inherited/full suite. The39 selection excludes inherited81. Each used
+UID65534/Python3.12.3 `-I -B -S`, CPU20/512MiB/wall30+kill2, read-only source,
+tiny writable fixtures and pre-project filesystem/process/network/native-loader
+guards: four synthetic guard controls, zero unexpected denials or ResourceWarnings.
+No genuine Git child, network, native backend, provider or crypto ran.
+
+Preserved failures: the missing-connection oracle **0/1 ERROR**; two WIP
+retry/final-cancellation regressions **0/2 FAIL** before repair; a first focused
+aggregate **35/36 PASS, one FAIL** because its policy-expiry error expectation
+was wrong; and an intermediate native aggregate **80/81 PASS, one ERROR** from
+an incompatible `read_phase()` return arity. The old `O.Fence` three-value API
+was restored; only the new window returns the extra retained child/session
+tuple. The selected legacy command did not run after that intermediate failure.
+An earlier oracle launcher failed before harness/project/test execution due to
+snapshot permissions; the corrected launcher retained the unchanged-source
+missing-connection failure.
+All repaired regressions are included in the final counts, not extra coverage.
+Exact independent implementation review belongs to the containing commit's
+issue record; author passes do not supply that review.
+
+This is only the **first** nonproductive worker readmission. Productive Stage1
+admission, repeated/after-save integration, recipient crypto, export/seal/upload,
+provider execution/custody, Stage2 qualification and workflow activation remain
+unfinished. Both ordinary HOLDs, required checks and manual owner approvals
+remain unchanged. No runtime, scheduling, cache or Release acceptance is added.
+
 ### Private handoff and read-only adoption
 
 Preparation binds the original native session/child-directory identities and

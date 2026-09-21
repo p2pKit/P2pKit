@@ -64,6 +64,8 @@ CHILD_SCOPE = "BOOTSTRAP_SERVICE_CHILD_PROVISIONAL_V1"
 ACK_SCOPE = "BOOTSTRAP_SERVICE_POST_CLOSE_ACK_V1"
 INITIAL_CONTEXT_SCOPE = "INITIAL_RECIPIENT_NATIVE_CONTEXT_V1"
 INITIAL_ACK_SCOPE = "INITIAL_RECIPIENT_SERVICE_POST_CLOSE_ACK_V1"
+INITIAL_ENTRY_CONTEXT_SCOPE = "INITIAL_RECIPIENT_READMISSION_NATIVE_CONTEXT_V1"
+INITIAL_ENTRY_ACK_SCOPE = "INITIAL_RECIPIENT_READMISSION_POST_CLOSE_ACK_V1"
 RESULT_SCOPE = "BOOTSTRAP_ORIGINALS_PENDING_CALLER_RETURN_V2"
 HANDOFF_SCOPE = "BOOTSTRAP_PREPARE_POST_CLOSE_HANDOFF_V1"
 HANDOFF_OUTPUT_SCOPE = "BOOTSTRAP_PREPARE_HANDOFF_PENDING_STEP_RETURN_V1"
@@ -678,10 +680,18 @@ def initial_command(context_hash, minimum=None):
     return result
 
 
+def initial_entry_command(context_hash, minimum=None):
+    """Only the distinct private Stage1 readmission route; no execution grant."""
+    result = initial_command(context_hash, minimum)
+    result[5] = "_service-entry"
+    return result
+
+
 def phase_command(context_raw, minimum=None):
     scope = origin.parse(context_raw).get("scope")
-    require(scope in (CONTEXT_SCOPE, INITIAL_CONTEXT_SCOPE), "BOOTSTRAP_SERVICE_CONTEXT_SCOPE")
-    fixed = initial_command if scope == INITIAL_CONTEXT_SCOPE else command
+    fixed = {CONTEXT_SCOPE: command, INITIAL_CONTEXT_SCOPE: initial_command,
+             INITIAL_ENTRY_CONTEXT_SCOPE: initial_entry_command}.get(scope)
+    require(fixed is not None, "BOOTSTRAP_SERVICE_CONTEXT_SCOPE")
     return fixed(origin.digest(context_raw), minimum)
 
 
@@ -909,31 +919,39 @@ def _admission_history_content(admitted, session, returned, past):
 
 
 def phase(owner, private, context_raw, token, fence):
-    context = origin.parse(context_raw)
-    started = fence.now()
-    work_end = min(fence.work, started + origin.wire.ACQUIRE_SECONDS * origin.NS)
-    final_end = min(fence.final, work_end + 45 * origin.NS)
-    old_limits = owner.work_limit, owner.final_limit
-    owner.work_limit, owner.final_limit = work_end, final_end
-    invocation = uuid.uuid4().hex
-    argv = phase_command(context_raw)
-    env = processes.ownership_environment(child_environment(private.path), context["job"], invocation,
-        str(private.path), str(private.path / "control-home"), allow_new_context=True)
-    inherited = {name: env[name] for name in query._CONTEXT}
-    start = {"schema": 1, "scope": PHASE_SCOPE, "contextSha256": origin.digest(context_raw), "argv": argv,
-             "cwd": str(ROOT), "role": fence.clock.role, "job": context["job"], "invocation": invocation,
-             "state": str(private.path), "home": str(private.path / "control-home"), "inheritedContext": inherited,
-             "startedNs": started, "workEndNs": work_end, "finalEndNs": final_end,
-             "exitCode": None, "launchAttempted": False, "scopeAttempted": False, "retirement": "UNKNOWN"}
-    directory = owner.child(private, "service", create=True)
-    start_raw = owner.write(directory, "start.json", start)
-    row = dict(start)
-    scope = out = err = child = None
-    before_errors = len(owner.errors)
-    captured, native_known, baseline_raw = {}, False, None
-    row["captureOutcomes"] = {name: {"synced": False, "verified": False, "closeAttempted": False,
-                                    "closed": False, "readback": False} for name in ("stdout", "stderr")}
-    resource_start = len(owner.resources)
+    try:
+        context = origin.parse(context_raw)
+        started = fence.now()
+        work_end = min(fence.work, started + origin.wire.ACQUIRE_SECONDS * origin.NS)
+        final_end = min(fence.final, work_end + 45 * origin.NS)
+        old_limits = owner.work_limit, owner.final_limit
+        entry = context.get("scope") == INITIAL_ENTRY_CONTEXT_SCOPE
+        if entry:
+            require(fence.enter_phase(owner, started) == (work_end, final_end), "BOOTSTRAP_INITIAL_ENTRY_PHASE")
+        else:
+            owner.work_limit, owner.final_limit = work_end, final_end
+        invocation = uuid.uuid4().hex
+        argv = phase_command(context_raw)
+        env = processes.ownership_environment(child_environment(private.path), context["job"], invocation,
+            str(private.path), str(private.path / "control-home"), allow_new_context=True)
+        inherited = {name: env[name] for name in query._CONTEXT}
+        start = {"schema": 1, "scope": PHASE_SCOPE, "contextSha256": origin.digest(context_raw), "argv": argv,
+                 "cwd": str(ROOT), "role": fence.clock.role, "job": context["job"], "invocation": invocation,
+                 "state": str(private.path), "home": str(private.path / "control-home"), "inheritedContext": inherited,
+                 "startedNs": started, "workEndNs": work_end, "finalEndNs": final_end,
+                 "exitCode": None, "launchAttempted": False, "scopeAttempted": False, "retirement": "UNKNOWN"}
+        directory = owner.child(private, "service", create=True)
+        start_raw = owner.write(directory, "start.json", start)
+        row = dict(start)
+        scope = out = err = child = None
+        before_errors = len(owner.errors)
+        captured, native_known, baseline_raw = {}, False, None
+        row["captureOutcomes"] = {name: {"synced": False, "verified": False, "closeAttempted": False,
+                                        "closed": False, "readback": False} for name in ("stdout", "stderr")}
+        resource_start = len(owner.resources)
+    except BaseException:
+        token = None  # Includes refused prelaunch setup, before a child environment carries it.
+        raise
     try:
         # The capture files remain alive through finalization, but acquisition
         # itself still checks the original work cutoff before AND after return.
@@ -1068,7 +1086,13 @@ def phase(owner, private, context_raw, token, fence):
             fence.now(final=True, limit=final_end)
         except BaseException as error:
             owner.error("service-receipt", error)
-        owner.work_limit, owner.final_limit = old_limits
+        if entry:
+            try:
+                fence.leave_phase(owner)
+            except BaseException as error:
+                owner.error("initial-entry-phase-return", error)
+        else:
+            owner.work_limit, owner.final_limit = old_limits
     if owner.original is not None:
         raise owner.original
     require(not owner.unknown and not owner.errors and row["exitCode"] == 0 and captured.get("stderr") == b"",
@@ -12931,7 +12955,7 @@ def guarded(operation):
     value, fence, limit = result
     cancellation(cancelled)
     observed = fence.now(final=True, limit=limit)
-    if value.get("scope") in (ACK_SCOPE, RECIPIENT_ACK_SCOPE, INITIAL_ACK_SCOPE):
+    if value.get("scope") in (ACK_SCOPE, RECIPIENT_ACK_SCOPE, INITIAL_ACK_SCOPE, INITIAL_ENTRY_ACK_SCOPE):
         value["closedNs"] = observed
     raw = origin.encoded(value)
     require(len(raw) <= ACK_LIMIT and sys.stdout.buffer.write(raw) == len(raw), "BOOTSTRAP_ACK_WRITE")
