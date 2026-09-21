@@ -244,6 +244,142 @@ class OutputSinkTests(unittest.TestCase):
         self.assertEqual(self.api.closed, [110])
         self.assertNotIn(("create",), self.api.calls)
 
+    def duplicate_interruption(self, ordinal, boundary, kind, *, close_failure=None):
+        self.reset_scope()
+        original = kind("MODELED_POPULATED_DUPLICATE_INTERRUPTION")
+        cause = original.__cause__ = ValueError("MODELED_EXISTING_CAUSE")
+        duplicate, check, close = self.api.DuplicateHandle, self.api.check, self.api.close
+
+        def interrupted_duplicate(*args):
+            result = duplicate(*args)
+            if len(self.api.duplicates) == ordinal and boundary == "supplier":
+                raise original
+            return result
+
+        def interrupted_check(result, operation):
+            if operation == "DuplicateHandle owned output" and len(self.api.duplicates) == ordinal and \
+                    boundary == "check":
+                raise original
+            return check(result, operation)
+
+        def failed_close(handle):
+            if handle == 110 and close_failure is not None:
+                self.api.close_attempts.append(handle)
+                if close_failure == "after-release":
+                    self.api.closed.append(handle)
+                raise OSError("MODELED_DUPLICATE_CLOSE_UNKNOWN")
+            return close(handle)
+
+        with patch.object(self.api, "DuplicateHandle", side_effect=interrupted_duplicate), \
+                patch.object(self.api, "check", side_effect=interrupted_check), \
+                patch.object(self.api, "close", side_effect=failed_close), self.assertRaises(kind) as raised:
+            self.spawn()
+        self.assertIs(raised.exception, original)
+        self.assertIs(original.__cause__, cause)
+        self.assertEqual(original.args, ("MODELED_POPULATED_DUPLICATE_INTERRUPTION",))
+        expected = [110, 111][:ordinal]
+        self.assertEqual(self.api.close_attempts, expected)
+        self.assertEqual(self.api.closed, expected[1:] if close_failure == "before-release" else expected)
+        self.assertNotIn(("create",), self.api.calls)
+        self.assertEqual(self.scope.leaders, [])
+        launch = self.scope.launches[0]
+        self.assertFalse(launch["created"] or launch["resumed"])
+        rows = launch["resourceCleanup"]
+        self.assertEqual([row["resource"] for row in rows], [f"launch-handle-{index}" for index in range(ordinal)])
+        self.assertTrue(all(row["phase"] == "launch-temporary" for row in rows))
+        self.assertEqual([row["status"] for row in rows],
+                         ["UNKNOWN" if close_failure is not None and index == 0 else "RETIRED"
+                          for index in range(ordinal)])
+        if close_failure is not None:
+            self.assertEqual(P.retirement_details(original)["resources"], [rows[0]])
+            self.assertEqual(self.scope.discovery_errors, {P._retirement_text(rows[0])})
+        else:
+            self.assertEqual(P.retirement_details(original), {})
+            self.assertEqual(self.scope.discovery_errors, set())
+        self.scope.close()
+        self.scope.close()
+        self.assertEqual(self.api.close_attempts, [*expected, 900])
+        self.assertNotIn(10, self.api.close_attempts)
+        self.assertNotIn(11, self.api.close_attempts)
+
+    def test_populated_duplicate_supplier_failure_keeps_each_output_owned(self):
+        for ordinal in (1, 2):
+            for kind in (OSError, KeyboardInterrupt, SystemExit):
+                with self.subTest(ordinal=ordinal, kind=kind.__name__):
+                    self.duplicate_interruption(ordinal, "supplier", kind)
+
+    def test_populated_duplicate_postcheck_failure_keeps_each_output_owned(self):
+        for ordinal in (1, 2):
+            for kind in (OSError, KeyboardInterrupt, SystemExit):
+                with self.subTest(ordinal=ordinal, kind=kind.__name__):
+                    self.duplicate_interruption(ordinal, "check", kind)
+
+    def test_populated_duplicate_false_result_retires_the_output(self):
+        for ordinal in (1, 2):
+            with self.subTest(ordinal=ordinal):
+                self.reset_scope()
+                duplicate = self.api.DuplicateHandle
+
+                def failed(*args):
+                    duplicate(*args)
+                    return 0 if len(self.api.duplicates) == ordinal else 1
+
+                with patch.object(self.api, "DuplicateHandle", side_effect=failed), \
+                        self.assertRaisesRegex(P.OwnershipError, "DuplicateHandle"):
+                    self.spawn()
+                expected = [110, 111][:ordinal]
+                self.assertEqual(self.api.close_attempts, expected)
+                self.assertEqual(self.api.closed, expected)
+                self.assertNotIn(("create",), self.api.calls)
+                self.scope.close()
+                self.scope.close()
+                self.assertEqual(self.api.close_attempts, [*expected, 900])
+
+    def test_populated_duplicate_close_unknown_preserves_primary_and_attempts_siblings_once(self):
+        for ordinal in (1, 2):
+            for disposition in ("before-release", "after-release"):
+                for kind in (OSError, KeyboardInterrupt):
+                    with self.subTest(ordinal=ordinal, disposition=disposition, kind=kind.__name__):
+                        self.duplicate_interruption(ordinal, "supplier", kind, close_failure=disposition)
+
+    def test_empty_duplicate_failure_does_not_invent_a_retired_output(self):
+        for ordinal in (1, 2):
+            for cancellation in (False, True):
+                with self.subTest(ordinal=ordinal, cancellation=cancellation):
+                    self.reset_scope()
+                    duplicate = self.api.DuplicateHandle
+                    original = KeyboardInterrupt("MODELED_NO_DUPLICATE_ACQUIRED")
+
+                    def failed(*args):
+                        if len(self.api.duplicates) + 1 == ordinal:
+                            if cancellation:
+                                raise original
+                            return 0
+                        return duplicate(*args)
+
+                    with patch.object(self.api, "DuplicateHandle", side_effect=failed), \
+                            self.assertRaises(KeyboardInterrupt if cancellation else P.OwnershipError) as raised:
+                        self.spawn()
+                    if cancellation:
+                        self.assertIs(raised.exception, original)
+                    expected = [110] if ordinal == 2 else []
+                    self.assertEqual(self.api.close_attempts, expected)
+                    self.assertEqual(self.api.closed, expected)
+                    self.assertEqual(self.scope.launches[0]["resourceCleanup"],
+                                     [{"phase": "launch-temporary", "resource": "launch-handle-0",
+                                       "status": "RETIRED"}] if expected else [])
+                    self.scope.close()
+                    self.assertEqual(self.api.close_attempts, [*expected, 900])
+
+    def test_owned_output_success_keeps_the_exact_five_cleanup_rows(self):
+        self.spawn()
+        self.assertEqual(self.scope.launches[0]["resourceCleanup"],
+                         [{"phase": "launch-temporary", "resource": name, "status": "RETIRED"}
+                          for name in ("startup-attributes", "launch-handle-0", "launch-handle-1",
+                                       "launch-handle-2", "primary-thread")])
+        self.assertEqual(self.scope.discovery_errors, set())
+        self.scope.close()
+
     def test_membership_failure_never_resumes_and_requests_job_retirement(self):
         self.api.member = False
         with self.assertRaisesRegex(P.OwnershipError, "lacks required job membership"):

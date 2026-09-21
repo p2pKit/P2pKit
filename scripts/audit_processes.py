@@ -1528,6 +1528,10 @@ class WindowsScope:
         attributes = None
         initialized = False
         handles: list[Any] = []
+        # Keep both output cells BEFORE any DuplicateHandle call. A supplier
+        # can populate its cell and then raise, or its result check can fail;
+        # neither case may hide the acquired duplicate from finalization.
+        output_duplicates = (PTR(), PTR()) if stdout is not None else ()
         streams: list[_WindowsPipeReader] = []
         process = ProcessInformation()
         created = False
@@ -1546,13 +1550,13 @@ class WindowsScope:
                     writes.append(write.value)
             else:
                 borrowed = set()
-                for sink in (stdout, stderr):
+                for sink, duplicate in zip((stdout, stderr), output_duplicates):
                     handle = sink.native_handle
                     if type(handle) is not int or handle in (0, ctypes.c_void_p(-1).value) or \
                             handle in borrowed or not sink.writable():
                         raise OwnershipError("Distinct open native output handles are required")
                     borrowed.add(handle)
-                    flags, duplicate = U32(), PTR()
+                    flags = U32()
                     self.api.check(self.api.GetHandleInformation(handle, ctypes.byref(flags)), "GetHandleInformation")
                     if flags.value & 1:
                         raise OwnershipError("Original private output handle must not be inheritable")
@@ -1561,7 +1565,6 @@ class WindowsScope:
                     # ambient runner handles.
                     self.api.check(self.api.DuplicateHandle(PTR(-1), handle, PTR(-1), ctypes.byref(duplicate),
                                                             0, 1, 2), "DuplicateHandle owned output")
-                    handles.append(duplicate.value)
                     writes.append(duplicate.value)
             stdin = self.api.CreateFileW("NUL", 0x80000000, 3, ctypes.byref(security), 3, 0x80, None)
             if stdin in (None, ctypes.c_void_p(-1).value):
@@ -1628,8 +1631,11 @@ class WindowsScope:
             # adoption, including a failed FileIO construction, excludes that
             # raw handle from CloseHandle without a second ownership handoff.
             adopted = {stream.native_handle for stream in streams if stream.descriptor_adopted}
+            # Empty cells represent no acquired resource. Successful file mode
+            # keeps its existing duplicate0/duplicate1/stdin cleanup ordering.
+            owned_handles = [cell.value for cell in output_duplicates if cell.value] + handles
             actions.extend((f"launch-handle-{index}", lambda value=handle: self.api.close(value))
-                           for index, handle in enumerate(handles) if handle not in adopted)
+                           for index, handle in enumerate(owned_handles) if handle not in adopted)
             if process.thread:
                 actions.append(("primary-thread", lambda: self.api.close(process.thread)))
             if process.process:

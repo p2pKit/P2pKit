@@ -3282,6 +3282,35 @@ use synthetic admission/query/crypto/native boundaries, not the custodian key,
 real encryption, native Windows or hosted qualification. Both HOLDs and all
 trusted-main/provider/resolver/custody/delivery/scheduling prerequisites remain.
 
+### Windows output-duplicate acquisition custody
+
+The supplied-file route in [the native process owner](../../scripts/audit_processes.py)
+now retains exactly two output `PTR` cells **before** calling `DuplicateHandle`.
+A call can populate its output and then raise, or its result check can fail;
+registering only a successfully returned value left that duplicate outside
+cleanup. Finalization now reads both retained cells, then the existing raw-handle
+list. Empty cells produce neither a close attempt nor a fictitious retirement row.
+The successful `launch-handle-0/1/2` duplicate/duplicate/stdin ordering and exact
+five-row bootstrap-native record remain unchanged. Borrowed original files stay
+caller-owned. Default pipes and their CRT-adoption exclusions are unchanged.
+
+Launch-temporary cleanup still attempts **all** acquired temporaries once, even
+after one close becomes UNKNOWN; this is distinct from the enclosing provider's
+quarantine of other file owners. A known modeled release followed by a close
+error remains UNKNOWN, preserves the primary/cause and grants no raw-handle retry.
+This narrow repair does not qualify other acquisition boundaries or native spawn,
+provider retirement, authenticated launch, current custody or hosted timing.
+
+Author [focused controls](../../scripts/tests/owned-output-sinks-test.py) passed
+**33/33 methods**:31 Windows output/pipe controls and2 POSIX call-shape models,
+not the entire caller suite. Four desired-state methods all rejected the unchanged
+preimage, with22 subtest failure entries; they are included in the final33, not
+extra coverage. Both processes used UID/GID65534, isolated Python, frozen source,
+pre-project filesystem/process/network/native-loader/pidfd/signal guards and the
+unchanged CPU20/512MiB/wall30+kill2 limits. Both recorded guard4, unexpected-denials0
+and ResourceWarnings0. Independent implementation review belongs to the exact
+containing commit's issue record; these author results do not supply it.
+
 ### Optional absolute native-drain acceptance
 
 [`audit_processes.py`](../../scripts/audit_processes.py) offers a separate
