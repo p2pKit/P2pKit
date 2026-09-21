@@ -17,6 +17,7 @@ import time
 
 import hosted_cache_bootstrap_identity as bootstrap
 import hosted_dependency_seed as authority
+import hosted_initial_recipient_bootstrap_identity as initial_bootstrap
 import hosted_windows_files as windows
 
 MIB = 1024 * 1024
@@ -31,7 +32,9 @@ STATUS = (*KNOWN, "FAILED", "UNKNOWN")
 INPUTS = ("gradle/verification-metadata.xml", "gradle/wrapper/gradle-wrapper.properties",
           "scripts/hosted_dependency_seed.py", "scripts/hosted_dependency_seed_files.py",
           "scripts/hosted_windows_files.py", "scripts/run-hosted-test-custody.py", "scripts/hosted_canonical_python.py",
-          "scripts/hosted_cache_bootstrap_identity.py", "scripts/hosted_test_identity.py")
+          "scripts/hosted_cache_bootstrap_identity.py", "scripts/hosted_test_identity.py",
+          "scripts/hosted_initial_recipient_bootstrap_identity.py", "scripts/hosted_initial_recipient_stages.py",
+          "scripts/hosted_initial_recipient_exception.py")
 
 
 class SeedError(RuntimeError):
@@ -547,6 +550,9 @@ def stage_path(session, profile, role, *, admitted_raw=None):
 
 def _bootstrap_cohort(admitted_raw):
     try:
+        initial = initial_bootstrap.cache_cohort(admitted_raw)
+        if initial is not None:
+            return initial
         return bootstrap.cache_cohort(admitted_raw)
     except bootstrap.ordinary.AdmissionError:
         raise SeedError("SEED_BOOTSTRAP_IDENTITY_CHANGED") from None

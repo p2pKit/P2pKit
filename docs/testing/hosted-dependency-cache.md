@@ -293,11 +293,11 @@ freeze/seal/upload. An unavailable failed original is not reconstructed.
 The final private result is explicitly pending owner close; its public digest
 is still **pending the original command/step return**, not self-authenticating
 evidence. It grants no `Admission`, worker execution, recipient-crypto result,
-cache cohort/export authority, Stage2 qualification or workflow activation.
+productive cache/export authority, Stage2 qualification or workflow activation.
 Future readmission and evidence/export integration must bind that actual return.
 
 The [focused enclosure controls](../../scripts/tests/hosted-initial-recipient-native-test.py)
-passed **37/37 methods**, exit0 (1.201s). They run the actual controller,
+at `c6141a56` passed **37/37 methods**, exit0 (1.201s). They run the actual controller,
 acquisition, GitView and readers over modeled Git/native/HTTP/clocks and tiny
 ordinary-UID POSIX files; complete cases cover the Linux gate and Linux worker,
 not genuine native hosts. The original30-method pass included fixture resource
@@ -313,9 +313,95 @@ not native/provider/custody/scheduling qualification. Exact independent review
 of the enclosing implementation belongs to its containing commit/issue record.
 
 The bootstrap workflow and pre-execution environment are still absent. Whole
-JVM-job dependencies, explicit exception-bearing bootstrap identity/cohort,
-repeated worker admission, export/seal/delivery and Stage2 remain unfinished.
+JVM-job dependencies, productive bootstrap admission, repeated worker admission,
+export/seal/delivery and Stage2 remain unfinished.
 Both ordinary HOLDs and all required checks/manual approvals remain unchanged.
+
+#### Explicit Stage1 worker identity, not productive admission
+
+The separate [initial-recipient identity](../../scripts/hosted_initial_recipient_bootstrap_identity.py)
+binds the exact worker `BootstrapMatch`, original event and public-policy bytes.
+Its immutable `InitialBootstrapIdentity` is deliberately **not** ordinary
+`Admission`. It retains the complete original Stage1 match: original base,
+reviewed/source commits and trees, personal authority, environment, run/attempt,
+first use and finite window. Recipient policy stays **reviewed-head-origin**;
+`originalMain` and `policyHead` replace neither each other nor legacy `policyMain`.
+The fixed configuration-only command, cohort and `NOT_PERFORMED` test status
+cannot be relabelled as FULL or Desktop test acceptance.
+
+Only the native worker's second original phase reread, after the fresh
+source-after queries, currently binds this identity. The gate cannot mint it.
+The private `worker-identity.json` hash is in the pending result; that file or
+its digest cannot create the in-call return. The private return registry is
+populated only after actual successful owner close and final clock/cancellation
+checks. Its worker accessor requires that exact original returned object,
+closed/known original owner and fence, immutable identity fields, unchanged
+binding and still-valid policy/exception. The registry independently retains
+the original pending/match/identity bytes and reference bindings, original
+prelude and local ceilings captured before close, and original cancellation
+reference/callback. It retains each accessor's clock high-water, including a
+validated observation that expires the fence. Mutually coherent edits to the
+returned object's fields cannot substitute for those saved originals. This is
+a private same-call contract, not a Python sandbox against replacing executable
+code or the registry. Expiry during close, copied references, gate identity or
+a later expired original fence refuses. The public CLI still emits only the
+unchanged pending-step digest envelope; `workerAdmission: NOT_PERFORMED` belongs
+to the **private** pending result, not that public envelope.
+
+Shared seed planning explicitly recognizes this new scope before the unchanged
+legacy reader. Initial-recipient markers cannot fall through by relabelling
+the scope. It uses the same existing literal staging path and byte-cohort key,
+while preserving distinct source/run/authority bindings. It cannot select
+consume mode or enter ordinary seed/product execution. The source-input roster
+now also binds the initial identity, staged matcher and joint matcher suppliers;
+old input records missing those suppliers are not current compatible records.
+The existing trusted-main bootstrap admission/exporter refuses the new type.
+
+Author guarded offline checks, kept separate: repaired native-enclosure
+**58/58**, exit0 (4.081s). The three original-return regressions separately
+failed **0/3** on unchanged R1 implementation and passed **3/3** after repair;
+they are included in the58, not additional coverage. Earlier unchanged-scope
+passes are retained, not rerun: identity/cohort **21/21**, legacy cohort
+**25/25**, legacy identity **29/29**, selected source-input reader **1/1** and
+selected cache-plan **4/4**. These commands had zero unexpected audit denials
+and ResourceWarnings.
+The six declarations/Windows paths are pure models; complete native-enclosure
+cases are modeled Linux gate/worker calls with tiny POSIX files. Tests use only
+committed public policy, synthetic Git/HTTP/clock/process records and an isolated
+read-only source snapshot under UID65534/Python3.12.3 `-I -B -S`, CPU20/512MiB,
+wall30 plus kill grace2, with pre-project process/network/native-loader guards.
+The source-input/cache-plan fixture's temporary parent alone was relocated to
+the owned test directory; no production source/admission path was substituted.
+
+The earlier author46 methods passed but missed original-return rebinding.
+Independent R1 was **REQUEST_CHANGES**: its four-method binding command had
+**one PASS / three FAIL**, separately from its passing identity/cohort commands.
+The three failures accepted replaced authority/identity, extended mutable
+ceilings and a replaced cancellation list. Report SHA-256:
+`4f4ac77526977f21b01e168d4d8b21f2229cda5e2b2a944539885e07bf4503fb`.
+Those failures are preserved, not reclassified as harness errors. The repair
+adds their regressions and nine original-value/reference/time variants. R1's
+numerical AST-pin proposal checks did **not** authorize applying that pin while
+implementation was blocked. Final exact implementation/pin review belongs to
+the containing commit's issue record, not the new author pass.
+
+Harness failures remain retained: the initial launcher lacked `/usr/bin/time`
+and ran no Python; Bash timing replaced only that wrapper. Two selected
+source-input commands each errored before reading the input roster because the
+guard rejected its existing directory-only ancestor pins, then failed to account
+for Python's added `O_CLOEXEC` audit flag. The corrected guard permits only exact
+read-only ancestor directory pins, checks descriptor-relative open paths and
+still forbids ancestor enumeration. No product/native/provider test failed or
+passed in those commands. Exact independent implementation review and the
+reviewed ordinary seed-source tripwire update belong to the containing commit's
+issue record; author passes do not supply that review.
+
+This slice neither reacquires current remote authority nor transfers live
+ownership into a producer. Repeated readmission must keep original `firstUseAt`,
+the exact expected match and the **real original job fence**; calling
+`prepare-originals` again would improperly restart75/120 and reuse its fixed
+directory. Productive budget admission, recipient crypto, export/seal/upload,
+provider/custody and Stage2 qualification remain unimplemented for this identity.
 
 [`run-hosted-cache-bootstrap.py`](../../scripts/run-hosted-cache-bootstrap.py)
 and [`hosted_cache_bootstrap_origin.py`](../../scripts/hosted_cache_bootstrap_origin.py)

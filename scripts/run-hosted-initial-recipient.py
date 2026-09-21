@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import argparse
 import base64
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 import importlib.util
 import math
 import os
@@ -28,6 +28,7 @@ SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 import hosted_initial_recipient_originals as acquisition
+import hosted_initial_recipient_bootstrap_identity as initial_identity
 
 # One fixed maintained controller, not a caller-selected plugin/command.
 _spec = importlib.util.spec_from_file_location("_initial_recipient_native_owner", SCRIPTS / "run-hosted-cache-bootstrap.py")
@@ -45,6 +46,7 @@ SOURCE_SCOPE = "INITIAL_RECIPIENT_SOURCE_QUERIES_RETURNED_V1"
 CHILD_SCOPE = "INITIAL_RECIPIENT_ACQUISITION_PENDING_CHILD_CLOSE_V1"
 RESULT_SCOPE = "INITIAL_RECIPIENT_ORIGINALS_PENDING_OWNER_CLOSE_V1"
 OUTPUT_SCOPE = "INITIAL_RECIPIENT_ORIGINALS_PENDING_STEP_RETURN_V1"
+_PREPARED_RETURNS = {}
 
 
 @dataclass(frozen=True)
@@ -53,6 +55,95 @@ class SourceReturn:
     records: tuple
     session: bytes
     raw: bytes
+
+
+@dataclass(frozen=True)
+class _OriginalPreparation:
+    """Same-call original return; never reconstructed from a digest or disk.
+
+    The optional worker identity does not admit a producer/exporter, a new
+    owner, an extended budget or another authority acquisition episode.
+    """
+    raw: bytes = field(repr=False)
+    identity: object = field(repr=False)
+    _owner: object = field(repr=False, compare=False)
+    _fence: object = field(repr=False, compare=False)
+    _cancelled: object = field(repr=False, compare=False)
+    _match: object = field(repr=False)
+
+
+@dataclass(frozen=True, repr=False)
+class _PreparationBinding:
+    """Independently retained values, not a comparison of the mutable graph to itself.
+
+    This is a private same-call contract, not a Python sandbox against replacing
+    this registry or executable code. No disk record can populate the registry.
+    """
+    original: _OriginalPreparation
+    raw: bytes
+    identity: object
+    identity_fields: object
+    match: object
+    match_raw: bytes
+    owner: object
+    fence: object
+    prelude_raw: bytes
+    local_end: float
+    cancelled: object
+    cancel_check: object
+    last_ns: int
+
+
+def _worker_fields(value):
+    require(type(value) is initial_identity.InitialBootstrapIdentity, "WORKER_IDENTITY_ONLY")
+    names = ("record", "original_event", "original_policy", "public_key", "fingerprint", "key_sha256", "expires_at")
+    fields = tuple(getattr(value, name) for name in names)
+    require(tuple(type(item) for item in fields) == (bytes, bytes, bytes, bytes, str, str, int),
+            "WORKER_IDENTITY_TYPES")
+    return fields
+
+
+def _original_limits(owner, fence, prelude_raw, local_end, cancel_check):
+    require(type(fence.raw) is bytes and fence.raw == prelude_raw and
+            type(owner.local_end) is float and owner.local_end == local_end and
+            fence.cancelled is cancel_check, "ORIGINAL_FENCE_CHANGED")
+    native.history.snapshot(fence)  # Also checks clock/first/work/final against original raw bytes.
+
+
+def original_worker_identity(original):
+    """Use only an actual in-call return, not an original command/step receipt."""
+    binding = _PREPARED_RETURNS.get(id(original))
+    require(type(original) is _OriginalPreparation and type(binding) is _PreparationBinding and
+            binding.original is original and original._owner is binding.owner and original._fence is binding.fence and
+            type(original._owner) is native.Owner and type(original._fence) is O.Fence and
+            original._owner.closed is True and original._owner.unknown is False and original._owner.original is None and
+            original._owner.fence is original._fence, "NOT_ORIGINAL_PREPARATION_RETURN")
+    native.cancellation(binding.cancelled)
+    require(original._cancelled is binding.cancelled, "ORIGINAL_CANCELLATION_CHANGED")
+    require(type(original.identity) is initial_identity.InitialBootstrapIdentity and
+            type(original._match) is acquisition.stages.BootstrapMatch, "WORKER_IDENTITY_ONLY")
+    value = original.identity
+    fields = _worker_fields(value)
+    require(value is binding.identity and fields == binding.identity_fields and original._match is binding.match and
+            type(original._match.record) is bytes and original._match.record == binding.match_raw and
+            type(original.raw) is bytes and original.raw == binding.raw, "ORIGINAL_BINDING_CHANGED")
+    pending = I.parse(binding.raw, I.EVENT_LIMIT)
+    require(pending["matchSha256"] == O.digest(binding.match_raw) and
+            pending["workerIdentitySha256"] == O.digest(value.record), "ORIGINAL_RESULT_CHANGED")
+    _original_limits(binding.owner, binding.fence, binding.prelude_raw, binding.local_end, binding.cancel_check)
+    O.integer(binding.fence.last, binding.last_ns)
+    rechecked = initial_identity.bind_worker_match(original._match, event_raw=value.original_event,
+        policy_raw=value.original_policy, now=int(time.time()))
+    require(rechecked == value, "WORKER_IDENTITY_CHANGED")
+    try:
+        binding.fence.now(final=True, minimum=binding.last_ns)
+    finally:
+        # Fence.now retains a validated observation even on expiry. A later
+        # field mutation must not erase that high-water or renew a failed end.
+        _PREPARED_RETURNS[id(original)] = replace(binding, last_ns=binding.fence.last)
+    native.posix._deadline(binding.local_end)
+    native.cancellation(binding.cancelled)
+    return value
 
 
 def require(value, code):
@@ -399,13 +490,16 @@ def read_phase(owner, private, context_raw, source, phase, fence):
         "checkedNs": checked}
 
 
-def prepare_originals(cancelled):
+def _prepare_originals(cancelled):
     token = os.environ.pop(O.wire.TOKEN_ENV, None)
     first = O.clocks.validate_reading(O.clocks.observe())
-    fence = O.Fence(O.prelude(first), minimum=first.nanoseconds, cancelled=lambda: native.cancellation(cancelled))
+    cancel_check = lambda: native.cancellation(cancelled)
+    fence = O.Fence(O.prelude(first), minimum=first.nanoseconds, cancelled=cancel_check)
+    prelude_raw = fence.raw
     owner = native.Owner(fence.deadline(O.PRELUDE_SECONDS, final=True), fence)
+    local_end = owner.local_end
     owner.initial_sources = {}
-    private = result_raw = None
+    private = result_raw = worker_identity = None
     try:
         require(not native.QUARANTINE and not Q.QUARANTINE and not native.diagnostics._QUARANTINE, "PRIOR_UNKNOWN")
         observed, path, event = host_context(int(time.time()))
@@ -428,10 +522,20 @@ def prepare_originals(cancelled):
         after = source_queries(owner, fence, observed, path / "source-after")
         require(source_readback(owner, path / "source-after", after) == dict(before.records), "SOURCE_CHANGED_AFTER_CHILD")
         match, chain = read_phase(owner, private, context_raw, before, phase, fence)
+        if observed["kind"] == "worker":
+            require(observed["github"]["job"] == acquisition.stages.bootstrap.JOB and
+                    type(match) is acquisition.stages.BootstrapMatch, "WORKER_MATCH_ONLY")
+            worker_identity = initial_identity.bind_worker_match(match, event_raw=event,
+                policy_raw=dict(after.records)["candidate_policy_raw"], now=int(time.time()))
+            owner.write(private, "worker-identity.json", worker_identity.record)
+        else:
+            require(observed["kind"] == "gate" and type(match) is acquisition.gate.GateEligibility,
+                    "GATE_CANNOT_MINT_WORKER_IDENTITY")
         result_raw = owner.write(private, "initial-result.json", {"schema": 1, "scope": RESULT_SCOPE,
             "contextSha256": O.digest(context_raw), "sourceBeforeSha256": O.digest(before.raw), "sourceAfterSha256": O.digest(after.raw),
             "matchSha256": O.digest(match.record), "originalChain": chain, "retainedNs": fence.now(),
             "retirement": "PENDING_OWNER_CLOSE", "budgetAcceptance": "NOT_ADMITTED", "workerAdmission": "NOT_PERFORMED",
+            "workerIdentitySha256": None if worker_identity is None else O.digest(worker_identity.record),
             "qualificationAcceptance": "NOT_ESTABLISHED", "exportSaveAuthority": False})
     except BaseException as error:
         owner.error("initial-originals", error)
@@ -450,9 +554,28 @@ def prepare_originals(cancelled):
     if owner.original is not None:
         raise owner.original
     require(result_raw is not None and not owner.unknown, "MISSING_ORIGINALS")
+    if worker_identity is not None:
+        # A valid pre-close identity cannot survive policy/exception expiry
+        # during the actual close. This does not reacquire remote authority or
+        # renew firstUseAt; the future productive owner still needs that step.
+        require(worker_identity == initial_identity.bind_worker_match(match, event_raw=event,
+            policy_raw=worker_identity.original_policy, now=int(time.time())), "WORKER_IDENTITY_CHANGED")
+    _original_limits(owner, fence, prelude_raw, local_end, cancel_check)
     fence.now(final=True)
+    native.posix._deadline(local_end)
     native.cancellation(cancelled)
-    return native.public_result(OUTPUT_SCOPE, "initialOriginalsSha256", result_raw), fence, fence.final
+    original = _OriginalPreparation(result_raw, worker_identity, owner, fence, cancelled, match)
+    _PREPARED_RETURNS[id(original)] = _PreparationBinding(original, result_raw, worker_identity,
+        None if worker_identity is None else _worker_fields(worker_identity), match, match.record, owner, fence,
+        prelude_raw, local_end, cancelled, cancel_check, fence.last)
+    return original
+
+
+def prepare_originals(cancelled):
+    original = _prepare_originals(cancelled)
+    # The CLI still emits only a pending-step digest. It does not serialize or
+    # transfer the original-call capability or issue productive Admission.
+    return native.public_result(OUTPUT_SCOPE, "initialOriginalsSha256", original.raw), original._fence, original._fence.final
 
 
 def main():

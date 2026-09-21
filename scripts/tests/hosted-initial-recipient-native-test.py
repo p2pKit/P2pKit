@@ -11,6 +11,7 @@ from __future__ import annotations
 from contextlib import ExitStack
 import copy
 import ctypes  # Only stdlib Python-API initialization precedes the audit guard.
+import dataclasses
 import importlib.util
 import json
 import os
@@ -87,6 +88,7 @@ class NativeModels(unittest.TestCase):
         S.QUARANTINE.clear()
         Q.QUARANTINE.clear()
         S.diagnostics._QUARANTINE.clear()
+        N._PREPARED_RETURNS.clear()
 
     def choose(self, kind, selection):
         self.fixture.choose(kind, selection)
@@ -238,6 +240,230 @@ class NativeModels(unittest.TestCase):
         self.assertEqual(match["github"]["job"], "populate")
         self.assertEqual(match["github"]["selection"], "desktop-linux-x64")
         self.assertIn("MATCH_ONLY_NOT_ADMISSION", match["scope"])
+
+    def test_original_worker_return_binds_explicit_head_policy_identity_not_admission(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        value = N.original_worker_identity(original)
+        self.assertIs(type(value), N.initial_identity.InitialBootstrapIdentity)
+        self.assertIsNot(type(value), I.Admission)
+        record = I.parse(value.record, I.EVENT_LIMIT)
+        self.assertEqual(record["policy"]["origin"], "reviewed-head")
+        self.assertEqual(record["policy"]["commit"], F.F.H1)
+        self.assertEqual(record["initialRecipient"], I.parse(original._match.record, I.EVENT_LIMIT))
+        self.assertEqual(record["github"]["eventBinding"]["originalMain"], N.acquisition.stages.BASE["commit"])
+        self.assertNotIn("policyMain", record["github"]["eventBinding"])
+        self.assertEqual((self.path / "worker-identity.json").read_bytes(), value.record)
+        pending = I.parse(original.raw, I.EVENT_LIMIT)
+        self.assertEqual(pending["workerIdentitySha256"], O.digest(value.record))
+        self.assertEqual(pending["workerAdmission"], "NOT_PERFORMED")
+        self.assertEqual(value.original_policy, F.F.POLICY)
+        self.assertEqual(len(self.fixture.requests), 8)
+
+    def test_original_gate_return_cannot_mint_worker_identity(self):
+        original = N._prepare_originals(self.cancelled)
+        self.assertIsNone(original.identity)
+        self.assertFalse((self.path / "worker-identity.json").exists())
+        self.assertIsNone(I.parse(original.raw, I.EVENT_LIMIT)["workerIdentitySha256"])
+        with self.assertRaisesRegex(I.AdmissionError, "WORKER_IDENTITY_ONLY"):
+            N.original_worker_identity(original)
+
+    def test_copied_preparation_with_same_closed_owner_does_not_register_return(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        with self.assertRaisesRegex(I.AdmissionError, "NOT_ORIGINAL_PREPARATION_RETURN"):
+            N.original_worker_identity(dataclasses.replace(original))
+        self.assertIs(N.original_worker_identity(original), original.identity)
+
+    def test_worker_match_cannot_be_replaced_with_gate_return_before_identity_binding(self):
+        self.choose("worker", "desktop-linux-x64")
+        read = N.read_phase
+        def replace(*args):
+            result, chain = read(*args)
+            return N.acquisition.gate.GateEligibility(result.record), chain
+        with patch.object(N, "read_phase", replace), self.assertRaisesRegex(I.AdmissionError, "WORKER_MATCH_ONLY"):
+            N._prepare_originals(self.cancelled)
+        self.assertFalse((self.path / "worker-identity.json").exists())
+        self.assertEqual(N._PREPARED_RETURNS, {})
+
+    def test_worker_identity_expiring_during_actual_owner_close_is_not_registered(self):
+        self.choose("worker", "desktop-linux-x64")
+        close = S.Owner.close
+        def expire(owner):
+            close(owner)
+            if hasattr(owner, "initial_sources"):
+                self.stack.enter_context(patch.object(N.time, "time", return_value=self.fixture.declaration["expiresAt"]))
+        with patch.object(S.Owner, "close", expire), self.assertRaisesRegex(I.AdmissionError, "CURRENT_WINDOW"):
+            N._prepare_originals(self.cancelled)
+        self.assertTrue((self.path / "worker-identity.json").exists())
+        self.assertEqual(N._PREPARED_RETURNS, {})
+
+    def test_worker_identity_accessor_does_not_renew_exception_or_query_authority(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        with patch.object(N.time, "time", return_value=self.fixture.declaration["expiresAt"]), \
+                self.assertRaisesRegex(I.AdmissionError, "CURRENT_WINDOW"):
+            N.original_worker_identity(original)
+        self.assertEqual(len(self.fixture.requests), 8)
+        self.assertEqual(len(self.queries), 3)
+
+    def test_worker_identity_accessor_cannot_start_a_new_prelude(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        self.fixture.ns = original._fence.final
+        with self.assertRaisesRegex(O.OriginError, "FENCE_EXPIRED"):
+            N.original_worker_identity(original)
+        self.assertEqual(len(self.fixture.requests), 8)
+
+    def test_cancelled_original_return_cannot_be_used_as_worker_identity(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        self.cancelled.append(True)
+        with self.assertRaises(KeyboardInterrupt): N.original_worker_identity(original)
+
+    def test_mutated_identity_equality_object_cannot_override_original_binding(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        class EqualBytes(bytes):
+            def __eq__(self, other): return True
+        object.__setattr__(original.identity, "record", EqualBytes(b"invented"))
+        with self.assertRaisesRegex(I.AdmissionError, "WORKER_IDENTITY_TYPES"):
+            N.original_worker_identity(original)
+
+    def test_coherent_worker_authority_and_identity_change_cannot_replace_originals(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        pending = I.parse(original.raw, I.EVENT_LIMIT)
+        value = I.parse(original._match.record, I.EVENT_LIMIT)
+        value["authority"]["bodySha256"] = "d" * 64
+        changed_match = N.acquisition.stages.BootstrapMatch(I.encoded(value))
+        changed_identity = N.initial_identity.bind_worker_match(changed_match,
+            event_raw=original.identity.original_event, policy_raw=original.identity.original_policy,
+            now=F.F.FIRST1)
+        self.assertNotEqual(pending["matchSha256"], O.digest(changed_match.record))
+        self.assertNotEqual(pending["workerIdentitySha256"], O.digest(changed_identity.record))
+        object.__setattr__(original, "_match", changed_match)
+        object.__setattr__(original, "identity", changed_identity)
+        with self.assertRaises(I.AdmissionError): N.original_worker_identity(original)
+
+    def test_worker_return_keeps_original_prelude_and_local_ceiling(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        old_final = original._fence.final
+        original._fence.final += 120 * O.NS
+        original._owner.local_end += 120
+        self.fixture.ns = old_final + O.NS
+        self.assertEqual(O.parse(original._fence.raw)["finalEndNs"], old_final)
+        with self.assertRaises((I.AdmissionError, O.OriginError)):
+            N.original_worker_identity(original)
+
+    def test_replaced_cancellation_reference_cannot_hide_original_cancel(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        self.cancelled.append(15)
+        object.__setattr__(original, "_cancelled", [])
+        with self.assertRaises((I.AdmissionError, KeyboardInterrupt)):
+            N.original_worker_identity(original)
+
+    def test_coherent_in_place_match_identity_and_pending_edits_do_not_change_registration(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        value = I.parse(original._match.record, I.EVENT_LIMIT)
+        value["authority"]["bodySha256"] = "d" * 64
+        object.__setattr__(original._match, "record", I.encoded(value))
+        changed = N.initial_identity.bind_worker_match(original._match,
+            event_raw=original.identity.original_event, policy_raw=original.identity.original_policy, now=F.F.FIRST1)
+        for field in dataclasses.fields(changed):
+            object.__setattr__(original.identity, field.name, getattr(changed, field.name))
+        pending = I.parse(original.raw, I.EVENT_LIMIT)
+        pending.update(matchSha256=O.digest(original._match.record), workerIdentitySha256=O.digest(original.identity.record))
+        object.__setattr__(original, "raw", I.encoded(pending))
+        with self.assertRaisesRegex(I.AdmissionError, "ORIGINAL_BINDING_CHANGED"):
+            N.original_worker_identity(original)
+
+    def test_equal_copied_worker_identity_or_match_does_not_replace_original_reference(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        for name in ("identity", "_match"):
+            kept = getattr(original, name)
+            object.__setattr__(original, name, dataclasses.replace(kept))
+            with self.subTest(field=name), self.assertRaisesRegex(I.AdmissionError, "ORIGINAL_BINDING_CHANGED"):
+                N.original_worker_identity(original)
+            object.__setattr__(original, name, kept)
+        self.assertIs(N.original_worker_identity(original), original.identity)
+
+    def test_coherently_copied_closed_owner_and_fence_do_not_rebind_original_return(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        owner, fence = copy.copy(original._owner), copy.copy(original._fence)
+        owner.fence = fence
+        object.__setattr__(original, "_owner", owner)
+        object.__setattr__(original, "_fence", fence)
+        with self.assertRaisesRegex(I.AdmissionError, "NOT_ORIGINAL_PREPARATION_RETURN"):
+            N.original_worker_identity(original)
+
+    def test_coherent_prelude_raw_and_fields_cannot_reissue_original_time(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        fence = original._fence
+        shifted = O.prelude(O.clocks.Reading(fence.clock, fence.first + 120 * O.NS))
+        fence.raw = O.encoded(shifted)
+        fence.first, fence.work, fence.final = (shifted[name] for name in ("firstNs", "workEndNs", "finalEndNs"))
+        fence.last = fence.first
+        original._owner.local_end += 120
+        self.fixture.ns = fence.first + O.NS
+        # Internally coherent current fields are insufficient without the saved original raw frame.
+        S.history.snapshot(fence)
+        with self.assertRaisesRegex(I.AdmissionError, "ORIGINAL_FENCE_CHANGED"):
+            N.original_worker_identity(original)
+
+    def test_local_ceiling_extension_refuses_even_before_original_expiry(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        original._owner.local_end += 1
+        with self.assertRaisesRegex(I.AdmissionError, "ORIGINAL_FENCE_CHANGED"):
+            N.original_worker_identity(original)
+
+    def test_replaced_fence_cancellation_callback_is_not_original_binding(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        original._fence.cancelled = lambda: None
+        with self.assertRaisesRegex(I.AdmissionError, "ORIGINAL_FENCE_CHANGED"):
+            N.original_worker_identity(original)
+
+    def test_successful_accessor_highwater_cannot_be_erased_by_fence_field_mutation(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        first = original._fence.last
+        self.fixture.ns += O.NS
+        self.assertIs(N.original_worker_identity(original), original.identity)
+        original._fence.last = first
+        self.fixture.ns = first
+        with self.assertRaisesRegex(O.OriginError, "ORIGIN_INTEGER"):
+            N.original_worker_identity(original)
+
+    def test_expired_accessor_highwater_cannot_be_erased_by_fence_field_mutation(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        first = original._fence.last
+        self.fixture.ns = original._fence.final
+        with self.assertRaisesRegex(O.OriginError, "FENCE_EXPIRED"):
+            N.original_worker_identity(original)
+        original._fence.last = first
+        self.fixture.ns = first
+        with self.assertRaisesRegex(O.OriginError, "ORIGIN_INTEGER"):
+            N.original_worker_identity(original)
+
+    def test_original_limits_are_pinned_before_actual_owner_close_not_at_registration(self):
+        self.choose("worker", "desktop-linux-x64")
+        close = S.Owner.close
+        def extend(owner):
+            close(owner)
+            if hasattr(owner, "initial_sources"):
+                owner.local_end += 1
+        with patch.object(S.Owner, "close", extend), self.assertRaisesRegex(I.AdmissionError, "ORIGINAL_FENCE_CHANGED"):
+            N._prepare_originals(self.cancelled)
+        self.assertEqual(N._PREPARED_RETURNS, {})
 
     def test_same_episode_cannot_retry_or_renew_acquisition(self):
         self.prepare()

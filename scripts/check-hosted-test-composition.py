@@ -50,7 +50,7 @@ EXPECTED = {
     "scripts/hosted_primary_abi.py": "ff168e70c31bc23b1c6e545a32d0c4217f9a212f7244a2c34571eee09f761553",
     "scripts/run-platform-tests.py": "1a3e6f093abe3a79bfbc2d3f426f26e71db77c6f72034effeb2e296dc833c271",
     "scripts/run-audit-command.py": "bba4d4137571c32205fbf0bc1ff3d7d4682eff6d0f6ed5a6e92af8d6415cc639",
-    "scripts/hosted_dependency_seed_files.py": "f7f430ddb95fa1b13a487d48101ccdc46ff88e2ae8789a1a90772f0b6cb78968",
+    "scripts/hosted_dependency_seed_files.py": "83da3e6ad30409864598e14a551af2d700c7f5d15e8ae3a8cd9857722126cf19",
     "scripts/hosted_canonical_python.py": "e93b7d0cb32b847d8cca57b074c9a9afae902ef5d0e2e0e5991c599ef772a2b0",
 }
 LIMIT = 1024 * 1024
