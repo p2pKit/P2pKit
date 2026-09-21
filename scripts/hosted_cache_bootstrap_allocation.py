@@ -92,14 +92,17 @@ def policy():
             "providerScope": "PROPOSED_CAPS_NOT_STORAGE_CONTENTS_OR_RESOLVER_QUALIFICATION"}
 
 
-def derive(admitted, originals, invocation, clock, runner_name):
-    """Rederive the basis; never accept a supplied digest/summary as authority."""
-    basis = service_time.derive(admitted, originals, invocation, clock, runner_name)
+def fence_arithmetic(job_start_basis_ns):
+    """Fixed proposal arithmetic only, never a job/phase execution fence.
+
+    No caller-selected roster, duration, scope or authority is accepted.
+    """
+    job_start = integer(job_start_basis_ns)
     fixed = policy()
     total = integer(fixed["allocatedSeconds"])
     require(0 < total < PROPOSED_JOB_SECONDS and len(dict(PHASES)) == len(PHASES),
             "BOOTSTRAP_ALLOCATION_ACCOUNTING")
-    end = integer(basis["jobStartBasisNs"] + PROPOSED_JOB_SECONDS * NS)
+    end = integer(job_start + PROPOSED_JOB_SECONDS * NS)
     start = integer(end - total * NS)
     cursor, fences = start, {}
     for name, seconds in PHASES:
@@ -107,12 +110,18 @@ def derive(admitted, originals, invocation, clock, runner_name):
         fences[name] = cursor
     require(cursor == end and all(row["maximumSeconds"] < 900 for row in fixed["nativeCaptureSpans"]),
             "BOOTSTRAP_ALLOCATION_ACCOUNTING")
+    return {"allocationStartBasisNs": start, "proposedJobEndNs": end, "phaseFencesNs": fences}
+
+
+def derive(admitted, originals, invocation, clock, runner_name):
+    """Rederive the basis; never accept a supplied digest/summary as authority."""
+    basis = service_time.derive(admitted, originals, invocation, clock, runner_name)
+    arithmetic = fence_arithmetic(basis["jobStartBasisNs"])
     return {"schema": 1, "scope": SCOPE, "profile": origin.bootstrap.PROFILE,
             "selection": basis["selection"], "cacheCohort": basis["cacheCohort"],
             "source": basis["source"], "github": basis["github"], "clock": basis["clock"],
             "serviceTimeBasis": basis, "serviceTimeBasisSha256": origin.digest(origin.encoded(basis)),
-            "policy": fixed, "allocationStartBasisNs": start, "proposedJobEndNs": end,
-            "phaseFencesNs": fences, "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED",
+            "policy": policy(), **arithmetic, "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED",
             "productiveOwner": "NOT_CREATED", "exportSaveAuthority": False}
 
 

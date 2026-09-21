@@ -37,6 +37,24 @@ def policy():
             "clockMarginSeconds": origin.wire.CLOCK_MARGIN_SECONDS}
 
 
+def basis_arithmetic(jobs_start_ns, job_epoch, service_date):
+    """Integer translation only; supplied timestamps establish no provenance.
+
+    Both identity paths use these fixed charges. There is no clock read,
+    duration/authority override or admission of the resulting basis.
+    """
+    jobs_start, job_epoch, service_date = (integer(value) for value in
+                                         (jobs_start_ns, job_epoch, service_date))
+    age = integer(service_date - job_epoch)
+    charges = policy()
+    seconds = integer(age + charges["dateQuantizationSeconds"] +
+                      charges["maximumServiceCacheSeconds"] + charges["clockMarginSeconds"])
+    charged_ns = integer(seconds * origin.NS)
+    return {"jobsRequestStartedNs": jobs_start, "jobStartedEpochSeconds": job_epoch,
+            "serviceAgeSeconds": age, "chargedAgeNs": charged_ns,
+            "jobStartBasisNs": integer(jobs_start - charged_ns)}
+
+
 def derive(admitted, originals, invocation, clock, runner_name):
     """Derive from the exact two-GET bytes, never an accepted-looking summary.
 
@@ -53,21 +71,13 @@ def derive(admitted, originals, invocation, clock, runner_name):
     responses = dict(originals)
     service = origin.service_identity(admitted, responses, invocation, clock, runner_name)
     record = origin.admitted_value(admitted)
-    jobs_start = integer(origin.parse(responses["jobs"])["startedNs"])
-    job_epoch = origin.wire.utc_epoch(service["jobStartedAt"])
-    age = integer(service["originDateEpochSeconds"] - job_epoch)
-    charges = policy()
-    seconds = integer(age + charges["dateQuantizationSeconds"] +
-                      charges["maximumServiceCacheSeconds"] + charges["clockMarginSeconds"])
-    charged_ns = integer(seconds * origin.NS)
-    start_basis = integer(jobs_start - charged_ns)
+    arithmetic = basis_arithmetic(origin.parse(responses["jobs"])["startedNs"],
+        origin.wire.utc_epoch(service["jobStartedAt"]), service["originDateEpochSeconds"])
     return {"schema": 1, "scope": SCOPE, "profile": origin.bootstrap.PROFILE,
             "selection": record["selection"], "cacheCohort": record["cacheCohort"],
             "source": record["source"], "github": record["github"],
             "admissionSha256": origin.digest(admitted.record), "clock": origin.clock_value(clock),
-            "invocation": invocation, "service": service, "policy": charges,
-            "jobsRequestStartedNs": jobs_start, "jobStartedEpochSeconds": job_epoch,
-            "serviceAgeSeconds": age, "chargedAgeNs": charged_ns, "jobStartBasisNs": start_basis,
+            "invocation": invocation, "service": service, "policy": policy(), **arithmetic,
             "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False}
 
 

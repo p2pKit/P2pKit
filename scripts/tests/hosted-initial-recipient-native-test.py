@@ -214,6 +214,54 @@ class NativeModels(unittest.TestCase):
         change(raw)
         path.write_bytes(O.encoded(raw))
 
+    def late_return_change(self, boundary, change, check):
+        """Mutate data at an actual final modeled boundary, not its registry."""
+        calls = []
+        if boundary == "raw":
+            def observe():
+                reading = self.fixture.observe()
+                calls.append("raw")
+                change()
+                return reading
+            replacement = patch.object(O.clocks, "observe", side_effect=observe)
+        elif boundary == "local":
+            deadline = S.posix._deadline
+            def local(end):
+                deadline(end)
+                calls.append("local")
+                change()
+            replacement = patch.object(S.posix, "_deadline", side_effect=local)
+        else:
+            self.assertEqual(boundary, "cancel")
+            cancellation = S.cancellation
+            def cancel(value):
+                cancellation(value)
+                calls.append("cancel")
+                if len(calls) == 2:
+                    change()  # The final call, not the initial cancellation check.
+            replacement = patch.object(S, "cancellation", side_effect=cancel)
+        with replacement, self.assertRaises(I.AdmissionError):
+            check()
+        self.assertEqual(len(calls), 2 if boundary == "cancel" else 1)
+
+    def final_record_change(self, boundary, *, identity):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        binding = N._PREPARED_RETURNS[id(original)]
+        if identity:
+            change = lambda: object.__setattr__(original.identity, "record", b"SYNTHETIC_CHANGED_IDENTITY\n")
+            check = lambda: N.original_worker_identity(original)
+        else:
+            def change():
+                object.__setattr__(original, "service_time_raw", b"SYNTHETIC_CHANGED_BASIS\n")
+                object.__setattr__(original, "proposal_raw", b"SYNTHETIC_CHANGED_PROPOSAL\n")
+            check = lambda: N.original_worker_time_records(original)
+        self.late_return_change(boundary, change, check)
+        self.assertEqual(N._PREPARED_RETURNS[id(original)].identity_fields, binding.identity_fields)
+        self.assertEqual(N._PREPARED_RETURNS[id(original)].service_time_raw, binding.service_time_raw)
+        self.assertEqual(N._PREPARED_RETURNS[id(original)].proposal_raw, binding.proposal_raw)
+        self.assertEqual(len(self.fixture.requests), 8)
+
     def test_complete_gate_composes_real_controller_acquisition_queries_and_retained_readers(self):
         value, fence, end = self.prepare()
         self.assertEqual(value["scope"], N.OUTPUT_SCOPE)
@@ -268,6 +316,257 @@ class NativeModels(unittest.TestCase):
         with self.assertRaisesRegex(I.AdmissionError, "WORKER_IDENTITY_ONLY"):
             N.original_worker_identity(original)
 
+    def test_worker_retains_jobs_start_basis_and_fixed_proposal_not_admission(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        pending = I.parse(original.raw, I.EVENT_LIMIT)
+        self.assertIn("serviceTimeBasisSha256", pending)
+        basis_raw, proposal_raw = N.original_worker_time_records(original)
+        basis, proposal = O.parse(basis_raw), O.parse(proposal_raw)
+        job = O.parse((self.path / "acquisition-queries/jobs.bin").read_bytes())
+        last = O.parse((self.path / "acquisition-queries/reviewed_ref.bin").read_bytes())
+        self.assertEqual((self.path / "worker-service-time.json").read_bytes(), basis_raw)
+        self.assertEqual((self.path / "worker-allocation-proposal.json").read_bytes(), proposal_raw)
+        self.assertEqual(pending["serviceTimeBasisSha256"], O.digest(basis_raw))
+        self.assertEqual(pending["allocationProposalSha256"], O.digest(proposal_raw))
+        self.assertEqual(basis["scope"], N.TIME_SCOPE)
+        self.assertEqual(proposal["scope"], N.ALLOCATION_SCOPE)
+        self.assertEqual(basis["jobsRequestStartedNs"], job["startedNs"])
+        self.assertEqual(basis["jobStartedEpochSeconds"], F.F.START)
+        self.assertEqual(basis["serviceAgeSeconds"], 10)
+        self.assertEqual(basis["chargedAgeNs"], 76 * O.NS)
+        self.assertEqual(basis["jobStartBasisNs"], job["startedNs"] - 76 * O.NS)
+        self.assertEqual(basis["service"]["lastNs"], last["finishedNs"])
+        self.assertEqual(set(basis["service"]["originalsSha256"]), set(N.HTTP_KEYS))
+        self.assertEqual(proposal["proposedJobEndNs"], basis["jobStartBasisNs"] + 5400 * O.NS)
+        self.assertEqual(proposal["allocationStartBasisNs"], proposal["proposedJobEndNs"] - 4650 * O.NS)
+        self.assertEqual(len(proposal["phaseFencesNs"]), 48)
+        self.assertEqual(proposal["serviceTimeBasis"], basis)
+        self.assertEqual(proposal["serviceTimeBasisSha256"], O.digest(basis_raw))
+        identity = I.parse(original.identity.record, I.EVENT_LIMIT)
+        for value in (basis, proposal):
+            self.assertEqual(value["workerIdentitySha256"], O.digest(original.identity.record))
+            self.assertEqual(value["firstUseAt"], F.F.FIRST1)
+            self.assertEqual(value["source"], identity["source"])
+            self.assertEqual(value["github"], identity["github"])
+            self.assertEqual(value["budgetAcceptance"], "NOT_ADMITTED")
+            self.assertEqual(value["testAcceptance"], "NOT_PERFORMED")
+            self.assertIs(value["exportSaveAuthority"], False)
+            self.assertNotIn("admissionSha256", value)
+        self.assertEqual(proposal["productiveOwner"], "NOT_CREATED")
+        self.assertEqual(len(self.fixture.requests), 8)
+
+    def test_gate_never_produces_a_worker_service_basis_or_proposal(self):
+        original = N._prepare_originals(self.cancelled)
+        pending = I.parse(original.raw, I.EVENT_LIMIT)
+        self.assertIsNone(pending["serviceTimeBasisSha256"])
+        self.assertIsNone(pending["allocationProposalSha256"])
+        self.assertIsNone(original.service_time_raw)
+        self.assertIsNone(original.proposal_raw)
+        self.assertFalse((self.path / "worker-service-time.json").exists())
+        self.assertFalse((self.path / "worker-allocation-proposal.json").exists())
+        with self.assertRaisesRegex(I.AdmissionError, "WORKER_IDENTITY_ONLY"):
+            N.original_worker_time_records(original)
+
+    def test_jobs_finish_and_later_response_date_never_replace_original_jobs_anchor(self):
+        self.choose("worker", "desktop-linux-x64")
+        self.fixture.after_close = lambda: setattr(self.fixture, "ns", self.fixture.ns + O.NS)
+        def later_date():
+            if len(self.fixture.requests) > 2:
+                self.fixture.service_date = F.F.FIRST1 + 10
+        self.fixture.before_request = later_date
+        original = N._prepare_originals(self.cancelled)
+        basis = O.parse(N.original_worker_time_records(original)[0])
+        job = O.parse((self.path / "acquisition-queries/jobs.bin").read_bytes())
+        last = O.parse((self.path / "acquisition-queries/reviewed_ref.bin").read_bytes())
+        self.assertGreaterEqual(job["finishedNs"] - job["startedNs"], O.NS)
+        self.assertGreater(last["finishedNs"], job["finishedNs"])
+        self.assertEqual(basis["service"]["lastNs"], last["finishedNs"])
+        self.assertEqual(basis["service"]["originDateEpochSeconds"], F.F.FIRST1)
+        self.assertEqual(basis["jobStartBasisNs"], job["startedNs"] - 76 * O.NS)
+        self.assertNotEqual(basis["jobStartBasisNs"], job["finishedNs"] - 76 * O.NS)
+
+    def test_coherently_rehashed_worker_proposal_cannot_replace_original_return(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        basis_raw, proposal_raw = N.original_worker_time_records(original)
+        basis, proposal = O.parse(basis_raw), O.parse(proposal_raw)
+        basis["jobStartBasisNs"] += O.NS
+        changed_basis = O.encoded(basis)
+        proposal.update(serviceTimeBasis=basis, serviceTimeBasisSha256=O.digest(changed_basis),
+                        **S.allocation.fence_arithmetic(basis["jobStartBasisNs"]))
+        changed_proposal = O.encoded(proposal)
+        pending = O.parse(original.raw)
+        pending.update(serviceTimeBasisSha256=O.digest(changed_basis), allocationProposalSha256=O.digest(changed_proposal))
+        object.__setattr__(original, "service_time_raw", changed_basis)
+        object.__setattr__(original, "proposal_raw", changed_proposal)
+        object.__setattr__(original, "raw", O.encoded(pending))
+        with self.assertRaisesRegex(I.AdmissionError, "ORIGINAL_BINDING_CHANGED"):
+            N.original_worker_time_records(original)
+        bound = N._PREPARED_RETURNS[id(original)]
+        self.assertEqual((bound.service_time_raw, bound.proposal_raw), (basis_raw, proposal_raw))
+
+    def test_changed_proposal_or_equality_overriding_bytes_refuse_original_accessor(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        class EqualBytes(bytes):
+            def __eq__(self, other): return True
+        for name in ("service_time_raw", "proposal_raw"):
+            before = getattr(original, name)
+            for value in (before + b"\n", bytearray(before), memoryview(before), EqualBytes(before)):
+                with self.subTest(field=name, kind=type(value).__name__):
+                    object.__setattr__(original, name, value)
+                    with self.assertRaisesRegex(I.AdmissionError, "ORIGINAL_TIME_BINDING_CHANGED"):
+                        N.original_worker_time_records(original)
+            object.__setattr__(original, name, before)
+        self.assertEqual(N.original_worker_time_records(original), (original.service_time_raw, original.proposal_raw))
+
+    def test_worker_time_originals_are_immutable_complete_and_distinct_from_summary(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        captured = N._PREPARED_RETURNS[id(original)].worker_originals
+        self.assertIs(type(captured), tuple)
+        self.assertEqual(tuple(name for name, _ in captured[1]), N.ORIGINAL_KEYS)
+        for rows in (captured[1][:-1], tuple(reversed(captured[1])), list(captured[1]),
+                     tuple((name, bytearray(raw)) for name, raw in captured[1])):
+            with self.subTest(kind=type(rows).__name__), self.assertRaisesRegex(I.AdmissionError, "WORKER_TIME_ORIGINALS"):
+                N._worker_time_records(original.identity, (captured[0], rows, *captured[2:]), original._fence.clock)
+        self.assertEqual(N.original_worker_time_records(original), (original.service_time_raw, original.proposal_raw))
+
+    def test_original_http_failure_clock_invocation_and_order_cannot_supply_basis(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        captured = N._PREPARED_RETURNS[id(original)].worker_originals
+        for name, mutate in (("jobs", lambda x: x.update(retirement="UNKNOWN")),
+                             ("jobs", lambda x: x.update(complete=False)),
+                             ("jobs", lambda x: x.update(invocation="f" * 32)),
+                             ("jobs", lambda x: x["clock"].update(role="windows-x64")),
+                             ("reviewed_ref", lambda x: x.update(startedNs=1))):
+            rows = dict(captured[1]); value = O.parse(rows[name]); mutate(value); rows[name] = O.encoded(value)
+            changed = (captured[0], tuple((key, rows[key]) for key in N.ORIGINAL_KEYS), *captured[2:])
+            with self.subTest(name=name), self.assertRaises((I.AdmissionError, O.OriginError, O.wire.BudgetError,
+                                                          O.clocks.ClockError)):
+                N._worker_time_records(original.identity, changed, original._fence.clock)
+
+    def test_original_worker_proposal_accessor_does_not_reacquire_or_renew_time(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        expected = N.original_worker_time_records(original)
+        self.fixture.ns += 10 * O.NS
+        self.assertEqual(N.original_worker_time_records(original), expected)
+        self.assertEqual(len(self.fixture.requests), 8)
+        self.fixture.ns = 1120 * O.NS
+        with self.assertRaisesRegex(O.OriginError, "FENCE_EXPIRED"):
+            N.original_worker_time_records(original)
+        self.assertEqual(len(self.fixture.requests), 8)
+
+    def test_worker_proposal_failure_is_primary_and_registers_no_original_return(self):
+        self.choose("worker", "desktop-linux-x64")
+        failure = RuntimeError("SYNTHETIC_TIME_BASIS_FAILURE")
+        with patch.object(S.service_time, "basis_arithmetic", side_effect=failure), self.assertRaises(RuntimeError) as raised:
+            N._prepare_originals(self.cancelled)
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(N._PREPARED_RETURNS, {})
+        self.assertFalse((self.path / "initial-result.json").exists())
+        self.assertTrue((self.path / "initial-failure.json").exists())
+
+    def test_worker_proposals_do_not_survive_late_original_owner_close(self):
+        self.choose("worker", "desktop-linux-x64")
+        close = S.Owner.close
+        def late(owner):
+            close(owner)
+            if hasattr(owner, "initial_sources"):
+                self.fixture.ns = 1120 * O.NS
+        with patch.object(S.Owner, "close", late), self.assertRaisesRegex(O.OriginError, "FENCE_EXPIRED"):
+            N._prepare_originals(self.cancelled)
+        self.assertTrue((self.path / "worker-allocation-proposal.json").exists())
+        self.assertEqual(N._PREPARED_RETURNS, {})
+
+    def test_worker_unknown_owner_close_keeps_pending_proposal_non_authorizing(self):
+        self.choose("worker", "desktop-linux-x64")
+        close = S.Owner.close
+        failure = O.OriginError("SYNTHETIC_UNKNOWN_OWNER_CLOSE")
+        def unknown(owner):
+            close(owner)
+            if hasattr(owner, "initial_sources"):
+                owner.error("synthetic-close", failure, unknown=True)
+                raise failure
+        with patch.object(S.Owner, "close", unknown), self.assertRaises(O.OriginError) as raised:
+            N._prepare_originals(self.cancelled)
+        self.assertIs(raised.exception, failure)
+        self.assertTrue((self.path / "worker-allocation-proposal.json").exists())
+        self.assertEqual(N._PREPARED_RETURNS, {})
+
+    def test_stage1_service_records_cannot_enter_legacy_admission_wrappers(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        captured = N._PREPARED_RETURNS[id(original)].worker_originals
+        rows = dict(captured[1]); pair = {name: rows[name] for name in ("attempt", "jobs")}
+        for operation in (S.service_time.derive, S.allocation.derive):
+            with self.subTest(operation=operation.__name__), self.assertRaisesRegex(O.OriginError, "ORIGINAL_ADMISSION"):
+                operation(original.identity, pair, captured[2], original._fence.clock, self.fixture.env["RUNNER_NAME"])
+        with self.assertRaises(O.wire.BudgetError):
+            O.wire.Budget(original.proposal_raw).value
+
+    def test_final_raw_observation_cannot_return_changed_time_records(self):
+        self.final_record_change("raw", identity=False)
+
+    def test_final_local_check_cannot_return_changed_time_records(self):
+        self.final_record_change("local", identity=False)
+
+    def test_final_cancellation_check_cannot_return_changed_time_records(self):
+        self.final_record_change("cancel", identity=False)
+
+    def test_final_raw_observation_cannot_return_changed_identity(self):
+        self.final_record_change("raw", identity=True)
+
+    def test_final_local_check_cannot_return_changed_identity(self):
+        self.final_record_change("local", identity=True)
+
+    def test_final_cancellation_check_cannot_return_changed_identity(self):
+        self.final_record_change("cancel", identity=True)
+
+    def test_final_local_boundary_cannot_replace_the_original_owner(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        self.late_return_change("local", lambda: object.__setattr__(original, "_owner", copy.copy(original._owner)),
+                                lambda: N.original_worker_identity(original))
+
+    def test_final_local_boundary_cannot_extend_the_original_local_end(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        self.late_return_change("local", lambda: setattr(original._owner, "local_end", original._owner.local_end + 1),
+                                lambda: N.original_worker_identity(original))
+
+    def test_final_cancellation_boundary_cannot_replace_original_cancellation(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        self.late_return_change("cancel", lambda: object.__setattr__(original, "_cancelled", []),
+                                lambda: N.original_worker_identity(original))
+
+    def test_final_local_boundary_cannot_replace_validated_raw_highwater(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        self.late_return_change("local", lambda: setattr(original._fence, "last", original._fence.last + 1),
+                                lambda: N.original_worker_identity(original))
+
+    def test_time_accessor_returns_saved_tuple_not_reloaded_return_fields(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        binding = N._PREPARED_RETURNS[id(original)]
+        expected = binding.service_time_raw, binding.proposal_raw
+        identity = N.original_worker_identity
+        def completed_check(value):
+            result = identity(value)
+            # A caller-boundary model: the genuine check has completed, but a
+            # later data-field change must not select different returned bytes.
+            object.__setattr__(original, "service_time_raw", b"SYNTHETIC_LATE_BASIS\n")
+            object.__setattr__(original, "proposal_raw", b"SYNTHETIC_LATE_PROPOSAL\n")
+            return result
+        with patch.object(N, "original_worker_identity", side_effect=completed_check):
+            self.assertEqual(N.original_worker_time_records(original), expected)
+        self.assertEqual(len(self.fixture.requests), 8)
+
     def test_copied_preparation_with_same_closed_owner_does_not_register_return(self):
         self.choose("worker", "desktop-linux-x64")
         original = N._prepare_originals(self.cancelled)
@@ -279,8 +578,8 @@ class NativeModels(unittest.TestCase):
         self.choose("worker", "desktop-linux-x64")
         read = N.read_phase
         def replace(*args):
-            result, chain = read(*args)
-            return N.acquisition.gate.GateEligibility(result.record), chain
+            result, chain, captured = read(*args)
+            return N.acquisition.gate.GateEligibility(result.record), chain, captured
         with patch.object(N, "read_phase", replace), self.assertRaisesRegex(I.AdmissionError, "WORKER_MATCH_ONLY"):
             N._prepare_originals(self.cancelled)
         self.assertFalse((self.path / "worker-identity.json").exists())

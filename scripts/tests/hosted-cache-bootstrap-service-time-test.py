@@ -31,6 +31,31 @@ spec.loader.exec_module(E)
 M, S, O = E.H.M, E.S, E.O
 
 
+class ArithmeticTests(unittest.TestCase):
+    def test_literal_jobs_start_translation_and_zero_basis(self):
+        self.assertEqual(T.basis_arithmetic(1002 * O.NS, 200, 210), {
+            "jobsRequestStartedNs": 1002 * O.NS, "jobStartedEpochSeconds": 200,
+            "serviceAgeSeconds": 10, "chargedAgeNs": 76 * O.NS, "jobStartBasisNs": 926 * O.NS})
+        self.assertEqual(T.basis_arithmetic(66 * O.NS, 0, 0)["jobStartBasisNs"], 0)
+
+    def test_typed_integer_only_and_no_underflow_or_charge_overflow(self):
+        for position in range(3):
+            for value in (True, 1.0, -1, "1", None, O.clocks.UINT64 + 1):
+                args = [1002 * O.NS, 200, 210]; args[position] = value
+                with self.subTest(position=position, value=value), self.assertRaises(T.ServiceTimeError):
+                    T.basis_arithmetic(*args)
+        for args in ((66 * O.NS - 1, 0, 0), (1002 * O.NS, 201, 200),
+                     (O.clocks.UINT64, 0, O.clocks.UINT64)):
+            with self.subTest(args=args), self.assertRaises(T.ServiceTimeError): T.basis_arithmetic(*args)
+
+    def test_exact_large_integer_and_no_duration_policy_or_clock_override(self):
+        start = (1 << 60) + 1
+        self.assertEqual(T.basis_arithmetic(start, 0, 0)["jobStartBasisNs"], start - 66 * O.NS)
+        for name in ("policy", "clock_margin", "maximum_age", "now", "trusted", "job_seconds"):
+            with self.subTest(name=name), self.assertRaises(TypeError):
+                T.basis_arithmetic(start, 0, 0, **{name: 0})
+
+
 class BasisTests(M.OfflineCase):
     def originals(self, admitted=None, clock=None, *, jobs_start=1_002_000_000_000):
         admitted = self.admitted if admitted is None else admitted

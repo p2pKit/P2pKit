@@ -147,6 +147,7 @@ def _run(context, attempt, jobs, service_date):
                 origin.wire.utc_epoch(predecessor.get("started_at")) <=
                 origin.wire.utc_epoch(predecessor.get("completed_at")) <=
                 origin.wire.utc_epoch(job["started_at"]), "GATE_PREDECESSOR")
+    return job  # The exact selected original row; no new service observation.
 
 
 def _ref(value, name, commit):

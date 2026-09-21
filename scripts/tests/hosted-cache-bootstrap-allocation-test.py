@@ -105,6 +105,26 @@ class Fixture(M.OfflineCase):
             predecessor=self.predecessor, observations=observations)
 
 
+class ArithmeticTests(unittest.TestCase):
+    def test_fixed_roster_and_original_end_without_authority_fields(self):
+        value = A.fence_arithmetic(1000 * O.NS)
+        self.assertEqual(set(value), {"allocationStartBasisNs", "proposedJobEndNs", "phaseFencesNs"})
+        self.assertEqual(value["allocationStartBasisNs"], 1750 * O.NS)
+        self.assertEqual(value["proposedJobEndNs"], 6400 * O.NS)
+        self.assertEqual(len(value["phaseFencesNs"]), 48)
+        self.assertEqual(value["phaseFencesNs"]["productive-entry"], 1870 * O.NS)
+        self.assertEqual(value["phaseFencesNs"]["delivery-return"], 6400 * O.NS)
+        self.assertEqual(A.fence_arithmetic(0)["proposedJobEndNs"], 5400 * O.NS)
+
+    def test_integer_precision_end_boundary_and_no_renewal_or_override(self):
+        start = O.clocks.UINT64 - 5400 * O.NS
+        self.assertEqual(A.fence_arithmetic(start)["proposedJobEndNs"], O.clocks.UINT64)
+        for value in (start + 1, -1, True, 1.0, "1", None):
+            with self.subTest(value=value), self.assertRaises(A.AllocationError): A.fence_arithmetic(value)
+        for name in ("phases", "job_seconds", "policy", "scope", "authority", "now"):
+            with self.subTest(name=name), self.assertRaises(TypeError): A.fence_arithmetic(0, **{name: 5400})
+
+
 class ProposalTests(Fixture):
     def test_literal_closed_roster_and_4650_second_accounting(self):
         value = self.proposal

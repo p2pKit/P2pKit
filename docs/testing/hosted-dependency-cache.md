@@ -403,6 +403,68 @@ the exact expected match and the **real original job fence**; calling
 directory. Productive budget admission, recipient crypto, export/seal/upload,
 provider/custody and Stage2 qualification remain unimplemented for this identity.
 
+#### Original Stage1 job-basis retention, not budget admission
+
+The later Stage1 parent now preserves the second original `read_phase()` return's
+complete immutable response bytes, invocation and original phase interval in its
+existing private return binding. Only the worker derives and retains
+`worker-service-time.json` and `worker-allocation-proposal.json`; the gate emits
+neither. The two records have distinct initial-recipient scopes and bind the
+full worker identity hash, original `firstUseAt`, candidate-origin policy and
+original source/run/clock. They contain no ordinary `admissionSha256` or grant.
+
+The basis uses the **second response's jobs-request START and its own Date**,
+minus the actual service age and unchanged 1-second quantization, 60-second cache
+and 5-second margin charges. The complete native chronology still extends through
+the **eighth** response; a later ref Date or response/retention finish cannot
+renew the jobs anchor. Small shared integer-arithmetic helpers reuse the existing
+48-phase/4,650-second roster and proposed5,400 end. Legacy service/allocation
+wrappers retain their Admission-only entry and canonical record shape; the
+arithmetic helpers themselves establish neither original provenance nor authority.
+
+Both private canonical records are written/read back before owner close. Their
+expected bytes and original inputs are retained independently of the returned
+object; only actual successful close and the unchanged RAW/local/cancellation
+checks register that return. The accessor rederives from the retained originals
+and refuses copied, replaced, expired or coherently rehashed output. It does not
+perform new HTTP/Git acquisition, construct an owner or issue an active fence.
+The public CLI still emits only its pending-step digest, not these private bytes.
+
+Independent R1 requested changes after two separate **0/1** failing controls:
+the new time accessor reloaded mutable return fields after its final checks,
+and the earlier identity accessor could return identity fields changed at that
+last observation. The latter is a newly tested, pre-existing boundary gap, not
+a claim that the earlier review included this control. Report SHA-256:
+`f0715805ba34d18861928cd9232d16570d32d68b0aca66562a750a14495e7d53`.
+The repair repeats data-only original binding checks after the final RAW/local/
+cancellation boundaries, without another callback, clock or I/O. The time
+accessor returns its independently saved immutable tuple, never fields reloaded
+from the returned object. Validated clock high-water and first failures remain.
+
+Final author Stage1 native-enclosure models passed **81/81**. Eleven new final-
+boundary/caller-return regressions failed **0/11** on unchanged R1 implementation,
+then passed **11/11**; these are included in the81, not extra coverage. Earlier
+70/70 author/independent passes missed the two return seams and remain dated.
+Unchanged service-time arithmetic/legacy **34/34**, allocation arithmetic/proposal/
+supplied-trace **41/41**, and one selected legacy retained-chain **1/1** passes
+were retained, not rerun for the return fix. That last command is not the full
+inherited chain suite. The new worker
+basis oracle failed **0/1** on the unchanged implementation (missing connected
+basis), then passed **1/1**; it is included in the81, not additional coverage.
+Original failure retained. UID65534/Python3.12.3 `-I -B -S`, CPU20/512MiB/
+wall30+kill2, read-only snapshots and pre-project process/network/native-loader/
+filesystem guards; zero unexpected denials or ResourceWarnings. The tests use
+modeled service/native boundaries and tiny POSIX files, not hosted or Windows
+execution. Exact independent review belongs to the containing commit's issue map.
+
+This supplies the first acquisition's retained **scheduling proposal**, not
+productive budget admission or actual repeated readmission. The future caller
+must retain this original basis while reacquiring current authority with the
+same expected match and original `firstUseAt`; new responses must not replace
+it or restart5,400. Calling `prepare-originals` again remains invalid. Existing
+75/120 prelude limits, both HOLDs, provider/native/custody requirements and all
+UNADMITTED/UNMEASURED dispositions remain unchanged.
+
 [`run-hosted-cache-bootstrap.py`](../../scripts/run-hosted-cache-bootstrap.py)
 and [`hosted_cache_bootstrap_origin.py`](../../scripts/hosted_cache_bootstrap_origin.py)
 add a **dormant, not-workflow-wired original-acquisition slice**. Its sole public

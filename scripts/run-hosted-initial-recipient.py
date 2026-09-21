@@ -46,6 +46,8 @@ SOURCE_SCOPE = "INITIAL_RECIPIENT_SOURCE_QUERIES_RETURNED_V1"
 CHILD_SCOPE = "INITIAL_RECIPIENT_ACQUISITION_PENDING_CHILD_CLOSE_V1"
 RESULT_SCOPE = "INITIAL_RECIPIENT_ORIGINALS_PENDING_OWNER_CLOSE_V1"
 OUTPUT_SCOPE = "INITIAL_RECIPIENT_ORIGINALS_PENDING_STEP_RETURN_V1"
+TIME_SCOPE = "INITIAL_RECIPIENT_BOOTSTRAP_SERVICE_TIME_BASIS_V1"
+ALLOCATION_SCOPE = "INITIAL_RECIPIENT_BOOTSTRAP_ALLOCATION_PROPOSAL_V1"
 _PREPARED_RETURNS = {}
 
 
@@ -66,6 +68,8 @@ class _OriginalPreparation:
     """
     raw: bytes = field(repr=False)
     identity: object = field(repr=False)
+    service_time_raw: object = field(repr=False)
+    proposal_raw: object = field(repr=False)
     _owner: object = field(repr=False, compare=False)
     _fence: object = field(repr=False, compare=False)
     _cancelled: object = field(repr=False, compare=False)
@@ -92,6 +96,9 @@ class _PreparationBinding:
     cancelled: object
     cancel_check: object
     last_ns: int
+    worker_originals: object
+    service_time_raw: object
+    proposal_raw: object
 
 
 def _worker_fields(value):
@@ -110,15 +117,19 @@ def _original_limits(owner, fence, prelude_raw, local_end, cancel_check):
     native.history.snapshot(fence)  # Also checks clock/first/work/final against original raw bytes.
 
 
-def original_worker_identity(original):
-    """Use only an actual in-call return, not an original command/step receipt."""
+def _preparation_binding(original):
+    """Data-only original-return check; no clock, callback or I/O."""
     binding = _PREPARED_RETURNS.get(id(original))
     require(type(original) is _OriginalPreparation and type(binding) is _PreparationBinding and
             binding.original is original and original._owner is binding.owner and original._fence is binding.fence and
             type(original._owner) is native.Owner and type(original._fence) is O.Fence and
             original._owner.closed is True and original._owner.unknown is False and original._owner.original is None and
             original._owner.fence is original._fence, "NOT_ORIGINAL_PREPARATION_RETURN")
-    native.cancellation(binding.cancelled)
+    return binding
+
+
+def _worker_binding_value(original, binding):
+    """Compare to independently saved values, including after final observations."""
     require(original._cancelled is binding.cancelled, "ORIGINAL_CANCELLATION_CHANGED")
     require(type(original.identity) is initial_identity.InitialBootstrapIdentity and
             type(original._match) is acquisition.stages.BootstrapMatch, "WORKER_IDENTITY_ONLY")
@@ -130,20 +141,53 @@ def original_worker_identity(original):
     pending = I.parse(binding.raw, I.EVENT_LIMIT)
     require(pending["matchSha256"] == O.digest(binding.match_raw) and
             pending["workerIdentitySha256"] == O.digest(value.record), "ORIGINAL_RESULT_CHANGED")
+    require(type(original.service_time_raw) is bytes and type(original.proposal_raw) is bytes and
+            original.service_time_raw == binding.service_time_raw and original.proposal_raw == binding.proposal_raw and
+            pending["serviceTimeBasisSha256"] == O.digest(binding.service_time_raw) and
+            pending["allocationProposalSha256"] == O.digest(binding.proposal_raw), "ORIGINAL_TIME_BINDING_CHANGED")
     _original_limits(binding.owner, binding.fence, binding.prelude_raw, binding.local_end, binding.cancel_check)
     O.integer(binding.fence.last, binding.last_ns)
+    return value
+
+
+def original_worker_identity(original):
+    """Use only an actual in-call return, not an original command/step receipt."""
+    binding = _preparation_binding(original)
+    native.cancellation(binding.cancelled)
+    value = _worker_binding_value(original, binding)
     rechecked = initial_identity.bind_worker_match(original._match, event_raw=value.original_event,
         policy_raw=value.original_policy, now=int(time.time()))
     require(rechecked == value, "WORKER_IDENTITY_CHANGED")
+    require(_worker_time_records(value, binding.worker_originals, binding.fence.clock) ==
+            (binding.service_time_raw, binding.proposal_raw), "WORKER_TIME_RECORDS_CHANGED")
     try:
         binding.fence.now(final=True, minimum=binding.last_ns)
     finally:
         # Fence.now retains a validated observation even on expiry. A later
         # field mutation must not erase that high-water or renew a failed end.
-        _PREPARED_RETURNS[id(original)] = replace(binding, last_ns=binding.fence.last)
+        binding = replace(binding, last_ns=binding.fence.last)
+        _PREPARED_RETURNS[id(original)] = binding
     native.posix._deadline(binding.local_end)
     native.cancellation(binding.cancelled)
+    # The final observations/cancellation boundary can expose changed data.
+    # Recheck against saved originals without another callback or clock read;
+    # do not return an identity whose fields changed after its earlier check.
+    require(_preparation_binding(original) is binding, "ORIGINAL_RETURN_BINDING_CHANGED")
+    require(_worker_binding_value(original, binding) is value and binding.fence.last == binding.last_ns,
+            "ORIGINAL_FINAL_BINDING_CHANGED")
     return value
+
+
+def original_worker_time_records(original):
+    """Original first-acquisition proposal bytes, NOT current authority or a lease.
+
+    The same original return/ceilings must still be valid. A later productive
+    claim/readmission needs separate ownership; this accessor renews nothing.
+    """
+    binding = _preparation_binding(original)
+    records = binding.service_time_raw, binding.proposal_raw
+    original_worker_identity(original)
+    return records  # Never reload mutable return fields after their validation.
 
 
 def require(value, code):
@@ -392,7 +436,8 @@ def retained_match(context, raw, invocation, clock, work_start, work_end):
         return data
     attempt = I.parse(body("attempt", attempt_path), O.wire.BODY_LIMIT)
     jobs = I.parse(body("jobs", attempt_path + "/jobs?per_page=100&page=1"), O.wire.BODY_LIMIT)
-    acquisition._run(observed, attempt, jobs, dates[-1])
+    job = acquisition._run(observed, attempt, jobs, dates[-1])
+    jobs_started, jobs_date = times[-2], dates[-1]
     approval = body("approvals", base + "/approvals")
     selected = acquisition.gate.select(stage="stage1", run_id=github["runId"], attempt=github["runAttempt"], approvals_raw=approval)
     selector = I.parse(selected.record, acquisition.stages.LIMIT)
@@ -421,7 +466,51 @@ def retained_match(context, raw, invocation, clock, work_start, work_end):
             body_sha256=selector["bodySha256"], observation_raw=I.encoded(observation), now=int(time.time()),
             expected=acquisition.stages.BootstrapMatch(raw["match"]), **args)
     require(raw["observation"] == I.encoded(observation), "OBSERVATION_CHANGED")
-    return result, {"firstNs": times[0], "lastNs": times[-1]}
+    return result, {"firstNs": times[0], "lastNs": times[-1], "numericJobId": job["id"],
+        "runnerName": observed["runnerName"],
+        "selector": acquisition.GATE_SELECTOR if observed["kind"] == "gate" else O.SERVICE_SELECTORS[clock.role],
+        "jobStartedAt": job["started_at"], "originDateEpochSeconds": jobs_date,
+        "jobsRequestStartedNs": jobs_started,
+        "originalsSha256": {name: O.digest(raw[name]) for name in HTTP_KEYS},
+        "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False}
+
+
+def _worker_time_records(identity, captured, clock):
+    """Rederive from the parent's exact retained inputs, not a supplied basis.
+
+    Only read_phase supplies these to the original preparation's registry.
+    This retained-record recheck neither reacquires authority nor admits proposed5400.
+    """
+    _worker_fields(identity)
+    require(type(captured) is tuple and len(captured) == 5, "WORKER_TIME_ORIGINALS")
+    context_raw, originals, invocation, began, end = captured
+    require(type(context_raw) is bytes and type(originals) is tuple and len(originals) == len(ORIGINAL_KEYS) and
+            all(type(row) is tuple and len(row) == 2 and type(row[0]) is str and type(row[1]) is bytes
+                for row in originals) and tuple(name for name, _ in originals) == ORIGINAL_KEYS, "WORKER_TIME_ORIGINALS")
+    O.clocks.validate_identity(clock)
+    context = O.parse(context_raw)
+    require(context["observed"]["kind"] == "worker" and context["observed"]["role"] == clock.role,
+            "WORKER_TIME_CONTEXT")
+    raw = dict(originals)
+    match, service = retained_match(context, raw, invocation, clock, O.integer(began), O.integer(end))
+    rechecked = initial_identity.bind_worker_match(match, event_raw=raw["event"],
+        policy_raw=raw["candidate_policy_raw"], now=int(time.time()))
+    require(_worker_fields(rechecked) == _worker_fields(identity), "WORKER_TIME_IDENTITY_CHANGED")
+    value = I.parse(identity.record, I.EVENT_LIMIT)
+    shared = {"schema": 1, "profile": value["profile"], "selection": value["selection"],
+        "cacheCohort": value["cacheCohort"], "source": value["source"], "github": value["github"],
+        "workerIdentitySha256": O.digest(identity.record), "clock": O.clock_value(clock),
+        "firstUseAt": value["initialRecipient"]["firstUseAt"], "budgetAcceptance": "NOT_ADMITTED",
+        "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False}
+    basis = {**shared, "scope": TIME_SCOPE, "invocation": invocation, "service": service,
+        "policy": native.service_time.policy(), **native.service_time.basis_arithmetic(
+            service["jobsRequestStartedNs"], O.wire.utc_epoch(service["jobStartedAt"]),
+            service["originDateEpochSeconds"])}
+    basis_raw = O.encoded(basis)
+    proposal = {**shared, "scope": ALLOCATION_SCOPE, "serviceTimeBasis": basis,
+        "serviceTimeBasisSha256": O.digest(basis_raw), "policy": native.allocation.policy(),
+        **native.allocation.fence_arithmetic(basis["jobStartBasisNs"]), "productiveOwner": "NOT_CREATED"}
+    return basis_raw, O.encoded(proposal)
 
 
 def read_phase(owner, private, context_raw, source, phase, fence):
@@ -487,7 +576,8 @@ def read_phase(owner, private, context_raw, source, phase, fence):
     checked = fence.now(minimum=minimum)
     return match, {"phaseSha256": {name: O.digest(data) for name, data in records.items()},
         "childSha256": O.digest(child_raw), "querySessionSha256": O.digest(session), "originalsSha256": child["originalsSha256"],
-        "checkedNs": checked}
+        "checkedNs": checked}, (context_raw, tuple((name, raw[name]) for name in ORIGINAL_KEYS),
+                               start["invocation"], start["startedNs"], start["workEndNs"])
 
 
 def _prepare_originals(cancelled):
@@ -499,7 +589,7 @@ def _prepare_originals(cancelled):
     owner = native.Owner(fence.deadline(O.PRELUDE_SECONDS, final=True), fence)
     local_end = owner.local_end
     owner.initial_sources = {}
-    private = result_raw = worker_identity = None
+    private = result_raw = worker_identity = worker_originals = service_time_raw = proposal_raw = None
     try:
         require(not native.QUARANTINE and not Q.QUARANTINE and not native.diagnostics._QUARANTINE, "PRIOR_UNKNOWN")
         observed, path, event = host_context(int(time.time()))
@@ -518,16 +608,20 @@ def _prepare_originals(cancelled):
             "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
         _, phase = native.phase(owner, private, context_raw, token, fence)
         token = None
-        match, chain = read_phase(owner, private, context_raw, before, phase, fence)
+        match, chain, _ = read_phase(owner, private, context_raw, before, phase, fence)
         after = source_queries(owner, fence, observed, path / "source-after")
         require(source_readback(owner, path / "source-after", after) == dict(before.records), "SOURCE_CHANGED_AFTER_CHILD")
-        match, chain = read_phase(owner, private, context_raw, before, phase, fence)
+        match, chain, captured = read_phase(owner, private, context_raw, before, phase, fence)
         if observed["kind"] == "worker":
             require(observed["github"]["job"] == acquisition.stages.bootstrap.JOB and
                     type(match) is acquisition.stages.BootstrapMatch, "WORKER_MATCH_ONLY")
             worker_identity = initial_identity.bind_worker_match(match, event_raw=event,
                 policy_raw=dict(after.records)["candidate_policy_raw"], now=int(time.time()))
             owner.write(private, "worker-identity.json", worker_identity.record)
+            worker_originals = captured  # Immutable bytes/scalars, saved before close.
+            service_time_raw, proposal_raw = _worker_time_records(worker_identity, worker_originals, fence.clock)
+            owner.write(private, "worker-service-time.json", service_time_raw)
+            owner.write(private, "worker-allocation-proposal.json", proposal_raw)
         else:
             require(observed["kind"] == "gate" and type(match) is acquisition.gate.GateEligibility,
                     "GATE_CANNOT_MINT_WORKER_IDENTITY")
@@ -536,6 +630,8 @@ def _prepare_originals(cancelled):
             "matchSha256": O.digest(match.record), "originalChain": chain, "retainedNs": fence.now(),
             "retirement": "PENDING_OWNER_CLOSE", "budgetAcceptance": "NOT_ADMITTED", "workerAdmission": "NOT_PERFORMED",
             "workerIdentitySha256": None if worker_identity is None else O.digest(worker_identity.record),
+            "serviceTimeBasisSha256": None if service_time_raw is None else O.digest(service_time_raw),
+            "allocationProposalSha256": None if proposal_raw is None else O.digest(proposal_raw),
             "qualificationAcceptance": "NOT_ESTABLISHED", "exportSaveAuthority": False})
     except BaseException as error:
         owner.error("initial-originals", error)
@@ -564,10 +660,10 @@ def _prepare_originals(cancelled):
     fence.now(final=True)
     native.posix._deadline(local_end)
     native.cancellation(cancelled)
-    original = _OriginalPreparation(result_raw, worker_identity, owner, fence, cancelled, match)
+    original = _OriginalPreparation(result_raw, worker_identity, service_time_raw, proposal_raw, owner, fence, cancelled, match)
     _PREPARED_RETURNS[id(original)] = _PreparationBinding(original, result_raw, worker_identity,
         None if worker_identity is None else _worker_fields(worker_identity), match, match.record, owner, fence,
-        prelude_raw, local_end, cancelled, cancel_check, fence.last)
+        prelude_raw, local_end, cancelled, cancel_check, fence.last, worker_originals, service_time_raw, proposal_raw)
     return original
 
 
