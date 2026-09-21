@@ -4157,6 +4157,64 @@ encrypted custody or workflow activation is added. Original native/file/job
 limits, both ordinary HOLDs and the whole-JVM fail-only interlock are unchanged.
 Bootstrap5400 stays UNADMITTED/UNMEASURED; no Release acceptance follows.
 
+### Supplied Node receipt reducer — unexecuted WIP
+
+The [Node reducer](../../scripts/hosted-cache-provider-node-return.cjs) is
+**DORMANT / NO_CALLER / UNEXECUTED**, not the asynchronous runner bridge.
+It consumes supplied Buffer bytes and event values only; it does not spawn,
+kill, register callbacks, read files/environment, observe clocks, acquire
+credentials, forward action commands or publish anything. The future original
+caller still owns actual child identity, error objects, stream/exit/close
+observations, RAW/cancellation fences and enclosing runner custody.
+
+A canonical request is capped at16KiB; stdout holds only the <=4KiB ACK,
+with <=1MiB private opaque stderr. Fixed buffers prevent tiny/empty events
+from accumulating unbounded retained objects. Accepted bytes are privately
+copied; overflow is a sticky failure, not silently successful truncation.
+`retainedBytes()` supplies private copies, never a public log. References in
+an ACK are not reads of the referenced files or proof of their custody.
+
+The supplied event sequence requires spawn, both EOFs, matching exit **and**
+close, then one finish. EOF/data may follow exit but must precede close.
+Duplicate, out-of-order, signalled, incomplete66, foreign-error and reentrant
+paths cannot become a completed receipt. A known-failed65 remains failed.
+Even a consistent supplied success retains `SUPPLIED_NODE_EVENT_CONSISTENCY_ONLY`,
+`NOT_AUTHENTICATED` child identity, unobserved RAW/cancellation/Node/runner
+boundaries and `NOT_ESTABLISHED` provider acceptance.
+
+The source re-encodes exact canonical ASCII JSON and checks the original request
+hash, closed ACK roster, native close order, sizes and distinct file identities.
+Node24's built-in JSON reviver source tokens preserve full uint64 file identities
+and positive int64 clock frequency using BigInt where needed; there is no rounded
+Number fallback or new custom JSON parser. Buffer copying uses intrinsic typed-
+array slots/set, rejects shared backing/proxies and does not read caller-owned
+length/copy getters. Only privately branded frozen source errors are preserved;
+a caller-created `ReceiptError` cannot supply public diagnostic text.
+
+Independent read-only review of the earlier draft found integer-width rejection
+and caller-Buffer cap/reentry/error-provenance defects. The revised source and
+[focused controls](../../scripts/tests/hosted-cache-provider-node-return-test.cjs)
+address those findings by inspection, **not executed regression evidence**.
+The exact inspection verdict and preimage/report hashes belong to the containing
+commit's issue record. These tests and the separate reviewer controls are all
+**AUTHORED_UNEXECUTED**; no syntax-check or test pass is claimed.
+
+The bounded offline setup first exited9 for an unsupported Node flag. After
+read-only installed V8-option inspection and removal of only that flag, startup
+exited133 at V8 `SegmentedTable::InitializeTable` allocation under AS512MiB,
+**before the harness or project code ran**. Both outcomes remain preserved;
+neither is a code-test result. No test guard/probe ran. CPU20/wall30+kill2 and
+all existing limits were retained. Another runtime/profile must be legitimately
+reviewed/admitted before testing; no deadline or memory allowance is silently
+increased, and no unchanged startup retry or runtime download is warranted.
+Do not build an accepted provider/receiving prerequisite on this unexecuted WIP.
+
+There is still no runnable Node bridge, provider service/source/tool admission,
+complete1066/current receiving authority, productive bootstrap or encrypted
+export/workflow qualification. Both ordinary HOLDs and the whole-JVM interlock
+remain; provider180/shared-final45, NativeFile900/Snapshot576MiB and existing
+job limits are unchanged. Bootstrap5400 stays UNADMITTED/UNMEASURED.
+
 ## Verification and remaining qualification
 
 Focused offline commands (not a claim they ran on a particular host):
