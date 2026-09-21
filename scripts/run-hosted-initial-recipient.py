@@ -54,10 +54,22 @@ ENTRY_CHILD_SCOPE = "INITIAL_RECIPIENT_READMISSION_PENDING_CHILD_CLOSE_V1"
 ENTRY_PENDING_SCOPE = "INITIAL_RECIPIENT_READMISSION_PENDING_OWNER_CLOSE_V1"
 READMISSION_SCOPE = "INITIAL_RECIPIENT_CLOSED_NONPRODUCTIVE_READMISSION_V1"
 ENTRY_CONTEXT_FIELDS = (CONTEXT_FIELDS - {"prelude"}) | {"entryWindow", "expectedMatch", "originalProposal"}
+AUTHORITY_WINDOW_SCOPE = "INITIAL_RECIPIENT_USE_AUTHORITY_SOURCE_CAP_V1"
+AUTHORITY_CHILD_SCOPE = "INITIAL_RECIPIENT_USE_AUTHORITY_PENDING_CHILD_CLOSE_V1"
+AUTHORITY_CONTEXT_FIELDS = (CONTEXT_FIELDS - {"prelude"}) | {"authorityWindow", "expectedMatch", "originalProposal"}
+RECIPIENT_WINDOW_SCOPE = "INITIAL_RECIPIENT_VALIDATION_SOURCE_CAP_V1"
+RECIPIENT_CONTEXT_SCOPE = "INITIAL_RECIPIENT_VALIDATION_CHILD_CONTEXT_V1"
+RECIPIENT_START_SCOPE = "INITIAL_RECIPIENT_VALIDATION_PRELAUNCH_V1"
+RECIPIENT_CHILD_SCOPE = "INITIAL_RECIPIENT_VALIDATION_PENDING_CHILD_CLOSE_V1"
+RECIPIENT_RETURN_SCOPE = "INITIAL_RECIPIENT_VALIDATION_CLOSED_HISTORY_V1"
 _PREPARED_RETURNS = {}
 _WORKER_USE_LOCK = threading.Lock()
 _WORKER_USES, _WORKER_CLAIMS, _ENTRY_WINDOWS, _READMISSION_RETURNS = {}, {}, {}, {}
 _READMISSION_ATTEMPTS = {}
+_RECIPIENT_USE_LOCK = threading.Lock()
+_READMISSION_USES, _RECIPIENT_ATTEMPTS, _RECIPIENT_CLAIMS = {}, {}, {}
+_RECIPIENT_WINDOWS, _AUTHORITY_WINDOWS, _AUTHORITY_RETURNS, _RECIPIENT_RETURNS = {}, {}, {}, {}
+_RECIPIENT_NATIVE_RETURNS = {}
 
 
 @dataclass(frozen=True)
@@ -581,15 +593,23 @@ def source_readback(owner, path, original):
 def context_record(raw, path, fence):
     value = O.parse(raw)
     entry = type(fence) is _ReadmissionWindow
-    require(entry or type(fence) is O.Fence, "CONTEXT_WINDOW")
-    scope = native.INITIAL_ENTRY_CONTEXT_SCOPE if entry else native.INITIAL_CONTEXT_SCOPE
-    require(set(value) == (ENTRY_CONTEXT_FIELDS if entry else CONTEXT_FIELDS) and raw == O.encoded(value) and
+    authority = type(fence) is _RecipientAuthorityWindow
+    require(entry or authority or type(fence) is O.Fence, "CONTEXT_WINDOW")
+    scope = (native.INITIAL_AUTHORITY_CONTEXT_SCOPE if authority else
+             native.INITIAL_ENTRY_CONTEXT_SCOPE if entry else native.INITIAL_CONTEXT_SCOPE)
+    fields = AUTHORITY_CONTEXT_FIELDS if authority else ENTRY_CONTEXT_FIELDS if entry else CONTEXT_FIELDS
+    frame_key = "authorityWindow" if authority else "entryWindow" if entry else "prelude"
+    require(set(value) == fields and raw == O.encoded(value) and
             type(value["schema"]) is int and value["schema"] == 1 and value["scope"] == scope and
-            value["entryWindow" if entry else "prelude"] == O.parse(fence.raw) and
+            value[frame_key] == O.parse(fence.raw) and
             value["root"] == str(ROOT) and value["session"] == str(path)
             and value["budgetAcceptance"] == "NOT_ADMITTED" and value["exportSaveAuthority"] is False, "CONTEXT")
     require(type(value["observed"]) is dict, "CONTEXT_OBSERVATION")
-    observed, actual_path, event = host_context(value["observed"].get("firstUseAt"), entry=entry)
+    if authority:
+        observed, actual_path, event = _recipient_host(value["observed"].get("firstUseAt"))
+        actual_path /= "authority"
+    else:
+        observed, actual_path, event = host_context(value["observed"].get("firstUseAt"), entry=entry)
     require(value["observed"] == observed and observed["role"] == fence.clock.role and actual_path == path and
             value["eventSha256"] == O.digest(event), "ACTUAL_CONTEXT_CHANGED")
     require(type(value["job"]) is str and re.fullmatch(r"[0-9a-f]{32}", value["job"]) and
@@ -610,6 +630,8 @@ def context_record(raw, path, fence):
                 proposal["firstUseAt"] == expected["firstUseAt"] == observed["firstUseAt"] == frame["firstUseAt"] and
                 proposal["phaseFencesNs"]["productive-entry"] == frame["originalProductiveEntryEndNs"] and
                 proposal["proposedJobEndNs"] == frame["originalProposedJobEndNs"], "ENTRY_CONTEXT_BINDINGS")
+    elif authority:
+        _authority_context_bindings(value, fence)
     return value, event
 
 
@@ -625,7 +647,12 @@ def _entry_phase_start(fence, source_returned_ns, start):
 
 def _entry_chain_minimum(fence, returned, start, row, birth, child, service, ack):
     _entry_phase_start(fence, returned, start)
-    times = [fence.first, returned, start["startedNs"], row["launchMinimumNs"], child["beganNs"],
+    return _service_chain_minimum(fence.first, returned, start, row, birth, child, service, ack)
+
+
+def _service_chain_minimum(first, returned, start, row, birth, child, service, ack):
+    """Only shared HTTP timestamp arithmetic; callers validate their exact frame."""
+    times = [first, returned, start["startedNs"], row["launchMinimumNs"], child["beganNs"],
         child["metadataLastNs"], service["firstNs"], service["lastNs"], child["acquiredNs"], child["queryReturnedNs"],
         child["completedNs"], ack["closedNs"], row["completedNs"], row["finalizedNs"]]
     require(all(type(x) is int and 0 <= x <= O.clocks.UINT64 for x in times) and times == sorted(times) and
@@ -646,6 +673,8 @@ def start_record(raw, context_raw, context, path, fence):
             type(value["invocation"]) is str and re.fullmatch(r"[0-9a-f]{32}", value["invocation"]), "PRELAUNCH")
     if type(fence) is _ReadmissionWindow:
         _entry_phase_start(fence, context["sourceReturnedNs"], value)
+    elif type(fence) is _RecipientAuthorityWindow:
+        _authority_phase_start(fence, context["sourceReturnedNs"], value)
     else:
         native.history.phase_start(native.history.snapshot(fence), context["sourceReturnedNs"], value)
     env = native.processes.ownership_environment(context["inheritedContext"], context["job"], value["invocation"],
@@ -654,22 +683,29 @@ def start_record(raw, context_raw, context, path, fence):
     return value
 
 
-def service_child(context_hash, minimum, cancelled, *, entry=False):
+def service_child(context_hash, minimum, cancelled, *, entry=False, authority=False):
     token = os.environ.pop(O.wire.TOKEN_ENV, None)
     owner = fence = directory = result_raw = None
     supplier = None
     try:
-        local_end = time.monotonic() + O.wire.ACQUIRE_SECONDS
+        require(type(entry) is bool and type(authority) is bool and not (entry and authority), "SERVICE_OPERATION")
+        local_start = time.monotonic()
+        local_end = local_start + O.wire.ACQUIRE_SECONDS
         first = O.clocks.validate_reading(O.clocks.observe())
         require(first.nanoseconds >= O.integer(minimum), "CHILD_PRECEDES_LAUNCH")
         owner = native.Owner(local_end, first=first, cancelled=lambda: native.cancellation(cancelled))
-        _, path = location(entry=entry)
+        if authority:
+            path = _recipient_path() / "authority"
+        else:
+            _, path = location(entry=entry)
         private = owner.open(path)
         context_raw = owner.read(private, "context.json")
         require(O.digest(context_raw) == context_hash, "CHILD_CONTEXT_CHANGED")
         context = O.parse(context_raw)
         check_cancel = lambda: native.cancellation(cancelled)
-        fence = (_ReadmissionWindow(O.encoded(context["entryWindow"]), minimum=first.nanoseconds, cancelled=check_cancel)
+        fence = (_RecipientAuthorityWindow.child(O.encoded(context["authorityWindow"]), first, local_start, check_cancel)
+                 if authority else
+                 _ReadmissionWindow(O.encoded(context["entryWindow"]), minimum=first.nanoseconds, cancelled=check_cancel)
                  if entry else O.Fence(context["prelude"], minimum=first.nanoseconds, cancelled=check_cancel))
         require(first.clock == fence.clock, "CHILD_CLOCK_CHANGED")
         context, event = context_record(context_raw, path, fence)
@@ -695,7 +731,7 @@ def service_child(context_hash, minimum, cancelled, *, entry=False):
             match, originals = acquisition.acquire_bootstrap(ROOT, kind=context["observed"]["kind"],
                 query_runner=supplier, invocation=domain["id"], token=token, retain=retain, fence=fence,
                 original_work_end=start["workEndNs"], first_use_at=context["observed"]["firstUseAt"],
-                expected=acquisition.stages.BootstrapMatch(O.encoded(context["expectedMatch"])) if entry else None)
+                expected=acquisition.stages.BootstrapMatch(O.encoded(context["expectedMatch"])) if entry or authority else None)
             token = None
             acquired = fence.now(limit=start["workEndNs"])
             require(dict(originals)["event"] == event, "CHILD_EVENT_CHANGED")
@@ -710,7 +746,8 @@ def service_child(context_hash, minimum, cancelled, *, entry=False):
         session = query_session(owner, queries)
         require(set(dict(originals)) == set(ORIGINAL_KEYS) and len(originals) == len(ORIGINAL_KEYS) and
                 all(owner.read(queries, name + ".bin") == raw for name, raw in originals), "CHILD_ORIGINALS_CHANGED")
-        result_raw = owner.write(directory, "child-result.json", {"schema": 1, "scope": ENTRY_CHILD_SCOPE if entry else CHILD_SCOPE,
+        result_raw = owner.write(directory, "child-result.json", {"schema": 1,
+            "scope": AUTHORITY_CHILD_SCOPE if authority else ENTRY_CHILD_SCOPE if entry else CHILD_SCOPE,
             "contextSha256": context_hash, "startSha256": O.digest(start_raw), "invocation": domain["id"],
             "clock": O.clock_value(fence.clock), "launchMinimumNs": minimum, "beganNs": first.nanoseconds,
             "metadataLastNs": owner.early_last, "acquiredNs": acquired, "queryReturnedNs": returned,
@@ -739,7 +776,8 @@ def service_child(context_hash, minimum, cancelled, *, entry=False):
     require(fence is not None and result_raw is not None and not owner.unknown, "CHILD_NO_ORIGINALS")
     native.posix._deadline(owner.local_end)
     closed = fence.now(limit=start["workEndNs"])
-    return {"schema": 1, "scope": native.INITIAL_ENTRY_ACK_SCOPE if entry else native.INITIAL_ACK_SCOPE, "invocation": domain["id"],
+    return {"schema": 1, "scope": (native.INITIAL_AUTHORITY_ACK_SCOPE if authority else
+            native.INITIAL_ENTRY_ACK_SCOPE if entry else native.INITIAL_ACK_SCOPE), "invocation": domain["id"],
             "terminalSha256": O.digest(result_raw), "clock": O.clock_value(fence.clock), "closedNs": closed}, fence, start["workEndNs"]
 
 
@@ -845,8 +883,10 @@ def read_phase(owner, private, context_raw, source, phase, fence):
             owner.fence is fence and any(x["owner"] is private and not x["attempted"] for x in owner.resources),
             "NOT_ORIGINAL_PHASE_RETURN")
     entry = type(fence) is _ReadmissionWindow
+    authority = type(fence) is _RecipientAuthorityWindow
+    frame_name = "authority-window.json" if authority else "entry-window.json" if entry else "prelude.json"
     require(owner.read(private, "context.json") == context_raw and
-            owner.read(private, "entry-window.json" if entry else "prelude.json") == fence.raw,
+            owner.read(private, frame_name) == fence.raw,
             "ORIGINAL_CONTEXT_CHANGED")
     context, event = context_record(context_raw, private.path, fence)
     policy = source_readback(owner, private.path / "source-before", source)
@@ -884,13 +924,14 @@ def read_phase(owner, private, context_raw, source, phase, fence):
     child, ack = O.parse(child_raw), O.parse(records["stdout.log"])
     require(records["stdout.log"] == O.encoded(ack) and set(ack) == {"schema", "scope", "invocation", "terminalSha256", "clock", "closedNs"}
             and type(ack["schema"]) is int and ack["schema"] == 1 and
-            ack["scope"] == (native.INITIAL_ENTRY_ACK_SCOPE if entry else native.INITIAL_ACK_SCOPE) and
+            ack["scope"] == (native.INITIAL_AUTHORITY_ACK_SCOPE if authority else
+                            native.INITIAL_ENTRY_ACK_SCOPE if entry else native.INITIAL_ACK_SCOPE) and
             ack["invocation"] == start["invocation"] and ack["terminalSha256"] == O.digest(child_raw) and
             ack["clock"] == O.clock_value(fence.clock), "CHILD_ACK")
     require(set(child) == {"schema", "scope", "contextSha256", "startSha256", "invocation", "clock", "launchMinimumNs", "beganNs",
             "metadataLastNs", "acquiredNs", "queryReturnedNs", "querySessionSha256", "originalsSha256", "matchSha256", "completedNs",
             "retirement", "errors"} and type(child["schema"]) is int and child["schema"] == 1 and
-            child["scope"] == (ENTRY_CHILD_SCOPE if entry else CHILD_SCOPE) and
+            child["scope"] == (AUTHORITY_CHILD_SCOPE if authority else ENTRY_CHILD_SCOPE if entry else CHILD_SCOPE) and
             child["contextSha256"] == O.digest(context_raw) and child["startSha256"] == O.digest(records["start.json"]) and
             child["invocation"] == start["invocation"] and child["clock"] == O.clock_value(fence.clock) and
             child["launchMinimumNs"] == row["launchMinimumNs"] and child["retirement"] == "KNOWN" and child["errors"] == [], "CHILD_RESULT")
@@ -901,11 +942,12 @@ def read_phase(owner, private, context_raw, source, phase, fence):
             {name: O.digest(data) for name, data in raw.items()} and child["matchSha256"] == O.digest(raw["match"])
             and raw["event"] == event and {name: raw[name] for name in SOURCE_KEYS} == policy, "ORIGINAL_BYTES_CHANGED")
     match, service = retained_match(context, raw, start["invocation"], fence.clock, start["startedNs"], start["workEndNs"])
-    if entry:
+    if entry or authority:
         require(type(match) is acquisition.stages.BootstrapMatch and
                 match.record == O.encoded(context["expectedMatch"]), "ENTRY_MATCH_CHANGED")
     require(child["acquiredNs"] <= O.integer(child["queryReturnedNs"]) <= child["completedNs"], "QUERY_RETURN_TIME")
-    minimum = (_entry_chain_minimum(fence, context["sourceReturnedNs"], start, row, birth, child, service, ack)
+    minimum = (_authority_chain_minimum(fence, context["sourceReturnedNs"], start, row, birth, child, service, ack)
+        if authority else _entry_chain_minimum(fence, context["sourceReturnedNs"], start, row, birth, child, service, ack)
         if entry else native.history.chain_minimum(native.history.snapshot(fence), context["sourceReturnedNs"],
             start, row, birth, child, service, ack))
     checked = fence.now(minimum=minimum)
@@ -915,7 +957,7 @@ def read_phase(owner, private, context_raw, source, phase, fence):
                                start["invocation"], start["startedNs"], start["workEndNs"])
     # Preserve the original preparation's three-value contract. Only the
     # distinct entry window also returns its complete child/session originals.
-    return (*result, (child_raw, session)) if entry else result
+    return (*result, (child_raw, session)) if entry or authority else result
 
 
 def _prepare_with_token(cancelled, token):
@@ -1110,10 +1152,32 @@ def _readmission_content(binding):
 
 def check_readmission_return(result):
     """Exact historical in-call return only: no live authority, I/O, renewal or grant."""
+    marker, binding = _begin_readmission_use(result)
+    try:
+        return _readmission_content(binding)
+    finally:
+        _end_readmission_use(result, marker)
+
+
+def _begin_readmission_use(result, *, consume=False):
     binding = _READMISSION_RETURNS.get(id(result))
     require(type(result) is _ReadmissionReturn and type(binding) is _ReadmissionBinding and binding.returned is result,
             "NOT_ORIGINAL_READMISSION_RETURN")
-    return _readmission_content(binding)
+    marker = object()
+    with _RECIPIENT_USE_LOCK:
+        require(_READMISSION_RETURNS.get(id(result)) is binding, "READMISSION_REGISTRY_CHANGED")
+        require(id(result) not in _RECIPIENT_ATTEMPTS, "READMISSION_ALREADY_CLAIMED")
+        require(id(result) not in _READMISSION_USES, "READMISSION_USE_IN_PROGRESS")
+        _READMISSION_USES[id(result)] = marker
+        if consume:
+            _RECIPIENT_ATTEMPTS[id(result)] = (result, marker)
+    return marker, binding
+
+
+def _end_readmission_use(result, marker):
+    with _RECIPIENT_USE_LOCK:
+        require(_READMISSION_USES.get(id(result)) is marker, "READMISSION_USE_CHANGED")
+        del _READMISSION_USES[id(result)]
 
 
 def _readmit_worker(claim, token):
@@ -1246,6 +1310,1293 @@ def _readmit_worker(claim, token):
         raise owner.original
 
 
+def _recipient_path():
+    kind, path = location()
+    require(kind == "worker", "RECIPIENT_WORKER_ONLY")
+    return path.with_name(path.name + "-recipient")
+
+
+def _recipient_host(first_use_at):
+    observed, _path, event = host_context(first_use_at)
+    require(observed["kind"] == "worker", "RECIPIENT_WORKER_ONLY")
+    return observed, _recipient_path(), event
+
+
+def _history_graph(*roots):
+    """Finite pins of the closed Stage1 records, not a live reader or object codec."""
+    records = (_ReadmissionReturn, _ReadmissionBinding, _ReadmissionClaim, _PreparationBinding,
+        _OriginalPreparation, _EntryWindowBinding, _ReadmissionWindow, SourceReturn, native.Owner,
+        native.OriginalPhase, O.Fence, O.clocks.Reading, O.clocks.ClockIdentity,
+        initial_identity.InitialBootstrapIdentity, acquisition.stages.BootstrapMatch,
+        _AuthorityReturn, _AuthorityState, _RecipientRoster, _RecipientNativeReturn, _RecipientValidationReturn)
+    scalars = (type(None), bool, int, float, str, bytes)
+    pending, seen, nodes = list(roots), set(), []
+    while pending:
+        value = pending.pop()
+        kind = type(value)
+        if kind in scalars or id(value) in seen:
+            continue
+        seen.add(id(value))
+        require(len(seen) <= 10000, "RECIPIENT_HISTORY_LIMIT")
+        if kind is dict:
+            saved, mode = tuple(value.items()), "mapping"
+            require(all(type(key) in scalars for key, _ in saved), "RECIPIENT_HISTORY_KEY")
+            pending.extend(item for pair in saved for item in pair)
+        elif kind in (tuple, list):
+            saved, mode = tuple(value), "sequence"
+            pending.extend(saved)
+        elif kind in records:
+            saved, mode = object.__getattribute__(value, "__dict__"), "record"
+            pending.append(saved)
+        elif kind is type(ROOT):
+            saved, mode = (str(value), value.parts, value.drive, value.root), "path"
+        else:
+            saved, mode = None, "opaque"  # Callbacks/retired resources: reference only, never invoked.
+        nodes.append((value, kind, mode, saved))
+    return tuple(nodes)
+
+
+def _check_history(nodes):
+    scalars = (type(None), bool, int, float, str, bytes)
+    def same(value, saved):
+        return value is saved or type(value) is type(saved) and type(saved) in scalars and value == saved
+    for value, kind, mode, saved in nodes:
+        require(type(value) is kind, "RECIPIENT_HISTORY_CHANGED")
+        if mode == "record":
+            valid = object.__getattribute__(value, "__dict__") is saved
+        elif mode == "mapping":
+            valid = len(value) == len(saved) and all(same(key, old_key) and same(item, old_item)
+                for (key, item), (old_key, old_item) in zip(value.items(), saved))
+        elif mode == "sequence":
+            valid = len(value) == len(saved) and all(same(item, old) for item, old in zip(value, saved))
+        elif mode == "path":
+            valid = (str(value), value.parts, value.drive, value.root) == saved
+        else:
+            valid = mode == "opaque"
+        require(valid, "RECIPIENT_HISTORY_CHANGED")
+
+
+@dataclass(frozen=True, repr=False)
+class _RecipientClaim:
+    original: _ReadmissionReturn
+
+
+def _claim_recipient(result):
+    marker, binding = _begin_readmission_use(result, consume=True)
+    try:
+        _readmission_content(binding)
+        original = binding.claim.binding
+        entry_state = _ENTRY_WINDOWS[id(binding.window)]
+        nodes = _history_graph(result, binding, original, entry_state)
+        claim = _RecipientClaim(result)
+        # These independent tuples, not the published claim's mutable fields,
+        # retain the first basis, clock, cancellation and the closed record graph.
+        saved = (claim, result, binding, original, entry_state, nodes,
+            _READMISSION_RETURNS, _PREPARED_RETURNS, _ENTRY_WINDOWS, _WORKER_CLAIMS)
+        with _RECIPIENT_USE_LOCK:
+            require(_READMISSION_USES.get(id(result)) is marker and
+                    _RECIPIENT_ATTEMPTS.get(id(result)) == (result, marker), "RECIPIENT_CLAIM_CHANGED")
+            _RECIPIENT_ATTEMPTS[id(result)] = (result, claim)
+            _RECIPIENT_CLAIMS[id(claim)] = saved
+        _recipient_claim(claim)
+        return claim
+    finally:
+        _end_readmission_use(result, marker)
+
+
+def _recipient_claim(claim):
+    saved = _RECIPIENT_CLAIMS.get(id(claim))
+    require(type(claim) is _RecipientClaim and type(saved) is tuple and len(saved) == 10 and saved[0] is claim and
+            claim.original is saved[1] and _RECIPIENT_ATTEMPTS.get(id(saved[1])) == (saved[1], claim),
+            "NOT_ORIGINAL_RECIPIENT_CLAIM")
+    _, result, binding, original, entry_state, nodes, returns, prepared, windows, workers = saved
+    require(returns is _READMISSION_RETURNS and returns.get(id(result)) is binding and
+            prepared is _PREPARED_RETURNS and prepared.get(id(original.original)) is original and
+            windows is _ENTRY_WINDOWS and windows.get(id(binding.window)) is entry_state and
+            workers is _WORKER_CLAIMS and workers.get(id(original.original)) is binding.claim,
+            "RECIPIENT_HISTORY_REGISTRY_CHANGED")
+    _check_history(nodes)  # No old fence/owner observation, parsing, callback or I/O.
+    require(type(original.cancelled) is list and original.cancelled == [], "RECIPIENT_CANCELLED")
+    return binding, original
+
+
+class _RecipientRoster:
+    """Original resource references for one new Owner, including failed returns."""
+    def __init__(self, owner, window, first):
+        require(type(owner) is native.Owner and owner.fence is window and owner.first is first and
+                owner.resources == [] and owner.errors == [], "RECIPIENT_OWNER_BINDING")
+        self.owner, self.window, self.first = owner, window, first
+        self.local, self.cancelled = owner.local_end, owner.cancelled
+        self.rows, self.errors, self.sources = owner.resources, owner.errors, owner.initial_sources
+        self.seen, self.frozen = [], None
+
+    def check(self, limits=(None, None)):
+        owner = self.owner
+        seen = {(id(row), id(resource)) for row, _label, resource, _a, _c in self.seen}
+        for rows in (self.rows,) if owner.resources is self.rows else (self.rows, owner.resources):
+            if type(rows) is list:
+                for row in rows:
+                    label, resource = (row.get("label"), row.get("owner")) if type(row) is dict else (None, None)
+                    if (id(row), id(resource)) not in seen:
+                        self.seen.append((row, label, resource, False, False))
+                        seen.add((id(row), id(resource)))
+        try:
+            require(owner.resources is self.rows and len(self.rows) == len(self.seen) and
+                    owner.errors is self.errors and owner.initial_sources is self.sources and
+                    owner.fence is self.window and owner.first is self.first and owner.cancelled is self.cancelled and
+                    type(owner.local_end) is float and owner.local_end == self.local and
+                    owner.early_last == self.first.nanoseconds and
+                    all(type(a) is type(b) and a == b for a, b in zip((owner.work_limit, owner.final_limit), limits)),
+                    "RECIPIENT_OWNER_CHANGED")
+            if self.frozen is not None:
+                require(len(self.rows) == len(self.frozen) and all(row is saved for row, saved in
+                        zip(self.rows, self.frozen)), "RECIPIENT_CLOSE_ROSTER_CHANGED")
+            for index, (row, label, resource, attempted, closed) in enumerate(self.seen):
+                require(self.rows[index] is row and type(row) is dict and set(row) == {"label", "owner", "attempted", "closed"}
+                    and row["owner"] is resource and row["label"] == label and
+                    label in ("directory", "writer", "stdout", "stderr", "native-scope") and
+                    type(row["attempted"]) is bool and type(row["closed"]) is bool and
+                    (not row["closed"] or row["attempted"]) and (not attempted or row["attempted"]) and
+                    (not closed or row["closed"]), "RECIPIENT_RESOURCE_CHANGED")
+                if (attempted, closed) != (row["attempted"], row["closed"]):
+                    self.seen[index] = (row, label, resource, row["attempted"], row["closed"])
+        except BaseException as error:
+            owner.error("recipient-resource-binding", error, unknown=True)
+            raise
+
+    def freeze(self):
+        self.check()
+        require(self.frozen is None and not self.owner.closed, "RECIPIENT_CLOSE_REENTRY")
+        self.frozen = tuple(self.rows)
+
+    def known(self):
+        self.check()
+        require(self.frozen is not None and self.owner.closed and not self.owner.unknown and
+                all(attempted and closed for _row, _label, _resource, attempted, closed in self.seen),
+                "RECIPIENT_CLOSE_INCOMPLETE")
+
+
+def _recipient_frame(raw):
+    value = O.parse(raw)
+    require(type(raw) is bytes and raw == O.encoded(value) and set(value) == {"schema", "scope", "clock", "firstNs",
+        "previousNs", "workEndNs", "finalEndNs", "readEndNs", "firstUseAt", "originalReadmissionSha256",
+        "workerIdentitySha256", "originalProposalSha256", "originalFencesNs", "originalProposedJobEndNs",
+        "budgetAcceptance", "exportSaveAuthority"} and type(value["schema"]) is int and value["schema"] == 1 and
+        value["scope"] == RECIPIENT_WINDOW_SCOPE and value["budgetAcceptance"] == "NOT_ADMITTED" and
+        value["exportSaveAuthority"] is False, "RECIPIENT_FRAME")
+    clock = O.wire.clock_identity(value["clock"])
+    first = O.integer(value["firstNs"], O.integer(value["previousNs"]))
+    fences = value["originalFencesNs"]
+    require(type(fences) is dict and set(fences) == {"recipient-validation", "recipient-final", "recipient-read"},
+            "RECIPIENT_FRAME_FENCES")
+    ends = tuple(min(O.integer(first + seconds * O.NS), O.integer(fences[name]),
+        O.integer(value["originalProposedJobEndNs"])) for seconds, name in
+        ((240, "recipient-validation"), (285, "recipient-final"), (315, "recipient-read")))
+    require(first < ends[0] <= ends[1] <= ends[2] and all(type(value[name]) is int and value[name] == end
+        for name, end in zip(("workEndNs", "finalEndNs", "readEndNs"), ends)), "RECIPIENT_FRAME_FENCES")
+    O.integer(value["firstUseAt"], 1)
+    require(all(type(value[name]) is str and re.fullmatch(r"[0-9a-f]{64}", value[name]) for name in
+        ("originalReadmissionSha256", "workerIdentitySha256", "originalProposalSha256")), "RECIPIENT_FRAME_HASHES")
+    return value, clock, first, ends
+
+
+@dataclass(frozen=True, repr=False)
+class _RecipientState:
+    window: object
+    claim: _RecipientClaim
+    raw: bytes
+    clock: object
+    first: int
+    ends: tuple
+    locals: tuple
+    local_start: float
+    cancelled: object
+    last: int
+    local_last: float
+    roster: object = None
+    phase: str = "WORK"
+    final_start: object = None
+    final_end: int = 0
+    final_local: float = 0.0
+    read_start: object = None
+    read_end: int = 0
+    read_local: float = 0.0
+    read_attempted: bool = False
+    busy: bool = False
+    failed: bool = False
+    terminal: bool = False
+
+
+class _RecipientUseWindow:
+    """Fixed work240/final45/read30 episode; no writable clock/cap aliases."""
+    __slots__ = ()
+
+    def __init__(self, claim, local, first):
+        binding, original = _recipient_claim(claim)
+        O.clocks.elapsed_ns(O.clocks.Reading(original.fence.clock, binding.closed_ns), first)
+        proposal = O.parse(original.proposal_raw)
+        ends = tuple(min(O.integer(first.nanoseconds + seconds * O.NS), proposal["phaseFencesNs"][name],
+            proposal["proposedJobEndNs"]) for seconds, name in
+            ((240, "recipient-validation"), (285, "recipient-final"), (315, "recipient-read")))
+        raw = O.encoded({"schema": 1, "scope": RECIPIENT_WINDOW_SCOPE, "clock": O.clock_value(first.clock),
+            "firstNs": first.nanoseconds, "previousNs": binding.closed_ns, "workEndNs": ends[0], "finalEndNs": ends[1],
+            "readEndNs": ends[2], "firstUseAt": O.parse(original.match_raw)["firstUseAt"],
+            "originalReadmissionSha256": O.digest(binding.raw), "workerIdentitySha256": O.digest(original.identity_fields[0]),
+            "originalProposalSha256": O.digest(original.proposal_raw), "originalFencesNs": {name: proposal["phaseFencesNs"][name]
+                for name in ("recipient-validation", "recipient-final", "recipient-read")},
+            "originalProposedJobEndNs": proposal["proposedJobEndNs"], "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
+        _recipient_frame(raw)
+        locals_ = tuple(O.wire._directed_deadline(local, seconds, end, first.nanoseconds)
+            for seconds, end in zip((240, 285, 315), ends))
+        _RECIPIENT_WINDOWS[id(self)] = _RecipientState(self, claim, raw, first.clock, first.nanoseconds, ends,
+            locals_, local, lambda: native.cancellation(original.cancelled), first.nanoseconds, local)
+
+    def state(self, *, cleanup=False):
+        value = _RECIPIENT_WINDOWS.get(id(self))
+        require(type(self) is _RecipientUseWindow and type(value) is _RecipientState and value.window is self,
+                "RECIPIENT_WINDOW_NOT_ORIGINAL")
+        if value.roster is not None:
+            value.roster.check()
+        if not cleanup:
+            _recipient_claim(value.claim)
+            require(not native.QUARANTINE and not Q.QUARANTINE and not native.diagnostics._QUARANTINE,
+                    "RECIPIENT_PRIOR_UNKNOWN")
+        return value
+
+    raw = property(lambda self: self.state(cleanup=True).raw)
+    clock = property(lambda self: self.state(cleanup=True).clock)
+    first = property(lambda self: self.state(cleanup=True).first)
+    work = property(lambda self: self.state(cleanup=True).ends[0])
+    final = property(lambda self: self.state(cleanup=True).final_end)
+    last = property(lambda self: self.state(cleanup=True).last)
+    local_end = property(lambda self: self.state(cleanup=True).locals[2])
+    cancelled = property(lambda self: self.state(cleanup=True).cancelled)
+
+    def bind(self, owner, first):
+        state = self.state()
+        require(state.roster is None, "RECIPIENT_OWNER_REBIND")
+        _RECIPIENT_WINDOWS[id(self)] = replace(state, roster=_RecipientRoster(owner, self, first))
+
+    def _sample(self, minimum=0):
+        state = self.state(cleanup=True)
+        local = time.monotonic()
+        require(type(local) in (int, float) and math.isfinite(local) and local >= state.local_last,
+                "RECIPIENT_LOCAL_CLOCK")
+        _RECIPIENT_WINDOWS[id(self)] = replace(state, local_last=local)
+        observed = O.clocks.checked_now(state.clock, minimum_ns=max(state.last, O.integer(minimum)))
+        current = _RECIPIENT_WINDOWS[id(self)]
+        _RECIPIENT_WINDOWS[id(self)] = replace(current, last=observed)
+        after = time.monotonic()
+        require(type(after) in (int, float) and math.isfinite(after) and after >= local, "RECIPIENT_LOCAL_CLOCK")
+        _RECIPIENT_WINDOWS[id(self)] = replace(_RECIPIENT_WINDOWS[id(self)], local_last=after)
+        self.state(cleanup=True)
+        return local, observed
+
+    def _cap(self):
+        value = self.state(cleanup=True)
+        return ((value.ends[0], value.locals[0]) if value.phase == "WORK" else
+                (value.final_end, value.final_local) if value.phase == "FINAL" else (value.read_end, value.read_local))
+
+    def now(self, *, final=False, minimum=0, limit=None):
+        state = self.state(cleanup=final)
+        require(type(final) is bool and not state.terminal and not state.busy and
+                (final or not state.failed and state.phase != "FINAL"), "RECIPIENT_WINDOW_NOT_LIVE")
+        _RECIPIENT_WINDOWS[id(self)] = replace(state, busy=True)
+        failed = False
+        try:
+            end, local_end = self._cap()
+            if limit is not None:
+                end = min(end, O.integer(limit))
+            for index in range(1 if final else 2):
+                local, observed = self._sample(minimum)
+                require(observed < end and self.state(cleanup=True).local_last < local_end, "RECIPIENT_WINDOW_EXPIRED")
+                if not final and index == 0:
+                    state.cancelled()
+                self.state(cleanup=final)
+            return observed
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            current = _RECIPIENT_WINDOWS[id(self)]
+            _RECIPIENT_WINDOWS[id(self)] = replace(current, busy=False, failed=current.failed or failed)
+
+    def deadline(self, maximum, *, final=False, limit=None):
+        require(type(maximum) in (int, float) and math.isfinite(maximum) and 0 < maximum <= 315,
+                "RECIPIENT_OPERATION_MAXIMUM")
+        self.state()  # Unlike cleanup observations, new I/O always checks the original history.
+        local = time.monotonic()
+        observed = self.now(final=final, minimum=0, limit=limit)
+        end, cap = self._cap()
+        if limit is not None:
+            end = min(end, O.integer(limit))
+        result = min(cap, O.wire._directed_deadline(local, maximum, end, observed))
+        self.state()
+        return result
+
+    def begin_final(self):
+        state = self.state(cleanup=True)
+        require(state.phase == "WORK" and not state.terminal and not state.busy, "RECIPIENT_FINAL_REENTRY")
+        _RECIPIENT_WINDOWS[id(self)] = replace(state, phase="FINAL")  # Expired sentinel if observation fails.
+        local, observed = self._sample()
+        end = min(state.ends[1], O.integer(observed + 45 * O.NS))
+        cap = min(state.locals[1], O.wire._directed_deadline(local, 45, end, observed))
+        current = self.state(cleanup=True)
+        _RECIPIENT_WINDOWS[id(self)] = replace(current, final_start=observed, final_end=end, final_local=cap)
+        self.now(final=True)
+
+    def begin_read(self, scope, captures):
+        state = self.state()
+        require(state.phase == "FINAL" and not state.read_attempted and state.roster is not None and
+                state.roster.owner.original is None and not state.roster.owner.unknown, "RECIPIENT_READ_NOT_READY")
+        resources = state.roster.rows
+        require(len(captures) == 2 and all(any(row["owner"] is value and row["attempted"] and row["closed"]
+                for row in resources) for value in (scope, *captures)), "RECIPIENT_READ_BEFORE_RETIREMENT")
+        _RECIPIENT_WINDOWS[id(self)] = replace(state, read_attempted=True)
+        self.now(final=True)
+        local, observed = self._sample()
+        require(observed < state.final_end and self.state().local_last < state.final_local, "RECIPIENT_READ_START_EXPIRED")
+        end = min(state.ends[2], O.integer(observed + 30 * O.NS))
+        cap = min(state.locals[2], O.wire._directed_deadline(local, 30, end, observed))
+        current = self.state()
+        _RECIPIENT_WINDOWS[id(self)] = replace(current, phase="READ", read_start=observed, read_end=end, read_local=cap)
+        self.now()
+
+
+def _authority_frame(raw):
+    value = O.parse(raw)
+    require(type(raw) is bytes and raw == O.encoded(value) and set(value) == {"schema", "scope", "recipientWindow",
+        "workEndNs", "finalEndNs"} and type(value["schema"]) is int and value["schema"] == 1 and
+        value["scope"] == AUTHORITY_WINDOW_SCOPE, "AUTHORITY_FRAME")
+    episode, clock, first, ends = _recipient_frame(O.encoded(value["recipientWindow"]))
+    final = min(O.integer(first + 120 * O.NS), ends[0])
+    work = min(O.integer(first + 75 * O.NS), O.integer(final - 45 * O.NS))
+    require(first < work and type(value["workEndNs"]) is int and type(value["finalEndNs"]) is int and
+            (value["workEndNs"], value["finalEndNs"]) == (work, final), "AUTHORITY_FRAME_FENCES")
+    return episode, clock, first, work, final
+
+
+@dataclass(frozen=True, repr=False)
+class _AuthorityState:
+    window: object
+    raw: bytes
+    clock: object
+    first: int
+    work: int
+    final: int
+    local_end: float
+    cancelled: object
+    last: int
+    local_last: float
+    episode: object = None
+    roster: object = None
+    limits: tuple = (None, None)
+    terminal: bool = False
+    busy: bool = False
+    failed: bool = False
+
+
+class _RecipientAuthorityWindow:
+    """New exact HTTP75/120 suboperation, wholly inside recipient WORK240."""
+    __slots__ = ()
+
+    @classmethod
+    def parent(cls, episode):
+        require(type(episode) is _RecipientUseWindow, "AUTHORITY_EPISODE")
+        outer = episode.state()
+        require(outer.phase == "WORK", "AUTHORITY_OUTSIDE_WORK")
+        final = min(outer.first + 120 * O.NS, outer.ends[0])
+        raw = O.encoded({"schema": 1, "scope": AUTHORITY_WINDOW_SCOPE, "recipientWindow": O.parse(outer.raw),
+            "workEndNs": min(outer.first + 75 * O.NS, final - 45 * O.NS), "finalEndNs": final})
+        require(outer.roster is not None, "AUTHORITY_PARENT_OWNER")
+        value = cls._new(raw, outer.roster.first, outer.local_start, outer.cancelled, episode)
+        return value
+
+    @classmethod
+    def child(cls, raw, first, local, cancelled):
+        return cls._new(raw, first, local, cancelled, None)
+
+    @classmethod
+    def _new(cls, raw, first_reading, local, cancelled, episode):
+        require(cls is _RecipientAuthorityWindow and callable(cancelled), "AUTHORITY_WINDOW_TYPE")
+        _frame, clock, first, work, final = _authority_frame(raw)
+        O.clocks.validate_reading(first_reading)
+        require(first_reading.clock == clock and first <= first_reading.nanoseconds < work, "AUTHORITY_FIRST_CLOCK")
+        local_end = O.wire._directed_deadline(local, 120, final, first_reading.nanoseconds)
+        if episode is not None:
+            local_end = min(local_end, episode.state().locals[0])
+        value = cls()
+        _AUTHORITY_WINDOWS[id(value)] = _AuthorityState(value, raw, first_reading.clock, first, work, final,
+            local_end, cancelled, first_reading.nanoseconds, local, episode)
+        return value
+
+    def checked(self, *, cleanup=False):
+        value = _AUTHORITY_WINDOWS.get(id(self))
+        require(type(self) is _RecipientAuthorityWindow and type(value) is _AuthorityState and value.window is self,
+                "AUTHORITY_WINDOW_NOT_ORIGINAL")
+        if value.roster is not None:
+            value.roster.check(value.limits)
+        if value.episode is not None and not value.terminal:
+            require(value.episode.state(cleanup=cleanup).phase == "WORK", "AUTHORITY_OUTSIDE_WORK")
+        return value
+
+    raw = property(lambda self: self.checked(cleanup=True).raw)
+    clock = property(lambda self: self.checked(cleanup=True).clock)
+    first = property(lambda self: self.checked(cleanup=True).first)
+    work = property(lambda self: self.checked(cleanup=True).work)
+    final = property(lambda self: self.checked(cleanup=True).final)
+    last = property(lambda self: self.checked(cleanup=True).last)
+
+    def bind(self, owner, first):
+        state = self.checked()
+        require(state.roster is None and state.episode is not None, "AUTHORITY_OWNER_REBIND")
+        _AUTHORITY_WINDOWS[id(self)] = replace(state, roster=_RecipientRoster(owner, self, first))
+
+    def enter_phase(self, owner, started):
+        state = self.checked()
+        require(state.roster is not None and state.roster.owner is owner and state.limits == (None, None) and
+                not state.terminal and not state.failed and state.last == O.integer(started) < state.work,
+                "AUTHORITY_PHASE_OWNER")
+        work = min(state.work, started + 45 * O.NS)
+        limits = work, min(state.final, work + 45 * O.NS)
+        owner.work_limit, owner.final_limit = limits
+        _AUTHORITY_WINDOWS[id(self)] = replace(state, limits=limits)
+        return limits
+
+    def leave_phase(self, owner):
+        state = self.checked(cleanup=True)
+        require(state.roster is not None and state.roster.owner is owner and state.limits != (None, None),
+                "AUTHORITY_PHASE_OWNER")
+        owner.work_limit = owner.final_limit = None
+        _AUTHORITY_WINDOWS[id(self)] = replace(state, limits=(None, None))
+
+    def now(self, *, final=False, minimum=0, limit=None):
+        state = self.checked(cleanup=final)
+        require(type(final) is bool and not state.terminal and not state.busy and (final or not state.failed),
+                "AUTHORITY_WINDOW_NOT_LIVE")
+        _AUTHORITY_WINDOWS[id(self)] = replace(state, busy=True)
+        failed = False
+        try:
+            end = state.final if final else state.work
+            if limit is not None:
+                end = min(end, O.integer(limit))
+            local = time.monotonic()
+            require(type(local) in (int, float) and math.isfinite(local) and local >= state.local_last,
+                    "AUTHORITY_LOCAL_CLOCK")
+            _AUTHORITY_WINDOWS[id(self)] = replace(_AUTHORITY_WINDOWS[id(self)], local_last=local)
+            observed = (state.episode.now(final=final, minimum=max(state.last, minimum), limit=end)
+                if state.episode is not None else O.clocks.checked_now(state.clock, minimum_ns=max(state.last, O.integer(minimum))))
+            _AUTHORITY_WINDOWS[id(self)] = replace(_AUTHORITY_WINDOWS[id(self)], last=observed)
+            require(observed < end and local < state.local_end, "AUTHORITY_WINDOW_EXPIRED")
+            if not final and state.episode is None:
+                state.cancelled()
+                observed = O.clocks.checked_now(state.clock, minimum_ns=observed)
+                _AUTHORITY_WINDOWS[id(self)] = replace(_AUTHORITY_WINDOWS[id(self)], last=observed)
+                require(observed < end, "AUTHORITY_WINDOW_EXPIRED")
+            after = time.monotonic()
+            require(type(after) in (int, float) and math.isfinite(after) and after >= local, "AUTHORITY_LOCAL_CLOCK")
+            _AUTHORITY_WINDOWS[id(self)] = replace(_AUTHORITY_WINDOWS[id(self)], local_last=after)
+            require(after < state.local_end, "AUTHORITY_WINDOW_EXPIRED")
+            self.checked(cleanup=final)
+            return observed
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            current = _AUTHORITY_WINDOWS[id(self)]
+            high = current.last if state.episode is None else max(current.last, _RECIPIENT_WINDOWS[id(state.episode)].last)
+            _AUTHORITY_WINDOWS[id(self)] = replace(current, busy=False, failed=current.failed or failed, last=high)
+
+    def deadline(self, maximum, *, final=False, limit=None):
+        require(type(maximum) in (int, float) and math.isfinite(maximum) and 0 < maximum <= 120,
+                "AUTHORITY_OPERATION_MAXIMUM")
+        state = self.checked()
+        local = time.monotonic()
+        observed = self.now(final=final, limit=limit)
+        end = state.final if final else state.work
+        if limit is not None:
+            end = min(end, O.integer(limit))
+        result = min(state.local_end, O.wire._directed_deadline(local, maximum, end, observed))
+        self.checked()
+        return result
+
+
+def _authority_context_bindings(value, window):
+    frame = _authority_frame(window.raw)[0]
+    expected, proposal, observed = value["expectedMatch"], value["originalProposal"], value["observed"]
+    initial_identity._match(expected)
+    require(type(proposal) is dict and proposal.get("scope") == ALLOCATION_SCOPE and
+        O.digest(O.encoded(proposal)) == frame["originalProposalSha256"] and
+        proposal["workerIdentitySha256"] == frame["workerIdentitySha256"] and proposal["clock"] == frame["clock"] and
+        proposal["source"] == observed["source"] and proposal["firstUseAt"] == expected["firstUseAt"] ==
+        observed["firstUseAt"] == frame["firstUseAt"] and proposal["proposedJobEndNs"] == frame["originalProposedJobEndNs"] and
+        {name: proposal["phaseFencesNs"][name] for name in frame["originalFencesNs"]} == frame["originalFencesNs"],
+        "AUTHORITY_CONTEXT_BINDINGS")
+
+
+def _authority_phase_start(window, returned, start):
+    value = window.checked(cleanup=True)
+    began = O.integer(start["startedNs"], O.integer(returned, value.first))
+    require(began < value.work and type(start["workEndNs"]) is int and type(start["finalEndNs"]) is int and
+        start["workEndNs"] == min(value.work, began + 45 * O.NS) and
+        start["finalEndNs"] == min(value.final, start["workEndNs"] + 45 * O.NS), "AUTHORITY_PHASE_FENCES")
+
+
+def _authority_chain_minimum(window, returned, start, row, birth, child, service, ack):
+    _authority_phase_start(window, returned, start)
+    return _service_chain_minimum(window.first, returned, start, row, birth, child, service, ack)
+
+
+@dataclass(frozen=True, repr=False)
+class _AuthorityReturn:
+    """Historical return of this actual authority call, not a remote lease."""
+    raw: bytes
+
+
+def _authority_return(value, episode):
+    saved = _AUTHORITY_RETURNS.get(id(value))
+    require(type(value) is _AuthorityReturn and type(saved) is tuple and len(saved) == 6 and
+            saved[0] is value and value.raw == saved[1] and saved[2] is episode, "NOT_ORIGINAL_AUTHORITY_RETURN")
+    _check_history(saved[4])
+    state = saved[3].checked()
+    require(state.terminal and not state.failed and not state.busy and state.limits == (None, None) and
+            state.roster.owner.original is None and state.roster.owner.errors == [], "AUTHORITY_RETURN_CHANGED")
+    state.roster.known()
+    return saved[5]
+
+
+def _recipient_authority(episode, token):
+    """Third original acquisition: every return/close still spends outer WORK."""
+    binding, original = _recipient_claim(episode.state().claim)
+    owner = window = private = evidence = None
+    try:
+        window = _RecipientAuthorityWindow.parent(episode)
+        state = window.checked()
+        first = episode.state().roster.first
+        owner = native.Owner(state.local_end, window, first=first, cancelled=state.cancelled)
+        owner.initial_sources = {}
+        window.bind(owner, first)
+        observed, root, event = _recipient_host(O.parse(original.match_raw)["firstUseAt"])
+        require(observed == O.parse(original.worker_originals[0])["observed"] and event == original.identity_fields[1],
+                "AUTHORITY_ACTUAL_CONTEXT_CHANGED")
+        path = root / "authority"
+        private = owner.new(path)
+        owner.write(private, "authority-window.json", window.raw)
+        owner.child(private, "control-home", create=True)
+        owner.child(private, "temporary", create=True)
+        before = source_queries(owner, window, observed, path / "source-before")
+        before_pin = _source_pin(before)
+        require(dict(before.records) == {name: dict(original.worker_originals[1])[name] for name in SOURCE_KEYS},
+                "AUTHORITY_SOURCE_CHANGED")
+        context_raw = owner.write(private, "context.json", {"schema": 1, "scope": native.INITIAL_AUTHORITY_CONTEXT_SCOPE,
+            "authorityWindow": O.parse(window.raw), "expectedMatch": O.parse(original.match_raw),
+            "originalProposal": O.parse(original.proposal_raw), "observed": observed, "eventSha256": O.digest(event),
+            "root": str(ROOT), "session": str(path), "job": uuid.uuid4().hex, "inheritedContext": Q._inherited_context(),
+            "sourceReturnSha256": O.digest(before.raw), "sourceReturnedNs": O.parse(before.raw)["returnedNs"],
+            "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
+        _, phase = native.phase(owner, private, context_raw, token, window)
+        phase_pin = _phase_pin(phase)
+        token = None
+        match, _chain, captured, _child = read_phase(owner, private, context_raw, before, phase, window)
+        require(match.record == original.match_raw and _service_job(captured, window.clock) == binding.claim.service_job,
+                "AUTHORITY_JOB_OR_MATCH_CHANGED")
+        after = source_queries(owner, window, observed, path / "source-after")
+        after_pin = _source_pin(after)
+        require(source_readback(owner, path / "source-after", after) == dict(before.records), "AUTHORITY_SOURCE_CHANGED")
+        match, chain, captured, (child, session) = read_phase(owner, private, context_raw, before, phase, window)
+        require(match.record == original.match_raw and _service_job(captured, window.clock) == binding.claim.service_job,
+                "AUTHORITY_JOB_OR_MATCH_CHANGED")
+        current = initial_identity.bind_worker_match(match, event_raw=event,
+            policy_raw=dict(after.records)["candidate_policy_raw"], now=int(time.time()))
+        require(_worker_fields(current) == original.identity_fields, "AUTHORITY_IDENTITY_CHANGED")
+        files = [("authority-window.json", window.raw), ("context.json", context_raw),
+            ("service/child-result.json", child), ("acquisition-queries/session-result.json", session)]
+        files.extend(("service/" + name, raw) for name, raw in phase.records)
+        files.extend(("acquisition-queries/" + name + ".bin", raw) for name, raw in captured[1])
+        for name, returned in (("source-before", before), ("source-after", after)):
+            files.extend(((name + "/source-return.json", returned.raw), (name + "/session-result.json", returned.session)))
+            files.extend((name + "/" + label + ".bin", raw) for label, raw in returned.records)
+        originals = tuple(files)
+        pending = owner.write(private, "authority-pending.json", {"schema": 1,
+            "scope": "INITIAL_RECIPIENT_USE_AUTHORITY_PENDING_CLOSE_V1", "recipientWindowSha256": O.digest(episode.raw),
+            "originalReadmissionSha256": O.digest(binding.raw), "filesSha256": {name: O.digest(raw) for name, raw in originals},
+            "originalChain": chain, "retainedNs": window.now(), "retirement": "PENDING_OWNER_CLOSE"})
+        evidence = (originals, pending, before, after, phase, captured, match)
+        graph = _history_graph(before, after, phase, match, owner.initial_sources)
+        require(_source_pin(before)[1:] == before_pin[1:] and _source_pin(after)[1:] == after_pin[1:] and
+                _phase_pin(phase)[1:] == phase_pin[1:] and owner.phase_originals is phase and
+                set(owner.initial_sources) == {str(path / "source-before"), str(path / "source-after")} and
+                owner.initial_sources[str(path / "source-before")] is before and
+                owner.initial_sources[str(path / "source-after")] is after, "AUTHORITY_ORIGINAL_RETURN_CHANGED")
+        _recipient_claim(episode.state().claim)
+        preclose = window.now()
+    except BaseException as error:
+        if owner is None:
+            raise
+        owner.error("recipient-authority", error)
+    finally:
+        token = None
+        if owner is not None:
+            try:
+                window.checked(cleanup=True).roster.freeze()
+            except BaseException as error:
+                owner.error("authority-close-roster", error, unknown=True)
+            try:
+                owner.close()
+            except BaseException as error:
+                owner.error("authority-owner-close", error)
+    try:
+        window.checked(cleanup=True).roster.known()
+    except BaseException as error:
+        owner.error("authority-close-return", error, unknown=True)
+    if owner.original is not None:
+        raise owner.original
+    require(evidence is not None, "AUTHORITY_INCOMPLETE")
+    _check_history(graph)
+    require(owner.phase_originals is phase, "AUTHORITY_ORIGINAL_RETURN_CHANGED")
+    current = initial_identity.bind_worker_match(original.match, event_raw=original.identity_fields[1],
+        policy_raw=original.identity_fields[2], now=int(time.time()))
+    require(_worker_fields(current) == original.identity_fields, "AUTHORITY_FINAL_POLICY_CHANGED")
+    closed = window.now(final=True, minimum=preclose)
+    episode.now(minimum=closed)  # Outer WORK, not outer FINAL45, includes the actual owner return.
+    _check_history(graph)
+    require(owner.phase_originals is phase, "AUTHORITY_ORIGINAL_RETURN_CHANGED")
+    state = window.checked()
+    _AUTHORITY_WINDOWS[id(window)] = replace(state, terminal=True)
+    raw = O.encoded({"schema": 1, "scope": "INITIAL_RECIPIENT_USE_AUTHORITY_CLOSED_HISTORY_V1",
+        "recipientWindowSha256": O.digest(episode.raw), "originalReadmissionSha256": O.digest(binding.raw),
+        "workerIdentitySha256": O.digest(original.identity_fields[0]), "matchSha256": O.digest(original.match_raw),
+        "serviceTimeBasisSha256": O.digest(original.service_time_raw), "originalProposalSha256": O.digest(original.proposal_raw),
+        "filesSha256": {name: O.digest(data) for name, data in evidence[0]}, "pendingSha256": O.digest(evidence[1]),
+        "originalChain": chain, "preCloseNs": preclose, "closedNs": closed, "resourceCount": len(state.roster.rows),
+        "retirement": "KNOWN_RESOURCE_CLOSE_ONLY", "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
+    result = _AuthorityReturn(raw)
+    nodes = _history_graph(result, _AUTHORITY_WINDOWS[id(window)], evidence)
+    _AUTHORITY_RETURNS[id(result)] = (result, raw, episode, window, nodes, evidence[0])
+    _authority_return(result, episode)
+    return result
+
+
+def _recipient_command(context_hash, minimum=None):
+    result = native.initial_command(context_hash, minimum)
+    result[5] = "_recipient"
+    return result
+
+
+RECIPIENT_FILES = ("recipient-window.json", "worker-identity.json", "worker-match.json", "worker-policy.json",
+                   "worker-proposal.json", "recipient-public.asc", "authority-return.json")
+RECIPIENT_DIRECTORIES = ("control-home", "temporary", "crypto", "recipient-validation")
+RECIPIENT_CONTEXT_FIELDS = {"schema", "scope", "root", "session", "observed", "eventSha256", "filesSha256",
+                            "job", "inheritedContext", "directories", "budgetAcceptance", "exportSaveAuthority"}
+
+
+def _recipient_inputs(owner, context_hash, minimum):
+    """Child consistency, never reconstruction of the parent's authority return."""
+    require(O.wire.TOKEN_ENV not in os.environ and not any(name in os.environ for name in
+        ("GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_RUNTIME_TOKEN", "ACTIONS_CACHE_URL", "ACTIONS_RESULTS_URL")),
+        "RECIPIENT_CHILD_CREDENTIAL")
+    native.recipient_environment(_recipient_path())
+    private = owner.open(_recipient_path())
+    context_raw = owner.read(private, "recipient-context.json")
+    context = O.parse(context_raw)
+    require(O.digest(context_raw) == context_hash and context_raw == O.encoded(context) and
+        set(context) == RECIPIENT_CONTEXT_FIELDS and type(context["schema"]) is int and context["schema"] == 1 and
+        context["scope"] == RECIPIENT_CONTEXT_SCOPE and context["root"] == str(ROOT) and
+        context["session"] == str(private.path) and context["budgetAcceptance"] == "NOT_ADMITTED" and
+        context["exportSaveAuthority"] is False, "RECIPIENT_CONTEXT")
+    raw = {name: owner.read(private, name) for name in RECIPIENT_FILES}
+    require(context["filesSha256"] == {name: O.digest(data) for name, data in raw.items()}, "RECIPIENT_FILES_CHANGED")
+    frame, clock, first, ends = _recipient_frame(raw["recipient-window.json"])
+    observed, path, event = _recipient_host(frame["firstUseAt"])
+    require(path == private.path and context["observed"] == observed and context["eventSha256"] == O.digest(event) and
+        observed["role"] == clock.role == owner.first.clock.role and clock == owner.first.clock, "RECIPIENT_ACTUAL_CONTEXT")
+    match = acquisition.stages.BootstrapMatch(raw["worker-match.json"])
+    identity = initial_identity.bind_worker_match(match, event_raw=event, policy_raw=raw["worker-policy.json"], now=int(time.time()))
+    require(identity.record == raw["worker-identity.json"] and identity.public_key == raw["recipient-public.asc"] and
+        O.digest(identity.record) == frame["workerIdentitySha256"] and
+        O.digest(raw["worker-proposal.json"]) == frame["originalProposalSha256"], "RECIPIENT_IDENTITY_CHANGED")
+    proposal = O.parse(raw["worker-proposal.json"])
+    require(proposal["scope"] == ALLOCATION_SCOPE and proposal["workerIdentitySha256"] == frame["workerIdentitySha256"] and
+        proposal["clock"] == frame["clock"] and proposal["firstUseAt"] == frame["firstUseAt"] and
+        proposal["proposedJobEndNs"] == frame["originalProposedJobEndNs"] and
+        {name: proposal["phaseFencesNs"][name] for name in frame["originalFencesNs"]} == frame["originalFencesNs"],
+        "RECIPIENT_PROPOSAL_CHANGED")
+    handles = {"session": private}
+    require(type(context["directories"]) is dict and set(context["directories"]) == set(RECIPIENT_DIRECTORIES),
+            "RECIPIENT_DIRECTORIES")
+    for name in RECIPIENT_DIRECTORIES:
+        directory = owner.child(private, name)
+        directory.verify()
+        require(list(directory.identity) == context["directories"][name], "RECIPIENT_DIRECTORY_CHANGED")
+        handles[name] = directory
+    start_raw = owner.read(handles["recipient-validation"], "start.json")
+    start = O.parse(start_raw)
+    require(set(start) == native.START_FIELDS and start_raw == O.encoded(start) and type(start["schema"]) is int and
+        start["schema"] == 1 and start["scope"] == RECIPIENT_START_SCOPE and start["contextSha256"] == context_hash and
+        start["argv"] == _recipient_command(context_hash) and start["cwd"] == str(ROOT) and start["role"] == clock.role and
+        start["job"] == context["job"] and start["state"] == str(path) and start["home"] == str(path / "control-home") and
+        type(start["invocation"]) is str and re.fullmatch(r"[0-9a-f]{32}", start["invocation"]) and
+        start["exitCode"] is None and start["launchAttempted"] is False and start["scopeAttempted"] is False and
+        start["retirement"] == "UNKNOWN" and start["workEndNs"] == ends[0] and start["finalEndNs"] == ends[1] and
+        first <= O.integer(start["startedNs"]) <= O.integer(minimum) <= owner.first.nanoseconds < ends[0], "RECIPIENT_START")
+    inherited = native.processes.ownership_environment(context["inheritedContext"], context["job"], start["invocation"],
+        str(path), str(path / "control-home"), allow_new_context=True)
+    require(start["inheritedContext"] == {name: inherited[name] for name in Q._CONTEXT} == Q._inherited_context(),
+            "RECIPIENT_NATIVE_CONTEXT")
+    authority = O.parse(raw["authority-return.json"])
+    require(authority["scope"] == "INITIAL_RECIPIENT_USE_AUTHORITY_CLOSED_HISTORY_V1" and
+        authority["recipientWindowSha256"] == O.digest(raw["recipient-window.json"]) and
+        authority["originalReadmissionSha256"] == frame["originalReadmissionSha256"] and
+        authority["workerIdentitySha256"] == O.digest(identity.record) and authority["matchSha256"] == O.digest(match.record) and
+        authority["originalProposalSha256"] == frame["originalProposalSha256"] and
+        first <= O.integer(authority["preCloseNs"]) <= O.integer(authority["closedNs"]) <= start["startedNs"],
+        "RECIPIENT_AUTHORITY_BINDING")
+    authority_dir = owner.child(private, "authority")
+    authority_context = owner.read(authority_dir, "context.json")
+    authority_window = owner.read(authority_dir, "authority-window.json")
+    require(_authority_frame(authority_window)[0] == frame and
+        authority["closedNs"] < _authority_frame(authority_window)[-1] <= ends[0], "RECIPIENT_AUTHORITY_WINDOW")
+    queries = owner.child(authority_dir, "acquisition-queries")
+    originals = {name: owner.read(queries, name + ".bin") for name in ORIGINAL_KEYS}
+    service = owner.child(authority_dir, "service")
+    service_start_raw = owner.read(service, "start.json")
+    service_start = O.parse(service_start_raw)
+    checked_match, _service = retained_match(O.parse(authority_context), originals, service_start["invocation"], clock,
+        service_start["startedNs"], service_start["workEndNs"])
+    require(checked_match.record == match.record and originals["event"] == event and
+        originals["candidate_policy_raw"] == identity.original_policy and
+        authority["filesSha256"]["context.json"] == O.digest(authority_context) and
+        authority["filesSha256"]["authority-window.json"] == O.digest(authority_window) and
+        authority["filesSha256"]["service/start.json"] == O.digest(service_start_raw) and
+        all(authority["filesSha256"]["acquisition-queries/" + name + ".bin"] == O.digest(data)
+            for name, data in originals.items()), "RECIPIENT_AUTHORITY_ORIGINALS_CHANGED")
+    owner.end()
+    return {"context": context, "start": start, "identity": identity, "match": match, "handles": handles,
+        "binding": (context_raw, tuple(raw.items()), start_raw, authority_context, authority_window,
+                    tuple(originals.items()), service_start_raw), "source": {name: originals[name] for name in SOURCE_KEYS}}
+
+
+def _recipient_object_fields(recipient):
+    kind = native.diagnostics.Recipient if os.name == "nt" else native.posix.Recipient
+    require(type(recipient) is kind, "RECIPIENT_SUPPLIER_TYPE")
+    return tuple((name, getattr(recipient, name)) for name in kind.__dataclass_fields__)
+
+
+def _recipient_child(context_hash, minimum, cancelled):
+    """Only the maintained synchronous60 validator, under the parent's native cap."""
+    _recipient_command(context_hash, minimum)
+    local = time.monotonic()
+    first = O.clocks.validate_reading(O.clocks.observe())
+    require(first.nanoseconds >= O.integer(minimum), "RECIPIENT_CHILD_PRECEDES_LAUNCH")
+    callback = lambda: native.cancellation(cancelled)
+    meta_window = native._RecipientWindow(first, first.nanoseconds, local, None, callback, metadata=True)
+    metadata = native.Owner(meta_window.local_end, meta_window, first=first, cancelled=callback)
+    metadata.initial_sources = {}
+    owner, window, target, recipient, fields, raw, failure = metadata, None, None, None, None, None, None
+    try:
+        initial = _recipient_inputs(metadata, context_hash, minimum)
+        metadata.close()
+        if metadata.original is not None:
+            raise metadata.original
+        require(not metadata.unknown and all(row["attempted"] and row["closed"] for row in metadata.resources),
+                "RECIPIENT_METADATA_CLOSE")
+        window = native._RecipientWindow(first, meta_window.last, local, initial["start"]["workEndNs"], callback)
+        owner = native.Owner(window.local_end, window, first=first, cancelled=callback)
+        owner.initial_sources = {}
+        current = _recipient_inputs(owner, context_hash, minimum)
+        require(current["binding"] == initial["binding"], "RECIPIENT_METADATA_CHANGED")
+        target, work = current["handles"]["recipient-validation"], current["handles"]["crypto"]
+        checked = current["identity"]
+        before = source_queries(owner, window, current["context"]["observed"], target.path / "source-before")
+        require(dict(before.records) == current["source"], "RECIPIENT_SOURCE_CHANGED")
+        identity_fields = _worker_fields(checked)
+        window.now()
+        if os.name == "nt":
+            recipient = native.diagnostics.validate_recipient(checked.public_key, checked.fingerprint, work,
+                job_id=current["context"]["job"])
+        else:
+            recipient = native.posix.validate_recipient(current["handles"]["session"].path / "recipient-public.asc",
+                checked.fingerprint, work.path)
+        # Save the ACTUAL returned object and fields before a clock or callback.
+        fields = _recipient_object_fields(recipient)
+        require(not native.diagnostics._QUARANTINE and not Q.QUARANTINE, "RECIPIENT_SUPPLIER_UNKNOWN")
+        returned = window.now()
+        supplier = native._recipient_supplier_record(recipient, work, checked, current["context"]["job"])
+        after = source_queries(owner, window, current["context"]["observed"], target.path / "source-after")
+        require(dict(after.records) == current["source"] and _worker_fields(checked) == identity_fields and
+            _recipient_inputs(owner, context_hash, minimum)["binding"] == initial["binding"] and
+            _recipient_object_fields(recipient) == fields, "RECIPIENT_POST_SUPPLIER_CHANGED")
+        raw = owner.write(target, "child-result.json", {"schema": 1, "scope": RECIPIENT_CHILD_SCOPE,
+            "contextSha256": context_hash, "startSha256": O.digest(initial["binding"][2]),
+            "identitySha256": O.digest(checked.record), "authoritySha256": O.digest(dict(initial["binding"][1])["authority-return.json"]),
+            "recipient": supplier, "clock": O.clock_value(window.clock), "invocation": current["start"]["invocation"],
+            "launchMinimumNs": minimum, "beganNs": first.nanoseconds, "metadataLastNs": meta_window.last,
+            "sourceBeforeSha256": O.digest(before.raw), "sourceAfterSha256": O.digest(after.raw),
+            "supplierReturnedNs": returned, "completedNs": window.now(minimum=returned), "supplierReturned": True,
+            "childResourceClose": "PENDING_CLOSE", "parentRetirement": "NOT_OBSERVED_HERE",
+            "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False})
+        require(owner.read(target, "child-result.json") == raw and _recipient_object_fields(recipient) == fields and
+                _recipient_inputs(owner, context_hash, minimum)["binding"] == initial["binding"], "RECIPIENT_CHILD_RESULT_CHANGED")
+    except BaseException as error:
+        failure = error if owner.original is None else owner.original
+        unknown = bool(native.diagnostics._QUARANTINE or Q.QUARANTINE) or (
+            isinstance(error, native.diagnostics.WindowsEvidenceError) and error.retirement_unknown is not False)
+        owner.error("initial-recipient-child", error, unknown=unknown)
+    finally:
+        for actual in (owner,) if owner is metadata else (owner, metadata):
+            try:
+                actual.close()
+            except BaseException as error:
+                if failure is None:
+                    failure = actual.original if actual.original is not None else error
+            if failure is None:
+                failure = actual.original
+    if failure is not None:
+        raise failure
+    require(window is not None and raw is not None and not owner.unknown and
+        all(row["attempted"] and row["closed"] for row in owner.resources), "RECIPIENT_CHILD_INCOMPLETE")
+    current_identity = initial_identity.bind_worker_match(current["match"], event_raw=checked.original_event,
+        policy_raw=checked.original_policy, now=int(time.time()))
+    require(_worker_fields(current_identity) == identity_fields, "RECIPIENT_CHILD_FINAL_POLICY")
+    native.cancellation(cancelled)
+    closed = window.now()
+    require(_recipient_object_fields(recipient) == fields and _worker_fields(checked) == identity_fields and
+            type(cancelled) is list and cancelled == [], "RECIPIENT_CHILD_FINAL_CHANGED")
+    return {"schema": 1, "scope": native.INITIAL_RECIPIENT_ACK_SCOPE, "invocation": current["start"]["invocation"],
+        "terminalSha256": O.digest(raw), "clock": O.clock_value(window.clock), "closedNs": closed}, window, window.final
+
+
+@dataclass(frozen=True, repr=False)
+class _RecipientNativeReturn:
+    context: bytes
+    records: tuple
+    child: bytes
+
+
+def _recipient_native(owner, private, context_raw, window, authority):
+    """One fixed credential-free child, using native primitives, not phase()."""
+    require(type(window) is _RecipientUseWindow and window.state().roster.owner is owner and
+            window.state().phase == "WORK", "RECIPIENT_NATIVE_OWNER")
+    _authority_return(authority, window)
+    context = O.parse(context_raw)
+    require(O.wire.TOKEN_ENV not in os.environ, "RECIPIENT_PARENT_READ_TOKEN")
+    started = window.now()
+    invocation = uuid.uuid4().hex
+    environment = native.processes.ownership_environment(native.recipient_environment(private.path), context["job"], invocation,
+        str(private.path), str(private.path / "control-home"), allow_new_context=True)
+    start = {"schema": 1, "scope": RECIPIENT_START_SCOPE, "contextSha256": O.digest(context_raw),
+        "argv": _recipient_command(O.digest(context_raw)), "cwd": str(ROOT), "role": window.clock.role,
+        "job": context["job"], "invocation": invocation, "state": str(private.path), "home": str(private.path / "control-home"),
+        "inheritedContext": {name: environment[name] for name in Q._CONTEXT}, "startedNs": started,
+        "workEndNs": window.work, "finalEndNs": window.state().ends[1], "exitCode": None, "launchAttempted": False,
+        "scopeAttempted": False, "retirement": "UNKNOWN"}
+    directory = owner.child(private, "recipient-validation")
+    start_raw = owner.write(directory, "start.json", start)
+    row = dict(start)
+    row["captureOutcomes"] = {name: {"synced": False, "verified": False, "closeAttempted": False,
+        "closed": False, "readback": False} for name in ("stdout", "stderr")}
+    scope = out = err = child = baseline_raw = birth_raw = None
+    native_known = False
+    resource_start = len(window.state().roster.seen)
+    try:
+        # Inherited sinks live only to the original R+285 cap, never a new IO45.
+        end = window.state().locals[1]
+        out = owner.acquire("stdout", lambda: directory.create_file("stdout.log", max_bytes=native.ACK_LIMIT, deadline=end))
+        err = owner.acquire("stderr", lambda: directory.create_file("stderr.log", max_bytes=native.STDERR_LIMIT, deadline=end))
+        row["scopeAttempted"] = True
+        scope = owner.acquire("native-scope", lambda: native.processes.make_scope(context["job"], invocation,
+            str(private.path), str(private.path / "control-home")))
+        row["preparerIdentity"] = native.preparer_identity(scope, window.clock.role)
+        baseline_raw = owner.write(directory, "baseline.json", {"role": window.clock.role,
+            "baseline": sorted(scope.baseline) if hasattr(scope, "baseline") else None,
+            "kernelJob": window.clock.role == "windows-x64"})
+        row["baselineSha256"] = O.digest(baseline_raw)
+        _authority_return(authority, window)
+        row["launchMinimumNs"] = window.now()
+        argv = _recipient_command(O.digest(context_raw), row["launchMinimumNs"])
+        row["launchArgv"], row["launchAttempted"] = argv, True
+        child = scope.spawn(argv, str(ROOT), environment, stdout=out, stderr=err)
+        require(child.stdout is None and child.stderr is None, "RECIPIENT_PRIVATE_SINKS")
+        birth = scope.description()
+        leaders = [value for value in birth.get("startedIdentities", []) if value.get("pid") == child.pid]
+        require(len(leaders) == 1, "RECIPIENT_NATIVE_BIRTH")
+        row["leader"] = dict(leaders[0])
+        native.lifetime(row["leader"], window.clock.role)
+        birth_raw = owner.write(directory, "native-start.json", {"ownership": birth, "leader": row["leader"],
+            "preparerIdentity": row["preparerIdentity"], "observedNs": window.now()})
+        row["nativeStartSha256"] = O.digest(birth_raw)
+        while True:
+            window.now()
+            if window.clock.role == "windows-x64":
+                out.observe_live_output()
+                err.observe_live_output()
+            else:
+                out.verify()
+                err.verify()
+            code = child.poll()
+            if code is not None:
+                row["exitCode"] = code
+            observed = window.now()
+            if code is not None:
+                row["completedNs"] = observed
+                require(type(code) is int and code == 0, "RECIPIENT_CHILD_FAILED")
+                require(not scope.discover(), "RECIPIENT_LEFT_DESCENDANTS")
+                window.now()
+                break
+            scope.discover()
+            native.time.sleep(.025)
+    except BaseException as error:
+        owner.error("initial-recipient-native", error)
+    finally:
+        # Returned resources were pinned by Owner.acquire BEFORE post-return
+        # observations. Recover those exact references, never retry allocation.
+        roster = _RECIPIENT_WINDOWS[id(window)].roster
+        saved = roster.seen[resource_start:]
+        scope = scope if scope is not None else next((resource for _row, label, resource, _a, _c in saved if label == "native-scope"), None)
+        out = out if out is not None else next((resource for _row, label, resource, _a, _c in saved if label == "stdout"), None)
+        err = err if err is not None else next((resource for _row, label, resource, _a, _c in saved if label == "stderr"), None)
+        try:
+            window.begin_final()
+        except BaseException as error:
+            owner.error("recipient-final-start", error)
+        if scope is not None:
+            drain_end = None
+            try:
+                window.now(final=True)
+                drain_end = window.state(cleanup=True).final_local
+                remaining = max(0, drain_end - time.monotonic())
+                grace = min(5, remaining)
+                kill_wait = min(5, max(0, remaining - grace))
+                row["survivors"] = scope.drain(grace=grace, kill_wait=kill_wait, deadline=drain_end)
+                require(row["survivors"] == [], "RECIPIENT_SURVIVORS")
+                row["ownership"] = scope.description()
+                require(row["ownership"].get("discoveryErrors") == [], "RECIPIENT_DRAIN_IDENTITY")
+                # Allocation can return a real scope before its post-return
+                # clock fails. Do not invent an unperformed preparer reading.
+                if "preparerIdentity" in row:
+                    require(native.preparer_identity(scope, window.clock.role) == row["preparerIdentity"],
+                            "RECIPIENT_DRAIN_IDENTITY")
+                window.now(final=True)
+                native.posix._deadline(drain_end)
+                native_known = True
+            except BaseException as error:
+                owner.error("recipient-drain", error, unknown=True)
+            owner.close_one(scope)
+            resource = next(row_ for row_, _label, actual, _a, _c in roster.seen if actual is scope)
+            row["scopeCloseAttempted"], row["scopeClosed"] = resource["attempted"], resource["closed"]
+            try:
+                window.now(final=True)
+                if drain_end is not None:
+                    native.posix._deadline(drain_end)
+                require(resource["closed"] is True, "RECIPIENT_SCOPE_CLOSE")
+            except BaseException as error:
+                native_known = False
+                owner.error("recipient-drain-close", error, unknown=True)
+        elif row["scopeAttempted"]:
+            owner.error("recipient-scope-construction", O.OriginError("INITIAL_RECIPIENT_SCOPE_UNKNOWN"), unknown=True)
+        else:
+            native_known = True
+        if native_known and not owner.unknown:
+            for name, stream in (("stdout", out), ("stderr", err)):
+                if stream is None:
+                    continue
+                outcome = row["captureOutcomes"][name]
+                try:
+                    window.now(final=True)
+                    stream.sync()
+                    outcome["synced"] = True
+                    stream.verify()
+                    outcome["verified"] = True
+                    window.now(final=True)
+                except BaseException as error:
+                    owner.error("recipient-capture", error)
+                owner.close_one(stream)
+                resource = next(row_ for row_, _label, actual, _a, _c in roster.seen if actual is stream)
+                outcome.update(closeAttempted=resource["attempted"], closed=resource["closed"])
+        else:
+            owner.unknown = True
+        # A bounded outer drain cannot establish the failed/late child's
+        # supplier return or metadata close. Keep this uncertainty sticky,
+        # as in the maintained legacy recipient supervisor; acquire nothing.
+        if row["launchAttempted"] and owner.original is not None:
+            owner.error("recipient-child-return", owner.original, unknown=True)
+    if owner.original is not None:
+        raise owner.original
+    require(native_known and not owner.unknown and all(outcome[name] is True for outcome in row["captureOutcomes"].values()
+        for name in ("synced", "verified", "closeAttempted", "closed")), "RECIPIENT_NATIVE_NOT_RETIRED")
+    row["finalizedNs"] = window.now(final=True)
+    window.begin_read(scope, (out, err))
+    captures = {}
+    for name, maximum in (("stdout", native.ACK_LIMIT), ("stderr", native.STDERR_LIMIT)):
+        captures[name] = owner.read(directory, name + ".log", maximum, final=True)
+        row["captureOutcomes"][name]["readback"] = True
+    require(captures["stderr"] == b"", "RECIPIENT_STDERR")
+    row.update(retirement="KNOWN", errors=[], captures={name: {"sha256": O.digest(raw), "bytes": len(raw)}
+        for name, raw in captures.items()}, finalStartedNs=window.state().final_start, finalEndNs=window.state().final_end,
+        readStartedNs=window.state().read_start, readEndNs=window.state().read_end, readbackCompletedNs=window.now())
+    row_raw = owner.write(directory, "result.json", row, final=True)
+    child_raw = owner.read(directory, "child-result.json", final=True)
+    require(owner.phase_originals is None, "RECIPIENT_NATIVE_RETURN_REUSE")
+    returned = _RecipientNativeReturn(context_raw, tuple(sorted({"start.json": start_raw, "result.json": row_raw,
+        "baseline.json": baseline_raw, "native-start.json": birth_raw, "stdout.log": captures["stdout"],
+        "stderr.log": captures["stderr"]}.items())), child_raw)
+    owner.phase_originals = returned
+    _RECIPIENT_NATIVE_RETURNS[id(returned)] = (returned, owner, window, context_raw, returned.records, child_raw)
+    return returned
+
+
+def _recipient_native_readback(owner, private, returned, window, authority, identity):
+    """Original native return plus unchanged bytes; ACK/file presence is insufficient."""
+    require(type(returned) is _RecipientNativeReturn and owner.phase_originals is returned and
+        window.state().phase == "READ" and owner.fence is window, "NOT_ORIGINAL_RECIPIENT_NATIVE_RETURN")
+    saved = _RECIPIENT_NATIVE_RETURNS.get(id(returned))
+    require(type(saved) is tuple and len(saved) == 6 and saved[0] is returned and saved[1] is owner and saved[2] is window and
+            type(returned.context) is bytes and returned.context == saved[3] and returned.records is saved[4] and
+            type(returned.child) is bytes and returned.child == saved[5], "RECIPIENT_NATIVE_RETURN_CHANGED")
+    _authority_return(authority, window)
+    require(owner.read(private, "recipient-context.json", final=True) == returned.context, "RECIPIENT_CONTEXT_CHANGED")
+    context = O.parse(returned.context)
+    records = dict(returned.records)
+    require(len(returned.records) == len(native.PHASE_FILES) and set(records) == native.PHASE_FILES,
+            "RECIPIENT_NATIVE_FILES")
+    directory = owner.child(private, "recipient-validation", final=True)
+    for name, raw in records.items():
+        require(owner.read(directory, name, final=True) == raw, "RECIPIENT_NATIVE_BYTES_CHANGED")
+    require(owner.read(directory, "child-result.json", final=True) == returned.child, "RECIPIENT_CHILD_CHANGED")
+    start, row, birth = (O.parse(records[name]) for name in ("start.json", "result.json", "native-start.json"))
+    require(set(start) == native.START_FIELDS and set(row) == native.TERMINAL_FIELDS |
+        {"finalStartedNs", "readStartedNs", "readEndNs", "readbackCompletedNs"} and
+        set(birth) == {"ownership", "leader", "preparerIdentity", "observedNs"} and start["scope"] == RECIPIENT_START_SCOPE and
+        start["argv"] == _recipient_command(O.digest(returned.context)) and
+        start["contextSha256"] == O.digest(returned.context) and start["job"] == context["job"] and
+        start["cwd"] == str(ROOT) and start["state"] == str(private.path) and start["home"] == str(private.path / "control-home") and
+        start["role"] == window.clock.role and start["workEndNs"] == window.work and
+        start["finalEndNs"] == window.state().ends[1], "RECIPIENT_NATIVE_START")
+    require(all(row[name] == start[name] for name in set(start) -
+        {"exitCode", "launchAttempted", "scopeAttempted", "retirement", "finalEndNs"}) and type(row["exitCode"]) is int and
+        row["exitCode"] == 0 and row["launchAttempted"] is True and row["scopeAttempted"] is True and
+        row["scopeCloseAttempted"] is True and row["scopeClosed"] is True and row["retirement"] == "KNOWN" and
+        row["errors"] == [] and row["survivors"] == [] and records["stderr.log"] == b"" and
+        row["baselineSha256"] == O.digest(records["baseline.json"]) and
+        row["nativeStartSha256"] == O.digest(records["native-start.json"]) and row["leader"] == birth["leader"],
+        "RECIPIENT_NATIVE_RETIREMENT")
+    baseline = native.baseline_record(records["baseline.json"], window.clock.role)
+    preparer = native.closed_lifetime(row["preparerIdentity"], window.clock.role)
+    require(preparer == native.closed_lifetime(birth["preparerIdentity"], window.clock.role) and
+            preparer["pid"] != row["leader"]["pid"], "RECIPIENT_PREPARER_CHANGED")
+    argv = _recipient_command(O.digest(returned.context), row["launchMinimumNs"])
+    require(row["launchArgv"] == argv, "RECIPIENT_LAUNCH_COMMAND")
+    native.native_record(row["ownership"], start, row["leader"], argv)
+    native.native_record(birth["ownership"], start, row["leader"], argv, terminal=False)
+    require(birth["ownership"]["launches"] == row["ownership"]["launches"], "RECIPIENT_NATIVE_BIRTH_CHANGED")
+    if baseline["baseline"] is not None:
+        lifetime = native.lifetime(row["leader"], window.clock.role)
+        require(list(lifetime[:4] if window.clock.role.startswith("macos-") else lifetime) not in baseline["baseline"],
+                "RECIPIENT_NATIVE_PREEXISTING_LEADER")
+    expected_outcomes = {name: {key: True for key in ("synced", "verified", "closeAttempted", "closed", "readback")}
+        for name in ("stdout", "stderr")}
+    require(row["captureOutcomes"] == expected_outcomes and all(type(value) is bool for outcome in
+        row["captureOutcomes"].values() for value in outcome.values()) and row["captures"] == {
+        name: {"sha256": O.digest(records[name + ".log"]), "bytes": len(records[name + ".log"])} for name in ("stdout", "stderr")},
+        "RECIPIENT_CAPTURE_RETIREMENT")
+    ack, child = O.parse(records["stdout.log"]), O.parse(returned.child)
+    require(records["stdout.log"] == O.encoded(ack) and set(ack) ==
+        {"schema", "scope", "invocation", "terminalSha256", "clock", "closedNs"} and type(ack["schema"]) is int and
+        ack["schema"] == 1 and ack["scope"] == native.INITIAL_RECIPIENT_ACK_SCOPE and ack["invocation"] == start["invocation"] and
+        ack["terminalSha256"] == O.digest(returned.child) and ack["clock"] == O.clock_value(window.clock), "RECIPIENT_CHILD_ACK")
+    require(set(child) == {"schema", "scope", "contextSha256", "startSha256", "identitySha256", "authoritySha256", "recipient",
+        "clock", "invocation", "launchMinimumNs", "beganNs", "metadataLastNs", "sourceBeforeSha256", "sourceAfterSha256",
+        "supplierReturnedNs", "completedNs", "supplierReturned", "childResourceClose", "parentRetirement", "budgetAcceptance",
+        "testAcceptance", "exportSaveAuthority"} and type(child["schema"]) is int and child["schema"] == 1 and
+        child["scope"] == RECIPIENT_CHILD_SCOPE and child["contextSha256"] == O.digest(returned.context) and
+        child["startSha256"] == O.digest(records["start.json"]) and child["identitySha256"] == O.digest(identity.record) and
+        child["authoritySha256"] == O.digest(authority.raw) and child["clock"] == O.clock_value(window.clock) and
+        child["invocation"] == start["invocation"] and child["launchMinimumNs"] == row["launchMinimumNs"] and
+        child["supplierReturned"] is True and child["childResourceClose"] == "PENDING_CLOSE" and
+        child["parentRetirement"] == "NOT_OBSERVED_HERE" and child["budgetAcceptance"] == "NOT_ADMITTED" and
+        child["testAcceptance"] == "NOT_PERFORMED" and child["exportSaveAuthority"] is False, "RECIPIENT_CHILD_RESULT")
+    supplier = child["recipient"]
+    supplier_fields = {"fingerprint", "encryption_fingerprint", "expires_at", "key_sha256", "work_identity", "executable"}
+    if window.clock.role == "windows-x64":
+        supplier_fields |= {"executable_sha256", "job_id"}
+        require(supplier.get("job_id") == context["job"] and type(supplier.get("executable_sha256")) is str and
+                re.fullmatch(r"[0-9a-f]{64}", supplier["executable_sha256"]), "RECIPIENT_WINDOWS_SUPPLIER")
+    require(type(supplier) is dict and set(supplier) == supplier_fields and supplier["fingerprint"] == identity.fingerprint and
+        type(supplier["encryption_fingerprint"]) is str and re.fullmatch(r"[0-9A-F]{40}", supplier["encryption_fingerprint"]) and
+        supplier["key_sha256"] == identity.key_sha256 and supplier["work_identity"] == context["directories"]["crypto"] and
+        type(supplier["expires_at"]) is int and (supplier["expires_at"] == 0 or supplier["expires_at"] >= identity.expires_at) and
+        type(supplier["executable"]) is str and Path(supplier["executable"]).is_absolute(), "RECIPIENT_SUPPLIER_RECORD")
+    times = [window.first, O.parse(authority.raw)["closedNs"], start["startedNs"], row["launchMinimumNs"], child["beganNs"],
+        child["metadataLastNs"], child["supplierReturnedNs"], child["completedNs"], ack["closedNs"], row["completedNs"],
+        row["finalStartedNs"], row["finalizedNs"], row["readStartedNs"], row["readbackCompletedNs"]]
+    state = window.state()
+    require(all(type(value) is int and 0 <= value <= O.clocks.UINT64 for value in times) and times == sorted(times) and
+        row["completedNs"] < window.work and row["finalizedNs"] <= row["readStartedNs"] < row["finalEndNs"] and
+        row["readbackCompletedNs"] < row["readEndNs"] and
+        (row["finalStartedNs"], row["finalEndNs"], row["readStartedNs"], row["readEndNs"]) ==
+        (state.final_start, state.final_end, state.read_start, state.read_end) and
+        row["launchMinimumNs"] <= O.integer(birth["observedNs"]) <= row["completedNs"], "RECIPIENT_NATIVE_CLOCK_CHAIN")
+    return window.now(minimum=max(times[-1], birth["observedNs"]))
+
+
+@dataclass(frozen=True, repr=False)
+class _RecipientValidationReturn:
+    """Closed historical validation only; not a live Recipient, Admission or lease."""
+    raw: bytes
+
+
+def check_recipient_validation_return(result):
+    saved = _RECIPIENT_RETURNS.get(id(result))
+    require(type(result) is _RecipientValidationReturn and type(saved) is tuple and len(saved) == 7 and
+        saved[0] is result and type(result.raw) is bytes and result.raw == saved[1] and
+        _RECIPIENT_WINDOWS.get(id(saved[2])) is saved[3], "NOT_ORIGINAL_RECIPIENT_VALIDATION_RETURN")
+    _recipient_claim(saved[3].claim)
+    _check_history(saved[4])
+    _check_history(saved[5])
+    state = saved[2].state(cleanup=True)
+    state.roster.known()
+    require(state.terminal and not state.busy and not state.failed and state.roster.owner.original is None and
+        state.roster.owner.errors == [] and state.roster.owner.phase_originals is saved[6], "RECIPIENT_CLOSED_RETURN_CHANGED")
+    return result
+
+
+def _prepare_and_validate_recipient(cancelled):
+    """Dormant real composition; no public productive/workflow entry or token courier."""
+    token = os.environ.pop(O.wire.TOKEN_ENV, None)
+    handlers = ()
+    owner = window = private = authority = phase = final_source = pending = graph = None
+    failure = None
+    try:
+        require(type(cancelled) is list and not cancelled, "RECIPIENT_CANCELLATION")
+        _recipient_path()  # Refuse gate/foreign roles before original preparation.
+        for number in (native.signal.SIGINT, native.signal.SIGTERM,
+                       *([native.signal.SIGBREAK] if hasattr(native.signal, "SIGBREAK") else [])):
+            previous = native.signal.getsignal(number)
+            handlers += ((number, previous),)  # Retain before the fallible install.
+            native.signal.signal(number, lambda signum, _frame: cancelled.append(signum))
+        prepared = _prepare_with_token(cancelled, token)
+        readmission = _readmit_worker(_claim_worker(prepared), token)
+        claim = _claim_recipient(readmission)
+        binding, original = _recipient_claim(claim)
+        local = time.monotonic()  # One LOCAL-before-RAW anchor, before allocation/authority.
+        first = O.clocks.validate_reading(O.clocks.observe())
+        window = _RecipientUseWindow(claim, local, first)
+        owner = native.Owner(window.local_end, window, first=first, cancelled=window.cancelled)
+        owner.initial_sources = {}
+        window.bind(owner, first)
+        observed, path, event = _recipient_host(O.parse(original.match_raw)["firstUseAt"])
+        require(observed == O.parse(original.worker_originals[0])["observed"] and event == original.identity_fields[1],
+                "RECIPIENT_SOURCE_CONTEXT_CHANGED")
+        native.recipient_environment(path)
+        private = owner.new(path)
+        directories = {}
+        for name in RECIPIENT_DIRECTORIES:
+            child = owner.child(private, name, create=True)
+            child.verify()
+            directories[name] = native.directory_identity(list(child.identity), first.clock.role)
+        files = {"recipient-window.json": window.raw, "worker-identity.json": original.identity_fields[0],
+            "worker-match.json": original.match_raw, "worker-policy.json": original.identity_fields[2],
+            "worker-proposal.json": original.proposal_raw, "recipient-public.asc": original.identity_fields[3]}
+        for name, raw in files.items():
+            owner.write(private, name, raw)
+        authority = _recipient_authority(window, token)
+        token = None  # Last owning-stack token reference ends BEFORE crypto preparation/launch.
+        owner.write(private, "authority-return.json", authority.raw)
+        files["authority-return.json"] = authority.raw
+        context_raw = owner.write(private, "recipient-context.json", {"schema": 1, "scope": RECIPIENT_CONTEXT_SCOPE,
+            "root": str(ROOT), "session": str(path), "observed": observed, "eventSha256": O.digest(event),
+            "filesSha256": {name: O.digest(files[name]) for name in RECIPIENT_FILES}, "job": uuid.uuid4().hex,
+            "inheritedContext": Q._inherited_context(), "directories": directories,
+            "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
+        require(all(owner.read(private, name) == raw for name, raw in files.items()), "RECIPIENT_PRELAUNCH_FILES_CHANGED")
+        phase = _recipient_native(owner, private, context_raw, window, authority)
+        phase_graph = _history_graph(phase)
+        _recipient_native_readback(owner, private, phase, window, authority, original.identity)
+        final_source = source_queries(owner, window, observed, path / "source-final")
+        graph = phase_graph + _history_graph(final_source, authority, owner.initial_sources)
+        require(dict(final_source.records) == {name: dict(original.worker_originals[1])[name] for name in SOURCE_KEYS},
+                "RECIPIENT_FINAL_SOURCE_CHANGED")
+        _recipient_native_readback(owner, private, phase, window, authority, original.identity)
+        require(all(owner.read(private, name, final=True) == raw for name, raw in files.items()), "RECIPIENT_FINAL_FILES_CHANGED")
+        pending = owner.write(private, "recipient-pending.json", {"schema": 1,
+            "scope": "INITIAL_RECIPIENT_VALIDATION_PENDING_OWNER_CLOSE_V1", "windowSha256": O.digest(window.raw),
+            "contextSha256": O.digest(context_raw), "authoritySha256": O.digest(authority.raw),
+            "phaseSha256": {name: O.digest(raw) for name, raw in phase.records}, "childSha256": O.digest(phase.child),
+            "sourceFinalSha256": O.digest(final_source.raw), "retainedNs": window.now(),
+            "retirement": "PENDING_OWNER_CLOSE", "liveRecipient": "NOT_TRANSFERRED", "budgetAcceptance": "NOT_ADMITTED",
+            "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False}, final=True)
+        _check_history(graph)
+        require(owner.phase_originals is phase and set(owner.initial_sources) == {str(path / "source-final")} and
+            owner.initial_sources[str(path / "source-final")] is final_source, "RECIPIENT_FINAL_ORIGINALS_CHANGED")
+        _recipient_claim(claim)
+        preclose = window.now()
+    except BaseException as error:
+        failure = error if owner is None or owner.original is None else owner.original
+        if owner is not None:
+            owner.error("initial-recipient-parent", error,
+                unknown=bool(native.diagnostics._QUARANTINE or Q.QUARANTINE))
+    finally:
+        token = None
+        if owner is not None:
+            try:
+                if window.state(cleanup=True).phase == "WORK":
+                    window.begin_final()
+                window.state(cleanup=True).roster.freeze()
+            except BaseException as error:
+                owner.error("recipient-parent-close-roster", error, unknown=True)
+            try:
+                owner.close()
+            except BaseException as error:
+                owner.error("recipient-parent-close", error)
+            if failure is None:
+                failure = owner.original
+        for number, previous in handlers:
+            try:
+                native.signal.signal(number, previous)
+            except BaseException as error:
+                if failure is None:
+                    failure = error
+    if owner is not None:
+        try:
+            window.state(cleanup=True).roster.known()
+        except BaseException as error:
+            owner.error("recipient-parent-close-return", error, unknown=True)
+        if failure is None:
+            failure = owner.original
+        if owner.unknown and not any(value is owner for value in native.QUARANTINE):
+            native.QUARANTINE.append(owner)
+    if failure is not None:
+        raise failure
+    require(pending is not None and graph is not None and owner is not None, "RECIPIENT_PARENT_INCOMPLETE")
+    _check_history(graph)
+    _authority_return(authority, window)
+    current = initial_identity.bind_worker_match(original.match, event_raw=original.identity_fields[1],
+        policy_raw=original.identity_fields[2], now=int(time.time()))
+    require(_worker_fields(current) == original.identity_fields and _recipient_host(O.parse(original.match_raw)["firstUseAt"]) ==
+        (observed, path, event), "RECIPIENT_FINAL_POLICY_OR_EVENT_CHANGED")
+    native.cancellation(cancelled)
+    closed = window.now(final=True, minimum=preclose)
+    native.posix._deadline(window.state(cleanup=True).read_local)
+    native.cancellation(cancelled)
+    state = window.state()
+    _check_history(graph)
+    require(owner.phase_originals is phase and set(owner.initial_sources) == {str(path / "source-final")} and
+        owner.initial_sources[str(path / "source-final")] is final_source and
+        type(cancelled) is list and cancelled == [], "RECIPIENT_FINAL_ORIGINALS_CHANGED")
+    state = replace(state, terminal=True)
+    _RECIPIENT_WINDOWS[id(window)] = state
+    raw = O.encoded({"schema": 1, "scope": RECIPIENT_RETURN_SCOPE, "window": O.parse(window.raw),
+        "originalReadmissionSha256": O.digest(binding.raw), "workerIdentitySha256": O.digest(original.identity_fields[0]),
+        "authoritySha256": O.digest(authority.raw), "pendingSha256": O.digest(pending), "preCloseNs": preclose, "closedNs": closed,
+        "resourceCount": len(state.roster.rows), "retirement": "KNOWN_RESOURCE_CLOSE_ONLY",
+        "liveRecipient": "NOT_TRANSFERRED", "currentRemoteAuthority": "NOT_GRANTED_BY_HISTORY",
+        "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False})
+    returned = _RecipientValidationReturn(raw)
+    closed_graph = _history_graph(returned, owner, state.roster)
+    _RECIPIENT_RETURNS[id(returned)] = (returned, raw, window, state, graph, closed_graph, phase)
+    return check_recipient_validation_return(returned)
+
+
 def _prepare_and_readmit_worker(cancelled):
     """Dormant two-acquisition stack; never a workflow/CLI execution entry."""
     token = os.environ.pop(O.wire.TOKEN_ENV, None)
@@ -1277,7 +2628,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="operation", required=True)
     commands.add_parser("prepare-originals")
-    for name in ("_service", "_service-entry"):
+    for name in ("_service", "_service-entry", "_service-authority", "_recipient"):
         child = commands.add_parser(name)
         child.add_argument("--context-sha256", required=True)
         child.add_argument("--minimum-ns", required=True)
@@ -1289,10 +2640,14 @@ def main():
         else:
             require(re.fullmatch(r"0|[1-9][0-9]{0,19}", args.minimum_ns), "LAUNCH_MINIMUM")
             minimum = O.integer(int(args.minimum_ns))
-            entry = args.operation == "_service-entry"
-            command = native.initial_entry_command if entry else native.initial_command
+            entry, authority = args.operation == "_service-entry", args.operation == "_service-authority"
+            command = (_recipient_command if args.operation == "_recipient" else native.initial_authority_command if authority
+                       else native.initial_entry_command if entry else native.initial_command)
             command(args.context_sha256, minimum)
-            native.guarded(lambda cancelled: service_child(args.context_sha256, minimum, cancelled, entry=entry))
+            if args.operation == "_recipient":
+                native.guarded(lambda cancelled: _recipient_child(args.context_sha256, minimum, cancelled))
+            else:
+                native.guarded(lambda cancelled: service_child(args.context_sha256, minimum, cancelled, entry=entry, authority=authority))
         return 0
     except BaseException:
         print("INITIAL_RECIPIENT_ORIGINALS_NOT_ACCEPTED", file=sys.stderr)

@@ -599,6 +599,100 @@ provider execution/custody, Stage2 qualification and workflow activation remain
 unfinished. Both ordinary HOLDs, required checks and manual owner approvals
 remain unchanged. No runtime, scheduling, cache or Release acceptance is added.
 
+#### Stage1 recipient-validation connection, not producer/export admission
+
+The later dormant internal `_prepare_and_validate_recipient()` in
+[`run-hosted-initial-recipient.py`](../../scripts/run-hosted-initial-recipient.py)
+now composes preparation, first readmission, a **third actual source/HTTP
+authority acquisition**, and a separate credential-free recipient child. There
+is no public productive driver or workflow caller. The old public preparation
+and service return contracts remain unchanged; the additional fixed
+`_service-authority` route is HTTP-only, not a generic crypto executor.
+
+An exact-original, once-only claim excludes competing reads/claims and remains
+consumed after failure. Independently retained closed history includes the
+original worker identity, match, firstUseAt, job/runner identity, service basis,
+proposal, clock and resource graph. Old owners/fences are never reopened or
+observed. The third acquisition rechecks current approval/comment, environment,
+branch policies, refs and source, with the original expected match and job basis.
+Its actual source/HTTP/native returns and source-registry identities are pinned
+before close and checked after the final observations. Closed history is not a
+fresh remote-authority lease.
+
+The new episode samples LOCAL before RAW at R, then derives only:
+
+```text
+W = min(R + 240s, original recipient-validation fence, original job end)
+F = min(R + 285s, original recipient-final fence, original job end)
+E = min(R + 315s, original recipient-read fence, original job end)
+authority final = min(R + 120s, W)
+authority work  = min(R + 75s, authority final - 45s)
+```
+
+All authority work, including its HTTP45/final45 and actual owner close, spends
+outer WORK, never outer FINAL. Source-after/readback/pre-close must finish before
+authority work; authority close must finish before authority final. Conservative
+LOCAL ceilings retain the original anchor and clamp to outer WORK too. Outer
+finalization starts once, ending at `min(F, actualFinalStart + 45s)`; a failed
+start leaves an expired sentinel. Readback starts only after actual native and
+capture retirement, ending at `min(E, actualReadStart + 30s)`. Equality expires.
+These are **UNADMITTED / UNMEASURED** caps, not proof of real scheduling fit.
+
+The token stays only on the owning metadata-acquisition stack/HTTP-child
+boundary and its local references are cleared before crypto. It is not put in
+claims, files, Git/crypto environments or argv, or restored to ambient state.
+The child uses the maintained POSIX/Windows `validate_recipient`, preserving its
+actual typed return and key/work fields through final checks. This code does not
+generate keys or need a private key. The existing synchronous60 internals are
+unchanged; their before/after checks alone cannot preempt a blocked validator.
+The separate native supervisor supplies the enclosing descendant lifetime.
+
+The supervisor retains original resources before fallible post-return checks,
+verifies native birth/argv/baseline, drains/closes once and retires captures
+before readback. A failed/late launched child remains conservatively UNKNOWN
+even after a known outer drain; no new acquisition or optimistic custody follows.
+An actual unlaunched scope can be retired after an allocation-return clock
+failure without inventing an unperformed preparer observation. First failures
+and unknown resource pins are preserved. Final source/phase identities are
+bound before subsequent callbacks, not canonized from post-close replacements.
+
+The result is only **closed historical recipient-validation evidence**:
+`liveRecipient=NOT_TRANSFERRED`, `budgetAcceptance=NOT_ADMITTED`,
+`testAcceptance=NOT_PERFORMED`, `exportSaveAuthority=false`. The historical
+checker performs no clock, I/O, crypto, current-policy or remote acquisition.
+It cannot reconstruct a live Recipient, ordinary Admission or productive grant.
+
+Author [focused controls](../../scripts/tests/hosted-initial-recipient-validation-test.py)
+passed **64/64 methods**, selected once across thirteen separate bounded final
+invocations (five or fewer methods each), not one unbounded run. Changed shared
+context/phase/ACK behavior also received separate existing readmission
+**39/39** (14.104s), native **81/81** (5.793s) and selected legacy original-chain
+**1/1** (0.063s) regression runs. The64 selection excludes inherited methods;
+these are not a deduplicated coverage total or repetitions of unchanged-source
+acceptance. Each final command used UID/GID65534/Python3.12.3 `-I -B -S`, cleared
+environment/groups, no-new-privs, CPU20/512MiB/file32MiB/FD128/wall30+kill2,
+read-only source and pre-project filesystem/process/network/native-loader
+guards: four synthetic guard controls, zero unexpected denials or ResourceWarnings.
+Only tiny POSIX files are real; Git/HTTP/native/process/crypto behavior is modeled.
+
+Preserved independent WIP controls **0/5 PASS** exposed authority phase/source
+alias replacement, missing failed-child UNKNOWN, missing preexisting-leader
+exclusion and final-source alias replacement. The fixes do not reinterpret
+those failures as passes. An author unlaunched-scope regression also failed
+before repair; the initial history-pin oracle error, launch/import failures,
+and later failed batches from error-expectation, coupled-clock and traceback
+fixture mistakes remain retained. Corrected regressions are included in the64,
+not extra coverage. Exact independent final review and source bindings belong
+to the containing commit's issue record, not to these author results.
+
+Productive Stage1 producer/repeated/after-save integration, evidence-only
+export/freeze/seal/upload, the operational gate/bootstrap workflow, provider
+startup/cancellation custody, genuine hosted/native/resolver/scheduling
+qualification and Stage2/trusted-main delivery remain unfinished. Both ordinary
+HOLDs, Provider180, NativeFile900/Snapshot576MiB, FULL3600/Desktop1800 and all
+required checks/manual owner approvals remain unchanged. No private material,
+actual crypto, build/download, dispatch, activation, merge or publication ran.
+
 ### Private handoff and read-only adoption
 
 Preparation binds the original native session/child-directory identities and
