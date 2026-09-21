@@ -199,9 +199,9 @@ as executions at that checkpoint.
 [separate Stage1 acquirer](../../scripts/hosted_initial_recipient_originals.py)
 now composes actual closed Git calls and the existing fixed-origin HTTP
 transport with the [two-stage contracts](../maintenance/initial-recipient-stages-2026-09-21.md).
-It has **no CLI, enclosing native HTTP/query supervisor, production caller or
-workflow integration yet**. Its callbacks still require that original owner;
-using the acquirer outside such an enclosure is not supported or admitted.
+The helper has no CLI or workflow caller; the separate native enclosure below
+now supplies its original owner. Using the helper without that enclosure is
+not supported or admitted. Neither path is workflow-wired or qualified.
 The ordinary/bootstrap identity and exporters remain trusted-main-only.
 
 Stage1 reads the actual dispatch context in its real entry, checks clean full
@@ -251,8 +251,71 @@ loss above. Independent R4's separate two-method boundary suite remains
 failed before the repair. The final suite adds those four controls plus two
 entered/post-retainer non-retry controls. Original failures remain retained;
 finalization-only retention never turns a late/cancelled acquisition into success.
-Exact independent implementation review remains required; authored/executed
-models are not genuine originals.
+The exact R5 source was independently approved as
+`APPROVE_EXACT_INITIAL_RECIPIENT_ORIGINALS_R5_SOURCE_ONLY` at `acb5158a`;
+report SHA-256 `0db74413e1a0d66f53f7b2b42fc9d53ed7706c381bdfa67db525c7206c530586`.
+Independent author38, composition13, original boundary2 and new variants6 each
+passed separately. That verdict does not cover the later native enclosure;
+authored/executed models are not genuine originals.
+
+#### Separate Stage1 native enclosure, still dormant
+
+[`run-hosted-initial-recipient.py`](../../scripts/run-hosted-initial-recipient.py)
+adds the fixed `prepare-originals` / private `_service` composition for Stage1.
+It reads the actual gate or worker context; it has no supplied hosted identity,
+URL, comment selector, policy-absence or command override. Before and after the
+HTTP phase, actual `NativeGitQueries` calls check source/main/policy and retain
+their original successful return. Inside the HTTP child, another original query
+owner supplies both source checks and retains all15 original byte records,
+including the genuinely empty original-base `ls-tree` output. Query environments
+remain credential-free. The Actions-read token goes only into the owned HTTP
+child, is removed from its ambient environment before query construction, and
+is not serialized into native/Git records or public output.
+
+The existing bootstrap `phase`, file owners, native scope/drain and guarded ACK
+are reused rather than adding a process backend. A closed two-scope dispatcher
+selects only the original trusted-main child or this separate initial-recipient
+child. The original child command/ACK and its identity checks remain distinct;
+the original admission/export readers do not accept the new context. The parent
+checks actual child exit, known native retirement, captured-byte closure, the
+post-close child ACK, all retained original bytes and fresh source queries.
+Copied phase/source return objects do not populate its original-call registries.
+It rechecks the match and policy window after child return, not only before it.
+
+All work still spends the existing **unadmitted/unmeasured75/120 prelude**, with
+the existing45-second HTTP phase, request15/socket5 and original finalization
+ceilings. The initial child local45 cap only shortens when the parent frame is
+loaded. There is no new180/5400 allowance. Original cancellation or failed/late
+query, native drain, file/owner close or ACK flush prevents success. UNKNOWN
+retains uncertain owners; it cannot produce accepted custody or authorize
+freeze/seal/upload. An unavailable failed original is not reconstructed.
+
+The final private result is explicitly pending owner close; its public digest
+is still **pending the original command/step return**, not self-authenticating
+evidence. It grants no `Admission`, worker execution, recipient-crypto result,
+cache cohort/export authority, Stage2 qualification or workflow activation.
+Future readmission and evidence/export integration must bind that actual return.
+
+The [focused enclosure controls](../../scripts/tests/hosted-initial-recipient-native-test.py)
+passed **37/37 methods**, exit0 (1.201s). They run the actual controller,
+acquisition, GitView and readers over modeled Git/native/HTTP/clocks and tiny
+ordinary-UID POSIX files; complete cases cover the Linux gate and Linux worker,
+not genuine native hosts. The original30-method pass included fixture resource
+warnings: test teardown discarded simulated UNKNOWN owners with real tiny
+streams still open. Teardown now closes those fixture-only streams before
+discarding models; that is not a native UNKNOWN recovery procedure. The final
+37-method run had no such warnings. A separate pre-import-guarded selection of
+the existing origin suite (`ControllerTests`, `NativeRecordTests`,
+`OwnerFenceTests`) passed **48/48 methods**, exit0 (1.044s). Both commands used
+ordinary UID65534, isolated Python, CPU30/512MiB/90-second bounds, and prohibited
+process/network/native-loader operations before any project import. These are
+not native/provider/custody/scheduling qualification. Exact independent review
+of the enclosing implementation belongs to its containing commit/issue record.
+
+The bootstrap workflow and pre-execution environment are still absent. Whole
+JVM-job dependencies, explicit exception-bearing bootstrap identity/cohort,
+repeated worker admission, export/seal/delivery and Stage2 remain unfinished.
+Both ordinary HOLDs and all required checks/manual approvals remain unchanged.
 
 [`run-hosted-cache-bootstrap.py`](../../scripts/run-hosted-cache-bootstrap.py)
 and [`hosted_cache_bootstrap_origin.py`](../../scripts/hosted_cache_bootstrap_origin.py)

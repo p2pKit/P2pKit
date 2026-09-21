@@ -62,6 +62,8 @@ CONTEXT_SCOPE = "BOOTSTRAP_ORIGINAL_ACQUISITION_CONTEXT_V1"
 PHASE_SCOPE = "BOOTSTRAP_ORIGINAL_NATIVE_PHASE_V1"
 CHILD_SCOPE = "BOOTSTRAP_SERVICE_CHILD_PROVISIONAL_V1"
 ACK_SCOPE = "BOOTSTRAP_SERVICE_POST_CLOSE_ACK_V1"
+INITIAL_CONTEXT_SCOPE = "INITIAL_RECIPIENT_NATIVE_CONTEXT_V1"
+INITIAL_ACK_SCOPE = "INITIAL_RECIPIENT_SERVICE_POST_CLOSE_ACK_V1"
 RESULT_SCOPE = "BOOTSTRAP_ORIGINALS_PENDING_CALLER_RETURN_V2"
 HANDOFF_SCOPE = "BOOTSTRAP_PREPARE_POST_CLOSE_HANDOFF_V1"
 HANDOFF_OUTPUT_SCOPE = "BOOTSTRAP_PREPARE_HANDOFF_PENDING_STEP_RETURN_V1"
@@ -669,6 +671,20 @@ def command(context_hash, minimum=None):
     return result if minimum is None else result + ["--minimum-ns", str(origin.integer(minimum))]
 
 
+def initial_command(context_hash, minimum=None):
+    """Fixed separate source entry; never an injected executable or Admission."""
+    result = command(context_hash, minimum)
+    result[4] = str(SCRIPTS / "run-hosted-initial-recipient.py")
+    return result
+
+
+def phase_command(context_raw, minimum=None):
+    scope = origin.parse(context_raw).get("scope")
+    require(scope in (CONTEXT_SCOPE, INITIAL_CONTEXT_SCOPE), "BOOTSTRAP_SERVICE_CONTEXT_SCOPE")
+    fixed = initial_command if scope == INITIAL_CONTEXT_SCOPE else command
+    return fixed(origin.digest(context_raw), minimum)
+
+
 def lifetime(value, role):
     require(type(value) is dict, "BOOTSTRAP_NATIVE_LIFETIME")
     keys = (("pid", "creationFileTime") if role == "windows-x64" else
@@ -900,7 +916,7 @@ def phase(owner, private, context_raw, token, fence):
     old_limits = owner.work_limit, owner.final_limit
     owner.work_limit, owner.final_limit = work_end, final_end
     invocation = uuid.uuid4().hex
-    argv = command(origin.digest(context_raw))
+    argv = phase_command(context_raw)
     env = processes.ownership_environment(child_environment(private.path), context["job"], invocation,
         str(private.path), str(private.path / "control-home"), allow_new_context=True)
     inherited = {name: env[name] for name in query._CONTEXT}
@@ -939,7 +955,7 @@ def phase(owner, private, context_raw, token, fence):
         require(type(token) is str and re.fullmatch(r"[A-Za-z0-9_.-]{16,4096}", token), "BOOTSTRAP_ACTIONS_READ_TOKEN")
         env[origin.wire.TOKEN_ENV], token = token, None
         row["launchMinimumNs"] = fence.now(limit=work_end)
-        argv = command(origin.digest(context_raw), row["launchMinimumNs"])
+        argv = phase_command(context_raw, row["launchMinimumNs"])
         row["launchArgv"] = argv
         row["launchAttempted"] = True
         child = scope.spawn(argv, str(ROOT), env, stdout=out, stderr=err)
@@ -12915,7 +12931,7 @@ def guarded(operation):
     value, fence, limit = result
     cancellation(cancelled)
     observed = fence.now(final=True, limit=limit)
-    if value.get("scope") in (ACK_SCOPE, RECIPIENT_ACK_SCOPE):
+    if value.get("scope") in (ACK_SCOPE, RECIPIENT_ACK_SCOPE, INITIAL_ACK_SCOPE):
         value["closedNs"] = observed
     raw = origin.encoded(value)
     require(len(raw) <= ACK_LIMIT and sys.stdout.buffer.write(raw) == len(raw), "BOOTSTRAP_ACK_WRITE")

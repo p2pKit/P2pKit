@@ -1,0 +1,473 @@
+#!/usr/bin/env python3
+"""Guarded offline parent/child composition, NOT hosted/native qualification.
+
+Actual tiny private POSIX files require an ordinary UID. All Git child, HTTP,
+native clock/scope, cancellation and service observations are explicit models.
+The real controller, acquisition, parsers, GitView and retained readers compose;
+no provider, crypto, application or external process is executed by these tests.
+"""
+from __future__ import annotations
+
+from contextlib import ExitStack
+import copy
+import ctypes  # Only stdlib Python-API initialization precedes the audit guard.
+import importlib.util
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+
+def offline(event, _args):
+    if event.startswith(("subprocess.", "socket.")) or event in (
+            "os.system", "os.exec", "os.posix_spawn", "os.fork", "os.forkpty", "pty.spawn", "ctypes.dlopen"):
+        raise RuntimeError("OFFLINE_PROCESS_NETWORK_NATIVE_FORBIDDEN")
+
+
+sys.addaudithook(offline)
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+
+def load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    value = importlib.util.module_from_spec(spec)
+    sys.modules[name] = value
+    spec.loader.exec_module(value)
+    return value
+
+
+N = load("initial_native_test_subject", ROOT / "scripts/run-hosted-initial-recipient.py")
+F = load("initial_native_acquisition_fixtures", Path(__file__).with_name("hosted-initial-recipient-originals-test.py"))
+S, O, I, Q = N.native, N.O, N.I, N.Q
+TOKEN = F.TOKEN
+
+
+class NativeModels(unittest.TestCase):
+    def setUp(self):
+        self.assertNotEqual(os.geteuid(), 0, "tiny POSIX file controls require an actual ordinary UID")
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        self.fixture = F.OriginalModels("runTest")
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        self.temp = tempfile.TemporaryDirectory(prefix="initial-native-model-")
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name)
+        self.event = self.base / "event.json"
+        self.queries, self.scopes, self.child_errors, self.child_envs, self.drains = [], [], [], [], []
+        self.query_close_error = self.scope_close_error = self.child_exit = self.ack_transform = None
+        self.before_child = self.after_child = self.after_drain = lambda: None
+        self.before_query = lambda path: None
+        self.after_query_close = lambda path: None
+        self.scope_survivors = []
+        self.cancelled = []
+        self.stack.enter_context(patch.object(Q, "NativeGitQueries", side_effect=self.make_queries))
+        self.stack.enter_context(patch.object(S.processes, "make_scope", side_effect=self.make_scope))
+        self.stack.enter_context(patch.object(N.time, "time", return_value=F.F.FIRST1))
+        self.stack.enter_context(patch.object(S.time, "sleep", side_effect=lambda seconds: None))
+        self.stack.enter_context(patch.object(S.signal, "getsignal", return_value=None))
+        self.stack.enter_context(patch.object(S.signal, "signal", return_value=None))
+        self.stack.enter_context(patch.dict(os.environ, {}, clear=True))
+        self.choose("gate", "full-macos-arm64")
+        self.addCleanup(self.reset_models)
+
+    def reset_models(self):
+        # The uncertainty here belongs exclusively to fake native domains.
+        # Close their real tiny fixture streams before releasing model owners;
+        # never treat this test teardown as a recovery path for native UNKNOWN.
+        for owner in S.QUARANTINE:
+            for row in reversed(owner.resources):
+                if row["label"] != "native-scope" and not row["attempted"]:
+                    row["owner"].close()
+        S.QUARANTINE.clear()
+        Q.QUARANTINE.clear()
+        S.diagnostics._QUARANTINE.clear()
+
+    def choose(self, kind, selection):
+        self.fixture.choose(kind, selection)
+        self.event.write_bytes(I.encoded(self.fixture.event))
+        env = dict(self.fixture.env, GITHUB_WORKSPACE=str(ROOT), GITHUB_EVENT_PATH=str(self.event), RUNNER_TEMP=str(self.base),
+                   GITHUB_TOKEN="UNRELATED_SYNTHETIC_TOKEN")
+        env[O.wire.TOKEN_ENV] = TOKEN
+        os.environ.clear()
+        os.environ.update(env)
+        self.path = N.location()[1]
+
+    def make_queries(self, root, path, *, check_cancel, owner_deadlines):
+        case = self
+        self.before_query(path)
+        class Queries:
+            def __init__(self):
+                self.path, self.unknown, self.closed, self.finalizations = path, False, False, 0
+                self.deadlines, self.calls, self.host_checked = owner_deadlines, [], False
+                self.private = Q._new_private_directory(path)
+                case.queries.append(self)
+            def native_host_matches_actions(self):
+                self.host_checked = True
+                case.assertNotIn(O.wire.TOKEN_ENV, os.environ)
+            def __call__(self, **kwargs):
+                check_cancel()
+                case.assertTrue(self.host_checked)
+                case.assertNotIn(O.wire.TOKEN_ENV, kwargs["environment"])
+                case.assertNotIn("GITHUB_TOKEN", kwargs["environment"])
+                case.assertNotIn(TOKEN, repr(kwargs))
+                case.assertEqual(kwargs["cwd"], root)
+                suffix = kwargs["argv"][7:]
+                case.assertTrue(Q._allowed_suffix(suffix))
+                self.calls.append(suffix)
+                git = case.fixture.git
+                if suffix == ("rev-parse", "--show-toplevel"):
+                    return (str(root) + "\n").encode() if git.root_value else b"/wrong\n"
+                if suffix == ("status", "--porcelain=v1", "--untracked-files=all"):
+                    return b"" if git.clean_value else b" M changed\n"
+                if suffix[:2] == ("rev-parse", "--verify"):
+                    ref = suffix[2]
+                    value = (git.head if ref == "HEAD^{commit}" else git.main if ref == "refs/remotes/origin/main^{commit}" else
+                             git.main_tree if ref == N.acquisition.stages.BASE["commit"] + "^{tree}" else git.tree_value)
+                    return value.encode() + b"\n"
+                return git.query(*suffix, limit=kwargs["stdout_limit"])
+            def _write(self, directory, name, raw):
+                if type(raw) is not bytes:
+                    raw = O.encoded(raw)
+                stream = directory.create_file(name, max_bytes=max(1, len(raw)), deadline=self.deadlines[1])
+                try:
+                    case.assertEqual(stream.write(raw), len(raw))
+                    stream.sync()
+                finally:
+                    stream.close()
+            def _finalize(self, failure):
+                self.finalizations += 1
+                case.assertEqual(self.finalizations, 1)
+                self._write(self.private, "session-result.json", {"schema": 1, "scope": "ORDINARY_GIT_QUERIES_ONLY",
+                    "job": "a" * 32, "queries": [list(x) for x in self.calls], "readbacks": [],
+                    "result": "READY_FOR_CALLER_SEAL" if failure is None else "HOLD", "retirement": "KNOWN",
+                    "firstError": None if failure is None else "SYNTHETIC_QUERY_FAILURE", "errors": [] if failure is None else ["SYNTHETIC"]})
+                self.private.close()
+                self.closed = True
+                case.after_query_close(path)
+                if case.query_close_error is not None:
+                    raise case.query_close_error
+        return Queries()
+
+    def make_scope(self, job, invocation, state, home):
+        case = self
+        class Scope:
+            name, baseline = "linux-proc-pidfd", set()
+            def __init__(self): self.launches, self.closed, self.close_calls = [], False, 0
+            def _identity(self, pid): return {"pid": pid, "startTicks": 9012, "live": True}
+            def spawn(self, argv, cwd, env, *, stdout, stderr):
+                case.before_child()
+                case.child_envs.append(dict(env))
+                case.assertEqual(env[O.wire.TOKEN_ENV], TOKEN)
+                case.assertNotIn("GITHUB_TOKEN", env)
+                case.assertEqual(argv[4], str(ROOT / "scripts/run-hosted-initial-recipient.py"))
+                self.launches = [{"api": "subprocess.Popen", "requestedArgv": argv, "resolvedArgv": argv,
+                    "cwd": cwd, "shell": False, "created": True, "executable": argv[0], "pid": 1234, "outputMode": "caller-owned-files"}]
+                def write(raw):
+                    captured = case.ack_transform(raw) if case.ack_transform else raw
+                    case.assertEqual(os.write(stdout.fileno(), captured), len(captured))
+                    return len(raw)
+                output = SimpleNamespace(buffer=SimpleNamespace(write=write, flush=stdout.sync))
+                code = 0
+                try:
+                    with patch.dict(os.environ, env, clear=True), patch.object(S.sys, "stdout", output):
+                        S.guarded(lambda cancelled: N.service_child(argv[-3], int(argv[-1]), cancelled))
+                except BaseException as error:
+                    case.child_errors.append(error)
+                    os.write(stderr.fileno(), b"SYNTHETIC_CHILD_FAILURE\n")
+                    code = 125
+                case.after_child()
+                return SimpleNamespace(pid=1234, stdout=None, stderr=None, poll=lambda: code if case.child_exit is None else case.child_exit)
+            def description(self):
+                return {"backend": self.name, "scope": "controlled-marker-inheriting-descendants", "job": job, "invocation": invocation,
+                    "launches": self.launches, "startedIdentities": [{"pid": 1234, "startTicks": 5678, "uid": os.getuid(), "live": False}],
+                    "discoveryErrors": [], "discoveryReconciliations": []}
+            def discover(self): return []
+            def drain(self, *, grace, kill_wait, deadline):
+                start = json.loads((Path(state) / "service/start.json").read_bytes())
+                case.assertLessEqual(deadline, start["finalEndNs"] / O.NS)
+                case.assertLessEqual(grace + kill_wait, max(0, deadline - case.fixture.ns / O.NS))
+                case.drains.append((grace, kill_wait, deadline))
+                case.after_drain()
+                return case.scope_survivors
+            def close(self):
+                self.closed = True
+                self.close_calls += 1
+                if case.scope_close_error is not None:
+                    raise case.scope_close_error
+        value = Scope()
+        self.scopes.append(value)
+        return value
+
+    def prepare(self):
+        return N.prepare_originals(self.cancelled)
+
+    def changed_json(self, path, change):
+        raw = json.loads(path.read_bytes())
+        change(raw)
+        path.write_bytes(O.encoded(raw))
+
+    def test_complete_gate_composes_real_controller_acquisition_queries_and_retained_readers(self):
+        value, fence, end = self.prepare()
+        self.assertEqual(value["scope"], N.OUTPUT_SCOPE)
+        self.assertEqual(end, fence.final)
+        self.assertFalse(value["exportSaveAuthority"])
+        self.assertEqual(value["budgetAcceptance"], "NOT_ADMITTED")
+        self.assertEqual([len(x.calls) for x in self.queries], [12, 24, 12])
+        self.assertTrue(all(x.closed and x.finalizations == 1 for x in self.queries))
+        self.assertEqual(len(self.fixture.requests), 8)
+        self.assertEqual(len(self.scopes), 1)
+        self.assertEqual(self.scopes[0].close_calls, 1)
+        self.assertEqual(len(self.drains), 1)
+        match = json.loads((self.path / "acquisition-queries/match.bin").read_bytes())
+        self.assertEqual(match["scope"], "NONPRODUCTIVE_ELIGIBILITY")
+        self.assertEqual(match["github"]["job"], "initial-recipient-gate")
+        self.assertEqual(match["workerAdmission"], "NOT_PERFORMED")
+        self.assertEqual((self.path / "acquisition-queries/base_policy_entry.bin").read_bytes(), b"")
+        self.assertTrue(all(TOKEN.encode() not in p.read_bytes() for p in self.path.rglob("*") if p.is_file()))
+
+    def test_worker_keeps_its_actual_populate_identity_and_still_has_no_admission(self):
+        self.choose("worker", "desktop-linux-x64")
+        self.prepare()
+        match = json.loads((self.path / "acquisition-queries/match.bin").read_bytes())
+        self.assertEqual(match["github"]["job"], "populate")
+        self.assertEqual(match["github"]["selection"], "desktop-linux-x64")
+        self.assertIn("MATCH_ONLY_NOT_ADMISSION", match["scope"])
+
+    def test_same_episode_cannot_retry_or_renew_acquisition(self):
+        self.prepare()
+        with self.assertRaises(Exception): self.prepare()
+        self.assertEqual(len(self.scopes), 1)
+        self.assertEqual(len(self.fixture.requests), 8)
+
+    def test_non_hosted_context_refuses_before_private_allocation(self):
+        os.environ["GITHUB_ACTIONS"] = "false"
+        with self.assertRaisesRegex(I.AdmissionError, "HOSTED_CONTEXT"): self.prepare()
+        self.assertFalse(self.path.exists())
+        self.assertEqual(self.queries, [])
+
+    def test_ambient_loader_override_refuses_before_queries(self):
+        os.environ["LD_PRELOAD"] = "SYNTHETIC_INVALID_OVERRIDE"
+        with self.assertRaisesRegex(O.OriginError, "AMBIENT_EXECUTION_OVERRIDE"): self.prepare()
+        self.assertFalse(self.path.exists())
+
+    def test_wrong_native_clock_role_refuses_even_with_plausible_actions_labels(self):
+        self.fixture.clock = O.clocks.ClockIdentity("macos-arm64", O.clocks.DOMAINS["macos-arm64"], O.NS)
+        with self.assertRaisesRegex(I.AdmissionError, "ACTUAL_NATIVE_ROLE"): self.prepare()
+        self.assertFalse(self.path.exists())
+
+    def test_source_failure_finalizes_query_once_without_starting_http_child(self):
+        self.fixture.git.clean_value = False
+        with self.assertRaisesRegex(I.AdmissionError, "SOURCE"): self.prepare()
+        self.assertEqual(len(self.queries), 1)
+        self.assertEqual(self.queries[0].finalizations, 1)
+        self.assertEqual(self.scopes, [])
+        self.assertEqual(self.fixture.requests, [])
+
+    def test_query_success_receipt_cannot_replace_failed_actual_close(self):
+        failure = RuntimeError("SYNTHETIC_QUERY_CLOSE")
+        self.query_close_error = failure
+        with self.assertRaises(RuntimeError) as caught: self.prepare()
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(self.scopes, [])
+        self.assertEqual(self.queries[0].finalizations, 1)
+
+    def test_primary_query_cancellation_survives_secondary_finalizer_error(self):
+        primary = KeyboardInterrupt("SYNTHETIC_QUERY_CANCEL")
+        self.fixture.git.failure = primary
+        self.query_close_error = RuntimeError("SYNTHETIC_SECONDARY_CLOSE")
+        with self.assertRaises(KeyboardInterrupt) as caught: self.prepare()
+        self.assertIs(caught.exception, primary)
+        self.assertEqual(self.queries[0].finalizations, 1)
+
+    def test_child_nonzero_refuses_even_with_complete_original_success_ack(self):
+        self.child_exit = 125
+        with self.assertRaisesRegex(O.OriginError, "SERVICE_CHILD_FAILED"): self.prepare()
+        self.assertTrue(self.scopes[0].closed)
+        self.assertEqual(len(self.queries), 2)
+
+    def test_child_current_gate_predecessor_failure_prevents_worker_return(self):
+        self.choose("worker", "desktop-linux-x64")
+        self.fixture.bodies["jobs"]["jobs"][1]["conclusion"] = "failure"
+        with self.assertRaisesRegex(O.OriginError, "SERVICE_CHILD_FAILED"): self.prepare()
+        self.assertIn("GATE_PREDECESSOR", str(self.child_errors[0]))
+        self.assertEqual(len(self.fixture.requests), 2)
+
+    def test_http_failure_preserves_original_bytes_in_private_query_custody(self):
+        self.fixture.request_error = KeyboardInterrupt("SYNTHETIC_HTTP_CANCEL")
+        with self.assertRaisesRegex(O.OriginError, "SERVICE_CHILD_FAILED"): self.prepare()
+        self.assertIs(self.child_errors[0], self.fixture.request_error)
+        response = json.loads((self.path / "acquisition-queries/attempt.bin").read_bytes())
+        self.assertFalse(response["complete"])
+        self.assertEqual(len(self.fixture.requests), 1)
+
+    def test_complete_returned_http_response_is_retained_at_pre_retainer_cancellation(self):
+        original = N.acquisition.origin._request
+        def request(*args):
+            result = original(*args)
+            args[3].cancelled = lambda: (_ for _ in ()).throw(KeyboardInterrupt("SYNTHETIC_AFTER_HTTP"))
+            return result
+        with patch.object(N.acquisition.origin, "_request", request), self.assertRaises(O.OriginError): self.prepare()
+        response = json.loads((self.path / "acquisition-queries/attempt.bin").read_bytes())
+        self.assertTrue(response["complete"])
+        self.assertEqual(response["retirement"], "KNOWN")
+        self.assertEqual(len(self.fixture.requests), 1)
+
+    def test_failed_child_query_finalizer_cannot_emit_success_ack(self):
+        def inject(path):
+            if path.name == "acquisition-queries": self.query_close_error = RuntimeError("SYNTHETIC_CHILD_QUERY_CLOSE")
+        self.before_query = inject
+        with self.assertRaisesRegex(O.OriginError, "SERVICE_CHILD_FAILED"): self.prepare()
+        self.assertIn("SYNTHETIC_CHILD_QUERY_CLOSE", str(self.child_errors[0]))
+        self.assertFalse((self.path / "service/child-result.json").exists())
+
+    def test_unknown_scope_close_prevents_capture_adoption(self):
+        self.scope_close_error = RuntimeError("SYNTHETIC_SCOPE_CLOSE")
+        with self.assertRaises(Exception): self.prepare()
+        self.assertEqual(self.scopes[0].close_calls, 1)
+        self.assertEqual(len(self.queries), 2)
+        self.assertTrue(S.QUARANTINE)
+
+    def test_surviving_native_domain_refuses_and_never_constructs_source_after(self):
+        self.scope_survivors = ["SYNTHETIC_SURVIVOR"]
+        with self.assertRaisesRegex(O.OriginError, "SERVICE_SURVIVORS"): self.prepare()
+        self.assertEqual(len(self.queries), 2)
+        self.assertEqual(self.scopes[0].close_calls, 1)
+
+    def test_late_native_return_fails_without_new_drain_budget(self):
+        self.after_child = lambda: setattr(self.fixture, "ns", 1080 * O.NS)
+        with self.assertRaisesRegex(O.OriginError, "FENCE_EXPIRED"): self.prepare()
+        self.assertEqual(self.scopes[0].close_calls, 1)
+        self.assertEqual(len(self.queries), 2)
+
+    def test_post_drain_expiry_cannot_accept_retirement(self):
+        self.after_drain = lambda: setattr(self.fixture, "ns", 1121 * O.NS)
+        with self.assertRaisesRegex(O.OriginError, "FENCE_EXPIRED"): self.prepare()
+        self.assertTrue(S.QUARANTINE)
+
+    def test_cancelled_parent_keeps_original_cancellation_after_successful_child(self):
+        self.after_child = lambda: self.cancelled.append(15)
+        with self.assertRaises(KeyboardInterrupt): self.prepare()
+        self.assertEqual(self.scopes[0].close_calls, 1)
+        self.assertEqual(len(self.queries), 2)
+
+    def test_original_ack_scope_cannot_be_substituted_by_old_bootstrap_ack(self):
+        def change(raw):
+            value = json.loads(raw); value["scope"] = S.ACK_SCOPE
+            return O.encoded(value)
+        self.ack_transform = change
+        with self.assertRaisesRegex(I.AdmissionError, "CHILD_ACK"): self.prepare()
+
+    def test_ack_duplicate_member_or_trailing_json_cannot_be_normalized(self):
+        self.ack_transform = lambda raw: raw.rstrip() + b'\n{}\n'
+        with self.assertRaises(Exception): self.prepare()
+        self.assertEqual(len(self.queries), 2)
+
+    def test_child_success_record_replacement_does_not_match_original_ack(self):
+        self.after_child = lambda: self.changed_json(self.path / "service/child-result.json", lambda x: x.update(matchSha256="0" * 64))
+        with self.assertRaisesRegex(I.AdmissionError, "CHILD_ACK"): self.prepare()
+
+    def test_retained_http_original_replacement_refuses_even_with_genuine_child_exit(self):
+        self.after_child = lambda: (self.path / "acquisition-queries/comment.bin").write_bytes(b"{}")
+        with self.assertRaisesRegex(I.AdmissionError, "ORIGINAL_BYTES_CHANGED"): self.prepare()
+
+    def test_source_after_child_is_actual_fresh_query_not_an_old_success_label(self):
+        def change(path):
+            if path.name == "source-after": self.fixture.git.clean_value = False
+        self.before_query = change
+        with self.assertRaisesRegex(I.AdmissionError, "SOURCE"): self.prepare()
+        self.assertEqual(len(self.queries), 3)
+        self.assertEqual(self.queries[-1].finalizations, 1)
+
+    def test_source_return_replacement_refuses_before_adopting_child_data(self):
+        self.after_child = lambda: (self.path / "source-before/source-return.json").write_bytes(b"{}")
+        with self.assertRaisesRegex(I.AdmissionError, "SOURCE_RETURN_CHANGED"): self.prepare()
+
+    def test_final_query_return_cannot_cross_original_prelude_work_cutoff(self):
+        def advance(path):
+            if path.name == "source-after": self.fixture.ns = 1075 * O.NS
+        self.after_query_close = advance
+        with self.assertRaisesRegex(O.OriginError, "FENCE_EXPIRED"): self.prepare()
+        self.assertFalse((self.path / "initial-result.json").exists())
+
+    def test_context_change_at_final_recheck_is_not_hidden_by_unchanged_match(self):
+        def change(path):
+            if path.name == "source-after": os.environ["GITHUB_SHA"] = F.F.H2
+        self.after_query_close = change
+        with self.assertRaisesRegex(I.AdmissionError, "WORKFLOW|EXPECTED_SOURCE"): self.prepare()
+
+    def test_copied_phase_cannot_register_actual_native_return(self):
+        original = S.phase
+        def copied(*args):
+            directory, phase = original(*args)
+            return directory, S.OriginalPhase(phase.context, phase.records)
+        with patch.object(S, "phase", copied), self.assertRaisesRegex(I.AdmissionError, "NOT_ORIGINAL_PHASE_RETURN"):
+            self.prepare()
+
+    def test_copied_source_return_cannot_register_native_query_completion(self):
+        original = N.source_queries
+        def copied(*args):
+            value = original(*args)
+            return N.SourceReturn(value.records, value.session, value.raw)
+        with patch.object(N, "source_queries", copied), self.assertRaisesRegex(I.AdmissionError, "NOT_ORIGINAL_SOURCE_RETURN"):
+            self.prepare()
+
+    def test_closed_phase_route_preserves_old_command_and_rejects_arbitrary_scope(self):
+        for scope, command in ((S.CONTEXT_SCOPE, S.command), (S.INITIAL_CONTEXT_SCOPE, S.initial_command)):
+            raw = O.encoded({"scope": scope})
+            self.assertEqual(S.phase_command(raw, 1), command(O.digest(raw), 1))
+        with self.assertRaisesRegex(O.OriginError, "SERVICE_CONTEXT_SCOPE"):
+            S.phase_command(O.encoded({"scope": "SYNTHETIC_OTHER", "argv": ["forbidden"]}))
+
+    def test_final_parent_owner_close_is_postchecked_against_original_end(self):
+        original = S.Owner.close
+        def late(owner):
+            original(owner)
+            if hasattr(owner, "initial_sources"):
+                self.fixture.ns = 1120 * O.NS
+        with patch.object(S.Owner, "close", late), self.assertRaisesRegex(O.OriginError, "FENCE_EXPIRED"):
+            self.prepare()
+        self.assertTrue((self.path / "initial-result.json").exists())
+
+    def test_initial_ack_gets_final_guarded_highwater_not_child_provisional_time(self):
+        value, _, _ = self.prepare()
+        row = json.loads((self.path / "service/child-result.json").read_bytes())
+        ack = json.loads((self.path / "service/stdout.log").read_bytes())
+        self.assertGreater(ack["closedNs"], row["completedNs"])
+        self.assertEqual(ack["scope"], S.INITIAL_ACK_SCOPE)
+        self.assertEqual(value["scope"], N.OUTPUT_SCOPE)
+
+    def test_context_extra_field_is_not_an_open_command_descriptor(self):
+        self.before_child = lambda: self.changed_json(self.path / "context.json", lambda x: x.update(argv=["not-allowed"]))
+        with self.assertRaisesRegex(O.OriginError, "SERVICE_CHILD_FAILED"): self.prepare()
+        self.assertIn("CHILD_CONTEXT_CHANGED", str(self.child_errors[0]))
+        self.assertEqual(len(self.fixture.requests), 0)
+
+    def test_changed_real_event_is_not_replaced_by_saved_context(self):
+        self.before_child = lambda: self.event.write_bytes(b"{}")
+        with self.assertRaisesRegex(O.OriginError, "SERVICE_CHILD_FAILED"): self.prepare()
+        self.assertEqual(len(self.fixture.requests), 0)
+
+    def test_replaced_candidate_policy_remains_rejected_before_http(self):
+        self.fixture.git.policy_raw += b"\n"
+        with self.assertRaisesRegex(I.AdmissionError, "POLICY_BLOB"): self.prepare()
+        self.assertEqual(self.fixture.requests, [])
+
+    def test_retained_match_recheck_still_validates_live_policy_window(self):
+        self.after_child = lambda: self.stack.enter_context(patch.object(N.time, "time", return_value=F.F.END))
+        with self.assertRaises(I.AdmissionError): self.prepare()
+        self.assertEqual(len(self.fixture.requests), 8)
+
+    def test_required_read_token_never_falls_back_to_ambient_github_token(self):
+        os.environ.pop(O.wire.TOKEN_ENV)
+        with self.assertRaisesRegex(O.OriginError, "ACTIONS_READ_TOKEN"): self.prepare()
+        self.assertEqual(len(self.fixture.requests), 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
