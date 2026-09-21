@@ -195,6 +195,65 @@ as executions at that checkpoint.
 
 ### Original acquisition, not bootstrap execution
 
+**Later initial-recipient acquisition preparation, 21 September:** the
+[separate Stage1 acquirer](../../scripts/hosted_initial_recipient_originals.py)
+now composes actual closed Git calls and the existing fixed-origin HTTP
+transport with the [two-stage contracts](../maintenance/initial-recipient-stages-2026-09-21.md).
+It has **no CLI, enclosing native HTTP/query supervisor, production caller or
+workflow integration yet**. Its callbacks still require that original owner;
+using the acquirer outside such an enclosure is not supported or admitted.
+The ordinary/bootstrap identity and exporters remain trusted-main-only.
+
+Stage1 reads the actual dispatch context in its real entry, checks clean full
+history/source/tree and exact successful empty original-base `ls-tree`, and
+retains the real candidate policy entry/blob bytes without relabelling them as
+main. Eight fixed GETs acquire the current attempt, complete jobs, approval
+history, **only its exactly selected comment**, current environment/protection
+and branch policies, then main and integration-branch refs. Source is queried
+again afterward. Every successful source operation/GET/retention/return is checked against
+the same original end, shortened to at most the existing45-second acquisition
+cap. No new budget, retry, redirect, URL or selector input is introduced.
+The existing HTTP transport now exposes its checked original body bytes so a
+list response need not be rewritten into a fake object; its existing run/job
+object parser remains unchanged. Pagination links or incomplete known counts
+refuse; no service completeness or performance qualification is inferred.
+
+Gate context remains actual Linux/X64 `initial-recipient-gate` (proposed selector
+`ubuntu-24.04`); each worker retains its real `populate` host/selection. Workers
+also require the original same-run/attempt gate job to have succeeded before
+their start. Failed HTTP originals are retained before propagating the original
+error, including cancellation, using only the enclosing owner's remaining
+original finalization fence. A complete transport return followed by a failed
+**pre-retainer** work check also offers those exact bytes once to that final
+retainer, then propagates the original boundary failure. It never rewrites the
+transport envelope or retries an already-entered retainer/post-retention check;
+secondary retention failure cannot replace the first failure. The service token
+is used only by HTTP, never in
+Git argv/environment, retained response records or public outputs. Returns are
+still only `GateEligibility` / `BootstrapMatch`, **not Admission, native enclosure
+or permission to invoke a provider**. Stage2 acquisition/qualification is not
+implemented by this Stage1 helper.
+
+The [focused author controls](../../scripts/tests/hosted-initial-recipient-originals-test.py)
+passed **38/38 methods**, exit0 (0.316s): actual parser/HTTP composition with
+modeled sockets, TLS, clocks, source and retainer. The first harness launch was
+refused before any test because the native-loader guard intercepted standard
+`ctypes` Python-API initialization. The fixture now preloads only that standard
+module, then guards all project imports/subsequent native loading and all
+process/network operations; no native backend ran. Intermediate29/31-pass
+revisions predate the final per-source-call/retention fences and worker gate
+predecessor checks; they are not additional final coverage. A separate guarded
+invocation of the existing bootstrap-origin `IdentityAndFenceTests` / `HttpTests`
+passed **22/22 methods** (0.102s), not its full suite or native owner controls.
+The earlier32-method author suite passed but missed the pre-retainer boundary
+loss above. Independent R4's separate two-method boundary suite remains
+**0 PASS /2 FAIL**, and all four added author desired-state preimage methods
+failed before the repair. The final suite adds those four controls plus two
+entered/post-retainer non-retry controls. Original failures remain retained;
+finalization-only retention never turns a late/cancelled acquisition into success.
+Exact independent implementation review remains required; authored/executed
+models are not genuine originals.
+
 [`run-hosted-cache-bootstrap.py`](../../scripts/run-hosted-cache-bootstrap.py)
 and [`hosted_cache_bootstrap_origin.py`](../../scripts/hosted_cache_bootstrap_origin.py)
 add a **dormant, not-workflow-wired original-acquisition slice**. Its sole public

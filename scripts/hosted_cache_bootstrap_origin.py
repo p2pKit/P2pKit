@@ -157,7 +157,13 @@ def paths(admitted):
     return {"attempt": base, "jobs": base + "/jobs?per_page=100&page=1"}
 
 
-def observation(raw, path, invocation, clock):
+def response_bytes(raw, path, invocation, clock):
+    """Check the retained transport envelope before parsing its original body.
+
+    The approval-history endpoint returns a JSON list, unlike run/job endpoints.
+    Exposing the exact checked body avoids rewriting an original response into
+    an invented object. This is transport validation, not caller admission.
+    """
     require(type(invocation) is str and re.fullmatch(r"[0-9a-f]{32}", invocation), "BOOTSTRAP_ORIGIN_INVOCATION")
     value = parse(raw)
     require(set(value) == {"schema", "scope", "origin", "method", "path", "invocation", "clock",
@@ -189,7 +195,12 @@ def observation(raw, path, invocation, clock):
                 "BOOTSTRAP_SERVICE_LENGTH")
     if "transfer-encoding" in headers:
         require(headers["transfer-encoding"].lower() == "chunked", "BOOTSTRAP_SERVICE_TRANSFER")
-    return value, bootstrap.ordinary.parse(decoded[1], wire.BODY_LIMIT), date
+    return value, decoded[1], date
+
+
+def observation(raw, path, invocation, clock):
+    value, body, date = response_bytes(raw, path, invocation, clock)
+    return value, bootstrap.ordinary.parse(body, wire.BODY_LIMIT), date
 
 
 def service_identity(admitted, originals, invocation, clock, runner_name):
