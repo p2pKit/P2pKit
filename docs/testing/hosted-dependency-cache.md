@@ -3434,6 +3434,82 @@ custodian-key or complete1066 execution. The graph stays dormant WIP. Serialized
 ownership, the external watchdog, both HOLDs and all original native/provider/
 job limits remain; no hosted qualification, delivery or Release acceptance follows.
 
+### Dormant same-call provider capture and retirement
+
+[`ProviderCapture`](../../scripts/hosted_cache_provider_lifecycle.py) is a small
+fixed-resource owner, **not an authenticated launcher or provider-to-custody
+controller**. Construction and context entry are inert. The caller transfers its
+actual original directory inside the active context before preparation can verify
+it or allocate the three fixed captures and native scope. There is no argv,
+environment, credential, arbitrary-owner registry or supplied step-success API.
+No workflow or production caller invokes this leaf.
+
+The supplied original RAW window is at most180 seconds. A sole LOCAL-before-RAW
+conversion can only shorten the caller's saved LOCAL end; the fixed45-second
+finalization reservation is **inside** that window, not extra time or a measured
+budget. All owner LOCAL samples, including sleep/drain calculations, share one
+finite nondecreasing high-water. RAW-before-LOCAL return checks charge sampling,
+callbacks, capture operations, last-directory close and result construction to
+the same ends. The serialized same-thread operation guard rejects callback reentry
+before changing resource/exit state. Caught failures remain sticky.
+
+Actual child exit is retained before later fallible checks. Finalization attempts
+the original scope's bounded drain only under a valid final frame, then its
+once-only close. Empty drain alone is insufficient: discovery/pending-lifetime
+failures and late scope closure cannot authorize file operations. UNKNOWN keeps
+strong original references in quarantine; the independently known scope can still
+be closed, but uncertain freeze/reader acquisition, diagnostic classification or
+reader close stops subsequent distinct file-owner operations. A supplier's internal
+all-pins cleanup is not permission to release another original owner. The first
+exception/cancellation and private diagnostics survive; no retry is authorized.
+
+Only after qualifying native retirement may Windows command freeze return its
+strict reader. The reader and original command-close state are registered before
+post-return observations. Fixed stdout/stderr readers and the last separate
+directory owner also require close and final fences. Windows diagnostic log reopen
+binds the same identity/size and the new strict-reader interval, **not immutable
+transcript continuity across the unpinned close/reopen gap**; a same-file/same-size
+overwrite there is not detected. POSIX reads use no-follow/nonblocking opens,
+original stat equality and bounded reads. These file checks cannot prove an
+absence of outside writers or authenticate the producer.
+
+A successfully constructed immutable private result retains exact capture bytes,
+the native description and closed-slot coverage, but explicitly says
+`original_step_outcome=NOT_OBSERVED`, `enclosing_owner_retirement=NOT_OBSERVED`
+and `provider_acceptance=NOT_ESTABLISHED`. It never invokes the provider-outcome
+classifier as successful. Failures retain owners, exceptions and existing files;
+they do **not** supply completed failure-custody packets or encrypted delivery.
+
+The [focused controls](../../scripts/tests/hosted-cache-provider-lifecycle-test.py)
+passed **57/57 author methods**:44 Windows sharing/native-scope models and13 tiny
+actual POSIX-file controls with modeled clocks/process scopes. Six selected
+desired-state regressions failed on the unchanged saved WIP and are included in
+the final57, not extra product coverage. The original57 aggregate remains FAILED
+(15pass/33fail/9error): the new fixture loaded two separate native-file module
+instances and the production exact-type guard correctly refused them. Only the
+fixture import order was corrected, with an explicit same-backend assertion.
+The next aggregate remains FAILED (56pass/one failure): the old repeated-exit
+expectation was corrected to require the exact original cancellation, while
+retaining its full no-further-operations assertion. Two harness launches failed
+before test import (absent optional timing executable, then copied-directory
+permissions); no package installation or bound extension was used.
+
+The successful aggregate and six-regression preimage each ran under
+UID/GID65534/Python3.12.3 `-I -B -S`, cleared environment/groups, no-new-privs,
+CPU20/512MiB/file32MiB/FD128/core0/wall30+kill2, frozen read-only source and
+pre-project filesystem/process/network/native-loader/pidfd/signal guards. Both
+reported guard4, unexpected-denials0 and ResourceWarnings0. The containing #437
+commit record separately binds independent review and executed independent checks.
+
+Still missing: authenticated original180 acquisition, successful original spawn
+return with exact sink/command routing and complete POSIX marker inheritance,
+safe Node24/native-tool startup and legitimate service credentials, an external
+original-domain watchdog, enclosing bridge/bundle/home retirement, failure-aware
+custody/seal/upload and genuine hosted execution. Sole registered leader identity
+does not prove those premises. The complete1066 graph remains **unaccepted WIP**;
+this leaf does not import or qualify it. Both HOLDs, NativeFile900/Snapshot576MiB,
+ordinary FULL3600/Desktop1800 and proposed5400's UNADMITTED/UNMEASURED status remain.
+
 ## Verification and remaining qualification
 
 Focused offline commands (not a claim they ran on a particular host):
@@ -3491,6 +3567,7 @@ python3 -I -B -S scripts/tests/hosted-cache-bootstrap-probe-test.py \
 python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-cache-provider-contract-test.py
 python3 -I -B -S scripts/tests/hosted-cache-provider-environment-test.py
+python3 -I -B -S scripts/tests/hosted-cache-provider-lifecycle-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/hosted-windows-provider-command-test.py
 python3 -I -B -S scripts/tests/hosted-test-evidence-test.py
