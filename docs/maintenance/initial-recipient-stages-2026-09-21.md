@@ -219,9 +219,17 @@ strict collection-tail content binding. The full receiver still must acquire
 and authenticate that original graph; older hashless evidence is not upgraded.
 The fixed [query-original reader](../testing/hosted-dependency-cache.md#stage1-query-original-reader-not-the-complete-receiver)
 now covers all twelve query roots under borrowed ownership, with exact byte,
-command and roster checks. Its45 offline controls do not supply the surrounding
-P/E/R/A wrapper traversal, current authority, original proposal rederivation,
-actual step/hash transport or the later enclosing owner close.
+command and roster checks. Its45 offline controls belong to that exact earlier
+query-only revision. The separate
+[surrounding original-graph reader](../testing/hosted-dependency-cache.md#stage1-surrounding-original-graph-not-current-authority)
+adds fixed P/E/R/A traversal and original service/proposal rederivation as
+supplied-record consistency only. It remains dormant WIP with
+**COMPLETE_POSITIVE_OUTSTANDING**: the complete1066 reader exceeded the existing
+offline CPU20 bound, even with synthetic fixture preparation separated. Focused
+negatives/equivalence checks do not supply its complete return/close or authorize
+building a receiving prerequisite on it. Neither reader supplies current
+authority, authenticated step/hash transport, same-boot continuity or the later
+enclosing owner close.
 Neither the hashes nor narrow sender/reader checks establish the missing
 receiving authority, timing continuity or complete original custody.
 

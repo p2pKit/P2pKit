@@ -945,14 +945,109 @@ replacement regression still failed; final45 includes that correction. The
 absent-entry preimage and one pre-import harness-permission refusal also remain
 preserved, not relabelled as passed execution.
 
-The complete fixed P/E/R/A parent graph, original proposal/service-time
-rederivation, genuine step/hash transport, NEW receiving owner and fresh Stage1
-authority still need integration inside the single canonical-init120 interval.
+Those45 controls and their independent approval belong to the query-only
+revision `cd2a8537fe88a390ce50a92f8e45db0c63975f49`. The surrounding graph and
+additional integration-performance changes are described below; their review
+is separate, and the older approval does not approve changed reader source.
+
+Genuine step/hash transport, a NEW receiving owner and fresh Stage1 authority
+still need integration inside the single canonical-init120 interval.
 The strict reader requires an actually retained unique native leader. A very
 short-lived POSIX Git child may exit before its lifetime is observed; missing
 leader evidence must refuse, not be reconstructed from its launch PID. Models
 do not establish that real native prerequisite. No private crypto working-file
 traversal, provider qualification, budget admission or HOLD change follows.
+
+#### Stage1 surrounding original graph, not current authority
+
+**Dormant WIP / COMPLETE_POSITIVE_OUTSTANDING.** Do not use this graph as an
+accepted receiving prerequisite. The complete positive has not returned within
+the existing offline CPU20 limit; selected negative and equivalence controls
+cannot replace that missing return, final rereads/listings and owner close.
+
+Internal `_read_initial_recipient_originals` borrows the receiving caller's
+Owner and sender directory. It reads the fixed preparation/entry/recipient/
+authority graph, including the query reader's twelve roots: **1,066 originals**
+(52 sender/wrapper files plus1,014 query files), with29 wrapper-directory opens
+and192 query-leaf additions. Roots/layout come from maintained source;
+query-child components derive from validated original IDs, not arbitrary path
+selectors. The aggregate retained-byte ceiling is64MiB; each complete query leaf
+is reserved before allocating its children. Existing per-file limits and all
+borrowed deadline/cancellation checks remain.
+
+The graph binds exact sender/hash references, canonical native/context records,
+source and ancestor contexts, P's original service-time basis/allocation proposal,
+E/A's same service-job identity and R's actual shortened final/read fences.
+It rereads earlier originals and directory rosters after later leaves. Exact
+encoded equality rejects boolean/integer/float aliases in duplicated native,
+clock and supplier records. Windows-native returned path spelling is checked
+separately from the graph's fixed slash-separated keys. Crypto's directory
+identity is pinned, but its contents are **never enumerated or read**.
+
+The supplied original `firstUseAt` is only a historical data-consistency time.
+Factored historical matching acquires no wall clock or current authority; live
+matching still samples wall time after interpretation, and live worker binding
+still makes its separate later currency check. The graph creates no Owner,
+credential, authority registry, live historical return, native worker or
+initializer. Return scope remains **SUPPLIED_STAGE1_PUBLISHED_GRAPH_CONSISTENCY_ONLY /
+OWNER_CLOSE_PENDING**. Supplied step outcome/hash and records cannot authenticate
+themselves or prove the same runner boot.
+
+The complete borrowed resource prefix, authentic appended rows, raw returned
+directories and saved Path state remain pinned before fallible callbacks.
+Falsey first failures remain first; uncertain custody is retained, not repaired
+by inventing a ledger or reopening a predecessor. For this larger composition,
+saved Path-history nodes are flattened without dropping/reordering duplicates;
+initial native-identity validation is followed by exact scalar-type/value checks;
+exact four-key roster checks avoid rebuilding sets at every boundary. These are
+integration-performance changes, not fewer callback/check boundaries or wider
+deadlines. The reader-only Path checker keeps every saved node and field order,
+delegating every nonpath node to the unchanged shared historical checker. These
+changes require their own independent equivalence/mutation review.
+
+The [focused graph controls](../../scripts/tests/hosted-initial-recipient-original-graph-test.py)
+are offline models with tiny ordinary-UID files, not hosted/native evidence:
+
+| Actually executed scope | Result |
+| --- | --- |
+| Current Path-history controls | 2/2 methods PASS, one invocation (0.001s). |
+| Current native-record grammar controls | 6/6 methods PASS, two disjoint three-method invocations (8.820s /7.566s). |
+| Current graph negatives and Windows relative-name seam | 12/12 methods PASS in twelve one-method invocations. These include original-file/roster/cap/falsey-failure controls and explicitly fault-injected source/ancestor/supplier returns. Windows spelling is a model, not Windows execution. |
+| Retained historical/live matching controls | R2's4/4 PASS (0.066s), not rerun. The four-method class and five affected matching/time functions are AST-identical; this is scoped input reuse, not a current whole-file run. |
+
+The supplier-identity and earlier-leaf reread controls borrow a separately
+prepared, closed **synthetic** file fixture and create a fresh model Owner;
+they do not restore historical authority. The latter ran last and intentionally
+changed the earlier original file. Every successful model-test Python invocation
+above used
+UID/GID65534, Python3.12.3 `-I -B -S`, cleared environment/groups, no-new-privs,
+read-only source, CPU20/512MiB/file32MiB/FD128/core0/wall30+kill2 and pre-project
+filesystem/process/network/native-loader guards: four synthetic guard controls,
+zero unexpected denials or ResourceWarnings. No private key or provider ran.
+
+The meaningful type-comparison preimages remain failed: eight ACK/child clock
+subtests in one method, and the unchanged supplier-identity method reaching
+`MODEL_INVALID_SUPPLIER_WAS_ACCEPTED`. Only the three canonical comparisons were
+reverted from R6 for those controls; R6's integration-performance changes were
+retained. This is not the later reader-only Path-checker revision minus three
+lines. Earlier setup/harness failures remain separately recorded.
+
+**No complete graph positive passed.** R2/R4/R5 combined attempts and R7/R9
+reader-only attempts were killed at CPU20. R9's exact current source exited137
+(USER19.723/SYSTEM0.286), without a final guard/resource summary. A separately
+bounded diagnostic finished all12 leaves but stopped after536 of1066 final
+rereads, before the second global listings, immutable return and final model
+close. Its deliberate diagnostic stop is not positive acceptance. No deadline
+was increased and no unchanged complete retry followed. Final independent
+review is recorded against the containing #437 checkpoint; it must not be
+described as `APPROVE_COMPLETE_GRAPH_IMPLEMENTATION` without the missing positive.
+
+This section grants no receiving authority, provider/native qualification,
+budget admission or workflow activation. Authentic predecessor outcome/hash
+transport, same-job/run/attempt/selection/runner/boot continuity, a NEW owner and
+fresh Stage1 authority must still fit original reading, authority acquisition/
+close, credential disposal and initialization into **one LOCAL-before-RAW
+canonical-init120 interval**.
 
 #### Stage1 canonical-context reader, not initialization authority
 

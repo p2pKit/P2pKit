@@ -784,8 +784,8 @@ def service_child(context_hash, minimum, cancelled, *, entry=False, authority=Fa
             "terminalSha256": O.digest(result_raw), "clock": O.clock_value(fence.clock), "closedNs": closed}, fence, start["workEndNs"]
 
 
-def retained_match(context, raw, invocation, clock, work_start, work_end):
-    """Recheck exact retained originals; only the native parent supplies origin."""
+def _retained_match_inputs(context, raw, invocation, clock, work_start, work_end):
+    """Interpret supplied HTTP/source bytes, without a clock or authority acquisition."""
     observed = context["observed"]
     github = observed["github"]
     base = acquisition.API + "/actions/runs/" + github["runId"]
@@ -825,22 +825,37 @@ def retained_match(context, raw, invocation, clock, work_start, work_end):
     args = {name: raw[name] for name in SOURCE_KEYS}
     if observed["kind"] == "gate":
         observation["inputs"] = observed["inputs"]
-        result = acquisition.gate.eligible(stage="stage1", approvals_raw=approval, comment_raw=comment,
-            environment_raw=env_raw, branches_raw=branches, observation_raw=I.encoded(observation), now=int(time.time()),
-            expected=acquisition.gate.GateEligibility(raw["match"]), **args)
+        args.update(stage="stage1", approvals_raw=approval, comment_raw=comment,
+            environment_raw=env_raw, branches_raw=branches, observation_raw=I.encoded(observation),
+            expected=acquisition.gate.GateEligibility(raw["match"]))
     else:
+        require(observed["kind"] == "worker", "RETAINED_MATCH_KIND")
         observation["github"].update(profile=acquisition.stages.bootstrap.PROFILE, selection=observed["inputs"]["selection"])
-        result = acquisition.stages.match_bootstrap(comment_raw=comment, comment_id=selector["commentId"],
-            body_sha256=selector["bodySha256"], observation_raw=I.encoded(observation), now=int(time.time()),
-            expected=acquisition.stages.BootstrapMatch(raw["match"]), **args)
+        args.update(comment_raw=comment, comment_id=selector["commentId"],
+            body_sha256=selector["bodySha256"], observation_raw=I.encoded(observation),
+            expected=acquisition.stages.BootstrapMatch(raw["match"]))
     require(raw["observation"] == I.encoded(observation), "OBSERVATION_CHANGED")
-    return result, {"firstNs": times[0], "lastNs": times[-1], "numericJobId": job["id"],
+    return observed["kind"], args, {"firstNs": times[0], "lastNs": times[-1], "numericJobId": job["id"],
         "runnerName": observed["runnerName"],
         "selector": acquisition.GATE_SELECTOR if observed["kind"] == "gate" else O.SERVICE_SELECTORS[clock.role],
         "jobStartedAt": job["started_at"], "originDateEpochSeconds": jobs_date,
         "jobsRequestStartedNs": jobs_started,
         "originalsSha256": {name: O.digest(raw[name]) for name in HTTP_KEYS},
         "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False}
+
+
+def _retained_match_at(inputs, *, now):
+    """Supplied-time predicate only; it cannot establish original/current currency."""
+    kind, args, service = inputs
+    require(kind in ("gate", "worker"), "RETAINED_MATCH_KIND")
+    matcher = acquisition.gate.eligible if kind == "gate" else acquisition.stages.match_bootstrap
+    return matcher(now=now, **args), service
+
+
+def retained_match(context, raw, invocation, clock, work_start, work_end):
+    """Live callers still sample wall time AFTER interpreting all original records."""
+    inputs = _retained_match_inputs(context, raw, invocation, clock, work_start, work_end)
+    return _retained_match_at(inputs, now=int(time.time()))
 
 
 def _worker_time_records(identity, captured, clock):
@@ -864,6 +879,11 @@ def _worker_time_records(identity, captured, clock):
     rechecked = initial_identity.bind_worker_match(match, event_raw=raw["event"],
         policy_raw=raw["candidate_policy_raw"], now=int(time.time()))
     require(_worker_fields(rechecked) == _worker_fields(identity), "WORKER_TIME_IDENTITY_CHANGED")
+    return _worker_time_values(identity, service, clock, invocation)
+
+
+def _worker_time_values(identity, service, clock, invocation):
+    """Pure basis/proposal encoding; supplied service data is not provenance or a budget."""
     value = I.parse(identity.record, I.EVENT_LIMIT)
     shared = {"schema": 1, "profile": value["profile"], "selection": value["selection"],
         "cacheCohort": value["cacheCohort"], "source": value["source"], "github": value["github"],
@@ -3441,6 +3461,23 @@ def _initial_query_commands(queries, captures, originals):
             require(raw == expected, "QUERY_ORIGINAL_SOURCE_BYTES")
 
 
+def _check_reader_path_history(nodes):
+    """Same saved nodes/predicates; avoid success-only exception-message work.
+
+    Reader pins contain Paths. Preserve the generic check for every other node
+    kind, rather than dropping or recategorizing any saved history. The shared
+    historical-object checker and its other callers are unchanged.
+    """
+    for value, kind, mode, saved in nodes:
+        if mode == "path":
+            if type(value) is not kind:
+                require(False, "RECIPIENT_HISTORY_CHANGED")
+            if (str(value), value.parts, value.drive, value.root) != saved:
+                require(False, "RECIPIENT_HISTORY_CHANGED")
+        else:
+            _check_history(((value, kind, mode, saved),))
+
+
 def _read_initial_query_originals(owner, directory, *, expected_session_sha256, expected_source_return_raw=None):
     """SUPPLIED_QUERY_BYTE_GRAPH_ONLY; enclosing OWNER_CLOSE_PENDING.
 
@@ -3467,16 +3504,18 @@ def _read_initial_query_originals(owner, directory, *, expected_session_sha256, 
     require(len({id(row) for row, *_rest in prefix}) == len(prefix) ==
         len({id(resource) for _row, _label, resource, _a, _c in prefix}), "QUERY_ORIGINAL_RESOURCE_ALIAS")
     methods = tuple((name, getattr(owner, name)) for name in ("end", "read", "acquire"))
-    held, new_rows, pins, path_pins, records = [], [], [], [], []
+    held, new_rows, pins, path_nodes, records = [], [], [], [], []
+    missing = object()
 
     def roster():
         return owner.resources is ledger and len(ledger) == len(prefix) + len(held) and all(
-            row is saved and type(row) is dict and set(row) == {"label", "owner", "attempted", "closed"} and
-            type(row["label"]) is str and row["label"] == label and row["owner"] is resource and
-            row["attempted"] is attempted and row["closed"] is closed
+            row is saved and type(row) is dict and len(row) == 4 and
+            type(row.get("label")) is str and row.get("label") == label and row.get("owner", missing) is resource and
+            row.get("attempted") is attempted and row.get("closed") is closed
             for row, (saved, label, resource, attempted, closed) in zip(ledger, prefix)) and all(
-            type(row) is dict and set(row) == {"label", "owner", "attempted", "closed"} and
-            row["label"] == "directory" and row["owner"] is resource and row["attempted"] is False and row["closed"] is False
+            type(row) is dict and len(row) == 4 and
+            row.get("label") == "directory" and row.get("owner", missing) is resource and
+            row.get("attempted") is False and row.get("closed") is False
             for row, resource in zip(ledger[len(prefix):], held)) and all(
             row is saved for row, saved in zip(ledger[len(prefix):], new_rows))
 
@@ -3491,12 +3530,18 @@ def _read_initial_query_originals(owner, directory, *, expected_session_sha256, 
         require(roster(), "QUERY_ORIGINAL_ROSTER_CHANGED")
         require(owner.closed is False and owner.unknown is False and owner.original is None and errors == [] and
             not native.QUARANTINE and not Q.QUARANTINE and not native.diagnostics._QUARANTINE, "QUERY_ORIGINAL_OWNER_NOT_LIVE")
-        for graph in path_pins:
-            _check_history(graph)
+        # Preserve every original node/check, including repeated paths, without
+        # recreating one helper frame per directory at each callback boundary.
+        _check_reader_path_history(path_nodes)
         for child, path, identity, original_path in pins:
-            require(child.path is original_path and child.path == path and
-                tuple(native.directory_identity(list(child.identity), role)) == identity and
-                (child._closed if role == "windows-x64" else child.closed) is False, "QUERY_ORIGINAL_DIRECTORY_CHANGED")
+            if not (child.path is original_path and child.path == path):
+                require(False, "QUERY_ORIGINAL_DIRECTORY_CHANGED")
+            current = tuple(child.identity)
+            # Exact equality to the initially validated scalar types/values also
+            # reestablishes their ranges/format; bool/int aliases remain invalid.
+            if not (len(current) == 2 and type(current[0]) is int and type(current[1]) is type(identity[1]) and current == identity and
+                    (child._closed if role == "windows-x64" else child.closed) is False):
+                require(False, "QUERY_ORIGINAL_DIRECTORY_CHANGED")
 
     def checked():
         data()
@@ -3521,7 +3566,7 @@ def _read_initial_query_originals(owner, directory, *, expected_session_sha256, 
                 for saved, saved_path, _identity, _original_path in pins),
             "QUERY_ORIGINAL_DIRECTORY_TYPE")
         pins.append((child, path, tuple(native.directory_identity(list(child.identity), role)), child.path))
-        path_pins.append(_history_graph(child.path, path))
+        path_nodes.extend(_history_graph(child.path, path))
 
     def owned(child):
         saved = next(row for row in pins if row[0] is child)
@@ -3726,6 +3771,631 @@ def _read_initial_query_originals(owner, directory, *, expected_session_sha256, 
         if owner.unknown:
             # Retention only, not a capability registry or a restored/forged ledger.
             native.QUARANTINE.append((owner, prefix, tuple(held), tuple(pins)))
+        raise original
+
+
+def _initial_graph_json(raw, fields=None, scope=None):
+    """Canonical supplied bytes only; no original-return or live authority lookup."""
+    value = O.parse(raw)
+    require(type(raw) is bytes and type(value) is dict and raw == O.encoded(value) and
+        (fields is None or set(value) == fields) and (scope is None or
+        type(value.get("schema")) is int and value["schema"] == 1 and value.get("scope") == scope),
+        "GRAPH_RECORD")
+    return value
+
+
+def _initial_graph_native(context_raw, path, clock, first, work, final, records, child_raw, kind):
+    """The four fixed historical native phases; no phase/fence/return is reconstructed."""
+    require(kind in ("P", "E", "A", "R") and set(records) == native.PHASE_FILES, "GRAPH_NATIVE_KIND")
+    recipient = kind == "R"
+    context = _initial_graph_json(context_raw)
+    start = _initial_graph_json(records["start.json"], native.START_FIELDS,
+        RECIPIENT_START_SCOPE if recipient else native.PHASE_SCOPE)
+    command = (_recipient_command(O.digest(context_raw)) if recipient else native.phase_command(context_raw))
+    require(start["contextSha256"] == O.digest(context_raw) and start["argv"] == command and
+        start["cwd"] == str(ROOT) and start["role"] == clock.role and start["job"] == context["job"] and
+        start["state"] == str(path) and start["home"] == str(path / "control-home") and
+        type(start["invocation"]) is str and re.fullmatch(r"[0-9a-f]{32}", start["invocation"]) and
+        start["exitCode"] is None and start["launchAttempted"] is False and start["scopeAttempted"] is False and
+        start["retirement"] == "UNKNOWN", "GRAPH_NATIVE_START")
+    began = O.integer(start["startedNs"], first if recipient else O.integer(context["sourceReturnedNs"], first))
+    ends = (work, final) if recipient else (min(work, began + 45 * O.NS), min(final, min(work, began + 45 * O.NS) + 45 * O.NS))
+    require(began < work and all(type(start[name]) is int and start[name] == end for name, end in
+        zip(("workEndNs", "finalEndNs"), ends)), "GRAPH_NATIVE_FENCES")
+    inherited = native.processes.ownership_environment(context["inheritedContext"], context["job"], start["invocation"],
+        str(path), str(path / "control-home"), allow_new_context=True)
+    require(start["inheritedContext"] == {name: inherited[name] for name in Q._CONTEXT}, "GRAPH_NATIVE_ANCESTORS")
+    extra = {"finalStartedNs", "readStartedNs", "readEndNs", "readbackCompletedNs"} if recipient else set()
+    row = _initial_graph_json(records["result.json"], native.TERMINAL_FIELDS | extra, start["scope"])
+    birth = _initial_graph_json(records["native-start.json"], {"ownership", "leader", "preparerIdentity", "observedNs"})
+    _initial_graph_json(records["baseline.json"], {"role", "baseline", "kernelJob"})
+    baseline = native.baseline_record(records["baseline.json"], clock.role)
+    replaced = {"exitCode", "launchAttempted", "scopeAttempted", "retirement"} | ({"finalEndNs"} if recipient else set())
+    require(all(O.encoded(row[name]) == O.encoded(start[name]) for name in set(start) - replaced) and
+        type(row["exitCode"]) is int and row["exitCode"] == 0 and row["launchAttempted"] is True and
+        row["scopeAttempted"] is True and row["scopeCloseAttempted"] is True and row["scopeClosed"] is True and
+        row["retirement"] == "KNOWN" and row["errors"] == [] and row["survivors"] == [] and
+        records["stderr.log"] == b"" and len(records["stdout.log"]) <= native.ACK_LIMIT and
+        row["baselineSha256"] == O.digest(records["baseline.json"]) and
+        row["nativeStartSha256"] == O.digest(records["native-start.json"]) and
+        O.encoded(row["leader"]) == O.encoded(birth["leader"]),
+        "GRAPH_NATIVE_RETIREMENT")
+    preparer = native.closed_lifetime(row["preparerIdentity"], clock.role)
+    require(preparer == native.closed_lifetime(birth["preparerIdentity"], clock.role) and
+        preparer["pid"] != row["leader"]["pid"], "GRAPH_NATIVE_PREPARER")
+    minimum = O.integer(row["launchMinimumNs"], began)
+    argv = (_recipient_command(O.digest(context_raw), minimum) if recipient else native.phase_command(context_raw, minimum))
+    require(row["launchArgv"] == argv, "GRAPH_NATIVE_COMMAND")
+    native.native_record(row["ownership"], start, row["leader"], argv)
+    native.native_record(birth["ownership"], start, row["leader"], argv, terminal=False)
+    require(O.encoded(birth["ownership"]["launches"]) == O.encoded(row["ownership"]["launches"]), "GRAPH_NATIVE_BIRTH")
+    if baseline["baseline"] is not None:
+        leader = native.lifetime(row["leader"], clock.role)
+        require(list(leader[:4] if clock.role.startswith("macos-") else leader) not in baseline["baseline"],
+            "GRAPH_NATIVE_PREEXISTING_LEADER")
+    outcomes = {name: {key: True for key in ("synced", "verified", "closeAttempted", "closed", "readback")}
+        for name in ("stdout", "stderr")}
+    captures = {name: {"bytes": len(records[name + ".log"]), "sha256": O.digest(records[name + ".log"])}
+        for name in ("stdout", "stderr")}
+    require(O.encoded(row["captureOutcomes"]) == O.encoded(outcomes) and
+        O.encoded(row["captures"]) == O.encoded(captures), "GRAPH_NATIVE_CAPTURES")
+    ack_scope = {"P": native.INITIAL_ACK_SCOPE, "E": native.INITIAL_ENTRY_ACK_SCOPE,
+        "A": native.INITIAL_AUTHORITY_ACK_SCOPE, "R": native.INITIAL_RECIPIENT_ACK_SCOPE}[kind]
+    ack = _initial_graph_json(records["stdout.log"], {"schema", "scope", "invocation", "terminalSha256", "clock", "closedNs"}, ack_scope)
+    require(ack["invocation"] == start["invocation"] and ack["terminalSha256"] == O.digest(child_raw) and
+        O.encoded(ack["clock"]) == O.encoded(O.clock_value(clock)), "GRAPH_NATIVE_ACK")
+    common = {"schema", "scope", "contextSha256", "startSha256", "clock", "invocation", "launchMinimumNs",
+        "beganNs", "metadataLastNs", "completedNs"}
+    fields = ({"identitySha256", "authoritySha256", "recipient", "sourceBeforeSha256", "sourceAfterSha256",
+        "supplierReturnedNs", "supplierReturned", "childResourceClose", "parentRetirement", "budgetAcceptance",
+        "testAcceptance", "exportSaveAuthority"} if recipient else {"acquiredNs", "queryReturnedNs",
+        "querySessionSha256", "originalsSha256", "matchSha256", "retirement", "errors"})
+    child = _initial_graph_json(child_raw, common | fields,
+        {"P": CHILD_SCOPE, "E": ENTRY_CHILD_SCOPE, "A": AUTHORITY_CHILD_SCOPE, "R": RECIPIENT_CHILD_SCOPE}[kind])
+    require(child["contextSha256"] == O.digest(context_raw) and child["startSha256"] == O.digest(records["start.json"]) and
+        O.encoded(child["clock"]) == O.encoded(O.clock_value(clock)) and child["invocation"] == start["invocation"] and
+        type(child["launchMinimumNs"]) is int and child["launchMinimumNs"] == minimum,
+        "GRAPH_NATIVE_CHILD")
+    if recipient:
+        require(child["supplierReturned"] is True and child["childResourceClose"] == "PENDING_CLOSE" and
+            child["parentRetirement"] == "NOT_OBSERVED_HERE" and child["budgetAcceptance"] == "NOT_ADMITTED" and
+            child["testAcceptance"] == "NOT_PERFORMED" and child["exportSaveAuthority"] is False, "GRAPH_RECIPIENT_CHILD")
+    else:
+        require(child["retirement"] == "KNOWN" and child["errors"] == [], "GRAPH_SERVICE_CHILD")
+    return start, row, birth, child, ack
+
+
+def _read_initial_recipient_originals(owner, directory, *, recipient_outcome, expected_sha256):
+    """SUPPLIED_STAGE1_PUBLISHED_GRAPH_CONSISTENCY_ONLY / OWNER_CLOSE_PENDING.
+
+    Read the fixed P/E/R/A graph rooted in the three-file sender S. Return only
+    immutable (relative-name, original-bytes) tuples; A is R/authority. Supplied
+    step outcome/hash are NOT authenticated here. Original firstUseAt is solely
+    FIRST_USE_DATA_CONSISTENCY_ONLY, not final/current currency or authority.
+    Crypto internals are unbound and NOT read. No new Owner, deadline, token,
+    registry, live historical object, native supplier or initializer is created.
+    The same borrowed interval includes all checks. Success still awaits its
+    enclosing owner's actual close and the future genuine receiving authority.
+    """
+    require(type(owner) is native.Owner and owner.first is not None and owner.fence is not None and
+        type(owner.resources) is list and type(owner.errors) is list, "GRAPH_OWNER")
+    first, fence, ledger, errors = owner.first, owner.fence, owner.resources, owner.errors
+    cancelled, local_end, limits = owner.cancelled, owner.local_end, (owner.work_limit, owner.final_limit)
+    O.clocks.validate_reading(first)
+    first_ns, clock_raw, role = first.nanoseconds, O.encoded(O.clock_value(first.clock)), first.clock.role
+    require(callable(cancelled) and type(local_end) is float and math.isfinite(local_end), "GRAPH_OWNER")
+    require(all(type(row) is dict and set(row) == {"label", "owner", "attempted", "closed"} and
+        row["label"] in ("directory", "writer", "stdout", "stderr", "native-scope") and
+        type(row["attempted"]) is bool and type(row["closed"]) is bool and (not row["closed"] or row["attempted"])
+        for row in ledger), "GRAPH_OWNER_ROSTER")
+    rows = [(row, row["label"], row["owner"], row["attempted"], row["closed"]) for row in ledger]
+    require(len({id(row) for row, *_ in rows}) == len(rows) == len({id(resource) for _, _, resource, _, _ in rows}),
+        "GRAPH_RESOURCE_ALIAS")
+    prefix_count = len(rows)
+    methods = tuple((name, getattr(owner, name)) for name in ("end", "read", "acquire"))
+    sender_reader, query_reader = _read_recipient_sender, _read_initial_query_originals
+    held, pins, path_nodes, rosters, originals = [], [], [], [], {}
+    missing = object()
+    prefix_paths = tuple((resource, resource.path, _history_graph(resource.path)) for _, label, resource, _, _ in rows
+        if label == "directory")
+    used, leaf_failed = 0, False
+
+    def roster(*, tail=False):
+        return owner.resources is ledger and (len(ledger) >= len(rows) if tail else len(ledger) == len(rows)) and all(
+            actual is saved and type(actual) is dict and len(actual) == 4 and actual.get("label", missing) is not missing and
+            actual.get("label") == label and actual.get("owner", missing) is resource and
+            actual.get("attempted") is attempted and actual.get("closed") is closed
+            for actual, (saved, label, resource, attempted, closed) in zip(ledger, rows))
+
+    def structural(*, tail=False):
+        require(type(owner) is native.Owner and owner.first is first and owner.fence is fence and owner.errors is errors and
+            owner.cancelled is cancelled and type(owner.local_end) is float and owner.local_end == local_end and
+            all(type(a) is type(b) and a == b for a, b in zip((owner.work_limit, owner.final_limit), limits)) and
+            type(first.nanoseconds) is int and first.nanoseconds == first_ns and
+            O.encoded(O.clock_value(first.clock)) == clock_raw == O.encoded(O.clock_value(fence.clock)) and
+            all(getattr(owner, name) == method for name, method in methods) and
+            _read_recipient_sender is sender_reader and _read_initial_query_originals is query_reader, "GRAPH_OWNER_CHANGED")
+        require(roster(tail=tail), "GRAPH_ROSTER_CHANGED")
+        for resource, path, graph in prefix_paths:
+            if resource.path is not path:
+                require(False, "GRAPH_PREFIX_PATH_CHANGED")
+            _check_reader_path_history(graph)
+        # Same saved nodes, order and duplicates; avoid one helper setup per pin.
+        _check_reader_path_history(path_nodes)
+        for resource, path, identity, original_path in pins:
+            if not (resource.path is original_path and resource.path == path):
+                require(False, "GRAPH_DIRECTORY_CHANGED")
+            current = tuple(resource.identity)
+            # Pin-time validation established the scalar ranges/format. Exact
+            # types and values imply those same predicates at every boundary.
+            if not (len(current) == 2 and type(current[0]) is int and type(current[1]) is type(identity[1]) and current == identity and
+                    (resource._closed if role == "windows-x64" else resource.closed) is False):
+                require(False, "GRAPH_DIRECTORY_CHANGED")
+
+    def data():
+        structural()
+        require(owner.closed is False and owner.unknown is False and owner.original is None and errors == [] and
+            not native.QUARANTINE and not Q.QUARANTINE and not native.diagnostics._QUARANTINE, "GRAPH_OWNER_NOT_LIVE")
+
+    def checked():
+        data()
+        cancelled()
+        data()
+        owner.end()
+        data()
+        cancelled()
+        data()
+        owner.end()
+        data()
+
+    def call(function, *args):
+        checked()
+        value = function(*args)
+        checked()
+        return value
+
+    def same(value, expected):
+        require(O.encoded(value) == O.encoded(expected), "GRAPH_BINDING")
+
+    def pin(resource, path):
+        require(type(resource) is (native.windows.PrivateDirectory if role == "windows-x64" else Q._PosixDirectory) and
+            resource.path == path and not any(resource is old or path == old_path for old, old_path, _, _ in pins),
+            "GRAPH_DIRECTORY_TYPE")
+        pins.append((resource, path, tuple(native.directory_identity(list(resource.identity), role)), resource.path))
+        path_nodes.extend(_history_graph(path, resource.path))
+
+    def owned(resource):
+        _, path, identity, _ = next(row for row in pins if row[0] is resource)
+        call(native._new_entry_owned, owner, resource, path, identity)
+
+    def names(resource, expected):
+        owned(resource)
+        end = call(owner.end)
+        found = []
+        if role == "windows-x64":
+            found = resource.names(max_names=max(1, len(expected)), deadline=end)
+        else:
+            with os.scandir(resource.path) as entries:
+                for entry in entries:
+                    checked()
+                    require(len(found) < max(1, len(expected)), "GRAPH_DIRECTORY_LIMIT")
+                    found.append(entry.name)
+        checked()
+        require(all(type(name) is str for name in found) and len(found) == len({name.casefold() for name in found}) and
+            tuple(sorted(found)) == tuple(sorted(expected)), "GRAPH_DIRECTORY_ROSTER")
+        owned(resource)
+
+    def opened(path, parent=None):
+        if parent is not None:
+            owned(parent)
+            require(path.parent == parent.path, "GRAPH_CHILD_PATH")
+            Q._component(path.name)
+        target_graph = _history_graph(path)
+        end = call(owner.end)
+        pending = []
+
+        def factory():
+            resource = (native.windows.open_private_directory(path) if parent is None else
+                parent.open_directory(path.name, deadline=end)) if role == "windows-x64" else Q._PosixDirectory(path)
+            held.append(resource)  # Raw return custody before ANY fallible pin/callback.
+            pending.append(resource)
+            _check_history(target_graph)
+            pin(resource, path)
+            return resource
+
+        checked()
+        saved_end, dictionary = owner.end, owner.__dict__
+        had_end, end_slot = "end" in dictionary, dictionary.get("end")
+        before = len(rows)
+
+        def allocation_end(*, final=False):
+            require(owner.__dict__ is dictionary and owner.end is allocation_end, "GRAPH_END_CHANGED")
+            if pending and len(rows) == before:
+                require(len(pending) == 1 and len(ledger) == before + 1, "GRAPH_ROSTER_CHANGED")
+                rows.append((ledger[-1], "directory", pending[0], False, False))
+            require(roster(), "GRAPH_ROSTER_CHANGED")
+            value = saved_end(final=final)
+            require(owner.__dict__ is dictionary and owner.end is allocation_end and roster(), "GRAPH_END_CHANGED")
+            return value
+
+        owner.end = allocation_end
+        try:
+            resource = owner.acquire("directory", factory)
+            require(owner.__dict__ is dictionary and owner.end is allocation_end, "GRAPH_END_CHANGED")
+        finally:
+            if owner.__dict__ is dictionary and owner.end is allocation_end:
+                if had_end:
+                    owner.end = end_slot
+                else:
+                    del owner.end
+            else:
+                owner.unknown = True
+        require(len(rows) == before + 1, "GRAPH_ROSTER_CHANGED")
+        checked()
+        owned(resource)
+        return resource
+
+    def retain(key, resource, name, raw, maximum):
+        nonlocal used
+        require(key not in originals and type(raw) is bytes and len(raw) <= maximum and
+            used + len(raw) <= Q.MAX_SESSION_BYTES, "GRAPH_BYTE_LIMIT")
+        used += len(raw)
+        originals[key] = (resource, name, maximum, raw)
+        return raw
+
+    def read(key, resource, name, maximum=native.LIMIT):
+        owned(resource)
+        remaining = Q.MAX_SESSION_BYTES - used
+        require(remaining > 0, "GRAPH_BYTE_LIMIT")
+        raw = call(owner.read, resource, name, min(maximum, remaining))
+        return retain(key, resource, name, raw, maximum)
+
+    def raw(key):
+        return originals[key][3]
+
+    def value(key):
+        return _initial_graph_json(raw(key))
+
+    def sha(key):
+        return O.digest(raw(key))
+
+    def query(key, session_hash, side_hash, ancestor, observed):
+        nonlocal leaf_failed
+        resource = dirs[key]
+        acquisition_root = key.endswith("/acquisition-queries")
+        side = None
+        if not acquisition_root:
+            side = read(key + "/source-return.json", resource, "source-return.json")
+            require(O.digest(side) == side_hash, "GRAPH_SOURCE_HASH")
+            session_hash = _initial_graph_json(side)["sessionSha256"]
+        session_raw = read(key + "/session-result.json", resource, "session-result.json", Q.MAX_RECEIPT_BYTES)
+        require(O.digest(session_raw) == session_hash, "GRAPH_QUERY_HASH")
+        session = _initial_graph_json(session_raw)
+        queries, declarations = session.get("queries"), session.get("readbacks")
+        require(type(queries) is list and len(queries) == (24 if acquisition_root else 12) and
+            all(type(item) is dict and type(item.get("id")) is str and re.fullmatch(r"[0-9a-f]{32}", item["id"])
+                for item in queries) and len({item["id"] for item in queries}) == len(queries), "GRAPH_QUERY_IDS")
+        query_names = ("start.json", "baseline.json", "stdout.log", "stderr.log", "result.json")
+        expected = [("", "owner.json")]
+        if acquisition_root:
+            expected.append(("", "event.bin"))
+        for index, item in enumerate(queries):
+            expected.extend(("query-" + item["id"], name) for name in query_names)
+            if acquisition_root and index == 11:
+                expected.extend(("", name + ".bin") for name in (*SOURCE_KEYS, *HTTP_KEYS))
+        expected.extend(("", name + ".bin") for name in (("observation", "match") if acquisition_root else SOURCE_KEYS))
+        require(type(declarations) is list and len(declarations) == len(expected), "GRAPH_QUERY_DECLARATIONS")
+        reserved = 0
+        for item, (parent, name) in zip(declarations, expected):
+            require(type(item) is dict and set(item) == {"parent", "name", "maximum", "retirement", "result", "bytes", "sha256"} and
+                item["parent"] == str(resource.path / parent) and item["name"] == name and
+                type(item["bytes"]) is int and type(item["maximum"]) is int and
+                0 <= item["bytes"] <= item["maximum"] <= Q.MAX_RECEIPT_BYTES and item["maximum"] > 0,
+                "GRAPH_QUERY_DECLARATIONS")
+            reserved += item["bytes"]
+            require(used + reserved <= Q.MAX_SESSION_BYTES, "GRAPH_BYTE_LIMIT")
+        checked()  # Reserve the entire fixed leaf BEFORE opening any leaf children.
+        before = len(rows)
+        try:
+            result = query_reader(owner, resource, expected_session_sha256=session_hash, expected_source_return_raw=side)
+        except BaseException:
+            leaf_failed = True
+            raise
+        # No outer end guard overlaps the leaf. Pin its authentic successful
+        # appended tail BEFORE a callback, clock, hash, parse or path inspection.
+        tail = tuple((row, row.get("owner") if type(row) is dict else None) for row in ledger[before:])
+        held.extend(resource_ for _, resource_ in tail)
+        rows.extend((row, "directory", resource_, False, False) for row, resource_ in tail)
+        child_names = ("query-home", *("query-" + item["id"] for item in queries))
+        require(len(tail) == len(child_names), "GRAPH_QUERY_TAIL")
+        for (_, child), name in zip(tail, child_names):
+            pin(child, resource.path / name)
+            rosters.append((child, () if name == "query-home" else query_names))
+        checked()
+        require(type(result) is tuple and len(result) == 3 and result[0] == session_raw and result[2] == side and
+            type(result[1]) is tuple and len(result[1]) == len(expected), "GRAPH_QUERY_RETURN")
+        root_names = ("owner.json", "session-result.json", *child_names,
+            *(name + ".bin" for name in (ORIGINAL_KEYS if acquisition_root else SOURCE_KEYS)),
+            *(("source-return.json",) if not acquisition_root else ()))
+        rosters.append((resource, root_names))
+        children = {"": resource, **{name: child for (_, child), name in zip(tail, child_names)}}
+        for returned, item, (parent, name) in zip(result[1], declarations, expected):
+            relative = str(Path(parent) / name)
+            require(type(returned) is tuple and len(returned) == 2 and returned[0] == relative and
+                type(returned[1]) is bytes and len(returned[1]) == item["bytes"], "GRAPH_QUERY_RETURN")
+            # Compare the leaf's OS-native spelling, but keep the byte graph's
+            # fixed keys slash-separated on every platform (including Windows).
+            member = parent + "/" + name if parent else name
+            retain(key + "/" + member, children[parent], name, returned[1], item["maximum"])
+        owner_value = value(key + "/owner.json")
+        same(owner_value["ancestorContext"], ancestor)
+        for position, field in ((2, "commit"), (3, "tree")):
+            capture = raw(key + "/query-" + queries[position]["id"] + "/stdout.log")
+            require(I.sha(capture.decode("ascii").strip()) == observed["source"][field], "GRAPH_QUERY_SOURCE")
+        originals_ = {name: raw(key + "/" + name + ".bin") for name in (ORIGINAL_KEYS if acquisition_root else SOURCE_KEYS)}
+        if source_originals:
+            require({name: originals_[name] for name in SOURCE_KEYS} == source_originals, "GRAPH_SOURCE_CHANGED")
+        checked()
+        return originals_, None if side is None else _initial_graph_json(side)
+
+    try:
+        recipient_path = call(_recipient_path)
+        preparation = recipient_path.with_name(recipient_path.name.removesuffix("-recipient"))
+        paths_by_key = {"P": preparation, "E": preparation.with_name(preparation.name + "-entry"), "R": recipient_path,
+            "S": recipient_path.with_name(recipient_path.name + "-output")}
+        pin(directory, paths_by_key["S"])
+        checked()
+        sender_raw, sender_records = sender_reader(owner, directory, recipient_outcome=recipient_outcome, expected_sha256=expected_sha256)
+        checked()
+        retain("S/sender-pending.json", directory, "sender-pending.json", sender_raw, native.LIMIT)
+        for name, contents in sender_records:
+            retain("S/" + name, directory, name, contents, native.LIMIT)
+        rosters.append((directory, ("sender-pending.json", "readmission-return.json", "recipient-return.json")))
+        entry, recipient, sender = value("S/readmission-return.json"), value("S/recipient-return.json"), value("S/sender-pending.json")
+        dirs = {"S": directory}
+        for key in ("P", "E", "R"):
+            dirs[key] = opened(paths_by_key[key])
+        dirs["R/authority"] = opened(recipient_path / "authority", dirs["R"])
+        files = {"P": ("prelude.json", "context.json", "worker-identity.json", "worker-service-time.json",
+                "worker-allocation-proposal.json", "initial-result.json"),
+            "E": ("entry-window.json", "context.json", "entry-pending.json"),
+            "R/authority": ("authority-window.json", "context.json", "authority-pending.json"),
+            "R": (*RECIPIENT_FILES, "recipient-context.json", "recipient-pending.json")}
+        service_dirs = ("control-home", "temporary", "source-before", "service", "acquisition-queries", "source-after")
+        children = {key: service_dirs for key in ("P", "E", "R/authority")}
+        children["R"] = (*RECIPIENT_DIRECTORIES, "authority", "source-final")
+        for key in ("P", "E", "R/authority", "R"):
+            names(dirs[key], (*files[key], *children[key]))
+            rosters.append((dirs[key], (*files[key], *children[key])))
+            for name in files[key]:
+                read(key + "/" + name, dirs[key], name, I.POLICY_LIMIT if name == "worker-policy.json" else native.LIMIT)
+            for name in children[key]:
+                child_key = key + "/" + name
+                if child_key not in dirs:
+                    dirs[child_key] = opened(dirs[key].path / name, dirs[key])
+                if name in ("control-home", "temporary"):
+                    names(dirs[child_key], ())
+                    rosters.append((dirs[child_key], ()))
+        phase_files = ("start.json", "baseline.json", "result.json", "native-start.json", "stdout.log", "stderr.log", "child-result.json")
+        for key in ("P/service", "E/service", "R/authority/service", "R/recipient-validation"):
+            source_children = ("source-before", "source-after") if key == "R/recipient-validation" else ()
+            names(dirs[key], (*phase_files, *source_children))
+            rosters.append((dirs[key], (*phase_files, *source_children)))
+            for name in phase_files:
+                maximum = native.ACK_LIMIT if name == "stdout.log" else native.STDERR_LIMIT if name == "stderr.log" else native.LIMIT
+                read(key + "/" + name, dirs[key], name, maximum)
+            for name in source_children:
+                dirs[key + "/" + name] = opened(dirs[key].path / name, dirs[key])
+        require(len(rows) == prefix_count + 29 and len(originals) == 52, "GRAPH_WRAPPER_ROSTER")
+        past = native.history.HistoricalPrelude(raw("P/prelude.json"))
+        eframe, eclock, efirst, ework, efinal = _entry_frame(raw("E/entry-window.json"))
+        rframe, rclock, rfirst, rends = _recipient_frame(raw("R/recipient-window.json"))
+        aframe, aclock, afirst, awork, afinal = _authority_frame(raw("R/authority/authority-window.json"))
+        require(all(clock == first.clock for clock in (past.clock, eclock, rclock, aclock)), "GRAPH_CLOCK")
+        same(eframe, entry["window"])
+        same(rframe, recipient["window"])
+        same(aframe, rframe)
+        pcontext = value("P/context.json")
+        observed = pcontext["observed"]
+        require(type(observed) is dict and set(observed) == {"kind", "source", "inputs", "firstUseAt", "role", "runnerName", "github"} and
+            observed["kind"] == "worker" and observed["role"] == role and type(observed["runnerName"]) is str and
+            0 < len(observed["runnerName"]) <= 256 and not any(ord(c) < 32 or ord(c) == 127 for c in observed["runnerName"]),
+            "GRAPH_OBSERVED")
+        first_use = O.integer(observed["firstUseAt"], 1)
+        contexts, phases, services, matches, captures, chains = {}, {}, {}, {}, {}, {}
+        source_originals = {}
+        for key, kind, frame_name, frame_key, scope, fields, frame, began, work, final in (
+            ("P", "P", "prelude.json", "prelude", native.INITIAL_CONTEXT_SCOPE, CONTEXT_FIELDS,
+                O.parse(past.raw), past.first, past.work, past.final),
+            ("E", "E", "entry-window.json", "entryWindow", native.INITIAL_ENTRY_CONTEXT_SCOPE, ENTRY_CONTEXT_FIELDS,
+                eframe, efirst, ework, efinal),
+            ("R/authority", "A", "authority-window.json", "authorityWindow", native.INITIAL_AUTHORITY_CONTEXT_SCOPE, AUTHORITY_CONTEXT_FIELDS,
+                value("R/authority/authority-window.json"), afirst, awork, afinal)):
+            context_raw = raw(key + "/context.json")
+            context = _initial_graph_json(context_raw, fields, scope)
+            same(context[frame_key], frame)
+            same(context["observed"], observed)
+            require(context["root"] == str(ROOT) and context["session"] == str(dirs[key].path) and
+                context["budgetAcceptance"] == "NOT_ADMITTED" and context["exportSaveAuthority"] is False and
+                type(context["job"]) is str and re.fullmatch(r"[0-9a-f]{32}", context["job"]), "GRAPH_CONTEXT")
+            inherited = context["inheritedContext"]
+            require(type(inherited) is dict and all(type(item) is str for item in inherited.values()) and
+                (set(inherited).issubset({"GRADLE_USER_HOME"}) or set(inherited) == set(Q._CONTEXT)), "GRAPH_CONTEXT_ANCESTORS")
+            same(inherited, pcontext["inheritedContext"])
+            before_originals, before = query(key + "/source-before", None, context["sourceReturnSha256"], inherited, observed)
+            same(context["sourceReturnedNs"], before["returnedNs"])
+            require(began <= O.integer(before["returnedNs"]) < work, "GRAPH_SOURCE_CHRONOLOGY")
+            if not source_originals:
+                source_originals = before_originals
+            phase = _initial_graph_native(context_raw, dirs[key].path, first.clock, began, work, final,
+                {name: raw(key + "/service/" + name) for name in native.PHASE_FILES}, raw(key + "/service/child-result.json"), kind)
+            start, row, birth, child, ack = phase
+            originals_, _ = query(key + "/acquisition-queries", child["querySessionSha256"], None, start["inheritedContext"], observed)
+            require(context["eventSha256"] == O.digest(originals_["event"]) and child["originalsSha256"] ==
+                {name: O.digest(originals_[name]) for name in ORIGINAL_KEYS} and child["matchSha256"] == O.digest(originals_["match"]),
+                "GRAPH_SERVICE_ORIGINALS")
+            inputs = _retained_match_inputs(context, originals_, start["invocation"], first.clock, start["startedNs"], start["workEndNs"])
+            match, service = _retained_match_at(inputs, now=first_use)
+            minimum = _service_chain_minimum(began, before["returnedNs"], start, row, birth, child, service, ack)
+            pending_name = {"P": "initial-result.json", "E": "entry-pending.json", "A": "authority-pending.json"}[kind]
+            pending = value(key + "/" + pending_name)
+            chain = pending["originalChain"]
+            require(type(chain) is dict, "GRAPH_CHAIN")
+            checked_ns = O.integer(chain.get("checkedNs"), minimum)
+            same(chain, {"phaseSha256": {name: sha(key + "/service/" + name) for name in native.PHASE_FILES},
+                "childSha256": sha(key + "/service/child-result.json"), "querySessionSha256": sha(key + "/acquisition-queries/session-result.json"),
+                "originalsSha256": {name: O.digest(originals_[name]) for name in ORIGINAL_KEYS}, "checkedNs": checked_ns})
+            after_hash = (value("R/authority-return.json")["filesSha256"]["source-after/source-return.json"] if kind == "A" else pending["sourceAfterSha256"])
+            _, after = query(key + "/source-after", None, after_hash, inherited, observed)
+            require(row["finalizedNs"] <= O.integer(after["returnedNs"]) <= checked_ns <= O.integer(pending["retainedNs"]) < work,
+                "GRAPH_SERVICE_CHRONOLOGY")
+            captured = (context_raw, tuple((name, originals_[name]) for name in ORIGINAL_KEYS), start["invocation"], start["startedNs"], start["workEndNs"])
+            contexts[key], phases[key], services[key], matches[key], captures[key], chains[key] = context, phase, service, match, captured, chain
+            if kind != "P":
+                require(match.record == matches["P"].record and originals_["event"] == dict(captures["P"][1])["event"] and
+                    _service_job(captured, first.clock) == _service_job(captures["P"], first.clock), "GRAPH_ORIGINAL_JOB_OR_MATCH")
+                same(context["expectedMatch"], O.parse(matches["P"].record))
+                require(O.encoded(context["originalProposal"]) == raw("P/worker-allocation-proposal.json"), "GRAPH_ORIGINAL_PROPOSAL")
+        initial_raw = dict(captures["P"][1])
+        identity = initial_identity.bind_worker_match(matches["P"], event_raw=initial_raw["event"],
+            policy_raw=source_originals["candidate_policy_raw"], now=first_use)
+        require(identity.record == raw("P/worker-identity.json"), "GRAPH_WORKER_IDENTITY")
+        identity_value = O.parse(identity.record)
+        github = {name: identity_value["github"][name] for name in ("event", "ref", "workflow", "workflowSha", "job", "runId", "runAttempt", "runnerOS", "runnerArch")}
+        same(observed, {"kind": "worker", "source": identity_value["source"], "inputs": I.parse(initial_raw["event"], I.EVENT_LIMIT)["inputs"],
+            "firstUseAt": first_use, "role": role, "runnerName": observed["runnerName"], "github": github})
+        require(preparation.name == "p2pkit-initial-recipient-" + github["runId"] + "-" + github["runAttempt"] + "-worker" and
+            identity_value["cacheCohort"]["role"] == role, "GRAPH_JOB_PATH")
+        basis_raw, proposal_raw = _worker_time_values(identity, services["P"], first.clock, phases["P"][0]["invocation"])
+        require(basis_raw == raw("P/worker-service-time.json") and proposal_raw == raw("P/worker-allocation-proposal.json"),
+            "GRAPH_ORIGINAL_TIME_BASIS")
+        proposal = O.parse(proposal_raw)
+        p = value("P/initial-result.json")
+        same(p, {"schema": 1, "scope": RESULT_SCOPE, "contextSha256": sha("P/context.json"),
+            "sourceBeforeSha256": sha("P/source-before/source-return.json"), "sourceAfterSha256": sha("P/source-after/source-return.json"),
+            "matchSha256": O.digest(matches["P"].record), "originalChain": chains["P"], "retainedNs": O.integer(p["retainedNs"]),
+            "retirement": "PENDING_OWNER_CLOSE", "budgetAcceptance": "NOT_ADMITTED", "workerAdmission": "NOT_PERFORMED",
+            "workerIdentitySha256": O.digest(identity.record), "serviceTimeBasisSha256": O.digest(basis_raw),
+            "allocationProposalSha256": O.digest(proposal_raw), "qualificationAcceptance": "NOT_ESTABLISHED", "exportSaveAuthority": False})
+        for supplied in (entry["originalPreparationSha256"], eframe["originalPreparationSha256"]):
+            same(supplied, sha("P/initial-result.json"))
+        same(entry["workerIdentitySha256"], O.digest(identity.record))
+        same(entry["serviceTimeBasisSha256"], O.digest(basis_raw))
+        same(entry["allocationProposalSha256"], O.digest(proposal_raw))
+        same(eframe["originalProductiveEntryEndNs"], proposal["phaseFencesNs"]["productive-entry"])
+        same(eframe["originalProposedJobEndNs"], proposal["proposedJobEndNs"])
+        same(eframe["firstUseAt"], first_use)
+        require(p["retainedNs"] <= eframe["previousNs"] < past.final, "GRAPH_PREPARATION_PREVIOUS")
+        ep = value("E/entry-pending.json")
+        same(ep, {"schema": 1, "scope": ENTRY_PENDING_SCOPE, "originalPreparationSha256": sha("P/initial-result.json"),
+            "windowSha256": sha("E/entry-window.json"), "contextSha256": sha("E/context.json"),
+            "sourceBeforeSha256": sha("E/source-before/source-return.json"), "sourceAfterSha256": sha("E/source-after/source-return.json"),
+            "matchSha256": O.digest(matches["P"].record), "originalChain": chains["E"], "retainedNs": O.integer(ep["retainedNs"]),
+            "retirement": "PENDING_OWNER_CLOSE", "budgetAcceptance": "NOT_ADMITTED", "workerAdmission": "NOT_PERFORMED",
+            "qualificationAcceptance": "NOT_ESTABLISHED", "exportSaveAuthority": False})
+        require(entry["pendingSha256"] == sha("E/entry-pending.json") and ep["retainedNs"] <= entry["preCloseNs"], "GRAPH_ENTRY_CLOSE")
+        same(rframe["originalFencesNs"], {name: proposal["phaseFencesNs"][name] for name in
+            ("recipient-validation", "recipient-final", "recipient-read")})
+        for name, expected_raw in (("worker-identity.json", identity.record), ("worker-match.json", matches["P"].record),
+                ("worker-policy.json", identity.original_policy), ("worker-proposal.json", proposal_raw), ("recipient-public.asc", identity.public_key)):
+            require(raw("R/" + name) == expected_raw, "GRAPH_RECIPIENT_IDENTITY")
+        authority, ap = value("R/authority-return.json"), value("R/authority/authority-pending.json")
+        authority_names = ("authority-window.json", "context.json", "service/child-result.json", "acquisition-queries/session-result.json",
+            *("service/" + name for name in sorted(native.PHASE_FILES)), *("acquisition-queries/" + name + ".bin" for name in ORIGINAL_KEYS),
+            *(side + "/" + name for side in ("source-before", "source-after") for name in
+                ("source-return.json", "session-result.json", *(name + ".bin" for name in SOURCE_KEYS))))
+        require(len(authority_names) == 37, "GRAPH_AUTHORITY_ROSTER")
+        file_hashes = {name: sha("R/authority/" + name) for name in authority_names}
+        same(ap, {"schema": 1, "scope": "INITIAL_RECIPIENT_USE_AUTHORITY_PENDING_CLOSE_V1", "recipientWindowSha256": sha("R/recipient-window.json"),
+            "originalReadmissionSha256": sha("S/readmission-return.json"), "filesSha256": file_hashes,
+            "originalChain": chains["R/authority"], "retainedNs": O.integer(ap["retainedNs"]), "retirement": "PENDING_OWNER_CLOSE"})
+        same(authority, {"schema": 1, "scope": "INITIAL_RECIPIENT_USE_AUTHORITY_CLOSED_HISTORY_V1",
+            "recipientWindowSha256": sha("R/recipient-window.json"), "originalReadmissionSha256": sha("S/readmission-return.json"),
+            "workerIdentitySha256": O.digest(identity.record), "matchSha256": O.digest(matches["P"].record),
+            "serviceTimeBasisSha256": O.digest(basis_raw), "originalProposalSha256": O.digest(proposal_raw), "filesSha256": file_hashes,
+            "pendingSha256": sha("R/authority/authority-pending.json"), "originalChain": chains["R/authority"],
+            "preCloseNs": O.integer(authority["preCloseNs"], ap["retainedNs"]), "closedNs": O.integer(authority["closedNs"]),
+            "resourceCount": O.integer(authority["resourceCount"], 1), "retirement": "KNOWN_RESOURCE_CLOSE_ONLY",
+            "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
+        require(authority["preCloseNs"] < awork and authority["preCloseNs"] <= authority["closedNs"] < afinal <= rends[0], "GRAPH_AUTHORITY_CLOSE")
+        same(recipient["authoritySha256"], sha("R/authority-return.json"))
+        rcontext = _initial_graph_json(raw("R/recipient-context.json"), RECIPIENT_CONTEXT_FIELDS, RECIPIENT_CONTEXT_SCOPE)
+        same(rcontext, {"schema": 1, "scope": RECIPIENT_CONTEXT_SCOPE, "root": str(ROOT), "session": str(recipient_path),
+            "observed": observed, "eventSha256": O.digest(initial_raw["event"]), "filesSha256": {name: sha("R/" + name) for name in RECIPIENT_FILES},
+            "job": rcontext["job"], "inheritedContext": pcontext["inheritedContext"],
+            "directories": {name: native.directory_identity(list(dirs["R/" + name].identity), role) for name in RECIPIENT_DIRECTORIES},
+            "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
+        require(type(rcontext["job"]) is str and re.fullmatch(r"[0-9a-f]{32}", rcontext["job"]), "GRAPH_RECIPIENT_JOB")
+        # The crypto directory is identity-pinned above, never enumerated/read.
+        start, row, birth, child, ack = _initial_graph_native(raw("R/recipient-context.json"), recipient_path, first.clock,
+            rfirst, rends[0], rends[1], {name: raw("R/recipient-validation/" + name) for name in native.PHASE_FILES},
+            raw("R/recipient-validation/child-result.json"), "R")
+        require(child["identitySha256"] == O.digest(identity.record) and child["authoritySha256"] == sha("R/authority-return.json"),
+            "GRAPH_RECIPIENT_CHILD_BINDING")
+        before, after = (query("R/recipient-validation/" + name, None, child[hash_name], start["inheritedContext"], observed)[1]
+            for name, hash_name in (("source-before", "sourceBeforeSha256"), ("source-after", "sourceAfterSha256")))
+        rp = value("R/recipient-pending.json")
+        _, final_source = query("R/source-final", None, rp["sourceFinalSha256"], rcontext["inheritedContext"], observed)
+        supplier = child["recipient"]
+        supplier_fields = {"fingerprint", "encryption_fingerprint", "expires_at", "key_sha256", "work_identity", "executable"}
+        if role == "windows-x64":
+            supplier_fields |= {"executable_sha256", "job_id"}
+            require(type(supplier) is dict and supplier.get("job_id") == rcontext["job"] and
+                type(supplier.get("executable_sha256")) is str and re.fullmatch(r"[0-9a-f]{64}", supplier["executable_sha256"]), "GRAPH_WINDOWS_SUPPLIER")
+        require(type(supplier) is dict and set(supplier) == supplier_fields and supplier["fingerprint"] == identity.fingerprint and
+            type(supplier["encryption_fingerprint"]) is str and re.fullmatch(r"[0-9A-F]{40}", supplier["encryption_fingerprint"]) and
+            supplier["key_sha256"] == identity.key_sha256 and
+            O.encoded(supplier["work_identity"]) == O.encoded(rcontext["directories"]["crypto"]) and
+            type(supplier["expires_at"]) is int and (supplier["expires_at"] == 0 or supplier["expires_at"] >= identity.expires_at) and
+            type(supplier["executable"]) is str and Path(supplier["executable"]).is_absolute(), "GRAPH_SUPPLIER_RECORD")
+        same(rp, {"schema": 1, "scope": "INITIAL_RECIPIENT_VALIDATION_PENDING_OWNER_CLOSE_V1", "windowSha256": sha("R/recipient-window.json"),
+            "contextSha256": sha("R/recipient-context.json"), "authoritySha256": sha("R/authority-return.json"),
+            "phaseSha256": {name: sha("R/recipient-validation/" + name) for name in native.PHASE_FILES},
+            "childSha256": sha("R/recipient-validation/child-result.json"), "sourceFinalSha256": sha("R/source-final/source-return.json"),
+            "retainedNs": O.integer(rp["retainedNs"]), "retirement": "PENDING_OWNER_CLOSE", "liveRecipient": "NOT_TRANSFERRED",
+            "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False})
+        same(recipient["pendingSha256"], sha("R/recipient-pending.json"))
+        times = [rfirst, authority["closedNs"], start["startedNs"], row["launchMinimumNs"], child["beganNs"], child["metadataLastNs"],
+            before["returnedNs"], child["supplierReturnedNs"], after["returnedNs"], child["completedNs"], ack["closedNs"], row["completedNs"],
+            row["finalStartedNs"], row["finalizedNs"], row["readStartedNs"], row["readbackCompletedNs"], final_source["returnedNs"],
+            rp["retainedNs"], recipient["preCloseNs"], recipient["closedNs"]]
+        require(all(type(item) is int and 0 <= item <= O.clocks.UINT64 for item in times) and times == sorted(times) and
+            child["metadataLastNs"] < child["beganNs"] + 45 * O.NS and
+            ack["closedNs"] < min(child["beganNs"] + 210 * O.NS, rends[0]) and row["completedNs"] < rends[0] and
+            row["launchMinimumNs"] <= O.integer(birth["observedNs"]) <= row["completedNs"], "GRAPH_RECIPIENT_CHRONOLOGY")
+        require(type(row["finalEndNs"]) is int and row["finalEndNs"] == min(rends[1], row["finalStartedNs"] + 45 * O.NS) and
+            type(row["readEndNs"]) is int and row["readEndNs"] == min(rends[2], row["readStartedNs"] + 30 * O.NS) and
+            row["finalizedNs"] <= row["readStartedNs"] < row["finalEndNs"] and recipient["closedNs"] < row["readEndNs"] and
+            sender["readWindow"]["readEndNs"] == row["readEndNs"], "GRAPH_ACTUAL_READ_FENCE")
+        require(len(rows) == prefix_count + 221 and len(originals) == 1066, "GRAPH_COMPLETE_ROSTER")
+        # Recheck earlier leaves after later traversal. Each fixed path is
+        # charged once, never deduplicated by content; no second leaf invocation.
+        for resource, expected in rosters:
+            names(resource, expected)
+        for resource, name, _maximum, contents in originals.values():
+            owned(resource)
+            require(call(owner.read, resource, name, max(1, len(contents))) == contents, "GRAPH_REREAD_CHANGED")
+        for resource, expected in rosters:
+            names(resource, expected)
+        for resource, _path, _identity, _original_path in pins:
+            owned(resource)  # Includes crypto's directory identity, never its contents.
+        checked()
+        return tuple((name, contents) for name, (_resource, _file, _maximum, contents) in originals.items())
+    except BaseException as error:
+        original = owner.original if owner.original is not None else error
+        unknown = False
+        try:
+            # A failed fixed leaf may legitimately have added rows. Do not
+            # adopt them or infer UNKNOWN merely from that longer ledger.
+            structural(tail=leaf_failed)
+        except BaseException:
+            unknown = True
+        try:
+            owner.error("initial-original-graph", error, unknown=unknown)
+        except BaseException:
+            owner.unknown = True
+        if owner.unknown:
+            native.QUARANTINE.append((owner, tuple(rows), tuple(held), tuple(pins), tuple(originals.items())))
         raise original
 
 
