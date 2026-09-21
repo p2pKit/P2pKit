@@ -901,9 +901,10 @@ class _ProviderCommandFile:
     def freeze(self):
         """One overlapping strict-reader handoff, not native retirement evidence.
 
-        The returned ordinary NativeFile is unchanged. Its caller must register
-        it, read/verify/close it and postcheck this same original deadline;
-        NativeFile.close() alone is not a timely-finalization oracle.
+        The returned ordinary NativeFile keeps its original deadline and
+        postchecks release of its own pins. The caller must still register it,
+        read/verify/close it and postcheck after every other original owner
+        closes; the reader cannot attest later directory/enclosing returns.
         """
         handle, pins, reader = None, [], None
         try:
@@ -1123,6 +1124,12 @@ class NativeFile(io.RawIOBase):
             except BaseException as error:
                 errors.append(error)
             self._retired = True
+            try:
+                # Charge final flush/verification and every owned pin release
+                # to the same deadline; cleanup and the first failure survive.
+                _check_time(self._deadline)
+            except BaseException as error:
+                errors.append(error)
         if errors:
             failure = FilesystemError("Native file finalization failed")
             for error in errors:

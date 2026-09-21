@@ -793,6 +793,46 @@ class ModelCustodyTests(unittest.TestCase):
             stream.close()
         self.assertEqual(len(self.api.handles), 3)
 
+    def test_final_close_refuses_slow_second_flush_and_still_retires_all_pins(self):
+        elapsed = [100.0]
+        with patch.object(files, "time", SimpleNamespace(monotonic=lambda: elapsed[0])):
+            stream = self.root.create_file("raw", max_bytes=1, deadline=120.0)
+            stream.write(b"x")
+            self.root.close()
+            flush, calls = self.api.flush, []
+            def slow(handle):
+                flush(handle)
+                calls.append(handle)
+                if len(calls) == 2:  # RawIOBase.close flushes after verify().
+                    elapsed[0] = 120.0
+            with patch.object(self.api, "flush", side_effect=slow):
+                with self.assertRaises(files.FilesystemError) as caught:
+                    stream.close()
+            self.assertEqual(len(calls), 2)
+            self.assertIn("deadline exceeded", " ".join(caught.exception.__notes__))
+            self.assertTrue(stream.closed and stream._retired)
+            self.assertEqual(self.api.handles, {})
+            self.assertEqual(stream._deadline, 120.0)
+
+    def test_late_close_keeps_body_failure_and_records_final_deadline_error(self):
+        elapsed = [100.0]
+        with patch.object(files, "time", SimpleNamespace(monotonic=lambda: elapsed[0])):
+            stream = self.root.create_file("raw", max_bytes=0, deadline=120.0)
+            self.root.close()
+            last, close = stream._pins[0].handle, self.api.close
+            def slow(handle):
+                close(handle)
+                if handle == last:
+                    elapsed[0] = 120.0
+            original = RuntimeError("original product error")
+            with patch.object(self.api, "close", side_effect=slow):
+                with self.assertRaises(RuntimeError) as caught:
+                    with stream:
+                        raise original
+            self.assertIs(caught.exception, original)
+            self.assertIn("deadline exceeded", " ".join(getattr(original, "__notes__", ())))
+            self.assertEqual(self.api.handles, {})
+
     def test_close_failure_does_not_prevent_other_handles_closing(self):
         self.api.close_failure = self.root._pins[-1].handle
         with self.assertRaises(files.FilesystemError) as caught:

@@ -439,7 +439,7 @@ class ProviderCommandModels(unittest.TestCase):
         with self.assertRaises(files.FilesystemError):
             command.close()
 
-    def test_final_reader_requires_callers_original_deadline_postcheck_after_close(self):
+    def test_final_reader_rejects_late_handle_close_without_renewing_or_retrying(self):
         command = self.command()
         reader = self.freeze(command)
         strict = reader.native_handle
@@ -449,13 +449,73 @@ class ProviderCommandModels(unittest.TestCase):
             if handle == strict:
                 self.elapsed = 120
         with patch.object(self.api, "close", side_effect=slow):
-            # The returned ordinary reader is deliberately not relaxed or
-            # rewritten by this capability. Its close has no final time check.
-            self.assertIsNone(reader.close())
+            with self.assertRaises(files.FilesystemError) as caught:
+                reader.close()
+        self.assertIn("deadline exceeded", " ".join(caught.exception.__notes__))
         self.assertTrue(reader.closed)
         self.assertEqual(reader._deadline, command._deadline)
-        # Required future-supervisor check, not a production caller or proof
-        # that the still-unwired provider currently performs it.
+        events = list(self.api.events)
+        reader.close()  # Once-only retirement cannot retry an uncertain handle.
+        self.assertEqual(self.api.events, events)
+
+    def test_final_reader_rejects_late_last_ancestor_close(self):
+        command = self.command()
+        self.root.close()  # Remaining ancestor references belong to command/reader.
+        reader = self.freeze(command)
+        last = reader._pins[0].handle
+        close = self.api.close
+        def slow(handle):
+            close(handle)
+            if handle == last:
+                self.elapsed = 120
+        with patch.object(self.api, "close", side_effect=slow):
+            with self.assertRaises(files.FilesystemError) as caught:
+                reader.close()
+        self.assertIn("deadline exceeded", " ".join(caught.exception.__notes__))
+        self.assertEqual(self.api.handles, {})
+        self.assertEqual(self.api.events[-1], ("close", last, "C:\\"))
+        self.assertEqual(reader._deadline, 120.0)
+
+    def test_final_reader_preserves_unknown_close_and_late_postcheck(self):
+        command = self.command()
+        self.root.close()
+        reader = self.freeze(command)
+        strict = reader.native_handle
+        self.api.close_failure = strict
+        close = self.api.close
+        def slow_unknown(handle):
+            try:
+                close(handle)
+            finally:
+                if handle == strict:
+                    self.elapsed = 120
+        with patch.object(self.api, "close", side_effect=slow_unknown):
+            with self.assertRaises(files.FilesystemError) as caught:
+                reader.close()
+        self.assertIn("closure failed", str(caught.exception.__cause__))
+        notes = " ".join(caught.exception.__notes__)
+        self.assertIn("retirement UNKNOWN", notes)
+        self.assertIn("deadline exceeded", notes)
+        self.assertEqual(self.api.handles, {})  # Model closes then reports UNKNOWN.
+        events = list(self.api.events)
+        reader.close()
+        self.assertEqual(self.api.events, events)
+
+    def test_other_original_directory_owner_still_requires_final_caller_postcheck(self):
+        command = self.command()
+        reader = self.freeze(command)
+        reader.close()
+        # NativeFile can only postcheck release of its own references. A
+        # separate original directory may own the last ancestor references.
+        last = self.root._pins[0].handle
+        close = self.api.close
+        def slow(handle):
+            close(handle)
+            if handle == last:
+                self.elapsed = 120
+        with patch.object(self.api, "close", side_effect=slow):
+            self.root.close()
+        self.assertEqual(self.api.handles, {})
         with self.assertRaises(files.FilesystemError):
             files._check_time(command._deadline)
 

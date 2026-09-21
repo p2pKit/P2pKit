@@ -2460,12 +2460,16 @@ rechecks ancestors and transfers a strict `NativeFile` with the same deadline
 before releasing the original. The capability's creation/observe/freeze/close
 operations reject late returns; sharing conflict, changed originals, cancellation
 or unknown close fails without an early-close/retry fallback. The returned
-**ordinary reader is unchanged**: `NativeFile.close()` checks before verification
-and release, not after the final native close. It can return after the end without
-raising. The supervisor must register that reader before another fallible action,
-read/verify/close it and **postcheck the same original end** before accepting
-capture finalization. No complete final-reader deadline enforcement is claimed
-until that caller is connected and reviewed. This file lock does not itself prove
+ordinary reader keeps the same sharing/byte/lifetime contract. Its
+`NativeFile.close()` now also checks the **same original end after all its own
+pin releases**, including final flush and ancestor closes. Cleanup still attempts
+every owned release, and a late result does not replace an earlier failure or
+authorize a retry. This check cannot cover another original directory owner that
+closes later. The supervisor must register the reader before another fallible
+action, read/verify/close it and **postcheck the original RAW and saved local end
+after the last required original owner closes** before accepting finalization.
+No complete enclosing finalization is claimed until that caller is connected and
+reviewed. This file lock does not itself prove
 process retirement, absence of writable mappings, power-loss durability, supplier
 trust or cache storage.
 
@@ -2479,6 +2483,19 @@ Both activation HOLDs, original180-second provider end, NativeFile900/Snapshot57
 and proposed5400's UNADMITTED/UNMEASURED status remain. The real recipient policy
 is prepared on the branch, **not delivered to trusted main or currently admitted**;
 completed owner key/recovery/environment setup is not reopened.
+
+The 21 September final-close correction has separate author offline evidence:
+five desired-state regressions failed on the unchanged backend; the control for
+a later independent directory close passed (**1/6 preimage**). After the small
+postcheck, those unchanged controls passed **6/6**; complete provider call/sharing
+models **38/38** and portable file models **75/75** passed separately. The six are
+included in those suites, not additional coverage. Tests model slow final file/
+ancestor release, the second flush, UNKNOWN plus expiry, original-body failure,
+and the still-required outer postcheck. They ran under UID65534/Python3.12.3
+`-I -B -S`, CPU20/512MiB/wall30+kill2, read-only snapshots and pre-project
+process/network/native-loader guards; zero unexpected denials or ResourceWarnings.
+No actual Windows/provider/native retirement ran. Exact independent review and
+containing-commit bindings belong to #437; source passes do not lift a HOLD.
 
 ### Dormant provider command-file parser
 
