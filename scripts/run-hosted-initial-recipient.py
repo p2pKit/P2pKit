@@ -62,6 +62,8 @@ RECIPIENT_CONTEXT_SCOPE = "INITIAL_RECIPIENT_VALIDATION_CHILD_CONTEXT_V1"
 RECIPIENT_START_SCOPE = "INITIAL_RECIPIENT_VALIDATION_PRELAUNCH_V1"
 RECIPIENT_CHILD_SCOPE = "INITIAL_RECIPIENT_VALIDATION_PENDING_CHILD_CLOSE_V1"
 RECIPIENT_RETURN_SCOPE = "INITIAL_RECIPIENT_VALIDATION_CLOSED_HISTORY_V1"
+RECIPIENT_SENDER_SCOPE = "INITIAL_RECIPIENT_SENDER_PENDING_OWNER_CLOSE_V1"
+RECIPIENT_OUTPUT_SCOPE = "INITIAL_RECIPIENT_SENDER_PENDING_STEP_RETURN_V1"
 _PREPARED_RETURNS = {}
 _WORKER_USE_LOCK = threading.Lock()
 _WORKER_USES, _WORKER_CLAIMS, _ENTRY_WINDOWS, _READMISSION_RETURNS = {}, {}, {}, {}
@@ -70,6 +72,7 @@ _RECIPIENT_USE_LOCK = threading.Lock()
 _READMISSION_USES, _RECIPIENT_ATTEMPTS, _RECIPIENT_CLAIMS = {}, {}, {}
 _RECIPIENT_WINDOWS, _AUTHORITY_WINDOWS, _AUTHORITY_RETURNS, _RECIPIENT_RETURNS = {}, {}, {}, {}
 _RECIPIENT_NATIVE_RETURNS = {}
+_RECIPIENT_SENDERS = {}
 
 
 @dataclass(frozen=True)
@@ -1328,7 +1331,8 @@ def _history_graph(*roots):
         _OriginalPreparation, _EntryWindowBinding, _ReadmissionWindow, SourceReturn, native.Owner,
         native.OriginalPhase, O.Fence, O.clocks.Reading, O.clocks.ClockIdentity,
         initial_identity.InitialBootstrapIdentity, acquisition.stages.BootstrapMatch,
-        _AuthorityReturn, _AuthorityState, _RecipientRoster, _RecipientNativeReturn, _RecipientValidationReturn)
+        _AuthorityReturn, _AuthorityState, _RecipientRoster, _RecipientNativeReturn, _RecipientValidationReturn,
+        _RecipientState)
     scalars = (type(None), bool, int, float, str, bytes)
     pending, seen, nodes = list(roots), set(), []
     while pending:
@@ -2592,9 +2596,525 @@ def _prepare_and_validate_recipient(cancelled):
         "liveRecipient": "NOT_TRANSFERRED", "currentRemoteAuthority": "NOT_GRANTED_BY_HISTORY",
         "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False})
     returned = _RecipientValidationReturn(raw)
-    closed_graph = _history_graph(returned, owner, state.roster)
+    closed_graph = _history_graph(returned, owner, state.roster, state)
     _RECIPIENT_RETURNS[id(returned)] = (returned, raw, window, state, graph, closed_graph, phase)
     return check_recipient_validation_return(returned)
+
+
+def _retain_recipient_validation(result):
+    """One file-only sender, inside the ORIGINAL actual read RAW/LOCAL caps.
+
+    No predecessor method is observed or reopened. The two exact memory-only
+    returns become private files; old source/HTTP/crypto files remain references
+    for a future authenticated receiver. The manifest cannot certify its own
+    later close or step outcome, and no current authority is acquired here.
+    """
+    check_recipient_validation_return(result)
+    returns, attempts = _RECIPIENT_RETURNS, _RECIPIENT_SENDERS
+    saved = returns[id(result)]
+    state = saved[3]
+    binding, original = _recipient_claim(state.claim)
+    context = O.parse(saved[6].context)
+    recipient_path = Path(context["session"])
+    path = recipient_path.with_name(recipient_path.name + "-output")
+    clock, hard, local_end = state.clock, state.read_end, state.read_local
+    last, local_last, issued_end = state.last, state.local_last, local_end
+    require(state.phase == "READ" and state.read_attempted and
+        O.integer(hard, O.integer(last) + 1) == hard and type(local_end) is float and
+        type(local_last) in (int, float) and math.isfinite(local_last) and
+        math.isfinite(local_end) and 0 <= local_last < local_end, "RECIPIENT_SENDER_ORIGINAL_READ_CAP")
+    blobs = (("readmission-return.json", binding.raw), ("recipient-return.json", saved[1]))
+    require(all(type(raw) is bytes and 0 < len(raw) <= native.LIMIT for _name, raw in blobs),
+            "RECIPIENT_SENDER_RECORD_LIMIT")
+    owner = roster = private = first = directory_id = None
+    path_graph, first_graph, closed_graph = _history_graph(recipient_path, path), None, None
+    held = []  # Raw resources and their independent close ledgers, never wrapper attributes.
+    windows_handles, windows_rosters = {}, []
+    value = manifest_raw = None
+    phase, busy, failed, output_checks = "OWNER", False, False, 0
+    failure, resource_unknown = None, False
+    attempt = None
+    cancel = state.cancelled
+
+    def remember(error, *, unknown=False):
+        nonlocal failed, failure, resource_unknown
+        failed = True
+        if failure is None:
+            failure = owner.original if owner is not None and owner.original is not None else error
+        resource_unknown |= unknown or owner is not None and owner.unknown
+        if owner is not None:
+            owner.error("recipient-sender", error, unknown=resource_unknown)
+            if owner.unknown and not any(item is owner for item in native.QUARANTINE):
+                native.QUARANTINE.append(owner)
+
+    def windows_pin(pin):
+        # Only a newly returned pin starts here. Existing shared pins retain
+        # their ORIGINAL handle/methods and independently witnessed call count.
+        require(type(pin.references) is int and pin.references == 1, "RECIPIENT_SENDER_WINDOWS_NEW_PIN_REFERENCES")
+        dictionary, info_dictionary, handle = pin.__dict__, pin.info.__dict__, pin.handle
+        fields = tuple((name, getattr(pin, name)) for name in ("api", "path", "info", "private",
+            "inherited_allowed", "writable", "strict_streams", "immutable", "lock"))
+        graph = _history_graph(info_dictionary)
+        acquire_raw, release_raw, lock = pin.acquire, pin.release, pin.lock
+        require(set(dictionary) == {name for name, _value in fields} | {"references", "handle"} and
+            getattr(acquire_raw, "__self__", None) is pin and acquire_raw.__func__ is native.windows._Pin.acquire and
+            getattr(release_raw, "__self__", None) is pin and release_raw.__func__ is native.windows._Pin.release,
+            "RECIPIENT_SENDER_WINDOWS_NEW_PIN_METHODS")
+        count, running, terminal_error = 1, False, None
+
+        def fail(error):
+            nonlocal terminal_error
+            if terminal_error is None:
+                terminal_error = error
+            remember(terminal_error, unknown=True)
+            return terminal_error
+
+        def data(expected):
+            require(type(pin) is native.windows._Pin and pin.__dict__ is dictionary and
+                set(dictionary) == {name for name, _value in fields} | {"references", "handle", "acquire", "release"} and
+                pin.acquire is acquire_guard and pin.release is release_guard,
+                "RECIPIENT_SENDER_WINDOWS_PIN_CHANGED")
+            require(all(getattr(pin, name) is value or type(getattr(pin, name)) is type(value) and
+                type(value) in (type(None), bool, int, float, str) and getattr(pin, name) == value
+                for name, value in fields) and pin.info.__dict__ is info_dictionary,
+                "RECIPIENT_SENDER_WINDOWS_PIN_CHANGED")
+            _check_history(graph)
+            require(type(pin.references) is int and pin.references == expected and
+                (type(pin.handle) is type(handle) and pin.handle == handle if expected else pin.handle is None),
+                "RECIPIENT_SENDER_WINDOWS_HANDLE_RETIREMENT")
+
+        def checked(expected=None):
+            try:
+                with lock:
+                    if terminal_error is not None:
+                        raise terminal_error
+                    require(not running, "RECIPIENT_SENDER_WINDOWS_PIN_REENTRY")
+                    data(count)
+                    require(expected is None or count == expected, "RECIPIENT_SENDER_WINDOWS_HANDLE_RETIREMENT")
+            except BaseException as error:
+                raise fail(error)
+
+        def change(self, acquiring):
+            nonlocal count, running
+            try:
+                with lock:
+                    require(self is pin, "RECIPIENT_SENDER_WINDOWS_PIN_NOT_ORIGINAL")
+                    checked()
+                    require(count > 0, "RECIPIENT_SENDER_WINDOWS_PIN_RETIRED")
+                    # A failed sibling must not prevent healthy-prefix cleanup.
+                    # Only THIS pin's sticky failure forbids another native call.
+                    running = True  # Attempted before the saved method/native boundary.
+                    try:
+                        returned = acquire_raw() if acquiring else release_raw()
+                        require(returned is (pin if acquiring else None), "RECIPIENT_SENDER_WINDOWS_PIN_RETURN")
+                        if terminal_error is not None:
+                            raise terminal_error
+                        expected = count + (1 if acquiring else -1)
+                        data(expected)
+                        count = expected  # Never learn a counter from a later public snapshot.
+                        return returned
+                    finally:
+                        running = False
+            except BaseException as error:
+                raise fail(error)
+
+        def acquire(self):
+            return change(self, True)
+
+        def release(self):
+            return change(self, False)
+
+        acquire_guard, release_guard = acquire.__get__(pin), release.__get__(pin)
+        pin.acquire, pin.release = acquire_guard, release_guard
+        checked()
+        return pin, checked
+
+    def windows_pins():
+        # Stable wrapper boundaries only: temporary readers/clones have already
+        # returned/retired. Each still-live returned resource owns exactly one
+        # reference to each original pin; a new writer adds one, its close removes
+        # one. No post-callback counter/handle recapture can witness native close.
+        for pin, checked in windows_handles.values():
+            expected = sum(not is_closed() for pins, is_closed in windows_rosters if any(item is pin for item in pins))
+            checked(expected)
+
+    def retain(raw, label, intended, intended_graph):
+        # The factory has ACTUALLY returned. Retain that reference before any
+        # fallible pin/check, and before Owner.acquire's postallocation clocks.
+        slot = [raw, None]
+        held.append(slot)
+        require(len(held) <= 4, "RECIPIENT_SENDER_RESOURCE_LIMIT")  # One directory, three fixed records.
+        raw_type, raw_path, row = type(raw), raw.path, None
+        windows = clock.role == "windows-x64"
+        raw_id = raw.identity if label == "directory" or windows else raw.original
+        identity = tuple(native.directory_identity(list(raw_id if label == "directory" or windows else
+            (raw_id.st_dev, raw_id.st_ino)), clock.role))
+        graph = _history_graph(raw_path, raw_id) + intended_graph
+        close_raw, verify_raw = raw.close, raw.verify
+        attempted, closed, executing, close_error = False, False, False, None
+        closed_pins = None
+        if windows:
+            require(raw_type is (native.windows.PrivateDirectory if label == "directory" else native.windows.NativeFile),
+                "RECIPIENT_SENDER_WINDOWS_RESOURCE_TYPE")
+            raw_api, operation_lock, pin_list = raw._api, raw._operation_lock, raw._pins
+            require(type(pin_list) is list and 0 < len(pin_list) <= native.windows.MAX_DEPTH + 1 and
+                len({id(pin) for pin in pin_list}) == len(pin_list), "RECIPIENT_SENDER_WINDOWS_PIN_ROSTER")
+            pins = tuple(pin_list)
+            graph += _history_graph(pin_list)
+            windows_rosters.append((pins, lambda: closed))  # Independently retain even a later failed return.
+            for pin in pins:
+                require(type(pin) is native.windows._Pin and type(pin.info) is native.windows.FileInfo and
+                    pin.api is raw_api, "RECIPIENT_SENDER_WINDOWS_PIN_TYPE")
+                if id(pin) not in windows_handles:
+                    windows_handles[id(pin)] = windows_pin(pin)
+            if label == "writer":
+                maximum, deadline, writable = raw.max_bytes, raw._deadline, raw._writable
+                initial_info = raw.initial_info
+                initial_dictionary = initial_info.__dict__
+                graph += _history_graph(initial_dictionary)
+        if label == "writer":
+            write_raw, sync_raw = raw.write, raw.sync
+            if not windows:
+                parent, stream, maximum, deadline = raw.parent, raw.stream, raw.maximum, raw.deadline
+        else:
+            create_raw, read_raw = raw.create_file, raw.read_bytes
+            names_raw = raw.names if windows else None
+
+        def raw_pins(*, retired):
+            try:
+                _check_history(graph)
+                require(type(raw) is raw_type and raw.path is raw_path and raw_path == intended and
+                    (raw.identity is raw_id if label == "directory" or windows else raw.original is raw_id),
+                    "RECIPIENT_SENDER_RESOURCE_CHANGED")
+                require((raw._closed if windows and label == "directory" else raw.closed) is retired,
+                    "RECIPIENT_SENDER_RESOURCE_CLOSE_CHANGED")
+                if windows:
+                    require(raw._api is raw_api and raw._operation_lock is operation_lock and
+                        (raw._pins is closed_pins and type(closed_pins) is list and not closed_pins and
+                            closed_pins is not pin_list if retired else raw._pins is pin_list),
+                        "RECIPIENT_SENDER_WINDOWS_RESOURCE_CHANGED")
+                    windows_pins()
+                if label == "writer":
+                    if windows:
+                        require(raw._retired is retired and type(raw.max_bytes) is type(maximum) and raw.max_bytes == maximum and
+                            type(raw._deadline) is type(deadline) and raw._deadline == deadline and raw._writable is writable and
+                            raw.initial_info is initial_info and initial_info.__dict__ is initial_dictionary,
+                            "RECIPIENT_SENDER_WINDOWS_RESOURCE_CHANGED")
+                    else:
+                        require(raw.parent is parent and raw.stream is stream and type(raw.maximum) is type(maximum) and
+                            raw.maximum == maximum and type(raw.deadline) is type(deadline) and raw.deadline == deadline and
+                            stream.closed is retired, "RECIPIENT_SENDER_RESOURCE_CHANGED")
+            except BaseException as error:
+                remember(error, unknown=True)
+                raise
+
+        def row_pins(expected=None):
+            nonlocal row
+            rows = [item for item in owner.resources if type(item) is dict and item.get("owner") is wrapper]
+            require(len(rows) == 1, "RECIPIENT_SENDER_RESOURCE_ROSTER")
+            if row is None:
+                row = rows[0]  # Before the first postallocation callback, in deadline's entry pins.
+            require(rows[0] is row and set(row) == {"label", "owner", "attempted", "closed"} and
+                row["label"] == label and type(row["attempted"]) is bool and type(row["closed"]) is bool and
+                (row["attempted"], row["closed"]) == ((attempted, closed) if expected is None else expected),
+                "RECIPIENT_SENDER_RESOURCE_CLOSE_LEDGER")
+
+        def checked():
+            row_pins()
+            if close_error is not None:
+                raise close_error  # Owner.original/errors are not the close witness.
+            raw_pins(retired=closed)
+
+        def original(self):
+            require(self is wrapper, "RECIPIENT_SENDER_RESOURCE_NOT_ORIGINAL")
+
+        def invoke(self, method, *args, **kwargs):
+            nonlocal executing
+            try:
+                original(self)
+                require(phase == "OWNER" and not failed and not executing and not attempted,
+                    "RECIPIENT_SENDER_RESOURCE_NOT_LIVE")
+                raw_pins(retired=False)
+                executing = True
+                try:
+                    returned = method(*args, **kwargs)
+                    raw_pins(retired=False)
+                    return returned
+                finally:
+                    executing = False
+            except BaseException as error:
+                remember(error)
+                raise
+
+        class Resource:
+            __slots__ = ()
+
+            path = property(lambda self: (original(self), raw_path)[1])
+            identity = property(lambda self: (original(self), identity)[1])
+            closed = property(lambda self: (original(self), closed)[1])
+
+            def verify(self):
+                return invoke(self, verify_raw)
+
+            def close(self):
+                nonlocal attempted, closed, executing, close_error, closed_pins
+                try:
+                    original(self)
+                    require(not attempted and not executing, "RECIPIENT_SENDER_RESOURCE_CLOSE_REUSED")
+                    # Only Owner.close_one may have advanced this row. Its
+                    # booleans do not witness an actual raw close call/return.
+                    row_pins((True, False))
+                    raw_pins(retired=False)
+                    attempted, executing = True, True
+                    try:
+                        close_raw()
+                        closed = True
+                        if windows:
+                            closed_pins = raw._pins  # Exact post-release empty list, not a new live roster.
+                        raw_pins(retired=True)
+                    except BaseException as error:
+                        close_error = error
+                        raise
+                    finally:
+                        executing = False
+                except BaseException as error:
+                    remember(error, unknown=self is wrapper)
+                    raise
+
+        class Writer(Resource):
+            __slots__ = ()
+
+            def write(self, raw_bytes):
+                return invoke(self, write_raw, raw_bytes)
+
+            def sync(self):
+                return invoke(self, sync_raw)
+
+        class Directory(Resource):
+            __slots__ = ()
+
+            def create_file(self, name, *, max_bytes, deadline):
+                nonlocal executing
+                try:
+                    original(self)
+                    require(phase == "OWNER" and not failed and not executing and not attempted,
+                        "RECIPIENT_SENDER_RESOURCE_NOT_LIVE")
+                    target = raw_path / Q._component(name)
+                    target_graph = _history_graph(target)  # Before the factory's own observations.
+                    raw_pins(retired=False)
+                    executing = True
+                    try:
+                        child = create_raw(name, max_bytes=max_bytes, deadline=deadline)
+                        returned = retain(child, "writer", target, target_graph)
+                        raw_pins(retired=False)
+                        return returned
+                    finally:
+                        executing = False
+                except BaseException as error:
+                    remember(error, unknown=True)
+                    raise
+
+            def read_bytes(self, name, *, max_bytes, deadline):
+                return invoke(self, read_raw, name, max_bytes=max_bytes, deadline=deadline)
+
+            def names(self, *, max_names, deadline):
+                require(names_raw is not None, "RECIPIENT_SENDER_WINDOWS_LIST_ONLY")
+                return invoke(self, names_raw, max_names=max_names, deadline=deadline)
+
+        wrapper = Directory() if label == "directory" else Writer()
+        slot[1] = checked
+        raw_pins(retired=False)
+        return wrapper
+
+    def ownership():
+        _check_history(path_graph)
+        if first_graph is not None:
+            _check_history(first_graph)
+        if roster is not None:
+            try:
+                roster.check()
+                require(not resource_unknown and len(held) == len(owner.resources) and
+                    all(check is not None for _raw, check in held), "RECIPIENT_SENDER_RESOURCE_ROSTER")
+                for _raw, check in held:
+                    check()
+            except BaseException as error:
+                remember(error, unknown=True)
+                raise
+
+    def pins():
+        require(_RECIPIENT_RETURNS is returns and returns.get(id(result)) is saved and
+            _RECIPIENT_SENDERS is attempts and attempts.get(id(result)) is attempt,
+            "RECIPIENT_SENDER_ORIGINAL_REGISTRY_CHANGED")
+        check_recipient_validation_return(result)  # Passive history, not old now()/deadline().
+        require(O.wire.TOKEN_ENV not in os.environ, "RECIPIENT_SENDER_READ_TOKEN")
+        require(not native.QUARANTINE and not Q.QUARANTINE and not native.diagnostics._QUARANTINE,
+                "RECIPIENT_SENDER_PRIOR_UNKNOWN")
+        ownership()
+        if roster is not None:
+            require(owner.original is None and not owner.unknown and owner.errors == [], "RECIPIENT_SENDER_OWNER_FAILED")
+        if phase == "OUTPUT":
+            require(closed_graph is not None, "RECIPIENT_SENDER_OUTPUT_NOT_ARMED")
+            _check_history(closed_graph)
+            roster.known()
+
+    class SenderFence:
+        # All live state is held by this fixed original-call closure. There are
+        # no caller-selected clocks/caps/readers and no writable field aliases.
+        __slots__ = ()
+
+        clock = property(lambda _self: clock)
+        last = property(lambda _self: last)
+        local_end = property(lambda _self: local_end)
+
+        def now(self, *, final=False, minimum=0, limit=None):
+            nonlocal last, local_last, busy, failed, phase, output_checks
+            if busy:
+                error = I.AdmissionError("RECIPIENT_SENDER_REENTRY")
+                remember(error)
+                raise error
+            busy = True
+            try:
+                require(self is fence and type(final) is bool and phase in ("OWNER", "CLOSING", "OUTPUT") and
+                    (phase == "CLOSING" and final or not failed), "RECIPIENT_SENDER_NOT_LIVE")
+                require(phase != "OUTPUT" or final, "RECIPIENT_SENDER_OUTPUT_ONLY")
+                closing = phase == "CLOSING"
+                cap = hard if limit is None else min(hard, O.integer(limit))
+                minimum = O.integer(minimum)
+                check = ownership if closing else pins
+                check()
+                for index in range(1 if closing else 2):
+                    local = time.monotonic()
+                    check()
+                    require(type(local) in (int, float) and math.isfinite(local) and local >= local_last,
+                            "RECIPIENT_SENDER_LOCAL_BACKWARDS")
+                    local_last = local
+                    last = O.clocks.checked_now(clock, minimum_ns=max(last, minimum))
+                    check()
+                    after = time.monotonic()
+                    check()
+                    require(type(after) in (int, float) and math.isfinite(after) and after >= local_last,
+                            "RECIPIENT_SENDER_LOCAL_BACKWARDS")
+                    local_last = after
+                    require(last < cap and local_last < issued_end, "RECIPIENT_SENDER_EXPIRED")
+                    if not closing:
+                        pins()
+                        if index == 0:
+                            cancel()
+                require(closing or not failed, "RECIPIENT_SENDER_FAILED")
+                if phase == "OUTPUT":
+                    output_checks += 1
+                    require(output_checks <= 2, "RECIPIENT_SENDER_OUTPUT_REUSED")
+                    if output_checks == 2:
+                        phase = "COMPLETE"
+                return last
+            except BaseException as error:
+                remember(error)
+                raise
+            finally:
+                busy = False
+
+        def deadline(self, maximum, *, final=False, limit=None):
+            nonlocal local_last, issued_end, failed
+            try:
+                require(self is fence and phase == "OWNER" and type(maximum) in (int, float) and math.isfinite(maximum) and
+                    0 < maximum <= 45, "RECIPIENT_SENDER_IO_ONLY")
+                pins()  # Bind a just-registered row before the first allocation-return callback.
+                local = time.monotonic()
+                pins()
+                require(type(local) in (int, float) and math.isfinite(local) and local >= local_last,
+                        "RECIPIENT_SENDER_LOCAL_BACKWARDS")
+                local_last = local
+                observed = self.now(final=final, limit=limit)
+                cap = hard if limit is None else min(hard, O.integer(limit))
+                issued_end = min(issued_end, O.wire._directed_deadline(local, maximum, cap, observed))
+                pins()
+                return issued_end
+            except BaseException as error:
+                remember(error)
+                raise
+
+    fence = SenderFence()
+    attempt = (result, saved, fence)  # Retains the actual owner through its closure, including on failure.
+    with _RECIPIENT_USE_LOCK:
+        require(_RECIPIENT_RETURNS is returns and returns.get(id(result)) is saved and
+            _RECIPIENT_SENDERS is attempts, "RECIPIENT_SENDER_ORIGINAL_REGISTRY_CHANGED")
+        require(id(result) not in attempts, "RECIPIENT_SENDER_ALREADY_CLAIMED")
+        attempts[id(result)] = attempt  # Irreversible before the first live observation/allocation.
+    try:
+        first = O.clocks.Reading(clock, fence.now())
+        first_graph = _history_graph(first)  # Before Owner construction or any later observation.
+        owner = native.Owner(local_end, fence, first=first, cancelled=cancel)
+        owner.initial_sources = {}
+        roster = _RecipientRoster(owner, fence, first)
+        fence.now()
+        private = owner.acquire("directory", lambda: retain(Q._new_private_directory(path), "directory", path, path_graph))
+        directory_id = tuple(native.directory_identity(list(private.identity), clock.role))
+        pins()
+        native._new_entry_owned(owner, private, path, directory_id)
+        require(not native._initializer_names(owner, private), "RECIPIENT_SENDER_DIRECTORY_NOT_EMPTY")
+        for name, raw in blobs:
+            require(owner.write(private, name, raw) == raw, "RECIPIENT_SENDER_RETURN_BYTES_CHANGED")
+        manifest_raw = owner.write(private, "sender-pending.json", {"schema": 1, "scope": RECIPIENT_SENDER_SCOPE,
+            "directory": str(path), "directoryIdentity": list(directory_id),
+            "records": {name: {"bytes": len(raw), "sha256": O.digest(raw)} for name, raw in blobs},
+            "originalReferences": {"recipientSession": str(recipient_path), "readmissionSession": str(binding.path),
+                "scope": "PINNED_CONTEXT_REFERENCES_NOT_CURRENT_FILESYSTEM_OBSERVATIONS",
+                "workerIdentitySha256": O.digest(original.identity_fields[0]),
+                "serviceTimeBasisSha256": O.digest(original.service_time_raw),
+                "originalProposalSha256": O.digest(original.proposal_raw)},
+            "readWindow": {"clock": O.clock_value(clock), "previousNs": state.last, "previousLocal": state.local_last,
+                "readEndNs": hard, "readLocalCeiling": local_end, "retainedNs": fence.now()},
+            "writerReturn": "PENDING_NOT_OBSERVABLE_BY_THIS_FILE", "originalStepOutcome": "NOT_OBSERVED",
+            "completeOriginals": "NOT_ESTABLISHED_BY_THIS_BUNDLE", "liveRecipient": "NOT_TRANSFERRED",
+            "currentRemoteAuthority": "NOT_GRANTED_BY_HISTORY", "budgetAcceptance": "NOT_ADMITTED",
+            "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False})
+        for name, raw in (*blobs, ("sender-pending.json", manifest_raw)):
+            require(owner.read(private, name) == raw, "RECIPIENT_SENDER_FINAL_BYTES_CHANGED")
+        require(native._initializer_names(owner, private) == tuple(sorted(name for name, _raw in
+            (*blobs, ("sender-pending.json", manifest_raw)))), "RECIPIENT_SENDER_FINAL_ROSTER_CHANGED")
+        native._new_entry_owned(owner, private, path, directory_id)
+        pins()
+    except BaseException as error:
+        remember(owner.original if failure is None and owner is not None and owner.original is not None else error)
+    finally:
+        phase = "CLOSING"
+        if owner is not None:
+            try:
+                ownership()
+                roster.freeze()
+            except BaseException as error:
+                remember(error, unknown=owner.unknown)
+            try:
+                owner.close()
+            except BaseException as error:
+                remember(error)
+            if failure is None:
+                failure = owner.original
+            if owner.unknown and not any(value is owner for value in native.QUARANTINE):
+                native.QUARANTINE.append(owner)
+    if failure is not None:
+        phase = "FAILED"
+        raise failure
+    try:
+        require(owner is not None and manifest_raw is not None, "RECIPIENT_SENDER_INCOMPLETE")
+        roster.known()  # Actual close return, not merely Owner.closed set at close entry.
+        pins()
+        fence.now(final=True)
+        pins()
+        require(not failed, "RECIPIENT_SENDER_FAILED")
+        value = native.public_result(RECIPIENT_OUTPUT_SCOPE, "recipientSenderSha256", manifest_raw)
+        closed_graph = _history_graph(owner, roster, value)
+        phase = "OUTPUT"  # Only now may guarded's final=True checks emit a digest.
+        return value, fence, hard
+    except BaseException as error:
+        phase = "FAILED"
+        remember(error)
+        raise failure
+
+
+def validate_recipient(cancelled):
+    """Dormant fixed sender command, not a productive admission or trusted caller."""
+    return _retain_recipient_validation(_prepare_and_validate_recipient(cancelled))
 
 
 def _prepare_and_readmit_worker(cancelled):
@@ -2628,6 +3148,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="operation", required=True)
     commands.add_parser("prepare-originals")
+    commands.add_parser("validate-recipient")
     for name in ("_service", "_service-entry", "_service-authority", "_recipient"):
         child = commands.add_parser(name)
         child.add_argument("--context-sha256", required=True)
@@ -2637,6 +3158,8 @@ def main():
         require(sys.flags.isolated == 1 and sys.flags.no_site == 1 and sys.dont_write_bytecode, "ISOLATED_INTERPRETER")
         if args.operation == "prepare-originals":
             native.guarded(prepare_originals)
+        elif args.operation == "validate-recipient":
+            native.guarded(validate_recipient)
         else:
             require(re.fullmatch(r"0|[1-9][0-9]{0,19}", args.minimum_ns), "LAUNCH_MINIMUM")
             minimum = O.integer(int(args.minimum_ns))

@@ -693,6 +693,84 @@ HOLDs, Provider180, NativeFile900/Snapshot576MiB, FULL3600/Desktop1800 and all
 required checks/manual owner approvals remain unchanged. No private material,
 actual crypto, build/download, dispatch, activation, merge or publication ran.
 
+#### Stage1 recipient sender, not receiving authority
+
+The dormant fixed `validate-recipient` command in
+[`run-hosted-initial-recipient.py`](../../scripts/run-hosted-initial-recipient.py)
+now composes the existing recipient-validation parent with a **file-only sender**.
+No workflow calls it. The historical return keeps its seven-element original
+registration; the closed recipient state is pinned when that return is first
+registered, not learned again by the sender. Its original return is claimed
+once before any live observation or allocation, including on failure.
+
+The sender exclusively creates the fixed `-recipient-output` sibling and writes:
+
+- `readmission-return.json`: the exact original memory-only readmission bytes;
+- `recipient-return.json`: the exact original closed recipient-validation bytes;
+- `sender-pending.json`: their sizes/hashes, directory identity, original context
+  references and original read-window bounds, with **its own writer/step return
+  still pending** and complete-original custody explicitly not established.
+
+Existing output is never overwritten or adopted. After exact readback and actual
+known resource closure, guarded stdout contains only the provisional
+`INITIAL_RECIPIENT_SENDER_PENDING_STEP_RETURN_V1` scope and manifest digest.
+The manifest cannot certify its own later writer return. An emitted digest is
+not success: handler restoration, output write/flush, cancellation or final
+clock checks can still fail. The future receiver needs the **actual original
+step outcome and independently transported hash**, not a conclusion or a digest
+read from this bundle itself.
+
+All work, closure and final output checks stay inside the **already established
+actual** recipient `readEndNs` and `readLocalCeiling`. There is no new45 allowance,
+nominal R+315 substitution, predecessor observation/reopening, authority query,
+live Recipient reconstruction or initializer execution. The source holds raw
+file resources privately before fallible postallocation callbacks. Fixed wrappers
+pin paths/native identities and independently witness original close attempts,
+returns and failures; mutable Owner row booleans cannot stand in for close.
+The first error remains sticky, and UNKNOWN owners stay quarantined.
+
+For the newly owned Windows pins only, fixed sender-local acquire/release guards
+retain the original API/handle/lock/methods before callbacks. They witness each
+reference transition and check each original handle immediately before its
+actual release, including **within** a multi-pin raw close. Temporary clones and
+readers must balance at stable wrapper boundaries. A failed pin cannot be retried
+by restoring public fields; healthy sibling/prefix cleanup remains possible.
+The shared Windows backend and `native.Owner` are unchanged. These guards are
+source-owned witnesses, not a sandbox against arbitrary executable replacement.
+
+Author [focused sender controls](../../scripts/tests/hosted-initial-recipient-sender-test.py)
+passed **47/47 own methods**, selected across fifteen successful bounded
+invocations: **31 composed/source controls with tiny real POSIX files**, and
+**16 AST-isolated Windows helper units**. The latter extract the exact nested
+sender helpers and use maintained native classes with **fake APIs/handles and
+synthetic outer state**, not Windows syscalls or authenticated whole-sender
+history. Five selected existing historical-return regressions passed separately
+(3/3 and2/2), not additional sender methods. All used UID/GID65534/Python3.12.3
+`-I -B -S`, cleared environment/groups, no-new-privs, CPU20/512MiB/file32MiB/FD128/
+wall30+kill2, read-only source and pre-project filesystem/process/network/native-
+loader guards: four synthetic guard controls, zero unexpected denials or
+ResourceWarnings. Exact independent review belongs to the containing #437
+commit record, not to these author results.
+
+Preserved WIP failures exposed postallocation path/identity pinning, forged
+close rows, first-reading mutation, nonsticky output refusal, missing UNKNOWN
+custody and first-error/Windows-pin witness gaps. In particular, the two-pin
+within-close preimage **0/1 PASS** showed a replaced parent handle was accepted
+after the leaf's actual modeled close; the corrected regression is among the16,
+not native execution. Earlier fixture-cleanup/oracle aggregate failures remain
+recorded. The final cancellation batch initially had **2 PASS /1 FAIL** solely
+because the oracle expected the later cancellation predicate rather than the
+first closed-history rejection. The implementation was unchanged; the exact
+error oracle and retry check then passed in the corrected3/3 batch. This does
+not relabel the original failed aggregate or reuse it as a passed suite.
+
+The receiving NEW owner, original step/hash custody and **fresh current Stage1
+authority in the same `populate` job** are still unimplemented. So are productive
+Stage1/repeated/after-save integration, operational workflow, provider/custody
+and actual hosted qualification. Both ordinary HOLDs, the whole-JVM interlock,
+all existing limits and manual owner approvals remain unchanged. No private key,
+actual native/GPG/provider execution, build/download or CI dispatch was used.
+
 #### Stage1 canonical-context reader, not initialization authority
 
 The separate fixed `initial_recipient_context_record()` in
