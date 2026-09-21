@@ -3243,6 +3243,82 @@ original cancellation, frozen capture/read/close and enclosing-return checks
 are still unimplemented. The [focused synthetic controls](../../scripts/tests/hosted-cache-provider-environment-test.py)
 exercise only the supplied-field grammar; all execution HOLDs and limits remain.
 
+### Runner startup and outer ownership investigation — 21 September
+
+The read-only independent assessment at `b9bdfdbfc18f31d96ad39255efb85b2ca1669718`
+(tree `69365c5486b274b88a974db95aac884ce2c7cb65`) returned
+**SOURCE_DESIGN_ONLY — SIMPLE_TOPOLOGY_CONDITIONAL,
+PRESTART_AND_HARD_STOP_GAPS_UNRESOLVED**. Report SHA-256:
+`3ebf734505af9fc6f4f3e27be7d358393a8b8eedd7251b769e82b30550e3ca9c`.
+It did not approve a bridge implementation or authorize execution.
+
+The retained runner source at `397b032cbf865e9c3ddfab89d533ec19325e1273`
+shows that `ProcessInvoker` overlays, rather than clears, its native startup
+environment. A check inside the Node script runs **after** Node startup hooks.
+Empty Results-URL/v2-flag sentinels could prevent residual conditional values;
+they cannot authenticate service origin or admit the pre-Node environment.
+The runner also prints action inputs/environment before injecting its runtime
+credentials. Never transport those credentials through inputs, workflow `env`,
+`GITHUB_ENV`, query receipts or diagnostics.
+
+A later bounded inspection of six additional public C# source files at that
+same pin verified their Git blob IDs, sizes and SHA-256 hashes without compiling
+or executing them. The two inspected runtime-context writers have narrower
+namespaces: `GitHubContext` emits allowlisted `GITHUB_*` fields and `RunnerContext`
+emits `RUNNER_*` fields. `ExecutionContext.InitializeJob` installs those concrete
+contexts; the inspected context converter constructs explicit basic data types,
+not a caller-selected class. This narrows those source paths only. It is **not**
+a complete writer-roster audit, an installed-runner observation or authentication
+of the eventual effective startup environment. Original receipts and complete
+source bindings are retained outside Git and will be mapped in #437 with the
+containing commit.
+
+An original Node `ChildProcess` plus an asynchronous timer does not itself own
+the provider's native domain when its Python capture worker fails. On Windows,
+closing Python's last Job handle is a safety backstop, not an observed empty
+membership/known-close result. On POSIX, killing that Python leader misses the
+provider's new-session descendants. Constructing a late scope with copied IDs
+is also invalid: its baseline excludes already-existing lifetimes. An original
+prelaunch native owner must survive the capture worker and supply its own actual
+stop/readback/close. A green step, leader exit or reconstructed scope cannot
+replace this missing ownership. Failure-aware custody and the actual enclosing
+return remain separate requirements.
+
+A separate followup found a concrete source-feasible arrangement:
+
+```text
+runner -> fixed asynchronous Node shim -> dedicated Python native supervisor
+  -> fixed Python capture worker -> pinned provider Node/tools
+```
+
+The supervisor creates its original outer scope **before** launching the worker
+through `scope.spawn`; the worker keeps the existing `ProviderCapture`/inner
+scope. The outer owner therefore survives capture-worker failure. POSIX must
+retain the complete admitted ancestor-marker chain; Windows must retain the
+original no-breakaway outer Job while using the inner Job. No late adoption,
+transferred Job handle or persistent guardian framework is needed for that
+specific gap. Independent verdict:
+**CONDITIONALLY_FEASIBLE_TWO_PYTHON_NATIVE_SUPERVISOR_DESIGN_ONLY_NOT_IMPLEMENTATION_OR_RUNTIME_APPROVAL**,
+report SHA-256 `b025b00ceb6fce7079125db6aaadd4d18b5bf1d4638bb8914a37de7da4e5a739`.
+
+This does not establish actual Windows nested membership/census/drain, complete
+POSIX inheritance, safe Node startup or any native timing. Control/return
+framing, the fixed outer resource roster and failure-aware custody still need
+implementation and review. Worker finalization and outer retirement/readback/
+close/return must share the **same original180 and final45**, not receive45 each.
+No internal split is admitted or measured here. Losing the supervisor itself is
+terminal UNKNOWN, not observed POSIX descendant retirement; no later reader may
+reuse, delete or seal private files beneath an uncertain writer. Original worker,
+supervisor and enclosing Node returns must remain separately observed.
+
+No provider action, native supervisor, workflow or new authority record was
+created by this investigation. The [complete1066 reader](#stage1-surrounding-original-graph-not-current-authority)
+also remains WIP. Its saved profile does not justify dropping Path observations,
+duplicates, callback boundaries or final rereads; an unmeasured roster-loop
+micro-optimization is not grounds for another unchanged complete retry. No graph
+import, test, profile or retry was performed during this investigation. Both
+HOLDs, whole-JVM interlock, original180/final45 and all other bounds remain.
+
 ### Dormant bootstrap encrypted-export identity adapter
 
 [`hosted_test_evidence.export_bootstrap_encrypted`](../../scripts/hosted_test_evidence.py)
