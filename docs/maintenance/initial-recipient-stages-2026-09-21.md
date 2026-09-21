@@ -217,6 +217,11 @@ labels do not attest the same boot. The shared query now supplies
 for newly observed owner/start/baseline/result bytes through its session, with
 strict collection-tail content binding. The full receiver still must acquire
 and authenticate that original graph; older hashless evidence is not upgraded.
+The fixed [query-original reader](../testing/hosted-dependency-cache.md#stage1-query-original-reader-not-the-complete-receiver)
+now covers all twelve query roots under borrowed ownership, with exact byte,
+command and roster checks. Its45 offline controls do not supply the surrounding
+P/E/R/A wrapper traversal, current authority, original proposal rederivation,
+actual step/hash transport or the later enclosing owner close.
 Neither the hashes nor narrow sender/reader checks establish the missing
 receiving authority, timing continuity or complete original custody.
 

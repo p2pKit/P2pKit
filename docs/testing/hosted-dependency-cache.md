@@ -884,6 +884,76 @@ reacquire current Stage1 authority and initialize within the single canonical120
 These digests alone implement none of that receiver or its trusted step transport.
 No workflow, HOLD, credential boundary, private key or execution permission changes.
 
+#### Stage1 query-original reader, not the complete receiver
+
+Internal `_read_initial_query_originals` in
+[`run-hosted-initial-recipient.py`](../../scripts/run-hosted-initial-recipient.py)
+now reads the fixed query subgraphs for all twelve Stage1 locations. These are
+the source-before/acquisition/source-after roots of preparation, entry and
+recipient-authority, plus the recipient child's two source roots and final
+source root. Paths come from maintained source, never serialized selectors.
+It borrows a live `native.Owner`; no workflow or command calls this reader.
+
+A source root has exactly twelve queries,65 ordered readbacks and20 entries;
+an acquisition root has24 queries,136 readbacks and42 entries. Each query has
+five fixed files; `query-home` must be empty. This separate exact-roster reader
+does not change the initializer's32-entry limit. It binds every original
+owner/start/baseline/capture/result and retained `.bin` byte to the separately
+supplied session digest, validates the fixed twelve-command sequence (twice for
+acquisition), and rereads bytes and rosters. Empty originals retain their actual
+zero-byte hashes. Native launch/lifetime/retirement records are **supplied-data
+grammar**, not execution or current authority.
+
+`source-return.json` was written outside the query session; it requires its own
+caller-supplied exact raw binding and is returned separately. It is never
+described as session-authenticated. Declared session plus readback bytes must
+fit the existing64MiB session ceiling before child allocation/large reads;
+receipts remain2MiB-bounded and the source sidecar is separately2MiB-bounded.
+These are leaf bounds, not a new aggregate receiver or canonical-init budget.
+
+The reader preserves the borrowed owner/fence/cancellation and original resource
+prefix. Factory-returned directories are retained before fallible callbacks;
+a fixed temporary `end` guard pins each actual appended ledger row before the
+maintained acquire's postallocation callback. Only that exact temporary method
+slot is restored. Copied rows, changed paths (including mutable cached Path
+state or equal replacement objects), foreign methods and uncertain custody
+refuse. Original falsey failures remain first; uncertain resources are retained
+without restoring a fabricated ledger. Shared Owner/query/native suppliers and
+accepted sender/package-reader code remain unchanged.
+
+The result is only immutable session bytes, ordered relative-name/original-byte
+pairs, and the separate optional sidecar: **SUPPLIED_QUERY_BYTE_GRAPH_ONLY /
+enclosing OWNER_CLOSE_PENDING**. New child directories remain resources of the
+borrowed owner; the result cannot prove its later close, authenticate the supplied
+root hashes, restore historical capabilities or grant initialization authority.
+
+The [focused controls](../../scripts/tests/hosted-initial-recipient-query-originals-test.py)
+passed **45/45 own methods in six disjoint invocations** (10/3/1/15/9/7), not
+one whole-file aggregate. Tiny ordinary-UID POSIX files are real; Git/native
+processes, historical clocks and Windows records are explicit models. Each used
+UID/GID65534, Python3.12.3 `-I -B -S`, cleared environment/groups, no-new-privs,
+read-only source, CPU20/512MiB/file32MiB/FD128/wall30+kill2 and pre-project
+filesystem/process/network/native-loader guards: four synthetic guard controls,
+zero unexpected denials or ResourceWarnings. Independent implementation approval
+belongs to the containing commit's exact #437 review record.
+
+Earlier author35 passed but missed four independently identified defects:
+postallocation equal-row replacement, aliased mutable paths, a preexisting
+native leader and an empty claimed ancestor context. All four failed dedicated
+preimage regressions. Author44 then passed, but the additional equal-Path
+replacement regression still failed; final45 includes that correction. The
+absent-entry preimage and one pre-import harness-permission refusal also remain
+preserved, not relabelled as passed execution.
+
+The complete fixed P/E/R/A parent graph, original proposal/service-time
+rederivation, genuine step/hash transport, NEW receiving owner and fresh Stage1
+authority still need integration inside the single canonical-init120 interval.
+The strict reader requires an actually retained unique native leader. A very
+short-lived POSIX Git child may exit before its lifetime is observed; missing
+leader evidence must refuse, not be reconstructed from its launch PID. Models
+do not establish that real native prerequisite. No private crypto working-file
+traversal, provider qualification, budget admission or HOLD change follows.
+
 #### Stage1 canonical-context reader, not initialization authority
 
 The separate fixed `initial_recipient_context_record()` in

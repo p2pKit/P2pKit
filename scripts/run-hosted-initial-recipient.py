@@ -3307,6 +3307,428 @@ def _read_recipient_sender(owner, directory, *, recipient_outcome, expected_sha2
         raise original  # The caller retains every borrowed resource and owns cleanup.
 
 
+def _initial_query_record(row, blobs, owner_value):
+    """Historical query grammar only; the caller first binds every original byte."""
+    fields = {"schema", "scope", "id", "job", "state", "home", "cwd", "argv", "stdoutLimit", "stderrLimit",
+        "timeoutSeconds", "launchAttempted", "scopeAttempted", "waitExitCode", "retirement", "result", "errors", "outputs"}
+    require(type(row) is dict and set(row) == fields | {"ownedSurvivors", "ownership"} and
+        type(row["schema"]) is int and row["schema"] == 1 and row["scope"] == "NATIVE_OWNED_ORDINARY_GIT_QUERY" and
+        type(row["id"]) is str and re.fullmatch(r"[0-9a-f]{32}", row["id"]) and
+        all(row[name] == owner_value[name] for name in ("job", "state", "home")) and
+        row["cwd"] == owner_value["root"] and row["launchAttempted"] is True and row["scopeAttempted"] is True and
+        type(row["waitExitCode"]) is int and row["waitExitCode"] == 0 and row["retirement"] == "KNOWN" and
+        row["result"] == "READY_FOR_CALLER_SEAL" and row["errors"] == [] and row["ownedSurvivors"] == [],
+        "QUERY_ORIGINAL_RESULT")
+    argv = row["argv"]
+    prefix = [owner_value["git"], "--no-replace-objects", "--no-pager", "-c", "core.fsmonitor=false", "-C", str(ROOT)]
+    require(type(argv) is list and all(type(arg) is str and 0 < len(arg) <= 8192 and "\0" not in arg for arg in argv) and
+        argv[:len(prefix)] == prefix and Q._allowed_suffix(tuple(argv[len(prefix):])) and
+        type(row["stdoutLimit"]) is int and 0 < row["stdoutLimit"] <= I.EVENT_LIMIT and
+        type(row["stderrLimit"]) is int and row["stderrLimit"] == 4096 and
+        type(row["timeoutSeconds"]) is int and row["timeoutSeconds"] == 15, "QUERY_ORIGINAL_COMMAND")
+    require(blobs["result.json"] == Q.encoded(row), "QUERY_ORIGINAL_RESULT_BYTES")
+    start = O.parse(blobs["start.json"])
+    require(set(start) == fields | {"environment"} and blobs["start.json"] == Q.encoded(start) and
+        all(O.encoded({name: start[name]}) == O.encoded({name: row[name]}) for name in fields -
+            {"launchAttempted", "scopeAttempted", "waitExitCode", "retirement", "result", "outputs"}) and
+        start["launchAttempted"] is False and start["scopeAttempted"] is False and start["waitExitCode"] is None and
+        start["retirement"] == "UNKNOWN" and start["result"] == "HOLD" and start["outputs"] == {},
+        "QUERY_ORIGINAL_START")
+    environment = start["environment"]
+    ancestors = owner_value["ancestorContext"]
+    if set(ancestors) == set(Q._CONTEXT):
+        require(ancestors[Q.processes.DOMAINS_ENV].isascii(), "QUERY_ORIGINAL_ANCESTOR_CONTEXT")
+        domains = Q.processes.ownership_domains(ancestors[Q.processes.CHAIN_ENV], ancestors[Q.processes.DOMAINS_ENV])
+        require(domains and ancestors[Q.processes.JOB_ENV] == domains[-1]["job"] and
+            ancestors[Q.processes.STATE_ENV] == domains[-1]["state"] and
+            ancestors["GRADLE_USER_HOME"] == domains[-1]["home"], "QUERY_ORIGINAL_ANCESTOR_CONTEXT")
+    expected = Q.processes.ownership_environment(owner_value["ancestorContext"], row["job"], row["id"],
+        row["state"], row["home"], allow_new_context=True)
+    require(type(environment) is dict and all(type(value) is str for value in environment.values()) and
+        all(environment.get(name) == value for name, value in expected.items()) and
+        set(environment) == set(expected) | {"PATH", "LANG", "LC_ALL", "GIT_TERMINAL_PROMPT", "GIT_CONFIG_NOSYSTEM",
+            "GIT_CONFIG_GLOBAL", "GIT_NO_LAZY_FETCH", "GIT_NO_REPLACE_OBJECTS", "GIT_OPTIONAL_LOCKS"} |
+            ({"SYSTEMROOT"} if owner_value["nativeRole"] == "windows-x64" else set()) and
+        all(environment.get(name) == value for name, value in {"LANG": "C", "LC_ALL": "C", "GIT_TERMINAL_PROMPT": "0",
+            "GIT_CONFIG_NOSYSTEM": "1", "GIT_NO_LAZY_FETCH": "1", "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_OPTIONAL_LOCKS": "0"}.items()) and environment.get("PATH") == os.defpath and
+        environment.get("GIT_CONFIG_GLOBAL") == os.devnull and
+        (owner_value["nativeRole"] != "windows-x64" or bool(environment.get("SYSTEMROOT"))), "QUERY_ORIGINAL_ENVIRONMENT")
+    baseline = O.parse(blobs["baseline.json"])
+    require(set(baseline) == {"nativeRole", "baseline", "kernelJob"} and
+        blobs["baseline.json"] == Q.encoded(baseline) and baseline["nativeRole"] == owner_value["nativeRole"],
+        "QUERY_ORIGINAL_BASELINE")
+    # Pure schema translation only. All digests remain of original query bytes.
+    native.baseline_record(O.encoded({"role": baseline["nativeRole"], "baseline": baseline["baseline"],
+        "kernelJob": baseline["kernelJob"]}), owner_value["nativeRole"])
+    ownership = row["ownership"]
+    require(type(ownership) is dict and type(ownership.get("launches")) is list and len(ownership["launches"]) == 1 and
+        type(ownership["launches"][0]) is dict and type(ownership["launches"][0].get("pid")) is int and
+        type(ownership.get("startedIdentities")) is list, "QUERY_ORIGINAL_NATIVE_LAUNCH")
+    leaders = [item for item in ownership["startedIdentities"] if type(item) is dict and
+        type(item.get("pid")) is int and item["pid"] == ownership["launches"][0]["pid"]]
+    require(len(leaders) == 1, "QUERY_ORIGINAL_NATIVE_LEADER")
+    native.native_record(ownership, {"role": owner_value["nativeRole"], "job": row["job"],
+        "invocation": row["id"], "cwd": row["cwd"]}, leaders[0], argv)
+    if baseline["baseline"] is not None:
+        leader = native.lifetime(leaders[0], owner_value["nativeRole"])
+        require(list(leader[:4] if owner_value["nativeRole"].startswith("macos-") else leader) not in baseline["baseline"],
+            "QUERY_ORIGINAL_NATIVE_PREEXISTING_LEADER")
+    require(type(row["outputs"]) is dict and set(row["outputs"]) == {"stdout", "stderr"}, "QUERY_ORIGINAL_CAPTURES")
+    for name in ("stdout", "stderr"):
+        capture = row["outputs"][name]
+        raw = blobs[name + ".log"]
+        require(type(capture) is dict and type(capture.get("bytes")) is int and
+            capture["bytes"] == len(raw) <= row[name + "Limit"] and capture.get("sha256") == O.digest(raw) and
+            type(capture.get("size")) is int and capture["size"] == len(raw), "QUERY_ORIGINAL_CAPTURE_BYTES")
+        if owner_value["nativeRole"] == "windows-x64":
+            require(set(capture) == {"identity", "is_directory", "size", "links", "attributes", "creation_100ns",
+                "modified_100ns", "change_100ns", "owner_sid", "protected_dacl", "bytes", "sha256"} and
+                capture["is_directory"] is False and type(capture["links"]) is int and capture["links"] == 1 and
+                capture["protected_dacl"] is True and type(capture["owner_sid"]) is str and
+                re.fullmatch(r"S-1-[0-9]+(?:-[0-9]+){1,15}", capture["owner_sid"]), "QUERY_ORIGINAL_CAPTURE_METADATA")
+            native.directory_identity(capture["identity"], "windows-x64")
+            for field in ("attributes", "creation_100ns", "modified_100ns", "change_100ns"):
+                O.integer(capture[field])
+            require(not capture["attributes"] & (native.windows.DIRECTORY | native.windows.REPARSE_POINT),
+                "QUERY_ORIGINAL_CAPTURE_METADATA")
+        else:
+            require(set(capture) == {"device", "inode", "size", "mtime_ns", "ctime_ns", "bytes", "sha256"},
+                "QUERY_ORIGINAL_CAPTURE_METADATA")
+            for field in ("device", "inode", "mtime_ns", "ctime_ns"):
+                O.integer(capture[field], 1 if field == "inode" else 0)
+    require(blobs["stderr.log"] == b"", "QUERY_ORIGINAL_STDERR")
+
+
+def _initial_query_commands(queries, captures, originals):
+    """Fixed historical command graph, not a GitView/replay runner or source admission."""
+    source = I.sha(captures[queries[2]["id"]]["stdout.log"].decode("ascii").strip())
+    tree = I.sha(captures[queries[3]["id"]]["stdout.log"].decode("ascii").strip())
+    entry = originals["candidate_policy_entry"]
+    match = re.fullmatch(rb"100644 blob ([0-9a-f]{40})\t" + re.escape(I.POLICY_PATH.encode("ascii")) + rb"\x00", entry)
+    require(match is not None, "QUERY_ORIGINAL_POLICY_ENTRY")
+    blob = match.group(1).decode("ascii")
+    policy = originals["candidate_policy_raw"]
+    require(0 < len(policy) <= I.POLICY_LIMIT and native.hashlib.sha1(b"blob " + str(len(policy)).encode("ascii") +
+        b"\0" + policy).hexdigest() == blob and originals["base_policy_entry"] == b"" and
+        originals["ancestry_raw"] in (acquisition.stages.BASE["commit"].encode("ascii") + b"\n",
+            acquisition.stages.BASE["commit"].encode("ascii") + b"\r\n"), "QUERY_ORIGINAL_POLICY_BYTES")
+    commands = (("rev-parse", "--show-toplevel"), ("status", "--porcelain=v1", "--untracked-files=all"),
+        ("rev-parse", "--verify", "HEAD^{commit}"), ("rev-parse", "--verify", source + "^{tree}"),
+        ("rev-parse", "--is-shallow-repository"), ("rev-parse", "--verify", "refs/remotes/origin/main^{commit}"),
+        ("rev-parse", "--verify", acquisition.stages.BASE["commit"] + "^{tree}"),
+        ("ls-tree", "-z", acquisition.stages.BASE["commit"], "--", I.POLICY_PATH),
+        ("merge-base", acquisition.stages.BASE["commit"], source), ("ls-tree", "-z", source, "--", I.POLICY_PATH),
+        ("cat-file", "-s", blob), ("cat-file", "blob", blob))
+    for index, row in enumerate(queries):
+        position = index % 12
+        raw = captures[row["id"]]["stdout.log"]
+        limit = I.EVENT_LIMIT if position == 1 else I.POLICY_LIMIT if position == 11 else 4096
+        require(tuple(row["argv"][7:]) == commands[position] and row["stdoutLimit"] == limit,
+            "QUERY_ORIGINAL_FIXED_SEQUENCE")
+        if position == 0:
+            require(Path(os.fsdecode(raw.rstrip(b"\r\n"))) == ROOT, "QUERY_ORIGINAL_SOURCE_ROOT")
+        elif position in (2, 3, 5, 6):
+            expected = {2: source, 3: tree, 5: acquisition.stages.BASE["commit"], 6: acquisition.stages.BASE["tree"]}[position]
+            require(I.sha(raw.decode("ascii").strip()) == expected, "QUERY_ORIGINAL_SOURCE_IDENTITY")
+        elif position == 4:
+            require(raw in (b"false\n", b"false\r\n"), "QUERY_ORIGINAL_FULL_HISTORY")
+        elif position == 10:
+            require(re.fullmatch(rb"[1-9][0-9]{0,5}\r?\n", raw) and int(raw) == len(policy), "QUERY_ORIGINAL_POLICY_SIZE")
+        else:
+            expected = {1: b"", 7: originals["base_policy_entry"], 8: originals["ancestry_raw"],
+                9: entry, 11: policy}[position]
+            require(raw == expected, "QUERY_ORIGINAL_SOURCE_BYTES")
+
+
+def _read_initial_query_originals(owner, directory, *, expected_session_sha256, expected_source_return_raw=None):
+    """SUPPLIED_QUERY_BYTE_GRAPH_ONLY; enclosing OWNER_CLOSE_PENDING.
+
+    Read one of twelve fixed Stage1 roots. The caller separately authenticates
+    the session hash and (source roots only) sidecar. No historical authority,
+    native acceptance, current source check or original-return object is made.
+    All newly opened directories remain borrowed-owner resources for its later
+    actual close; no new clock/owner/token, write, command or registry is created.
+    """
+    require(type(expected_session_sha256) is str and re.fullmatch(r"[0-9a-f]{64}", expected_session_sha256),
+        "QUERY_ORIGINAL_EXPECTED_HASH")
+    require(type(owner) is native.Owner and owner.first is not None and owner.fence is not None and
+        type(owner.resources) is list and type(owner.errors) is list, "QUERY_ORIGINAL_OWNER")
+    first, fence, ledger, errors = owner.first, owner.fence, owner.resources, owner.errors
+    cancelled, local_end, limits = owner.cancelled, owner.local_end, (owner.work_limit, owner.final_limit)
+    O.clocks.validate_reading(first)
+    first_ns, clock_raw, role = first.nanoseconds, O.encoded(O.clock_value(first.clock)), first.clock.role
+    require(callable(cancelled) and type(local_end) is float and math.isfinite(local_end), "QUERY_ORIGINAL_OWNER")
+    require(all(type(row) is dict and set(row) == {"label", "owner", "attempted", "closed"} and
+        type(row["label"]) is str and row["label"] in ("directory", "writer", "stdout", "stderr", "native-scope") and
+        type(row["attempted"]) is bool and type(row["closed"]) is bool and (not row["closed"] or row["attempted"])
+        for row in ledger), "QUERY_ORIGINAL_RESOURCE_ROSTER")
+    prefix = tuple((row, row["label"], row["owner"], row["attempted"], row["closed"]) for row in ledger)
+    require(len({id(row) for row, *_rest in prefix}) == len(prefix) ==
+        len({id(resource) for _row, _label, resource, _a, _c in prefix}), "QUERY_ORIGINAL_RESOURCE_ALIAS")
+    methods = tuple((name, getattr(owner, name)) for name in ("end", "read", "acquire"))
+    held, new_rows, pins, path_pins, records = [], [], [], [], []
+
+    def roster():
+        return owner.resources is ledger and len(ledger) == len(prefix) + len(held) and all(
+            row is saved and type(row) is dict and set(row) == {"label", "owner", "attempted", "closed"} and
+            type(row["label"]) is str and row["label"] == label and row["owner"] is resource and
+            row["attempted"] is attempted and row["closed"] is closed
+            for row, (saved, label, resource, attempted, closed) in zip(ledger, prefix)) and all(
+            type(row) is dict and set(row) == {"label", "owner", "attempted", "closed"} and
+            row["label"] == "directory" and row["owner"] is resource and row["attempted"] is False and row["closed"] is False
+            for row, resource in zip(ledger[len(prefix):], held)) and all(
+            row is saved for row, saved in zip(ledger[len(prefix):], new_rows))
+
+    def data():
+        require(type(owner) is native.Owner and owner.first is first and owner.fence is fence and
+            owner.resources is ledger and owner.errors is errors and owner.cancelled is cancelled and
+            type(owner.local_end) is float and owner.local_end == local_end and
+            all(type(a) is type(b) and a == b for a, b in zip((owner.work_limit, owner.final_limit), limits)) and
+            type(first.nanoseconds) is int and first.nanoseconds == first_ns and
+            O.encoded(O.clock_value(first.clock)) == clock_raw == O.encoded(O.clock_value(fence.clock)) and
+            all(getattr(owner, name) == method for name, method in methods), "QUERY_ORIGINAL_OWNER_CHANGED")
+        require(roster(), "QUERY_ORIGINAL_ROSTER_CHANGED")
+        require(owner.closed is False and owner.unknown is False and owner.original is None and errors == [] and
+            not native.QUARANTINE and not Q.QUARANTINE and not native.diagnostics._QUARANTINE, "QUERY_ORIGINAL_OWNER_NOT_LIVE")
+        for graph in path_pins:
+            _check_history(graph)
+        for child, path, identity, original_path in pins:
+            require(child.path is original_path and child.path == path and
+                tuple(native.directory_identity(list(child.identity), role)) == identity and
+                (child._closed if role == "windows-x64" else child.closed) is False, "QUERY_ORIGINAL_DIRECTORY_CHANGED")
+
+    def checked():
+        data()
+        cancelled()
+        data()
+        owner.end()
+        data()
+        cancelled()
+        data()
+        owner.end()  # The last cancellation callback spends the same original interval.
+        data()
+
+    def call(function, *args):
+        checked()
+        result = function(*args)
+        checked()
+        return result
+
+    def pin(child, path):
+        require(type(child) is (native.windows.PrivateDirectory if role == "windows-x64" else Q._PosixDirectory) and
+            child.path == path and not any(child is saved or child.path == saved_path
+                for saved, saved_path, _identity, _original_path in pins),
+            "QUERY_ORIGINAL_DIRECTORY_TYPE")
+        pins.append((child, path, tuple(native.directory_identity(list(child.identity), role)), child.path))
+        path_pins.append(_history_graph(child.path, path))
+
+    def owned(child):
+        saved = next(row for row in pins if row[0] is child)
+        call(native._new_entry_owned, owner, child, saved[1], saved[2])
+
+    def names(child, expected):
+        owned(child)
+        end = call(owner.end)
+        observed = []
+        if role == "windows-x64":
+            observed = child.names(max_names=max(1, len(expected)), deadline=end)
+        else:
+            with os.scandir(child.path) as entries:
+                for entry in entries:
+                    checked()
+                    require(len(observed) < max(1, len(expected)), "QUERY_ORIGINAL_DIRECTORY_LIMIT")
+                    observed.append(entry.name)
+        checked()
+        require(all(type(name) is str for name in observed) and len(observed) == len(set(name.casefold() for name in observed)) and
+            tuple(sorted(observed)) == tuple(sorted(expected)), "QUERY_ORIGINAL_DIRECTORY_ROSTER")
+        owned(child)
+
+    def child(name):
+        owned(directory)
+        Q._component(name)
+        target = directory.path / name
+        target_graph = _history_graph(target)
+        end = call(owner.end)
+
+        def acquire():
+            raw = (directory.open_directory(name, deadline=end) if role == "windows-x64" else
+                Q._PosixDirectory(target))
+            held.append(raw)  # Before pins or Owner.acquire's fallible postallocation callbacks.
+            _check_history(target_graph)
+            pin(raw, target)
+            return raw
+
+        checked()
+        saved_end, dictionary = owner.end, owner.__dict__
+        had_end, end_slot = "end" in dictionary, dictionary.get("end")
+
+        def allocation_end(*, final=False):
+            require(owner.__dict__ is dictionary and owner.end is allocation_end, "QUERY_ORIGINAL_END_CHANGED")
+            if len(new_rows) < len(held):
+                require(len(new_rows) + 1 == len(held) and len(ledger) == len(prefix) + len(held),
+                    "QUERY_ORIGINAL_ROSTER_CHANGED")
+                # Owner.acquire has just appended this actual row. Pin it BEFORE
+                # forwarding the first postallocation deadline/cancellation call.
+                new_rows.append(ledger[-1])
+            require(roster(), "QUERY_ORIGINAL_ROSTER_CHANGED")
+            result = saved_end(final=final)
+            require(owner.__dict__ is dictionary and owner.end is allocation_end, "QUERY_ORIGINAL_END_CHANGED")
+            require(roster(), "QUERY_ORIGINAL_ROSTER_CHANGED")
+            return result
+
+        owner.end = allocation_end
+        try:
+            result = owner.acquire("directory", acquire)
+            require(owner.__dict__ is dictionary and owner.end is allocation_end, "QUERY_ORIGINAL_END_CHANGED")
+        finally:
+            # Restore only our exact temporary slot, never a callback's changed
+            # owner/method or ledger. Preserve an original thrown failure.
+            if owner.__dict__ is dictionary and owner.end is allocation_end:
+                if had_end:
+                    owner.end = end_slot
+                else:
+                    del owner.end
+            else:
+                owner.unknown = True
+        require(len(new_rows) == len(held), "QUERY_ORIGINAL_ROSTER_CHANGED")
+        checked()
+        owned(result)
+        return result
+
+    def read(parent, name, maximum, expected_hash, expected_bytes):
+        owned(parent)
+        raw = call(owner.read, parent, name, maximum)
+        require(type(raw) is bytes and len(raw) == expected_bytes and O.digest(raw) == expected_hash,
+            "QUERY_ORIGINAL_BYTES_CHANGED")
+        checked()
+        records.append((parent, name, maximum, raw))
+        return raw
+
+    try:
+        recipient = call(_recipient_path)
+        preparation = recipient.with_name(recipient.name.removesuffix("-recipient"))
+        paths = {parent / name: name == "acquisition-queries" for parent in
+            (preparation, preparation.with_name(preparation.name + "-entry"), recipient / "authority")
+            for name in ("source-before", "acquisition-queries", "source-after")}
+        paths.update({recipient / "recipient-validation" / name: False for name in ("source-before", "source-after")})
+        paths[recipient / "source-final"] = False
+        require(directory is not None and directory.path in paths, "QUERY_ORIGINAL_LAYOUT")
+        acquisition_root = paths[directory.path]
+        require(expected_source_return_raw is None if acquisition_root else type(expected_source_return_raw) is bytes and
+            0 < len(expected_source_return_raw) <= native.LIMIT, "QUERY_ORIGINAL_SIDECAR_INPUT")
+        pin(directory, directory.path)
+        owned(directory)
+        raw = call(owner.read, directory, "session-result.json")
+        require(type(raw) is bytes and 0 < len(raw) <= Q.MAX_RECEIPT_BYTES and O.digest(raw) == expected_session_sha256,
+            "QUERY_ORIGINAL_SESSION_HASH")
+        session = O.parse(raw)
+        require(set(session) == {"schema", "scope", "job", "queries", "result", "retirement", "firstError", "errors", "readbacks"} and
+            raw == Q.encoded(session) and type(session["schema"]) is int and session["schema"] == 1 and
+            session["scope"] == "ORDINARY_GIT_QUERIES_ONLY" and type(session["job"]) is str and
+            re.fullmatch(r"[0-9a-f]{32}", session["job"]) and session["result"] == "READY_FOR_CALLER_SEAL" and
+            session["retirement"] == "KNOWN" and session["firstError"] is None and session["errors"] == [] and
+            type(session["queries"]) is list and len(session["queries"]) == (24 if acquisition_root else 12) and
+            type(session["readbacks"]) is list, "QUERY_ORIGINAL_SESSION")
+        queries, readbacks = session["queries"], session["readbacks"]
+        require(all(type(row) is dict and type(row.get("id")) is str and re.fullmatch(r"[0-9a-f]{32}", row["id"])
+            for row in queries) and len({row["id"] for row in queries}) == len(queries), "QUERY_ORIGINAL_IDS")
+        keys = ORIGINAL_KEYS if acquisition_root else SOURCE_KEYS
+        root_names = ("owner.json", "session-result.json", "query-home", *(name + ".bin" for name in keys),
+            *("query-" + row["id"] for row in queries), *(("source-return.json",) if not acquisition_root else ()))
+        names(directory, root_names)
+        query_names = ("start.json", "baseline.json", "stdout.log", "stderr.log", "result.json")
+        expected = [(directory.path, "owner.json")]
+        if acquisition_root:
+            expected.append((directory.path, "event.bin"))
+        for index, row in enumerate(queries):
+            expected.extend((directory.path / ("query-" + row["id"]), name) for name in query_names)
+            if acquisition_root and index == 11:
+                expected.extend((directory.path, name + ".bin") for name in (*SOURCE_KEYS, *HTTP_KEYS))
+        expected.extend((directory.path, name + ".bin") for name in (("observation", "match") if acquisition_root else SOURCE_KEYS))
+        require(len(readbacks) == len(expected), "QUERY_ORIGINAL_READBACK_ROSTER")
+        total = len(raw)
+        for row, (parent, name) in zip(readbacks, expected):
+            require(type(row) is dict and set(row) == {"parent", "name", "maximum", "retirement", "result", "bytes", "sha256"} and
+                row["parent"] == str(parent) and row["name"] == name and row["retirement"] == "KNOWN" and
+                row["result"] == "RETAINED" and type(row["maximum"]) is int and type(row["bytes"]) is int and
+                0 <= row["bytes"] <= row["maximum"] <= Q.MAX_RECEIPT_BYTES and row["maximum"] > 0 and
+                type(row["sha256"]) is str and re.fullmatch(r"[0-9a-f]{64}", row["sha256"]), "QUERY_ORIGINAL_READBACK")
+            if name.endswith(".log"):
+                query = next(item for item in queries if parent.name == "query-" + item["id"])
+                require(type(query.get(name[:-4] + "Limit")) is int and row["maximum"] == query[name[:-4] + "Limit"],
+                    "QUERY_ORIGINAL_CAPTURE_LIMIT")
+            else:
+                require(row["maximum"] == max(1, row["bytes"]), "QUERY_ORIGINAL_RECEIPT_LIMIT")
+            total += row["bytes"]
+            require(total <= Q.MAX_SESSION_BYTES, "QUERY_ORIGINAL_SESSION_LIMIT")
+        checked()  # Refuse declared cumulative excess before opening any children or large readbacks.
+        directories = {directory.path: directory}
+        home = child("query-home")
+        names(home, ())
+        for row in queries:
+            opened = child("query-" + row["id"])
+            directories[opened.path] = opened
+            names(opened, query_names)
+        blobs = {}
+        for row, (parent, name) in zip(readbacks, expected):
+            blobs[(parent, name)] = read(directories[parent], name, row["maximum"], row["sha256"], row["bytes"])
+        owner_raw = blobs[(directory.path, "owner.json")]
+        value = O.parse(owner_raw)
+        require(set(value) == {"schema", "scope", "job", "state", "home", "root", "nativeRole", "git", "ancestorContext"} and
+            owner_raw == Q.encoded(value) and type(value["schema"]) is int and value["schema"] == 1 and
+            value["scope"] == "ORDINARY_GIT_QUERIES_ONLY" and value["job"] == session["job"] and
+            value["state"] == str(directory.path) and value["home"] == str(home.path) and value["root"] == str(ROOT) and
+            value["nativeRole"] == role and type(value["git"]) is str and 0 < len(value["git"]) <= 8192 and
+            "\0" not in value["git"] and Path(value["git"]).is_absolute() and ".." not in Path(value["git"]).parts and
+            type(value["ancestorContext"]) is dict and all(type(item) is str for item in value["ancestorContext"].values()) and
+            (set(value["ancestorContext"]).issubset({"GRADLE_USER_HOME"}) or set(value["ancestorContext"]) == set(Q._CONTEXT)),
+            "QUERY_ORIGINAL_OWNER_RECORD")
+        captures = {}
+        for row in queries:
+            contents = {name: blobs[(directory.path / ("query-" + row["id"]), name)] for name in query_names}
+            _initial_query_record(row, contents, value)
+            captures[row["id"]] = contents
+            checked()
+        originals = {name: blobs[(directory.path, name + ".bin")] for name in keys}
+        _initial_query_commands(queries, captures, originals)
+        checked()
+        if not acquisition_root:
+            sidecar = read(directory, "source-return.json", len(expected_source_return_raw),
+                O.digest(expected_source_return_raw), len(expected_source_return_raw))
+            require(sidecar == expected_source_return_raw, "QUERY_ORIGINAL_SIDECAR_BYTES")
+            side = O.parse(sidecar)
+            require(set(side) == {"schema", "scope", "originalsSha256", "sessionSha256", "clock", "returnedNs"} and
+                sidecar == O.encoded(side) and type(side["schema"]) is int and side["schema"] == 1 and
+                side["scope"] == SOURCE_SCOPE and side["sessionSha256"] == expected_session_sha256 and
+                side["originalsSha256"] == {name: O.digest(originals[name]) for name in SOURCE_KEYS} and
+                O.encoded(side["clock"]) == clock_raw, "QUERY_ORIGINAL_SIDECAR")
+            O.integer(side["returnedNs"])
+        names(home, ())
+        for opened in directories.values():
+            names(opened, root_names if opened is directory else query_names)
+        for parent, name, maximum, original in records:
+            owned(parent)
+            require(call(owner.read, parent, name, maximum) == original, "QUERY_ORIGINAL_REREAD_CHANGED")
+        require(call(owner.read, directory, "session-result.json") == raw, "QUERY_ORIGINAL_SESSION_CHANGED")
+        names(home, ())
+        for opened in directories.values():
+            names(opened, root_names if opened is directory else query_names)
+        checked()
+        return raw, tuple((str(parent.relative_to(directory.path) / name), blobs[(parent, name)]) for parent, name in expected), \
+            expected_source_return_raw
+    except BaseException as error:
+        original = owner.original if owner.original is not None else error
+        try:
+            owner.error("initial-query-originals", error, unknown=not roster())
+        except BaseException:
+            owner.unknown = True
+        if owner.unknown:
+            # Retention only, not a capability registry or a restored/forged ledger.
+            native.QUARANTINE.append((owner, prefix, tuple(held), tuple(pins)))
+        raise original
+
+
 def _prepare_and_readmit_worker(cancelled):
     """Dormant two-acquisition stack; never a workflow/CLI execution entry."""
     token = os.environ.pop(O.wire.TOKEN_ENV, None)
