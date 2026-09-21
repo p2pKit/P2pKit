@@ -238,12 +238,13 @@ class _Window:
     def __init__(self, first, issued, end, cutoff):
         clocks.validate_reading(first)
         require(issued <= first.nanoseconds < cutoff <= end, "PROVIDER_ORIGINAL_RAW_EXPIRED")
+        self.first, self.issued = first, issued
         self.clock, self.highest, self.end, self.cutoff = first.clock, first.nanoseconds, end, cutoff
         self.local_highest = self.local()
         now = self.raw()
         require(now < cutoff, "PROVIDER_ORIGINAL_RAW_EXPIRED")
         self.local_end = math.nextafter(self.local_highest + math.nextafter((cutoff - now) / clocks.NS, 0.0), -math.inf)
-        self._binding = (self.clock, end, cutoff, self.local_end)
+        self._binding = (first, issued, self.clock, end, cutoff, self.local_end)
 
     def local(self):
         value = time.monotonic()
@@ -258,10 +259,13 @@ class _Window:
 
     def check(self, *, work=False):
         binding = self._binding
-        require((self.clock, self.end, self.cutoff, self.local_end) == binding, "PROVIDER_LAUNCH_WINDOW_CHANGED")
+        require(self.first is binding[0] and
+                (self.first, self.issued, self.clock, self.end, self.cutoff, self.local_end) == binding,
+                "PROVIDER_LAUNCH_WINDOW_CHANGED")
         now = self.raw()
         local = self.local()
-        require(self._binding is binding and (self.clock, self.end, self.cutoff, self.local_end) == binding,
+        require(self._binding is binding and self.first is binding[0] and
+                (self.first, self.issued, self.clock, self.end, self.cutoff, self.local_end) == binding,
                 "PROVIDER_LAUNCH_WINDOW_CHANGED")
         require(now < min(self.cutoff, self.end - (45 * clocks.NS if work else 0)) and local < self.local_end,
                 "PROVIDER_LAUNCH_EXPIRED")
@@ -279,6 +283,7 @@ class SupervisorLaunch:
         self.directory = self.home = self.capture_directory = self.bundle = None
         self.stdout = self.stderr = self.scope = self.child = None
         self.window = self.worker_environment = self.worker_argv = None
+        self._window_original = None
         self.frame = self.source_originals = None
         self.attempted, self.original_error = set(), None
         self._thread, self._started = threading.get_ident(), False
@@ -295,6 +300,12 @@ class SupervisorLaunch:
         self._owners["directory"], self._owners["home"] = directory, home
         self.directory, self.home = directory, home  # Transfer before any verification.
 
+    def take_window(self, window):
+        """Transfer the entry's actual pre-root window, never a serialized LOCAL."""
+        require(not self._started and self.window is self._window_original is None and type(window) is _Window,
+                "PROVIDER_WINDOW_TRANSFER")
+        self.window = self._window_original = window
+
     def _failed(self, error):
         if self.original_error is None:
             self.original_error = error
@@ -304,6 +315,7 @@ class SupervisorLaunch:
     def _healthy(self):
         if self.original_error is not None:
             raise self.original_error
+        require(self.window is self._window_original, "PROVIDER_ORIGINAL_WINDOW_CHANGED")
         require(all(getattr(self, name) is owner for name, owner in self._owners.items()), "PROVIDER_ORIGINAL_OWNER_CHANGED")
 
     def _acquire(self, name, factory):
@@ -345,8 +357,15 @@ class SupervisorLaunch:
                 clocks.integer(value)
             require(issued_ns + 45 * clocks.NS < worker_cutoff_ns < hard_end_ns <= issued_ns + 180 * clocks.NS,
                     "PROVIDER_LAUNCH_WINDOW")
-            self.window = _Window(first, issued_ns, hard_end_ns, hard_end_ns)
+            if self._window_original is None:
+                require(self.window is None, "PROVIDER_ORIGINAL_WINDOW_CHANGED")
+                self.window = self._window_original = _Window(first, issued_ns, hard_end_ns, hard_end_ns)
+            else:
+                require(self.window is self._window_original and type(self.window) is _Window and
+                        self.window.first is first and self.window.issued == issued_ns and
+                        self.window.end == self.window.cutoff == hard_end_ns, "PROVIDER_ORIGINAL_WINDOW_CHANGED")
             self.window.check(work=True)
+            self._healthy()
             self.directory.verify()
             self.home.verify()
             capture = self._acquire("capture_directory", lambda: self.directory.create_directory("capture", deadline=self.window.local_end))

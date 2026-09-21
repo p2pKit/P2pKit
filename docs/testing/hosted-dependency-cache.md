@@ -4027,9 +4027,10 @@ failure. An opaque known-closed failed transcript can be transported without
 parsing failed command bytes as successful provider output.
 
 Once-only `exit_code` permits0 only for the exact completed success,65 only for
-its exact completed failure; every other classification raises. **No actual
-outer CLI/main or Node caller exists yet.** That future original entry must
-normalize incomplete paths to66 and the original asynchronous Node child must
+its exact completed failure; every other classification raises. **At this
+outer-return-only increment, no outer CLI/main or Node caller existed.** The
+subsequent fixed entry below normalizes incomplete paths to66; the still-missing
+original asynchronous Node child must
 observe matching ACK/exit and actual `close`. The supplied ACK parser cannot
 observe these events, retire a lost supervisor or establish timely enclosing
 return. Its output retains Node/runner outcome NOT_OBSERVED and provider
@@ -4077,6 +4078,84 @@ Enclosing Node/runner and pre-Node/source/tool/service admission, complete1066/
 current receiving authority, productive/repeated bootstrap, full encrypted
 custody/workflow integration, genuine qualification and trusted-main delivery
 remain unfinished. Bootstrap5400 remains UNADMITTED/UNMEASURED.
+
+### Fixed outer entry and original window, not admitted runner execution
+
+The dormant [fixed loader](../../scripts/hosted_cache_provider_worker.py) adds
+only the literal **`--supervisor`** mode and a separate fixed three-module outer
+roster. Its original worker roster and seven-argument invocation remain intact.
+Every source is read within its existing cap, hash-bound and loaded from those
+same bytes without widening `sys.path`; original argv identity/values are checked
+after each module too. There is no arbitrary module/path selector or credential
+argument. This is not authentication of the loader's own startup or suppliers.
+
+The new [outer entry](../../scripts/hosted_cache_provider_entry.py) validates the
+canonical request, paths and provider plan before roots. It establishes one
+actual **LOCAL-before-RAW window before root acquisition** and transfers that
+same in-process object to the original launcher; no serialized LOCAL deadline or
+fresh post-acquisition conversion can extend it. It opens only the two
+already-existing roots and registers each actual return before further checks.
+Before invoking the supervisor it can close known returned roots once within
+the original end; an unreturned/None acquisition or ambiguous close keeps
+distinct roots pinned/UNKNOWN. After invocation, the supervisor alone owns their
+close. Root-open fences reject late returns; they cannot preempt a blocked
+native opener or establish a hard-stop guarantee.
+
+The main-thread entry owns only SIGINT/SIGTERM and, where available, SIGBREAK.
+Its temporary handler merely latches cooperative cancellation: no asynchronous
+raise, I/O or cleanup. The actual supervisor receives that original cancellation
+object; its worker/retirement checks still spend provider180/shared-final45.
+Every attempted handler installation is restored, including a setter that fails
+after its effect. A changed handler, failed restoration, late cancellation or
+late final fence prevents a completed entry. An ACK that already escaped does
+not override final66. Once-only exit classification binds the actual local
+run return/error and the original supervisor's completed send, never a replay
+or an exception's claimed exit code. No actual signal delivery is tested here.
+
+Author offline checks on the initial entry candidate passed separately:
+
+| Suite | Result | Test / wall seconds |
+| --- | --- | --- |
+| [Entry](../../scripts/tests/hosted-cache-provider-entry-test.py) | **33/33**:27 Windows/native/service/root/signal models and six loader controls | 1.850 / 2.661 |
+| [Launch](../../scripts/tests/hosted-cache-provider-launch-test.py) | **40/40** | 1.525 / 2.042 |
+| [Supervisor](../../scripts/tests/hosted-cache-provider-supervisor-test.py) | **50/50** | 0.371 / 0.844 |
+| [Outer return](../../scripts/tests/hosted-cache-provider-supervisor-return-test.py) | **45/45** | 2.491 / 2.970 |
+| [Inner return](../../scripts/tests/hosted-cache-provider-return-test.py) | **35/35** | 0.552 / 1.095 |
+
+Four loader controls perform cold definition loading/tiny source reads and
+refuse before native acquisition. All invocations used UID/GID65534, cleared
+environment/groups, no-new-privs, read-only frozen inputs, Python `-I -B -S`,
+CPU20/512MiB/file32MiB/FD128/core0/wall30+kill2 and pre-import filesystem/process/
+network/native-loader/pidfd/signal guards. Each retained guard4, unexpected
+denials0, ResourceWarnings0 and unchanged inputs. Complete1066 was physically
+excluded. Final independent implementation/document review and any later
+focused results belong to the exact containing commit's issue record; these
+author passes do not supply them or native/provider qualification.
+
+Independent R1 retained **14 PASS / 4 FAIL** in18 methods. The final handler-getter
+loop followed the last completion fence: a modeled late cancellation or LOCAL
+expiry could still classify0. Restoration also accepted an early replacement
+with the previous handler and discarded the setter's actual displaced-handler
+return. Each of those four adverse controls returned0 where66 was required;
+they are model findings, not real signal incidents. The failed aggregate remains
+preserved, not relabelled as approval.
+
+The repaired entry records each successfully returned installation before the
+next callback, refuses lost installed ownership and binds the actual displaced
+handler during restoration. Both existing getter loops remain; an additional
+original-window and sticky-state check follows the final one. Four author
+regressions bring the revised entry suite to **37/37 PASS** (1.186s/wall1.713s),
+with the same bounds/guard results and unchanged209 frozen inputs. Earlier
+launch40/supervisor50/outer-return45/inner-return35 results remain their separate
+R1 executions, not new R2 runs. Final independent re-review is separately bound
+to the exact containing commit; no source approval or runtime acceptance is
+inferred from the author's37 passes.
+
+No Node/runner caller, bundle acquisition, source/tool/service admission,
+productive/repeated bootstrap, complete1066/current receiving authority, full
+encrypted custody or workflow activation is added. Original native/file/job
+limits, both ordinary HOLDs and the whole-JVM fail-only interlock are unchanged.
+Bootstrap5400 stays UNADMITTED/UNMEASURED; no Release acceptance follows.
 
 ## Verification and remaining qualification
 
@@ -4140,6 +4219,7 @@ python3 -I -B -S scripts/tests/hosted-cache-provider-launch-test.py
 python3 -I -B -S scripts/tests/hosted-cache-provider-supervisor-test.py
 python3 -I -B -S scripts/tests/hosted-cache-provider-return-test.py
 python3 -I -B -S scripts/tests/hosted-cache-provider-supervisor-return-test.py
+python3 -I -B -S scripts/tests/hosted-cache-provider-entry-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/hosted-windows-provider-command-test.py
 python3 -I -B -S scripts/tests/hosted-test-evidence-test.py

@@ -1,7 +1,7 @@
-"""Fixed, dormant provider-worker bootstrap; NOT a hosted admission entry.
+"""Fixed, dormant provider-worker/outer bootstrap; NOT a hosted admission entry.
 
-Only the internal original native launcher selects this script. Its source/tool
-and pre-Node admission are separate, still missing prerequisites. No CLI or
+Only fixed internal parents may select this script. Its source/tool and
+pre-Node admission are separate, still missing prerequisites. No admitted
 workflow calls it today. No credential belongs in its arguments or source map.
 """
 from __future__ import annotations
@@ -29,6 +29,8 @@ NAMES = (
     "hosted_cache_provider_environment", "hosted_cache_provider_lifecycle", "hosted_cache_provider_return",
     "hosted_cache_provider_worker", "hosted_cache_provider_launch",
 )
+OUTER_NAMES = ("hosted_cache_provider_supervisor_return", "hosted_cache_provider_supervisor",
+               "hosted_cache_provider_entry")
 STAMP = ("st_dev", "st_ino", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns", "st_file_attributes")
 
 
@@ -44,9 +46,13 @@ def names(role):
     return tuple(name for name in NAMES if name != "hosted_lock_resources" or role.startswith("macos-"))
 
 
+def outer_names(role):
+    return names(role) + OUTER_NAMES
+
+
 def read_source(directory, name):
     """Bounded original byte read, not installed-source/runner authentication."""
-    require(type(name) is str and name in NAMES and isinstance(directory, Path) and directory.is_absolute())
+    require(type(name) is str and name in NAMES + OUTER_NAMES and isinstance(directory, Path) and directory.is_absolute())
     path = directory / (name + ".py")
     require(".." not in path.parts)
     ancestors = [(parent, parent.lstat()) for parent in path.parents]
@@ -102,9 +108,12 @@ def record(raw):
 
 
 def bootstrap():
-    require(sys.flags.isolated == 1 and sys.flags.no_site == 1 and sys.dont_write_bytecode and len(sys.argv) == 3)
-    bindings, frame = record(sys.argv[1]), record(sys.argv[2])
-    roster = names(frame.get("role"))
+    original_argv, argv = sys.argv, tuple(sys.argv)
+    outer = len(argv) == 4 and argv[1] == "--supervisor"
+    require(sys.flags.isolated == 1 and sys.flags.no_site == 1 and sys.dont_write_bytecode and
+            (len(argv) == 3 or outer))
+    bindings, frame = record(argv[-2]), record(argv[-1])
+    roster = outer_names(frame.get("role")) if outer else names(frame.get("role"))
     require(set(bindings) == set(roster) and all(type(value) is str and re.fullmatch(r"[0-9a-f]{64}", value)
                                                for value in bindings.values()))
     directory = Path(__file__).absolute().parent
@@ -123,18 +132,24 @@ def bootstrap():
         module.__package__, module.__spec__, module.__cached__ = None, None, None
         sys.modules[name] = module
         exec(code[name], module.__dict__)
-        require(sys.path is original_path and tuple(sys.path) == path_values)
+        require(sys.path is original_path and tuple(sys.path) == path_values and
+                sys.argv is original_argv and tuple(sys.argv) == argv)
     # Return the actual new worker, not a replay selected from the diagnostic
     # roster. main() normalizes every incomplete exit, including SystemExit.
-    worker = sys.modules["hosted_cache_provider_launch"]._CaptureWorker(frame, sys.argv[2].encode("ascii"))
+    if outer:
+        return sys.modules["hosted_cache_provider_entry"]._SupervisorEntry(argv[-1].encode("ascii"))
+    worker = sys.modules["hosted_cache_provider_launch"]._CaptureWorker(frame, argv[-1].encode("ascii"))
     sys.modules["hosted_cache_provider_launch"]._WORKERS.append(worker)
     return worker
 
 
 def main():
     try:
+        outer = len(sys.argv) == 4 and sys.argv[1] == "--supervisor"
         worker = bootstrap()
-        require(type(worker) is sys.modules["hosted_cache_provider_launch"]._CaptureWorker)
+        expected = (sys.modules["hosted_cache_provider_entry"]._SupervisorEntry if outer else
+                    sys.modules["hosted_cache_provider_launch"]._CaptureWorker)
+        require(type(worker) is expected)
         try:
             result = worker.run()
         except BaseException as error:

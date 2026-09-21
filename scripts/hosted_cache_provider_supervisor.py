@@ -114,6 +114,14 @@ class ProviderSupervisor:
             self._failed("transfer", error)
             raise self._primary
 
+    def take_window(self, window):
+        try:
+            launch.require(not self._started and self.launch is self._original, "SUPERVISOR_WINDOW_TRANSFER")
+            self._original.take_window(window)
+        except BaseException as error:
+            self._failed("window-transfer", error)
+            raise self._primary
+
     def _failed(self, stage, error, *, unknown=False):
         if self._primary is None:
             self._primary = error
