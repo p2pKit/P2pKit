@@ -53,6 +53,13 @@ trusted-original-base policy bootstrap and genuine qualification. Older
 sections' missing-owner/nonauthor-review wording is historical to those slices,
 not a new requirement for another person. Neither ordinary HOLD is lifted.
 
+**Two-stage preparation, 21 September:** the owner approved the
+[separate initial-bootstrap and first-PR design](../maintenance/initial-recipient-stages-2026-09-21.md).
+Its distinct dormant contracts preserve H1 history and require fresh H2 authority;
+selected qualification references do not establish runtime/cache acceptance.
+The new pre-execution gate, native admission/export integration and actual
+provider/custody qualification remain unfinished. No gate is created or activated.
+
 ## Reuse bytes, not old test results
 
 The explicit modes are:

@@ -229,6 +229,13 @@ it is not personal PR authorization or approval of future evidence.
 
 ### Initial-recipient exception preparation — 20 September 2026
 
+**Later two-stage preparation, 21 September:** the owner approved the
+[separate bootstrap/first-PR design](../maintenance/initial-recipient-stages-2026-09-21.md).
+Its new closed contracts separate live H1 bootstrap from historical H1 evidence
+and fresh H2 ordinary authority; references alone do not qualify that evidence.
+The joint matcher and its results below remain the historical single-head scope,
+not the new path or a fallback. No stage/environment/PR/CI has been activated.
+
 The owner has now authorized **preparing a separately reviewed, one-time initial
 recipient exception for both cache bootstrap and the first ordinary PR**. This
 supersedes only the earlier *preparation-permission* blocker. It does not approve
