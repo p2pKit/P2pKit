@@ -3724,7 +3724,10 @@ domain values may not. A mismatched inherited context is refused, not repaired
 with `allow_new_context`. Actual returned scope/file/child objects enter a fixed
 owner roster before subsequent fallible observations. Partial/no-return failures
 retain the first exception and original owners; quarantine is not retirement.
-The outer object returns only its original worker object, never a provider result.
+The launch-only revision returned only its original worker object, never a provider
+result. The outer-supervisor increment below binds that child and its actual
+request in an immutable same-call return; the earlier40-control result belongs
+to the launch-only revision, not that later delta.
 
 Only the three selected runtime-service values cross newly constructed native
 child environments, with fixed provider inputs and original output sinks. No
@@ -3769,7 +3772,7 @@ ResourceWarnings0. Final40 took1.155s (process wall1.64/user1.50/system0.09s), n
 provider scheduling evidence. Independent final review is separately bound to the
 containing commit's issue record, not inferred from these author passes.
 
-Still absent: actual outer wait/drain/close and bounded control-return framing,
+At this launch-only boundary, absent: actual outer wait/drain/close and bounded control-return framing,
 worker-loss failure custody/seal/upload, an asynchronous enclosing Node shim and
 original runner return, pre-Node effective-environment/installed-source/tool
 admission, and genuine nested-Job/POSIX/provider qualification. The worker's
@@ -3777,6 +3780,111 @@ in-process result cannot cross those missing boundaries by implication. Losing
 the outer supervisor remains terminal UNKNOWN. Complete1066 and the single
 canonical-init120 receiving authority remain unaccepted/unfinished. Both ordinary
 HOLDs, whole-JVM interlock, native/file/job limits and proposed5400's status remain.
+
+### Outer worker retirement and opaque transcripts, not provider returns
+
+The separate dormant [outer supervisor](../../scripts/hosted_cache_provider_supervisor.py)
+now encloses one actual fixed launch, worker wait, original-scope drain and known
+close, bounded worker-log readback and fixed-owner closes. Its constructor and
+directory transfer are inert. No supplied child, replayed native owner or
+caller-provided success record can substitute for that internal original call.
+No workflow, asynchronous Node shim or admitted entry invokes it yet.
+
+The actual spawn receives the immutable pre-spawn argv tuple. Its returned child
+and exact request bytes enter a frozen `WorkerLaunch`, retained before subsequent
+launcher callbacks and captured before the supervisor's first callback-bearing
+check. The mutable diagnostic `worker_argv` list is not request authority.
+Carrier, child, request and acquisition-roster bindings remain checked during
+wait and retirement; an equal replacement is not the original return. Successful
+launch binding is mandatory even if its diagnostic carrier slot is later cleared.
+An unreturned acquisition is retained from the actual factory's exceptional
+return, not reconstructed solely from its callback-mutable attempt set.
+
+The wait ends at the launch's explicitly shorter worker cutoff. That cutoff is
+derived only by shortening the original LOCAL end; callbacks, polling and final
+construction cannot reset it or the original RAW180 end. Retirement uses the
+same saved absolute end, never another45. These are acceptance fences, not
+preemption of blocked native calls or a measured/admitted phase allocation.
+The original outer scope can survive worker loss; losing this supervisor itself
+remains terminal UNKNOWN, with no later reconstructed retirement authority.
+
+Worker stdout/stderr use the existing fixed `provider-stdout.log` and
+`provider-stderr.log` basenames at the outer root, distinct from the provider's
+files under `capture/`. This reuses the narrow Windows pinned-writer readback
+without broadening the native filename/sharing permissions. POSIX readers are
+exclusive original registrations with no-follow/nonblocking opens and bounded
+same-descriptor/metadata checks. No raw worker contents are printed or uploaded.
+
+Only an empty original drain, clear discovery and successful original scope
+close allow file readback. A scope close after expiry/UNKNOWN is merely a safety
+backstop; distinct enclosing files remain pinned. Failed acquisitions/readbacks
+or ambiguous closes do not authorize retry or later outer-owner release. Any
+attempted-but-unreturned file/directory/scope acquisition is UNKNOWN. A missing
+child return can instead be retired through its actual original scope; an
+already returned file followed by a callback failure is not an unreturned
+acquisition. Initial log sync/verification and their fences are inside the
+same conservative UNKNOWN readback boundary as the byte reads. A
+nonzero worker or cancellation preserves its first exception while a separately
+accessible immutable **opaque worker transcript** may retain known-closed bytes.
+Partial bytes remain unqualified staging. This transcript does not contain the
+worker's in-memory `CapturedProvider`/`FailedProviderCapture` and does not prove
+the provider-control return, original runner outcome or provider acceptance.
+
+The [focused author controls](../../scripts/tests/hosted-cache-provider-supervisor-test.py)
+passed **50/50 methods** in R4:43 whole outer-call controls over Windows/native/service
+models and seven actual tiny POSIX-file controls with an explicitly modeled
+upstream launch/native scope/clock. One Windows model composes the existing
+inner worker as well; the two directories' bytes remain distinct. No native
+process, provider, Node, crypto or application build runs in these controls.
+
+R4 took0.485s (process wall0.94/user0.86/system0.04s). Its successful whole50
+does not relabel the earlier failed48 aggregate or replace independent review.
+
+The first36 author pass missed mutable exit/request/cutoff-slot substitution.
+Three new desired-state methods all fail on that unchanged R1 source. The
+correction pins actual local poll returns and original wait inputs through the
+wait's final return and checks them around subsequent callbacks/retirement.
+The same three methods pass within R2's39, not additional product coverage.
+Independent R2 then returned **2 PASS/7 FAIL**: four unreturned acquisitions
+released distinct owners, post-spawn argv could replace the reported request,
+and initial sync/verify failures escaped UNKNOWN. Those failed packets remain
+preserved; all nine methods passed on the later R3 revision.
+
+The corrected R3 author aggregate is **47 PASS/1 FAIL** (test0.460s;
+wall1.01/user0.87/system0.07s). Its one failure expected the older wait diagnostic;
+the new original-carrier check correctly refused earlier. Only that test's exact
+expected reason changed, with a stronger all-distinct-pins assertion; the
+separate corrected method **1/1 PASS** (test0.017s; wall0.52s). The other47 methods
+and implementation bytes were unchanged and not rerun for that test-only
+correction. Five selected actual
+launcher-delta controls also passed separately (test0.060s; wall0.49s), not a
+rerun of the earlier40-method suite.
+
+Independent R3 was **14 PASS/2 FAIL**: the original9 passed; seven added controls
+had5 passes and2 failures. Clearing the optional successful-return slot disabled
+request binding; erasing an attempt inside a failing factory hid its unreturned
+owner. R4 corrects both paths as described above, preserving the distinction
+between genuine failed launch and missing successful-return state, and between
+unreturned acquisition and known return followed by a callback failure. Two new
+author regressions are included in the final50, not additional product coverage.
+The independent R3 failed aggregate is retained separately.
+
+Every author invocation used UID/GID65534, cleared environment/groups,
+no-new-privs, Python `-I -B -S`, frozen read-only source,
+CPU20/512MiB/file32MiB/FD128/core0/wall30+kill2 and pre-project filesystem/process/
+network/native-loader/pidfd/signal guards; each guard4, unexpected-denials0 and
+ResourceWarnings0. Frozen inputs remained unchanged. These are not provider/native
+timing qualifications. Final independent implementation/document review and its
+executed scope are separately bound in #437, not inferred from author passes.
+
+Still missing: bounded worker control-return and inner failure-byte transport,
+full failure custody/export/seal/upload, enclosing asynchronous Node/runner
+returns, pre-Node/source/tool/service admission, complete1066/one canonical-init120
+receiving authority, productive/repeated bootstrap and operational gate/workflow.
+Genuine native/provider/cache/resolver/custody/scheduling qualification and
+Stage2/trusted-main delivery remain held. Both ordinary HOLDs and the whole-JVM
+interlock, NativeFile900/Snapshot576MiB, FULL3600/Desktop1800 and proposed5400's
+UNADMITTED/UNMEASURED status are unchanged. Opaque logs do not make Releases ready.
 
 ## Verification and remaining qualification
 
@@ -3836,6 +3944,8 @@ python3 -I -B -S scripts/tests/hosted-dependency-cache-test.py
 python3 -I -B -S scripts/tests/hosted-cache-provider-contract-test.py
 python3 -I -B -S scripts/tests/hosted-cache-provider-environment-test.py
 python3 -I -B -S scripts/tests/hosted-cache-provider-lifecycle-test.py
+python3 -I -B -S scripts/tests/hosted-cache-provider-launch-test.py
+python3 -I -B -S scripts/tests/hosted-cache-provider-supervisor-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/hosted-windows-provider-command-test.py
 python3 -I -B -S scripts/tests/hosted-test-evidence-test.py

@@ -1,13 +1,14 @@
-"""Dormant fixed native launch sites, NOT a complete provider supervisor.
+"""Dormant fixed native launch sites, NOT an admitted provider bridge.
 
 There is no admitted CLI/workflow caller, pre-Node/environment/tool authority,
-outer wait/drain/close, return protocol or custody/seal/upload in this increment.
-Original owners remain live on both launch return and failure. A future original
+return protocol or custody/seal/upload in this module. Standalone start() leaves
+original owners live on both return and failure. The separate original outer
 supervisor must finish them under the SAME180/final45; never infer retirement
 from child exit, an in-process quarantine, or a success-shaped supplied record.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import hashlib
 import json
 import math
@@ -39,6 +40,13 @@ _FRAME_KEYS = {"schema", "role", "frequency", "issuedNs", "hardEndNs", "workerCu
 
 class ProviderLaunchError(RuntimeError):
     """Fixed public-safe reason. Environments, original errors and files are private."""
+
+
+@dataclass(frozen=True, repr=False)
+class WorkerLaunch:
+    """Original child and immutable actual request, not a provider result."""
+    child: object = field(repr=False)
+    request: bytes = field(repr=False)
 
 
 def require(value, reason):
@@ -244,7 +252,7 @@ class SupervisorLaunch:
 
     Transfer both actual native directory objects before start(). On any failure
     this object and all returned owners are retained in QUARANTINE. That is not
-    retirement; only a future bounded original outer supervisor may finalize it.
+    retirement; only the separate bounded original outer supervisor may finalize it.
     """
     def __init__(self):
         self.directory = self.home = self.capture_directory = self.bundle = None
@@ -254,6 +262,8 @@ class SupervisorLaunch:
         self.attempted, self.original_error = set(), None
         self._thread, self._started = threading.get_ident(), False
         self.spawn_returned = False
+        self._launch_return = None
+        self._unreturned_acquisition = None
         self._owners = {name: None for name in ("directory", "home", "capture_directory", "bundle", "stdout", "stderr", "scope", "child")}
 
     def take_directories(self, directory, home):
@@ -279,11 +289,24 @@ class SupervisorLaunch:
         self._healthy()
         self.window.check(work=True)
         require(name not in self.attempted, "PROVIDER_LAUNCH_DUPLICATE_OWNER")
-        self.attempted.add(name)
-        owner = factory()
+        attempts = self.attempted
+        attempts.add(name)
+        expected = frozenset(attempts)
+        try:
+            owner = factory()
+        except BaseException:
+            # Retain the actual local episode on its exceptional return. The
+            # callback-mutable diagnostic set cannot erase this obligation.
+            self._unreturned_acquisition = name
+            raise
         self._owners[name] = owner  # First action on return: fixed-roster custody.
         setattr(self, name, owner)
+        if owner is None:
+            self._unreturned_acquisition = name
+            require(False, "PROVIDER_LAUNCH_OWNER_NOT_RETURNED")
+        require(self.attempted is attempts and attempts == expected, "PROVIDER_LAUNCH_ACQUISITIONS_CHANGED")
         self.window.check(work=True)
+        require(self.attempted is attempts and attempts == expected, "PROVIDER_LAUNCH_ACQUISITIONS_CHANGED")
         self._healthy()
         return getattr(self, name)
 
@@ -323,7 +346,9 @@ class SupervisorLaunch:
             self._acquire("bundle", lambda: _open_bundle(self.directory, role, self.window.local_end, contract["bundle"]["bytes"]))
             _bundle_bytes(self.bundle, self.directory, role, contract)
             for name in ("stdout", "stderr"):
-                self._acquire(name, lambda name=name: self.directory.create_file("worker-" + name + ".log",
+                # The same narrow native log capability is used in TWO distinct
+                # directories: worker logs here, provider logs under capture/.
+                self._acquire(name, lambda name=name: self.directory.create_file("provider-" + name + ".log",
                     max_bytes=lifecycle.LOG_BYTES, deadline=self.window.local_end))
             sources = {name: worker_source.read_source(SCRIPTS, name) for name in worker_source.names(role)}
             self.source_originals = sources
@@ -337,6 +362,7 @@ class SupervisorLaunch:
             child_env.update(services)
             self.worker_environment, self.worker_argv = child_env, argv
             original_environment, original_argv = _environment_values(child_env), tuple(argv)
+            request = original_argv[-1].encode("ascii")
             cancelled()
             self._healthy()
             self.window.check(work=True)
@@ -351,14 +377,20 @@ class SupervisorLaunch:
             _scope_binding(scope, role, job, invocation, str(self.directory.path), str(self.home.path))
             self._healthy()
             self.attempted.add("child")
-            child = scope.spawn(argv, str(SCRIPTS.parent), child_env, stdout=self.stdout, stderr=self.stderr)
+            # Pass the immutable vector itself. The later diagnostic argv list
+            # cannot replace the bytes handed to the actual native spawn.
+            child = scope.spawn(original_argv, str(SCRIPTS.parent), child_env, stdout=self.stdout, stderr=self.stderr)
             self._owners["child"] = child
             self.child = child
             self.spawn_returned = True
+            returned = WorkerLaunch(child, request)
+            self._launch_return = returned
             self.window.check(work=True)
             self._healthy()
             _leader(scope, child, role)
-            return child  # Original child only, never provider/step/retirement success.
+            require(self._launch_return is returned and returned.child is child and returned.request is request,
+                    "PROVIDER_ORIGINAL_LAUNCH_RETURN_CHANGED")
+            return returned  # Never provider/step/retirement success.
         except BaseException as error:
             self._failed(error)
             raise self.original_error
