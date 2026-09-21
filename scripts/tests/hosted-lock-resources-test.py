@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -17,6 +18,7 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts"))
 SPEC = importlib.util.spec_from_file_location("hosted_resources", ROOT / "scripts/hosted_lock_resources.py")
 R = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(R)

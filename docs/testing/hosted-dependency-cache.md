@@ -3547,7 +3547,8 @@ controller**. Construction and context entry are inert. The caller transfers its
 actual original directory inside the active context before preparation can verify
 it or allocate the three fixed captures and native scope. There is no argv,
 environment, credential, arbitrary-owner registry or supplied step-success API.
-No workflow or production caller invokes this leaf.
+No workflow or admitted execution invokes this leaf; the fixed internal launch
+sites below do not supply that admission.
 
 The supplied original RAW window is at most180 seconds. A sole LOCAL-before-RAW
 conversion can only shorten the caller's saved LOCAL end; the fixed45-second
@@ -3704,6 +3705,78 @@ custody/seal/upload and genuine hosted execution. Sole registered leader identit
 does not prove those premises. The complete1066 graph remains **unaccepted WIP**;
 this leaf does not import or qualify it. Both HOLDs, NativeFile900/Snapshot576MiB,
 ordinary FULL3600/Desktop1800 and proposed5400's UNADMITTED/UNMEASURED status remain.
+
+### Fixed internal provider launch sites, not complete supervision
+
+The dormant [launcher](../../scripts/hosted_cache_provider_launch.py) now contains
+the two concrete native spawn sites from the reviewed topology: an original
+outer scope launches a separate fixed Python worker, whose original
+`ProviderCapture` scope launches the phase-pinned provider. The
+[worker bootstrap](../../scripts/hosted_cache_provider_worker.py) has a fixed
+source/import roster, bounded byte/hash checks and isolated `-I -B -S` startup;
+it does not widen `sys.path` or repurpose the canonical Gradle loader.
+These are internal conditional launch mechanics, **not an admitted workflow or
+authenticated source/tool/startup boundary**. No workflow calls either entry.
+
+Both launches preserve the complete genuine inherited ownership-domain sequence
+and append their own actual id/job/state/home. JSON spelling may differ; ordered
+domain values may not. A mismatched inherited context is refused, not repaired
+with `allow_new_context`. Actual returned scope/file/child objects enter a fixed
+owner roster before subsequent fallible observations. Partial/no-return failures
+retain the first exception and original owners; quarantine is not retirement.
+The outer object returns only its original worker object, never a provider result.
+
+Only the three selected runtime-service values cross newly constructed native
+child environments, with fixed provider inputs and original output sinks. No
+credential is transported in argv, JSON, query records or hashes. Full launch
+environment/argv and original owner bindings are checked before each spawn.
+Original RAW values use decimal strings and each process converts LOCAL-before-RAW
+against the original end. The worker must use an explicitly shorter cutoff;
+the tests' synthetic split is **not an admitted or measured scheduling budget**.
+Neither process gains a fresh180 or a second final45.
+
+The [focused author controls](../../scripts/tests/hosted-cache-provider-launch-test.py)
+passed **40/40 methods**:30 caller controls over modeled native scopes, Windows
+files, clocks, sources and service values; ten source-bootstrap controls include
+tiny actual POSIX source reads. Three cold-load controls execute the fixed source
+roster, stopping at invalid-frame rejection **before** clock/native acquisition.
+Their role selections are import-topology tests, not native platform execution.
+The changed two direct-spec fixtures are imported only for definition/startup
+checks; their crypto/resource test methods and key setup are not run.
+No native process, provider, Node or crypto ran.
+
+The earlier34 author pass missed a transitive import escape: `hosted_evidence`
+and Darwin's `hosted_lock_resources` prepended the source directory during import,
+allowing an unhashed sibling `uuid.py` to load. Independent R3 was **6 PASS /3 FAIL**
+and requested changes. Both helpers now own path setup only in direct-script mode;
+their two direct-spec fixtures explicitly set up their own path. The fixed worker
+also checks path object/value continuity after each module. This is not a sandbox
+for arbitrary malicious source or pre-start authentication. Four new desired-state
+methods fail on unchanged R3 (five failure entries, including three actual poison
+imports); they are included in final40. Five earlier late environment/argv/sink
+methods fail on the unchanged initial WIP and also pass within final40.
+
+Original author R1 remains
+**8 PASS /25 FAIL /1 ERROR**: the cohort fixture displaced the new scope model
+with its deliberate offline guard. R2 remains **25 PASS /9 FAIL**: the corrected
+model used Linux path joining for one Windows expectation. Only the new fixture
+wiring/spelling changed; production guards and accepted fixtures were not weakened.
+All author Python invocations used UID/GID65534, isolated
+Python, cleared environment/groups, no-new-privs, read-only source,
+CPU20/512MiB/file32MiB/FD128/core0/wall30+kill2 and pre-project filesystem/process/
+network/native-loader/pidfd/signal guards; guard4, unexpected-denials0 and
+ResourceWarnings0. Final40 took1.155s (process wall1.64/user1.50/system0.09s), not
+provider scheduling evidence. Independent final review is separately bound to the
+containing commit's issue record, not inferred from these author passes.
+
+Still absent: actual outer wait/drain/close and bounded control-return framing,
+worker-loss failure custody/seal/upload, an asynchronous enclosing Node shim and
+original runner return, pre-Node effective-environment/installed-source/tool
+admission, and genuine nested-Job/POSIX/provider qualification. The worker's
+in-process result cannot cross those missing boundaries by implication. Losing
+the outer supervisor remains terminal UNKNOWN. Complete1066 and the single
+canonical-init120 receiving authority remain unaccepted/unfinished. Both ordinary
+HOLDs, whole-JVM interlock, native/file/job limits and proposed5400's status remain.
 
 ## Verification and remaining qualification
 

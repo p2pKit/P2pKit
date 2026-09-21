@@ -27,9 +27,11 @@ import tempfile
 import time
 from typing import BinaryIO
 
-# Isolated script/fixture entry points still use the exact checked-in supplier.
+# Only the direct script owns its import path. Importing this helper must not
+# widen a caller's isolated, hash-bound module-loading environment.
 sys.dont_write_bytecode = True
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
 import audit_processes
 
 
