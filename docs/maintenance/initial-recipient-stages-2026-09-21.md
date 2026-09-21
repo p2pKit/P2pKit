@@ -113,6 +113,50 @@ service behavior**, not a performed registration. It must be distinct from
 `populate`, dependency setup and provider work, and requires separate authority.
 A main registration merge changes B and cannot silently replace this route.
 
+### Dormant approval selector and nonproductive eligibility
+
+The separate [gate matcher](../../scripts/hosted_initial_recipient_gate.py) parses
+**supplied original records only**. It has no CLI, HTTP/Git acquirer, workflow
+caller, environment creation or native execution. Its
+[focused offline controls](../../scripts/tests/hosted-initial-recipient-gate-test.py)
+use synthetic environment/run/comment records. The author command
+`timeout --kill-after=5s 90s python3 -I -B -S scripts/tests/hosted-initial-recipient-gate-test.py -v`
+passed **32/32 methods**, exit 0 (0.094s), with a process/network/native-loader
+audit guard installed before project imports. Implementation approval, if any,
+belongs to the containing commit's exact independent review, not that author pass.
+
+The earlier 30-method author suite passed but missed a parser-wrapper defect.
+Independent R1 retained **26 methods / 24 PASS / 2 FAIL**: a malformed original
+approval list with an appended object member was accepted after wrapping it in
+an object for parsing. The wrapper now requires exactly its sole `history` key.
+The two new author regressions each failed on the unchanged preimage, then
+passed in the final 32-method suite. These original failures are preserved;
+they are not authenticated API acceptance or a genuine hosted approval bypass.
+
+The approval-history selector requires exactly this full challenge, without
+whitespace normalization, a latest-comment search or inferred attempt:
+
+```text
+AUTHORIZE_INITIAL_RECIPIENT <stage1|stage2> <run>/<attempt> <comment-id> <body-sha256>
+```
+
+This is a grammar specification, not an actual authorization command. Exactly
+one challenge may match the current stage/run/attempt. It must be approved by
+the sole owner and name only the pinned pre-execution environment. The selected
+comment, environment ID/protections and both complete branch-policy IDs are
+then checked against the statement. Changed or duplicate selectors refuse.
+The gate retains its **actual Linux/X64 `initial-recipient-gate` identity** even
+when the selected bootstrap worker is Mac/Windows or the ordinary profile is
+FULL; it cannot impersonate `populate`, `verify` or `complete-gate`.
+
+The immutable `ApprovalSelector` and `GateEligibility` records are distinct
+from each other and from native Admission. Eligibility explicitly records
+`NONPRODUCTIVE_ELIGIBILITY`, `workerAdmission: NOT_PERFORMED` and
+`qualificationAcceptance: NOT_ESTABLISHED_BY_GATE`. Stage2 historical reference
+checks do not inspect or qualify evidence. Fresh complete original acquisition,
+actual source/host admission, whole-job dependencies, worker reacquisition and
+original custody remain necessary before this can be connected to execution.
+
 ## Remaining implementation and authorization boundaries
 
 | Increment | Required work; current boundary |
