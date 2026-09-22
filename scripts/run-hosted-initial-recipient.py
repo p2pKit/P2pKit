@@ -3479,6 +3479,115 @@ def _check_reader_path_history(nodes):
             _check_history(((value, kind, mode, saved),))
 
 
+_READER_PATH_CHECK = _check_reader_path_history
+_READER_PATH_CODE = _check_reader_path_history.__code__
+
+
+class _ReaderPathHistory:
+    """Private saved-metadata plan, never a cache of current observations.
+
+    Only an immutable prefix or our own unexposed accumulation list is planned.
+    Every current type/field/comparison is still observed at every boundary.
+    Interception, reentrancy or unsupported metadata permanently selects the
+    original live-container helper, including after a helper is restored.
+    Like the surrounding private pins, this is not a Python code/frame sandbox.
+    """
+    __slots__ = ("_nodes", "_pairs", "_kind", "_fallback", "_building")
+
+    def __init__(self, nodes):
+        self._nodes, self._pairs, self._kind = nodes, [], None
+        self._fallback, self._building = type(nodes) is not tuple, True
+        try:
+            if not self._fallback and not self._append_plan(nodes):
+                self._fallback = True
+        except BaseException:
+            self._fallback = True
+            raise
+        finally:
+            self._building = False
+
+    @classmethod
+    def accumulating(cls):
+        value = cls(())
+        value._nodes = []  # No supplied mutable container can enter the fast path.
+        return value
+
+    def _append_plan(self, nodes):
+        for node in nodes:
+            # Inspect only immutable routing metadata. Invalid/custom shapes
+            # must fail in the original helper, not earlier during planning.
+            if not (type(node) is tuple and len(node) == 4 and type(node[2]) is str and node[2] == "path"):
+                return False
+            value, kind, _mode, saved = node
+            if self._pairs and kind is not self._kind:
+                return False
+            self._kind = kind
+            self._pairs.append((value, saved))  # Same references, order and duplicates.
+        return True
+
+    def extend(self, nodes):
+        building, self._building = self._building, True
+        if building:
+            self._fallback = True
+        try:
+            before = len(self._nodes)
+            self._nodes.extend(nodes)  # Preserve partial extension and its original exception.
+            if not self._fallback and not self._append_plan(self._nodes[before:]):
+                self._fallback = True
+        except BaseException:
+            self._fallback = True
+            raise
+        finally:
+            self._building = building
+
+    def check(self):
+        checker = _check_reader_path_history
+        if not (not self._fallback and not self._building and checker is _READER_PATH_CHECK and
+                checker.__code__ is _READER_PATH_CODE):
+            self._fallback = True
+            # Drop duplicate references before a helper can expose/mutate the
+            # original container; removed nodes must retain original lifetimes.
+            self._pairs.clear()
+            self._kind = None
+            return checker(self._nodes)
+        kind = self._kind
+        for value, saved in self._pairs:
+            if type(value) is not kind:
+                require(False, "RECIPIENT_HISTORY_CHANGED")
+            if (str(value), value.parts, value.drive, value.root) != saved:
+                require(False, "RECIPIENT_HISTORY_CHANGED")
+
+
+def _query_reader_roster(owner, ledger, prefix, held, new_rows, missing):
+    # Preserve the original generator scopes: a tail row's finalizer can
+    # change the live ledger before the next phase constructs its fresh slice.
+    return owner.resources is ledger and len(ledger) == len(prefix) + len(held) and all(
+        row is saved and type(row) is dict and len(row) == 4 and
+        type(row.get("label")) is str and row.get("label") == label and row.get("owner", missing) is resource and
+        row.get("attempted") is attempted and row.get("closed") is closed
+        for row, (saved, label, resource, attempted, closed) in zip(ledger, prefix)) and all(
+        type(row) is dict and len(row) == 4 and
+        row.get("label") == "directory" and row.get("owner", missing) is resource and
+        row.get("attempted") is False and row.get("closed") is False
+        for row, resource in zip(ledger[len(prefix):], held)) and all(
+        row is saved for row, saved in zip(ledger[len(prefix):], new_rows))
+
+
+def _graph_reader_roster(owner, ledger, rows, missing, *, tail=False):
+    if not (owner.resources is ledger and (len(ledger) >= len(rows) if tail else len(ledger) == len(rows))):
+        return False
+    for actual, (saved, label, resource, attempted, closed) in zip(ledger, rows):
+        valid = (actual is saved and type(actual) is dict and len(actual) == 4 and actual.get("label", missing) is not missing and
+            actual.get("label") == label and actual.get("owner", missing) is resource and
+            actual.get("attempted") is attempted and actual.get("closed") is closed)
+        try:
+            if not valid:
+                return False
+        finally:
+            del valid
+    return True
+
+
 def _read_initial_query_originals(owner, directory, *, expected_session_sha256, expected_source_return_raw=None):
     """SUPPLIED_QUERY_BYTE_GRAPH_ONLY; enclosing OWNER_CLOSE_PENDING.
 
@@ -3505,20 +3614,12 @@ def _read_initial_query_originals(owner, directory, *, expected_session_sha256, 
     require(len({id(row) for row, *_rest in prefix}) == len(prefix) ==
         len({id(resource) for _row, _label, resource, _a, _c in prefix}), "QUERY_ORIGINAL_RESOURCE_ALIAS")
     methods = tuple((name, getattr(owner, name)) for name in ("end", "read", "acquire"))
-    held, new_rows, pins, path_nodes, records = [], [], [], [], []
+    held, new_rows, pins, records = [], [], [], []
+    path_nodes = _ReaderPathHistory.accumulating()
     missing = object()
 
     def roster():
-        return owner.resources is ledger and len(ledger) == len(prefix) + len(held) and all(
-            row is saved and type(row) is dict and len(row) == 4 and
-            type(row.get("label")) is str and row.get("label") == label and row.get("owner", missing) is resource and
-            row.get("attempted") is attempted and row.get("closed") is closed
-            for row, (saved, label, resource, attempted, closed) in zip(ledger, prefix)) and all(
-            type(row) is dict and len(row) == 4 and
-            row.get("label") == "directory" and row.get("owner", missing) is resource and
-            row.get("attempted") is False and row.get("closed") is False
-            for row, resource in zip(ledger[len(prefix):], held)) and all(
-            row is saved for row, saved in zip(ledger[len(prefix):], new_rows))
+        return _query_reader_roster(owner, ledger, prefix, held, new_rows, missing)
 
     def data():
         require(type(owner) is native.Owner and owner.first is first and owner.fence is fence and
@@ -3533,7 +3634,7 @@ def _read_initial_query_originals(owner, directory, *, expected_session_sha256, 
             not native.QUARANTINE and not Q.QUARANTINE and not native.diagnostics._QUARANTINE, "QUERY_ORIGINAL_OWNER_NOT_LIVE")
         # Preserve every original node/check, including repeated paths, without
         # recreating one helper frame per directory at each callback boundary.
-        _check_reader_path_history(path_nodes)
+        path_nodes.check()
         for child, path, identity, original_path in pins:
             if not (child.path is original_path and child.path == path):
                 require(False, "QUERY_ORIGINAL_DIRECTORY_CHANGED")
@@ -3895,18 +3996,15 @@ def _read_initial_recipient_originals(owner, directory, *, recipient_outcome, ex
     prefix_count = len(rows)
     methods = tuple((name, getattr(owner, name)) for name in ("end", "read", "acquire"))
     sender_reader, query_reader = _read_recipient_sender, _read_initial_query_originals
-    held, pins, path_nodes, rosters, originals = [], [], [], [], {}
+    held, pins, rosters, originals = [], [], [], {}
+    path_nodes = _ReaderPathHistory.accumulating()
     missing = object()
-    prefix_paths = tuple((resource, resource.path, _history_graph(resource.path)) for _, label, resource, _, _ in rows
+    prefix_paths = tuple((resource, resource.path, _ReaderPathHistory(_history_graph(resource.path))) for _, label, resource, _, _ in rows
         if label == "directory")
     used, leaf_failed = 0, False
 
     def roster(*, tail=False):
-        return owner.resources is ledger and (len(ledger) >= len(rows) if tail else len(ledger) == len(rows)) and all(
-            actual is saved and type(actual) is dict and len(actual) == 4 and actual.get("label", missing) is not missing and
-            actual.get("label") == label and actual.get("owner", missing) is resource and
-            actual.get("attempted") is attempted and actual.get("closed") is closed
-            for actual, (saved, label, resource, attempted, closed) in zip(ledger, rows))
+        return _graph_reader_roster(owner, ledger, rows, missing, tail=tail)
 
     def structural(*, tail=False):
         require(type(owner) is native.Owner and owner.first is first and owner.fence is fence and owner.errors is errors and
@@ -3920,9 +4018,9 @@ def _read_initial_recipient_originals(owner, directory, *, recipient_outcome, ex
         for resource, path, graph in prefix_paths:
             if resource.path is not path:
                 require(False, "GRAPH_PREFIX_PATH_CHANGED")
-            _check_reader_path_history(graph)
+            graph.check()
         # Same saved nodes, order and duplicates; avoid one helper setup per pin.
-        _check_reader_path_history(path_nodes)
+        path_nodes.check()
         for resource, path, identity, original_path in pins:
             if not (resource.path is original_path and resource.path == path):
                 require(False, "GRAPH_DIRECTORY_CHANGED")

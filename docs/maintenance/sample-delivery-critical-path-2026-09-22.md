@@ -515,6 +515,57 @@ this result. Any later execution needs its own exact authorization. Both ordinar
 HOLDs, productive bootstrap refusal and later qualifications remain. Public
 development sample delivery is still **0/4 (0%); remaining4/4 (100%)**.
 
+## Receiver scan repair awaiting execution
+
+After the failed hosted probe, the owner authorized a receiver-performance
+source repair and independent implementation review, **then a fresh exact-source
+execution request**. The repair preserves all check boundaries and limits. It
+changes only private saved-path routing and aggregate roster-loop bookkeeping;
+the [cache guide](../testing/hosted-dependency-cache.md#receiver-scan-performance-candidate-execution-held)
+describes the live observations and fallback obligations. The query roster keeps
+its original generator phases rather than introducing phase-lifetime machinery.
+
+Independent source review identified two concrete lifetime-equivalence defects:
+a temporary query tail row surviving into the next slice, and compiled path
+references retaining a node after fallback exposed its mutable original list.
+The candidate restores the original query phases and discards duplicate plan
+references before fallback. Dedicated oracle controls cover both, including
+deletion inside an intercepted helper and after helper restoration. These are
+**source findings and authored regressions, not executed failures/passes**.
+
+Final candidate file bindings:
+
+| File | SHA-256 |
+| --- | --- |
+| `scripts/run-hosted-initial-recipient.py` | `44b1208c3eafe2a730838fcda1439b511396ec4bc075d4f36e47e6f05c980d65` |
+| `scripts/tests/hosted-initial-recipient-reader-scans-test.py` | `2be93ee6e259544d16b36b896b772c142bd0bf3d4d4d74283a38fb0af81ae8e9` |
+
+Independent verdict:
+**APPROVE_EXACT_RECEIVER_SCAN_IMPLEMENTATION_AND_AUTHORED_CONTROLS_SOURCE_ONLY**,
+corrected R3 report SHA-256
+`d78f90aa02439b0da4c1799d9f75b9fe10a69887f3c54a05390e5bec6b7514ff`.
+This is file-pair source approval, not executed equivalence, measured performance,
+complete-reader capacity or the owner's exact-head PR authorization.
+
+The new file contains **18 unexecuted focused controls** (11 history /7 roster)
+plus **one unexecuted diagnostic**, not a complete graph test. The proposed next
+request is exactly two serial, bounded offline Python invocations: the18 controls,
+then the one fixed442-node/223-row diagnostic only after a successful first
+aggregate. It uses the existing UID65534, isolated Python3.12, cleared environment,
+read-only source, process/network/native-loader guards and unchanged resource
+envelope. No syntax/import check, timing run, full receiver retry, application
+build, provider execution, CI dispatch, merge or publication is included in this
+source authorization. Whitespace/hash inspection is not a test pass.
+
+No measured performance gain or CPU20/complete1066/owner-close acceptance exists
+for these changed bytes. The earlier failed aggregate remains failed. The final
+independent verdict is bound above. The local commit/tree and request manifest
+will be mapped in #437/#424 after this checkpoint and request are frozen; that
+mapping is not yet completed here. Source review is not execution or personal
+owner authorization. No source push or workflow activation follows automatically. Original cancellation
+WIP, protected instructions, public recipient policy and all HOLDs are preserved.
+Public app delivery remains **0/4 (0%); remaining4/4 (100%)**; **Release NOT_READY**.
+
 ## Remaining execution blockers, in order
 
 1. **Finish/qualify this real runner connection:** its Node30 and Python18 model

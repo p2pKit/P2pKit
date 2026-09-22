@@ -1074,6 +1074,47 @@ was downloaded and its service digest, full roster and source bindings verified.
 No new provider/native/capacity acceptance, retry, larger limit or execution
 authorization follows. The failed VPS aggregates remain failed too.
 
+##### Receiver scan performance candidate (execution held)
+
+The subsequent receiver-only source repair targets repeated saved-metadata and
+roster bookkeeping, **not the number of live checks**. `_ReaderPathHistory`
+plans only exact immutable, homogeneous path-node metadata from an immutable
+prefix or its own private accumulation list. Every check still observes the
+current exact type, `str`, `parts`, `drive`, `root`, and original tuple inequality,
+in original order with every duplicate preserved. Unsupported metadata, helper
+interception/code replacement and reentrant/failed extension permanently select
+the unchanged helper on the original container. Before that helper can expose
+or mutate the container, duplicate plan references are discarded so removed
+nodes keep their original finalizer timing. No current-value/validity cache,
+private pathlib shortcut, interpreter switch or skipped scan is introduced.
+
+The aggregate roster loop retains its exact predicates, both label lookups,
+original exceptions and separate truth conversion/result release. Independent
+source review found that the proposed query loops retained a temporary last row
+across the next fresh slice. The query helper therefore keeps **all three exact
+original generator phases**; that proposed optimization was abandoned. Review
+also found the fallback's duplicate-reference lifetime problem above. Both
+findings are reasoned source counterexamples, not executed preimage failures.
+
+The [new scan controls](../../scripts/tests/hosted-initial-recipient-reader-scans-test.py)
+author **18 focused methods** (11 history /7 roster), including both lifetime
+regressions, and **one separately selected scan-cost diagnostic**. **None has
+been imported, syntax-checked or executed.** The proposed two-invocation envelope
+selects those18 controls first, then the diagnostic only if they pass. The latter
+compares442 Path nodes /223 rows, ten warmups per implementation and four1000-loop
+samples in preimage/candidate/candidate/preimage order. It creates no graph
+fixture or owner and has no speed threshold or capacity-acceptance assertion.
+The [source checkpoint](../maintenance/sample-delivery-critical-path-2026-09-22.md#receiver-scan-repair-awaiting-execution)
+binds the reviewed file bytes. The local commit/tree and separate execution
+request must be frozen and mapped in #437/#424 before requesting authorization;
+that mapping is pending at this source-document checkpoint.
+
+Expected performance is **UNMEASURED**. All1066 rereads, listings, callback
+boundaries, native ownership observations and enclosing-close requirements are
+unchanged. CPU20/wall30+kill2/AS512MiB/file32MiB/FD128/core0 remain; no blind full
+receiver retry is proposed. A small diagnostic gain would not itself establish
+complete1066 plus close, authorize another run, or resolve receiving authority.
+
 This section grants no receiving authority, provider/native qualification,
 budget admission or workflow activation. Authentic predecessor outcome/hash
 transport, same-job/run/attempt/selection/runner/boot continuity, a NEW owner and
