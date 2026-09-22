@@ -243,7 +243,7 @@ At this native-helper checkpoint, the three new Action files were
 the Action test file did not yet exist. The following source-only increment
 supersedes that source-review status, not its execution HOLDs.
 
-## Thin provider Action: source reviewed, 48 controls not yet run
+## Thin provider Action: reviewed source and subsequent offline result
 
 The [Action](../../.github/actions/dependency-cache-provider/action.yml) now has
 independent implementation review and
@@ -253,9 +253,23 @@ records its exact scope and review hash. The single blocking static finding,
 lost originals on main output failure, was repaired before execution. The
 reviewer's final verdict is
 **APPROVE_EXACT_PROVIDER_ACTION_SOURCE_AND_48_AUTHORED_CONTROLS_ONLY**.
-Only the bounded Ruby manifest structure check has run; **no Node startup,
-syntax check, import or Action control execution has occurred for this source**.
-The full frozen offline envelope and fresh exact owner authorization are next.
+At that source-only checkpoint, only the bounded Ruby manifest structure check
+had run; no Node startup, syntax check, import or Action control execution had
+occurred. The frozen offline envelope and execution authorization were separate.
+
+After the owner's later release-workflow testing/qualification authorization,
+the reviewed envelope ran once at **10:54:44–10:54:45UTC**: **48/48 PASS**,
+guard4/unexpected0, command/wrapper/enclosing-invocation0/0/0, empty stderr and
+exact input/output integrity. Source was
+`14a1e8d0dda4d1dd13c11bb7e995052e123c358c`, tree
+`4a8e6a29b239fadc7d4f2980cbf5e4635e9a5e03`. Independent original readback returned
+**APPROVE_EXACT_ACTION48_ORIGINAL_OFFLINE_MODEL_RESULT_ONLY**, report SHA-256
+`eb68d12d4a353c5a6f752b05ad120c59823eea1dae7f1d26b3fe56b1e4dd279e`.
+The [exact result record](../testing/hosted-dependency-cache.md#subsequent-action48-original-offline-result)
+binds the frozen request, complete original/enclosing manifests and unchanged
+CPU20/AS2GiB/wall30+kill2 envelope. This is model execution, not actual
+Python/native/provider/HTTP/cache/hosted acceptance. No accepted suite or app
+build was repeated; no private key was accessed.
 
 No workflow invokes this Action. Its native helper still requires trusted-main
 admission; it cannot bootstrap its own recipient or supply Stage1 authority.

@@ -4597,15 +4597,16 @@ The reviewer found loss of original supervisor/error custody during main output
 failure; the private retained return was corrected and two negative controls
 were authored before any execution. This is not an executed preimage failure.
 
-All [48 controls](../../scripts/tests/hosted-cache-provider-action-test.cjs) are
+At the source-only checkpoint, all
+[48 controls](../../scripts/tests/hosted-cache-provider-action-test.cjs) were
 **authored but unexecuted**. They model spawn, HTTP, files, clocks, signals,
 native/helper/bridge returns and service inputs. The full-length synthetic
 bundle is nonexecutable data with a modeled digest; a separate real-SHA negative
 control refuses it. There is no real bundle, provider, credential or network
 execution in the proposed suite. A bounded Ruby safe-load/closed-roster check
 passed for the Action manifest only; no Node startup, syntax check, import,
-Action run or test pass is claimed. The frozen offline execution envelope and
-fresh exact one-invocation owner authorization remain separate prerequisites.
+Action run or test pass was claimed at that checkpoint. The later execution
+below has its own frozen envelope and owner testing authorization.
 
 This Action cannot authenticate its own prestart source/tools/service origin.
 Native admission still requires trusted-main policy, not productive Stage1
@@ -4614,6 +4615,37 @@ native/provider qualification remain open. Both ordinary HOLDs, the whole-JVM
 interlock, complete1066 hold, all existing deadlines and bootstrap5400
 **UNADMITTED / UNMEASURED** are unchanged. This is not workflow activation or
 Release qualification.
+
+#### Subsequent Action48 original offline result
+
+After the owner's authorization to proceed with release-workflow testing and
+qualification, the previously reviewed one-shot envelope ran **once**, at
+**2026-09-22T10:54:44Z–10:54:45Z**. All **48/48 offline Action controls passed**,
+with guard4/unexpected0, command/wrapper/enclosing-invocation exits0/0/0,
+3532-byte stdout matching the exact51-line roster, empty stderr and matching
+pre/post source/tool/input hashes. No preliminary Node startup or retry occurred.
+Source was `14a1e8d0dda4d1dd13c11bb7e995052e123c358c`, tree
+`4a8e6a29b239fadc7d4f2980cbf5e4635e9a5e03`; request-manifest SHA-256
+`36867a39f437f44a3bcf4431121177b28b58ebdcd700d5457a1ea0582f6f8187`.
+
+The unchanged envelope used UID/GID65534, cleared environment, read-only
+case/runtime, no-network bwrap namespaces, Node permissions/closed imports and
+CPU20/AS2GiB/file32MiB/FD128/core0/wall30+kill2 limits. AS is an address-space
+limit, **not measured RSS**. The synthetic bundle was nonexecutable model data;
+no real HTTP, Python/native child, provider, cache, hosted runner or app ran.
+
+Independent readback returned
+**APPROVE_EXACT_ACTION48_ORIGINAL_OFFLINE_MODEL_RESULT_ONLY**, report SHA-256
+`eb68d12d4a353c5a6f752b05ad120c59823eea1dae7f1d26b3fe56b1e4dd279e`.
+Complete original-results manifest SHA-256:
+`055281014968677e78270fb5f6486889c98f1de683d951267f31c8261139e3ee`;
+enclosing-invocation capture manifest SHA-256:
+`a4925d2faaa9ef439bc57961bd1cf12d22948021ce784f4d2ab90b2ec0564825`.
+The final EXIT-trap-created `wrapper.exit` was independently read and hashed
+in the complete14-file result manifest, not inferred from the earlier inner
+capture. No test was rerun for review. This closes only the exact offline-model
+execution prerequisite; all native/Stage1/custody and activation boundaries
+above remain. The owner chat is not a personal GitHub stage/run authorization.
 
 ## Verification and remaining qualification
 
