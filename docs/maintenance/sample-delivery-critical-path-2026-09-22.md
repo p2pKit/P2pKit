@@ -171,17 +171,23 @@ wall0.279s, command/wrapper0, guard8/unexpected0/ResourceWarnings0 and matching
 pre/post integrity. This uses modeled readings and tiny source/file fixtures,
 not native clock/provider execution. The cache guide binds its original capture.
 
-The updated **30 Node controls remain UNEXECUTED**, not covered by the earlier17
-pass. Their one-invocation offline request is separately prepared; fresh exact
-owner authorization is required before any Node startup. This is not a standing
-2GiB allowance or an authorization to start held CI. No build was repeated.
+The updated **30 Node controls subsequently passed once** at the same exact
+`2f442918` source after separate owner authorization. Recorded timestamps were
+02:43:43–02:43:44UTC, with command/wrapper0, guard4/unexpected0, empty stderr and
+matching pre/post integrity. Independent original-result inspection returned
+**ACCEPT_EXACT_ORIGINAL_NODE30_GUARDED_MODEL_RESULTS_ONLY**, report SHA-256
+`f0a0d28a9bd1594098d63f7bfc70c07155b661e4be456a98f36bbf07ae07826f`.
+The cache guide binds the exact request, original captures and resource limits.
+No real provider/native/runner execution is inferred. This one-invocation
+authorization is consumed, not a standing2GiB allowance or permission to start
+held CI. No test or build was repeated.
 
 ## Remaining execution blockers, in order
 
-1. **Finish/qualify this real runner connection:** the updated Node30 controls
-   await exact offline authorization; actual caller/prestart source/tool/service
-   handoff, post-last-owner/Node/runner custody and native Windows qualification
-   remain. The new post-provider-close helper is only partially verified. Do not
+1. **Finish/qualify this real runner connection:** its Node30 and Python18 model
+   results are accepted, but actual caller/prestart source/tool/service handoff,
+   post-last-owner/Node/runner custody and native Windows qualification remain.
+   The new post-provider-close helper is only verified in offline models. Do not
    reactivate unrelated cancellation review merely to polish it.
 2. **Finish the existing Stage 1 path:** original receiving authority and
    initialization, bounded productive bootstrap, provider save/probe and

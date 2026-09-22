@@ -4410,12 +4410,28 @@ Python used supplied clock Readings and tiny synthetic source/file fixtures;
 no project-native clock supplier or real provider/clock-helper child was
 exercised. No key material was accessed and no hosted runner was invoked.
 
-The updated **30 Node controls remain UNEXECUTED**. They replace both children,
-clocks and timers with explicit models and do not inherit the earlier17 pass.
-Their separately prepared one-invocation envelope requires fresh exact owner
-authorization; the earlier one- and two-invocation permissions are consumed,
-not a standing2GiB allowance. Original result/envelope review and any later
-execution belong to their exact issue records, not an inferred permission here.
+The updated **30 Node controls subsequently passed once**, after the owner
+authorized their exact separate request. They replace both children, clocks and
+timers with explicit models and do not inherit the earlier17 pass. The original
+invocation at `2f442918` was recorded from **2026-09-22 02:43:43 to 02:43:44 UTC**
+(timestamps, not a separately measured one-second duration): **30/30**,
+guard4/unexpected0, command/wrapper0, empty captured stderr and byte-identical
+pre/post integrity. Request-manifest SHA-256:
+`d1af6c90f99df8dce5d5274c73075a6509b20ad22464c2bc7c94caa1b7e07a15`;
+complete original-result manifest:
+`3f6a0236b436a4e379b970ede52fffc80fa66ab5303b559cdb26b1953e5706ba`.
+Independent read-only verdict:
+**ACCEPT_EXACT_ORIGINAL_NODE30_GUARDED_MODEL_RESULTS_ONLY**, report SHA-256
+`f0a0d28a9bd1594098d63f7bfc70c07155b661e4be456a98f36bbf07ae07826f`.
+
+CPU20s/AS2GiB (not an RSS guarantee)/wall30+kill2/file32MiB/FD128/core0,
+UID/GID65534, no-network namespaces, readonly source/runtime, cleared environment
+and closed import/permission guards were unchanged. No real provider or clock
+child, native supplier, dependency download, build or hosted runner was invoked.
+There was no retry; this single-invocation authorization is now **consumed**, not
+a standing2GiB allowance. Actual caller/prestart authority, enclosing custody
+and native/provider qualification remain outstanding. Neither source review nor
+these model results authorize workflow activation or publication.
 
 ## Verification and remaining qualification
 
