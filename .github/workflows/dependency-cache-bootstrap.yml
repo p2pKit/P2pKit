@@ -1,52 +1,31 @@
-name: Dependency cache bootstrap (productive stage held)
+name: Initial receiver capacity probe only
 
-# Source preparation only. Registration, the separate protected environment,
-# exact owner stage/run/attempt/source approval and hosted qualification remain
-# prerequisites. There is no push/PR/schedule/registration event in this file.
+# NEVER MERGE this probe branch. Its initial push is itself execution and needs
+# separate exact-source owner authorization. It does not activate a productive
+# bootstrap or replace the integration branch's unchanged exit125.
 on:
-  workflow_dispatch:
-    inputs:
-      selection:
-        description: Exact dependency cohort; not ordinary test acceptance
-        type: choice
-        required: true
-        options:
-          - desktop-linux-x64
-          - desktop-windows-x64
-          - desktop-macos-arm64
-          - desktop-macos-x64
-          - full-macos-arm64
-          - full-macos-x64
-      expected_sha:
-        description: Full independently reviewed source commit
-        type: string
-        required: true
-      expected_tree:
-        description: Full independently reviewed source tree
-        type: string
-        required: true
+  push:
+    branches: [work/receiver-hosted-capacity-20260922-362aa96c]
+    paths: [.github/workflows/dependency-cache-bootstrap.yml]
 
-permissions: {}
+permissions:
+  contents: read
 
-# The metadata gate is not a participant in the heavy-job queue. Preserve all
-# allocated attempts instead of cancelling a waiting owner authorization.
 concurrency:
-  group: p2pkit-initial-recipient-bootstrap
-  queue: max
+  group: p2pkit-receiver-capacity-probe
   cancel-in-progress: false
 
 jobs:
-  initial-recipient-gate:
-    # Keep the API job name equal to GITHUB_JOB: no display-name or matrix alias.
-    if: ${{ github.repository == 'p2pKit/P2pKit' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/work/nonphysical-integration-20260915-022112' && github.sha == inputs.expected_sha }}
-    permissions:
-      contents: read
-      actions: read
+  receiver_capacity_only:
+    if: >-
+      ${{ github.repository == 'p2pKit/P2pKit' && github.event_name == 'push' &&
+          github.ref == 'refs/heads/work/receiver-hosted-capacity-20260922-362aa96c' &&
+          github.event.created && !github.event.deleted && !github.event.forced &&
+          github.run_attempt == 1 && github.event.head_commit.id == github.sha }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 6
-    environment: initial-recipient-execution
+    timeout-minutes: 5
     steps:
-      - name: Check out the actual reviewed event source without persisted credentials
+      - name: Check out the exact public probe source
         timeout-minutes: 2
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -54,41 +33,52 @@ jobs:
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
-
-      - name: Fetch the two source histories without tags or checkout credentials
-        timeout-minutes: 1
-        shell: bash
-        env:
-          GIT_TERMINAL_PROMPT: "0"
-        # checkout's depth-zero path fetches all tags even with fetch-tags:false.
-        # The public repository needs no token for this bounded source fetch.
-        run: >-
-          git fetch --no-tags --unshallow origin
-          refs/heads/main:refs/remotes/origin/main
-          refs/heads/work/nonphysical-integration-20260915-022112:refs/remotes/origin/work/nonphysical-integration-20260915-022112
-
-      - name: Acquire original nonproductive Stage1 eligibility
-        id: initial-originals
+          submodules: false
+          lfs: false
+      - name: Measure only the isolated receiver model
+        id: receiver
         timeout-minutes: 3
         shell: bash
         env:
-          P2PKIT_ACTIONS_READ_TOKEN: ${{ github.token }}
-        # Native acquisition retains its original work75/final120 caps. This
-        # step emits a provisional digest, not worker Admission or a job output.
-        run: exec /usr/bin/python3 -I -B -S scripts/run-hosted-initial-recipient.py prepare-originals
-
-  populate:
-    needs: initial-recipient-gate
-    permissions: {}
-    runs-on: ${{ fromJSON('{"desktop-linux-x64":"ubuntu-latest","desktop-windows-x64":"windows-latest","desktop-macos-arm64":"macos-26","desktop-macos-x64":"macos-15-intel","full-macos-arm64":"macos-26","full-macos-x64":"macos-15-intel"}')[inputs.selection] }}
-    timeout-minutes: 1
-    # Deliberately no checkout, setup, environment, credentials, artifact
-    # upload, provider Action or Gradle (including unconditional cleanup).
-    # Replacing this refusal requires reviewed productive Stage1 implementation
-    # and separate activation authority; a successful gate cannot lift it.
-    steps:
-      - name: Hold the unqualified productive bootstrap
-        shell: bash
+          PROBE_SHA: ${{ github.sha }}
+          PROBE_REF: ${{ github.ref }}
+          PROBE_RUN: ${{ github.run_id }}
+          PROBE_ATTEMPT: ${{ github.run_attempt }}
         run: |
-          echo 'INITIAL_RECIPIENT_STAGE1=HOLD; PRODUCTIVE_BOOTSTRAP_NOT_QUALIFIED' >&2
-          exit 125
+          set -euo pipefail
+          set -C
+          umask 077
+          readonly CASE="$RUNNER_TEMP/p2pkit-receiver-capacity-$PROBE_RUN-$PROBE_ATTEMPT"
+          readonly RESULTS="$CASE/results"
+          mkdir -m 0700 -- "$CASE" "$RESULTS"
+          date -u '+%Y-%m-%dT%H:%M:%SZ' > "$RESULTS/launcher-started-at.txt"
+          set +e
+          /usr/bin/sudo -n /usr/bin/env -i \
+            PATH=/usr/bin:/bin HOME=/nonexistent LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+            GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+            /usr/bin/bash --noprofile --norc \
+            "$GITHUB_WORKSPACE/scripts/tests/run-initial-recipient-graph-probe.sh" \
+            "$GITHUB_WORKSPACE" "$RUNNER_TEMP" "$PROBE_SHA" "$PROBE_REF" \
+            "$PROBE_RUN" "$PROBE_ATTEMPT" "$ImageOS" "$ImageVersion" \
+            </dev/null > "$RESULTS/launcher.stdout" 2> "$RESULTS/launcher.stderr"
+          launcher_status=$?
+          set -e
+          # This is the observed completed sudo/launcher return, not the body's
+          # status on entry to its EXIT trap. Capture failures also fail the step.
+          printf '%s\n' "$launcher_status" > "$RESULTS/launcher.exit"
+          date -u '+%Y-%m-%dT%H:%M:%SZ' > "$RESULTS/launcher-finished-at.txt"
+          (cd "$RESULTS" && find . -type f ! -path ./captures.sha256 -print0 |
+            sort -z | xargs -0 sha256sum) > "$RESULTS/captures.sha256"
+          printf 'RECEIVER_CAPACITY_LAUNCHER_EXIT=%s; MODEL_ONLY; NO_RELEASE_AUTHORITY\n' "$launcher_status"
+          exit "$launcher_status"
+      - name: Retain public model transcripts and runtime metadata only
+        if: ${{ always() && steps.receiver.outcome != 'skipped' }}
+        timeout-minutes: 1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: receiver-capacity-model-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/p2pkit-receiver-capacity-${{ github.run_id }}-${{ github.run_attempt }}/results/
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false
+          include-hidden-files: false
