@@ -4081,9 +4081,10 @@ remain unfinished. Bootstrap5400 remains UNADMITTED/UNMEASURED.
 
 ### Fixed outer entry and original window, not admitted runner execution
 
-The dormant [fixed loader](../../scripts/hosted_cache_provider_worker.py) adds
-only the literal **`--supervisor`** mode and a separate fixed three-module outer
-roster. Its original worker roster and seven-argument invocation remain intact.
+The initial dormant [fixed loader](../../scripts/hosted_cache_provider_worker.py)
+increment added only the literal **`--supervisor`** mode and a separate fixed
+three-module outer roster. The later cancellation leaf below adds one outer
+module; the original worker roster and seven-argument invocation remain intact.
 Every source is read within its existing cap, hash-bound and loaded from those
 same bytes without widening `sys.path`; original argv identity/values are checked
 after each module too. There is no arbitrary module/path selector or credential
@@ -4156,6 +4157,51 @@ productive/repeated bootstrap, complete1066/current receiving authority, full
 encrypted custody or workflow activation is added. Original native/file/job
 limits, both ordinary HOLDs and the whole-JVM fail-only interlock are unchanged.
 Bootstrap5400 stays UNADMITTED/UNMEASURED; no Release acceptance follows.
+
+### Fixed original-stdin cancellation — unreviewed source preparation
+
+The new [fixed reader](../../scripts/hosted_cache_provider_cancel.py) and outer
+entry integration are **UNREVIEWED / UNEXECUTED / DORMANT**, not an admitted Node
+bridge or qualified cancellation path. Independent design/source-contract review
+alone did not approve this implementation. The
+[focused reader controls](../../scripts/tests/hosted-cache-provider-cancel-test.py)
+and added entry controls are authored but have not yet run.
+
+The proposed one-shot outer interpreter borrows its original fd0 and separately
+owns one non-inheritable identity pin. It never reads that pin, re-adopts/closes
+stdin or restores blocking mode before final classification. POSIX accepts a
+pipe/socket only with a usable nonzero native inode identity, retaining a dup for
+comparison; zero/non-identifying platform observations fail closed. Windows
+retains a raw same-process DuplicateHandle and compares kernel objects with the
+fixed Kernelbase CompareObjectHandles export. Windows pipe fstat supplies type,
+**not identity**. A partial acquisition or uncertain close cannot become known
+ownership/retirement or authorize a retry.
+
+CPython3.12 mode/read operations spend the entry's original window. Windows
+explicitly checks msvcrt.setmode's previous O_BINARY value; normalizing an unknown
+text mode does not grant acceptance. Each poll reads at most two bytes from
+original fd0. Only the first literal **`b"C"` (0x43)** latches cancellation; no
+newline, JSON, resume or acknowledgement exists. Would-block is merely absence
+of a newly observed byte. EOF, extra/duplicate/invalid bytes, changed originals,
+mode errors and late returns are sticky incomplete transport, even after an
+earlier valid cancellation. Input bytes/errors are not printed.
+
+Entry checks pass the same original cancellation object to the existing
+supervisor. An OS signal delivered inside a wire poll must not be cleared by a
+false/no-byte return. Known root/scope retirement remains separately bounded;
+final polling, once-only pin close and post-close checks use the original end.
+The completed entry retains its actual control owner, not a later replacement
+chosen from diagnostics. Only direct terminal-state checks follow pin retirement.
+
+This cannot preempt blocked native calls, flushes or the existing retirement
+sequence. The future original Node parent must retain the writer and its own
+cancellation/error latch through **actual child close**; no Python final poll
+atomically covers exit. Actual CPython/Node/OS pipe identity, modes, EOF, timing
+and native retirement still require qualification. Source/tool/service authority,
+original Node post-close RAW, complete1066/current receiver, productive bootstrap,
+encrypted custody and workflow integration remain missing. Both ordinary HOLDs,
+whole-JVM interlock, provider180/shared-final45, NativeFile900/Snapshot576MiB,
+FULL3600/Desktop1800 and unadmitted/unmeasured Bootstrap5400 remain unchanged.
 
 ### Supplied Node receipt reducer — bounded controls executed
 
@@ -4305,6 +4351,7 @@ python3 -I -B -S scripts/tests/hosted-cache-provider-supervisor-test.py
 python3 -I -B -S scripts/tests/hosted-cache-provider-return-test.py
 python3 -I -B -S scripts/tests/hosted-cache-provider-supervisor-return-test.py
 python3 -I -B -S scripts/tests/hosted-cache-provider-entry-test.py
+python3 -I -B -S scripts/tests/hosted-cache-provider-cancel-test.py
 python3 -I -B -S scripts/tests/hosted-dependency-seed-files-test.py
 python3 -I -B -S scripts/tests/hosted-windows-provider-command-test.py
 python3 -I -B -S scripts/tests/hosted-test-evidence-test.py

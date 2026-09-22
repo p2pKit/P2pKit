@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 import signal
 import threading
 
+import hosted_cache_provider_cancel as cancel_input
 import hosted_cache_provider_supervisor as supervisor
 
 
@@ -25,10 +26,11 @@ class _EntryReturn:
     result: object = field(repr=False)
     error: BaseException | None = field(repr=False)
     check: object = field(repr=False)
+    control: object = field(repr=False)
 
 
 class _SupervisorEntry:
-    """One actual pre-root window, two actual roots and a finite signal owner."""
+    """One pre-root window, two roots, finite signals and fixed original stdin."""
     def __init__(self, request):
         context, _ = T._context(request)
         role = context["role"]
@@ -51,6 +53,7 @@ class _SupervisorEntry:
         self._errors = []
         self._signalled = False
         self._cancellation = KeyboardInterrupt("PROVIDER_ENTRY_CANCELLED")
+        self._control = self._control_original = None
 
     def _failed(self, stage, error, *, unknown=False):
         if self._primary is None:
@@ -73,7 +76,7 @@ class _SupervisorEntry:
         errors, cancellation = self._errors, self._cancellation
         thread = threading.get_ident()
         handlers, installed, restored, closed = [], set(), [], []
-        window = result = run_error = completion = None
+        window = result = run_error = completion = control = None
         called = transferred = False
 
         def same():
@@ -83,11 +86,12 @@ class _SupervisorEntry:
                 all(roots[name] is value for name, value in originals.items()) and
                 self.window is window and self._errors is errors and self._cancellation is cancellation,
                 "PROVIDER_ENTRY_ORIGINALS_CHANGED")
+            L.require(self._control is self._control_original is control, "PROVIDER_ENTRY_CONTROL_CHANGED")
             if window is not None:
                 L.require(owner.launch.window is owner.launch._window_original is window,
                           "PROVIDER_ENTRY_WINDOW_CHANGED")
 
-        def checked(*, final=False):
+        def checked(*, final=False, poll=True):
             same()
             if not final:
                 if self._primary is not None:
@@ -95,6 +99,10 @@ class _SupervisorEntry:
                 if self._signalled:
                     raise cancellation
             observed = window.check(work=not final)
+            if poll and control is not None:
+                wire_seen = control.poll()
+                if wire_seen:
+                    self._signalled = True  # Never overwrite an OS signal delivered inside poll().
             same()
             if not final:
                 if self._primary is not None:
@@ -125,6 +133,10 @@ class _SupervisorEntry:
                                int(context["hardEndNs"]))
             self.window = window
             owner.take_window(window)
+            checked()
+            control = cancel_input.OriginalStdinCancel(window)
+            self._control = self._control_original = control  # Own before start can acquire/fail.
+            control.start()
             checked()
             numbers = (signal.SIGINT, signal.SIGTERM, *([signal.SIGBREAK] if hasattr(signal, "SIGBREAK") else []))
             for number in numbers:
@@ -175,10 +187,10 @@ class _SupervisorEntry:
                     value = originals[name]
                     if value is not None:
                         try:
-                            checked(final=True)
+                            checked(final=True, poll=False)
                             closed.append(name)  # Never retry an ambiguous close.
                             value.close()
-                            checked(final=True)
+                            checked(final=True, poll=False)
                         except BaseException as error:
                             self._failed("root-close", error, unknown=True)
                             break
@@ -201,12 +213,18 @@ class _SupervisorEntry:
                       restored == [number for number, _ in reversed(handlers)], "PROVIDER_ENTRY_INCOMPLETE")
             L.require(not self._signalled or run_error is cancellation, "PROVIDER_ENTRY_LATE_CANCELLATION")
             checked(final=True)
+            L.require(not self._signalled or run_error is cancellation, "PROVIDER_ENTRY_LATE_CANCELLATION")
             prefix, signal_state = tuple(errors), self._signalled
-            def completed():
+            def completed(*, terminal=False):
                 L.require(self._finished and self._completed is completion and not self._unknown and
                     self._primary is run_error and self._signalled is signal_state and
+                    (not self._signalled or run_error is cancellation) and
                     len(errors) == len(prefix) and all(a is b for a, b in zip(errors, prefix)),
                     "PROVIDER_ENTRY_COMPLETION_CHANGED")
+                if terminal:
+                    same()
+                    control.check_retired()
+                    return  # No handler/mode/native reader after pin retirement.
                 for number, previous in handlers:
                     L.require(signal.getsignal(number) is previous, "PROVIDER_ENTRY_SIGNAL_RESTORE_CHANGED")
                 checked(final=True)
@@ -224,29 +242,49 @@ class _SupervisorEntry:
                     len(errors) == len(prefix) and all(a is b for a, b in zip(errors, prefix)),
                     "PROVIDER_ENTRY_COMPLETION_CHANGED")
             completed()
-            pending = _EntryReturn(result, run_error, completed)
+            pending = _EntryReturn(result, run_error, completed, control)
             completed()
             completion = pending
             self._completed = completion  # No following callback before actual return.
         except BaseException as error:
             self._failed("completion", error)
+        if self._completed is None and control is not None:
+            try:
+                control.retire()  # Actual local owner, never a later-selected field replacement.
+            except BaseException as error:
+                self._failed("control-retire", error)
         if self._primary is not None:
             raise self._primary
         return result
 
     def exit_code(self, result, error):
         """Actual loader passes its own run return/raise here once, never a replay."""
+        control = original_error = None
         try:
             L.require(not self._exit_started, "PROVIDER_ENTRY_EXIT_ONCE")
             self._exit_started = True
             completion = self._completed
             L.require(type(completion) is _EntryReturn and result is completion.result and error is completion.error,
                       "PROVIDER_ENTRY_EXIT_INCOMPLETE")
+            control, original_error = completion.control, completion.error
             completion.check()
             code = self.owner.exit_code(result, error)
             completion.check()
             L.require(type(code) is int and code == (0 if error is None else T.FAILED_EXIT), "PROVIDER_ENTRY_EXIT_CODE")
+            wire_seen = control.retire()
+            if wire_seen:
+                self._signalled = True
+            completion.check(terminal=True)
+            self.window.check()
+            completion.check(terminal=True)
             return code
         except BaseException as failure:
+            if original_error is not None:
+                self._primary = original_error  # Preserve the bound original despite a changed diagnostic slot.
             self._failed("exit", failure)
+            if control is not None and not control._retire_started:
+                try:
+                    control.retire()
+                except BaseException as secondary:
+                    self._failed("control-retire", secondary)
             raise self._primary

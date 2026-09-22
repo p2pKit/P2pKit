@@ -58,6 +58,40 @@ class Signals:
         self.receiver(self.SIGTERM, None)
 
 
+class Control:
+    """Entry-only seam; real fixed-reader mechanics have their own syscall models."""
+    def __init__(self):
+        self.window = None
+        self.started = self._retire_started = self.closed = self.wire = False
+        self.failure = None
+        self.polls = self.closes = 0
+        self.on_poll = self.on_retire = lambda: None
+
+    def start(self):
+        self.started = True
+
+    def poll(self):
+        self.polls += 1
+        self.on_poll()
+        if self.failure is not None:
+            raise self.failure
+        return self.wire
+
+    def retire(self):
+        self._retire_started = True
+        if self.failure is None and self.started:
+            self.poll()
+        self.closes += 1
+        self.closed = True
+        self.on_retire()
+        if self.failure is not None:
+            raise self.failure
+        return self.wire
+
+    def check_retired(self):
+        L.require(self.closed and self._retire_started and self.failure is None, "MODEL_CONTROL_NOT_RETIRED")
+
+
 class EntryModels(unittest.TestCase):
     def setUp(self):
         self.base = F.SendModels()
@@ -66,6 +100,11 @@ class EntryModels(unittest.TestCase):
         self.model, self.fixture = self.base.model, self.base.base.fixture
         self.signals = Signals()
         self.patch(E, "signal", self.signals)
+        self.control = Control()
+        def control(window):
+            self.control.window = window
+            return self.control
+        self.control_factory = self.patch(E.cancel_input, "OriginalStdinCancel", Mock(side_effect=control))
         self.context = {"schema": "P2PKIT_PROVIDER_SUPERVISOR_REQUEST_V1", "role": self.model.clock.role,
             "frequency": self.model.clock.ticks_per_second, "firstNs": str(self.model.raw),
             "issuedNs": str(100 * clocks.NS), "hardEndNs": str(280 * clocks.NS), "workerCutoffNs": str(250 * clocks.NS),
@@ -114,6 +153,7 @@ class EntryModels(unittest.TestCase):
         self.assertEqual(self.signals.sets, [])
         self.open_directory.assert_not_called()
         self.fixture.scope_factory.assert_not_called()
+        self.control_factory.assert_not_called()
 
     def test_success_owns_original_roots_handlers_and_matching_ack_then_classifies_once(self):
         self.assertEqual(self.call(), 0)
@@ -125,6 +165,9 @@ class EntryModels(unittest.TestCase):
         self.assertEqual(ack.provider_acceptance, "NOT_ESTABLISHED")
         self.assertIs(self.entry.owner.launch.window, self.entry.window)
         self.assertIs(self.entry.window.first, self.entry.first)
+        self.assertIs(self.control.window, self.entry.window)
+        self.assertTrue(self.control.closed)
+        self.assertEqual(self.control.closes, 1)
         self.assertIsNotNone(caught(lambda: self.entry.exit_code(self.entry._completed.result, None)))
 
     def test_root_acquisition_time_cannot_reconstruct_or_renew_original_window(self):
@@ -376,6 +419,121 @@ class EntryModels(unittest.TestCase):
             self.assertEqual(self.call(), 66)
         self.assertEqual(self.base.sink.writes, [])
 
+    def test_wire_cancel_before_roots_refuses_and_retires_only_control_pin(self):
+        self.control.wire = True
+        self.assertIs(self.incomplete(), self.entry._cancellation)
+        self.open_directory.assert_not_called()
+        self.assertEqual(self.control.closes, 1)
+
+    def test_wire_cancel_after_spawn_preserves_original_cancellation_and_drain(self):
+        original = self.fixture.outer.spawn.side_effect
+        def spawn(*args, **values):
+            child = original(*args, **values)
+            self.control.wire = True
+            return child
+        self.fixture.outer.spawn.side_effect = spawn
+        self.assertEqual(self.call(), 65)
+        self.assertIs(self.entry._primary, self.entry._cancellation)
+        self.fixture.outer.drain.assert_called_once()
+        self.assertEqual(self.control.closes, 1)
+
+    def test_transport_failure_during_wait_cannot_mint65_even_after_known_drain(self):
+        original = self.fixture.outer.spawn.side_effect
+        failure = F.Failure("MODEL_STDIN_LOST")
+        def spawn(*args, **values):
+            child = original(*args, **values)
+            self.control.failure = failure
+            return child
+        self.fixture.outer.spawn.side_effect = spawn
+        self.assertIs(self.incomplete(), failure)
+        self.fixture.outer.drain.assert_called_once()
+        self.assertEqual(self.control.closes, 1)
+
+    def test_first_wire_byte_during_ack_flush_is_late_not_success(self):
+        self.base.sink.on_flush = lambda: setattr(self.control, "wire", True)
+        self.incomplete()
+        self.assertEqual(len(self.base.sink.writes), 1)
+        self.assertTrue(self.entry._signalled)
+
+    def test_os_signal_inside_false_wire_poll_is_never_cleared(self):
+        def polled():
+            if self.signals.receiver is not None:
+                self.signals.emit()
+        self.control.on_poll = polled
+        self.assertIs(self.incomplete(), self.entry._cancellation)
+        self.assertTrue(self.entry._signalled)
+        self.assertFalse(self.control.wire)
+        self.open_directory.assert_not_called()
+
+    def test_final_control_poll_first_cancellation_refuses_completed_success(self):
+        original = self.control.retire
+        def retired():
+            self.control.wire = True
+            return original()
+        self.control.retire = retired
+        self.assertEqual(self.call(), 66)
+        self.assertEqual(self.control.closes, 1)
+        self.assertIsNotNone(self.entry._completed)
+
+    def test_prior_os_cancellation_and_first_wire_byte_are_not_a_duplicate(self):
+        original = self.fixture.outer.spawn.side_effect
+        def spawn(*args, **values):
+            child = original(*args, **values)
+            self.signals.emit()
+            return child
+        self.fixture.outer.spawn.side_effect = spawn
+        retired = self.control.retire
+        def retire():
+            self.control.wire = True
+            return retired()
+        self.control.retire = retire
+        self.assertEqual(self.call(), 65)
+        self.assertIs(self.entry._primary, self.entry._cancellation)
+
+    def test_pin_close_failure_refuses_success_and_is_not_retried(self):
+        failure = F.Failure("MODEL_PIN_CLOSE")
+        self.control.on_retire = lambda: (_ for _ in ()).throw(failure)
+        self.assertEqual(self.call(), 66)
+        self.assertIs(self.entry._primary, failure)
+        self.assertEqual(self.control.closes, 1)
+        self.assertIs(caught(lambda: self.entry.exit_code(self.entry._completed.result, None)), failure)
+        self.assertEqual(self.control.closes, 1)
+
+    def test_post_pin_close_expiry_uses_same_original_window(self):
+        self.control.on_retire = lambda: setattr(self.model, "local", 280.0)
+        self.assertEqual(self.call(), 66)
+        self.assertEqual(self.control.closes, 1)
+
+    def test_pin_close_callback_cannot_clear_original_failure(self):
+        self.fixture.worker_code = 29
+        self.control.on_retire = lambda: setattr(self.entry, "_primary", None)
+        self.assertEqual(self.call(), 66)
+        self.assertEqual(self.control.closes, 1)
+        self.assertIs(self.entry._primary, self.entry.owner._completion.error)
+
+    def test_control_is_acquired_before_first_root_and_not_recreated(self):
+        original = self.open_directory.side_effect
+        def opened(*args):
+            self.assertTrue(self.control.started)
+            self.assertIs(self.control.window, self.entry.window)
+            return original(*args)
+        self.open_directory.side_effect = opened
+        self.assertEqual(self.call(), 0)
+        self.control_factory.assert_called_once_with(self.entry.window)
+
+    def test_control_replacement_cannot_redirect_final_retirement(self):
+        self.base.sink.on_flush = lambda: setattr(self.entry, "_control", Control())
+        self.incomplete()
+        self.assertEqual(self.control.closes, 1)
+        self.assertEqual(self.entry._control.closes, 0)
+
+    def test_original_slot_replacement_cannot_redirect_incomplete_run_retirement(self):
+        substitute = Control()
+        self.base.sink.on_flush = lambda: setattr(self.entry, "_control_original", substitute)
+        self.incomplete()
+        self.assertEqual(self.control.closes, 1)
+        self.assertEqual(substitute.closes, 0)
+
 
 class FixedOuterLoader(unittest.TestCase):
     def cold(self, role, *, mutate_argv=False):
@@ -424,6 +582,8 @@ class FixedOuterLoader(unittest.TestCase):
         self.assertTrue(set(W.names("linux-x64")).isdisjoint(W.OUTER_NAMES))
         self.assertNotIn("run-hosted-initial-recipient", W.outer_names("linux-x64"))
         self.assertNotIn("hosted_lock_resources", W.outer_names("windows-x64"))
+        self.assertIn("hosted_cache_provider_cancel", W.OUTER_NAMES)
+        self.assertNotIn("hosted_cache_provider_cancel", W.names("linux-x64"))
 
     def test_unknown_mode_or_roster_refuses_before_source_read(self):
         for mode in ("--Supervisor", "--entry", "--supervisor=1"):

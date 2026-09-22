@@ -30,7 +30,7 @@ NAMES = (
     "hosted_cache_provider_worker", "hosted_cache_provider_launch",
 )
 OUTER_NAMES = ("hosted_cache_provider_supervisor_return", "hosted_cache_provider_supervisor",
-               "hosted_cache_provider_entry")
+               "hosted_cache_provider_cancel", "hosted_cache_provider_entry")
 STAMP = ("st_dev", "st_ino", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns", "st_file_attributes")
 
 
