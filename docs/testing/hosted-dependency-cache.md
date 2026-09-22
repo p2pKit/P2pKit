@@ -969,10 +969,11 @@ traversal, provider qualification, budget admission or HOLD change follows.
 
 #### Stage1 surrounding original graph, not current authority
 
-**Dormant WIP / COMPLETE_POSITIVE_OUTSTANDING.** Do not use this graph as an
-accepted receiving prerequisite. The complete positive has not returned within
-the existing offline CPU20 limit; selected negative and equivalence controls
-cannot replace that missing return, final rereads/listings and owner close.
+**Complete offline reader/model-close PASS; genuine receiving authority remains
+unqualified.** The [accepted later measurement](#accepted-complete-reader-measurement--2120-utc)
+supersedes the earlier missing-positive/CPU20 blocker below. CPU20 was an
+external probe safety budget, not a Release performance criterion. Do not repeat
+the accepted reader or optimize it for CPU20.
 
 Internal `_read_initial_recipient_originals` borrows the receiving caller's
 Owner and sender directory. It reads the fixed preparation/entry/recipient/
@@ -1041,7 +1042,8 @@ reverted from R6 for those controls; R6's integration-performance changes were
 retained. This is not the later reader-only Path-checker revision minus three
 lines. Earlier setup/harness failures remain separately recorded.
 
-**No complete graph positive passed.** R2/R4/R5 combined attempts and R7/R9
+**Historical result before the later accepted measurement: no complete graph
+positive had passed.** R2/R4/R5 combined attempts and R7/R9
 reader-only attempts were killed at CPU20. R9's exact current source exited137
 (USER19.723/SYSTEM0.286), without a final guard/resource summary. A separately
 bounded diagnostic finished all12 leaves but stopped after536 of1066 final
@@ -1132,6 +1134,9 @@ no further execution is authorized; a defensible stronger repair remains needed.
 
 ##### Final-reread guard scheduling (source only, execution held)
 
+This is the source-freeze account; the later authorized packet and accepted
+reader measurement are recorded below. Earlier failed aggregates stay failed.
+
 The owner subsequently authorized a narrow **guard-scheduling change**, not an
 identical-observation optimization or permission to execute. The private
 `_reread_initial_graph_originals` now shares consecutive full guard groups:
@@ -1174,6 +1179,70 @@ transport, same-job/run/attempt/selection/runner/boot continuity, a NEW owner an
 fresh Stage1 authority must still fit original reading, authority acquisition/
 close, credential disposal and initialization into **one LOCAL-before-RAW
 canonical-init120 interval**.
+
+##### Accepted complete-reader measurement — 21:20 UTC
+
+At unchanged commit `23d85a83b75ad7598d586874f91d2734643e054b`, tree
+`8178ec0182489f0562af73355aac580a1ba016be`, the separately authorized
+`FixtureReaderModels.test_complete_fixed_graph_from_closed_synthetic_fixture`
+passed **1/1**, command/wrapper/outer exit0, at
+**2026-09-22T21:20:24Z–21:20:50Z**. Command CPU was **24.411s**
+(user23.032/system1.379), wall **25.790s**. All1,066 rereads, validations,
+ownership checks, close assertions and post-fixture inventory remained intact.
+The existing source-bound fixture was reused, not regenerated. Four existing
+guard controls passed; unexpected denials and ResourceWarnings were zero.
+
+This one measurement used owner-authorized **external CPU60/wall90** bounds;
+no production/native deadline or source logic changed. CPU20 was only the earlier
+probe's safety limit. Its preceding packet still records6/6 scheduling controls,
+1/1 fixture preparation and a failed reader at20.011 CPU seconds/exit137.
+Neither failure nor consumed authorization is relabelled. The owner accepted the
+later complete pass; no reader rerun or further CPU20 optimization is required.
+
+Request SHA-256:
+`c290c9f97a3d5534afe1bf1225a40e138cf55efe28469a73553e8630dcc31f88`.
+Inner/outer capture-manifest SHA-256:
+`6751650df380fc156348dc0a6d1a28b67495bc353420545d668e015ec66dca84` /
+`6519c4d8e1fffdab41ad6036b7e6a263fd537ad1aee21c884b019a0ffbf954ff`.
+Posted/read-back records:
+[#437](https://github.com/p2pKit/P2pKit/issues/437#issuecomment-5784382909) /
+[#424](https://github.com/p2pKit/P2pKit/issues/424#issuecomment-5784383316).
+This is exact-source offline reader/model-close evidence, **not genuine
+canonical-init120**, native/provider qualification or workflow activation.
+
+##### Live receiving/current-authority seam — source only
+
+The private `_receive_initialization` in
+[`run-hosted-initial-recipient.py`](../../scripts/run-hosted-initial-recipient.py)
+now prepares one LOCAL-before-RAW init120 owner before the unchanged complete
+reader. The original firstUseAt, service-job/runner tuple and cumulative proposal
+are retained. A distinct fixed `_service-receiving-authority` route performs
+source-before/native HTTP/source-after acquisition and actual acquisition-owner
+close within the **same remaining init WORK120**. The fresh token is removed
+before Git and cleared before yielding the still-live private continuation.
+No old Recipient/Admission/initializer parent is reconstructed; no second120 or
+FINAL165/READ195 borrowing is introduced.
+
+The fixed initializer is **not connected**. Normal scope exit refuses with
+`RECEIVING_FIXED_INITIALIZER_NOT_CONNECTED`; error/abandonment closes actual
+known ownership and retains UNKNOWN custody. There is no public receiving
+command, productive workflow caller or caller-selected success flag. Authentic
+predecessor outcome/hash transport, same-boot/post-step-return continuity,
+canonical initialization, provider/custody integration and genuine hosted timing
+remain outstanding. Existing HOLDs, interlock, exit125 and deadlines are unchanged.
+
+The [15 focused receiving controls](../../scripts/tests/hosted-initial-recipient-receiving-test.py)
+are **AUTHORED / UNEXECUTED**. They compose real tiny-file ownership/readback/close
+with explicit source/HTTP/native/clock models and a supplied immutable graph;
+they do not create a1,066-file fixture or run the accepted full reader. They cover
+live scope/close/token disposal, exhausted time, changed source/job/statement,
+first failure, cancellation, query/native-close failure, continuation identity,
+changed transport/token, sticky original failure after input restoration,
+old-route refusal and owner-fence substitution. Independent source review found
+and corrected that continuation-failure seam and helper-setup cleanup ordering;
+these are source findings, not executed failures or passes. Final
+file hashes and independent source/envelope review belong to this increment's
+#437/#424 record. Fresh exact-source authorization is required before execution.
 
 #### Stage1 canonical-context reader, not initialization authority
 
@@ -4935,8 +5004,10 @@ This closes only the selected offline receipt/caller regression packet. Its
 authorization is consumed; no extra invocation, retry, native/provider/receiver
 execution, CI, build or download followed. It supplies no current Stage1
 authority/initializer, productive bootstrap or encrypted-custody integration.
-The full receiver CPU20/complete1066/owner-close requirement remains unresolved;
-the optional ~2% diagnostic is still deferred. Both ordinary HOLDs, whole-JVM
+The complete-reader/owner-close blocker recorded at that packet is superseded
+only by the [later accepted measurement](#accepted-complete-reader-measurement--2120-utc);
+genuine receiving/init120 remains unverified. The optional ~2% diagnostic stays
+deferred. Both ordinary HOLDs, whole-JVM
 interlock, productive exit125, bootstrap5400 UNADMITTED/UNMEASURED,
 NativeFile900/Snapshot576MiB, finite branch-only policy and all later required
 qualification/owner approvals remain. **Public app delivery0/4; Release NOT_READY.**

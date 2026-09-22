@@ -623,6 +623,25 @@ RC2/RC3 with no assets. Original cancellation WIP and protected instructions are
 unchanged. **Authorized packet2/2 completed; public app delivery0/4 (0%);
 remaining4/4 (100%); Release NOT_READY.** All later HOLDs and owner approvals remain.
 
+## Accepted complete reader; next receiving integration
+
+The owner accepted the unchanged1,066-file reader/model-close **1/1 PASS** at
+**21:20:24–21:20:50UTC**, CPU24.411s/wall25.790s, under the separately authorized
+CPU60/wall90 measurement. All rereads, validation/ownership and close assertions
+passed. CPU20 was only a probe safety limit, not a Release criterion. This
+supersedes the earlier complete-positive blocker and optimization proposals
+above; failed prior packets remain failed. The
+[exact record](../testing/hosted-dependency-cache.md#accepted-complete-reader-measurement--2120-utc)
+binds source, request and originals. Do not rerun or optimize this accepted work.
+
+The next [receiving/current-authority seam](../testing/hosted-dependency-cache.md#live-receivingcurrent-authority-seam--source-only)
+adds one live owner, fresh fixed source/HTTP acquisition and actual closes within
+the original init120; no workflow calls it yet. Its15 focused controls are
+authored, unexecuted and require fresh exact-source authorization after review.
+The seam deliberately refuses normal exit as NOT_CONNECTED; the fixed initializer
+is not called. No genuine
+canonical-init120, provider/custody qualification or Release readiness is claimed.
+
 ## Remaining execution blockers, in order
 
 1. **Finish/qualify this real runner connection:** its Node30 and Python18 model
@@ -632,9 +651,9 @@ remaining4/4 (100%); Release NOT_READY.** All later HOLDs and owner approvals re
    reactivate unrelated cancellation review merely to polish it.
 2. **Finish the existing Stage 1 path:** original receiving authority and
    initialization, bounded productive bootstrap, provider save/probe and
-   encrypted export/custody. The complete1066 receiver still lacks its complete
-   positive/owner-close acceptance. The separately authorized hosted capacity
-   probe above failed; no subsequent retry or productive activation occurred.
+   encrypted export/custody. The accepted complete1066 offline return/model-close
+   is not genuine current authority or canonical-init120 acceptance. The private
+   receiving seam remains source-only; fixed initialization is not connected.
    Bootstrap5400 remains **UNADMITTED / UNMEASURED**, not a usable job budget.
 3. **Legitimate execution admission:** registration-only service behavior is now
    established, but actual branch dispatch/allocation remains unexecuted and

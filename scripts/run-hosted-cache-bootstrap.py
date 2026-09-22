@@ -698,11 +698,23 @@ def initial_authority_command(context_hash, minimum=None):
     return result
 
 
+def initial_receiving_command(context_hash, minimum=None):
+    """Fixed HTTP-only receiving route; never the legacy recipient episode."""
+    result = initial_command(context_hash, minimum)
+    result[5] = "_service-receiving-authority"
+    return result
+
+
+INITIAL_RECEIVING_CONTEXT_SCOPE = "INITIAL_RECIPIENT_RECEIVING_AUTHORITY_CONTEXT_V1"
+INITIAL_RECEIVING_ACK_SCOPE = "INITIAL_RECIPIENT_RECEIVING_AUTHORITY_POST_CLOSE_ACK_V1"
+
+
 def phase_command(context_raw, minimum=None):
     scope = origin.parse(context_raw).get("scope")
     fixed = {CONTEXT_SCOPE: command, INITIAL_CONTEXT_SCOPE: initial_command,
              INITIAL_ENTRY_CONTEXT_SCOPE: initial_entry_command,
-             INITIAL_AUTHORITY_CONTEXT_SCOPE: initial_authority_command}.get(scope)
+             INITIAL_AUTHORITY_CONTEXT_SCOPE: initial_authority_command,
+             INITIAL_RECEIVING_CONTEXT_SCOPE: initial_receiving_command}.get(scope)
     require(fixed is not None, "BOOTSTRAP_SERVICE_CONTEXT_SCOPE")
     return fixed(origin.digest(context_raw), minimum)
 
@@ -937,7 +949,8 @@ def phase(owner, private, context_raw, token, fence):
         work_end = min(fence.work, started + origin.wire.ACQUIRE_SECONDS * origin.NS)
         final_end = min(fence.final, work_end + 45 * origin.NS)
         old_limits = owner.work_limit, owner.final_limit
-        managed = context.get("scope") in (INITIAL_ENTRY_CONTEXT_SCOPE, INITIAL_AUTHORITY_CONTEXT_SCOPE)
+        managed = context.get("scope") in (INITIAL_ENTRY_CONTEXT_SCOPE, INITIAL_AUTHORITY_CONTEXT_SCOPE,
+                                           INITIAL_RECEIVING_CONTEXT_SCOPE)
         if managed:
             require(fence.enter_phase(owner, started) == (work_end, final_end), "BOOTSTRAP_INITIAL_ENTRY_PHASE")
         else:
@@ -12989,7 +13002,7 @@ def guarded(operation):
     cancellation(cancelled)
     observed = fence.now(final=True, limit=limit)
     if value.get("scope") in (ACK_SCOPE, RECIPIENT_ACK_SCOPE, INITIAL_ACK_SCOPE, INITIAL_ENTRY_ACK_SCOPE,
-                             INITIAL_AUTHORITY_ACK_SCOPE, INITIAL_RECIPIENT_ACK_SCOPE):
+                             INITIAL_AUTHORITY_ACK_SCOPE, INITIAL_RECIPIENT_ACK_SCOPE, INITIAL_RECEIVING_ACK_SCOPE):
         value["closedNs"] = observed
     raw = origin.encoded(value)
     require(len(raw) <= ACK_LIMIT and sys.stdout.buffer.write(raw) == len(raw), "BOOTSTRAP_ACK_WRITE")

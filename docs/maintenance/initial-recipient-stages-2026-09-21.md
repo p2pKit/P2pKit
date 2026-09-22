@@ -222,8 +222,10 @@ now retains the two original memory-only returns and emits only a provisional
 manifest digest, within the original actual read caps. The
 [borrowed-owner three-file reader](../testing/hosted-dependency-cache.md#stage1-recipient-package-reader-not-a-receiving-initializer)
 checks supplied package consistency only, not the references' complete originals
-or authenticated step/hash transport. The receiving NEW owner and current
-authority still do not exist. A NEW owner must reread originals and acquire current native/
+or authenticated step/hash transport. The later
+[live receiving seam](../testing/hosted-dependency-cache.md#live-receivingcurrent-authority-seam--source-only)
+prepares a NEW owner and fresh acquisition in source, not an executed initializer.
+The owner must reread originals and acquire current native/
 source/HTTP Stage1 authority with the runner's fresh step-scoped token, then
 discard it before the fixed canonical initializer. Original firstUseAt, service
 job/start, runner and clock/proposal fences cannot reset at this boundary.
@@ -243,11 +245,10 @@ command and roster checks. Its45 offline controls belong to that exact earlier
 query-only revision. The separate
 [surrounding original-graph reader](../testing/hosted-dependency-cache.md#stage1-surrounding-original-graph-not-current-authority)
 adds fixed P/E/R/A traversal and original service/proposal rederivation as
-supplied-record consistency only. It remains dormant WIP with
-**COMPLETE_POSITIVE_OUTSTANDING**: the complete1066 reader exceeded the existing
-offline CPU20 bound, even with synthetic fixture preparation separated. Focused
-negatives/equivalence checks do not supply its complete return/close or authorize
-building a receiving prerequisite on it. Neither reader supplies current
+supplied-record consistency only. Its later accepted **complete1,066-file
+reader/model-close PASS** used24.411 CPU/25.790 wall seconds under the separately
+authorized CPU60/wall90 probe. CPU20 was an external safety limit, not Release
+acceptance; do not repeat or optimize that accepted reader. Neither reader supplies current
 authority, authenticated step/hash transport, same-boot continuity or the later
 enclosing owner close.
 Neither the hashes nor narrow sender/reader checks establish the missing
