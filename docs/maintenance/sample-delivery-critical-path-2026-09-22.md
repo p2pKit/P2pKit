@@ -517,6 +517,9 @@ development sample delivery is still **0/4 (0%); remaining4/4 (100%)**.
 
 ## Receiver scan repair awaiting execution
 
+This is the historical source-freeze record. The later authorized execution
+and its limited outcome are recorded immediately below.
+
 After the failed hosted probe, the owner authorized a receiver-performance
 source repair and independent implementation review, **then a fresh exact-source
 execution request**. The repair preserves all check boundaries and limits. It
@@ -565,6 +568,60 @@ mapping is not yet completed here. Source review is not execution or personal
 owner authorization. No source push or workflow activation follows automatically. Original cancellation
 WIP, protected instructions, public recipient policy and all HOLDs are preserved.
 Public app delivery remains **0/4 (0%); remaining4/4 (100%)**; **Release NOT_READY**.
+
+## Receiver scan original results — 17:35 UTC
+
+The owner subsequently authorized the exact two-invocation request once. At
+**2026-09-22T17:35:45Z–17:35:49Z**, it ran at clean local commit
+**`6b14b3551a4058d54a473de1a276e9d2fe6d561a`**, tree
+**`91f9b421d23848574fcd601f210dd4f46e0bb070`**. This result-only documentation
+follow-up is not a different executed source or a new qualification run.
+
+| Actual invocation | Result | Command wall / user / system seconds |
+| --- | --- | --- |
+| 11 `ReaderHistoryModels` +7 `ReaderRosterModels` controls | **18/18 PASS**, exit0; unittest0.007s | 1.155 /0.940 /0.162 |
+| `ReaderScanDiagnostics.test_bounded_saved_metadata_and_roster_cost_only` | **1/1 PASS**, exit0; unittest1.220s | 2.192 /2.105 /0.087 |
+
+Each retained four synthetic guard controls, zero unexpected denials/
+ResourceWarnings, no skips or expected failures, UID/GID65534, isolated
+Python3.12.3, closed environment and unchanged CPU20/wall30+kill2/AS512MiB/
+file32MiB/FD128/core0. Both phases' pre/post hashes matched the frozen request,
+221 current/staged public source files and23 tools. The body and enclosing
+launcher exited0; launcher wall/user/system was4.224/3.409/0.810s.
+The complete14-entry outer and33-file inner capture manifests matched.
+
+- Request-input manifest SHA-256:
+  `38c52e12053b2a8dd0d240eb64db7aca610f3e0f9246ec7d2baa73a39285dde5`.
+- Outer capture-manifest SHA-256:
+  `2c40eed1dc0456cf6ce8f8421b9a62660ada83bdda24a870f77856e78c74b7a4`.
+- Inner capture-manifest SHA-256:
+  `244a612c9f46afd4ad61670882d427ab653bf7561599c2bf9be8eedce3482b06`.
+- Independent original-result verdict:
+  **APPROVE_EXACT_RECEIVER_SCAN_ORIGINAL_OFFLINE_RESULTS_ONLY_NOT_GRAPH_CAPACITY_OR_RELEASE_ACCEPTANCE**;
+  report SHA-256
+  `f1655bd1a37694e5efb8f9bda181548ec23d800935de53c17cf0ecfadc0fd672`.
+
+The diagnostic's four1000-loop CPU samples were preimage302992048ns,
+candidate301999152ns, candidate295001127ns, preimage305992169ns. Candidate mean
+was **1.967857% lower** in this single442-node/223-row diagnostic. There is no
+timing threshold, robust speedup, full-graph result or owner-close evidence here.
+Independent review explicitly found **no justification for another full-reader
+attempt from these numbers**. The preceding hosted/VPS failures remain failed;
+no retry, new benchmark, provider/native run, CI, build/download, private-key
+access, push, merge or publication followed. The authorization is consumed.
+
+The existing historical partial profile was read, not repeated. It still locates
+the expensive work in repeated live Path/roster observations; it is not a profile
+of this candidate. No high-impact same-observation repair is established by
+these results. A stronger defensible source repair, independent review and fresh
+exact-source authorization remain necessary before a capacity retry.
+
+Read-only metadata at **17:40:00–17:40:08UTC** retained unchanged main/integration,
+all four required checks, complete138/127 #437/#424 comments and zero queued/
+in-progress/waiting/pending/requested runs. Anonymous Releases still returned
+RC2/RC3 with no assets. Original cancellation WIP and protected instructions are
+unchanged. **Authorized packet2/2 completed; public app delivery0/4 (0%);
+remaining4/4 (100%); Release NOT_READY.** All later HOLDs and owner approvals remain.
 
 ## Remaining execution blockers, in order
 

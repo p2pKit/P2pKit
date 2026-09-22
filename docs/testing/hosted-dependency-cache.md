@@ -1076,6 +1076,10 @@ authorization follows. The failed VPS aggregates remain failed too.
 
 ##### Receiver scan performance candidate (execution held)
 
+This heading records the **source-only checkpoint**, not the later execution
+status. The two subsequently authorized invocations and their narrow results
+are recorded at the end of this section.
+
 The subsequent receiver-only source repair targets repeated saved-metadata and
 roster bookkeeping, **not the number of live checks**. `_ReaderPathHistory`
 plans only exact immutable, homogeneous path-node metadata from an immutable
@@ -1098,8 +1102,8 @@ findings are reasoned source counterexamples, not executed preimage failures.
 
 The [new scan controls](../../scripts/tests/hosted-initial-recipient-reader-scans-test.py)
 author **18 focused methods** (11 history /7 roster), including both lifetime
-regressions, and **one separately selected scan-cost diagnostic**. **None has
-been imported, syntax-checked or executed.** The proposed two-invocation envelope
+regressions, and **one separately selected scan-cost diagnostic**. **None had
+been imported, syntax-checked or executed at that source checkpoint.** The proposed two-invocation envelope
 selects those18 controls first, then the diagnostic only if they pass. The latter
 compares442 Path nodes /223 rows, ten warmups per implementation and four1000-loop
 samples in preimage/candidate/candidate/preimage order. It creates no graph
@@ -1109,11 +1113,22 @@ binds the reviewed file bytes. The local commit/tree and separate execution
 request must be frozen and mapped in #437/#424 before requesting authorization;
 that mapping is pending at this source-document checkpoint.
 
-Expected performance is **UNMEASURED**. All1066 rereads, listings, callback
+Expected performance was **UNMEASURED at that source checkpoint**. All1066 rereads, listings, callback
 boundaries, native ownership observations and enclosing-close requirements are
 unchanged. CPU20/wall30+kill2/AS512MiB/file32MiB/FD128/core0 remain; no blind full
 receiver retry is proposed. A small diagnostic gain would not itself establish
 complete1066 plus close, authorize another run, or resolve receiving authority.
+
+After separate exact-source owner authorization, **18/18 controls and1/1
+diagnostic passed in exactly two serial invocations at17:35:46–17:35:49UTC on
+22September**. Four synthetic guards per invocation, zero unexpected denials/
+ResourceWarnings, no skips/expected failures and all input/capture hashes passed.
+The [original-result record](../maintenance/sample-delivery-critical-path-2026-09-22.md#receiver-scan-original-results--1735-utc)
+binds the executed commit/tree, request, timings, captures and independent verdict.
+The candidate's mean scan CPU was only **1.967857% lower** in that single
+diagnostic, not robust throughput or complete-receiver capacity evidence. The
+review does **not justify another full-reader attempt**. No test was rerun and
+no further execution is authorized; a defensible stronger repair remains needed.
 
 This section grants no receiving authority, provider/native qualification,
 budget admission or workflow activation. Authentic predecessor outcome/hash
