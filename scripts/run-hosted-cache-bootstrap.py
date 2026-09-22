@@ -942,7 +942,34 @@ def _admission_history_content(admitted, session, returned, past):
                    "returnSha256": origin.digest(returned)}
 
 
-def phase(owner, private, context_raw, token, fence):
+def _initial_service_environment(path, context, installed_git):
+    """One original Stage1 Git installation, not an ambient tool-search grant.
+
+    The Stage1 caller derives this executable from its original source-before
+    return. The child separately checks actual resolution before its first query;
+    a PATH spelling or Windows search flag alone is not executable identity.
+    """
+    environment = child_environment(path)
+    initial = context.get("scope") in (INITIAL_CONTEXT_SCOPE, INITIAL_ENTRY_CONTEXT_SCOPE,
+        INITIAL_AUTHORITY_CONTEXT_SCOPE, INITIAL_RECEIVING_CONTEXT_SCOPE)
+    if not initial:
+        require(installed_git is None, "BOOTSTRAP_INITIAL_GIT_ON_ORDINARY_ROUTE")
+        return environment
+    require(type(installed_git) is str and 0 < len(installed_git) <= 4096 and
+        not any(ord(char) < 32 or ord(char) == 127 for char in installed_git), "BOOTSTRAP_INITIAL_GIT_REQUIRED")
+    executable = Path(installed_git)
+    name = "git.exe" if os.name == "nt" else "git"
+    require(executable.is_absolute() and ".." not in executable.parts and str(executable) == installed_git and
+        executable.name == name and executable.resolve(strict=True) == executable and executable.is_file() and
+        os.pathsep not in str(executable.parent), "BOOTSTRAP_INITIAL_GIT_PATH")
+    environment["PATH"] = str(executable.parent)
+    if os.name == "nt":
+        environment["PATHEXT"] = ".EXE"
+        environment["NoDefaultCurrentDirectoryInExePath"] = "1"
+    return environment
+
+
+def phase(owner, private, context_raw, token, fence, *, initial_git=None):
     try:
         context = origin.parse(context_raw)
         started = fence.now()
@@ -957,7 +984,8 @@ def phase(owner, private, context_raw, token, fence):
             owner.work_limit, owner.final_limit = work_end, final_end
         invocation = uuid.uuid4().hex
         argv = phase_command(context_raw)
-        env = processes.ownership_environment(child_environment(private.path), context["job"], invocation,
+        env = processes.ownership_environment(_initial_service_environment(private.path, context, initial_git),
+            context["job"], invocation,
             str(private.path), str(private.path / "control-home"), allow_new_context=True)
         inherited = {name: env[name] for name in query._CONTEXT}
         start = {"schema": 1, "scope": PHASE_SCOPE, "contextSha256": origin.digest(context_raw), "argv": argv,

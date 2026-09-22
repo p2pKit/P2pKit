@@ -1315,6 +1315,46 @@ required CI, main-merge marker and post-build publication gates remain intact.
 Productive provider/custody integration and genuine hosted qualification remain
 separate blockers. **Public development delivery0/4; Release NOT_READY.**
 
+##### Subsequent initializer results and original-Git service routing
+
+The preceding initializer/continuity packet subsequently passed at unchanged
+commit `5ee953d2f9d35e8c0cca75680d8ee78de3cba96b`, tree
+`16d4c4da5eebd02bd2faab5559adcb588c26de43`: **16/16 initializer methods and
+15/15 continuity/sender methods**, with **4/4 guards per invocation** and all
+command/wrapper/outer exits0. CPU/wall were **16.095s/17.088s** and
+**1.243s/1.285s**, respectively. No retry, old reader or earlier control was run.
+Independent original-result review approved this exact offline-model scope,
+**not genuine init120 or hosted continuity**. Request SHA-256:
+`42273d913ecf79b34b6891f3735649a8df4bcc15df07b11da4a31327fde1723b`.
+The posted/read-back [#437 result](https://github.com/p2pKit/P2pKit/issues/437#issuecomment-5786008851)
+and [#424 result](https://github.com/p2pKit/P2pKit/issues/424#issuecomment-5786024524)
+retain the original capture/review hashes; they are not owner activation records.
+
+The next actual Windows service blocker is separate: the closed child
+environment's default PATH does not include installed Git. The four Stage1
+service routes now derive **one installed Git executable from the twelve
+already retained successful original source-before query argv rows**, bound to
+their original owner, source-return/session hashes and fixed command roster.
+Only that executable's directory enters the child PATH; no ambient PATH or
+credential is forwarded. Ordinary/trusted-main routes reject this override.
+Windows fixes PATHEXT to `.EXE` and requests no current-directory lookup, but
+those flags are not proof: the service checks its actual resolved Git against
+the expected absolute path **before its first Git query**, inside the existing
+failure finalization. The unchanged query supplier also refuses later GitView
+selection drift before spawn. This routes an original tool; it does not
+authenticate installed bytes or establish native Windows qualification.
+
+The [new focused routing controls](../../scripts/tests/hosted-initial-recipient-service-git-test.py)
+are **AUTHORED / UNEXECUTED** at source preparation. They use nonexecutable tiny
+files and explicit Windows/original-return/query models, not hosted execution.
+The shared query/identity source and accepted reader/initializer bodies remain
+unchanged. Independent implementation review and guarded execution/result review
+remain prerequisites to accepting this repair. The callable workflow prefix
+and Stage1-specific encrypted success/eligible-failure custody must still be
+connected and reviewed before dispatch; digest-only stdout cannot preserve
+original qualification evidence. Both ordinary HOLDs, productive exit125,
+bootstrap5400 UNADMITTED/UNMEASURED and all existing deadlines/Release gates remain.
+
 #### Stage1 canonical-context reader, not initialization authority
 
 The separate fixed `initial_recipient_context_record()` in

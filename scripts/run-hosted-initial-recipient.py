@@ -607,6 +607,98 @@ def source_readback(owner, path, original):
     return dict(original.records)
 
 
+def _initial_service_phase(owner, private, context_raw, token, fence, before):
+    """Carry the Git selected by ORIGINAL parent queries into the fixed child.
+
+    This is same-call tool routing, not a new authority/receipt reader. No tool
+    is discovered from PATH here and no original capability is reconstructed.
+    """
+    try:
+        owner.end()
+        path = private.path / "source-before"
+        require(type(before) is SourceReturn and owner.initial_sources.get(str(path)) is before and
+            type(before.raw) is bytes and type(before.session) is bytes and type(before.records) is tuple and
+            tuple(name for name, _raw in before.records) == SOURCE_KEYS and
+            all(type(name) is str and type(raw) is bytes for name, raw in before.records), "SERVICE_GIT_ORIGINAL")
+        pin = before.records, before.session, before.raw
+        context, returned, session = O.parse(context_raw), O.parse(before.raw), O.parse(before.session)
+        require(context["scope"] in (native.INITIAL_CONTEXT_SCOPE, native.INITIAL_ENTRY_CONTEXT_SCOPE,
+            native.INITIAL_AUTHORITY_CONTEXT_SCOPE, native.INITIAL_RECEIVING_CONTEXT_SCOPE) and
+            context["root"] == str(ROOT) and context["session"] == str(private.path) and
+            context["sourceReturnSha256"] == O.digest(before.raw) and
+            context["sourceReturnedNs"] == returned["returnedNs"] and
+            type(context["sourceReturnedNs"]) is int, "SERVICE_GIT_CONTEXT")
+        originals = dict(before.records)
+        require(set(returned) == {"schema", "scope", "originalsSha256", "sessionSha256", "clock", "returnedNs"} and
+            type(returned["schema"]) is int and returned["schema"] == 1 and returned["scope"] == SOURCE_SCOPE and
+            returned["sessionSha256"] == O.digest(before.session) and
+            returned["originalsSha256"] == {name: O.digest(raw) for name, raw in before.records} and
+            before.raw == O.encoded(returned), "SERVICE_GIT_RETURN")
+        require(set(session) == {"schema", "scope", "job", "queries", "result", "retirement", "firstError", "errors", "readbacks"} and
+            type(session["schema"]) is int and session["schema"] == 1 and session["scope"] == "ORDINARY_GIT_QUERIES_ONLY" and
+            session["result"] == "READY_FOR_CALLER_SEAL" and session["retirement"] == "KNOWN" and
+            session["firstError"] is None and session["errors"] == [] and type(session["readbacks"]) is list and
+            type(session["job"]) is str and re.fullmatch(r"[0-9a-f]{32}", session["job"]) and
+            type(session["queries"]) is list and len(session["queries"]) == 12 and
+            before.session == Q.encoded(session), "SERVICE_GIT_SESSION")
+        source = context["observed"]["source"]["commit"]
+        I.sha(source)
+        entry = re.fullmatch(rb"100644 blob ([0-9a-f]{40})\t" + re.escape(I.POLICY_PATH.encode("ascii")) + rb"\x00",
+            originals["candidate_policy_entry"])
+        require(entry is not None, "SERVICE_GIT_POLICY_ENTRY")
+        blob = entry.group(1).decode("ascii")
+        # Closed counterpart of acquisition._source, not a replay/acquirer.
+        commands = (("rev-parse", "--show-toplevel"), ("status", "--porcelain=v1", "--untracked-files=all"),
+            ("rev-parse", "--verify", "HEAD^{commit}"), ("rev-parse", "--verify", source + "^{tree}"),
+            ("rev-parse", "--is-shallow-repository"), ("rev-parse", "--verify", "refs/remotes/origin/main^{commit}"),
+            ("rev-parse", "--verify", acquisition.stages.BASE["commit"] + "^{tree}"),
+            ("ls-tree", "-z", acquisition.stages.BASE["commit"], "--", I.POLICY_PATH),
+            ("merge-base", acquisition.stages.BASE["commit"], source), ("ls-tree", "-z", source, "--", I.POLICY_PATH),
+            ("cat-file", "-s", blob), ("cat-file", "blob", blob))
+        selected = None
+        for row, command in zip(session["queries"], commands):
+            require(type(row) is dict and type(row.get("argv")) is list and row["argv"] and
+                type(row["argv"][0]) is str, "SERVICE_GIT_QUERY")
+            if selected is None:
+                selected = row["argv"][0]
+            require(row["argv"] == [selected, "--no-replace-objects", "--no-pager", "-c", "core.fsmonitor=false",
+                "-C", str(ROOT), *command] and row.get("job") == session["job"] and row.get("state") == str(path) and
+                row.get("home") == str(path / "query-home") and row.get("cwd") == str(ROOT) and
+                row.get("launchAttempted") is True and row.get("scopeAttempted") is True and
+                type(row.get("waitExitCode")) is int and row["waitExitCode"] == 0 and
+                row.get("retirement") == "KNOWN" and row.get("result") == "READY_FOR_CALLER_SEAL" and
+                row.get("errors") == [] and row.get("ownedSurvivors") == [], "SERVICE_GIT_QUERY")
+        owner.end()
+        require(owner.initial_sources.get(str(path)) is before and
+            (before.records, before.session, before.raw) == pin, "SERVICE_GIT_ORIGINAL_CHANGED")
+        return native.phase(owner, private, context_raw, token, fence, initial_git=selected)
+    finally:
+        token = None  # Also clear this stack reference on prelaunch refusal.
+
+
+def _initial_service_query_git(supplier):
+    """Refuse resolver/CWD/PATHEXT shadows before the service's first Git launch.
+
+    The native parent supplied this single search directory from its original
+    query return. This is not a public executable override or admission API.
+    GitView's later independent selection is also fenced by the unchanged
+    NativeGitQueries exact argv-prefix check before it can launch anything.
+    """
+    search = os.environ.get("PATH")
+    require(type(search) is str and 0 < len(search) <= 4096 and os.pathsep not in search and
+        not any(ord(char) < 32 or ord(char) == 127 for char in search), "SERVICE_GIT_SEARCH")
+    directory = Path(search)
+    require(directory.is_absolute() and ".." not in directory.parts and str(directory) == search and
+        directory.resolve(strict=True) == directory, "SERVICE_GIT_SEARCH")
+    name = "git.exe" if os.name == "nt" else "git"
+    expected = directory / name
+    require(expected.resolve(strict=True) == expected and expected.is_file() and
+        type(supplier.executable) is str and supplier.executable == str(expected), "SERVICE_GIT_SELECTION")
+    if os.name == "nt":
+        require(os.environ.get("PATHEXT") == ".EXE" and
+            os.environ.get("NoDefaultCurrentDirectoryInExePath") == "1", "SERVICE_GIT_WINDOWS_SEARCH")
+
+
 def context_record(raw, path, fence):
     value = O.parse(raw)
     entry = type(fence) is _ReadmissionWindow
@@ -742,6 +834,7 @@ def service_child(context_hash, minimum, cancelled, *, entry=False, authority=Fa
         failure = None
         try:
             supplier = query_owner(owner, fence, path / "acquisition-queries")
+            _initial_service_query_git(supplier)
             supplier.native_host_matches_actions()
             def retain(name, raw, *, failed):
                 require(name in ORIGINAL_KEYS and type(raw) is bytes, "ORIGINAL_NAME")
@@ -1028,7 +1121,7 @@ def _prepare_with_token(cancelled, token):
             "session": str(path), "job": uuid.uuid4().hex, "inheritedContext": inherited,
             "sourceReturnSha256": O.digest(before.raw), "sourceReturnedNs": O.parse(before.raw)["returnedNs"],
             "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
-        _, phase = native.phase(owner, private, context_raw, token, fence)
+        _, phase = _initial_service_phase(owner, private, context_raw, token, fence, before)
         token = None
         match, chain, _ = read_phase(owner, private, context_raw, before, phase, fence)
         after = source_queries(owner, fence, observed, path / "source-after")
@@ -1272,7 +1365,7 @@ def _readmit_worker(claim, token):
             "observed": observed, "eventSha256": O.digest(event), "root": str(ROOT), "session": str(path),
             "job": uuid.uuid4().hex, "inheritedContext": inherited, "sourceReturnSha256": O.digest(before.raw),
             "sourceReturnedNs": O.parse(before.raw)["returnedNs"], "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
-        _, phase = native.phase(owner, private, context_raw, token, window)
+        _, phase = _initial_service_phase(owner, private, context_raw, token, window, before)
         token = None
         phase_pin = _phase_pin(phase)
         match, _chain, captured, _child = read_phase(owner, private, context_raw, before, phase, window)
@@ -2760,7 +2853,7 @@ def _recipient_authority(episode, token):
             "root": str(ROOT), "session": str(path), "job": uuid.uuid4().hex, "inheritedContext": Q._inherited_context(),
             "sourceReturnSha256": O.digest(before.raw), "sourceReturnedNs": O.parse(before.raw)["returnedNs"],
             "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
-        _, phase = native.phase(owner, private, context_raw, token, window)
+        _, phase = _initial_service_phase(owner, private, context_raw, token, window, before)
         phase_pin = _phase_pin(phase)
         token = None
         match, _chain, captured, _child = read_phase(owner, private, context_raw, before, phase, window)
@@ -2876,7 +2969,7 @@ def _receiving_authority(episode, token):
             "root": str(ROOT), "session": str(path), "job": uuid.uuid4().hex, "inheritedContext": Q._inherited_context(),
             "sourceReturnSha256": O.digest(before.raw), "sourceReturnedNs": O.parse(before.raw)["returnedNs"],
             "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
-        _, phase = native.phase(owner, private, context_raw, token, window)
+        _, phase = _initial_service_phase(owner, private, context_raw, token, window, before)
         token = None
         phase_pin = _phase_pin(phase)
         match, _chain, captured, _child = read_phase(owner, private, context_raw, before, phase, window)
