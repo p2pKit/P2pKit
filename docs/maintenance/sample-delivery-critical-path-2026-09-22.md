@@ -102,7 +102,7 @@ invocations. No further Node startup, provider or hosted execution is authorized
 
 This module is not yet a GitHub JavaScript Action or an admitted CLI. A closed
 environment or matching supplied source hashes cannot authenticate the caller,
-Node startup, tools or original runtime-service credentials. Its return always
+Node startup, tools or original runtime-service credentials. The17-tested return
 leaves RAW/outer-Node/runner/provider acceptance unestablished. No ordinary
 consumer or publisher is changed to accept this partial result.
 
@@ -143,6 +143,30 @@ the earlier preservation mappings; no previously captured comment changed.
 Effective required checks and the main-only/no-admin-bypass owner-review
 environment remain unchanged. Bootstrap registration and its separate initial
 execution environment remain absent. Public development delivery is still0/4.
+
+## Next narrow source: observe RAW after the provider child closes
+
+The [fixed clock helper](../../scripts/hosted_cache_provider_clock.py) and updated
+Node adapter now have a source connection for an isolated, credential-free native
+clock read **after the provider supervisor's actual child close**. The same
+invocation, role/domain, exact INT64 frequency, original RAW high-water and hard
+end remain bound; Node keeps its original local deadline through the helper's
+own EOF/exit/close. There is no new allowance, provider caller or workflow wiring.
+The [cache guide](../testing/hosted-dependency-cache.md#post-provider-close-raw-continuation--unexecuted-source)
+describes the precise scope and remaining outer-ownership gap.
+
+The helper samples before its own process closes. Thus this source can establish
+only `OBSERVED_AFTER_PROVIDER_CLOSE`, **not post-last-owner/Node/runner RAW or
+provider acceptance**. Timed-out children and failed/incomplete clock-helper
+returns remain private and incomplete, never permission to read, delete, reuse
+or seal native files. A closed known-failed provider transport stays failed.
+Supplied source hashes do not authenticate prestart tools or runtime credentials.
+
+The new18 Python controls and updated30 Node controls are authored but
+**UNEXECUTED** here, not covered by the earlier17 pass. Source review, original
+results and any exact Node execution request must be recorded separately before
+this increment can become a qualified prerequisite. No Node startup or execution
+authority is inferred from preparing source or from the prior consumed requests.
 
 ## Remaining execution blockers, in order
 

@@ -4353,6 +4353,54 @@ The reader/entry's separate R2 source repairs and source-bound offline results d
 inherit the adapter model pass. No timeout becomes retirement, and no original
 runner/provider outcome becomes established through a matching supplied ACK.
 
+### Post-provider-close RAW continuation — unexecuted source
+
+The separate [clock helper](../../scripts/hosted_cache_provider_clock.py) and
+updated [Node adapter](../../scripts/hosted-cache-provider-node-bridge.cjs) are
+**DORMANT / NOT_WORKFLOW_WIRED**. This increment connects one missing observation;
+it is not an admitted Action, prestart/service authority or provider qualification.
+The earlier17/17 result above does not cover this changed bridge.
+
+Only after the original provider supervisor has supplied a consistent ACK,
+both EOFs, matching exit and actual `ChildProcess.close` may the adapter launch
+the fixed isolated Python helper. Shared source hashes must match the provider
+roster; the helper checks only its own source and the maintained clock's small
+dependency roster, without widening `sys.path` or loading the provider graph.
+These supplied hashes still cannot authenticate either interpreter's earlier
+startup. The fresh helper environment omits every runtime-service credential;
+stdin is ignored and stdout/stderr stay private bounded pipes.
+
+The request binds the original invocation, role, exact frequency, ACK high-water
+and original hard end. Node24's integer source tokens retain full INT64 Windows
+frequency; the helper protocol carries decimal strings, not rounded JSON Numbers.
+The maintained `hosted_job_clock.checked_now` requires the same role/domain/
+frequency and nondecreasing RAW value strictly before the original end. A full
+write/flush and a final native check are required; provisional output followed
+by exit66 never establishes success. Node separately checks canonical bytes,
+empty stderr, original helper spawn/EOF/exit/close and the unchanged local end.
+
+No new180 or finalization allowance is created. Cancellation, malformed/late/
+backward output, source mismatch and incomplete helper closure remain failures.
+A timeout retains the actual live/unknown child and private bytes; it grants no
+retirement, native-file reading, cleanup, reuse or sealing permission.
+
+The successful transport label is only **`OBSERVED_AFTER_PROVIDER_CLOSE`**.
+The RAW sample occurs **before the clock helper's own close**, not after the
+last enclosing owner/Node/runner return. `postLastOwnerCloseRaw`, enclosing Node
+return and original runner outcome remain `NOT_OBSERVED`; provider acceptance
+remains `NOT_ESTABLISHED`. This narrower observation cannot lift any existing
+native/custody/runner qualification requirement.
+
+The [18 Python controls](../../scripts/tests/hosted-cache-provider-clock-test.py)
+and updated [30 Node model controls](../../scripts/tests/hosted-cache-provider-node-bridge-test.cjs)
+are **AUTHORED / UNEXECUTED** at this source checkpoint. Python uses supplied
+clock Readings and tiny synthetic source/file fixtures; Node replaces both
+children, clocks and timers with explicit models. Neither runs a provider or
+reads key material. Independent source review and exact original execution
+results, when available, are separately mapped to the containing commit.
+Further Node startup needs fresh exact owner authorization; the earlier one-
+and two-invocation permissions are consumed, not a standing2GiB allowance.
+
 ## Verification and remaining qualification
 
 Focused offline commands (not a claim they ran on a particular host):
