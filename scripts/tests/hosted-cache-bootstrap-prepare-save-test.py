@@ -17,6 +17,7 @@ import json
 import math
 from pathlib import Path
 import runpy
+import sys
 from types import SimpleNamespace as NS
 from typing import NamedTuple, Tuple
 import unittest
@@ -24,6 +25,9 @@ from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+import hosted_initial_recipient_bootstrap_identity as initial_bootstrap
+
 prior = runpy.run_path(str(ROOT / "tests/hosted-cache-bootstrap-save-reader-test.py"), run_name="reader_models")
 selected, require, Refusal, FalseyFailure = (prior[name] for name in ("selected", "require", "Refusal", "FalseyFailure"))
 encoded, digest, SECOND, LIMIT = (prior[name] for name in ("encoded", "digest", "SECOND", "LIMIT"))
@@ -85,7 +89,8 @@ class World(prior["World"]):
             authority["Artifact"]("fixture", "beta", "1", "beta.jar", "b" * 64)), "c" * 64, "d" * 64, 2, 10)
         file_ns = self.files.__dict__
         file_ns.update(authority=NS(**authority), re=prior["re"], digest=digest, record=self.origin.parse,
-            bootstrap=NS(cache_cohort=lambda raw: (profile, role), ordinary=NS(AdmissionError=Refusal)), SeedError=Refusal)
+            bootstrap=NS(cache_cohort=lambda raw: (profile, role), ordinary=NS(AdmissionError=Refusal)),
+            initial_bootstrap=initial_bootstrap, SeedError=Refusal)
         exec(FILES, file_ns)
         cache_ns = self.staging.cache.__dict__
         cache_ns.update(Path=Path)

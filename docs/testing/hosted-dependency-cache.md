@@ -4762,14 +4762,56 @@ There is no new clock, deadline, workflow caller or Stage1 authority.
 Independent review returned
 **APPROVE_EXACT_R1_ACTION_RECEIPT_HANDOFF_SOURCE_ONLY**, report SHA-256
 `a65ed938455940132858ecf2c77e144ff36eed3e111763eca97cfce56e3ffacf`.
-This is not execution authorization or acceptance of unexecuted tests. The
+This is not execution authorization or acceptance of unexecuted tests. At that
+source-only checkpoint, the
 [22 new controls](../../scripts/tests/hosted-cache-provider-action-return-test.py)
-are **authored, unexecuted**: 16 supplied-record controls and six caller controls
+were **authored, unexecuted**: 16 supplied-record controls and six caller controls
 over AST-selected commands/memory files, with Action/admission boundaries modeled.
 Two affected native-helper controls and the Action lookup control were extended;
 no previously accepted test or build was rerun. CPU20, both ordinary HOLDs,
 the whole-JVM interlock, productive exit125, unqualified complete1066 and
 bootstrap5400 UNADMITTED/UNMEASURED remain unchanged.
+
+#### Original receipt22 failure and narrow fixture correction
+
+The subsequently authorized one-attempt packet ran at
+**2026-09-22T19:19:36Z–19:19:41Z** on
+`e5dd9b0d148ab462a543a93b97150774fbac3f9c`, tree
+`a7ccd364126a2cd5a2f0f06be22478261bdd3496`. Request-manifest SHA-256:
+`e9bc939ddb3ec594ee20a510631a41cef02087a5b68f0c6a946d24db8723caf9`.
+Its first invocation **FAILED (errors=6)**: 16 supplied-record `ReceiptControls`
+passed, but all six `CallerControls` errored while constructing their shared
+fixture, before their intended caller assertions. Command/wrapper/outer exits
+were **1/1/1**. Native-helper2 and Action48 **did not start**; there was no retry.
+The original22 aggregate remains failed, not a partial packet pass.
+
+The error was `NameError: name 'initial_bootstrap' is not defined` in the
+AST-selected `_bootstrap_cohort` called by `stage_record`. Production already
+imports the maintained Stage1 discriminator; the shared prepare-save fixture
+omitted that global after the Stage1 cohort change. The narrow correction
+imports that same maintained module and supplies it to the selected-source
+namespace. It does not stub the discriminator, change production code or
+weaken any assertion. The correction is **unexecuted**.
+Independent fixture verdict:
+**APPROVE_EXACT_PREPARE_SAVE_INITIAL_IDENTITY_FIXTURE_BINDING_SOURCE_ONLY**,
+report SHA-256
+`45178a10d712cc9add9d55b22a5c1095f68b6b51117ea34055c493f525ecfff0`.
+
+Original guard8/unexpected0/ResourceWarnings0 and matching272-line pre/post
+integrity captures do not override the failure. Inner/outer capture-manifest
+SHA-256 values are
+`6f660dc471927b5df4008c6c8bcc116398d081a373bbd2bfa528d99564ae7175` /
+`5992316ee77e4460e9901c6733868b06d7bd99f04420e4264f54aefbde3f3dfb`.
+Independent result verdict:
+**CONFIRM_EXACT_FAILED_RECEIPT22_AGGREGATE_AND_STOP_ONLY**, report SHA-256
+`796ddc040669a32b8b8e0f366680bbf96990d8f03316e818ff5d34bf7f3c1247`.
+
+That authorization is consumed. A separate, independently reviewed exact-source
+request and fresh owner authorization are required for the six failed caller
+controls, the two unstarted native-helper controls and the affected Action48
+suite. The unchanged16 pure controls retain only their historical supplied-record
+scope; no new22 pass, native/provider qualification, receiver acceptance or
+Release readiness is inferred. All HOLDs and limits above remain.
 
 ## Verification and remaining qualification
 
