@@ -4161,15 +4161,15 @@ Bootstrap5400 stays UNADMITTED/UNMEASURED; no Release acceptance follows.
 ### Fixed original-stdin cancellation — four source repairs reviewed
 
 The new [fixed reader](../../scripts/hosted_cache_provider_cancel.py) and outer
-entry integration remain **UNEXECUTED / DORMANT**, not an admitted Node bridge or
-qualified cancellation path. Independent implementation review of the four R1
+entry integration remain **DORMANT / NOT_NATIVELY_QUALIFIED**, not an admitted Node
+bridge or qualified cancellation path. Independent implementation review of the four R1
 execution-blocker repairs returned
 **APPROVE_EXACT_FOUR_R1_SOURCE_REPAIRS_ONLY_NOT_EXECUTION_OR_WINDOWS_QUALIFICATION**;
 report SHA-256
 `ea2caf3de467db8444767a11e48aab57e01716346ae81b654e370d63a2fc9e16`.
 This is narrower than complete implementation/runtime acceptance. The
 [focused reader controls](../../scripts/tests/hosted-cache-provider-cancel-test.py)
-and added entry controls are authored but have not yet run.
+and added entry controls subsequently ran in the bounded offline models below.
 
 The proposed one-shot outer interpreter borrows its original fd0 and separately
 owns one non-inheritable identity pin. It never reads that pin, re-adopts/closes
@@ -4210,12 +4210,30 @@ binding closure refuses a copied completion before selecting its fields.
 
 The original six R1 files remain untouched in the integration worktree and are
 also preserved in a separate WIP ancestry commit. R2 is developed in an isolated
-worktree. The reader now has45 authored methods and the entry52; all97 are still
-**UNEXECUTED** for this revision. The four existing independent regressions and
-two model-classification anchors also remain authored/unexecuted. Earlier entry/
-supervisor results and the Node bridge's17 controls do not execute this changed
-reader/entry composition. Exact implementation review belongs to this revision's
-issue record; no native Windows or hosted acceptance follows from source repair.
+worktree. At exact source `b5c9889dcb8793295e5f0e08751e40681da69bec`, tree
+`28bf571b0692ffc2e74e6892ea07e2be48217486`, the reader **45/45** and entry
+**52/52** passed in separate single invocations at02:02:59UTC on22September
+(captured wall0.489s/2.131s). The existing independent four regressions and two
+classification anchors subsequently passed **6/6** (wall0.674s). These are
+distinct model aggregates, not103 Windows/native tests. All successful commands
+and wrappers exited0, with guard8/unexpected0/ResourceWarnings0 and identical
+pre/post inputs, tools, source and protected-boundary hashes. The unchanged
+CPU20/AS512MiB/file32MiB/FD128/core0/wall30+kill2, UID/GID65534, cleared environment
+and Python `-I -B -S` profile prohibited process/network/native-loader/stdin/signal
+operations before project imports. Complete1066 was absent and prohibited.
+
+The first independent invocation exited1 at a fixture import-identity assertion,
+before selecting any test. That original failure remains preserved. Independent
+correction only loaded the sharing/entry fixture before the reader fixture;
+all six method bodies and assertions remained byte-identical. Its corrected
+source SHA-256 is
+`a3a1ed24d4b47548a7675242714dfbdaaf10992498eba262a6a1353c820e1655`.
+Only that corrected six-control invocation ran; neither author suite was retried.
+Independent original-result verdict:
+**ACCEPT_EXACT_ORIGINAL_R2_GUARDED_MODEL_RESULTS_ONLY**, report SHA-256
+`c733eb67e820ebad2c73cf0e118ff1edd286f10b160c7042ec79af2bc6a799ec`.
+Earlier entry/supervisor and Node17 results remain separately scoped; no native
+Windows or hosted acceptance follows from these source/model checks.
 
 This cannot preempt blocked native calls, flushes or the existing retirement
 sequence. The future original Node parent must retain the writer and its own

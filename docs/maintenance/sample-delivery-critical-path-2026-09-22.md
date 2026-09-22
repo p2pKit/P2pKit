@@ -115,13 +115,34 @@ remain unchanged in the integration worktree and are preserved in WIP ancestry
 at `27330dc4f30e3bf64b624e7dcf4f5313a1b5ffb7`; R2 source is isolated.
 The [cache guide](../testing/hosted-dependency-cache.md) records the post-poll
 work-fence, lifecycle-phase, terminal-binding and wrong-return retirement repairs.
-This is not a broader cancellation/security review. New reader45/entry52 methods
-and the existing six focused independent controls remain **UNEXECUTED** for R2;
-the Node17 pass does not qualify this changed composition.
+This is not a broader cancellation/security review. At exact source
+`b5c9889dcb8793295e5f0e08751e40681da69bec` / tree
+`28bf571b0692ffc2e74e6892ea07e2be48217486`, separate bounded offline reader
+**45/45**, entry **52/52** and corrected independent **6/6** aggregates passed.
+The first independent invocation failed during fixture import, before its tests;
+the two-line fixture-order correction preserved all six method bodies/assertions.
+Neither author suite was repeated. All successful invocations had exit0,
+guard8/unexpected0/ResourceWarnings0 and matching pre/post input integrity.
+No actual Windows pipe, provider, native clock or Actions runner was executed.
 Independent review returned
 **APPROVE_EXACT_FOUR_R1_SOURCE_REPAIRS_ONLY_NOT_EXECUTION_OR_WINDOWS_QUALIFICATION**,
 report SHA-256
 `ea2caf3de467db8444767a11e48aab57e01716346ae81b654e370d63a2fc9e16`.
+Independent original-result inspection returned
+**ACCEPT_EXACT_ORIGINAL_R2_GUARDED_MODEL_RESULTS_ONLY**, report SHA-256
+`c733eb67e820ebad2c73cf0e118ff1edd286f10b160c7042ec79af2bc6a799ec`.
+Capture manifests (including the retained setup failure, then corrected6):
+`b4cb511227e0375520d788a6b1955664cbf5c9c1abd1653627443ef39ea94ba2` /
+`de6c5ec5e7541ce441369951ee1fb77898952acb555a95cb749b77a6fa596033`.
+The Node17 pass remains separately scoped to its earlier exact source.
+
+Read-only GitHub refresh on22September still found unchanged main, all four
+preview artifacts unexpired, no campaign PR and zero queued/in-progress/waiting
+runs. Complete #437/#424 conversations now contain124/113 comments, including
+the earlier preservation mappings; no previously captured comment changed.
+Effective required checks and the main-only/no-admin-bypass owner-review
+environment remain unchanged. Bootstrap registration and its separate initial
+execution environment remain absent. Public development delivery is still0/4.
 
 ## Remaining execution blockers, in order
 
