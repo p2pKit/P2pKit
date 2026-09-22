@@ -182,6 +182,25 @@ No real provider/native/runner execution is inferred. This one-invocation
 authorization is consumed, not a standing2GiB allowance or permission to start
 held CI. No test or build was repeated.
 
+## Fixed provider-original readback, still not an Action caller
+
+The [new reader](../../scripts/hosted_cache_provider_readback.py) now checks
+actual retained file identities and bytes against the successful outer ACK and
+joins the original worker-request/native launch/inner packet bindings. Its22
+focused offline controls passed once at03:11:49–03:11:51UTC; the
+[cache guide](../testing/hosted-dependency-cache.md#fixed-ack-bound-provider-original-readback)
+records exact scope, limits, original capture hash and independent approval.
+These use tiny real POSIX files with modeled provider/native/clock originals,
+not a hosted run or Windows qualification. Enclosing Owner/Action/runner return
+and provider acceptance remain pending. No accepted test suite or app build was
+repeated. Native preparation and the thin Node24 Action remain the next join.
+
+Read-only service refresh at03:09:55UTC again found the four required checks,
+sole-owner/main-only/no-admin-bypass release environment, no campaign PR or
+active/waiting runs, and no bootstrap/initial-recipient execution registration.
+The four preview artifacts remain unexpired; anonymous Releases still contain
+RC2/RC3 without app assets. **Public development delivery remains0/4.**
+
 ## Remaining execution blockers, in order
 
 1. **Finish/qualify this real runner connection:** its Node30 and Python18 model

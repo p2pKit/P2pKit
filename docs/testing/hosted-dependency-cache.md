@@ -4433,6 +4433,47 @@ a standing2GiB allowance. Actual caller/prestart authority, enclosing custody
 and native/provider qualification remain outstanding. Neither source review nor
 these model results authorize workflow activation or publication.
 
+### Fixed ACK-bound provider-original readback
+
+[`hosted_cache_provider_readback.py`](../../scripts/hosted_cache_provider_readback.py)
+now reads the four original native/log/worker-packet files under a supplied NEW
+bootstrap `Owner`. It checks the actual file identities, sizes and hashes against
+the successful outer ACK, then recovers the exact worker-request argv token from
+the retained native launch description. Existing inner ACK/packet parsers check
+the original provider captures and their linkage; no request is reconstructed.
+Every reader belongs to that Owner and must close before interpretation. The
+same clock and original provider end remain mandatory. This adds no process,
+provider, downloader, caller, workflow, admission or new deadline.
+
+This is **success-only file readback**, not complete failed/cancelled custody.
+Its private result explicitly leaves the enclosing Owner close, original Action
+outcome and provider acceptance unestablished. A fixed admitted caller still has
+to supply genuine original ACK/exit/close and source/tool/step bindings. The
+Node transport cannot become provider acceptance merely by invoking this reader.
+
+The [22 new controls](../../scripts/tests/hosted-cache-provider-readback-test.py)
+passed once on22September,03:11:49–03:11:51UTC: tests0.291s/wall1.561s,
+command/wrapper0, guard8/unexpected0/ResourceWarnings0 and matching pre/post
+integrity. Only the maintained `Owner` and `LIMIT` definitions were AST-selected;
+the complete controller and held complete1066 receiver were not imported.
+Tiny owned POSIX files are real; clocks, native descriptions, admissions, source
+bindings, ACKs and provider captures are explicit models. There is no Windows
+execution/model-readback coverage or real provider/native-process execution in
+this suite. The reviewer found a missing fixture `LIMIT` before startup; its
+correction is not an executed preimage failure, and no accepted suite was rerun.
+
+The invocation used isolated Python3.12, UID/GID65534, cleared environment/groups,
+no-new-privileges, CPU20s/AS512MiB/wall30+kill2/file32MiB/FD128/core0 and pre-import
+filesystem/process/network/native/stdin guards. These guards are not hosted
+qualification. Original capture-manifest SHA-256:
+`53b4cfb2c183b0f9008309c11db9c9224b5008ab5dbec26cd4eca4524c638fcb`.
+Independent verdict:
+**APPROVE_EXACT_DORMANT_PROVIDER_READBACK_SOURCE_AND_22_OFFLINE_CONTROLS_ONLY**;
+report SHA-256
+`671c271d5a3d560adbe03123263729e2b416e3d0bcede62a9ca015200b297413`.
+Provider180/shared-final45, both ordinary HOLDs, the whole-JVM interlock and all
+Stage1/native/custody/scheduling/Release prerequisites remain unchanged.
+
 ## Verification and remaining qualification
 
 Focused offline commands (not a claim they ran on a particular host):
