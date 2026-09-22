@@ -4157,10 +4157,10 @@ encrypted custody or workflow activation is added. Original native/file/job
 limits, both ordinary HOLDs and the whole-JVM fail-only interlock are unchanged.
 Bootstrap5400 stays UNADMITTED/UNMEASURED; no Release acceptance follows.
 
-### Supplied Node receipt reducer — unexecuted WIP
+### Supplied Node receipt reducer — bounded controls executed
 
 The [Node reducer](../../scripts/hosted-cache-provider-node-return.cjs) is
-**DORMANT / NO_CALLER / UNEXECUTED**, not the asynchronous runner bridge.
+**DORMANT / NO_CALLER**, not the asynchronous runner bridge.
 It consumes supplied Buffer bytes and event values only; it does not spawn,
 kill, register callbacks, read files/environment, observe clocks, acquire
 credentials, forward action commands or publish anything. The future original
@@ -4194,20 +4194,47 @@ a caller-created `ReceiptError` cannot supply public diagnostic text.
 Independent read-only review of the earlier draft found integer-width rejection
 and caller-Buffer cap/reentry/error-provenance defects. The revised source and
 [focused controls](../../scripts/tests/hosted-cache-provider-node-return-test.cjs)
-address those findings by inspection, **not executed regression evidence**.
-The exact inspection verdict and preimage/report hashes belong to the containing
-commit's issue record. These tests and the separate reviewer controls are all
-**AUTHORED_UNEXECUTED**; no syntax-check or test pass is claimed.
+were first preserved at `8fdeccb6cf79dcf14e53c584c11a3b3ef6496840` as
+**UNEXECUTED WIP**, with preservation/document-accuracy approval only. The
+preimage and inspection reports remain preserved; no preimage Node execution
+is claimed. The following later executions do not rewrite that earlier status.
 
 The bounded offline setup first exited9 for an unsupported Node flag. After
 read-only installed V8-option inspection and removal of only that flag, startup
 exited133 at V8 `SegmentedTable::InitializeTable` allocation under AS512MiB,
 **before the harness or project code ran**. Both outcomes remain preserved;
-neither is a code-test result. No test guard/probe ran. CPU20/wall30+kill2 and
-all existing limits were retained. Another runtime/profile must be legitimately
-reviewed/admitted before testing; no deadline or memory allowance is silently
-increased, and no unchanged startup retry or runtime download is warranted.
-Do not build an accepted provider/receiving prerequisite on this unexecuted WIP.
+neither is a code-test result and neither reached a test guard. No unchanged
+startup retry or runtime download followed.
+
+On **22 September**, the owner separately authorized the exact preserved
+commit/tree, request and frozen source/runtime/harness/full-command roster for
+at most two serial offline invocations with an explicit **AS2GiB** ceiling.
+CPU20/wall30+kill2, file32MiB/FD128/core0, UID/GID65534, cleared environment,
+isolated namespaces/no host network, read-only cases and the Node permission/
+closed-import guards remained. The capture wrapper uses Git reads without
+optional locks, no-clobber outputs and a successful post-integrity marker; a
+nonempty postcheck log alone cannot authorize the independent invocation.
+
+The installed **Node24.20.0** executed the exact unchanged R3 source:
+
+| Invocation | Result | Captured command wall seconds |
+| --- | --- | --- |
+| Author focused supplied-event controls | **66/66 PASS** | 0.215 |
+| Separate independently authored controls | **14/14 PASS** | 0.133 |
+
+Both exited0, reported four import-guard refusals and zero unexpected denials,
+had empty stderr and retained unchanged input/tool hashes after execution.
+Fresh MemAvailable was24060972KiB/24060960KiB respectively, above the required
+3GiB floor. These are separate model aggregates, not80 product/native tests.
+No hard512MiB RSS cap, provider timing, hosted Node compatibility or actual
+child/RAW/cancellation/runner observation follows. The exact independent
+implementation verdict, owner-request/roster hashes and original output hashes
+belong to the containing commit's #437/#424 issue records.
+
+The two authorized invocations are **consumed**. This is not a standing2GiB
+allowance or permission for changed-source/profile tests, retries, native
+provider execution or workflow activation. Further Node execution needs its
+own legitimate reviewed authorization; ordinary/Python limits are unchanged.
 
 There is still no runnable Node bridge, provider service/source/tool admission,
 complete1066/current receiving authority, productive bootstrap or encrypted
