@@ -3967,6 +3967,21 @@ def _initial_graph_native(context_raw, path, clock, first, work, final, records,
     return start, row, birth, child, ack
 
 
+def _reread_initial_graph_originals(owner, pins, originals, checked):
+    """Share adjacent final-reread guards; the caller owns failure/close custody."""
+    checked()
+    for resource, name, _maximum, contents in originals.values():
+        _, path, identity, _ = next(row for row in pins if row[0] is resource)
+        native._new_entry_owned(owner, resource, path, identity)
+        checked()
+        current = owner.read(resource, name, max(1, len(contents)))
+        checked()
+        # retain() already pinned exact bytes. Refuse custom equality/finalizers
+        # before sharing this guard with the next ownership operation.
+        require(type(current) is bytes and current == contents, "GRAPH_REREAD_CHANGED")
+        del current  # No successful reread result lives across the next I/O.
+
+
 def _read_initial_recipient_originals(owner, directory, *, recipient_outcome, expected_sha256):
     """SUPPLIED_STAGE1_PUBLISHED_GRAPH_CONSISTENCY_ONLY / OWNER_CLOSE_PENDING.
 
@@ -4471,9 +4486,7 @@ def _read_initial_recipient_originals(owner, directory, *, recipient_outcome, ex
         # charged once, never deduplicated by content; no second leaf invocation.
         for resource, expected in rosters:
             names(resource, expected)
-        for resource, name, _maximum, contents in originals.values():
-            owned(resource)
-            require(call(owner.read, resource, name, max(1, len(contents))) == contents, "GRAPH_REREAD_CHANGED")
+        _reread_initial_graph_originals(owner, pins, originals, checked)
         for resource, expected in rosters:
             names(resource, expected)
         for resource, _path, _identity, _original_path in pins:

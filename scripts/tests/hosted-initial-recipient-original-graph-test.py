@@ -103,6 +103,165 @@ class ReaderPathHistoryModels(unittest.TestCase):
                 checker(((opaque, object, "INVALID_MODE", None),))
 
 
+class FinalRereadSchedulingModels(unittest.TestCase):
+    """Only the actual reread scheduler, with modeled native/read/guard boundaries."""
+    def setUp(self):
+        self.resources = (object(), object())
+        self.pins = [(resource, Path("MODEL_REREAD_" + str(index)), (index + 1, index + 10), object())
+            for index, resource in enumerate(self.resources)]
+        self.originals = {name: (self.resources[index % 2], name, 1024, contents)
+            for index, (name, contents) in enumerate((("one", b"same"), ("two", b"same"), ("empty", b"")))}
+        self.events = []
+        self.check_hook = lambda: None
+        self.owned_hook = lambda *_: None
+        self.read_hook = lambda _resource, _name, contents: contents
+        self.owner = SimpleNamespace(read=self.read)
+
+    def checked(self):
+        self.events.append("checked")
+        self.check_hook()
+
+    def owned(self, owner, resource, path, identity):
+        pin = next(row for row in self.pins if row[0] is resource)
+        self.assertIs(owner, self.owner)
+        self.assertIs(path, pin[1])
+        self.assertIs(identity, pin[2])
+        self.events.append(("owned", resource, path, identity))
+        self.owned_hook(resource)
+
+    def read(self, resource, name, maximum):
+        self.events.append(("read", resource, name, maximum))
+        self.assertIs(resource, self.originals[name][0])
+        return self.read_hook(resource, name, self.originals[name][3])
+
+    def expected_events(self):
+        expected = ["checked"]
+        for resource, name, _maximum, contents in self.originals.values():
+            pin = next(row for row in self.pins if row[0] is resource)
+            expected.extend((("owned", resource, pin[1], pin[2]), "checked",
+                ("read", resource, name, max(1, len(contents))), "checked"))
+        return expected
+
+    def reread(self):
+        with patch.object(N.native, "_new_entry_owned", new=self.owned):
+            return N._reread_initial_graph_originals(self.owner, self.pins, self.originals, self.checked)
+
+    def test_all_1066_entries_share_only_adjacent_guards_without_deduplication(self):
+        self.originals = {"original-" + str(index): (self.resources[index % 2], "original-" + str(index),
+            1024, b"" if index == 1065 else b"same") for index in range(1066)}
+        self.assertIsNone(self.reread())
+        self.assertEqual(self.events, self.expected_events())
+        self.assertEqual(self.events.count("checked"), 2 * 1066 + 1)
+        self.assertEqual(sum(type(event) is tuple and event[0] == "read" for event in self.events), 1066)
+        self.assertEqual(sum(type(event) is tuple and event[0] == "owned" for event in self.events), 1066)
+
+    def test_each_shared_guard_failure_stops_before_the_next_operation(self):
+        expected = self.expected_events()
+        for position, event in enumerate(expected):
+            if event != "checked":
+                continue
+            with self.subTest(position=position):
+                self.events.clear()
+                failure = FalseyFailure("MODEL_REREAD_GUARD")
+                def check():
+                    if len(self.events) - 1 == position:
+                        raise failure
+                self.check_hook = check
+                with self.assertRaises(FalseyFailure) as caught:
+                    self.reread()
+                self.assertIs(caught.exception, failure)
+                self.assertEqual(self.events, expected[:position + 1])
+
+    def test_ownership_and_read_failures_preserve_the_same_falsey_exception(self):
+        expected = self.expected_events()
+        for position, event in enumerate(expected):
+            if type(event) is not tuple:
+                continue
+            with self.subTest(position=position, operation=event[0]):
+                self.events.clear()
+                failure = FalseyFailure("MODEL_REREAD_OPERATION")
+                def owned(_resource):
+                    if len(self.events) - 1 == position:
+                        raise failure
+                def read(_resource, _name, contents):
+                    if len(self.events) - 1 == position:
+                        raise failure
+                    return contents
+                self.owned_hook, self.read_hook = owned, read
+                with self.assertRaises(FalseyFailure) as caught:
+                    self.reread()
+                self.assertIs(caught.exception, failure)
+                self.assertEqual(self.events, expected[:position + 1])
+
+    def test_native_or_read_mutation_is_checked_before_any_next_operation(self):
+        expected = self.expected_events()
+        for position, event in enumerate(expected):
+            if type(event) is not tuple:
+                continue
+            with self.subTest(position=position, operation=event[0]):
+                self.events.clear()
+                changed = []
+                failure = FalseyFailure("MODEL_REREAD_MUTATED")
+                def check():
+                    if changed:
+                        raise failure
+                def owned(_resource):
+                    if len(self.events) - 1 == position:
+                        changed.append(True)
+                def read(_resource, _name, contents):
+                    if len(self.events) - 1 == position:
+                        changed.append(True)
+                    return contents
+                self.check_hook, self.owned_hook, self.read_hook = check, owned, read
+                with self.assertRaises(FalseyFailure) as caught:
+                    self.reread()
+                self.assertIs(caught.exception, failure)
+                self.assertEqual(changed, [True])
+                self.assertEqual(self.events, expected[:position + 2])
+
+    def test_changed_or_nonexact_bytes_refuse_without_custom_equality(self):
+        equality = []
+        class CustomEqual:
+            def __eq__(self, other):
+                equality.append("custom")
+                return True
+        class ByteSubclass(bytes):
+            def __eq__(self, other):
+                equality.append("subclass")
+                return True
+        for result in (b"changed", bytearray(b"same"), memoryview(b"same"), ByteSubclass(b"same"), CustomEqual()):
+            with self.subTest(result_type=type(result).__name__):
+                self.events.clear()
+                self.read_hook = lambda *_: result
+                with self.assertRaisesRegex(I.AdmissionError, "GRAPH_REREAD_CHANGED"):
+                    self.reread()
+                self.assertEqual(self.events, self.expected_events()[:5])
+                self.assertEqual(equality, [])
+
+    def test_postread_guard_failure_retains_returned_value_in_traceback_custody(self):
+        released = []
+        class Returned:
+            def __del__(self):
+                released.append("released")
+        failure = FalseyFailure("MODEL_REREAD_POSTGUARD")
+        def check():
+            if len(self.events) == 5:
+                raise failure
+        self.check_hook = check
+        self.read_hook = lambda *_: Returned()
+        try:
+            self.reread()
+        except FalseyFailure as caught:
+            self.assertIs(caught, failure)
+            self.assertEqual(released, [])
+            self.assertEqual(self.events, self.expected_events()[:5])
+        else:
+            self.fail("postread guard did not fail")
+        finally:
+            failure.__traceback__ = None
+        self.assertEqual(released, ["released"])
+
+
 class MatchTimeModels(unittest.TestCase):
     def setUp(self):
         self.fixture = ACQ.OriginalModels("runTest")
@@ -729,6 +888,7 @@ class NativeRecordModels(F.SenderModels):
 
 
 if __name__ == "__main__":
-    suite = unittest.TestSuite(cls(name) for cls in (ReaderPathHistoryModels, MatchTimeModels, OriginalGraphModels, NativeRecordModels)
+    suite = unittest.TestSuite(cls(name) for cls in (ReaderPathHistoryModels, FinalRereadSchedulingModels,
+        MatchTimeModels, OriginalGraphModels, NativeRecordModels)
         for name in sorted(cls.__dict__) if name.startswith("test_"))
     raise SystemExit(0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1)

@@ -1130,6 +1130,44 @@ diagnostic, not robust throughput or complete-receiver capacity evidence. The
 review does **not justify another full-reader attempt**. No test was rerun and
 no further execution is authorized; a defensible stronger repair remains needed.
 
+##### Final-reread guard scheduling (source only, execution held)
+
+The owner subsequently authorized a narrow **guard-scheduling change**, not an
+identical-observation optimization or permission to execute. The private
+`_reread_initial_graph_originals` now shares consecutive full guard groups:
+`guard, (ownership, guard, read, guard)` for every retained original. All1066
+rereads keep their order, exact native ownership arguments, byte-length caps and
+comparisons. Every remaining guard still performs all five structural scans;
+the two global roster passes, final ownership sweep and outer failure/UNKNOWN/
+enclosing-close behavior are unchanged. Exact-byte result refusal prevents
+custom equality/finalizer callbacks between shared successful boundaries.
+
+This changes the final-reread phase from21,320 to10,665 complete structural scans
+by source counting only. It is **not a measured speedup or CPU20 pass**. No Path
+aliasing, current-validity cache, new Owner, deadline or limit change is included.
+The six new `FinalRereadSchedulingModels` methods cover ordered1066-entry
+scheduling, guard/operation failures, post-operation mutation, nonexact bytes
+and failed-postguard result lifetime. They are **AUTHORED / UNEXECUTED**, not
+real-file/native/complete-graph acceptance; existing test bodies remain unchanged.
+
+Independent verdict: **APPROVE_EXACT_FINAL_REREAD_SCHEDULING_SOURCE_ONLY**;
+report SHA-256 `ab638fce8a00bf1b9df00fc3d044bc4a1843412f28efd05a76907503901edc2b`.
+Reviewed receiver SHA-256:
+`c823c79f69fefb86342dca436ffbff2d4bd686dfe24c482b29f0130c16df07fe`;
+original-graph-test SHA-256:
+`5e3c78abf398f795232666d5b23ec8463ff02e654589760542bf0736d982c60b`.
+
+The next requested scope is three serial offline invocations: these six controls,
+fresh source-bound synthetic fixture preparation, then the existing complete
+reader/close control. Old fixtures bind different receiver/test hashes and must
+not be relabelled. No new primitive diagnostic or app build is requested. The
+exact commit/tree/envelope must be frozen and independently inspected before
+fresh owner execution authorization. Nothing has run: no import, syntax check,
+test or CI. CPU20/AS512MiB/file32MiB/FD128/core0/wall30+kill2, both ordinary HOLDs,
+whole-JVM interlock and all Release gates remain. All earlier failed aggregates
+stay failed; prior successful packets stay consumed. Public app delivery0/4;
+**Release NOT_READY**.
+
 This section grants no receiving authority, provider/native qualification,
 budget admission or workflow activation. Authentic predecessor outcome/hash
 transport, same-job/run/attempt/selection/runner/boot continuity, a NEW owner and
