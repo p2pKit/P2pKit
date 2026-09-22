@@ -4474,6 +4474,52 @@ report SHA-256
 Provider180/shared-final45, both ordinary HOLDs, the whole-JVM interlock and all
 Stage1/native/custody/scheduling/Release prerequisites remain unchanged.
 
+### Fixed native provider-file materialization
+
+[`hosted_cache_provider_prepare.py`](../../scripts/hosted_cache_provider_prepare.py)
+joins a supplied successful preparation outcome/hash to the existing descriptor,
+plan, native directory and original clock. Under its borrowed `Owner` it creates
+only fixed `provider`/`provider-home` children, writes the supplied pinned bundle,
+syncs/closes it and independently rereads its bytes and native identity. Separate
+worker/clock source rosters are read and rechecked before the full supervisor
+request is returned privately. Source bindings are not source/tool admission.
+
+Static review found two real deadline defects in the unexecuted preimage:
+the smaller worker cutoff was not enforced during materialization, and the last
+Owner operation followed the final native check. Both are corrected: preparation
+uses `min(workerCutoff, originalEnd - 45s)` and postchecks the final Owner operation.
+Neither correction changes the original provider180/shared-final45. The
+descriptor's `ticksPerSecond` spelling was already correct. One fixture cleanup
+defect was also corrected before execution; no preimage test failure is claimed.
+
+The [26 focused controls](../../scripts/tests/hosted-cache-provider-prepare-test.py)
+passed once at **2026-09-22T03:38:11Z–03:38:13Z**: tests0.388s/wall1.647s,
+command/wrapper0, guard8/unexpected0/ResourceWarnings0 and matching pre/post
+integrity. They use tiny real private POSIX files and the maintained AST-selected
+Owner+LIMIT, with modeled plan/admission/outcome/clock/bundle metadata. Actual
+source bytes are read, not executed as providers. The real pinned metadata
+separately rejects the synthetic bundle. There is no Windows materialization
+coverage, provider execution, acquisition/download or complete-controller import.
+
+The isolated Python3.12 invocation retained UID/GID65534, cleared environment/
+groups, no-new-privileges, CPU20s/AS512MiB/wall30+kill2/file32MiB/FD128/core0 and
+the existing pre-import filesystem/process/network/native/stdin guards. The held
+complete1066 receiver was physically excluded. Original capture-manifest SHA-256:
+`f8469f11e9c55febb87a5da11b30f9d2125e8ca5faf53daeadb3fb1b2a363c06`.
+Independent source/original-result verdict:
+**APPROVE_EXACT_DORMANT_PROVIDER_PREPARE_SOURCE_AND_ORIGINAL_26_OFFLINE_PASSES_ONLY**;
+report SHA-256
+`78a340a6b886f3d7e1e155f8cef36c84bcab31f4ca994105749ad18cdc03a957`.
+
+This is **not the native preparation command, an admitted Action or a downloader**.
+The fixed caller still needs genuine native admission and exact original
+descriptor/staging/plan rederivation, public bundle acquisition, source/tool/service
+authority, known enclosing Owner/Action returns and ACK-bound readback/custody.
+The new carrier explicitly leaves Owner close pending and provider execution
+unperformed. No production caller or workflow is connected by this increment.
+Both ordinary HOLDs, Stage1/complete1066, whole-JVM interlock, bootstrap5400
+UNADMITTED/UNMEASURED and all native/custody/scheduling/Release prerequisites remain.
+
 ## Verification and remaining qualification
 
 Focused offline commands (not a claim they ran on a particular host):

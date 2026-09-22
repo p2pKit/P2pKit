@@ -201,6 +201,25 @@ active/waiting runs, and no bootstrap/initial-recipient execution registration.
 The four preview artifacts remain unexpired; anonymous Releases still contain
 RC2/RC3 without app assets. **Public development delivery remains0/4.**
 
+## Native provider-file preparation: reviewed offline increment
+
+The previously unfinished
+[materializer](../../scripts/hosted_cache_provider_prepare.py) now has independent
+implementation/result review and **26/26** focused offline passes, executed once
+at03:38:11–03:38:13UTC. Two static deadline findings were repaired before that
+invocation; the [cache guide](../testing/hosted-dependency-cache.md#fixed-native-provider-file-materialization)
+binds exact scope, limits, captures and verdict. Tiny POSIX file writes/readbacks
+are real; plan/admission/outcome/clock/bundle inputs are models. No accepted test
+suite or successful app build was repeated, and no provider bundle was downloaded.
+
+This completes only fixed file/request materialization under a borrowed Owner,
+not the native readmission/preparation command, actual Action or acquisition path.
+The enclosing Owner/Action return and provider/custody qualification remain open.
+The earlier reader commit `fba24a179a58cafd687f1b6a4cbd76794233df45` is now mapped
+to #437/#424 with exact posted-body readback. Source/GitHub refresh at03:27:07UTC
+still found unchanged main, all existing gates, no campaign PR/active runs and
+four unexpired preview artifacts. **Public development delivery remains0/4.**
+
 ## Remaining execution blockers, in order
 
 1. **Finish/qualify this real runner connection:** its Node30 and Python18 model
