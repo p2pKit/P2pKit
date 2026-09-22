@@ -71,8 +71,7 @@ admitted roster with the fixed stdin reader uses one `C` byte, never Windows
 runtime qualification. The paused reader/entry WIP has not been changed,
 executed or promoted by this adapter.
 
-**New adapter and focused controls are UNEXECUTED / NOT_WORKFLOW_WIRED.** Their
-independent verdict is
+**The adapter remains NOT_WORKFLOW_WIRED.** Its implementation-review verdict is
 **APPROVE_EXACT_NODE_BRIDGE_SOURCE_ONLY_NOT_EXECUTION_OR_HOSTED_ACCEPTANCE**,
 report SHA-256
 `8fde20b5f1a362e21d5f44bc252f985f7f1ac30e7b2a657c487ca4317d4c41a3`.
@@ -87,15 +86,42 @@ so an unresolved model Promise cannot quietly exit0. The containing commit's
 issue record binds the final preservation and any separate offline request.
 The [17 authored controls](../../scripts/tests/hosted-cache-provider-node-bridge-test.cjs)
 replace process/timer/clock boundaries with explicit models; they are not
-seventeen actual child/Windows/provider tests. No Node syntax check, import or test
-has been run for this increment. The earlier two authorized Node invocations
-are consumed and are not permission to execute this new source/profile.
+seventeen actual child/Windows/provider tests. They were unexecuted at the source
+checkpoint. After a separate exact one-invocation owner authorization, all
+**17/17 passed at 01:39:44 UTC**, original command/wrapper exit0, empty stderr,
+guard4/unexpected0 and matching pre/post input hashes. Source was exactly
+`4207bad2d932541eef2465c036502266d22f53dd`, tree
+`ec4c219312d5d344e485a0bc10568cc25cd61951`; request-manifest SHA-256
+`c0694e853a2ca77cd118f7b8b57878d4a36e1216cbe7e3f38b2de50d20ba1207`.
+Original capture-manifest SHA-256:
+`65d58b276301540db8459d0b14094cd61c5995a4fe20baeb856cfe96e05f540e`.
+Independent read-only result verdict:
+**ACCEPT_EXACT_ORIGINAL_OFFLINE_BRIDGE_MODEL_RESULT_ONLY**. No rerun occurred.
+This one authorization is now consumed, as are the two earlier reducer
+invocations. No further Node startup, provider or hosted execution is authorized.
 
 This module is not yet a GitHub JavaScript Action or an admitted CLI. A closed
 environment or matching supplied source hashes cannot authenticate the caller,
 Node startup, tools or original runtime-service credentials. Its return always
 leaves RAW/outer-Node/runner/provider acceptance unestablished. No ordinary
 consumer or publisher is changed to accept this partial result.
+
+## Narrow follow-up: the Windows launch refusal
+
+The committed no-stdin roster makes the bridge refuse Windows before spawning.
+Only the four already-recorded reader/entry launch/retirement defects were
+therefore resumed as actual execution blockers. The six original paused files
+remain unchanged in the integration worktree and are preserved in WIP ancestry
+at `27330dc4f30e3bf64b624e7dcf4f5313a1b5ffb7`; R2 source is isolated.
+The [cache guide](../testing/hosted-dependency-cache.md) records the post-poll
+work-fence, lifecycle-phase, terminal-binding and wrong-return retirement repairs.
+This is not a broader cancellation/security review. New reader45/entry52 methods
+and the existing six focused independent controls remain **UNEXECUTED** for R2;
+the Node17 pass does not qualify this changed composition.
+Independent review returned
+**APPROVE_EXACT_FOUR_R1_SOURCE_REPAIRS_ONLY_NOT_EXECUTION_OR_WINDOWS_QUALIFICATION**,
+report SHA-256
+`ea2caf3de467db8444767a11e48aab57e01716346ae81b654e370d63a2fc9e16`.
 
 ## Remaining execution blockers, in order
 

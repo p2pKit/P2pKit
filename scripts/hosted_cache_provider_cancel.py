@@ -64,6 +64,19 @@ class OriginalStdinCancel:
         self._dup_output = None  # Retained even if a native call fails after its effect.
         self._acquired = False
         self._windows = window.clock.role == "windows-x64"
+        self._retired = self._retired_original = None
+
+    def _phase(self):
+        return (self._started, self._active, self._sealed, self._retire_started,
+                self._close_attempted, self._closed, self._acquired)
+
+    @staticmethod
+    def _advanced(boundary, index):
+        # Each flag changes only False -> True at one fixed source-owned point.
+        # Derive expectations from the saved phase, never callback-mutated fields.
+        phase = boundary[2]
+        L.require(phase[index] is False, "PROVIDER_CANCEL_PHASE_REPEAT")
+        return (*boundary[:2], phase[:index] + (True,) + phase[index + 1:])
 
     def _failed(self, error):
         if self._primary is None:
@@ -81,7 +94,7 @@ class OriginalStdinCancel:
             if not retiring and self._primary is not None:
                 raise self._primary
             self._busy, entered = True, True
-            yield self._primary, self._faults
+            yield self._primary, self._faults, self._phase()
         except BaseException as error:
             self._failed(error)
             raise self._primary
@@ -97,6 +110,7 @@ class OriginalStdinCancel:
                 self._streams is self._streams_original and self._native is self._native_original and
                 self._pin == self._pin_original and self._identity is self._identity_original and
                 self._handle == self._handle_original and self._wire_seen is self._wire_original and
+                all(actual is expected for actual, expected in zip(self._phase(), boundary[2])) and
                 self._windows is (self.window.clock.role == "windows-x64"),
                 "PROVIDER_CANCEL_ORIGINALS_CHANGED")
         same()
@@ -160,8 +174,9 @@ class OriginalStdinCancel:
 
     def start(self):
         with self._operation() as boundary:
-            L.require(not self._started and not self._sealed, "PROVIDER_CANCEL_START_ONCE")
+            L.require(all(value is False for value in boundary[2]), "PROVIDER_CANCEL_START_ONCE")
             self._started = True
+            boundary = self._advanced(boundary, 0)
             self._fence(boundary)
             L.require(sys.implementation.name == "cpython" and sys.version_info[:2] == (3, 12) and
                 ((os.name == "nt" and self._windows) or (os.name == "posix" and not self._windows)),
@@ -192,12 +207,14 @@ class OriginalStdinCancel:
                 L.require(type(status) is int and status != 0 and type(self._pin) is int and
                     0 < self._pin < PTR(-1).value and self._pin != self._handle, "PROVIDER_CANCEL_DUPLICATE")
                 self._acquired = True
+                boundary = self._advanced(boundary, 6)
             else:
                 self._identity = self._identity_original = self._posix_identity(self._call(boundary, os.fstat, 0))
                 self._fence(boundary)
                 self._pin = self._pin_original = os.dup(0)
                 L.require(type(self._pin) is int and self._pin > 2, "PROVIDER_CANCEL_DUPLICATE")
                 self._acquired = True
+                boundary = self._advanced(boundary, 6)
             self._fence(boundary)
             self._objects(boundary)
             L.require(self._call(boundary, os.get_blocking, 0) is True, "PROVIDER_CANCEL_INITIAL_MODE")
@@ -209,10 +226,14 @@ class OriginalStdinCancel:
             self._modes(boundary)
             self._objects(boundary)
             self._active = True
+            boundary = self._advanced(boundary, 1)
+            self._fence(boundary)
 
     def poll(self):
         with self._operation() as boundary:
-            L.require(self._active and not self._sealed, "PROVIDER_CANCEL_NOT_ACTIVE")
+            L.require(all(actual is expected for actual, expected in
+                zip(boundary[2], (True, True, False, False, False, False, True))),
+                "PROVIDER_CANCEL_NOT_ACTIVE")
             self._objects(boundary)
             self._modes(boundary)
             self._objects(boundary)
@@ -246,18 +267,27 @@ class OriginalStdinCancel:
         with self._operation(retiring=True) as boundary:
             L.require(not self._retire_started, "PROVIDER_CANCEL_RETIRE_ONCE")
             self._retire_started = self._sealed = True
+            boundary = self._advanced(self._advanced(boundary, 2), 3)
             self._objects(boundary)
             self._fence(boundary)
             self._close_attempted = True  # Never retry even if the native result is ambiguous.
+            boundary = self._advanced(boundary, 4)
             if self._windows:
                 status = self._native.CloseHandle(self._pin)
                 L.require(type(status) is int and status != 0, "PROVIDER_CANCEL_PIN_CLOSE")
             else:
                 os.close(self._pin)
             self._closed = True  # Actual close return, before the post-close original fence.
+            boundary = self._advanced(boundary, 5)
             self._fence(boundary)
             if self._primary is not None:
                 raise self._primary
+            # Immutable source-owned terminal bindings. Later checks never query
+            # the retired pin, reread its modes or sample a native clock.
+            self._retired = self._retired_original = (
+                self._window_original, self._streams_original, self._native_original,
+                self._pin_original, self._identity_original, self._handle_original,
+                self._wire_original, self._dup_output, self._thread, self._windows, boundary[2])
             return self._wire_seen
 
     def check_retired(self):
@@ -265,3 +295,15 @@ class OriginalStdinCancel:
         L.require(self._sealed and self._retire_started and self._close_attempted and self._closed and
             not self._busy and self._primary is None and self._faults == 0,
             "PROVIDER_CANCEL_RETIRE_INCOMPLETE")
+        retired = self._retired
+        L.require(type(retired) is tuple and len(retired) == 11 and retired is self._retired_original,
+                  "PROVIDER_CANCEL_RETIRE_BINDING")
+        window, streams, native, pin, identity, handle, wire, output, thread, windows, phase = retired
+        L.require(self.window is self._window_original is window and
+            self._streams is self._streams_original is streams and
+            self._native is self._native_original is native and
+            self._pin is self._pin_original is pin and self._identity is self._identity_original is identity and
+            self._handle is self._handle_original is handle and self._wire_seen is self._wire_original is wire and
+            self._dup_output is output and self._thread is thread and self._windows is windows and
+            all(actual is expected for actual, expected in zip(self._phase(), phase)),
+            "PROVIDER_CANCEL_RETIRE_BINDING")

@@ -399,8 +399,38 @@ class EntryModels(unittest.TestCase):
 
     def test_wrong_actual_return_is_not_replayable_as_original_success(self):
         result = self.entry.run()
-        self.assertIsNotNone(caught(lambda: self.entry.exit_code(replace(result), None)))
-        self.assertIsNotNone(caught(lambda: self.entry.exit_code(result, None)))
+        self.assertIs(self.entry._completed.control, self.control)
+        self.assertFalse(self.control.closed)
+        error = caught(lambda: self.entry.exit_code(replace(result), None))
+        self.assertTrue(self.control.closed)
+        self.assertEqual(self.control.closes, 1)
+        self.assertIs(caught(lambda: self.entry.exit_code(result, None)), error)
+        self.assertEqual(self.control.closes, 1)
+
+    def test_copied_completion_cannot_select_foreign_control_for_retirement(self):
+        result = self.entry.run()
+        foreign = Control()
+        self.entry._completed = replace(self.entry._completed, control=foreign)
+        error = caught(lambda: self.entry.exit_code(result, None))
+        self.assertEqual(foreign.closes, 0)
+        self.assertEqual(self.control.closes, 0)  # Missing original binding stays incomplete.
+        self.assertIs(caught(lambda: self.entry.exit_code(result, None)), error)
+
+    def test_poll_crossing_work_fence_prevents_first_root_acquisition(self):
+        polls, effects = [], []
+        def poll():
+            if len(self.signals.sets) == 3 and not self.opens:
+                polls.append("all-handlers-installed")
+                if len(polls) == 2:
+                    effects.append("work235-expired-hard280-not-expired")
+                    self.model.raw = 236 * clocks.NS
+                    self.model.local = 236.0
+        self.control.on_poll = poll
+        self.assertEqual(self.call(), 66)
+        self.assertEqual(effects, ["work235-expired-hard280-not-expired"])
+        self.open_directory.assert_not_called()
+        self.fixture.scope_factory.assert_not_called()
+        self.assertEqual(self.control.closes, 1)
 
     def test_late_exit_cannot_be_retried_after_clock_restore(self):
         result = self.entry.run()

@@ -4158,12 +4158,16 @@ encrypted custody or workflow activation is added. Original native/file/job
 limits, both ordinary HOLDs and the whole-JVM fail-only interlock are unchanged.
 Bootstrap5400 stays UNADMITTED/UNMEASURED; no Release acceptance follows.
 
-### Fixed original-stdin cancellation — unreviewed source preparation
+### Fixed original-stdin cancellation — four source repairs reviewed
 
 The new [fixed reader](../../scripts/hosted_cache_provider_cancel.py) and outer
-entry integration are **UNREVIEWED / UNEXECUTED / DORMANT**, not an admitted Node
-bridge or qualified cancellation path. Independent design/source-contract review
-alone did not approve this implementation. The
+entry integration remain **UNEXECUTED / DORMANT**, not an admitted Node bridge or
+qualified cancellation path. Independent implementation review of the four R1
+execution-blocker repairs returned
+**APPROVE_EXACT_FOUR_R1_SOURCE_REPAIRS_ONLY_NOT_EXECUTION_OR_WINDOWS_QUALIFICATION**;
+report SHA-256
+`ea2caf3de467db8444767a11e48aab57e01716346ae81b654e370d63a2fc9e16`.
+This is narrower than complete implementation/runtime acceptance. The
 [focused reader controls](../../scripts/tests/hosted-cache-provider-cancel-test.py)
 and added entry controls are authored but have not yet run.
 
@@ -4191,7 +4195,27 @@ supervisor. An OS signal delivered inside a wire poll must not be cleared by a
 false/no-byte return. Known root/scope retirement remains separately bounded;
 final polling, once-only pin close and post-close checks use the original end.
 The completed entry retains its actual control owner, not a later replacement
-chosen from diagnostics. Only direct terminal-state checks follow pin retirement.
+chosen from diagnostics. The control's terminal checks are direct retained-binding
+checks without pin/mode reads. The entry still performs its existing original
+post-close RAW fences; no new clock or deadline is created.
+
+The R1 source review requested four changes: recheck the work fence after each
+wire poll; retain lifecycle phase expectations across callbacks; retain sealed
+original bindings for pure terminal checks; and capture the original completed
+control before rejecting a wrong caller return. R2 addresses only those existing
+execution-blocking findings, not a broader cancellation review. Per-operation
+phase expectations advance only at fixed source-owned transitions. A retained
+terminal tuple cannot be replaced by querying a closed pin. The entry's original
+binding closure refuses a copied completion before selecting its fields.
+
+The original six R1 files remain untouched in the integration worktree and are
+also preserved in a separate WIP ancestry commit. R2 is developed in an isolated
+worktree. The reader now has45 authored methods and the entry52; all97 are still
+**UNEXECUTED** for this revision. The four existing independent regressions and
+two model-classification anchors also remain authored/unexecuted. Earlier entry/
+supervisor results and the Node bridge's17 controls do not execute this changed
+reader/entry composition. Exact implementation review belongs to this revision's
+issue record; no native Windows or hosted acceptance follows from source repair.
 
 This cannot preempt blocked native calls, flushes or the existing retirement
 sequence. The future original Node parent must retain the writer and its own
@@ -4205,8 +4229,9 @@ FULL3600/Desktop1800 and unadmitted/unmeasured Bootstrap5400 remain unchanged.
 
 ### Supplied Node receipt reducer — bounded controls executed
 
-The [Node reducer](../../scripts/hosted-cache-provider-node-return.cjs) is
-**DORMANT / NO_CALLER**, not the asynchronous runner bridge.
+The [Node reducer](../../scripts/hosted-cache-provider-node-return.cjs) was
+**DORMANT / NO_CALLER** at its original source checkpoint. The later asynchronous
+adapter below now calls it, but there is still no admitted Action/workflow caller.
 It consumes supplied Buffer bytes and event values only; it does not spawn,
 kill, register callbacks, read files/environment, observe clocks, acquire
 credentials, forward action commands or publish anything. The future original
@@ -4282,11 +4307,33 @@ allowance or permission for changed-source/profile tests, retries, native
 provider execution or workflow activation. Further Node execution needs its
 own legitimate reviewed authorization; ordinary/Python limits are unchanged.
 
-There is still no runnable Node bridge, provider service/source/tool admission,
+There is still no admitted runnable Node Action, provider service/source/tool admission,
 complete1066/current receiving authority, productive bootstrap or encrypted
 export/workflow qualification. Both ordinary HOLDs and the whole-JVM interlock
 remain; provider180/shared-final45, NativeFile900/Snapshot576MiB and existing
 job limits are unchanged. Bootstrap5400 stays UNADMITTED/UNMEASURED.
+
+### Original asynchronous Node adapter — focused offline result
+
+The [fixed child adapter](../../scripts/hosted-cache-provider-node-bridge.cjs)
+now supplies the original asynchronous spawn/pipe/exit/close wiring. At exact
+commit `4207bad2d932541eef2465c036502266d22f53dd`, a separately owner-authorized
+single invocation passed all **17/17 focused model controls** at01:39:44UTC on
+22September: original command/wrapper exit0, empty stderr, guard4/unexpected0
+and identical pre/post input hashes. Independent original-result inspection
+returned **ACCEPT_EXACT_ORIGINAL_OFFLINE_BRIDGE_MODEL_RESULT_ONLY**. No actual
+provider, Python child, Windows pipe, native clock or Actions runner was executed.
+The exact request and output hashes are in the
+[delivery checkpoint](../maintenance/sample-delivery-critical-path-2026-09-22.md).
+That one Node authorization is consumed; it is not a retry or general allowance.
+
+There is no new Action, CLI or workflow caller. The adapter still requires
+prestart source/tool/service authority and original post-close RAW readback.
+It refuses Windows before spawn without the fixed stdin-reader roster; merely
+adding that source name is not reviewed implementation or native qualification.
+The reader/entry's separate R2 source repairs and unexecuted controls do not
+inherit the adapter model pass. No timeout becomes retirement, and no original
+runner/provider outcome becomes established through a matching supplied ACK.
 
 ## Verification and remaining qualification
 

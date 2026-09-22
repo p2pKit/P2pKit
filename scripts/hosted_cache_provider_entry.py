@@ -27,6 +27,7 @@ class _EntryReturn:
     error: BaseException | None = field(repr=False)
     check: object = field(repr=False)
     control: object = field(repr=False)
+    original: object = field(repr=False)
 
 
 class _SupervisorEntry:
@@ -103,6 +104,10 @@ class _SupervisorEntry:
                 wire_seen = control.poll()
                 if wire_seen:
                     self._signalled = True  # Never overwrite an OS signal delivered inside poll().
+                same()
+                # The poll spends the hard window; recheck the work/final fence
+                # before allowing the next root/native side effect.
+                observed = window.check(work=not final)
             same()
             if not final:
                 if self._primary is not None:
@@ -224,7 +229,7 @@ class _SupervisorEntry:
                 if terminal:
                     same()
                     control.check_retired()
-                    return  # No handler/mode/native reader after pin retirement.
+                    return  # Pure bindings here; exit_code still checks original RAW.
                 for number, previous in handlers:
                     L.require(signal.getsignal(number) is previous, "PROVIDER_ENTRY_SIGNAL_RESTORE_CHANGED")
                 checked(final=True)
@@ -242,7 +247,13 @@ class _SupervisorEntry:
                     len(errors) == len(prefix) and all(a is b for a, b in zip(errors, prefix)),
                     "PROVIDER_ENTRY_COMPLETION_CHANGED")
             completed()
-            pending = _EntryReturn(result, run_error, completed, control)
+            def original(supplied):
+                # Capture actual locals before validating the caller's return.
+                # A copied completion cannot redirect retirement to its fields.
+                L.require(supplied is completion and threading.get_ident() == thread,
+                          "PROVIDER_ENTRY_ORIGINAL_RETURN")
+                return result, run_error, control
+            pending = _EntryReturn(result, run_error, completed, control, original)
             completed()
             completion = pending
             self._completed = completion  # No following callback before actual return.
@@ -264,9 +275,10 @@ class _SupervisorEntry:
             L.require(not self._exit_started, "PROVIDER_ENTRY_EXIT_ONCE")
             self._exit_started = True
             completion = self._completed
-            L.require(type(completion) is _EntryReturn and result is completion.result and error is completion.error,
+            L.require(type(completion) is _EntryReturn, "PROVIDER_ENTRY_EXIT_INCOMPLETE")
+            original_result, original_error, control = completion.original(completion)
+            L.require(result is original_result and error is original_error,
                       "PROVIDER_ENTRY_EXIT_INCOMPLETE")
-            control, original_error = completion.control, completion.error
             completion.check()
             code = self.owner.exit_code(result, error)
             completion.check()

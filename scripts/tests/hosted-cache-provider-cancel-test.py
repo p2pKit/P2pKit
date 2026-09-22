@@ -213,6 +213,40 @@ class CancelModels(unittest.TestCase):
         self.assertEqual(self.model.duplicates, [])
         self.factory.assert_not_called()
 
+    def test_raw_phase_mutation_refuses_before_read_and_cannot_reacquire(self):
+        for name, changed in (("_sealed", True), ("_started", False)):
+            with self.subTest(name=name):
+                self.on_raw = lambda: None
+                self.start()
+                def mutate():
+                    setattr(self.owner, name, changed)
+                self.on_raw = mutate
+                error = caught(self.owner.poll)
+                self.assertEqual(self.model.reads, [])
+                self.assertIs(caught(self.owner.start), error)
+                self.assertEqual(self.model.duplicates, [("dup", 0)])
+
+    def test_phase_mutation_inside_original_read_cannot_pass_its_post_fence(self):
+        self.start()
+        self.model.on_read = lambda: setattr(self.owner, "_active", False)
+        error = caught(self.owner.poll)
+        self.assertEqual(self.model.reads, [(0, 2)])
+        self.assertIs(caught(self.owner.poll), error)
+        self.assertEqual(self.model.reads, [(0, 2)])
+
+    def test_retired_original_bindings_refuse_changes_without_native_queries(self):
+        for name, changed in (("window", object()), ("_pin", 99), ("_wire_seen", True)):
+            with self.subTest(name=name):
+                self.start()
+                self.owner.retire()
+                self.owner.check_retired()
+                before = list(self.model.events)
+                setattr(self.owner, name, changed)
+                with self.assertRaises(L.ProviderLaunchError):
+                    self.owner.check_retired()
+                self.assertEqual(self.model.events, before)
+                self.assertEqual(self.model.closes, [("close", 7)])
+
     def test_posix_socket_original_and_only_owned_pin_are_retained(self):
         self.start()
         self.assertFalse(self.owner.poll())
