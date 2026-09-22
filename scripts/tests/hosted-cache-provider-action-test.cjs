@@ -81,7 +81,7 @@ function model(f = fixture(), settings = {}) {
     for (const name of ['PRODUCER_OUTCOME', 'SAVE_PREPARE_OUTCOME', 'SAVE_OUTCOME', 'AFTER_SAVE_OUTCOME', 'PROBE_PREPARE_OUTCOME']) {
         env['P2PKIT_BOOTSTRAP_' + name] = 'success';
     }
-    for (const name of ['HANDOFF_SHA256', 'PRODUCER_RETURN_SHA256', 'SAVE_PREPARATION_SHA256', 'AFTER_SAVE_SHA256',
+    for (const name of ['HANDOFF_SHA256', 'PRODUCER_RETURN_SHA256', 'SAVE_PREPARATION_SHA256', 'SAVE_READBACK_SHA256', 'AFTER_SAVE_SHA256',
         'PROBE_PREPARATION_SHA256']) env['P2PKIT_BOOTSTRAP_' + name] = f.preparationHash;
     Object.assign(env, settings.env || {});
     const processModel = Object.assign(new EventEmitter(), {env, platform: f.windows ? 'win32' :
@@ -271,6 +271,11 @@ test('lookup carries only original bounded three-field outputs', async () => {
     await completeRun(m);
     assert.deepEqual({...((await pending).value.outputs)}, {'readback-sha256': m.f.readbackHash, ...m.f.readback.outputs});
     assert.equal(m.calls.http[0].url, m.f.bundle.url);
+    for (const child of m.calls.spawn) {
+        assert.equal(child.options.env.P2PKIT_BOOTSTRAP_SAVE_READBACK_SHA256, m.f.preparationHash);
+        assert(!Object.hasOwn(child.options.env, 'P2PKIT_BOOTSTRAP_PROBE_READBACK_SHA256'));
+    }
+    assert(!Object.hasOwn(m.calls.supervisor[0].environment, 'P2PKIT_BOOTSTRAP_SAVE_READBACK_SHA256'));
 });
 test('private JSON preserves full-width native integers', () => {
     const m = model(fixture('windows-x64'));

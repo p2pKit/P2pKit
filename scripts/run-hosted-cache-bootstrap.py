@@ -49,6 +49,7 @@ import hosted_cache_bootstrap_producer as producer
 import hosted_cache_bootstrap_producer_command as producer_command
 import hosted_cache_bootstrap_service_time as service_time
 import hosted_cache_bootstrap_staging as staging
+import hosted_cache_provider_readback as provider_readback
 import hosted_evidence as posix
 import hosted_test_query as query
 import hosted_windows_evidence as diagnostics
@@ -12057,7 +12058,7 @@ def after_save_originals(cancelled):
     failure = None
     claims = {name: os.environ.get("P2PKIT_BOOTSTRAP_" + name) for name in
         ("PRODUCER_OUTCOME", "HANDOFF_SHA256", "PRODUCER_RETURN_SHA256", "SAVE_PREPARE_OUTCOME",
-         "SAVE_PREPARATION_SHA256", "SAVE_OUTCOME")}
+         "SAVE_PREPARATION_SHA256", "SAVE_OUTCOME", "SAVE_READBACK_SHA256")}
 
     def environment():
         require(origin.wire.TOKEN_ENV not in os.environ and
@@ -12067,7 +12068,7 @@ def after_save_originals(cancelled):
                 ("PRODUCER_OUTCOME", "SAVE_PREPARE_OUTCOME", "SAVE_OUTCOME")),
                 "BOOTSTRAP_AFTER_SAVE_ORIGINAL_OUTCOMES")
         require(all(type(claims[name]) is str and re.fullmatch(r"[0-9a-f]{64}", claims[name]) for name in
-                ("HANDOFF_SHA256", "PRODUCER_RETURN_SHA256", "SAVE_PREPARATION_SHA256")),
+                ("HANDOFF_SHA256", "PRODUCER_RETURN_SHA256", "SAVE_PREPARATION_SHA256", "SAVE_READBACK_SHA256")),
                 "BOOTSTRAP_AFTER_SAVE_ORIGINAL_HASHES")
         cancellation(cancelled)
 
@@ -12206,6 +12207,8 @@ def after_save_originals(cancelled):
         prepared = origin.parse(prepared_raw)
         require(first.nanoseconds < origin.integer(prepared["providerWindow"]["hardEndNs"]),
                 "BOOTSTRAP_AFTER_SAVE_PROVIDER_RETURN_BOUND")
+        action_originals = {name: owner.read(prepared_directory, name, 16384) for name in provider_readback.ACTION_FILES}
+        provider_readback.validate_action_return(action_originals, prepared_raw, claims, first, phase="save", outputs={})
         handoff_raw = owner.read(directory, "save-handoff.json")
         require(origin.digest(handoff_raw) == claims["HANDOFF_SHA256"], "BOOTSTRAP_AFTER_SAVE_HANDOFF_HASH")
         index = origin.parse(handoff_raw)
@@ -12290,6 +12293,10 @@ def after_save_originals(cancelled):
                 owner.read(initializer, "producer-function-return.json") == producer_raw and
                 owner.read(prepared_directory, "save-preparation.json") == prepared_raw,
                 "BOOTSTRAP_AFTER_SAVE_FINAL_ORIGINALS_CHANGED")
+        _new_entry_owned(owner, prepared_directory, prepared_directory.path, prepared["directoryIdentity"])
+        for name, raw in action_originals.items():
+            require(owner.read(prepared_directory, name, 16384) == raw,
+                    "BOOTSTRAP_AFTER_SAVE_FINAL_PROVIDER_ORIGINALS_CHANGED")
         for directory_, name, reference, raw, bound in originals:
             _new_entry_owned(owner, directory_, directory_.path, reference["directoryIdentity"])
             if bound:
@@ -12366,7 +12373,7 @@ def after_save_originals(cancelled):
         owner.end()
         target = owner.open(path)
         _new_entry_owned(owner, target, path, target_identity)
-        retained = {"after-leaf.json": leaf_raw, "save-preparation.json": prepared_raw,
+        retained = {**action_originals, "after-leaf.json": leaf_raw, "save-preparation.json": prepared_raw,
             "provider-save.json": origin.encoded(provider), "readmission-close.json": origin.encoded({
                 **readmission_close, "admissionReturn": admission_return, "finalAdmissionReturn": final_return}),
             "after-parent-close.json": origin.encoded({**after_close, "leafSha256": origin.digest(leaf_raw),
@@ -12447,7 +12454,7 @@ def _probe_after_save_records(owner, directory, expected_hash, claims, admitted,
     require(returned["directory"] == str(directory.path) and returned["providerStorage"] == "UNPROVEN",
             "BOOTSTRAP_PROBE_AFTER_SAVE_DIRECTORY")
     old_claims = {name: claims[name] for name in ("PRODUCER_OUTCOME", "HANDOFF_SHA256", "PRODUCER_RETURN_SHA256",
-                                               "SAVE_PREPARE_OUTCOME", "SAVE_PREPARATION_SHA256", "SAVE_OUTCOME")}
+        "SAVE_PREPARE_OUTCOME", "SAVE_PREPARATION_SHA256", "SAVE_OUTCOME", "SAVE_READBACK_SHA256")}
     clock = origin.clock_value(first.clock)
 
     def nonacceptance(value):
@@ -12477,7 +12484,7 @@ def _probe_after_save_records(owner, directory, expected_hash, claims, admitted,
         require(origin.encoded(observations[name]) == origin.encoded(index[name]) ==
                 origin.encoded(origin.admitted_value(admitted)[name]), "BOOTSTRAP_PROBE_OBSERVATIONS_IDENTITY")
     names = ("after-leaf.json", "save-preparation.json", "provider-save.json", "readmission-close.json",
-             "after-parent-close.json")
+             "after-parent-close.json", *provider_readback.ACTION_FILES)
     require(type(observations["files"]) is dict and set(observations["files"]) == set(names),
             "BOOTSTRAP_PROBE_OBSERVATIONS_ROSTER")
     retained = {name: owner.read(directory, name) for name in names}
@@ -12492,6 +12499,8 @@ def _probe_after_save_records(owner, directory, expected_hash, claims, admitted,
     require(observations["providerEndNs"] == prepared["providerWindow"]["hardEndNs"] and
             owner.read(prepared_directory, "save-preparation.json") == retained["save-preparation.json"],
             "BOOTSTRAP_PROBE_ORIGINAL_SAVE_PREPARATION_CHANGED")
+    provider_readback.validate_action_return({name: retained[name] for name in provider_readback.ACTION_FILES},
+        retained["save-preparation.json"], old_claims, origin.clocks.Reading(first.clock, post_ns), phase="save", outputs={})
     provider = origin.parse(retained["provider-save.json"])
     require(retained["provider-save.json"] == origin.encoded(staging.cache.provider_observation(
             index["plan"], "save", original_outcome=claims["SAVE_OUTCOME"], outputs={})) and
@@ -12580,7 +12589,8 @@ def _probe_preparation_record(raw, expected_hash, claims, admitted, plan, propos
             value["budgetAcceptance"] == "NOT_ADMITTED" and value["exportSaveAuthority"] is False,
             "BOOTSTRAP_PROBE_PREPARATION_RECORD")
     base_claims = {name: claims[name] for name in ("PRODUCER_OUTCOME", "HANDOFF_SHA256", "PRODUCER_RETURN_SHA256",
-        "SAVE_PREPARE_OUTCOME", "SAVE_PREPARATION_SHA256", "SAVE_OUTCOME", "AFTER_SAVE_OUTCOME", "AFTER_SAVE_SHA256")}
+        "SAVE_PREPARE_OUTCOME", "SAVE_PREPARATION_SHA256", "SAVE_OUTCOME", "SAVE_READBACK_SHA256",
+        "AFTER_SAVE_OUTCOME", "AFTER_SAVE_SHA256")}
     for name in ("source", "github", "selection", "cacheCohort"):
         require(origin.encoded(value[name]) == origin.encoded(origin.admitted_value(admitted)[name]),
                 "BOOTSTRAP_PROBE_PREPARATION_IDENTITY")
@@ -12624,8 +12634,9 @@ def _probe_command(cancelled, *, after):
     proposal = owner = fence = result_raw = None
     failure = None
     base_names = ("PRODUCER_OUTCOME", "HANDOFF_SHA256", "PRODUCER_RETURN_SHA256", "SAVE_PREPARE_OUTCOME",
-                  "SAVE_PREPARATION_SHA256", "SAVE_OUTCOME", "AFTER_SAVE_OUTCOME", "AFTER_SAVE_SHA256")
-    names = base_names + (("PROBE_PREPARE_OUTCOME", "PROBE_PREPARATION_SHA256", "PROBE_OUTCOME") if after else ())
+                  "SAVE_PREPARATION_SHA256", "SAVE_OUTCOME", "SAVE_READBACK_SHA256", "AFTER_SAVE_OUTCOME", "AFTER_SAVE_SHA256")
+    names = base_names + (("PROBE_PREPARE_OUTCOME", "PROBE_PREPARATION_SHA256", "PROBE_OUTCOME",
+                          "PROBE_READBACK_SHA256") if after else ())
     claims = {name: os.environ.get("P2PKIT_BOOTSTRAP_" + name) for name in names}
     outputs = ({name: os.environ.get("P2PKIT_BOOTSTRAP_PROBE_" + suffix) for name, suffix in
                (("cache-primary-key", "PRIMARY_KEY"), ("cache-matched-key", "MATCHED_KEY"), ("cache-hit", "HIT"))}
@@ -12766,12 +12777,15 @@ def _probe_command(cancelled, *, after):
         original_after = owner.read(after_directory, "after-save-return.json")
         require(origin.digest(original_after) == claims["AFTER_SAVE_SHA256"], "BOOTSTRAP_PROBE_AFTER_SAVE_HASH")
         probe_directory = probe_raw = None
+        action_originals = {}
         if after:
             probe_directory = owner.open(original_path.with_name(original_path.name + "-probe"))
             probe_raw = owner.read(probe_directory, "probe-preparation.json")
             require(origin.digest(probe_raw) == claims["PROBE_PREPARATION_SHA256"], "BOOTSTRAP_PROBE_PREPARATION_HASH")
             require(first.nanoseconds < origin.integer(origin.parse(probe_raw)["providerWindow"]["hardEndNs"]),
                     "BOOTSTRAP_PROBE_PROVIDER_RETURN_BOUND")
+            action_originals = {name: owner.read(probe_directory, name, 16384) for name in provider_readback.ACTION_FILES}
+            provider_readback.validate_action_return(action_originals, probe_raw, claims, first, phase="lookup", outputs=outputs)
         handoff_raw = owner.read(directory, "save-handoff.json")
         require(origin.digest(handoff_raw) == claims["HANDOFF_SHA256"], "BOOTSTRAP_PROBE_HANDOFF_HASH")
         index = origin.parse(handoff_raw)
@@ -12882,6 +12896,8 @@ def _probe_command(cancelled, *, after):
         else:
             _new_entry_owned(owner, probe_directory, probe_directory.path, prepared["directoryIdentity"])
             require(owner.read(probe_directory, "probe-preparation.json") == probe_raw, "BOOTSTRAP_PROBE_FINAL_PREPARATION_CHANGED")
+            for name, raw in action_originals.items():
+                require(owner.read(probe_directory, name, 16384) == raw, "BOOTSTRAP_PROBE_FINAL_PROVIDER_ORIGINALS_CHANGED")
             readmission_close = close_known()
             local = staging._local(time.monotonic())
             began = origin.clocks.validate_reading(origin.clocks.observe())
@@ -12895,6 +12911,8 @@ def _probe_command(cancelled, *, after):
             provider_raw = owner.write(target, "provider-probe.json", provider)
             require(provider["status"] == "REPORTED_EXACT_HIT", "BOOTSTRAP_PROBE_NO_QUALIFIED_EXACT_HIT")
             originals_raw = owner.write(target, "probe-preparation.json", probe_raw)
+            for name, raw in action_originals.items():
+                owner.write(target, name, raw)
             close_raw = owner.write(target, "readmission-close.json", {**readmission_close,
                 "admissionReturn": admission_return, "finalAdmissionReturn": final_return})
             result_raw = owner.write(target, "probe-result.json", {
@@ -12906,7 +12924,8 @@ def _probe_command(cancelled, *, after):
                 "firstPostProviderLocal": local_start, "providerEndNs": prepared["providerWindow"]["hardEndNs"],
                 "providerTimeScope": "POST_ACTION_UPPER_BOUND_ONLY_REQUIRES_TRUSTED_SEQUENTIAL_ORIGINAL_OUTCOME",
                 "observationWindow": fence.record(), "files": {"provider-probe.json": origin.digest(provider_raw),
-                    "probe-preparation.json": origin.digest(originals_raw), "readmission-close.json": origin.digest(close_raw)},
+                    "probe-preparation.json": origin.digest(originals_raw), "readmission-close.json": origin.digest(close_raw),
+                    **{name: origin.digest(raw) for name, raw in action_originals.items()}},
                 "status": "REPORTED_EXACT_HIT_PRESENCE_ONLY", "cacheContents": "NOT_PROVEN", "resolverReuse": "NOT_PROVEN",
                 "providerDeadlineEnforcement": "NOT_ESTABLISHED", "providerRetirement": "NOT_OBSERVED",
                 "writerReturn": "PENDING_NOT_OBSERVABLE_BY_THIS_FILE", "budgetAcceptance": "NOT_ADMITTED",

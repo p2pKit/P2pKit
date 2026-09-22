@@ -30,10 +30,8 @@ SOURCE_NAME = "provider-source.cjs"
 PREPARED_NAME = "provider-prepared.json"
 READBACK_NAME = "provider-readback.json"
 WORKER_MARGIN_SECONDS = 30  # Inside the old end, not an added retirement budget.
-_BASE_CLAIMS = ("PRODUCER_OUTCOME", "HANDOFF_SHA256", "PRODUCER_RETURN_SHA256",
-                "SAVE_PREPARE_OUTCOME", "SAVE_PREPARATION_SHA256")
-_LOOKUP_CLAIMS = ("SAVE_OUTCOME", "AFTER_SAVE_OUTCOME", "AFTER_SAVE_SHA256",
-                  "PROBE_PREPARE_OUTCOME", "PROBE_PREPARATION_SHA256")
+_BASE_CLAIMS = readback.BASE_CLAIMS
+_LOOKUP_CLAIMS = readback.LOOKUP_CLAIMS
 
 
 def _bootstrap():
@@ -354,7 +352,9 @@ def operate(operation, phase, cancelled, *, node=None, tool_path=None, prepared_
             # and binding hashes leave this helper. Acceptance is still external.
             retained = owner.write(directory, READBACK_NAME, {"scope": "PROVIDER_NATIVE_READBACK_PENDING_HELPER_RETURN_V1",
                 "phase": phase, "preparedSha256": prepared_sha256, "preparationSha256": expected_hash,
+                "acknowledgement": acknowledgement.decode("ascii"),
                 "acknowledgementSha256": hashlib.sha256(acknowledgement).hexdigest(),
+                "python": str(L._path(sys.executable, first.clock.role)),
                 "workerRequestSha256": hashlib.sha256(value.worker_request).hexdigest(),
                 "outputs": dict(value.provider.outputs), "checkedNs": str(value.checked_ns),
                 "originalClaims": claims, "enclosingActionReturn": "NOT_OBSERVED", "providerAcceptance": "NOT_ESTABLISHED"})

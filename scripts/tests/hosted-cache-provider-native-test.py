@@ -410,6 +410,14 @@ class NativeControls(unittest.TestCase):
         self.assertEqual(output["providerAcceptance"], "NOT_ESTABLISHED")
         self.assertEqual(output["ownerClose"], "KNOWN_RESOURCE_CLOSE_ONLY")
         self.assertTrue((self.model.prepared_path / N.READBACK_NAME).is_file())
+        retained = (self.model.prepared_path / N.READBACK_NAME).read_bytes()
+        receipt = json.loads(retained)
+        self.assertEqual(receipt["acknowledgement"].encode("ascii"), b"MODEL_ORIGINAL_ACK")
+        self.assertEqual(receipt["acknowledgementSha256"], hashlib.sha256(b"MODEL_ORIGINAL_ACK").hexdigest())
+        self.assertEqual(receipt["python"], python)
+        self.assertEqual(hashlib.sha256(retained).hexdigest(), output["readbackSha256"])
+        self.assertNotIn("acknowledgement", output)
+        self.assertNotIn("python", output)
 
     def test_readback_rejects_changed_prepared_hash_before_provider_read(self):
         self.model.prepare()
@@ -444,6 +452,7 @@ class NativeControls(unittest.TestCase):
         request, _ = N.readback.outer._context(result["request"].encode("ascii"))
         self.assertEqual(request["phase"], "lookup")
         self.assertEqual(result["originalClaims"]["SAVE_OUTCOME"], "success")
+        self.assertEqual(result["originalClaims"]["SAVE_READBACK_SHA256"], model.claims["SAVE_READBACK_SHA256"])
         self.assertEqual(result["originalClaims"]["AFTER_SAVE_SHA256"], model.claims["AFTER_SAVE_SHA256"])
         self.assertTrue(model.prepared["providerRequest"]["lookupOnly"])
         model.claims["SAVE_OUTCOME"] = "failure"

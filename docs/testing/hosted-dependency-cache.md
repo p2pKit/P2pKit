@@ -4735,6 +4735,42 @@ capture. No test was rerun for review. This closes only the exact offline-model
 execution prerequisite; all native/Stage1/custody and activation boundaries
 above remain. The owner chat is not a personal GitHub stage/run authorization.
 
+### Original Action receipt handoff — source reviewed, execution held
+
+The Action's `readback-sha256` previously had no save/probe consumer. The
+native helper also retained only the supervisor ACK's hash, losing its original
+bytes after Node exited. The candidate retains that exact ACK and original
+Python spelling **privately** in the existing readback file. Public Action
+outputs are unchanged; no raw ACK, provider output or credential is published.
+
+The existing save/probe guards now require the original Action outcome and
+`SAVE_READBACK_SHA256` / `PROBE_READBACK_SHA256`, respectively. The prior save
+hash is carried into lookup preparation. A pure validator binds the two small
+prepared/readback metadata files, original ACK, preparation/request/plan/claims,
+lookup outputs and `ACK observed <= readback checked <= first post-Action RAW
+< original provider end`. Historical save validation uses its retained original
+post-Action RAW, not the later probe's start. Both metadata files are reread
+before the existing receiving Owner closes, retained in the existing evidence
+rosters and propagated through historical validation.
+
+This is **receipt consistency only**. It neither repeats the four-file native
+readback nor establishes later native/log/packet preservation, file identity,
+encrypted failure custody, cache contents, resolver reuse or hosted acceptance.
+Fresh descriptor/source admission and existing Owner closes remain mandatory.
+There is no new clock, deadline, workflow caller or Stage1 authority.
+
+Independent review returned
+**APPROVE_EXACT_R1_ACTION_RECEIPT_HANDOFF_SOURCE_ONLY**, report SHA-256
+`a65ed938455940132858ecf2c77e144ff36eed3e111763eca97cfce56e3ffacf`.
+This is not execution authorization or acceptance of unexecuted tests. The
+[22 new controls](../../scripts/tests/hosted-cache-provider-action-return-test.py)
+are **authored, unexecuted**: 16 supplied-record controls and six caller controls
+over AST-selected commands/memory files, with Action/admission boundaries modeled.
+Two affected native-helper controls and the Action lookup control were extended;
+no previously accepted test or build was rerun. CPU20, both ordinary HOLDs,
+the whole-JVM interlock, productive exit125, unqualified complete1066 and
+bootstrap5400 UNADMITTED/UNMEASURED remain unchanged.
+
 ## Verification and remaining qualification
 
 Focused offline commands (not a claim they ran on a particular host):

@@ -85,6 +85,7 @@ class World(prior["World"]):
                 P2PKIT_BOOTSTRAP_PROBE_PREPARATION_SHA256=result["probePreparationSha256"],
                 P2PKIT_BOOTSTRAP_PROBE_OUTCOME="success", P2PKIT_BOOTSTRAP_PROBE_PRIMARY_KEY=self.plan["key"],
                 P2PKIT_BOOTSTRAP_PROBE_MATCHED_KEY=self.plan["key"], P2PKIT_BOOTSTRAP_PROBE_HIT="true")
+            self.add_action_originals(self.probe_path, "PROBE")
             self.after = True
             self.reset_observation(1400, 5.0)
             self.classifications = []

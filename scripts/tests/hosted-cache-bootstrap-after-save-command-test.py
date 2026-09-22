@@ -4,7 +4,7 @@
 Selected actual Owner, admission composition, descriptor/mapper, supplied-input
 constructors, canonical-record checks, after-save traversal and private writers
 execute. Native admission, original allocation, source allowlist acquisition,
-elapsed clocks and files are explicit models. No full runner import or old
+elapsed clocks, Action receipts and files are explicit models. No full runner import or old
 producer/prepare test execution, native files, provider, download or Gradle.
 """
 import argparse
@@ -237,6 +237,22 @@ class World(prior["World"]):
             "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False}
         self.env.update(P2PKIT_BOOTSTRAP_SAVE_PREPARE_OUTCOME="success", P2PKIT_BOOTSTRAP_SAVE_OUTCOME="success")
         self.preparation_bytes()
+        self.action_calls = []
+        self.namespace["provider_readback"] = NS(ACTION_FILES=("provider-prepared.json", "provider-readback.json"),
+                                                validate_action_return=self.action_return)
+        self.add_action_originals(self.save_path, "SAVE")
+
+    def add_action_originals(self, path, prefix):
+        # Only the new caller seam is modeled here; the pure validator has its
+        # own focused controls. These are not real native/Action originals.
+        for name in self.namespace["provider_readback"].ACTION_FILES:
+            self.data[path]["files"][name] = encoded({"MODEL_ACTION_METADATA": name, "phase": prefix})
+        self.env["P2PKIT_BOOTSTRAP_" + prefix + "_READBACK_SHA256"] = digest(
+            self.data[path]["files"]["provider-readback.json"])
+
+    def action_return(self, originals, descriptor, claims, first, **options):
+        self.action_calls.append((dict(originals), descriptor, dict(claims), first, options))
+        self.hit("action-receipt:" + options["phase"])
 
     def add_file(self, path, raw, number):
         info = Info(self.ids(number), len(raw))
