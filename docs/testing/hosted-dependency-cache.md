@@ -1355,6 +1355,23 @@ connected and reviewed before dispatch; digest-only stdout cannot preserve
 original qualification evidence. Both ordinary HOLDs, productive exit125,
 bootstrap5400 UNADMITTED/UNMEASURED and all existing deadlines/Release gates remain.
 
+The routing packet subsequently ran **once** at commit
+`20082c97f4badecdf005b8270a91898ff72d7d94`, tree
+`a0c1be1defb36aef4228920d0c51d1dd44728c6e`: **18/18 focused methods and4/4
+guards PASS**, command/wrapper/outer exits0, CPU **1.073s**, wall **1.083s**.
+There were no retries, skips, unexpected denials or ResourceWarnings. Independent
+review approved the original offline results only, report SHA-256
+`546576187539442ece588f9a236034c4fcf13c49ed0076a38fabdcc708878ec1`.
+Request SHA-256:
+`a3106c70b2ac46cbdc3818b2a753f51b179a3b17631c28df1f0454c0933f367d`;
+inner/outer capture-manifest SHA-256:
+`f15dbe7529dba043ed2f28d5a6d11386d4be1ebcbfb78307b0c3bbc7edc29b61` /
+`43e828b8442bda160ebf22bf44882f449429f2ca07849ef191c820438e42ae5a`.
+The later-GitView prefix negative was added during source review, not after an
+executed failure. No accepted reader, initializer, continuity or preview was
+rerun. This resolves the exact modeled routing repair, **not native Windows,
+genuine init120, provider or custody qualification**.
+
 #### Stage1 canonical-context reader, not initialization authority
 
 The separate fixed `initial_recipient_context_record()` in
