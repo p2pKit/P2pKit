@@ -4791,7 +4791,7 @@ imports the maintained Stage1 discriminator; the shared prepare-save fixture
 omitted that global after the Stage1 cohort change. The narrow correction
 imports that same maintained module and supplies it to the selected-source
 namespace. It does not stub the discriminator, change production code or
-weaken any assertion. The correction is **unexecuted**.
+weaken any assertion. The correction was **unexecuted** at that source checkpoint.
 Independent fixture verdict:
 **APPROVE_EXACT_PREPARE_SAVE_INITIAL_IDENTITY_FIXTURE_BINDING_SOURCE_ONLY**,
 report SHA-256
@@ -4812,6 +4812,49 @@ controls, the two unstarted native-helper controls and the affected Action48
 suite. The unchanged16 pure controls retain only their historical supplied-record
 scope; no new22 pass, native/provider qualification, receiver acceptance or
 Release readiness is inferred. All HOLDs and limits above remain.
+
+#### Corrected Caller6 attempt — failed context-fixture dependency
+
+The fresh owner-authorized packet at
+`2ae2abb1cff84233d5b6804d70cced3f73ea4977`, tree
+`b81d112f4116dedcb9c16cad3be619195d61ae96`, ran once at
+**2026-09-22T19:41:39Z–19:41:43Z**. Request-manifest SHA-256:
+`f9ea87495a79a2f7ff7d7709866ac32e7b5624f5a61d2df3cef6adc91ea47541`.
+Only Caller6 ran: **FAILED (errors=6)**, all during fixture construction at
+`initialization.context_record`, before the intended caller assertions.
+The missing global was `_context_values`, not the previously corrected
+`initial_bootstrap`. Native2/Action48 again **did not start**; no retry occurred.
+The earlier16 pure controls were not rerun. Command/wrapper/invocation/outer exits
+were1/1/1/1; guard8/unexpected0/ResourceWarnings0 and matching271-line pre/post
+integrity captures do not establish a passing aggregate.
+
+Inner/outer capture-manifest SHA-256 values:
+`8917d123106a2243f0f7d1889882fd823b8146674ad709da0526df87e07e2b38` /
+`a3ff7066713f45944671f63f47dc2ea69ed18c2b4c3bfb4a5c4647cfe27323af`.
+Independent result verdict:
+**CONFIRM_EXACT_FAILED_CALLER6_AGGREGATE_AND_STOP_ONLY**, report SHA-256
+`ec4f9944704e85248ac99f7fc11f58da717133cb8854c15279afa17d7a29f007`.
+This request's authorization is consumed. Its original request/results remain
+preserved; neither failed packet may be resumed or relabelled as a pass.
+
+Source inspection traced the omission to the canonical-context refactor:
+`context_record` now calls `_context_values` and `_context_fields`, but the
+after-save AST fixture selected neither. The new **unexecuted** correction
+selects both maintained pure helpers and completes their existing producer
+namespace with the actual `ProducerError` class and `re` dependency. The latter
+support the UTC-error and Windows-path branches; their omission was found by
+source inspection, not an executed negative result. No production code,
+predicate, test body, assertion, limit, workflow or HOLD is changed. Any next
+execution requires independent exact-source review and fresh owner approval.
+
+Independent correction verdict:
+**APPROVE_EXACT_AFTER_SAVE_CONTEXT_HELPER_CLOSURE_SOURCE_ONLY**, report SHA-256
+`78046e08aa8f06df6d4842e737e698f75a9460793273b799b30b61f900666b84`.
+Reviewed fixture SHA-256:
+`b63c00eb48e3b7940355b31450548c2ec2f061c8ff245dd60cf8a51162339bb7`.
+This reviews the selected-source dependency closure, not a passing execution.
+The minimum next request remains Caller6, Native2 and Action48; no new controls,
+limit increase, full-receiver retry or rerun of the historical16 is included.
 
 ## Verification and remaining qualification
 

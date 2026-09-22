@@ -34,8 +34,10 @@ CUSTODY = selected("hosted_cache_bootstrap_custody.py", {"StagedEvidence", "_cap
 SAVE = selected("hosted_cache_bootstrap_save_set.py", {"SCOPE", "STATUSES", "AFTER_SCOPE", "AFTER_STATUS",
     "SaveSetEvidence", "_Window", "_AfterWindow", "before_save", "after_save", "_observe"})
 PROVIDER = selected("hosted_dependency_cache.py", {"OBSERVATION_SCOPE", "OUTCOMES", "RESTORE_OUTPUTS", "provider_observation"})
-INITIALIZER = selected("hosted_cache_bootstrap_initialization.py", {"properties", "context_record"})
-PRODUCER = selected("hosted_cache_bootstrap_producer.py", {"_path", "JVM_ARGUMENTS", "CONTEXT_FIELDS"})
+# Keep the pure helpers extracted from context_record in the selected namespace.
+INITIALIZER = selected("hosted_cache_bootstrap_initialization.py",
+    {"properties", "_context_values", "_context_fields", "context_record"})
+PRODUCER = selected("hosted_cache_bootstrap_producer.py", {"ProducerError", "_path", "JVM_ARGUMENTS", "CONTEXT_FIELDS"})
 HASH = selected("hosted_dependency_seed_files.py", {"_hash"})
 
 
@@ -59,7 +61,8 @@ class World(prior["World"]):
         self.files.__dict__["hashlib"] = hashlib
         exec(HASH, self.files.__dict__)
         exec(PROVIDER, self.staging.cache.__dict__)
-        producer = {"require": require, "PurePosixPath": PurePosixPath, "PureWindowsPath": PureWindowsPath,
+        producer = {"__name__": __name__, "require": require, "PurePosixPath": PurePosixPath,
+            "PureWindowsPath": PureWindowsPath, "re": prior["prior"]["re"],
             "parse": self.origin.parse, "digest": digest, "bootstrap": self.origin.bootstrap}
         exec(PRODUCER, producer)
         initializer = {"require": require, "producer": NS(**producer), "re": prior["prior"]["re"],
