@@ -4520,6 +4520,55 @@ unperformed. No production caller or workflow is connected by this increment.
 Both ordinary HOLDs, Stage1/complete1066, whole-JVM interlock, bootstrap5400
 UNADMITTED/UNMEASURED and all native/custody/scheduling/Release prerequisites remain.
 
+### Fixed credential-free native provider commands
+
+[`hosted_cache_provider_native.py`](../../scripts/hosted_cache_provider_native.py)
+adds three fixed private-pipe operations for the future Action: `window` reads
+the hash-bound old preparation issuance and observes RAW after its Owner closes;
+`prepare` reuses trusted-main admission and original graph/staging/plan checks,
+reads only acquired `provider-source.cjs`, calls the accepted materializer and
+retains private preparation; `readback` calls the accepted ACK-bound reader and
+retains the private result. `window` is **not admission**. None starts a provider,
+downloads a bundle, acquires credentials or authorizes a workflow. Stdout is for
+a private child pipe, never public logs or unrestricted `GITHUB_OUTPUT`.
+
+Three static preimage defects were corrected before the original test run:
+readback ordinary Owner operations now spend the remaining shared final45 rather
+than incorrectly stopping at end-minus45; the reader receives the launcher's
+original lexical Python spelling; and secondary errors cannot displace the
+retained primary Owner error, including UNKNOWN. Cancellation/failure checks and
+the original hard end remain. No executed preimage failure is claimed.
+
+The [30 focused controls](../../scripts/tests/hosted-cache-provider-native-test.py)
+passed once at **2026-09-22T04:06:10Z–04:06:12Z**: tests0.476s/wall1.451s,
+command/wrapper0, guard8/unexpected0/ResourceWarnings0 and matching pre/post
+integrity. Tiny private POSIX files and the maintained materializer are real;
+host/admission/graph/RAW/bundle metadata and successful provider-reader results
+are models. One full-width Windows/QPC descriptor case is data-only, not Windows
+file/native execution. The full controller is present **as source data**;
+only maintained Owner+LIMIT are AST-selected and compiled. There was no complete
+controller import; the held complete1066 receiver was physically absent.
+
+The isolated Python3.12 invocation retained UID/GID65534, cleared environment/
+groups, no-new-privileges, CPU20s/AS512MiB/wall30+kill2/file32MiB/FD128/core0
+and pre-import filesystem/process/network/native/stdin guards. Original capture
+manifest SHA-256:
+`c118c9259a2fd25e8d847b873e2e3b33736609793e4a1569c3f1fd2a2d6fbef8`.
+Independent verdict:
+**APPROVE_EXACT_PROVIDER_NATIVE_SOURCE_AND_ORIGINAL_30_OFFLINE_PASSES_ONLY**;
+report SHA-256
+`ee6f2de098726672d056abae0fa22a46d4c343ec3ce78eeafbcaa33e8a5e2afb`.
+
+The actual guarded CLI/native helper return is **unqualified**, and there is no
+workflow caller. Trusted-main admission still requires the recipient policy on
+main; this is **not a productive Stage1 initial-recipient bridge** or a fallback
+that relabels Stage1 identity as ordinary Admission. The proposed worker cutoff
+at oldEnd-minus30 is inside provider180/shared-final45, **not admitted/measured**.
+Genuine source/tool/runtime-service provenance, original child/Action/runner
+returns, post-last-owner RAW, failure custody and native/provider qualification
+remain. Both ordinary HOLDs, complete1066, whole-JVM interlock, NativeFile900/
+Snapshot576MiB and UNADMITTED/UNMEASURED bootstrap5400 are unchanged.
+
 ## Verification and remaining qualification
 
 Focused offline commands (not a claim they ran on a particular host):

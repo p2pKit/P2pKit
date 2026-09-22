@@ -220,6 +220,30 @@ to #437/#424 with exact posted-body readback. Source/GitHub refresh at03:27:07UT
 still found unchanged main, all existing gates, no campaign PR/active runs and
 four unexpired preview artifacts. **Public development delivery remains0/4.**
 
+## Native helper commands: reviewed offline increment
+
+The [fixed native helper](../../scripts/hosted_cache_provider_native.py) now joins
+old issuance observation, native preparation and ACK-bound readback in three
+credential-free private-pipe commands. Independent implementation/original-result
+review accepted **30/30** focused offline passes, executed once at
+04:06:10–04:06:12UTC. The
+[cache guide](../testing/hosted-dependency-cache.md#fixed-credential-free-native-provider-commands)
+binds the three static preimage repairs, exact original capture/review hashes and
+modeled scope. No accepted test suite, key procedure or app build was repeated.
+
+This source reuses **trusted-main admission only**, not the still-unfinished
+Stage1 receiving authority. The full controller was only source data; tests
+compiled Owner+LIMIT, not the complete controller. No guarded native CLI, real
+provider, Windows native files, Node Action or runner was executed. The proposed
+oldEnd-minus30 worker cutoff is not admitted/measured. Source availability and
+offline controls do not close the native/custody/scheduling acceptance gap.
+
+The three new Action files remain **UNREVIEWED / UNTESTED / NOT_WORKFLOW_WIRED**
+and outside this reviewed native-helper increment. No Action test file or Node
+startup is claimed. The next source work is that thin Action's actual lifecycle
+and private-return connection, not expansion of the paused cancellation review.
+All execution HOLDs remain; **public development delivery is still0/4**.
+
 ## Remaining execution blockers, in order
 
 1. **Finish/qualify this real runner connection:** its Node30 and Python18 model
