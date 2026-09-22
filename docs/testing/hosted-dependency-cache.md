@@ -4353,7 +4353,7 @@ The reader/entry's separate R2 source repairs and source-bound offline results d
 inherit the adapter model pass. No timeout becomes retirement, and no original
 runner/provider outcome becomes established through a matching supplied ACK.
 
-### Post-provider-close RAW continuation — unexecuted source
+### Post-provider-close RAW continuation — partial offline verification
 
 The separate [clock helper](../../scripts/hosted_cache_provider_clock.py) and
 updated [Node adapter](../../scripts/hosted-cache-provider-node-bridge.cjs) are
@@ -4391,15 +4391,31 @@ return and original runner outcome remain `NOT_OBSERVED`; provider acceptance
 remains `NOT_ESTABLISHED`. This narrower observation cannot lift any existing
 native/custody/runner qualification requirement.
 
-The [18 Python controls](../../scripts/tests/hosted-cache-provider-clock-test.py)
+At source checkpoint `2f442918d06c9ff0f824dd0e006da96a18587edb`, tree
+`4c46b9a9ca998aba86f05d7fac106323faced92b`, the
+[18 Python controls](../../scripts/tests/hosted-cache-provider-clock-test.py)
 and updated [30 Node model controls](../../scripts/tests/hosted-cache-provider-node-bridge-test.cjs)
-are **AUTHORED / UNEXECUTED** at this source checkpoint. Python uses supplied
-clock Readings and tiny synthetic source/file fixtures; Node replaces both
-children, clocks and timers with explicit models. Neither runs a provider or
-reads key material. Independent source review and exact original execution
-results, when available, are separately mapped to the containing commit.
-Further Node startup needs fresh exact owner authorization; the earlier one-
-and two-invocation permissions are consumed, not a standing2GiB allowance.
+were authored but unexecuted. Independent review returned
+**APPROVE_EXACT_POST_PROVIDER_CLOSE_RAW_SOURCE_ONLY_NOT_EXECUTION_OR_NATIVE_QUALIFICATION**,
+report SHA-256 `cffe9b3ca5819c1be5544a70751175a84b25afe0d072cf80ada9ed7d956141e0`.
+
+One subsequent bounded Python invocation at **2026-09-22 02:28:38 UTC** passed
+**18/18**, test0.018s/wall0.279s, command/wrapper0, guard8/unexpected0,
+ResourceWarnings0, empty wrapper stderr and matching pre/post integrity.
+CPU20s/AS512MiB/wall30+kill2/file32MiB/FD128/core0, UID/GID65534,
+cleared environment/groups, no-new-privs and isolated Python remain unchanged.
+Complete1066 was physically excluded. Capture-manifest SHA-256:
+`5433a367bd8dd3583633cbf28f28f06ed1466272dd5fa70fc329c9e2d927c2d2`.
+Python used supplied clock Readings and tiny synthetic source/file fixtures;
+no project-native clock supplier or real provider/clock-helper child was
+exercised. No key material was accessed and no hosted runner was invoked.
+
+The updated **30 Node controls remain UNEXECUTED**. They replace both children,
+clocks and timers with explicit models and do not inherit the earlier17 pass.
+Their separately prepared one-invocation envelope requires fresh exact owner
+authorization; the earlier one- and two-invocation permissions are consumed,
+not a standing2GiB allowance. Original result/envelope review and any later
+execution belong to their exact issue records, not an inferred permission here.
 
 ## Verification and remaining qualification
 

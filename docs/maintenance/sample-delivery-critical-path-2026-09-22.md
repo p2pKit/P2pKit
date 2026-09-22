@@ -152,7 +152,7 @@ clock read **after the provider supervisor's actual child close**. The same
 invocation, role/domain, exact INT64 frequency, original RAW high-water and hard
 end remain bound; Node keeps its original local deadline through the helper's
 own EOF/exit/close. There is no new allowance, provider caller or workflow wiring.
-The [cache guide](../testing/hosted-dependency-cache.md#post-provider-close-raw-continuation--unexecuted-source)
+The [cache guide](../testing/hosted-dependency-cache.md#post-provider-close-raw-continuation--partial-offline-verification)
 describes the precise scope and remaining outer-ownership gap.
 
 The helper samples before its own process closes. Thus this source can establish
@@ -162,17 +162,26 @@ returns remain private and incomplete, never permission to read, delete, reuse
 or seal native files. A closed known-failed provider transport stays failed.
 Supplied source hashes do not authenticate prestart tools or runtime credentials.
 
-The new18 Python controls and updated30 Node controls are authored but
-**UNEXECUTED** here, not covered by the earlier17 pass. Source review, original
-results and any exact Node execution request must be recorded separately before
-this increment can become a qualified prerequisite. No Node startup or execution
-authority is inferred from preparing source or from the prior consumed requests.
+At exact source `2f442918d06c9ff0f824dd0e006da96a18587edb` / tree
+`4c46b9a9ca998aba86f05d7fac106323faced92b`, independent implementation review
+approved **source only, not execution/native qualification** (report SHA-256
+`cffe9b3ca5819c1be5544a70751175a84b25afe0d072cf80ada9ed7d956141e0`).
+One later bounded Python invocation passed **18/18** at02:28:38UTC, test0.018s/
+wall0.279s, command/wrapper0, guard8/unexpected0/ResourceWarnings0 and matching
+pre/post integrity. This uses modeled readings and tiny source/file fixtures,
+not native clock/provider execution. The cache guide binds its original capture.
+
+The updated **30 Node controls remain UNEXECUTED**, not covered by the earlier17
+pass. Their one-invocation offline request is separately prepared; fresh exact
+owner authorization is required before any Node startup. This is not a standing
+2GiB allowance or an authorization to start held CI. No build was repeated.
 
 ## Remaining execution blockers, in order
 
-1. **Finish this real runner connection:** focused implementation validation,
-   trusted prestart source/tool/service handoff, original post-close RAW
-   readback and the required Windows cooperative stop integration. Do not
+1. **Finish/qualify this real runner connection:** the updated Node30 controls
+   await exact offline authorization; actual caller/prestart source/tool/service
+   handoff, post-last-owner/Node/runner custody and native Windows qualification
+   remain. The new post-provider-close helper is only partially verified. Do not
    reactivate unrelated cancellation review merely to polish it.
 2. **Finish the existing Stage 1 path:** original receiving authority and
    initialization, bounded productive bootstrap, provider save/probe and
