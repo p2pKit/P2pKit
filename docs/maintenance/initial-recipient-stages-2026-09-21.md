@@ -13,8 +13,11 @@ still governs the two later manual publication decisions.
 connects only the existing Stage1 nonproductive gate. `populate` still exits125
 without checkout/setup/provider work. The [critical-path record](sample-delivery-critical-path-2026-09-22.md#nonproductive-stage1-workflow-source)
 records its exact review/test scope. This supersedes earlier workflow-absence
-statements only; registration, environment configuration, exact owner admission,
-the receiving initializer and productive qualification remain outstanding.
+statements only; registration, exact owner admission, the receiving initializer
+and productive qualification remain outstanding. The separate environment was
+subsequently owner-authorized, configured and independently checked on22September;
+the [configuration record](sample-delivery-critical-path-2026-09-22.md#protected-stage1-environment-configured--12101212-utc)
+binds its actual IDs and configuration-only result, not execution authority.
 
 ## Why two stages
 
@@ -96,7 +99,10 @@ permitted, no administrator bypass, and exactly these branch policies (no tags):
 
 Its actual environment and branch-policy IDs belong in each statement. Validate
 the real configuration and exact IDs repeatedly; absent, recreated or changed
-protection refuses. No environment has been created or configured by this work.
+protection refuses. This was initially only a design requirement. The separately
+authorized22September configuration now has environment ID`22474224636` and
+branch-policy IDs`60692240` /`60692241`, respectively. This resolved setup does
+not supply a personal Stage1 statement/challenge or permission to allocate runs.
 
 1. Only after separately authorized registration/allocation may real runs wait
    at this gate. Bootstrap keeps exactly its existing three dispatch inputs:

@@ -358,6 +358,58 @@ registration/configuration/allocation need their existing separate authorization
 The worker is deliberately held until the complete receiver/current authority,
 initializer, producer, provider, evidence integration and qualification exist.
 
+## Protected Stage1 environment configured — 12:10–12:12 UTC
+
+The owner separately authorized creation/configuration of
+`initial-recipient-execution`. This prerequisite is now **complete**, superseding
+the earlier dated absence observations above; it is not registration, dispatch,
+Stage1 authority or permission to lift a HOLD.
+
+| Read-back setting | Actual value |
+| --- | --- |
+| Environment ID | `22474224636` |
+| Sole required reviewer | `Apdelrahman1911` / user `104788132` |
+| Self-review prevention / administrator bypass | `false` / `false` |
+| Deployment policy | Custom branch policies; not protected-branches mode |
+| Integration branch policy | `60692240`: `work/nonphysical-integration-20260915-022112` |
+| PR merge branch policy | `60692241`: `refs/pull/*/merge` |
+
+There are exactly these two branch policies, no tags, and exactly the
+required-reviewers and branch-policy protection-rule types. No environment
+secret was configured. Creation was recorded at **2026-09-22T12:10:45Z**;
+configuration completed at **12:11:11Z**. Separate final GETs matched the original
+responses. The unchanged maintained `hosted_initial_recipient_gate.check_environment`
+ran **once**, on those real final bodies and IDs, at **12:12:59Z**: **PASS**,
+exit0, empty stderr and matching pre/post input/tool integrity. It created no
+owner statement, approval selector, eligibility or native Admission.
+
+This was an offline check of public configuration bodies, not hosted/native
+execution or proof of a particular namespace/resource envelope. The retained
+packet does not include its launch command. Independent read-only original-result review returned
+**APPROVE_EXACT_INITIAL_RECIPIENT_ENVIRONMENT_CONFIGURATION_READBACK_ONLY**,
+report SHA-256
+`eb3e5df39cd7749eb220129203e6bb36508e0ee9df0d49aa38a23170272cff16`.
+The reviewer did not rerun the check or query GitHub independently.
+
+Final environment/branch-policy GET SHA-256 values are
+`4b2d7096ef531b17a2ac0d127e4f0cdee9798c34cf98a1658407ab9620f34095` /
+`f70052e752222760e6d1f44210c8644d18cd06a0abd8b27e2a1d05e6bf64260d`;
+the validator-capture manifest is
+`c7c43858f7efe59552c8e28371e175bb757ff2671df6addcfa48f2ea86effac6`.
+These are configuration records, not a challenge or authorization to execute.
+Future statements must bind these actual IDs, and actual use must reacquire the
+configuration rather than trust this dated record.
+
+Read-only refresh completed at **12:22:41UTC**: both environment configurations
+and main rules were unchanged; all four required checks remain. There are
+78 open issues, seven dependency PRs, no campaign PR and zero queued/in-progress/
+waiting Actions. Bootstrap and publisher workflows remain unregistered. The four
+preview artifacts remain unexpired through September30; anonymous Releases still
+have no sample assets. No artifact was downloaded, no accepted suite/build/key
+procedure was repeated, and no private material was accessed. Main and integration
+remain `3bc76f956f8f47447b51a62474fc878b9c43173c` and
+`24bbe8e9b78cef552559904fe901a12c443ec184` at that refresh.
+
 ## Remaining execution blockers, in order
 
 1. **Finish/qualify this real runner connection:** its Node30 and Python18 model
@@ -370,8 +422,8 @@ initializer, producer, provider, evidence integration and qualification exist.
    encrypted export/custody. The complete1066 receiver still lacks its complete
    positive/owner-close acceptance; its held profile was not imported or retried.
    Bootstrap5400 remains **UNADMITTED / UNMEASURED**, not a usable job budget.
-3. **Legitimate execution admission:** safely register the workflow, configure
-   the separate initial-recipient environment and obtain the owner's exact
+3. **Legitimate execution admission:** safely register the workflow, recheck
+   the now-configured separate initial-recipient environment and obtain the owner's exact
    stage/run/attempt/commit/tree/policy authorization. These operations require
    their separate authorization; this source checkpoint creates none of them.
    The public recipient policy remains branch-only, hash
