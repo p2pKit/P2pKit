@@ -4856,6 +4856,53 @@ This reviews the selected-source dependency closure, not a passing execution.
 The minimum next request remains Caller6, Native2 and Action48; no new controls,
 limit increase, full-receiver retry or rerun of the historical16 is included.
 
+#### Context-corrected packet — scoped offline pass
+
+After fresh exact-source owner authorization, that packet ran **once**, in
+order, at **2026-09-22T20:06:35Z–20:06:44Z** on
+`cba920d22807b9fc56fa73252dce8d0269150088`, tree
+`3ba70fab9613ca146229424fb9ab3b940f1d98e6`. Request-manifest SHA-256:
+`028f3f5013dcf4a8ae3faea211fbed543e787dbe83dada45bba6bf91352a2977`.
+
+| Selected invocation | Original result | Command wall seconds |
+| --- | --- | --- |
+| CallerControls only | **6/6 PASS**, unittest3.060s | 3.497 |
+| Two affected NativeControls only | **2/2 PASS**, unittest0.115s | 1.245 |
+| Fixed Action model suite | **48/48 PASS** | 0.285 |
+
+All three command exits and the wrapper/enclosing-invocation/outer exits were0.
+The56 functional controls and20 existing guards passed: Python8+8, Node4,
+unexpected denials0, Python ResourceWarnings0 and empty Node/enclosing stderr.
+All six271-line pre/post integrity captures matched. Enclosing shell time was
+wall8.466/user5.705/system2.518s; shell timing is not provider CPU/RSS, native
+retirement or capacity evidence. The earlier outer MemAvailable snapshot was
+1,470,588kB; the later per-invocation snapshots were6,361,020 /23,785,016 /
+23,779,968kB, each above the unchanged3,145,728kB minimum. These differently
+timed observations are not a host-capacity qualification.
+
+Inner/outer capture-manifest SHA-256 values:
+`960176c7a753cd38f85346f3762b2917d47a4fde05ace9b814c087b9b0d95eb5` /
+`ef7668f2efaa1493a769fbe8f2fc6ebf8ca55caeb2cc122b08241b587588058c`.
+Independent original-result verdict:
+**CONFIRM_EXACT_CONTEXT_CALLER6_NATIVE2_ACTION48_OFFLINE_PASS_ONLY**,
+report SHA-256
+`c8a82b0a269db104a05985b6a5e8e871081333a89d26e416c6d89909d92c91a8`.
+All41 inner/15 outer originals and exact source/request bindings were inspected
+without reviewer execution. Both earlier failures remain failed and preserved;
+the historical16 were not rerun or combined into a fictional new22 aggregate.
+The sibling UTC-error/Windows-path bindings are not claimed as independently
+exercised by these Linux models.
+
+This closes only the selected offline receipt/caller regression packet. Its
+authorization is consumed; no extra invocation, retry, native/provider/receiver
+execution, CI, build or download followed. It supplies no current Stage1
+authority/initializer, productive bootstrap or encrypted-custody integration.
+The full receiver CPU20/complete1066/owner-close requirement remains unresolved;
+the optional ~2% diagnostic is still deferred. Both ordinary HOLDs, whole-JVM
+interlock, productive exit125, bootstrap5400 UNADMITTED/UNMEASURED,
+NativeFile900/Snapshot576MiB, finite branch-only policy and all later required
+qualification/owner approvals remain. **Public app delivery0/4; Release NOT_READY.**
+
 ## Verification and remaining qualification
 
 Focused offline commands (not a claim they ran on a particular host):
