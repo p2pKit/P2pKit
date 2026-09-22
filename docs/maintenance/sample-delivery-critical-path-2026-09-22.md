@@ -410,6 +410,53 @@ procedure was repeated, and no private material was accessed. Main and integrati
 remain `3bc76f956f8f47447b51a62474fc878b9c43173c` and
 `24bbe8e9b78cef552559904fe901a12c443ec184` at that refresh.
 
+## Registration-only hosted probe completed — 12:55 UTC
+
+After separate exact-source owner authorization, one normal no-tags push at
+**12:55:07–12:55:11UTC** created only
+`work/register-cache-bootstrap-20260922-24bbe8e9`, at commit
+`210f87ec8a64ffd371a0001a19371857ffc10b45`, tree
+`079640d2a9e8579338ad4b425ddcc87de951b839`. **Never merge this probe branch.**
+Its only source change replaces the bootstrap workflow on that isolated branch;
+the integration gate and productive exit125 HOLD remain unchanged.
+
+The [actual run35730126848/1](https://github.com/p2pKit/P2pKit/actions/runs/35730126848)
+completed **successfully**. GitHub now registers the bootstrap path as workflow
+**364235112**, active, named `Dependency cache bootstrap registration only`.
+Its sole job **106753327302 / registration_only**, label `ubuntu-24.04`, ran at
+**12:55:24–12:55:26UTC** with the reviewed one-minute job ceiling. Apart from
+GitHub's setup/completion steps, it executed only the fixed informational printf.
+The retained log contains
+`CACHE_BOOTSTRAP_REGISTRATION_ONLY; NO_ADMISSION_OR_PROVIDER_EXECUTION`.
+There was no checkout, setup Action, environment gate, mapped credential,
+provider invocation, build or artifact upload. The artifact list is empty.
+
+The remote commit/tree/parent and decoded public workflow bytes match the
+reviewed source. YAML SHA-256:
+`d27d380c9c9d158539a0931bd5ea25ad979a4ff3b37fd3a3517d973df6ea1acc`.
+Original job-log SHA-256:
+`bcac0c6298a9dc4a10ad5f84f958b09c79eb28287b06c1323fe1941c13d1790d`.
+Retained source/preflight/push/service-result manifest SHA-256:
+`d4e7fa040c73a5758a6eab33ba87d7f8234b0c38e8bc68276234b057e0c2c0e7`.
+Independent original-result review will be mapped separately in #437; these records
+are not a personal Stage1 statement, environment challenge or native Admission.
+
+A pre-push metadata helper initially addressed the wrong environment name and
+received404. No push had occurred. That client variable-collision error and its
+response were retained; corrected literal-endpoint GETs matched both actual
+environments, branch policies and main rules. It was not a missing protection
+or failed hosted attempt. The one authorized push and run were not retried.
+The accepted13+15 offline controls and earlier suites/builds were not repeated.
+
+Read-only verification at **12:57:47UTC** found exactly that one successful
+attempt for the probe head and zero queued/in-progress/waiting runs. Main and
+integration remained `3bc76f956f8f47447b51a62474fc878b9c43173c` and
+`9db9f71b188c675533ef7f737a2e31e96df23741`. Publisher registration remains absent.
+The consumed authorization permits no subsequent dispatch, rerun, productive
+activation or publication. Successful registration does **not** prove branch
+dispatch behavior, receiver/provider/native/cache/custody or scheduling
+qualification, or remove any HOLD. Public development delivery remains **0/4**.
+
 ## Remaining execution blockers, in order
 
 1. **Finish/qualify this real runner connection:** its Node30 and Python18 model
@@ -422,8 +469,10 @@ remain `3bc76f956f8f47447b51a62474fc878b9c43173c` and
    encrypted export/custody. The complete1066 receiver still lacks its complete
    positive/owner-close acceptance; its held profile was not imported or retried.
    Bootstrap5400 remains **UNADMITTED / UNMEASURED**, not a usable job budget.
-3. **Legitimate execution admission:** safely register the workflow, recheck
-   the now-configured separate initial-recipient environment and obtain the owner's exact
+3. **Legitimate execution admission:** registration-only service behavior is now
+   established, but actual branch dispatch/allocation remains unexecuted and
+   separately authorized. Recheck the configured initial-recipient environment
+   and obtain the owner's exact
    stage/run/attempt/commit/tree/policy authorization. These operations require
    their separate authorization; this source checkpoint creates none of them.
    The public recipient policy remains branch-only, hash

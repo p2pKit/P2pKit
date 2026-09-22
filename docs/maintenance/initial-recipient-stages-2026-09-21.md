@@ -13,8 +13,9 @@ still governs the two later manual publication decisions.
 connects only the existing Stage1 nonproductive gate. `populate` still exits125
 without checkout/setup/provider work. The [critical-path record](sample-delivery-critical-path-2026-09-22.md#nonproductive-stage1-workflow-source)
 records its exact review/test scope. This supersedes earlier workflow-absence
-statements only; registration, exact owner admission, the receiving initializer
-and productive qualification remain outstanding. The separate environment was
+statements only; the later first-run registration is recorded below. Exact owner
+admission, the receiving initializer and productive qualification remain
+outstanding. The separate environment was
 subsequently owner-authorized, configured and independently checked on22September;
 the [configuration record](sample-delivery-critical-path-2026-09-22.md#protected-stage1-environment-configured--12101212-utc)
 binds its actual IDs and configuration-only result, not execution authority.
@@ -122,10 +123,15 @@ not supply a personal Stage1 statement/challenge or permission to allocate runs.
    result guard. Native workers reacquire authority/configuration/source originals
    before side effects and sealing, charging their original deadlines.
 
-GitHub's proposed reserved-branch registration-only push remains **unproven
-service behavior**, not a performed registration. It must be distinct from
-`populate`, dependency setup and provider work, and requires separate authority.
-A main registration merge changes B and cannot silently replace this route.
+On22September, the owner separately authorized the exact reserved-branch
+registration-only push. Its [first hosted run](https://github.com/p2pKit/P2pKit/actions/runs/35730126848)
+passed and GitHub registered workflow`364235112`; the
+[critical-path record](sample-delivery-critical-path-2026-09-22.md) binds its
+actual source, single informational job and retained originals. This proves
+registration only: subsequent branch dispatch/allocation and Stage1 admission
+remain unexecuted and separately gated. The probe contains no `populate`,
+dependency setup or provider work and must never merge into main/integration.
+A main registration merge would change B and cannot silently replace this route.
 
 ### Dormant approval selector and nonproductive eligibility
 
