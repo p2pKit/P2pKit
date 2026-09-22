@@ -1062,6 +1062,18 @@ complete1066 invocation was not repeated. Independent diagnosis report SHA-256:
 `9500d28a58f686c66d065785cfd9609e3136c8b2c87eabfe4bb230661be6ec06`.
 This diagnosis and primitive timing are not implementation or CPU20 acceptance.
 
+The subsequent separately authorized
+[hosted capacity probe35747118161/1](../maintenance/sample-delivery-critical-path-2026-09-22.md#authorized-receiver-capacity-probe-failed-originals-retained)
+also **failed** on the unchanged receiver. Synthetic fixture preparation passed;
+the reader invocation entered its test but exited1 through `unshare` after
+wall20.009/user19.824/system0.182 seconds, without complete-return or enclosing
+model-close evidence. The originals strongly suggest CPU20 exhaustion, but retain no
+raw child wait status; the signal-restoration error is not proof of a specific
+signal, wall timeout or Python assertion defect. The complete capture artifact
+was downloaded and its service digest, full roster and source bindings verified.
+No new provider/native/capacity acceptance, retry, larger limit or execution
+authorization follows. The failed VPS aggregates remain failed too.
+
 This section grants no receiving authority, provider/native qualification,
 budget admission or workflow activation. Authentic predecessor outcome/hash
 transport, same-job/run/attempt/selection/runner/boot continuity, a NEW owner and

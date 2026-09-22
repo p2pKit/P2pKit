@@ -457,6 +457,64 @@ activation or publication. Successful registration does **not** prove branch
 dispatch behavior, receiver/provider/native/cache/custody or scheduling
 qualification, or remove any HOLD. Public development delivery remains **0/4**.
 
+## Authorized receiver-capacity probe: failed, originals retained
+
+The owner's subsequent exact single-push authorization was used once for
+**`7c6b671dd9286a9bbd108730c75c9f506f85565b`**, tree
+**`f427dd88345be216c8096460517cfdd73e629615`**, parent
+`362aa96cdeff29a534b000814317dea7fcef6799`. The isolated branch
+`work/receiver-hosted-capacity-20260922-362aa96c` is **NEVER MERGE**.
+Its source/static approval did not approve execution results or Stage1.
+
+[Run35747118161/1](https://github.com/p2pKit/P2pKit/actions/runs/35747118161)
+completed **failure**. Its only job, `106811483340 / receiver_capacity_only`,
+ran on `ubuntu-24.04` at **15:24:33–15:25:07UTC**. Actual image:
+`20260920.314.1`, Ubuntu24.04.5, Python3.12.3 and util-linux2.39.3-9ubuntu6.6.
+The two original serial model invocations, with unchanged CPU20/wall30+kill2
+and other reviewed limits, returned:
+
+| Invocation | Original result |
+| --- | --- |
+| `FixturePrepareModels.test_prepare_and_close_synthetic_graph` | Exit0, one method PASS; wall5.138/user3.872/system0.156 seconds; guard4, unexpected denials0, ResourceWarnings0. This is synthetic fixture/model close only. |
+| `FixtureReaderModels.test_complete_fixed_graph_from_closed_synthetic_fixture` | Entered its fixed test, then exit1; wall20.009/user19.824/system0.182 seconds; `unshare: sigprocmask unblock failed: Invalid argument`. No completed-method result, complete1066 marker, final guard/resource summary or receiver-close acceptance. |
+
+Body, completed launcher, Actions step and run all failed. Upload succeeded;
+that does not turn the failed receiver into a pass. Artifact **10704000608**,
+`receiver-capacity-model-35747118161-1`, contains only public model captures:
+**31,326 ZIP bytes /43 files /136,592 uncompressed bytes**. GitHub records
+creation **2026-09-22T15:25:04Z** and expiry **2026-10-06T15:25:03Z**.
+The downloaded ZIP matches the service size/digest; every extracted byte,
+complete42-entry capture manifest, all222 reviewed source inputs, both harness
+inputs and four complete455-line pre/post integrity transcripts match.
+
+- Artifact SHA-256: `3ddd56f52798e2e15f52f251bbf9fe1100ca1ce8f7676ac15961a56725abf42a`.
+- Capture-manifest SHA-256: `ee28d53678dd105a2113888665dd1b7ab850713ec273759863e98ec1ffa01c16`.
+- Retained seven-file original-manifest SHA-256: `beeddf82519aebf919c6bc5d44595f15122ed2f22733a3c3ee7dc57e9cb5ecf7`.
+
+The observed20.006 aggregate CPU seconds strongly suggest exhaustion of the
+existing20-second CPU limit. Public upstream util-linux2.39.3 reports that same
+error for several child-signal restoration failures, including a rejected
+`signal(SIGKILL, SIG_DFL)`. This is a supporting source explanation, **not an
+exact Ubuntu-binary mapping or retained child wait status**. Do not relabel the
+observed exit1 as137, assert a specific child signal, claim a wall30 timeout or
+invent a Python assertion failure. No further experiment is needed merely to
+establish that this attempt failed its required complete return.
+
+Read-only post-run metadata at **15:30:52–15:31:40UTC** found exactly this one
+head run/attempt, no queued/in-progress/waiting/pending/requested runs, unchanged
+main/integration refs and effective rules, and unchanged complete136/125-comment
+#437/#424 histories. The classic protection endpoint's404 is not absent ruleset
+protection. The scoped original-result review will be mapped separately in #437;
+it cannot approve capacity, native/provider execution or an owner decision.
+
+No retry, alternate runtime/machine, deadline change, provider invocation, app
+rebuild, private-key access, merge or publication followed. The authorization
+is consumed. A defensible reviewed receiver repair is still needed; neither an
+unchanged retry nor the rejected earlier primitive alternatives is justified by
+this result. Any later execution needs its own exact authorization. Both ordinary
+HOLDs, productive bootstrap refusal and later qualifications remain. Public
+development sample delivery is still **0/4 (0%); remaining4/4 (100%)**.
+
 ## Remaining execution blockers, in order
 
 1. **Finish/qualify this real runner connection:** its Node30 and Python18 model
@@ -467,7 +525,8 @@ qualification, or remove any HOLD. Public development delivery remains **0/4**.
 2. **Finish the existing Stage 1 path:** original receiving authority and
    initialization, bounded productive bootstrap, provider save/probe and
    encrypted export/custody. The complete1066 receiver still lacks its complete
-   positive/owner-close acceptance; its held profile was not imported or retried.
+   positive/owner-close acceptance. The separately authorized hosted capacity
+   probe above failed; no subsequent retry or productive activation occurred.
    Bootstrap5400 remains **UNADMITTED / UNMEASURED**, not a usable job budget.
 3. **Legitimate execution admission:** registration-only service behavior is now
    established, but actual branch dispatch/allocation remains unexecuted and
