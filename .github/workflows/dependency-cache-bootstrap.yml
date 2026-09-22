@@ -1,0 +1,94 @@
+name: Dependency cache bootstrap (productive stage held)
+
+# Source preparation only. Registration, the separate protected environment,
+# exact owner stage/run/attempt/source approval and hosted qualification remain
+# prerequisites. There is no push/PR/schedule/registration event in this file.
+on:
+  workflow_dispatch:
+    inputs:
+      selection:
+        description: Exact dependency cohort; not ordinary test acceptance
+        type: choice
+        required: true
+        options:
+          - desktop-linux-x64
+          - desktop-windows-x64
+          - desktop-macos-arm64
+          - desktop-macos-x64
+          - full-macos-arm64
+          - full-macos-x64
+      expected_sha:
+        description: Full independently reviewed source commit
+        type: string
+        required: true
+      expected_tree:
+        description: Full independently reviewed source tree
+        type: string
+        required: true
+
+permissions: {}
+
+# The metadata gate is not a participant in the heavy-job queue. Preserve all
+# allocated attempts instead of cancelling a waiting owner authorization.
+concurrency:
+  group: p2pkit-initial-recipient-bootstrap
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  initial-recipient-gate:
+    # Keep the API job name equal to GITHUB_JOB: no display-name or matrix alias.
+    if: ${{ github.repository == 'p2pKit/P2pKit' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/work/nonphysical-integration-20260915-022112' && github.sha == inputs.expected_sha }}
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    environment: initial-recipient-execution
+    steps:
+      - name: Check out the actual reviewed event source without persisted credentials
+        timeout-minutes: 2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Fetch the two source histories without tags or checkout credentials
+        timeout-minutes: 1
+        shell: bash
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+        # checkout's depth-zero path fetches all tags even with fetch-tags:false.
+        # The public repository needs no token for this bounded source fetch.
+        run: >-
+          git fetch --no-tags --unshallow origin
+          refs/heads/main:refs/remotes/origin/main
+          refs/heads/work/nonphysical-integration-20260915-022112:refs/remotes/origin/work/nonphysical-integration-20260915-022112
+
+      - name: Acquire original nonproductive Stage1 eligibility
+        id: initial-originals
+        timeout-minutes: 3
+        shell: bash
+        env:
+          P2PKIT_ACTIONS_READ_TOKEN: ${{ github.token }}
+        # Native acquisition retains its original work75/final120 caps. This
+        # step emits a provisional digest, not worker Admission or a job output.
+        run: exec /usr/bin/python3 -I -B -S scripts/run-hosted-initial-recipient.py prepare-originals
+
+  populate:
+    needs: initial-recipient-gate
+    permissions: {}
+    runs-on: ${{ fromJSON('{"desktop-linux-x64":"ubuntu-latest","desktop-windows-x64":"windows-latest","desktop-macos-arm64":"macos-26","desktop-macos-x64":"macos-15-intel","full-macos-arm64":"macos-26","full-macos-x64":"macos-15-intel"}')[inputs.selection] }}
+    timeout-minutes: 1
+    # Deliberately no checkout, setup, environment, credentials, artifact
+    # upload, provider Action or Gradle (including unconditional cleanup).
+    # Replacing this refusal requires reviewed productive Stage1 implementation
+    # and separate activation authority; a successful gate cannot lift it.
+    steps:
+      - name: Hold the unqualified productive bootstrap
+        shell: bash
+        run: |
+          echo 'INITIAL_RECIPIENT_STAGE1=HOLD; PRODUCTIVE_BOOTSTRAP_NOT_QUALIFIED' >&2
+          exit 125

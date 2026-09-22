@@ -2,9 +2,10 @@
 
 The actual entry reads the process's original event/context and delegates only
 closed Git queries and fixed-origin HTTP GETs. Its caller MUST already own the
-native query and HTTP-child domains, original fence and private retainer. No
-workflow/CLI calls this module yet; calling it without that enclosing owner is
-not a supported execution path. No policy exception is installed by a return.
+native query and HTTP-child domains, original fence and private retainer. The
+separate native CLI supplies that enclosure; the prepared workflow connects
+only its nonproductive gate. Calling without that enclosing owner is not a
+supported execution path. No policy exception is installed by a return.
 """
 from __future__ import annotations
 

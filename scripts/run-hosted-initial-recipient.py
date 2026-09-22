@@ -4,7 +4,8 @@
 The gate and populate worker use their actual identities. This fixed parent
 owns the HTTP child and its nested read-only Git queries, reuses the maintained
 native phase/finalization, and retains originals before returning a provisional
-digest. No workflow invokes it. A successful command is not provider, recipient
+digest. The prepared bootstrap workflow connects only the nonproductive gate;
+its productive job remains held. A successful command is not provider, recipient
 crypto, budget, export or Stage2 qualification; original step outcome is still
 required by any future caller. Both ordinary HOLDs remain separate.
 """

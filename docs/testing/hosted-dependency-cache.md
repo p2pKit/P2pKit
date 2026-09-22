@@ -60,6 +60,15 @@ selected qualification references do not establish runtime/cache acceptance.
 The new pre-execution gate, native admission/export integration and actual
 provider/custody qualification remain unfinished. No gate is created or activated.
 
+**Nonproductive workflow preparation, 22 September:** the
+[manual-only Stage1 workflow](../../.github/workflows/dependency-cache-bootstrap.yml)
+now connects the existing native `prepare-originals` gate, followed by an explicit
+fail-only `populate` job. This is not productive bootstrap wiring, workflow
+registration, an environment configuration or execution permission. The
+[critical-path record](../maintenance/sample-delivery-critical-path-2026-09-22.md#nonproductive-stage1-workflow-source)
+describes this later source state; earlier slices' absent-workflow statements
+remain historical. No provider Action or receiving initializer is called.
+
 ## Reuse bytes, not old test results
 
 The explicit modes are:
@@ -1041,6 +1050,17 @@ close. Its deliberate diagnostic stop is not positive acceptance. No deadline
 was increased and no unchanged complete retry followed. Final independent
 review is recorded against the containing #437 checkpoint; it must not be
 described as `APPROVE_COMPLETE_GRAPH_IMPLEMENTATION` without the missing positive.
+
+The later22September source diagnosis identified20 full mutable-state scans per
+final reread. One isolated primitive comparison used442 synthetic Path nodes /
+223 roster rows,2000 iterations: original Path projection0.551991CPU seconds,
+public attrgetter variants0.733973/0.772998, roster generator0.080000 and ordered
+loop0.064995. It imported no graph/controller and supplied no complete-reader
+result. The slower Path alternatives were rejected; the small roster-only gain
+did not establish a sufficient repair. Neither change was applied, and the
+complete1066 invocation was not repeated. Independent diagnosis report SHA-256:
+`9500d28a58f686c66d065785cfd9609e3136c8b2c87eabfe4bb230661be6ec06`.
+This diagnosis and primitive timing are not implementation or CPU20 acceptance.
 
 This section grants no receiving authority, provider/native qualification,
 budget admission or workflow activation. Authentic predecessor outcome/hash

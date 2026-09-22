@@ -284,6 +284,80 @@ conversations contained130/119 comments. All four preview artifacts remain
 unexpired; anonymous Releases still list RC2/RC3 with no app assets.
 **Public development delivery remains0/4 (0%); remaining4/4 (100%).**
 
+## Nonproductive Stage1 workflow source
+
+The [manual-only bootstrap workflow](../../.github/workflows/dependency-cache-bootstrap.yml)
+now connects the existing `prepare-originals` CLI in the actual
+`initial-recipient-gate` job on `ubuntu-24.04`. It retains exactly `selection`,
+`expected_sha` and `expected_tree`, the separate `initial-recipient-execution`
+environment and the original owner approval-history/comment checks. Job/API
+names are not display/matrix aliases. The dedicated `P2PKIT_ACTIONS_READ_TOKEN`
+mapping is confined to the acquisition step. Checkout separately uses its
+platform credential temporarily, with no persisted authentication for the
+explicit public fetch. No credential is sent to a provider or job output;
+native acquisition never serializes its read token into Git records or logs.
+The native gate still owns work75/final120; the six-minute job ceiling is only
+an unqualified outer checkout/fetch/acquisition limit, not bootstrap5400 admission.
+
+Pinned checkout starts shallow with tags disabled and no persisted credentials;
+one explicit no-tags fetch then obtains the two required complete source histories.
+Read-only inspection of checkout `3d3c42e`'s `git-source-provider.ts` established
+that its depth-zero route fetches all branches/tags, so setting only
+`fetch-tags:false` alongside depth0 would not meet the no-tags requirement.
+The inspected12701-byte public source has SHA-256
+`aaad769029fde263ba2c9fd26287ada2eed4d7d0c89676a04b78c0bfd52dc7a2`;
+no Action was executed or installed by that source inspection.
+
+The dependent `populate` job maps the six exact cohorts to their maintained
+native selectors, but its **only command exits125**. It has no checkout, setup,
+credentials, environment, provider call, artifact upload or unconditional Gradle
+cleanup. Gate success cannot bypass this productive HOLD. There is no push,
+schedule, PR or guessed registration event, and no change to CI's Stage2/whole-JVM
+interlock or either ordinary HOLD. No completed bootstrap, provider call or
+Release asset follows from this preparation. A wrong-context skipped gate also
+supplies no eligibility or qualification.
+
+The [focused workflow controls](../../scripts/tests/check-initial-recipient-workflow-policy-test.rb)
+received independent implementation verdict
+**APPROVE_EXACT_NONPRODUCTIVE_STAGE1_WORKFLOW_SOURCE_AND_43_AUTHORED_CONTROLS_ONLY**,
+report SHA-256
+`069809e652299d0addf153e43fde0f69c90c90811c347e4a260d78fe43120ffa`.
+The final seven-input source manifest is
+`563001b1ce36e044a6b2df7a5408f2476294024524cf4c484058a48189bdebd4`,
+over baseline `e22e9dd6a6467f0db2a5c2dc24e5f630eb88577f` / tree
+`954f713d6810cbe4c76b0d1abb4f5bd58406677b`. That verdict is distinct from the
+earlier preimplementation recommendation and did not execute the controls.
+
+At **11:45:44UTC**, the43 controls passed once, together with one positive
+existing heavy-queue composition check over all current workflows. Ruby reported
+CPU0.071693s/wall0.081107s; command/wrapper/enclosing exits were0/0/0, stderr was
+empty and pre/post source/tool integrity matched. The first Ruby startup had
+refused before loading any controls because bubblewrap added `PWD` to the four
+allowed environment names. A no-project environment diagnostic confirmed that
+cause. The corrected launcher clears the environment again immediately before
+Ruby; the original harness, assertions, YAML and test remained unchanged.
+The failed startup is retained, not counted as a passing test or erased.
+
+Both launches retained UID/GID65534, no-network namespaces, read-only case/runtime,
+CPU20/AS512MiB/file32MiB/FD128/core0/wall30+kill2. Successful capture and enclosing
+manifest SHA-256 values are
+`da3f52743588fcc8b01913116f465ab79f764ca14f6736793d037c9250b95d5d` /
+`658ba2c2ad8fabb2d5c1a3c4ede8cba8a55f03e7fd5a6f154df6ef9e91b5b7a7`;
+the failed capture is
+`96b83b3d42dbee54e96c262f0c41e0e1ff539460ddee7b68bea209a06f74d013`.
+Independent original-result/final-document review is mapped separately in #437.
+This standalone control is not yet a CI/release gate. No existing suite, Python
+controller, complete1066 receiver, provider, hosted Action or app build ran.
+
+This workflow is **not dispatch-ready**. The environment and workflow
+registration remain absent, and no exact Stage1 owner statement/challenge has
+been supplied for this source. Merely referencing an environment in YAML does
+not configure its required protection; GitHub can create an unprotected missing
+environment at execution. Do not dispatch to discover that condition. Safe
+registration/configuration/allocation need their existing separate authorization.
+The worker is deliberately held until the complete receiver/current authority,
+initializer, producer, provider, evidence integration and qualification exist.
+
 ## Remaining execution blockers, in order
 
 1. **Finish/qualify this real runner connection:** its Node30 and Python18 model

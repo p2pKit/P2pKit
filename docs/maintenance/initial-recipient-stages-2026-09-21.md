@@ -8,6 +8,14 @@ workflow registration, dispatch, HOLD removal, merge or publication. No private
 key access is needed or authorized. The [custodian procedure](../testing/evidence-custodian.md)
 still governs the two later manual publication decisions.
 
+**Later source connection, 22 September:** the
+[prepared bootstrap workflow](../../.github/workflows/dependency-cache-bootstrap.yml)
+connects only the existing Stage1 nonproductive gate. `populate` still exits125
+without checkout/setup/provider work. The [critical-path record](sample-delivery-critical-path-2026-09-22.md#nonproductive-stage1-workflow-source)
+records its exact review/test scope. This supersedes earlier workflow-absence
+statements only; registration, environment configuration, exact owner admission,
+the receiving initializer and productive qualification remain outstanding.
+
 ## Why two stages
 
 The previous [joint matcher](../../scripts/hosted_initial_recipient_exception.py)
