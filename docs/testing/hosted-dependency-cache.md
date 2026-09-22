@@ -4349,7 +4349,7 @@ There is no new Action, CLI or workflow caller. The adapter still requires
 prestart source/tool/service authority and original post-close RAW readback.
 It refuses Windows before spawn without the fixed stdin-reader roster; merely
 adding that source name is not reviewed implementation or native qualification.
-The reader/entry's separate R2 source repairs and unexecuted controls do not
+The reader/entry's separate R2 source repairs and source-bound offline results do not
 inherit the adapter model pass. No timeout becomes retirement, and no original
 runner/provider outcome becomes established through a matching supplied ACK.
 
