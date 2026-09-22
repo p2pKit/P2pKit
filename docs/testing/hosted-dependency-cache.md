@@ -4569,6 +4569,52 @@ returns, post-last-owner RAW, failure custody and native/provider qualification
 remain. Both ordinary HOLDs, complete1066, whole-JVM interlock, NativeFile900/
 Snapshot576MiB and UNADMITTED/UNMEASURED bootstrap5400 are unchanged.
 
+### Fixed Node24 provider Action — source reviewed, not executed
+
+The [local Action](../../.github/actions/dependency-cache-provider/action.yml)
+and [fixed entry](../../.github/actions/dependency-cache-provider/index.cjs) now
+connect the [Node implementation](../../scripts/hosted-cache-provider-action.cjs)
+to the existing native helper and supervisor bridge. **No workflow invokes it.**
+Its proposed sequence is original-window observation, exact pinned public-source
+acquisition with original HTTP close, exclusive source retention, native
+preparation, supervisor/clock child close and successful ACK-bound readback.
+Only bounded output hashes and lookup fields may reach the runner output file;
+helper/provider captures and original errors remain private, including when
+final output writing fails. Retaining a live handle is not known retirement.
+
+The native helper receives no runtime-service credentials. Only the existing
+three-field runtime-service fragment reaches the provider environment. The
+public-source request has no runtime headers, redirects or retries. Each helper
+and acquisition tightens its wait to the original remaining end and local45;
+there is no renewed provider allowance. These are reviewed source properties,
+not observed runner/provider behavior.
+
+Independent verdict:
+**APPROVE_EXACT_PROVIDER_ACTION_SOURCE_AND_48_AUTHORED_CONTROLS_ONLY**;
+report SHA-256
+`ada48eca0ee3421e1172c1d896accd57a25aae86d3ffe5ff624b981691c8e498`.
+The reviewer found loss of original supervisor/error custody during main output
+failure; the private retained return was corrected and two negative controls
+were authored before any execution. This is not an executed preimage failure.
+
+All [48 controls](../../scripts/tests/hosted-cache-provider-action-test.cjs) are
+**authored but unexecuted**. They model spawn, HTTP, files, clocks, signals,
+native/helper/bridge returns and service inputs. The full-length synthetic
+bundle is nonexecutable data with a modeled digest; a separate real-SHA negative
+control refuses it. There is no real bundle, provider, credential or network
+execution in the proposed suite. A bounded Ruby safe-load/closed-roster check
+passed for the Action manifest only; no Node startup, syntax check, import,
+Action run or test pass is claimed. The frozen offline execution envelope and
+fresh exact one-invocation owner authorization remain separate prerequisites.
+
+This Action cannot authenticate its own prestart source/tools/service origin.
+Native admission still requires trusted-main policy, not productive Stage1
+receiving authority. Post-last-owner/Action/runner RAW, failure custody and real
+native/provider qualification remain open. Both ordinary HOLDs, the whole-JVM
+interlock, complete1066 hold, all existing deadlines and bootstrap5400
+**UNADMITTED / UNMEASURED** are unchanged. This is not workflow activation or
+Release qualification.
+
 ## Verification and remaining qualification
 
 Focused offline commands (not a claim they ran on a particular host):

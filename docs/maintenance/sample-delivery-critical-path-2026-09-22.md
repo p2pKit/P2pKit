@@ -238,11 +238,37 @@ provider, Windows native files, Node Action or runner was executed. The proposed
 oldEnd-minus30 worker cutoff is not admitted/measured. Source availability and
 offline controls do not close the native/custody/scheduling acceptance gap.
 
-The three new Action files remain **UNREVIEWED / UNTESTED / NOT_WORKFLOW_WIRED**
-and outside this reviewed native-helper increment. No Action test file or Node
-startup is claimed. The next source work is that thin Action's actual lifecycle
-and private-return connection, not expansion of the paused cancellation review.
-All execution HOLDs remain; **public development delivery is still0/4**.
+At this native-helper checkpoint, the three new Action files were
+**UNREVIEWED / UNTESTED / NOT_WORKFLOW_WIRED** and outside that increment;
+the Action test file did not yet exist. The following source-only increment
+supersedes that source-review status, not its execution HOLDs.
+
+## Thin provider Action: source reviewed, 48 controls not yet run
+
+The [Action](../../.github/actions/dependency-cache-provider/action.yml) now has
+independent implementation review and
+[48 authored controls](../../scripts/tests/hosted-cache-provider-action-test.cjs).
+The [cache guide](../testing/hosted-dependency-cache.md#fixed-node24-provider-action--source-reviewed-not-executed)
+records its exact scope and review hash. The single blocking static finding,
+lost originals on main output failure, was repaired before execution. The
+reviewer's final verdict is
+**APPROVE_EXACT_PROVIDER_ACTION_SOURCE_AND_48_AUTHORED_CONTROLS_ONLY**.
+Only the bounded Ruby manifest structure check has run; **no Node startup,
+syntax check, import or Action control execution has occurred for this source**.
+The full frozen offline envelope and fresh exact owner authorization are next.
+
+No workflow invokes this Action. Its native helper still requires trusted-main
+admission; it cannot bootstrap its own recipient or supply Stage1 authority.
+Actual runner/native/provider execution, post-last-owner RAW, custody and the
+existing qualification/activation gates remain outstanding. Cancellation-review
+expansion, repeated app builds and key setup remain out of scope.
+
+Read-only GitHub refresh at **04:36:13–04:36:24UTC** found
+the same four required checks, the sole-owner/main-only release environment,
+no campaign PR and zero queued/in-progress/waiting runs. Complete #437/#424
+conversations contained130/119 comments. All four preview artifacts remain
+unexpired; anonymous Releases still list RC2/RC3 with no app assets.
+**Public development delivery remains0/4 (0%); remaining4/4 (100%).**
 
 ## Remaining execution blockers, in order
 
