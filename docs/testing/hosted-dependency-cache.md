@@ -1244,6 +1244,77 @@ these are source findings, not executed failures or passes. Final
 file hashes and independent source/envelope review belong to this increment's
 #437/#424 record. Fresh exact-source authorization is required before execution.
 
+##### Canonical initializer and private same-job continuity — dormant source
+
+The preceding receiving/current-authority packet subsequently passed **15/15
+focused controls and4/4 guards, exit0**, at commit
+`252572a734d5030a0c72110a7460cf02bd34a69c`. Its results were accepted and are
+recorded at [#437](https://github.com/p2pKit/P2pKit/issues/437#issuecomment-5785022248)
+and [#424](https://github.com/p2pKit/P2pKit/issues/424#issuecomment-5785022578).
+That authorization is consumed. The accepted1,066-file reader measurement above
+also stands unchanged; neither packet is repeated by this increment.
+
+The new fixed `initialize-step` connects canonical initialization **inside the
+existing receiving WORK120**, not the legacy initializer parent. The original
+LOCAL-before-RAW first reading, full original reader, fresh source/HTTP authority
+and its actual close, fixed canonical child, native/capture close, output
+readback, receiving-owner close and final output all spend the same original
+120-second/cumulative-proposal intersection. No extra120, FINAL165/READ195 or
+productive5400 budget is granted. Fixed request/tool bytes are captured **before**
+the existing source-before/HTTP/source-after authority sequence, then rechecked
+before launch. Only a one-shot original initialization result allows successful
+scope exit; the bare old seam still refuses `NOT_CONNECTED`. Canonical state,
+properties, empty outputs and distinct job/source/host use the separate Stage1
+context checker, never an ordinary `Admission` cast.
+
+The new uncalled
+[`initial-recipient-initialize` composite](../../.github/actions/initial-recipient-initialize/action.yml)
+prepares `sender-step`, then transports its **actual Steps outcome** and named
+digest outputs to `initialize-step`. The original sender and its two final
+guarded checks stay unchanged. Before those checks, a new file-only owner spends
+only the sender's remaining original read cap to retain a fixed **private
+sibling sidecar**, outside the exact three-file sender bundle. Its RAW/LOCAL
+sample is explicitly **after the sender function but before guarded output and
+step return**, never a fabricated final timestamp or self-certified close.
+Only hashes reach `GITHUB_OUTPUT`. The sidecar owner and output descriptor must
+actually close; the original two sender checks still decide command success.
+
+[`hosted_initial_recipient_continuity.py`](../../scripts/hosted_initial_recipient_continuity.py)
+adds lazy fixed kernel-boot observations: Linux boot_id, Darwin bootsessionuuid,
+and Windows SystemBootEnvironmentInformation. Raw boot identifiers are not
+published. Receiver checks actual boot equality, transported sidecar bytes,
+original run/attempt/job/selection/source/runner/clock/proposal and lower-bound
+ordering. Only genuine sequential Steps execution can establish that the first
+receiver observation is after the preceding step returned. Neither these labels
+nor the uncalled Action qualifies a host, interpreter or source before startup.
+The private closed initialization history and retained pending receipt remain
+**nonproductive history**, not provider/cache/Release authority.
+
+Independent source review identified two final-edge gaps: a rejected deadline
+could leave the new sender adapter reusable, and final output did not recheck
+live boot after receiving-owner close. The narrow corrections make original
+deadline failures sticky and check the retained boot again around final output
+within the same original RAW/LOCAL caps, without reopening the terminal owner.
+New same-instance restoration controls cover both. These are source findings
+and authored controls, not executed failures or passing runtime evidence.
+
+New [initializer controls](../../scripts/tests/hosted-initial-recipient-initialization-test.py)
+and [continuity controls](../../scripts/tests/hosted-initial-recipient-continuity-test.py)
+are **AUTHORED / UNEXECUTED** (16 initializer and15 continuity/sender methods).
+They compose supplied graph/Git/HTTP/native/boot/
+clock/sender models with tiny ordinary-UID files; no full reader or existing test
+method is selected. Native APIs, genuine canonical-init120 timing and actual
+runner/Steps continuity remain **UNQUALIFIED**. Implementation review and fresh
+exact-source execution authorization are required; no import, syntax check,
+test, fixture, native observation, CI or build was performed for this source.
+
+This Action is **UNCALLED**. Both ordinary activation HOLDs, whole-JVM interlock,
+productive populate exit125, bootstrap5400 UNADMITTED/UNMEASURED,
+NativeFile900/Snapshot576MiB, finite branch-only recipient policy and exact owner,
+required CI, main-merge marker and post-build publication gates remain intact.
+Productive provider/custody integration and genuine hosted qualification remain
+separate blockers. **Public development delivery0/4; Release NOT_READY.**
+
 #### Stage1 canonical-context reader, not initialization authority
 
 The separate fixed `initial_recipient_context_record()` in

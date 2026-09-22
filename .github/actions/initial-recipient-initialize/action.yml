@@ -1,0 +1,40 @@
+name: Initial recipient canonical initialization
+description: Dormant same-job Steps edge; requires separately admitted Stage1 source, tools and execution
+outputs:
+  initialization-sha256:
+    description: Private pending-close receipt digest, not producer or Release authority
+    value: ${{ steps.initializer.outputs.initializationSha256 }}
+runs:
+  using: composite
+  steps:
+    # UNCALLED. Interpreter routing is not prestart source/tool qualification.
+    # The trusted caller must admit this exact source, host and Stage1 first.
+    - name: Validate recipient and retain private step continuity
+      id: recipient
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        P2PKIT_ACTIONS_READ_TOKEN: ${{ github.token }}
+      run: |
+        case "$RUNNER_OS" in
+          Windows) exec python -I -B -S scripts/run-hosted-initial-recipient.py sender-step ;;
+          Linux|macOS) exec python3 -I -B -S scripts/run-hosted-initial-recipient.py sender-step ;;
+          *) exit 125 ;;
+        esac
+    - name: Initialize within the original receiving 120 seconds
+      id: initializer
+      if: ${{ success() && steps.recipient.outcome == 'success' }}
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        # Fresh step-scoped access to the job token; never transported by sender.
+        P2PKIT_ACTIONS_READ_TOKEN: ${{ github.token }}
+        P2PKIT_INITIAL_RECIPIENT_OUTCOME: ${{ steps.recipient.outcome }}
+        P2PKIT_INITIAL_RECIPIENT_SENDER_SHA256: ${{ steps.recipient.outputs.recipientSenderSha256 }}
+        P2PKIT_INITIAL_RECIPIENT_STEP_SHA256: ${{ steps.recipient.outputs.recipientStepSha256 }}
+      run: |
+        case "$RUNNER_OS" in
+          Windows) exec python -I -B -S scripts/run-hosted-initial-recipient.py initialize-step ;;
+          Linux|macOS) exec python3 -I -B -S scripts/run-hosted-initial-recipient.py initialize-step ;;
+          *) exit 125 ;;
+        esac

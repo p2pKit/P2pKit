@@ -32,6 +32,7 @@ ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 import hosted_initial_recipient_originals as acquisition
 import hosted_initial_recipient_bootstrap_identity as initial_identity
+import hosted_initial_recipient_continuity as continuity
 
 # One fixed maintained controller, not a caller-selected plugin/command.
 _spec = importlib.util.spec_from_file_location("_initial_recipient_native_owner", SCRIPTS / "run-hosted-cache-bootstrap.py")
@@ -82,6 +83,10 @@ _RECIPIENT_NATIVE_RETURNS = {}
 _RECIPIENT_SENDERS = {}
 _RECEIVING_WINDOWS = {}
 _RECEIVING_CONTINUATIONS = {}
+_SENDER_STEP_ATTEMPTS = {}
+_RECEIVING_INIT_ATTEMPTS = {}
+_RECEIVING_INIT_RETURNS = {}
+_RECEIVING_CLOSED_RETURNS = {}
 
 
 @dataclass(frozen=True)
@@ -1753,6 +1758,10 @@ class _ReceivingState:
     proposal_raw: object = None
     service_job: tuple = ()
     authority: object = None
+    step_hash: object = None
+    continuity: object = None
+    inputs: object = None
+    initialization: object = None
     phase: str = "WORK"
     busy: bool = False
     failed: bool = False
@@ -1910,6 +1919,7 @@ def _bind_receiving_originals(window, originals):
 def _receiving_current(window):
     state = window.state()
     require(state.raw is not None and (os.environ.get(RECEIVING_OUTCOME_ENV), os.environ.get(RECEIVING_HASH_ENV)) == state.step and
+        os.environ.get(continuity.STEP_HASH_ENV) == state.step_hash and
         O.wire.TOKEN_ENV not in os.environ, "RECEIVING_STEP_OR_TOKEN_CHANGED")
     frame = _receiving_frame(state.raw)[0]
     observed, path, event = _recipient_host(frame["firstUseAt"])
@@ -1952,13 +1962,14 @@ class _ReceivingContinuation:
 
 @contextmanager
 def _receive_initialization(cancelled):
-    """Dormant live receiver seam, NOT a public command or fixed initializer.
+    """One receiving120 scope, including the separate fixed initializer route.
 
     Fixed env inputs name the future reviewed workflow's separate step outcome
     and recipientSenderSha256 transport. Their mere presence is not genuine
     workflow/boot/step-return qualification. All existing activation HOLDs stay.
-    A future fixed consumer belongs INSIDE this scope, under this original120;
-    normal exit currently fails because that initializer is not connected yet.
+    Only the registered fixed initializer may complete inside this original120.
+    The old bare seam still refuses success. No supplied callback/success bit,
+    restored legacy recipient or second initializer allowance is accepted.
     """
     token = os.environ.pop(O.wire.TOKEN_ENV, None)
     owner = window = continuation = None
@@ -1968,9 +1979,13 @@ def _receive_initialization(cancelled):
         require(step[0] == "success" and type(step[1]) is str and re.fullmatch(r"[0-9a-f]{64}", step[1]),
                 "RECEIVING_STEP_INPUTS")
         require(type(token) is str and re.fullmatch(r"[A-Za-z0-9_.-]{16,4096}", token), "RECEIVING_READ_TOKEN")
+        step_hash = os.environ.get(continuity.STEP_HASH_ENV)
+        require(step_hash is None or type(step_hash) is str and re.fullmatch(r"[0-9a-f]{64}", step_hash),
+                "RECEIVING_STEP_HASH")
         local = time.monotonic()  # One original LOCAL-before-RAW anchor, before any original read.
         first = O.clocks.validate_reading(O.clocks.observe())
         window = _ReceivingWindow(local, first, lambda: native.cancellation(cancelled), step)
+        _RECEIVING_WINDOWS[id(window)] = replace(window.state(), step_hash=step_hash)
         owner = native.Owner(window.local_end, window, first=first, cancelled=window.state().cancelled)
         owner.initial_sources = {}
         window.bind(owner)
@@ -1978,12 +1993,17 @@ def _receive_initialization(cancelled):
         path = _receiving_path()
         native.child_environment(path)  # Reject overrides; token was already removed, never restored.
         private = owner.new(path)  # Exclusive reservation also refuses replay across fresh processes.
+        if step_hash is not None:
+            _capture_receiving_step(window)
         source = _recipient_path()
         sender = owner.open(source.with_name(source.name + "-output"))
         originals = _read_initial_recipient_originals(owner, sender, recipient_outcome=step[0], expected_sha256=step[1])
         _bind_receiving_originals(window, originals)
         owner.write(private, "receiving-window.json", window.raw)
         _receiving_current(window)
+        if step_hash is not None:
+            _receiving_step_current(window)
+            _capture_receiving_inputs(window, private)  # BEFORE the unchanged source-before/HTTP/source-after.
         authority = _receiving_authority(window, token)
         token = None  # All current-acquisition frames have returned/closed; no credential crosses yield.
         state = window.state()
@@ -1993,9 +2013,9 @@ def _receive_initialization(cancelled):
         continuation.checked()
         yield continuation
         continuation.checked()
-        # No generic callback, argv or caller-set success bit can promote this
-        # seam. The separate reviewed fixed initializer must replace this guard.
-        require(False, "RECEIVING_FIXED_INITIALIZER_NOT_CONNECTED")
+        _receiving_initialization_return(continuation)
+        _receiving_step_current(window)
+        _receiving_inputs_current(window)
     except BaseException as error:
         failure = error if owner is None or owner.original is None else owner.original
         if owner is not None:
@@ -2026,6 +2046,463 @@ def _receive_initialization(cancelled):
                 native.QUARANTINE.append(owner)
     if failure is not None:
         raise failure
+
+
+def _step_path():
+    path = _recipient_path()
+    return path.with_name(path.name + "-step")
+
+
+def _step_record(raw):
+    value = O.parse(raw)
+    require(type(raw) is bytes and 0 < len(raw) <= continuity.STEP_LIMIT and raw == O.encoded(value) and
+        set(value) == {"schema", "scope", "directory", "directoryIdentity", "senderSha256", "observed", "serviceJob",
+            "workerIdentitySha256", "originalProposalSha256", "clock", "bootSha256", "lowerNs", "lowerLocal",
+            "readEndNs", "readLocalCeiling", "sample", "writerReturn", "originalStepOutcome",
+            "budgetAcceptance", "exportSaveAuthority"} and type(value["schema"]) is int and value["schema"] == 1 and
+        value["scope"] == continuity.STEP_SCOPE and
+        value["sample"] == "AFTER_SENDER_FUNCTION_BEFORE_GUARDED_OUTPUT_AND_STEP_RETURN" and
+        value["writerReturn"] == "PENDING_OWNER_CLOSE" and value["originalStepOutcome"] == "NOT_OBSERVED" and
+        value["budgetAcceptance"] == "NOT_ADMITTED" and value["exportSaveAuthority"] is False, "STEP_RECORD")
+    clock = O.wire.clock_identity(value["clock"])
+    require(all(type(value[name]) is str and re.fullmatch(r"[0-9a-f]{64}", value[name]) for name in
+        ("senderSha256", "workerIdentitySha256", "originalProposalSha256", "bootSha256")), "STEP_RECORD_HASH")
+    require(type(value["observed"]) is dict and type(value["serviceJob"]) is list and len(value["serviceJob"]) == 4 and
+        type(value["directory"]) is str and Path(value["directory"]).is_absolute(), "STEP_RECORD_IDENTITY")
+    native.directory_identity(value["directoryIdentity"], clock.role)
+    require(O.integer(value["lowerNs"]) < O.integer(value["readEndNs"]) and
+        all(type(value[name]) in (int, float) and math.isfinite(value[name]) for name in
+            ("lowerLocal", "readLocalCeiling")) and 0 <= value["lowerLocal"] < value["readLocalCeiling"],
+        "STEP_RECORD_BOUNDS")
+    return value
+
+
+@dataclass(frozen=True, repr=False)
+class _ReceivingStep:
+    raw: bytes
+    directory: object
+    path: object
+    identity: tuple
+    boot: str
+
+
+def _capture_receiving_step(window):
+    state = window.state()
+    require(state.continuity is None and state.step_hash is not None and not continuity.QUARANTINE,
+            "RECEIVING_CONTINUITY_NOT_NEW")
+    owner, path = state.roster.owner, _step_path()
+    directory = owner.open(path)
+    raw = owner.read(directory, continuity.STEP_FILE, continuity.STEP_LIMIT)
+    value = _step_record(raw)
+    identity = tuple(native.directory_identity(list(directory.identity), state.clock.role))
+    native._new_entry_owned(owner, directory, path, identity)
+    require(value["directory"] == str(path) and value["directoryIdentity"] == list(identity) and
+        O.digest(raw) == state.step_hash and value["senderSha256"] == state.step[1] and
+        value["clock"] == O.clock_value(state.clock) and
+        native._initializer_names(owner, directory) == (continuity.STEP_FILE,), "RECEIVING_CONTINUITY_BYTES")
+    require(state.first >= value["lowerNs"] and state.local_start >= value["lowerLocal"],
+            "RECEIVING_STEP_ORDER")
+    window.now()
+    boot = continuity.boot_digest(state.clock.role)
+    window.now()
+    require(boot == value["bootSha256"], "RECEIVING_BOOT_CHANGED")
+    binding = _ReceivingStep(raw, directory, path, identity, boot)
+    _RECEIVING_WINDOWS[id(window)] = replace(window.state(),
+        continuity=(binding, _history_graph(binding.__dict__, path)))
+
+
+def _receiving_step_current(window):
+    state = window.state()
+    require(state.continuity is not None and state.raw is not None and not continuity.QUARANTINE and
+        (os.environ.get(RECEIVING_OUTCOME_ENV), os.environ.get(RECEIVING_HASH_ENV)) == state.step and
+        os.environ.get(continuity.STEP_HASH_ENV) == state.step_hash and O.wire.TOKEN_ENV not in os.environ,
+        "RECEIVING_CONTINUITY_REQUIRED")
+    binding, graph = state.continuity
+    require(type(binding) is _ReceivingStep, "RECEIVING_CONTINUITY_BINDING")
+    _check_history(graph)
+    value = _step_record(binding.raw)
+    owner = state.roster.owner
+    native._new_entry_owned(owner, binding.directory, _step_path(), binding.identity)
+    require(owner.read(binding.directory, continuity.STEP_FILE, continuity.STEP_LIMIT) == binding.raw and
+        native._initializer_names(owner, binding.directory) == (continuity.STEP_FILE,) and
+        O.digest(binding.raw) == state.step_hash and value["senderSha256"] == state.step[1],
+        "RECEIVING_CONTINUITY_CHANGED")
+    original = O.parse(dict(state.originals)["S/sender-pending.json"])["readWindow"]
+    require(O.encoded(value["observed"]) == state.observed_raw and tuple(value["serviceJob"]) == state.service_job and
+        value["workerIdentitySha256"] == O.digest(state.identity_fields[0]) and
+        value["originalProposalSha256"] == O.digest(state.proposal_raw) and
+        value["clock"] == original["clock"] == O.clock_value(state.clock) and
+        value["readEndNs"] == original["readEndNs"] and value["readLocalCeiling"] == original["readLocalCeiling"] and
+        original["retainedNs"] <= value["lowerNs"] <= state.first and
+        original["previousLocal"] <= value["lowerLocal"] <= state.local_start, "RECEIVING_CONTINUITY_ORIGINALS")
+    window.now()
+    require(continuity.boot_digest(state.clock.role) == binding.boot == value["bootSha256"], "RECEIVING_BOOT_CHANGED")
+    window.now()
+    _check_history(graph)
+
+
+def _capture_receiving_inputs(window, private):
+    """Bind source/tool bytes BEFORE their existing source/HTTP authentication."""
+    state = window.state()
+    require(state.inputs is None and state.continuity is not None, "RECEIVING_INIT_INPUTS_NOT_NEW")
+    owner, path = state.roster.owner, _receiving_path()
+    native.initialization.stdout_path(str(path / "state"), state.clock.role)
+    directories = [("session", private)]
+    for name in ("canonical-init", "control-home", "temporary"):
+        directories.append((name, owner.child(private, name, create=True)))
+    pinned = tuple((name, directory, directory.path,
+        tuple(native.directory_identity(list(directory.identity), state.clock.role))) for name, directory in directories)
+    require("state" not in {name.casefold() for name in native._initializer_names(owner, private)},
+            "RECEIVING_INIT_STATE_EXISTS")
+    toolchains = native.initialization.installed_toolchains()
+    owner.end()
+    interpreter = native.canonical._interpreter()
+    request = native.canonical.init_request(state=str(path / "state"),
+        expected_commit=O.parse(state.identity_fields[0])["source"]["commit"], role=state.clock.role)
+    owner.end()
+    environment = native.recipient_environment(path)
+    environment.update(toolchains.environment())
+    homes = toolchains.homes()
+    inputs = native._InitializationInputs(request, interpreter, toolchains, tuple(sorted(environment.items())),
+        homes, native.initialization.properties(homes))
+    graph = _history_graph(inputs.__dict__, toolchains.__dict__, pinned)
+    _RECEIVING_WINDOWS[id(window)] = replace(window.state(), inputs=(inputs, graph, pinned))
+    owner.write(dict(directories)["canonical-init"], "request.json", request)
+    _receiving_inputs_current(window, absent=True)
+
+
+def _receiving_inputs_current(window, *, absent=False):
+    state = window.state()
+    require(state.inputs is not None and state.continuity is not None and O.wire.TOKEN_ENV not in os.environ,
+            "RECEIVING_INIT_INPUTS_REQUIRED")
+    inputs, graph, directories = state.inputs
+    require(type(inputs) is native._InitializationInputs, "RECEIVING_INIT_INPUTS_CHANGED")
+    _check_history(graph)
+    owner, path = state.roster.owner, _receiving_path()
+    for name, directory, target, identity in directories:
+        require(target == (path if name == "session" else path / name), "RECEIVING_INIT_PATH_CHANGED")
+        native._new_entry_owned(owner, directory, target, identity)
+    handles = {name: directory for name, directory, _path, _identity in directories}
+    environment = native.recipient_environment(path)
+    environment.update(inputs.toolchains.environment())
+    require(tuple(sorted(environment.items())) == inputs.environment and native.canonical._interpreter() == inputs.interpreter and
+        inputs.toolchains.homes() == inputs.homes and native.initialization.properties(inputs.homes) == inputs.policy,
+        "RECEIVING_INIT_INPUTS_CHANGED")
+    require(native.canonical.init_request(state=str(path / "state"),
+        expected_commit=O.parse(state.identity_fields[0])["source"]["commit"], role=state.clock.role) == inputs.request_raw and
+        owner.read(handles["canonical-init"], "request.json") == inputs.request_raw, "RECEIVING_INIT_REQUEST_CHANGED")
+    if absent:
+        require("state" not in {name.casefold() for name in native._initializer_names(owner, handles["session"])} and
+            all(native._initializer_names(owner, handles[name]) == () for name in ("control-home", "temporary")),
+            "RECEIVING_INIT_STATE_EXISTS")
+    _check_history(graph)
+    window.now()
+    return inputs, handles
+
+
+def _receiving_initialize_native(continuation, context_raw):
+    """Fixed canonical child, using ONLY the enclosing original WORK120 owner."""
+    owner, window = continuation.checked()
+    state = window.state()
+    inputs, handles = _receiving_inputs_current(window, absent=True)
+    directory, path = handles["canonical-init"], _receiving_path()
+    context = O.parse(context_raw)
+    invocation, argv = uuid.uuid4().hex, O.parse(inputs.request_raw)["argv"]
+    environment = native.processes.ownership_environment(dict(inputs.environment), context["job"], invocation,
+        str(path), str(path / "control-home"), allow_new_context=True)
+    start = {"schema": 1, "scope": "INITIAL_RECIPIENT_CANONICAL_INIT_PRELAUNCH_V1", "contextSha256": O.digest(context_raw),
+        "argv": argv, "cwd": str(ROOT), "role": state.clock.role, "job": context["job"], "invocation": invocation,
+        "state": str(path), "home": str(path / "control-home"),
+        "inheritedContext": {name: environment[name] for name in Q._CONTEXT}, "startedNs": window.now(),
+        "workEndNs": state.work, "finalEndNs": state.work, "exitCode": None, "launchAttempted": False,
+        "scopeAttempted": False, "retirement": "UNKNOWN"}
+    start_raw = owner.write(directory, "start.json", start)
+    row = {**start, "captureOutcomes": {name: {"synced": False, "verified": False, "closeAttempted": False,
+        "closed": False, "readback": False} for name in ("stdout", "stderr")}}
+    scope = out = err = baseline_raw = birth_raw = None
+    native_known, resource_start = False, len(state.roster.seen)
+    try:
+        end = window.deadline(120)
+        out = owner.acquire("stdout", lambda: directory.create_file("stdout.log", max_bytes=native.ACK_LIMIT, deadline=end))
+        err = owner.acquire("stderr", lambda: directory.create_file("stderr.log", max_bytes=native.STDERR_LIMIT, deadline=end))
+        def make_scope():
+            row["scopeAttempted"] = True
+            return native.processes.make_scope(context["job"], invocation, str(path), str(path / "control-home"))
+        scope = owner.acquire("native-scope", make_scope)
+        row["preparerIdentity"] = native.preparer_identity(scope, state.clock.role)
+        baseline_raw = owner.write(directory, "baseline.json", {"role": state.clock.role,
+            "baseline": sorted(scope.baseline) if hasattr(scope, "baseline") else None,
+            "kernelJob": state.clock.role == "windows-x64"})
+        row["baselineSha256"] = O.digest(baseline_raw)
+        native.baseline_record(baseline_raw, state.clock.role)
+        continuation.checked()
+        _receiving_step_current(window)
+        native._initializer_outputs_absent(owner)
+        _receiving_inputs_current(window, absent=True)
+        require(native.processes.ownership_environment(dict(inputs.environment), context["job"], invocation,
+            str(path), str(path / "control-home"), allow_new_context=True) == environment,
+            "RECEIVING_INIT_ENVIRONMENT_CHANGED")
+        row["launchMinimumNs"] = window.now()
+        row["launchArgv"], row["launchAttempted"] = argv, True
+        child = scope.spawn(argv, str(ROOT), environment, stdout=out, stderr=err)
+        require(child.stdout is None and child.stderr is None, "RECEIVING_INIT_PRIVATE_SINKS")
+        birth = O.parse(O.encoded(scope.description()))
+        leaders = [value for value in birth.get("startedIdentities", []) if value.get("pid") == child.pid]
+        require(len(leaders) == 1, "RECEIVING_INIT_NATIVE_BIRTH")
+        row["leader"] = leaders[0]
+        native.native_record(birth, start, row["leader"], argv, terminal=False)
+        birth_raw = owner.write(directory, "native-start.json", {"ownership": birth, "leader": row["leader"],
+            "preparerIdentity": row["preparerIdentity"], "observedNs": window.now()})
+        row["nativeStartSha256"] = O.digest(birth_raw)
+        while True:
+            window.now()
+            for stream in (out, err):
+                stream.observe_live_output() if state.clock.role == "windows-x64" else stream.verify()
+            code = child.poll()
+            if code is not None:
+                row["exitCode"] = code  # Preserve the ACTUAL return, including a following failed observation.
+            observed = window.now()
+            if code is not None:
+                row["completedNs"] = observed
+                require(type(code) is int and code == 0, "RECEIVING_INIT_CHILD_FAILED")
+                require(scope.discover() == [], "RECEIVING_INIT_LEFT_DESCENDANTS")
+                window.now()
+                break
+            scope.discover()
+            native.time.sleep(.025)
+    except BaseException as error:
+        owner.error("receiving-canonical-child", error)
+    finally:
+        # Owner registered each actual return BEFORE its postallocation checks.
+        # A failed assignment cannot drop those references or justify a retry.
+        roster = _RECEIVING_WINDOWS[id(window)].roster
+        try:
+            roster.check()  # Capture any original returned row before recovering failed assignments.
+        except BaseException as error:
+            owner.error("receiving-initializer-resource-roster", error, unknown=True)
+        saved = roster.seen[resource_start:]
+        scope = scope if scope is not None else next((r for _row, label, r, _a, _c in saved if label == "native-scope"), None)
+        out = out if out is not None else next((r for _row, label, r, _a, _c in saved if label == "stdout"), None)
+        err = err if err is not None else next((r for _row, label, r, _a, _c in saved if label == "stderr"), None)
+        if scope is not None:
+            drain_end = None
+            try:
+                local = time.monotonic()
+                row["drainStartedNs"] = window.now(final=True)
+                drain_end = min(state.locals[0], O.wire._directed_deadline(local, 120, state.work, row["drainStartedNs"]))
+                remaining = max(0, drain_end - time.monotonic())
+                grace = min(5, remaining)
+                row["survivors"] = scope.drain(grace=grace, kill_wait=min(5, max(0, remaining - grace)), deadline=drain_end)
+                row["ownership"] = O.parse(O.encoded(scope.description()))
+                require(row["survivors"] == [] and row["ownership"].get("discoveryErrors") == [], "RECEIVING_INIT_DRAIN_UNKNOWN")
+                if "preparerIdentity" in row:
+                    require(native.preparer_identity(scope, state.clock.role) == row["preparerIdentity"],
+                            "RECEIVING_INIT_PREPARER_CHANGED")
+                if "leader" in row:
+                    native.native_record(row["ownership"], start, row["leader"], argv)
+                window.now(final=True)
+                native.posix._deadline(drain_end)
+                native_known = True
+            except BaseException as error:
+                owner.error("receiving-initializer-drain", error, unknown=True)
+            owner.close_one(scope)
+            resource = next(r for r, _label, actual, _a, _c in roster.seen if actual is scope)
+            row["scopeCloseAttempted"], row["scopeClosed"] = resource["attempted"], resource["closed"]
+            try:
+                require(resource["closed"] is True and drain_end is not None, "RECEIVING_INIT_SCOPE_CLOSE")
+                window.now(final=True)
+                native.posix._deadline(drain_end)
+            except BaseException as error:
+                native_known = False
+                owner.error("receiving-initializer-scope-close", error, unknown=True)
+        elif row["scopeAttempted"]:
+            owner.error("receiving-initializer-construction", O.OriginError("RECEIVING_INIT_SCOPE_UNKNOWN"), unknown=True)
+        else:
+            native_known = True
+        if native_known and not owner.unknown:
+            for name, stream in (("stdout", out), ("stderr", err)):
+                if stream is None:
+                    continue
+                outcome = row["captureOutcomes"][name]
+                try:
+                    window.now(final=True)
+                    stream.sync()
+                    outcome["synced"] = True
+                    stream.verify()
+                    outcome["verified"] = True
+                    window.now(final=True)
+                except BaseException as error:
+                    owner.error("receiving-initializer-capture", error)
+                owner.close_one(stream)
+                resource = next(r for r, _label, actual, _a, _c in roster.seen if actual is stream)
+                outcome.update(closeAttempted=resource["attempted"], closed=resource["closed"])
+                if owner.unknown:
+                    break
+        else:
+            owner.unknown = True
+        if row["launchAttempted"] and owner.original is not None:
+            # Outer drain cannot prove a failed child's internal supplier close.
+            owner.error("receiving-initializer-child-return", owner.original, unknown=True)
+    if owner.original is not None:
+        raise owner.original
+    require(native_known and not owner.unknown and all(outcome[name] is True for outcome in row["captureOutcomes"].values()
+        for name in ("synced", "verified", "closeAttempted", "closed")), "RECEIVING_INIT_NATIVE_NOT_RETIRED")
+    row["finalizedNs"] = window.now()
+    captures = {}
+    for name, maximum in (("stdout", native.ACK_LIMIT), ("stderr", native.STDERR_LIMIT)):
+        captures[name] = owner.read(directory, name + ".log", maximum)
+        row["captureOutcomes"][name]["readback"] = True
+    require(captures["stdout"] == native.initialization.stdout_path(str(path / "state"), state.clock.role) and
+        captures["stderr"] == b"", "RECEIVING_INIT_STDOUT")
+    row.update(retirement="KNOWN", errors=[], captures={name: {"sha256": O.digest(raw), "bytes": len(raw)}
+        for name, raw in captures.items()}, readbackCompletedNs=window.now())
+    birth, baseline = O.parse(birth_raw), native.baseline_record(baseline_raw, state.clock.role)
+    preparer = native.closed_lifetime(row["preparerIdentity"], state.clock.role)
+    require(preparer == native.closed_lifetime(birth["preparerIdentity"], state.clock.role) and
+        preparer["pid"] != row["leader"]["pid"] and birth["ownership"]["launches"] == row["ownership"]["launches"],
+        "RECEIVING_INIT_NATIVE_CHANGED")
+    native.native_record(birth["ownership"], start, row["leader"], argv, terminal=False)
+    native.native_record(row["ownership"], start, row["leader"], argv)
+    if baseline["baseline"] is not None:
+        identity = native.lifetime(row["leader"], state.clock.role)
+        require(list(identity[:4] if state.clock.role.startswith("macos-") else identity) not in baseline["baseline"],
+                "RECEIVING_INIT_PREEXISTING_LEADER")
+    times = (state.first, start["startedNs"], row["launchMinimumNs"], birth["observedNs"], row["completedNs"],
+        row["drainStartedNs"], row["finalizedNs"], row["readbackCompletedNs"])
+    require(all(type(value) is int and 0 <= value < state.work for value in times) and list(times) == sorted(times),
+            "RECEIVING_INIT_CHRONOLOGY")
+    row_raw = owner.write(directory, "result.json", row)
+    result = native.OriginalPhase(context_raw, tuple(sorted({"request.json": inputs.request_raw, "start.json": start_raw,
+        "baseline.json": baseline_raw, "native-start.json": birth_raw, "result.json": row_raw,
+        "stdout.log": captures["stdout"], "stderr.log": captures["stderr"]}.items())))
+    require(owner.phase_originals is None, "RECEIVING_INIT_NATIVE_REUSE")
+    owner.phase_originals = result
+    return result
+
+
+@dataclass(frozen=True, repr=False)
+class _ReceivingInitialization:
+    pending: bytes
+    originals: tuple
+    native: object
+
+
+def _initialize_receiving(continuation):
+    """Private one-shot canonical initializer; not producer/provider authority."""
+    saved = _RECEIVING_CONTINUATIONS.get(id(continuation))
+    require(type(continuation) is _ReceivingContinuation and type(saved) is tuple and len(saved) == 3 and
+        saved[0] is continuation, "RECEIVING_CONTINUATION_NOT_ORIGINAL")
+    window = saved[1]
+    state = window.state()
+    owner = state.roster.owner
+    require(state.inputs is not None and state.continuity is not None and id(continuation) not in _RECEIVING_INIT_ATTEMPTS,
+            "RECEIVING_FIXED_INITIALIZER_NOT_CONNECTED_OR_REUSED")
+    attempt = (continuation, window, owner, state.authority, state.inputs, state.continuity)
+    _RECEIVING_INIT_ATTEMPTS[id(continuation)] = attempt  # Irreversible, BEFORE fallible suppliers.
+    child_accepted = False
+    try:
+        require(continuation.checked() == (owner, window), "RECEIVING_INIT_CONTINUATION_CHANGED")
+        _receiving_step_current(window)
+        inputs, handles = _receiving_inputs_current(window, absent=True)
+        path = _receiving_path()
+        context_raw = owner.write(handles["session"], "initializer-context.json", {"schema": 1,
+            "scope": "INITIAL_RECIPIENT_CANONICAL_INITIALIZER_CONTEXT_V1", "job": uuid.uuid4().hex,
+            "receivingWindowSha256": O.digest(state.raw), "authoritySha256": O.digest(state.authority.raw),
+            "senderSha256": state.step[1], "stepSha256": state.step_hash, "requestSha256": O.digest(inputs.request_raw),
+            "workerIdentitySha256": O.digest(state.identity_fields[0]), "budgetAcceptance": "NOT_ADMITTED",
+            "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False})
+        phase = _receiving_initialize_native(continuation, context_raw)
+        files = [(handles["session"], "receiving-window.json", native.LIMIT, state.raw),
+            (handles["session"], "initializer-context.json", native.LIMIT, context_raw)]
+        files.extend((handles["canonical-init"], name, native.LIMIT, raw) for name, raw in phase.records)
+        states = []
+        for name in ("state", "gradle-home", "evidence", "cancellations"):
+            parent = handles["session"] if name == "state" else states[0][1]
+            directory = owner.child(parent, name)
+            identity = tuple(native.directory_identity(list(directory.identity), state.clock.role))
+            states.append((name, directory, directory.path, identity))
+        context = owner.read(states[0][1], "context.json")
+        policy = owner.read(states[1][1], "gradle.properties", 16384)
+        value = native.initialization.initial_recipient_context_record(context, worker_raw=state.identity_fields[0],
+            root=str(ROOT), state=str(path / "state"), role=state.clock.role, outer_job=O.parse(context_raw)["job"],
+            homes=inputs.homes, policy_raw=policy)
+        require(value["id"] != O.parse(dict(state.originals)["R/recipient-context.json"])["job"],
+                "RECEIVING_INIT_CONTEXT_JOB")
+        files.extend(((states[0][1], "context.json", native.LIMIT, context),
+            (states[1][1], "gradle.properties", 16384, policy)))
+        originals = tuple((directory, directory.path,
+            tuple(native.directory_identity(list(directory.identity), state.clock.role)), name, maximum, raw)
+            for directory, name, maximum, raw in files)
+        def reread():
+            require(_RECEIVING_INIT_ATTEMPTS.get(id(continuation)) is attempt and window.state().inputs is state.inputs and
+                window.state().continuity is state.continuity and owner.phase_originals is phase,
+                "RECEIVING_INIT_ORIGINAL_CHANGED")
+            for directory, target, identity, name, maximum, raw in originals:
+                native._new_entry_owned(owner, directory, target, identity)
+                require(owner.read(directory, name, maximum) == raw, "RECEIVING_INIT_ORIGINAL_BYTES_CHANGED")
+            for name, directory, target, identity in states:
+                native._new_entry_owned(owner, directory, target, identity)
+                expected = (("cancellations", "context.json", "evidence", "gradle-home") if name == "state" else
+                    ("gradle.properties",) if name == "gradle-home" else ())
+                require(native._initializer_names(owner, directory) == expected, "RECEIVING_INIT_STATE_ROSTER")
+            require(native._initializer_names(owner, handles["canonical-init"]) == tuple(name for name, _ in phase.records),
+                    "RECEIVING_INIT_NATIVE_ROSTER")
+            _receiving_step_current(window)
+            _receiving_inputs_current(window)
+            native._initializer_outputs_absent(owner)
+            continuation.checked()
+        reread()
+        pending = owner.write(handles["session"], "initialization-pending.json", {"schema": 1,
+            "scope": "INITIAL_RECIPIENT_CANONICAL_INITIALIZATION_PENDING_OWNER_CLOSE_V1",
+            "window": O.parse(state.raw), "stepSha256": state.step_hash, "authoritySha256": O.digest(state.authority.raw),
+            "originals": [{"directory": str(target), "directoryIdentity": list(identity), "name": name,
+                "sha256": O.digest(raw), "bytes": len(raw)} for _directory, target, identity, name, _maximum, raw in originals],
+            "retainedNs": window.now(), "retainedLocal": window.state().local_last,
+            "childReturn": "INITIALIZED_CONTEXT_NOT_PRODUCT_RECEIPT", "ownerReturn": "PENDING_OWNER_CLOSE",
+            "originalStepOutcome": "NOT_OBSERVED", "budgetAcceptance": "NOT_ADMITTED",
+            "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False})
+        reread()
+        require(owner.read(handles["session"], "initialization-pending.json") == pending,
+                "RECEIVING_INIT_PENDING_CHANGED")
+        result = _ReceivingInitialization(pending, originals, phase)
+        graph = _history_graph(result.__dict__, originals, phase, state.inputs[0].__dict__, state.continuity[0].__dict__)
+        _RECEIVING_INIT_RETURNS[id(result)] = (result, attempt, pending, originals, phase, graph)
+        _RECEIVING_WINDOWS[id(window)] = replace(window.state(), initialization=result)
+        _receiving_initialization_return(continuation)
+        child_accepted = True
+        return result
+    except BaseException as error:
+        owner.error("receiving-fixed-initializer", error, unknown=owner.phase_originals is not None and not child_accepted)
+        current = _RECEIVING_WINDOWS.get(id(window))
+        if type(current) is _ReceivingState and current.window is window:
+            _RECEIVING_WINDOWS[id(window)] = replace(current, failed=True)
+        raise owner.original
+
+
+def _receiving_initialization_return(continuation, *, closed=False):
+    saved = _RECEIVING_CONTINUATIONS.get(id(continuation))
+    require(type(continuation) is _ReceivingContinuation and type(saved) is tuple and len(saved) == 3 and saved[0] is continuation,
+            "RECEIVING_CONTINUATION_NOT_ORIGINAL")
+    window, authority = saved[1:]
+    state = window.state(cleanup=closed)
+    result = state.initialization
+    returned = _RECEIVING_INIT_RETURNS.get(id(result))
+    require(type(result) is _ReceivingInitialization and type(returned) is tuple and len(returned) == 6 and returned[0] is result,
+            "RECEIVING_FIXED_INITIALIZER_NOT_CONNECTED")
+    attempt = returned[1]
+    require(_RECEIVING_INIT_ATTEMPTS.get(id(continuation)) is attempt and attempt[0] is continuation and attempt[1] is window and
+        attempt[2] is state.roster.owner and attempt[3] is authority is state.authority and
+        attempt[4] is state.inputs and attempt[5] is state.continuity and
+        result.pending == returned[2] and result.originals is returned[3] and result.native is returned[4] and
+        state.roster.owner.phase_originals is result.native and not state.failed, "RECEIVING_INIT_RETURN_CHANGED")
+    _check_history(returned[5])
+    if closed:
+        state.roster.known()
+        require(state.terminal and not state.busy and state.roster.owner.original is None and state.roster.owner.errors == [],
+                "RECEIVING_INIT_CLOSE_NOT_KNOWN")
+    else:
+        require(not state.terminal, "RECEIVING_INIT_RETIRED")
+    return result
 
 
 def _authority_frame(raw):
@@ -3616,6 +4093,296 @@ def validate_recipient(cancelled):
     return _retain_recipient_validation(_prepare_and_validate_recipient(cancelled))
 
 
+def _sender_step(cancelled):
+    """Prepare a private lower-bound sidecar BEFORE guarded's two final checks."""
+    native.cancellation(cancelled)
+    boot = continuity.boot_digest(O.clocks.processes.host_role())
+    returned = validate_recipient(cancelled)  # Accepted sender body and its final-only fence are unchanged.
+    return _retain_sender_step(returned, cancelled, boot)
+
+
+def _retain_sender_step(returned, cancelled, initial_boot):
+    require(type(returned) is tuple and len(returned) == 3, "STEP_SENDER_ORIGINAL_RETURN")
+    value, sender, hard = returned
+    candidates = [row for row in _RECIPIENT_SENDERS.values() if type(row) is tuple and len(row) == 3 and row[2] is sender]
+    require(len(candidates) == 1, "STEP_SENDER_NOT_ORIGINAL")
+    original_attempt = candidates[0]
+    result, saved, _ = original_attempt
+    check_recipient_validation_return(result)
+    state = saved[3]
+    _binding, original = _recipient_claim(state.claim)
+    clock, last, cap = sender.clock, O.integer(sender.last), sender.local_end
+    require(clock is state.clock and type(hard) is int and hard == state.read_end and last < hard and
+        type(cap) is float and cap == state.read_local and math.isfinite(cap) and
+        type(value) is dict and set(value) == {"scope", "recipientSenderSha256", "budgetAcceptance", "testAcceptance",
+            "exportSaveAuthority"} and value["scope"] == RECIPIENT_OUTPUT_SCOPE and
+        value["budgetAcceptance"] == "NOT_ADMITTED" and value["testAcceptance"] == "NOT_PERFORMED" and
+        value["exportSaveAuthority"] is False and re.fullmatch(r"[0-9a-f]{64}", value["recipientSenderSha256"]),
+        "STEP_SENDER_BINDINGS")
+    value_graph = _history_graph(value, clock)
+    claim = (returned, original_attempt, cancelled, clock, hard, cap, value_graph)
+    require(id(sender) not in _SENDER_STEP_ATTEMPTS, "STEP_SENDER_ALREADY_CLAIMED")
+    _SENDER_STEP_ATTEMPTS[id(sender)] = claim  # Before metadata/clock/native suppliers.
+    local_last = state.local_last
+    owner = roster = None
+    phase, busy, failed, final_checks = "METADATA", False, False, 0
+    failure, closed_graph = None, None
+
+    def remember(error):
+        nonlocal failed, failure
+        failed = True
+        if failure is None:
+            failure = owner.original if owner is not None and owner.original is not None else error
+        if owner is not None:
+            owner.error("sender-step", error)
+
+    def pins(*, closing=False):
+        if roster is not None:
+            roster.check()
+        if closing:
+            return
+        require(_SENDER_STEP_ATTEMPTS.get(id(sender)) is claim and _RECIPIENT_SENDERS.get(id(result)) is original_attempt and
+            _RECIPIENT_RETURNS.get(id(result)) is saved and sender.clock is clock and sender.local_end == cap and
+            not failed and O.wire.TOKEN_ENV not in os.environ and not continuity.QUARANTINE and
+            not native.QUARANTINE and not Q.QUARANTINE and not native.diagnostics._QUARANTINE,
+            "STEP_SENDER_BINDING_CHANGED")
+        check_recipient_validation_return(result)  # Passive identity/history ONLY, never the old sender now/deadline.
+        _check_history(value_graph)
+        if owner is not None:
+            require(owner.original is None and not owner.unknown and owner.errors == [], "STEP_METADATA_OWNER_FAILED")
+        if phase in ("FILE_OUTPUT", "HANDOFF", "COMPLETE"):
+            roster.known()
+            require(closed_graph is not None, "STEP_METADATA_CLOSE_REQUIRED")
+            _check_history(closed_graph)
+
+    def local_sample():
+        nonlocal local_last
+        local = time.monotonic()
+        require(type(local) in (int, float) and math.isfinite(local) and local >= local_last,
+                "STEP_LOCAL_BACKWARDS")
+        local_last = local
+        require(local < cap, "STEP_ORIGINAL_READ_EXPIRED")
+        return local
+
+    class StepFence:
+        __slots__ = ()
+        clock = property(lambda _self: clock)
+        last = property(lambda _self: last)
+        local_end = property(lambda _self: cap)
+
+        def now(self, *, final=False, minimum=0, limit=None):
+            nonlocal last, busy, phase, final_checks
+            require(self is fence, "STEP_METADATA_NOT_ORIGINAL")
+            if busy:
+                error = I.AdmissionError("STEP_METADATA_REENTRY")
+                remember(error)
+                raise error
+            busy = True
+            try:
+                require(type(final) is bool and phase != "COMPLETE" and
+                    (phase == "CLOSING" and final or not failed), "STEP_METADATA_NOT_LIVE")
+                end = hard if limit is None else min(hard, O.integer(limit))
+                minimum = max(last, O.integer(minimum))
+                pins(closing=phase == "CLOSING")
+                local_sample()
+                if phase == "HANDOFF":
+                    require(final and final_checks < 2, "STEP_SENDER_FINAL_ONLY")
+                    # Exactly the ORIGINAL two OUTPUT calls. Never its deadline,
+                    # a third now, or any state restoration after guarded.
+                    final_checks += 1
+                    observed = sender.now(final=True, minimum=minimum, limit=end)
+                    require(type(observed) is int and minimum <= observed < end, "STEP_SENDER_HIGHWATER")
+                    last = observed
+                    local_sample()
+                    pins()
+                    if final_checks == 2:
+                        phase = "COMPLETE"
+                    return observed
+                for index in range(1 if final else 2):
+                    last = O.clocks.checked_now(clock, minimum_ns=max(last, minimum))
+                    local_sample()
+                    require(last < end, "STEP_ORIGINAL_READ_EXPIRED")
+                    pins(closing=phase == "CLOSING")
+                    if not final and index == 0:
+                        state.cancelled()
+                        native.cancellation(cancelled)
+                        local_sample()
+                return last
+            except BaseException as error:
+                remember(error)
+                raise
+            finally:
+                busy = False
+
+        def deadline(self, maximum, *, final=False, limit=None):
+            require(self is fence, "STEP_METADATA_NOT_ORIGINAL")
+            try:
+                require(phase == "METADATA" and type(maximum) in (int, float) and
+                    math.isfinite(maximum) and 0 < maximum <= 45, "STEP_METADATA_IO_ONLY")
+                local = local_sample()
+                observed = self.now(final=final, limit=limit)
+                end = hard if limit is None else min(hard, O.integer(limit))
+                return min(cap, O.wire._directed_deadline(local, maximum, end, observed))
+            except BaseException as error:
+                remember(error)  # A failed original deadline cannot revive as final sender handoff.
+                raise
+
+    fence = StepFence()
+    raw = None
+    try:
+        fence.now()
+        require(continuity.boot_digest(clock.role) == initial_boot, "STEP_SENDER_BOOT_CHANGED")
+        fence.now()
+        first = O.clocks.Reading(clock, last)
+        owner = native.Owner(cap, fence, first=first, cancelled=state.cancelled)
+        owner.initial_sources = {}
+        roster = _RecipientRoster(owner, fence, first)
+        path = _step_path()
+        directory = owner.new(path)
+        identity = tuple(native.directory_identity(list(directory.identity), clock.role))
+        native._new_entry_owned(owner, directory, path, identity)
+        require(native._initializer_names(owner, directory) == (), "STEP_METADATA_NOT_EMPTY")
+        observed, _recipient, event = _recipient_host(O.parse(original.match_raw)["firstUseAt"])
+        require(observed == O.parse(original.worker_originals[0])["observed"] and event == original.identity_fields[1],
+                "STEP_SENDER_HOST_CHANGED")
+        service_job = _service_job(original.worker_originals, clock)
+        lower = fence.now()
+        raw = O.encoded({"schema": 1, "scope": continuity.STEP_SCOPE, "directory": str(path),
+            "directoryIdentity": list(identity), "senderSha256": value["recipientSenderSha256"], "observed": observed,
+            "serviceJob": list(service_job), "workerIdentitySha256": O.digest(original.identity_fields[0]),
+            "originalProposalSha256": O.digest(original.proposal_raw), "clock": O.clock_value(clock),
+            "bootSha256": initial_boot, "lowerNs": lower, "lowerLocal": local_last, "readEndNs": hard,
+            "readLocalCeiling": cap, "sample": "AFTER_SENDER_FUNCTION_BEFORE_GUARDED_OUTPUT_AND_STEP_RETURN",
+            "writerReturn": "PENDING_OWNER_CLOSE", "originalStepOutcome": "NOT_OBSERVED",
+            "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
+        _step_record(raw)
+        owner.write(directory, continuity.STEP_FILE, raw)
+        require(owner.read(directory, continuity.STEP_FILE, continuity.STEP_LIMIT) == raw and
+            native._initializer_names(owner, directory) == (continuity.STEP_FILE,), "STEP_METADATA_CHANGED")
+        native._new_entry_owned(owner, directory, path, identity)
+        pins()
+    except BaseException as error:
+        remember(error)
+    finally:
+        phase = "CLOSING"
+        if owner is not None:
+            try:
+                roster.freeze()
+            except BaseException as error:
+                owner.error("step-close-roster", error, unknown=True)
+                remember(error)
+            try:
+                owner.close()
+                roster.known()
+            except BaseException as error:
+                owner.error("step-close", error, unknown=True)
+                remember(error)
+            if failure is None:
+                failure = owner.original
+            if owner.unknown and not any(value is owner for value in native.QUARANTINE):
+                native.QUARANTINE.append(owner)
+    if failure is not None:
+        raise failure
+    try:
+        require(owner is not None and raw is not None and not failed, "STEP_METADATA_INCOMPLETE")
+        closed_graph = _history_graph(owner, roster)
+        phase = "FILE_OUTPUT"
+        continuity.append_outputs({"recipientSenderSha256": value["recipientSenderSha256"],
+            "recipientStepSha256": O.digest(raw)}, fence.now)
+        pins()
+        phase = "HANDOFF"
+        return value, fence, hard
+    except BaseException as error:
+        remember(error)
+        raise failure
+
+
+def _initialize_step(cancelled):
+    """Fixed uncalled Steps consumer; emits only a pending-close receipt digest."""
+    require(type(os.environ.get(continuity.STEP_HASH_ENV)) is str and
+        re.fullmatch(r"[0-9a-f]{64}", os.environ[continuity.STEP_HASH_ENV]), "RECEIVING_FIXED_STEP_REQUIRED")
+    with _receive_initialization(cancelled) as continuation:
+        result = _initialize_receiving(continuation)
+    require(_receiving_initialization_return(continuation, closed=True) is result, "RECEIVING_INIT_CLOSED_RETURN")
+    window = _RECEIVING_CONTINUATIONS[id(continuation)][1]
+    terminal = window.state(cleanup=True)
+    # No now()/deadline() on the terminal receiver. These independently capped
+    # direct output observations inherit its ORIGINAL RAW/LOCAL high-water.
+    last, local_last, hard, cap = terminal.last, terminal.local_last, terminal.work, terminal.locals[0]
+    graph = _history_graph(terminal.__dict__, terminal.roster.owner, terminal.roster)
+    busy, failed, checks = False, False, 0
+
+    def pins():
+        require(_RECEIVING_WINDOWS.get(id(window)) is terminal and not failed and
+            _RECEIVING_CLOSED_RETURNS.get(id(continuation)) is closed_return and
+            _receiving_initialization_return(continuation, closed=True) is result and
+            (os.environ.get(RECEIVING_OUTCOME_ENV), os.environ.get(RECEIVING_HASH_ENV)) == terminal.step and
+            os.environ.get(continuity.STEP_HASH_ENV) == terminal.step_hash and O.wire.TOKEN_ENV not in os.environ and
+            not continuity.QUARANTINE and not native.QUARANTINE and not Q.QUARANTINE and not native.diagnostics._QUARANTINE,
+            "RECEIVING_INIT_OUTPUT_CHANGED")
+        _check_history(graph)
+
+    def observe(minimum=0, limit=None):
+        nonlocal last, local_last, failed, busy
+        if busy:
+            failed = True
+            raise I.AdmissionError("RECEIVING_INIT_OUTPUT_REENTRY")
+        busy = True
+        try:
+            pins()
+            native.cancellation(cancelled)
+            local = time.monotonic()
+            require(type(local) in (int, float) and math.isfinite(local) and local >= local_last,
+                    "RECEIVING_INIT_OUTPUT_LOCAL_BACKWARDS")
+            local_last = local
+            end = hard if limit is None else min(hard, O.integer(limit))
+            last = O.clocks.checked_now(terminal.clock, minimum_ns=max(last, O.integer(minimum)))
+            require(last < end and local < cap, "RECEIVING_INIT120_OUTPUT_EXPIRED")
+            # Boot must still match after actual enclosing close and at each
+            # final output edge. Terminal history is not a live boot supplier.
+            require(continuity.boot_digest(terminal.clock.role) == terminal.continuity[0].boot,
+                    "RECEIVING_INIT_OUTPUT_BOOT_CHANGED")
+            last = O.clocks.checked_now(terminal.clock, minimum_ns=last)
+            after = time.monotonic()
+            require(type(after) in (int, float) and math.isfinite(after) and after >= local_last,
+                    "RECEIVING_INIT_OUTPUT_LOCAL_BACKWARDS")
+            local_last = after
+            require(last < end and after < cap, "RECEIVING_INIT120_OUTPUT_EXPIRED")
+            pins()
+            return last
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            busy = False
+
+    class ClosedOutput:
+        __slots__ = ()
+        def now(self, *, final=False, minimum=0, limit=None):
+            nonlocal checks, failed
+            require(self is fence, "RECEIVING_INIT_OUTPUT_NOT_ORIGINAL")
+            if final is not True or checks >= 2:
+                failed = True
+                raise I.AdmissionError("RECEIVING_INIT_OUTPUT_FINAL_ONLY")
+            checks += 1
+            return observe(minimum, limit)
+
+    # Private same-call closed history; its bytes are deliberately NOT logged.
+    # The retained pending file plus actual successful Step is the disk edge.
+    closed = O.encoded({"schema": 1, "scope": "INITIAL_RECIPIENT_CLOSED_INITIALIZATION_HISTORY_V1",
+        "pendingSha256": O.digest(result.pending), "closedNs": terminal.last, "closedLocal": terminal.local_last,
+        "resourceCount": len(terminal.roster.rows), "ownerReturn": "KNOWN_RESOURCE_CLOSE_ONLY",
+        "nextPhaseAuthority": False, "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
+    require(id(continuation) not in _RECEIVING_CLOSED_RETURNS, "RECEIVING_INIT_CLOSED_HISTORY_REUSE")
+    closed_return = (continuation, result, terminal, closed)
+    _RECEIVING_CLOSED_RETURNS[id(continuation)] = closed_return
+    observe()
+    continuity.append_outputs({"initializationSha256": O.digest(result.pending)}, observe)
+    fence = ClosedOutput()
+    return native.public_result("INITIAL_RECIPIENT_INITIALIZATION_PENDING_STEP_RETURN_V1",
+        "initializationSha256", result.pending), fence, hard
+
+
 def _read_recipient_sender(owner, directory, *, recipient_outcome, expected_sha256):
     """SUPPLIED_PACKAGE_CONSISTENCY_ONLY; enclosing OWNER_CLOSE_PENDING.
 
@@ -5021,6 +5788,8 @@ def main():
     commands = parser.add_subparsers(dest="operation", required=True)
     commands.add_parser("prepare-originals")
     commands.add_parser("validate-recipient")
+    commands.add_parser("sender-step")
+    commands.add_parser("initialize-step")
     for name in ("_service", "_service-entry", "_service-authority", "_service-receiving-authority", "_recipient"):
         child = commands.add_parser(name)
         child.add_argument("--context-sha256", required=True)
@@ -5032,6 +5801,10 @@ def main():
             native.guarded(prepare_originals)
         elif args.operation == "validate-recipient":
             native.guarded(validate_recipient)
+        elif args.operation == "sender-step":
+            native.guarded(_sender_step)
+        elif args.operation == "initialize-step":
+            native.guarded(_initialize_step)
         else:
             require(re.fullmatch(r"0|[1-9][0-9]{0,19}", args.minimum_ns), "LAUNCH_MINIMUM")
             minimum = O.integer(int(args.minimum_ns))
