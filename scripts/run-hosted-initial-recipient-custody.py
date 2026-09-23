@@ -3140,3 +3140,193 @@ def checked_custody_authority(result, primary_result):
             attempt["failure"] = error
         attempt["state"] = "FAILED"
         raise attempt["failure"]
+
+
+def _copy_authority(owner, primary_result, authority_result, destination):
+    """Append only the original closed authority episode; no freeze or export.
+
+    The fixed outer caller owns this NEW file-only owner and its final close.
+    Both prior returns stay historical; they neither restore owners nor renew
+    the SAME original Window. PRIMARY's original map is never rewritten.
+    """
+    require(type(owner) is _PrimaryOwner, "AUTHORITY_COPY_OWNER")
+    try:
+        owner.guard()
+        window, primary, history, primary_raw, historical = checked_primary(primary_result)
+        authority_window, match, captured, closed_raw, inventory_raw, originals = \
+            checked_custody_authority(authority_result, primary_result)
+        require(authority_window is window and type(window) is Window and owner.owner.fence is window and
+            owner.owner.first is window._view().binding[0] and not owner.snapshots and
+            owner.owner.work_limit == window.work and owner.owner.final_limit == window.final,
+            "AUTHORITY_COPY_ORIGINAL_WINDOW")
+        require(any(row[2] is destination and row[1] == "directory" and not row[3] and not row[4]
+            for row in owner.rows), "AUTHORITY_COPY_OWNED_DESTINATION")
+        roots, handoff, custody_path = _paths(primary.kind)
+        require(destination.path == custody_path / "copied-evidence" and
+            primary.role == window.clock.role, "AUTHORITY_COPY_FIXED_DESTINATION")
+
+        def current():
+            owner.guard()
+            now = checked_primary(primary_result)
+            require(now[0] is window and now[1] is primary and now[2] == history and
+                now[3] == primary_raw and now[4] is historical, "AUTHORITY_COPY_PRIMARY_CHANGED")
+            now = checked_custody_authority(authority_result, primary_result)
+            require(now[0] is window and now[1] is match and now[2] is captured and
+                now[3] == closed_raw and now[4] == inventory_raw and now[5] is originals,
+                "AUTHORITY_COPY_RETURN_CHANGED")
+            require(_paths(primary.kind) == (roots, handoff, custody_path) and
+                destination.path == custody_path / "copied-evidence", "AUTHORITY_COPY_PATH_CHANGED")
+            owner.structural()  # No callback after the original-return checks.
+
+        def metadata(snapshot):
+            return [[name, directory, list(identity), count, O.parse(raw)]
+                for name, directory, identity, count, raw in snapshot.metadata]
+
+        old = canonical(primary_raw)
+        require(old["scope"] == PRIMARY_SCOPE and old["origin"] == "PRIMARY" and
+            old["destination"] == str(destination.path) and old["destinationIdentity"] == list(destination.identity) and
+            type(old["members"]) is list and type(old["memberCount"]) is int and
+            old["memberCount"] == old["nextOrdinal"] == len(old["members"]) > 0 and
+            old["totalBytes"] == sum(row["bytes"] for row in old["members"]) and
+            old["remainingOrigins"] == list(ORIGINS[1:]) and old["freeze"] == "NOT_FINAL_THREE_ORIGIN_FREEZE" and
+            old["exportSaveAuthority"] is False, "AUTHORITY_COPY_PRIMARY_MAP")
+        previous_count = old["memberCount"]
+        before = _snapshot(owner, "COPIED_PRIMARY", destination)
+        require(metadata(before) == old["destinationMetadata"] and before.pin == tuple(old["destinationIdentity"]) and
+            tuple(row[0] for row in before.metadata) == ("", *(_member_name(n) for n in range(previous_count))) and
+            all(not row[1] for row in before.metadata[1:]), "AUTHORITY_COPY_PREVIOUS_DESTINATION")
+        for number, (item, node) in enumerate(zip(old["members"], before.metadata[1:])):
+            require(item["member"] == _member_name(number) and item["origin"] == "PRIMARY" and
+                type(item["bytes"]) is int and item["bytes"] == node[3], "AUTHORITY_COPY_PREVIOUS_MEMBER")
+            _written_matches(O.encoded(item["destinationWriteMetadata"]), node, before.windows)
+            reader, verify = _snapshot_reader(owner, before, item["member"])
+            _consume(owner, reader, item["bytes"], item["sha256"], verify)
+            current()
+
+        path = custody_path / "authority-1"
+        index = fields(canonical(inventory_raw), "schema scope origin root clock contextSha256 matchSha256 "
+            "pendingSha256 files directories fileCount directoryCount totalBytes copyState exportSaveAuthority",
+            "AUTHORITY_COPY_INDEX_FIELDS")
+        require(type(index["schema"]) is int and index["schema"] == 1 and index["scope"] == _AUTHORITY_INDEX_SCOPE and
+            index["origin"] == ORIGINS[1] and index["root"] == str(path) and
+            index["clock"] == O.clock_value(window.clock) and index["copyState"] == "ORIGINAL_BYTES_NOT_COPIED" and
+            index["exportSaveAuthority"] is False and type(index["fileCount"]) is int and index["fileCount"] == 281 and
+            type(index["directoryCount"]) is int and index["directoryCount"] == 58 and
+            type(index["files"]) is list and len(index["files"]) == 281 and
+            type(index["directories"]) is list and len(index["directories"]) == 58, "AUTHORITY_COPY_INDEX")
+        require(type(originals) is tuple and len(originals) == 38 and
+            all(type(name) is str and type(raw) is bytes for name, raw in originals) and
+            len(dict(originals)) == 38, "AUTHORITY_COPY_RETAINED_ORIGINALS")
+        available = dict(originals)
+        closed = fields(canonical(closed_raw), "schema scope windowSha256 primaryResultSha256 primaryCopySha256 "
+            "matchSha256 inventorySha256 pendingSha256 originalChain preCloseNs closedNs resourceCount retirement "
+            "budgetAcceptance exportSaveAuthority", "AUTHORITY_COPY_CLOSED_FIELDS")
+        require(type(closed["schema"]) is int and closed["schema"] == 1 and closed["scope"] == _AUTHORITY_RETURN_SCOPE and
+            closed["windowSha256"] == O.digest(available["authority-window.json"]) and
+            closed["primaryResultSha256"] == primary.result_sha256 and closed["primaryCopySha256"] == O.digest(primary_raw) and
+            closed["inventorySha256"] == O.digest(inventory_raw) and
+            closed["matchSha256"] == index["matchSha256"] == O.digest(match.record) and
+            closed["pendingSha256"] == index["pendingSha256"] == O.digest(available["authority-pending.json"]) and
+            index["contextSha256"] == O.digest(available["context.json"]) and
+            captured[0] == available["context.json"] and dict(captured[1])["match"] == match.record and
+            closed["retirement"] == "KNOWN_RESOURCE_CLOSE_ONLY" and closed["budgetAcceptance"] == "NOT_ADMITTED" and
+            closed["exportSaveAuthority"] is False, "AUTHORITY_COPY_CLOSED_LINKS")
+        current()
+        source = _snapshot(owner, ORIGINS[1], _private(owner, path))
+        nodes = {row[0]: row for row in source.metadata}
+        file_rows, directory_rows = {}, {}
+        for row in index["files"]:
+            fields(row, "relative maximum bytes sha256 provenance", "AUTHORITY_COPY_FILE_FIELDS")
+            name = row["relative"]
+            require(type(name) is str and name and all(Q._component(part) == part for part in name.split("/")) and
+                name not in file_rows and type(row["maximum"]) is int and type(row["bytes"]) is int and
+                0 <= row["bytes"] <= row["maximum"] <= native.LIMIT and row["maximum"] > 0,
+                "AUTHORITY_COPY_FILE")
+            digest(row["sha256"])
+            retained = name in available
+            require(row["provenance"] == ("ACTUAL_RETAINED_BYTES" if retained else "ORIGINAL_QUERY_DECLARATION") and
+                (not retained or row["bytes"] == len(available[name]) and row["sha256"] == O.digest(available[name])) and
+                (row["bytes"] != 0 or row["sha256"] == O.digest(b"")), "AUTHORITY_COPY_FILE_PROVENANCE")
+            file_rows[name] = row
+        fixed_pins = {"", "control-home", "temporary", "service", "source-before", "source-after", "acquisition-queries"}
+        for row in index["directories"]:
+            fields(row, "relative identity provenance", "AUTHORITY_COPY_DIRECTORY_FIELDS")
+            relative = row["relative"]
+            name = "" if relative == "." else relative
+            require(type(name) is str and (relative == "." or name and
+                all(Q._component(part) == part for part in name.split("/"))) and name not in directory_rows,
+                "AUTHORITY_COPY_DIRECTORY")
+            pinned = name in fixed_pins
+            require(row["provenance"] == ("ORIGINAL_NATIVE_PIN" if pinned else "ORIGINAL_QUERY_DECLARATION") and
+                (row["identity"] is not None) is pinned, "AUTHORITY_COPY_DIRECTORY_PROVENANCE")
+            if pinned:
+                pin = tuple(native.directory_identity(row["identity"], primary.role))
+                require(name in nodes and nodes[name][1] is True and nodes[name][2] == pin,
+                    "AUTHORITY_COPY_ORIGINAL_PIN")
+            directory_rows[name] = row
+        require(tuple(file_rows) == tuple(sorted(file_rows)) and tuple(directory_rows) == tuple(sorted(directory_rows)) and
+            set(available) <= set(file_rows) and fixed_pins <= set(directory_rows) and
+            len(set(file_rows) | set(directory_rows)) == 339 and set(nodes) == set(file_rows) | set(directory_rows) and
+            all(nodes[name][1] is True for name in directory_rows) and
+            all(nodes[name][1] is False and nodes[name][3] == row["bytes"] for name, row in file_rows.items()) and
+            type(index["totalBytes"]) is int and index["totalBytes"] == sum(row["bytes"] for row in file_rows.values()),
+            "AUTHORITY_COPY_EXACT_ROSTER")
+        combined = (*before.metadata, *source.metadata)
+        require(len({row[2] for row in combined}) == len(combined), "AUTHORITY_COPY_SOURCE_ALIAS")
+        # Existing PRIMARY + original authority + the appended destination share
+        # ONE unchanged aggregate allowance. Snapshot observations are retained.
+        added_bytes = index["totalBytes"] + len(closed_raw)
+        _aggregate(tuple(owner.snapshots), old["totalBytes"] + added_bytes, previous_count + 283)
+        members = []
+        for name, row in file_rows.items():
+            current()
+            target, written = _copy_member(owner, destination, previous_count + len(members), row["bytes"], row["sha256"],
+                snapshot=source, name=name)
+            members.append({"member": target, "origin": ORIGINS[1], "original": name,
+                "originalMaximum": row["maximum"], "bytes": row["bytes"], "sha256": row["sha256"],
+                "provenance": row["provenance"], "carrier": "INDEXED_DISK_ORIGINAL",
+                "sourceCopyIdentity": list(nodes[name][2]), "destinationWriteMetadata": O.parse(written)})
+            current()
+        target, written = _copy_member(owner, destination, previous_count + len(members), len(closed_raw),
+            O.digest(closed_raw), embedded=closed_raw)
+        members.append({"member": target, "origin": ORIGINS[1], "original": "authority-return.json",
+            "originalMaximum": native.LIMIT, "bytes": len(closed_raw), "sha256": O.digest(closed_raw),
+            "provenance": "ACTUAL_CLOSED_PARENT_RETURN", "carrier": "EMBEDDED_NOT_DISK_ORIGINAL",
+            "sourceCopyIdentity": None, "destinationWriteMetadata": O.parse(written)})
+        require(len(members) == 282, "AUTHORITY_COPY_MEMBER_COUNT")
+        current()
+        after = _snapshot(owner, "COPIED_PRIMARY_AND_AUTHORITY", destination)
+        require(after.path == before.path and after.pin == before.pin and
+            tuple(row[0] for row in after.metadata) == ("", *(_member_name(n) for n in range(previous_count + 282))) and
+            all(not row[1] for row in after.metadata[1:]) and
+            after.metadata[1:previous_count + 1] == before.metadata[1:], "AUTHORITY_COPY_APPEND_TRANSITION")
+        _aggregate(tuple(owner.snapshots))
+        combined = (*source.metadata, *after.metadata)
+        require(len({row[2] for row in combined}) == len(combined), "AUTHORITY_COPY_DESTINATION_ALIAS")
+        for item, node in zip((*old["members"], *members), after.metadata[1:]):
+            current()
+            _written_matches(O.encoded(item["destinationWriteMetadata"]), node, after.windows)
+            reader, verify = _snapshot_reader(owner, after, item["member"])
+            _consume(owner, reader, item["bytes"], item["sha256"], verify)
+        for snapshot in (source, after):
+            current()
+            _snapshot_current(owner, snapshot, rescan=True)
+            current()
+        raw = O.encoded({"schema": 1, "scope": "INITIAL_RECIPIENT_CUSTODY_AUTHORITY_COPY_V1", "origin": ORIGINS[1],
+            "primaryResultSha256": primary.result_sha256, "primaryCopySha256": O.digest(primary_raw),
+            "authorityReturnSha256": O.digest(closed_raw), "authorityInventorySha256": O.digest(inventory_raw),
+            "authorityInventoryBase64": base64.b64encode(inventory_raw).decode("ascii"),
+            "members": members, "sourceMetadata": metadata(source), "originalDirectories": index["directories"],
+            "destination": str(destination.path), "destinationIdentity": list(after.pin),
+            "destinationBeforeMetadataSha256": O.digest(O.encoded({"metadata": metadata(before)})),
+            "destinationRootBefore": metadata(before)[0], "destinationMetadata": metadata(after),
+            "previousMemberCount": previous_count, "memberCount": len(members), "totalBytes": added_bytes,
+            "aggregateMemberCount": previous_count + len(members), "aggregateTotalBytes": old["totalBytes"] + added_bytes,
+            "nextOrdinal": previous_count + len(members), "freeze": "NOT_FINAL_THREE_ORIGIN_FREEZE",
+            "remainingOrigins": [ORIGINS[2]], "productiveAuthority": False,
+            "currentAuthority": "CLOSED_HISTORY_NOT_LIVE_LEASE", "exportSaveAuthority": False})
+        canonical(raw)
+        current()
+        return raw
+    except BaseException as error:
+        raise owner.remember(error)
