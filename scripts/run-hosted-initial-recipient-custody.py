@@ -4908,7 +4908,8 @@ def _collect_names(metadata, directory, extra=()):
             for entry in entries:
                 require(len(names) < 32, "COLLECT_ROSTER_LIMIT")
                 names.append(entry.name)
-    expected = (*_CRYPTO_INPUT_LIMITS, "context.json", "custody-return.json", "control-home", "temporary", "crypto-service", *extra)
+    expected = (*_CRYPTO_INPUT_LIMITS, "context.json", "crypto-child-result.json", "custody-return.json",
+        "control-home", "temporary", "crypto-service", *extra)
     require(len(names) == len(set(name.casefold() for name in names)) and tuple(sorted(names)) == tuple(sorted(expected)),
         "COLLECT_RETURNED_ROSTER")
     directory.verify()

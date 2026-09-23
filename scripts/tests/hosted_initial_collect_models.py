@@ -295,7 +295,11 @@ class Packets:
         self.raws = {"step": wire(self.transfer), "carrier": carrier_raw, "context": context_raw, "manifest": manifest_raw,
             "original-match": self.match.record, "fresh-match": self.match.record, "event": self.event,
             "policy": self.policy_raw, "public": key}
-        for name, raw in {**files, "context.json": context_raw, "custody-return.json": carrier_raw,
+        # This prior child is an opaque supplied Step-boundary byte string, not
+        # an executed crypto result. Its hash matches the supplied carrier; the
+        # new collect roster must preserve the real producer's mandatory name.
+        for name, raw in {**files, "context.json": context_raw, "crypto-child-result.json": b"SUPPLIED-CHILD",
+                "custody-return.json": carrier_raw,
                 D._EXPORT_STEP_FILE: self.raws["step"]}.items():
             put(paths["returned"] / name, raw)
         put(paths["export-output"] / D.native.posix.MANIFEST, manifest_raw)

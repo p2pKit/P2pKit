@@ -247,6 +247,28 @@ class TransferAndInputControls(unittest.TestCase):
             with self.assertRaisesRegex(Exception, "RETURNED_ROSTER"):
                 rig.export_step()
 
+    def test_prior_crypto_child_member_is_mandatory_and_returned_roster_stays_exact(self):
+        for stage in ("transfer", "input", "final"):
+            for changed in ("missing", "extra"):
+                with self.subTest(stage=stage, changed=changed), Rig() as rig:
+                    authority = rig.authority() if stage == "final" else None
+                    child = rig.custody / "returned/crypto-child-result.json"
+                    self.assertEqual(sha(child.read_bytes()), json.loads(rig.packets.raws["carrier"])["exporter"]["childSha256"])
+                    if changed == "missing":
+                        child.unlink()
+                    else:
+                        M.put(child.with_name("unexpected-crypto-child.json"), b"SUPPLIED_EXTRA_PRIOR_CHILD")
+                    with self.assertRaisesRegex(Exception, "RETURNED_ROSTER"):
+                        if stage == "transfer":
+                            rig.export_step()
+                        elif stage == "input":
+                            rig.input()
+                        else:
+                            D._collect_closed(authority)
+                    self.assertEqual(D._EXPORT_STEPS, {})
+                    self.assertEqual(D._COLLECT_RETURNS, {})
+                    self.assertEqual(rig.output.read_bytes(), b"")
+
     def test_actual_new_input_owner_closes_before_binding_and_immutable_actual_hashes(self):
         with Rig() as rig:
             clock, inputs, expected = rig.input()
