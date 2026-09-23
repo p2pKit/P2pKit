@@ -1988,7 +1988,7 @@ class _CustodyOwner(native.Owner):
     """
     def __init__(self, local_end, fence=None, *, first=None, cancelled=lambda: None):
         require(type(self) is _CustodyOwner and id(self) not in _CUSTODY_OWNERS and
-            type(fence) in (Window, _CustodyChildClock) and first is not None,
+            type(fence) in (Window, _CustodyChildClock, _CollectClock) and first is not None,
             "AUTHORITY_OWNER_NEW")
         native.Owner.__init__(self, local_end, fence, first=first, cancelled=cancelled)
         self.initial_sources = {}
@@ -2226,6 +2226,33 @@ class _CustodyOwner(native.Owner):
         anchor = self.check()
         require(anchor.phase_active and anchor.phase == (started, work_end, final_end, (None, None)),
             "CRYPTO_OWNER_PHASE_RETURN_CHANGED")
+        self.work_limit = self.final_limit = None
+        anchor.phase_active = False
+        self.check()
+
+    def enter_collect_phase(self, context_raw, started, work_end, final_end):
+        """Only the new post-export native phase, within its original READ end."""
+        anchor = self.check()
+        require(type(self.fence) is _CollectClock and self.fence.side == "parent" and
+            anchor.phase is None and not anchor.closed and not anchor.unknown and anchor.failure is None and
+            not anchor.busy and anchor.frozen is None and self.work_limit is None and self.final_limit is None and
+            type(started) is int and type(work_end) is int and type(final_end) is int and
+            started == self.fence.last and started < work_end and
+            work_end == min(self.fence.work, started + 45 * O.NS) and
+            final_end == min(self.fence.final, work_end + 45 * O.NS), "COLLECT_OWNER_ORIGINAL_PHASE")
+        context = _collect_context(context_raw, self.fence.clock)
+        require(context["continuationEndNs"] == self.fence.work == self.fence.final and
+            context["originalWindow"] == self.fence.frame, "COLLECT_OWNER_ORIGINAL_WINDOW")
+        anchor.phase = (started, work_end, final_end, (None, None))
+        anchor.phase_active = True
+        self.work_limit, self.final_limit = work_end, final_end
+        self.check()
+
+    def leave_collect_phase(self, started, work_end, final_end, old_limits):
+        anchor = self.check()
+        require(type(self.fence) is _CollectClock and anchor.phase_active and type(old_limits) is tuple and
+            old_limits == (None, None) and anchor.phase == (started, work_end, final_end, old_limits),
+            "COLLECT_OWNER_PHASE_RETURN_CHANGED")
         self.work_limit = self.final_limit = None
         anchor.phase_active = False
         self.check()
@@ -4768,10 +4795,1833 @@ def _custody_crypto_carrier(result):
         raise attempt["failure"]
 
 
+# Two distinct trusted Steps. The first never retains its token across crypto;
+# the second needs its own real mapping and predecessor SUCCESS. Neither route
+# authorizes activation. Post-cut records below are LOCAL guard inputs only.
+_COLLECT_OUTCOME = "P2PKIT_INITIAL_CRYPTO_OUTCOME"
+_COLLECT_STEP_HASH = "P2PKIT_INITIAL_CRYPTO_STEP_SHA256"
+_COLLECT_EXPORT_HASH = "P2PKIT_INITIAL_EXPORTER_RETURN_SHA256"
+_COLLECT_NAMES = (*_ACTUAL_NAMES, _COLLECT_OUTCOME, _COLLECT_STEP_HASH, _COLLECT_EXPORT_HASH)
+_EXPORT_STEP_SCOPE = "INITIAL_CUSTODY_CRYPTO_STEP_PENDING_GUARDED_OUTPUT_V1"
+_EXPORT_STEP_FILE = "crypto-step-pending.json"
+_COLLECT_SCOPE = "INITIAL_RECIPIENT_COLLECT_CLOSED_RETURN_V1"
+_COLLECT_FILE = "collect-close.json"
+_COLLECT_CHILD_SCOPE = "INITIAL_POST_EXPORT_AUTHORITY_PENDING_CHILD_CLOSE_V1"
+_COLLECT_ACK_SCOPE = "INITIAL_POST_EXPORT_AUTHORITY_ORIGINAL_POST_CLOSE_ACK_V1"
+_COLLECT_STEP_FIELDS = "schema scope kind step primary originalServiceJob directory directoryIdentity cryptoCarrier " \
+    "originalWindow originalContextSha256 observed lowerNs lowerLocal sample writerReturn originalStepOutcome " \
+    "testAcceptance productiveAuthority cacheAuthority budgetAcceptance exportSaveAuthority"
+_COLLECT_CONTEXT_FIELDS = "schema scope edge kind root session job observed originalWindow originalServiceJob " \
+    "predecessor expectedMatch eventSha256 sourceReturnSha256 sourceReturnedNs inheritedContext directoryIdentity " \
+    "parentFirstNs continuationEndNs budgetAcceptance exportSaveAuthority"
+_COLLECT_ATTEMPTS, _EXPORT_STEPS, _COLLECT_INPUTS, _COLLECT_CLOCKS = {}, {}, {}, {}
+_COLLECT_AUTHORITY_RETURNS, _COLLECT_RETURNS, _COLLECT_OUTPUTS = {}, {}, {}
+
+
+def _collect_begin(name):
+    """Failure accounting only; this closed list selects no operation or cap."""
+    require(name in ("export-transfer", "post-export-authority", "collect-final", "collect-export-entry", "collect-close-entry"),
+        "COLLECT_ATTEMPT_NAME")
+    previous = _COLLECT_ATTEMPTS.get(name)
+    if previous is not None:
+        if previous["failure"] is None:
+            previous["failure"] = O.OriginError("INITIAL_CUSTODY_COLLECT_ATTEMPT_REUSE")
+        previous["state"] = "FAILED"
+        raise previous["failure"]
+    attempt = {"failure": None, "state": "STARTED", "return": None}
+    _COLLECT_ATTEMPTS[name] = attempt
+    return attempt
+
+
+def _collect_pending(value):
+    require(value["writerReturn"] == "PENDING_OWNER_CLOSE" and value["originalStepOutcome"] == "NOT_OBSERVED" and
+        value["testAcceptance"] == "NOT_PERFORMED" and value["productiveAuthority"] is False and
+        value["cacheAuthority"] is False and value["budgetAcceptance"] == "NOT_ADMITTED" and
+        value["exportSaveAuthority"] is False, "COLLECT_PENDING_FLAGS")
+
+
+def _collect_primary(value, kind):
+    fields(value, " ".join(E.PRIMARY_FIELDS), "COLLECT_PRIMARY_FIELDS")
+    require(kind in ("gate", "worker") and value["outcome"] == "success" and
+        value["step"] == ("initial-originals" if kind == "gate" else "canonical-initialization"), "COLLECT_PRIMARY_STEP")
+    for name in ("resultSha256", "handoffSha256", "inventorySha256"):
+        digest(value[name])
+
+
+def _collect_service_job(value):
+    require(type(value) is list and len(value) == 4 and type(value[0]) is int and value[0] > 0 and
+        type(value[3]) is int and value[3] > 0 and type(value[1]) is str and type(value[2]) is str and
+        0 < len(value[2]) <= 256 and not any(ord(char) < 32 or ord(char) == 127 for char in value[2]),
+        "COLLECT_ORIGINAL_SERVICE_JOB")
+    A.stages.joint.timestamp(value[1])
+    return value
+
+
+def _collect_close_rows(value, labels):
+    require(type(value) is list and 0 < len(value) <= MAX_MEMBERS, "COLLECT_CLOSE_ROSTER")
+    for ordinal, row in enumerate(value):
+        fields(row, "ordinal label closeAttempted closed", "COLLECT_CLOSE_ROW")
+        require(type(row["ordinal"]) is int and row["ordinal"] == ordinal and
+            type(row["label"]) is str and row["label"] in labels and row["closeAttempted"] is True and
+            row["closed"] is True, "COLLECT_CLOSE_ROW_VALUE")
+
+
+def _collect_file_close(raw):
+    value = fields(canonical(raw), "schema scope resources retirement exportSaveAuthority", "COLLECT_FILE_CLOSE_FIELDS")
+    require(type(value["schema"]) is int and value["schema"] == 1 and
+        value["scope"] == "INITIAL_CUSTODY_PRIMARY_NATIVE_CLOSE_V1" and
+        value["retirement"] == "KNOWN_RESOURCE_CLOSE_ONLY" and value["exportSaveAuthority"] is False,
+        "COLLECT_FILE_CLOSE_SCOPE")
+    _collect_close_rows(value["resources"], {"directory", "reader", "writer", "snapshot", "embedded-reader"})
+    return value
+
+
+def _collect_write(owner, directory, name, raw):
+    """Only the two new post-cut records; never extend the frozen-map writer."""
+    require(type(owner) is _PrimaryOwner and name in (_EXPORT_STEP_FILE, _COLLECT_FILE), "COLLECT_FIXED_RECORD_NAME")
+    canonical(raw)
+    reader = owner.acquire("embedded-reader", lambda: io.BytesIO(raw))
+    end = owner.guard()
+    writer = owner.acquire("writer", lambda: directory.create_file(name, max_bytes=len(raw), deadline=end))
+    def verify():
+        require(type(reader) is io.BytesIO and reader.getvalue() == raw, "COLLECT_WRITER_ORIGINAL_BYTES")
+    checksum, _written = _consume(owner, reader, len(raw), O.digest(raw), verify, writer=writer)
+    require(checksum == O.digest(raw) and _read_private(owner, directory, name, native.LIMIT) == raw,
+        "COLLECT_WRITER_READBACK")
+
+
+def _collect_directory_closed(directory, role):
+    return directory._closed if role == "windows-x64" else directory.closed
+
+
+def _collect_names(metadata, directory, extra=()):
+    """Only the immediate returned directory, not a replay of its old readers."""
+    require(type(metadata) is _PrimaryOwner and type(extra) is tuple and
+        extra in ((), (_EXPORT_STEP_FILE,), (_EXPORT_STEP_FILE, _COLLECT_FILE)), "COLLECT_ROSTER_STAGE")
+    end = metadata.guard()
+    directory.verify()
+    if metadata.owner.first.clock.role == "windows-x64":
+        names = directory.names(max_names=32, deadline=end)
+    else:
+        names = []
+        with os.scandir(directory.path) as entries:
+            for entry in entries:
+                require(len(names) < 32, "COLLECT_ROSTER_LIMIT")
+                names.append(entry.name)
+    expected = (*_CRYPTO_INPUT_LIMITS, "context.json", "custody-return.json", "control-home", "temporary", "crypto-service", *extra)
+    require(len(names) == len(set(name.casefold() for name in names)) and tuple(sorted(names)) == tuple(sorted(expected)),
+        "COLLECT_RETURNED_ROSTER")
+    directory.verify()
+    metadata.guard()
+
+
+def _collect_actual(expected=None):
+    actual = tuple(os.environ.get(name) for name in _COLLECT_NAMES)
+    require((expected is None or type(expected) is tuple and actual == expected) and
+        not any(name in os.environ for name in _CREDENTIAL_NAMES) and
+        os.environ.get(_COLLECT_OUTCOME) == "success" and os.environ.get(PRIMARY_OUTCOME) == "success",
+        "COLLECT_ACTUAL_STEP_OR_CREDENTIAL_CHANGED")
+    for name in (_COLLECT_STEP_HASH, _COLLECT_EXPORT_HASH, PRIMARY_RESULT, PRIMARY_HANDOFF):
+        digest(os.environ.get(name))
+    return actual
+
+
+def _checked_crypto_carrier(carrier):
+    """Only THIS actual return; bytes or an equal reconstructed carrier cannot mint it."""
+    saved = _CRYPTO_CARRIERS.get(id(carrier))
+    require(type(carrier) is CustodyCryptoCarrier and type(saved) is tuple and saved[0] is carrier,
+        "COLLECT_NOT_ORIGINAL_CRYPTO_CARRIER")
+    _, parent, raw, closed, metadata, anchor, graph = saved
+    require(carrier.parent is parent and carrier.raw == raw and carrier.metadata_close == closed and
+        metadata._anchor() is anchor and any(value is carrier.__dict__ and mode == "mapping"
+            for value, _kind, mode, _snapshot in graph), "COLLECT_CRYPTO_CARRIER_CHANGED")
+    N._check_history(graph)
+    metadata.structural()
+    require(metadata.finished and metadata.failure is None and metadata.owner.closed and not metadata.owner.unknown and
+        metadata.owner.original is None and metadata.errors == [] and
+        all(a and c for _row, _label, _resource, a, c in metadata.rows), "COLLECT_CRYPTO_WRITER_NOT_CLOSED")
+    window, context, phase, manifest, parent_close = checked_custody_crypto(parent)
+    attempt = _CRYPTO_RETURNS[id(parent)][10]
+    facade = attempt["reader"]
+    require(attempt["state"] == "RETURNED" and attempt["readClaimed"] is True and type(facade) is _CryptoReadFence and
+        facade._current() is window, "COLLECT_NOT_ORIGINAL_READ_FACADE")
+    _collect_file_close(closed)
+    return window, facade, context, manifest, parent_close
+
+
+def _collect_crypto_inputs(carrier):
+    """Only the original already-checked crypto call's actual two inputs."""
+    _checked_crypto_carrier(carrier)
+    attempt = _CRYPTO_RETURNS[id(carrier.parent)][10]
+    return attempt["primary"], attempt["authority"]
+
+
+def _collect_export_currency(carrier):
+    window, facade, context_raw, manifest_raw, parent_close = _checked_crypto_carrier(carrier)
+    primary_result, authority_result = _collect_crypto_inputs(carrier)
+    _, _primary, history_raw, _copy, historical = checked_primary(primary_result)
+    _, original, captured, _raw, _index, _originals = checked_custody_authority(authority_result, primary_result)
+    original_pin = _custody_match_pin(original, _primary.kind)
+    graph = N._history_graph(carrier.__dict__, captured, historical)
+    dictionary = carrier.__dict__
+    context, originals, invocation, began, end = captured
+    match, _service = N.retained_match(canonical(context), dict(originals), invocation, window.clock, began, end)
+    match_pin = _custody_match_pin(match, _primary.kind)
+    require(type(match) is type(original) and match.record == original.record, "COLLECT_EXPORT_GRANT_CHANGED")
+    I._policy(dict(historical)["P/acquisition-queries/candidate_policy_raw.bin"], int(time.time()))
+    facade.now()
+    # No fresh observation follows these passive pins: even the last output
+    # cancellation callback must not mutate a previously checked old return.
+    N._check_history(graph)
+    _custody_match_check(original_pin)
+    _custody_match_check(match_pin)
+    require(carrier.__dict__ is dictionary and _checked_crypto_carrier(carrier) ==
+        (window, facade, context_raw, manifest_raw, parent_close) and checked_primary(primary_result)[0] is window and
+        checked_custody_authority(authority_result, primary_result)[0] is window, "COLLECT_EXPORT_POST_CALLBACK_CHANGED")
+    current_inputs = _collect_crypto_inputs(carrier)
+    require(current_inputs[0] is primary_result and current_inputs[1] is authority_result, "COLLECT_EXPORT_INPUTS_CHANGED")
+    return window, facade, context_raw, manifest_raw, parent_close, canonical(history_raw)
+
+
+@dataclass(frozen=True, repr=False)
+class _ExportStep:
+    carrier: object
+    raw: bytes
+    metadata_close: bytes
+
+
+def _export_pre_crypto(kind, cancelled):
+    """The outer caller NEVER receives a token reference to keep across crypto."""
+    token = os.environ.pop(O.wire.TOKEN_ENV, None)
+    try:
+        require(type(token) is str and re.fullmatch(r"[A-Za-z0-9_.-]{16,4096}", token) and
+            not any(name in os.environ for name in _CREDENTIAL_NAMES), "COLLECT_EXPORT_TOKEN")
+        primary = copy_primary(kind, cancelled=cancelled)
+        authority = custody_authority(primary, token)
+        return primary, authority
+    finally:
+        token = None
+
+
+def _retain_crypto_step(carrier):
+    attempt = _collect_begin("export-transfer")
+    attempt["carrier"] = carrier
+    metadata = None
+    failure = None
+    try:
+        window, facade, context_raw, manifest_raw, _closed, history = _collect_export_currency(carrier)
+        context = canonical(context_raw, 65536)
+        original_carrier = carrier.raw
+        original_dictionary = carrier.__dict__
+        input_graph = N._history_graph(carrier.__dict__, context, history)
+        first, _local, _boot, _limits, _ends, _locals, cancelled = window._view().binding
+        lower = facade.now()
+        lower_local = window._view().local_last
+        metadata = _PrimaryOwner(native.Owner(facade.deadline(30), facade, first=first, cancelled=cancelled))
+        paths = _crypto_directory_paths(context["kind"])
+        directory = _private(metadata, paths["returned"])
+        pin = (directory, directory.path, tuple(directory.identity))
+        _collect_names(metadata, directory)
+        output = _private(metadata, paths["export-output"])
+        pins = (pin, (output, output.path, tuple(output.identity)))
+        require((context["directories"]["export-output"] is None or
+            list(output.identity) == context["directories"]["export-output"]) and
+            _read_private(metadata, output, native.posix.MANIFEST, E.MANIFEST_LIMIT) == manifest_raw,
+            "COLLECT_TRANSFER_ORIGINAL_MANIFEST")
+        require(list(pin[2]) == context["directories"]["returned"] and
+            _read_private(metadata, directory, "custody-return.json", native.LIMIT) == original_carrier and
+            _read_private(metadata, directory, "context.json", 65536) == context_raw, "COLLECT_TRANSFER_ORIGINAL_FILES")
+        raw = O.encoded({"schema": 1, "scope": _EXPORT_STEP_SCOPE, "kind": context["kind"],
+            "step": "initial-custody-export", "primary": context["primary"], "originalServiceJob": history["serviceJob"],
+            "directory": str(paths["returned"]), "directoryIdentity": list(pin[2]),
+            "cryptoCarrier": {"sha256": O.digest(original_carrier), "bytes": len(original_carrier),
+                "exporterReturnSha256": O.digest(manifest_raw), "metadataClose": _collect_file_close(carrier.metadata_close)},
+            "originalWindow": context["window"], "originalContextSha256": O.digest(context_raw), "observed": context["observed"],
+            "lowerNs": lower, "lowerLocal": lower_local,
+            "sample": "AFTER_CRYPTO_CARRIER_FUNCTION_BEFORE_GUARDED_OUTPUT_AND_STEP_RETURN",
+            "writerReturn": "PENDING_OWNER_CLOSE", "originalStepOutcome": "NOT_OBSERVED", "testAcceptance": "NOT_PERFORMED",
+            "productiveAuthority": False, "cacheAuthority": False, "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
+        _collect_step_record(raw)
+        _collect_write(metadata, directory, _EXPORT_STEP_FILE, raw)
+        _collect_names(metadata, directory, (_EXPORT_STEP_FILE,))
+        require(_read_private(metadata, directory, _EXPORT_STEP_FILE, native.LIMIT) == raw and
+            _read_private(metadata, directory, "custody-return.json", native.LIMIT) == original_carrier and
+            _read_private(metadata, directory, "context.json", 65536) == context_raw and
+            _read_private(metadata, output, native.posix.MANIFEST, E.MANIFEST_LIMIT) == manifest_raw,
+            "COLLECT_TRANSFER_READBACK")
+        N._check_history(input_graph)
+        require(carrier.__dict__ is original_dictionary and carrier.raw == original_carrier, "COLLECT_TRANSFER_CARRIER_CHANGED")
+        _collect_export_currency(carrier)
+        closed = metadata.finish()
+        facade.now(final=True)
+        result = _ExportStep(carrier, raw, closed)
+        saved = (result, result.__dict__, raw, closed, carrier, original_dictionary, original_carrier,
+            metadata, metadata._anchor(), pins, window, facade, attempt,
+            N._history_graph(result.__dict__, metadata.owner.__dict__, tuple(value[1] for value in pins)), input_graph)
+        _EXPORT_STEPS[id(result)] = saved
+        attempt["return"], attempt["state"] = result, "RETURNED"
+        _checked_export_step(result)
+        return result
+    except BaseException as error:
+        failure = error if metadata is None else metadata.remember(error)
+    finally:
+        if metadata is not None and not metadata.finished and not metadata.owner.unknown:
+            try:
+                metadata.finish()
+            except BaseException as error:
+                if failure is None:
+                    failure = error
+        if failure is not None:
+            if attempt["failure"] is None:
+                attempt["failure"] = failure
+            attempt["state"] = "FAILED"
+    raise attempt["failure"]
+
+
+def _checked_export_step(result):
+    saved = _EXPORT_STEPS.get(id(result))
+    require(type(result) is _ExportStep and type(saved) is tuple and saved[0] is result,
+        "COLLECT_NOT_ORIGINAL_EXPORT_STEP")
+    _, dictionary, raw, closed, carrier, carrier_dictionary, carrier_raw, metadata, anchor, pins, window, facade, attempt, graph, inputs = saved
+    try:
+        def current():
+            require(type(result) is _ExportStep and type(carrier) is CustodyCryptoCarrier and
+                _EXPORT_STEPS.get(id(result)) is saved and _COLLECT_ATTEMPTS.get("export-transfer") is attempt and
+                attempt["return"] is result and attempt["state"] == "RETURNED" and attempt["failure"] is None and
+                result.__dict__ is dictionary and result.carrier is carrier and result.raw == raw and result.metadata_close == closed and
+                carrier.__dict__ is carrier_dictionary and carrier.raw == carrier_raw, "COLLECT_EXPORT_STEP_CHANGED")
+            N._check_history(graph)
+            N._check_history(inputs)
+            require(metadata._anchor() is anchor, "COLLECT_TRANSFER_OWNER_CHANGED")
+            metadata.structural()
+            require(metadata.finished and metadata.failure is None and metadata.owner.closed and not metadata.owner.unknown and
+                metadata.owner.original is None and metadata.errors == [] and all(a and c for _r, _l, _v, a, c in metadata.rows),
+                "COLLECT_TRANSFER_CLOSE_UNKNOWN")
+            for directory, path, identity in pins:
+                require(directory.path is path and tuple(directory.identity) == identity and
+                    _collect_directory_closed(directory, window.clock.role) is True, "COLLECT_TRANSFER_PIN_CHANGED")
+        current()
+        currency = _collect_export_currency(carrier)
+        current()
+        require(currency[0] is window and currency[1] is facade, "COLLECT_TRANSFER_FACADE_CHANGED")
+        _collect_file_close(closed)
+        return facade, canonical(currency[2], 65536)["window"]["readEndNs"], {
+            "initialCryptoStepSha256": O.digest(raw), "initialExporterReturnSha256": O.digest(currency[3])}
+    except BaseException as error:
+        if attempt["failure"] is None:
+            attempt["failure"] = error
+        attempt["state"] = "FAILED"
+        raise attempt["failure"]
+
+
+def _collect_step_record(raw):
+    value = fields(canonical(raw), _COLLECT_STEP_FIELDS, "COLLECT_STEP_FIELDS")
+    require(type(value["schema"]) is int and value["schema"] == 1 and value["scope"] == _EXPORT_STEP_SCOPE and
+        value["step"] == "initial-custody-export" and value["kind"] in ("gate", "worker") and
+        value["sample"] == "AFTER_CRYPTO_CARRIER_FUNCTION_BEFORE_GUARDED_OUTPUT_AND_STEP_RETURN", "COLLECT_STEP_SCOPE")
+    _collect_pending(value)
+    clock, limits = _custody_authority_frame(value["originalWindow"])
+    require(limits["kind"] == value["kind"] and limits["startNs"] <= O.integer(value["lowerNs"]) < limits["readEndNs"],
+        "COLLECT_STEP_ORIGINAL_TIME")
+    local_value(value["lowerLocal"])
+    _collect_primary(value["primary"], value["kind"])
+    _collect_service_job(value["originalServiceJob"])
+    digest(value["originalContextSha256"])
+    native.directory_identity(value["directoryIdentity"], clock.role)
+    require(type(value["directory"]) is str and Path(value["directory"]).is_absolute() and
+        ".." not in Path(value["directory"]).parts and type(value["observed"]) is dict,
+        "COLLECT_STEP_DIRECTORY_OR_HOST")
+    carrier = fields(value["cryptoCarrier"], "sha256 bytes exporterReturnSha256 metadataClose", "COLLECT_STEP_CARRIER_FIELDS")
+    digest(carrier["sha256"])
+    digest(carrier["exporterReturnSha256"])
+    require(type(carrier["bytes"]) is int and 0 < carrier["bytes"] <= native.LIMIT, "COLLECT_STEP_CARRIER_LIMIT")
+    _collect_file_close(O.encoded(carrier["metadataClose"]))
+    return value
+
+
+_COLLECT_READ_LIMITS = {
+    "step": native.LIMIT, "carrier": native.LIMIT, "context": 65536, "manifest": E.MANIFEST_LIMIT,
+    "original-match": _CRYPTO_INPUT_LIMITS["original-match.json"], "fresh-match": _CRYPTO_INPUT_LIMITS["fresh-match.json"],
+    "event": I.EVENT_LIMIT, "policy": I.POLICY_LIMIT, "public": native.posix.MAX_KEY_BYTES,
+}
+
+
+def _collect_manifest(raw):
+    value = fields(canonical(raw, E.MANIFEST_LIMIT), "schema scope kind selection source github policy initialRecipient "
+        "primary copy recipient testAcceptance productiveAuthority cacheAuthority exportSaveAuthority budgetAcceptance artifact",
+        "COLLECT_MANIFEST_FIELDS")
+    require(type(value["schema"]) is int and value["schema"] == 4 and value["scope"] == E.SCOPE and
+        value["kind"] in ("gate", "worker") and value["testAcceptance"] == "NOT_PERFORMED" and
+        value["productiveAuthority"] is False and value["cacheAuthority"] is False and
+        value["exportSaveAuthority"] is False and value["budgetAcceptance"] == "NOT_ADMITTED", "COLLECT_MANIFEST_SCOPE")
+    A.stages.joint.source(value["source"])
+    _collect_primary(value["primary"], value["kind"])
+    copied = fields(value["copy"], " ".join(E.COPY_FIELDS), "COLLECT_MANIFEST_COPY")
+    fields(copied["origins"], " ".join(ORIGINS), "COLLECT_MANIFEST_ORIGINS")
+    for checksum in (copied["mapSha256"], *copied["origins"].values()):
+        digest(checksum)
+    require(len(set(copied["origins"].values())) == 3 and type(copied["memberCount"]) is int and
+        0 < copied["memberCount"] < MAX_MEMBERS and type(copied["totalBytes"]) is int and
+        0 < copied["totalBytes"] <= MAX_BYTES, "COLLECT_MANIFEST_COPY_LIMIT")
+    recipient = fields(value["recipient"], "fingerprint encryptionFingerprint keySha256 expiresAt", "COLLECT_MANIFEST_RECIPIENT")
+    require(all(type(recipient[name]) is str and re.fullmatch(r"[0-9A-F]{40}", recipient[name])
+        for name in ("fingerprint", "encryptionFingerprint")), "COLLECT_RECIPIENT_FINGERPRINTS")
+    digest(recipient["keySha256"])
+    O.integer(recipient["expiresAt"], 1)
+    artifact = fields(value["artifact"], "name sha256 size", "COLLECT_MANIFEST_ARTIFACT")
+    require(artifact["name"] == native.posix.ARTIFACT and type(artifact["size"]) is int and
+        0 < artifact["size"] <= native.posix.MAX_CIPHERTEXT_BYTES, "COLLECT_MANIFEST_ARTIFACT_LIMIT")
+    digest(artifact["sha256"])
+    return value
+
+
+def _collect_bundle(raws):
+    """Closed prior-Step DATA. Never constructs an old live/native return object."""
+    require(type(raws) is dict and set(raws) == set(_COLLECT_READ_LIMITS), "COLLECT_INPUT_ROSTER")
+    for name, maximum in _COLLECT_READ_LIMITS.items():
+        require(type(raws[name]) is bytes and 0 < len(raws[name]) <= maximum, "COLLECT_INPUT_LIMIT")
+    step = _collect_step_record(raws["step"])
+    frame = step["originalWindow"]
+    clock, _limits = _custody_authority_frame(frame)
+    carrier = fields(canonical(raws["carrier"]), "schema scope kind selection source github policy authority primary window copy "
+        "recipient exporter parentClose writerReturn originalStepOutcome testAcceptance productiveAuthority cacheAuthority "
+        "exportSaveAuthority budgetAcceptance", "COLLECT_CRYPTO_CARRIER_FIELDS")
+    require(type(carrier["schema"]) is int and carrier["schema"] == 1 and
+        carrier["scope"] == "INITIAL_RECIPIENT_CUSTODY_CLOSED_RETURN_V1" and carrier["kind"] == step["kind"] and
+        len(raws["carrier"]) == step["cryptoCarrier"]["bytes"] and
+        O.digest(raws["carrier"]) == step["cryptoCarrier"]["sha256"], "COLLECT_CRYPTO_CARRIER_LINK")
+    _collect_pending(carrier)
+    context = fields(canonical(raws["context"], 65536), _CRYPTO_CONTEXT_FIELDS, "COLLECT_ORIGINAL_CONTEXT_FIELDS")
+    require(type(context["schema"]) is int and context["schema"] == 1 and context["scope"] == _CRYPTO_CONTEXT_SCOPE and
+        context["kind"] == step["kind"] and context["window"] == frame and context["observed"] == step["observed"] and
+        context["primary"] == carrier["primary"] == step["primary"] and context["root"] == str(ROOT) and
+        context["session"] == step["directory"] and O.digest(raws["context"]) == step["originalContextSha256"] and
+        context["budgetAcceptance"] == "NOT_ADMITTED" and context["exportSaveAuthority"] is False and
+        type(context["job"]) is str and re.fullmatch(r"[0-9a-f]{32}", context["job"]), "COLLECT_ORIGINAL_CONTEXT_LINK")
+    hashes = fields(context["filesSha256"], " ".join(_CRYPTO_INPUT_LIMITS), "COLLECT_ORIGINAL_INPUT_FIELDS")
+    for checksum in hashes.values():
+        digest(checksum)
+    for name, original in (("original-match", "original-match.json"), ("fresh-match", "fresh-match.json"),
+            ("event", "event.json"), ("policy", "candidate-policy.json"), ("public", "recipient-public.asc")):
+        require(O.digest(raws[name]) == hashes[original], "COLLECT_ORIGINAL_INPUT_HASH")
+    require(raws["original-match"] == raws["fresh-match"], "COLLECT_ORIGINAL_MATCH_CHANGED")
+    initial = fields(context["authority"], "returnSha256 matchSha256 copySha256", "COLLECT_INITIAL_AUTHORITY_FIELDS")
+    for checksum in initial.values():
+        digest(checksum)
+    require(initial["matchSha256"] == hashes["original-match.json"] == hashes["fresh-match.json"] and
+        initial["returnSha256"] == hashes["authority-return.json"] and initial["copySha256"] == hashes["authority-map.json"],
+        "COLLECT_INITIAL_AUTHORITY_LINKS")
+    directories = fields(context["directories"], " ".join(_CRYPTO_DIRECTORIES), "COLLECT_ORIGINAL_DIRECTORIES")
+    identities = []
+    for name, value in directories.items():
+        if name == "export-output" and clock.role != "windows-x64":
+            require(value is None, "COLLECT_ORIGINAL_POSIX_OUTPUT")
+        else:
+            identities.append(tuple(native.directory_identity(value, clock.role)))
+    require(len(identities) == len(set(identities)) and directories["returned"] == step["directoryIdentity"],
+        "COLLECT_ORIGINAL_DIRECTORY_PINS")
+    inherited = context["inheritedContext"]
+    require(type(inherited) is dict and all(type(item) is str for item in inherited.values()) and
+        (set(inherited).issubset({"GRADLE_USER_HOME"}) or set(inherited) == set(Q._CONTEXT)), "COLLECT_ORIGINAL_DOMAIN")
+    old_window = fields(carrier["window"], "clock originalBootDigest originalJobBasisNs jobEndNs startNs " +
+        " ".join(WINDOW_NAMES) + " lastNs lastLocal", "COLLECT_CARRIER_WINDOW_FIELDS")
+    require(all(old_window[name] == frame[name] for name in old_window if name not in ("lastNs", "lastLocal")) and
+        frame["startNs"] <= O.integer(old_window["lastNs"]) <= step["lowerNs"] and
+        local_value(old_window["lastLocal"]) <= step["lowerLocal"], "COLLECT_CARRIER_WINDOW_LINK")
+    exported = fields(carrier["exporter"], "manifestBase64 manifestBytes manifestSha256 childSha256 ackSha256 phaseSha256 "
+        "nativeResources", "COLLECT_EXPORTER_FIELDS")
+    require(type(exported["manifestBase64"]) is str and len(exported["manifestBase64"]) <= 4 * ((E.MANIFEST_LIMIT + 2) // 3),
+        "COLLECT_EXPORTER_ENCODING_LIMIT")
+    try:
+        original_manifest = base64.b64decode(exported["manifestBase64"], validate=True)
+    except (ValueError, TypeError):
+        raise O.OriginError("INITIAL_CUSTODY_COLLECT_EXPORTER_ENCODING") from None
+    require(base64.b64encode(original_manifest).decode("ascii") == exported["manifestBase64"] and
+        original_manifest == raws["manifest"] and type(exported["manifestBytes"]) is int and
+        len(original_manifest) == exported["manifestBytes"] and
+        O.digest(original_manifest) == digest(exported["manifestSha256"]) == step["cryptoCarrier"]["exporterReturnSha256"],
+        "COLLECT_ORIGINAL_EXPORTER_BYTES")
+    for name in ("childSha256", "ackSha256"):
+        digest(exported[name])
+    fields(exported["phaseSha256"], " ".join(native.PHASE_FILES), "COLLECT_EXPORTER_PHASE_HASHES")
+    for checksum in exported["phaseSha256"].values():
+        digest(checksum)
+    parent = fields(carrier["parentClose"], "schema scope contextSha256 childSha256 authorityCopyCloseSha256 phaseSha256 "
+        "closedNs resources retirement exportSaveAuthority", "COLLECT_CRYPTO_PARENT_CLOSE_FIELDS")
+    require(type(parent["schema"]) is int and parent["schema"] == 1 and
+        parent["scope"] == "INITIAL_CUSTODY_CRYPTO_PARENT_KNOWN_CLOSE_V1" and
+        parent["contextSha256"] == step["originalContextSha256"] and parent["childSha256"] == exported["childSha256"] and
+        parent["phaseSha256"] == exported["phaseSha256"] and parent["resources"] == exported["nativeResources"] and
+        frame["startNs"] <= O.integer(parent["closedNs"]) <= old_window["lastNs"] and
+        parent["closedNs"] < frame["nativeFinalEndNs"] and parent["retirement"] == "KNOWN_RESOURCE_CLOSE_ONLY" and
+        parent["exportSaveAuthority"] is False, "COLLECT_CRYPTO_PARENT_CLOSE_LINK")
+    digest(parent["authorityCopyCloseSha256"])
+    _collect_close_rows(parent["resources"], {"directory", "writer", "native-scope", "stdout", "stderr"})
+    manifest = _collect_manifest(original_manifest)
+    for name in ("kind", "selection", "source", "github", "policy", "primary", "recipient"):
+        require(carrier[name] == manifest[name], "COLLECT_MANIFEST_CARRIER_LINK")
+    require(carrier["authority"] == manifest["initialRecipient"] and
+        manifest["initialRecipient"]["matchSha256"] == initial["matchSha256"] and
+        manifest["initialRecipient"]["freshReturnSha256"] == initial["returnSha256"], "COLLECT_MANIFEST_AUTHORITY_LINK")
+    copied = fields(carrier["copy"], " ".join(E.COPY_FIELDS) + " path directoryIdentity sourceMetadataSha256 destinationMetadataSha256",
+        "COLLECT_CARRIER_COPY_FIELDS")
+    require({name: copied[name] for name in E.COPY_FIELDS} == manifest["copy"] and
+        copied["directoryIdentity"] == directories["copied-evidence"], "COLLECT_CARRIER_COPY_LINK")
+    fields(copied["sourceMetadataSha256"], " ".join(ORIGINS), "COLLECT_CARRIER_ORIGIN_METADATA")
+    for checksum in (*copied["sourceMetadataSha256"].values(), copied["destinationMetadataSha256"]):
+        digest(checksum)
+    require(type(copied["path"]) is str and Path(copied["path"]).is_absolute(), "COLLECT_CARRIER_COPY_PATH")
+    return step, carrier, context, manifest
+
+
+def _collect_host(raws, parsed, clock):
+    step, carrier, context, manifest = parsed
+    graph = N._history_graph(parsed, raws)
+    first_use = O.integer(step["observed"]["firstUseAt"], 1)
+    observed, primary, event = N.host_context(first_use)
+    roots, _handoff, custody = _paths(step["kind"])
+    require(observed == step["observed"] and observed["role"] == clock.role and primary == roots["P"] and event == raws["event"] and
+        step["directory"] == str(custody / "returned") and context["session"] == str(custody / "returned") and
+        carrier["copy"]["path"] == str(custody / "copied-evidence"), "COLLECT_ACTUAL_HOST_OR_PATH")
+    expected = canonical(raws["original-match"], A.stages.LIMIT)
+    fields(expected, " ".join(E.COMMON_MATCH | ({"stage", "selector", "workerAdmission", "qualificationAcceptance"}
+        if step["kind"] == "gate" else set())), "COLLECT_EXPECTED_MATCH_FIELDS")
+    github = dict(observed["github"])
+    if step["kind"] == "worker":
+        github.update(profile=A.stages.bootstrap.PROFILE, selection=observed["inputs"]["selection"])
+    require(type(expected["schema"]) is int and expected["schema"] == 1 and expected["scope"] ==
+        ("NONPRODUCTIVE_ELIGIBILITY" if step["kind"] == "gate" else A.stages.STAGE1 + "_MATCH_ONLY_NOT_ADMISSION") and
+        expected["github"] == github and expected["source"] == expected["reviewed"] == observed["source"] and
+        expected["originalBase"] == A.stages.BASE and expected["firstUseAt"] == first_use and
+        manifest["source"] == observed["source"] and manifest["selection"] == observed["inputs"]["selection"] and
+        manifest["github"] == {**github, "repository": I.REPOSITORY, "eventSha256": O.digest(event)}, "COLLECT_EXPECTED_IDENTITY")
+    policy, public = I._policy(raws["policy"], int(time.time()))
+    require(public == raws["public"] and O.digest(raws["policy"]) == A.stages.POLICY_SHA256 and
+        expected["policy"] == {"origin": "reviewed-head", "commit": observed["source"]["commit"],
+            "blob": hashlib.sha1(b"blob " + str(len(raws["policy"])).encode("ascii") + b"\0" + raws["policy"]).hexdigest(),
+            "path": I.POLICY_PATH, "sha256": A.stages.POLICY_SHA256}, "COLLECT_EXPECTED_POLICY")
+    initial = fields(manifest["initialRecipient"], "authority environment originalBase reviewed firstUseAt notBefore expiresAt "
+        "matchSha256 freshReturnSha256", "COLLECT_MANIFEST_INITIAL_FIELDS")
+    for name in ("authority", "environment", "originalBase", "reviewed", "firstUseAt", "notBefore", "expiresAt"):
+        require(initial[name] == expected[name], "COLLECT_MANIFEST_INITIAL_LINK")
+    require(manifest["policy"] == {**expected["policy"], "fingerprint": policy["recipient"]["fingerprint"],
+        "keySha256": policy["recipient"]["sha256"], "expiresAt": policy["expiresAt"], "retentionDays": 14} and
+        manifest["recipient"]["fingerprint"] == policy["recipient"]["fingerprint"] and
+        manifest["recipient"]["keySha256"] == O.digest(public) and
+        policy["expiresAt"] <= manifest["recipient"]["expiresAt"], "COLLECT_MANIFEST_POLICY_RECIPIENT")
+    now = int(time.time())
+    require(policy["notBefore"] <= O.integer(expected["notBefore"], 1) <= first_use <= now <
+        O.integer(expected["expiresAt"], 1) <= policy["expiresAt"], "COLLECT_ORIGINAL_GRANT_EXPIRED")
+    N._check_history(graph)
+    match = (A.gate.GateEligibility if step["kind"] == "gate" else A.stages.BootstrapMatch)(raws["original-match"])
+    return match
+
+
+@dataclass(frozen=True, repr=False)
+class _CollectInput:
+    originals: tuple
+    metadata_close: bytes
+
+
+def _checked_collect_input(value):
+    saved = _COLLECT_INPUTS.get(id(value))
+    require(type(value) is _CollectInput and type(saved) is tuple and saved[0] is value, "COLLECT_NOT_ORIGINAL_INPUT")
+    _, dictionary, originals, close, metadata, anchor, pins, graph, actual = saved
+    require(value.__dict__ is dictionary and value.originals is originals and value.metadata_close == close and
+        metadata._anchor() is anchor, "COLLECT_INPUT_RETURN_CHANGED")
+    N._check_history(graph)
+    _collect_actual(actual)
+    metadata.structural()
+    require(metadata.finished and metadata.failure is None and metadata.owner.closed and not metadata.owner.unknown and
+        metadata.owner.original is None and metadata.errors == [] and
+        all(a and c for _r, _l, _v, a, c in metadata.rows), "COLLECT_INPUT_CLOSE_UNKNOWN")
+    for directory, path, identity in pins:
+        require(directory.path is path and tuple(directory.identity) == identity and
+            _collect_directory_closed(directory, metadata.owner.first.clock.role) is True, "COLLECT_INPUT_PIN_CHANGED")
+    _collect_file_close(close)
+    return dict(originals), metadata
+
+
+def _read_collect_input(clock, kind, actual):
+    metadata = _PrimaryOwner(native.Owner(clock.local_end, clock, first=clock.reading, cancelled=clock.cancelled))
+    clock.attach_metadata(metadata)
+    failure = None
+    try:
+        _collect_actual(actual)
+        _roots, _handoff, custody = _paths(kind)
+        returned = _private(metadata, custody / "returned")
+        output = _private(metadata, custody / "export-output")
+        _collect_names(metadata, returned, (_EXPORT_STEP_FILE,))
+        pins = tuple((directory, directory.path, tuple(directory.identity)) for directory in (returned, output))
+        records = (("step", returned, _EXPORT_STEP_FILE), ("carrier", returned, "custody-return.json"),
+            ("context", returned, "context.json"), ("manifest", output, native.posix.MANIFEST),
+            ("original-match", returned, "original-match.json"), ("fresh-match", returned, "fresh-match.json"),
+            ("event", returned, "event.json"), ("policy", returned, "candidate-policy.json"),
+            ("public", returned, "recipient-public.asc"))
+        originals = tuple((name, _read_private(metadata, directory, leaf, _COLLECT_READ_LIMITS[name]))
+            for name, directory, leaf in records)
+        graph = N._history_graph(originals, tuple(row[1] for row in pins))
+        raws = dict(originals)
+        require(O.digest(raws["step"]) == os.environ[_COLLECT_STEP_HASH], "COLLECT_ACTUAL_STEP_HASH")
+        parsed = _collect_bundle(raws)
+        step, _carrier, context, _manifest = parsed
+        require(step["kind"] == kind and step["primary"]["resultSha256"] == os.environ[PRIMARY_RESULT] and
+            step["primary"]["handoffSha256"] == os.environ[PRIMARY_HANDOFF] and
+            step["cryptoCarrier"]["exporterReturnSha256"] == os.environ[_COLLECT_EXPORT_HASH] and
+            step["directoryIdentity"] == list(pins[0][2]) and (context["directories"]["export-output"] is None or
+                context["directories"]["export-output"] == list(pins[1][2])), "COLLECT_ACTUAL_PREDECESSOR")
+        _collect_host(raws, parsed, clock.clock)
+        for name, directory, leaf in records:
+            require(_read_private(metadata, directory, leaf, _COLLECT_READ_LIMITS[name]) == raws[name], "COLLECT_INPUT_REREAD")
+        _collect_names(metadata, returned, (_EXPORT_STEP_FILE,))
+        _collect_actual(actual)
+        N._check_history(graph)
+        closed = metadata.finish()
+        clock.now(final=True)
+        result = _CollectInput(originals, closed)
+        _COLLECT_INPUTS[id(result)] = (result, result.__dict__, originals, closed, metadata, metadata._anchor(), pins,
+            N._history_graph(result.__dict__, metadata.owner.__dict__, tuple(row[1] for row in pins)), actual)
+        _checked_collect_input(result)
+        return result
+    except BaseException as error:
+        failure = metadata.remember(error)
+    finally:
+        if not metadata.finished and not metadata.owner.unknown:
+            try:
+                metadata.finish()
+            except BaseException as error:
+                if failure is None:
+                    failure = error
+    raise failure
+
+
+@dataclass(eq=False, repr=False)
+class _CollectClockAnchor:
+    handle: object
+    binding: tuple
+    graph: tuple
+    last: int
+    local_last: float
+    metadata: object = None
+    metadata_graph: tuple = ()
+    frame_binding: object = None
+    frame_graph: tuple = ()
+    operative: object = None
+    phase: str = "METADATA"
+    busy: bool = False
+    failure: object = None
+
+
+class _CollectClock:
+    """Only the two new POST_EXPORT owners; never restore a historical Window.
+
+    Parent metadata30 and child metadata45 start at their actual FIRST samples.
+    Original READ and launch bounds only shorten both ceilings. The frame keeps
+    its original work/native-final/read ends unchanged as historical data.
+    """
+    __slots__ = ("_binding",)
+
+    def __init__(self, first, local, boot, cancelled, *, side):
+        require(type(self) is _CollectClock and id(self) not in _COLLECT_CLOCKS and side in ("parent", "child"),
+            "COLLECT_CLOCK_NEW")
+        graph = N._history_graph(first)
+        O.clocks.validate_reading(first)
+        local_value(local)
+        digest(boot)
+        require(callable(cancelled), "COLLECT_CLOCK_CANCEL")
+        seconds = 30 if side == "parent" else 45
+        end = O.integer(first.nanoseconds + seconds * O.NS)
+        local_end = O.wire._directed_deadline(local, seconds, end, first.nanoseconds)
+        self._binding = (first, local, boot, cancelled, side, (end, local_end))
+        N._check_history(graph)
+        _COLLECT_CLOCKS[id(self)] = _CollectClockAnchor(self, self._binding, graph, first.nanoseconds, local)
+        self._view()
+
+    def _anchor(self):
+        anchor = _COLLECT_CLOCKS.get(id(self))
+        require(type(self) is _CollectClock and type(anchor) is _CollectClockAnchor and anchor.handle is self,
+            "COLLECT_CLOCK_ORIGINAL_HANDLE")
+        return anchor
+
+    @staticmethod
+    def _error(anchor, error):
+        if anchor.failure is None:
+            anchor.failure = error
+        return anchor.failure
+
+    def _current(self, anchor):
+        require(_COLLECT_CLOCKS.get(id(self)) is anchor and self._binding is anchor.binding and anchor.handle is self,
+            "COLLECT_CLOCK_ORIGINAL_BINDING")
+        N._check_history(anchor.graph)
+        N._check_history(anchor.metadata_graph)
+        N._check_history(anchor.frame_graph)
+        if anchor.metadata is not None:
+            anchor.metadata.structural()
+        if anchor.frame_binding is not None and anchor.binding[4] == "parent":
+            _checked_collect_input(anchor.frame_binding[0])
+        if anchor.frame_binding is not None:
+            index = 4 if anchor.binding[4] == "parent" else 6
+            require(anchor.frame_binding[index].__dict__ is anchor.frame_binding[index + 1],
+                "COLLECT_CLOCK_EXPECTED_DICTIONARY_CHANGED")
+        if anchor.operative is not None:
+            require(type(anchor.operative) is _CustodyOwner and anchor.operative.fence is self,
+                "COLLECT_CLOCK_OPERATIVE_CHANGED")
+            anchor.operative.check()
+
+    def _view(self):
+        anchor = self._anchor()
+        try:
+            self._current(anchor)
+            return anchor
+        except BaseException as error:
+            raise self._error(anchor, error)
+
+    @staticmethod
+    def _caps(anchor):
+        return anchor.binding[5] if anchor.frame_binding is None else anchor.frame_binding[-1]
+
+    reading = property(lambda self: self._view().binding[0])
+    clock = property(lambda self: self.reading.clock)
+    cancelled = property(lambda self: self._view().binding[3])
+    side = property(lambda self: self._view().binding[4])
+    first = property(lambda self: self.reading.nanoseconds)
+    last = property(lambda self: self._view().last)
+    local_end = property(lambda self: self._caps(self._view())[1])
+    work = property(lambda self: self._caps(self._view())[0])
+    final = property(lambda self: self.work)
+
+    @property
+    def frame(self):
+        anchor = self._view()
+        require(anchor.phase == "OPERATIVE" and anchor.frame_binding is not None, "COLLECT_CLOCK_NOT_BOUND")
+        return anchor.frame_binding[1]
+
+    def _begin(self):
+        anchor = self._anchor()
+        if anchor.failure is not None:
+            raise anchor.failure
+        try:
+            self._current(anchor)
+            require(not anchor.busy, "COLLECT_CLOCK_REENTRY")
+            anchor.busy = True
+            return anchor
+        except BaseException as error:
+            raise self._error(anchor, error)
+
+    def _local(self, anchor):
+        value = local_value(time.monotonic())
+        require(value >= anchor.local_last, "COLLECT_LOCAL_BACKWARDS")
+        anchor.local_last = value
+        self._current(anchor)
+        require(value < self._caps(anchor)[1], "COLLECT_LOCAL_EXPIRED")
+        return value
+
+    def _observe(self, anchor, minimum, limit):
+        end = self._caps(anchor)[0]
+        if limit is not None:
+            end = min(end, O.integer(limit))
+        frontier = max(anchor.last, O.integer(minimum))
+        for number in range(2):
+            local = self._local(anchor)
+            observed = O.clocks.checked_now(anchor.binding[0].clock, minimum_ns=frontier)
+            anchor.last = frontier = O.integer(observed, frontier)
+            self._current(anchor)
+            require(frontier < end and anchor.busy and anchor.failure is None, "COLLECT_RAW_EXPIRED_OR_CHANGED")
+            boot = C.boot_digest(anchor.binding[0].clock.role)
+            self._current(anchor)
+            require(type(boot) is str and boot == anchor.binding[2], "COLLECT_BOOT_CHANGED")
+            if number == 0:
+                anchor.binding[3]()
+                self._current(anchor)
+                require(anchor.last == frontier and anchor.local_last == local and anchor.failure is None and anchor.busy,
+                    "COLLECT_CALLBACK_CHANGED")
+        self._local(anchor)
+        self._current(anchor)
+        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "COLLECT_FRONTIER_CHANGED")
+        return frontier
+
+    def now(self, *, final=False, minimum=0, limit=None):
+        anchor = self._begin()
+        try:
+            require(type(final) is bool, "COLLECT_FINAL_TYPE")
+            return self._observe(anchor, minimum, limit)
+        except BaseException as error:
+            raise self._error(anchor, error)
+        finally:
+            anchor.busy = False
+
+    def deadline(self, maximum, *, final=False, limit=None):
+        anchor = self._begin()
+        try:
+            require(type(final) is bool and type(maximum) in (int, float) and math.isfinite(maximum) and
+                0 < maximum <= 900, "COLLECT_MECHANISM_MAXIMUM")
+            local = self._local(anchor)
+            observed = self._observe(anchor, 0, limit)
+            end, local_end = self._caps(anchor)
+            if limit is not None:
+                end = min(end, O.integer(limit))
+            result = min(local_end, O.wire._directed_deadline(local, maximum, end, observed))
+            self._current(anchor)
+            require(anchor.busy and anchor.failure is None, "COLLECT_DEADLINE_CHANGED")
+            return result
+        except BaseException as error:
+            raise self._error(anchor, error)
+        finally:
+            anchor.busy = False
+
+    def attach_metadata(self, metadata):
+        anchor = self._begin()
+        try:
+            require(anchor.phase == "METADATA" and anchor.metadata is None and type(metadata) is _PrimaryOwner and
+                metadata.owner.fence is self and metadata.owner.first is anchor.binding[0] and
+                not metadata.finished and not metadata.rows, "COLLECT_METADATA_ORIGINAL_OWNER")
+            anchor.metadata = metadata
+            self._current(anchor)
+        except BaseException as error:
+            raise self._error(anchor, error)
+        finally:
+            anchor.busy = False
+
+    def _bind_begin(self, anchor, side):
+        require(anchor.binding[4] == side and anchor.phase == "METADATA" and anchor.frame_binding is None and
+            anchor.metadata is not None, "COLLECT_BIND_ONCE")
+        anchor.phase = "BINDING"
+        metadata = anchor.metadata
+        metadata.structural()
+        require(metadata.finished and metadata.failure is None and metadata.owner.closed and
+            metadata.owner.original is None and not metadata.owner.unknown and metadata.errors == [] and
+            all(a and c for _r, _l, _v, a, c in metadata.rows), "COLLECT_BIND_METADATA_NOT_CLOSED")
+        anchor.metadata_graph = N._history_graph(metadata.owner.__dict__)
+        self._observe(anchor, anchor.last, None)
+
+    def _bind_end(self, anchor, values, frame, end):
+        old_end, old_local = self._caps(anchor)
+        end = min(old_end, O.integer(end))
+        require(anchor.last < end, "COLLECT_BIND_TOO_LATE")
+        local_end = min(old_local, O.wire._directed_deadline(anchor.binding[1],
+            (end - anchor.binding[0].nanoseconds) / O.NS, end, anchor.binding[0].nanoseconds))
+        require(anchor.local_last < local_end, "COLLECT_BIND_LOCAL_EXPIRED")
+        anchor.frame_binding = (values[0], frame, *values[1:], (end, local_end))
+        anchor.frame_graph = N._history_graph(anchor.frame_binding)
+        anchor.phase = "OPERATIVE"
+        self._current(anchor)
+        self._observe(anchor, anchor.last, end)
+
+    def bind_parent(self, result):
+        anchor = self._begin()
+        try:
+            self._bind_begin(anchor, "parent")
+            raws, metadata = _checked_collect_input(result)
+            require(metadata is anchor.metadata, "COLLECT_BIND_ORIGINAL_METADATA")
+            parsed = _collect_bundle(raws)
+            graph = N._history_graph(parsed, raws, result.__dict__)
+            step = parsed[0]
+            frame = step["originalWindow"]
+            require(frame["clock"] == O.clock_value(anchor.binding[0].clock) and frame["originalBootDigest"] == anchor.binding[2] and
+                anchor.binding[0].nanoseconds >= step["lowerNs"] and anchor.binding[1] >= step["lowerLocal"],
+                "COLLECT_BIND_ORIGINAL_FLOOR")
+            expected = _collect_host(raws, parsed, anchor.binding[0].clock)
+            pin = _custody_match_pin(expected, step["kind"])
+            N._check_history(graph)
+            _custody_match_check(pin)
+            self._bind_end(anchor, (result, raws, parsed, expected, expected.__dict__), frame, frame["readEndNs"])
+            return expected
+        except BaseException as error:
+            raise self._error(anchor, error)
+        finally:
+            anchor.busy = False
+
+    def bind_child(self, context_raw, start_raw, event, inherited):
+        anchor = self._begin()
+        try:
+            self._bind_begin(anchor, "child")
+            context, start = canonical(context_raw), canonical(start_raw)
+            graph = N._history_graph(context, start, inherited)
+            _collect_context(context_raw, anchor.binding[0].clock)
+            expected = _collect_child_host(context, event, anchor.binding[0], anchor.binding[2])
+            pin = _custody_match_pin(expected, context["kind"])
+            _collect_start_fields(start_raw, context_raw, context, anchor.binding[0].clock)
+            require(type(inherited) is dict and set(inherited) == set(Q._CONTEXT) and inherited == start["inheritedContext"] and
+                start["startedNs"] <= anchor.binding[0].nanoseconds < start["workEndNs"], "COLLECT_CHILD_INHERITANCE")
+            domain = native.processes.ownership_domains(inherited[native.processes.CHAIN_ENV],
+                inherited[native.processes.DOMAINS_ENV])[-1]
+            require(domain == {"id": start["invocation"], "job": start["job"], "state": start["state"], "home": start["home"]},
+                "COLLECT_CHILD_NATIVE_DOMAIN")
+            N._check_history(graph)
+            _custody_match_check(pin)
+            self._bind_end(anchor, (None, context_raw, context, start_raw, start, expected, expected.__dict__, event, inherited),
+                context["originalWindow"], start["workEndNs"])
+            return context, start, expected, domain
+        except BaseException as error:
+            raise self._error(anchor, error)
+        finally:
+            anchor.busy = False
+
+    def attach_operative(self, owner):
+        anchor = self._begin()
+        try:
+            require(anchor.phase == "OPERATIVE" and anchor.operative is None and type(owner) is _CustodyOwner and
+                owner.first is anchor.binding[0] and owner.fence is self and not owner.closed and
+                not owner.check().rows and owner._anchor().pending is None, "COLLECT_OPERATIVE_ORIGINAL_OWNER")
+            anchor.operative = owner
+            self._current(anchor)
+        except BaseException as error:
+            raise self._error(anchor, error)
+        finally:
+            anchor.busy = False
+
+
+def _collect_context(raw, clock):
+    context = fields(canonical(raw), _COLLECT_CONTEXT_FIELDS, "COLLECT_CONTEXT_FIELDS")
+    frame_clock, limits = _custody_authority_frame(context["originalWindow"])
+    require(type(context["schema"]) is int and context["schema"] == 1 and
+        context["scope"] == native.INITIAL_COLLECT_AUTHORITY_CONTEXT_SCOPE and context["edge"] == "POST_EXPORT" and
+        context["kind"] == limits["kind"] and context["root"] == str(ROOT) and frame_clock == clock and
+        context["budgetAcceptance"] == "NOT_ADMITTED" and context["exportSaveAuthority"] is False,
+        "COLLECT_CONTEXT_SCOPE")
+    _collect_service_job(context["originalServiceJob"])
+    prior = fields(context["predecessor"], "step outcome stepSha256 cryptoCarrierSha256 exporterReturnSha256", "COLLECT_CONTEXT_PREDECESSOR")
+    require(prior["step"] == "initial-custody-export" and prior["outcome"] == "success", "COLLECT_CONTEXT_PREDECESSOR_OUTCOME")
+    for name in ("stepSha256", "cryptoCarrierSha256", "exporterReturnSha256"):
+        digest(prior[name])
+    for name in ("eventSha256", "sourceReturnSha256"):
+        digest(context[name])
+    began = O.integer(context["parentFirstNs"], limits["startNs"])
+    require(context["continuationEndNs"] == min(limits["readEndNs"], began + 30 * O.NS) and
+        began <= O.integer(context["sourceReturnedNs"]) < O.integer(context["continuationEndNs"]) and
+        type(context["job"]) is str and re.fullmatch(r"[0-9a-f]{32}", context["job"]) and
+        type(context["observed"]) is dict and context["observed"]["kind"] == context["kind"] and
+        context["observed"]["role"] == clock.role, "COLLECT_CONTEXT_TIME_OR_HOST")
+    native.directory_identity(context["directoryIdentity"], clock.role)
+    path = _paths(context["kind"])[2] / "authority-2"
+    require(context["session"] == str(path), "COLLECT_CONTEXT_FIXED_PATH")
+    inherited = context["inheritedContext"]
+    require(type(inherited) is dict and all(type(item) is str for item in inherited.values()) and
+        (set(inherited).issubset({"GRADLE_USER_HOME"}) or set(inherited) == set(Q._CONTEXT)), "COLLECT_CONTEXT_PARENT_DOMAIN")
+    expected = context["expectedMatch"]
+    fields(expected, " ".join(E.COMMON_MATCH | ({"stage", "selector", "workerAdmission", "qualificationAcceptance"}
+        if context["kind"] == "gate" else set())), "COLLECT_CONTEXT_EXPECTED_FIELDS")
+    require(expected["firstUseAt"] == context["observed"]["firstUseAt"] and
+        expected["source"] == context["observed"]["source"], "COLLECT_CONTEXT_EXPECTED_LINK")
+    return context
+
+
+def _collect_child_host(context, event, first, boot):
+    graph = N._history_graph(context, first)
+    observed, _primary, actual_event = N.host_context(O.integer(context["observed"]["firstUseAt"], 1))
+    require(observed == context["observed"] and type(event) is bytes and event == actual_event and
+        O.digest(event) == context["eventSha256"] and context["originalWindow"]["clock"] == O.clock_value(first.clock) and
+        context["originalWindow"]["originalBootDigest"] == boot and
+        context["parentFirstNs"] <= first.nanoseconds < context["continuationEndNs"], "COLLECT_CHILD_ACTUAL_HOST")
+    N._check_history(graph)
+    return (A.gate.GateEligibility if context["kind"] == "gate" else A.stages.BootstrapMatch)(O.encoded(context["expectedMatch"]))
+
+
+def _collect_start_fields(raw, context_raw, context, clock):
+    start = fields(canonical(raw), " ".join(native.START_FIELDS), "COLLECT_START_FIELDS")
+    graph = N._history_graph(context, start)
+    path = _paths(context["kind"])[2] / "authority-2"
+    require(type(start["schema"]) is int and start["schema"] == 1 and start["scope"] == native.PHASE_SCOPE and
+        start["contextSha256"] == O.digest(context_raw) and start["argv"] == native.phase_command(context_raw) and
+        start["cwd"] == str(ROOT) and start["role"] == clock.role and start["job"] == context["job"] and
+        start["state"] == str(path) and start["home"] == str(path / "control-home") and
+        type(start["invocation"]) is str and re.fullmatch(r"[0-9a-f]{32}", start["invocation"]) and
+        start["exitCode"] is None and start["launchAttempted"] is False and start["scopeAttempted"] is False and
+        start["retirement"] == "UNKNOWN", "COLLECT_START")
+    began = O.integer(start["startedNs"], context["sourceReturnedNs"])
+    require(began < O.integer(start["workEndNs"]) and
+        start["workEndNs"] == min(context["continuationEndNs"], began + 45 * O.NS) and
+        start["finalEndNs"] == min(context["continuationEndNs"], start["workEndNs"] + 45 * O.NS), "COLLECT_PHASE_CAPS")
+    expected = native.processes.ownership_environment(context["inheritedContext"], context["job"], start["invocation"],
+        str(path), str(path / "control-home"), allow_new_context=True)
+    require(type(start["inheritedContext"]) is dict and
+        start["inheritedContext"] == {name: expected[name] for name in Q._CONTEXT}, "COLLECT_START_INHERITANCE")
+    N._check_history(graph)
+    return start
+
+
+def _collect_authority_child(context_hash, minimum, cancelled):
+    token = os.environ.pop(O.wire.TOKEN_ENV, None)
+    metadata = owner = clock = result_raw = None
+    failure = None
+    try:
+        local = local_value(time.monotonic())
+        first = O.clocks.observe()
+        first_graph = N._history_graph(first)
+        O.clocks.validate_reading(first)
+        require(first.nanoseconds >= O.integer(minimum) and native.processes.host_role() == first.clock.role,
+            "COLLECT_CHILD_FIRST_OR_HOST")
+        boot = digest(C.boot_digest(first.clock.role))
+        N._check_history(first_graph)
+        digest(context_hash)
+        require(type(token) is str and re.fullmatch(r"[A-Za-z0-9_.-]{16,4096}", token) and
+            not any(name in os.environ for name in _CREDENTIAL_NAMES) and callable(cancelled), "COLLECT_CHILD_TOKEN")
+        clock = _CollectClock(first, local, boot, cancelled, side="child")
+        metadata = _PrimaryOwner(native.Owner(clock.local_end, clock, first=first, cancelled=cancelled))
+        clock.attach_metadata(metadata)
+        kind, _primary = N.location()
+        path = _paths(kind)[2] / "authority-2"
+        private = _private(metadata, path)
+        service = _private(metadata, path / "service")
+        private_pin, service_pin = tuple(private.identity), tuple(service.identity)
+        context_raw = _read_private(metadata, private, "context.json", native.LIMIT)
+        start_raw = _read_private(metadata, service, "start.json", native.LIMIT)
+        require(O.digest(context_raw) == context_hash, "COLLECT_CHILD_CONTEXT_HASH")
+        context = _collect_context(context_raw, first.clock)
+        require(tuple(context["directoryIdentity"]) == private_pin, "COLLECT_CHILD_CONTEXT_PIN")
+        _observed, _root, event = N.host_context(context["observed"]["firstUseAt"])
+        inherited = Q._inherited_context()
+        metadata_graph = N._history_graph(context, inherited, first)
+        metadata_close = metadata.finish()
+        metadata_last = clock.now()
+        N._check_history(metadata_graph)
+        context, start, expected, domain = clock.bind_child(context_raw, start_raw, event, inherited)
+        expected_pin = _custody_match_pin(expected, kind)
+        require(start["startedNs"] <= minimum <= first.nanoseconds, "COLLECT_CHILD_LAUNCH_MINIMUM")
+        owner = _CustodyOwner(clock.local_end, clock, first=first, cancelled=cancelled)
+        clock.attach_operative(owner)
+        private = owner.open(path)
+        service = owner.child(private, "service")
+        require(tuple(private.identity) == private_pin and tuple(service.identity) == service_pin and
+            owner.read(private, "context.json") == context_raw and owner.read(service, "start.json") == start_raw,
+            "COLLECT_CHILD_ORIGINAL_METADATA")
+        supplier = None
+        query_failure = None
+        try:
+            supplier = N.query_owner(owner, clock, path / "acquisition-queries")
+            N._initial_service_query_git(supplier)
+            supplier.native_host_matches_actions()
+            def retain(name, raw, *, failed):
+                require(name in N.ORIGINAL_KEYS and type(raw) is bytes and type(failed) is bool, "COLLECT_CHILD_ORIGINAL_NAME")
+                owner.end(final=failed)
+                supplier._write(supplier.private, name + ".bin", raw)
+                owner.end(final=failed)
+            match, originals = A.acquire_bootstrap(ROOT, kind=kind, query_runner=supplier, invocation=domain["id"],
+                token=token, retain=retain, fence=clock, original_work_end=start["workEndNs"],
+                first_use_at=context["observed"]["firstUseAt"], expected=expected)
+            token = None
+            match_pin = _custody_match_pin(match, kind)
+            original_graph = N._history_graph(match.__dict__, originals)
+            acquired = clock.now(limit=start["workEndNs"])
+            _custody_match_check(match_pin)
+            _custody_match_check(expected_pin)
+            require(type(match) is type(expected) and match.record == expected.record and type(originals) is tuple and
+                tuple(name for name, _raw in originals) == N.ORIGINAL_KEYS and all(type(raw) is bytes for _name, raw in originals) and
+                dict(originals)["event"] == event, "COLLECT_CHILD_FRESH_MATCH")
+        except BaseException as error:
+            query_failure = error
+        finally:
+            token = None
+            _custody_finish_queries(owner, supplier, query_failure)
+        returned = clock.now(limit=start["workEndNs"])
+        N._check_history(original_graph)
+        _custody_match_check(match_pin)
+        queries = owner.open(path / "acquisition-queries")
+        session = N.query_session(owner, queries)
+        require(all(owner.read(queries, name + ".bin") == raw for name, raw in originals), "COLLECT_CHILD_ORIGINAL_READBACK")
+        _collect_query_index(path / "acquisition-queries", session, dict(originals), context["observed"])
+        N._check_history(metadata_graph)
+        _custody_match_check(expected_pin)
+        result_raw = owner.write(service, "child-result.json", {"schema": 1, "scope": _COLLECT_CHILD_SCOPE,
+            "contextSha256": context_hash, "startSha256": O.digest(start_raw), "invocation": domain["id"],
+            "clock": O.clock_value(first.clock), "bootDigest": boot, "launchMinimumNs": minimum,
+            "beganNs": first.nanoseconds, "metadataLastNs": metadata_last, "acquiredNs": acquired,
+            "queryReturnedNs": returned, "querySessionSha256": O.digest(session),
+            "originalsSha256": {name: O.digest(raw) for name, raw in originals}, "matchSha256": O.digest(match.record),
+            "directoryIdentities": {".": list(private_pin), "service": list(service_pin)},
+            "metadataClose": _collect_file_close(metadata_close), "completedNs": clock.now(limit=start["workEndNs"]),
+            "retirement": "PENDING_CHILD_CLOSE", "errors": []})
+        N._check_history(original_graph)
+        _custody_match_check(match_pin)
+        clock.now()
+    except BaseException as error:
+        failure = error
+        if owner is not None:
+            owner.error("collect-authority-child", error)
+            failure = owner._anchor().failure
+        elif metadata is not None:
+            failure = metadata.remember(error)
+    finally:
+        token = None
+        if metadata is not None and not metadata.finished and not metadata.owner.unknown:
+            try:
+                metadata.finish()
+            except BaseException as error:
+                if failure is None:
+                    failure = error
+        if owner is not None:
+            if failure is None and owner._anchor().failure is None:
+                try:
+                    owner.freeze()
+                except BaseException as error:
+                    owner.error("collect-child-close-roster", error, unknown=True)
+            try:
+                owner.close()
+            except BaseException as error:
+                owner.error("collect-child-close", error)
+            if failure is None and owner._anchor().failure is not None:
+                failure = owner._anchor().failure
+    if failure is not None:
+        raise failure
+    require(owner is not None and clock is not None and result_raw is not None, "COLLECT_CHILD_INCOMPLETE")
+    anchor = owner.known()
+    N._check_history(metadata_graph)
+    N._check_history(original_graph)
+    _custody_match_check(expected_pin)
+    _custody_match_check(match_pin)
+    closed = clock.now(limit=start["workEndNs"])
+    owner.known()
+    owner_close = {"schema": 1, "scope": "INITIAL_POST_EXPORT_AUTHORITY_CHILD_KNOWN_CLOSE_V1",
+        "resources": [{"ordinal": index, "label": label, "closeAttempted": attempted, "closed": ended}
+            for index, (_row, label, _resource, attempted, ended) in enumerate(anchor.rows)],
+        "retirement": "KNOWN_RESOURCE_CLOSE_ONLY", "exportSaveAuthority": False}
+    return {"schema": 1, "scope": _COLLECT_ACK_SCOPE, "invocation": domain["id"], "terminalSha256": O.digest(result_raw),
+        "clock": O.clock_value(first.clock), "closedNs": closed, "ownerClose": owner_close}, clock, start["workEndNs"]
+
+
+def _collect_phase_bytes(context_raw, phase, child_raw, clock, private_pin, service_pin):
+    """This new phase only; the caller separately proves actual owner-return identity."""
+    require(type(phase) is native.OriginalPhase and phase.context == context_raw and type(phase.records) is tuple,
+        "COLLECT_PHASE_RETURN_TYPE")
+    context = _collect_context(context_raw, clock)
+    records = dict(phase.records)
+    require(len(phase.records) == len(records) and set(records) == native.PHASE_FILES and
+        all(type(raw) is bytes for raw in records.values()), "COLLECT_PHASE_FILES")
+    start = _collect_start_fields(records["start.json"], context_raw, context, clock)
+    row = fields(canonical(records["result.json"]), " ".join(native.TERMINAL_FIELDS), "COLLECT_TERMINAL_FIELDS")
+    birth = fields(canonical(records["native-start.json"]), "ownership leader preparerIdentity observedNs", "COLLECT_BIRTH_FIELDS")
+    changed = {"exitCode", "launchAttempted", "scopeAttempted", "retirement"}
+    _same({name: row[name] for name in start if name not in changed},
+        {name: start[name] for name in start if name not in changed}, "COLLECT_TERMINAL_START")
+    require(type(row["exitCode"]) is int and row["exitCode"] == 0 and row["launchAttempted"] is True and
+        row["scopeAttempted"] is True and row["scopeCloseAttempted"] is True and row["scopeClosed"] is True and
+        row["retirement"] == "KNOWN" and row["survivors"] == [] and row["errors"] == [] and records["stderr.log"] == b"" and
+        row["nativeStartSha256"] == O.digest(records["native-start.json"]) and
+        row["baselineSha256"] == O.digest(records["baseline.json"]) and row["leader"] == birth["leader"], "COLLECT_NATIVE_RETURN")
+    argv = native.phase_command(context_raw, O.integer(row["launchMinimumNs"], start["startedNs"]))
+    _same(row["launchArgv"], argv, "COLLECT_NATIVE_COMMAND")
+    native.native_record(row["ownership"], start, row["leader"], argv)
+    native.native_record(birth["ownership"], start, row["leader"], argv, terminal=False)
+    _same(birth["ownership"]["launches"], row["ownership"]["launches"], "COLLECT_NATIVE_BIRTH")
+    preparer = native.closed_lifetime(row["preparerIdentity"], clock.role)
+    require(preparer == native.closed_lifetime(birth["preparerIdentity"], clock.role) and
+        preparer["pid"] != row["leader"]["pid"], "COLLECT_NATIVE_PREPARER")
+    baseline = native.baseline_record(records["baseline.json"], clock.role)
+    if baseline["baseline"] is not None:
+        leader = native.lifetime(row["leader"], clock.role)
+        require(list(leader[:4] if clock.role.startswith("macos-") else leader) not in baseline["baseline"], "COLLECT_PREEXISTING_LEADER")
+    _same(row["captureOutcomes"], {name: {key: True for key in
+        ("synced", "verified", "closeAttempted", "closed", "readback")} for name in ("stdout", "stderr")}, "COLLECT_CAPTURE_CLOSE")
+    _same(row["captures"], {name: {"sha256": O.digest(records[name + ".log"]), "bytes": len(records[name + ".log"])}
+        for name in ("stdout", "stderr")}, "COLLECT_CAPTURE_BYTES")
+    child = fields(canonical(child_raw), "schema scope contextSha256 startSha256 invocation clock bootDigest launchMinimumNs "
+        "beganNs metadataLastNs acquiredNs queryReturnedNs querySessionSha256 originalsSha256 matchSha256 directoryIdentities "
+        "metadataClose completedNs retirement errors", "COLLECT_CHILD_FIELDS")
+    ack = fields(canonical(records["stdout.log"]), "schema scope invocation terminalSha256 clock closedNs ownerClose", "COLLECT_ACK_FIELDS")
+    require(type(child["schema"]) is int and child["schema"] == 1 and child["scope"] == _COLLECT_CHILD_SCOPE and
+        child["contextSha256"] == O.digest(context_raw) and child["startSha256"] == O.digest(records["start.json"]) and
+        child["invocation"] == start["invocation"] and child["clock"] == O.clock_value(clock) and
+        child["bootDigest"] == context["originalWindow"]["originalBootDigest"] and child["launchMinimumNs"] == row["launchMinimumNs"] and
+        child["retirement"] == "PENDING_CHILD_CLOSE" and child["errors"] == [] and
+        type(ack["schema"]) is int and ack["schema"] == 1 and ack["scope"] == _COLLECT_ACK_SCOPE and
+        ack["invocation"] == start["invocation"] and ack["terminalSha256"] == O.digest(child_raw) and
+        ack["clock"] == O.clock_value(clock), "COLLECT_CHILD_ACK")
+    _same(child["directoryIdentities"], {".": list(private_pin), "service": list(service_pin)}, "COLLECT_CHILD_PINS")
+    metadata = _collect_file_close(O.encoded(child["metadataClose"]))
+    _same(metadata["resources"], [{"ordinal": index, "label": label, "closeAttempted": True, "closed": True}
+        for index, label in enumerate(("directory", "directory", "reader", "reader"))], "COLLECT_METADATA_ROSTER")
+    close = fields(ack["ownerClose"], "schema scope resources retirement exportSaveAuthority", "COLLECT_CHILD_CLOSE_FIELDS")
+    require(type(close["schema"]) is int and close["schema"] == 1 and
+        close["scope"] == "INITIAL_POST_EXPORT_AUTHORITY_CHILD_KNOWN_CLOSE_V1" and
+        close["retirement"] == "KNOWN_RESOURCE_CLOSE_ONLY" and close["exportSaveAuthority"] is False, "COLLECT_CHILD_CLOSE")
+    _collect_close_rows(close["resources"], {"directory", "writer"})
+    fields(child["originalsSha256"], " ".join(N.ORIGINAL_KEYS), "COLLECT_CHILD_ORIGINAL_HASHES")
+    for checksum in (child["querySessionSha256"], child["matchSha256"], *child["originalsSha256"].values()):
+        digest(checksum)
+    ordered = [row["launchMinimumNs"], *(child[name] for name in
+        ("beganNs", "metadataLastNs", "acquiredNs", "queryReturnedNs", "completedNs")), ack["closedNs"], row["completedNs"], row["finalizedNs"]]
+    require(all(type(value) is int and O.integer(value) == value for value in ordered) and ordered == sorted(ordered) and
+        start["startedNs"] <= ordered[0] and ack["closedNs"] < start["workEndNs"] and row["completedNs"] < start["workEndNs"] and
+        row["finalizedNs"] < start["finalEndNs"] and row["launchMinimumNs"] <= O.integer(birth["observedNs"]) <= row["completedNs"],
+        "COLLECT_ORIGINAL_PHASE_CHRONOLOGY")
+    return start, row, birth, child, ack
+
+
+def _collect_query_index(path, session_raw, originals, observed, *, source=None):
+    """Closed declarations of THIS actual12/24-query return, never old custody."""
+    rows, directories = N._gate_query_index(path, session_raw, originals, source=source)
+    graph = N._history_graph(originals, observed)
+    session = canonical(session_raw, Q.MAX_RECEIPT_BYTES)
+    entry = re.fullmatch(rb"100644 blob ([0-9a-f]{40})\t" + re.escape(I.POLICY_PATH.encode("ascii")) + rb"\x00",
+        originals["candidate_policy_entry"])
+    require(entry is not None, "COLLECT_QUERY_POLICY_ENTRY")
+    blob, commit = entry.group(1).decode("ascii"), observed["source"]["commit"]
+    I.sha(commit)
+    commands = (("rev-parse", "--show-toplevel"), ("status", "--porcelain=v1", "--untracked-files=all"),
+        ("rev-parse", "--verify", "HEAD^{commit}"), ("rev-parse", "--verify", commit + "^{tree}"),
+        ("rev-parse", "--is-shallow-repository"), ("rev-parse", "--verify", "refs/remotes/origin/main^{commit}"),
+        ("rev-parse", "--verify", A.stages.BASE["commit"] + "^{tree}"),
+        ("ls-tree", "-z", A.stages.BASE["commit"], "--", I.POLICY_PATH),
+        ("merge-base", A.stages.BASE["commit"], commit), ("ls-tree", "-z", commit, "--", I.POLICY_PATH),
+        ("cat-file", "-s", blob), ("cat-file", "blob", blob))
+    selected = None
+    for index, row in enumerate(session["queries"]):
+        require(type(row["argv"]) is list and row["argv"] and type(row["argv"][0]) is str, "COLLECT_QUERY_ARGV")
+        if selected is None:
+            selected = row["argv"][0]
+        require(row["argv"] == [selected, "--no-replace-objects", "--no-pager", "-c", "core.fsmonitor=false",
+            "-C", str(ROOT), *commands[index % 12]], "COLLECT_QUERY_ORIGINAL_COMMAND")
+    N._check_history(graph)
+    return rows, directories
+
+
+def _collect_source_pin(source):
+    N._source_pin(source)
+    return source, source.__dict__, source.records, source.session, source.raw, N._history_graph(source)
+
+
+def _collect_source_current(pin):
+    source, dictionary, records, session, raw, graph = pin
+    require(type(source) is N.SourceReturn and source.__dict__ is dictionary and source.records is records and
+        source.session == session and source.raw == raw, "COLLECT_SOURCE_RETURN_CHANGED")
+    N._check_history(graph)
+
+
+def _collect_phase_pin(phase):
+    N._phase_pin(phase)
+    return phase, phase.__dict__, phase.context, phase.records, N._history_graph(phase)
+
+
+def _collect_phase_current(pin):
+    phase, dictionary, context, records, graph = pin
+    require(type(phase) is native.OriginalPhase and phase.__dict__ is dictionary and phase.context == context and
+        phase.records is records, "COLLECT_PHASE_RETURN_CHANGED")
+    N._check_history(graph)
+
+
+def _collect_predecessor(raws, step):
+    return {"step": "initial-custody-export", "outcome": "success", "stepSha256": O.digest(raws["step"]),
+        "cryptoCarrierSha256": step["cryptoCarrier"]["sha256"],
+        "exporterReturnSha256": step["cryptoCarrier"]["exporterReturnSha256"]}
+
+
+def _collect_read_authority(owner, private, before, phase, clock, input_result, expected):
+    """Actual new phase/source/query readback; original prior SUCCESS is data only."""
+    before_pin, phase_pin, expected_pin = _collect_source_pin(before), _collect_phase_pin(phase), \
+        _custody_match_pin(expected, clock.frame["kind"])
+    raws, _metadata = _checked_collect_input(input_result)
+    step, _carrier, old_context, _manifest = _collect_bundle(raws)
+    context_raw = phase.context
+    context = _collect_context(context_raw, clock.clock)
+    graph = N._history_graph(context, raws)
+    require(type(owner) is _CustodyOwner and owner.fence is clock and owner.phase_originals is phase and
+        context["originalWindow"] == clock.frame == step["originalWindow"] and
+        context["originalServiceJob"] == step["originalServiceJob"] and context["observed"] == old_context["observed"] and
+        context["predecessor"] == _collect_predecessor(raws, step) and
+        O.encoded(context["expectedMatch"]) == expected.record == raws["original-match"] and
+        owner.read(private, "context.json") == context_raw and tuple(context["directoryIdentity"]) == tuple(private.identity),
+        "COLLECT_CURRENT_CONTEXT")
+    policy = N.source_readback(owner, private.path / "source-before", before)
+    require(context["sourceReturnSha256"] == O.digest(before.raw) and
+        context["sourceReturnedNs"] == canonical(before.raw)["returnedNs"], "COLLECT_CURRENT_SOURCE_RETURN")
+    _collect_query_index(private.path / "source-before", before.session, dict(before.records), context["observed"], source=before)
+    service = owner.child(private, "service")
+    for name, raw in phase.records:
+        maximum = native.ACK_LIMIT if name == "stdout.log" else native.STDERR_LIMIT if name == "stderr.log" else native.LIMIT
+        require(owner.read(service, name, maximum) == raw, "COLLECT_CURRENT_PHASE_BYTES")
+    child_raw = owner.read(service, "child-result.json")
+    start, row, birth, child, ack = _collect_phase_bytes(context_raw, phase, child_raw, clock.clock,
+        tuple(private.identity), tuple(service.identity))
+    queries = owner.open(private.path / "acquisition-queries")
+    session = N.query_session(owner, queries)
+    originals = tuple((name, owner.read(queries, name + ".bin")) for name in N.ORIGINAL_KEYS)
+    original = dict(originals)
+    captured = (context_raw, originals, start["invocation"], start["startedNs"], start["workEndNs"])
+    captured_graph = N._history_graph(captured)
+    require(child["querySessionSha256"] == O.digest(session) and child["originalsSha256"] ==
+        {name: O.digest(raw) for name, raw in originals} and child["matchSha256"] == O.digest(original["match"]) and
+        original["event"] == raws["event"] and {name: original[name] for name in N.SOURCE_KEYS} == policy and
+        original["candidate_policy_raw"] == raws["policy"] and original["match"] == expected.record,
+        "COLLECT_CURRENT_ORIGINALS")
+    _collect_query_index(private.path / "acquisition-queries", session, original, context["observed"])
+    match, service_time = N.retained_match(context, original, start["invocation"], clock.clock,
+        start["startedNs"], start["workEndNs"])
+    match_pin = _custody_match_pin(match, context["kind"])
+    match_graph = N._history_graph(match.__dict__, service_time)
+    require(type(match) is type(expected) and match.record == expected.record and
+        list(N._service_job(captured, clock.clock)) == step["originalServiceJob"], "COLLECT_CURRENT_MATCH_OR_ORIGINAL_JOB")
+    minimum = N._service_chain_minimum(clock.first, context["sourceReturnedNs"], start, row, birth, child, service_time, ack)
+    checked = clock.now(minimum=minimum)
+    _collect_source_current(before_pin)
+    _collect_phase_current(phase_pin)
+    _custody_match_check(expected_pin)
+    _custody_match_check(match_pin)
+    N._check_history(graph)
+    N._check_history(captured_graph)
+    N._check_history(match_graph)
+    owner.check()
+    require(owner.phase_originals is phase, "COLLECT_CURRENT_PHASE_OWNER")
+    authority = {"contextSha256": O.digest(context_raw), "sourceBeforeSha256": O.digest(before.raw),
+        "expectedMatchSha256": O.digest(expected.record), "freshMatchSha256": O.digest(match.record),
+        "originalsSha256": {name: O.digest(raw) for name, raw in originals}, "querySessionSha256": O.digest(session),
+        "phaseSha256": {name: O.digest(raw) for name, raw in phase.records}, "childSha256": O.digest(child_raw),
+        "ackSha256": O.digest(dict(phase.records)["stdout.log"]), "invocation": start["invocation"],
+        "startedNs": start["startedNs"], "workEndNs": start["workEndNs"], "finalEndNs": start["finalEndNs"],
+        "acquiredNs": child["acquiredNs"], "checkedNs": checked}
+    return match, captured, authority, child_raw, session
+
+
+@dataclass(frozen=True, repr=False)
+class _CollectAuthority:
+    """This second-Step episode's actual known-close, never exported originals."""
+    input: object
+    raw: bytes
+    originals: tuple
+
+
+def _collect_authority(input_result, clock, expected, token):
+    attempt = _collect_begin("post-export-authority")
+    attempt.update(input=input_result, clock=clock, owner=None)
+    owner = None
+    failure = None
+    source_links, source_pins, graphs, match_pins, directory_pins = (), (), (), (), ()
+    phase = phase_pin = None
+    try:
+        require(type(token) is str and re.fullmatch(r"[A-Za-z0-9_.-]{16,4096}", token) and
+            not any(name in os.environ for name in _CREDENTIAL_NAMES) and type(clock) is _CollectClock and
+            clock.side == "parent", "COLLECT_AUTHORITY_TOKEN_OR_CLOCK")
+        raws, _metadata = _checked_collect_input(input_result)
+        parsed = _collect_bundle(raws)
+        step, _carrier, old_context, _manifest = parsed
+        expected_pin = _custody_match_pin(expected, step["kind"])
+        match_pins = (expected_pin,)
+        graphs = (N._history_graph(raws, parsed),)
+        require(expected.record == raws["original-match"] and clock.frame == step["originalWindow"], "COLLECT_AUTHORITY_INPUT")
+        owner = _CustodyOwner(clock.local_end, clock, first=clock.reading, cancelled=clock.cancelled)
+        attempt["owner"] = owner
+        clock.attach_operative(owner)
+        anchor, dictionary = owner._anchor(), owner.__dict__
+        def current():
+            require(_COLLECT_ATTEMPTS.get("post-export-authority") is attempt and attempt["input"] is input_result and
+                attempt["clock"] is clock and attempt["owner"] is owner and attempt["state"] in ("STARTED", "RETURNED") and
+                attempt["failure"] is None and owner.__dict__ is dictionary and owner._anchor() is anchor,
+                "COLLECT_AUTHORITY_ORIGINAL_ATTEMPT")
+            _checked_collect_input(input_result)
+            owner.check()
+            require(owner.original is None and not owner.unknown and owner.errors == [] and
+                set(owner.initial_sources) == {name for name, _source in source_links} and
+                all(owner.initial_sources[name] is source for name, source in source_links) and owner.phase_originals is phase,
+                "COLLECT_AUTHORITY_ORIGINAL_OWNER")
+            for pin in source_pins:
+                _collect_source_current(pin)
+            if phase_pin is not None:
+                _collect_phase_current(phase_pin)
+            for pin in match_pins:
+                _custody_match_check(pin)
+            for graph in graphs:
+                N._check_history(graph)
+            if directory_pins:
+                N._check_worker_pins(directory_pins, clock.reading.clock.role, closed=owner.closed)
+        current()
+        custody = _paths(step["kind"])[2]
+        root = owner.open(custody)
+        require(native._initializer_names(owner, root) == ("authority-1", "copied-evidence", "export-output", "public-crypto", "returned"),
+            "COLLECT_CUSTODY_INITIAL_ROSTER")
+        path = custody / "authority-2"
+        private = owner.child(root, "authority-2", create=True)
+        private_pin = tuple(private.identity)
+        owner.child(private, "control-home", create=True)
+        owner.child(private, "temporary", create=True)
+        before = N.source_queries(owner, clock, old_context["observed"], path / "source-before")
+        source_links = ((str(path / "source-before"), before),)
+        source_pins = (_collect_source_pin(before),)
+        current()
+        policy = N.source_readback(owner, path / "source-before", before)
+        require(policy["candidate_policy_raw"] == raws["policy"], "COLLECT_POST_EXPORT_POLICY_CHANGED")
+        _collect_query_index(path / "source-before", before.session, policy, old_context["observed"], source=before)
+        inherited = Q._inherited_context()
+        context = {"schema": 1, "scope": native.INITIAL_COLLECT_AUTHORITY_CONTEXT_SCOPE, "edge": "POST_EXPORT",
+            "kind": step["kind"], "root": str(ROOT), "session": str(path), "job": uuid.uuid4().hex,
+            "observed": old_context["observed"], "originalWindow": step["originalWindow"],
+            "originalServiceJob": step["originalServiceJob"], "predecessor": _collect_predecessor(raws, step),
+            "expectedMatch": canonical(expected.record, A.stages.LIMIT), "eventSha256": O.digest(raws["event"]),
+            "sourceReturnSha256": O.digest(before.raw), "sourceReturnedNs": canonical(before.raw)["returnedNs"],
+            "inheritedContext": inherited, "directoryIdentity": list(private_pin), "parentFirstNs": clock.first,
+            "continuationEndNs": clock.work, "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False}
+        graphs = (*graphs, N._history_graph(context, inherited))
+        context_raw = O.encoded(context)
+        _collect_context(context_raw, clock.clock)
+        current()
+        require(owner.write(private, "context.json", context_raw) == context_raw, "COLLECT_CONTEXT_WRITE")
+        _directory, returned_phase = N._initial_service_phase(owner, private, context_raw, token, clock, before)
+        phase = returned_phase
+        phase_pin = _collect_phase_pin(phase)
+        token = None
+        current()
+        first_match, first_captured, _chain, _child, _session = _collect_read_authority(
+            owner, private, before, phase, clock, input_result, expected)
+        match_pins = (*match_pins, _custody_match_pin(first_match, step["kind"]))
+        graphs = (*graphs, N._history_graph(first_captured))
+        current()
+        after = N.source_queries(owner, clock, old_context["observed"], path / "source-after")
+        source_links = (*source_links, (str(path / "source-after"), after))
+        source_pins = (*source_pins, _collect_source_pin(after))
+        current()
+        require(N.source_readback(owner, path / "source-after", after) == policy, "COLLECT_FINAL_SOURCE_CHANGED")
+        _collect_query_index(path / "source-after", after.session, dict(after.records), old_context["observed"], source=after)
+        match, captured, authority, child_raw, session_raw = _collect_read_authority(
+            owner, private, before, phase, clock, input_result, expected)
+        match_pin = _custody_match_pin(match, step["kind"])
+        match_pins = (*match_pins, match_pin)
+        require(captured == first_captured, "COLLECT_FRESH_ORIGINALS_CHANGED")
+        authority["sourceAfterSha256"] = O.digest(after.raw)
+        files = [("context.json", context_raw), ("service/child-result.json", child_raw),
+            ("acquisition-queries/session-result.json", session_raw)]
+        files.extend(("service/" + name, raw) for name, raw in phase.records)
+        files.extend(("acquisition-queries/" + name + ".bin", raw) for name, raw in captured[1])
+        for name, source in (("source-before", before), ("source-after", after)):
+            files.extend(((name + "/source-return.json", source.raw), (name + "/session-result.json", source.session)))
+            files.extend((name + "/" + key + ".bin", raw) for key, raw in source.records)
+        originals = tuple(files)
+        graphs = (*graphs, N._history_graph(captured, authority, originals))
+        directory_pins = N._worker_pins(owner, clock.clock.role, {".": path, **{name: path / name for name in
+            ("control-home", "temporary", "service", "source-before", "source-after", "acquisition-queries")}})
+        current()
+        require(tuple(private.identity) == private_pin and native._initializer_names(owner, root) ==
+            ("authority-1", "authority-2", "copied-evidence", "export-output", "public-crypto", "returned"),
+            "COLLECT_PARENT_FINAL_ROSTER")
+        preclose = clock.now()
+        current()
+        owner.freeze()
+    except BaseException as error:
+        failure = error
+        if owner is not None:
+            owner.error("collect-authority-parent", error)
+            failure = owner._anchor().failure
+    finally:
+        token = None
+        if owner is not None:
+            try:
+                owner.close()
+            except BaseException as error:
+                owner.error("collect-authority-parent-close", error)
+            if failure is None and owner._anchor().failure is not None:
+                failure = owner._anchor().failure
+    try:
+        if failure is not None:
+            raise failure
+        require(owner is not None and owner._anchor() is anchor, "COLLECT_AUTHORITY_INCOMPLETE")
+        owner.known()
+        current()
+        closed = clock.now(minimum=preclose)
+        current()
+        parent_close = {"schema": 1, "scope": "INITIAL_POST_EXPORT_AUTHORITY_PARENT_KNOWN_CLOSE_V1",
+            "resources": [{"ordinal": index, "label": label, "closeAttempted": attempted, "closed": ended}
+                for index, (_row, label, _resource, attempted, ended) in enumerate(anchor.rows)],
+            "retirement": "KNOWN_RESOURCE_CLOSE_ONLY", "exportSaveAuthority": False}
+        final_authority = {**authority, "closedNs": closed}
+        raw = O.encoded({"schema": 1, "scope": "INITIAL_POST_EXPORT_AUTHORITY_CLOSED_RETURN_V1", "edge": "POST_EXPORT",
+            "authority": final_authority, "parentClose": parent_close, "preCloseNs": preclose, "closedNs": closed,
+            "testAcceptance": "NOT_PERFORMED", "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
+        canonical(raw)
+        result = _CollectAuthority(input_result, raw, originals)
+        saved = (result, result.__dict__, input_result, raw, originals, clock, owner, anchor, dictionary, current,
+            N._history_graph(result.__dict__, captured, final_authority, parent_close), match_pin, captured, attempt)
+        _COLLECT_AUTHORITY_RETURNS[id(result)] = saved
+        attempt["return"], attempt["state"] = result, "RETURNED"
+        _checked_collect_authority(result)
+        return result
+    except BaseException as error:
+        if attempt["failure"] is None:
+            attempt["failure"] = error
+        attempt["state"] = "FAILED"
+        raise attempt["failure"]
+
+
+def _checked_collect_authority(result):
+    """Passive original new episode graph/known-close, not a new remote query."""
+    saved = _COLLECT_AUTHORITY_RETURNS.get(id(result))
+    require(type(result) is _CollectAuthority and type(saved) is tuple and saved[0] is result,
+        "COLLECT_NOT_ORIGINAL_AUTHORITY_RETURN")
+    _, dictionary, inputs, raw, originals, clock, owner, anchor, owner_dictionary, current, graph, match_pin, captured, attempt = saved
+    try:
+        require(result.__dict__ is dictionary and result.input is inputs and result.raw == raw and result.originals is originals and
+            attempt["state"] == "RETURNED" and attempt["return"] is result and attempt["failure"] is None,
+            "COLLECT_AUTHORITY_RETURN_CHANGED")
+        N._check_history(graph)
+        current()
+        require(owner.__dict__ is owner_dictionary and owner._anchor() is anchor and clock._view().failure is None,
+            "COLLECT_AUTHORITY_OWNER_CHANGED")
+        owner.known()
+        match = _custody_match_check(match_pin)
+        return clock, inputs, raw, originals, match, captured
+    except BaseException as error:
+        if attempt["failure"] is None:
+            attempt["failure"] = error
+        attempt["state"] = "FAILED"
+        raise attempt["failure"]
+
+
+def _collect_authority_currency(result):
+    clock, inputs, raw, originals, original_match, captured = _checked_collect_authority(result)
+    pin = _custody_match_pin(original_match, clock.frame["kind"])
+    raws, _metadata = _checked_collect_input(inputs)
+    parsed = _collect_bundle(raws)
+    graph = N._history_graph(raws, parsed, captured)
+    expected = _collect_host(raws, parsed, clock.clock)
+    expected_pin = _custody_match_pin(expected, parsed[0]["kind"])
+    context_raw, acquisition_raws, invocation, began, end = captured
+    match, _service = N.retained_match(canonical(context_raw), dict(acquisition_raws), invocation, clock.clock, began, end)
+    fresh_pin = _custody_match_pin(match, parsed[0]["kind"])
+    require(type(match) is type(original_match) is type(expected) and match.record == original_match.record == expected.record,
+        "COLLECT_LATE_GRANT_CHANGED")
+    clock.now()
+    _custody_match_check(pin)
+    _custody_match_check(expected_pin)
+    _custody_match_check(fresh_pin)
+    N._check_history(graph)
+    _checked_collect_authority(result)
+    return clock, inputs, raw, originals
+
+
+def _collect_pre_metadata(kind, cancelled):
+    """The sole second-Step token holder returns no secret/closure to metadata."""
+    token = os.environ.pop(O.wire.TOKEN_ENV, None)
+    try:
+        local = local_value(time.monotonic())
+        first = O.clocks.observe()
+        graph = N._history_graph(first)
+        O.clocks.validate_reading(first)
+        boot = digest(C.boot_digest(first.clock.role))
+        N._check_history(graph)
+        require(type(token) is str and re.fullmatch(r"[A-Za-z0-9_.-]{16,4096}", token) and callable(cancelled) and
+            not native.QUARANTINE and not Q.QUARANTINE and not C.QUARANTINE and not native.diagnostics._QUARANTINE and
+            native.processes.host_role() == first.clock.role, "COLLECT_SECOND_TOKEN_OR_UNKNOWN")
+        actual = _collect_actual()
+        clock = _CollectClock(first, local, boot, cancelled, side="parent")
+        inputs = _read_collect_input(clock, kind, actual)
+        expected = clock.bind_parent(inputs)
+        return _collect_authority(inputs, clock, expected, token)
+    finally:
+        token = None
+
+
+def _collect_authority_record(raw, frame):
+    value = fields(canonical(raw), "schema scope edge authority parentClose preCloseNs closedNs testAcceptance "
+        "budgetAcceptance exportSaveAuthority", "COLLECT_AUTHORITY_RECORD_FIELDS")
+    require(type(value["schema"]) is int and value["schema"] == 1 and
+        value["scope"] == "INITIAL_POST_EXPORT_AUTHORITY_CLOSED_RETURN_V1" and value["edge"] == "POST_EXPORT" and
+        value["testAcceptance"] == "NOT_PERFORMED" and value["budgetAcceptance"] == "NOT_ADMITTED" and
+        value["exportSaveAuthority"] is False, "COLLECT_AUTHORITY_RECORD_SCOPE")
+    authority = fields(value["authority"], "contextSha256 sourceBeforeSha256 sourceAfterSha256 expectedMatchSha256 freshMatchSha256 "
+        "originalsSha256 querySessionSha256 phaseSha256 childSha256 ackSha256 invocation startedNs workEndNs finalEndNs "
+        "acquiredNs checkedNs closedNs", "COLLECT_AUTHORITY_BINDING_FIELDS")
+    for name in ("contextSha256", "sourceBeforeSha256", "sourceAfterSha256", "expectedMatchSha256", "freshMatchSha256",
+            "querySessionSha256", "childSha256", "ackSha256"):
+        digest(authority[name])
+    fields(authority["originalsSha256"], " ".join(N.ORIGINAL_KEYS), "COLLECT_AUTHORITY_ORIGINAL_HASH_FIELDS")
+    fields(authority["phaseSha256"], " ".join(native.PHASE_FILES), "COLLECT_AUTHORITY_PHASE_HASH_FIELDS")
+    for checksum in (*authority["originalsSha256"].values(), *authority["phaseSha256"].values()):
+        digest(checksum)
+    require(authority["freshMatchSha256"] == authority["expectedMatchSha256"] == authority["originalsSha256"]["match"] and
+        authority["ackSha256"] == authority["phaseSha256"]["stdout.log"] and type(authority["invocation"]) is str and
+        re.fullmatch(r"[0-9a-f]{32}", authority["invocation"]), "COLLECT_AUTHORITY_HASH_LINKS")
+    times = [authority[name] for name in ("startedNs", "acquiredNs", "checkedNs")]
+    times.extend((value["preCloseNs"], value["closedNs"]))
+    require(all(type(item) is int and O.integer(item) == item for item in times) and times == sorted(times) and
+        frame["startNs"] <= times[0] and authority["closedNs"] == value["closedNs"] < frame["readEndNs"] and
+        times[0] < O.integer(authority["workEndNs"]) <= O.integer(authority["finalEndNs"]) <= frame["readEndNs"] and
+        authority["acquiredNs"] < authority["workEndNs"], "COLLECT_AUTHORITY_RECORD_TIME")
+    close = fields(value["parentClose"], "schema scope resources retirement exportSaveAuthority", "COLLECT_PARENT_CLOSE_FIELDS")
+    require(type(close["schema"]) is int and close["schema"] == 1 and
+        close["scope"] == "INITIAL_POST_EXPORT_AUTHORITY_PARENT_KNOWN_CLOSE_V1" and
+        close["retirement"] == "KNOWN_RESOURCE_CLOSE_ONLY" and close["exportSaveAuthority"] is False,
+        "COLLECT_PARENT_CLOSE_SCOPE")
+    _collect_close_rows(close["resources"], {"directory", "writer", "native-scope", "stdout", "stderr"})
+    return value
+
+
+@dataclass(frozen=True, repr=False)
+class _CollectClosed:
+    authority: object
+    raw: bytes
+    metadata_close: bytes
+
+
+def _collect_final_record(raw, inputs, authority_raw):
+    value = fields(canonical(raw), "schema scope kind edge predecessor primary originalWindow lastNs lastLocal authority parentClose "
+        "writerReturn originalStepOutcome testAcceptance productiveAuthority cacheAuthority budgetAcceptance exportSaveAuthority",
+        "COLLECT_FINAL_FIELDS")
+    raws, _metadata = _checked_collect_input(inputs)
+    step = _collect_step_record(raws["step"])
+    authority = _collect_authority_record(authority_raw, step["originalWindow"])
+    require(type(value["schema"]) is int and value["schema"] == 1 and value["scope"] == _COLLECT_SCOPE and
+        value["kind"] == step["kind"] and value["edge"] == "POST_EXPORT" and
+        value["predecessor"] == _collect_predecessor(raws, step) and value["primary"] == step["primary"] and
+        value["originalWindow"] == step["originalWindow"] and value["authority"] == authority["authority"] and
+        value["parentClose"] == authority["parentClose"] and
+        authority["closedNs"] <= O.integer(value["lastNs"]) < step["originalWindow"]["readEndNs"] and
+        local_value(value["lastLocal"]) >= step["lowerLocal"], "COLLECT_FINAL_ORIGINAL_LINKS")
+    _collect_pending(value)
+    return value
+
+
+def _collect_final_readback(metadata, returned, output, raws):
+    names = (("step", returned, _EXPORT_STEP_FILE), ("carrier", returned, "custody-return.json"),
+        ("context", returned, "context.json"), ("manifest", output, native.posix.MANIFEST),
+        ("original-match", returned, "original-match.json"), ("fresh-match", returned, "fresh-match.json"),
+        ("event", returned, "event.json"), ("policy", returned, "candidate-policy.json"), ("public", returned, "recipient-public.asc"))
+    for name, directory, leaf in names:
+        require(_read_private(metadata, directory, leaf, _COLLECT_READ_LIMITS[name]) == raws[name], "COLLECT_FINAL_PRIOR_BYTES_CHANGED")
+
+
+def _collect_closed(authority_result):
+    attempt = _collect_begin("collect-final")
+    attempt["authority"] = authority_result
+    metadata = None
+    failure = None
+    try:
+        clock, inputs, authority_raw, _originals = _collect_authority_currency(authority_result)
+        raws, _prior_metadata = _checked_collect_input(inputs)
+        step = _collect_step_record(raws["step"])
+        authority = _collect_authority_record(authority_raw, step["originalWindow"])
+        graph = N._history_graph(authority_result.__dict__, raws, step, authority)
+        authority_dictionary = authority_result.__dict__
+        last = clock.now()
+        last_local = clock._view().local_last
+        metadata = _PrimaryOwner(native.Owner(clock.local_end, clock, first=clock.reading, cancelled=clock.cancelled))
+        paths = _crypto_directory_paths(step["kind"])
+        returned, output = _private(metadata, paths["returned"]), _private(metadata, paths["export-output"])
+        pins = tuple((directory, directory.path, tuple(directory.identity)) for directory in (returned, output))
+        original_pins = _COLLECT_INPUTS[id(inputs)][6]
+        require(all(pin[1:] == original[1:] for pin, original in zip(pins, original_pins)), "COLLECT_FINAL_ORIGINAL_DIRECTORY_PINS")
+        _collect_names(metadata, returned, (_EXPORT_STEP_FILE,))
+        _collect_final_readback(metadata, returned, output, raws)
+        raw = O.encoded({"schema": 1, "scope": _COLLECT_SCOPE, "kind": step["kind"], "edge": "POST_EXPORT",
+            "predecessor": _collect_predecessor(raws, step), "primary": step["primary"], "originalWindow": step["originalWindow"],
+            "lastNs": last, "lastLocal": last_local, "authority": authority["authority"], "parentClose": authority["parentClose"],
+            "writerReturn": "PENDING_OWNER_CLOSE", "originalStepOutcome": "NOT_OBSERVED", "testAcceptance": "NOT_PERFORMED",
+            "productiveAuthority": False, "cacheAuthority": False, "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
+        _collect_final_record(raw, inputs, authority_raw)
+        _collect_write(metadata, returned, _COLLECT_FILE, raw)
+        _collect_names(metadata, returned, (_EXPORT_STEP_FILE, _COLLECT_FILE))
+        _collect_final_readback(metadata, returned, output, raws)
+        N._check_history(graph)
+        require(authority_result.__dict__ is authority_dictionary, "COLLECT_FINAL_AUTHORITY_CHANGED")
+        _collect_authority_currency(authority_result)
+        closed = metadata.finish()
+        clock.now(final=True)
+        result = _CollectClosed(authority_result, raw, closed)
+        saved = (result, result.__dict__, authority_result, authority_dictionary, inputs, raw, closed, clock,
+            metadata, metadata._anchor(), pins, attempt,
+            N._history_graph(result.__dict__, metadata.owner.__dict__, tuple(pin[1] for pin in pins)), graph)
+        _COLLECT_RETURNS[id(result)] = saved
+        attempt["return"], attempt["state"] = result, "RETURNED"
+        _checked_collect_closed(result)
+        return result
+    except BaseException as error:
+        failure = error if metadata is None else metadata.remember(error)
+    finally:
+        if metadata is not None and not metadata.finished and not metadata.owner.unknown:
+            try:
+                metadata.finish()
+            except BaseException as error:
+                if failure is None:
+                    failure = error
+        if failure is not None:
+            if attempt["failure"] is None:
+                attempt["failure"] = failure
+            attempt["state"] = "FAILED"
+    raise attempt["failure"]
+
+
+def _checked_collect_closed(result):
+    saved = _COLLECT_RETURNS.get(id(result))
+    require(type(result) is _CollectClosed and type(saved) is tuple and saved[0] is result,
+        "COLLECT_NOT_ORIGINAL_FINAL_RETURN")
+    _, dictionary, authority, authority_dictionary, inputs, raw, closed, clock, metadata, anchor, pins, attempt, graph, input_graph = saved
+    try:
+        def current():
+            require(type(result) is _CollectClosed and type(authority) is _CollectAuthority and
+                _COLLECT_RETURNS.get(id(result)) is saved and _COLLECT_ATTEMPTS.get("collect-final") is attempt and
+                attempt["state"] == "RETURNED" and attempt["return"] is result and attempt["authority"] is authority and
+                attempt["failure"] is None and result.__dict__ is dictionary and result.authority is authority and
+                result.raw == raw and result.metadata_close == closed and authority.__dict__ is authority_dictionary and
+                metadata._anchor() is anchor, "COLLECT_FINAL_RETURN_CHANGED")
+            N._check_history(graph)
+            N._check_history(input_graph)
+            metadata.structural()
+            require(metadata.finished and metadata.failure is None and metadata.owner.closed and not metadata.owner.unknown and
+                metadata.owner.original is None and metadata.errors == [] and all(a and c for _row, _label, _resource, a, c in metadata.rows),
+                "COLLECT_FINAL_WRITER_CLOSE_UNKNOWN")
+            for directory, path, identity in pins:
+                require(directory.path is path and tuple(directory.identity) == identity and
+                    _collect_directory_closed(directory, clock.clock.role) is True, "COLLECT_FINAL_PIN_CHANGED")
+        current()
+        currency = _collect_authority_currency(authority)
+        current()
+        require(currency[0] is clock and currency[1] is inputs, "COLLECT_FINAL_CURRENCY_CHANGED")
+        _collect_file_close(closed)
+        value = _collect_final_record(raw, inputs, currency[2])
+        return clock, value["originalWindow"]["readEndNs"], {"initialCustodySha256": O.digest(raw),
+            "initialExporterReturnSha256": value["predecessor"]["exporterReturnSha256"]}
+    except BaseException as error:
+        if attempt["failure"] is None:
+            attempt["failure"] = error
+        attempt["state"] = "FAILED"
+        raise attempt["failure"]
+
+
+class _CollectOutputFence:
+    """Exactly one registered result, one actual append and two late OUTPUT checks."""
+    __slots__ = ("_binding",)
+
+    def __init__(self, result):
+        require(type(self) is _CollectOutputFence and id(self) not in _COLLECT_OUTPUTS, "COLLECT_OUTPUT_NEW")
+        require(type(result) in (_ExportStep, _CollectClosed), "COLLECT_OUTPUT_ORIGINAL_TYPE")
+        registry = _EXPORT_STEPS if type(result) is _ExportStep else _COLLECT_RETURNS
+        returned = registry.get(id(result))
+        require(type(returned) is tuple and returned[0] is result and
+            not any(saved[1][0] is result for saved in _COLLECT_OUTPUTS.values()), "COLLECT_OUTPUT_RETURN_REUSE")
+        clock, limit, values = (_checked_export_step(result) if type(result) is _ExportStep else _checked_collect_closed(result))
+        value = {"schema": 1, "scope": "INITIAL_CUSTODY_DIGESTS_PENDING_ORIGINAL_STEP_RETURN_V1", **values,
+            "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False}
+        self._binding = (result, registry, returned, result.__dict__, clock, limit, values, value, N._history_graph(values, value))
+        _COLLECT_OUTPUTS[id(self)] = (self, self._binding, {"phase": "NEW", "checks": 0, "busy": False, "failure": None})
+
+    def _original(self):
+        saved = _COLLECT_OUTPUTS.get(id(self))
+        require(type(self) is _CollectOutputFence and type(saved) is tuple and saved[0] is self,
+            "COLLECT_OUTPUT_ORIGINAL_FACADE")
+        return saved
+
+    @staticmethod
+    def _fail(saved, error):
+        state = saved[2]
+        if state["failure"] is None:
+            state["failure"] = error
+        return state["failure"]
+
+    def _begin(self):
+        saved = self._original()
+        if saved[2]["failure"] is not None:
+            raise saved[2]["failure"]
+        try:
+            require(self._binding is saved[1] and not saved[2]["busy"], "COLLECT_OUTPUT_REENTRY_OR_BINDING")
+            saved[2]["busy"] = True
+            return saved
+        except BaseException as error:
+            raise self._fail(saved, error)
+
+    def _current(self, saved):
+        require(self._original() is saved and self._binding is saved[1] and saved[2]["busy"] and
+            saved[2]["failure"] is None, "COLLECT_OUTPUT_CHANGED")
+        result, registry, returned, dictionary, clock, limit, values, value, graph = saved[1]
+        require(registry.get(id(result)) is returned and result.__dict__ is dictionary and not C.QUARANTINE and
+            not native.QUARANTINE and not Q.QUARANTINE and not native.diagnostics._QUARANTINE, "COLLECT_OUTPUT_RETURN_CHANGED")
+        N._check_history(graph)
+        current = _checked_export_step(result) if type(result) is _ExportStep else _checked_collect_closed(result)
+        require(current[0] is clock and type(current[1]) is int and current[1] == limit and current[2] == values,
+            "COLLECT_OUTPUT_ORIGINAL_DIGESTS")
+        N._check_history(graph)
+        require(self._original() is saved and self._binding is saved[1] and saved[2]["busy"] and saved[2]["failure"] is None and
+            registry.get(id(result)) is returned and result.__dict__ is dictionary, "COLLECT_OUTPUT_CALLBACK_CHANGED")
+        return clock, limit, values, value
+
+    def _append_guard(self):
+        saved = self._begin()
+        try:
+            require(saved[2]["phase"] == "APPENDING" and saved[2]["checks"] == 0, "COLLECT_OUTPUT_APPEND_PHASE")
+            clock, limit, _values, _value = self._current(saved)
+            clock.now(final=True, limit=limit)
+            self._current(saved)
+        except BaseException as error:
+            raise self._fail(saved, error)
+        finally:
+            saved[2]["busy"] = False
+
+    def append(self):
+        saved = self._begin()
+        try:
+            require(saved[2]["phase"] == "NEW" and saved[2]["checks"] == 0, "COLLECT_OUTPUT_APPEND_ONCE")
+            _clock, limit, values, value = self._current(saved)
+            saved[2]["phase"] = "APPENDING"
+        except BaseException as error:
+            raise self._fail(saved, error)
+        finally:
+            saved[2]["busy"] = False
+        try:
+            C.append_outputs(values, self._append_guard)
+            self._append_guard()
+            require(self._original() is saved and saved[2]["phase"] == "APPENDING" and saved[2]["failure"] is None,
+                "COLLECT_OUTPUT_APPEND_RETURN_CHANGED")
+            saved[2]["phase"] = "OUTPUT"
+            return value, self, limit
+        except BaseException as error:
+            raise self._fail(saved, error)
+
+    def now(self, *, final=False, minimum=0, limit=None):
+        saved = self._begin()
+        try:
+            require(saved[2]["phase"] == "OUTPUT" and type(final) is bool and final is True and
+                type(minimum) is int and minimum == 0 and type(limit) is int and limit == saved[1][5] and
+                type(saved[2]["checks"]) is int and 0 <= saved[2]["checks"] < 2, "COLLECT_OUTPUT_EXACT_LATE_CHECK")
+            saved[2]["checks"] += 1
+            clock, original_limit, _values, _value = self._current(saved)
+            observed = clock.now(final=True, limit=original_limit)
+            self._current(saved)
+            return observed
+        except BaseException as error:
+            raise self._fail(saved, error)
+        finally:
+            saved[2]["busy"] = False
+
+
+def collect_export(kind, cancelled):
+    attempt = _collect_begin("collect-export-entry")
+    try:
+        primary, authority = _export_pre_crypto(kind, cancelled)
+        # No token ever existed in this frame. Do not merge these calls into a
+        # transaction retaining the pre-crypto helper's credential across them.
+        result = custody_crypto(primary, authority)
+        carrier = _custody_crypto_carrier(result)
+        transfer = _retain_crypto_step(carrier)
+        output = _CollectOutputFence(transfer).append()
+        require(_COLLECT_ATTEMPTS.get("collect-export-entry") is attempt and attempt["state"] == "STARTED" and
+            attempt["failure"] is None, "COLLECT_EXPORT_ENTRY_CHANGED")
+        attempt["state"] = "RETURNED"
+        return output
+    except BaseException as error:
+        if attempt["failure"] is None:
+            attempt["failure"] = error
+        attempt["state"] = "FAILED"
+        raise attempt["failure"]
+
+
+def collect_close(kind, cancelled):
+    attempt = _collect_begin("collect-close-entry")
+    try:
+        authority = _collect_pre_metadata(kind, cancelled)
+        closed = _collect_closed(authority)
+        output = _CollectOutputFence(closed).append()
+        require(_COLLECT_ATTEMPTS.get("collect-close-entry") is attempt and attempt["state"] == "STARTED" and
+            attempt["failure"] is None, "COLLECT_CLOSE_ENTRY_CHANGED")
+        attempt["state"] = "RETURNED"
+        return output
+    except BaseException as error:
+        if attempt["failure"] is None:
+            attempt["failure"] = error
+        attempt["state"] = "FAILED"
+        raise attempt["failure"]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     commands = parser.add_subparsers(dest="operation", required=True)
-    for name in ("_authority", "_crypto"):
+    for name in ("collect-export", "collect-close"):
+        entry = commands.add_parser(name, allow_abbrev=False)
+        entry.add_argument("--kind", required=True, choices=("gate", "worker"))
+    for name in ("_authority", "_crypto", "_post-export-authority"):
         child = commands.add_parser(name, allow_abbrev=False)
         child.add_argument("--context-sha256", required=True)
         child.add_argument("--minimum-ns", required=True)
@@ -4779,12 +6629,19 @@ def main():
     try:
         require(sys.flags.isolated == 1 and sys.flags.no_site == 1 and sys.dont_write_bytecode,
             "ISOLATED_INTERPRETER_REQUIRED")
+        if args.operation in ("collect-export", "collect-close"):
+            operation = collect_export if args.operation == "collect-export" else collect_close
+            native.guarded(lambda signals: operation(args.kind, lambda: native.cancellation(signals)))
+            return 0
         digest(args.context_sha256)
         require(re.fullmatch(r"0|[1-9][0-9]{0,19}", args.minimum_ns), "LAUNCH_MINIMUM")
         minimum = O.integer(int(args.minimum_ns))
         if args.operation == "_authority":
             native.initial_custody_authority_command(args.context_sha256, minimum)
             operation = custody_authority_child
+        elif args.operation == "_post-export-authority":
+            native.initial_collect_authority_command(args.context_sha256, minimum)
+            operation = _collect_authority_child
         else:
             _custody_crypto_command(args.context_sha256, minimum)
             operation = custody_crypto_child

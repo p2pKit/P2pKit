@@ -125,7 +125,9 @@ def append_outputs(values, check):
         {"recipientSenderSha256", "recipientStepSha256"},
         {"recipientSenderSha256", "recipientStepSha256", "recipientCryptoOriginalsSha256"}, {"initializationSha256"},
         {"initializationSha256", "workerHandoffSha256"},
-        {"initialOriginalsSha256", "gateHandoffSha256"}) and
+        {"initialOriginalsSha256", "gateHandoffSha256"},
+        {"initialCryptoStepSha256", "initialExporterReturnSha256"},
+        {"initialCustodySha256", "initialExporterReturnSha256"}) and
         all(type(value) is str and re.fullmatch(r"[0-9a-f]{64}", value) for value in values.values()) and
         callable(check) and not QUARANTINE, "STEP_OUTPUT_FIELDS")
     raw = "".join(name + "=" + values[name] + "\n" for name in sorted(values)).encode("ascii")
