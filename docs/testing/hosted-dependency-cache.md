@@ -1453,6 +1453,31 @@ execution/result review, complete gate/worker custody/sealing and genuine hosted
 timing remain required. Both ordinary HOLDs, productive125, init120, bootstrap5400
 UNADMITTED/UNMEASURED and all Release gates remain; **delivery0/4, NOT_READY**.
 
+The subsequent guarded offline executions retain **two failed aggregates**. The
+first envelope refused at `bwrap`'s working-directory change before Python or any
+test (exits1/1). Correcting only the real outer host UID/GID to65534, without changing
+permissions or limits, permitted the second packet at `d47d13ea`: **14/14 inventory
+controls and4/4 guards passed**, then the first parent control errored at
+`INITIAL_NATIVE_SERVICE_GIT_QUERY`; the other nine methods were **NOT_RUN**.
+That24-method aggregate remains **FAILED**, not a crypto-runtime failure: the old
+synthetic query supplier lacked the original full routing records/executable.
+
+The independently reviewed fixture-only correction at
+`6ef017d96a66dcabda2be9b7b005acefe466889c`, tree
+`a961f50f525a6f2d9c822789a7c68090b0d6130c`, retained the real production routing
+checks. Its separate remaining packet passed **3/3 parent+7/7 sender controls and
+4/4 fresh guards**, exits0/0, at2026-09-23T01:07:50Z–01:08:00Z. Process CPU was
+10.223225s and import/suite wall10.168508s (shell wall10.313s). Both168-entry
+integrity captures matched; no unexpected guard denials or ResourceWarnings.
+Request SHA-256:
+`31799a0f44ee0527202d96134d63f9ae496c0a69a669b56c00316e391ec04588`.
+Independent original-result review accepted only these10+4 controls; report
+SHA-256 `c47a2cba16aa55a27dd9f0a36496f34dca183597ee2b93488be48c0576141491`.
+These are disjoint exact-source model results, **not a fresh repaired-source
+24/24 aggregate or native crypto/Windows/hosted qualification**. No inventory,
+accepted1,066-file reader, old suite or preview build was rerun. Complete custody,
+actual exporter return/seal/upload and genuine hosted qualification remain.
+
 #### Stage1 canonical-context reader, not initialization authority
 
 The separate fixed `initial_recipient_context_record()` in
