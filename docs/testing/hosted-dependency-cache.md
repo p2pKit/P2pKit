@@ -1613,6 +1613,26 @@ actual encryption/copy/Recipient provenance nor native/hosted custody was run.
 No accepted reader, worker, gate or preview suite was repeated. The worker's
 separate failed aggregates remain failed; all live-caller and Release gates remain.
 
+##### Stage1 custody foundation — source only
+
+The new fixed [custody driver](../../scripts/run-hosted-initial-recipient-custody.py)
+currently contains only primary-carrier grammar, path-tied pin provenance and
+the existing finite custody-window arithmetic/RAW/LOCAL/boot guards. Independent
+review required and accepted four corrections: represent every original gate pin,
+bind worker provenance to its producer paths, preserve the initial deadline LOCAL
+sample and first error, and retain original clock/handle bindings independently.
+Source-review SHA-256:
+`04f64be587e7a6b70aa427c8d59228cbdb57404f614d496f97afec8f188dd9df`.
+The [38 new controls](../../scripts/tests/hosted-initial-recipient-custody-foundation-test.py)
+are independently source-reviewed but **unexecuted**:12 primary grammar,
+2 schedule and24 window models. Control-review SHA-256:
+`e179133eab06e5b726c904fa3d8da325dad3d48493cc2a86ce19c03212884883`.
+These are supplied shapes and modeled observations, not authenticated historical
+or crypto originals. The actual copy edge must still enforce the complete crypto
+sidecar/leaf/key/16MiB/retirement contract. This foundation has no native copying,
+fresh acquisition, encryption, seal/upload, standalone CLI or workflow caller.
+It does not establish timing fit or lift any HOLD/Release requirement.
+
 #### Stage1 canonical-context reader, not initialization authority
 
 The separate fixed `initial_recipient_context_record()` in
