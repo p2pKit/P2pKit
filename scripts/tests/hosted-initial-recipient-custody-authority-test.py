@@ -995,9 +995,12 @@ class ChildCallerControls(unittest.TestCase):
     def test_metadata_consuming_parent45_cannot_start_new_child45_or210(self):
         with CallerRig() as rig:
             rig.prepare_child()
+            elapsed_seconds, remainder = divmod(rig.start["workEndNs"] - START, NS)
+            self.assertEqual(remainder, 0)
             def exhaust(directory):
                 if directory.path == rig.path:
-                    rig.clock.advance(47)  # Exactly parent started+45; still below metadata first+45.
+                    # The original parent end may be clipped before started+45.
+                    rig.clock.advance(elapsed_seconds)
             rig.fs.close_hook = exhaust
             with self.assertRaisesRegex(ValueError, "CHILD_FRAME_ORIGINAL_CAP"):
                 rig.run_child()
