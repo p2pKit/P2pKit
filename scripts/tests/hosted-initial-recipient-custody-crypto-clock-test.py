@@ -307,6 +307,8 @@ class CryptoClockTests(unittest.TestCase):
                 original_owner = rig.metadata.owner
                 original_dictionary = original_owner.__dict__
                 original_first = rig.first
+                original_row = original_owner.resources[0]
+                original_anchor_row = rig.metadata._anchor().rows[0]
                 falsey = FalseyFailure("SUPPLIED_METADATA_FALSEY_CLOSE_FAILURE")
                 if failure_kind == "failed-close":
                     rig.resource.error = falsey
@@ -315,14 +317,24 @@ class CryptoClockTests(unittest.TestCase):
                     self.assertIs(closed.exception, falsey)
                     self.assertIs(rig.metadata.failure, falsey)
                     self.assertIs(original_owner.original, falsey)
+                    # Actual attempted-but-failed close is retained, never
+                    # rewritten as a successful original close tuple.
+                    self.assertIs(original_owner.resources[0], original_row)
+                    self.assertIs(original_row["owner"], rig.resource)
+                    self.assertIs(original_row["attempted"], True)
+                    self.assertIs(original_row["closed"], False)
+                    self.assertIs(rig.metadata._anchor().rows[0], original_anchor_row)
+                    self.assertEqual(original_anchor_row[3:], (False, False))
+                    self.assertIs(original_owner.unknown, True)
                 elif failure_kind != "open":
                     rig.close_metadata()
                     if failure_kind == "unknown":
                         original_owner.unknown = True  # Explicit malformed closed-owner negative.
                     else:
                         original_owner.__dict__ = dict(original_dictionary)
-                with self.assertRaisesRegex(Exception,
-                        "CHILD_METADATA_CLOSE_UNKNOWN|COPY_ORIGINAL_OWNER_BINDING") as caught:
+                expected = {"open": "CHILD_METADATA_CLOSE_UNKNOWN", "failed-close": "COPY_LEDGER_CHANGED",
+                    "unknown": "CHILD_METADATA_CLOSE_UNKNOWN", "equal-owner-dictionary": "COPY_ORIGINAL_OWNER_BINDING"}
+                with self.assertRaisesRegex(Exception, "^INITIAL_CUSTODY_" + expected[failure_kind] + "$") as caught:
                     # The actual metadata refusal must precede even reading these
                     # invalid frame inputs. No validator stub turns them positive.
                     rig.guard.bind_crypto(None, None, None, None, None, None, None)
