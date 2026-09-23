@@ -1401,6 +1401,31 @@ separately reviewed Stage1-bound encrypted success/eligible-failure custody and
 actual post-return sealing exist for **both gate and worker**. A successful
 initializer and digest-only stdout cannot substitute for those originals.
 
+The corrected static packet subsequently passed **116/116 workflow controls and
+15/15 new queue controls**, once at **2026-09-23T00:15:55Z**, commit
+`b1b37bd949706de12f9a0f09e86636acd3cf485e`, tree
+`74a292ed6ea6640d61a539851c4216fc298b1665`. Command/wrapper/outer exits were0;
+stderr was empty and both58-entry integrity captures matched. Recorded shell
+wall/user/system fields were0.246/0.006/0.003s, not complete native CPU accounting.
+Independent original-result review accepted **only this static116+15 scope**,
+report SHA-256
+`4148b69b7d972f09f82e2c021160ba195113b12f2bbbd02718f3273ef484de41`.
+Request SHA-256:
+`9cb2a75ca7d7d058f06c13e6f64d4d580d49a79a447b8f494af78dfcd238e98e`;
+inner/outer capture-manifest SHA-256:
+`ab3db563e0c4e28bc8d6e1d01fb3ee15cb9a964fae93f5ac087a78f263deb83d` /
+`92ea6648d02daf69a8be44470094e6827319d09c6eb82bca41ab3e7e6c4449f3`.
+
+The preceding aggregate at7c759b4b remains **FAILED**, exits1/1/1: its new
+mutation guard treated integer6 and float6.0 as equal, stopping before the
+strict policy check; the queue block was not reached. Independent source review
+approved only the two type-preserving `Marshal.dump` guard comparisons before
+the new packet. Workflow/production predicates, all controls and limits were
+unchanged; the old packet was not retried or rewritten. Neither packet ran
+workflow shell commands, the accepted reader/initializer suites, native toolchain probes,
+CI or builds. Both jobs' custody/seal prerequisites, productive125 and ordinary
+HOLDs remain; **genuine hosted qualification and Release readiness are absent**.
+
 #### Stage1 canonical-context reader, not initialization authority
 
 The separate fixed `initial_recipient_context_record()` in
