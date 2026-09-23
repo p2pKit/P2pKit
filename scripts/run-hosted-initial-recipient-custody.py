@@ -1349,7 +1349,8 @@ def _snapshot_metadata(entries, windows):
         else:
             require(type(value) is tuple and len(value) == 8 and all(type(number) is int for number in value) and
                 (stat.S_ISDIR(value[2]) or stat.S_ISREG(value[2])) and value[5] >= 0, "COPY_POSIX_METADATA")
-            identity, directory, count, raw = value[:2], stat.S_ISDIR(value[2]), value[5], O.encoded(list(value))
+            identity, directory, count = value[:2], stat.S_ISDIR(value[2]), value[5]
+            raw = O.encoded({"posixStamp": list(value)})
         result.append((name, directory, identity, count, raw))
     require(result[0][0] == "" and result[0][1] is True and
         len({row[0].casefold() for row in result}) == len(result) and
@@ -1480,7 +1481,9 @@ def _written_matches(raw, node, windows):
     if windows:
         require(O.encoded(metadata) == node[4], "COPY_WRITER_SNAPSHOT_PIN")
     else:
-        stamp = O.parse(node[4])
+        stamp = fields(canonical(node[4]), "posixStamp", "COPY_POSIX_STAMP_FIELDS")["posixStamp"]
+        require(type(stamp) is list and len(stamp) == 8 and all(type(value) is int for value in stamp),
+            "COPY_POSIX_STAMP")
         _same(metadata, {"device": stamp[0], "inode": stamp[1], "size": stamp[5],
             "mtime_ns": stamp[6], "ctime_ns": stamp[7]}, "COPY_WRITER_SNAPSHOT_PIN")
 

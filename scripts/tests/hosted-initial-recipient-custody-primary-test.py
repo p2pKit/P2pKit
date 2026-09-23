@@ -147,6 +147,15 @@ class TinyPosixCopyTests(unittest.TestCase):
                 ["member-00000.bin", "member-00001.bin", "member-00002.bin"])
             self.assertEqual((fixture.path / "member-00001.bin").read_bytes(), b"")
             self.assertEqual({row[0] for row in value["sourceMetadata"]}, {"P", "P/empty-dir", "P/a.bin", "P/empty.bin"})
+            for name, row in value["sourceMetadata"]:
+                stamp = fixture.sources[0].original[name.removeprefix("P").lstrip("/")]
+                self.assertEqual(row[3], {"posixStamp": list(stamp)})
+                self.assertEqual(len(row[3]["posixStamp"]), 8)
+            for name, _directory, _identity, _count, metadata in value["handoffMetadata"]:
+                self.assertEqual(metadata, {"posixStamp": list(fixture.handoff.original[name])})
+            readback = owner.snapshots[-1]
+            for name, _directory, _identity, _count, metadata in value["destinationMetadata"]:
+                self.assertEqual(metadata, {"posixStamp": list(readback.original[name])})
             for row in value["members"]:
                 raw = (fixture.path / row["member"]).read_bytes()
                 self.assertEqual((len(raw), sha(raw)), (row["bytes"], row["sha256"]))
