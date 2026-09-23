@@ -1685,6 +1685,44 @@ These are foundation models only, not authenticated primary history, native
 copying, encryption, delivery or hosted timing qualification. No successful
 reader, worker, gate or preview test was repeated; all Release gates remain.
 
+##### PRIMARY copy: corrected offline result, not hosted custody
+
+The fixed custody driver now retains original PRIMARY history and bounded copy
+ownership. The first74-control packet stopped at its first method with
+`IDENTITY_JSON_OBJECT`: **0 PASS /1 ERROR /73 NOT_RUN**. POSIX native stamps
+were encoded as top-level arrays, but all four copy-map consumers use the
+unchanged object-only parser. That packet remains failed and consumed; its
+capture-manifest SHA-256 is
+`4bf836cd3b059182cc5bcdf57db5973133d2ec18ecd073e65e69d99977934a1a`.
+
+The independently reviewed repair retains all eight stamp integers in a closed
+`posixStamp` object and strengthens the first positive's full original-stamp
+assertions. No Windows, generic parser, ownership, byte/hash/EOF/reread or deadline
+check changed. Source commits are `c2ebed6b97cfe245e719c2adc5eba529de49f550` and
+`55ef1a0513870904d19e9180809cab081b0611e6`; the corrected invocation used the latter,
+tree `8e1870ca828c6eb4eaa9fbeb406729355cd386e4`.
+
+The fresh corrected packet passed **74/74 controls +4 guards**, once, with
+command/wrapper/launcher exit0, zero unexpected denials/ResourceWarnings and
+empty work after completion. Actual process CPU was1.797923s; harness/command/
+launcher wall times were1.740002/1.862/2.666s. All individual outcomes/order,
+166-line pre/post integrity records and24 original captures were independently
+verified. Request SHA-256:
+`a886ca1297377b0939b44fc545d7c26a3497b981b50aaa04a773656d1e0e2017`.
+Capture-manifest SHA-256:
+`89b5b549158fba7062ab43c6318d030214136909950bdd96a42db6142470533c`.
+Independent corrected-source/result review SHA-256:
+`4f5a04997e1467d97325dadd75660c28a328a4d3687c00b5a940e2339dce393c` /
+`481368ee52ac25290fd53e5892a3d2400a1b807ce96f2c965024abf31cd5582d`.
+
+These are tiny real POSIX copy/close and supplied historical/clock/host/Step
+models, not an authentic281/1361-file carrier, Windows/native/backend/provider
+qualification, live authority/Recipient, encrypted delivery or timing fit.
+Deliberate UNKNOWN/quarantine negatives are not known-close resource acceptance.
+No accepted1,066-file reader, earlier suite or preview build was repeated.
+Authority/crypto/export/seal/upload integration and genuine hosted qualification
+remain separate; both ordinary HOLDs, productive125 and Release gates remain.
+
 #### Stage1 canonical-context reader, not initialization authority
 
 The separate fixed `initial_recipient_context_record()` in
