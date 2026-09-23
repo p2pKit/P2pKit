@@ -1566,6 +1566,21 @@ The consumed aggregate remains failed. The next packet selects only the correcte
 method and28 unrun worker methods, not the passed gate/worker methods or reader.
 These are model controls, not native/hosted custody or Release qualification.
 
+##### Closed Stage1 evidence adapter — reviewed source only
+
+[`hosted_initial_recipient_evidence.py`](../../scripts/hosted_initial_recipient_evidence.py)
+binds a fixed nonproductive schema to exact gate/worker matches, public recipient,
+successful primary-Step data and three distinct copied-original origins. It
+captures the actual unchanged backend's returned manifest before callbacks and
+compares its exact canonical bytes with separately owned readback. It neither
+acquires authority nor transports a live Recipient. The fixed driver must still
+provide real acquisition, same-process validation, complete frozen originals,
+native close, absolute timing, sealing and14-day delivery.
+Independent source-review SHA-256:
+`c1f51ad8f445b0446cb14141dfb3d02a8a4e18d0a3a4db888d5477a525590314`.
+Its39 focused controls are **authored but unexecuted** here. No workflow invokes
+this adapter yet; all HOLDs and Release qualification remain unchanged.
+
 #### Stage1 canonical-context reader, not initialization authority
 
 The separate fixed `initial_recipient_context_record()` in
