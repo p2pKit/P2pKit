@@ -1950,3 +1950,1193 @@ def checked_primary(result):
             attempt["failure"] = error
         attempt["state"] = "FAILED"
         raise attempt["failure"]
+
+
+# Confined authority owner; unchanged native file/process backends and Window.
+_CUSTODY_OWNERS = {}
+
+
+@dataclass(eq=False, repr=False)
+class _CustodyOwnerAnchor:
+    owner: object
+    dictionary: dict
+    binding: tuple
+    first_graph: tuple
+    rows: tuple = ()
+    pending: object = None
+    failure: object = None
+    unknown: bool = False
+    closed: bool = False
+    frozen: object = None
+    phase: object = None
+    phase_active: bool = False
+    busy: bool = False
+    closing: object = None
+    error_rows: tuple = ()
+    error_graph: tuple = ()
+
+
+class _CustodyOwner(native.Owner):
+    """Actual custody-only Owner with original return/close observations.
+
+    Shared native Owner file methods and original phase/source callers use these
+    fixed acquisition/close seams. Nothing replaces a native resource backend or
+    the first Window. A callback cannot create closure by editing ledger flags.
+    """
+    def __init__(self, local_end, fence=None, *, first=None, cancelled=lambda: None):
+        require(type(self) is _CustodyOwner and id(self) not in _CUSTODY_OWNERS and
+            type(fence) in (Window, _CustodyChildClock) and first is not None,
+            "AUTHORITY_OWNER_NEW")
+        native.Owner.__init__(self, local_end, fence, first=first, cancelled=cancelled)
+        self.initial_sources = {}
+        binding = (self.first, self.fence, self.cancelled, self.local_end, self.resources,
+            self.errors, self.initial_sources, self.admissions, self.early_last,
+            self.entry_original, self.entry_close_attempted, self.entry_close_original, self.entry_close_snapshot)
+        _CUSTODY_OWNERS[id(self)] = _CustodyOwnerAnchor(self, self.__dict__, binding,
+            N._history_graph(first), error_graph=N._history_graph(self.errors))
+        self.check()
+
+    def _anchor(self):
+        anchor = _CUSTODY_OWNERS.get(id(self))
+        require(type(self) is _CustodyOwner and type(anchor) is _CustodyOwnerAnchor and anchor.owner is self,
+            "AUTHORITY_OWNER_ORIGINAL_HANDLE")
+        return anchor
+
+    def error(self, stage, error, *, unknown=False):
+        anchor = self._anchor()
+        if anchor.failure is None:
+            anchor.failure = error  # Only this actual error callback establishes the first failure.
+        anchor.unknown |= unknown
+        if self.__dict__ is anchor.dictionary:
+            try:
+                native.Owner.error(self, stage, error, unknown=anchor.unknown)
+            except BaseException:
+                anchor.unknown = True
+            anchor.unknown |= self.unknown
+            anchor.dictionary["unknown"] = anchor.unknown
+            # These rows were produced by the actual error recorder. The original
+            # first exception above is independently retained even if it is falsey.
+            anchor.error_rows = tuple(anchor.binding[5])
+            anchor.error_graph = N._history_graph(anchor.binding[5])
+        else:
+            anchor.unknown = True
+            anchor.dictionary["unknown"] = True
+        if anchor.unknown and not any(owner is self for owner in native.QUARANTINE):
+            native.QUARANTINE.append(self)
+
+    def check(self):
+        """Passive original binding/ledger checks; never observe or grant time."""
+        anchor = self._anchor()
+        try:
+            first, fence, cancelled, local, resources, errors, sources, admissions, early, \
+                entry, entry_attempted, entry_original, entry_snapshot = anchor.binding
+            require(self.__dict__ is anchor.dictionary and self.first is first and self.fence is fence and
+                self.cancelled is cancelled and type(self.local_end) is float and self.local_end == local and
+                self.resources is resources and self.errors is errors and self.initial_sources is sources and
+                self.admissions is admissions and type(self.early_last) is int and self.early_last == early and
+                self.entry_original is entry and self.entry_close_attempted is entry_attempted and
+                self.entry_close_original is entry_original and self.entry_close_snapshot is entry_snapshot and
+                self.original is anchor.failure and self.unknown is anchor.unknown and self.closed is anchor.closed,
+                "AUTHORITY_OWNER_BINDING_CHANGED")
+            limits = anchor.phase[1:3] if anchor.phase_active else (None, None)
+            require(all(type(value) is type(original) and value == original for value, original in
+                zip((self.work_limit, self.final_limit), limits)), "AUTHORITY_OWNER_PHASE_LIMITS_CHANGED")
+            N._check_history(anchor.first_graph)
+            require(type(resources) is list and len(resources) == len(anchor.rows) <= MAX_MEMBERS and
+                len({id(row) for row, *_ in anchor.rows}) == len(anchor.rows) ==
+                len({id(resource) for _row, _label, resource, _a, _c in anchor.rows}), "AUTHORITY_OWNER_ROSTER_CHANGED")
+            for current, (row, label, resource, attempted, closed) in zip(resources, anchor.rows):
+                require(current is row and type(row) is dict and set(row) == {"label", "owner", "attempted", "closed"} and
+                    type(row["label"]) is str and row["label"] == label and row["owner"] is resource and
+                    row["attempted"] is attempted and row["closed"] is closed and (not closed or attempted),
+                    "AUTHORITY_OWNER_RESOURCE_CHANGED")
+            require(type(errors) is list and len(errors) == len(anchor.error_rows) and
+                all(current is original for current, original in zip(errors, anchor.error_rows)), "AUTHORITY_OWNER_ERRORS_CHANGED")
+            N._check_history(anchor.error_graph)
+            if anchor.frozen is not None:
+                require(tuple((row, label, resource) for row, label, resource, _a, _c in anchor.rows) == anchor.frozen,
+                    "AUTHORITY_OWNER_FROZEN_CHANGED")
+            return anchor
+        except BaseException as error:
+            self.error("custody-owner-binding", error, unknown=True)
+            raise anchor.failure
+
+    def end(self, *, final=False):
+        anchor = self.check()
+        try:
+            result = native.Owner.end(self, final=final)
+            self.check()
+            require(final or anchor.failure is None, "AUTHORITY_OWNER_CALLBACK_FAILED")
+            return result
+        except BaseException as error:
+            self.error("custody-owner-fence", error)
+            try:
+                self.check()
+            except BaseException:
+                pass  # Binding failure retains UNKNOWN and the original error.
+            raise anchor.failure
+
+    def acquire(self, label, factory, *, final=False):
+        anchor = self.check()
+        require(type(label) is str and label in ("directory", "writer", "stdout", "stderr", "native-scope") and
+            type(final) is bool, "AUTHORITY_OWNER_RESOURCE_LABEL")
+        if anchor.busy:
+            self.error("custody-owner-reentry", O.OriginError("INITIAL_CUSTODY_AUTHORITY_OWNER_REENTRY"))
+            raise anchor.failure
+        require(not anchor.closed and anchor.frozen is None and not anchor.unknown, "AUTHORITY_OWNER_ACQUIRE_CLOSED")
+        anchor.busy = True
+        try:
+            self.end(final=final)
+            try:
+                value = factory()
+            except BaseException as error:
+                self.error("custody-" + label + "-allocation", error, unknown=True)
+                raise anchor.failure
+            anchor.pending = value  # FIRST operation after actual return; before any callback/check.
+            self.check()
+            require(not any(resource is value for _row, _label, resource, _a, _c in anchor.rows),
+                "AUTHORITY_OWNER_DUPLICATE_RESOURCE")
+            row = {"label": label, "owner": value, "attempted": False, "closed": False}
+            anchor.rows = (*anchor.rows, (row, label, value, False, False))
+            anchor.binding[4].append(row)
+            anchor.pending = None
+            self.end(final=final)
+            return value
+        except BaseException as error:
+            self.error("custody-owner-acquire", error, unknown=anchor.pending is not None)
+            try:
+                self.check()
+            except BaseException:
+                pass
+            raise anchor.failure
+        finally:
+            anchor.busy = False
+
+    def close_fence(self):
+        anchor = self.check()
+        if anchor.unknown:
+            return False
+        native.Owner.close_fence(self)  # Same retained fence/LOCAL ceiling; never a new allowance.
+        self.check()
+        return not anchor.unknown
+
+    def close_one(self, value):
+        anchor = self.check()
+        if anchor.closing is not None:
+            self.error("custody-owner-close-reentry", O.OriginError("INITIAL_CUSTODY_AUTHORITY_OWNER_CLOSE_REENTRY"))
+            raise anchor.failure
+        index = next((index for index, row in enumerate(anchor.rows) if row[2] is value), None)
+        require(index is not None, "AUTHORITY_OWNER_FOREIGN_CLOSE")
+        row, label, resource, attempted, closed = anchor.rows[index]
+        if attempted:
+            require(closed, "AUTHORITY_OWNER_CLOSE_RETRY")
+            return
+        if anchor.unknown or not self.close_fence():
+            return
+        self.check()
+        anchor.closing = resource
+        row["attempted"] = True
+        anchor.rows = (*anchor.rows[:index], (row, label, resource, True, False), *anchor.rows[index + 1:])
+        try:
+            resource.close()  # The actual unchanged backend's return is the ONLY close proof.
+        except BaseException as error:
+            self.error("custody-" + label + "-close", error, unknown=True)
+        else:
+            row["closed"] = True
+            anchor.rows = (*anchor.rows[:index], (row, label, resource, True, True), *anchor.rows[index + 1:])
+        finally:
+            anchor.closing = None
+        self.close_fence()
+
+    def close(self):
+        anchor = self.check()
+        if anchor.closed:
+            return
+        anchor.closed = True
+        self.closed = True
+        self.close_fence()
+        for _row, _label, resource, _attempted, _closed in reversed(anchor.rows):
+            if anchor.unknown:
+                break
+            self.close_one(resource)
+        self.close_fence()
+        if anchor.unknown:
+            if not any(owner is self for owner in native.QUARANTINE):
+                native.QUARANTINE.append(self)
+            raise anchor.failure if anchor.failure is not None else O.OriginError("INITIAL_CUSTODY_AUTHORITY_OWNER_UNKNOWN")
+
+    def freeze(self):
+        anchor = self.check()
+        require(not anchor.closed and not anchor.unknown and anchor.failure is None and anchor.frozen is None and
+            anchor.pending is None and not anchor.busy and anchor.closing is None and not anchor.phase_active,
+            "AUTHORITY_OWNER_FREEZE")
+        anchor.frozen = tuple((row, label, resource) for row, label, resource, _a, _c in anchor.rows)
+
+    def known(self):
+        anchor = self.check()
+        require(anchor.frozen is not None and anchor.closed and not anchor.unknown and anchor.failure is None and
+            anchor.pending is None and not anchor.busy and anchor.closing is None and not anchor.phase_active and
+            all(attempted and closed for _row, _label, _resource, attempted, closed in anchor.rows),
+            "AUTHORITY_OWNER_CLOSE_NOT_KNOWN")
+        return anchor
+
+    def enter_custody_phase(self, started, work_end, final_end):
+        anchor = self.check()
+        require(type(self.fence) is Window and anchor.phase is None and not anchor.closed and not anchor.unknown and
+            anchor.failure is None and not anchor.busy and anchor.frozen is None and
+            type(started) is int and type(work_end) is int and type(final_end) is int and
+            started == self.fence.last and started < work_end and
+            work_end == min(self.fence.work, started + 45 * O.NS) and
+            final_end == min(self.fence.final, work_end + 45 * O.NS), "AUTHORITY_OWNER_ORIGINAL_PHASE")
+        anchor.phase = (started, work_end, final_end, (self.work_limit, self.final_limit))
+        anchor.phase_active = True
+        self.work_limit, self.final_limit = work_end, final_end
+        self.check()
+
+    def leave_custody_phase(self, started, work_end, final_end, old_limits):
+        anchor = self.check()
+        require(anchor.phase_active and anchor.phase is not None and
+            type(old_limits) is tuple and old_limits == (None, None) and
+            (started, work_end, final_end, old_limits) == anchor.phase, "AUTHORITY_OWNER_PHASE_RETURN_CHANGED")
+        self.work_limit, self.final_limit = old_limits
+        anchor.phase_active = False  # Original phase tuple remains consumed forever.
+        self.check()
+
+
+def _custody_match_pin(match, kind):
+    require(kind in ("gate", "worker") and type(match) is
+        (A.gate.GateEligibility if kind == "gate" else A.stages.BootstrapMatch) and type(match.record) is bytes,
+        "AUTHORITY_MATCH_TYPE")
+    dictionary, raw = match.__dict__, match.record
+    require(type(dictionary) is dict and set(dictionary) == {"record"}, "AUTHORITY_MATCH_FIELDS")
+    return match, type(match), dictionary, raw, N._history_graph(dictionary)
+
+
+def _custody_match_check(pin):
+    require(type(pin) is tuple and len(pin) == 5, "AUTHORITY_MATCH_PIN")
+    match, kind, dictionary, raw, graph = pin
+    require(type(match) is kind and match.__dict__ is dictionary and type(match.record) is bytes and match.record == raw,
+        "AUTHORITY_MATCH_CHANGED")
+    N._check_history(graph)
+    return match
+
+
+# Fixed custody child guard. The maintained helper supplies immutable caps only;
+# it never supplies a reconstructed current observation or original parent owner.
+_CUSTODY_CHILD_CLOCKS = {}
+
+
+@dataclass(eq=False, repr=False)
+class _CustodyChildAnchor:
+    handle: object
+    binding: tuple
+    first_graph: tuple
+    cap: object
+    cap_dictionary: dict
+    cap_graph: tuple
+    last: int
+    local_last: float
+    phase: str = "METADATA"
+    metadata: object = None
+    metadata_graph: tuple = ()
+    frame: tuple = ()
+    frame_graph: tuple = ()
+    operative: object = None
+    busy: bool = False
+    failure: object = None
+
+
+class _CustodyChildClock:
+    """Actual child-first clocks; one metadata cap, one shortening, no renewal.
+
+    _RecipientWindow remains unchanged. Its complete dictionary, including the
+    construction-only `last`, is immutable here. Actual checked_now returns go
+    straight into our independently retained frontier before any other callback.
+    There is no call to the helper's now/deadline or adoption of its mutable last.
+    """
+    __slots__ = ("_binding",)
+
+    def __init__(self, first, local, boot, cancelled):
+        require(type(self) is _CustodyChildClock and id(self) not in _CUSTODY_CHILD_CLOCKS,
+            "CHILD_CLOCK_NOT_NEW")
+        first_graph = N._history_graph(first)
+        O.clocks.validate_reading(first)
+        local_value(local)
+        digest(boot)
+        require(callable(cancelled), "CHILD_CLOCK_CALLBACK")
+        cap = native._RecipientWindow(first, first.nanoseconds, local, None, cancelled, metadata=True)
+        self._binding = (first, local, boot, cancelled)
+        anchor = _CustodyChildAnchor(self, self._binding, first_graph, cap, cap.__dict__,
+            N._history_graph(cap.__dict__), first.nanoseconds, local)
+        _CUSTODY_CHILD_CLOCKS[id(self)] = anchor
+        self._current(anchor)
+
+    def _anchor(self):
+        anchor = _CUSTODY_CHILD_CLOCKS.get(id(self))
+        require(type(self) is _CustodyChildClock and type(anchor) is _CustodyChildAnchor and
+            anchor.handle is self, "CHILD_CLOCK_ORIGINAL_HANDLE")
+        return anchor
+
+    @staticmethod
+    def _error(anchor, error):
+        if anchor.failure is None:
+            anchor.failure = error
+        return anchor.failure
+
+    def _current(self, anchor):
+        require(_CUSTODY_CHILD_CLOCKS.get(id(self)) is anchor and self._binding is anchor.binding and
+            anchor.handle is self and type(anchor.cap) is native._RecipientWindow and
+            anchor.cap.__dict__ is anchor.cap_dictionary, "CHILD_CLOCK_ORIGINAL_BINDING")
+        N._check_history(anchor.first_graph)
+        N._check_history(anchor.cap_graph)
+        if anchor.metadata is not None:
+            anchor.metadata.structural()
+        N._check_history(anchor.metadata_graph)
+        N._check_history(anchor.frame_graph)
+        if anchor.frame:
+            require(anchor.frame[4].__dict__ is anchor.frame[5] and
+                type(anchor.frame[-3]) is native._RecipientWindow and
+                anchor.frame[-3].__dict__ is anchor.frame[-2], "CHILD_CLOCK_RETAINED_FRAME_CHANGED")
+        if anchor.operative is not None:
+            require(type(anchor.operative) is _CustodyOwner, "CHILD_CLOCK_ORIGINAL_OWNER")
+            anchor.operative.check()
+
+    def _view(self):
+        anchor = self._anchor()
+        try:
+            self._current(anchor)
+            return anchor
+        except BaseException as error:
+            raise self._error(anchor, error)
+
+    clock = property(lambda self: self._view().binding[0].clock)
+    first = property(lambda self: self._view().binding[0].nanoseconds)
+    work = property(lambda self: self._view().cap.work)
+    final = property(lambda self: self._view().cap.final)
+    local_end = property(lambda self: self._view().cap.local_end)
+    last = property(lambda self: self._view().last)
+
+    def _begin(self):
+        anchor = self._anchor()
+        if anchor.failure is not None:
+            raise anchor.failure
+        try:
+            self._current(anchor)
+            require(not anchor.busy, "CHILD_CLOCK_REENTRY")
+            anchor.busy = True
+            return anchor
+        except BaseException as error:
+            raise self._error(anchor, error)
+
+    def _local(self, anchor):
+        value = local_value(time.monotonic())
+        require(value >= anchor.local_last, "CHILD_CLOCK_LOCAL_BACKWARDS")
+        anchor.local_last = value
+        self._current(anchor)
+        require(value < anchor.cap.local_end, "CHILD_CLOCK_LOCAL_EXPIRED")
+        return value
+
+    def _observe(self, anchor, *, final, minimum, limit):
+        require(type(final) is bool, "CHILD_CLOCK_FINAL_TYPE")
+        end = anchor.cap.final if final else anchor.cap.work
+        if limit is not None:
+            end = min(end, O.integer(limit))
+        frontier = max(anchor.last, O.integer(minimum))
+        for number in range(2):
+            self._current(anchor)  # Pin newly returned native rows BEFORE any clock callback.
+            local = self._local(anchor)
+            observed = O.clocks.checked_now(anchor.binding[0].clock, minimum_ns=frontier)
+            anchor.last = frontier = O.integer(observed, frontier)
+            self._current(anchor)
+            require(frontier < end and anchor.busy and anchor.failure is None, "CHILD_CLOCK_RAW_EXPIRED_OR_CHANGED")
+            # Both sides of cancellation are observed. An unchanged ClockIdentity
+            # cannot stand in for the live boot after the callback/second RAW.
+            boot = C.boot_digest(anchor.binding[0].clock.role)
+            self._current(anchor)
+            require(type(boot) is str and boot == anchor.binding[2], "CHILD_CLOCK_BOOT_CHANGED")
+            if number == 0:
+                anchor.binding[3]()
+                self._current(anchor)
+                require(anchor.last == frontier and anchor.local_last == local and anchor.busy and
+                    anchor.failure is None, "CHILD_CLOCK_CALLBACK_CHANGED")
+        self._local(anchor)
+        self._current(anchor)
+        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "CHILD_CLOCK_FRONTIER_CHANGED")
+        return frontier
+
+    def now(self, *, final=False, minimum=0, limit=None):
+        anchor = self._begin()
+        try:
+            return self._observe(anchor, final=final, minimum=minimum, limit=limit)
+        except BaseException as error:
+            raise self._error(anchor, error)
+        finally:
+            anchor.busy = False
+
+    def deadline(self, maximum, *, final=False, limit=None):
+        anchor = self._begin()
+        try:
+            require(type(maximum) in (int, float) and math.isfinite(maximum) and 0 < maximum <= 210,
+                "CHILD_CLOCK_OPERATION_MAXIMUM")
+            local = self._local(anchor)
+            observed = self._observe(anchor, final=final, minimum=0, limit=limit)
+            end = anchor.cap.final if final else anchor.cap.work
+            if limit is not None:
+                end = min(end, O.integer(limit))
+            result = min(anchor.cap.local_end, O.wire._directed_deadline(local, maximum, end, observed))
+            self._current(anchor)
+            require(anchor.busy and anchor.failure is None, "CHILD_CLOCK_DEADLINE_CHANGED")
+            return result
+        except BaseException as error:
+            raise self._error(anchor, error)
+        finally:
+            anchor.busy = False
+
+    def attach_metadata(self, wrapper):
+        anchor = self._begin()
+        try:
+            require(anchor.phase == "METADATA" and anchor.metadata is None and type(wrapper) is _PrimaryOwner and
+                wrapper.owner.first is anchor.binding[0] and wrapper.owner.fence is self and
+                not wrapper.finished and not wrapper.rows, "CHILD_METADATA_ORIGINAL_OWNER")
+            anchor.metadata = wrapper
+            self._current(anchor)
+        except BaseException as error:
+            raise self._error(anchor, error)
+        finally:
+            anchor.busy = False
+
+    def bind(self, context_raw, context, start_raw, start, expected, event, inherited):
+        anchor = self._begin()
+        try:
+            require(anchor.phase == "METADATA" and anchor.metadata is not None, "CHILD_CLOCK_BIND_ONCE")
+            anchor.phase = "BINDING"  # Any failure consumes the one transition.
+            metadata = anchor.metadata
+            metadata.structural()
+            require(metadata.finished and metadata.failure is None and metadata.owner.closed is True and
+                metadata.owner.original is None and metadata.owner.unknown is False and metadata.errors == [] and
+                all(attempted and closed for _, _, _, attempted, closed in metadata.rows), "CHILD_METADATA_CLOSE_UNKNOWN")
+            require(type(context_raw) is bytes and type(start_raw) is bytes and type(event) is bytes and
+                canonical(context_raw) == context and canonical(start_raw) == start and
+                type(context) is dict and type(start) is dict and type(inherited) is dict,
+                "CHILD_FRAME_ORIGINAL_BYTES")
+            kind = context["observed"]["kind"]
+            require(kind in ("gate", "worker") and type(expected) is
+                (A.gate.GateEligibility if kind == "gate" else A.stages.BootstrapMatch) and
+                type(expected.record) is bytes and expected.record == O.encoded(context["expectedMatch"]),
+                "CHILD_FRAME_EXPECTED_MATCH")
+            frame = context["window"]
+            require(frame["originalBootDigest"] == anchor.binding[2] and frame["clock"] == O.clock_value(anchor.binding[0].clock) and
+                start["startedNs"] <= anchor.binding[0].nanoseconds and
+                start["workEndNs"] == min(frame["workEndNs"], O.integer(start["startedNs"]) + 45 * O.NS) and
+                anchor.last < O.integer(start["workEndNs"]), "CHILD_FRAME_ORIGINAL_CAP")
+            anchor.metadata_graph = N._history_graph(metadata.owner)
+            anchor.frame = (context_raw, context, start_raw, start, expected, expected.__dict__, event, inherited,
+                anchor.cap, anchor.cap_dictionary, anchor.cap_graph)
+            anchor.frame_graph = N._history_graph(anchor.frame)
+            # Same ACTUAL first/LOCAL and metadata frontier; no helper observation
+            # is restored or reused. The validated parent45 can only shorten it.
+            cap = native._RecipientWindow(anchor.binding[0], anchor.last, anchor.binding[1],
+                start["workEndNs"], anchor.binding[3])
+            anchor.cap, anchor.cap_dictionary = cap, cap.__dict__
+            anchor.cap_graph = N._history_graph(cap.__dict__)
+            anchor.phase = "OPERATIVE"
+            self._current(anchor)
+            self._observe(anchor, final=False, minimum=anchor.last, limit=start["workEndNs"])
+        except BaseException as error:
+            raise self._error(anchor, error)
+        finally:
+            anchor.busy = False
+
+    def attach_operative(self, owner):
+        anchor = self._begin()
+        try:
+            require(anchor.phase == "OPERATIVE" and anchor.operative is None and type(owner) is _CustodyOwner and
+                owner.fence is self and owner.first is anchor.binding[0] and not owner.closed and
+                not owner.check().rows and owner._anchor().pending is None,
+                "CHILD_OPERATIVE_ORIGINAL_OWNER")
+            anchor.operative = owner
+            self._current(anchor)
+        except BaseException as error:
+            raise self._error(anchor, error)
+        finally:
+            anchor.busy = False
+
+
+# Fixed authority-1 child, not a standalone acquisition/provider or a new budget.
+_AUTHORITY_CHILD_SCOPE = "INITIAL_CUSTODY_AUTHORITY_PENDING_CHILD_CLOSE_V1"
+_AUTHORITY_CONTEXT_FIELDS = "schema scope window history observed expectedMatch eventSha256 root session job " \
+    "inheritedContext sourceReturnSha256 sourceReturnedNs primaryResultSha256 primaryCopySha256 " \
+    "directoryIdentity budgetAcceptance exportSaveAuthority"
+_AUTHORITY_HISTORY_FIELDS = "schema scope kind observed clock originalBootDigest originalPreviousNs originalJobBasisNs " \
+    "serviceArithmetic serviceJob firstUseAt matchSha256 originalLocalScope primaryStepScope currentAuthority " \
+    "budgetAcceptance exportSaveAuthority"
+
+
+def _custody_authority_frame(value):
+    """Closed parent data, never a reconstructed live custody Window."""
+    fields(value, "schema scope clock originalBootDigest kind originalJobBasisNs jobEndNs startNs " +
+        " ".join(WINDOW_NAMES), "AUTHORITY_WINDOW_FIELDS")
+    require(type(value["schema"]) is int and value["schema"] == 1 and value["scope"] == WINDOW_SCOPE,
+        "AUTHORITY_WINDOW_SCOPE")
+    clock = O.wire.clock_identity(value["clock"])
+    digest(value["originalBootDigest"])
+    limits = schedule(value["kind"], value["originalJobBasisNs"], value["startNs"])
+    _same({name: value[name] for name in limits}, limits, "AUTHORITY_WINDOW_ARITHMETIC")
+    return clock, limits
+
+
+def _custody_authority_context(raw, path, first, boot):
+    """Actual host/event binding inside the genuinely owned fixed HTTP child."""
+    context = fields(canonical(raw), _AUTHORITY_CONTEXT_FIELDS, "AUTHORITY_CONTEXT_FIELDS")
+    frame_clock, limits = _custody_authority_frame(context["window"])
+    history = fields(context["history"], _AUTHORITY_HISTORY_FIELDS, "AUTHORITY_HISTORY_FIELDS")
+    require(type(context["schema"]) is int and context["schema"] == 1 and
+        context["scope"] == native.INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE and
+        context["root"] == str(ROOT) and context["session"] == str(path) and
+        context["budgetAcceptance"] == "NOT_ADMITTED" and context["exportSaveAuthority"] is False and
+        type(history["schema"]) is int and history["schema"] == 1 and
+        history["scope"] == "INITIAL_CUSTODY_PRIMARY_HISTORICAL_BINDING_V1" and
+        history["kind"] == limits["kind"] and history["observed"] == context["observed"] and
+        history["clock"] == context["window"]["clock"] and frame_clock == first.clock and
+        history["originalBootDigest"] == context["window"]["originalBootDigest"] == boot and
+        history["originalJobBasisNs"] == limits["originalJobBasisNs"] and
+        O.integer(history["originalPreviousNs"]) <= limits["startNs"] <= first.nanoseconds < limits["workEndNs"] and
+        history["budgetAcceptance"] == "NOT_ADMITTED" and history["exportSaveAuthority"] is False and
+        history["currentAuthority"] == "NOT_ACQUIRED", "AUTHORITY_CONTEXT_BINDINGS")
+    first_use = O.integer(history["firstUseAt"], 1)
+    kind = history["kind"]
+    observed, primary_path, event = N.host_context(first_use)
+    roots, _handoff, custody_path = _paths(kind)
+    require(primary_path == roots["P"] and path == custody_path / "authority-1" and
+        observed == context["observed"] and observed["role"] == first.clock.role and
+        observed["kind"] == kind and observed["firstUseAt"] == first_use and
+        context["eventSha256"] == O.digest(event), "AUTHORITY_ACTUAL_CONTEXT")
+    for name in ("sourceReturnSha256", "primaryResultSha256", "primaryCopySha256"):
+        digest(context[name])
+    require(type(context["job"]) is str and re.fullmatch(r"[0-9a-f]{32}", context["job"]) and
+        limits["startNs"] <= O.integer(context["sourceReturnedNs"]) < limits["workEndNs"],
+        "AUTHORITY_SOURCE_TIME")
+    inherited = context["inheritedContext"]
+    require(type(inherited) is dict and all(type(item) is str for item in inherited.values()) and
+        (set(inherited).issubset({"GRADLE_USER_HOME"}) or set(inherited) == set(Q._CONTEXT)),
+        "AUTHORITY_PARENT_DOMAIN")
+    native.directory_identity(context["directoryIdentity"], first.clock.role)
+    expected_raw = O.encoded(context["expectedMatch"])
+    require(O.digest(expected_raw) == digest(history["matchSha256"]) and
+        context["expectedMatch"]["firstUseAt"] == first_use, "AUTHORITY_EXPECTED_HISTORY")
+    # A supplied historical value is not current authority. The actual acquirer
+    # must revalidate this exact expected record against fresh original responses.
+    expected = (A.gate.GateEligibility if kind == "gate" else A.stages.BootstrapMatch)(expected_raw)
+    return context, expected, event
+
+
+def _custody_authority_start(raw, context_raw, context, path, first, minimum, inherited):
+    start = _custody_authority_start_fields(raw, context_raw, context, path, first.clock)
+    require(start["startedNs"] <= O.integer(minimum) <= first.nanoseconds < start["workEndNs"],
+        "AUTHORITY_ORIGINAL_PHASE")
+    require(type(inherited) is dict and set(inherited) == set(Q._CONTEXT) and
+        inherited == start["inheritedContext"],
+        "AUTHORITY_NATIVE_INHERITANCE")
+    domain = native.processes.ownership_domains(inherited[native.processes.CHAIN_ENV],
+        inherited[native.processes.DOMAINS_ENV])[-1]
+    require(domain == {"id": start["invocation"], "job": start["job"], "state": start["state"],
+        "home": start["home"]}, "AUTHORITY_NATIVE_DOMAIN")
+    return start, domain
+
+
+def _custody_finish_queries(owner, supplier, failure):
+    """Exactly one actual finalizer; preserve even a falsey original failure."""
+    if supplier is not None:
+        try:
+            supplier._finalize(failure)
+        except BaseException as error:
+            if failure is None:
+                failure = error
+    if (supplier is not None and supplier.unknown) or Q.QUARANTINE or native.diagnostics._QUARANTINE:
+        if failure is None:
+            failure = O.OriginError("INITIAL_CUSTODY_AUTHORITY_QUERY_UNKNOWN")
+        owner.error("custody-authority-query", failure, unknown=True)
+    if failure is not None:
+        raise failure
+
+
+def custody_authority_child(context_hash, minimum, cancelled):
+    """One real authority-1 child under the parent's already-owned native domain.
+
+    No CLI dispatch is installed by this fragment. Metadata and acquisition use
+    two NEW actual Owners, with known metadata close before the sole cap bind.
+    The first LOCAL/RAW/boot never restart; the parent phase45 can only shorten.
+    """
+    token = os.environ.pop(O.wire.TOKEN_ENV, None)
+    metadata = owner = clock = result_raw = None
+    failure = None
+    try:
+        local = local_value(time.monotonic())  # Before first RAW, including all metadata work.
+        first = O.clocks.observe()
+        first_graph = N._history_graph(first)
+        O.clocks.validate_reading(first)
+        require(first.nanoseconds >= O.integer(minimum), "AUTHORITY_CHILD_PRECEDES_LAUNCH")
+        boot = digest(C.boot_digest(first.clock.role))
+        N._check_history(first_graph)
+        digest(context_hash)
+        require(callable(cancelled) and type(token) is str and re.fullmatch(r"[A-Za-z0-9_.-]{16,4096}", token) and
+            not any(name in os.environ for name in _CREDENTIAL_NAMES), "AUTHORITY_CHILD_CREDENTIAL_BOUNDARY")
+        clock = _CustodyChildClock(first, local, boot, cancelled)
+        metadata_owner = native.Owner(clock.local_end, clock, first=first, cancelled=cancelled)
+        metadata = _PrimaryOwner(metadata_owner)
+        clock.attach_metadata(metadata)
+        kind, _primary_path = N.location()
+        path = _paths(kind)[2] / "authority-1"
+        private = _private(metadata, path)
+        private_pin = tuple(private.identity)
+        context_raw = _read_private(metadata, private, "context.json", native.LIMIT)
+        require(O.digest(context_raw) == context_hash, "AUTHORITY_CHILD_CONTEXT_HASH")
+        context, expected, event = _custody_authority_context(context_raw, path, first, boot)
+        expected_pin = _custody_match_pin(expected, kind)
+        require(tuple(context["directoryIdentity"]) == private_pin, "AUTHORITY_CHILD_PARENT_PIN")
+        service = _private(metadata, path / "service")
+        service_pin = tuple(service.identity)
+        start_raw = _read_private(metadata, service, "start.json", native.LIMIT)
+        inherited = Q._inherited_context()
+        start, domain = _custody_authority_start(start_raw, context_raw, context, path, first, minimum, inherited)
+        metadata_graph = N._history_graph(context, start, expected.__dict__, inherited, first)
+        metadata_close = metadata.finish()
+        metadata_last = clock.now()
+        N._check_history(metadata_graph)
+        _custody_match_check(expected_pin)
+        clock.bind(context_raw, context, start_raw, start, expected, event, inherited)
+        # These directories are reopened by a NEW Owner only after metadata's
+        # actual known close. No retired handle or observed LOCAL is restored.
+        owner = _CustodyOwner(clock.local_end, clock, first=first, cancelled=cancelled)
+        clock.attach_operative(owner)
+        private = owner.open(path)
+        require(tuple(private.identity) == private_pin and owner.read(private, "context.json") == context_raw,
+            "AUTHORITY_CHILD_ORIGINAL_CONTEXT")
+        service = owner.child(private, "service")
+        require(tuple(service.identity) == service_pin and owner.read(service, "start.json") == start_raw,
+            "AUTHORITY_CHILD_ORIGINAL_START")
+        supplier = None
+        query_failure = None
+        try:
+            supplier = N.query_owner(owner, clock, path / "acquisition-queries")
+            N._initial_service_query_git(supplier)
+            supplier.native_host_matches_actions()
+            def retain(name, raw, *, failed):
+                require(name in N.ORIGINAL_KEYS and type(raw) is bytes and type(failed) is bool,
+                    "AUTHORITY_CHILD_ORIGINAL_NAME")
+                owner.end(final=failed)
+                supplier._write(supplier.private, name + ".bin", raw)
+                owner.end(final=failed)
+            match, originals = A.acquire_bootstrap(ROOT, kind=kind, query_runner=supplier, invocation=domain["id"],
+                token=token, retain=retain, fence=clock, original_work_end=start["workEndNs"],
+                first_use_at=context["observed"]["firstUseAt"], expected=expected)
+            token = None
+            match_pin = _custody_match_pin(match, kind)
+            original_graph = N._history_graph(match.__dict__, originals)
+            acquired = clock.now(limit=start["workEndNs"])
+            _custody_match_check(expected_pin)
+            _custody_match_check(match_pin)
+            require(type(match) is type(expected) and match.record == expected.record and
+                type(originals) is tuple and tuple(name for name, _raw in originals) == N.ORIGINAL_KEYS and
+                all(type(raw) is bytes for _name, raw in originals) and dict(originals)["event"] == event,
+                "AUTHORITY_CHILD_ORIGINAL_MATCH")
+        except BaseException as error:
+            query_failure = error
+        finally:
+            token = None
+            _custody_finish_queries(owner, supplier, query_failure)
+        # No provisional session or caught finalizer error can cross this edge.
+        returned = clock.now(limit=start["workEndNs"])
+        N._check_history(original_graph)
+        _custody_match_check(match_pin)
+        queries = owner.open(path / "acquisition-queries")
+        session = N.query_session(owner, queries)
+        require(all(owner.read(queries, name + ".bin") == raw for name, raw in originals),
+            "AUTHORITY_CHILD_ORIGINAL_READBACK")
+        N._check_history(metadata_graph)
+        _custody_match_check(expected_pin)
+        result_raw = owner.write(service, "child-result.json", {"schema": 1, "scope": _AUTHORITY_CHILD_SCOPE,
+            "contextSha256": context_hash, "startSha256": O.digest(start_raw), "invocation": domain["id"],
+            "clock": O.clock_value(first.clock), "bootDigest": boot, "launchMinimumNs": minimum,
+            "beganNs": first.nanoseconds, "metadataLastNs": metadata_last, "acquiredNs": acquired,
+            "queryReturnedNs": returned, "querySessionSha256": O.digest(session),
+            "originalsSha256": {name: O.digest(raw) for name, raw in originals}, "matchSha256": O.digest(match.record),
+            "directoryIdentities": {".": list(private_pin), "service": list(service_pin)},
+            "metadataClose": canonical(metadata_close),
+            "completedNs": clock.now(limit=start["workEndNs"]), "retirement": "KNOWN", "errors": []})
+        N._check_history(original_graph)
+        _custody_match_check(match_pin)
+        clock.now()
+    except BaseException as error:
+        failure = error
+        if owner is not None:
+            owner.error("custody-authority-child", error)
+            failure = owner._anchor().failure
+        elif metadata is not None:
+            failure = metadata.remember(error)
+    finally:
+        token = None
+        if metadata is not None and not metadata.finished:
+            try:
+                metadata.finish()
+            except BaseException as error:
+                if failure is None:
+                    failure = error
+        if owner is not None:
+            if failure is None and owner._anchor().failure is None:
+                try:
+                    owner.freeze()
+                except BaseException as error:
+                    owner.error("custody-authority-close-roster", error, unknown=True)
+            try:
+                owner.close()
+            except BaseException as error:
+                owner.error("custody-authority-owner-close", error)
+            if failure is None and owner._anchor().failure is not None:
+                failure = owner._anchor().failure
+            if failure is None:
+                try:
+                    owner.known()
+                except BaseException as error:
+                    owner.error("custody-authority-close-return", error, unknown=True)
+                    failure = owner._anchor().failure
+    if failure is not None:
+        raise failure
+    require(owner is not None and clock is not None and result_raw is not None and not owner.unknown,
+        "AUTHORITY_CHILD_NO_ORIGINALS")
+    N._check_history(metadata_graph)
+    N._check_history(original_graph)
+    closed = clock.now(limit=start["workEndNs"])
+    _custody_match_check(expected_pin)
+    _custody_match_check(match_pin)
+    owner.known()
+    return {"schema": 1, "scope": native.INITIAL_CUSTODY_AUTHORITY_ACK_SCOPE, "invocation": domain["id"],
+        "terminalSha256": O.digest(result_raw), "clock": O.clock_value(first.clock), "closedNs": closed}, \
+        clock, start["workEndNs"]
+
+
+# Fixed pre-export authority-1 parent. Source draft: no CLI/workflow integration.
+_AUTHORITY_RETURNS = {}
+_AUTHORITY_ATTEMPTS = {}
+_AUTHORITY_INDEX_SCOPE = "INITIAL_CUSTODY_AUTHORITY_PRE_EXPORT_INDEX_V1"
+_AUTHORITY_PENDING_SCOPE = "INITIAL_CUSTODY_AUTHORITY_PRE_EXPORT_PENDING_CLOSE_V1"
+_AUTHORITY_RETURN_SCOPE = "INITIAL_CUSTODY_AUTHORITY_PRE_EXPORT_CLOSED_HISTORY_V1"
+
+
+def _custody_authority_window(window):
+    """Encode the ORIGINAL live Window; these bytes never reconstruct it."""
+    require(type(window) is Window, "AUTHORITY_ORIGINAL_WINDOW")
+    anchor = window._view()
+    require(anchor.failure is None, "AUTHORITY_FAILED_WINDOW")
+    first, _local, boot, limits_raw, _ends, _locals, _cancel = anchor.binding
+    raw = O.encoded({"schema": 1, "scope": WINDOW_SCOPE, "clock": O.clock_value(first.clock),
+        "originalBootDigest": boot, **canonical(limits_raw)})
+    _custody_authority_frame(canonical(raw))
+    return raw
+
+
+def _custody_authority_start_fields(raw, context_raw, context, path, clock):
+    """Pure original-phase schema; no synthesized Reading or live native owner."""
+    start = fields(canonical(raw), " ".join(native.START_FIELDS), "AUTHORITY_START_FIELDS")
+    require(type(start["schema"]) is int and start["schema"] == 1 and start["scope"] == native.PHASE_SCOPE and
+        start["contextSha256"] == O.digest(context_raw) and start["argv"] == native.phase_command(context_raw) and
+        start["cwd"] == str(ROOT) and start["role"] == clock.role and start["job"] == context["job"] and
+        start["state"] == str(path) and start["home"] == str(path / "control-home") and
+        type(start["invocation"]) is str and re.fullmatch(r"[0-9a-f]{32}", start["invocation"]) and
+        start["exitCode"] is None and start["launchAttempted"] is False and start["scopeAttempted"] is False and
+        start["retirement"] == "UNKNOWN", "AUTHORITY_START")
+    frame = context["window"]
+    began = O.integer(start["startedNs"], O.integer(context["sourceReturnedNs"]))
+    require(began < O.integer(start["workEndNs"]) and
+        start["workEndNs"] == min(frame["workEndNs"], began + 45 * O.NS) and
+        start["finalEndNs"] == min(frame["nativeFinalEndNs"], start["workEndNs"] + 45 * O.NS),
+        "AUTHORITY_ORIGINAL_PHASE")
+    expected = native.processes.ownership_environment(context["inheritedContext"], context["job"],
+        start["invocation"], str(path), str(path / "control-home"), allow_new_context=True)
+    require(type(start["inheritedContext"]) is dict and
+        start["inheritedContext"] == {name: expected[name] for name in Q._CONTEXT}, "AUTHORITY_START_INHERITANCE")
+    return start
+
+
+def _custody_authority_phase_bytes(context_raw, path, clock, records, child_raw, private_pin, service_pin):
+    """Maintain the native phase/ACK/close predicates without old-window adoption."""
+    require(type(records) is dict and set(records) == native.PHASE_FILES and
+        all(type(raw) is bytes for raw in records.values()), "AUTHORITY_PHASE_FILES")
+    context = canonical(context_raw)
+    start = _custody_authority_start_fields(records["start.json"], context_raw, context, path, clock)
+    row = fields(canonical(records["result.json"]), " ".join(native.TERMINAL_FIELDS), "AUTHORITY_TERMINAL_FIELDS")
+    birth = fields(canonical(records["native-start.json"]), "ownership leader preparerIdentity observedNs",
+        "AUTHORITY_BIRTH_FIELDS")
+    changed = {"exitCode", "launchAttempted", "scopeAttempted", "retirement"}
+    _same({name: row[name] for name in start if name not in changed},
+        {name: start[name] for name in start if name not in changed}, "AUTHORITY_TERMINAL_START")
+    require(type(row["exitCode"]) is int and row["exitCode"] == 0 and row["launchAttempted"] is True and
+        row["scopeAttempted"] is True and row["scopeCloseAttempted"] is True and row["scopeClosed"] is True and
+        row["retirement"] == "KNOWN" and row["survivors"] == [] and row["errors"] == [] and records["stderr.log"] == b"" and
+        row["nativeStartSha256"] == O.digest(records["native-start.json"]) and
+        row["baselineSha256"] == O.digest(records["baseline.json"]) and row["leader"] == birth["leader"],
+        "AUTHORITY_NATIVE_RETURN")
+    argv = native.phase_command(context_raw, O.integer(row["launchMinimumNs"], start["startedNs"]))
+    _same(row["launchArgv"], argv, "AUTHORITY_EXECUTED_COMMAND")
+    native.native_record(row["ownership"], start, row["leader"], argv)
+    native.native_record(birth["ownership"], start, row["leader"], argv, terminal=False)
+    _same(birth["ownership"]["launches"], row["ownership"]["launches"], "AUTHORITY_NATIVE_BIRTH")
+    preparer = native.closed_lifetime(row["preparerIdentity"], clock.role)
+    require(preparer == native.closed_lifetime(birth["preparerIdentity"], clock.role) and
+        preparer["pid"] != row["leader"]["pid"], "AUTHORITY_PREPARER")
+    baseline = native.baseline_record(records["baseline.json"], clock.role)
+    if baseline["baseline"] is not None:
+        leader = native.lifetime(row["leader"], clock.role)
+        require(list(leader[:4] if clock.role.startswith("macos-") else leader) not in baseline["baseline"],
+            "AUTHORITY_PREEXISTING_LEADER")
+    _same(row["captureOutcomes"], {name: {key: True for key in
+        ("synced", "verified", "closeAttempted", "closed", "readback")} for name in ("stdout", "stderr")},
+        "AUTHORITY_CAPTURE_CLOSE")
+    _same(row["captures"], {name: {"sha256": O.digest(records[name + ".log"]),
+        "bytes": len(records[name + ".log"])} for name in ("stdout", "stderr")}, "AUTHORITY_CAPTURE_BYTES")
+    child = fields(canonical(child_raw), "schema scope contextSha256 startSha256 invocation clock bootDigest "
+        "launchMinimumNs beganNs metadataLastNs acquiredNs queryReturnedNs querySessionSha256 originalsSha256 "
+        "matchSha256 directoryIdentities metadataClose completedNs retirement errors", "AUTHORITY_CHILD_FIELDS")
+    ack = fields(canonical(records["stdout.log"]), "schema scope invocation terminalSha256 clock closedNs",
+        "AUTHORITY_ACK_FIELDS")
+    require(type(child["schema"]) is int and child["schema"] == 1 and child["scope"] == _AUTHORITY_CHILD_SCOPE and
+        child["contextSha256"] == O.digest(context_raw) and child["startSha256"] == O.digest(records["start.json"]) and
+        child["invocation"] == start["invocation"] and child["clock"] == O.clock_value(clock) and
+        child["bootDigest"] == context["window"]["originalBootDigest"] and
+        child["launchMinimumNs"] == row["launchMinimumNs"] and child["retirement"] == "KNOWN" and child["errors"] == [] and
+        type(ack["schema"]) is int and ack["schema"] == 1 and
+        ack["scope"] == native.INITIAL_CUSTODY_AUTHORITY_ACK_SCOPE and ack["invocation"] == start["invocation"] and
+        ack["terminalSha256"] == O.digest(child_raw) and ack["clock"] == O.clock_value(clock),
+        "AUTHORITY_CHILD_ACK")
+    _same(child["directoryIdentities"], {".": list(private_pin), "service": list(service_pin)},
+        "AUTHORITY_CHILD_DIRECTORY_PINS")
+    closed = fields(child["metadataClose"], "schema scope resources retirement exportSaveAuthority",
+        "AUTHORITY_METADATA_CLOSE_FIELDS")
+    require(type(closed["schema"]) is int and closed["schema"] == 1 and
+        closed["scope"] == "INITIAL_CUSTODY_PRIMARY_NATIVE_CLOSE_V1" and
+        closed["retirement"] == "KNOWN_RESOURCE_CLOSE_ONLY" and closed["exportSaveAuthority"] is False,
+        "AUTHORITY_METADATA_CLOSE")
+    _same(closed["resources"], [{"ordinal": index, "label": label, "closeAttempted": True, "closed": True}
+        for index, label in enumerate(("directory", "reader", "directory", "reader"))],
+        "AUTHORITY_METADATA_ORIGINAL_ROSTER")
+    return start, row, birth, child, ack
+
+
+def _custody_read_authority_phase(owner, private, context_raw, source, phase, window, primary_result):
+    """Read THIS native return, then recheck current authority from its originals."""
+    require(type(owner) is _CustodyOwner and type(phase) is native.OriginalPhase and
+        owner.phase_originals is phase and phase.context == context_raw and owner.fence is window and
+        any(row["owner"] is private and row["attempted"] is False for row in owner.resources),
+        "AUTHORITY_NOT_ORIGINAL_PHASE")
+    owner.check()
+    source_pin, phase_pin = N._source_pin(source), N._phase_pin(phase)
+    graph = N._history_graph(source, phase)
+    same_window, primary, history_raw, copy_raw, historical = checked_primary(primary_result)
+    require(same_window is window, "AUTHORITY_PRIMARY_WINDOW_CHANGED")
+    path, first = private.path, window._view().binding[0]
+    boot = window._view().binding[2]
+    context, expected, event = _custody_authority_context(context_raw, path, first, boot)
+    require(context["history"] == canonical(history_raw) and context["primaryResultSha256"] == primary.result_sha256 and
+        context["primaryCopySha256"] == O.digest(copy_raw) and
+        context["window"] == canonical(_custody_authority_window(window)) and
+        tuple(context["directoryIdentity"]) == tuple(private.identity) and
+        owner.read(private, "context.json") == context_raw and
+        owner.read(private, "authority-window.json") == _custody_authority_window(window),
+        "AUTHORITY_CURRENT_CONTEXT")
+    policy = N.source_readback(owner, path / "source-before", source)
+    require(context["sourceReturnSha256"] == O.digest(source.raw) and
+        context["sourceReturnedNs"] == canonical(source.raw)["returnedNs"], "AUTHORITY_SOURCE_RETURN")
+    records = dict(phase.records)
+    require(len(phase.records) == len(native.PHASE_FILES) and set(records) == native.PHASE_FILES,
+        "AUTHORITY_ORIGINAL_PHASE_ROSTER")
+    directory = owner.child(private, "service")
+    private_pin, service_pin = tuple(private.identity), tuple(directory.identity)
+    require(all(owner.read(directory, name) == raw for name, raw in phase.records), "AUTHORITY_PHASE_READBACK")
+    child_raw = owner.read(directory, "child-result.json")
+    start, row, birth, child, ack = _custody_authority_phase_bytes(context_raw, path, first.clock,
+        records, child_raw, private_pin, service_pin)
+    queries = owner.open(path / "acquisition-queries")
+    session = N.query_session(owner, queries)
+    originals = tuple((name, owner.read(queries, name + ".bin")) for name in N.ORIGINAL_KEYS)
+    original = dict(originals)
+    require(child["querySessionSha256"] == O.digest(session) and child["originalsSha256"] ==
+        {name: O.digest(raw) for name, raw in originals} and child["matchSha256"] == O.digest(original["match"]) and
+        original["event"] == event and {name: original[name] for name in N.SOURCE_KEYS} == policy and
+        original["match"] == expected.record == dict(historical)["P/acquisition-queries/match.bin"],
+        "AUTHORITY_ORIGINAL_BYTES")
+    match, service = N.retained_match(context, original, start["invocation"], window.clock,
+        start["startedNs"], start["workEndNs"])
+    captured = (context_raw, originals, start["invocation"], start["startedNs"], start["workEndNs"])
+    match_pin = _custody_match_pin(match, primary.kind)
+    return_graph = N._history_graph(match.__dict__, captured)
+    require(type(match) is type(expected) and match.record == expected.record and
+        list(N._service_job(captured, window.clock)) == canonical(history_raw)["serviceJob"],
+        "AUTHORITY_CURRENT_MATCH_OR_JOB")
+    minimum = N._service_chain_minimum(first.nanoseconds, context["sourceReturnedNs"], start, row, birth, child, service, ack)
+    checked = window.now(minimum=minimum)
+    N._check_history(graph)
+    N._check_history(return_graph)
+    _custody_match_check(match_pin)
+    owner.check()
+    require(N._source_pin(source)[1:] == source_pin[1:] and N._phase_pin(phase)[1:] == phase_pin[1:] and
+        owner.phase_originals is phase, "AUTHORITY_NATIVE_ORIGINAL_CHANGED")
+    chain = {"phaseSha256": {name: O.digest(raw) for name, raw in phase.records}, "childSha256": O.digest(child_raw),
+        "querySessionSha256": O.digest(session), "originalsSha256": {name: O.digest(raw) for name, raw in originals},
+        "checkedNs": checked}
+    return match, chain, captured, (child_raw, session)
+
+
+def _custody_authority_index(owner, path, window, originals, pending, before, after, phase, match, captured):
+    """Index all actual new originals, retaining original pins vs declarations."""
+    require(type(originals) is tuple and len(originals) == len(dict(originals)) == 37 and
+        all(type(name) is str and type(raw) is bytes for name, raw in originals) and
+        type(pending) is bytes and owner.phase_originals is phase and
+        owner.initial_sources.get(str(path / "source-before")) is before and
+        owner.initial_sources.get(str(path / "source-after")) is after, "AUTHORITY_INDEX_ORIGINALS")
+    available = dict((*originals, ("authority-pending.json", pending)))
+    data = dict(captured[1])
+    require(tuple(data) == N.ORIGINAL_KEYS and data["match"] == match.record and
+        {name: data[name] for name in N.SOURCE_KEYS} == dict(before.records) == dict(after.records),
+        "AUTHORITY_INDEX_MATCH")
+    indexed, directories = [], [path, path / "control-home", path / "temporary", path / "service"]
+    for name, source, raw, values in (
+            ("source-before", before, before.session, dict(before.records)),
+            ("acquisition-queries", None, available["acquisition-queries/session-result.json"], data),
+            ("source-after", after, after.session, dict(after.records))):
+        rows, paths = N._gate_query_index(path / name, raw, values, source=source)
+        indexed.extend(rows)
+        directories.extend(paths)
+    for name in ("authority-window.json", "context.json", "authority-pending.json",
+            *("service/" + name for name in sorted(native.PHASE_FILES)), "service/child-result.json"):
+        raw = available[name]
+        maximum = (native.ACK_LIMIT if name == "service/stdout.log" else
+            native.STDERR_LIMIT if name == "service/stderr.log" else native.LIMIT)
+        require(len(raw) <= maximum, "AUTHORITY_INDEX_RECORD_LIMIT")
+        indexed.append((path / name, maximum, len(raw), O.digest(raw)))
+    require(len(indexed) == len({target for target, *_ in indexed}) == 281 and
+        len(directories) == len(set(directories)) == 58, "AUTHORITY_INDEX_COMPLETE_ROSTER")
+    targets = {".": path, **{name: path / name for name in
+        ("control-home", "temporary", "service", "source-before", "source-after", "acquisition-queries")}}
+    pins = N._worker_pins(owner, window.clock.role, targets)
+    identities = {key: identity for key, _row, _dir, _path, identity in pins}
+    require(set(identities) == set(targets), "AUTHORITY_INDEX_REQUIRED_PINS")
+    files = []
+    for target, maximum, count, checksum in sorted(indexed):
+        name = target.relative_to(path).as_posix()
+        if name in available:
+            require(count == len(available[name]) and checksum == O.digest(available[name]), "AUTHORITY_INDEX_RAW_CHANGED")
+        files.append({"relative": name, "maximum": maximum, "bytes": count, "sha256": checksum,
+            "provenance": "ACTUAL_RETAINED_BYTES" if name in available else "ORIGINAL_QUERY_DECLARATION"})
+    require(sum(row["provenance"] == "ACTUAL_RETAINED_BYTES" for row in files) == 38 and
+        sum(row["bytes"] for row in files) <= MAX_BYTES, "AUTHORITY_INDEX_AVAILABLE_ROSTER")
+    entries = []
+    for target in sorted(directories):
+        name = "." if target == path else target.relative_to(path).as_posix()
+        entries.append({"relative": name, "identity": None if name not in identities else list(identities[name]),
+            "provenance": "ORIGINAL_NATIVE_PIN" if name in identities else "ORIGINAL_QUERY_DECLARATION"})
+    raw = O.encoded({"schema": 1, "scope": _AUTHORITY_INDEX_SCOPE, "origin": "AUTHORITY_PRE_EXPORT",
+        "root": str(path), "clock": O.clock_value(window.clock), "contextSha256": O.digest(phase.context),
+        "matchSha256": O.digest(match.record), "pendingSha256": O.digest(pending), "files": files, "directories": entries,
+        "fileCount": len(files), "directoryCount": len(entries), "totalBytes": sum(row["bytes"] for row in files),
+        "copyState": "ORIGINAL_BYTES_NOT_COPIED", "exportSaveAuthority": False})
+    canonical(raw)
+    return raw, pins
+
+
+@dataclass(frozen=True, repr=False)
+class CustodyAuthority:
+    """Actual authority-1 return, not a live lease, Admission or export capability."""
+    primary: object
+    raw: bytes
+    inventory: bytes
+    originals: tuple
+
+
+def custody_authority(primary_result, token):
+    """One original native acquisition under the SAME live custody Window."""
+    require("fixed" not in _AUTHORITY_ATTEMPTS, "AUTHORITY_REUSE")
+    attempt = {"primary": primary_result, "state": "STARTED", "failure": None, "owner": None, "return": None}
+    _AUTHORITY_ATTEMPTS["fixed"] = attempt
+    owner = result = None
+    match_pins = []
+    source_links = ()
+    phase_link = None
+    pins = ()
+    graphs = []
+    failure = None
+    try:
+        require(type(token) is str and re.fullmatch(r"[A-Za-z0-9_.-]{16,4096}", token) and
+            not any(name in os.environ for name in _CREDENTIAL_NAMES), "AUTHORITY_TOKEN_BOUNDARY")
+        window, primary, history_raw, copy_raw, historical = checked_primary(primary_result)
+        history, source_files = canonical(history_raw), dict(historical)
+        window_raw = _custody_authority_window(window)
+        first = window._view().binding[0]
+        observed, actual_root, event = N.host_context(history["firstUseAt"])
+        roots, _handoff, custody_path = _paths(primary.kind)
+        require(actual_root == roots["P"] and observed == history["observed"] and
+            event == source_files["P/acquisition-queries/event.bin"], "AUTHORITY_ACTUAL_PRIMARY_CONTEXT")
+        graphs.append(N._history_graph(primary_result, observed, first))
+        window.now()
+        owner = _CustodyOwner(window.deadline(900, final=True), window, first=first, cancelled=window._view().binding[6])
+        attempt["owner"] = owner
+        owner_anchor = owner._anchor()
+        owner_binding = (owner.__dict__, owner.resources, owner.errors, owner.initial_sources)
+        def current():
+            require(_AUTHORITY_ATTEMPTS.get("fixed") is attempt and attempt["primary"] is primary_result and
+                attempt["owner"] is owner and attempt["state"] in ("STARTED", "RETURNED") and
+                attempt["failure"] is None, "AUTHORITY_ATTEMPT_CHANGED")
+            require(owner.__dict__ is owner_binding[0] and owner.resources is owner_binding[1] and
+                owner.errors is owner_binding[2] and owner.initial_sources is owner_binding[3] and
+                owner.original is None and owner.unknown is False and owner.errors == [], "AUTHORITY_OWNER_CHANGED")
+            require(checked_primary(primary_result)[0] is window, "AUTHORITY_PRIMARY_RETURN_CHANGED")
+            require(owner._anchor() is owner_anchor, "AUTHORITY_ORIGINAL_OWNER_ANCHOR")
+            owner.check()
+            require(set(owner.initial_sources) == {key for key, _source in source_links} and
+                all(owner.initial_sources[key] is source for key, source in source_links) and
+                owner.phase_originals is phase_link, "AUTHORITY_ORIGINAL_LINKS_CHANGED")
+            for pin in match_pins:
+                _custody_match_check(pin)
+            for graph in graphs:
+                N._check_history(graph)
+            if pins:
+                N._check_worker_pins(pins, first.clock.role, closed=owner.closed)
+        current()
+        root = owner.open(custody_path)
+        require(native._initializer_names(owner, root) == ("copied-evidence",), "AUTHORITY_CUSTODY_INITIAL_ROSTER")
+        path = custody_path / "authority-1"
+        private = owner.child(root, "authority-1", create=True)
+        private_pin = tuple(private.identity)
+        owner.write(private, "authority-window.json", window_raw)
+        owner.child(private, "control-home", create=True)
+        owner.child(private, "temporary", create=True)
+        current()
+        before = N.source_queries(owner, window, observed, path / "source-before")
+        source_links = ((str(path / "source-before"), before),)
+        before_pin = N._source_pin(before)
+        graphs.append(N._history_graph(before))
+        current()
+        require(dict(before.records) == {name: source_files["P/acquisition-queries/" + name + ".bin"]
+            for name in N.SOURCE_KEYS}, "AUTHORITY_SOURCE_CHANGED")
+        expected_raw = source_files["P/acquisition-queries/match.bin"]
+        context_raw = owner.write(private, "context.json", {"schema": 1,
+            "scope": native.INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE, "window": canonical(window_raw),
+            "history": history, "observed": observed, "expectedMatch": canonical(expected_raw), "eventSha256": O.digest(event),
+            "root": str(ROOT), "session": str(path), "job": N.uuid.uuid4().hex, "inheritedContext": Q._inherited_context(),
+            "sourceReturnSha256": O.digest(before.raw), "sourceReturnedNs": canonical(before.raw)["returnedNs"],
+            "primaryResultSha256": primary.result_sha256, "primaryCopySha256": O.digest(copy_raw),
+            "directoryIdentity": list(private_pin), "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
+        _, phase = N._initial_service_phase(owner, private, context_raw, token, window, before)
+        phase_link = phase
+        token = None
+        phase_pin = N._phase_pin(phase)
+        graphs.append(N._history_graph(phase))
+        current()
+        _custody_read_authority_phase(owner, private, context_raw, before, phase, window, primary_result)
+        current()
+        after = N.source_queries(owner, window, observed, path / "source-after")
+        source_links = (*source_links, (str(path / "source-after"), after))
+        after_pin = N._source_pin(after)
+        graphs.append(N._history_graph(after))
+        current()
+        require(N.source_readback(owner, path / "source-after", after) == dict(before.records),
+            "AUTHORITY_FINAL_SOURCE_CHANGED")
+        match, chain, captured, (child_raw, session_raw) = _custody_read_authority_phase(
+            owner, private, context_raw, before, phase, window, primary_result)
+        match_pin = _custody_match_pin(match, primary.kind)
+        match_pins.append(match_pin)
+        graphs.append(N._history_graph(match.__dict__, chain, captured))
+        current()
+        files = [("authority-window.json", window_raw), ("context.json", context_raw),
+            ("service/child-result.json", child_raw), ("acquisition-queries/session-result.json", session_raw)]
+        files.extend(("service/" + name, raw) for name, raw in phase.records)
+        files.extend(("acquisition-queries/" + name + ".bin", raw) for name, raw in captured[1])
+        for name, source in (("source-before", before), ("source-after", after)):
+            files.extend(((name + "/source-return.json", source.raw), (name + "/session-result.json", source.session)))
+            files.extend((name + "/" + label + ".bin", raw) for label, raw in source.records)
+        originals = tuple(files)
+        pending = owner.write(private, "authority-pending.json", {"schema": 1, "scope": _AUTHORITY_PENDING_SCOPE,
+            "windowSha256": O.digest(window_raw), "primaryResultSha256": primary.result_sha256,
+            "primaryCopySha256": O.digest(copy_raw), "matchSha256": O.digest(match.record),
+            "filesSha256": {name: O.digest(raw) for name, raw in originals}, "originalChain": chain,
+            "retainedNs": window.now(), "retirement": "PENDING_OWNER_CLOSE", "exportSaveAuthority": False})
+        inventory_raw, pins = _custody_authority_index(owner, path, window, originals, pending,
+            before, after, phase, match, captured)
+        graphs.append(N._history_graph(originals, tuple(path for _key, _row, _dir, path, _identity in pins),
+            tuple(identity for _key, _row, _dir, _path, identity in pins)))
+        current()
+        require(N._source_pin(before)[1:] == before_pin[1:] and N._source_pin(after)[1:] == after_pin[1:] and
+            N._phase_pin(phase)[1:] == phase_pin[1:] and owner.phase_originals is phase and
+            owner.initial_sources == {str(path / "source-before"): before, str(path / "source-after"): after} and
+            tuple(private.identity) == private_pin and
+            native._initializer_names(owner, root) == ("authority-1", "copied-evidence"),
+            "AUTHORITY_ORIGINAL_RETURN_CHANGED")
+        preclose = window.now()
+        current()
+        owner.freeze()
+    except BaseException as error:
+        failure = error
+        if owner is not None:
+            owner.error("custody-authority", error)
+            failure = owner._anchor().failure
+    finally:
+        token = None
+        if owner is not None:
+            try:
+                owner.close()
+            except BaseException as error:
+                owner.error("custody-authority-close", error)
+            if failure is None and owner._anchor().failure is not None:
+                failure = owner._anchor().failure
+    try:
+        if failure is not None:
+            raise failure
+        require(owner is not None and owner._anchor() is owner_anchor, "AUTHORITY_INCOMPLETE")
+        owner.known()
+        current()
+        closed = window.now(minimum=preclose)  # Original WORK, not a new or native-final allowance.
+        current()
+        raw = O.encoded({"schema": 1, "scope": _AUTHORITY_RETURN_SCOPE, "windowSha256": O.digest(window_raw),
+            "primaryResultSha256": primary.result_sha256, "primaryCopySha256": O.digest(copy_raw),
+            "matchSha256": O.digest(match.record), "inventorySha256": O.digest(inventory_raw),
+            "pendingSha256": O.digest(pending), "originalChain": chain, "preCloseNs": preclose, "closedNs": closed,
+            "resourceCount": len(owner_anchor.frozen), "retirement": "KNOWN_RESOURCE_CLOSE_ONLY",
+            "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
+        canonical(raw)
+        all_originals = (*originals, ("authority-pending.json", pending))
+        result = CustodyAuthority(primary_result, raw, inventory_raw, all_originals)
+        return_graph = N._history_graph(result.__dict__, all_originals)
+        saved = (result, primary_result, raw, inventory_raw, all_originals, window, current,
+            owner, owner_anchor, owner.__dict__, return_graph, match_pin, captured, attempt)
+        require(id(result) not in _AUTHORITY_RETURNS, "AUTHORITY_RETURN_REUSE")
+        _AUTHORITY_RETURNS[id(result)] = saved
+        attempt["return"], attempt["state"] = result, "RETURNED"
+        checked_custody_authority(result, primary_result)
+        return result
+    except BaseException as error:
+        if attempt["failure"] is None:
+            attempt["failure"] = error
+        attempt["state"] = "FAILED"
+        raise attempt["failure"]
+
+
+def checked_custody_authority(result, primary_result):
+    """Authenticate this same-process return only; do not renew remote authority."""
+    saved = _AUTHORITY_RETURNS.get(id(result))
+    require(type(result) is CustodyAuthority and type(saved) is tuple and saved[0] is result and
+        saved[1] is primary_result and result.primary is primary_result, "AUTHORITY_NOT_ORIGINAL_RETURN")
+    _, _primary, raw, inventory, originals, window, current, owner, anchor, dictionary, graph, match_pin, captured, attempt = saved
+    try:
+        require(attempt["state"] == "RETURNED" and attempt["return"] is result and result.raw == raw and
+            result.inventory == inventory and result.originals is originals, "AUTHORITY_RETURN_CHANGED")
+        N._check_history(graph)
+        current()
+        require(owner.__dict__ is dictionary and owner._anchor() is anchor, "AUTHORITY_RETURN_OWNER_CHANGED")
+        owner.known()
+        match = _custody_match_check(match_pin)
+        require(window._view().failure is None, "AUTHORITY_RETURN_FAILED_WINDOW")
+        return window, match, captured, raw, inventory, originals
+    except BaseException as error:
+        if attempt["failure"] is None:
+            attempt["failure"] = error
+        attempt["state"] = "FAILED"
+        raise attempt["failure"]

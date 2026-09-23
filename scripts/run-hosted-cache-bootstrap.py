@@ -981,6 +981,7 @@ def _initial_service_environment(path, context, installed_git):
 
 
 def phase(owner, private, context_raw, token, fence, *, initial_git=None):
+    custody_phase = None
     try:
         context = origin.parse(context_raw)
         started = fence.now()
@@ -991,6 +992,9 @@ def phase(owner, private, context_raw, token, fence, *, initial_git=None):
                                            INITIAL_RECEIVING_CONTEXT_SCOPE)
         if managed:
             require(fence.enter_phase(owner, started) == (work_end, final_end), "BOOTSTRAP_INITIAL_ENTRY_PHASE")
+        elif context.get("scope") == INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE:
+            owner.enter_custody_phase(started, work_end, final_end)
+            custody_phase = (started, work_end, final_end, old_limits)
         else:
             owner.work_limit, owner.final_limit = work_end, final_end
         invocation = uuid.uuid4().hex
@@ -1014,8 +1018,14 @@ def phase(owner, private, context_raw, token, fence, *, initial_git=None):
         row["captureOutcomes"] = {name: {"synced": False, "verified": False, "closeAttempted": False,
                                         "closed": False, "readback": False} for name in ("stdout", "stderr")}
         resource_start = len(owner.resources)
-    except BaseException:
+    except BaseException as error:
         token = None  # Includes refused prelaunch setup, before a child environment carries it.
+        if custody_phase is not None:
+            owner.error("custody-phase-setup", error)
+            try:
+                owner.leave_custody_phase(*custody_phase)
+            except BaseException as restore_error:
+                owner.error("custody-phase-setup-return", restore_error, unknown=True)
         raise
     try:
         # The capture files remain alive through finalization, but acquisition
@@ -1168,6 +1178,11 @@ def phase(owner, private, context_raw, token, fence, *, initial_git=None):
                 fence.leave_phase(owner)
             except BaseException as error:
                 owner.error("initial-entry-phase-return", error)
+        elif custody_phase is not None:
+            try:
+                owner.leave_custody_phase(*custody_phase)
+            except BaseException as error:
+                owner.error("custody-phase-return", error, unknown=True)
         else:
             owner.work_limit, owner.final_limit = old_limits
     if owner.original is not None:

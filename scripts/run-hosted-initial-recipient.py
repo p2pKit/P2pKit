@@ -563,11 +563,13 @@ def finish_queries(owner, supplier, failure):
         try:
             supplier._finalize(failure)
         except BaseException as error:
-            failure = failure or error
+            if failure is None:
+                failure = error
     if (supplier is not None and supplier.unknown) or Q.QUARANTINE or native.diagnostics._QUARANTINE:
-        error = failure or O.OriginError("INITIAL_NATIVE_QUERY_UNKNOWN")
+        error = failure if failure is not None else O.OriginError("INITIAL_NATIVE_QUERY_UNKNOWN")
         owner.error("initial-query", error, unknown=True)
-        failure = failure or error
+        if failure is None:
+            failure = error
     if failure is not None:
         raise failure
 

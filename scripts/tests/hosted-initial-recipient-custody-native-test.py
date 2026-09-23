@@ -7,6 +7,8 @@ imported. Native resources, original registration, clocks, paths, signals and
 captures are explicit in-memory models: no process, Git, HTTP, private file or
 real signal operation occurs. The N dispatcher control selects ONLY its actual
 scope predicate, not a recreated SourceReturn or successful authority episode.
+Custody-only enter/leave hooks below model the owner's new phase-limit interface;
+they do not exercise the actual custody-owner implementation or add acceptance.
 
 Missing/invalid saved ceilings use the exact existing phase scope-finalizer
 subtree. They are malformed-state refusal probes, NOT a claim those states can
@@ -249,8 +251,21 @@ class OwnerModel:
         self.work_limit, self.final_limit = self.fence.work, self.fence.final
         self.resources, self.errors, self.writes, self.reads = [], [], {}, []
         self.original, self.unknown, self.phase_originals = None, False, None
+        self.custody_phase = None
         for name in ("error", "close_fence", "close_one"):
             setattr(self, name, MethodType(rig.ns[name], self))
+
+    def enter_custody_phase(self, started, work_end, final_end):
+        require(self.custody_phase is None and started == self.rig.raw and
+            work_end == min(self.fence.work, started + 45 * NS) and
+            final_end == min(self.fence.final, work_end + 45 * NS), "MODEL_CUSTODY_PHASE")
+        self.custody_phase = (started, work_end, final_end, (self.work_limit, self.final_limit))
+        self.work_limit, self.final_limit = work_end, final_end
+
+    def leave_custody_phase(self, started, work_end, final_end, old_limits):
+        require((started, work_end, final_end, old_limits) == self.custody_phase,
+            "MODEL_CUSTODY_PHASE_RETURN")
+        self.work_limit, self.final_limit = old_limits
 
     def acquire(self, label, factory):
         value = factory()
