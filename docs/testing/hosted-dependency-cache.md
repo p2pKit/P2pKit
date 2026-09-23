@@ -1551,6 +1551,21 @@ not genuine hosted admission, personal approvals or any HOLD/Release gate.
 Actual copying/export/seal/upload and qualification remain; delivery0/4,
 **Release NOT_READY**.
 
+The first bounded packet at source `fd91eb663264a89c0c0dbfc47aeb719f7c61cb57`
+completed **12/12 gate controls +4 guards**, then **FAILED** in worker method3:
+the first2 passed and the remaining28 were **NOT_RUN**. The maintained encoder
+correctly rejected the base64-expanded oversized record with
+`BudgetError/JOB_TIME_RECORD_LIMIT`; the test expected a later, unreachable
+handoff refusal. Only that exact exception assertion was corrected, with no
+production or limit change. The corrected method is not yet executed here.
+Independent original-result/source-repair review SHA-256:
+`dd345ff0000c8136c34bff0eaab4c5f981c11f779cbcb781c80d9079984ba453`.
+Original capture manifest SHA-256:
+`af08e60e0e966ceac57efe7126a057394767c75b2914f2dca4aacc6b4f0be233`.
+The consumed aggregate remains failed. The next packet selects only the corrected
+method and28 unrun worker methods, not the passed gate/worker methods or reader.
+These are model controls, not native/hosted custody or Release qualification.
+
 #### Stage1 canonical-context reader, not initialization authority
 
 The separate fixed `initial_recipient_context_record()` in

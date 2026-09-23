@@ -300,7 +300,9 @@ class WorkerValueControls(unittest.TestCase):
         for raw in (b"", bytearray(b"{}"), b"x" * (S.LIMIT + 1)):
             with self.subTest(kind=type(raw).__name__, count=len(raw)), self.assertRaisesRegex(I.AdmissionError, "WORKER_EMBEDDED_ORIGINAL_LIMIT"):
                 N._worker_handoff_record(*args, raw, b"{}")
-        with self.assertRaisesRegex(I.AdmissionError, "WORKER_HANDOFF_RECORD_LIMIT"):
+        # The shared bounded encoder refuses this base64-expanded record before
+        # the handoff's additional length check. Require that exact refusal.
+        with self.assertRaisesRegex(O.wire.BudgetError, "^JOB_TIME_RECORD_LIMIT$"):
             N._worker_handoff_record(*args, b"x" * (S.LIMIT // 2), b"y" * (S.LIMIT // 2))
 
 
