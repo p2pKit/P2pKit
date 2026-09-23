@@ -1780,6 +1780,51 @@ repeated. Both ordinary HOLDs, whole-JVM interlock, productive125, unchanged
 native limits and bootstrap5400 **UNADMITTED / UNMEASURED** remain.
 **Public development assets0/4; Release NOT_READY.**
 
+##### Same-child custody crypto: separate original results — 23 September
+
+Commit `9f112854e292c84e70296bc04ed774db437b596b` adds the same-child public
+Recipient validation, three-origin copy/freeze/export and original native/parent
+close carrier. Independent source/control review SHA-256:
+`af67d2e0671e8c243ac32f6d5e986cb00823fbbb44555f10f59e794c81828092`.
+It is source preparation, not a workflow caller or genuine encryption execution.
+
+The original **crypto16 remains FAILED / CONSUMED: 2 PASS /1 FAIL /13 NOT_RUN**.
+Method3 expected the wrong refusal for an attempted-but-failed metadata close;
+the real implementation correctly refused `INITIAL_CUSTODY_COPY_LEDGER_CHANGED`.
+Later assertions in that failed subcase were not completed. Independent original
+result-review SHA-256:
+`c12c56709a3076e31740b3690e45239db32a8e1ffb699bb288336196994662e7`.
+Test-only commit `8416c96d5c3c1732c88bee870824a1656cdb4d16` uses exact per-case
+refusals and adds causal original-row/attempted/closed/UNKNOWN assertions;
+it changes no production code, functional check or deadline. Independent source
+review SHA-256 `9c1166e1dd13c0e1b84ca584703010b4658d55b68fcf45a2fbd8eb4b415730c4`.
+
+Only corrected method3 and unrun methods4–16 were then selected at that commit,
+tree `4a8092113d4ea3bfac87acc95170b0af5ef9fd8e`. The single **crypto14** invocation
+at **2026-09-23T07:28:04Z–07:29:12Z** passed **14/14 controls +4/4 guards**:
+all three exits0, zero errors/skips/unexpected denials/ResourceWarnings,
+176 identical pre/post input checks and empty new work. The earlier two passed
+methods were not selected; their module necessarily remained an import input.
+There was no clean whole16 invocation. Old failed originals remain preserved.
+
+- Request/input-manifest SHA-256:
+  `79143c91a45e8d519081ebba1f053d248e872e4e727a2e9946dbe56d61e22f7d` /
+  `5bfc65ebf105f412803546aa37e09a36c7d67c7f19b03146e1fd07c05ea02e0a`.
+- Outer original capture-manifest SHA-256:
+  `d1a47aabe0f65c2cf9450b95e3f379743a2a20ab9a575e30809453754ec11d41`.
+- Independent verdict **APPROVE_EXACT_CRYPTO14_OFFLINE_RESULT_ONLY**;
+  report SHA-256 `8d0b21a88e1f7e550bc58a0f15a8b56a4bca6f60a84e9237ad4c43afd4689c17`.
+
+Candidate self-CPU through the post-suite sample was66.367362s; import/suite
+wall67.493498s, command wall67.645s, outer wall68.308s. Unchanged CPU180/wall240
+containment is not a functional window or hosted timing result. Tiny actual
+POSIX files and supplied native/GPG/export/clock boundaries do not establish
+genuine native encryption, canonical-init120, provider/cache/custody/scheduling
+or delivery qualification. Post-export authority, seal/upload and real caller
+integration remain; both ordinary HOLDs, whole-JVM interlock, productive125,
+native limits and bootstrap5400 **UNADMITTED / UNMEASURED** are unchanged.
+**Public development assets0/4; Release NOT_READY.**
+
 #### Stage1 canonical-context reader, not initialization authority
 
 The separate fixed `initial_recipient_context_record()` in
