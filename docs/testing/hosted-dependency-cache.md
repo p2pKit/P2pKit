@@ -1598,6 +1598,25 @@ A fresh remaining27-only request excludes this already-passed complete index
 control and all3 previously passed value controls; it is not a successful31
 aggregate, a retry of the consumed packet or hosted/native acceptance.
 
+The remaining27-only packet subsequently ran once at **2026-09-23T03:29:31Z–03:37:40Z**
+on `d9b361252ca42ef84303ce3ff4f7b40f1735e65a`, tree
+`bc09c20fdacff03fad828cb1e0584084e9692dfb`: **27/27 PASS +4 guards**, all exits0,
+no unexpected denials or ResourceWarnings. It selected7 index,5 crypto and15
+handoff models, excluding the four earlier passed worker methods and the accepted
+1,066-file reader. Process CPU was477.527996s; harness/command/launcher wall was
+488.024342/488.166/489.235s. The external CPU900/wall1200+kill2 safety envelope
+does not admit or widen a native/hosted phase. Both177-row integrity captures,
+102 public source copies,24 capture files and empty work were independently
+verified. Request/capture-manifest SHA-256:
+`0b8045115d74fc142f0fa18eb5b58e653e519def1269105e273d244ca5231754` /
+`892b3525403167f68f6cba416834aa287114aa4cd58b43b98f329557589ff92e`.
+Independent verdict: **ACCEPT_EXACT_WORKER27_OFFLINE_MODEL_RESULTS**, report
+SHA-256 `cffb83bee3b229d0a39531ef5fd3a92eeeeee7e75e5c114d6f6a0ec03c032d5d`.
+The disjoint worker methods now have individual passes, not a fresh31/31
+aggregate. Prior failed aggregates remain failed. Actual original copying,
+current authority, native/hosted init120, provider/cache/custody, scheduling and
+Release acceptance remain separate; both ordinary HOLDs and productive125 stay.
+
 ##### Closed Stage1 evidence adapter — reviewed source only
 
 [`hosted_initial_recipient_evidence.py`](../../scripts/hosted_initial_recipient_evidence.py)
