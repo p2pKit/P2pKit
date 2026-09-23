@@ -88,6 +88,13 @@ _SENDER_STEP_ATTEMPTS = {}
 _RECEIVING_INIT_ATTEMPTS = {}
 _RECEIVING_INIT_RETURNS = {}
 _RECEIVING_CLOSED_RETURNS = {}
+_GATE_CAPTURES = {}
+_GATE_RETURNS = {}
+_GATE_HANDOFF_ATTEMPTS = {}
+_GATE_USE_LOCK = threading.Lock()
+GATE_INVENTORY_SCOPE = "INITIAL_RECIPIENT_GATE_ORIGINAL_INDEX_V1"
+GATE_HANDOFF_SCOPE = "INITIAL_RECIPIENT_GATE_ORIGINALS_PENDING_HANDOFF_CLOSE_V1"
+GATE_HANDOFF_FILE = "gate-originals.json"
 
 
 @dataclass(frozen=True)
@@ -1095,10 +1102,465 @@ def read_phase(owner, private, context_raw, source, phase, fence):
     return (*result, (child_raw, session)) if entry or authority else result
 
 
+def _gate_query_index(path, session_raw, originals, *, source=None):
+    """Original session declarations only, NOT a replay or full byte rereader."""
+    require(type(session_raw) is bytes and 0 < len(session_raw) <= Q.MAX_RECEIPT_BYTES,
+            "GATE_QUERY_SESSION_BYTES")
+    session = O.parse(session_raw)
+    acquisition_root = source is None
+    keys = ORIGINAL_KEYS if acquisition_root else SOURCE_KEYS
+    require(type(originals) is dict and tuple(originals) == keys and
+        all(type(raw) is bytes for raw in originals.values()), "GATE_QUERY_ORIGINAL_KEYS")
+    require(session_raw == Q.encoded(session) and set(session) ==
+        {"schema", "scope", "job", "queries", "result", "retirement", "firstError", "errors", "readbacks"} and
+        type(session["schema"]) is int and session["schema"] == 1 and
+        session["scope"] == "ORDINARY_GIT_QUERIES_ONLY" and type(session["job"]) is str and
+        re.fullmatch(r"[0-9a-f]{32}", session["job"]) and session["result"] == "READY_FOR_CALLER_SEAL" and
+        session["retirement"] == "KNOWN" and session["firstError"] is None and session["errors"] == [] and
+        type(session["queries"]) is list and len(session["queries"]) == (24 if acquisition_root else 12) and
+        type(session["readbacks"]) is list, "GATE_QUERY_SESSION")
+    queries = session["queries"]
+    require(all(type(row) is dict and type(row.get("id")) is str and re.fullmatch(r"[0-9a-f]{32}", row["id"])
+        for row in queries) and len({row["id"] for row in queries}) == len(queries), "GATE_QUERY_IDS")
+    expected = [(path, "owner.json", None)]
+    if acquisition_root:
+        expected.append((path, "event.bin", None))
+    directories = [path, path / "query-home"]
+    for index, query in enumerate(queries):
+        target = path / ("query-" + query["id"])
+        directories.append(target)
+        limit = I.EVENT_LIMIT if index % 12 == 1 else I.POLICY_LIMIT if index % 12 == 11 else 4096
+        require(type(query.get("stdoutLimit")) is int and query["stdoutLimit"] == limit and
+            type(query.get("stderrLimit")) is int and query["stderrLimit"] == 4096 and
+            query.get("job") == session["job"] and query.get("state") == str(path) and
+            query.get("home") == str(path / "query-home") and query.get("cwd") == str(ROOT) and
+            query.get("launchAttempted") is True and query.get("scopeAttempted") is True and
+            type(query.get("waitExitCode")) is int and query["waitExitCode"] == 0 and
+            query.get("retirement") == "KNOWN" and query.get("result") == "READY_FOR_CALLER_SEAL" and
+            query.get("errors") == [] and query.get("ownedSurvivors") == [], "GATE_QUERY_RETURN")
+        expected.extend((target, name, query[name[:-4] + "Limit"] if name.endswith(".log") else None)
+            for name in ("start.json", "baseline.json", "stdout.log", "stderr.log", "result.json"))
+        if acquisition_root and index == 11:
+            expected.extend((path, name + ".bin", None) for name in (*SOURCE_KEYS, *HTTP_KEYS))
+    expected.extend((path, name + ".bin", None)
+        for name in (("observation", "match") if acquisition_root else SOURCE_KEYS))
+    require(len(session["readbacks"]) == len(expected), "GATE_QUERY_READBACK_ROSTER")
+    records, total = [], len(session_raw)
+    for row, (parent, name, limit) in zip(session["readbacks"], expected):
+        require(type(row) is dict and set(row) == {"parent", "name", "maximum", "retirement", "result", "bytes", "sha256"}
+            and row["parent"] == str(parent) and row["name"] == name and row["retirement"] == "KNOWN" and
+            row["result"] == "RETAINED" and type(row["bytes"]) is int and type(row["maximum"]) is int and
+            0 <= row["bytes"] <= row["maximum"] <= Q.MAX_RECEIPT_BYTES and row["maximum"] > 0 and
+            type(row["sha256"]) is str and re.fullmatch(r"[0-9a-f]{64}", row["sha256"]) and
+            row["maximum"] == (max(1, row["bytes"]) if limit is None else limit), "GATE_QUERY_READBACK")
+        require(row["bytes"] != 0 or row["sha256"] == O.digest(b""), "GATE_QUERY_EMPTY_DIGEST")
+        total += row["bytes"]
+        require(total <= Q.MAX_SESSION_BYTES, "GATE_QUERY_SESSION_LIMIT")
+        if parent == path and name.endswith(".bin"):
+            raw = originals[name[:-4]]
+            require(row["bytes"] == len(raw) and row["sha256"] == O.digest(raw), "GATE_QUERY_ORIGINAL_CHANGED")
+        records.append((parent / name, row["maximum"], row["bytes"], row["sha256"]))
+    records.append((path / "session-result.json", Q.MAX_RECEIPT_BYTES, len(session_raw), O.digest(session_raw)))
+    if source is not None:
+        require(type(source) is SourceReturn and source.session == session_raw and dict(source.records) == originals,
+                "GATE_QUERY_SOURCE_RETURN")
+        require(type(source.raw) is bytes and 0 < len(source.raw) <= native.LIMIT, "GATE_QUERY_SOURCE_BYTES")
+        side = O.parse(source.raw)
+        require(source.raw == O.encoded(side) and set(side) ==
+            {"schema", "scope", "originalsSha256", "sessionSha256", "clock", "returnedNs"} and
+            type(side["schema"]) is int and side["schema"] == 1 and side["scope"] == SOURCE_SCOPE and
+            side["originalsSha256"] == {name: O.digest(raw) for name, raw in originals.items()} and
+            side["sessionSha256"] == O.digest(session_raw), "GATE_QUERY_SOURCE_BINDING")
+        records.append((path / "source-return.json", native.LIMIT, len(source.raw), O.digest(source.raw)))
+    return records, directories
+
+
+def _gate_inventory(path, prelude_raw, context_raw, before, after, phase, match, chain, captured,
+                    child_raw, session_raw, result_raw):
+    """Fixed281-file/58-directory metadata index; only seven original native pins exist."""
+    require(type(match) is acquisition.gate.GateEligibility and type(match.record) is bytes and
+        type(before) is SourceReturn and type(after) is SourceReturn and type(phase) is native.OriginalPhase and
+        phase.context == context_raw and type(captured) is tuple and len(captured) == 5 and
+        captured[0] == context_raw and type(captured[1]) is tuple and
+        tuple(name for name, _raw in captured[1]) == ORIGINAL_KEYS, "GATE_ORIGINAL_INPUTS")
+    context, gate, pending = O.parse(context_raw), O.parse(match.record), O.parse(result_raw)
+    observed = context["observed"]
+    require(observed["kind"] == "gate" and observed["role"] == "linux-x64" and
+        observed["github"]["job"] == acquisition.gate.JOB and
+        (observed["github"]["runnerOS"], observed["github"]["runnerArch"]) == ("Linux", "X64") and
+        context["session"] == str(path) and context["prelude"] == O.parse(prelude_raw) and
+        gate["scope"] == "NONPRODUCTIVE_ELIGIBILITY" and gate["stage"] == "stage1" and
+        gate["github"] == observed["github"] and gate["source"] == gate["reviewed"] == observed["source"] and
+        gate["firstUseAt"] == observed["firstUseAt"] and gate["originalBase"] == acquisition.stages.BASE and
+        gate["policy"]["sha256"] == O.digest(dict(after.records)["candidate_policy_raw"]), "GATE_ORIGINAL_CONTEXT")
+    require(type(result_raw) is bytes and result_raw == O.encoded(pending) and pending["scope"] == RESULT_SCOPE and
+        pending["contextSha256"] == O.digest(context_raw) and pending["matchSha256"] == O.digest(match.record) and
+        pending["sourceBeforeSha256"] == O.digest(before.raw) and pending["sourceAfterSha256"] == O.digest(after.raw) and
+        pending["originalChain"] == chain and all(pending[name] is None for name in
+        ("workerIdentitySha256", "serviceTimeBasisSha256", "allocationProposalSha256")) and
+        pending["retirement"] == "PENDING_OWNER_CLOSE" and pending["exportSaveAuthority"] is False,
+        "GATE_ORIGINAL_PENDING")
+    original = dict(captured[1])
+    require(len(original) == len(ORIGINAL_KEYS) and all(type(raw) is bytes for raw in original.values()) and
+        original["match"] == match.record and {name: original[name] for name in SOURCE_KEYS} ==
+        dict(before.records) == dict(after.records) and
+        chain["childSha256"] == O.digest(child_raw) and chain["querySessionSha256"] == O.digest(session_raw) and
+        chain["originalsSha256"] == {name: O.digest(raw) for name, raw in original.items()} and
+        chain["phaseSha256"] == {name: O.digest(raw) for name, raw in phase.records}, "GATE_ORIGINAL_CHAIN")
+    child = O.parse(child_raw)
+    require(child["querySessionSha256"] == O.digest(session_raw) and child["matchSha256"] == O.digest(match.record) and
+        child["originalsSha256"] == chain["originalsSha256"] and child["invocation"] == captured[2],
+        "GATE_ORIGINAL_CHILD")
+    records, directories = [], [path, path / "control-home", path / "temporary", path / "service"]
+    for name, source, raw, data in (("source-before", before, before.session, dict(before.records)),
+            ("acquisition-queries", None, session_raw, original), ("source-after", after, after.session, dict(after.records))):
+        rows, paths = _gate_query_index(path / name, raw, data, source=source)
+        records.extend(rows)
+        directories.extend(paths)
+    for name, raw in (("prelude.json", prelude_raw), ("context.json", context_raw), ("initial-result.json", result_raw),
+            *(("service/" + name, raw) for name, raw in phase.records), ("service/child-result.json", child_raw)):
+        require(type(raw) is bytes and len(raw) <= native.LIMIT, "GATE_ORIGINAL_RECORD_LIMIT")
+        records.append((path / name, native.LIMIT, len(raw), O.digest(raw)))
+    require(len(records) == len({item[0] for item in records}) == 281 and
+        len(directories) == len(set(directories)) == 58, "GATE_ORIGINAL_COMPLETE_ROSTER")
+    raw = O.encoded({"schema": 1, "scope": GATE_INVENTORY_SCOPE, "root": str(path),
+        "contextSha256": O.digest(context_raw), "initialOriginalsSha256": O.digest(result_raw),
+        "gateEligibilitySha256": O.digest(match.record), "source": observed["source"], "github": observed["github"],
+        "policy": gate["policy"], "directories": sorted(str(item.relative_to(path)) for item in directories),
+        "files": [{"relative": str(target.relative_to(path)), "maximum": maximum, "bytes": count, "sha256": digest}
+            for target, maximum, count, digest in sorted(records)],
+        "copyState": "ORIGINAL_BYTES_NOT_COPIED", "nestedNativePins": "NOT_CAPTURED", "exportSaveAuthority": False})
+    require(len(raw) <= native.LIMIT, "GATE_ORIGINAL_INDEX_LIMIT")
+    return raw
+
+
+class _GateRoster:
+    """One frozen full native ledger, not Owner.closed alone or a new worker guardian."""
+    def __init__(self, owner):
+        require(type(owner) is native.Owner and type(owner.resources) is list and type(owner.errors) is list and
+            type(owner.initial_sources) is dict and not owner.closed and not owner.unknown and
+            owner.original is None and owner.errors == [], "GATE_CLOSE_OWNER")
+        self.owner, self.dictionary = owner, owner.__dict__
+        self.rows, self.errors, self.sources = owner.resources, owner.errors, owner.initial_sources
+        self.fence, self.cancelled, self.first = owner.fence, owner.cancelled, owner.first
+        self.local, self.limits, self.early = owner.local_end, (owner.work_limit, owner.final_limit), owner.early_last
+        self.phase = owner.phase_originals
+        self.frozen = tuple((row, row.get("label"), row.get("owner"), row.get("attempted"), row.get("closed"))
+            for row in self.rows if type(row) is dict)
+        self.graph = _history_graph(self.sources, self.phase)
+        self._binding = tuple((name, getattr(self, name)) for name in
+            ("owner", "dictionary", "rows", "errors", "sources", "fence", "cancelled", "first", "local", "limits", "early",
+             "phase", "frozen", "graph"))
+        self.check(closed=False)
+
+    def check(self, *, closed):
+        require(type(self._binding) is tuple and len(self._binding) == 14 and all(getattr(self, name) is saved
+            for name, saved in self._binding), "GATE_CLOSE_SNAPSHOT_CHANGED")
+        owner = self.owner
+        require(type(owner) is native.Owner and owner.__dict__ is self.dictionary and owner.resources is self.rows and
+            owner.errors is self.errors and owner.initial_sources is self.sources and owner.phase_originals is self.phase and
+            owner.fence is self.fence and owner.cancelled is self.cancelled and owner.first is self.first and
+            type(owner.local_end) is float and owner.local_end == self.local and owner.early_last == self.early and
+            all(type(a) is type(b) and a == b for a, b in zip((owner.work_limit, owner.final_limit), self.limits)) and
+            owner.closed is closed and owner.unknown is False and owner.original is None and self.errors == [] and
+            not native.QUARANTINE and not Q.QUARANTINE and not native.diagnostics._QUARANTINE,
+            "GATE_CLOSE_OWNER_CHANGED")
+        require(len(self.rows) == len(self.frozen) == len({id(row) for row, *_ in self.frozen}) ==
+            len({id(resource) for _row, _label, resource, _a, _c in self.frozen}), "GATE_CLOSE_ROSTER_CHANGED")
+        for current, (row, label, resource, attempted, was_closed) in zip(self.rows, self.frozen):
+            require(current is row and type(row) is dict and set(row) == {"label", "owner", "attempted", "closed"} and
+                type(label) is str and label in ("directory", "writer", "stdout", "stderr", "native-scope") and
+                row["label"] == label and row["owner"] is resource and type(attempted) is bool and
+                type(was_closed) is bool and (not was_closed or attempted) and
+                type(row["attempted"]) is bool and type(row["closed"]) is bool and
+                ((row["attempted"] and row["closed"]) if closed else
+                 (row["attempted"] == attempted and row["closed"] == was_closed)), "GATE_CLOSE_RESOURCE_CHANGED")
+        _check_history(self.graph)
+
+
+@dataclass(frozen=True, repr=False)
+class _GateCapture:
+    raw: bytes
+    owner: object
+    root: object
+    match: object
+    result_raw: bytes
+    pins: tuple
+    roster: object
+
+
+def _gate_names(owner, directory, expected, *, final=False):
+    """Linux gate only; the closed expected roster also bounds the native listing."""
+    owner.end(final=final)
+    directory.verify()
+    names = []
+    with os.scandir(directory.path) as entries:
+        for entry in entries:
+            owner.end(final=final)
+            require(len(names) < max(1, len(expected)), "GATE_DIRECTORY_LIMIT")
+            names.append(entry.name)
+    require(len(names) == len(set(names)) and tuple(sorted(names)) == tuple(sorted(expected)), "GATE_DIRECTORY_ROSTER")
+    directory.verify()
+    owner.end(final=final)
+
+
+def _capture_gate_originals(owner, private, context_raw, before, after, phase, match, chain, captured, result_raw, cancelled):
+    require(type(owner) is native.Owner and type(owner.fence) is O.Fence and owner.fence.clock.role == "linux-x64" and
+        owner.phase_originals is phase and owner.initial_sources ==
+        {str(private.path / "source-before"): before, str(private.path / "source-after"): after} and
+        owner.initial_sources[str(private.path / "source-before")] is before and
+        owner.initial_sources[str(private.path / "source-after")] is after, "GATE_ORIGINAL_OWNER")
+    # Exactly two extra original reads; no query or service operation is replayed.
+    service = owner.child(private, "service")
+    child_raw = owner.read(service, "child-result.json")
+    queries = owner.open(private.path / "acquisition-queries")
+    session_raw = owner.read(queries, "session-result.json")
+    raw = _gate_inventory(private.path, owner.fence.raw, context_raw, before, after, phase, match, chain, captured,
+                          child_raw, session_raw, result_raw)
+    inventory = O.parse(raw)
+    # Freeze retained originals immediately, before listing/verification callbacks or close.
+    graph = _history_graph(before, after, phase, match.__dict__, chain, captured, inventory, private.path)
+    pins, identities = [], {}
+    expected = {private.path, *(private.path / name for name in
+        ("control-home", "temporary", "service", "source-before", "source-after", "acquisition-queries"))}
+    for row in tuple(owner.resources):
+        if row["label"] != "directory":
+            continue
+        directory = row["owner"]
+        require(type(directory) is Q._PosixDirectory and directory.path in expected and
+            row["attempted"] is False and row["closed"] is False, "GATE_ORIGINAL_DIRECTORY")
+        target, original_path = directory.path, directory.path
+        identity = tuple(native.directory_identity(list(directory.identity), "linux-x64"))
+        require(target not in identities or identities[target] == identity, "GATE_ORIGINAL_REPEATED_PIN")
+        identities[target] = identity
+        pins.append((directory, original_path, str(target), identity))
+    require(set(identities) == expected and len(identities) == 7 and
+        len(set(identities.values())) == 7, "GATE_ORIGINAL_PIN_ROSTER")
+    pin_graph = _history_graph(tuple(path for _directory, path, _text, _identity in pins))
+    for target in sorted(expected):
+        directory = next(item for item, _path, text, _identity in pins if text == str(target))
+        relative = target.relative_to(private.path)
+        members = [Path(name).name for name in inventory["directories"] if name != "." and Path(name).parent == relative]
+        members.extend(Path(row["relative"]).name for row in inventory["files"] if Path(row["relative"]).parent == relative)
+        _gate_names(owner, directory, members)
+        _check_history(graph)
+        _check_history(pin_graph)
+    owner.end()
+    native.cancellation(cancelled)
+    _check_history(graph)
+    _check_history(pin_graph)
+    roster = _GateRoster(owner)
+    capture = _GateCapture(raw, owner, private.path, match, result_raw, tuple(pins), roster)
+    # The pre-close anchor is independent of the later preparation/return registry.
+    anchor = (capture, raw, private.path, match, match.record, result_raw, capture.pins, roster, roster.frozen,
+        graph, pin_graph, _GATE_CAPTURES, _GATE_RETURNS, _PREPARED_RETURNS, cancelled,
+        owner.fence, owner.fence.raw, owner.fence.cancelled, owner.local_end, roster._binding)
+    require(id(owner) not in _GATE_CAPTURES and not hasattr(owner, "_gate_capture_anchor"), "GATE_CAPTURE_REUSE")
+    owner._gate_capture_anchor = anchor  # Original owner anchor, never learned from a replacement return.
+    _GATE_CAPTURES[id(owner)] = anchor
+    _check_gate_capture(anchor, closed=False)
+    owner.end()  # Collection AND the completed freeze must fit original WORK75, not only FINAL120.
+    _check_gate_capture(anchor, closed=False)  # That last fallible clock/cancellation cannot replace the snapshot.
+    return anchor
+
+
+def _check_gate_capture(anchor, *, closed):
+    require(type(anchor) is tuple and len(anchor) == 20, "GATE_CAPTURE_BINDING")
+    capture, raw, root, match, match_raw, result_raw, pins, roster, frozen, graph, pin_graph, captures, returns, prepared, \
+        cancelled, fence, prelude, cancel_check, local, roster_binding = anchor
+    require(type(capture) is _GateCapture and type(capture.owner) is native.Owner and
+        capture.owner._gate_capture_anchor is anchor and captures is _GATE_CAPTURES and
+        captures.get(id(capture.owner)) is anchor and returns is _GATE_RETURNS and prepared is _PREPARED_RETURNS and
+        type(capture.raw) is bytes and capture.raw == raw and capture.root is root and capture.match is match and
+        type(match.record) is bytes and match.record == match_raw and type(capture.result_raw) is bytes and
+        capture.result_raw == result_raw and capture.pins is pins and capture.roster is roster and
+        type(roster) is _GateRoster and roster.owner is capture.owner and roster.frozen is frozen and
+        roster._binding is roster_binding and
+        capture.owner.fence is fence and type(cancelled) is list and cancelled == [], "GATE_CAPTURE_CHANGED")
+    _original_limits(capture.owner, fence, prelude, local, cancel_check)
+    roster.check(closed=closed)
+    _check_history(graph)
+    _check_history(pin_graph)
+    for directory, path, text, identity in pins:
+        require(type(directory) is Q._PosixDirectory and directory.path is path and str(path) == text and
+            type(directory.identity) is tuple and tuple(directory.identity) == identity and
+            all(type(a) is type(b) for a, b in zip(directory.identity, identity)) and directory.closed is closed,
+            "GATE_ORIGINAL_PIN_CHANGED")
+    return capture
+
+
+def _register_gate_return(original, anchor, closed_ns):
+    capture = _check_gate_capture(anchor, closed=True)
+    binding = _preparation_binding(original)
+    require(binding.original is original and binding.owner is capture.owner and binding.match is capture.match and
+        binding.raw == capture.result_raw and binding.identity is None and binding.worker_originals is None and
+        binding.service_time_raw is None and binding.proposal_raw is None and original.raw == capture.result_raw and
+        original.identity is None and original.service_time_raw is None and original.proposal_raw is None and
+        original._cancelled is anchor[14] and binding.cancelled is anchor[14] and
+        binding.last_ns == closed_ns == capture.owner.fence.last, "GATE_PREPARATION_BINDING")
+    entry = (original, binding, anchor, O.integer(closed_ns), original.raw, original._match,
+        binding.prelude_raw, binding.local_end, binding.cancel_check, _GATE_RETURNS)
+    require(id(original) not in _GATE_RETURNS and not hasattr(capture.owner, "_gate_closed_entry"), "GATE_PREPARATION_REUSE")
+    capture.owner._gate_closed_entry = entry
+    _GATE_RETURNS[id(original)] = entry
+    return entry
+
+
+def _gate_return(original):
+    entry = _GATE_RETURNS.get(id(original))
+    require(type(entry) is tuple and len(entry) == 10 and entry[0] is original and entry[9] is _GATE_RETURNS and
+        _preparation_binding(original) is entry[1], "NOT_ORIGINAL_GATE_RETURN")
+    binding, anchor = entry[1], entry[2]
+    capture = _check_gate_capture(anchor, closed=True)
+    require(capture.owner._gate_closed_entry is entry and binding.owner is capture.owner and
+        original._owner is capture.owner and original._fence is anchor[15] and
+        original._cancelled is binding.cancelled is anchor[14] and original._match is binding.match is entry[5] is capture.match and
+        type(original.raw) is bytes and type(binding.raw) is bytes and original.raw == binding.raw == entry[4] == capture.result_raw and
+        type(binding.match_raw) is bytes and binding.match_raw == anchor[4] and binding.identity is None and binding.identity_fields is None and
+        binding.worker_originals is None and binding.service_time_raw is None and binding.proposal_raw is None and
+        original.identity is None and original.service_time_raw is None and original.proposal_raw is None and
+        type(binding.prelude_raw) is bytes and binding.prelude_raw == entry[6] == anchor[16] and
+        type(binding.local_end) is float and binding.local_end == entry[7] == anchor[18] and
+        binding.cancel_check is entry[8] is anchor[17] and type(binding.last_ns) is int and binding.last_ns == entry[3],
+        "GATE_RETURN_CHANGED")
+    return entry
+
+
+def _retain_gate_handoff(original):
+    entry = _gate_return(original)
+    binding, anchor, closed_ns = entry[1:4]
+    capture = anchor[0]
+    with _GATE_USE_LOCK:
+        require(_GATE_RETURNS.get(id(original)) is entry and id(original) not in _GATE_HANDOFF_ATTEMPTS,
+                "GATE_HANDOFF_ALREADY_CONSUMED")
+        require(not hasattr(capture.owner, "_gate_handoff_attempt"), "GATE_HANDOFF_ALREADY_CONSUMED")
+        marker = object()
+        retained = []
+        attempt = (original, marker, retained)
+        capture.owner._gate_handoff_attempt = attempt
+        _GATE_HANDOFF_ATTEMPTS[id(original)] = attempt  # Sticky before callbacks/I/O, also on failure.
+    attempts = _GATE_HANDOFF_ATTEMPTS
+    fence, local, cancelled = binding.fence, binding.local_end, binding.cancelled
+    owner = roster = roster_binding = raw = pin = None
+    failure, busy, final_calls, last, local_last = None, False, 0, closed_ns, None
+    phase = "METADATA"
+
+    def passive():
+        if failure is not None:
+            raise failure
+        require(_gate_return(original) is entry and attempts is _GATE_HANDOFF_ATTEMPTS and
+            attempts.get(id(original)) is attempt and capture.owner._gate_handoff_attempt is attempt,
+                "GATE_HANDOFF_CHANGED")
+        O.integer(fence.last, last)
+        if roster is not None:
+            require(roster._binding is roster_binding, "GATE_HANDOFF_CLOSE_BINDING_CHANGED")
+            roster.check(closed=True)
+        if pin is not None:
+            directory, path, identity = pin
+            require(directory.path is path and tuple(directory.identity) == identity and
+                all(type(a) is type(b) for a, b in zip(directory.identity, identity)) and
+                directory.closed is (roster is not None), "GATE_HANDOFF_PIN_CHANGED")
+
+    def check():
+        nonlocal failure, busy, last, local_last
+        if failure is not None:
+            raise failure
+        if busy:
+            failure = O.OriginError("GATE_HANDOFF_REENTRY")
+            raise failure
+        busy = True
+        try:
+            passive()
+            native.cancellation(cancelled)
+            value = fence.now(final=True, minimum=last)
+            last = fence.last
+            sample = time.monotonic()
+            require(type(sample) in (int, float) and math.isfinite(sample) and
+                (local_last is None or sample >= local_last) and sample < local, "GATE_HANDOFF_LOCAL_EXPIRED")
+            local_last = sample
+            native.posix._deadline(local)
+            native.cancellation(cancelled)
+            passive()
+            return value
+        except BaseException as error:
+            failure = error
+            raise
+        finally:
+            # Even a failed final observation cannot be erased to revive this use.
+            if type(fence.last) is int:
+                last = max(last, fence.last)
+            busy = False
+
+    class OutputFence:
+        final = fence.final
+
+        def now(self, *, final=False, limit=None):
+            nonlocal final_calls, failure
+            try:
+                require(phase == "OUTPUT" and final is True and type(limit) is int and
+                    limit == self.final == fence.final and final_calls < 2, "GATE_FINAL_OUTPUT_ONLY")
+                final_calls += 1
+                return check()
+            except BaseException as error:
+                failure = failure or error
+                raise failure
+
+    try:
+        check()
+        owner = native.Owner(local, fence, cancelled=anchor[17])
+        retained.append(owner)
+        owner.initial_sources = {}
+        check()
+        path = capture.root.with_name(capture.root.name + "-handoff")
+        directory = owner.acquire("directory", lambda: Q._new_private_directory(path), final=True)
+        pin = (directory, directory.path, tuple(native.directory_identity(list(directory.identity), "linux-x64")))
+        check()
+        _gate_names(owner, directory, (), final=True)
+        check()
+        raw = owner.write(directory, GATE_HANDOFF_FILE, {"schema": 1, "scope": GATE_HANDOFF_SCOPE,
+            "directory": str(path), "directoryIdentity": list(pin[2]), "inventory": O.parse(capture.raw),
+            "gateEligibility": O.parse(capture.match.record), "originalClosedNs": closed_ns,
+            "clock": O.clock_value(fence.clock), "preludeSha256": O.digest(binding.prelude_raw),
+            "originalClose": {"retirement": "KNOWN", "resources": [label for _row, label, _resource, _a, _c in capture.roster.frozen]},
+            "originalNativeDirectories": [{"path": text, "identity": list(identity)} for text, identity in
+                sorted({(text, identity) for _directory, _path, text, identity in capture.pins})],
+            "writerReturn": "PENDING_OWNER_CLOSE", "originalStepOutcome": "NOT_OBSERVED",
+            "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False}, final=True)
+        check()
+        require(owner.read(directory, GATE_HANDOFF_FILE, final=True) == raw, "GATE_HANDOFF_READBACK")
+        _gate_names(owner, directory, (GATE_HANDOFF_FILE,), final=True)
+        check()
+        roster = _GateRoster(owner)
+        roster_binding = roster._binding
+        retained.append(roster)
+    except BaseException as error:
+        failure = failure or error
+        if owner is not None:
+            owner.error("gate-handoff", error)
+    finally:
+        if owner is not None:
+            try:
+                owner.close()
+            except BaseException as error:
+                owner.error("gate-handoff-close", error)
+            if failure is None:
+                failure = owner.original
+    if failure is not None:
+        raise failure
+    require(owner is not None and roster is not None and raw is not None, "GATE_HANDOFF_INCOMPLETE")
+    check()
+    continuity.append_outputs({"initialOriginalsSha256": O.digest(original.raw), "gateHandoffSha256": O.digest(raw)}, check)
+    check()
+    phase = "OUTPUT"
+    value = native.public_result(OUTPUT_SCOPE, "initialOriginalsSha256", original.raw)
+    value["gateHandoffSha256"] = O.digest(raw)
+    return value, OutputFence(), fence.final
+
+
 def _prepare_with_token(cancelled, token):
     """Borrow only the outer parent's stack reference; never reinstall ambient credentials."""
     owner = None
-    private = result_raw = worker_identity = worker_originals = service_time_raw = proposal_raw = None
+    private = result_raw = worker_identity = worker_originals = service_time_raw = proposal_raw = gate_anchor = None
     try:
         first = O.clocks.validate_reading(O.clocks.observe())
         cancel_check = lambda: native.cancellation(cancelled)
@@ -1149,6 +1611,9 @@ def _prepare_with_token(cancelled, token):
             "serviceTimeBasisSha256": None if service_time_raw is None else O.digest(service_time_raw),
             "allocationProposalSha256": None if proposal_raw is None else O.digest(proposal_raw),
             "qualificationAcceptance": "NOT_ESTABLISHED", "exportSaveAuthority": False})
+        if worker_identity is None:
+            gate_anchor = _capture_gate_originals(owner, private, context_raw, before, after, phase, match, chain,
+                captured, result_raw, cancelled)
     except BaseException as error:
         if owner is None:
             raise
@@ -1176,13 +1641,15 @@ def _prepare_with_token(cancelled, token):
         require(worker_identity == initial_identity.bind_worker_match(match, event_raw=event,
             policy_raw=worker_identity.original_policy, now=int(time.time())), "WORKER_IDENTITY_CHANGED")
     _original_limits(owner, fence, prelude_raw, local_end, cancel_check)
-    fence.now(final=True)
+    closed_ns = fence.now(final=True)
     native.posix._deadline(local_end)
     native.cancellation(cancelled)
     original = _OriginalPreparation(result_raw, worker_identity, service_time_raw, proposal_raw, owner, fence, cancelled, match)
     _PREPARED_RETURNS[id(original)] = _PreparationBinding(original, result_raw, worker_identity,
         None if worker_identity is None else _worker_fields(worker_identity), match, match.record, owner, fence,
         prelude_raw, local_end, cancelled, cancel_check, fence.last, worker_originals, service_time_raw, proposal_raw)
+    if worker_identity is None:
+        _register_gate_return(original, gate_anchor, closed_ns)
     return original
 
 
@@ -6032,6 +6499,8 @@ def _prepare_originals(cancelled):
 
 def prepare_originals(cancelled):
     original = _prepare_originals(cancelled)
+    if original.identity is None:
+        return _retain_gate_handoff(original)
     # The CLI still emits only a pending-step digest. It does not serialize or
     # transfer the original-call capability or issue productive Admission.
     return native.public_result(OUTPUT_SCOPE, "initialOriginalsSha256", original.raw), original._fence, original._fence.final

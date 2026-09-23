@@ -106,12 +106,22 @@ class NativeModels(unittest.TestCase):
         N._ENTRY_WINDOWS.clear()
         N._READMISSION_RETURNS.clear()
         N._READMISSION_ATTEMPTS.clear()
+        N._GATE_CAPTURES.clear()
+        N._GATE_RETURNS.clear()
+        N._GATE_HANDOFF_ATTEMPTS.clear()
 
     def choose(self, kind, selection):
         self.fixture.choose(kind, selection)
         self.event.write_bytes(I.encoded(self.fixture.event))
         env = dict(self.fixture.env, GITHUB_WORKSPACE=str(ROOT), GITHUB_EVENT_PATH=str(self.event), RUNNER_TEMP=str(self.base),
                    GITHUB_TOKEN="UNRELATED_SYNTHETIC_TOKEN")
+        if kind == "gate":
+            commands = self.base / "_runner_file_commands"
+            commands.mkdir(mode=0o700, exist_ok=True)
+            self.output = commands / "set_output_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+            self.output.write_bytes(b"")
+            self.output.chmod(0o600)
+            env["GITHUB_OUTPUT"] = str(self.output)
         env[O.wire.TOKEN_ENV] = TOKEN
         os.environ.clear()
         os.environ.update(env)
@@ -126,7 +136,15 @@ class NativeModels(unittest.TestCase):
                 self.deadlines, self.calls, self.host_checked = owner_deadlines, [], False
                 self.executable, self.records = str(case.git_executable), []
                 self.private = Q._new_private_directory(path)
+                self.gate, self.readbacks, self.home = case.fixture.context["kind"] == "gate", [], None
                 case.queries.append(self)
+                if self.gate:
+                    # Gate custody indexes the real tiny files and readbacks of
+                    # this explicit supplier model. No native query runs here.
+                    self.home = self.private.create_directory("query-home", deadline=self.deadlines[1])
+                    self._write(self.private, "owner.json", {"schema": 1, "scope": "ORDINARY_GIT_QUERIES_ONLY",
+                        "job": "a" * 32, "state": str(path), "home": str(self.home.path), "root": str(root),
+                        "nativeRole": "linux-x64", "git": self.executable, "ancestorContext": Q._inherited_context()})
             def native_host_matches_actions(self):
                 self.host_checked = True
                 case.assertNotIn(O.wire.TOKEN_ENV, os.environ)
@@ -155,27 +173,52 @@ class NativeModels(unittest.TestCase):
                 case.assertEqual(kwargs["argv"][0], self.executable)
                 # Only a returned modeled call gets a successful modeled row.
                 # These are NOT native process observations or complete custody.
-                self.records.append({"argv": list(kwargs["argv"]), "job": "a" * 32,
+                record = {"argv": list(kwargs["argv"]), "job": "a" * 32,
                     "state": str(path), "home": str(path / "query-home"), "cwd": str(kwargs["cwd"]),
                     "launchAttempted": True, "scopeAttempted": True, "waitExitCode": 0,
-                    "retirement": "KNOWN", "result": "READY_FOR_CALLER_SEAL", "errors": [], "ownedSurvivors": []})
+                    "retirement": "KNOWN", "result": "READY_FOR_CALLER_SEAL", "errors": [], "ownedSurvivors": []}
+                if self.gate:
+                    invocation = f"{len(self.records) + 1:032x}"
+                    record.update(id=invocation, stdoutLimit=kwargs["stdout_limit"], stderrLimit=kwargs["stderr_limit"])
+                    directory = self.private.create_directory("query-" + invocation, deadline=self.deadlines[1])
+                    try:
+                        # Native process-history contents remain explicitly
+                        # modeled. The five file/readback positions and limits
+                        # are the maintained native supplier's exact grammar.
+                        self._write(directory, "start.json", {"schema": 1, "scope": "SYNTHETIC_GATE_QUERY_START_ONLY",
+                            "id": invocation, "argv": list(kwargs["argv"])})
+                        self._write(directory, "baseline.json", {"nativeRole": "linux-x64", "baseline": [], "kernelJob": False})
+                        self._write(directory, "stdout.log", raw, maximum=kwargs["stdout_limit"])
+                        self._write(directory, "stderr.log", b"", maximum=kwargs["stderr_limit"])
+                        self._write(directory, "result.json", record)
+                    finally:
+                        directory.close()
+                self.records.append(record)
                 return raw
-            def _write(self, directory, name, raw):
+            def _write(self, directory, name, raw, *, maximum=None):
                 if type(raw) is not bytes:
                     raw = O.encoded(raw)
-                stream = directory.create_file(name, max_bytes=max(1, len(raw)), deadline=self.deadlines[1])
+                limit = max(1, len(raw)) if maximum is None else maximum
+                stream = directory.create_file(name, max_bytes=limit, deadline=self.deadlines[1])
                 try:
                     case.assertEqual(stream.write(raw), len(raw))
                     stream.sync()
                 finally:
                     stream.close()
+                if self.gate:
+                    returned = directory.read_bytes(name, max_bytes=limit, deadline=self.deadlines[1])
+                    case.assertEqual(returned, raw)
+                    self.readbacks.append({"parent": str(directory.path), "name": name, "maximum": limit,
+                        "retirement": "KNOWN", "result": "RETAINED", "bytes": len(returned), "sha256": O.digest(returned)})
             def _finalize(self, failure):
                 self.finalizations += 1
                 case.assertEqual(self.finalizations, 1)
                 self._write(self.private, "session-result.json", {"schema": 1, "scope": "ORDINARY_GIT_QUERIES_ONLY",
-                    "job": "a" * 32, "queries": self.records, "readbacks": [],
+                    "job": "a" * 32, "queries": self.records, "readbacks": self.readbacks if self.gate else [],
                     "result": "READY_FOR_CALLER_SEAL" if failure is None else "HOLD", "retirement": "KNOWN",
                     "firstError": None if failure is None else "SYNTHETIC_QUERY_FAILURE", "errors": [] if failure is None else ["SYNTHETIC"]})
+                if self.home is not None:
+                    self.home.close()
                 self.private.close()
                 self.closed = True
                 case.after_query_close(path)

@@ -1478,6 +1478,32 @@ These are disjoint exact-source model results, **not a fresh repaired-source
 accepted1,066-file reader, old suite or preview build was rerun. Complete custody,
 actual exporter return/seal/upload and genuine hosted qualification remain.
 
+##### Gate original index and closed handoff — source preparation
+
+The gate-only preparation now retains a fixed **281-file /58-directory** index
+from its original source/service returns and two extra child/session readbacks.
+Its266 ordered query declarations include240 captures and all three owner
+records; available original bytes, empty files, existing member/session bounds
+and exact declared names stay checked. Only **seven** root/immediate-child
+native directory identities actually exist in the original parent. The other
+51 expected directories are not retroactively claimed as native pins.
+
+A separate original-owner anchor freezes the gate records, directory pins and
+entire resource ledger before close. The authentic prepared entry and known
+complete original close bind a one-shot, fresh fixed sibling
+`-handoff/gate-originals.json`. This small metadata owner uses only the remainder
+of the original FINAL120/LOCAL ceiling; it neither reopens the old owner nor
+extends WORK75. Its known complete close precedes one fixed two-hash runner
+append and the two unchanged final guarded checks. Handoff bytes still mark
+their own writer/Step outcome as pending, not self-certified success.
+
+This source preparation is **UNEXECUTED / NOT_HOSTED_QUALIFIED**. Worker return
+contracts and the accepted reader are unchanged. Actual successful Steps,
+complete worker history, fresh recipient custody, byte copying, exporter return,
+sealing and14-day upload for both jobs remain required before dispatch. Both
+ordinary HOLDs, productive125, original job/component bounds, bootstrap5400
+UNADMITTED/UNMEASURED and every Release gate remain intact.
+
 #### Stage1 canonical-context reader, not initialization authority
 
 The separate fixed `initial_recipient_context_record()` in
