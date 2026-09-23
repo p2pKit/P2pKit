@@ -360,8 +360,35 @@ class WorkerIndexControls(unittest.TestCase):
         def authority(*args):
             self.assertFalse(args[2].closed)
             self.assertFalse(N._WORKER_AUTHORITY_RETURNS)
+            # Repeated opens retain separate original owner rows: this fixture
+            # has thirteen handles for seven unique authority directories.
+            owner, root = args[2], self.m.roots["I"] / "authority"
+            targets = {"I/authority" + ("/" + name if name else ""): root / name for name in
+                ("", "control-home", "temporary", "service", "source-before", "source-after", "acquisition-queries")}
+            original_pins = [(row, row["owner"], row["owner"].path, tuple(row["owner"].identity)) for row in owner.resources
+                if row["label"] == "directory" and row["owner"].path in targets.values()]
             anchor = capture(*args)
-            self.assertEqual((len(anchor[0].files), len(anchor[0].directories), len(anchor[0].pins)), (281, 58, 7))
+            pins = anchor[0].pins
+            self.assertIs(anchor[0].owner, owner)
+            self.assertEqual((len(anchor[0].files), len(anchor[0].directories), len(pins)), (281, 58, 13))
+            self.assertEqual([id(pin[1]) for pin in pins], [id(row) for row, *_ in original_pins])
+            self.assertEqual(len({id(row) for row, *_ in original_pins}), 13)
+            self.assertEqual({pin[0] for pin in pins}, set(targets))
+            self.assertEqual(len({pin[4] for pin in pins}), 7)
+            for captured_pin, original_pin in zip(pins, original_pins):
+                key, row, directory, path, identity = captured_pin
+                original_row, original_directory, original_path, original_identity = original_pin
+                self.assertIs(row, original_row)
+                self.assertIs(directory, original_directory)
+                self.assertIs(directory, row["owner"])
+                self.assertIs(path, original_path)
+                self.assertIs(path, directory.path)
+                self.assertEqual(path, targets[key])
+                self.assertEqual(identity, original_identity)
+                self.assertEqual(identity, tuple(directory.identity))
+                self.assertEqual(identity, tuple(self.m.identity(targets[key])))
+                self.assertIs(row["attempted"], False)
+                self.assertIs(row["closed"], False)
             self.assertEqual(sum(row["provenance"] == "ACTUAL_RETAINED_BYTES" for row in anchor[0].files), 38)
             seen.append("authority")
             return anchor
