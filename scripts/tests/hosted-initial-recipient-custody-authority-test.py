@@ -663,7 +663,9 @@ class CallerRig(Harness):
         check()
         if self.source_failure is not None:
             raise self.source_failure
-        self.clock.advance(1 if supplier.path.name == "source-before" else 20)
+        # Offset19 is the returned phase frontier; offset20 is the gate's
+        # exclusive original WORK end. Nondecreasing equal samples are valid.
+        self.clock.advance(1 if supplier.path.name == "source-before" else 19)
         check()
         return {name: self.fixture.originals[name] for name in D.N.SOURCE_KEYS}
 
