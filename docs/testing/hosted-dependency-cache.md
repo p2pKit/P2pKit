@@ -1504,6 +1504,26 @@ sealing and14-day upload for both jobs remain required before dispatch. Both
 ordinary HOLDs, productive125, original job/component bounds, bootstrap5400
 UNADMITTED/UNMEASURED and every Release gate remain intact.
 
+The subsequent exact-source packet passed **29/29 new gate controls and4/4
+fresh guards**, once at2026-09-23T01:41:45Z–01:41:53Z, source
+`d6a605687ee1ff5b7f9c22078e517c56e5270c22`, tree
+`019ab0b67c9528c600957d152565b10779d42201`. Command/wrapper exits were0/0;
+CPU7.166589s, import/suite wall7.133422s and shell wall7.257s. Both169-entry
+integrity captures matched, with no unexpected denials/ResourceWarnings and
+empty work after cleanup. Only8 inventory+5 parent+16 handoff methods ran;
+no accepted reader, crypto suite, old method, native child or preview was rerun.
+Request SHA-256:
+`ab1f57805928914ef30008eeb0956c2430867cbc31ababbc18f0c3429bdb8186`.
+Original-capture manifest SHA-256:
+`197908f0f3e3510e49428c672b7225f9536d976d7fb6ed7a88b0b9fcb7b0839d`.
+Independent original-result review accepted only this29+4 model scope, report
+SHA-256 `c2d4a42fe26c626e18bd2b21b10f8f8c09cee4629a838e2bd48da5966490563a`.
+The external CPU60/wall90+kill2 safety envelope did not change WORK75,
+FINAL120 or init120. These are **not actual primary-Step, native, encrypted
+custody or hosted timing results**. Worker handoff and both jobs' exact copying,
+fresh public-recipient validation, exporter return, seal/upload and genuine
+qualification still block dispatch; productive125 and ordinary HOLDs remain.
+
 #### Stage1 canonical-context reader, not initialization authority
 
 The separate fixed `initial_recipient_context_record()` in
