@@ -9,7 +9,7 @@ UPLOAD = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
 READ = {"contents" => "read", "actions" => "read", "checks" => "read", "pull-requests" => "read", "deployments" => "read"}.freeze
 COMMAND = "python3 -I -B -S scripts/publish-sample-release.py"
 ARGS = ' --source "$SOURCE" --producer "$PRODUCER" --attempt "$ATTEMPT"'
-ADMIT_IF = %q!${{ github.repository == 'p2pKit/P2pKit' && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || (contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event.workflow_run.event) && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success')) }}!
+ADMIT_IF = %q!${{ github.repository == 'p2pKit/P2pKit' && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success' && ((github.event.workflow_run.name == 'Publish Maven Central' && github.event.workflow_run.event == 'push' && startsWith(github.event.workflow_run.head_branch, 'v')) || (contains(fromJSON('["Desktop cross-host","CI","OSV Advisory Scan"]'), github.event.workflow_run.name) && github.event.workflow_run.head_branch == 'main' && contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event.workflow_run.event))))) }}!
 
 def need(value, reason)
     raise ArgumentError, reason unless value
@@ -22,8 +22,8 @@ def check(workflow)
                                     "cancel-in-progress" => false}, "publication must not be cancelled or overlap by source")
     triggers = workflow["on"]
     need(triggers.keys.sort == %w[workflow_dispatch workflow_run], "no PR/tag or unsafe publisher trigger")
-    need(triggers["workflow_run"] == {"workflows" => ["Desktop cross-host", "CI", "OSV Advisory Scan"],
-                                     "types" => ["completed"], "branches" => ["main"]}, "trusted main completion triggers required")
+    need(triggers["workflow_run"] == {"workflows" => ["Desktop cross-host", "CI", "OSV Advisory Scan", "Publish Maven Central"],
+                                     "types" => ["completed"]}, "main and Maven tag completions must reach explicit admission")
     inputs = triggers["workflow_dispatch"]["inputs"]
     need(inputs.keys.sort == %w[operation producer_attempt producer_run source_sha] &&
          inputs.values.all? { |x| x["required"] == true } &&
@@ -98,9 +98,14 @@ mutations = [
     ->(x) { x["permissions"]["contents"] = "write" },
     ->(x) { x["on"]["pull_request_target"] = {} },
     ->(x) { x["on"]["workflow_run"]["branches"] = ["*"] },
+    ->(x) { x["on"]["workflow_run"]["branches"] = ["main"] },
+    ->(x) { x["on"]["workflow_run"]["workflows"].delete("Publish Maven Central") },
     ->(x) { x["on"]["workflow_dispatch"]["inputs"]["operation"]["default"] = "publish" },
     ->(x) { x["concurrency"]["cancel-in-progress"] = true },
     ->(x) { x["jobs"]["admit"].delete("if") },
+    ->(x) { x["jobs"]["admit"]["if"] = x["jobs"]["admit"]["if"].sub("github.event.workflow_run.head_branch == 'main'", "true") },
+    ->(x) { x["jobs"]["admit"]["if"] = x["jobs"]["admit"]["if"].sub("github.event.workflow_run.conclusion == 'success'", "true") },
+    ->(x) { x["jobs"]["admit"]["if"] = x["jobs"]["admit"]["if"].sub("github.event.workflow_run.event == 'push'", "true") },
     ->(x) { x["jobs"]["verify-only"]["permissions"] = READ.merge("contents" => "write") },
     ->(x) { x["jobs"]["publish"].delete("needs") },
     ->(x) { x["jobs"]["publish"]["needs"] = "admit" },

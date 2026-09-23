@@ -370,6 +370,32 @@ Raw test transcripts never enter app bundles, publisher review artifacts or
 Releases. Only the separate recipient-admitted ordinary evidence artifacts retain
 encrypted originals; app distribution does not authorize raw evidence upload.
 
+#### After Maven Central publication
+
+Once this wiring is merged into `main`, each successful **Publish Maven Central**
+tag-push completion automatically starts the sample publisher. Failed publications,
+ordinary commits and publication outside that maintained workflow do not trigger
+this Maven hand-off. It verifies the original publisher run/attempt, both successful
+verification/publication jobs, immutable `v<VERSION_NAME>` tag and the exact
+tagged `gradle.properties` version before selecting the matching main sample build.
+
+The resulting public development prerelease is **`samples-v<VERSION_NAME>`**,
+with the Maven version/run recorded in `sample-release.json`. It contains the
+same APK, Windows x64 MSI, macOS ARM64 DMG and Linux x64 DEB plus notices/checksums described
+above. It neither modifies the library's `v*` tag/release nor replaces the
+separate `samples-<SHA>` or existing preview releases.
+
+This is a delivery hand-off, **not another build system**: the marked main merge
+already requests the source-matched four-platform build. Its inspected installer
+bytes are reused without recompilation. All current HOLDs, marked-merge/PR/main
+checks, original encrypted evidence and fresh post-build owner approval remain
+mandatory; a successful Maven publication cannot substitute for them. Missing or
+expired matching apps/evidence cause HOLD, never reuse of an unrelated preview.
+If gates finish later, rerun the sample publisher with its original Maven event,
+not the immutable Maven publication. Reruns still require fresh exact-attempt
+evidence approval and may not overwrite tags/assets. No new Maven publication or
+qualified-main readiness is authorized by this automation.
+
 ### Download development apps from Actions
 
 The **Desktop cross-host** workflow requests verification on **every push to

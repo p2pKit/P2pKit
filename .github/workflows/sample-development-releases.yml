@@ -2,9 +2,10 @@ name: Development sample Releases
 
 on:
   workflow_run:
-    workflows: [Desktop cross-host, CI, OSV Advisory Scan]
+    workflows: [Desktop cross-host, CI, OSV Advisory Scan, Publish Maven Central]
     types: [completed]
-    branches: [main]
+    # Maven's head_branch is its immutable v-tag, not main. The job guard and
+    # Python admission keep ordinary main events separate from Maven tag pushes.
   workflow_dispatch:
     inputs:
       source_sha:
@@ -43,7 +44,8 @@ jobs:
   admit:
     # Admission independently pins each workflow's allowed main events. CI/OSV
     # schedule/manual results qualify; the application producer stays push-only.
-    if: ${{ github.repository == 'p2pKit/P2pKit' && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || (contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event.workflow_run.event) && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success')) }}
+    # Maven completion only selects the matching already-qualified main build.
+    if: ${{ github.repository == 'p2pKit/P2pKit' && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success' && ((github.event.workflow_run.name == 'Publish Maven Central' && github.event.workflow_run.event == 'push' && startsWith(github.event.workflow_run.head_branch, 'v')) || (contains(fromJSON('["Desktop cross-host","CI","OSV Advisory Scan"]'), github.event.workflow_run.name) && github.event.workflow_run.head_branch == 'main' && contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event.workflow_run.event))))) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:

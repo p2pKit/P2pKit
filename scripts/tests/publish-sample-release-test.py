@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Pure policy/state-machine fixtures; NO real GitHub, build or app evidence."""
 
+import base64
 import copy
 import hashlib
 import importlib.util
@@ -136,6 +137,8 @@ class FakeApi:
         if path == "/releases/500":
             return copy.deepcopy(self.release)
         if path.startswith("/git/ref/tags/"):
+            if path in self.data:
+                return copy.deepcopy(self.data[path])
             return copy.deepcopy(self.ref)
         return copy.deepcopy(self.data[path])
 
@@ -212,6 +215,24 @@ class ReleaseTest(unittest.TestCase):
     def plan(self):
         # Actual argparse/workflow inputs are strings, not test-only integers.
         return R.admit(self.api, SOURCE, "300", "1")
+
+    def maven_fixture(self):
+        tag = "v0.8.0-rc1"
+        self.api.data["/actions/runs/900"] = {**run(900, R.MAVEN_WORKFLOW, SOURCE),
+                                             "head_branch": tag, "workflow_id": 88}
+        self.api.data["/actions/workflows/publish-maven-central.yml"] = {"id": 88, "path": R.MAVEN_WORKFLOW}
+        self.api.data["/git/ref/tags/" + tag] = {"ref": "refs/tags/" + tag, "object": {"type": "commit", "sha": SOURCE}}
+        raw = b"VERSION_NAME=0.8.0-rc1\nLATEST_PUBLISHED_VERSION=0.7.0-rc3\n"
+        self.api.data[f"/contents/gradle.properties?ref={SOURCE}"] = {"type": "file", "path": "gradle.properties",
+            "size": len(raw), "encoding": "base64", "content": base64.encodebytes(raw).decode("ascii")}
+        self.api.collections["/actions/runs/900/attempts/1/jobs"] = [
+            {"id": 910 + i, "name": name, "run_id": 900, "run_attempt": 1, "head_sha": SOURCE,
+             "status": "completed", "conclusion": "success", "completed_at": "2026-09-15T11:00:00Z"}
+            for i, name in enumerate(("verify-release", "publish-release"))]
+        return {"name": R.MAVEN_NAME, "id": 900, "run_attempt": 1, "head_sha": SOURCE, "head_branch": tag}
+
+    def maven_plan(self):
+        return R.admit(self.api, SOURCE, "300", "1", {"id": 900, "attempt": 1})
 
     def output(self, label="output"):
         path = self.base / label
@@ -771,6 +792,212 @@ class ReleaseTest(unittest.TestCase):
         api.public_probe("samples-" + SOURCE, {"file": "example.apk", "bytes": 17})
         self.assertEqual(2, len(calls))
         self.assertTrue(all(x.get_header("Authorization") is None and x.get_header("Range") == "bytes=0-0" for x in calls))
+
+    def test_maven_completion_binds_version_and_reuses_exact_qualified_main_apps(self):
+        event = self.maven_fixture()
+        self.assertEqual(SOURCE, R.trigger_source(self.api, event))
+        plan, ordinary = self.maven_plan(), self.plan()
+        self.assertEqual("samples-v0.8.0-rc1", plan["tag"])
+        for key in ("source", "producer", "pullRequest", "mainChecks", "artifacts", "scope", "evidence"):
+            self.assertEqual(ordinary[key], plan[key])
+        self.assertEqual({"verify-release", "publish-release"}, {x["name"] for x in plan["mavenPublication"]["jobs"]})
+        self.assertEqual(SOURCE, plan["mavenPublication"]["source"])
+        self.assertEqual([], self.api.mutations)
+
+    def test_maven_failed_wrong_or_newer_attempt_never_triggers_sample_publication(self):
+        event = self.maven_fixture()
+        path = "/actions/runs/900"
+        original = copy.deepcopy(self.api.data[path])
+        changes = [{"id": 901}, {"run_attempt": 2}, {"path": R.PRODUCER}, {"workflow_id": 77},
+            {"head_sha": HEAD}, {"event": "workflow_dispatch"}, {"event": "pull_request"},
+            {"repository": {"full_name": "other/P2pKit"}}, {"head_repository": {"full_name": "fork/P2pKit"}},
+            {"status": "in_progress"}, {"conclusion": "failure"}, {"conclusion": "skipped"}]
+        for change in changes:
+            self.api.data[path] = {**original, **change}
+            with self.subTest(change=change), self.assertRaises(R.Hold):
+                R.trigger_source(self.api, event)
+        self.api.data[path] = original
+        with self.assertRaises(R.Hold):
+            R.trigger_source(self.api, {**event, "head_branch": "v0.8.0"})
+        with self.assertRaises(R.Hold):
+            R.trigger_source(self.api, {**event, "run_attempt": 2})
+        self.assertEqual([], self.api.mutations)
+
+    def test_maven_both_jobs_must_pass_in_the_bound_source_and_attempt(self):
+        self.maven_fixture()
+        path = "/actions/runs/900/attempts/1/jobs"
+        original = copy.deepcopy(self.api.collections[path])
+        for index in (0, 1):
+            for change in ({"conclusion": "failure"}, {"conclusion": "skipped"}, {"status": "queued"},
+                           {"run_attempt": 2}, {"run_id": 901}, {"head_sha": HEAD}, {"completed_at": ""}):
+                self.api.collections[path] = copy.deepcopy(original)
+                self.api.collections[path][index].update(change)
+                with self.subTest(index=index, change=change), self.assertRaises(R.Hold):
+                    self.maven_plan()
+            for rows in (original[:index] + original[index + 1:], original + [original[index]]):
+                self.api.collections[path] = copy.deepcopy(rows)
+                with self.subTest(index=index, rows=len(rows)), self.assertRaises(R.Hold):
+                    self.maven_plan()
+
+    def test_maven_annotated_tag_is_resolved_without_moving_it(self):
+        self.maven_fixture()
+        tag_sha = "a" * 40
+        self.api.data["/git/ref/tags/v0.8.0-rc1"]["object"] = {"type": "tag", "sha": tag_sha}
+        self.api.data["/git/tags/" + tag_sha] = {"sha": tag_sha, "object": {"type": "commit", "sha": SOURCE}}
+        self.assertEqual("v0.8.0-rc1", self.maven_plan()["mavenPublication"]["tag"])
+        self.assertEqual([], self.api.mutations)
+
+    def test_maven_wrong_tag_target_reference_and_tag_cycles_are_rejected(self):
+        self.maven_fixture()
+        path = "/git/ref/tags/v0.8.0-rc1"
+        original = copy.deepcopy(self.api.data[path])
+        for change in ({"ref": "refs/heads/v0.8.0-rc1"}, {"object": {"type": "commit", "sha": HEAD}},
+                       {"object": {"type": "tree", "sha": SOURCE}}, {"object": {"type": "commit", "sha": ""}}):
+            self.api.data[path] = {**original, **change}
+            with self.subTest(change=change), self.assertRaises(R.Hold):
+                self.maven_plan()
+        tag_sha = "a" * 40
+        self.api.data[path] = {**original, "object": {"type": "tag", "sha": tag_sha}}
+        self.api.data["/git/tags/" + tag_sha] = {"sha": tag_sha, "object": {"type": "tag", "sha": tag_sha}}
+        with self.assertRaises(R.Hold):
+            self.maven_plan()
+
+    def test_maven_tag_must_be_non_snapshot_safe_and_exactly_versioned(self):
+        self.maven_fixture()
+        run_path = "/actions/runs/900"
+        for tag in ("main", "v", "v0.8.0-SNAPSHOT", "v0.8.0-snapshot", "v0.8.0/branch", "v0.8.0\n"):
+            self.api.data[run_path]["head_branch"] = tag
+            with self.subTest(tag=tag), self.assertRaises(R.Hold):
+                self.maven_plan()
+        self.api.data[run_path]["head_branch"] = "v0.8.0-rc1"
+        path = f"/contents/gradle.properties?ref={SOURCE}"
+        for raw in (b"VERSION_NAME=0.8.0\n", b"VERSION_NAME=0.8.0-rc1\nVERSION_NAME=0.8.0-rc1\n",
+                    b"VERSION_NAME=0.8.0-rc1 \n", b"LATEST_PUBLISHED_VERSION=0.8.0-rc1\n"):
+            self.api.data[path].update(size=len(raw), content=base64.b64encode(raw).decode("ascii"))
+            with self.subTest(raw=raw), self.assertRaises(R.Hold):
+                self.maven_plan()
+
+    def test_maven_version_metadata_is_bounded_and_from_the_exact_regular_file(self):
+        self.maven_fixture()
+        path = f"/contents/gradle.properties?ref={SOURCE}"
+        original = copy.deepcopy(self.api.data[path])
+        for change in ({"type": "symlink"}, {"path": "other/gradle.properties"}, {"encoding": "none"},
+                       {"size": 0}, {"size": True}, {"size": 65537}, {"size": original["size"] + 1},
+                       {"content": "x" * 131073}, {"content": "not base64"}):
+            self.api.data[path] = {**original, **change}
+            with self.subTest(change=list(change)), self.assertRaises(ValueError):
+                self.maven_plan()
+
+    def test_maven_success_does_not_waive_existing_marker_checks_custody_or_apps(self):
+        self.maven_fixture()
+        original_data, original_collections = copy.deepcopy(self.api.data), copy.deepcopy(self.api.collections)
+        changes = [lambda: self.api.data["/commits/" + SOURCE]["commit"].update(message="unmarked"),
+            lambda: self.api.collections["/issues/99/comments"].clear(),
+            lambda: self.api.collections[f"/commits/{HEAD}/check-runs?filter=all"].clear(),
+            lambda: self.api.collections[f"/commits/{SOURCE}/check-runs?filter=all"].clear(),
+            lambda: self.api.collections["/actions/runs/300/attempts/1/jobs"][0].update(conclusion="failure"),
+            lambda: self.api.collections["/actions/runs/300/artifacts"][0].update(expired=True),
+            lambda: self.api.collections["/actions/runs/300/artifacts"].pop(0),
+            lambda: self.api.collections["/actions/runs/300/artifacts"].pop(),
+            lambda: self.api.collections["/actions/runs/200/artifacts"].clear()]
+        for index, change in enumerate(changes):
+            self.api.data, self.api.collections = copy.deepcopy(original_data), copy.deepcopy(original_collections)
+            change()
+            with self.subTest(index=index), self.assertRaises(R.Hold):
+                self.maven_plan()
+            self.assertEqual([], self.api.mutations)
+
+    def test_maven_samples_publish_version_namespace_and_original_four_app_bytes(self):
+        self.maven_fixture()
+        plan, directory = self.maven_plan(), self.output()
+        result = self.publish(self.api, plan, directory, True)
+        self.assertEqual("PUBLISHED_DEVELOPMENT_PRERELEASE", result["result"])
+        self.assertEqual("samples-v0.8.0-rc1", self.api.release["tag_name"])
+        self.assertEqual("Development samples — 0.8.0-rc1", self.api.release["name"])
+        self.assertIn("Maven Central version `0.8.0-rc1`", self.api.release["body"])
+        manifest = json.loads((directory / "sample-release.json").read_bytes())
+        self.assertEqual(plan["mavenPublication"], manifest["mavenPublication"])
+        self.assertEqual(SOURCE, self.api.data["/git/ref/tags/v0.8.0-rc1"]["object"]["sha"])
+        self.assertEqual(7, len(result["assets"]))
+        for asset in result["assets"][:4]:
+            with zipfile.ZipFile(io.BytesIO(self.api.files[asset["artifactId"]])) as original:
+                self.assertEqual(original.read(asset["member"]), (directory / asset["file"]).read_bytes())
+
+    def test_maven_samples_cannot_substitute_an_intel_mac_for_the_required_arm64_dmg(self):
+        self.maven_fixture()
+        row = self.api.collections["/actions/runs/300/artifacts"][3]
+        row["name"] = row["name"].replace("macOS-ARM64-", "macOS-X64-")
+        evidence = self.api.collections["/actions/runs/300/artifacts"][-1]
+        evidence["name"] = evidence["name"].replace("macOS-ARM64-", "macOS-X64-")
+        with self.assertRaisesRegex(R.Hold, "native macOS ARM64"):
+            self.maven_plan()
+        self.assertEqual([], self.api.mutations)
+
+    def test_maven_rerun_is_idempotent_but_still_requires_new_owner_approval(self):
+        self.maven_fixture()
+        plan = self.maven_plan()
+        self.publish(self.api, plan, self.output(), True)
+        self.api.mutations.clear()
+        self.publish(self.api, plan, self.output("rerun"), True)
+        self.assertEqual([], self.api.mutations)
+        descriptor = self.authorization(plan)
+        self.api.data["/actions/runs/400/approvals"] = []
+        with self.assertRaises(R.Hold):
+            R.publish(self.api, plan, self.output("no-approval"), True, descriptor)
+        self.assertEqual([], self.api.mutations)
+
+    def test_maven_source_or_publication_change_after_review_blocks_mutation(self):
+        self.maven_fixture()
+        plan = self.maven_plan()
+        descriptor = self.authorization(plan)
+        original = copy.deepcopy(self.api.data)
+        changes = [lambda: self.api.data["/actions/runs/900"].update(run_attempt=2),
+            lambda: self.api.data["/actions/runs/900"].update(conclusion="failure"),
+            lambda: self.api.data["/git/ref/tags/v0.8.0-rc1"]["object"].update(sha=HEAD)]
+        for index, change in enumerate(changes):
+            self.api.data = copy.deepcopy(original)
+            change()
+            with self.subTest(index=index), self.assertRaises(R.Hold):
+                R.publish(self.api, plan, self.output("maven-changed-" + str(index)), True, descriptor)
+            self.assertEqual([], self.api.mutations)
+
+    def test_maven_completion_is_rebound_in_admit_prepare_and_publish_entrypoints(self):
+        event = self.maven_fixture()
+        event_path = self.base / "event.json"
+        event_path.write_bytes(R.encoded({"workflow_run": event}))
+        output = self.base / "github-output"
+        captured = []
+        def stop_at_admit(api, sha, producer, attempt, publication):
+            captured.append((sha, producer, attempt, publication))
+            raise R.Hold("Synthetic stop before artifact access")
+        for operation, job in (("admit", "admit"), ("prepare-review", "prepare-review"), ("publish", "publish")):
+            with mock.patch.dict(os.environ, {"GITHUB_EVENT_NAME": "workflow_run", "GITHUB_EVENT_PATH": str(event_path),
+                    "GITHUB_JOB": job, "RUNNER_TEMP": str(self.base), "GITHUB_OUTPUT": str(output)}), \
+                    mock.patch.object(R.subprocess, "run", return_value=mock.Mock(stdout=(SOURCE + "\n").encode())), \
+                    mock.patch.object(R, "Api", return_value=self.api), mock.patch.object(R, "admit", side_effect=stop_at_admit), \
+                    mock.patch("sys.argv", ["publish-sample-release.py", operation, "--source", SOURCE,
+                                           "--producer", "300", "--attempt", "1"]), \
+                    mock.patch("sys.stdout", new=io.StringIO()):
+                self.assertEqual(1, R.main())
+        self.assertEqual([(SOURCE, "300", "1", {"id": 900, "attempt": 1})] * 3, captured)
+        self.assertEqual([], self.api.mutations)
+
+    def test_github_binary_transfer_keeps_json_accept_and_separate_binary_content_type(self):
+        calls = []
+        api = R.Api("synthetic-fixture-token-not-a-credential")
+        api.opener = mock.Mock()
+        api.opener.open.side_effect = lambda request, timeout: calls.append(request)
+        api.open(R.API + R.PREFIX + "/actions/artifacts/1/zip", binary=True)
+        api.open("https://uploads.github.com" + R.PREFIX + "/releases/1/assets?name=fixture.apk",
+                 method="POST", data=b"fixture", binary=True, size=7)
+        api.open("https://fixture.blob.core.windows.net/fixture", binary=True, authenticated=False)
+        self.assertEqual(["application/vnd.github+json", "application/vnd.github+json", "application/octet-stream"],
+                         [x.get_header("Accept") for x in calls])
+        self.assertIsNone(calls[0].get_header("Content-type"))
+        self.assertEqual("application/octet-stream", calls[1].get_header("Content-type"))
+        self.assertIsNone(calls[2].get_header("Authorization"))
+        with self.assertRaises(R.Hold):
+            api.open("https://fixture.blob.core.windows.net/fixture", binary=True)
 
 
 if __name__ == "__main__":

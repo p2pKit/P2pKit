@@ -8,6 +8,7 @@ mutation, and never replaces tags/releases/assets. No private evidence is opened
 """
 
 import argparse
+import base64
 import datetime
 import hashlib
 import importlib.util
@@ -31,6 +32,8 @@ API = "https://api.github.com"
 PREFIX = "/repos/" + REPO
 WORKFLOW = ".github/workflows/sample-development-releases.yml"
 PRODUCER = ".github/workflows/desktop-cross-host.yml"
+MAVEN_WORKFLOW = ".github/workflows/publish-maven-central.yml"
+MAVEN_NAME = "Publish Maven Central"
 TRIGGERS = {"Desktop cross-host": PRODUCER, "CI": ".github/workflows/ci.yml",
             "OSV Advisory Scan": ".github/workflows/osv-scanner.yml"}
 MAIN_EVENTS = {PRODUCER: ("push",),
@@ -112,7 +115,9 @@ class Api:
 
     def open(self, url, *, method="GET", data=None, binary=False, authenticated=True, size=None):
         headers = {"User-Agent": "P2pKit-development-samples", "X-GitHub-Api-Version": "2022-11-28",
-                   "Accept": "application/octet-stream" if binary else "application/vnd.github+json"}
+                   # Artifact redirects and upload responses are GitHub JSON APIs.
+                   # Only the anonymous storage response is requested as binary.
+                   "Accept": "application/octet-stream" if binary and not authenticated else "application/vnd.github+json"}
         if authenticated:
             need(url.startswith(API + PREFIX + "/") or url.startswith("https://uploads.github.com" + PREFIX + "/"),
                  "Credential destination outside this repository")
@@ -248,11 +253,71 @@ def trusted_run(run, path, sha, events):
 
 
 def trigger_source(api, event):
+    if event.get("name") == MAVEN_NAME:
+        publication = maven_publication(api, event["head_sha"], event["id"], event["run_attempt"])
+        need(event.get("head_branch") == publication["tag"], "Maven completion tag differs from the original run")
+        return event["head_sha"]
     need(event.get("name") in TRIGGERS, "Unexpected triggering workflow")
     path = TRIGGERS[event["name"]]
     trigger = api.json("/actions/runs/" + str(number(event["id"])))
     trusted_run(trigger, path, event["head_sha"], MAIN_EVENTS[path])
     return event["head_sha"]
+
+
+def maven_publication(api, sha, identifier, attempt):
+    """Bind a completed protected Maven publisher; never publish to Maven here.
+
+    A tag completion is not an ordinary main producer. All existing main/PR,
+    app, encrypted-evidence and owner-approval checks remain independently required.
+    """
+    need(type(sha) is str and SHA.fullmatch(sha), "Invalid Maven source SHA")
+    identifier, attempt = number(identifier), number(attempt)
+    run = api.json(f"/actions/runs/{identifier}")
+    workflow = api.json("/actions/workflows/publish-maven-central.yml")
+    need(run.get("id") == identifier and run.get("run_attempt") == attempt and
+         run.get("path") == workflow.get("path") == MAVEN_WORKFLOW and
+         run.get("workflow_id") == workflow.get("id") and type(workflow.get("id")) is int and
+         run.get("head_sha") == sha and run.get("event") == "push" and
+         run.get("repository", {}).get("full_name") == REPO and
+         run.get("head_repository", {}).get("full_name") == REPO and
+         run.get("status") == "completed" and run.get("conclusion") == "success",
+         "Maven publication run/source/attempt/workflow is not the exact successful tag push")
+    tag = run.get("head_branch", "")
+    need(type(tag) is str and re.fullmatch(r"v[0-9][0-9A-Za-z._+-]{0,99}", tag) and
+         "SNAPSHOT" not in tag.upper(), "Maven publication lacks a safe non-snapshot version tag")
+    ref = api.json("/git/ref/tags/" + urllib.parse.quote(tag, safe=""))
+    need(ref.get("ref") == "refs/tags/" + tag, "Maven tag reference differs")
+    target = ref.get("object", {})
+    for _ in range(4):
+        need(SHA.fullmatch(target.get("sha", "")), "Maven tag lacks an immutable object")
+        if target.get("type") != "tag":
+            break
+        annotated = api.json("/git/tags/" + target["sha"])
+        need(annotated.get("sha") == target["sha"], "Annotated Maven tag lookup differs")
+        target = annotated.get("object", {})
+    need(target.get("type") == "commit" and target.get("sha") == sha,
+         "Immutable Maven tag does not resolve to this exact source")
+    properties = api.json(f"/contents/gradle.properties?ref={sha}")
+    need(properties.get("type") == "file" and properties.get("path") == "gradle.properties" and
+         properties.get("encoding") == "base64" and type(properties.get("size")) is int and
+         0 < properties["size"] <= 65536 and type(properties.get("content")) is str and
+         len(properties["content"]) <= 131072, "Missing or oversized tagged version metadata")
+    raw = base64.b64decode(properties["content"].replace("\n", ""), validate=True)
+    need(len(raw) == properties["size"], "Tagged version metadata size differs")
+    versions = re.findall(r"^VERSION_NAME=([^\r\n]*)\r?$", raw.decode("utf-8"), re.MULTILINE)
+    need(versions == [tag[1:]], "Maven tag does not match one exact tagged VERSION_NAME")
+    jobs = api.pages(f"/actions/runs/{identifier}/attempts/{attempt}/jobs", "jobs")
+    verified = []
+    for name in ("verify-release", "publish-release"):
+        found = [x for x in jobs if x.get("name") == name]
+        need(len(found) == 1 and found[0].get("run_id") == identifier and found[0].get("run_attempt") == attempt and
+             found[0].get("head_sha") == sha and found[0].get("status") == "completed" and
+             found[0].get("conclusion") == "success", "Missing successful original Maven verification/publication job")
+        job = found[0]
+        need(timestamp(job.get("completed_at")) <= time.time(), "Maven job completion is not in the past")
+        verified.append({"id": number(job["id"]), "name": name, "completedAt": job["completed_at"]})
+    return {"id": identifier, "attempt": attempt, "workflowId": workflow["id"], "workflowPath": MAVEN_WORKFLOW,
+            "source": sha, "tag": tag, "version": tag[1:], "jobs": verified}
 
 
 def latest(rows, reason):
@@ -373,8 +438,9 @@ def evidence_set(api, source, producer, artifacts, applications, main_checks):
     return result
 
 
-def admit(api, sha, producer_id=None, attempt=None):
+def admit(api, sha, producer_id=None, attempt=None, publication=None):
     need(isinstance(sha, str) and SHA.fullmatch(sha), "Expected a full source SHA")
+    maven = None if publication is None else maven_publication(api, sha, publication["id"], publication["attempt"])
     rules = api.json("/rules/branches/main")
     names = {check["context"] for rule in rules if rule.get("type") == "required_status_checks"
              for check in rule.get("parameters", {}).get("required_status_checks", [])}
@@ -429,9 +495,15 @@ def admit(api, sha, producer_id=None, attempt=None):
          "Artifact set duplicates/exceeds transfer budget")
     producer = {"id": producer_id, "attempt": selected_attempt, "workflowId": run["workflow_id"],
                 "workflowPath": PRODUCER, "jobs": [{"id": x["id"], "name": x["name"]} for x in jobs if x["name"] in hosts]}
-    return {"schema": 2, "source": {"commit": sha, "tree": tree}, "tag": "samples-" + sha, "producer": producer,
+    plan = {"schema": 2, "source": {"commit": sha, "tree": tree}, "tag": "samples-" + sha, "producer": producer,
             "pullRequest": pull, "mainChecks": main_checks, "artifacts": selected, "scope": PACK.SCOPE,
             "evidence": evidence_set(api, sha, producer, artifacts, selected, main_checks)}
+    if maven is not None:
+        need([(x["platform"], x["architecture"]) for x in selected] ==
+             [("android", "apk-abis-not-inspected"), ("linux", "x64"), ("windows", "x64"), ("macos", "arm64")],
+             "Maven sample delivery requires Android, Linux x64, Windows x64 and native macOS ARM64")
+        plan.update(tag="samples-" + maven["tag"], mavenPublication=maven)
+    return plan
 
 
 def publication_environment(api):
@@ -615,7 +687,11 @@ def copy_installable(bundle, artifact, plan, directory):
 
 
 def release_body(plan, manifest_hash):
-    return ("Development sample apps — not a library or production release.\n\n"
+    publication = plan.get("mavenPublication")
+    maven = (f"Built from the same source as Maven Central version `{publication['version']}`. "
+             f"Verified Maven publisher: https://github.com/{REPO}/actions/runs/{publication['id']} "
+             f"(attempt {publication['attempt']}, tag `{publication['tag']}`).\n\n") if publication else ""
+    return ("Development sample apps — not a library or production release.\n\n" + maven +
             "Download the Android .apk, Windows .msi, macOS .dmg or Linux .deb for your platform. "
             "Verify SHA256SUMS before opening the package. License/notice material is in sample-notices.zip.\n\n"
             "These are development packages: no production signing/notarization, installation test, app-launch, "
@@ -661,7 +737,8 @@ def publish(api, plan, directory, mutate, review=None):
     assets.append({"file": "SHA256SUMS", "bytes": len(sums), "sha256": hashlib.sha256(sums).hexdigest()})
     # No mutation until *all* bytes are inspected and live gates still bind the
     # same candidate. No permission to rebuild when a producer has expired.
-    need(admit(api, plan["source"]["commit"], plan["producer"]["id"], plan["producer"]["attempt"]) == plan,
+    need(admit(api, plan["source"]["commit"], plan["producer"]["id"], plan["producer"]["attempt"],
+               plan.get("mavenPublication")) == plan,
          "Admission changed while downloading; retain a HOLD")
     body = release_body(plan, assets[-2]["sha256"])
     if not mutate:
@@ -671,7 +748,9 @@ def publish(api, plan, directory, mutate, review=None):
     need(require_publication_approval(api, plan, authorization, context) == approval,
          "Owner evidence approval changed before Release mutation")
     tag = plan["tag"]
-    need(tag == "samples-" + plan["source"]["commit"] and not tag.startswith("v"), "Unapproved release namespace")
+    publication = plan.get("mavenPublication")
+    expected_tag = "samples-" + (publication["tag"] if publication else plan["source"]["commit"])
+    need(tag == expected_tag and not tag.startswith("v"), "Unapproved release namespace")
     # The tag endpoint promises published releases, not draft visibility. Search
     # the authenticated, complete list so a retry cannot create a second draft.
     matches = [x for x in api.pages("/releases") if x.get("tag_name") == tag]
@@ -682,7 +761,7 @@ def publish(api, plan, directory, mutate, review=None):
         need(ref.get("object") == {"type": "commit", "sha": plan["source"]["commit"],
              "url": API + PREFIX + "/git/commits/" + plan["source"]["commit"]}, "Existing tag target/type differs")
         need(release is not None, "Existing orphan tag requires manual reconciliation")
-    title = "Development samples — " + plan["source"]["commit"][:12]
+    title = "Development samples — " + (publication["version"] if publication else plan["source"]["commit"][:12])
     if release is None:
         release = api.json("/releases", method="POST", value={"tag_name": tag,
                            "target_commitish": plan["source"]["commit"], "name": title, "body": body,
@@ -708,7 +787,8 @@ def publish(api, plan, directory, mutate, review=None):
         api.json(f"/releases/{release['id']}/assets?name=" + urllib.parse.quote(name, safe=""), upload=directory / name)
     need(roster() == set(expected), "Remote asset roster/digests incomplete")
     if release.get("draft") is True:
-        need(admit(api, plan["source"]["commit"], plan["producer"]["id"], plan["producer"]["attempt"]) == plan,
+        need(admit(api, plan["source"]["commit"], plan["producer"]["id"], plan["producer"]["attempt"],
+                   plan.get("mavenPublication")) == plan,
              "Admission changed before draft publication")
         need(require_publication_approval(api, plan, authorization, context) == approval,
              "Owner evidence approval changed before draft publication")
@@ -767,11 +847,17 @@ def main():
         need(actual.stdout.decode().strip() == context["source"], "Checkout is not the trusted publisher source")
         api = Api(os.environ.get("GH_TOKEN", ""))
         sha, producer, attempt = args.source, args.producer or None, args.attempt or None
-        if os.environ["GITHUB_EVENT_NAME"] == "workflow_run" and args.operation == "admit":
+        publication = None
+        if os.environ["GITHUB_EVENT_NAME"] == "workflow_run":
             event = parsed(Path(os.environ["GITHUB_EVENT_PATH"]).read_bytes())["workflow_run"]
-            sha = trigger_source(api, event)
+            if args.operation == "admit" or event.get("name") == MAVEN_NAME:
+                triggered_sha = trigger_source(api, event)
+                need(not sha or sha == triggered_sha, "Requested source differs from the completed workflow")
+                sha = triggered_sha
+            if event.get("name") == MAVEN_NAME:
+                publication = {"id": event["id"], "attempt": event["run_attempt"]}
         need(sha, "Exact candidate source required")
-        plan = admit(api, sha, producer, attempt)
+        plan = admit(api, sha, producer, attempt, publication)
         if args.operation == "admit":
             with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
                 output.write(f"ready=true\nsource={sha}\nproducer={plan['producer']['id']}\nattempt={plan['producer']['attempt']}\n")
