@@ -69,6 +69,8 @@ INITIAL_ENTRY_CONTEXT_SCOPE = "INITIAL_RECIPIENT_READMISSION_NATIVE_CONTEXT_V1"
 INITIAL_ENTRY_ACK_SCOPE = "INITIAL_RECIPIENT_READMISSION_POST_CLOSE_ACK_V1"
 INITIAL_AUTHORITY_CONTEXT_SCOPE = "INITIAL_RECIPIENT_USE_AUTHORITY_NATIVE_CONTEXT_V1"
 INITIAL_AUTHORITY_ACK_SCOPE = "INITIAL_RECIPIENT_USE_AUTHORITY_POST_CLOSE_ACK_V1"
+INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE = "INITIAL_RECIPIENT_CUSTODY_AUTHORITY_CONTEXT_V1"
+INITIAL_CUSTODY_AUTHORITY_ACK_SCOPE = "INITIAL_RECIPIENT_CUSTODY_AUTHORITY_POST_CLOSE_ACK_V1"
 INITIAL_RECIPIENT_ACK_SCOPE = "INITIAL_RECIPIENT_VALIDATION_POST_CLOSE_ACK_V1"
 RESULT_SCOPE = "BOOTSTRAP_ORIGINALS_PENDING_CALLER_RETURN_V2"
 HANDOFF_SCOPE = "BOOTSTRAP_PREPARE_POST_CLOSE_HANDOFF_V1"
@@ -705,6 +707,14 @@ def initial_receiving_command(context_hash, minimum=None):
     return result
 
 
+def initial_custody_authority_command(context_hash, minimum=None):
+    """Fixed new custody HTTP child; never a restored recipient/receiving owner."""
+    result = initial_command(context_hash, minimum)
+    result[4] = str(SCRIPTS / "run-hosted-initial-recipient-custody.py")
+    result[5] = "_authority"
+    return result
+
+
 INITIAL_RECEIVING_CONTEXT_SCOPE = "INITIAL_RECIPIENT_RECEIVING_AUTHORITY_CONTEXT_V1"
 INITIAL_RECEIVING_ACK_SCOPE = "INITIAL_RECIPIENT_RECEIVING_AUTHORITY_POST_CLOSE_ACK_V1"
 
@@ -714,7 +724,8 @@ def phase_command(context_raw, minimum=None):
     fixed = {CONTEXT_SCOPE: command, INITIAL_CONTEXT_SCOPE: initial_command,
              INITIAL_ENTRY_CONTEXT_SCOPE: initial_entry_command,
              INITIAL_AUTHORITY_CONTEXT_SCOPE: initial_authority_command,
-             INITIAL_RECEIVING_CONTEXT_SCOPE: initial_receiving_command}.get(scope)
+             INITIAL_RECEIVING_CONTEXT_SCOPE: initial_receiving_command,
+             INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE: initial_custody_authority_command}.get(scope)
     require(fixed is not None, "BOOTSTRAP_SERVICE_CONTEXT_SCOPE")
     return fixed(origin.digest(context_raw), minimum)
 
@@ -951,7 +962,7 @@ def _initial_service_environment(path, context, installed_git):
     """
     environment = child_environment(path)
     initial = context.get("scope") in (INITIAL_CONTEXT_SCOPE, INITIAL_ENTRY_CONTEXT_SCOPE,
-        INITIAL_AUTHORITY_CONTEXT_SCOPE, INITIAL_RECEIVING_CONTEXT_SCOPE)
+        INITIAL_AUTHORITY_CONTEXT_SCOPE, INITIAL_RECEIVING_CONTEXT_SCOPE, INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE)
     if not initial:
         require(installed_git is None, "BOOTSTRAP_INITIAL_GIT_ON_ORDINARY_ROUTE")
         return environment
@@ -997,6 +1008,7 @@ def phase(owner, private, context_raw, token, fence, *, initial_git=None):
         start_raw = owner.write(directory, "start.json", start)
         row = dict(start)
         scope = out = err = child = None
+        capture_end = None
         before_errors = len(owner.errors)
         captured, native_known, baseline_raw = {}, False, None
         row["captureOutcomes"] = {name: {"synced": False, "verified": False, "closeAttempted": False,
@@ -1012,6 +1024,7 @@ def phase(owner, private, context_raw, token, fence, *, initial_git=None):
         # fence, not a new per-file IO45 interval beginning at allocation.
         end = min(owner.local_end, fence.deadline(origin.wire.ACQUIRE_SECONDS + 45,
             final=True, limit=final_end))
+        capture_end = end  # Original prelaunch ceiling, never renewed by failed-work cleanup.
         out = owner.acquire("stdout", lambda: directory.create_file("stdout.log", max_bytes=ACK_LIMIT, deadline=end))
         err = owner.acquire("stderr", lambda: directory.create_file("stderr.log", max_bytes=STDERR_LIMIT, deadline=end))
         fence.now(limit=work_end)
@@ -1079,7 +1092,18 @@ def phase(owner, private, context_raw, token, fence, *, initial_git=None):
                     remaining = max(0, drain_end - time.monotonic())
                 except BaseException as error:
                     owner.error("drain-fence", error)
-                    raise
+                    if context.get("scope") != INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE:
+                        raise
+                    # The custody Window deliberately stays failed. That must
+                    # not skip an already-owned child's bounded drain. Use only
+                    # its ACTUAL prelaunch capture ceiling, not a new45 window.
+                    # All later original RAW/boot checks and first errors stay;
+                    # this fallback cannot create a successful OriginalPhase.
+                    require(type(capture_end) in (int, float) and math.isfinite(capture_end) and capture_end > 0 and
+                        type(owner.local_end) in (int, float) and math.isfinite(owner.local_end) and owner.local_end > 0,
+                        "BOOTSTRAP_CUSTODY_NO_ORIGINAL_CLEANUP_CEILING")
+                    drain_end = min(capture_end, owner.local_end)
+                    remaining = max(0, drain_end - time.monotonic())
                 grace = min(5, remaining)
                 kill_wait = min(5, max(0, remaining - grace))
                 row["survivors"] = scope.drain(grace=grace, kill_wait=kill_wait, deadline=drain_end)
@@ -13030,7 +13054,8 @@ def guarded(operation):
     cancellation(cancelled)
     observed = fence.now(final=True, limit=limit)
     if value.get("scope") in (ACK_SCOPE, RECIPIENT_ACK_SCOPE, INITIAL_ACK_SCOPE, INITIAL_ENTRY_ACK_SCOPE,
-                             INITIAL_AUTHORITY_ACK_SCOPE, INITIAL_RECIPIENT_ACK_SCOPE, INITIAL_RECEIVING_ACK_SCOPE):
+                             INITIAL_AUTHORITY_ACK_SCOPE, INITIAL_RECIPIENT_ACK_SCOPE, INITIAL_RECEIVING_ACK_SCOPE,
+                             INITIAL_CUSTODY_AUTHORITY_ACK_SCOPE):
         value["closedNs"] = observed
     raw = origin.encoded(value)
     require(len(raw) <= ACK_LIMIT and sys.stdout.buffer.write(raw) == len(raw), "BOOTSTRAP_ACK_WRITE")

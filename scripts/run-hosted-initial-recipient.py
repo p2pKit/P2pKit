@@ -642,7 +642,8 @@ def _initial_service_phase(owner, private, context_raw, token, fence, before):
         pin = before.records, before.session, before.raw
         context, returned, session = O.parse(context_raw), O.parse(before.raw), O.parse(before.session)
         require(context["scope"] in (native.INITIAL_CONTEXT_SCOPE, native.INITIAL_ENTRY_CONTEXT_SCOPE,
-            native.INITIAL_AUTHORITY_CONTEXT_SCOPE, native.INITIAL_RECEIVING_CONTEXT_SCOPE) and
+            native.INITIAL_AUTHORITY_CONTEXT_SCOPE, native.INITIAL_RECEIVING_CONTEXT_SCOPE,
+            native.INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE) and
             context["root"] == str(ROOT) and context["session"] == str(private.path) and
             context["sourceReturnSha256"] == O.digest(before.raw) and
             context["sourceReturnedNs"] == returned["returnedNs"] and

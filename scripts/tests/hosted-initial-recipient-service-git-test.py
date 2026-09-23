@@ -33,6 +33,7 @@ BLOB = "c" * 40
 POLICY = ".github/test-evidence-recipient.json"
 SCOPES = ("INITIAL_CONTEXT_SCOPE", "INITIAL_ENTRY_CONTEXT_SCOPE",
           "INITIAL_AUTHORITY_CONTEXT_SCOPE", "INITIAL_RECEIVING_CONTEXT_SCOPE")
+NATIVE_SCOPES = (*SCOPES, "INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE")
 KEYS = ("base_policy_entry", "ancestry_raw", "candidate_policy_entry", "candidate_policy_raw")
 TOKEN = "SYNTHETIC_NONCREDENTIAL_SERVICE_GIT_CONTROL"
 
@@ -88,8 +89,8 @@ class ServiceGitControls(unittest.TestCase):
         self.native_ns = {"__name__": __name__, "require": require, "os": self.os, "Path": Path,
                           "query": SimpleNamespace(_inherited_context=lambda: {})}
         assignments = [value for value in B_TREE.body if isinstance(value, ast.Assign) and
-                       any(isinstance(target, ast.Name) and target.id in (*SCOPES, "IDENTITY_ENV") for target in value.targets)]
-        self.assertEqual(len(assignments), 5)
+                       any(isinstance(target, ast.Name) and target.id in (*NATIVE_SCOPES, "IDENTITY_ENV") for target in value.targets)]
+        self.assertEqual(len(assignments), 6)
         exec(compile(ast.Module(body=assignments, type_ignores=[]), str(B_PATH), "exec", dont_inherit=True), self.native_ns)
         selected(B_TREE, ("child_environment", "_initial_service_environment"), self.native_ns, B_PATH)
         self.calls = []
@@ -99,7 +100,7 @@ class ServiceGitControls(unittest.TestCase):
             self.calls.append((args, kwargs))
             return self.returned
 
-        self.native = SimpleNamespace(**{name: self.native_ns[name] for name in SCOPES}, phase=phase,
+        self.native = SimpleNamespace(**{name: self.native_ns[name] for name in NATIVE_SCOPES}, phase=phase,
                                       diagnostics=SimpleNamespace(_QUARANTINE=[]))
         self.ns = {"__name__": __name__, "dataclass": dataclass, "Path": Path, "ROOT": ROOT, "re": re,
                    "require": require, "os": self.os, "native": self.native, "SOURCE_KEYS": KEYS,
