@@ -1596,6 +1596,23 @@ Independent source-review SHA-256:
 Its39 focused controls are **authored but unexecuted** here. No workflow invokes
 this adapter yet; all HOLDs and Release qualification remain unchanged.
 
+The subsequently reviewed single invocation ran at **2026-09-23T03:00:11Z–03:00:13Z**
+on `3c78d384e2f05b88f55c2acb65c7b5e5c3793e18`, tree
+`a8d0d405f92fd6cacb728a9be6fae8e37708e1ae`: **39/39 controls +4 guards PASS**,
+command/wrapper/launcher0, no unexpected denials or ResourceWarnings. CPU was
+0.519158s, import/suite wall0.458931s, command wall0.570s and launcher wall1.570s.
+Both177-row integrity transcripts, all104 public source copies and the24-file
+capture roster were independently verified; work was empty. Request SHA-256:
+`32264c6975e4393976f5c0eab498eddbe3296fca104999da807ed716edb7db27`.
+Capture-manifest SHA-256:
+`fb1a12ce12d7831261fd01e7808648e69d96150a489d980f250229f2ef592c39`.
+Independent original-result review SHA-256:
+`32386768955ed0f235a187c2434ef0f0475a851ff364f73886087b49639df97c`.
+This establishes only supplied-record/backend-return model behavior. Neither
+actual encryption/copy/Recipient provenance nor native/hosted custody was run.
+No accepted reader, worker, gate or preview suite was repeated. The worker's
+separate failed aggregates remain failed; all live-caller and Release gates remain.
+
 #### Stage1 canonical-context reader, not initialization authority
 
 The separate fixed `initial_recipient_context_record()` in
