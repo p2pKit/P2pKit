@@ -8,6 +8,7 @@ retirement and separate successful seal/upload Steps remain mandatory.
 """
 from __future__ import annotations
 
+import argparse
 import base64
 from dataclasses import dataclass
 import hashlib
@@ -20,6 +21,7 @@ import re
 import stat
 import sys
 import time
+import uuid
 
 sys.dont_write_bytecode = True
 SCRIPTS = Path(__file__).resolve().parent
@@ -31,6 +33,7 @@ N = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = N
 _spec.loader.exec_module(N)
 native, O, I, Q, A, C = N.native, N.O, N.I, N.Q, N.acquisition, N.continuity
+import hosted_initial_recipient_evidence as E
 
 PRIMARY_OUTCOME = "P2PKIT_INITIAL_PRIMARY_OUTCOME"
 PRIMARY_RESULT = "P2PKIT_INITIAL_PRIMARY_RESULT_SHA256"
@@ -2202,6 +2205,31 @@ class _CustodyOwner(native.Owner):
         anchor.phase_active = False  # Original phase tuple remains consumed forever.
         self.check()
 
+    def enter_crypto_phase(self, context_raw, started, work_end, final_end):
+        """One distinct token-free210 phase; never change authority45."""
+        anchor = self.check()
+        context = canonical(context_raw, 65536)
+        require(context.get("scope") == _CRYPTO_CONTEXT_SCOPE and type(self.fence) is Window and
+            anchor.phase is None and not anchor.closed and not anchor.unknown and anchor.failure is None and
+            not anchor.busy and anchor.frozen is None and self.work_limit is None and self.final_limit is None and
+            type(started) is int and type(work_end) is int and type(final_end) is int and
+            started == self.fence.last and started < work_end and
+            work_end == min(self.fence.work, started + 210 * O.NS) and
+            final_end == min(self.fence.final, work_end + 45 * O.NS), "CRYPTO_OWNER_ORIGINAL_PHASE")
+        _same(context["window"], canonical(_custody_authority_window(self.fence)), "CRYPTO_OWNER_WINDOW")
+        anchor.phase = (started, work_end, final_end, (None, None))
+        anchor.phase_active = True
+        self.work_limit, self.final_limit = work_end, final_end
+        self.check()
+
+    def leave_crypto_phase(self, started, work_end, final_end):
+        anchor = self.check()
+        require(anchor.phase_active and anchor.phase == (started, work_end, final_end, (None, None)),
+            "CRYPTO_OWNER_PHASE_RETURN_CHANGED")
+        self.work_limit = self.final_limit = None
+        anchor.phase_active = False
+        self.check()
+
 
 def _custody_match_pin(match, kind):
     require(kind in ("gate", "worker") and type(match) is
@@ -2456,6 +2484,46 @@ class _CustodyChildClock:
                 "CHILD_OPERATIVE_ORIGINAL_OWNER")
             anchor.operative = owner
             self._current(anchor)
+        except BaseException as error:
+            raise self._error(anchor, error)
+        finally:
+            anchor.busy = False
+
+    def bind_crypto(self, context_raw, context, start_raw, start, expected, event, inherited):
+        """One original metadata-to-crypto transition, not an authority45 knob."""
+        anchor = self._begin()
+        try:
+            require(anchor.phase == "METADATA" and anchor.metadata is not None, "CHILD_CLOCK_BIND_ONCE")
+            anchor.phase = "BINDING"
+            metadata = anchor.metadata
+            metadata.structural()
+            require(metadata.finished and metadata.failure is None and metadata.owner.closed is True and
+                metadata.owner.original is None and metadata.owner.unknown is False and metadata.errors == [] and
+                all(attempted and closed for _, _, _, attempted, closed in metadata.rows), "CHILD_METADATA_CLOSE_UNKNOWN")
+            require(type(context_raw) is bytes and type(start_raw) is bytes and type(event) is bytes and
+                canonical(context_raw, 65536) == context and canonical(start_raw) == start and
+                type(context) is dict and type(start) is dict and type(inherited) is dict,
+                "CHILD_FRAME_ORIGINAL_BYTES")
+            kind = context["kind"]
+            require(type(expected) is (A.gate.GateEligibility if kind == "gate" else A.stages.BootstrapMatch) and
+                type(expected.record) is bytes and O.digest(expected.record) == context["filesSha256"]["fresh-match.json"],
+                "CRYPTO_CHILD_EXPECTED_MATCH")
+            # Retain the original frame BEFORE host/ownership suppliers run.
+            # A callback cannot replace an already validated shorter parent end.
+            anchor.metadata_graph = N._history_graph(metadata.owner)
+            anchor.frame = (context_raw, context, start_raw, start, expected, expected.__dict__, event, inherited,
+                anchor.cap, anchor.cap_dictionary, anchor.cap_graph)
+            anchor.frame_graph = N._history_graph(anchor.frame)
+            _crypto_start(context_raw, context, start, anchor.binding[0], anchor.binding[2], event, inherited)
+            self._current(anchor)
+            require(anchor.last < start["workEndNs"], "CRYPTO_CHILD_ORIGINAL_CAP")
+            cap = native._RecipientWindow(anchor.binding[0], anchor.last, anchor.binding[1],
+                start["workEndNs"], anchor.binding[3])
+            anchor.cap, anchor.cap_dictionary = cap, cap.__dict__
+            anchor.cap_graph = N._history_graph(cap.__dict__)
+            anchor.phase = "OPERATIVE"
+            self._current(anchor)
+            self._observe(anchor, final=False, minimum=anchor.last, limit=start["workEndNs"])
         except BaseException as error:
             raise self._error(anchor, error)
         finally:
@@ -3330,3 +3398,1402 @@ def _copy_authority(owner, primary_result, authority_result, destination):
         return raw
     except BaseException as error:
         raise owner.remember(error)
+
+
+# This route owns ONLY validation/export. It grants no custody Step output,
+# productive cache authority, seal, upload, or current post-export HTTP lease.
+_CRYPTO_CONTEXT_SCOPE = "INITIAL_CUSTODY_CRYPTO_CONTEXT_V1"
+_CRYPTO_START_SCOPE = "INITIAL_CUSTODY_CRYPTO_START_V1"
+_CRYPTO_CHILD_SCOPE = "INITIAL_CUSTODY_CRYPTO_PENDING_CHILD_CLOSE_V1"
+_CRYPTO_ACK_SCOPE = "INITIAL_CUSTODY_CRYPTO_POST_OWNER_CLOSE_ACK_V1"
+_CRYPTO_CONTEXT_FIELDS = "schema scope kind root session job observed window primary authority filesSha256 " \
+    "directories inheritedContext budgetAcceptance exportSaveAuthority"
+_CRYPTO_INPUT_LIMITS = {
+    "primary-map.json": native.LIMIT, "authority-map.json": native.LIMIT,
+    "authority-return.json": native.LIMIT, "original-match.json": min(A.stages.LIMIT, native.LIMIT),
+    "fresh-match.json": min(A.stages.LIMIT, native.LIMIT), "event.json": I.EVENT_LIMIT,
+    "candidate-policy.json": I.POLICY_LIMIT, "recipient-public.asc": native.posix.MAX_KEY_BYTES,
+}
+_CRYPTO_DIRECTORIES = ("custody", "returned", "control-home", "temporary", "crypto-service",
+    "copied-evidence", "public-crypto", "export-output")
+_CRYPTO_ATTEMPTS, _CRYPTO_RETURNS = {}, {}
+_CRYPTO_NATIVE_RETURNS = {}
+
+
+def _custody_crypto_command(context_hash, minimum=None):
+    result = native.initial_custody_authority_command(context_hash, minimum)
+    result[5] = "_crypto"
+    return result
+
+
+def _crypto_context(context_raw, first, boot):
+    """Closed fixed transport plus actual host; no transported clock is live."""
+    context = fields(canonical(context_raw, 65536), _CRYPTO_CONTEXT_FIELDS, "CRYPTO_CONTEXT_FIELDS")
+    clock, limits = _custody_authority_frame(context["window"])
+    kind = context["kind"]
+    require(type(context["schema"]) is int and context["schema"] == 1 and
+        context["scope"] == _CRYPTO_CONTEXT_SCOPE and kind in ("gate", "worker") and
+        limits["kind"] == kind and clock == first.clock and context["window"]["originalBootDigest"] == boot and
+        context["root"] == str(ROOT) and context["budgetAcceptance"] == "NOT_ADMITTED" and
+        context["exportSaveAuthority"] is False and not any(name in os.environ for name in _CREDENTIAL_NAMES),
+        "CRYPTO_CONTEXT_BINDINGS")
+    first_use = O.integer(context["observed"]["firstUseAt"], 1)
+    observed, primary_path, event = N.host_context(first_use)
+    roots, _handoff, custody = _paths(kind)
+    returned = custody / "returned"
+    require(observed == context["observed"] and observed["kind"] == kind and
+        observed["role"] == first.clock.role and primary_path == roots["P"] and
+        context["session"] == str(returned) and limits["startNs"] <= first.nanoseconds < limits["workEndNs"] and
+        type(context["job"]) is str and re.fullmatch(r"[0-9a-f]{32}", context["job"]), "CRYPTO_ACTUAL_CONTEXT")
+    primary = fields(context["primary"], " ".join(E.PRIMARY_FIELDS), "CRYPTO_PRIMARY_FIELDS")
+    require(primary["step"] == ("initial-originals" if kind == "gate" else "canonical-initialization") and
+        primary["outcome"] == "success", "CRYPTO_PRIMARY_STEP")
+    for name in ("resultSha256", "handoffSha256", "inventorySha256"):
+        digest(primary[name])
+    authority = fields(context["authority"], "returnSha256 matchSha256 copySha256", "CRYPTO_AUTHORITY_FIELDS")
+    for value in authority.values():
+        digest(value)
+    hashes = fields(context["filesSha256"], " ".join(_CRYPTO_INPUT_LIMITS), "CRYPTO_INPUT_FIELDS")
+    for value in hashes.values():
+        digest(value)
+    require(hashes["original-match.json"] == hashes["fresh-match.json"] == authority["matchSha256"] and
+        hashes["authority-return.json"] == authority["returnSha256"] and
+        hashes["authority-map.json"] == authority["copySha256"] and hashes["event.json"] == O.digest(event),
+        "CRYPTO_ORIGINAL_INPUT_LINKS")
+    directories = fields(context["directories"], " ".join(_CRYPTO_DIRECTORIES), "CRYPTO_DIRECTORY_FIELDS")
+    identities = []
+    for name in _CRYPTO_DIRECTORIES:
+        if name == "export-output" and first.clock.role != "windows-x64":
+            require(directories[name] is None, "CRYPTO_POSIX_OUTPUT_ABSENT")
+        else:
+            identities.append(tuple(native.directory_identity(directories[name], first.clock.role)))
+    require(len(set(identities)) == len(identities), "CRYPTO_DIRECTORY_ALIAS")
+    inherited = context["inheritedContext"]
+    require(type(inherited) is dict and all(type(item) is str for item in inherited.values()) and
+        (set(inherited).issubset({"GRADLE_USER_HOME"}) or set(inherited) == set(Q._CONTEXT)),
+        "CRYPTO_PARENT_DOMAIN")
+    return context, event
+
+
+def _crypto_start_fields(context_raw, context, start, clock):
+    fields(start, " ".join(native.START_FIELDS), "CRYPTO_START_FIELDS")
+    path = _paths(context["kind"])[2] / "returned"
+    frame = context["window"]
+    require(type(start["schema"]) is int and start["schema"] == 1 and start["scope"] == _CRYPTO_START_SCOPE and
+        start["contextSha256"] == O.digest(context_raw) and start["argv"] == _custody_crypto_command(O.digest(context_raw)) and
+        start["cwd"] == str(ROOT) and start["role"] == clock.role and start["job"] == context["job"] and
+        start["state"] == str(path) and start["home"] == str(path / "control-home") and
+        type(start["invocation"]) is str and re.fullmatch(r"[0-9a-f]{32}", start["invocation"]) and
+        start["exitCode"] is None and start["launchAttempted"] is False and start["scopeAttempted"] is False and
+        start["retirement"] == "UNKNOWN", "CRYPTO_START")
+    began = O.integer(start["startedNs"], O.integer(frame["startNs"]))
+    require(began < O.integer(start["workEndNs"]) and
+        start["workEndNs"] == min(frame["workEndNs"], began + 210 * O.NS) and
+        start["finalEndNs"] == min(frame["nativeFinalEndNs"], start["workEndNs"] + 45 * O.NS),
+        "CRYPTO_ORIGINAL_PHASE")
+    expected = native.processes.ownership_environment(context["inheritedContext"], context["job"],
+        start["invocation"], str(path), str(path / "control-home"), allow_new_context=True)
+    require(type(start["inheritedContext"]) is dict and
+        start["inheritedContext"] == {name: expected[name] for name in Q._CONTEXT}, "CRYPTO_START_INHERITANCE")
+    return start
+
+
+def _crypto_start(context_raw, context, start, first, boot, event, inherited):
+    checked, actual_event = _crypto_context(context_raw, first, boot)
+    require(checked == context and type(event) is bytes and actual_event == event, "CRYPTO_FRAME_ORIGINALS")
+    _crypto_start_fields(context_raw, context, start, first.clock)
+    require(start["startedNs"] <= first.nanoseconds < start["workEndNs"] and
+        type(inherited) is dict and set(inherited) == set(Q._CONTEXT) and inherited == start["inheritedContext"],
+        "CRYPTO_NATIVE_INHERITANCE")
+    domain = native.processes.ownership_domains(inherited[native.processes.CHAIN_ENV],
+        inherited[native.processes.DOMAINS_ENV])[-1]
+    require(domain == {"id": start["invocation"], "job": start["job"], "state": start["state"],
+        "home": start["home"]}, "CRYPTO_NATIVE_DOMAIN")
+    return start, domain
+
+
+def _crypto_inputs(context, raws):
+    """Fixed original-byte links, not a serialized PRIMARY/authority capability."""
+    require(type(raws) is dict and set(raws) == set(_CRYPTO_INPUT_LIMITS), "CRYPTO_INPUT_ROSTER")
+    for name, maximum in _CRYPTO_INPUT_LIMITS.items():
+        raw = raws[name]
+        require(type(raw) is bytes and 0 < len(raw) <= maximum and
+            O.digest(raw) == context["filesSha256"][name], "CRYPTO_INPUT_BYTES")
+    require(raws["original-match.json"] == raws["fresh-match.json"], "CRYPTO_MATCH_BYTES")
+    kind = context["kind"]
+    match_type = A.gate.GateEligibility if kind == "gate" else A.stages.BootstrapMatch
+    match = canonical(raws["fresh-match.json"], _CRYPTO_INPUT_LIMITS["fresh-match.json"])
+    require(match["firstUseAt"] == context["observed"]["firstUseAt"] and
+        match["source"] == context["observed"]["source"], "CRYPTO_MATCH_SOURCE")
+    primary, authority, closed = (canonical(raws[name]) for name in
+        ("primary-map.json", "authority-map.json", "authority-return.json"))
+    require(primary["scope"] == PRIMARY_SCOPE and primary["origin"] == ORIGINS[0] and
+        authority["scope"] == "INITIAL_RECIPIENT_CUSTODY_AUTHORITY_COPY_V1" and authority["origin"] == ORIGINS[1] and
+        closed["scope"] == _AUTHORITY_RETURN_SCOPE and closed["retirement"] == "KNOWN_RESOURCE_CLOSE_ONLY" and
+        closed["windowSha256"] == O.digest(O.encoded(context["window"])) and
+        closed["primaryResultSha256"] == authority["primaryResultSha256"] == context["primary"]["resultSha256"] and
+        closed["primaryCopySha256"] == authority["primaryCopySha256"] == O.digest(raws["primary-map.json"]) and
+        authority["authorityReturnSha256"] == O.digest(raws["authority-return.json"]) and
+        authority["authorityInventorySha256"] == closed["inventorySha256"] and
+        closed["matchSha256"] == context["authority"]["matchSha256"] and
+        all(value["exportSaveAuthority"] is False for value in (primary, authority, closed)),
+        "CRYPTO_PRIMARY_AUTHORITY_LINKS")
+    try:
+        inventory_raw = base64.b64decode(authority["authorityInventoryBase64"], validate=True)
+    except (ValueError, TypeError):
+        raise O.OriginError("INITIAL_CUSTODY_CRYPTO_AUTHORITY_INVENTORY_ENCODING") from None
+    inventory = canonical(inventory_raw)
+    require(O.digest(inventory_raw) == closed["inventorySha256"] and
+        inventory["matchSha256"] == closed["matchSha256"] and inventory["pendingSha256"] == closed["pendingSha256"],
+        "CRYPTO_AUTHORITY_INVENTORY_LINKS")
+    policy, public = I._policy(raws["candidate-policy.json"], int(time.time()))
+    require(public == raws["recipient-public.asc"] and O.digest(raws["candidate-policy.json"]) == A.stages.POLICY_SHA256 and
+        policy["recipient"]["sha256"] == O.digest(public), "CRYPTO_RECIPIENT_PUBLIC_POLICY")
+    return match_type(raws["original-match.json"]), match_type(raws["fresh-match.json"]), policy
+
+
+@dataclass(frozen=True, repr=False)
+class _CryptoNativeReturn:
+    context: bytes
+    records: tuple
+    child: bytes
+    phase: tuple
+
+
+def _custody_crypto_native(owner, private, context_raw, window, check):
+    """One token-free child, captured and retired within the original phase.
+
+    The owner predates setup and keeps its original LOCAL255 ceiling. This
+    function neither closes that outer owner nor grants the later READ edge.
+    """
+    require(type(owner) is _CustodyOwner and type(window) is Window and owner.fence is window and
+        owner.first is window._view().binding[0] and callable(check), "CRYPTO_NATIVE_OWNER")
+    context = canonical(context_raw, 65536)
+    require(context["scope"] == _CRYPTO_CONTEXT_SCOPE and
+        private.path == _paths(context["kind"])[2] / "returned" and
+        tuple(private.identity) == tuple(context["directories"]["returned"]) and
+        not any(name in os.environ for name in _CREDENTIAL_NAMES), "CRYPTO_NATIVE_CONTEXT")
+    check()
+    started = window.now()
+    work_end = min(window.work, started + 210 * O.NS)
+    final_end = min(window.final, work_end + 45 * O.NS)
+    owner.enter_crypto_phase(context_raw, started, work_end, final_end)
+    # Setup has already spent the owner's original ceiling. This only clips it.
+    capture_end = min(owner.local_end, window.deadline(255, final=True, limit=final_end))
+    invocation = uuid.uuid4().hex
+    environment = native.processes.ownership_environment(native.recipient_environment(private.path),
+        context["job"], invocation, str(private.path), str(private.path / "control-home"), allow_new_context=True)
+    require(not any(name in environment for name in _CREDENTIAL_NAMES), "CRYPTO_NATIVE_TOKEN_FREE")
+    start = {"schema": 1, "scope": _CRYPTO_START_SCOPE, "contextSha256": O.digest(context_raw),
+        "argv": _custody_crypto_command(O.digest(context_raw)), "cwd": str(ROOT), "role": window.clock.role,
+        "job": context["job"], "invocation": invocation, "state": str(private.path),
+        "home": str(private.path / "control-home"),
+        "inheritedContext": {name: environment[name] for name in Q._CONTEXT}, "startedNs": started,
+        "workEndNs": work_end, "finalEndNs": final_end, "exitCode": None,
+        "launchAttempted": False, "scopeAttempted": False, "retirement": "UNKNOWN"}
+    _crypto_start_fields(context_raw, context, start, window.clock)
+    directory = owner.child(private, "crypto-service")
+    require(tuple(directory.identity) == tuple(context["directories"]["crypto-service"]), "CRYPTO_SERVICE_PIN")
+    start_raw = owner.write(directory, "start.json", start)
+    row = dict(start)
+    row["captureOutcomes"] = {name: {"synced": False, "verified": False, "closeAttempted": False,
+        "closed": False, "readback": False} for name in ("stdout", "stderr")}
+    scope = out = err = child = baseline_raw = birth_raw = None
+    native_known = False
+    anchor = owner.check()
+    resource_start = len(anchor.rows)
+    try:
+        check()
+        out = owner.acquire("stdout", lambda: directory.create_file("stdout.log",
+            max_bytes=native.ACK_LIMIT, deadline=capture_end))
+        err = owner.acquire("stderr", lambda: directory.create_file("stderr.log",
+            max_bytes=native.STDERR_LIMIT, deadline=capture_end))
+        row["scopeAttempted"] = True
+        scope = owner.acquire("native-scope", lambda: native.processes.make_scope(context["job"], invocation,
+            str(private.path), str(private.path / "control-home")))
+        row["preparerIdentity"] = native.preparer_identity(scope, window.clock.role)
+        baseline_raw = owner.write(directory, "baseline.json", {"role": window.clock.role,
+            "baseline": sorted(scope.baseline) if hasattr(scope, "baseline") else None,
+            "kernelJob": window.clock.role == "windows-x64"})
+        row["baselineSha256"] = O.digest(baseline_raw)
+        check()
+        row["launchMinimumNs"] = window.now(limit=work_end)
+        argv = _custody_crypto_command(O.digest(context_raw), row["launchMinimumNs"])
+        row["launchArgv"], row["launchAttempted"] = argv, True
+        child = scope.spawn(argv, str(ROOT), environment, stdout=out, stderr=err)
+        require(child.stdout is None and child.stderr is None, "CRYPTO_PRIVATE_SINKS")
+        birth = scope.description()
+        leaders = [value for value in birth.get("startedIdentities", []) if value.get("pid") == child.pid]
+        require(len(leaders) == 1, "CRYPTO_NATIVE_BIRTH")
+        row["leader"] = dict(leaders[0])
+        native.lifetime(row["leader"], window.clock.role)
+        birth_raw = owner.write(directory, "native-start.json", {"ownership": birth, "leader": row["leader"],
+            "preparerIdentity": row["preparerIdentity"], "observedNs": window.now(limit=work_end)})
+        row["nativeStartSha256"] = O.digest(birth_raw)
+        while True:
+            check()
+            window.now(limit=work_end)
+            if window.clock.role == "windows-x64":
+                out.observe_live_output()
+                err.observe_live_output()
+            else:
+                out.verify()
+                err.verify()
+            code = child.poll()
+            if code is not None:
+                row["exitCode"] = code  # Original supplier return before any later observation.
+            observed = window.now(limit=work_end)
+            if code is not None:
+                row["completedNs"] = observed
+                require(type(code) is int and code == 0, "CRYPTO_CHILD_FAILED")
+                require(not scope.discover(), "CRYPTO_LEFT_DESCENDANTS")
+                window.now(limit=work_end)
+                break
+            scope.discover()
+            native.time.sleep(.025)
+    except BaseException as error:
+        owner.error("custody-crypto-native", error)
+    finally:
+        # Acquisition may return before a late guard raises. These private rows
+        # retain the actual resources; no repeat allocation or inferred birth.
+        saved = anchor.rows[resource_start:]
+        scope = scope if scope is not None else next((r for _row, label, r, _a, _c in saved if label == "native-scope"), None)
+        out = out if out is not None else next((r for _row, label, r, _a, _c in saved if label == "stdout"), None)
+        err = err if err is not None else next((r for _row, label, r, _a, _c in saved if label == "stderr"), None)
+        if scope is not None:
+            try:
+                # A failed original clock cannot prevent bounded cleanup, but
+                # the retained prelaunch ceiling cannot yield successful use.
+                try:
+                    window.now(final=True, limit=final_end)
+                except BaseException as error:
+                    owner.error("crypto-final-clock", error)
+                remaining = max(0, capture_end - time.monotonic())
+                grace = min(5, remaining)
+                row["survivors"] = scope.drain(grace=grace, kill_wait=min(5, max(0, remaining - grace)),
+                    deadline=capture_end)
+                require(row["survivors"] == [], "CRYPTO_SURVIVORS")
+                row["ownership"] = scope.description()
+                require(row["ownership"].get("discoveryErrors") == [], "CRYPTO_DRAIN_IDENTITY")
+                if "preparerIdentity" in row:
+                    require(native.preparer_identity(scope, window.clock.role) == row["preparerIdentity"],
+                        "CRYPTO_DRAIN_IDENTITY")
+                native.posix._deadline(capture_end)
+                native_known = True
+            except BaseException as error:
+                owner.error("crypto-drain", error, unknown=True)
+            owner.close_one(scope)
+            original_row = next(r for r, _label, actual, _a, _c in anchor.rows if actual is scope)
+            row["scopeCloseAttempted"], row["scopeClosed"] = original_row["attempted"], original_row["closed"]
+            if not original_row["closed"]:
+                native_known = False
+                owner.error("crypto-scope-close", O.OriginError("INITIAL_CUSTODY_CRYPTO_SCOPE_UNKNOWN"), unknown=True)
+        elif row["scopeAttempted"]:
+            owner.error("crypto-scope-construction", O.OriginError("INITIAL_CUSTODY_CRYPTO_SCOPE_UNKNOWN"), unknown=True)
+        else:
+            native_known = True
+        if native_known and not anchor.unknown:
+            for name, stream in (("stdout", out), ("stderr", err)):
+                if stream is None:
+                    continue
+                outcome = row["captureOutcomes"][name]
+                try:
+                    native.posix._deadline(capture_end)
+                    stream.sync()
+                    outcome["synced"] = True
+                    stream.verify()
+                    outcome["verified"] = True
+                    native.posix._deadline(capture_end)
+                except BaseException as error:
+                    owner.error("crypto-capture", error)
+                owner.close_one(stream)
+                original_row = next(r for r, _label, actual, _a, _c in anchor.rows if actual is stream)
+                outcome.update(closeAttempted=original_row["attempted"], closed=original_row["closed"])
+        elif not native_known:
+            owner.error("crypto-native-close", O.OriginError("INITIAL_CUSTODY_CRYPTO_NATIVE_UNKNOWN"), unknown=True)
+        if row["launchAttempted"] and anchor.failure is not None:
+            owner.error("crypto-child-return", anchor.failure, unknown=True)
+    if anchor.failure is not None:
+        raise anchor.failure
+    require(native_known and not anchor.unknown and all(outcome[name] is True
+        for outcome in row["captureOutcomes"].values() for name in ("synced", "verified", "closeAttempted", "closed")),
+        "CRYPTO_NATIVE_NOT_RETIRED")
+    row["finalizedNs"] = window.now(final=True, limit=final_end)
+    captures = {}
+    for name, maximum in (("stdout", native.ACK_LIMIT), ("stderr", native.STDERR_LIMIT)):
+        captures[name] = owner.read(directory, name + ".log", maximum, final=True)
+        row["captureOutcomes"][name]["readback"] = True
+        native.posix._deadline(capture_end)
+        window.now(final=True, limit=final_end)
+    require(captures["stderr"] == b"", "CRYPTO_STDERR")
+    row.update(retirement="KNOWN", errors=[], captures={name: {"sha256": O.digest(raw), "bytes": len(raw)}
+        for name, raw in captures.items()})
+    row_raw = owner.write(directory, "result.json", row, final=True)
+    child_raw = owner.read(private, "crypto-child-result.json", final=True)
+    native.posix._deadline(capture_end)
+    window.now(final=True, limit=final_end)
+    require(owner.phase_originals is None, "CRYPTO_NATIVE_RETURN_REUSE")
+    returned = _CryptoNativeReturn(context_raw, tuple(sorted({"start.json": start_raw, "result.json": row_raw,
+        "baseline.json": baseline_raw, "native-start.json": birth_raw, "stdout.log": captures["stdout"],
+        "stderr.log": captures["stderr"]}.items())), child_raw, (started, work_end, final_end))
+    owner.phase_originals = returned
+    original = (returned, owner, window, owner.__dict__, anchor, scope, out, err, child, capture_end,
+        returned.records, child_raw, returned.phase, returned.__dict__)
+    _CRYPTO_NATIVE_RETURNS[id(returned)] = (original, N._history_graph(returned.__dict__, returned.records))
+    owner.leave_crypto_phase(started, work_end, final_end)
+    return returned
+
+
+def _crypto_metadata(snapshot):
+    return [[name, directory, list(identity), count, O.parse(raw)]
+        for name, directory, identity, count, raw in snapshot.metadata]
+
+
+def _crypto_previous(owner, destination, primary_raw, authority_raw):
+    primary, authority = canonical(primary_raw), canonical(authority_raw)
+    require(primary["scope"] == PRIMARY_SCOPE and primary["origin"] == ORIGINS[0] and
+        authority["scope"] == "INITIAL_RECIPIENT_CUSTODY_AUTHORITY_COPY_V1" and authority["origin"] == ORIGINS[1] and
+        authority["primaryCopySha256"] == O.digest(primary_raw) and
+        authority["previousMemberCount"] == primary["memberCount"] == primary["nextOrdinal"] and
+        authority["aggregateMemberCount"] == authority["nextOrdinal"] == primary["memberCount"] + authority["memberCount"] and
+        authority["aggregateTotalBytes"] == primary["totalBytes"] + authority["totalBytes"] and
+        authority["remainingOrigins"] == [ORIGINS[2]] and authority["freeze"] == "NOT_FINAL_THREE_ORIGIN_FREEZE" and
+        primary["exportSaveAuthority"] is False and authority["exportSaveAuthority"] is False and
+        primary["destination"] == authority["destination"] == str(destination.path) and
+        primary["destinationIdentity"] == authority["destinationIdentity"] == list(destination.identity),
+        "CRYPTO_PREVIOUS_MAPS")
+    require(type(primary["members"]) is list and len(primary["members"]) == primary["memberCount"] > 0 and
+        type(authority["members"]) is list and len(authority["members"]) == authority["memberCount"] > 0 and
+        authority["destinationRootBefore"] == primary["destinationMetadata"][0] and
+        authority["destinationBeforeMetadataSha256"] == O.digest(O.encoded({"metadata": primary["destinationMetadata"]})),
+        "CRYPTO_PREVIOUS_MAP_LINKS")
+    before = _snapshot(owner, "COPIED_PRIMARY_AND_AUTHORITY", destination)
+    members = tuple((*primary["members"], *authority["members"]))
+    require(_crypto_metadata(before) == authority["destinationMetadata"] and
+        before.metadata[1:primary["memberCount"] + 1] == tuple((name, directory, tuple(identity), count, O.encoded(data))
+            for name, directory, identity, count, data in primary["destinationMetadata"][1:]) and
+        tuple(row[0] for row in before.metadata) == ("", *(_member_name(n) for n in range(len(members)))) and
+        all(not row[1] for row in before.metadata[1:]), "CRYPTO_PREVIOUS_DESTINATION")
+    for number, (item, node) in enumerate(zip(members, before.metadata[1:])):
+        require(item["member"] == _member_name(number) and item["origin"] ==
+            (ORIGINS[0] if number < primary["memberCount"] else ORIGINS[1]) and
+            type(item["bytes"]) is int and item["bytes"] == node[3], "CRYPTO_PREVIOUS_MEMBER")
+        _written_matches(O.encoded(item["destinationWriteMetadata"]), node, before.windows)
+        reader, verify = _snapshot_reader(owner, before, item["member"])
+        _consume(owner, reader, item["bytes"], item["sha256"], verify)
+    require(sum(item["bytes"] for item in members) == authority["aggregateTotalBytes"], "CRYPTO_PREVIOUS_BYTES")
+    return before, members
+
+
+def _recipient_inventory(owner, work, public_raw):
+    """Actual completed validation tree, not fabricated old PRIMARY pins."""
+    source = _snapshot(owner, ORIGINS[2], work)
+    nodes = {row[0]: row for row in source.metadata}
+    windows = source.windows
+    names = tuple(sorted(name for name in nodes if name and "/" not in name))
+    operations = tuple(name for name in names if re.fullmatch(
+        r"gpg-[0-9a-f]{32}" if windows else r"gpg-[a-z0-9_]+", name))
+    results = tuple(name for name in names if re.fullmatch(r"recipient-validation-result-[0-9a-f]{32}\.json", name))
+    require(len(operations) == (3 if windows else 2) and len(results) == (1 if windows else 0) and
+        set(names) == {"recipient.asc", "recipient.gpg", "gnupg", "tmp", *operations, *results},
+        "RECIPIENT_VALIDATION_ROOT_ROSTER")
+    directory_names = ("", "gnupg", "tmp", *operations)
+    require({name for name, node in nodes.items() if node[1]} == set(directory_names), "RECIPIENT_VALIDATION_DIRECTORIES")
+    directories = []
+    expected = {name: native.posix.MAX_KEY_BYTES for name in ("recipient.asc", "recipient.gpg")}
+    expected.update({name: native.diagnostics.MAX_RECORD_BYTES for name in results})
+    for directory in directory_names:
+        prefix = directory + "/" if directory else ""
+        members = tuple(sorted(name[len(prefix):] for name in nodes if name != directory and name.startswith(prefix) and
+            "/" not in name[len(prefix):]))
+        require(len(members) <= 32, "RECIPIENT_VALIDATION_DIRECTORY_CAP")
+        if directory in ("gnupg", "tmp"):
+            require(not windows or not members, "RECIPIENT_WINDOWS_HOME_NOT_EMPTY")
+            require(all("secret" not in name.casefold() and "private" not in name.casefold() and
+                name.casefold() != "secring.gpg" for name in members), "RECIPIENT_PRIVATE_MATERIAL_FORBIDDEN")
+        elif directory:
+            require(members == tuple(sorted(("stdout", "stderr") if windows else
+                ("stdout", "stderr", "status", "process.json"))), "RECIPIENT_VALIDATION_OPERATION_ROSTER")
+        directories.append({"relative": directory, "identity": list(nodes[directory][2]), "members": list(members)})
+        if directory:
+            for name in members:
+                expected[directory + "/" + name] = (native.LIMIT if directory in ("gnupg", "tmp") or
+                    name == "process.json" else native.posix.MAX_DIAGNOSTIC_BYTES)
+    files = {name: row for name, row in nodes.items() if not row[1]}
+    require(set(files) == set(expected) and (len(files) == 9 if windows else 10 <= len(files) <= 74),
+        "RECIPIENT_VALIDATION_FILE_ROSTER")
+    records, encodings, total = [], {}, 0
+    for name in sorted(expected):
+        node, maximum = files[name], expected[name]
+        require(node[3] <= maximum, "RECIPIENT_VALIDATION_FILE_CAP")
+        reader, verify = _snapshot_reader(owner, source, name)
+        retain = name in ("recipient.asc", "recipient.gpg")
+        returned = _consume(owner, reader, node[3], None, verify, retain=retain)
+        if retain:
+            encodings[name] = returned
+        checksum = O.digest(returned) if retain else returned
+        total += node[3]
+        require(total <= N.CRYPTO_ORIGINALS_LIMIT, "RECIPIENT_VALIDATION_TOTAL_CAP")
+        records.append({"relative": name, "maximum": maximum, "bytes": node[3], "sha256": checksum,
+            "identity": list(node[2]), "provenance": "ACTUAL_SAME_CHILD_VALIDATION_ORIGINAL"})
+    require(type(public_raw) is bytes and 0 < len(public_raw) <= native.posix.MAX_KEY_BYTES and
+        encodings["recipient.asc"] == public_raw and native.posix._public_armor(public_raw) == encodings["recipient.gpg"],
+        "RECIPIENT_PUBLIC_ONLY_ENCODINGS")
+    _snapshot_current(owner, source, rescan=True)
+    return source, {"schema": 1, "scope": "INITIAL_CUSTODY_SAME_CHILD_VALIDATION_ORIGINALS_V1",
+        "root": str(work.path), "directories": directories, "files": records, "fileCount": len(records),
+        "directoryCount": len(directories), "totalBytes": total, "outerChild": "STILL_LIVE",
+        "exportSaveAuthority": False}
+
+
+@dataclass(frozen=True, repr=False)
+class _RecipientCopy:
+    raw: bytes
+    source: object
+    before: object
+    after: object
+    members: tuple
+    prior: tuple
+
+
+def _copy_recipient(owner, destination, work, primary_raw, authority_raw, context_raw, start_raw,
+        summary_raw, public_raw, check):
+    require(type(owner) is _PrimaryOwner and callable(check), "RECIPIENT_COPY_OWNER")
+    try:
+        check()
+        before, prior = _crypto_previous(owner, destination, primary_raw, authority_raw)
+        source, inventory = _recipient_inventory(owner, work, public_raw)
+        context, start, summary = canonical(context_raw, 65536), canonical(start_raw), canonical(summary_raw)
+        require(context["scope"] == _CRYPTO_CONTEXT_SCOPE and start["scope"] == _CRYPTO_START_SCOPE and
+            summary["scope"] == "INITIAL_CUSTODY_ACTUAL_RECIPIENT_RETURN_V1" and
+            summary["contextSha256"] == O.digest(context_raw) and summary["startSha256"] == O.digest(start_raw) and
+            summary["supplierReturned"] is True and summary["outerChild"] == "STILL_LIVE" and
+            summary["recipient"]["key_sha256"] == O.digest(public_raw) and
+            summary["recipient"]["work_identity"] == list(work.identity) and
+            context["directories"]["public-crypto"] == list(work.identity), "RECIPIENT_COPY_ORIGINAL_BINDINGS")
+        embedded = (("context.json", context_raw), ("start.json", start_raw), ("recipient-return.json", summary_raw))
+        added_bytes = inventory["totalBytes"] + sum(len(raw) for _, raw in embedded)
+        _aggregate(tuple(owner.snapshots), sum(row["bytes"] for row in prior) + added_bytes,
+            len(prior) + len(inventory["files"]) + len(embedded) + 1)
+        require(len({row[2] for row in (*before.metadata, *source.metadata)}) ==
+            len(before.metadata) + len(source.metadata), "RECIPIENT_COPY_SOURCE_ALIAS")
+        members = []
+        for item in inventory["files"]:
+            check()
+            name, written = _copy_member(owner, destination, len(prior) + len(members), item["bytes"], item["sha256"],
+                snapshot=source, name=item["relative"])
+            members.append({"member": name, "origin": ORIGINS[2], "original": item["relative"],
+                "originalMaximum": item["maximum"], "bytes": item["bytes"], "sha256": item["sha256"],
+                "provenance": item["provenance"], "carrier": "INDEXED_DISK_ORIGINAL",
+                "sourceCopyIdentity": item["identity"], "destinationWriteMetadata": O.parse(written)})
+        for name, raw in embedded:
+            check()
+            target, written = _copy_member(owner, destination, len(prior) + len(members), len(raw), O.digest(raw), embedded=raw)
+            members.append({"member": target, "origin": ORIGINS[2], "original": name,
+                "originalMaximum": 65536 if name == "context.json" else native.LIMIT,
+                "bytes": len(raw), "sha256": O.digest(raw), "provenance": "ACTUAL_PRE_EXPORT_RETURNED_BYTES",
+                "carrier": "EMBEDDED_NOT_DISK_ORIGINAL", "sourceCopyIdentity": None,
+                "destinationWriteMetadata": O.parse(written)})
+        after = _snapshot(owner, "COPIED_THREE_ORIGIN_DATA", destination)
+        require(after.pin == before.pin and after.metadata[1:len(prior) + 1] == before.metadata[1:] and
+            tuple(row[0] for row in after.metadata) == ("", *(_member_name(n) for n in range(len(prior) + len(members)))) and
+            all(not row[1] for row in after.metadata[1:]), "RECIPIENT_COPY_APPEND_TRANSITION")
+        for item, node in zip((*prior, *members), after.metadata[1:]):
+            check()
+            _written_matches(O.encoded(item["destinationWriteMetadata"]), node, after.windows)
+            reader, verify = _snapshot_reader(owner, after, item["member"])
+            _consume(owner, reader, item["bytes"], item["sha256"], verify)
+        _snapshot_current(owner, source, rescan=True)
+        _snapshot_current(owner, after, rescan=True)
+        _aggregate(tuple(owner.snapshots))
+        raw = O.encoded({"schema": 1, "scope": "INITIAL_CUSTODY_RECIPIENT_COPY_V1", "origin": ORIGINS[2],
+            "primaryCopySha256": O.digest(primary_raw), "authorityCopySha256": O.digest(authority_raw),
+            "validationInventory": inventory, "recipientReturnSha256": O.digest(summary_raw),
+            "members": members, "sourceMetadata": _crypto_metadata(source), "originalDirectories": inventory["directories"],
+            "destination": str(destination.path), "destinationIdentity": list(after.pin),
+            "destinationBeforeMetadataSha256": O.digest(O.encoded({"metadata": _crypto_metadata(before)})),
+            "destinationRootBefore": _crypto_metadata(before)[0], "destinationMetadata": _crypto_metadata(after),
+            "previousMemberCount": len(prior), "memberCount": len(members), "totalBytes": added_bytes,
+            "aggregateMemberCount": len(prior) + len(members),
+            "aggregateTotalBytes": sum(row["bytes"] for row in prior) + added_bytes,
+            "nextOrdinal": len(prior) + len(members), "outerChild": "STILL_LIVE",
+            "freeze": "NOT_FINAL_THREE_ORIGIN_FREEZE", "exportSaveAuthority": False})
+        canonical(raw)
+        check()
+        return _RecipientCopy(raw, source, before, after, tuple(members), prior)
+    except BaseException as error:
+        raise owner.remember(error)
+
+
+def _write_custody_map(owner, destination, name, raw):
+    """Only the four fixed non-overwriting manifest members, never an arbitrary path."""
+    require(name in ("primary-map.json", "authority-map.json", "recipient-map.json", "copy-map.json"),
+        "CRYPTO_FIXED_MAP_NAME")
+    canonical(raw, 65536 if name == "copy-map.json" else native.LIMIT)
+    reader = owner.acquire("embedded-reader", lambda: io.BytesIO(raw))
+    end = owner.guard()
+    writer = owner.acquire("writer", lambda: destination.create_file(name, max_bytes=len(raw), deadline=end))
+    def verify():
+        require(type(reader) is io.BytesIO and reader.getvalue() == raw, "CRYPTO_MAP_ORIGINAL_BYTES")
+    checksum, written = _consume(owner, reader, len(raw), O.digest(raw), verify, writer=writer)
+    require(checksum == O.digest(raw) and _read_private(owner, destination, name, len(raw)) == raw, "CRYPTO_MAP_READBACK")
+    return written
+
+
+@dataclass(frozen=True, repr=False)
+class _CryptoFreeze:
+    snapshot: object
+    maps: tuple
+    copied: bytes
+    metadata_sha256: str
+    members: tuple
+
+
+def _freeze_custody_copy(owner, destination, primary_raw, authority_raw, recipient_copy, check):
+    require(type(owner) is _PrimaryOwner and type(recipient_copy) is _RecipientCopy and callable(check), "CRYPTO_FREEZE_OWNER")
+    try:
+        primary, authority, recipient = canonical(primary_raw), canonical(authority_raw), canonical(recipient_copy.raw)
+        require(recipient["primaryCopySha256"] == O.digest(primary_raw) and
+            recipient["authorityCopySha256"] == O.digest(authority_raw) and
+            recipient["destinationMetadata"] == _crypto_metadata(recipient_copy.after), "CRYPTO_FREEZE_ORIGINS")
+        members = (*recipient_copy.prior, *recipient_copy.members)
+        maps = (("primary-map.json", primary_raw), ("authority-map.json", authority_raw),
+            ("recipient-map.json", recipient_copy.raw))
+        originals = (primary, authority, recipient)
+        require(tuple(value["origin"] for value in originals) == ORIGINS and
+            sum(value["memberCount"] for value in originals) == len(members) and
+            all(value["memberCount"] == len(value["members"]) for value in originals), "CRYPTO_FREEZE_MEMBER_COUNTS")
+        data_bytes = sum(row["bytes"] for row in members)
+        require(sum(value["totalBytes"] for value in originals) == data_bytes, "CRYPTO_FREEZE_DATA_BYTES")
+        combined = O.encoded({"schema": 1, "scope": "INITIAL_CUSTODY_THREE_ORIGIN_COPY_MAP_V1",
+            "origins": {origin: {"mapFile": name, "bytes": len(raw), "sha256": O.digest(raw),
+                "memberCount": value["memberCount"], "totalBytes": value["totalBytes"]}
+                for origin, (name, raw), value in zip(ORIGINS, maps, originals)},
+            "dataMemberCount": len(members), "dataTotalBytes": data_bytes,
+            "payloadMembersExcludingThisMap": len(members) + 3,
+            "payloadBytesExcludingThisMap": data_bytes + sum(len(raw) for _, raw in maps),
+            "destination": str(destination.path), "destinationIdentity": list(destination.identity),
+            "contentState": "COMPLETE_PRE_EXPORT_CONTENT_DECLARATION", "exportSaveAuthority": False})
+        canonical(combined, 65536)
+        maps = (*maps, ("copy-map.json", combined))
+        _aggregate(tuple(owner.snapshots), sum(len(raw) for _, raw in maps), 4)
+        check()
+        _snapshot_current(owner, recipient_copy.after, rescan=True)
+        written = {}
+        for name, raw in maps:
+            written[name] = _write_custody_map(owner, destination, name, raw)
+            check()
+        _snapshot_current(owner, recipient_copy.source, rescan=True)
+        # The completed validation cut is now immutable history. Close every
+        # source reader/Snapshot/writer before the ONE completed payload freeze;
+        # only the destination directory remains for its new read-only snapshot.
+        for _row, _label, resource, attempted, closed in reversed(owner.rows):
+            if resource is destination:
+                continue
+            if not attempted:
+                owner.close_one(resource)
+            else:
+                require(closed, "CRYPTO_PRE_EXPORT_CLOSE_UNKNOWN")
+        require(all(resource is destination or attempted and closed
+            for _row, _label, resource, attempted, closed in owner.rows), "CRYPTO_VALIDATION_NOT_RETIRED")
+        complete = _snapshot(owner, "COMPLETED_THREE_ORIGIN_FREEZE", destination)
+        require(complete.pin == recipient_copy.after.pin and
+            tuple(row[0] for row in complete.metadata) == tuple(sorted(("", *(row["member"] for row in members),
+                *(name for name, _ in maps)))) and all(not row[1] for row in complete.metadata[1:]),
+            "CRYPTO_COMPLETE_FREEZE_ROSTER")
+        nodes = {row[0]: row for row in complete.metadata}
+        for item, original in zip(members, recipient_copy.after.metadata[1:]):
+            node = nodes[item["member"]]
+            require(node == original, "CRYPTO_FINAL_DATA_CHANGED")
+            _written_matches(O.encoded(item["destinationWriteMetadata"]), node, complete.windows)
+            reader, verify = _snapshot_reader(owner, complete, item["member"])
+            _consume(owner, reader, item["bytes"], item["sha256"], verify)
+        for name, raw in maps:
+            _written_matches(written[name], nodes[name], complete.windows)
+            reader, verify = _snapshot_reader(owner, complete, name)
+            require(_consume(owner, reader, len(raw), O.digest(raw), verify, retain=True) == raw, "CRYPTO_FINAL_MAP_CHANGED")
+        _aggregate(tuple(owner.snapshots))
+        _snapshot_current(owner, complete, rescan=True)
+        final_bytes = data_bytes + sum(len(raw) for _, raw in maps)
+        require(sum(row[3] for row in complete.metadata if not row[1]) == final_bytes and
+            len(complete.metadata) == len(members) + 5, "CRYPTO_FINAL_PAYLOAD_COUNTS")
+        copied = O.encoded({"mapSha256": O.digest(combined), "memberCount": len(members) + 4,
+            "totalBytes": final_bytes, "origins": {origin: O.digest(raw)
+                for origin, (_name, raw) in zip(ORIGINS, maps[:3])}})
+        check()
+        return _CryptoFreeze(complete, maps, copied, O.digest(O.encoded({"metadata": _crypto_metadata(complete)})), tuple(members))
+    except BaseException as error:
+        raise owner.remember(error)
+
+
+def _crypto_directory_paths(kind):
+    custody = _paths(kind)[2]
+    returned = custody / "returned"
+    return {"custody": custody, "returned": returned, "control-home": returned / "control-home",
+        "temporary": returned / "temporary", "crypto-service": returned / "crypto-service",
+        "copied-evidence": custody / "copied-evidence", "public-crypto": custody / "public-crypto",
+        "export-output": custody / "export-output"}
+
+
+def _crypto_open_directories(owner, context):
+    paths, directories = _crypto_directory_paths(context["kind"]), {}
+    role = context["observed"]["role"]
+    for name in _CRYPTO_DIRECTORIES:
+        if name == "export-output" and role != "windows-x64":
+            require(not os.path.lexists(paths[name]), "CRYPTO_POSIX_OUTPUT_ALREADY_EXISTS")
+            continue
+        directory = _private(owner, paths[name]) if type(owner) is _PrimaryOwner else owner.open(paths[name])
+        pin = tuple(native.directory_identity(context["directories"][name], role))
+        require(tuple(directory.identity) == pin and directory.path == paths[name], "CRYPTO_DIRECTORY_PIN_CHANGED")
+        directories[name] = directory
+    return directories
+
+
+def _crypto_fixed_readback(owner, directories, context_raw, start_raw, raws):
+    """Read only fixed immutable inputs, never the evolving service directory."""
+    def read(directory, name, maximum):
+        if type(owner) is _PrimaryOwner:
+            return _read_private(owner, directory, name, maximum)
+        return owner.read(directory, name, maximum)
+    require(read(directories["returned"], "context.json", 65536) == context_raw and
+        read(directories["crypto-service"], "start.json", native.LIMIT) == start_raw, "CRYPTO_FRAME_READBACK")
+    for name, maximum in _CRYPTO_INPUT_LIMITS.items():
+        require(read(directories["returned"], name, maximum) == raws[name], "CRYPTO_INPUT_READBACK")
+    context = canonical(context_raw, 65536)
+    for name, directory in directories.items():
+        directory.verify()
+        require(tuple(directory.identity) == tuple(context["directories"][name]) and
+            directory.path == _crypto_directory_paths(context["kind"])[name], "CRYPTO_READBACK_DIRECTORY_CHANGED")
+
+
+def _crypto_recipient_value(pin):
+    E._recipient_current(pin)
+    recipient = pin[0]
+    value = {name: getattr(recipient, name) for name in
+        ("fingerprint", "encryption_fingerprint", "expires_at", "key_sha256")}
+    value.update(work_identity=list(recipient.work_identity), executable=str(recipient.executable))
+    if os.name == "nt":
+        value.update(work=str(recipient.work.path), executable_sha256=recipient.executable_sha256, job_id=recipient.job_id)
+    else:
+        value.update(work_dir=str(recipient.work_dir), home=str(recipient.home))
+    return value
+
+
+def _crypto_recipient_closed(pin):
+    """Original immutable fields after real close, not a live-owner assertion."""
+    recipient, kind, dictionary, names, values, paths, directories = pin
+    require(type(recipient) is kind and recipient.__dict__ is dictionary and set(dictionary) == set(names),
+        "CRYPTO_CLOSED_RECIPIENT_CHANGED")
+    for name, saved in zip(names, values):
+        actual = dictionary[name]
+        require(type(actual) is type(saved) and (actual == saved if type(saved) in (str, int) else actual is saved),
+            "CRYPTO_CLOSED_RECIPIENT_CHANGED")
+    for directory, original, path, identity in directories:
+        require(type(directory) is E.windows.files.PrivateDirectory and directory.__dict__ is original and
+            directory.path is path and directory.identity is identity and directory._closed is True,
+            "CRYPTO_CLOSED_RECIPIENT_DIRECTORY_CHANGED")
+    E._paths_current(paths)
+
+
+def _crypto_export_timeout(clock):
+    require(type(clock) is _CustodyChildClock, "CRYPTO_EXPORT_CLOCK")
+    local = local_value(time.monotonic())
+    now = clock.now()
+    remaining = min(clock.local_end - local, (clock.work - now) / O.NS)
+    # The Windows backend's separate finish30 is charged to this same end.
+    finish = 30 if clock.clock.role == "windows-x64" else 0
+    seconds = math.floor(min(240, remaining - finish))
+    require(type(seconds) is int and seconds > 0, "CRYPTO_EXPORT_NO_REMAINING_WORK")
+    return seconds
+
+
+def _crypto_child_work(clock, context_raw, start_raw, raws, minimum, metadata_close, metadata_last):
+    """Same-child actual Recipient, three-origin copy, one export and real close."""
+    context, start = canonical(context_raw, 65536), canonical(start_raw)
+    anchor = clock._view()
+    require(anchor.phase == "OPERATIVE" and anchor.operative is None, "CRYPTO_CHILD_OPERATIVE_PHASE")
+    first, _local, boot, cancelled = anchor.binding
+    original, fresh, policy = _crypto_inputs(context, raws)
+    frames = N._history_graph(context, start, raws, original.__dict__, fresh.__dict__, policy, first)
+    owner = file_owner = pin = recipient_copy_dictionary = recipient_copy_graph = None
+    copied_dictionary = copied_graph = None
+    failure = result_raw = copied = recipient_copy = manifest_raw = None
+    try:
+        owner = _CustodyOwner(clock.local_end, clock, first=first, cancelled=cancelled)
+        clock.attach_operative(owner)
+        directories = _crypto_open_directories(owner, context)
+        _crypto_fixed_readback(owner, directories, context_raw, start_raw, raws)
+        work, evidence = directories["public-crypto"], directories["copied-evidence"]
+        output_path = _crypto_directory_paths(context["kind"])["export-output"]
+        output = directories.get("export-output") if os.name == "nt" else output_path
+        require(native._initializer_names(owner, work) == (), "CRYPTO_VALIDATION_WORK_NOT_EMPTY")
+        validating = clock.now()
+        if os.name == "nt":
+            recipient = native.diagnostics.validate_recipient(raws["recipient-public.asc"], policy["recipient"]["fingerprint"],
+                work, job_id=context["job"])
+        else:
+            recipient = native.posix.validate_recipient(directories["returned"].path / "recipient-public.asc",
+                policy["recipient"]["fingerprint"], work.path)
+        # FIRST action after the supplier returns. This live object never comes
+        # from a summary file/dictionary, nor from the retired primary child.
+        pin = E._recipient_pin(recipient, os.name == "nt", evidence if os.name == "nt" else evidence.path, output)
+        returned = clock.now()
+        E._recipient_current(pin)
+        require(recipient.work_identity == work.identity and recipient.fingerprint == policy["recipient"]["fingerprint"] and
+            recipient.key_sha256 == policy["recipient"]["sha256"] and policy["expiresAt"] <= recipient.expires_at and
+            ((os.name == "nt" and recipient.work is work and recipient.job_id == context["job"]) or
+             (os.name != "nt" and recipient.work_dir == work.path and recipient.home == work.path / "gnupg")),
+            "CRYPTO_ACTUAL_RECIPIENT_RETURN")
+        summary_raw = O.encoded({"schema": 1, "scope": "INITIAL_CUSTODY_ACTUAL_RECIPIENT_RETURN_V1",
+            "contextSha256": O.digest(context_raw), "startSha256": O.digest(start_raw), "invocation": start["invocation"],
+            "clock": O.clock_value(first.clock), "bootDigest": boot, "launchMinimumNs": minimum,
+            "beganNs": first.nanoseconds, "metadataLastNs": metadata_last, "validationStartedNs": validating,
+            "validationReturnedNs": returned, "recipient": _crypto_recipient_value(pin),
+            "supplierReturned": True, "outerChild": "STILL_LIVE", "exportSaveAuthority": False})
+        canonical(summary_raw)
+        raw_owner = native.Owner(clock.local_end, clock, first=first, cancelled=cancelled)
+        file_owner = _PrimaryOwner(raw_owner)
+        destination = _private(file_owner, evidence.path)
+        validation_source = _private(file_owner, work.path)
+
+        def copy_returns_current():
+            # Callback-free original-return checks remain valid after the live
+            # Recipient/work owners close; no retired owner is reopened here.
+            if recipient_copy is not None:
+                require(type(recipient_copy) is _RecipientCopy and recipient_copy.__dict__ is recipient_copy_dictionary,
+                    "CRYPTO_RECIPIENT_COPY_RETURN_CHANGED")
+                N._check_history(recipient_copy_graph)
+            if copied is not None:
+                require(type(copied) is _CryptoFreeze and copied.__dict__ is copied_dictionary, "CRYPTO_FREEZE_RETURN_CHANGED")
+                N._check_history(copied_graph)
+
+        def passive():
+            N._check_history(frames)
+            clock._view()
+            owner.check()
+            E._recipient_current(pin)
+            require(not any(name in os.environ for name in _CREDENTIAL_NAMES), "CRYPTO_CHILD_CREDENTIAL_CHANGED")
+            require(destination.path == evidence.path and destination.identity == evidence.identity and
+                recipient.work_identity == work.identity, "CRYPTO_CHILD_ORIGINAL_ROOTS")
+            copy_returns_current()
+
+        def before_export():
+            passive()
+            clock.now()
+            _crypto_fixed_readback(owner, directories, context_raw, start_raw, raws)
+            passive()
+
+        before_export()
+        recipient_copy = _copy_recipient(file_owner, destination, validation_source, raws["primary-map.json"],
+            raws["authority-map.json"], context_raw, start_raw, summary_raw, raws["recipient-public.asc"], passive)
+        recipient_copy_dictionary = recipient_copy.__dict__
+        recipient_copy_graph = N._history_graph(recipient_copy_dictionary)
+        copied = _freeze_custody_copy(file_owner, destination, raws["primary-map.json"], raws["authority-map.json"],
+            recipient_copy, passive)
+        copied_dictionary = copied.__dict__
+        copied_graph = N._history_graph(copied.__dict__)
+        output_owner = output if os.name == "nt" else None
+
+        def export_check():
+            before_export()
+            require(type(copied) is _CryptoFreeze and copied.__dict__ is copied_dictionary, "CRYPTO_FREEZE_RETURN_CHANGED")
+            N._check_history(copied_graph)
+            _snapshot_current(file_owner, copied.snapshot, rescan=True)
+            current = int(time.time())
+            require(policy["notBefore"] <= context["observed"]["firstUseAt"] <= current < policy["expiresAt"] <=
+                recipient.expires_at, "CRYPTO_LOCAL_POLICY_EXPIRED")
+            # Validation-only work roster is intentionally NOT reasserted here:
+            # export creates additional backend records outside the frozen tree.
+
+        def read_manifest():
+            nonlocal output_owner
+            if output_owner is None:
+                output_owner = owner.open(output_path)
+            return owner.read(output_owner, native.posix.MANIFEST, E.MANIFEST_LIMIT)
+
+        timeout_seconds = _crypto_export_timeout(clock)
+        manifest_raw = E.export_encrypted(evidence if os.name == "nt" else evidence.path, output, recipient,
+            kind=context["kind"], selection=context["observed"]["inputs"]["selection"],
+            source_commit=context["observed"]["source"]["commit"], source_tree=context["observed"]["source"]["tree"],
+            original_match=original, fresh_match=fresh, event_raw=raws["event.json"], policy_raw=raws["candidate-policy.json"],
+            primary=context["primary"], copied=canonical(copied.copied),
+            authority={name: context["authority"][name] for name in E.AUTHORITY_FIELDS}, check=export_check,
+            read_manifest=read_manifest, timeout_seconds=timeout_seconds, max_bytes=MAX_BYTES, max_members=MAX_MEMBERS)
+        # Capture the actual adapter bytes before any callback or file readback.
+        require(type(manifest_raw) is bytes and 0 < len(manifest_raw) <= E.MANIFEST_LIMIT, "CRYPTO_EXPORT_BYTE_RETURN")
+        manifest = canonical(manifest_raw, E.MANIFEST_LIMIT)
+        exported = clock.now()
+        export_check()
+        require(read_manifest() == manifest_raw and manifest["copy"] == canonical(copied.copied) and
+            manifest["primary"] == context["primary"] and manifest["source"] == context["observed"]["source"],
+            "CRYPTO_EXPORT_RETURN_CHANGED")
+        result_raw = O.encoded({"schema": 1, "scope": _CRYPTO_CHILD_SCOPE,
+            "contextSha256": O.digest(context_raw), "startSha256": O.digest(start_raw), "invocation": start["invocation"],
+            "clock": O.clock_value(first.clock), "bootDigest": boot, "launchMinimumNs": minimum,
+            "beganNs": first.nanoseconds, "metadataLastNs": metadata_last, "metadataCloseSha256": O.digest(metadata_close),
+            "validationStartedNs": validating, "validationReturnedNs": returned, "exportedNs": exported,
+            "recipientReturnSha256": O.digest(summary_raw), "recipient": manifest["recipient"],
+            "copy": canonical(copied.copied), "freezeMetadataSha256": copied.metadata_sha256,
+            "sourceMetadataSha256": {origin: O.digest(O.encoded({"metadata": canonical(raw)["sourceMetadata"]}))
+                for origin, raw in zip(ORIGINS, (raws["primary-map.json"], raws["authority-map.json"], recipient_copy.raw))},
+            "manifest": {"bytes": len(manifest_raw), "sha256": O.digest(manifest_raw),
+                "base64": base64.b64encode(manifest_raw).decode("ascii")},
+            "retirement": "PENDING_CHILD_CLOSE", "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
+        canonical(result_raw)
+        require(owner.write(directories["returned"], "crypto-child-result.json", result_raw) == result_raw,
+            "CRYPTO_CHILD_RESULT_WRITE")
+        export_check()
+        file_close = file_owner.finish()
+        passive()
+        before_close = clock.now()
+        owner.freeze()
+    except BaseException as error:
+        failure = error
+        if file_owner is not None:
+            failure = file_owner.remember(error)
+        if owner is not None:
+            owner.error("crypto-child", failure)
+            failure = owner._anchor().failure
+    finally:
+        if file_owner is not None and not file_owner.finished and not file_owner.owner.unknown:
+            try:
+                file_owner.finish()
+            except BaseException as error:
+                if failure is None:
+                    failure = error
+                if owner is not None:
+                    owner.error("crypto-child-files-close", error, unknown=file_owner.owner.unknown)
+        if owner is not None:
+            try:
+                owner.close()
+            except BaseException as error:
+                owner.error("crypto-child-owner-close", error)
+            if failure is None and owner._anchor().failure is not None:
+                failure = owner._anchor().failure
+    if failure is not None:
+        raise failure
+    require(result_raw is not None and pin is not None and file_owner.finished and file_owner.failure is None,
+        "CRYPTO_CHILD_INCOMPLETE")
+    closed_owner = owner.known()
+    file_owner.structural()
+    copy_returns_current()
+    _crypto_recipient_closed(pin)
+    N._check_history(frames)
+    closed = clock.now(minimum=before_close)
+    _crypto_recipient_closed(pin)
+    copy_returns_current()
+    require(all(attempted and ended for _row, _label, _resource, attempted, ended in file_owner.rows),
+        "CRYPTO_CHILD_FILE_CLOSE_UNKNOWN")
+    close_summary = O.encoded({"fileOwner": canonical(file_close), "operativeResources": [
+        {"ordinal": number, "label": label, "closeAttempted": attempted, "closed": ended}
+        for number, (_row, label, _resource, attempted, ended) in enumerate(closed_owner.rows)]})
+    ack = {"schema": 1, "scope": _CRYPTO_ACK_SCOPE, "invocation": start["invocation"],
+        "terminalSha256": O.digest(result_raw), "clock": O.clock_value(first.clock), "closedNs": closed,
+        "ownerCloseSha256": O.digest(close_summary), "fileResourceCount": len(file_owner.rows),
+        "operativeResourceCount": len(closed_owner.rows)}
+    copy_returns_current()
+    return ack, clock, clock.work
+
+
+def custody_crypto_child(context_hash, minimum, cancelled):
+    """Fixed child entry; metadata closes before the one crypto cap binding."""
+    metadata = clock = None
+    failure = None
+    try:
+        local = local_value(time.monotonic())
+        first = O.clocks.observe()
+        first_graph = N._history_graph(first)
+        O.clocks.validate_reading(first)
+        require(first.nanoseconds >= O.integer(minimum), "CRYPTO_CHILD_PRECEDES_LAUNCH")
+        boot = digest(C.boot_digest(first.clock.role))
+        N._check_history(first_graph)
+        digest(context_hash)
+        require(callable(cancelled) and not any(name in os.environ for name in _CREDENTIAL_NAMES), "CRYPTO_CHILD_TOKEN_FREE")
+        clock = _CustodyChildClock(first, local, boot, cancelled)
+        metadata = _PrimaryOwner(native.Owner(clock.local_end, clock, first=first, cancelled=cancelled))
+        clock.attach_metadata(metadata)
+        kind, _primary_path = N.location()
+        path = _paths(kind)[2] / "returned"
+        private = _private(metadata, path)
+        context_raw = _read_private(metadata, private, "context.json", 65536)
+        require(O.digest(context_raw) == context_hash, "CRYPTO_CHILD_CONTEXT_HASH")
+        context, event = _crypto_context(context_raw, first, boot)
+        directories = _crypto_open_directories(metadata, context)
+        require(private.identity == directories["returned"].identity, "CRYPTO_METADATA_DIRECTORY_CHANGED")
+        start_raw = _read_private(metadata, directories["crypto-service"], "start.json", native.LIMIT)
+        start = canonical(start_raw)
+        inherited = Q._inherited_context()
+        _crypto_start(context_raw, context, start, first, boot, event, inherited)
+        require(start["startedNs"] <= minimum <= first.nanoseconds, "CRYPTO_ACTUAL_LAUNCH_MINIMUM")
+        raws = {name: _read_private(metadata, private, name, maximum) for name, maximum in _CRYPTO_INPUT_LIMITS.items()}
+        original, expected, policy = _crypto_inputs(context, raws)
+        frame_graph = N._history_graph(context, start, raws, expected.__dict__, original.__dict__, policy, inherited, first)
+        _crypto_fixed_readback(metadata, directories, context_raw, start_raw, raws)
+        metadata_close = metadata.finish()
+        metadata_last = clock.now()
+        N._check_history(frame_graph)
+        clock.bind_crypto(context_raw, context, start_raw, start, expected, event, inherited)
+        return _crypto_child_work(clock, context_raw, start_raw, raws, minimum, metadata_close, metadata_last)
+    except BaseException as error:
+        failure = error
+    finally:
+        if metadata is not None and not metadata.finished and not metadata.owner.unknown:
+            try:
+                metadata.finish()
+            except BaseException as error:
+                if failure is None:
+                    failure = error
+    if failure is not None:
+        raise failure
+
+
+def _crypto_phase_bytes(context_raw, phase, clock):
+    """Fixed byte consistency, used only AFTER a registered actual native return."""
+    context = canonical(context_raw, 65536)
+    records = dict(phase.records)
+    require(type(phase) is _CryptoNativeReturn and phase.context == context_raw and
+        len(phase.records) == len(records) and set(records) == native.PHASE_FILES and
+        all(type(raw) is bytes for raw in records.values()), "CRYPTO_PHASE_BYTES")
+    start = _crypto_start_fields(context_raw, context, canonical(records["start.json"]), clock)
+    require(phase.phase == (start["startedNs"], start["workEndNs"], start["finalEndNs"]), "CRYPTO_PHASE_ORIGINAL_CAPS")
+    row = fields(canonical(records["result.json"]), " ".join(native.TERMINAL_FIELDS), "CRYPTO_TERMINAL_FIELDS")
+    birth = fields(canonical(records["native-start.json"]), "ownership leader preparerIdentity observedNs", "CRYPTO_BIRTH_FIELDS")
+    changed = {"exitCode", "launchAttempted", "scopeAttempted", "retirement"}
+    _same({name: row[name] for name in start if name not in changed},
+        {name: start[name] for name in start if name not in changed}, "CRYPTO_TERMINAL_START")
+    require(type(row["exitCode"]) is int and row["exitCode"] == 0 and row["launchAttempted"] is True and
+        row["scopeAttempted"] is True and row["scopeCloseAttempted"] is True and row["scopeClosed"] is True and
+        row["retirement"] == "KNOWN" and row["survivors"] == [] and row["errors"] == [] and records["stderr.log"] == b"" and
+        row["nativeStartSha256"] == O.digest(records["native-start.json"]) and
+        row["baselineSha256"] == O.digest(records["baseline.json"]) and row["leader"] == birth["leader"],
+        "CRYPTO_NATIVE_RETURN")
+    argv = _custody_crypto_command(O.digest(context_raw), O.integer(row["launchMinimumNs"], start["startedNs"]))
+    _same(row["launchArgv"], argv, "CRYPTO_EXECUTED_COMMAND")
+    native.native_record(row["ownership"], start, row["leader"], argv)
+    native.native_record(birth["ownership"], start, row["leader"], argv, terminal=False)
+    _same(birth["ownership"]["launches"], row["ownership"]["launches"], "CRYPTO_NATIVE_BIRTH")
+    preparer = native.closed_lifetime(row["preparerIdentity"], clock.role)
+    require(preparer == native.closed_lifetime(birth["preparerIdentity"], clock.role) and
+        preparer["pid"] != row["leader"]["pid"], "CRYPTO_PREPARER")
+    baseline = native.baseline_record(records["baseline.json"], clock.role)
+    if baseline["baseline"] is not None:
+        leader = native.lifetime(row["leader"], clock.role)
+        require(list(leader[:4] if clock.role.startswith("macos-") else leader) not in baseline["baseline"],
+            "CRYPTO_PREEXISTING_LEADER")
+    _same(row["captureOutcomes"], {name: {key: True for key in
+        ("synced", "verified", "closeAttempted", "closed", "readback")} for name in ("stdout", "stderr")},
+        "CRYPTO_CAPTURE_CLOSE")
+    _same(row["captures"], {name: {"sha256": O.digest(records[name + ".log"]),
+        "bytes": len(records[name + ".log"])} for name in ("stdout", "stderr")}, "CRYPTO_CAPTURE_BYTES")
+    child = fields(canonical(phase.child), "schema scope contextSha256 startSha256 invocation clock bootDigest "
+        "launchMinimumNs beganNs metadataLastNs metadataCloseSha256 validationStartedNs validationReturnedNs exportedNs "
+        "recipientReturnSha256 recipient copy freezeMetadataSha256 sourceMetadataSha256 manifest retirement budgetAcceptance exportSaveAuthority",
+        "CRYPTO_CHILD_FIELDS")
+    ack = fields(canonical(records["stdout.log"]), "schema scope invocation terminalSha256 clock closedNs "
+        "ownerCloseSha256 fileResourceCount operativeResourceCount", "CRYPTO_ACK_FIELDS")
+    require(type(child["schema"]) is int and child["schema"] == 1 and child["scope"] == _CRYPTO_CHILD_SCOPE and
+        child["contextSha256"] == O.digest(context_raw) and child["startSha256"] == O.digest(records["start.json"]) and
+        child["invocation"] == start["invocation"] and child["clock"] == O.clock_value(clock) and
+        child["bootDigest"] == context["window"]["originalBootDigest"] and child["launchMinimumNs"] == row["launchMinimumNs"] and
+        child["retirement"] == "PENDING_CHILD_CLOSE" and child["budgetAcceptance"] == "NOT_ADMITTED" and
+        child["exportSaveAuthority"] is False and type(ack["schema"]) is int and ack["schema"] == 1 and
+        ack["scope"] == _CRYPTO_ACK_SCOPE and ack["invocation"] == start["invocation"] and
+        ack["terminalSha256"] == O.digest(phase.child) and ack["clock"] == O.clock_value(clock), "CRYPTO_CHILD_ACK")
+    for name in ("metadataCloseSha256", "recipientReturnSha256", "freezeMetadataSha256"):
+        digest(child[name])
+    fields(child["sourceMetadataSha256"], " ".join(ORIGINS), "CRYPTO_SOURCE_METADATA_HASHES")
+    for value in child["sourceMetadataSha256"].values():
+        digest(value)
+    copied = fields(child["copy"], " ".join(E.COPY_FIELDS), "CRYPTO_COPY_FIELDS")
+    fields(copied["origins"], " ".join(ORIGINS), "CRYPTO_COPY_ORIGINS")
+    digest(copied["mapSha256"])
+    for value in copied["origins"].values():
+        digest(value)
+    require(len(set(copied["origins"].values())) == len(ORIGINS) and
+        type(copied["memberCount"]) is int and 0 < copied["memberCount"] < MAX_MEMBERS and
+        type(copied["totalBytes"]) is int and 0 < copied["totalBytes"] <= MAX_BYTES,
+        "CRYPTO_COPY_BOUNDS")  # The unchanged aggregate also counts the root.
+    digest(ack["ownerCloseSha256"])
+    require(all(type(ack[name]) is int and 0 < ack[name] <= MAX_MEMBERS
+        for name in ("fileResourceCount", "operativeResourceCount")), "CRYPTO_CHILD_CLOSE_COUNTS")
+    ordered = [row["launchMinimumNs"], *(child[name] for name in ("beganNs", "metadataLastNs", "validationStartedNs",
+        "validationReturnedNs", "exportedNs")), ack["closedNs"], row["completedNs"], row["finalizedNs"]]
+    require(all(type(value) is int and O.integer(value) == value for value in ordered) and ordered == sorted(ordered) and
+        start["startedNs"] <= ordered[0] and ack["closedNs"] < min(start["workEndNs"], child["beganNs"] + 210 * O.NS) and
+        row["completedNs"] < start["workEndNs"] and row["finalizedNs"] < start["finalEndNs"] and
+        row["launchMinimumNs"] <= O.integer(birth["observedNs"]) <= row["completedNs"], "CRYPTO_ORIGINAL_CHRONOLOGY")
+    exported = fields(child["manifest"], "bytes sha256 base64", "CRYPTO_MANIFEST_FIELDS")
+    require(type(exported["bytes"]) is int and 0 < exported["bytes"] <= E.MANIFEST_LIMIT and
+        type(exported["base64"]) is str and len(exported["base64"]) <= 4 * ((E.MANIFEST_LIMIT + 2) // 3),
+        "CRYPTO_MANIFEST_BOUNDS")
+    try:
+        manifest_raw = base64.b64decode(exported["base64"], validate=True)
+    except (ValueError, TypeError):
+        raise O.OriginError("INITIAL_CUSTODY_CRYPTO_MANIFEST_ENCODING") from None
+    manifest = canonical(manifest_raw, E.MANIFEST_LIMIT)
+    require(base64.b64encode(manifest_raw).decode("ascii") == exported["base64"] and
+        len(manifest_raw) == exported["bytes"] and O.digest(manifest_raw) == digest(exported["sha256"]) and
+        manifest["schema"] == 4 and manifest["scope"] == E.SCOPE and manifest["kind"] == context["kind"] and
+        manifest["source"] == context["observed"]["source"] and manifest["primary"] == context["primary"] and
+        manifest["copy"] == child["copy"] and manifest["recipient"] == child["recipient"] and
+        manifest["initialRecipient"]["matchSha256"] == context["authority"]["matchSha256"] and
+        manifest["initialRecipient"]["freshReturnSha256"] == context["authority"]["returnSha256"] and
+        manifest["productiveAuthority"] is False and manifest["cacheAuthority"] is False and
+        manifest["exportSaveAuthority"] is False and manifest["budgetAcceptance"] == "NOT_ADMITTED",
+        "CRYPTO_ORIGINAL_MANIFEST")
+    return start, row, child, ack, manifest_raw
+
+
+def _checked_crypto_native(phase, owner, window):
+    saved = _CRYPTO_NATIVE_RETURNS.get(id(phase))
+    require(type(phase) is _CryptoNativeReturn and type(saved) is tuple and len(saved) == 2, "CRYPTO_NOT_ORIGINAL_NATIVE_RETURN")
+    original, graph = saved
+    require(original[0] is phase and original[1] is owner and original[2] is window and
+        owner.__dict__ is original[3] and owner._anchor() is original[4] and owner.phase_originals is phase and
+        phase.records is original[10] and phase.child == original[11] and phase.phase is original[12] and
+        phase.__dict__ is original[13],
+        "CRYPTO_NATIVE_RETURN_CHANGED")
+    N._check_history(graph)
+    anchor = owner.check()
+    require(not anchor.unknown and anchor.failure is None and not anchor.phase_active and
+        anchor.phase[:3] == phase.phase and owner.local_end == anchor.binding[3], "CRYPTO_NATIVE_OWNER_CHANGED")
+    for resource, label in zip(original[5:8], ("native-scope", "stdout", "stderr")):
+        require(any(actual is resource and name == label and attempted and closed
+            for _row, name, actual, attempted, closed in anchor.rows), "CRYPTO_NATIVE_RESOURCE_CLOSE_CHANGED")
+    return _crypto_phase_bytes(phase.context, phase, window.clock)
+
+
+@dataclass(frozen=True, repr=False)
+class _ClosedCrypto:
+    context: bytes
+    phase: object
+    manifest: bytes
+    parent_close: bytes
+
+
+def custody_crypto(primary_result, authority_result):
+    """Actual known-close parent return only; no outward custody Step success."""
+    require("fixed" not in _CRYPTO_ATTEMPTS, "CRYPTO_PARENT_REUSE")
+    attempt = {"state": "STARTED", "primary": primary_result, "authority": authority_result,
+        "failure": None, "return": None, "readClaimed": False, "reader": None}
+    _CRYPTO_ATTEMPTS["fixed"] = attempt
+    owner = copy_owner = phase = result = None
+    failure = None
+    try:
+        window, primary, history_raw, primary_raw, historical = checked_primary(primary_result)
+        authority_window, fresh, captured, authority_raw, inventory_raw, originals = checked_custody_authority(authority_result, primary_result)
+        require(authority_window is window and not any(name in os.environ for name in _CREDENTIAL_NAMES), "CRYPTO_PARENT_ORIGINAL_WINDOW")
+        first, _local, _boot, _limits, _ends, _locals, cancelled = window._view().binding
+        history, source_files = canonical(history_raw), dict(historical)
+        frame_raw = _custody_authority_window(window)
+        paths = _crypto_directory_paths(primary.kind)
+        owner_before = native.Owner(window.deadline(900, final=True), window, first=first, cancelled=cancelled)
+        owner_before.work_limit, owner_before.final_limit = window.work, window.final
+        copy_owner = _PrimaryOwner(owner_before)
+        destination = _private(copy_owner, paths["copied-evidence"])
+        authority_copy_raw = _copy_authority(copy_owner, primary_result, authority_result, destination)
+        require(type(authority_copy_raw) is bytes, "CRYPTO_AUTHORITY_COPY_BYTE_RETURN")
+        copy_close = copy_owner.finish()
+        copy_owner.structural()
+        require(copy_owner.finished and copy_owner.failure is None and all(a and c for _r, _l, _v, a, c in copy_owner.rows),
+            "CRYPTO_AUTHORITY_COPY_NOT_CLOSED")
+        # This is the only parent LOCAL255 allocation and precedes ALL new setup.
+        owner = _CustodyOwner(window.deadline(255, final=True), window, first=first, cancelled=cancelled)
+        anchor = owner._anchor()
+        observed, actual_root, event = N.host_context(history["firstUseAt"])
+        require(observed == history["observed"] and actual_root == _paths(primary.kind)[0]["P"] and
+            event == source_files["P/acquisition-queries/event.bin"], "CRYPTO_PARENT_ACTUAL_CONTEXT")
+        original_match = source_files["P/acquisition-queries/match.bin"]
+        policy_raw = source_files["P/acquisition-queries/candidate_policy_raw.bin"]
+        policy, public = I._policy(policy_raw, int(time.time()))
+        require(original_match == fresh.record and O.digest(original_match) == history["matchSha256"], "CRYPTO_PARENT_MATCH")
+        raw_inputs = {"primary-map.json": primary_raw, "authority-map.json": authority_copy_raw,
+            "authority-return.json": authority_raw, "original-match.json": original_match, "fresh-match.json": fresh.record,
+            "event.json": event, "candidate-policy.json": policy_raw, "recipient-public.asc": public}
+        graphs = (N._history_graph(observed, raw_inputs, fresh.__dict__, primary.__dict__, captured, originals),)
+        directories = {"custody": owner.open(paths["custody"])}
+        require(native._initializer_names(owner, directories["custody"]) == ("authority-1", "copied-evidence"),
+            "CRYPTO_PARENT_INITIAL_ROSTER")
+        directories["returned"] = owner.child(directories["custody"], "returned", create=True)
+        for name in ("control-home", "temporary", "crypto-service"):
+            directories[name] = owner.child(directories["returned"], name, create=True)
+        directories["copied-evidence"] = owner.child(directories["custody"], "copied-evidence")
+        directories["public-crypto"] = owner.child(directories["custody"], "public-crypto", create=True)
+        if os.name == "nt":
+            directories["export-output"] = owner.child(directories["custody"], "export-output", create=True)
+        else:
+            require(not os.path.lexists(paths["export-output"]), "CRYPTO_PARENT_OUTPUT_MUST_BE_ABSENT")
+        identities = {name: list(directories[name].identity) if name in directories else None for name in _CRYPTO_DIRECTORIES}
+        for name, maximum in _CRYPTO_INPUT_LIMITS.items():
+            require(type(raw_inputs[name]) is bytes and 0 < len(raw_inputs[name]) <= maximum, "CRYPTO_PARENT_INPUT_CAP")
+            require(owner.write(directories["returned"], name, raw_inputs[name]) == raw_inputs[name], "CRYPTO_PARENT_INPUT_WRITE")
+        context = {"schema": 1, "scope": _CRYPTO_CONTEXT_SCOPE, "kind": primary.kind, "root": str(ROOT),
+            "session": str(paths["returned"]), "job": uuid.uuid4().hex, "observed": observed, "window": canonical(frame_raw),
+            "primary": {"step": "initial-originals" if primary.kind == "gate" else "canonical-initialization",
+                "outcome": "success", "resultSha256": primary.result_sha256, "handoffSha256": O.digest(primary.handoff_raw),
+                "inventorySha256": O.digest(primary.inventory_raw)},
+            "authority": {"returnSha256": O.digest(authority_raw), "matchSha256": O.digest(fresh.record),
+                "copySha256": O.digest(authority_copy_raw)},
+            "filesSha256": {name: O.digest(raw) for name, raw in raw_inputs.items()}, "directories": identities,
+            "inheritedContext": Q._inherited_context(), "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False}
+        context_raw = O.encoded(context)
+        _crypto_context(context_raw, first, window._view().binding[2])
+        _crypto_inputs(context, raw_inputs)
+        require(owner.write(directories["returned"], "context.json", context_raw) == context_raw, "CRYPTO_PARENT_CONTEXT_WRITE")
+        context_graph = N._history_graph(context)
+
+        def current():
+            require(_CRYPTO_ATTEMPTS.get("fixed") is attempt and attempt["failure"] is None and
+                attempt["state"] in ("STARTED", "CLOSED", "RETURNED") and
+                attempt["primary"] is primary_result and attempt["authority"] is authority_result,
+                "CRYPTO_PARENT_ATTEMPT_CHANGED")
+            p = checked_primary(primary_result)
+            a = checked_custody_authority(authority_result, primary_result)
+            require(p[0] is window and p[1] is primary and p[2] == history_raw and p[3] == primary_raw and p[4] is historical and
+                a[0] is window and a[1] is fresh and a[2] is captured and a[3] == authority_raw and
+                a[4] == inventory_raw and a[5] is originals, "CRYPTO_PARENT_UPSTREAM_CHANGED")
+            for graph in graphs:
+                N._check_history(graph)
+            N._check_history(context_graph)
+            require(owner._anchor() is anchor, "CRYPTO_PARENT_OWNER_CHANGED")
+            owner.check()
+            copy_owner.structural()
+            require(copy_owner.finished and copy_owner.failure is None, "CRYPTO_PARENT_COPY_CLOSE_CHANGED")
+
+        current()
+        phase = _custody_crypto_native(owner, directories["returned"], context_raw, window, current)
+        start, terminal, child, ack, manifest_raw = _checked_crypto_native(phase, owner, window)
+        current()
+        window.now(final=True, limit=start["finalEndNs"])
+        owner.freeze()
+    except BaseException as error:
+        failure = error
+        if owner is not None:
+            owner.error("crypto-parent", error)
+            failure = owner._anchor().failure
+    finally:
+        if copy_owner is not None and not copy_owner.finished and not copy_owner.owner.unknown:
+            try:
+                copy_owner.finish()
+            except BaseException as error:
+                if failure is None:
+                    failure = error
+        if owner is not None:
+            try:
+                owner.close()
+            except BaseException as error:
+                owner.error("crypto-parent-close", error)
+            if failure is None and owner._anchor().failure is not None:
+                failure = owner._anchor().failure
+    try:
+        if failure is not None:
+            raise failure
+        anchor = owner.known()
+        current()
+        _checked_crypto_native(phase, owner, window)
+        closed = window.now(final=True, limit=start["finalEndNs"])
+        native.posix._deadline(owner.local_end)
+        parent_close = O.encoded({"schema": 1, "scope": "INITIAL_CUSTODY_CRYPTO_PARENT_KNOWN_CLOSE_V1",
+            "contextSha256": O.digest(context_raw), "childSha256": O.digest(phase.child),
+            "authorityCopyCloseSha256": O.digest(copy_close), "phaseSha256": {name: O.digest(raw) for name, raw in phase.records},
+            "closedNs": closed, "resources": [{"ordinal": number, "label": label,
+                "closeAttempted": attempted, "closed": ended}
+                for number, (_row, label, _resource, attempted, ended) in enumerate(anchor.rows)],
+            "retirement": "KNOWN_RESOURCE_CLOSE_ONLY", "exportSaveAuthority": False})
+        canonical(parent_close)
+        result = _ClosedCrypto(context_raw, phase, manifest_raw, parent_close)
+        graph = N._history_graph(result.__dict__, owner.__dict__)
+        saved = (result, window, owner, anchor, context_raw, phase, manifest_raw, parent_close, graph, current, attempt,
+            copy_close, result.__dict__)
+        _CRYPTO_RETURNS[id(result)] = saved
+        attempt["return"], attempt["state"] = result, "CLOSED"
+        checked_custody_crypto(result)
+        return result
+    except BaseException as error:
+        if attempt["failure"] is None:
+            attempt["failure"] = error
+        attempt["state"] = "FAILED"
+        raise attempt["failure"]
+
+
+def checked_custody_crypto(result):
+    saved = _CRYPTO_RETURNS.get(id(result))
+    require(type(result) is _ClosedCrypto and type(saved) is tuple and saved[0] is result, "CRYPTO_NOT_ORIGINAL_PARENT_RETURN")
+    _, window, owner, anchor, context_raw, phase, manifest_raw, parent_close, graph, current, attempt, _copy_close, dictionary = saved
+    try:
+        require(attempt["return"] is result and attempt["state"] in ("CLOSED", "RETURNED") and
+            result.context == context_raw and result.phase is phase and result.manifest == manifest_raw and
+            result.parent_close == parent_close and result.__dict__ is dictionary, "CRYPTO_PARENT_RETURN_CHANGED")
+        N._check_history(graph)
+        current()
+        require(owner._anchor() is anchor, "CRYPTO_PARENT_CLOSE_CHANGED")
+        owner.known()
+        _checked_crypto_native(phase, owner, window)
+        require(window._view().failure is None, "CRYPTO_PARENT_WINDOW_FAILED")
+        return window, context_raw, phase, manifest_raw, parent_close
+    except BaseException as error:
+        if attempt["failure"] is None:
+            attempt["failure"] = error
+        attempt["state"] = "FAILED"
+        raise attempt["failure"]
+
+
+_CRYPTO_READ_FENCES, _CRYPTO_CARRIERS = {}, {}
+
+
+class _CryptoReadFence:
+    """Only the original known-close parent's existing READ end, not a new clock."""
+    __slots__ = ("_binding",)
+
+    def __init__(self, result):
+        require(type(self) is _CryptoReadFence and id(self) not in _CRYPTO_READ_FENCES, "CRYPTO_READ_NEW_FACADE")
+        window, _context, _phase, _manifest, _closed = checked_custody_crypto(result)
+        saved = _CRYPTO_RETURNS[id(result)]
+        attempt = saved[10]
+        require(attempt["readClaimed"] is True and attempt["reader"] is None, "CRYPTO_READ_ORIGINAL_CLAIM")
+        self._binding = (result, saved, window, attempt)
+        _CRYPTO_READ_FENCES[id(self)] = (self, self._binding)
+        attempt["reader"] = self
+        self._current()
+
+    def _current(self):
+        pin = _CRYPTO_READ_FENCES.get(id(self))
+        require(type(self) is _CryptoReadFence and type(pin) is tuple and pin[0] is self and
+            self._binding is pin[1], "CRYPTO_READ_ORIGINAL_FACADE")
+        result, saved, window, attempt = pin[1]
+        require(_CRYPTO_RETURNS.get(id(result)) is saved and saved[10] is attempt and attempt["readClaimed"] is True and
+            attempt["reader"] is self and checked_custody_crypto(result)[0] is window, "CRYPTO_READ_PARENT_CHANGED")
+        return window
+
+    clock = property(lambda self: self._current().clock)
+
+    def now(self, *, final=False, minimum=0, limit=None):
+        require(type(final) is bool, "CRYPTO_READ_FINAL_TYPE")
+        return self._current().now(final=final, minimum=minimum, limit=limit, stage="readEndNs")
+
+    def deadline(self, maximum, *, final=False, limit=None):
+        require(type(final) is bool, "CRYPTO_READ_FINAL_TYPE")
+        return self._current().deadline(maximum, final=final, limit=limit, stage="readEndNs")
+
+
+@dataclass(frozen=True, repr=False)
+class CustodyCryptoCarrier:
+    parent: object
+    raw: bytes
+    metadata_close: bytes
+
+
+def _custody_crypto_carrier(result):
+    """One post-parent-close writer; no actual custody Step/late authority grant."""
+    window, context_raw, phase, manifest_raw, parent_close = checked_custody_crypto(result)
+    saved = _CRYPTO_RETURNS[id(result)]
+    attempt = saved[10]
+    require(attempt["readClaimed"] is False, "CRYPTO_READ_WRITER_REUSE")
+    attempt["readClaimed"] = True  # Includes failures before allocation/write.
+    metadata = None
+    failure = None
+    try:
+        facade = _CryptoReadFence(result)
+        first, _local, _boot, _limits, _ends, _locals, cancelled = window._view().binding
+        metadata = _PrimaryOwner(native.Owner(facade.deadline(45, final=True), facade, first=first, cancelled=cancelled))
+        context, manifest = canonical(context_raw, 65536), canonical(manifest_raw, E.MANIFEST_LIMIT)
+        child = canonical(phase.child)
+        paths = _crypto_directory_paths(context["kind"])
+        output = _private(metadata, paths["export-output"])
+        if context["directories"]["export-output"] is not None:
+            require(list(output.identity) == context["directories"]["export-output"], "CRYPTO_READ_OUTPUT_PIN")
+        require(_read_private(metadata, output, native.posix.MANIFEST, E.MANIFEST_LIMIT) == manifest_raw,
+            "CRYPTO_READ_ORIGINAL_MANIFEST")
+        returned = _private(metadata, paths["returned"])
+        require(list(returned.identity) == context["directories"]["returned"], "CRYPTO_READ_RETURNED_PIN")
+        facade.now()
+        original_window = canonical(context_raw, 65536)["window"]
+        window_value = {name: original_window[name] for name in
+            ("clock", "originalBootDigest", "originalJobBasisNs", "jobEndNs", "startNs", *WINDOW_NAMES)}
+        view = window._view()
+        window_value.update(lastNs=view.last, lastLocal=view.local_last)
+        raw = O.encoded({"schema": 1, "scope": "INITIAL_RECIPIENT_CUSTODY_CLOSED_RETURN_V1",
+            "kind": context["kind"], "selection": manifest["selection"], "source": manifest["source"],
+            "github": manifest["github"], "policy": manifest["policy"], "authority": manifest["initialRecipient"],
+            "primary": context["primary"], "window": window_value,
+            "copy": {**manifest["copy"], "path": str(paths["copied-evidence"]),
+                "directoryIdentity": context["directories"]["copied-evidence"],
+                "sourceMetadataSha256": child["sourceMetadataSha256"],
+                "destinationMetadataSha256": child["freezeMetadataSha256"]},
+            "recipient": manifest["recipient"],
+            "exporter": {"manifestBase64": base64.b64encode(manifest_raw).decode("ascii"),
+                "manifestBytes": len(manifest_raw), "manifestSha256": O.digest(manifest_raw),
+                "childSha256": O.digest(phase.child), "ackSha256": O.digest(dict(phase.records)["stdout.log"]),
+                "phaseSha256": {name: O.digest(data) for name, data in phase.records},
+                "nativeResources": canonical(parent_close)["resources"]},
+            "parentClose": canonical(parent_close), "writerReturn": "PENDING_OWNER_CLOSE",
+            "originalStepOutcome": "NOT_OBSERVED", "testAcceptance": "NOT_PERFORMED", "productiveAuthority": False,
+            "cacheAuthority": False, "exportSaveAuthority": False, "budgetAcceptance": "NOT_ADMITTED"})
+        canonical(raw)
+        reader = metadata.acquire("embedded-reader", lambda: io.BytesIO(raw))
+        end = metadata.guard()
+        writer = metadata.acquire("writer", lambda: returned.create_file("custody-return.json", max_bytes=len(raw), deadline=end))
+        def verify():
+            require(type(reader) is io.BytesIO and reader.getvalue() == raw, "CRYPTO_CARRIER_ORIGINAL_BYTES")
+        checksum, _written = _consume(metadata, reader, len(raw), O.digest(raw), verify, writer=writer)
+        require(checksum == O.digest(raw) and _read_private(metadata, returned, "custody-return.json", native.LIMIT) == raw,
+            "CRYPTO_CARRIER_READBACK")
+        checked_custody_crypto(result)
+        closed = metadata.finish()
+        facade.now(final=True)
+        checked_custody_crypto(result)
+        require(metadata.finished and metadata.failure is None and metadata.owner.closed and not metadata.owner.unknown and
+            all(attempted and ended for _row, _label, _resource, attempted, ended in metadata.rows), "CRYPTO_CARRIER_CLOSE_UNKNOWN")
+        carrier = CustodyCryptoCarrier(result, raw, closed)
+        _CRYPTO_CARRIERS[id(carrier)] = (carrier, result, raw, closed, metadata, metadata._anchor(),
+            N._history_graph(carrier.__dict__, metadata.owner.__dict__))
+        attempt["state"] = "RETURNED"
+        return carrier  # Private data only. Fresh post-export/late-output edges are NOT implemented here.
+    except BaseException as error:
+        failure = error
+        if metadata is not None:
+            failure = metadata.remember(error)
+    finally:
+        if metadata is not None and not metadata.finished and not metadata.owner.unknown:
+            try:
+                metadata.finish()
+            except BaseException as error:
+                if failure is None:
+                    failure = error
+        if failure is not None:
+            if attempt["failure"] is None:
+                attempt["failure"] = failure
+            attempt["state"] = "FAILED"
+    if failure is not None:
+        raise attempt["failure"]
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    commands = parser.add_subparsers(dest="operation", required=True)
+    for name in ("_authority", "_crypto"):
+        child = commands.add_parser(name, allow_abbrev=False)
+        child.add_argument("--context-sha256", required=True)
+        child.add_argument("--minimum-ns", required=True)
+    args = parser.parse_args()
+    try:
+        require(sys.flags.isolated == 1 and sys.flags.no_site == 1 and sys.dont_write_bytecode,
+            "ISOLATED_INTERPRETER_REQUIRED")
+        digest(args.context_sha256)
+        require(re.fullmatch(r"0|[1-9][0-9]{0,19}", args.minimum_ns), "LAUNCH_MINIMUM")
+        minimum = O.integer(int(args.minimum_ns))
+        if args.operation == "_authority":
+            native.initial_custody_authority_command(args.context_sha256, minimum)
+            operation = custody_authority_child
+        else:
+            _custody_crypto_command(args.context_sha256, minimum)
+            operation = custody_crypto_child
+        native.guarded(lambda signals: operation(args.context_sha256, minimum, lambda: native.cancellation(signals)))
+        return 0
+    except BaseException:
+        print("INITIAL_RECIPIENT_CUSTODY_NOT_ACCEPTED", file=sys.stderr)
+        return 125
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
