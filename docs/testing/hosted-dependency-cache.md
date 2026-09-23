@@ -1566,6 +1566,21 @@ The consumed aggregate remains failed. The next packet selects only the correcte
 method and28 unrun worker methods, not the passed gate/worker methods or reader.
 These are model controls, not native/hosted custody or Release qualification.
 
+The fresh29-method selection at `1cf31b01472ec7e53c449a3467eb8dcf4c56e8f7`
+passed the corrected value control, then **FAILED** at the first index control:
+the isolated source layout omitted `buildSrc`, required by the unchanged
+canonical output-absence check. The other27 methods were **NOT_RUN**;4 guards
+passed, both172-entry integrity captures matched, and no native child ran.
+Independent original-result/layout review SHA-256:
+`776fafae98c963eae1802f7b28a3c6986c2c1071c6dc000373fa31f6f6234bf5`.
+Capture manifest SHA-256:
+`6627cc5e09b7508435f2b3e4f900135c30322b15a0a89edecf4f780f65650fba`.
+The staging-only correction must retain the13 canonical source directories,
+including every immediate library/sample module, without adding outputs or
+mocking the check. A fresh selection of only28 index/crypto/handoff methods is
+next; all3 already-passed value methods stay excluded. Neither failed aggregate
+is converted into a pass, and genuine initializer timing remains unverified.
+
 ##### Closed Stage1 evidence adapter — reviewed source only
 
 [`hosted_initial_recipient_evidence.py`](../../scripts/hosted_initial_recipient_evidence.py)
