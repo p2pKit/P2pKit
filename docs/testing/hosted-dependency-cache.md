@@ -1426,6 +1426,33 @@ workflow shell commands, the accepted reader/initializer suites, native toolchai
 CI or builds. Both jobs' custody/seal prerequisites, productive125 and ordinary
 HOLDs remain; **genuine hosted qualification and Release readiness are absent**.
 
+##### Original recipient crypto inventory — source preparation
+
+The recipient parent now captures the original crypto root only **after native
+validation readback and descendant/scope/capture retirement**, inside the same
+READ30 RAW/LOCAL intersection. The fixed shallow POSIX/Windows inventories retain
+complete names, directory identities and file sizes/hashes, including empty logs,
+with unchanged per-file bounds and a separate16MiB total. POSIX home/temp support
+only at-most32 immediate regular files each; unsupported layouts refuse. This is
+not a claim that every installed GPG layout qualifies. No raw files are copied.
+
+The actual inventory return is frozen before later fallible callbacks and bound
+separately to the successful known-closed recipient return. The existing sender
+metadata owner writes a small fixed sibling `-crypto-originals/crypto-originals.json`,
+closes it, and emits its hash with the two old hashes in **one** file-command append.
+The original sender's two guarded checks, seven-field validation registry,
+P/E/R/S rosters and accepted1,066-file reader remain unchanged. The sidecar does
+not certify its own writer close or Step outcome; later custody must verify the
+authentic successful Step and actually copy the bound originals before encryption.
+
+The [24 new focused controls](../../scripts/tests/hosted-initial-recipient-crypto-originals-test.py)
+are **AUTHORED / UNEXECUTED** at this source checkpoint. Synthetic supplier and
+sender fixtures have only the corresponding new inventory dependency; no old test
+method or reader is rerun. Independent implementation review, guarded offline
+execution/result review, complete gate/worker custody/sealing and genuine hosted
+timing remain required. Both ordinary HOLDs, productive125, init120, bootstrap5400
+UNADMITTED/UNMEASURED and all Release gates remain; **delivery0/4, NOT_READY**.
+
 #### Stage1 canonical-context reader, not initialization authority
 
 The separate fixed `initial_recipient_context_record()` in

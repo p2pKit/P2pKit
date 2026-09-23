@@ -1,6 +1,9 @@
 name: Initial recipient canonical initialization
 description: Same-job Steps edge behind Stage1 source, custody and execution prerequisites
 outputs:
+  recipient-crypto-originals-sha256:
+    description: Original crypto inventory digest; requires actual recipient Step success for custody
+    value: ${{ steps.recipient.outputs.recipientCryptoOriginalsSha256 }}
   initialization-sha256:
     description: Private pending-close receipt digest, not producer or Release authority
     value: ${{ steps.initializer.outputs.initializationSha256 }}

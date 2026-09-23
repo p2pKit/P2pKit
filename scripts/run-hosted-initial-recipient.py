@@ -80,6 +80,7 @@ _RECIPIENT_USE_LOCK = threading.Lock()
 _READMISSION_USES, _RECIPIENT_ATTEMPTS, _RECIPIENT_CLAIMS = {}, {}, {}
 _RECIPIENT_WINDOWS, _AUTHORITY_WINDOWS, _AUTHORITY_RETURNS, _RECIPIENT_RETURNS = {}, {}, {}, {}
 _RECIPIENT_NATIVE_RETURNS = {}
+_RECIPIENT_CRYPTO_ORIGINALS = {}
 _RECIPIENT_SENDERS = {}
 _RECEIVING_WINDOWS = {}
 _RECEIVING_CONTINUATIONS = {}
@@ -1463,7 +1464,7 @@ def _history_graph(*roots):
         native.OriginalPhase, O.Fence, O.clocks.Reading, O.clocks.ClockIdentity,
         initial_identity.InitialBootstrapIdentity, acquisition.stages.BootstrapMatch,
         _AuthorityReturn, _AuthorityState, _RecipientRoster, _RecipientNativeReturn, _RecipientValidationReturn,
-        _RecipientState)
+        _RecipientState, _RecipientCryptoOriginals)
     scalars = (type(None), bool, int, float, str, bytes)
     pending, seen, nodes = list(roots), set(), []
     while pending:
@@ -3518,6 +3519,139 @@ class _RecipientValidationReturn:
     raw: bytes
 
 
+CRYPTO_ORIGINALS_SCOPE = "INITIAL_RECIPIENT_CRYPTO_ORIGINAL_INVENTORY_V1"
+CRYPTO_SIDECAR_SCOPE = "INITIAL_RECIPIENT_CRYPTO_ORIGINALS_PENDING_OWNER_CLOSE_V1"
+CRYPTO_ORIGINALS_FILE = "crypto-originals.json"
+CRYPTO_ORIGINALS_LIMIT = 16 * 1024 * 1024
+
+
+@dataclass(frozen=True, repr=False)
+class _RecipientCryptoOriginals:
+    """Original hashes/pins only; not a live Recipient or a copied evidence tree."""
+    raw: bytes
+    phase: _RecipientNativeReturn
+    directories: tuple
+
+
+def _capture_recipient_crypto_originals(owner, root, phase, window):
+    """Fixed shallow inventory AFTER native readback, inside original READ30.
+
+    The original parent owns root; a later custody owner must copy the actual
+    bytes. No retired owner, Snapshot, arbitrary path or recursive scan enters.
+    """
+    saved = _RECIPIENT_NATIVE_RETURNS.get(id(phase))
+    require(type(owner) is native.Owner and owner.fence is window and owner.phase_originals is phase and
+        type(phase) is _RecipientNativeReturn and type(saved) is tuple and len(saved) == 6 and
+        saved[0] is phase and saved[1] is owner and saved[2] is window and phase.context == saved[3] and
+        phase.records is saved[4] and phase.child == saved[5] and window.state().phase == "READ" and
+        not owner.closed and not owner.unknown and owner.original is None and owner.errors == [],
+        "CRYPTO_ORIGINAL_NATIVE_RETURN")
+    context = O.parse(phase.context)
+    role = window.clock.role
+    require(root.path == Path(context["session"]) / "crypto" and
+        tuple(root.identity) == tuple(context["directories"]["crypto"]) and
+        any(row["owner"] is root and row["label"] == "directory" and not row["attempted"] and not row["closed"]
+            for row in owner.resources), "CRYPTO_ORIGINAL_ROOT")
+    names = native._initializer_names(owner, root)
+    for name in names:
+        Q._component(name)
+    windows = role == "windows-x64"
+    operations = tuple(name for name in names if re.fullmatch(
+        r"gpg-[0-9a-f]{32}" if windows else r"gpg-[a-z0-9_]+", name))
+    results = tuple(name for name in names if re.fullmatch(r"recipient-validation-result-[0-9a-f]{32}\.json", name))
+    require(len(operations) == (3 if windows else 2) and len(results) == (1 if windows else 0) and
+        set(names) == {"recipient.asc", "recipient.gpg", "gnupg", "tmp", *operations, *results},
+        "CRYPTO_ORIGINAL_ROOT_ROSTER")
+    pins, records, total = [], [], 0
+
+    def pin(relative, directory, roster):
+        directory.verify()
+        identity = tuple(native.directory_identity(list(directory.identity), role))
+        pins.append((relative, directory, str(directory.path), identity, roster))
+
+    def read(directory, name, maximum):
+        owner.end(final=True)
+        Q._component(name)
+        # Do not open-first to classify a FIFO. Native read still performs its
+        # original per-open identity/privacy/size/close checks on regular files.
+        if not windows:
+            require(stat.S_ISREG((directory.path / name).lstat().st_mode), "CRYPTO_ORIGINAL_REGULAR_FILE")
+        return owner.read(directory, name, maximum, final=True)
+
+    def record(relative, directory, name, maximum):
+        nonlocal total
+        raw = read(directory, name, maximum)
+        if relative == "recipient.asc":
+            require(O.digest(raw) == O.parse(phase.child)["recipient"]["key_sha256"], "CRYPTO_ORIGINAL_KEY_CHANGED")
+        elif relative == "recipient.gpg":
+            require(len(raw) > 0, "CRYPTO_ORIGINAL_EMPTY_RING")
+        total += len(raw)
+        require(total <= CRYPTO_ORIGINALS_LIMIT, "CRYPTO_ORIGINAL_TOTAL_LIMIT")
+        records.append((relative, len(raw), O.digest(raw), directory, name, maximum))
+
+    pin("", root, names)
+    for name in ("recipient.asc", "recipient.gpg"):
+        record(name, root, name, native.posix.MAX_KEY_BYTES)
+    for name in results:
+        record(name, root, name, native.diagnostics.MAX_RECORD_BYTES)
+    for name in ("gnupg", "tmp", *operations):
+        directory = owner.child(root, name, final=True)
+        roster = native._initializer_names(owner, directory)
+        if name in ("gnupg", "tmp"):
+            require(not windows or roster == (), "CRYPTO_ORIGINAL_WINDOWS_HOME_NOT_EMPTY")
+        else:
+            require(roster == tuple(sorted(("stdout", "stderr") if windows else
+                ("stdout", "stderr", "status", "process.json"))), "CRYPTO_ORIGINAL_OPERATION_ROSTER")
+        pin(name, directory, roster)
+        for member in roster:
+            maximum = native.LIMIT if name in ("gnupg", "tmp") or member == "process.json" else native.posix.MAX_DIAGNOSTIC_BYTES
+            record(name + "/" + member, directory, member, maximum)
+    for _relative, directory, path, identity, roster in pins:
+        require(str(directory.path) == path and tuple(directory.identity) == identity and
+            native._initializer_names(owner, directory) == roster, "CRYPTO_ORIGINAL_DIRECTORY_CHANGED")
+    for _relative, count, digest, directory, name, maximum in records:
+        raw = read(directory, name, maximum)
+        require(len(raw) == count and O.digest(raw) == digest, "CRYPTO_ORIGINAL_BYTES_CHANGED")
+    for _relative, directory, path, identity, roster in pins:
+        require(str(directory.path) == path and tuple(directory.identity) == identity and
+            native._initializer_names(owner, directory) == roster, "CRYPTO_ORIGINAL_DIRECTORY_CHANGED")
+    require(_RECIPIENT_NATIVE_RETURNS.get(id(phase)) is saved and owner.phase_originals is phase and
+        phase.context == saved[3] and phase.records is saved[4] and phase.child == saved[5],
+        "CRYPTO_ORIGINAL_NATIVE_RETURN_CHANGED")
+    raw = O.encoded({"schema": 1, "scope": CRYPTO_ORIGINALS_SCOPE, "root": str(root.path),
+        "contextSha256": O.digest(phase.context), "childSha256": O.digest(phase.child),
+        "phaseSha256": {name: O.digest(data) for name, data in phase.records}, "clock": O.clock_value(window.clock),
+        "readEndNs": window.state().read_end, "readLocalCeiling": window.state().read_local, "capturedNs": window.now(),
+        "directories": [{"relative": relative, "identity": list(identity), "members": list(roster)}
+            for relative, _directory, _path, identity, roster in pins],
+        "files": [{"relative": relative, "bytes": count, "sha256": digest}
+            for relative, count, digest, _directory, _name, _maximum in sorted(records)], "totalBytes": total,
+        "copyState": "ORIGINAL_BYTES_NOT_COPIED", "liveRecipient": "NOT_TRANSFERRED",
+        "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
+    return _RecipientCryptoOriginals(raw, phase, tuple(pins))
+
+
+def _checked_recipient_crypto_originals(result):
+    """Passive successful-return binding; never observe/reopen a retired owner."""
+    check_recipient_validation_return(result)
+    saved = _RECIPIENT_CRYPTO_ORIGINALS.get(id(result))
+    require(type(saved) is tuple and len(saved) == 7 and saved[0] is result and
+        _RECIPIENT_RETURNS.get(id(result)) is saved[1] and type(saved[2]) is _RecipientCryptoOriginals and
+        type(saved[2].raw) is bytes and saved[2].raw == saved[3] and saved[2].phase is saved[4] is saved[1][6] and
+        saved[2].directories is saved[5], "CRYPTO_ORIGINAL_RETURN_CHANGED")
+    require(sum(node[0] is saved[2] and node[1] is _RecipientCryptoOriginals and node[2] == "record"
+        for node in saved[1][4]) == 1, "CRYPTO_ORIGINAL_PARENT_BINDING")
+    _check_history(saved[6])
+    for _relative, directory, path, identity, _roster in saved[5]:
+        require(str(directory.path) == path and tuple(directory.identity) == identity, "CRYPTO_ORIGINAL_PIN_CHANGED")
+    return saved[3]
+
+
+def _crypto_originals_path():
+    path = _recipient_path()
+    return path.with_name(path.name + "-crypto-originals")
+
+
 def check_recipient_validation_return(result):
     saved = _RECIPIENT_RETURNS.get(id(result))
     require(type(result) is _RecipientValidationReturn and type(saved) is tuple and len(saved) == 7 and
@@ -3538,6 +3672,7 @@ def _prepare_and_validate_recipient(cancelled):
     token = os.environ.pop(O.wire.TOKEN_ENV, None)
     handlers = ()
     owner = window = private = authority = phase = final_source = pending = graph = None
+    crypto = crypto_originals = crypto_graph = None
     failure = None
     try:
         require(type(cancelled) is list and not cancelled, "RECIPIENT_CANCELLATION")
@@ -3567,6 +3702,8 @@ def _prepare_and_validate_recipient(cancelled):
             child = owner.child(private, name, create=True)
             child.verify()
             directories[name] = native.directory_identity(list(child.identity), first.clock.role)
+            if name == "crypto":
+                crypto = child  # Original parent resource, not a later path-only reopen.
         files = {"recipient-window.json": window.raw, "worker-identity.json": original.identity_fields[0],
             "worker-match.json": original.match_raw, "worker-policy.json": original.identity_fields[2],
             "worker-proposal.json": original.proposal_raw, "recipient-public.asc": original.identity_fields[3]}
@@ -3585,8 +3722,10 @@ def _prepare_and_validate_recipient(cancelled):
         phase = _recipient_native(owner, private, context_raw, window, authority)
         phase_graph = _history_graph(phase)
         _recipient_native_readback(owner, private, phase, window, authority, original.identity)
+        crypto_originals = _capture_recipient_crypto_originals(owner, crypto, phase, window)
+        crypto_graph = _history_graph(crypto_originals)  # Freeze the actual return before another fallible supplier.
         final_source = source_queries(owner, window, observed, path / "source-final")
-        graph = phase_graph + _history_graph(final_source, authority, owner.initial_sources)
+        graph = phase_graph + crypto_graph + _history_graph(final_source, authority, owner.initial_sources)
         require(dict(final_source.records) == {name: dict(original.worker_originals[1])[name] for name in SOURCE_KEYS},
                 "RECIPIENT_FINAL_SOURCE_CHANGED")
         _recipient_native_readback(owner, private, phase, window, authority, original.identity)
@@ -3667,7 +3806,13 @@ def _prepare_and_validate_recipient(cancelled):
     returned = _RecipientValidationReturn(raw)
     closed_graph = _history_graph(returned, owner, state.roster, state)
     _RECIPIENT_RETURNS[id(returned)] = (returned, raw, window, state, graph, closed_graph, phase)
-    return check_recipient_validation_return(returned)
+    check_recipient_validation_return(returned)
+    require(type(crypto_originals) is _RecipientCryptoOriginals and crypto_originals.phase is phase,
+            "CRYPTO_ORIGINAL_PARENT_INCOMPLETE")
+    _RECIPIENT_CRYPTO_ORIGINALS[id(returned)] = (returned, _RECIPIENT_RETURNS[id(returned)], crypto_originals,
+        crypto_originals.raw, phase, crypto_originals.directories, crypto_graph)
+    _checked_recipient_crypto_originals(returned)
+    return returned
 
 
 def _retain_recipient_validation(result):
@@ -4201,7 +4346,8 @@ def _retain_sender_step(returned, cancelled, initial_boot):
     require(len(candidates) == 1, "STEP_SENDER_NOT_ORIGINAL")
     original_attempt = candidates[0]
     result, saved, _ = original_attempt
-    check_recipient_validation_return(result)
+    crypto_raw = _checked_recipient_crypto_originals(result)
+    crypto_registry, crypto_binding = _RECIPIENT_CRYPTO_ORIGINALS, _RECIPIENT_CRYPTO_ORIGINALS[id(result)]
     state = saved[3]
     _binding, original = _recipient_claim(state.claim)
     clock, last, cap = sender.clock, O.integer(sender.last), sender.local_end
@@ -4239,7 +4385,8 @@ def _retain_sender_step(returned, cancelled, initial_boot):
             not failed and O.wire.TOKEN_ENV not in os.environ and not continuity.QUARANTINE and
             not native.QUARANTINE and not Q.QUARANTINE and not native.diagnostics._QUARANTINE,
             "STEP_SENDER_BINDING_CHANGED")
-        check_recipient_validation_return(result)  # Passive identity/history ONLY, never the old sender now/deadline.
+        require(_RECIPIENT_CRYPTO_ORIGINALS is crypto_registry and crypto_registry.get(id(result)) is crypto_binding and
+            _checked_recipient_crypto_originals(result) == crypto_raw, "STEP_CRYPTO_ORIGINALS_CHANGED")
         _check_history(value_graph)
         if owner is not None:
             require(owner.original is None and not owner.unknown and owner.errors == [], "STEP_METADATA_OWNER_FAILED")
@@ -4321,7 +4468,7 @@ def _retain_sender_step(returned, cancelled, initial_boot):
                 raise
 
     fence = StepFence()
-    raw = None
+    raw = crypto_sidecar = None
     try:
         fence.now()
         require(continuity.boot_digest(clock.role) == initial_boot, "STEP_SENDER_BOOT_CHANGED")
@@ -4353,6 +4500,20 @@ def _retain_sender_step(returned, cancelled, initial_boot):
         require(owner.read(directory, continuity.STEP_FILE, continuity.STEP_LIMIT) == raw and
             native._initializer_names(owner, directory) == (continuity.STEP_FILE,), "STEP_METADATA_CHANGED")
         native._new_entry_owned(owner, directory, path, identity)
+        crypto_path = _crypto_originals_path()
+        crypto_directory = owner.new(crypto_path)
+        crypto_identity = tuple(native.directory_identity(list(crypto_directory.identity), clock.role))
+        native._new_entry_owned(owner, crypto_directory, crypto_path, crypto_identity)
+        require(native._initializer_names(owner, crypto_directory) == (), "STEP_CRYPTO_DIRECTORY_NOT_EMPTY")
+        crypto_sidecar = owner.write(crypto_directory, CRYPTO_ORIGINALS_FILE, {"schema": 1, "scope": CRYPTO_SIDECAR_SCOPE,
+            "directory": str(crypto_path), "directoryIdentity": list(crypto_identity),
+            "recipientValidationSha256": O.digest(result.raw), "recipientSenderSha256": value["recipientSenderSha256"],
+            "recipientStepSha256": O.digest(raw), "inventory": O.parse(crypto_raw),
+            "writerReturn": "PENDING_OWNER_CLOSE", "originalStepOutcome": "NOT_OBSERVED",
+            "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
+        require(owner.read(crypto_directory, CRYPTO_ORIGINALS_FILE) == crypto_sidecar and
+            native._initializer_names(owner, crypto_directory) == (CRYPTO_ORIGINALS_FILE,), "STEP_CRYPTO_ORIGINALS_CHANGED")
+        native._new_entry_owned(owner, crypto_directory, crypto_path, crypto_identity)
         pins()
     except BaseException as error:
         remember(error)
@@ -4377,11 +4538,11 @@ def _retain_sender_step(returned, cancelled, initial_boot):
     if failure is not None:
         raise failure
     try:
-        require(owner is not None and raw is not None and not failed, "STEP_METADATA_INCOMPLETE")
+        require(owner is not None and raw is not None and crypto_sidecar is not None and not failed, "STEP_METADATA_INCOMPLETE")
         closed_graph = _history_graph(owner, roster)
         phase = "FILE_OUTPUT"
         continuity.append_outputs({"recipientSenderSha256": value["recipientSenderSha256"],
-            "recipientStepSha256": O.digest(raw)}, fence.now)
+            "recipientStepSha256": O.digest(raw), "recipientCryptoOriginalsSha256": O.digest(crypto_sidecar)}, fence.now)
         pins()
         phase = "HANDOFF"
         return value, fence, hard

@@ -53,7 +53,7 @@ class RecipientModels(F.NativeModels):
         super().reset_models()
         for registry in (N._READMISSION_USES, N._RECIPIENT_ATTEMPTS, N._RECIPIENT_CLAIMS,
                          N._RECIPIENT_WINDOWS, N._AUTHORITY_WINDOWS, N._AUTHORITY_RETURNS,
-                         N._RECIPIENT_NATIVE_RETURNS, N._RECIPIENT_RETURNS):
+                         N._RECIPIENT_NATIVE_RETURNS, N._RECIPIENT_RETURNS, N._RECIPIENT_CRYPTO_ORIGINALS):
             registry.clear()
 
     def validate(self, key_path, fingerprint, work_path):
@@ -65,6 +65,19 @@ class RecipientModels(F.NativeModels):
         for saved in N._AUTHORITY_RETURNS.values():
             self.assertTrue(saved[3].checked().terminal)
             self.assertTrue(saved[3].checked().roster.owner.closed)
+        # Tiny explicit supplier OUTPUT models, never a GPG/key invocation.
+        # The original successful parent now retains their shallow inventory.
+        for name in ("gnupg", "tmp", "gpg-model001", "gpg-model002"):
+            (work_path / name).mkdir(mode=0o700)
+        files = {"recipient.asc": key_path.read_bytes(), "recipient.gpg": b"SYNTHETIC_PUBLIC_RING_NOT_A_KEY\n"}
+        for operation in ("gpg-model001", "gpg-model002"):
+            files.update({operation + "/stdout": b"SYNTHETIC_PUBLIC_LISTING\n", operation + "/stderr": b"",
+                operation + "/status": b"", operation + "/process.json": b'{"synthetic":true}\n'})
+        for name, raw in files.items():
+            target = work_path / name
+            with target.open("xb") as stream:
+                stream.write(raw)
+            target.chmod(0o600)
         info = work_path.stat()
         recipient = S.posix.Recipient(work_path, work_path / "gnupg", work_path / "SYNTHETIC_GPG_NEVER_EXECUTED",
             fingerprint, "E" * 40, 0, O.digest(key_path.read_bytes()), (info.st_dev, info.st_ino))

@@ -208,9 +208,13 @@ class SenderStepControls(unittest.TestCase):
             def deadline(self, *_args, **_kwargs):
                 raise AssertionError("ORIGINAL_SENDER_DEADLINE_MUST_NOT_RUN")
         self.sender = Sender()
-        saved = (result, result.raw, None, state, None, None, None)
+        self.crypto = N._RecipientCryptoOriginals(O.encoded({"model": "EXPLICIT_ORIGINAL_CRYPTO_INVENTORY_NOT_EVIDENCE"}),
+            None, ())
+        saved = (result, result.raw, None, state, N._history_graph(self.crypto), None, None)
         self.stack.enter_context(patch.object(N, "_RECIPIENT_RETURNS", {id(result): saved}))
         self.stack.enter_context(patch.object(N, "_RECIPIENT_SENDERS", {id(result): (result, saved, self.sender)}))
+        self.stack.enter_context(patch.object(N, "_RECIPIENT_CRYPTO_ORIGINALS", {id(result):
+            (result, saved, self.crypto, self.crypto.raw, None, self.crypto.directories, N._history_graph(self.crypto))}))
         def checked(value):
             self.assertIs(value, result)
             return value
@@ -250,7 +254,9 @@ class SenderStepControls(unittest.TestCase):
             returned[1].now(final=True)
         self.assertEqual(len(self.calls), 2)
         lines = dict(line.split("=", 1) for line in self.output.read_text().splitlines())
-        self.assertEqual(lines, {"recipientSenderSha256": self.value["recipientSenderSha256"], "recipientStepSha256": O.digest(raw)})
+        crypto_raw = (N._crypto_originals_path() / N.CRYPTO_ORIGINALS_FILE).read_bytes()
+        self.assertEqual(lines, {"recipientSenderSha256": self.value["recipientSenderSha256"],
+            "recipientStepSha256": O.digest(raw), "recipientCryptoOriginalsSha256": O.digest(crypto_raw)})
 
     def test_failed_final_highwater_cannot_be_restored_or_call_sender_again(self):
         returned = self.retain()
