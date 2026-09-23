@@ -111,6 +111,114 @@ jobs:
         # step emits a provisional digest, not worker Admission or a job output.
         run: exec /usr/bin/python3 -I -B -S scripts/run-hosted-initial-recipient.py prepare-originals
 
+      # These same-job steps share the original custody clock. Their coarse
+      # Actions timeouts do not extend any native, stage or original job end.
+      - name: Export the original nonproductive gate evidence
+        id: initial-custody-export
+        if: ${{ success() && steps.initial-originals.outcome == 'success' }}
+        timeout-minutes: 6
+        shell: bash
+        env:
+          P2PKIT_ACTIONS_READ_TOKEN: ${{ github.token }}
+          P2PKIT_INITIAL_PRIMARY_OUTCOME: ${{ steps.initial-originals.outcome }}
+          P2PKIT_INITIAL_PRIMARY_RESULT_SHA256: ${{ steps.initial-originals.outputs.initialOriginalsSha256 }}
+          P2PKIT_INITIAL_PRIMARY_HANDOFF_SHA256: ${{ steps.initial-originals.outputs.gateHandoffSha256 }}
+        run: exec /usr/bin/python3 -I -B -S scripts/run-hosted-initial-recipient-custody.py collect-export --kind gate
+
+      - name: Close gate custody with fresh post-export authority
+        id: initial-custody
+        if: ${{ success() && steps.initial-originals.outcome == 'success' && steps.initial-custody-export.outcome == 'success' }}
+        timeout-minutes: 1
+        shell: bash
+        env:
+          P2PKIT_ACTIONS_READ_TOKEN: ${{ github.token }}
+          P2PKIT_INITIAL_PRIMARY_OUTCOME: ${{ steps.initial-originals.outcome }}
+          P2PKIT_INITIAL_PRIMARY_RESULT_SHA256: ${{ steps.initial-originals.outputs.initialOriginalsSha256 }}
+          P2PKIT_INITIAL_PRIMARY_HANDOFF_SHA256: ${{ steps.initial-originals.outputs.gateHandoffSha256 }}
+          P2PKIT_INITIAL_CRYPTO_OUTCOME: ${{ steps.initial-custody-export.outcome }}
+          P2PKIT_INITIAL_CRYPTO_STEP_SHA256: ${{ steps.initial-custody-export.outputs.initialCryptoStepSha256 }}
+          P2PKIT_INITIAL_EXPORTER_RETURN_SHA256: ${{ steps.initial-custody-export.outputs.initialExporterReturnSha256 }}
+        run: exec /usr/bin/python3 -I -B -S scripts/run-hosted-initial-recipient-custody.py collect-close --kind gate
+
+      - name: Seal the exact encrypted gate output
+        id: initial-seal
+        if: ${{ success() && steps.initial-originals.outcome == 'success' && steps.initial-custody-export.outcome == 'success' && steps.initial-custody.outcome == 'success' }}
+        timeout-minutes: 1
+        shell: bash
+        env:
+          P2PKIT_ACTIONS_READ_TOKEN: ${{ github.token }}
+          P2PKIT_INITIAL_PRIMARY_OUTCOME: ${{ steps.initial-originals.outcome }}
+          P2PKIT_INITIAL_PRIMARY_RESULT_SHA256: ${{ steps.initial-originals.outputs.initialOriginalsSha256 }}
+          P2PKIT_INITIAL_PRIMARY_HANDOFF_SHA256: ${{ steps.initial-originals.outputs.gateHandoffSha256 }}
+          P2PKIT_INITIAL_CRYPTO_OUTCOME: ${{ steps.initial-custody-export.outcome }}
+          P2PKIT_INITIAL_CRYPTO_STEP_SHA256: ${{ steps.initial-custody-export.outputs.initialCryptoStepSha256 }}
+          P2PKIT_INITIAL_EXPORTER_RETURN_SHA256: ${{ steps.initial-custody-export.outputs.initialExporterReturnSha256 }}
+          P2PKIT_INITIAL_CUSTODY_OUTCOME: ${{ steps.initial-custody.outcome }}
+          P2PKIT_INITIAL_CUSTODY_SHA256: ${{ steps.initial-custody.outputs.initialCustodySha256 }}
+          P2PKIT_INITIAL_CUSTODY_EXPORTER_RETURN_SHA256: ${{ steps.initial-custody.outputs.initialExporterReturnSha256 }}
+        run: exec /usr/bin/python3 -I -B -S scripts/run-hosted-initial-recipient-custody.py seal --kind gate
+
+      - name: Check the original gate upload window
+        id: initial-upload-before
+        if: ${{ success() && steps.initial-originals.outcome == 'success' && steps.initial-custody-export.outcome == 'success' && steps.initial-custody.outcome == 'success' && steps.initial-seal.outcome == 'success' }}
+        timeout-minutes: 1
+        shell: bash
+        env:
+          P2PKIT_ACTIONS_READ_TOKEN: ${{ github.token }}
+          P2PKIT_INITIAL_PRIMARY_OUTCOME: ${{ steps.initial-originals.outcome }}
+          P2PKIT_INITIAL_PRIMARY_RESULT_SHA256: ${{ steps.initial-originals.outputs.initialOriginalsSha256 }}
+          P2PKIT_INITIAL_PRIMARY_HANDOFF_SHA256: ${{ steps.initial-originals.outputs.gateHandoffSha256 }}
+          P2PKIT_INITIAL_CRYPTO_OUTCOME: ${{ steps.initial-custody-export.outcome }}
+          P2PKIT_INITIAL_CRYPTO_STEP_SHA256: ${{ steps.initial-custody-export.outputs.initialCryptoStepSha256 }}
+          P2PKIT_INITIAL_EXPORTER_RETURN_SHA256: ${{ steps.initial-custody-export.outputs.initialExporterReturnSha256 }}
+          P2PKIT_INITIAL_CUSTODY_OUTCOME: ${{ steps.initial-custody.outcome }}
+          P2PKIT_INITIAL_CUSTODY_SHA256: ${{ steps.initial-custody.outputs.initialCustodySha256 }}
+          P2PKIT_INITIAL_CUSTODY_EXPORTER_RETURN_SHA256: ${{ steps.initial-custody.outputs.initialExporterReturnSha256 }}
+          P2PKIT_INITIAL_SEAL_OUTCOME: ${{ steps.initial-seal.outcome }}
+          P2PKIT_INITIAL_SEAL_SHA256: ${{ steps.initial-seal.outputs.initialSealSha256 }}
+        run: exec /usr/bin/python3 -I -B -S scripts/run-hosted-initial-recipient-custody.py upload-before --kind gate
+
+      - name: Retain only encrypted gate evidence and its public manifest
+        id: initial-evidence
+        if: ${{ success() && steps.initial-originals.outcome == 'success' && steps.initial-custody-export.outcome == 'success' && steps.initial-custody.outcome == 'success' && steps.initial-seal.outcome == 'success' && steps.initial-upload-before.outcome == 'success' }}
+        timeout-minutes: 1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: stage1-gate-evidence-${{ inputs.selection }}-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/p2pkit-initial-recipient-${{ github.run_id }}-${{ github.run_attempt }}-gate-custody/export-output/evidence.tar.gz.gpg
+            ${{ runner.temp }}/p2pkit-initial-recipient-${{ github.run_id }}-${{ github.run_attempt }}-gate-custody/export-output/manifest.json
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
+
+      - name: Bind actual gate upload success inside the original deadline
+        id: initial-upload-after
+        if: ${{ success() && steps.initial-originals.outcome == 'success' && steps.initial-custody-export.outcome == 'success' && steps.initial-custody.outcome == 'success' && steps.initial-seal.outcome == 'success' && steps.initial-upload-before.outcome == 'success' && steps.initial-evidence.outcome == 'success' }}
+        timeout-minutes: 1
+        shell: bash
+        env:
+          P2PKIT_ACTIONS_READ_TOKEN: ${{ github.token }}
+          P2PKIT_INITIAL_PRIMARY_OUTCOME: ${{ steps.initial-originals.outcome }}
+          P2PKIT_INITIAL_PRIMARY_RESULT_SHA256: ${{ steps.initial-originals.outputs.initialOriginalsSha256 }}
+          P2PKIT_INITIAL_PRIMARY_HANDOFF_SHA256: ${{ steps.initial-originals.outputs.gateHandoffSha256 }}
+          P2PKIT_INITIAL_CRYPTO_OUTCOME: ${{ steps.initial-custody-export.outcome }}
+          P2PKIT_INITIAL_CRYPTO_STEP_SHA256: ${{ steps.initial-custody-export.outputs.initialCryptoStepSha256 }}
+          P2PKIT_INITIAL_EXPORTER_RETURN_SHA256: ${{ steps.initial-custody-export.outputs.initialExporterReturnSha256 }}
+          P2PKIT_INITIAL_CUSTODY_OUTCOME: ${{ steps.initial-custody.outcome }}
+          P2PKIT_INITIAL_CUSTODY_SHA256: ${{ steps.initial-custody.outputs.initialCustodySha256 }}
+          P2PKIT_INITIAL_CUSTODY_EXPORTER_RETURN_SHA256: ${{ steps.initial-custody.outputs.initialExporterReturnSha256 }}
+          P2PKIT_INITIAL_SEAL_OUTCOME: ${{ steps.initial-seal.outcome }}
+          P2PKIT_INITIAL_SEAL_SHA256: ${{ steps.initial-seal.outputs.initialSealSha256 }}
+          P2PKIT_INITIAL_UPLOAD_BEFORE_OUTCOME: ${{ steps.initial-upload-before.outcome }}
+          P2PKIT_INITIAL_UPLOAD_WINDOW_SHA256: ${{ steps.initial-upload-before.outputs.initialUploadWindowSha256 }}
+          P2PKIT_INITIAL_UPLOAD_OUTCOME: ${{ steps.initial-evidence.outcome }}
+          P2PKIT_INITIAL_ARTIFACT_ID: ${{ steps.initial-evidence.outputs.artifact-id }}
+          P2PKIT_INITIAL_ARTIFACT_DIGEST: ${{ steps.initial-evidence.outputs.artifact-digest }}
+        run: exec /usr/bin/python3 -I -B -S scripts/run-hosted-initial-recipient-custody.py upload-after --kind gate
+
   populate:
     needs: initial-recipient-gate
     permissions:
@@ -203,6 +311,137 @@ jobs:
         id: canonical-initialization
         timeout-minutes: 12
         uses: ./.github/actions/initial-recipient-initialize
+
+      - name: Export the original nonproductive worker evidence
+        id: initial-custody-export
+        if: ${{ success() && steps.canonical-initialization.outcome == 'success' }}
+        timeout-minutes: 6
+        shell: bash
+        env:
+          P2PKIT_ACTIONS_READ_TOKEN: ${{ github.token }}
+          P2PKIT_INITIAL_PRIMARY_OUTCOME: ${{ steps.canonical-initialization.outcome }}
+          P2PKIT_INITIAL_PRIMARY_RESULT_SHA256: ${{ steps.canonical-initialization.outputs.initialization-sha256 }}
+          P2PKIT_INITIAL_PRIMARY_HANDOFF_SHA256: ${{ steps.canonical-initialization.outputs.worker-handoff-sha256 }}
+        run: |
+          case "$RUNNER_OS" in
+            Windows) exec python -I -B -S scripts/run-hosted-initial-recipient-custody.py collect-export --kind worker ;;
+            Linux|macOS) exec python3 -I -B -S scripts/run-hosted-initial-recipient-custody.py collect-export --kind worker ;;
+            *) exit 125 ;;
+          esac
+
+      - name: Close worker custody with fresh post-export authority
+        id: initial-custody
+        if: ${{ success() && steps.canonical-initialization.outcome == 'success' && steps.initial-custody-export.outcome == 'success' }}
+        timeout-minutes: 1
+        shell: bash
+        env:
+          P2PKIT_ACTIONS_READ_TOKEN: ${{ github.token }}
+          P2PKIT_INITIAL_PRIMARY_OUTCOME: ${{ steps.canonical-initialization.outcome }}
+          P2PKIT_INITIAL_PRIMARY_RESULT_SHA256: ${{ steps.canonical-initialization.outputs.initialization-sha256 }}
+          P2PKIT_INITIAL_PRIMARY_HANDOFF_SHA256: ${{ steps.canonical-initialization.outputs.worker-handoff-sha256 }}
+          P2PKIT_INITIAL_CRYPTO_OUTCOME: ${{ steps.initial-custody-export.outcome }}
+          P2PKIT_INITIAL_CRYPTO_STEP_SHA256: ${{ steps.initial-custody-export.outputs.initialCryptoStepSha256 }}
+          P2PKIT_INITIAL_EXPORTER_RETURN_SHA256: ${{ steps.initial-custody-export.outputs.initialExporterReturnSha256 }}
+        run: |
+          case "$RUNNER_OS" in
+            Windows) exec python -I -B -S scripts/run-hosted-initial-recipient-custody.py collect-close --kind worker ;;
+            Linux|macOS) exec python3 -I -B -S scripts/run-hosted-initial-recipient-custody.py collect-close --kind worker ;;
+            *) exit 125 ;;
+          esac
+
+      - name: Seal the exact encrypted worker output
+        id: initial-seal
+        if: ${{ success() && steps.canonical-initialization.outcome == 'success' && steps.initial-custody-export.outcome == 'success' && steps.initial-custody.outcome == 'success' }}
+        timeout-minutes: 1
+        shell: bash
+        env:
+          P2PKIT_ACTIONS_READ_TOKEN: ${{ github.token }}
+          P2PKIT_INITIAL_PRIMARY_OUTCOME: ${{ steps.canonical-initialization.outcome }}
+          P2PKIT_INITIAL_PRIMARY_RESULT_SHA256: ${{ steps.canonical-initialization.outputs.initialization-sha256 }}
+          P2PKIT_INITIAL_PRIMARY_HANDOFF_SHA256: ${{ steps.canonical-initialization.outputs.worker-handoff-sha256 }}
+          P2PKIT_INITIAL_CRYPTO_OUTCOME: ${{ steps.initial-custody-export.outcome }}
+          P2PKIT_INITIAL_CRYPTO_STEP_SHA256: ${{ steps.initial-custody-export.outputs.initialCryptoStepSha256 }}
+          P2PKIT_INITIAL_EXPORTER_RETURN_SHA256: ${{ steps.initial-custody-export.outputs.initialExporterReturnSha256 }}
+          P2PKIT_INITIAL_CUSTODY_OUTCOME: ${{ steps.initial-custody.outcome }}
+          P2PKIT_INITIAL_CUSTODY_SHA256: ${{ steps.initial-custody.outputs.initialCustodySha256 }}
+          P2PKIT_INITIAL_CUSTODY_EXPORTER_RETURN_SHA256: ${{ steps.initial-custody.outputs.initialExporterReturnSha256 }}
+        run: |
+          case "$RUNNER_OS" in
+            Windows) exec python -I -B -S scripts/run-hosted-initial-recipient-custody.py seal --kind worker ;;
+            Linux|macOS) exec python3 -I -B -S scripts/run-hosted-initial-recipient-custody.py seal --kind worker ;;
+            *) exit 125 ;;
+          esac
+
+      - name: Check the original worker upload window
+        id: initial-upload-before
+        if: ${{ success() && steps.canonical-initialization.outcome == 'success' && steps.initial-custody-export.outcome == 'success' && steps.initial-custody.outcome == 'success' && steps.initial-seal.outcome == 'success' }}
+        timeout-minutes: 1
+        shell: bash
+        env:
+          P2PKIT_ACTIONS_READ_TOKEN: ${{ github.token }}
+          P2PKIT_INITIAL_PRIMARY_OUTCOME: ${{ steps.canonical-initialization.outcome }}
+          P2PKIT_INITIAL_PRIMARY_RESULT_SHA256: ${{ steps.canonical-initialization.outputs.initialization-sha256 }}
+          P2PKIT_INITIAL_PRIMARY_HANDOFF_SHA256: ${{ steps.canonical-initialization.outputs.worker-handoff-sha256 }}
+          P2PKIT_INITIAL_CRYPTO_OUTCOME: ${{ steps.initial-custody-export.outcome }}
+          P2PKIT_INITIAL_CRYPTO_STEP_SHA256: ${{ steps.initial-custody-export.outputs.initialCryptoStepSha256 }}
+          P2PKIT_INITIAL_EXPORTER_RETURN_SHA256: ${{ steps.initial-custody-export.outputs.initialExporterReturnSha256 }}
+          P2PKIT_INITIAL_CUSTODY_OUTCOME: ${{ steps.initial-custody.outcome }}
+          P2PKIT_INITIAL_CUSTODY_SHA256: ${{ steps.initial-custody.outputs.initialCustodySha256 }}
+          P2PKIT_INITIAL_CUSTODY_EXPORTER_RETURN_SHA256: ${{ steps.initial-custody.outputs.initialExporterReturnSha256 }}
+          P2PKIT_INITIAL_SEAL_OUTCOME: ${{ steps.initial-seal.outcome }}
+          P2PKIT_INITIAL_SEAL_SHA256: ${{ steps.initial-seal.outputs.initialSealSha256 }}
+        run: |
+          case "$RUNNER_OS" in
+            Windows) exec python -I -B -S scripts/run-hosted-initial-recipient-custody.py upload-before --kind worker ;;
+            Linux|macOS) exec python3 -I -B -S scripts/run-hosted-initial-recipient-custody.py upload-before --kind worker ;;
+            *) exit 125 ;;
+          esac
+
+      - name: Retain only encrypted worker evidence and its public manifest
+        id: initial-evidence
+        if: ${{ success() && steps.canonical-initialization.outcome == 'success' && steps.initial-custody-export.outcome == 'success' && steps.initial-custody.outcome == 'success' && steps.initial-seal.outcome == 'success' && steps.initial-upload-before.outcome == 'success' }}
+        timeout-minutes: 1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: stage1-worker-evidence-${{ inputs.selection }}-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/p2pkit-initial-recipient-${{ github.run_id }}-${{ github.run_attempt }}-worker-custody/export-output/evidence.tar.gz.gpg
+            ${{ runner.temp }}/p2pkit-initial-recipient-${{ github.run_id }}-${{ github.run_attempt }}-worker-custody/export-output/manifest.json
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
+
+      - name: Bind actual worker upload success inside the original deadline
+        id: initial-upload-after
+        if: ${{ success() && steps.canonical-initialization.outcome == 'success' && steps.initial-custody-export.outcome == 'success' && steps.initial-custody.outcome == 'success' && steps.initial-seal.outcome == 'success' && steps.initial-upload-before.outcome == 'success' && steps.initial-evidence.outcome == 'success' }}
+        timeout-minutes: 1
+        shell: bash
+        env:
+          P2PKIT_ACTIONS_READ_TOKEN: ${{ github.token }}
+          P2PKIT_INITIAL_PRIMARY_OUTCOME: ${{ steps.canonical-initialization.outcome }}
+          P2PKIT_INITIAL_PRIMARY_RESULT_SHA256: ${{ steps.canonical-initialization.outputs.initialization-sha256 }}
+          P2PKIT_INITIAL_PRIMARY_HANDOFF_SHA256: ${{ steps.canonical-initialization.outputs.worker-handoff-sha256 }}
+          P2PKIT_INITIAL_CRYPTO_OUTCOME: ${{ steps.initial-custody-export.outcome }}
+          P2PKIT_INITIAL_CRYPTO_STEP_SHA256: ${{ steps.initial-custody-export.outputs.initialCryptoStepSha256 }}
+          P2PKIT_INITIAL_EXPORTER_RETURN_SHA256: ${{ steps.initial-custody-export.outputs.initialExporterReturnSha256 }}
+          P2PKIT_INITIAL_CUSTODY_OUTCOME: ${{ steps.initial-custody.outcome }}
+          P2PKIT_INITIAL_CUSTODY_SHA256: ${{ steps.initial-custody.outputs.initialCustodySha256 }}
+          P2PKIT_INITIAL_CUSTODY_EXPORTER_RETURN_SHA256: ${{ steps.initial-custody.outputs.initialExporterReturnSha256 }}
+          P2PKIT_INITIAL_SEAL_OUTCOME: ${{ steps.initial-seal.outcome }}
+          P2PKIT_INITIAL_SEAL_SHA256: ${{ steps.initial-seal.outputs.initialSealSha256 }}
+          P2PKIT_INITIAL_UPLOAD_BEFORE_OUTCOME: ${{ steps.initial-upload-before.outcome }}
+          P2PKIT_INITIAL_UPLOAD_WINDOW_SHA256: ${{ steps.initial-upload-before.outputs.initialUploadWindowSha256 }}
+          P2PKIT_INITIAL_UPLOAD_OUTCOME: ${{ steps.initial-evidence.outcome }}
+          P2PKIT_INITIAL_ARTIFACT_ID: ${{ steps.initial-evidence.outputs.artifact-id }}
+          P2PKIT_INITIAL_ARTIFACT_DIGEST: ${{ steps.initial-evidence.outputs.artifact-digest }}
+        run: |
+          case "$RUNNER_OS" in
+            Windows) exec python -I -B -S scripts/run-hosted-initial-recipient-custody.py upload-after --kind worker ;;
+            Linux|macOS) exec python3 -I -B -S scripts/run-hosted-initial-recipient-custody.py upload-after --kind worker ;;
+            *) exit 125 ;;
+          esac
 
       # Success of the initializer cannot admit producer/cache work. Earlier
       # failures already stop this normal path; there is no cleanup/build tail.
