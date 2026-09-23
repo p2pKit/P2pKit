@@ -254,7 +254,7 @@ end
 mutations.each do |name, mutate|
     candidate = Marshal.load(Marshal.dump(workflow))
     mutate.call(candidate)
-    abort "FAIL: ineffective mutation #{name}" if candidate == workflow
+    abort "FAIL: ineffective mutation #{name}" if Marshal.dump(candidate) == Marshal.dump(workflow)
     begin
         InitialRecipientWorkflowPolicy.check(candidate)
     rescue InitialRecipientWorkflowPolicy::Error
@@ -290,7 +290,7 @@ queue_mutations = {
 queue_mutations.each do |name, mutate|
     candidate = Marshal.load(original)
     mutate.call(candidate)
-    abort "FAIL: ineffective queue mutation #{name}" if candidate == workflows
+    abort "FAIL: ineffective queue mutation #{name}" if Marshal.dump(candidate) == original
     begin
         HeavyJobQueuePolicy.check(candidate)
     rescue HeavyJobQueuePolicy::Error
