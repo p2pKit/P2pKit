@@ -59,6 +59,18 @@ class NativeModels(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="initial-native-model-")
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
+        # Explicit nonexecutable supplier data, not an installed/runnable Git.
+        # Parent selection and the real child search check must see the SAME
+        # canonical tiny file; neither production routing check is mocked out.
+        self.git_bin = self.base / "synthetic-git-bin"
+        self.git_bin.mkdir(mode=0o700)
+        self.git_executable = self.git_bin / "git"
+        self.git_executable.write_bytes(b"EXPLICIT_SYNTHETIC_GIT_NEVER_EXECUTED\n")
+        self.git_executable.chmod(0o600)
+        def find_git(name):
+            self.assertEqual(name, "git")
+            return str(self.git_executable)
+        self.stack.enter_context(patch.object(I.shutil, "which", side_effect=find_git))
         self.event = self.base / "event.json"
         self.queries, self.scopes, self.child_errors, self.child_envs, self.drains = [], [], [], [], []
         self.query_close_error = self.scope_close_error = self.child_exit = self.ack_transform = None
@@ -112,6 +124,7 @@ class NativeModels(unittest.TestCase):
             def __init__(self):
                 self.path, self.unknown, self.closed, self.finalizations = path, False, False, 0
                 self.deadlines, self.calls, self.host_checked = owner_deadlines, [], False
+                self.executable, self.records = str(case.git_executable), []
                 self.private = Q._new_private_directory(path)
                 case.queries.append(self)
             def native_host_matches_actions(self):
@@ -129,15 +142,24 @@ class NativeModels(unittest.TestCase):
                 self.calls.append(suffix)
                 git = case.fixture.git
                 if suffix == ("rev-parse", "--show-toplevel"):
-                    return (str(root) + "\n").encode() if git.root_value else b"/wrong\n"
-                if suffix == ("status", "--porcelain=v1", "--untracked-files=all"):
-                    return b"" if git.clean_value else b" M changed\n"
-                if suffix[:2] == ("rev-parse", "--verify"):
+                    raw = (str(root) + "\n").encode() if git.root_value else b"/wrong\n"
+                elif suffix == ("status", "--porcelain=v1", "--untracked-files=all"):
+                    raw = b"" if git.clean_value else b" M changed\n"
+                elif suffix[:2] == ("rev-parse", "--verify"):
                     ref = suffix[2]
                     value = (git.head if ref == "HEAD^{commit}" else git.main if ref == "refs/remotes/origin/main^{commit}" else
                              git.main_tree if ref == N.acquisition.stages.BASE["commit"] + "^{tree}" else git.tree_value)
-                    return value.encode() + b"\n"
-                return git.query(*suffix, limit=kwargs["stdout_limit"])
+                    raw = value.encode() + b"\n"
+                else:
+                    raw = git.query(*suffix, limit=kwargs["stdout_limit"])
+                case.assertEqual(kwargs["argv"][0], self.executable)
+                # Only a returned modeled call gets a successful modeled row.
+                # These are NOT native process observations or complete custody.
+                self.records.append({"argv": list(kwargs["argv"]), "job": "a" * 32,
+                    "state": str(path), "home": str(path / "query-home"), "cwd": str(kwargs["cwd"]),
+                    "launchAttempted": True, "scopeAttempted": True, "waitExitCode": 0,
+                    "retirement": "KNOWN", "result": "READY_FOR_CALLER_SEAL", "errors": [], "ownedSurvivors": []})
+                return raw
             def _write(self, directory, name, raw):
                 if type(raw) is not bytes:
                     raw = O.encoded(raw)
@@ -151,7 +173,7 @@ class NativeModels(unittest.TestCase):
                 self.finalizations += 1
                 case.assertEqual(self.finalizations, 1)
                 self._write(self.private, "session-result.json", {"schema": 1, "scope": "ORDINARY_GIT_QUERIES_ONLY",
-                    "job": "a" * 32, "queries": [list(x) for x in self.calls], "readbacks": [],
+                    "job": "a" * 32, "queries": self.records, "readbacks": [],
                     "result": "READY_FOR_CALLER_SEAL" if failure is None else "HOLD", "retirement": "KNOWN",
                     "firstError": None if failure is None else "SYNTHETIC_QUERY_FAILURE", "errors": [] if failure is None else ["SYNTHETIC"]})
                 self.private.close()
