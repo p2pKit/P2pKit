@@ -1723,6 +1723,63 @@ No accepted1,066-file reader, earlier suite or preview build was repeated.
 Authority/crypto/export/seal/upload integration and genuine hosted qualification
 remain separate; both ordinary HOLDs, productive125 and Release gates remain.
 
+##### Original custody authority and complete copy controls — 23 September
+
+Commits `c040c0c95dbd7d30183b6138079ac5ce91c6bd1c` and
+`428c7096199f680183561a16f0b1fa666d5fdb5f` retain actual authority-owner/query
+returns and append their indexed originals without replacing PRIMARY bytes.
+Independent copy/source-control review SHA-256:
+`38fad0802164429ceedbefe2c3008381f1e37d719e1ffe2426b16774686737d9`.
+The two following fixture-only corrections, `dcc7a066` and `d99f0034`, use the
+original clipped phase deadline and keep the nominal fixture inside its existing
+exclusive window. No production clock, cap, validation or ownership check changed.
+Their independent source-review hashes are
+`8cb75c2d95ccb4bfcb6a17f28a6c430e42213d3c74492dec44641ed4bdfb9bf9` and
+`cf23adcd92d4ce976020515d664000addfd4d23555f811c0ac520996d9c8ff84`.
+
+The original stopped aggregates remain **FAILED / CONSUMED**:
+
+| Packet | Original ordered result | Independent result-review SHA-256 |
+| --- | --- | --- |
+| authority71 | 19 PASS /1 FAIL /51 NOT_RUN | `7d38ef4bed6b21c4df68c7fbaa6dd02286f59026817a4c49c446d1fbbc90dbd8` |
+| custody68 | 4 PASS /1 ERROR /63 NOT_RUN | `1d46c780b46350835c3a217ce03d869c0a9eed7c20e3f2d0955af5b386a13923` |
+| custody64 | 48 PASS /1 INCOMPLETE /15 NOT_RUN | `dfd9d3feadedc598feea1b8a9fc4012ff6933028d46826ca6a7411bb0c165629` |
+
+Custody64 completed12 remaining parent controls and36 child-clock controls.
+Its first copy method was killed with exit137 at60.050s wall, strongly consistent
+with its external CPU60 limit; an actual final CPU total is unavailable.
+The final guard/warning checks were not reached. Original nonempty worker-copy
+residue is preserved. No complete64/64 result or gate-subcase pass is inferred.
+
+Only the16 incomplete/unrun copy methods were then selected, with unchanged
+source `d99f0034674b85c8610ceceb0b2b1eb5843b0117`, tree
+`a399989fc7e2b3e6f81688756a5d896bf77275bc`. This single new packet completed at
+**2026-09-23T06:38:11Z–06:41:13Z: 16/16 PASS +4 guards**, all three exits0,
+zero unexpected denials/ResourceWarnings,173 matching integrity rows and empty
+new work. The full281-file/58-directory authority shapes were retained; the
+48 passed methods were neither staged nor replayed. External CPU600/wall660+kill2
+was probe containment only, not a functional-window change. Child CPU through
+the post-suite sample was178.177668s; import/suite wall180.311859s, command
+wall180.427s and outer wall181.554s. These are modeled-clock offline timings,
+not genuine custody-window or canonical-init120 qualification.
+
+- Request/input-manifest SHA-256:
+  `1e2465aada5719f180b13b024d152a7d712b149d22b4c156fac5c6712ee8b769` /
+  `0e86bf4735cae41f2b92ed5614e947b9c5f45743fa5c5eccf58602b530e3b4aa`.
+- Outer original capture-manifest SHA-256:
+  `f17c3d1964516349a6a14b807b2332c113e0644a3f4fd655f7ab2a37516abcc9`.
+- Independent verdict: **ACCEPT_ORIGINAL_COPY16_OFFLINE_CONTROL_RESULT**;
+  report SHA-256 `dcf843f221a7a8d11d9c005d341babceaafe4fa7eb8c88f96e08fbe1d3383c73`.
+
+This does not pass the earlier failed aggregates, authenticate upstream/native
+owners, or establish real encryption, provider/cache, scheduling or delivery.
+Same-child crypto/export, post-export fresh authority, seal/upload and caller
+integration still require their separate reviewed implementation and evidence.
+The successful1,066 reader, prior accepted suites and preview builds were not
+repeated. Both ordinary HOLDs, whole-JVM interlock, productive125, unchanged
+native limits and bootstrap5400 **UNADMITTED / UNMEASURED** remain.
+**Public development assets0/4; Release NOT_READY.**
+
 #### Stage1 canonical-context reader, not initialization authority
 
 The separate fixed `initial_recipient_context_record()` in
