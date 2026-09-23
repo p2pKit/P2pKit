@@ -1,5 +1,5 @@
 name: Initial recipient canonical initialization
-description: Dormant same-job Steps edge; requires separately admitted Stage1 source, tools and execution
+description: Same-job Steps edge behind Stage1 source, custody and execution prerequisites
 outputs:
   initialization-sha256:
     description: Private pending-close receipt digest, not producer or Release authority
@@ -7,7 +7,8 @@ outputs:
 runs:
   using: composite
   steps:
-    # UNCALLED. Interpreter routing is not prestart source/tool qualification.
+    # The bootstrap prefix calls this edge; productive bootstrap remains held.
+    # Interpreter routing is not prestart source/tool or custody qualification.
     # The trusted caller must admit this exact source, host and Stage1 first.
     - name: Validate recipient and retain private step continuity
       id: recipient

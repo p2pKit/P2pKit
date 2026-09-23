@@ -27,6 +27,7 @@ module HeavyJobQueuePolicy
             "windows-helper-controls" => "windows-helper-controls", "mac-host-admission-probe" => "mac-host-admission-probe", "dependency-lock-candidate" => "dependency-lock-candidate", "iphoneos-product" => "iphoneos-product"},
         "ios-x64-tests.yml" => {"ios-x64" => nil},
         "dependency-submission.yml" => {"submit" => nil},
+        "dependency-cache-bootstrap.yml" => {"populate" => nil},
     }.freeze
     # Separate workflow groups prevent a workflow holding the lease its jobs
     # need. Retain ordinary supersession and CI's independent scheduled backstop.
@@ -40,6 +41,8 @@ module HeavyJobQueuePolicy
             "cancel-in-progress" => "${{ github.event_name != 'workflow_dispatch' || (inputs.operation != 'windows-directory-fsync-control' && inputs.operation != 'windows-helper-controls' && inputs.operation != 'macos-arm64-admission' && inputs.operation != 'macos-x64-admission' && inputs.operation != 'dependency-lock-candidate' && inputs.operation != 'dependency-lock-candidate-x64' && inputs.operation != 'dependency-lock-candidate-macos14' && inputs.operation != 'iphoneos-product') }}",
         },
         "ios-x64-tests.yml" => {"group" => "ios-x64-tests-${{ github.ref }}", "cancel-in-progress" => false},
+        "dependency-cache-bootstrap.yml" => {"group" => "p2pkit-initial-recipient-bootstrap", "queue" => "max",
+                                             "cancel-in-progress" => false},
     }.freeze
     MATRICES = {
         ["ci.yml", "jvm-library-checks"] => {"include" => [
@@ -99,12 +102,22 @@ module HeavyJobQueuePolicy
             require_policy(expected_concurrency ? workflow["concurrency"] == expected_concurrency :
                 !workflow.key?("concurrency"), "#{path}: preserve separate workflow concurrency/supersession")
             jobs = workflow["jobs"]
-            expected_ids = expected_jobs.keys + (path == "ci.yml" ? [INITIAL_JOB] : [])
+            has_initial_gate = ["ci.yml", "dependency-cache-bootstrap.yml"].include?(path)
+            expected_ids = expected_jobs.keys + (has_initial_gate ? [INITIAL_JOB] : [])
             require_policy(jobs.is_a?(Hash) && jobs.keys.sort == expected_ids.sort,
                            "#{path}: participating job IDs changed; review queue coverage")
             if path == "ci.yml"
                 require_policy(jobs[INITIAL_JOB] == INITIAL_INTERLOCK,
                                "#{path}: preserve fail-only whole-JVM interlock without acquisition/lease/approval")
+            elsif path == "dependency-cache-bootstrap.yml"
+                gate = jobs[INITIAL_JOB]
+                require_policy(gate.is_a?(Hash) &&
+                    gate.keys.sort == %w[environment if permissions runs-on steps timeout-minutes] &&
+                    gate["environment"] == "initial-recipient-execution" && gate["runs-on"] == "ubuntu-24.04" &&
+                    gate["permissions"] == {"contents" => "read", "actions" => "read"} &&
+                    gate["timeout-minutes"].instance_of?(Integer) && gate["timeout-minutes"] == 6 &&
+                    gate["if"] == "${{ github.repository == 'p2pKit/P2pKit' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/work/nonphysical-integration-20260915-022112' && github.sha == inputs.expected_sha }}",
+                    "#{path}: preserve protected nonheavy initial gate without alias/dependency/lease")
             end
             expected_jobs.each do |id, name|
                 job = jobs[id]
@@ -112,8 +125,12 @@ module HeavyJobQueuePolicy
                 require_policy(job.is_a?(Hash) && job["concurrency"] == QUEUE,
                                "#{label}: require exact job-level group, queue:max and boolean cancel-in-progress:false")
                 require_policy(name ? job["name"] == name : !job.key?("name"), "#{label}: preserve job/check name")
-                prerequisite = path == "ci.yml" ? {"jvm-library-checks" => INITIAL_JOB,
-                                                  "complete-gate" => "jvm-library-checks"}[id] : nil
+                prerequisite = case path
+                when "ci.yml"
+                    {"jvm-library-checks" => INITIAL_JOB, "complete-gate" => "jvm-library-checks"}[id]
+                when "dependency-cache-bootstrap.yml"
+                    INITIAL_JOB
+                end
                 require_policy(prerequisite ? job["needs"] == prerequisite : !job.key?("needs"),
                                "#{label}: preserve acyclic job dependencies")
                 condition = CONDITIONS[[path, id]]
@@ -159,5 +176,5 @@ if $PROGRAM_NAME == __FILE__
     rescue HeavyJobQueuePolicy::Error, SystemCallError => error
         abort "FATAL: #{error.message}"
     end
-    puts "RESULT: PASS — ten participating jobs share the bounded non-cancelling queue; workflow groups remain separate"
+    puts "RESULT: PASS — eleven participating jobs share the bounded non-cancelling queue; workflow groups remain separate"
 end

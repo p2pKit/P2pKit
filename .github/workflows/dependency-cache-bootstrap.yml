@@ -1,8 +1,8 @@
 name: Dependency cache bootstrap (productive stage held)
 
-# Source preparation only. Registration, the separate protected environment,
-# exact owner stage/run/attempt/source approval and hosted qualification remain
-# prerequisites. There is no push/PR/schedule/registration event in this file.
+# Source preparation only. Exact owner stage/run/attempt/source approval,
+# gate/worker encrypted custody and hosted qualification remain prerequisites.
+# There is no push/PR/schedule/registration event in this file.
 on:
   workflow_dispatch:
     inputs:
@@ -49,23 +49,57 @@ jobs:
       - name: Check out the actual reviewed event source without persisted credentials
         timeout-minutes: 2
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: "false"
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
 
-      - name: Fetch the two source histories without tags or checkout credentials
+      - name: Fetch full no-tag history and verify source before repository Python
         timeout-minutes: 1
         shell: bash
         env:
           GIT_TERMINAL_PROMPT: "0"
+          P2PKIT_EXPECTED_SHA: ${{ inputs.expected_sha }}
+          P2PKIT_EXPECTED_TREE: ${{ inputs.expected_tree }}
         # checkout's depth-zero path fetches all tags even with fetch-tags:false.
         # The public repository needs no token for this bounded source fetch.
-        run: >-
-          git fetch --no-tags --unshallow origin
-          refs/heads/main:refs/remotes/origin/main
-          refs/heads/work/nonphysical-integration-20260915-022112:refs/remotes/origin/work/nonphysical-integration-20260915-022112
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = p2pKit/P2pKit
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/work/nonphysical-integration-20260915-022112
+          [[ "$P2PKIT_EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$P2PKIT_EXPECTED_TREE" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$P2PKIT_EXPECTED_SHA"
+          git fetch --no-tags --unshallow origin \
+            refs/heads/main:refs/remotes/origin/main \
+            refs/heads/work/nonphysical-integration-20260915-022112:refs/remotes/origin/work/nonphysical-integration-20260915-022112
+          test "$(git rev-parse --is-shallow-repository)" = false
+          test "$(git rev-parse HEAD)" = "$P2PKIT_EXPECTED_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$P2PKIT_EXPECTED_TREE"
+          test "$(git rev-parse refs/remotes/origin/main)" = 3bc76f956f8f47447b51a62474fc878b9c43173c
+          test "$(git rev-parse 'refs/remotes/origin/main^{tree}')" = 2a1105fde1d1ac299448489501e29d7a0d4a407a
+          test "$(git rev-parse refs/remotes/origin/work/nonphysical-integration-20260915-022112)" = "$P2PKIT_EXPECTED_SHA"
+          git merge-base --is-ancestor 3bc76f956f8f47447b51a62474fc878b9c43173c "$P2PKIT_EXPECTED_SHA"
+          source_status="$(git status --porcelain=v1 --untracked-files=all)"
+          test -z "$source_status"
+          repository_root="$(git rev-parse --show-toplevel)"
+          workspace="$GITHUB_WORKSPACE"
+          case "$RUNNER_OS" in
+            Windows) repository_root="$(cygpath -u -- "$repository_root")"; workspace="$(cygpath -u -- "$workspace")" ;;
+            Linux|macOS) ;;
+            *) exit 125 ;;
+          esac
+          current_root="$(pwd -P)"
+          repository_root="$(cd -- "$repository_root" && pwd -P)"
+          workspace="$(cd -- "$workspace" && pwd -P)"
+          test "$current_root" = "$repository_root"
+          test "$current_root" = "$workspace"
 
       - name: Acquire original nonproductive Stage1 eligibility
         id: initial-originals
@@ -79,15 +113,101 @@ jobs:
 
   populate:
     needs: initial-recipient-gate
-    permissions: {}
+    permissions:
+      contents: read
+      actions: read
     runs-on: ${{ fromJSON('{"desktop-linux-x64":"ubuntu-latest","desktop-windows-x64":"windows-latest","desktop-macos-arm64":"macos-26","desktop-macos-x64":"macos-15-intel","full-macos-arm64":"macos-26","full-macos-x64":"macos-15-intel"}')[inputs.selection] }}
-    timeout-minutes: 1
-    # Deliberately no checkout, setup, environment, credentials, artifact
-    # upload, provider Action or Gradle (including unconditional cleanup).
-    # Replacing this refusal requires reviewed productive Stage1 implementation
-    # and separate activation authority; a successful gate cannot lift it.
+    timeout-minutes: 20
+    concurrency:
+      group: p2pkit-nonphysical-heavy
+      queue: max
+      cancel-in-progress: false
+    # Nonproductive prefix only. Its outer envelope does not extend init120,
+    # any native component cap or the unadmitted bootstrap5400 proposal.
+    # Do not dispatch before both jobs have reviewed encrypted custody/sealing.
     steps:
+      - name: Check out the actual reviewed event source without persisted credentials
+        timeout-minutes: 2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: "false"
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Fetch full no-tag history and verify source before repository Python
+        timeout-minutes: 1
+        shell: bash
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+          P2PKIT_EXPECTED_SHA: ${{ inputs.expected_sha }}
+          P2PKIT_EXPECTED_TREE: ${{ inputs.expected_tree }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = p2pKit/P2pKit
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/work/nonphysical-integration-20260915-022112
+          [[ "$P2PKIT_EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$P2PKIT_EXPECTED_TREE" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$P2PKIT_EXPECTED_SHA"
+          git fetch --no-tags --unshallow origin \
+            refs/heads/main:refs/remotes/origin/main \
+            refs/heads/work/nonphysical-integration-20260915-022112:refs/remotes/origin/work/nonphysical-integration-20260915-022112
+          test "$(git rev-parse --is-shallow-repository)" = false
+          test "$(git rev-parse HEAD)" = "$P2PKIT_EXPECTED_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$P2PKIT_EXPECTED_TREE"
+          test "$(git rev-parse refs/remotes/origin/main)" = 3bc76f956f8f47447b51a62474fc878b9c43173c
+          test "$(git rev-parse 'refs/remotes/origin/main^{tree}')" = 2a1105fde1d1ac299448489501e29d7a0d4a407a
+          test "$(git rev-parse refs/remotes/origin/work/nonphysical-integration-20260915-022112)" = "$P2PKIT_EXPECTED_SHA"
+          git merge-base --is-ancestor 3bc76f956f8f47447b51a62474fc878b9c43173c "$P2PKIT_EXPECTED_SHA"
+          source_status="$(git status --porcelain=v1 --untracked-files=all)"
+          test -z "$source_status"
+          repository_root="$(git rev-parse --show-toplevel)"
+          workspace="$GITHUB_WORKSPACE"
+          case "$RUNNER_OS" in
+            Windows) repository_root="$(cygpath -u -- "$repository_root")"; workspace="$(cygpath -u -- "$workspace")" ;;
+            Linux|macOS) ;;
+            *) exit 125 ;;
+          esac
+          current_root="$(pwd -P)"
+          repository_root="$(cd -- "$repository_root" && pwd -P)"
+          workspace="$(cd -- "$workspace" && pwd -P)"
+          test "$current_root" = "$repository_root"
+          test "$current_root" = "$workspace"
+
+      - name: Configure native daemon Java 21 and wrapper Java 17
+        timeout-minutes: 3
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: |
+            21
+            17
+
+      - name: Bind the native Stage1 daemon JDK
+        timeout-minutes: 1
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$RUNNER_ARCH" in X64|ARM64) ;; *) echo 'FATAL: unsupported native Java architecture' >&2; exit 1 ;; esac
+          daemon_variable="JAVA_HOME_21_${RUNNER_ARCH}"
+          daemon_home="${!daemon_variable}"
+          case "$daemon_home" in ''|*$'\n'*|*$'\r'*) echo 'FATAL: missing or invalid daemon JDK path' >&2; exit 1 ;; esac
+          printf 'P2PKIT_AUDIT_JDK21=%s\n' "$daemon_home" >> "$GITHUB_ENV"
+
+      - name: Initialize the exact Stage1 source within existing component windows
+        id: canonical-initialization
+        timeout-minutes: 12
+        uses: ./.github/actions/initial-recipient-initialize
+
+      # Success of the initializer cannot admit producer/cache work. Earlier
+      # failures already stop this normal path; there is no cleanup/build tail.
       - name: Hold the unqualified productive bootstrap
+        timeout-minutes: 1
         shell: bash
         run: |
           echo 'INITIAL_RECIPIENT_STAGE1=HOLD; PRODUCTIVE_BOOTSTRAP_NOT_QUALIFIED' >&2

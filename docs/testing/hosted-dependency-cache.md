@@ -1372,6 +1372,35 @@ executed failure. No accepted reader, initializer, continuity or preview was
 rerun. This resolves the exact modeled routing repair, **not native Windows,
 genuine init120, provider or custody qualification**.
 
+##### Callable nonproductive workflow prefix — source preparation
+
+The manual bootstrap workflow now connects the existing initializer composite
+once, after its protected gate and exact-source/native-JDK prerequisites. This
+supersedes the earlier **UNCALLED** source status only; no hosted initialization
+or runner continuity is claimed. Both jobs retain pinned credential-free LF
+checkout and spend the existing one-minute history-fetch step on full no-tag
+history plus fixed inline source checks **before repository Python**. These
+bind the event, reviewed commit/tree, original main, ancestry, clean worktree
+and actual repository/workspace root, including Windows path normalization.
+Checkout's temporary Git settings do not reach the other steps.
+
+Only the worker joins the existing noncancelling heavy queue; its protected
+gate and separate workflow group stay outside that lease. Native Temurin21
+then17 and the maintained explicit JDK21 binding supply tool homes, not Java
+execution or dependency setup. The new20-minute worker envelope contains
+checkout2/history-and-prestart1/setup3/binding1/composite12/HOLD1 minutes.
+The gate stays6 minutes (checkout2/history-and-prestart1/acquisition3).
+All are shared outer caps, not measured execution fit or extended component
+deadlines: receiving WORK120 and bootstrap5400 UNADMITTED/UNMEASURED remain.
+
+The existing composite's executable Steps, controllers and accepted reader are
+unchanged. Focused changed workflow/new queue controls are **AUTHORED / UNEXECUTED**
+at this source checkpoint. Productive exit125, both ordinary HOLDs, whole-JVM
+interlock and every Release gate remain. **Do not dispatch** this prefix before
+separately reviewed Stage1-bound encrypted success/eligible-failure custody and
+actual post-return sealing exist for **both gate and worker**. A successful
+initializer and digest-only stdout cannot substitute for those originals.
+
 #### Stage1 canonical-context reader, not initialization authority
 
 The separate fixed `initial_recipient_context_record()` in
