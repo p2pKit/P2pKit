@@ -72,6 +72,7 @@ RECEIVING_AUTHORITY_WINDOW_SCOPE = "INITIAL_RECIPIENT_RECEIVING_AUTHORITY_SOURCE
 RECEIVING_CHILD_SCOPE = "INITIAL_RECIPIENT_RECEIVING_AUTHORITY_PENDING_CHILD_CLOSE_V1"
 RECEIVING_OUTCOME_ENV = "P2PKIT_INITIAL_RECIPIENT_OUTCOME"
 RECEIVING_HASH_ENV = "P2PKIT_INITIAL_RECIPIENT_SENDER_SHA256"
+RECEIVING_CRYPTO_HASH_ENV = "P2PKIT_INITIAL_RECIPIENT_CRYPTO_ORIGINALS_SHA256"
 _PREPARED_RETURNS = {}
 _WORKER_USE_LOCK = threading.Lock()
 _WORKER_USES, _WORKER_CLAIMS, _ENTRY_WINDOWS, _READMISSION_RETURNS = {}, {}, {}, {}
@@ -92,9 +93,19 @@ _GATE_CAPTURES = {}
 _GATE_RETURNS = {}
 _GATE_HANDOFF_ATTEMPTS = {}
 _GATE_USE_LOCK = threading.Lock()
+_WORKER_READER_CAPTURES = {}
+_WORKER_AUTHORITY_CAPTURES = {}
+_WORKER_AUTHORITY_RETURNS = {}
+_WORKER_CRYPTO_CAPTURES = {}
+_WORKER_ORIGINAL_CAPTURES = {}
+_WORKER_HANDOFF_ATTEMPTS = {}
+_WORKER_HANDOFF_LOCK = threading.Lock()
 GATE_INVENTORY_SCOPE = "INITIAL_RECIPIENT_GATE_ORIGINAL_INDEX_V1"
 GATE_HANDOFF_SCOPE = "INITIAL_RECIPIENT_GATE_ORIGINALS_PENDING_HANDOFF_CLOSE_V1"
 GATE_HANDOFF_FILE = "gate-originals.json"
+WORKER_INVENTORY_SCOPE = "INITIAL_RECIPIENT_WORKER_ORIGINAL_INDEX_V1"
+WORKER_HANDOFF_SCOPE = "INITIAL_RECIPIENT_WORKER_ORIGINALS_PENDING_HANDOFF_CLOSE_V1"
+WORKER_HANDOFF_FILE = "worker-originals.json"
 
 
 @dataclass(frozen=True)
@@ -1287,6 +1298,27 @@ class _GateCapture:
     result_raw: bytes
     pins: tuple
     roster: object
+    boot: str
+
+
+def _gate_boot_observe(fence, local_end, cancelled, expected=None, *, final=False, minimum=0):
+    """Original gate process only; ClockIdentity alone is not a boot binding."""
+    require(type(fence) is O.Fence and fence.clock.role == "linux-x64" and
+        (expected is None or type(expected) is str and re.fullmatch(r"[0-9a-f]{64}", expected)),
+        "GATE_BOOT_BINDING")
+    native.cancellation(cancelled)
+    before = fence.now(final=final, minimum=minimum)
+    native.posix._deadline(local_end)
+    boot = continuity.boot_digest("linux-x64")
+    require(type(boot) is str and re.fullmatch(r"[0-9a-f]{64}", boot) and
+        (expected is None or boot == expected), "GATE_BOOT_CHANGED")
+    native.posix._deadline(local_end)
+    # A fallible boot supplier cannot replace the already validated RAW floor
+    # by lowering the mutable fence field. Keep the original minimum locally.
+    after = fence.now(final=final, minimum=before)
+    O.integer(after, before)
+    native.cancellation(cancelled)
+    return boot
 
 
 def _gate_names(owner, directory, expected, *, final=False):
@@ -1304,12 +1336,13 @@ def _gate_names(owner, directory, expected, *, final=False):
     owner.end(final=final)
 
 
-def _capture_gate_originals(owner, private, context_raw, before, after, phase, match, chain, captured, result_raw, cancelled):
+def _capture_gate_originals(owner, private, context_raw, before, after, phase, match, chain, captured, result_raw, cancelled, boot):
     require(type(owner) is native.Owner and type(owner.fence) is O.Fence and owner.fence.clock.role == "linux-x64" and
         owner.phase_originals is phase and owner.initial_sources ==
         {str(private.path / "source-before"): before, str(private.path / "source-after"): after} and
         owner.initial_sources[str(private.path / "source-before")] is before and
         owner.initial_sources[str(private.path / "source-after")] is after, "GATE_ORIGINAL_OWNER")
+    require(type(boot) is str and re.fullmatch(r"[0-9a-f]{64}", boot), "GATE_BOOT_BINDING")
     # Exactly two extra original reads; no query or service operation is replayed.
     service = owner.child(private, "service")
     child_raw = owner.read(service, "child-result.json")
@@ -1350,11 +1383,11 @@ def _capture_gate_originals(owner, private, context_raw, before, after, phase, m
     _check_history(graph)
     _check_history(pin_graph)
     roster = _GateRoster(owner)
-    capture = _GateCapture(raw, owner, private.path, match, result_raw, tuple(pins), roster)
+    capture = _GateCapture(raw, owner, private.path, match, result_raw, tuple(pins), roster, boot)
     # The pre-close anchor is independent of the later preparation/return registry.
     anchor = (capture, raw, private.path, match, match.record, result_raw, capture.pins, roster, roster.frozen,
         graph, pin_graph, _GATE_CAPTURES, _GATE_RETURNS, _PREPARED_RETURNS, cancelled,
-        owner.fence, owner.fence.raw, owner.fence.cancelled, owner.local_end, roster._binding)
+        owner.fence, owner.fence.raw, owner.fence.cancelled, owner.local_end, roster._binding, boot)
     require(id(owner) not in _GATE_CAPTURES and not hasattr(owner, "_gate_capture_anchor"), "GATE_CAPTURE_REUSE")
     owner._gate_capture_anchor = anchor  # Original owner anchor, never learned from a replacement return.
     _GATE_CAPTURES[id(owner)] = anchor
@@ -1365,9 +1398,9 @@ def _capture_gate_originals(owner, private, context_raw, before, after, phase, m
 
 
 def _check_gate_capture(anchor, *, closed):
-    require(type(anchor) is tuple and len(anchor) == 20, "GATE_CAPTURE_BINDING")
+    require(type(anchor) is tuple and len(anchor) == 21, "GATE_CAPTURE_BINDING")
     capture, raw, root, match, match_raw, result_raw, pins, roster, frozen, graph, pin_graph, captures, returns, prepared, \
-        cancelled, fence, prelude, cancel_check, local, roster_binding = anchor
+        cancelled, fence, prelude, cancel_check, local, roster_binding, boot = anchor
     require(type(capture) is _GateCapture and type(capture.owner) is native.Owner and
         capture.owner._gate_capture_anchor is anchor and captures is _GATE_CAPTURES and
         captures.get(id(capture.owner)) is anchor and returns is _GATE_RETURNS and prepared is _PREPARED_RETURNS and
@@ -1375,7 +1408,8 @@ def _check_gate_capture(anchor, *, closed):
         type(match.record) is bytes and match.record == match_raw and type(capture.result_raw) is bytes and
         capture.result_raw == result_raw and capture.pins is pins and capture.roster is roster and
         type(roster) is _GateRoster and roster.owner is capture.owner and roster.frozen is frozen and
-        roster._binding is roster_binding and
+        roster._binding is roster_binding and type(boot) is str and re.fullmatch(r"[0-9a-f]{64}", boot) and
+        type(capture.boot) is str and capture.boot == boot and
         capture.owner.fence is fence and type(cancelled) is list and cancelled == [], "GATE_CAPTURE_CHANGED")
     _original_limits(capture.owner, fence, prelude, local, cancel_check)
     roster.check(closed=closed)
@@ -1472,8 +1506,9 @@ def _retain_gate_handoff(original):
         try:
             passive()
             native.cancellation(cancelled)
-            value = fence.now(final=True, minimum=last)
-            last = fence.last
+            _gate_boot_observe(fence, local, cancelled, capture.boot, final=True, minimum=last)
+            value = O.integer(fence.last, last)
+            last = max(last, value)
             sample = time.monotonic()
             require(type(sample) in (int, float) and math.isfinite(sample) and
                 (local_last is None or sample >= local_last) and sample < local, "GATE_HANDOFF_LOCAL_EXPIRED")
@@ -1520,7 +1555,8 @@ def _retain_gate_handoff(original):
         raw = owner.write(directory, GATE_HANDOFF_FILE, {"schema": 1, "scope": GATE_HANDOFF_SCOPE,
             "directory": str(path), "directoryIdentity": list(pin[2]), "inventory": O.parse(capture.raw),
             "gateEligibility": O.parse(capture.match.record), "originalClosedNs": closed_ns,
-            "clock": O.clock_value(fence.clock), "preludeSha256": O.digest(binding.prelude_raw),
+            "clock": O.clock_value(fence.clock), "bootDigest": capture.boot,
+            "preludeSha256": O.digest(binding.prelude_raw),
             "originalClose": {"retirement": "KNOWN", "resources": [label for _row, label, _resource, _a, _c in capture.roster.frozen]},
             "originalNativeDirectories": [{"path": text, "identity": list(identity)} for text, identity in
                 sorted({(text, identity) for _directory, _path, text, identity in capture.pins})],
@@ -1560,7 +1596,7 @@ def _retain_gate_handoff(original):
 def _prepare_with_token(cancelled, token):
     """Borrow only the outer parent's stack reference; never reinstall ambient credentials."""
     owner = None
-    private = result_raw = worker_identity = worker_originals = service_time_raw = proposal_raw = gate_anchor = None
+    private = result_raw = worker_identity = worker_originals = service_time_raw = proposal_raw = gate_anchor = gate_boot = None
     try:
         first = O.clocks.validate_reading(O.clocks.observe())
         cancel_check = lambda: native.cancellation(cancelled)
@@ -1572,6 +1608,10 @@ def _prepare_with_token(cancelled, token):
         require(not native.QUARANTINE and not Q.QUARANTINE and not native.diagnostics._QUARANTINE, "PRIOR_UNKNOWN")
         observed, path, event = host_context(int(time.time()))
         require(observed["role"] == first.clock.role, "ACTUAL_NATIVE_ROLE")
+        if observed["kind"] == "gate":
+            # Capture before original source/HTTP work in this SAME process.
+            # Worker preparation and shared context/reader schemas are unchanged.
+            gate_boot = _gate_boot_observe(fence, local_end, cancelled)
         inherited = Q._inherited_context()
         native.child_environment(path)  # Reject ambient execution overrides before allocation.
         private = owner.new(path)
@@ -1613,7 +1653,8 @@ def _prepare_with_token(cancelled, token):
             "qualificationAcceptance": "NOT_ESTABLISHED", "exportSaveAuthority": False})
         if worker_identity is None:
             gate_anchor = _capture_gate_originals(owner, private, context_raw, before, after, phase, match, chain,
-                captured, result_raw, cancelled)
+                captured, result_raw, cancelled, gate_boot)
+            _gate_boot_observe(fence, local_end, cancelled, gate_boot)
     except BaseException as error:
         if owner is None:
             raise
@@ -1641,6 +1682,8 @@ def _prepare_with_token(cancelled, token):
         require(worker_identity == initial_identity.bind_worker_match(match, event_raw=event,
             policy_raw=worker_identity.original_policy, now=int(time.time())), "WORKER_IDENTITY_CHANGED")
     _original_limits(owner, fence, prelude_raw, local_end, cancel_check)
+    if gate_boot is not None:
+        _gate_boot_observe(fence, local_end, cancelled, gate_boot, final=True)
     closed_ns = fence.now(final=True)
     native.posix._deadline(local_end)
     native.cancellation(cancelled)
@@ -2522,7 +2565,7 @@ class _ReceivingContinuation:
 
 
 @contextmanager
-def _receive_initialization(cancelled):
+def _receive_initialization(cancelled, *, crypto_sha256=None):
     """One receiving120 scope, including the separate fixed initializer route.
 
     Fixed env inputs name the future reviewed workflow's separate step outcome
@@ -2533,8 +2576,17 @@ def _receive_initialization(cancelled):
     restored legacy recipient or second initializer allowance is accepted.
     """
     token = os.environ.pop(O.wire.TOKEN_ENV, None)
-    owner = window = continuation = None
+    owner = window = continuation = reader_anchor = crypto_anchor = authority = authority_anchor = None
     failure = None
+
+    def original_authority():
+        # This lexical tuple is assigned immediately after the genuine call,
+        # before any later supplier. A current registry entry cannot replace it.
+        if authority_anchor is None:
+            require(authority is None, "WORKER_AUTHORITY_RETURN_NOT_CAPTURED")
+            return None
+        return _worker_authority_return(authority, expected=authority_anchor)
+
     try:
         step = os.environ.get(RECEIVING_OUTCOME_ENV), os.environ.get(RECEIVING_HASH_ENV)
         require(step[0] == "success" and type(step[1]) is str and re.fullmatch(r"[0-9a-f]{64}", step[1]),
@@ -2554,25 +2606,43 @@ def _receive_initialization(cancelled):
         path = _receiving_path()
         native.child_environment(path)  # Reject overrides; token was already removed, never restored.
         private = owner.new(path)  # Exclusive reservation also refuses replay across fresh processes.
+        step_original = None
         if step_hash is not None:
             _capture_receiving_step(window)
+            step_original = _RECEIVING_WINDOWS[id(window)].continuity
         source = _recipient_path()
         sender = owner.open(source.with_name(source.name + "-output"))
         originals = _read_initial_recipient_originals(owner, sender, recipient_outcome=step[0], expected_sha256=step[1])
+        # Pin the ACTUAL return and ledger before bind/current/source suppliers.
+        # This supplements, but does not alter or repeat, the accepted reader.
+        reader_anchor = _capture_worker_reader(window, owner, private, sender, originals, step_original, original_authority)
         _bind_receiving_originals(window, originals)
+        _check_worker_reader(reader_anchor, bound=True)
         owner.write(private, "receiving-window.json", window.raw)
         _receiving_current(window)
         if step_hash is not None:
             _receiving_step_current(window)
+            if crypto_sha256 is not None:
+                crypto_anchor = _capture_worker_crypto(window, reader_anchor, crypto_sha256)
             _capture_receiving_inputs(window, private)  # BEFORE the unchanged source-before/HTTP/source-after.
         authority = _receiving_authority(window, token)
+        authority_anchor = _WORKER_AUTHORITY_RETURNS.get(id(authority))
+        require(type(authority_anchor) is tuple and len(authority_anchor) == 6 and authority_anchor[0] is authority,
+                "WORKER_AUTHORITY_RETURN_NOT_CAPTURED")
+        original_authority()
         token = None  # All current-acquisition frames have returned/closed; no credential crosses yield.
         state = window.state()
         _RECEIVING_WINDOWS[id(window)] = replace(state, authority=authority)
         continuation = _ReceivingContinuation()
         _RECEIVING_CONTINUATIONS[id(continuation)] = (continuation, window, authority)
         continuation.checked()
+        _check_worker_reader(reader_anchor, bound=True)
+        if crypto_anchor is not None:
+            _check_worker_crypto(crypto_anchor)
         yield continuation
+        _check_worker_reader(reader_anchor, bound=True)
+        if crypto_anchor is not None:
+            _check_worker_crypto(crypto_anchor)
         continuation.checked()
         _receiving_initialization_return(continuation)
         _receiving_step_current(window)
@@ -2597,6 +2667,10 @@ def _receive_initialization(cancelled):
             try:
                 window.state(cleanup=True).roster.known()
                 window.now(final=True)
+                if reader_anchor is not None:
+                    _check_worker_reader(reader_anchor, bound=True, closed=True)
+                if crypto_anchor is not None:
+                    _check_worker_crypto(crypto_anchor, closed=True)
             except BaseException as error:
                 owner.error("receiving-close-return", error, unknown=owner.unknown)
             if failure is None:
@@ -3413,7 +3487,7 @@ def _receiving_authority(episode, token):
     """
     require(type(episode) is _ReceivingWindow, "RECEIVING_AUTHORITY_EPISODE")
     outer = episode.state()
-    owner = window = evidence = None
+    owner = window = evidence = worker_anchor = None
     try:
         observed, _recipient, event = _receiving_current(episode)
         window = _RecipientAuthorityWindow.for_receiving(episode)
@@ -3466,6 +3540,7 @@ def _receiving_authority(episode, token):
             "senderSha256": outer.step[1], "filesSha256": {name: O.digest(raw) for name, raw in originals},
             "originalChain": chain, "retainedNs": window.now(), "retirement": "PENDING_OWNER_CLOSE"})
         evidence = (originals, pending, before, after, phase, captured, match)
+        worker_anchor = _capture_worker_authority(episode, window, owner, private, evidence)
         graph = _history_graph(before, after, phase, match, owner.initial_sources)
         require(_source_pin(before)[1:] == before_pin[1:] and _source_pin(after)[1:] == after_pin[1:] and
             _phase_pin(phase)[1:] == phase_pin[1:] and owner.phase_originals is phase and
@@ -3512,9 +3587,13 @@ def _receiving_authority(episode, token):
         "resourceCount": len(state.roster.rows), "retirement": "KNOWN_RESOURCE_CLOSE_ONLY",
         "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
     result = _AuthorityReturn(raw)
+    require(worker_anchor is not None and not hasattr(owner, "_worker_authority_original_return"),
+            "WORKER_AUTHORITY_RETURN_REUSE")
+    owner._worker_authority_original_return = (result, raw)
     nodes = _history_graph(result, _AUTHORITY_WINDOWS[id(window)], evidence)
     _AUTHORITY_RETURNS[id(result)] = (result, raw, episode, window, nodes, originals)
     _authority_return(result, episode)
+    _register_worker_authority(result, episode, worker_anchor)
     return result
 
 
@@ -5018,39 +5097,809 @@ def _retain_sender_step(returned, cancelled, initial_boot):
         raise failure
 
 
-def _initialize_step(cancelled):
-    """Fixed uncalled Steps consumer; emits only a pending-close receipt digest."""
-    require(type(os.environ.get(continuity.STEP_HASH_ENV)) is str and
-        re.fullmatch(r"[0-9a-f]{64}", os.environ[continuity.STEP_HASH_ENV]), "RECEIVING_FIXED_STEP_REQUIRED")
-    with _receive_initialization(cancelled) as continuation:
-        result = _initialize_receiving(continuation)
-    require(_receiving_initialization_return(continuation, closed=True) is result, "RECEIVING_INIT_CLOSED_RETURN")
-    window = _RECEIVING_CONTINUATIONS[id(continuation)][1]
-    terminal = window.state(cleanup=True)
-    # No now()/deadline() on the terminal receiver. These independently capped
-    # direct output observations inherit its ORIGINAL RAW/LOCAL high-water.
-    last, local_last, hard, cap = terminal.last, terminal.local_last, terminal.work, terminal.locals[0]
-    graph = _history_graph(terminal.__dict__, terminal.roster.owner, terminal.roster)
-    busy, failed, checks = False, False, 0
+def _worker_registries():
+    # Container identity, not a mutable registry's assertion about itself.
+    return (_RECEIVING_WINDOWS, _RECEIVING_CONTINUATIONS, _RECEIVING_INIT_ATTEMPTS, _RECEIVING_INIT_RETURNS,
+        _RECEIVING_CLOSED_RETURNS, _AUTHORITY_WINDOWS, _AUTHORITY_RETURNS, _WORKER_READER_CAPTURES,
+        _WORKER_AUTHORITY_CAPTURES, _WORKER_AUTHORITY_RETURNS, _WORKER_CRYPTO_CAPTURES,
+        _WORKER_ORIGINAL_CAPTURES, _WORKER_HANDOFF_ATTEMPTS)
 
-    def pins():
-        require(_RECEIVING_WINDOWS.get(id(window)) is terminal and not failed and
-            _RECEIVING_CLOSED_RETURNS.get(id(continuation)) is closed_return and
-            _receiving_initialization_return(continuation, closed=True) is result and
-            (os.environ.get(RECEIVING_OUTCOME_ENV), os.environ.get(RECEIVING_HASH_ENV)) == terminal.step and
-            os.environ.get(continuity.STEP_HASH_ENV) == terminal.step_hash and O.wire.TOKEN_ENV not in os.environ and
+
+def _worker_owner_binding(owner, roster):
+    """Save references only; the existing roster owns allocation/close flags."""
+    return (owner.__dict__, roster.__dict__, owner.resources, owner.errors, owner.initial_sources, roster.seen,
+        owner.first, owner.cancelled, owner.local_end, owner.early_last)
+
+
+def _worker_owner_current(owner, window, roster, binding, *, closed=False, cleanup=False):
+    dictionary, roster_dictionary, rows, errors, sources, seen, first, cancel, local, early = binding
+    require(type(owner) is native.Owner and type(roster) is _RecipientRoster and owner.__dict__ is dictionary and
+        roster.__dict__ is roster_dictionary and owner.resources is rows is roster.rows and
+        owner.errors is errors is roster.errors and owner.initial_sources is sources is roster.sources and
+        roster.seen is seen and roster.owner is owner and owner.fence is window is roster.window and
+        owner.first is first is roster.first and owner.cancelled is cancel is roster.cancelled and
+        type(owner.local_end) is float and owner.local_end == local == roster.local and
+        type(owner.early_last) is int and owner.early_last == early and
+        owner.work_limit is None and owner.final_limit is None, "WORKER_ORIGINAL_OWNER_CHANGED")
+    roster.check()
+    if cleanup:
+        return  # Preserve actual cleanup even after an earlier non-ownership failure.
+    require(owner.closed is closed and owner.unknown is False and owner.original is None and errors == [],
+            "WORKER_ORIGINAL_OWNER_FAILED")
+    if closed:
+        roster.known()
+
+
+def _worker_pins(owner, role, targets):
+    """Actual ledger pins only; never open a declared/closed query directory."""
+    found, pins = {}, []
+    for row in tuple(owner.resources):
+        require(type(row) is dict, "WORKER_ORIGINAL_RESOURCE_ROW")
+        if row.get("label") != "directory":
+            continue
+        directory = row["owner"]
+        require(type(directory) is (native.windows.PrivateDirectory if role == "windows-x64" else Q._PosixDirectory),
+                "WORKER_ORIGINAL_DIRECTORY_TYPE")
+        matches = [key for key, path in targets.items() if directory.path == path]
+        if not matches:
+            continue
+        require(len(matches) == 1 and row["attempted"] is False and row["closed"] is False,
+                "WORKER_ORIGINAL_DIRECTORY_LIVE")
+        key, path = matches[0], directory.path
+        identity = tuple(native.directory_identity(list(directory.identity), role))
+        require(key not in found or found[key] == identity, "WORKER_ORIGINAL_REPEATED_PIN")
+        found[key] = identity
+        pins.append((key, row, directory, path, identity))
+    require(set(found) == set(targets) and len(set(found.values())) == len(found), "WORKER_ORIGINAL_PIN_ROSTER")
+    return tuple(pins)
+
+
+def _check_worker_pins(pins, role, *, closed=False):
+    for _key, row, directory, path, identity in pins:
+        current = tuple(directory.identity)
+        require(type(directory) is (native.windows.PrivateDirectory if role == "windows-x64" else Q._PosixDirectory) and
+            row["label"] == "directory" and row["owner"] is directory and directory.path is path and
+            len(current) == len(identity) == 2 and current == identity and
+            all(type(a) is type(b) for a, b in zip(current, identity)) and
+            (directory._closed if role == "windows-x64" else directory.closed) is closed and
+            row["attempted"] is closed and row["closed"] is closed, "WORKER_ORIGINAL_PIN_CHANGED")
+
+
+def _worker_relative(name):
+    require(type(name) is str and name.split("/", 1)[0] in ("P", "E", "R", "S", "I", "T", "C"),
+            "WORKER_ORIGINAL_LOGICAL_PATH")
+    for part in name.split("/")[1:]:
+        Q._component(part)
+    return name
+
+
+def _worker_file(name, maximum, count, digest, provenance):
+    _worker_relative(name)
+    require("/" in name and type(maximum) is int and type(count) is int and
+        0 <= count <= maximum <= native.LIMIT and maximum > 0 and
+        type(digest) is str and re.fullmatch(r"[0-9a-f]{64}", digest) and
+        (count != 0 or digest == O.digest(b"")) and provenance in
+        ("ACTUAL_RETAINED_BYTES", "ORIGINAL_AUTHORITY_QUERY_DECLARATION", "AUTHENTICATED_CRYPTO_DECLARATION"),
+        "WORKER_ORIGINAL_FILE")
+    return {"relative": name, "parent": name.rsplit("/", 1)[0], "maximum": max(1, count),
+        "bytes": count, "sha256": digest, "provenance": provenance}
+
+
+@dataclass(frozen=True, repr=False)
+class _WorkerReaderCapture:
+    # Opaque to _history_graph(owner): future ledger additions must stay live.
+    owner: object
+    window: object
+    originals: tuple
+    roots: tuple
+    directories: tuple
+    pins: tuple
+    prefix: tuple
+    step: object
+    authority_check: object
+
+
+def _capture_worker_reader(window, owner, private, sender, originals, step, authority_check):
+    """Called immediately after the one accepted1066 return, without live I/O."""
+    state, registries = _RECEIVING_WINDOWS.get(id(window)), _worker_registries()
+    require(type(state) is _ReceivingState and state.window is window and state.roster.owner is owner and
+        state.raw is None and state.originals == () and state.continuity is step, "WORKER_READER_NOT_NEW")
+    roster, binding = state.roster, _worker_owner_binding(owner, state.roster)
+    prefix = tuple((row, row.get("label"), row.get("owner")) for row in owner.resources if type(row) is dict)
+    require(callable(authority_check), "WORKER_READER_AUTHORITY_CHECK")
+    step_pin = None
+    if step is not None:
+        require(type(step) is tuple and len(step) == 2 and type(step[0]) is _ReceivingStep,
+                "WORKER_READER_STEP")
+        original_step = step[0]
+        step_pin = (original_step, original_step.__dict__, original_step.raw, original_step.directory,
+            original_step.path, original_step.identity, original_step.boot)
+    # This is the original tuple object, not an equality-tested copy. Freeze it
+    # and the original first/step/path graph before parsing or any later supplier.
+    graph = _history_graph(originals, state.first_reading, private.path, sender.path,
+        () if step is None else step[0].__dict__)
+    require(type(originals) is tuple and len(originals) == 1066 and
+        all(type(row) is tuple and len(row) == 2 and type(row[0]) is str and type(row[1]) is bytes for row in originals) and
+        len(dict(originals)) == 1066 and sum(len(raw) for _key, raw in originals) <= Q.MAX_SESSION_BYTES,
+        "WORKER_READER_ORIGINAL_TUPLE")
+    recipient = sender.path.with_name(sender.path.name.removesuffix("-output"))
+    preparation = recipient.with_name(recipient.name.removesuffix("-recipient"))
+    roots = (("P", preparation), ("E", preparation.with_name(preparation.name + "-entry")), ("R", recipient),
+        ("S", sender.path), ("I", private.path), ("T", recipient.with_name(recipient.name + "-step")),
+        ("C", recipient.with_name(recipient.name + "-crypto-originals")))
+    require(sender.path.name == recipient.name + "-output" and recipient.name == preparation.name + "-recipient" and
+        private.path == recipient.with_name(recipient.name + "-initializer"), "WORKER_READER_ROOTS")
+    raw = dict(originals)
+    require(O.parse(raw["P/context.json"])["session"] == str(preparation) and
+        O.parse(raw["R/recipient-context.json"])["session"] == str(recipient), "WORKER_READER_CONTEXT_ROOTS")
+    counts = {key: 0 for key in ("P", "E", "R", "S")}
+    for name, data in originals:
+        _worker_relative(name)
+        require(name.split("/", 1)[0] in counts and "/" in name and len(data) <= native.LIMIT,
+                "WORKER_READER_FILE")
+        counts[name.split("/", 1)[0]] += 1
+    require(counts == {"P": 284, "E": 281, "R": 498, "S": 3} and
+        len({key.casefold() for key in raw}) == 1066, "WORKER_READER_GROUPS")
+    query_roots = tuple(group + "/" + name for group in ("P", "E", "R/authority")
+        for name in ("source-before", "acquisition-queries", "source-after")) + (
+        "R/recipient-validation/source-before", "R/recipient-validation/source-after", "R/source-final")
+    directories = {name.rsplit("/", 1)[0] for name in raw}
+    directories.update(group + "/" + name for group in ("P", "E", "R/authority", "R")
+        for name in ("control-home", "temporary"))
+    directories.update(name + "/query-home" for name in query_roots)
+    directories.add("R/crypto")
+    directories = tuple(sorted(directories))
+    require(len(directories) == 222 and all(name + "/session-result.json" in raw for name in query_roots) and
+        {key: sum(name.split("/", 1)[0] == key for name in directories) for key in counts} ==
+        {"P": 58, "E": 58, "R": 105, "S": 1}, "WORKER_READER_DIRECTORY_ROSTER")
+    paths = dict(roots)
+    targets = {name: paths[name.split("/", 1)[0]].joinpath(*name.split("/")[1:]) for name in directories}
+    targets["I"] = private.path
+    if step is not None:
+        require(type(step) is tuple and len(step) == 2 and type(step[0]) is _ReceivingStep, "WORKER_READER_STEP")
+        targets["T"] = paths["T"]
+    pins = _worker_pins(owner, state.clock.role, targets)
+    require(len(pins) == len(targets) and len(prefix) == len(owner.resources), "WORKER_READER_PIN_COUNT")
+    graph += _history_graph(roots, directories, tuple(path for _key, _row, _dir, path, _id in pins))
+    capture = _WorkerReaderCapture(owner, window, originals, roots, directories, pins, prefix, step, authority_check)
+    anchor = (capture, owner, window, originals, roots, directories, pins, prefix, step, roster, binding, graph,
+        registries, state.first_reading, state.clock, state.clock_raw, state.local_start, state.step, state.step_hash,
+        step_pin, authority_check)
+    require(id(window) not in _WORKER_READER_CAPTURES and not hasattr(owner, "_worker_reader_capture"),
+            "WORKER_READER_REUSE")
+    owner._worker_reader_capture = capture
+    _WORKER_READER_CAPTURES[id(window)] = anchor
+    _check_worker_reader(anchor, bound=False)
+    return anchor
+
+
+def _check_worker_reader(anchor, *, bound=True, closed=False):
+    require(type(anchor) is tuple and len(anchor) == 21, "WORKER_READER_BINDING")
+    capture, owner, window, originals, roots, directories, pins, prefix, step, roster, binding, graph, registries, \
+        first, clock, clock_raw, local_start, original_step, step_hash, step_pin, authority_check = anchor
+    require(type(capture) is _WorkerReaderCapture and owner._worker_reader_capture is capture and
+        _WORKER_READER_CAPTURES.get(id(window)) is anchor and
+        len(registries) == len(_worker_registries()) and
+        all(current is saved for current, saved in zip(_worker_registries(), registries)) and
+        capture.owner is owner and capture.window is window and capture.originals is originals and capture.roots is roots and
+        capture.directories is directories and capture.pins is pins and capture.prefix is prefix and capture.step is step and
+        capture.authority_check is authority_check and callable(authority_check),
+        "WORKER_READER_CAPTURE_CHANGED")
+    if step is None:
+        require(step_pin is None, "WORKER_READER_STEP_CHANGED")
+    else:
+        saved, dictionary, raw, directory, path, identity, boot = step_pin
+        require(type(step) is tuple and len(step) == 2 and step[0] is saved and type(saved) is _ReceivingStep and
+            saved.__dict__ is dictionary and set(dictionary) == {"raw", "directory", "path", "identity", "boot"} and
+            type(saved.raw) is bytes and saved.raw == raw and saved.directory is directory and saved.path is path and
+            saved.identity is identity and type(saved.boot) is str and saved.boot == boot,
+            "WORKER_READER_STEP_CHANGED")
+    state = _RECEIVING_WINDOWS.get(id(window))
+    require(type(state) is _ReceivingState and state.window is window and state.roster is roster and
+        state.first_reading is first and state.clock is clock and type(state.clock_raw) is bytes and state.clock_raw == clock_raw and
+        type(state.local_start) is float and state.local_start == local_start and state.continuity is step and
+        state.step is original_step and state.step_hash == step_hash and
+        (os.environ.get(RECEIVING_OUTCOME_ENV), os.environ.get(RECEIVING_HASH_ENV)) == original_step and
+        os.environ.get(continuity.STEP_HASH_ENV) == step_hash and O.wire.TOKEN_ENV not in os.environ,
+        "WORKER_READER_RECEIVING_CHANGED")
+    _worker_owner_current(owner, window, roster, binding, closed=closed)
+    require(len(owner.resources) >= len(prefix) and all(row is saved and row["label"] == label and row["owner"] is resource
+        for row, (saved, label, resource) in zip(owner.resources, prefix)), "WORKER_READER_LEDGER_CHANGED")
+    _check_history(graph)
+    _check_worker_pins(pins, clock.role, closed=closed)
+    authority_check()  # None only before the genuine authority call returns.
+    if bound:
+        require(state.originals is originals and type(state.raw) is bytes, "WORKER_READER_TUPLE_REPLACED")
+        frame, bound_clock, began, work = _receiving_frame(state.raw)
+        raw = dict(originals)
+        require(bound_clock == clock and began == first.nanoseconds == state.first and work == state.work and
+            state.locals == (min(binding[8], O.wire._directed_deadline(local_start, 120, work, began)),) and
+            frame["senderSha256"] == O.digest(raw["S/sender-pending.json"]) == original_step[1] and
+            frame["workerIdentitySha256"] == O.digest(raw["P/worker-identity.json"]) and
+            state.identity_fields[:4] == (raw["P/worker-identity.json"], raw["P/acquisition-queries/event.bin"],
+                raw["P/acquisition-queries/candidate_policy_raw.bin"], raw["R/recipient-public.asc"]) and
+            state.match_raw == raw["P/acquisition-queries/match.bin"] and
+            state.proposal_raw == raw["P/worker-allocation-proposal.json"] and
+            state.observed_raw == O.encoded(O.parse(raw["P/context.json"])["observed"]), "WORKER_READER_BOUND_ORIGINALS")
+    return capture
+
+
+@dataclass(frozen=True, repr=False)
+class _WorkerAuthorityCapture:
+    owner: object
+    window: object
+    episode: object
+    evidence: tuple
+    files: tuple
+    directories: tuple
+    pins: tuple
+
+
+def _capture_worker_authority(episode, window, owner, private, evidence):
+    """281 declarations/available raws from THIS authority, before its close."""
+    state, registries = _AUTHORITY_WINDOWS[id(window)], _worker_registries()
+    roster, binding = state.roster, _worker_owner_binding(owner, state.roster)
+    originals, pending, before, after, phase, captured, match = evidence
+    graph = _history_graph(evidence, private.path, state.roster.first)
+    path = private.path
+    require(state.episode is episode and owner.phase_originals is phase and type(evidence) is tuple and
+        type(pending) is bytes and 0 < len(pending) <= native.LIMIT and
+        type(originals) is tuple and len(originals) == len(dict(originals)) == 37 and
+        type(before) is SourceReturn and type(after) is SourceReturn and type(phase) is native.OriginalPhase and
+        phase.context == dict(originals)["context.json"] and captured[0] == phase.context and
+        type(match) is acquisition.stages.BootstrapMatch and match.record == episode.state().match_raw,
+        "WORKER_AUTHORITY_ORIGINALS")
+    _source_pin(before)
+    _source_pin(after)
+    _phase_pin(phase)
+    context = O.parse(phase.context)
+    child_raw, session_raw = dict(originals)["service/child-result.json"], dict(originals)["acquisition-queries/session-result.json"]
+    child, value = O.parse(child_raw), O.parse(pending)
+    require(context["session"] == str(path) and context["scope"] == native.INITIAL_RECEIVING_CONTEXT_SCOPE and
+        context["authorityWindow"] == O.parse(window.raw) and path == dict(_check_worker_reader(
+            _WORKER_READER_CAPTURES[id(episode)]).roots)["I"] / "authority" and
+        owner.initial_sources.get(str(path / "source-before")) is before and
+        owner.initial_sources.get(str(path / "source-after")) is after and len(owner.initial_sources) == 2 and
+        pending == O.encoded(value) and value["scope"] == "INITIAL_RECIPIENT_RECEIVING_AUTHORITY_PENDING_CLOSE_V1" and
+        value["filesSha256"] == {name: O.digest(raw) for name, raw in originals} and
+        value["receivingWindowSha256"] == O.digest(episode.raw) and
+        value["senderSha256"] == episode.state().step[1] and value["retirement"] == "PENDING_OWNER_CLOSE",
+        "WORKER_AUTHORITY_PENDING")
+    data = dict(captured[1])
+    chain = value["originalChain"]
+    require(tuple(data) == ORIGINAL_KEYS and data["match"] == match.record and
+        {name: data[name] for name in SOURCE_KEYS} == dict(before.records) == dict(after.records) and
+        chain["childSha256"] == O.digest(child_raw) and chain["querySessionSha256"] == O.digest(session_raw) and
+        chain["phaseSha256"] == {name: O.digest(raw) for name, raw in phase.records} and
+        chain["originalsSha256"] == {name: O.digest(raw) for name, raw in data.items()} and
+        child["querySessionSha256"] == O.digest(session_raw) and child["matchSha256"] == O.digest(match.record) and
+        child["originalsSha256"] == chain["originalsSha256"] and child["invocation"] == captured[2],
+        "WORKER_AUTHORITY_CHAIN")
+    indexed, directories = [], [path, path / "control-home", path / "temporary", path / "service"]
+    for name, source, raw, values in (("source-before", before, before.session, dict(before.records)),
+            ("acquisition-queries", None, session_raw, data), ("source-after", after, after.session, dict(after.records))):
+        rows, paths = _gate_query_index(path / name, raw, values, source=source)
+        indexed.extend(rows)
+        directories.extend(paths)
+    available = dict((*originals, ("authority-pending.json", pending)))
+    for name in ("authority-window.json", "context.json", "authority-pending.json",
+            *("service/" + name for name in sorted(native.PHASE_FILES)), "service/child-result.json"):
+        raw = available[name]
+        maximum = native.ACK_LIMIT if name == "service/stdout.log" else native.STDERR_LIMIT if name == "service/stderr.log" else native.LIMIT
+        require(type(raw) is bytes and len(raw) <= maximum, "WORKER_AUTHORITY_RAW_LIMIT")
+        indexed.append((path / name, maximum, len(raw), O.digest(raw)))
+    require(len(indexed) == len({row[0] for row in indexed}) == 281 and
+        len(directories) == len(set(directories)) == 58, "WORKER_AUTHORITY_COMPLETE_ROSTER")
+    files = []
+    for target, maximum, count, digest in indexed:
+        relative = target.relative_to(path).as_posix()
+        if relative in available:
+            require(type(available[relative]) is bytes and count == len(available[relative]) and
+                digest == O.digest(available[relative]), "WORKER_AUTHORITY_RAW_CHANGED")
+        files.append(_worker_file("I/authority/" + relative, maximum, count, digest,
+            "ACTUAL_RETAINED_BYTES" if relative in available else "ORIGINAL_AUTHORITY_QUERY_DECLARATION"))
+    require(sum(row["provenance"] == "ACTUAL_RETAINED_BYTES" for row in files) == 38,
+            "WORKER_AUTHORITY_AVAILABLE_ROSTER")
+    directories = tuple(sorted("I/authority" + ("/" + item.relative_to(path).as_posix() if item != path else "")
+        for item in directories))
+    targets = {"I/authority": path, **{"I/authority/" + name: path / name for name in
+        ("control-home", "temporary", "service", "source-before", "source-after", "acquisition-queries")}}
+    pins = _worker_pins(owner, state.clock.role, targets)
+    files = tuple(sorted(files, key=lambda row: row["relative"]))
+    graph += _history_graph(files, directories, tuple(target for _key, _row, _dir, target, _id in pins))
+    capture = _WorkerAuthorityCapture(owner, window, episode, evidence, files, directories, pins)
+    anchor = (capture, owner, window, episode, evidence, files, directories, pins, roster, binding, graph, registries)
+    require(id(owner) not in _WORKER_AUTHORITY_CAPTURES and not hasattr(owner, "_worker_authority_capture"),
+            "WORKER_AUTHORITY_CAPTURE_REUSE")
+    owner._worker_authority_capture = capture
+    _WORKER_AUTHORITY_CAPTURES[id(owner)] = anchor
+    _check_worker_authority(anchor, closed=False)
+    return anchor
+
+
+def _check_worker_authority(anchor, *, closed):
+    require(type(anchor) is tuple and len(anchor) == 12, "WORKER_AUTHORITY_BINDING")
+    capture, owner, window, episode, evidence, files, directories, pins, roster, binding, graph, registries = anchor
+    require(type(capture) is _WorkerAuthorityCapture and owner._worker_authority_capture is capture and
+        _WORKER_AUTHORITY_CAPTURES.get(id(owner)) is anchor and
+        len(registries) == len(_worker_registries()) and
+        all(current is saved for current, saved in zip(_worker_registries(), registries)) and
+        capture.owner is owner and capture.window is window and capture.episode is episode and capture.evidence is evidence and
+        capture.files is files and capture.directories is directories and capture.pins is pins and
+        _AUTHORITY_WINDOWS[id(window)].roster is roster and _AUTHORITY_WINDOWS[id(window)].episode is episode,
+        "WORKER_AUTHORITY_CAPTURE_CHANGED")
+    _worker_owner_current(owner, window, roster, binding, closed=closed)
+    _check_history(graph)
+    _check_worker_pins(pins, binding[6].clock.role, closed=closed)
+    require(owner.phase_originals is evidence[4] and
+        owner.initial_sources.get(str(next(path for key, _row, _dir, path, _id in pins
+            if key == "I/authority/source-before"))) is evidence[2] and
+        owner.initial_sources.get(str(next(path for key, _row, _dir, path, _id in pins
+            if key == "I/authority/source-after"))) is evidence[3], "WORKER_AUTHORITY_SOURCE_REPLACED")
+    return capture
+
+
+def _register_worker_authority(result, episode, anchor):
+    capture = _check_worker_authority(anchor, closed=True)
+    saved, terminal = _AUTHORITY_RETURNS.get(id(result)), _AUTHORITY_WINDOWS[id(capture.window)]
+    require(type(result) is _AuthorityReturn and type(result.raw) is bytes and 0 < len(result.raw) <= native.LIMIT and
+        type(saved) is tuple and len(saved) == 6 and saved[0] is result and saved[1] == result.raw and
+        saved[2] is episode is capture.episode and saved[3] is capture.window and saved[5] is capture.evidence[0] and
+        _authority_return(result, episode) is capture.evidence[0], "WORKER_AUTHORITY_ORIGINAL_RETURN")
+    value = O.parse(result.raw)
+    require(value["filesSha256"] == {name: O.digest(raw) for name, raw in capture.evidence[0]} and
+        value["pendingSha256"] == O.digest(capture.evidence[1]) and
+        value["scope"] == "INITIAL_RECIPIENT_RECEIVING_AUTHORITY_CLOSED_HISTORY_V1" and
+        value["retirement"] == "KNOWN_RESOURCE_CLOSE_ONLY", "WORKER_AUTHORITY_CLOSED_RAW")
+    returned = (result, result.raw, saved, terminal, anchor, _history_graph(result))
+    require(id(result) not in _WORKER_AUTHORITY_RETURNS and
+        capture.owner._worker_authority_original_return[0] is result and
+        capture.owner._worker_authority_original_return[1] == result.raw, "WORKER_AUTHORITY_RETURN_REUSE")
+    _WORKER_AUTHORITY_RETURNS[id(result)] = returned
+    return returned
+
+
+def _worker_authority_return(result, expected=None):
+    returned = _WORKER_AUTHORITY_RETURNS.get(id(result))
+    require(type(returned) is tuple and len(returned) == 6 and returned[0] is result and
+        (expected is None or returned is expected), "WORKER_AUTHORITY_NOT_ORIGINAL_RETURN")
+    value, raw, saved, terminal, anchor, graph = returned
+    capture = _check_worker_authority(anchor, closed=True)
+    require(value is result and type(result.raw) is bytes and result.raw == raw and
+        capture.owner._worker_authority_original_return[0] is result and
+        capture.owner._worker_authority_original_return[1] == raw and
+        _AUTHORITY_RETURNS.get(id(result)) is saved and _AUTHORITY_WINDOWS.get(id(capture.window)) is terminal and
+        saved[0] is result and saved[1] == raw and saved[2] is capture.episode and saved[3] is capture.window and
+        saved[5] is capture.evidence[0] and _authority_return(result, capture.episode) is capture.evidence[0],
+        "WORKER_AUTHORITY_CLOSED_BINDING_CHANGED")
+    _check_history(graph)
+    return returned
+
+
+def _worker_crypto_index(raw, reader, pin, expected_hash):
+    """Validate the existing shallow inventory; do not reread crypto or run GPG."""
+    _check_worker_reader(reader)
+    captured = reader[0]
+    state = _RECEIVING_WINDOWS[id(captured.window)]
+    old, roots = dict(captured.originals), dict(captured.roots)
+    require(type(raw) is bytes and 0 < len(raw) <= native.LIMIT and O.digest(raw) == expected_hash,
+            "WORKER_CRYPTO_TRANSPORT_HASH")
+    side = O.parse(raw)
+    require(raw == O.encoded(side) and set(side) == {"schema", "scope", "directory", "directoryIdentity",
+        "recipientValidationSha256", "recipientSenderSha256", "recipientStepSha256", "inventory", "writerReturn",
+        "originalStepOutcome", "budgetAcceptance", "exportSaveAuthority"} and
+        type(side["schema"]) is int and side["schema"] == 1 and side["scope"] == CRYPTO_SIDECAR_SCOPE and
+        side["writerReturn"] == "PENDING_OWNER_CLOSE" and side["originalStepOutcome"] == "NOT_OBSERVED" and
+        side["budgetAcceptance"] == "NOT_ADMITTED" and side["exportSaveAuthority"] is False,
+        "WORKER_CRYPTO_SIDECAR_SCHEMA")
+    require(captured.step is not None and side["directory"] == str(roots["C"]) == str(pin[3]) and
+        native.directory_identity(side["directoryIdentity"], state.clock.role) == list(pin[4]) and
+        side["recipientValidationSha256"] == O.digest(old["S/recipient-return.json"]) and
+        side["recipientSenderSha256"] == state.step[1] == O.digest(old["S/sender-pending.json"]) and
+        side["recipientStepSha256"] == state.step_hash == O.digest(captured.step[0].raw), "WORKER_CRYPTO_SIDECAR_BINDINGS")
+    value = side["inventory"]
+    require(type(value) is dict and set(value) == {"schema", "scope", "root", "contextSha256", "childSha256",
+        "phaseSha256", "clock", "readEndNs", "readLocalCeiling", "capturedNs", "directories", "files", "totalBytes",
+        "copyState", "liveRecipient", "budgetAcceptance", "exportSaveAuthority"} and
+        type(value["schema"]) is int and value["schema"] == 1 and value["scope"] == CRYPTO_ORIGINALS_SCOPE and
+        value["root"] == str(roots["R"] / "crypto") and value["copyState"] == "ORIGINAL_BYTES_NOT_COPIED" and
+        value["liveRecipient"] == "NOT_TRANSFERRED" and value["budgetAcceptance"] == "NOT_ADMITTED" and
+        value["exportSaveAuthority"] is False, "WORKER_CRYPTO_INVENTORY_SCHEMA")
+    context = O.parse(old["R/recipient-context.json"])
+    child = O.parse(old["R/recipient-validation/child-result.json"])
+    native_result = O.parse(old["R/recipient-validation/result.json"])
+    sender, step = O.parse(old["S/sender-pending.json"]), _step_record(captured.step[0].raw)
+    validation, pending = O.parse(old["S/recipient-return.json"]), O.parse(old["R/recipient-pending.json"])
+    source = O.parse(old["R/source-final/source-return.json"])
+    require(value["contextSha256"] == O.digest(old["R/recipient-context.json"]) and
+        value["childSha256"] == O.digest(old["R/recipient-validation/child-result.json"]) and
+        value["phaseSha256"] == {name: O.digest(old["R/recipient-validation/" + name]) for name in native.PHASE_FILES} and
+        context["session"] == str(roots["R"]) and context["root"] == str(ROOT) and
+        context["observed"] == O.parse(old["P/context.json"])["observed"] and
+        O.encoded(value["clock"]) == O.encoded(child["clock"]) == O.encoded(sender["readWindow"]["clock"]) ==
+        O.encoded(step["clock"]) == O.encoded(source["clock"]) == state.clock_raw, "WORKER_CRYPTO_ORIGINAL_LINKS")
+    O.wire.clock_identity(value["clock"])
+    require(type(value["readEndNs"]) is int and value["readEndNs"] == native_result["readEndNs"] ==
+        sender["readWindow"]["readEndNs"] == step["readEndNs"] and
+        type(value["readLocalCeiling"]) is float and math.isfinite(value["readLocalCeiling"]) and
+        value["readLocalCeiling"] == sender["readWindow"]["readLocalCeiling"] == step["readLocalCeiling"] and
+        0 <= sender["readWindow"]["previousLocal"] <= step["lowerLocal"] < value["readLocalCeiling"] and
+        step["lowerLocal"] <= state.local_start, "WORKER_CRYPTO_ORIGINAL_CAPS")
+    chronology = (native_result["readbackCompletedNs"], value["capturedNs"], source["returnedNs"], pending["retainedNs"],
+        validation["preCloseNs"], validation["closedNs"], sender["readWindow"]["previousNs"],
+        sender["readWindow"]["retainedNs"], step["lowerNs"])
+    require(all(type(item) is int and 0 <= item < value["readEndNs"] for item in chronology) and
+        tuple(sorted(chronology)) == chronology and chronology[-1] <= state.first, "WORKER_CRYPTO_CHRONOLOGY")
+    windows = state.clock.role == "windows-x64"
+    directories, rows = value["directories"], value["files"]
+    require(type(directories) is list and len(directories) == (6 if windows else 5) and
+        all(type(row) is dict and set(row) == {"relative", "identity", "members"} and type(row["relative"]) is str and
+            type(row["members"]) is list and len(row["members"]) <= 32 and
+            all(type(name) is str for name in row["members"]) and row["members"] == sorted(row["members"]) and
+            len({name.casefold() for name in row["members"]}) == len(row["members"]) for row in directories),
+        "WORKER_CRYPTO_DIRECTORIES")
+    members = directories[0]["members"]
+    for directory in directories:
+        native.directory_identity(directory["identity"], state.clock.role)
+        for name in directory["members"]:
+            Q._component(name)
+    operations = tuple(name for name in members if re.fullmatch(r"gpg-[0-9a-f]{32}" if windows else r"gpg-[a-z0-9_]+", name))
+    results = tuple(name for name in members if re.fullmatch(r"recipient-validation-result-[0-9a-f]{32}\.json", name))
+    require(len(operations) == (3 if windows else 2) and len(results) == (1 if windows else 0) and
+        set(members) == {"recipient.asc", "recipient.gpg", "gnupg", "tmp", *operations, *results} and
+        tuple(row["relative"] for row in directories) == ("", "gnupg", "tmp", *operations) and
+        len({tuple(row["identity"]) for row in directories}) == len(directories), "WORKER_CRYPTO_DIRECTORY_GRAMMAR")
+    original_root = next(identity for name, _row, _directory, _path, identity in captured.pins if name == "R/crypto")
+    require(directories[0]["identity"] == list(original_root) == context["directories"]["crypto"] ==
+        child["recipient"]["work_identity"], "WORKER_CRYPTO_ORIGINAL_ROOT_IDENTITY")
+    expected = {name: native.posix.MAX_KEY_BYTES for name in ("recipient.asc", "recipient.gpg")}
+    expected.update({name: native.diagnostics.MAX_RECORD_BYTES for name in results})
+    for directory in directories[1:]:
+        name, members = directory["relative"], directory["members"]
+        if name in ("gnupg", "tmp"):
+            require(not windows or members == [], "WORKER_CRYPTO_WINDOWS_HOME_NOT_EMPTY")
+        else:
+            require(members == sorted(("stdout", "stderr") if windows else ("stdout", "stderr", "status", "process.json")),
+                    "WORKER_CRYPTO_OPERATION_ROSTER")
+        for member in members:
+            expected[name + "/" + member] = (native.LIMIT if name in ("gnupg", "tmp") or member == "process.json"
+                else native.posix.MAX_DIAGNOSTIC_BYTES)
+    require(type(rows) is list and len(rows) == len(expected) and
+        (len(rows) == 9 if windows else 10 <= len(rows) <= 74) and
+        all(type(row) is dict and set(row) == {"relative", "bytes", "sha256"} and type(row["relative"]) is str
+            for row in rows) and tuple(row["relative"] for row in rows) == tuple(sorted(expected)),
+        "WORKER_CRYPTO_FILE_ROSTER")
+    files, total = [], 0
+    for row in rows:
+        files.append(_worker_file("R/crypto/" + row["relative"], expected[row["relative"]], row["bytes"], row["sha256"],
+            "AUTHENTICATED_CRYPTO_DECLARATION"))
+        total += row["bytes"]
+        require(total <= CRYPTO_ORIGINALS_LIMIT, "WORKER_CRYPTO_TOTAL_LIMIT")
+        if row["relative"] == "recipient.asc":
+            require(row["bytes"] == len(old["R/recipient-public.asc"]) > 0 and
+                row["sha256"] == O.digest(old["R/recipient-public.asc"]) == child["recipient"]["key_sha256"],
+                "WORKER_CRYPTO_KEY_CHANGED")
+        elif row["relative"] == "recipient.gpg":
+            require(row["bytes"] > 0, "WORKER_CRYPTO_EMPTY_RING")
+    require(type(value["totalBytes"]) is int and value["totalBytes"] == total, "WORKER_CRYPTO_TOTAL_BYTES")
+    return tuple(files), tuple(("R/crypto/" + row["relative"], tuple(row["identity"])) for row in directories[1:])
+
+
+@dataclass(frozen=True, repr=False)
+class _WorkerCryptoCapture:
+    reader: object
+    raw: bytes
+    pin: tuple
+    files: tuple
+    directories: tuple
+    sha256: str
+
+
+def _capture_worker_crypto(window, reader, expected_hash):
+    require(type(expected_hash) is str and re.fullmatch(r"[0-9a-f]{64}", expected_hash) and
+        os.environ.get(RECEIVING_CRYPTO_HASH_ENV) == expected_hash, "WORKER_CRYPTO_INPUT_REQUIRED")
+    original = _check_worker_reader(reader)
+    owner, path = original.owner, dict(original.roots)["C"]
+    require(original.window is window and original.step is not None and id(window) not in _WORKER_CRYPTO_CAPTURES and
+        not hasattr(owner, "_worker_crypto_capture"), "WORKER_CRYPTO_CAPTURE_REUSE")
+    directory = owner.open(path)
+    pin = _worker_pins(owner, window.clock.role, {"C": path})
+    require(len(pin) == 1 and pin[0][2] is directory, "WORKER_CRYPTO_READER_PIN")
+    pin = pin[0]
+    path_graph = _history_graph(path, pin[3])
+    _check_worker_reader(reader)
+    native._new_entry_owned(owner, directory, path, pin[4])
+    raw = owner.read(directory, CRYPTO_ORIGINALS_FILE, native.LIMIT)
+    files, directories = _worker_crypto_index(raw, reader, pin, expected_hash)
+    # Independently save bytes, declarations, native pin and env hash before
+    # the later listing/initializer/source suppliers can change any of them.
+    capture = _WorkerCryptoCapture(reader, raw, pin, files, directories, expected_hash)
+    graph = path_graph + _history_graph(files, directories)
+    anchor = (capture, reader, raw, pin, files, directories, expected_hash, graph, _WORKER_CRYPTO_CAPTURES)
+    owner._worker_crypto_capture = capture
+    _WORKER_CRYPTO_CAPTURES[id(window)] = anchor
+    require(native._initializer_names(owner, directory) == (CRYPTO_ORIGINALS_FILE,), "WORKER_CRYPTO_SIDECAR_ROSTER")
+    native._new_entry_owned(owner, directory, path, pin[4])
+    _check_worker_crypto(anchor)
+    return anchor
+
+
+def _check_worker_crypto(anchor, *, closed=False):
+    require(type(anchor) is tuple and len(anchor) == 9, "WORKER_CRYPTO_CAPTURE_BINDING")
+    capture, reader, raw, pin, files, directories, sha256, graph, registry = anchor
+    original = _check_worker_reader(reader, closed=closed)
+    require(type(capture) is _WorkerCryptoCapture and original.owner._worker_crypto_capture is capture and
+        registry is _WORKER_CRYPTO_CAPTURES and registry.get(id(original.window)) is anchor and
+        capture.reader is reader and type(capture.raw) is bytes and capture.raw == raw and capture.pin is pin and
+        capture.files is files and capture.directories is directories and capture.sha256 == sha256 and
+        os.environ.get(RECEIVING_CRYPTO_HASH_ENV) == sha256 and O.digest(raw) == sha256,
+        "WORKER_CRYPTO_CAPTURE_CHANGED")
+    _check_history(graph)
+    _check_worker_pins((pin,), reader[14].role, closed=closed)
+    return capture
+
+
+@dataclass(frozen=True, repr=False)
+class _WorkerOriginalCapture:
+    continuation: object
+    result: object
+    raw: bytes
+    reader: object
+    authority: object
+    crypto: object
+    pins: tuple
+
+
+def _capture_worker_originals(continuation, result):
+    """Freeze the complete fixed logical index at the actual initializer return."""
+    # Keep the exact successful call/registry entries BEFORE checks or suppliers.
+    saved = _RECEIVING_CONTINUATIONS.get(id(continuation))
+    attempt = _RECEIVING_INIT_ATTEMPTS.get(id(continuation))
+    returned = _RECEIVING_INIT_RETURNS.get(id(result))
+    registries = _worker_registries()
+    require(type(continuation) is _ReceivingContinuation and type(saved) is tuple and len(saved) == 3 and
+        saved[0] is continuation and type(result) is _ReceivingInitialization and
+        type(returned) is tuple and len(returned) == 6 and returned[0] is result and returned[1] is attempt,
+        "WORKER_INITIALIZER_ORIGINAL_RETURN")
+    window, authority_result = saved[1:]
+    state = _RECEIVING_WINDOWS[id(window)]
+    graph = _history_graph(result.__dict__, result.originals, result.native)
+    fields = tuple((name, getattr(state, name)) for name in ("raw", "originals", "observed_raw", "captured",
+        "identity_fields", "match_raw", "proposal_raw", "service_job", "authority", "inputs", "continuity", "initialization"))
+    reader, crypto = _WORKER_READER_CAPTURES[id(window)], _WORKER_CRYPTO_CAPTURES[id(window)]
+    original = _check_worker_reader(reader)
+    crypto_original = _check_worker_crypto(crypto)
+    authority = original.authority_check()
+    require(type(authority) is tuple and len(authority) == 6 and authority[0] is authority_result,
+            "WORKER_INITIALIZER_AUTHORITY_ORIGINAL")
+    authority_original = authority[4][0]
+    require(_receiving_initialization_return(continuation) is result and crypto_original.reader is reader and
+        authority_original.episode is window and type(result.originals) is tuple and len(result.originals) == 11 and
+        type(result.pending) is bytes and 0 < len(result.pending) <= native.LIMIT,
+        "WORKER_INITIALIZER_CAPTURE_BINDINGS")
+    owner, roots, role = original.owner, dict(original.roots), state.clock.role
+    expected_i = ("I", "I/canonical-init", "I/control-home", "I/temporary", "I/state", "I/state/gradle-home",
+        "I/state/evidence", "I/state/cancellations")
+    targets = {name: roots["I"].joinpath(*name.split("/")[1:]) for name in expected_i}
+    pins = _worker_pins(owner, role, targets)
+    require(len(pins) == 8 and next(pin[2] for pin in pins if pin[0] == "I") is
+        next(pin[2] for pin in original.pins if pin[0] == "I"), "WORKER_INITIALIZER_PIN_ROSTER")
+    by_path = {path: (key, directory, identity) for key, _row, directory, path, identity in pins}
+    for name, directory, target, identity in state.inputs[2]:
+        key = "I" if name == "session" else "I/" + name
+        require(by_path[target] == (key, directory, identity), "WORKER_INITIALIZER_INPUT_PIN_CHANGED")
+    files = [_worker_file(name, max(1, len(raw)), len(raw), O.digest(raw), "ACTUAL_RETAINED_BYTES")
+        for name, raw in original.originals]
+    files.extend(dict(row) for row in authority_original.files)
+    i_names = {"I/receiving-window.json", "I/initializer-context.json", "I/initialization-pending.json",
+        "I/state/context.json", "I/state/gradle-home/gradle.properties",
+        *("I/canonical-init/" + name for name in (*native.PHASE_FILES, "request.json"))}
+    i_files = []
+    for directory, target, identity, name, maximum, raw in result.originals:
+        require(target in by_path and by_path[target][1] is directory and by_path[target][2] == identity and
+            type(raw) is bytes and type(maximum) is int, "WORKER_INITIALIZER_ORIGINAL_FILE")
+        key = by_path[target][0] + "/" + name
+        limit = (16384 if key == "I/state/gradle-home/gradle.properties" else native.ACK_LIMIT if
+            key == "I/canonical-init/stdout.log" else native.STDERR_LIMIT if key == "I/canonical-init/stderr.log" else native.LIMIT)
+        i_files.append(_worker_file(key, min(limit, maximum), len(raw), O.digest(raw), "ACTUAL_RETAINED_BYTES"))
+    i_files.append(_worker_file("I/initialization-pending.json", native.LIMIT,
+        len(result.pending), O.digest(result.pending), "ACTUAL_RETAINED_BYTES"))
+    require(len(i_files) == 12 and {row["relative"] for row in i_files} == i_names, "WORKER_INITIALIZER_FILE_ROSTER")
+    files.extend(i_files)
+    for key, name, raw, maximum in (("T", continuity.STEP_FILE, original.step[0].raw, continuity.STEP_LIMIT),
+            ("C", CRYPTO_ORIGINALS_FILE, crypto_original.raw, native.LIMIT)):
+        files.append(_worker_file(key + "/" + name, maximum, len(raw), O.digest(raw), "ACTUAL_RETAINED_BYTES"))
+    files.extend(dict(row) for row in crypto_original.files)
+    directories = []
+    def directory_row(key, identity, provenance):
+        _worker_relative(key)
+        path = roots[key.split("/", 1)[0]].joinpath(*key.split("/")[1:])
+        directories.append({"relative": key, "parent": None if "/" not in key else key.rsplit("/", 1)[0],
+            "path": str(path), "identity": None if identity is None else native.directory_identity(list(identity), role),
+            "provenance": provenance})
+    old_pins = {name: identity for name, _row, _directory, _path, identity in original.pins}
+    for key in original.directories:
+        directory_row(key, old_pins[key], "RECEIVER_READBACK_NATIVE_PIN")
+    authority_pins = {name: identity for name, _row, _directory, _path, identity in authority_original.pins}
+    for key in authority_original.directories:
+        directory_row(key, authority_pins.get(key), "ORIGINAL_AUTHORITY_NATIVE_PIN" if key in authority_pins
+            else "ORIGINAL_AUTHORITY_DECLARED_DIRECTORY")
+    for key, _row, _directory, _path, identity in pins:
+        directory_row(key, identity, "ORIGINAL_INITIALIZER_NATIVE_PIN")
+    directory_row("T", old_pins["T"], "SENDER_STEP_RECEIVER_READBACK_NATIVE_PIN")
+    directory_row("C", crypto_original.pin[4], "CRYPTO_SIDECAR_RECEIVER_READBACK_NATIVE_PIN")
+    for key, identity in crypto_original.directories:
+        directory_row(key, identity, "AUTHENTICATED_ORIGINAL_CRYPTO_NATIVE_PIN")
+    windows, crypto_count = role == "windows-x64", len(crypto_original.files)
+    file_counts = {key: sum(row["relative"].split("/", 1)[0] == key for row in files) for key in roots}
+    directory_counts = {key: sum(row["relative"].split("/", 1)[0] == key for row in directories) for key in roots}
+    require(file_counts == {"P": 284, "E": 281, "R": 498 + crypto_count, "S": 3, "I": 293, "T": 1, "C": 1} and
+        len(files) == 1361 + crypto_count and (len(files) == 1370 if windows else 1371 <= len(files) <= 1435) and
+        directory_counts == {"P": 58, "E": 58, "R": 110 if windows else 109, "S": 1, "I": 66, "T": 1, "C": 1} and
+        len(directories) == (295 if windows else 294), "WORKER_COMPLETE_COUNTS")
+    file_names, directory_names = {row["relative"] for row in files}, {row["relative"] for row in directories}
+    all_names = tuple(file_names | directory_names)
+    require(len(file_names) == len(files) and len(directory_names) == len(directories) and
+        file_names.isdisjoint(directory_names) and len({name.casefold() for name in all_names}) == len(all_names) and
+        all(row["parent"] in directory_names for row in files) and
+        all(row["parent"] is None or row["parent"] in directory_names for row in directories) and
+        len({row["path"].casefold() for row in directories}) == len(directories), "WORKER_COMPLETE_NAMES")
+    identities = [tuple(row["identity"]) for row in directories if row["identity"] is not None]
+    require(len(identities) == len(set(identities)) and
+        sum(row["identity"] is None for row in directories) == 51, "WORKER_COMPLETE_PIN_PROVENANCE")
+    owned = {id(directory) for _key, _row, directory, _path, _identity in (*original.pins, *pins, crypto_original.pin)}
+    require(len(owned) == 232 and {id(row["owner"]) for row in owner.resources if row["label"] == "directory"} == owned,
+            "WORKER_COMPLETE_RECEIVING_LEDGER")
+    observed = O.parse(state.observed_raw)
+    raw = O.encoded({"schema": 1, "scope": WORKER_INVENTORY_SCOPE,
+        "roots": [{"group": key, "path": str(path)} for key, path in original.roots],
+        "source": observed["source"], "github": observed["github"], "clock": O.clock_value(state.clock),
+        "senderSha256": state.step[1], "recipientStepSha256": state.step_hash,
+        "recipientCryptoOriginalsSha256": crypto_original.sha256, "initializationSha256": O.digest(result.pending),
+        "authoritySha256": O.digest(authority[1]), "workerIdentitySha256": O.digest(state.identity_fields[0]),
+        "files": sorted(files, key=lambda row: row["relative"]), "fileCount": len(files), "fileCounts": file_counts,
+        "directories": sorted(directories, key=lambda row: row["relative"]),
+        "directoryCount": len(directories), "directoryCounts": directory_counts,
+        "totalBytes": sum(row["bytes"] for row in files), "copyState": "ORIGINAL_BYTES_NOT_COPIED",
+        "liveRecipient": "NOT_TRANSFERRED", "budgetAcceptance": "NOT_ADMITTED",
+        "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False})
+    require(len(raw) <= native.LIMIT, "WORKER_COMPLETE_INDEX_LIMIT")
+    graph += _history_graph(tuple(path for _key, _row, _directory, path, _identity in pins))
+    capture = _WorkerOriginalCapture(continuation, result, raw, reader, authority, crypto, pins)
+    anchor = (capture, continuation, result, raw, reader, authority, crypto, pins, saved, attempt, returned, fields, graph, registries)
+    require(id(continuation) not in _WORKER_ORIGINAL_CAPTURES and not hasattr(owner, "_worker_original_capture"),
+            "WORKER_COMPLETE_CAPTURE_REUSE")
+    owner._worker_original_capture = capture
+    _WORKER_ORIGINAL_CAPTURES[id(continuation)] = anchor
+    _check_worker_originals(anchor, closed=False)
+    return anchor
+
+
+def _check_worker_originals(anchor, *, closed):
+    require(type(anchor) is tuple and len(anchor) == 14, "WORKER_COMPLETE_BINDING")
+    capture, continuation, result, raw, reader, authority, crypto, pins, saved, attempt, returned, fields, graph, registries = anchor
+    original = _check_worker_reader(reader, closed=closed)
+    require(type(capture) is _WorkerOriginalCapture and original.owner._worker_original_capture is capture and
+        _WORKER_ORIGINAL_CAPTURES.get(id(continuation)) is anchor and
+        len(registries) == len(_worker_registries()) and
+        all(current is previous for current, previous in zip(_worker_registries(), registries)) and
+        capture.continuation is continuation and capture.result is result and type(capture.raw) is bytes and capture.raw == raw and
+        capture.reader is reader and capture.authority is authority and capture.crypto is crypto and capture.pins is pins and
+        _RECEIVING_CONTINUATIONS.get(id(continuation)) is saved and saved[1] is original.window and
+        _RECEIVING_INIT_ATTEMPTS.get(id(continuation)) is attempt and _RECEIVING_INIT_RETURNS.get(id(result)) is returned and
+        returned[0] is result and returned[1] is attempt, "WORKER_COMPLETE_CAPTURE_CHANGED")
+    state = _RECEIVING_WINDOWS[id(original.window)]
+    require(all(getattr(state, name) is value for name, value in fields) and
+        _receiving_initialization_return(continuation, closed=closed) is result and
+        _worker_authority_return(saved[2], authority) is authority and
+        _check_worker_crypto(crypto, closed=closed).reader is reader, "WORKER_COMPLETE_RETURN_CHANGED")
+    _check_history(graph)
+    _check_worker_pins(pins, state.clock.role, closed=closed)
+    return capture
+
+
+def _worker_handoff_record(path, identity, inventory_raw, authority_raw, initialization_raw):
+    """Two embedded MEMORY originals, not invented files or an evidence archive."""
+    embedded = []
+    for name, raw in (("receiving-authority-return.json", authority_raw), ("initialization-history.json", initialization_raw)):
+        require(type(raw) is bytes and 0 < len(raw) <= native.LIMIT, "WORKER_EMBEDDED_ORIGINAL_LIMIT")
+        encoded = base64.b64encode(raw).decode("ascii")
+        require(base64.b64decode(encoded, validate=True) == raw and
+            base64.b64encode(base64.b64decode(encoded, validate=True)).decode("ascii") == encoded,
+            "WORKER_EMBEDDED_ORIGINAL_ENCODING")
+        embedded.append({"name": name, "bytes": len(raw), "sha256": O.digest(raw), "rawBase64": encoded})
+    raw = O.encoded({"schema": 1, "scope": WORKER_HANDOFF_SCOPE, "directory": str(path),
+        "directoryIdentity": list(identity), "inventory": O.parse(inventory_raw), "embeddedOriginals": embedded,
+        "originalClose": {"authority": "KNOWN_RESOURCE_CLOSE_ONLY", "receiving": "KNOWN_RESOURCE_CLOSE_ONLY"},
+        "writerReturn": "PENDING_OWNER_CLOSE", "originalStepOutcome": "NOT_OBSERVED",
+        "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
+    require(len(raw) <= native.LIMIT, "WORKER_HANDOFF_RECORD_LIMIT")
+    return raw
+
+
+def _retain_worker_handoff(continuation, result, original_anchor, cancelled):
+    """One exclusive metadata sibling, still inside the ORIGINAL receiving120."""
+    original = _check_worker_originals(original_anchor, closed=True)
+    require(original.continuation is continuation and original.result is result and
+        _receiving_initialization_return(continuation, closed=True) is result, "RECEIVING_INIT_CLOSED_RETURN")
+    window = original.reader[0].window
+    terminal = _RECEIVING_WINDOWS[id(window)]
+    last, local_last, hard, cap = terminal.last, terminal.local_last, terminal.work, terminal.locals[0]
+    require(type(last) is int and last < O.integer(hard) and type(cap) is float and math.isfinite(cap) and
+        type(local_last) in (int, float) and math.isfinite(local_last) and 0 <= local_last < cap,
+        "WORKER_HANDOFF_ORIGINAL_CAP")
+    path = dict(original.reader[0].roots)["I"]
+    path = path.with_name(path.name + "-handoff")
+    path_graph = _history_graph(path)
+    registries, attempts = _worker_registries(), _WORKER_HANDOFF_ATTEMPTS
+    marker, retained = object(), []
+    attempt = (continuation, result, original_anchor, marker, retained)
+    original_owner = terminal.roster.owner
+    with _WORKER_HANDOFF_LOCK:
+        require(_WORKER_HANDOFF_ATTEMPTS is attempts and id(continuation) not in attempts and
+            not hasattr(original_owner, "_worker_handoff_marker") and
+            id(continuation) not in _RECEIVING_CLOSED_RETURNS, "WORKER_HANDOFF_ALREADY_CLAIMED")
+        original_owner._worker_handoff_marker = marker
+        attempts[id(continuation)] = attempt  # Sticky BEFORE any metadata observation/allocation/callback.
+    closed = O.encoded({"schema": 1, "scope": "INITIAL_RECIPIENT_CLOSED_INITIALIZATION_HISTORY_V1",
+        "pendingSha256": O.digest(result.pending), "closedNs": terminal.last, "closedLocal": terminal.local_last,
+        "resourceCount": len(terminal.roster.rows), "ownerReturn": "KNOWN_RESOURCE_CLOSE_ONLY",
+        "nextPhaseAuthority": False, "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
+    closed_return = (continuation, result, terminal, closed)
+    _RECEIVING_CLOSED_RETURNS[id(continuation)] = closed_return  # Existing four-field shape, original bytes retained below.
+    graph = _history_graph(terminal.__dict__, original_owner, terminal.roster)
+    owner = roster = owner_binding = first_graph = pin = pin_graph = closed_graph = value_graph = None
+    raw = value = failure = None
+    phase, busy, io_busy, failed, checks, issued_end = "METADATA", False, False, False, 0, cap
+
+    def remember(error):
+        nonlocal failure, failed
+        failed = True
+        if failure is None:
+            failure = owner.original if owner is not None and owner.original is not None else error
+        if owner is not None:
+            owner.error("worker-originals-handoff", error)
+            if owner.unknown and not any(item is owner for item in native.QUARANTINE):
+                native.QUARANTINE.append(owner)
+
+    def pins(*, cleanup=False):
+        if roster is not None:
+            _worker_owner_current(owner, metadata, roster, owner_binding,
+                closed=phase in ("FILE_OUTPUT", "OUTPUT", "COMPLETE"), cleanup=cleanup)
+            _check_history(first_graph)
+        if pin is not None:
+            _check_history(pin_graph)
+            _check_worker_pins((pin,), terminal.clock.role, closed=pin[1]["closed"] if cleanup else
+                phase in ("FILE_OUTPUT", "OUTPUT", "COMPLETE"))
+        if cleanup:
+            return
+        require(not failed and _WORKER_HANDOFF_ATTEMPTS is attempts and attempts.get(id(continuation)) is attempt and
+            original_owner._worker_handoff_marker is marker and
+            len(registries) == len(_worker_registries()) and
+            all(current is saved for current, saved in zip(_worker_registries(), registries)) and
+            _RECEIVING_WINDOWS.get(id(window)) is terminal and _RECEIVING_CLOSED_RETURNS.get(id(continuation)) is closed_return and
+            _check_worker_originals(original_anchor, closed=True) is original and
             not continuity.QUARANTINE and not native.QUARANTINE and not Q.QUARANTINE and not native.diagnostics._QUARANTINE,
             "RECEIVING_INIT_OUTPUT_CHANGED")
         _check_history(graph)
+        _check_history(path_graph)
+        if phase in ("FILE_OUTPUT", "OUTPUT", "COMPLETE"):
+            require(owner is not None and closed_graph is not None, "WORKER_HANDOFF_CLOSE_REQUIRED")
+            _check_history(closed_graph)
+            _check_history(value_graph)
 
     def observe(minimum=0, limit=None):
-        nonlocal last, local_last, failed, busy
+        # Direct original-clock observations, never terminal.now()/deadline().
+        nonlocal last, local_last, busy
         if busy:
-            failed = True
-            raise I.AdmissionError("RECEIVING_INIT_OUTPUT_REENTRY")
+            error = I.AdmissionError("RECEIVING_INIT_OUTPUT_REENTRY")
+            remember(error)
+            raise error
         busy = True
         try:
-            pins()
+            cleanup = phase == "CLOSING"
+            pins(cleanup=cleanup)
+            terminal.cancelled()
             native.cancellation(cancelled)
             local = time.monotonic()
             require(type(local) in (int, float) and math.isfinite(local) and local >= local_last,
@@ -5059,8 +5908,6 @@ def _initialize_step(cancelled):
             end = hard if limit is None else min(hard, O.integer(limit))
             last = O.clocks.checked_now(terminal.clock, minimum_ns=max(last, O.integer(minimum)))
             require(last < end and local < cap, "RECEIVING_INIT120_OUTPUT_EXPIRED")
-            # Boot must still match after actual enclosing close and at each
-            # final output edge. Terminal history is not a live boot supplier.
             require(continuity.boot_digest(terminal.clock.role) == terminal.continuity[0].boot,
                     "RECEIVING_INIT_OUTPUT_BOOT_CHANGED")
             last = O.clocks.checked_now(terminal.clock, minimum_ns=last)
@@ -5069,39 +5916,146 @@ def _initialize_step(cancelled):
                     "RECEIVING_INIT_OUTPUT_LOCAL_BACKWARDS")
             local_last = after
             require(last < end and after < cap, "RECEIVING_INIT120_OUTPUT_EXPIRED")
-            pins()
+            pins(cleanup=cleanup)
             return last
-        except BaseException:
-            failed = True
+        except BaseException as error:
+            remember(error)
             raise
         finally:
             busy = False
 
+    class MetadataFence:
+        __slots__ = ()
+        clock = property(lambda _self: terminal.clock)
+        last = property(lambda _self: last)
+        local_end = property(lambda _self: cap)
+
+        def now(self, *, final=False, minimum=0, limit=None):
+            try:
+                require(self is metadata and not io_busy and type(final) is bool and
+                    (phase == "METADATA" or phase == "CLOSING" and final), "WORKER_HANDOFF_METADATA_ONLY")
+                return observe(minimum, limit)
+            except BaseException as error:
+                remember(error)
+                raise
+
+        def deadline(self, maximum, *, final=False, limit=None):
+            nonlocal local_last, issued_end, io_busy
+            try:
+                require(self is metadata and phase == "METADATA" and not busy and not io_busy and type(final) is bool and
+                    type(maximum) in (int, float) and
+                    math.isfinite(maximum) and 0 < maximum <= 45, "WORKER_HANDOFF_METADATA_IO_ONLY")
+                io_busy = True
+                pins()
+                local = time.monotonic()
+                require(type(local) in (int, float) and math.isfinite(local) and local >= local_last,
+                        "RECEIVING_INIT_OUTPUT_LOCAL_BACKWARDS")
+                local_last = local
+                observed = observe(limit=limit)
+                end = hard if limit is None else min(hard, O.integer(limit))
+                # Owner's existing per-operation maximum only NARROWS the
+                # inherited ceiling; it never creates another work/final phase.
+                issued_end = min(issued_end, O.wire._directed_deadline(local, maximum, end, observed))
+                pins()
+                return issued_end
+            except BaseException as error:
+                remember(error)
+                raise
+            finally:
+                io_busy = False
+
     class ClosedOutput:
         __slots__ = ()
         def now(self, *, final=False, minimum=0, limit=None):
-            nonlocal checks, failed
-            require(self is fence, "RECEIVING_INIT_OUTPUT_NOT_ORIGINAL")
-            if final is not True or checks >= 2:
-                failed = True
-                raise I.AdmissionError("RECEIVING_INIT_OUTPUT_FINAL_ONLY")
-            checks += 1
-            return observe(minimum, limit)
+            nonlocal checks, phase
+            try:
+                require(self is fence and phase == "OUTPUT" and final is True and checks < 2,
+                        "RECEIVING_INIT_OUTPUT_FINAL_ONLY")
+                checks += 1  # Exactly native.guarded's two final checks, not an owner interface.
+                observed = observe(minimum, limit)
+                if checks == 2:
+                    phase = "COMPLETE"
+                return observed
+            except BaseException as error:
+                remember(error)
+                raise
 
-    # Private same-call closed history; its bytes are deliberately NOT logged.
-    # The retained pending file plus actual successful Step is the disk edge.
-    closed = O.encoded({"schema": 1, "scope": "INITIAL_RECIPIENT_CLOSED_INITIALIZATION_HISTORY_V1",
-        "pendingSha256": O.digest(result.pending), "closedNs": terminal.last, "closedLocal": terminal.local_last,
-        "resourceCount": len(terminal.roster.rows), "ownerReturn": "KNOWN_RESOURCE_CLOSE_ONLY",
-        "nextPhaseAuthority": False, "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
-    require(id(continuation) not in _RECEIVING_CLOSED_RETURNS, "RECEIVING_INIT_CLOSED_HISTORY_REUSE")
-    closed_return = (continuation, result, terminal, closed)
-    _RECEIVING_CLOSED_RETURNS[id(continuation)] = closed_return
-    observe()
-    continuity.append_outputs({"initializationSha256": O.digest(result.pending)}, observe)
-    fence = ClosedOutput()
-    return native.public_result("INITIAL_RECIPIENT_INITIALIZATION_PENDING_STEP_RETURN_V1",
-        "initializationSha256", result.pending), fence, hard
+    metadata, fence = MetadataFence(), ClosedOutput()
+    try:
+        observe()
+        first = O.clocks.Reading(terminal.clock, last)
+        first_graph = _history_graph(first)
+        owner = native.Owner(cap, metadata, first=first, cancelled=terminal.cancelled)
+        retained.append(owner)
+        owner.initial_sources = {}
+        roster = _RecipientRoster(owner, metadata, first)
+        retained.append(roster)
+        owner_binding = _worker_owner_binding(owner, roster)
+        directory = owner.new(path)
+        pin = _worker_pins(owner, terminal.clock.role, {"I-handoff": path})
+        require(len(pin) == 1 and pin[0][2] is directory, "WORKER_HANDOFF_DIRECTORY_PIN")
+        pin = pin[0]
+        pin_graph = _history_graph(pin[3])
+        native._new_entry_owned(owner, directory, path, pin[4])
+        require(native._initializer_names(owner, directory) == (), "WORKER_HANDOFF_DIRECTORY_NOT_EMPTY")
+        raw = _worker_handoff_record(path, pin[4], original.raw, original.authority[1], closed)
+        written = owner.write(directory, WORKER_HANDOFF_FILE, raw)
+        readback = owner.read(directory, WORKER_HANDOFF_FILE, native.LIMIT)
+        require(type(written) is bytes and written == raw and type(readback) is bytes and readback == raw and
+            native._initializer_names(owner, directory) == (WORKER_HANDOFF_FILE,), "WORKER_HANDOFF_READBACK")
+        native._new_entry_owned(owner, directory, path, pin[4])
+        pins()
+    except BaseException as error:
+        remember(error)
+    finally:
+        phase = "CLOSING"
+        if owner is not None:
+            try:
+                pins(cleanup=True)
+                roster.freeze()
+            except BaseException as error:
+                owner.error("worker-handoff-close-roster", error, unknown=True)
+                remember(error)
+            try:
+                owner.close()
+                roster.known()
+            except BaseException as error:
+                owner.error("worker-handoff-close", error, unknown=True)
+                remember(error)
+            if failure is None:
+                failure = owner.original
+            if owner.unknown and not any(item is owner for item in native.QUARANTINE):
+                native.QUARANTINE.append(owner)
+    if failure is not None:
+        raise failure
+    try:
+        require(owner is not None and raw is not None and pin is not None and not failed, "WORKER_HANDOFF_INCOMPLETE")
+        closed_graph = _history_graph(owner, roster)
+        value = native.public_result("INITIAL_RECIPIENT_INITIALIZATION_PENDING_STEP_RETURN_V1", "initializationSha256", result.pending)
+        value["workerHandoffSha256"] = O.digest(raw)
+        value_graph = _history_graph(value)
+        phase = "FILE_OUTPUT"
+        observe()
+        continuity.append_outputs({"initializationSha256": value["initializationSha256"],
+            "workerHandoffSha256": value["workerHandoffSha256"]}, observe)
+        pins()
+        phase = "OUTPUT"
+        return value, fence, hard
+    except BaseException as error:
+        remember(error)
+        raise failure
+
+
+def _initialize_step(cancelled):
+    """Fixed completing Step: one closed handoff, not producer/custody authority."""
+    require(type(os.environ.get(continuity.STEP_HASH_ENV)) is str and
+        re.fullmatch(r"[0-9a-f]{64}", os.environ[continuity.STEP_HASH_ENV]), "RECEIVING_FIXED_STEP_REQUIRED")
+    crypto_hash = os.environ.get(RECEIVING_CRYPTO_HASH_ENV)
+    require(type(crypto_hash) is str and re.fullmatch(r"[0-9a-f]{64}", crypto_hash), "RECEIVING_FIXED_CRYPTO_HASH_REQUIRED")
+    with _receive_initialization(cancelled, crypto_sha256=crypto_hash) as continuation:
+        result = _initialize_receiving(continuation)
+        original = _capture_worker_originals(continuation, result)
+    return _retain_worker_handoff(continuation, result, original, cancelled)
 
 
 def _read_recipient_sender(owner, directory, *, recipient_outcome, expected_sha256):

@@ -62,7 +62,9 @@ class InitializationControls(unittest.TestCase):
             os.environ[name] = str(home)
         self.output = self.fx.base / "_runner_file_commands" / ("set_output_" + "1" * 8 + "-" + "2" * 4 +
             "-" + "3" * 4 + "-" + "4" * 4 + "-" + "5" * 12)
-        self.output.parent.mkdir(mode=0o700)
+        # NativeModels may already own this private runner-command directory
+        # for its distinct gate fixture output. Never replace either file.
+        self.output.parent.mkdir(mode=0o700, exist_ok=True)
         self.output.touch(mode=0o600)
         os.environ["GITHUB_OUTPUT"] = str(self.output)
 

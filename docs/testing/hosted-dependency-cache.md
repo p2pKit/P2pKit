@@ -1524,6 +1524,33 @@ custody or hosted timing results**. Worker handoff and both jobs' exact copying,
 fresh public-recipient validation, exporter return, seal/upload and genuine
 qualification still block dispatch; productive125 and ordinary HOLDs remain.
 
+##### Complete worker originals and original gate boot — reviewed source
+
+The next source increment retains the worker's fixed1361+Ncrypto disk-file
+inventory (Windows1370; POSIX1371..1435),294/295 declared directories and two
+separately identified embedded original returns. The original receiving Step
+object/dictionary/boot and immediately saved current-authority return remain
+pinned through initializer close, the one-shot handoff and both final output
+checks. The composite Action transports the existing crypto-inventory digest
+and exposes only the additional worker-handoff digest, not custody authority.
+
+Gate preparation separately binds its actual original same-process boot before
+source/HTTP work and rechecks it through close/output. The fallible boot supplier
+cannot lower the independently retained RAW high-water. Gate281/58, WORK75,
+FINAL120, worker init120 and the accepted1,066-file reader remain unchanged.
+
+Independent combined-source review accepted these exact worker/gate changes;
+report SHA-256
+`531dd795a2eecb417ec73e02860164f5a421bcf9016fb33a3a0213c5721a4321`.
+The new12 gate and31 worker methods are **authored, not yet executed** at this
+source checkpoint. They use tiny supplied old-reader/crypto/native models, not
+the accepted reader or actual provider/GPG/hosted execution. A separate bounded
+two-invocation packet and independent original-result review are next. The
+owner's standing execution authority removes per-test permission questions,
+not genuine hosted admission, personal approvals or any HOLD/Release gate.
+Actual copying/export/seal/upload and qualification remain; delivery0/4,
+**Release NOT_READY**.
+
 #### Stage1 canonical-context reader, not initialization authority
 
 The separate fixed `initial_recipient_context_record()` in

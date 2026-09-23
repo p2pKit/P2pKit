@@ -78,7 +78,16 @@ class NativeModels(unittest.TestCase):
         self.before_query = lambda path: None
         self.after_query_close = lambda path: None
         self.scope_survivors = []
+        # Opt-in by the new worker-originals controls only. Existing sparse
+        # worker fixtures and old test selections keep their original shape.
+        self.complete_worker_queries = False
         self.cancelled = []
+        self.gate_boot, self.gate_boot_calls = "a" * 64, []
+        def gate_boot(role):
+            self.assertEqual(role, "linux-x64")
+            self.gate_boot_calls.append((role, self.fixture.ns))
+            return self.gate_boot  # Explicit synthetic kernel observation, never a native boot query.
+        self.stack.enter_context(patch.object(N.continuity, "boot_digest", side_effect=gate_boot))
         self.stack.enter_context(patch.object(Q, "NativeGitQueries", side_effect=self.make_queries))
         self.stack.enter_context(patch.object(S.processes, "make_scope", side_effect=self.make_scope))
         self.stack.enter_context(patch.object(N.time, "time", return_value=F.F.FIRST1))
@@ -136,11 +145,12 @@ class NativeModels(unittest.TestCase):
                 self.deadlines, self.calls, self.host_checked = owner_deadlines, [], False
                 self.executable, self.records = str(case.git_executable), []
                 self.private = Q._new_private_directory(path)
-                self.gate, self.readbacks, self.home = case.fixture.context["kind"] == "gate", [], None
+                self.gate, self.readbacks, self.home = (
+                    case.fixture.context["kind"] == "gate" or case.complete_worker_queries), [], None
                 case.queries.append(self)
                 if self.gate:
-                    # Gate custody indexes the real tiny files and readbacks of
-                    # this explicit supplier model. No native query runs here.
+                    # Gate or opted-in worker custody indexes the tiny files
+                    # and readbacks of this supplier model. No native query runs.
                     self.home = self.private.create_directory("query-home", deadline=self.deadlines[1])
                     self._write(self.private, "owner.json", {"schema": 1, "scope": "ORDINARY_GIT_QUERIES_ONLY",
                         "job": "a" * 32, "state": str(path), "home": str(self.home.path), "root": str(root),

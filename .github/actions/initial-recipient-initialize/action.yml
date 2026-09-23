@@ -7,6 +7,9 @@ outputs:
   initialization-sha256:
     description: Private pending-close receipt digest, not producer or Release authority
     value: ${{ steps.initializer.outputs.initializationSha256 }}
+  worker-handoff-sha256:
+    description: Complete private worker-original index digest; requires actual initializer Step success for custody
+    value: ${{ steps.initializer.outputs.workerHandoffSha256 }}
 runs:
   using: composite
   steps:
@@ -36,6 +39,7 @@ runs:
         P2PKIT_INITIAL_RECIPIENT_OUTCOME: ${{ steps.recipient.outcome }}
         P2PKIT_INITIAL_RECIPIENT_SENDER_SHA256: ${{ steps.recipient.outputs.recipientSenderSha256 }}
         P2PKIT_INITIAL_RECIPIENT_STEP_SHA256: ${{ steps.recipient.outputs.recipientStepSha256 }}
+        P2PKIT_INITIAL_RECIPIENT_CRYPTO_ORIGINALS_SHA256: ${{ steps.recipient.outputs.recipientCryptoOriginalsSha256 }}
       run: |
         case "$RUNNER_OS" in
           Windows) exec python -I -B -S scripts/run-hosted-initial-recipient.py initialize-step ;;
