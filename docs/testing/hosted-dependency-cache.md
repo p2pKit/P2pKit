@@ -1581,6 +1581,23 @@ mocking the check. A fresh selection of only28 index/crypto/handoff methods is
 next; all3 already-passed value methods stay excluded. Neither failed aggregate
 is converted into a pass, and genuine initializer timing remains unverified.
 
+The corrected-layout28-method packet then passed the complete1371-file/
+294-directory index control and **FAILED** at the next assertion: the actual
+authority capture retained13 original directory-handle rows for7 unique paths,
+not7 rows. The other26 methods were **NOT_RUN**;4 guards passed, with no unexpected
+denials or ResourceWarnings. Capture-manifest SHA-256:
+`bf49413914bf2e9966bb5a41d80ec9856ad1eb87636de09022c24894470f2c17`;
+independent original-result review:
+`864a7590d30de0a0cf3cecc39be9bae4e647a445d3f7b67c58ed77e53cff5329`.
+Commit `d9b361252ca42ef84303ce3ff4f7b40f1735e65a` corrects only that test:
+snapshot every original row/owner/path/identity before capture, require all13
+ordered handles and separately the exact7 paths/identities. Production pins
+are not deduplicated or changed. Independent source-review SHA-256:
+`9763ccfee634095c291355a7bb8bbceb08cf2e86d89594a57aa6a411f5d5aaf5`.
+A fresh remaining27-only request excludes this already-passed complete index
+control and all3 previously passed value controls; it is not a successful31
+aggregate, a retry of the consumed packet or hosted/native acceptance.
+
 ##### Closed Stage1 evidence adapter — reviewed source only
 
 [`hosted_initial_recipient_evidence.py`](../../scripts/hosted_initial_recipient_evidence.py)
@@ -1632,6 +1649,22 @@ or crypto originals. The actual copy edge must still enforce the complete crypto
 sidecar/leaf/key/16MiB/retirement contract. This foundation has no native copying,
 fresh acquisition, encryption, seal/upload, standalone CLI or workflow caller.
 It does not establish timing fit or lift any HOLD/Release requirement.
+
+The exact foundation packet subsequently passed **38/38 controls +4 guards**
+once at **2026-09-23T03:18:18Z**, source
+`57799107af758dc0d53cc52bdfb8061e2c8b92e3`, tree
+`2072631815b0b2312ef94ea60da334ebbe627f8f`. All exits were0, with no unexpected
+denials or ResourceWarnings; both175-row integrity captures,104 source copies,
+24 retained output files and empty work were independently checked. Actual CPU
+was1.756952s; harness/command/launcher wall times were1.726448/1.884/2.491s.
+Request/capture-manifest SHA-256:
+`d1c65615324f52e16266f42cb77a81be61486b37f3d221ad287137145ec95cfb` /
+`87930c4ec3b13c4ad83caee5508cae57e4f7f2af1c4356a25ed942c5b39d60ff`.
+Independent original-result review SHA-256:
+`b67c7cacc4f3c208e88c82a81eef4083321416b7e1bd9a0bc29ba307ceaa9b59`.
+These are foundation models only, not authenticated primary history, native
+copying, encryption, delivery or hosted timing qualification. No successful
+reader, worker, gate or preview test was repeated; all Release gates remain.
 
 #### Stage1 canonical-context reader, not initialization authority
 
