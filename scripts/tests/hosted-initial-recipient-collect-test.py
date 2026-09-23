@@ -40,6 +40,60 @@ def frames():
     return result
 
 
+def dispose_supplied_unknown_captures(case, rig, scope, failure):
+    """Dispose only these two test streams; never certify candidate retirement.
+
+    The supplied UNKNOWN native scope deliberately prevents production capture
+    close. After all refusal assertions, close its tiny real buffered streams
+    without calling the candidate owner/sink/scope or changing its custody ledger.
+    This is explicit negative-fixture teardown, not general leak cleanup.
+    """
+    anchors = [anchor for anchor in D._CUSTODY_OWNERS.values()
+        if any(resource is scope for _row, _label, resource, _attempted, _closed in anchor.rows)]
+    case.assertEqual(len(anchors), 1)
+    anchor = anchors[0]
+    owner = anchor.owner
+    case.assertIs(type(owner), D._CustodyOwner)
+    case.assertIs(owner.__dict__, anchor.dictionary)
+    case.assertIs(owner.original, failure)
+    case.assertIs(anchor.failure, failure)
+    case.assertIs(owner.unknown, True)
+    case.assertIs(anchor.unknown, True)
+    case.assertTrue(any(value is owner for value in D.native.QUARANTINE))
+    rows, quarantine = anchor.rows, tuple(D.native.QUARANTINE)
+    ledger = tuple((row, dict(row)) for row, *_rest in rows)
+    flags = (owner.closed, anchor.closed, scope.close_calls, scope.closed, tuple(scope.drains))
+    captures = [(row, label, sink, attempted, closed) for row, label, sink, attempted, closed in rows
+        if label in ("stdout", "stderr")]
+    case.assertEqual([label for _row, label, *_rest in captures], ["stdout", "stderr"])
+    for row, label, sink, attempted, closed in captures:
+        case.assertIs(type(sink), D.Q._PosixSink)
+        case.assertIs(type(sink.stream), io.BufferedWriter)
+        case.assertEqual(sink.path, rig.custody / "authority-2/service" / (label + ".log"))
+        case.assertIs(row["owner"], sink)
+        case.assertIs(attempted, False)
+        case.assertIs(closed, False)
+        case.assertIs(sink.closed, False)
+        case.assertIs(sink.stream.closed, False)
+        opened = M.os.fstat(sink.stream.fileno())
+        named = sink.path.lstat()
+        case.assertTrue(M.os.path.samestat(opened, named))
+        case.assertEqual((opened.st_uid, opened.st_nlink), (M.os.geteuid(), 1))
+    for _row, _label, sink, _attempted, _closed in captures:
+        sink.stream.close()  # Test-only disposal; do not mutate sink.closed or any candidate row.
+        case.assertIs(sink.stream.closed, True)
+        case.assertIs(sink.closed, False)
+    case.assertIs(anchor.rows, rows)
+    case.assertEqual(tuple(D.native.QUARANTINE), quarantine)
+    case.assertEqual((owner.closed, anchor.closed, scope.close_calls, scope.closed, tuple(scope.drains)), flags)
+    case.assertIs(owner.original, failure)
+    case.assertIs(anchor.failure, failure)
+    case.assertIs(owner.unknown, True)
+    case.assertIs(anchor.unknown, True)
+    for row, original in ledger:
+        case.assertEqual(row, original)
+
+
 def rehash_bundle(raws, *, step=None, carrier=None, context=None, manifest=None):
     """Supplied-data mutation utility, not a production signer/Step fallback."""
     result = dict(raws)
@@ -599,6 +653,7 @@ class SupplierAndLifetimeControls(unittest.TestCase):
             self.assertEqual(D._COLLECT_AUTHORITY_RETURNS, {})
             self.assertTrue(scope.drains)
             self.assertLessEqual(scope.drains[0][2], rig.original_local_end)
+            dispose_supplied_unknown_captures(self, rig, scope, failure)
 
     def test_query_and_scope_close_unknown_keep_falsey_first_failure_without_retry(self):
         for target in ("query", "scope"):
@@ -616,6 +671,7 @@ class SupplierAndLifetimeControls(unittest.TestCase):
                 self.assertTrue(D.native.QUARANTINE)
                 if target == "scope":
                     self.assertEqual(rig.scopes[0].close_calls, 1)
+                    dispose_supplied_unknown_captures(self, rig, rig.scopes[0], failure)
                 else:
                     self.assertEqual(rig.queries[0].close_calls, 1)
 
