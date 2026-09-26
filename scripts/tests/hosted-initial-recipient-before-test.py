@@ -627,7 +627,26 @@ class BeforeSourceShapeControls(unittest.TestCase):
         self.assertIn("NOT_K_CAPTURE", self.source("_before_pending_close"))
 
     def test_single_original_entry_latch_is_bound_only_to_parent_clock(self):
-        self.assertEqual(len(calls(CUSTODY, "B.EntryLatch")), 1)
+        # A2 has a separate terminal productive-prefix retirement entry. It
+        # must not share BEFORE's latch/registry or add another constructor at
+        # any nested site. Count exact registrations, not unrelated callers.
+        expected = {"_BEFORE_ENTRY": "_BEFORE_ATTEMPTS",
+            "_PRODUCTIVE_PREFIX_ENTRY": "_PRODUCTIVE_PREFIX_ATTEMPTS"}
+        constructors = calls(CUSTODY, "B.EntryLatch")
+        registrations = [node for node in CUSTODY.body if isinstance(node, ast.Assign) and
+            any(node.value is call for call in constructors)]
+        self.assertEqual(len(registrations), len(expected))
+        self.assertEqual({id(call) for call in constructors}, {id(node.value) for node in registrations})
+        actual = {}
+        for node in registrations:
+            self.assertEqual(len(node.targets), 1)
+            self.assertIsInstance(node.targets[0], ast.Name)
+            self.assertNotIn(node.targets[0].id, actual)
+            self.assertEqual(len(node.value.args), 1)
+            self.assertIsInstance(node.value.args[0], ast.Name)
+            self.assertEqual(node.value.keywords, [])
+            actual[node.targets[0].id] = node.value.args[0].id
+        self.assertEqual(actual, expected)
         self.assertIn("return _BEFORE_ENTRY.begin(_BEFORE_ATTEMPTS)", self.source("_before_begin"))
         parent = self.source("_before_pre_metadata")
         self.assertIn("entry=entry", parent)

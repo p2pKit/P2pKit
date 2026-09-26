@@ -48,6 +48,31 @@ original result records without rerunning them; that cross-check is not the
 independent implementation review. No old reader, fixture, transport/provider
 suite, preview or build was repeated.
 
+### Combined source-CI compatibility correction
+
+Hosted source run [36276036384/1](https://github.com/p2pKit/P2pKit/actions/runs/36276036384)
+at `c969c36a882c5dedaf285cfe94bab582314d5d2f` **failed**, not qualified:
+the existing BEFORE structural control counted one latch constructor across
+the entire module, while A2 correctly adds a separate productive-retirement
+latch with its own registry. Downstream suites, including Node, were skipped.
+
+The control now requires the exact two module-level constructor registrations,
+their distinct named registries, and no extra/nested constructors. All original
+BEFORE parent-clock/child-exclusion assertions and production source remain
+unchanged. Independent source verdict:
+`APPROVE_EXACT_BEFORE_LATCH_ROSTER_SINGLE_TEST_SOURCE_ONLY`;
+review SHA-256 `3418b57dd640dd2853d9d380f57678bf72ae07d43ddc9753b8f9884238df3338`.
+Only that changed control was executed: **1/1 PASS, exit 0**;
+wall 3.317s, user 2.981s, system 0.276s including imports/source parsing.
+Log SHA-256 `0c4619d6fc3689d68efd9d3686c18fecf81dff5b176539a68c7061594611fa66`.
+Independent result verdict:
+`APPROVE_EXACT_ONE_CHANGED_BEFORE_CONTROL_RESULT_ONLY`;
+review SHA-256 `d1562202ff15b06a40cddd0f1444a175edd46223d9fb55a0563afe0591824ad4`.
+An earlier wrapper exited 127 because `/usr/bin/time` was absent, before Python
+launched; switching to Bash's built-in timer changed no source or limit.
+That wrapper failure and the failed hosted aggregate remain recorded. This
+single local correction does not turn either into a hosted pass.
+
 ## Still required before productive execution and Release
 
 The actual productive adapter/Step8 and K/U/A delivery counterparts still need
