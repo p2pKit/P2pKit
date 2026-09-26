@@ -35,6 +35,8 @@ WORKFLOW = ".github/workflows/sample-development-releases.yml"
 PRODUCER = ".github/workflows/desktop-cross-host.yml"
 MAVEN_WORKFLOW = ".github/workflows/publish-maven-central.yml"
 MAVEN_NAME = "Publish Maven Central"
+RECOVERY_WORKFLOW = ".github/workflows/recover-maven-central.yml"
+RECOVERY_NAME = "Recover Maven Central verification"
 TRIGGERS = {"Desktop cross-host": PRODUCER, "CI": ".github/workflows/ci.yml",
             "OSV Advisory Scan": ".github/workflows/osv-scanner.yml"}
 MAIN_EVENTS = {PRODUCER: ("push",),
@@ -274,7 +276,13 @@ def trigger_source(api, event):
         publication = maven_publication(api, event["head_sha"], event["id"], event["run_attempt"])
         need(event.get("head_branch") == publication["tag"], "Maven completion tag differs from the original run")
         return event["head_sha"]
-    raise Hold("Only verified Maven completion can trigger application publication")
+    if event.get("name") == RECOVERY_NAME:
+        plan = recovery_publication_plan(api, event["id"], event["run_attempt"])
+        context = plan["mavenRecovery"]["invocation"]
+        need(event.get("head_sha") == context["source"] and event.get("head_branch") == "main" and
+             event.get("event") == "workflow_dispatch", "Recovery completion does not bind its trusted main controller")
+        return plan["source"]["commit"]
+    raise Hold("Only successful original Maven or separately verified recovery can trigger application publication")
 
 
 def source_version(api, sha):
@@ -295,12 +303,10 @@ def source_version(api, sha):
     return value
 
 
-def maven_invocation(api, sha, identifier, attempt, *, completed):
-    """Bind a tag-run separately from ordinary main builds, before or after upload."""
+def maven_source_identity(api, sha, identifier, attempt, run, workflow):
+    """Structural tag/source binding only, never execution or publication authority."""
     need(type(sha) is str and SHA.fullmatch(sha), "Invalid Maven source SHA")
     identifier, attempt = number(identifier), number(attempt)
-    run = api.json(f"/actions/runs/{identifier}/attempts/{attempt}")
-    workflow = api.json("/actions/workflows/publish-maven-central.yml")
     need(run.get("id") == identifier and run.get("run_attempt") == attempt and
          run.get("path") == workflow.get("path") == MAVEN_WORKFLOW and
          run.get("workflow_id") == workflow.get("id") and type(workflow.get("id")) is int and
@@ -308,15 +314,6 @@ def maven_invocation(api, sha, identifier, attempt, *, completed):
          run.get("repository", {}).get("full_name") == REPO and
          run.get("head_repository", {}).get("full_name") == REPO,
          "Maven run/source/attempt/workflow is not the exact tag push")
-    if completed:
-        need(run.get("status") == "completed" and run.get("conclusion") == "success",
-             "Maven publication attempt is not successful")
-    else:
-        current = api.json(f"/actions/runs/{identifier}")
-        need(current.get("id") == identifier and current.get("run_attempt") == attempt and
-             run.get("status") == current.get("status") == "in_progress" and
-             run.get("conclusion") is current.get("conclusion") is None,
-             "Preflight requires the current in-progress Maven attempt, never a completed publication")
     tag = run.get("head_branch", "")
     need(type(tag) is str and re.fullmatch(r"v[0-9][0-9A-Za-z._+-]{0,99}", tag) and
          "SNAPSHOT" not in tag.upper(), "Maven publication lacks a safe non-snapshot version tag")
@@ -336,6 +333,24 @@ def maven_invocation(api, sha, identifier, attempt, *, completed):
          "Maven tag does not match the canonical source version")
     return {"id": identifier, "attempt": attempt, "workflowId": workflow["id"], "workflowPath": MAVEN_WORKFLOW,
             "source": sha, "tag": tag, "version": tag[1:], "tagObject": ref["object"]["sha"]}
+
+
+def maven_invocation(api, sha, identifier, attempt, *, completed):
+    """Bind a tag-run separately from ordinary main builds, before or after upload."""
+    identifier, attempt = number(identifier), number(attempt)
+    run = api.json(f"/actions/runs/{identifier}/attempts/{attempt}")
+    workflow = api.json("/actions/workflows/publish-maven-central.yml")
+    identity = maven_source_identity(api, sha, identifier, attempt, run, workflow)
+    if completed:
+        need(run.get("status") == "completed" and run.get("conclusion") == "success",
+             "Maven publication attempt is not successful")
+    else:
+        current = api.json(f"/actions/runs/{identifier}")
+        need(current.get("id") == identifier and current.get("run_attempt") == attempt and
+             run.get("status") == current.get("status") == "in_progress" and
+             run.get("conclusion") is current.get("conclusion") is None,
+             "Preflight requires the current in-progress Maven attempt, never a completed publication")
+    return identity
 
 
 def maven_publication(api, sha, identifier, attempt):
@@ -373,10 +388,90 @@ def frozen_publication_plan(api, publication, binding=None):
 
 
 def revalidate_plan(api, plan):
-    publication = plan["mavenPublication"]
-    current = maven_publication(api, plan["source"]["commit"], publication["id"], publication["attempt"])
-    need(current == publication and frozen_publication_plan(api, current, plan["frozenApplicationSet"]) == plan,
-         "Original Maven publication/frozen set/gates/evidence changed")
+    authority = delivery_authority(plan)
+    if authority == "maven":
+        publication = plan["mavenPublication"]
+        current = maven_publication(api, plan["source"]["commit"], publication["id"], publication["attempt"])
+        need(current == publication and frozen_publication_plan(api, current, plan["frozenApplicationSet"]) == plan,
+             "Original Maven publication/frozen set/gates/evidence changed")
+    else:
+        recovery = plan["mavenRecovery"]
+        invocation = recovery["invocation"]
+        need(recovery_publication_plan(api, invocation["id"], invocation["attempt"], recovery) == plan,
+             "Separate recovery authority or original failed attempt/frozen set/custody changed")
+
+
+def delivery_authority(plan):
+    need(("mavenPublication" in plan) != ("mavenRecovery" in plan) and plan.get("frozenApplicationSet") is not None,
+         "Delivery requires exactly one successful original Maven or distinct recovery authority and its frozen apps")
+    return "maven" if "mavenPublication" in plan else "recovery"
+
+
+def recovery_publication_plan(api, identifier, attempt, binding=None):
+    # Lazy import: the recovery policy also uses the existing ordinary/frozen
+    # validators. It never turns a failed Maven attempt into mavenPublication.
+    spec = importlib.util.spec_from_file_location("maven_recovery", ROOT / "scripts/maven_recovery.py")
+    recovery = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(recovery)
+    parent = Path(os.environ["RUNNER_TEMP"])
+    PACK.physical_directory(parent)
+    options = {} if binding is None else {"artifact_id": binding["artifact"]["id"], "expected_hash": binding["sha256"]}
+    with tempfile.TemporaryDirectory(prefix="p2pkit-recovery-delivery-", dir=parent) as temporary:
+        try:
+            return recovery.publication_plan(api, identifier, attempt, Path(temporary), **options)
+        except recovery.P.Hold as error:
+            raise Hold(str(error)) from None
+
+
+def select_delivery_plan(api, args, event=None):
+    """Bind manual inputs or the exact completion; never select latest artifacts."""
+    authority = args.authority or "maven"
+    if event is not None:
+        need(event.get("name") in (MAVEN_NAME, RECOVERY_NAME), "Unsupported sample delivery completion")
+        authority = "maven" if event["name"] == MAVEN_NAME else "recovery"
+        need(not args.authority or args.authority == authority, "Requested authority differs from the completed workflow")
+    need(bool(args.frozen_artifact) == bool(args.frozen_sha256), "Incomplete frozen artifact/hash binding")
+    frozen = {"artifact": {"id": args.frozen_artifact}, "sha256": args.frozen_sha256} if args.frozen_artifact else None
+    if event is None:
+        need(args.source and args.maven_run and args.maven_attempt and frozen,
+             "Manual delivery needs exact original source/Maven run/attempt and frozen artifact/hash")
+    if authority == "maven":
+        need(not any((args.recovery_run, args.recovery_attempt, args.recovery_artifact, args.recovery_sha256)),
+             "Recovery binding cannot replace a successful original Maven authority")
+        if event is None:
+            publication = maven_publication(api, args.source, args.maven_run, args.maven_attempt)
+        else:
+            sha = trigger_source(api, event)
+            need((not args.source or args.source == sha) and
+                 (not args.maven_run or number(args.maven_run) == event["id"]) and
+                 (not args.maven_attempt or number(args.maven_attempt) == event["run_attempt"]),
+                 "Requested source/Maven attempt differs from the triggering completion")
+            publication = maven_publication(api, sha, event["id"], event["run_attempt"])
+        return frozen_publication_plan(api, publication, frozen)
+    need(authority == "recovery" and bool(args.recovery_artifact) == bool(args.recovery_sha256),
+         "Incomplete recovery result/artifact binding")
+    binding = {"artifact": {"id": args.recovery_artifact}, "sha256": args.recovery_sha256} if args.recovery_artifact else None
+    if event is None:
+        need(args.recovery_run and args.recovery_attempt and binding,
+             "Manual recovery delivery requires the exact successful recovery run/attempt/result ID/hash")
+        identifier, attempt = args.recovery_run, args.recovery_attempt
+    else:
+        identifier, attempt = event["id"], event["run_attempt"]
+        need((not args.recovery_run or number(args.recovery_run) == identifier) and
+             (not args.recovery_attempt or number(args.recovery_attempt) == attempt),
+             "Requested recovery attempt differs from the triggering completion")
+    plan = recovery_publication_plan(api, identifier, attempt, binding)
+    context, original = plan["mavenRecovery"]["invocation"], plan["mavenRecovery"]["original"]
+    if event is not None:
+        need(event.get("head_sha") == context["source"] and event.get("head_branch") == "main" and
+             event.get("event") == "workflow_dispatch", "Recovery event must bind the controller, not substitute application source")
+    need((not args.source or args.source == plan["source"]["commit"]) and
+         (not args.maven_run or number(args.maven_run) == original["id"]) and
+         (not args.maven_attempt or number(args.maven_attempt) == original["attempt"]) and
+         (frozen is None or (number(args.frozen_artifact) == plan["frozenApplicationSet"]["artifact"]["id"] and
+                            args.frozen_sha256 == plan["frozenApplicationSet"]["sha256"])),
+         "Recovery cannot substitute the exact original source, failed Maven attempt or frozen applications")
+    return plan
 
 
 def latest(rows, reason):
@@ -781,6 +876,15 @@ def release_body(plan, manifest_hash):
     maven = (f"Built from the same source as Maven Central version `{publication['version']}`. "
              f"Verified Maven publisher: https://github.com/{REPO}/actions/runs/{publication['id']} "
              f"(attempt {publication['attempt']}, tag `{publication['tag']}`).\n\n") if publication else ""
+    if "mavenRecovery" in plan:
+        recovery = plan["mavenRecovery"]
+        original, invocation = recovery["original"], recovery["invocation"]
+        maven = (f"Built from the same source as Maven Central version `{original['version']}`. "
+                 f"Original Maven attempt https://github.com/{REPO}/actions/runs/{original['id']} "
+                 f"(attempt {original['attempt']}, tag `{original['tag']}`) remains **FAILED**. "
+                 f"Separate owner-approved read-only signature/remote-byte/consumer recovery passed: "
+                 f"https://github.com/{REPO}/actions/runs/{invocation['id']} (attempt {invocation['attempt']}). "
+                 "No Maven republishing or application rebuild occurred in recovery.\n\n")
     return ("Development sample apps — not a library or production release.\n\n" + maven +
             "Download the Android .apk, Windows .msi, macOS .dmg or Linux .deb for your platform. "
             "Verify SHA256SUMS before opening the package. License/notice material is in sample-notices.zip.\n\n"
@@ -799,8 +903,7 @@ def publish(api, plan, directory, mutate, review=None):
     need(directory.is_dir() and {p.name for p in directory.iterdir()} <= {".owner.json"},
          "Publisher workspace must be exclusively allocated and empty")
     authorization, approval, context = None, None, None
-    need(plan.get("mavenPublication") is not None and plan.get("frozenApplicationSet") is not None,
-         "Application delivery requires successful Maven and its exact frozen application set")
+    delivery_authority(plan)
     if mutate:
         context = hosted_context(os.environ, "publish")
         authorization = load_review_request(api, review, directory, context)
@@ -851,7 +954,7 @@ def publish(api, plan, directory, mutate, review=None):
         need(ref.get("object") == {"type": "commit", "sha": plan["source"]["commit"],
              "url": API + PREFIX + "/git/commits/" + plan["source"]["commit"]}, "Existing tag target/type differs")
         need(release is not None, "Existing orphan tag requires manual reconciliation")
-    title = "Development samples — " + (publication["version"] if publication else plan["source"]["commit"][:12])
+    title = "Development samples — " + plan["versionBinding"]["canonicalVersion"]
     if release is None:
         release = api.json("/releases", method="POST", value={"tag_name": tag,
                            "target_commitish": plan["source"]["commit"], "name": title, "body": body,
@@ -904,6 +1007,11 @@ def main():
     parser.add_argument("--maven-attempt", default="")
     parser.add_argument("--frozen-artifact", default="")
     parser.add_argument("--frozen-sha256", default="")
+    parser.add_argument("--authority", choices=("", "maven", "recovery"), default="")
+    parser.add_argument("--recovery-run", default="")
+    parser.add_argument("--recovery-attempt", default="")
+    parser.add_argument("--recovery-artifact", default="")
+    parser.add_argument("--recovery-sha256", default="")
     parser.add_argument("--review-artifact", default="")
     parser.add_argument("--review-request", default="")
     args = parser.parse_args()
@@ -936,29 +1044,21 @@ def main():
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15, check=True)
         need(actual.stdout.decode().strip() == context["source"], "Checkout is not the trusted publisher source")
         api = Api(os.environ.get("GH_TOKEN", ""))
-        sha, publication = args.source, None
+        event = None
         if os.environ["GITHUB_EVENT_NAME"] == "workflow_run":
             event = parsed(Path(os.environ["GITHUB_EVENT_PATH"]).read_bytes())["workflow_run"]
-            triggered_sha = trigger_source(api, event)
-            need(not sha or sha == triggered_sha, "Requested source differs from the completed workflow")
-            sha = triggered_sha
-            need((not args.maven_run or number(args.maven_run) == event["id"]) and
-                 (not args.maven_attempt or number(args.maven_attempt) == event["run_attempt"]),
-                 "Requested Maven attempt differs from the triggering completion")
-            publication = maven_publication(api, sha, event["id"], event["run_attempt"])
-        need(sha, "Exact candidate source required")
-        if publication is None:
-            need(args.maven_run and args.maven_attempt and args.frozen_artifact and args.frozen_sha256,
-                 "Manual delivery needs exact original Maven run/attempt and frozen artifact/hash")
-            publication = maven_publication(api, sha, args.maven_run, args.maven_attempt)
-        need(bool(args.frozen_artifact) == bool(args.frozen_sha256), "Incomplete frozen artifact/hash binding")
-        binding = {"artifact": {"id": args.frozen_artifact}, "sha256": args.frozen_sha256} if args.frozen_artifact else None
-        plan = frozen_publication_plan(api, publication, binding)
+        plan = select_delivery_plan(api, args, event)
+        sha, authority = plan["source"]["commit"], delivery_authority(plan)
         if args.operation == "admit":
             with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
                 frozen = plan["frozenApplicationSet"]
+                recovery = plan.get("mavenRecovery")
+                publication = plan["mavenPublication"] if recovery is None else recovery["original"]
                 output.write(f"ready=true\nsource={sha}\nmaven_run={publication['id']}\nmaven_attempt={publication['attempt']}\n"
-                             f"frozen_artifact={frozen['artifact']['id']}\nfrozen_sha256={frozen['sha256']}\n")
+                             f"frozen_artifact={frozen['artifact']['id']}\nfrozen_sha256={frozen['sha256']}\nauthority={authority}\n")
+                if recovery is not None:
+                    output.write(f"recovery_run={recovery['invocation']['id']}\nrecovery_attempt={recovery['invocation']['attempt']}\n"
+                                 f"recovery_artifact={recovery['artifact']['id']}\nrecovery_sha256={recovery['sha256']}\n")
             result, code = {"result": "ADMITTED_METADATA_ONLY", "plan": plan}, 0
         else:
             candidate.mkdir(mode=0o700)

@@ -62,11 +62,19 @@ scripts/build-central-portal-bundle.sh
 
 The builder creates a fresh isolated local publication, verifies the signing
 fingerprint, artifact signatures and publication shape, then generates
-checksums and the bundle. It writes the versioned ZIP, SHA-256 manifest and JSON
-summary under `build/central/`. It never uploads and does not replace the
-complete release gates or authorize publication. Keep secret material out of
-logs and remove it from the invocation environment afterward.
+checksums and the bundle. It writes the versioned ZIP, SHA-256 manifest,
+source-bound JSON summary and public-only signing certificate under
+`build/central/`. The protected publisher retains this verified quartet before
+upload and the original PUBLISHED deployment receipt before remote verification.
+It never exports private signing material into those public artifacts.
+The builder never uploads and does not replace the complete release gates or
+authorize publication. Keep secret material out of logs and remove it from the
+invocation environment afterward.
 
 After publication, retain the deployment ID, bundle SHA-256, file counts,
 workflow URL, source/tag SHA, and remote byte/consumer verification in a release
 record. See [`../releases/0.7.0-rc3.md`](../releases/0.7.0-rc3.md).
+If an irreversible upload succeeds but verification fails, do not rerun the
+publisher. Follow the separately protected [read-only recovery procedure](release-foundation.md#read-only-recovery-after-an-original-published-deployment)
+using the original signed quartet, deployment receipt and frozen applications.
+Missing or expired originals remain a HOLD; rebuilding is not recovery.

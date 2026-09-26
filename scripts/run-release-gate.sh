@@ -32,7 +32,9 @@ python3 -I -B scripts/tests/sample-artifact-identity-test.py
 python3 -I -B scripts/tests/package-sample-apps-test.py
 python3 -I -B scripts/tests/publish-sample-release-test.py
 python3 -I -B scripts/tests/release-application-set-test.py
+python3 -I -B scripts/tests/central-bundle-evidence-test.py
 python3 -I -B scripts/tests/central-deployment-evidence-test.py
+python3 -I -B scripts/tests/maven-recovery-test.py
 ruby scripts/tests/release-foundation-workflow-test.rb
 scripts/check-release-metadata.sh
 scripts/check-git-whitespace.sh

@@ -2,9 +2,9 @@ name: Development sample Releases
 
 on:
   workflow_run:
-    workflows: [Publish Maven Central]
+    workflows: [Publish Maven Central, Recover Maven Central verification]
     types: [completed]
-    # Only verified Maven completion can deliver its already-frozen app set.
+    # Original Maven success or separately approved successful read-only recovery.
   workflow_dispatch:
     inputs:
       source_sha:
@@ -12,11 +12,11 @@ on:
         type: string
         required: true
       maven_run:
-        description: Original successful Maven tag-push run ID (app-only resume)
+        description: Exact original Maven tag-push run ID (successful or separately recovered)
         type: string
         required: true
       maven_attempt:
-        description: Original successful Maven attempt, never a new build
+        description: Exact original Maven attempt, never a new build
         type: string
         required: true
       frozen_artifact:
@@ -27,6 +27,22 @@ on:
         description: Exact SHA-256 of release-application-set.json
         type: string
         required: true
+      recovery_run:
+        description: Only for recovery delivery, exact successful recovery run ID
+        type: string
+        required: false
+      recovery_attempt:
+        description: Exact successful recovery attempt (all four recovery fields required together)
+        type: string
+        required: false
+      recovery_artifact:
+        description: Exact original recovery-result artifact ID, never latest
+        type: string
+        required: false
+      recovery_sha256:
+        description: Exact original recovery-result.json SHA-256
+        type: string
+        required: false
       operation:
         description: Verify without publication, or publish the verified development samples
         type: choice
@@ -44,13 +60,15 @@ permissions:
 # This is not a Gradle/build job; it never occupies the shared heavy-job lease
 # while waiting for other gates. Each completion rechecks readiness, without a build.
 concurrency:
-  group: development-samples-${{ github.event.workflow_run.head_sha || inputs.source_sha }}
+  # Recovery's event head is controller code, not original app source S. One
+  # delivery writer prevents manual/original/recovery races without reselecting S.
+  group: development-samples
   cancel-in-progress: false
 
 jobs:
   admit:
     # Manual resume is app-only and must name the same Maven attempt and frozen set.
-    if: ${{ github.repository == 'p2pKit/P2pKit' && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.name == 'Publish Maven Central' && github.event.workflow_run.event == 'push' && startsWith(github.event.workflow_run.head_branch, 'v'))) }}
+    if: ${{ github.repository == 'p2pKit/P2pKit' && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success' && ((github.event.workflow_run.name == 'Publish Maven Central' && github.event.workflow_run.event == 'push' && startsWith(github.event.workflow_run.head_branch, 'v')) || (github.event.workflow_run.name == 'Recover Maven Central verification' && github.event.workflow_run.event == 'workflow_dispatch' && github.event.workflow_run.head_branch == 'main')))) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -59,13 +77,18 @@ jobs:
       maven_attempt: ${{ steps.admit.outputs.maven_attempt }}
       frozen_artifact: ${{ steps.admit.outputs.frozen_artifact }}
       frozen_sha256: ${{ steps.admit.outputs.frozen_sha256 }}
+      authority: ${{ steps.admit.outputs.authority }}
+      recovery_run: ${{ steps.admit.outputs.recovery_run }}
+      recovery_attempt: ${{ steps.admit.outputs.recovery_attempt }}
+      recovery_artifact: ${{ steps.admit.outputs.recovery_artifact }}
+      recovery_sha256: ${{ steps.admit.outputs.recovery_sha256 }}
     steps:
       - name: Check out trusted main publisher code, never producer-supplied code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
-      - name: Require successful Maven and its exact approved frozen application set
+      - name: Require successful Maven or distinct recovery and the exact approved frozen application set
         id: admit
         env:
           GH_TOKEN: ${{ github.token }}
@@ -74,7 +97,12 @@ jobs:
           MAVEN_ATTEMPT: ${{ inputs.maven_attempt }}
           FROZEN_ARTIFACT: ${{ inputs.frozen_artifact }}
           FROZEN_SHA256: ${{ inputs.frozen_sha256 }}
-        run: python3 -I -B -S scripts/publish-sample-release.py admit --source "$SOURCE" --maven-run "$MAVEN_RUN" --maven-attempt "$MAVEN_ATTEMPT" --frozen-artifact "$FROZEN_ARTIFACT" --frozen-sha256 "$FROZEN_SHA256"
+          AUTHORITY: ${{ inputs.recovery_run != '' && 'recovery' || '' }}
+          RECOVERY_RUN: ${{ inputs.recovery_run }}
+          RECOVERY_ATTEMPT: ${{ inputs.recovery_attempt }}
+          RECOVERY_ARTIFACT: ${{ inputs.recovery_artifact }}
+          RECOVERY_SHA256: ${{ inputs.recovery_sha256 }}
+        run: python3 -I -B -S scripts/publish-sample-release.py admit --source "$SOURCE" --maven-run "$MAVEN_RUN" --maven-attempt "$MAVEN_ATTEMPT" --frozen-artifact "$FROZEN_ARTIFACT" --frozen-sha256 "$FROZEN_SHA256" --authority "$AUTHORITY" --recovery-run "$RECOVERY_RUN" --recovery-attempt "$RECOVERY_ATTEMPT" --recovery-artifact "$RECOVERY_ARTIFACT" --recovery-sha256 "$RECOVERY_SHA256"
 
   verify-only:
     needs: admit
@@ -95,7 +123,12 @@ jobs:
           MAVEN_ATTEMPT: ${{ needs.admit.outputs.maven_attempt }}
           FROZEN_ARTIFACT: ${{ needs.admit.outputs.frozen_artifact }}
           FROZEN_SHA256: ${{ needs.admit.outputs.frozen_sha256 }}
-        run: python3 -I -B -S scripts/publish-sample-release.py verify --source "$SOURCE" --maven-run "$MAVEN_RUN" --maven-attempt "$MAVEN_ATTEMPT" --frozen-artifact "$FROZEN_ARTIFACT" --frozen-sha256 "$FROZEN_SHA256"
+          AUTHORITY: ${{ needs.admit.outputs.authority }}
+          RECOVERY_RUN: ${{ needs.admit.outputs.recovery_run }}
+          RECOVERY_ATTEMPT: ${{ needs.admit.outputs.recovery_attempt }}
+          RECOVERY_ARTIFACT: ${{ needs.admit.outputs.recovery_artifact }}
+          RECOVERY_SHA256: ${{ needs.admit.outputs.recovery_sha256 }}
+        run: python3 -I -B -S scripts/publish-sample-release.py verify --source "$SOURCE" --maven-run "$MAVEN_RUN" --maven-attempt "$MAVEN_ATTEMPT" --frozen-artifact "$FROZEN_ARTIFACT" --frozen-sha256 "$FROZEN_SHA256" --authority "$AUTHORITY" --recovery-run "$RECOVERY_RUN" --recovery-attempt "$RECOVERY_ATTEMPT" --recovery-artifact "$RECOVERY_ARTIFACT" --recovery-sha256 "$RECOVERY_SHA256"
       - name: Retain only public provenance, never private test transcripts
         id: evidence
         if: ${{ always() }}
@@ -136,7 +169,12 @@ jobs:
           MAVEN_ATTEMPT: ${{ needs.admit.outputs.maven_attempt }}
           FROZEN_ARTIFACT: ${{ needs.admit.outputs.frozen_artifact }}
           FROZEN_SHA256: ${{ needs.admit.outputs.frozen_sha256 }}
-        run: python3 -I -B -S scripts/publish-sample-release.py prepare-review --source "$SOURCE" --maven-run "$MAVEN_RUN" --maven-attempt "$MAVEN_ATTEMPT" --frozen-artifact "$FROZEN_ARTIFACT" --frozen-sha256 "$FROZEN_SHA256"
+          AUTHORITY: ${{ needs.admit.outputs.authority }}
+          RECOVERY_RUN: ${{ needs.admit.outputs.recovery_run }}
+          RECOVERY_ATTEMPT: ${{ needs.admit.outputs.recovery_attempt }}
+          RECOVERY_ARTIFACT: ${{ needs.admit.outputs.recovery_artifact }}
+          RECOVERY_SHA256: ${{ needs.admit.outputs.recovery_sha256 }}
+        run: python3 -I -B -S scripts/publish-sample-release.py prepare-review --source "$SOURCE" --maven-run "$MAVEN_RUN" --maven-attempt "$MAVEN_ATTEMPT" --frozen-artifact "$FROZEN_ARTIFACT" --frozen-sha256 "$FROZEN_SHA256" --authority "$AUTHORITY" --recovery-run "$RECOVERY_RUN" --recovery-attempt "$RECOVERY_ATTEMPT" --recovery-artifact "$RECOVERY_ARTIFACT" --recovery-sha256 "$RECOVERY_SHA256"
       - name: Retain the immutable public review request, never private evidence
         id: evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -184,9 +222,14 @@ jobs:
           MAVEN_ATTEMPT: ${{ needs.admit.outputs.maven_attempt }}
           FROZEN_ARTIFACT: ${{ needs.admit.outputs.frozen_artifact }}
           FROZEN_SHA256: ${{ needs.admit.outputs.frozen_sha256 }}
+          AUTHORITY: ${{ needs.admit.outputs.authority }}
+          RECOVERY_RUN: ${{ needs.admit.outputs.recovery_run }}
+          RECOVERY_ATTEMPT: ${{ needs.admit.outputs.recovery_attempt }}
+          RECOVERY_ARTIFACT: ${{ needs.admit.outputs.recovery_artifact }}
+          RECOVERY_SHA256: ${{ needs.admit.outputs.recovery_sha256 }}
           REVIEW_ARTIFACT: ${{ needs.prepare-review.outputs.artifact_id }}
           REVIEW_REQUEST: ${{ needs.prepare-review.outputs.request_sha256 }}
-        run: python3 -I -B -S scripts/publish-sample-release.py publish --source "$SOURCE" --maven-run "$MAVEN_RUN" --maven-attempt "$MAVEN_ATTEMPT" --frozen-artifact "$FROZEN_ARTIFACT" --frozen-sha256 "$FROZEN_SHA256" --review-artifact "$REVIEW_ARTIFACT" --review-request "$REVIEW_REQUEST"
+        run: python3 -I -B -S scripts/publish-sample-release.py publish --source "$SOURCE" --maven-run "$MAVEN_RUN" --maven-attempt "$MAVEN_ATTEMPT" --frozen-artifact "$FROZEN_ARTIFACT" --frozen-sha256 "$FROZEN_SHA256" --review-artifact "$REVIEW_ARTIFACT" --review-request "$REVIEW_REQUEST" --authority "$AUTHORITY" --recovery-run "$RECOVERY_RUN" --recovery-attempt "$RECOVERY_ATTEMPT" --recovery-artifact "$RECOVERY_ARTIFACT" --recovery-sha256 "$RECOVERY_SHA256"
       - name: Retain only public publication provenance
         id: evidence
         if: ${{ always() }}

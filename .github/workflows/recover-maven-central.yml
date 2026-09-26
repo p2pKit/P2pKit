@@ -1,0 +1,136 @@
+name: Recover Maven Central verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact original published source S, not current main
+        type: string
+        required: true
+      maven_run:
+        description: Original failed Maven run with retained PUBLISHED originals
+        type: string
+        required: true
+      maven_attempt:
+        description: Exact failed original attempt, never a later rerun
+        type: string
+        required: true
+      frozen_artifact:
+        description: Original pre-publication frozen application-set artifact ID
+        type: string
+        required: true
+      frozen_sha256:
+        description: Original release-application-set.json SHA-256
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+  checks: read
+  pull-requests: read
+  deployments: read
+
+concurrency:
+  group: maven-recovery-${{ inputs.maven_run }}-${{ inputs.maven_attempt }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+    working-directory: controller
+
+jobs:
+  prepare-recovery:
+    if: ${{ github.repository == 'p2pKit/P2pKit' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      original_source: ${{ steps.prepare.outputs.original_source }}
+      request_sha256: ${{ steps.prepare.outputs.sha256 }}
+      request_artifact: ${{ steps.request.outputs.artifact-id }}
+    steps:
+      - name: Check out trusted main recovery controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: controller
+          persist-credentials: false
+      - name: Prepare the exact original recovery request
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE: ${{ inputs.source_sha }}
+          MAVEN_RUN: ${{ inputs.maven_run }}
+          MAVEN_ATTEMPT: ${{ inputs.maven_attempt }}
+          FROZEN_ARTIFACT: ${{ inputs.frozen_artifact }}
+          FROZEN_SHA256: ${{ inputs.frozen_sha256 }}
+        run: python3 -I -B -S scripts/maven_recovery.py prepare --source "$SOURCE" --maven-run "$MAVEN_RUN" --maven-attempt "$MAVEN_ATTEMPT" --frozen-artifact "$FROZEN_ARTIFACT" --frozen-sha256 "$FROZEN_SHA256"
+      - name: Retain the immutable recovery request
+        id: request
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: maven-central-recovery-request-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/p2pkit-maven-recovery/recovery-request.json
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false
+
+  verify-recovery:
+    needs: prepare-recovery
+    runs-on: macos-15
+    timeout-minutes: 90
+    # A separate owner-only, main-only environment, with administrator bypass
+    # disabled. No signing or Central credentials are configured or referenced.
+    environment: maven-central-recovery
+    env:
+      REQUEST_ARTIFACT: ${{ needs.prepare-recovery.outputs.request_artifact }}
+      REQUEST_SHA256: ${{ needs.prepare-recovery.outputs.request_sha256 }}
+      ORIGINAL_ROOT: ${{ github.workspace }}/original
+    steps:
+      - name: Check out trusted main recovery controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: controller
+          persist-credentials: false
+      - name: Require the exact protected recovery approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I -B -S scripts/maven_recovery.py authorize --request-artifact "$REQUEST_ARTIFACT" --request-sha256 "$REQUEST_SHA256"
+      - name: Check out the original frozen source separately, never current version overrides
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare-recovery.outputs.original_source }}
+          path: original
+          persist-credentials: false
+      - name: Configure Java 17 for complete remote consumer fixtures only
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install Android SDK platform for original remote consumers
+        run: '"$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager "platforms;android-36"'
+      - name: Verify original public signatures and immutable remote bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I -B -S scripts/maven_recovery.py verify-originals --request-artifact "$REQUEST_ARTIFACT" --request-sha256 "$REQUEST_SHA256" --original-root "$ORIGINAL_ROOT"
+      - name: Verify complete remote consumers without republishing
+        # The controller executes only the exact original S's unchanged remote
+        # complete consumer script, not a library build or current-main fixture.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I -B -S scripts/maven_recovery.py verify-consumers --request-artifact "$REQUEST_ARTIFACT" --request-sha256 "$REQUEST_SHA256" --original-root "$ORIGINAL_ROOT"
+      - name: Record fresh recovery verification and original custody
+        id: result
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I -B -S scripts/maven_recovery.py finish --request-artifact "$REQUEST_ARTIFACT" --request-sha256 "$REQUEST_SHA256" --original-root "$ORIGINAL_ROOT"
+      - name: Retain the successful public recovery result
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: maven-central-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/p2pkit-maven-recovery/recovery-result.json
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false

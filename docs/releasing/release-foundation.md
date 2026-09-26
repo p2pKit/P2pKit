@@ -66,10 +66,11 @@ After this foundation's activation prerequisites are genuinely satisfied:
 7. The existing protected Maven job signs/inspects/publishes from S/V and
    verifies remote bytes and isolated consumers. Signing material stays within
    its existing secret-bearing steps; it never enters the frozen app record.
-8. **Only verified Maven completion** automatically starts `Development sample
-   Releases`. Ordinary CI/Desktop/OSV completions cannot publish applications.
-   The delivery job loads A from that Maven attempt; it never selects a new
-   producer or builds replacement applications.
+8. **Only verified Maven completion**, or the separately approved verification
+   recovery described below, automatically starts `Development sample Releases`.
+   Ordinary CI/Desktop/OSV completions cannot publish applications. The delivery
+   job loads A from the original Maven attempt; it never selects a new producer
+   or builds replacement applications.
 9. A secret-free preparation job verifies those bytes again and creates a
    fresh post-build evidence-review request. The owner retrieves/decrypts the
    original encrypted evidence privately and approves the protected
@@ -121,13 +122,91 @@ are unencrypted public Release assets and require no evidence decryption access.
   or adopt an unrelated/orphan tag. An already-public complete release is only
   reverified; its bytes are not replaced.
 - **Central upload succeeded but the Maven job later failed:** do **not** rerun
-  the tag publisher or reinterpret that failed attempt as success. A separate
-  original-bound, read-only verification-recovery path is still an outstanding
-  implementation prerequisite. Missing/expired signed-bundle or deployment
-  originals remain HOLD; rebuilding cannot recreate them.
+  the tag publisher or reinterpret that failed attempt as success. Use the
+  separate original-bound recovery below only when the failure is confined to
+  the post-publication verification/evidence tail and every required original
+  survives. Missing/expired signed-bundle or deployment originals remain HOLD;
+  rebuilding cannot recreate them.
 - **Original retention expired:** no automatic substitution, new producer,
   reconstructed evidence or refreshed ciphertext lifetime is allowed. Stop at
   the retained policy boundary even if Central publication already occurred.
+
+## Read-only recovery after an original PUBLISHED deployment
+
+`Recover Maven Central verification` (`recover-maven-central.yml`) is a separate
+main-only manual workflow. Its controller is the workflow's exact main commit;
+the original release S is checked out into a different directory. Advancing
+main does not select another library version, consumer fixture or application
+set. The original Maven attempt must remain **failed**, with no later rerun.
+
+Eligibility requires successful original freeze and complete-gate jobs, the
+original owner's application-set approval, successful signing/SBOM/upload, and
+both immutable, attempt-named original evidence artifacts:
+
+- `maven-central-signed-bundle-<tag>-<run>-<attempt>`: the original ZIP, SHA-256
+  manifest, source-bound summary and **public-only** signing certificate.
+- `maven-central-deployment-<tag>-<run>-<attempt>`: original Portal events,
+  PUBLISHED status, deployment ID, bundle/source hashes and their bound receipt.
+
+These are retained before the fallible remote-verification step. Cancellation,
+pre-upload failure, absent originals, changed tags, expired custody, a skipped
+remote-verification step or another failed stage cannot use this recovery path.
+An uploaded receipt is evidence, not owner approval or a successful Maven job.
+
+1. Dispatch `Recover Maven Central verification` from `main` with the five
+   required inputs: `source_sha` (S), `maven_run`, `maven_attempt`,
+   `frozen_artifact` (original frozen application-set artifact ID) and
+   `frozen_sha256` (the original JSON hash). No `latest` or version override is
+   accepted. This does not upload to Central or mutate tags/releases.
+2. The 20-minute secret-free preparation job checks original identity,
+   deployment, custody, gates and structural public-bundle data. It retains
+   a new exact-attempt recovery request. Structural preparation does **not**
+   count as signature, remote-byte or consumer verification.
+3. The separately configured `maven-central-recovery` environment must allow
+   only the `main` branch, name `Apdelrahman1911` as its sole reviewer, allow
+   self-review and disable administrator bypass. It has no Central or signing
+   secrets. The owner reviews the request and uses its exact summary challenge:
+
+   ```text
+   APPROVE_MAVEN_RECOVERY <recovery-run>/<attempt> <request-SHA256>
+   ```
+
+   The controller checks the actual environment and personal approval again;
+   adding the environment name to YAML cannot create that authority.
+4. The protected 90-minute macOS job revalidates the originals after the delay,
+   verifies all 84 original public signatures and the local 504-member
+   bundle/checksum roster, then runs S's existing remote-byte verifier against
+   that original bundle and S's **complete** isolated remote consumers. The
+   remote checker compares 168 base/signature files; do not describe that as
+   remote comparison of all 504 ZIP members. No library build, signing,
+   coordinate-absence probe, Central upload or application rebuild is allowed.
+5. Successful command/source/step/ownership records join the approved request
+   and original PUBLISHED deployment into `recovery-result.json`. Only a
+   successful recovery job and its exact retained artifact give distinct
+   `mavenRecovery` delivery authority. The original remains visibly failed;
+   there is no manufactured green status for it.
+6. Successful recovery automatically starts normal sample delivery using A.
+   The separate fresh `APPROVE_EVIDENCE` approval is still mandatory. If delivery
+   later fails, the normal sample manual path must supply its six original
+   inputs **and** all four recovery inputs: `recovery_run`, `recovery_attempt`,
+   `recovery_artifact` and `recovery_sha256`. These are the exact successful
+   recovery attempt, result artifact ID and JSON hash, not another recovery.
+
+Recovery records also have 14-day retention, but their creation never renews
+the original objects' lifetime. Preparation/authorization require the existing
+110-minute recovery-plus-delivery headroom; final delivery still needs 20 minutes
+before the earliest original expiry. A new recovery after failure needs its own
+request and personal approval. It may not replace A or reupload Maven.
+
+On command failure or unknown process retirement, owned command logs, consumer
+work and acquired public-bundle inputs are left on the ephemeral runner rather
+than being deleted while a child may still use them. Raw logs are not uploaded
+or printed. Bounded status/exit diagnostics do not claim retained encrypted
+failure evidence; successful public receipts contain hashes, not log contents.
+
+The recovery source controls are not hosted remote-consumer qualification.
+Its environment provisioning, genuine hosted qualification and this foundation's
+other activation prerequisites must be completed before operational use.
 
 ## Maintained implementation boundary
 
@@ -136,6 +215,9 @@ are unencrypted public Release assets and require no evidence decryption access.
 `package-sample-apps.py` and `sample_artifact_identity.py` produce and inspect
 source/version-bound application bundles on their native hosts. The existing
 Maven workflow remains the only Central upload path.
+`central_bundle_evidence.py` and `central_deployment_evidence.py` preserve and
+verify original public publication evidence; `maven_recovery.py` provides only
+the separate protected verification-recovery path, never a second publisher.
 
 The source-control workflow runs synthetic policy/package tests and the
 dependency-free version helper. Passing it is **not** a native app build,

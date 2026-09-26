@@ -304,8 +304,11 @@ def _archive_members(archive, expected):
 def inspect(bundle, manifest, summary, public_key, source_sha, source_tree, version, *, verify_signatures=True):
     """Return a public receipt for exact original bytes; never infer publication.
 
-    ``verify_signatures=False`` is only for synthetic structure controls. Its
-    explicitly unverified receipt must never satisfy recovery admission.
+    ``verify_signatures=False`` supports synthetic structure controls and
+    unverified recovery-request preparation only. That preparatory metadata
+    is not a verification result: its explicitly unverified receipt must never
+    satisfy recovery admission. The CLI and accepting recovery execution both
+    require full public-signature verification.
     """
     need(type(source_sha) is str and HEX40.fullmatch(source_sha) and type(source_tree) is str and HEX40.fullmatch(source_tree),
          "Exact lowercase source commit/tree are required")
