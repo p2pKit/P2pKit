@@ -1,5 +1,41 @@
 # Initial-recipient artifact transport: source and offline models
 
+## Public terminal observer: R1 source and local models
+
+The fixed `scripts/hosted-initial-artifact-observer.cjs` acquires one original
+unauthenticated job response before upload, or the original job then exact
+artifact-ID responses after upload. Its successful return requires verified
+TLS, original request finish/end callback, bounded complete bytes/EOF and all
+original request/response/socket closes. It uses an explicit fresh, no-proxy
+Agent; no token, retry, list/latest selection or redirect is admitted.
+Actual Node raw-header vectors are retained, not fabricated wire-header bytes.
+
+Reviewed source SHA-256:
+`2665159d622245259eba5045e7f979aeb590cc450b91fe5929a1f16a4eadf067`;
+test SHA-256:
+`a1a4364f56c53e1026997abafba5e174224427b6c9247791af85b676beaf9dc3`.
+Independent source verdict:
+`APPROVE_EXACT_OBSERVER_R1_SOURCE_AND_39_NEW_OFFLINE_MODELS_ONLY`;
+review SHA-256 `a06d6bf54cddb21b649af12f76266e66db94eb4ee3260d3ae39e45edba721d02`.
+
+One fail-fast invocation on 2026-09-26 at 22:37:08–22:37:09 UTC passed
+**39/39, exit 0**, wall 0.903s/user 0.552s/system 0.323s. The closed VM import
+roster used synthetic HTTP/Agent/TLS/clocks/timers, not native or network
+qualification. External probe bounds were CPU30/wall60+kill3/AS768MiB under
+UID/GID65534; original source/runtime hashes matched and the original guarded
+process was observed absent. No network-namespace isolation is claimed.
+Log SHA-256 `4da1b57abd2a3f53e06f2236461bb6260e3b41fecf69fda0ac8b65c5a4949dc8`.
+Independent result verdict:
+`APPROVE_EXACT_39_LOCAL_OBSERVER_R1_MODELS_RESULT_ONLY`;
+review SHA-256 `257fa3ad03cf0b8a800fb3eb0afc66d94683a7422d6703206c49cf3247353c0a`.
+
+The source-only CI now includes this model suite after the reader controls.
+That wiring is not an executed hosted pass. No accepted local reader, preview,
+fixture or provider test was repeated for this increment. The actual K/U/A
+caller, semantic Step/source/retention checks, public API visibility/quota and
+native service/custody/timing qualification remain outstanding. U60/startBy,
+five-second closure reserve, shared A15, all HOLDs and Release gates remain.
+
 ## Fixed native-reader bridge: R2 source and local models
 
 `scripts/hosted-initial-artifact-reader.cjs` now owns one fixed, credential-free

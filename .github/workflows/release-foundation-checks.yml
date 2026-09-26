@@ -65,6 +65,7 @@ jobs:
           set -euo pipefail
           node scripts/tests/hosted-initial-artifact-transport-test.cjs
           node scripts/tests/hosted-initial-artifact-reader-test.cjs
+          node scripts/tests/hosted-initial-artifact-observer-test.cjs
           git diff --exit-code
       # No Gradle, SDK setup, provider, application build or publication. This
       # job cannot replace the ordinary FULL/Desktop or protected release gates.
