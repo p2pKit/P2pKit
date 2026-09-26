@@ -7932,6 +7932,230 @@ def _historical_seal_record(raw, raws, *, outcome, expected_sha256):
     return value
 
 
+_HISTORICAL_AUTHORITY_LIMITS = {
+    "context.json": native.LIMIT, "service/child-result.json": native.LIMIT,
+    "acquisition-queries/session-result.json": Q.MAX_RECEIPT_BYTES,
+    **{"service/" + name: native.ACK_LIMIT if name == "stdout.log" else
+        native.STDERR_LIMIT if name == "stderr.log" else native.LIMIT for name in native.PHASE_FILES},
+    **{"acquisition-queries/" + name + ".bin": Q.MAX_RECEIPT_BYTES for name in N.ORIGINAL_KEYS},
+    **{side + "/" + name: native.LIMIT if name == "source-return.json" else Q.MAX_RECEIPT_BYTES
+        for side in ("source-before", "source-after")
+        for name in ("source-return.json", "session-result.json", *(key + ".bin" for key in N.SOURCE_KEYS))},
+}
+
+
+def _historical_query_index(context, side, raws):
+    """Expand original query declarations, NOT read files or restore SourceReturn.
+
+    Native ownership/output metadata remains opaque historical DATA. Query
+    result and stream hashes are bound, but no native retirement is established.
+    Every emitted row still requires a new owned size/hash/EOF/metadata read.
+    """
+    require(side in ("source-before", "source-after", "acquisition-queries"), "HISTORY_QUERY_SIDE")
+    acquisition = side == "acquisition-queries"
+    keys = N.ORIGINAL_KEYS if acquisition else N.SOURCE_KEYS
+    originals = {name: raws[side + "/" + name + ".bin"] for name in keys}
+    session_raw = raws[side + "/session-result.json"]
+    session = fields(canonical(session_raw, Q.MAX_RECEIPT_BYTES),
+        "schema scope job queries result retirement firstError errors readbacks", "HISTORY_QUERY_SESSION_FIELDS")
+    require(type(session["schema"]) is int and session["schema"] == 1 and
+        session["scope"] == "ORDINARY_GIT_QUERIES_ONLY" and type(session["job"]) is str and
+        re.fullmatch(r"[0-9a-f]{32}", session["job"]) and session["result"] == "READY_FOR_CALLER_SEAL" and
+        session["retirement"] == "KNOWN" and session["firstError"] is None and session["errors"] == [] and
+        type(session["queries"]) is list and len(session["queries"]) == (24 if acquisition else 12) and
+        type(session["readbacks"]) is list, "HISTORY_QUERY_SESSION")
+    path = Path(context["session"]) / side  # Path arithmetic only; no filesystem call.
+    entry = re.fullmatch(rb"100644 blob ([0-9a-f]{40})\t" + re.escape(I.POLICY_PATH.encode("ascii")) + rb"\x00",
+        originals["candidate_policy_entry"])
+    require(entry is not None, "HISTORY_QUERY_POLICY_ENTRY")
+    commit, blob = context["observed"]["source"]["commit"], entry.group(1).decode("ascii")
+    I.sha(commit)
+    commands = (("rev-parse", "--show-toplevel"), ("status", "--porcelain=v1", "--untracked-files=all"),
+        ("rev-parse", "--verify", "HEAD^{commit}"), ("rev-parse", "--verify", commit + "^{tree}"),
+        ("rev-parse", "--is-shallow-repository"), ("rev-parse", "--verify", "refs/remotes/origin/main^{commit}"),
+        ("rev-parse", "--verify", A.stages.BASE["commit"] + "^{tree}"),
+        ("ls-tree", "-z", A.stages.BASE["commit"], "--", I.POLICY_PATH),
+        ("merge-base", A.stages.BASE["commit"], commit), ("ls-tree", "-z", commit, "--", I.POLICY_PATH),
+        ("cat-file", "-s", blob), ("cat-file", "blob", blob))
+    expected, directories, ids, selected = [(path, "owner.json", None, None)], [side, side + "/query-home"], set(), None
+    if acquisition:
+        expected.append((path, "event.bin", None, None))
+    for index, query in enumerate(session["queries"]):
+        fields(query, "schema scope id job state home cwd argv stdoutLimit stderrLimit timeoutSeconds launchAttempted "
+            "scopeAttempted waitExitCode retirement result errors outputs ownedSurvivors ownership", "HISTORY_QUERY_FIELDS")
+        require(type(query["schema"]) is int and query["schema"] == 1 and
+            query["scope"] == "NATIVE_OWNED_ORDINARY_GIT_QUERY" and type(query["id"]) is str and
+            re.fullmatch(r"[0-9a-f]{32}", query["id"]) and query["id"] not in ids and
+            query["job"] == session["job"] and query["state"] == str(path) and
+            query["home"] == str(path / "query-home") and query["cwd"] == context["root"] and
+            query["launchAttempted"] is True and query["scopeAttempted"] is True and
+            type(query["waitExitCode"]) is int and query["waitExitCode"] == 0 and
+            query["retirement"] == "KNOWN" and query["result"] == "READY_FOR_CALLER_SEAL" and
+            query["errors"] == query["ownedSurvivors"] == [] and type(query["ownership"]) is dict and
+            query["ownership"].get("discoveryErrors") == [], "HISTORY_QUERY_DECLARATION")
+        ids.add(query["id"])
+        timeout = query["timeoutSeconds"]
+        require(type(timeout) in (int, float) and math.isfinite(timeout) and 0 < timeout <= 15, "HISTORY_QUERY_TIMEOUT")
+        limit = I.EVENT_LIMIT if index % 12 == 1 else I.POLICY_LIMIT if index % 12 == 11 else 4096
+        require(type(query["stdoutLimit"]) is int and query["stdoutLimit"] == limit and
+            type(query["stderrLimit"]) is int and query["stderrLimit"] == 4096 and type(query["argv"]) is list and
+            query["argv"] and type(query["argv"][0]) is str and 0 < len(query["argv"][0]) <= 8192 and
+            "\0" not in query["argv"][0], "HISTORY_QUERY_LIMITS")
+        if selected is None:
+            selected = query["argv"][0]
+        require(query["argv"] == [selected, "--no-replace-objects", "--no-pager", "-c", "core.fsmonitor=false",
+            "-C", context["root"], *commands[index % 12]], "HISTORY_QUERY_COMMAND")
+        fields(query["outputs"], "stdout stderr", "HISTORY_QUERY_OUTPUTS")
+        target = path / ("query-" + query["id"])
+        directories.append(side + "/query-" + query["id"])
+        expected.extend((target, name, query[name[:-4] + "Limit"] if name.endswith(".log") else None, query)
+            for name in ("start.json", "baseline.json", "stdout.log", "stderr.log", "result.json"))
+        if acquisition and index == 11:
+            expected.extend((path, name + ".bin", None, None) for name in (*N.SOURCE_KEYS, *N.HTTP_KEYS))
+    expected.extend((path, name + ".bin", None, None)
+        for name in (("observation", "match") if acquisition else N.SOURCE_KEYS))
+    require(len(session["readbacks"]) == len(expected), "HISTORY_QUERY_READBACK_COUNT")
+    rows, total = [], len(session_raw)
+    for row, (parent, name, limit, query) in zip(session["readbacks"], expected):
+        fields(row, "parent name maximum retirement result bytes sha256", "HISTORY_QUERY_READBACK_FIELDS")
+        count, maximum = O.integer(row["bytes"]), O.integer(row["maximum"], 1)
+        checksum = digest(row["sha256"])
+        require(row["parent"] == str(parent) and row["name"] == name and row["retirement"] == "KNOWN" and
+            row["result"] == "RETAINED" and count <= maximum <= Q.MAX_RECEIPT_BYTES and
+            maximum == (max(1, count) if limit is None else limit) and
+            (count != 0 or checksum == O.digest(b"")), "HISTORY_QUERY_READBACK")
+        if parent == path and name.endswith(".bin"):
+            original = originals[name[:-4]]
+            require(count == len(original) and checksum == O.digest(original), "HISTORY_QUERY_ORIGINAL_BYTES")
+        if query is not None and name.endswith(".log"):
+            output = query["outputs"][name[:-4]]
+            require(type(output) is dict and type(output.get("bytes")) is int and output["bytes"] == count and
+                output.get("sha256") == checksum, "HISTORY_QUERY_STREAM_BINDING")
+        if query is not None and name == "result.json":
+            original = Q.encoded(query)
+            require(count == len(original) and checksum == O.digest(original), "HISTORY_QUERY_RESULT_BINDING")
+        total += count
+        require(total <= Q.MAX_SESSION_BYTES, "HISTORY_QUERY_SESSION_CAP")
+        relative = side + "/" + ("" if parent == path else parent.name + "/") + name
+        rows.append((relative, maximum, count, checksum))
+    rows.append((side + "/session-result.json", Q.MAX_RECEIPT_BYTES, len(session_raw), O.digest(session_raw)))
+    if not acquisition:
+        raw = raws[side + "/source-return.json"]
+        source = fields(canonical(raw), "schema scope originalsSha256 sessionSha256 clock returnedNs", "HISTORY_SOURCE_FIELDS")
+        require(type(source["schema"]) is int and source["schema"] == 1 and source["scope"] == N.SOURCE_SCOPE and
+            source["sessionSha256"] == O.digest(session_raw), "HISTORY_SOURCE_SESSION")
+        _same(source["originalsSha256"], {name: O.digest(value) for name, value in originals.items()}, "HISTORY_SOURCE_ORIGINALS")
+        _same(source["clock"], context["originalWindow"]["clock"], "HISTORY_SOURCE_CLOCK")
+        O.integer(source["returnedNs"])
+        rows.append((side + "/source-return.json", native.LIMIT, len(raw), O.digest(raw)))
+    require(len(rows) == (137 if acquisition else 67), "HISTORY_QUERY_FILE_COUNT")
+    return tuple(rows), tuple(directories)
+
+
+def _historical_authority_index(raws, prior_raws, parsed, sealed, side):
+    """The existing36 binding inputs DECLARE279 required files, not custody."""
+    require(side in ("authority-2", "authority-seal") and type(raws) is dict and
+        set(raws) == set(_HISTORICAL_AUTHORITY_LIMITS), "HISTORY_AUTHORITY_INPUT_ROSTER")
+    require(all(type(raw) is bytes and len(raw) <= _HISTORICAL_AUTHORITY_LIMITS[name] for name, raw in raws.items()),
+        "HISTORY_AUTHORITY_INPUT_LIMIT")
+    step, _carrier, old_context, _manifest, collected = parsed
+    sealing = side == "authority-seal"
+    authority = sealed["authority"]["authority"] if sealing else collected["authority"]
+    context_raw = raws["context.json"]
+    context = fields(canonical(context_raw), _TAIL_CONTEXT_FIELDS if sealing else _COLLECT_CONTEXT_FIELDS,
+        "HISTORY_AUTHORITY_CONTEXT_FIELDS")
+    require(type(context["schema"]) is int and context["schema"] == 1 and context["scope"] ==
+        (native.INITIAL_TAIL_AUTHORITY_CONTEXT_SCOPE if sealing else native.INITIAL_COLLECT_AUTHORITY_CONTEXT_SCOPE) and
+        context["edge"] == ("SEAL" if sealing else "POST_EXPORT") and context["kind"] == step["kind"] and
+        context["root"] == old_context["root"] and context["session"] == str(Path(step["directory"]).parent / side) and
+        type(context["job"]) is str and re.fullmatch(r"[0-9a-f]{32}", context["job"]) and
+        context["budgetAcceptance"] == "NOT_ADMITTED" and context["exportSaveAuthority"] is False and
+        O.digest(context_raw) == authority["contextSha256"], "HISTORY_AUTHORITY_CONTEXT")
+    expected = {"observed": old_context["observed"], "originalWindow": step["originalWindow"],
+        "originalServiceJob": step["originalServiceJob"], "expectedMatch": canonical(prior_raws["original-match"], A.stages.LIMIT),
+        "eventSha256": O.digest(prior_raws["event"]), "sourceReturnSha256": authority["sourceBeforeSha256"],
+        "predecessor": _tail_predecessor(prior_raws, step) if sealing else _collect_predecessor(prior_raws, step)}
+    _same({name: context[name] for name in expected}, expected, "HISTORY_AUTHORITY_CONTEXT_BINDINGS")
+    frame = step["originalWindow"]
+    clock = O.wire.clock_identity(frame["clock"])
+    first, end = O.integer(context["parentFirstNs"], step["lowerNs"]), O.integer(context["continuationEndNs"])
+    require(end == min(first + 30 * O.NS, frame["sealEndNs" if sealing else "readEndNs"]) and
+        end == authority["workEndNs"] == authority["finalEndNs"] and first <= authority["startedNs"] and
+        (not sealing or first == sealed["firstNs"]), "HISTORY_AUTHORITY_CONTEXT_TIME")
+    inherited = context["inheritedContext"]
+    require(type(inherited) is dict and all(type(item) is str for item in inherited.values()) and
+        (set(inherited).issubset({"GRADLE_USER_HOME"}) or set(inherited) == set(Q._CONTEXT)), "HISTORY_AUTHORITY_INHERITANCE")
+    private_pin = native.directory_identity(context["directoryIdentity"], clock.role)
+    for name, expected_hash in (("service/child-result.json", authority["childSha256"]),
+            ("source-before/source-return.json", authority["sourceBeforeSha256"]),
+            ("source-after/source-return.json", authority["sourceAfterSha256"]),
+            ("acquisition-queries/session-result.json", authority["querySessionSha256"]),
+            *(("service/" + name, checksum) for name, checksum in authority["phaseSha256"].items()),
+            *(("acquisition-queries/" + name + ".bin", checksum) for name, checksum in authority["originalsSha256"].items())):
+        require(O.digest(raws[name]) == expected_hash, "HISTORY_AUTHORITY_ORIGINAL_HASH")
+    originals = {name: raws["acquisition-queries/" + name + ".bin"] for name in N.ORIGINAL_KEYS}
+    require(originals["event"] == prior_raws["event"] and originals["match"] == prior_raws["original-match"] and
+        originals["candidate_policy_raw"] == prior_raws["policy"] and all(raws[side_name + "/" + name + ".bin"] == originals[name]
+        for side_name in ("source-before", "source-after") for name in N.SOURCE_KEYS), "HISTORY_AUTHORITY_SOURCE_BYTES")
+    child = canonical(raws["service/child-result.json"])
+    require(child.get("contextSha256") == O.digest(context_raw) and child.get("retirement") == "PENDING_CHILD_CLOSE" and
+        child.get("querySessionSha256") == authority["querySessionSha256"], "HISTORY_AUTHORITY_CHILD_BINDINGS")
+    _same(child.get("originalsSha256"), authority["originalsSha256"], "HISTORY_AUTHORITY_CHILD_ORIGINALS")
+    pins = fields(child.get("directoryIdentities"), ". service", "HISTORY_AUTHORITY_CHILD_PINS")
+    _same(pins["."], list(private_pin), "HISTORY_AUTHORITY_ROOT_PIN")
+    service_pin = native.directory_identity(pins["service"], clock.role)
+    require(private_pin != service_pin, "HISTORY_AUTHORITY_PIN_ALIAS")
+    # This helper binds native phase/child byte hashes, not their complete native
+    # grammar/outcome. No native object or historical owner is reconstructed.
+    rows = [(name, _HISTORICAL_AUTHORITY_LIMITS[name], len(raws[name]), O.digest(raws[name]))
+        for name in ("context.json", "service/child-result.json", *("service/" + name for name in sorted(native.PHASE_FILES)))]
+    directories = ["", "control-home", "temporary", "service"]
+    for side_name in ("source-before", "source-after", "acquisition-queries"):
+        query_rows, query_directories = _historical_query_index(context, side_name, raws)
+        rows.extend(query_rows)
+        directories.extend(query_directories)
+    before = canonical(raws["source-before/source-return.json"])["returnedNs"]
+    after = canonical(raws["source-after/source-return.json"])["returnedNs"]
+    require(type(context["sourceReturnedNs"]) is int and context["sourceReturnedNs"] == before and
+        first <= before <= authority["startedNs"] <= authority["acquiredNs"] <= after <= authority["checkedNs"] < end,
+        "HISTORY_AUTHORITY_SOURCE_CHRONOLOGY")
+    require(len(rows) == 279 and len({row[0].casefold() for row in rows}) == 279 and len(directories) == 58 and
+        len({name.casefold() for name in directories}) == 58, "HISTORY_AUTHORITY_EXACT_ROSTER")
+    return tuple(sorted(rows)), tuple((name, tuple(private_pin) if not name else tuple(service_pin) if name == "service" else None)
+        for name in sorted(directories))
+
+
+def _historical_tail_authority_indexes(prior_raws, seal_raw, authorities, *, outcome, expected_sha256):
+    """558 required file declarations only; no B schema, reads, copy or owner.
+
+    Both original authority episodes must be present. The36 retained binding
+    inputs per episode expand to279/58, never substitute for actual custody of
+    the original query streams, owners, starts, baselines and result files.
+    """
+    sealed = _historical_seal_record(seal_raw, prior_raws, outcome=outcome, expected_sha256=expected_sha256)
+    parsed = _tail_bundle(prior_raws)
+    require(type(authorities) is dict and set(authorities) == {"authority-2", "authority-seal"}, "HISTORY_AUTHORITY_PAIR")
+    all_rows, all_directories = [], []
+    for side in ("authority-2", "authority-seal"):
+        rows, directories = _historical_authority_index(authorities[side], prior_raws, parsed, sealed, side)
+        all_rows.extend({"relative": side + "/" + name, "maximum": maximum, "bytes": count, "sha256": checksum}
+            for name, maximum, count, checksum in rows)
+        all_directories.extend({"relative": side + ("/" + name if name else ""),
+            "historicalPin": None if pin is None else list(pin), "provenance":
+            "HISTORICAL_CONTEXT_OR_CHILD_PIN" if pin is not None else "HISTORICAL_DECLARED_DIRECTORY_NOT_NATIVE_PIN"}
+            for name, pin in directories)
+    pins = [tuple(row["historicalPin"]) for row in all_directories if row["historicalPin"] is not None]
+    total = sum(row["bytes"] for row in all_rows)
+    require(len(pins) == len(set(pins)) == 4 and len(all_rows) == 558 and len(all_directories) == 116 and
+        total <= MAX_BYTES, "HISTORY_AUTHORITY_PAIR_LIMIT_OR_ALIAS")
+    return O.encoded({"schema": 1, "scope": "INITIAL_CUSTODY_EXISTING_AUTHORITY_REQUIRED_FILES_DATA_V1",
+        "sealSha256": O.digest(seal_raw), "files": all_rows, "directories": all_directories,
+        "fileCount": 558, "directoryCount": 116, "totalBytes": total,
+        "copyState": "NOT_COPIED", "readback": "NOT_PERFORMED", "nativeAcceptance": "NOT_PERFORMED",
+        "beforeAuthority": "NOT_IMPLEMENTED", "productiveAuthority": False, "cacheAuthority": False,
+        "exportSaveAuthority": False, "budgetAcceptance": "NOT_ADMITTED"})
+
+
 def _tail_write(metadata, directory, raw):
     require(type(metadata) is _PrimaryOwner and directory.path.name == "seal", "TAIL_SEAL_FIXED_DIRECTORY")
     canonical(raw)
