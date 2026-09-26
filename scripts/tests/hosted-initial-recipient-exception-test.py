@@ -46,7 +46,7 @@ def utc(epoch):
 def declaration():
     return {"schema": 1, "scope": "P2PKIT_INITIAL_RECIPIENT_EXCEPTION_V1", "repository": "p2pKit/P2pKit",
             "base": dict(E.BASE), "reviewed": {"commit": HEAD, "tree": TREE},
-            "sourceRef": "refs/heads/work/nonphysical-integration-20260915-022112",
+            "sourceRef": "refs/heads/work/release-foundation-20260926-1WzHcOIr",
             "policySha256": "2e90a1ed038d5bb6759d8d22e1bb5468331b49274a6956df470c1e785691f521",
             "notBefore": START, "expiresAt": END,
             "bootstrap": [{"selection": name, "runId": str(100 + n), "runAttempt": "1"}
@@ -127,6 +127,19 @@ class SuppliedRecordModels(unittest.TestCase):
         self.assertEqual(len(POLICY), 3631)
         self.assertEqual(hashlib.sha256(POLICY).hexdigest(), E.POLICY_SHA256)
         self.assertEqual(BLOB, "118bf7577771ca79aeaf016d9f9602cb5b666dfa")
+
+    def test_foundation_lane_has_an_independent_fixed_positive(self):
+        expected = "refs/heads/work/release-foundation-20260926-1WzHcOIr"
+        self.assertEqual(E.SOURCE_REF, expected)
+        self.assertEqual(self.value["sourceRef"], expected)
+        self.assertIs(type(self.check()), E.Match)
+
+    def test_previous_campaign_statement_cannot_authorize_foundation(self):
+        self.value["sourceRef"] = "refs/heads/work/nonphysical-integration-20260915-022112"
+        # Reconstruct a consistent old-lane observation and rehash the actual
+        # supplied comment. Refusal must be the fixed lane, not a stale digest.
+        self.observed = observation(self.value)
+        self.refuse("STATEMENT_SCOPE")
 
     def test_all_six_closed_bootstrap_tuples_match_only(self):
         for name in SELECTIONS:

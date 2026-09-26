@@ -36,7 +36,7 @@ BLOB = hashlib.sha1(b"blob " + str(len(POLICY)).encode("ascii") + b"\x00" + POLI
 ENTRY = b"100644 blob " + BLOB.encode("ascii") + b"\t.github/test-evidence-recipient.json\x00"
 OWNER = {"login": "Apdelrahman1911", "id": 104788132, "type": "User"}
 ENVIRONMENT = {"name": "initial-recipient-execution", "id": 101,
-    "branchPolicies": [{"id": 102, "name": "work/nonphysical-integration-20260915-022112", "type": "branch"},
+    "branchPolicies": [{"id": 102, "name": "work/release-foundation-20260926-1WzHcOIr", "type": "branch"},
                        {"id": 103, "name": "refs/pull/*/merge", "type": "branch"}]}
 SELECTIONS = tuple(x[0] for x in B.SELECTIONS)
 
@@ -174,6 +174,37 @@ class StagedModels(unittest.TestCase):
         self.assertEqual(len(POLICY), 3631)
         self.assertEqual(hashlib.sha256(POLICY).hexdigest(), S.POLICY_SHA256)
         self.assertEqual(BLOB, "118bf7577771ca79aeaf016d9f9602cb5b666dfa")
+
+    def test_foundation_lane_and_branch_policy_have_fixed_independent_expectations(self):
+        expected = "work/release-foundation-20260926-1WzHcOIr"
+        self.assertEqual(S.SOURCE_REF, "refs/heads/" + expected)
+        self.assertEqual(S.BRANCHES, (expected, "refs/pull/*/merge"))
+        self.assertEqual(ENVIRONMENT["branchPolicies"][0]["name"], expected)
+        self.assertIs(type(self.check1()), S.BootstrapMatch)
+        self.assertIs(type(self.check2()), S.OrdinaryMatch)
+
+    def test_old_campaign_declarations_refuse_both_stages_after_rehash(self):
+        for value, refuse in ((self.one, self.refuse1), (self.two, self.refuse2)):
+            previous = value["sourceRef"]
+            value["sourceRef"] = "refs/heads/work/nonphysical-integration-20260915-022112"
+            # check1/check2 construct freshly hashed supplied comments.
+            refuse("STATEMENT_SCOPE")
+            value["sourceRef"] = previous
+
+    def test_old_campaign_environment_refuses_both_stages_after_rehash(self):
+        for value, refuse in ((self.one, self.refuse1), (self.two, self.refuse2)):
+            policy = value["environment"]["branchPolicies"][0]
+            previous = policy["name"]
+            policy["name"] = "work/nonphysical-integration-20260915-022112"
+            refuse("ENVIRONMENT_BRANCHES")
+            policy["name"] = previous
+
+    def test_old_campaign_actual_execution_refuses_foundation_declarations(self):
+        previous = "work/nonphysical-integration-20260915-022112"
+        self.obs1["github"]["ref"] = "refs/heads/" + previous
+        self.refuse1("BOOTSTRAP_EXECUTION")
+        self.obs2["pullRequest"]["head"]["ref"] = previous
+        self.refuse2("PR_BASE_OR_HEAD")
 
     def test_stage1_all_six_roles_work_without_a_pr(self):
         for name in SELECTIONS:
