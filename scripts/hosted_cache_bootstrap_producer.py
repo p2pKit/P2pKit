@@ -17,11 +17,14 @@ import re
 import subprocess
 
 import hosted_cache_bootstrap_identity as bootstrap
+import hosted_initial_recipient_bootstrap_identity as initial_identity
 
 
 LIMIT = 4 * 1024 * 1024
 REQUEST_SCOPE = "CACHE_BOOTSTRAP_PRODUCER_REQUEST_V1"
 OBSERVATION_SCOPE = "CACHE_BOOTSTRAP_CANONICAL_OBSERVATION_V1"
+INITIAL_REQUEST_SCOPE = "INITIAL_RECIPIENT_CACHE_BOOTSTRAP_PRODUCER_REQUEST_V1"
+INITIAL_OBSERVATION_SCOPE = "INITIAL_RECIPIENT_CACHE_BOOTSTRAP_CANONICAL_OBSERVATION_V1"
 PURPOSE = "cache-bootstrap-configuration"
 # An independent closed counterpart of the immutable canonical supplier's
 # gradle_arguments(COMMAND), not arbitrary caller flags or ordinary FULL tasks.
@@ -106,6 +109,18 @@ def make_request(admitted_raw, canonical_raw, *, invocation, ancestor_invocation
     except (ValueError, TypeError, RecursionError, OverflowError):
         raise ProducerError("BOOTSTRAP_PRODUCER_ADMISSION") from None
     require(cohort is not None, "BOOTSTRAP_PRODUCER_ADMISSION")
+    return _request_fields(admitted_raw, canonical_raw, cohort, invocation, ancestor_invocations, REQUEST_SCOPE)
+
+
+def make_initial_recipient_request(worker_raw, canonical_raw, *, invocation, ancestor_invocations):
+    """Closed initial-origin DATA route; no Admission or original launch is made."""
+    cohort = initial_identity.cache_cohort(worker_raw)
+    require(cohort is not None, "BOOTSTRAP_PRODUCER_INITIAL_IDENTITY_REQUIRED")
+    return _request_fields(worker_raw, canonical_raw, cohort, invocation, ancestor_invocations, INITIAL_REQUEST_SCOPE)
+
+
+def _request_fields(admitted_raw, canonical_raw, cohort, invocation, ancestor_invocations, scope):
+    """Shared canonical grammar; only the two fixed origin wrappers select it."""
     admitted, canonical = parse(admitted_raw), parse(canonical_raw)
     profile, role = cohort
     require(set(canonical) == CONTEXT_FIELDS and type(canonical["schema"]) is int and canonical["schema"] == 1,
@@ -133,7 +148,7 @@ def make_request(admitted_raw, canonical_raw, *, invocation, ancestor_invocation
     _utc(canonical["createdUtc"])
     wrapper = str(root / ("gradlew.bat" if role == "windows-x64" else "gradlew"))
     return parse(encoded({
-        "schema": 1, "scope": REQUEST_SCOPE, "profile": bootstrap.PROFILE, "selection": admitted["selection"],
+        "schema": 1, "scope": scope, "profile": bootstrap.PROFILE, "selection": admitted["selection"],
         "cacheCohort": {"profile": profile, "role": role}, "source": admitted["source"], "github": admitted["github"],
         "admissionSha256": digest(admitted_raw), "canonicalContextSha256": digest(canonical_raw),
         "id": invocation, "jobId": canonical["id"], "ancestorInvocationIds": list(ancestor_invocations),
@@ -231,6 +246,22 @@ def observe_canonical(request_raw, admitted_raw, canonical_raw, start_raw, recei
     request, start, receipt = map(parse, (request_raw, start_raw, receipt_raw))
     expected = make_request(admitted_raw, canonical_raw, invocation=request.get("id"),
                             ancestor_invocations=request.get("ancestorInvocationIds"))
+    return _observe_fields(request_raw, admitted_raw, canonical_raw, start_raw, receipt_raw, start, receipt,
+                           expected, original_exit_code, OBSERVATION_SCOPE)
+
+
+def observe_initial_recipient_canonical(request_raw, worker_raw, canonical_raw, start_raw, receipt_raw, *,
+                                        original_exit_code):
+    """Initial request plus actual supplied receipt DATA, never an owner/return."""
+    request, start, receipt = map(parse, (request_raw, start_raw, receipt_raw))
+    expected = make_initial_recipient_request(worker_raw, canonical_raw, invocation=request.get("id"),
+        ancestor_invocations=request.get("ancestorInvocationIds"))
+    return _observe_fields(request_raw, worker_raw, canonical_raw, start_raw, receipt_raw, start, receipt,
+                           expected, original_exit_code, INITIAL_OBSERVATION_SCOPE)
+
+
+def _observe_fields(request_raw, admitted_raw, canonical_raw, start_raw, receipt_raw, start, receipt,
+                    expected, original_exit_code, scope):
     require(request_raw == encoded(expected), "BOOTSTRAP_PRODUCER_REQUEST_CHANGED")
     require(type(original_exit_code) is int and original_exit_code == 0, "BOOTSTRAP_PRODUCER_ORIGINAL_EXIT")
     require(set(start) == START_FIELDS and set(receipt) == TERMINAL_FIELDS and
@@ -256,7 +287,7 @@ def observe_canonical(request_raw, admitted_raw, canonical_raw, start_raw, recei
     require(type(duration) in (int, float) and 0 <= duration <= (1 << 64) - 1 and math.isfinite(duration) and
             type(receipt["reports"]) is list, "BOOTSTRAP_PRODUCER_TERMINAL_METADATA")
     _ownership(receipt["ownership"], expected, receipt)
-    return {"schema": 1, "scope": OBSERVATION_SCOPE, "requestSha256": digest(request_raw),
+    return {"schema": 1, "scope": scope, "requestSha256": digest(request_raw),
             "admissionSha256": digest(admitted_raw), "canonicalContextSha256": digest(canonical_raw),
             "startSha256": digest(start_raw), "receiptSha256": digest(receipt_raw), "originalExitCode": 0,
             "status": "CANONICAL_CONFIGURATION_REPORTED_SUCCESS", "producerScope": bootstrap.PRODUCER_SCOPE,
@@ -267,5 +298,13 @@ def observe_canonical(request_raw, admitted_raw, canonical_raw, start_raw, recei
 def validate_observation(value, request_raw, admitted_raw, canonical_raw, start_raw, receipt_raw, *, original_exit_code):
     expected = observe_canonical(request_raw, admitted_raw, canonical_raw, start_raw, receipt_raw,
                                  original_exit_code=original_exit_code)
+    require(type(value) is dict and encoded(value) == encoded(expected), "BOOTSTRAP_PRODUCER_OBSERVATION_CHANGED")
+    return value
+
+
+def validate_initial_recipient_observation(value, request_raw, worker_raw, canonical_raw, start_raw, receipt_raw, *,
+                                           original_exit_code):
+    expected = observe_initial_recipient_canonical(request_raw, worker_raw, canonical_raw, start_raw, receipt_raw,
+                                                   original_exit_code=original_exit_code)
     require(type(value) is dict and encoded(value) == encoded(expected), "BOOTSTRAP_PRODUCER_OBSERVATION_CHANGED")
     return value

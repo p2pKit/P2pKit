@@ -101,7 +101,8 @@ def _parent_record(inputs, raw, leaf, previous_raw, minimum, name, checked=None)
             (checked is None or closed <= checked < leaf_window["hardEndNs"]) and
             type(value["resourceCount"]) is int and 0 < value["resourceCount"] <= files.MEMBER_LIMIT and
             staging.cache._sha(value["pendingSha256"]), "BOOTSTRAP_CUSTODY_PARENT_CHRONOLOGY")
-    _equal(value, {"schema": 1, "scope": PARENT_SCOPE, "phase": name, "window": expected_window,
+    parent_scope = staging.initial.STAGING_PARENT_SCOPE if type(inputs) is _InitialInputs else PARENT_SCOPE
+    _equal(value, {"schema": 1, "scope": parent_scope, "phase": name, "window": expected_window,
         "pendingSha256": value["pendingSha256"], "predecessorSha256": files.digest(previous_raw),
         "predecessorCheckedNs": predecessor, "leafSha256": files.digest(leaf[0]), "leafCheckedNs": leaf[2],
         "closedNs": closed, "resourceCount": value["resourceCount"], "parentResourceClose": "KNOWN_RESOURCE_CLOSE_ONLY",
@@ -110,9 +111,8 @@ def _parent_record(inputs, raw, leaf, previous_raw, minimum, name, checked=None)
     return value
 
 
-class _Inputs(staging._Inputs):
-    def __init__(self, originals, captured, staged, staged_capture):
-        super().__init__(originals, captured)
+class _StagedInputs:
+    def _staged_setup(self, staged, staged_capture):
         self.staged, self.staged_capture = staged, staged_capture
         self.source_root = ROOT
         require(isinstance(self.source_root, Path) and self.source_root == staging.ROOT and
@@ -144,8 +144,7 @@ class _Inputs(staging._Inputs):
                 "BOOTSTRAP_CUSTODY_SEED_PARENT_RETURN")
         self.directory = self.session / "configuration-custody"
 
-    def unchanged(self):
-        super().unchanged()
+    def _staged_unchanged(self):
         require(ROOT == self.source_root == staging.ROOT and _capture_staged(self.staged) == self.staged_capture,
                 "BOOTSTRAP_CUSTODY_STAGED_INPUT_CHANGED")
 
@@ -155,6 +154,27 @@ class _Inputs(staging._Inputs):
                 "seedParentSha256": files.digest(parent), "seedLeafSha256": files.digest(seed[0]),
                 "seedParentCheckedNs": checked, "seedParentCheckedLocal": local,
                 "provenance": "SUPPLIED_DATA_NOT_AUTHENTICATED_PARENT_RETURNS"}
+
+
+class _Inputs(staging._Inputs, _StagedInputs):
+    def __init__(self, originals, captured, staged, staged_capture):
+        super().__init__(originals, captured)
+        self._staged_setup(staged, staged_capture)
+
+    def unchanged(self):
+        super().unchanged()
+        self._staged_unchanged()
+
+
+class _InitialInputs(staging.initial.InitialInputs, _StagedInputs):
+    """Exact initial-origin sibling, not an ordinary _Inputs/Admission."""
+    def __init__(self, originals, captured, staged, staged_capture):
+        super().__init__(originals, captured)
+        self._staged_setup(staged, staged_capture)
+
+    def unchanged(self):
+        super().unchanged()
+        self._staged_unchanged()
 
 
 def _sources(leaf, inputs):
@@ -228,6 +248,18 @@ def reserve_configuration(parent, originals, phase, staged):
     """
     captured, phase_capture, staged_capture = staging._capture(originals), staging._capture_phase(phase), _capture_staged(staged)
     inputs = _Inputs(originals, captured, staged, staged_capture)
+    return _reserve_inputs(parent, inputs, phase, phase_capture, staged_capture)
+
+
+def reserve_initial_recipient_configuration(parent, originals, phase, staged):
+    """Fixed initial input route; no loader, producer or Admission is created."""
+    captured = staging.initial.capture_originals(originals)
+    phase_capture, staged_capture = staging._capture_phase(phase), _capture_staged(staged)
+    inputs = _InitialInputs(originals, captured, staged, staged_capture)
+    return _reserve_inputs(parent, inputs, phase, phase_capture, staged_capture)
+
+
+def _reserve_inputs(parent, inputs, phase, phase_capture, staged_capture):
     window = staging._Window(inputs, phase, phase_capture,
         (staged_capture[0], staged_capture[4], staged_capture[5]), "custody-prepare")
     leaf = staging._Leaf(parent, window)

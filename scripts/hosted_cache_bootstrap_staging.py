@@ -18,6 +18,7 @@ import hosted_cache_bootstrap_allocation as allocation
 import hosted_cache_bootstrap_initialization as initialization
 import hosted_dependency_cache as cache
 import hosted_dependency_seed_files as files
+import hosted_initial_recipient_productive_data as initial
 
 
 origin = allocation.origin
@@ -435,12 +436,18 @@ def _initialized_readback(leaf, inputs, handles, bindings=None):
     return found
 
 
+def _bootstrap_sources(inputs):
+    # This is a DATA provenance roster, not a polymorphic authority decision.
+    # Every public leaf wrapper still constructs its exact origin input type.
+    return BOOTSTRAP_INPUTS + (initial.INITIAL_SOURCE_INPUTS if isinstance(inputs, initial.InitialInputs) else ())
+
+
 def _sources(leaf, inputs):
     bound, compiled = files.source_inputs(leaf, inputs.root, leaf.end(new=True), leaf.check)
     opened, extra = {}, {}
     try:
         opened[()] = leaf.acquire("bootstrap-source", lambda: files.public_root(inputs.root))
-        for relative in BOOTSTRAP_INPUTS:
+        for relative in _bootstrap_sources(inputs):
             parts = tuple(relative.split("/"))
             for count in range(1, len(parts)):
                 prefix = parts[:count]
@@ -500,7 +507,7 @@ def _stage_evidence(inputs, captured):
             "BOOTSTRAP_SEED_STAGE_NOT_COMPLETED")
     files.validate_retained_stage(stage, inputs.admitted.record,
         {"session": str(inputs.session), "profile": inputs.profile, "role": inputs.role}, value["inputs"])
-    require(type(value["bootstrapInputs"]) is dict and set(value["bootstrapInputs"]) == set(BOOTSTRAP_INPUTS) and
+    require(type(value["bootstrapInputs"]) is dict and set(value["bootstrapInputs"]) == set(_bootstrap_sources(inputs)) and
             all(cache._sha(sha) for sha in value["bootstrapInputs"].values()) and
             type(value["fileBindings"]) is dict and set(value["fileBindings"]) ==
             {"initializer-context", "canonical-context", "properties", "staging"} and
@@ -529,6 +536,19 @@ def _run(parent, originals, phase, previous_stage):
     captured, phase_snapshot = _capture(originals), _capture_phase(phase)
     stage_capture = None if previous_stage is None else _capture_evidence(previous_stage)
     inputs = _Inputs(originals, captured)
+    return _run_inputs(parent, inputs, phase, phase_snapshot, previous_stage, stage_capture)
+
+
+def _run_initial(parent, originals, phase, previous_stage):
+    captured, phase_snapshot = initial.capture_originals(originals), _capture_phase(phase)
+    stage_capture = None if previous_stage is None else _capture_evidence(previous_stage)
+    inputs = initial.InitialInputs(originals, captured)
+    return _run_inputs(parent, inputs, phase, phase_snapshot, previous_stage, stage_capture)
+
+
+def _run_inputs(parent, inputs, phase, phase_snapshot, previous_stage, stage_capture):
+    # Only the fixed origin wrappers construct the detached input view. Native
+    # creation/readback/close and the original leaf limits stay shared.
     previous = ((inputs.closed_raw, inputs.previous_ns, inputs.previous_local) if stage_capture is None else
                 (stage_capture[0], stage_capture[2], stage_capture[4]))
     window = _Window(inputs, phase, phase_snapshot, previous, "dependency-stage" if stage_capture is None else "empty-seed")
@@ -628,3 +648,14 @@ def observe_empty_seed(parent, originals, phase, stage_evidence):
     """Read-only proof of zero transferable bytes, not a dependency writer."""
     require(stage_evidence is not None, "BOOTSTRAP_SEED_STAGE_RETURN_REQUIRED")
     return _run(parent, originals, phase, stage_evidence)
+
+
+def stage_initial_recipient_empty(parent, originals, phase):
+    """Initial-origin DATA setup, same exclusive original S/container engine."""
+    return _run_initial(parent, originals, phase, None)
+
+
+def observe_initial_recipient_empty_seed(parent, originals, phase, stage_evidence):
+    """Initial-origin DATA setup; never an ordinary Admission or seed writer."""
+    require(stage_evidence is not None, "BOOTSTRAP_SEED_STAGE_RETURN_REQUIRED")
+    return _run_initial(parent, originals, phase, stage_evidence)

@@ -539,12 +539,21 @@ def stage_path(session, profile, role, *, admitted_raw=None):
         github = admitted["github"]
         require(all(type(github.get(name)) is str and re.fullmatch(r"[1-9][0-9]{0,19}", github[name])
                     for name in ("runId", "runAttempt")), "SEED_BOOTSTRAP_RUN")
-        expected = ("p2pkit-cache-originals-" + github["runId"] + "-" + github["runAttempt"] + "-" +
-                    admitted["selection"] + "-productive")
-        require(path.is_absolute() and ".." not in path.parts and len(path.parts) > 3 and
-                str(path) == str(session) and path.name == "initializer" and parent.name == expected,
-                "SEED_BOOTSTRAP_SESSION_PATH")
-        parent = parent.parent
+        if initial_bootstrap.cache_cohort(admitted_raw) is not None:
+            # Initializer already exists at this distinct native initial route.
+            # Keep the SAME literal runner-temp provider target; never pretend
+            # that an ordinary productive/initializer path was executed.
+            expected = ("p2pkit-initial-recipient-" + github["runId"] + "-" + github["runAttempt"] +
+                        "-worker-recipient-initializer")
+            require(path.is_absolute() and ".." not in path.parts and len(path.parts) > 2 and
+                    str(path) == str(session) and path.name == expected, "SEED_INITIAL_RECIPIENT_SESSION_PATH")
+        else:
+            expected = ("p2pkit-cache-originals-" + github["runId"] + "-" + github["runAttempt"] + "-" +
+                        admitted["selection"] + "-productive")
+            require(path.is_absolute() and ".." not in path.parts and len(path.parts) > 3 and
+                    str(path) == str(session) and path.name == "initializer" and parent.name == expected,
+                    "SEED_BOOTSTRAP_SESSION_PATH")
+            parent = parent.parent
     return parent / ("p2pkit-dependency-seed-" + profile + "-" + role)
 
 

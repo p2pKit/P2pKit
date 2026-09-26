@@ -33,6 +33,13 @@ class _Window(staging._Window):
         self.local_soft = origin.wire._directed_deadline(self.local_start, 90, self.soft, self.first)
 
 
+class _InitialWindow(_Window):
+    """Distinct closed initial wrapper; duration and shared engine are unchanged."""
+    def __init__(self, inputs, phase, previous):
+        origin.require(type(inputs) is custody._InitialInputs, "BOOTSTRAP_EXPORT_INITIAL_INPUTS")
+        super().__init__(inputs, phase, previous)
+
+
 def export_snapshot(parent, inputs, window):
     """Copy only allowlisted artifact bytes after the parent's original return.
 
@@ -43,6 +50,16 @@ def export_snapshot(parent, inputs, window):
     """
     origin.require(type(inputs) is custody._Inputs and type(window) is _Window and window.inputs is inputs,
                    "BOOTSTRAP_EXPORT_INPUT_WINDOW")
+    return _export_inputs(parent, inputs, window)
+
+
+def export_initial_recipient_snapshot(parent, inputs, window):
+    origin.require(type(inputs) is custody._InitialInputs and type(window) is _InitialWindow and window.inputs is inputs,
+                   "BOOTSTRAP_EXPORT_INITIAL_INPUT_WINDOW")
+    return _export_inputs(parent, inputs, window)
+
+
+def _export_inputs(parent, inputs, window):
     completion = False
 
     class CopyLeaf(staging._Leaf):

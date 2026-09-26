@@ -73,10 +73,28 @@ launched; switching to Bash's built-in timer changed no source or limit.
 That wrapper failure and the failed hosted aggregate remain recorded. This
 single local correction does not turn either into a hosted pass.
 
+## Productive adapter and Step8 source integration
+
+The separate productive adapter, closed DATA predicates and ten initial-only
+leaf adapters now have independent connected-source approval. The ordinary
+entry points remain separate. A reviewed correction uses the genuine
+`C.B.EntryLatch`, not an absent export on the native module.
+The **64/64** new offline controls passed once, exit0; no old test was selected.
+Two earlier modules supply fixture setup only. Whole-wrapper times were
+1.599s wall, 1.478s user and 0.082s system; unittest body 0.276s.
+Independent result-review SHA-256:
+`64db66974d96ef5b54908a4e4ab09e637a72f9c89bde41831593627969ad7b02`.
+Original result-manifest SHA-256:
+`99cba3ca0e95bfa6493f096652c5580dbdf53bf3d58f3f893901beb8c621582d`.
+These are synthetic lifecycle/DATA/source-order controls, not native runs,
+provider storage, cache/resolver qualification or completed final custody.
+
 ## Still required before productive execution and Release
 
-The actual productive adapter/Step8 and K/U/A delivery counterparts still need
-connected review and integration. In particular, a full per-use readback has
+The complete productive final-custody consumer and U/A delivery counterparts
+still need connected implementation/review/integration. K has a separate
+source-only checkpoint; neither it nor these controls provides a live pass.
+In particular, a full per-use readback has
 281 files, not only its 38 retained blobs; query stdout limits must come from
 original session order, not sorted random query identifiers. Local models are
 not native ownership, HTTP, timing, provider, resolver or custody evidence.

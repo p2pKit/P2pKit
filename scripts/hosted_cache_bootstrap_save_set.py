@@ -73,6 +73,19 @@ class _AfterWindow(staging._Window):
         super().sample(new=new)
 
 
+class _InitialWindow(_Window):
+    def __init__(self, inputs, phase, previous):
+        origin.require(type(inputs) is custody._InitialInputs, "BOOTSTRAP_SAVE_INITIAL_INPUTS")
+        super().__init__(inputs, phase, previous)
+
+
+class _InitialAfterWindow(_AfterWindow):
+    def __init__(self, inputs, phase, previous, *, current_process_floor):
+        origin.require(type(inputs) is custody._InitialInputs and current_process_floor is not None,
+                       "BOOTSTRAP_SAVE_INITIAL_NEW_PROCESS")
+        super().__init__(inputs, phase, previous, current_process_floor=current_process_floor)
+
+
 def before_save(parent, inputs, window, export_raw):
     """Observe the complete original export, under its own before-save window."""
     return _observe(parent, inputs, window, export_raw, None)
@@ -100,6 +113,31 @@ Snapshot, deletion, provider call or ordinary execution context is used.
                    window.inputs is inputs and
                    type(export_raw) is bytes and 0 < len(export_raw) <= files.RECEIPT_LIMIT,
                    "BOOTSTRAP_SAVE_INPUT_WINDOW")
+    return _observe_inputs(parent, inputs, window, export_raw, frozen_raw,
+        "BOOTSTRAP_SAVE_SET_PARENT_CLOSED_OBSERVATIONS_V1" if after else
+        "BOOTSTRAP_EXPORT_PARENT_CLOSED_OBSERVATIONS_V1")
+
+
+def before_initial_recipient_save(parent, inputs, window, export_raw):
+    return _observe_initial(parent, inputs, window, export_raw, None)
+
+
+def after_initial_recipient_save(parent, inputs, window, export_raw, frozen_raw):
+    origin.require(type(frozen_raw) is bytes and 0 < len(frozen_raw) <= files.RECEIPT_LIMIT,
+                   "BOOTSTRAP_SAVE_BEFORE_BYTES_REQUIRED")
+    return _observe_initial(parent, inputs, window, export_raw, frozen_raw)
+
+
+def _observe_initial(parent, inputs, window, export_raw, frozen_raw):
+    origin.require(type(inputs) is custody._InitialInputs and
+        type(window) is (_InitialAfterWindow if frozen_raw is not None else _InitialWindow) and
+        window.inputs is inputs and type(export_raw) is bytes and 0 < len(export_raw) <= files.RECEIPT_LIMIT,
+        "BOOTSTRAP_SAVE_INITIAL_INPUT_WINDOW")
+    return _observe_inputs(parent, inputs, window, export_raw, frozen_raw, staging.initial.PARENT_SCOPE)
+
+
+def _observe_inputs(parent, inputs, window, export_raw, frozen_raw, previous_scope):
+    after = frozen_raw is not None
     leaf = staging._Leaf(parent, window)
     exported = origin.parse(export_raw)
     frozen = origin.parse(frozen_raw) if after else None
@@ -219,8 +257,6 @@ Snapshot, deletion, provider call or ordinary execution context is used.
         files._validate_inventory(exported, compiled, statuses=dependency_export.STATUSES,
                                   destination_identity=inputs.stage["sourceIdentity"])
         previous = origin.parse(window.previous_raw)
-        previous_scope = ("BOOTSTRAP_SAVE_SET_PARENT_CLOSED_OBSERVATIONS_V1" if after else
-                          "BOOTSTRAP_EXPORT_PARENT_CLOSED_OBSERVATIONS_V1")
         origin.require(previous.get("scope") == previous_scope and
                        previous.get("leafSha256") == files.digest(frozen_raw if after else export_raw) and
                        origin.integer(exported["window"]["finishedNs"]) <= window.previous_ns <= window.first,

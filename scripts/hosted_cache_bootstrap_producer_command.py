@@ -20,6 +20,7 @@ import hosted_cache_bootstrap_producer as producer
 SCRIPTS = Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
 SCOPE = "BOOTSTRAP_CANONICAL_PRODUCER_COMMAND_REQUEST_ONLY_V1"
+INITIAL_SCOPE = "INITIAL_RECIPIENT_CANONICAL_PRODUCER_COMMAND_REQUEST_ONLY_V1"
 _PHASES = (("producer-work", 600), ("producer-return", 225),
            ("producer-final", 45), ("producer-read", 30))
 
@@ -68,6 +69,21 @@ def command_request(admitted_raw, canonical_raw, *, invocation, ancestor_invocat
     producer validation owns cohort/context/invocation/ancestry and detaches the
     request before any source supplier. Repeated calls grant no single-use right.
     """
+    location = _request_inputs(admitted_raw, canonical_raw)
+    request = producer.make_request(admitted_raw, canonical_raw, invocation=invocation,
+                                    ancestor_invocations=ancestor_invocations)
+    return _command_fields(admitted_raw, canonical_raw, request, SCOPE, location)
+
+
+def initial_recipient_command_request(worker_raw, canonical_raw, *, invocation, ancestor_invocations):
+    """Fixed initial-origin sibling; the descriptor remains DATA, never a launch."""
+    location = _request_inputs(worker_raw, canonical_raw)
+    request = producer.make_initial_recipient_request(worker_raw, canonical_raw, invocation=invocation,
+                                                      ancestor_invocations=ancestor_invocations)
+    return _command_fields(worker_raw, canonical_raw, request, INITIAL_SCOPE, location)
+
+
+def _request_inputs(admitted_raw, canonical_raw):
     require(sys.flags.isolated == 1 and sys.flags.no_site == 1 and sys.dont_write_bytecode,
             "BOOTSTRAP_PRODUCER_COMMAND_ISOLATION")
     require(type(admitted_raw) is bytes and type(canonical_raw) is bytes,
@@ -77,10 +93,11 @@ def command_request(admitted_raw, canonical_raw, *, invocation, ancestor_invocat
             ".." not in root.parts and scripts == root / "scripts" and
             canonical.ROOT == root and canonical.SCRIPTS == scripts,
             "BOOTSTRAP_PRODUCER_COMMAND_LOCATION")
-    # Pass the original container to the existing exact list/tuple check. A
-    # premature tuple(iterable) would silently admit generators and subclasses.
-    request = producer.make_request(admitted_raw, canonical_raw, invocation=invocation,
-                                    ancestor_invocations=ancestor_invocations)
+    return root, scripts
+
+
+def _command_fields(admitted_raw, canonical_raw, request, scope, location):
+    root, scripts = location  # Original pre-request snapshot, including the legacy route.
     request_raw = producer.encoded(request)
     ancestors = tuple(request["ancestorInvocationIds"])
     path = PureWindowsPath if request["host"] == "windows-x64" else PurePosixPath
@@ -111,7 +128,7 @@ def command_request(admitted_raw, canonical_raw, *, invocation, ancestor_invocat
             "BOOTSTRAP_PRODUCER_COMMAND_BINDING_CHANGED")
     require(ROOT == root and SCRIPTS == scripts and canonical.ROOT == root and canonical.SCRIPTS == scripts,
             "BOOTSTRAP_PRODUCER_COMMAND_LOCATION_CHANGED")
-    return producer.encoded({"schema": 1, "scope": SCOPE,
+    return producer.encoded({"schema": 1, "scope": scope,
         "requestBytes": request_raw.decode("ascii"), "requestSha256": producer.digest(request_raw),
         "admissionSha256": producer.digest(admitted_raw), "canonicalContextSha256": producer.digest(canonical_raw),
         "root": str(root), "state": str(state), "gradleHome": request["gradleHome"],

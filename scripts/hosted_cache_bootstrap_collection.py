@@ -163,6 +163,20 @@ def describe_inventory(request_raw, admitted_raw, canonical_raw, start_raw, rece
         _bytes(raw)
     observed = producer.observe_canonical(request_raw, admitted_raw, canonical_raw, start_raw, receipt_raw,
                                          original_exit_code=original_exit_code)
+    return _describe_fields(observed, start_raw, receipt_raw, manifest_raw)
+
+
+def describe_initial_recipient_inventory(request_raw, worker_raw, canonical_raw, start_raw, receipt_raw,
+                                         manifest_raw, *, original_exit_code):
+    """Initial-origin supplied grammar, never original-call collection rights."""
+    for raw in (request_raw, worker_raw, canonical_raw, start_raw, receipt_raw, manifest_raw):
+        _bytes(raw)
+    observed = producer.observe_initial_recipient_canonical(request_raw, worker_raw, canonical_raw,
+        start_raw, receipt_raw, original_exit_code=original_exit_code)
+    return _describe_fields(observed, start_raw, receipt_raw, manifest_raw)
+
+
+def _describe_fields(observed, start_raw, receipt_raw, manifest_raw):
     manifest = _manifest(manifest_raw)
     retained, counts = _reports(manifest["records"])
     # Comparing encoded values distinguishes true/1 and int/float while keeping
@@ -193,5 +207,14 @@ def validate_inventory(value_raw, request_raw, admitted_raw, canonical_raw, star
     _bytes(value_raw)
     expected = describe_inventory(request_raw, admitted_raw, canonical_raw, start_raw, receipt_raw, manifest_raw,
                                   original_exit_code=original_exit_code)
+    require(value_raw == expected, "BOOTSTRAP_COLLECTION_INVENTORY_CHANGED")
+    return value_raw
+
+
+def validate_initial_recipient_inventory(value_raw, request_raw, worker_raw, canonical_raw, start_raw,
+                                       receipt_raw, manifest_raw, *, original_exit_code):
+    _bytes(value_raw)
+    expected = describe_initial_recipient_inventory(request_raw, worker_raw, canonical_raw, start_raw,
+        receipt_raw, manifest_raw, original_exit_code=original_exit_code)
     require(value_raw == expected, "BOOTSTRAP_COLLECTION_INVENTORY_CHANGED")
     return value_raw

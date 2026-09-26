@@ -64,13 +64,10 @@ def _capture(value):
     return (*raw, identity)
 
 
-class _Inputs:
-    def __init__(self, originals):
-        self.originals, self.captured = originals, _capture(originals)
-        request_raw, admitted_raw, canonical_raw, self.identity = self.captured
-        request = producer.parse(request_raw)
-        expected = producer.make_request(admitted_raw, canonical_raw, invocation=request.get("id"),
-                                        ancestor_invocations=request.get("ancestorInvocationIds"))
+class _HomeInputs:
+    def _setup(self, originals, captured, expected):
+        self.originals, self.captured = originals, captured
+        request_raw, admitted_raw, canonical_raw, self.identity = captured
         require(request_raw == producer.encoded(expected), "BOOTSTRAP_NO_LOADER_REQUEST_CHANGED")
         self.role, self.home = expected["host"], Path(expected["gradleHome"])
         require((os.name == "nt") == (self.role == "windows-x64") and self.home.is_absolute() and
@@ -85,6 +82,24 @@ class _Inputs:
         return {"requestSha256": files.digest(self.captured[0]), "admissionSha256": files.digest(self.captured[1]),
                 "canonicalContextSha256": files.digest(self.captured[2]), "home": str(self.home),
                 "homeIdentity": list(self.identity), "target": INIT_DIRECTORY + "/" + LOADER}
+
+
+class _Inputs(_HomeInputs):
+    def __init__(self, originals):
+        captured = _capture(originals)
+        request = producer.parse(captured[0])
+        expected = producer.make_request(captured[1], captured[2], invocation=request.get("id"),
+            ancestor_invocations=request.get("ancestorInvocationIds"))
+        self._setup(originals, captured, expected)
+
+
+class _InitialInputs(_HomeInputs):
+    def __init__(self, originals):
+        captured = _capture(originals)
+        request = producer.parse(captured[0])
+        expected = producer.make_initial_recipient_request(captured[1], captured[2], invocation=request.get("id"),
+            ancestor_invocations=request.get("ancestorInvocationIds"))
+        self._setup(originals, captured, expected)
 
 
 class _Observation(collection._Copy):
@@ -156,6 +171,17 @@ def observe_absence(parent, originals):
     """
     began = collection._local(time.monotonic())
     inputs = _Inputs(originals)
+    return _observe_inputs(parent, inputs, began)
+
+
+def observe_initial_recipient_absence(parent, originals):
+    """Initial-origin request predicate; the exact read-only target is unchanged."""
+    began = collection._local(time.monotonic())
+    inputs = _InitialInputs(originals)
+    return _observe_inputs(parent, inputs, began)
+
+
+def _observe_inputs(parent, inputs, began):
     observation = _Observation(parent, inputs, began)
     result = {"schema": 1, "scope": SCOPE, "binding": inputs.binding(), "completed": False,
         "observationState": "FAILED", "inputProvenance": "SUPPLIED_RECORDS_NOT_ORIGINAL_CALL",

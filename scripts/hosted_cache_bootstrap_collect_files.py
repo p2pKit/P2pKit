@@ -97,12 +97,11 @@ class _Member:
     binding_raw: object = field(default=None, repr=False)
 
 
-class _Inputs:
-    def __init__(self, original):
-        self.original, self.captured = original, _capture(original)
+class _FileInputs:
+    def _setup(self, original, captured, inventory_raw):
+        self.original, self.captured = original, captured
         request, admitted, canonical, start, receipt, manifest, bindings, code, source_id, target_id = self.captured
-        self.inventory_raw = inventory.describe_inventory(request, admitted, canonical, start, receipt, manifest,
-                                                          original_exit_code=code)
+        self.inventory_raw = inventory_raw
         self.inventory = inventory.producer.parse(self.inventory_raw)
         request_value = inventory.producer.parse(request)
         self.role = request_value["host"]
@@ -149,6 +148,20 @@ class _Inputs:
 
     def unchanged(self):
         require(_capture(self.original) == self.captured, "BOOTSTRAP_COLLECT_INPUT_CHANGED")
+
+
+class _Inputs(_FileInputs):
+    def __init__(self, original):
+        captured = _capture(original)
+        raw = inventory.describe_inventory(*captured[:6], original_exit_code=captured[7])
+        self._setup(original, captured, raw)
+
+
+class _InitialInputs(_FileInputs):
+    def __init__(self, original):
+        captured = _capture(original)
+        raw = inventory.describe_initial_recipient_inventory(*captured[:6], original_exit_code=captured[7])
+        self._setup(original, captured, raw)
 
 
 @dataclass(eq=False)
@@ -527,6 +540,17 @@ Only the derived existing retained directory is used, never an arbitrary path.
 """
     began = _local(time.monotonic())
     inputs = _Inputs(originals)  # Snapshot/rederive before any owner callback.
+    return _collect_inputs(parent, inputs, began)
+
+
+def collect_initial_recipient_inventory(parent, originals):
+    """Fixed initial predicate with the same bounded original-file copy engine."""
+    began = _local(time.monotonic())
+    inputs = _InitialInputs(originals)
+    return _collect_inputs(parent, inputs, began)
+
+
+def _collect_inputs(parent, inputs, began):
     copy = _Copy(parent, inputs, began)
     result = {"schema": 1, "scope": SCOPE, "inventorySha256": files.digest(inputs.inventory_raw),
         "inputProvenance": "SUPPLIED_RECORDS_NOT_ORIGINAL_CALL", "collectionState": "FAILED", "completed": False,
