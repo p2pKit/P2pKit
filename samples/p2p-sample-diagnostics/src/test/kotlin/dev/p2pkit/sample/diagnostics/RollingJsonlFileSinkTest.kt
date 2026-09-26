@@ -4,6 +4,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.file.Files
+import java.util.Base64
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -238,7 +239,16 @@ class RollingJsonlFileSinkTest {
     }
 
     @Test
-    fun cooperatingOwnersFailFastWithoutReleasingAnExistingNativeLock() = withDirectory { directory ->
+    fun cooperatingOwnersFailFastWithoutReleasingAnExistingNativeLock() {
+        assertCooperatingOwners(withBenignOption = false)
+    }
+
+    @Test
+    fun cooperatingOwnersPreserveInheritedJvmOptionsAndTheirExactStartupNote() {
+        assertCooperatingOwners(withBenignOption = true)
+    }
+
+    private fun assertCooperatingOwners(withBenignOption: Boolean) = withDirectory { directory ->
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
         val operations = object : RollingJsonlFileOperations() {
@@ -261,12 +271,12 @@ class RollingJsonlFileSinkTest {
             // Different families, even in the same directory, must not share the busy guard.
             RollingJsonlFileSink(File(directory, "other"))("independent")
             RollingJsonlFileSink.forFile(File(directory, "separate.jsonl"))("independent")
-            assertEquals("BUSY", nativeLockProbe(directory))
+            nativeLockProbe(directory, "BUSY", withBenignOption)
             release.countDown()
             writing.get(5, TimeUnit.SECONDS)
             contender("after")
             assertEquals("first\nafter\n", File(directory, "diagnostic-events.jsonl").readText())
-            assertEquals("ACQUIRED", nativeLockProbe(directory))
+            nativeLockProbe(directory, "ACQUIRED", withBenignOption)
         } finally {
             release.countDown()
             worker.shutdownNow()
@@ -319,21 +329,82 @@ class RollingJsonlFileSinkTest {
         assertTrue(File(directory, ".${active.name}.lock").isFile)
     }
 
-    private fun nativeLockProbe(directory: File): String {
+    private fun nativeLockProbe(directory: File, expected: String, withBenignOption: Boolean) {
         val java = File(System.getProperty("java.home"), "bin/java").path
         val classpath = File(DiagnosticDirectoryLockProbe::class.java.protectionDomain.codeSource.location.toURI()).path
-        val process = ProcessBuilder(
+        val output = Files.createTempFile(directory.toPath(), "native-lock-probe-", ".log").toFile()
+        val builder = ProcessBuilder(
             java, "-cp", classpath, DiagnosticDirectoryLockProbe::class.java.name,
             File(directory, ".diagnostic-events.jsonl.lock").path
-        ).redirectErrorStream(true).start()
+        ).redirectErrorStream(true).redirectOutput(output)
+        if (withBenignOption) {
+            val environment = builder.environment()
+            // Keep inherited ownership options; append only this test's benign property.
+            environment["JDK_JAVA_OPTIONS"] = listOfNotNull(
+                environment["JDK_JAVA_OPTIONS"], "-Dp2pkit.test.nativeLockProbe.option=present"
+            ).joinToString(" ")
+            builder.command().add("present")
+        }
+        val inheritedOptions = builder.environment()["JDK_JAVA_OPTIONS"]
+        var process: Process? = null
         try {
+            process = builder.start()
             assertTrue(process.waitFor(5, TimeUnit.SECONDS), "native lock probe did not finish")
-            val output = process.inputStream.bufferedReader().use { it.readText() }.trim()
-            assertEquals(0, process.exitValue(), output)
-            return output
+            assertEquals(0, process.exitValue(), output.readText())
+            assertNativeLockTranscript(output.readLines(), expected, inheritedOptions)
         } finally {
-            if (process.isAlive) process.destroyForcibly()
-            assertTrue(process.waitFor(5, TimeUnit.SECONDS))
+            if (process?.isAlive == true) {
+                process.destroyForcibly()
+                check(process.waitFor(5, TimeUnit.SECONDS)) { "Owned native lock probe survived forced cleanup" }
+            }
+            try {
+                process?.outputStream?.close()
+            } finally {
+                try {
+                    // Retain original bytes independently of text/XML newline processing.
+                    val bytes = output.readBytes()
+                    val encoded = Base64.getEncoder().encodeToString(bytes)
+                    println(
+                        "NATIVE_LOCK_PROBE_RAW expected=$expected benignOption=$withBenignOption " +
+                            "bytes=${bytes.size} base64=$encoded"
+                    )
+                    check(!System.out.checkError()) { "Could not retain the native lock probe transcript" }
+                } finally {
+                    check(output.delete()) { "Could not remove owned native lock probe output" }
+                }
+            }
+        }
+    }
+
+    private fun assertNativeLockTranscript(lines: List<String>, expected: String, inheritedOptions: String?) {
+        val startupNote = inheritedOptions?.let { "NOTE: Picked up JDK_JAVA_OPTIONS: $it" }
+        assertEquals(listOfNotNull(startupNote) + expected, lines)
+    }
+
+    @Test
+    fun nativeLockTranscriptRejectsMissingChangedAndUnexpectedOutput() {
+        val options = "-Dp2pkit.test.nativeLockProbe.option=present"
+        val note = "NOTE: Picked up JDK_JAVA_OPTIONS: $options"
+        for (expected in listOf("BUSY", "ACQUIRED")) {
+            for (inheritedOptions in listOf(null, options)) {
+                val prefix = if (inheritedOptions == null) emptyList() else listOf(note)
+                val transcript = prefix + expected
+                assertNativeLockTranscript(transcript, expected, inheritedOptions)
+                val invalid = mutableListOf(prefix, prefix + "UNKNOWN", prefix + listOf("BUSY", "ACQUIRED"))
+                for (extra in listOf(
+                    expected, "unexpected stderr", "NOTE: Picked up JDK_JAVA_OPTIONS: wrong", note, ""
+                )) {
+                    invalid += transcript + extra
+                    invalid += listOf(extra) + transcript
+                }
+                if (inheritedOptions != null) {
+                    invalid += listOf(expected)
+                    invalid += listOf(expected, note)
+                }
+                for (lines in invalid) {
+                    assertFailsWith<AssertionError> { assertNativeLockTranscript(lines, expected, inheritedOptions) }
+                }
+            }
         }
     }
 
