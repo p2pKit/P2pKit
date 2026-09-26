@@ -37,6 +37,13 @@ jobs:
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-sealed-data-test.py -v -f
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-tail-inventory-test.py -v -f
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-seal-deadline-test.py -v -f
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-before-test.py -v -f
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-public-origin-test.py -v -f
+          # Public/private request mechanics are shared; retain their affected
+          # private regressions without replaying the unrelated native reader.
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-originals-test.py -v -f
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-cache-bootstrap-origin-test.py -v -f \
+            HttpTests IdentityAndFenceTests.test_original_response_order_types_clock_and_http_freshness_are_required
           # These three suites already set failfast=True; unittest does not
           # accept an additional -f when that constructor argument is explicit.
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-ordinary-qualification-test.py -v

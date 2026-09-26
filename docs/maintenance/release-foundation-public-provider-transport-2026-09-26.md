@@ -1,6 +1,7 @@
 # Initial-provider public transport: source-only increment
 
-Status: dormant source, pending independent implementation review and execution.
+Original freeze status: dormant source, then pending implementation review and
+execution. The later exact-source review/results are recorded below.
 This does not activate a workflow or qualify provider, cache, custody or Release.
 
 The distinct contract in
@@ -50,3 +51,20 @@ and close/failure preservation. Models use explicitly synthetic identities and
 fake HTTP/Git I/O. These methods are **authored but unexecuted** in this source
 increment; they cannot establish original service/native/provider acceptance.
 All original HOLDs, approvals, required checks and Release gates remain.
+
+## Later source review, focused results and integration
+
+Source `1b1a456fdac16db83fefe8be3987cf70d649fa85` received independent
+`APPROVE_EXACT_A_SOURCE_AND_FOCUSED_OFFLINE_CONTROLS_ONLY`, report SHA-256
+`3e775add263bb0e381e450030289fde19a5c925269235c8447ea00784fd37c75`.
+Its five postimages were integrated unchanged by Foundation `864e847e`.
+The new **34/34** public models and affected **38/38** private-acquisition and
+**16/16** private-transport controls passed in bounded, non-root, read-only
+source snapshots. Independent result verdict: `PASS_EXACT_LOCAL_FOCUSED_CONTROLS_ONLY`,
+report SHA-256 `e9b563bc359aba1e1a719e0f09ec2b07638f3f73f05ab737a32337984cecfd19`.
+The complete logs remain in private local maintenance packets, not this source.
+
+The source workflow now selects those exact groups for future CI. That wiring
+does not itself constitute a hosted result. These are synthetic transport and
+source controls, not real service/native/provider/custody/timing qualification.
+The unfinished productive integration and all HOLDs described above remain.

@@ -1,6 +1,6 @@
 # Initial-recipient BEFORE authority: B1 source checkpoints
 
-## F1/F2 successor: source review pending, no execution
+## F1/F2 successor: original pre-review source checkpoint
 
 **UNREVIEWED SUCCESSOR / DORMANT / 60 AUTHORED CONTROLS, NONE EXECUTED.**
 This narrow successor preserves the original B1 commit
@@ -326,3 +326,26 @@ producer/export/save/probe, formal C1/C2/owner/environment/PR approval, Release
 or productive Stage2 authority is supplied. Protected instructions, RC3 and
 unrelated dependency proposals remain untouched; no build/download/native/key
 operation, physical-device request or held CI dispatch is authorized here.
+
+## Later exact-source review, controls and Foundation integration
+
+Successor `4769fcd65b6f38367783a573f5c15f08db22e6ed`, tree
+`652b33ff7ae72ebf1bbac80b80cd6aaade92450f`, received independent
+`ACCEPT_EXACT_B1_SUCCESSOR_SOURCE_ONLY`, report SHA-256
+`eb4a41ffccd74a697a182286b43f39562a045384735354db78ed801e563d60b5`.
+Foundation `1fafe274` integrates its six reviewed postimages unchanged, without
+importing donor ancestry. The pre-review descriptions above remain historical.
+
+The separately reviewed bounded offline invocation passed **60/60** methods:
+**35 DATA, 11 actual in-memory EntryLatch controls and 14 AST assertions**.
+The original test and wrapper exited 0. Unittest reported 0.266 seconds; the
+whole wrapper measured 3.147 wall, 2.773 user and 0.299 system seconds. Those
+different measurement spans are not native timing qualification. The 1,463-file
+read-only snapshot remained unchanged; the private temporary fixtures were empty.
+Independent result verdict: `ACCEPT_EXACT_BEFORE60_LOCAL_DATA_LATCH_AST_RESULT_ONLY`,
+report SHA-256 `fd606c1ed44ae7c2e2ec95f4706e6cf56954d7d7534936a43b09c7712e33bfb1`.
+
+The source workflow now includes these controls; that wiring is not a hosted
+result. No old successful reader/seal suite was repeated in this local packet.
+Real BEFORE, native/Windows lifetime, service, provider, custody, K, scheduling
+and timing qualification remain outstanding. No activation HOLD is lifted.
