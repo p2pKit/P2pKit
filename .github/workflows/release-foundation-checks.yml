@@ -31,5 +31,28 @@ jobs:
           bash scripts/tests/release-workflow-test.sh
           bash scripts/tests/check-application-release-version.sh
           git diff --exit-code
+      - name: Validate initial-recipient DATA contracts without native acquisition
+        run: |
+          set -euo pipefail
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-sealed-data-test.py -v -f
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-tail-inventory-test.py -v -f
+          # These three suites already set failfast=True; unittest does not
+          # accept an additional -f when that constructor argument is explicit.
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-ordinary-qualification-test.py -v
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-ordinary-originals-test.py -v
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-ordinary-identity-test.py -v
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-stages-test.py -v -f \
+            StagedModels.test_metadata_references_require_exact_positive_direct_comment_ids \
+            StagedModels.test_changed_metadata_locator_is_a_changed_authorization_even_with_same_digest \
+            StagedModels.test_packet_locator_cannot_be_a_comment_or_inner_ciphertext_reference
+      - name: Configure Node 24 for offline transport models only
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Validate original-stream transport with offline service models
+        run: |
+          node scripts/tests/hosted-initial-artifact-transport-test.cjs
+          git diff --exit-code
       # No Gradle, SDK setup, provider, application build or publication. This
       # job cannot replace the ordinary FULL/Desktop or protected release gates.
