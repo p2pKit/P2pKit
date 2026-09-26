@@ -187,6 +187,372 @@ class CoveragePolicyTest(unittest.TestCase):
                 GATE.required_tasks(POLICY, profile, arch)
 
 
+class OrdinarySimulatorModels(unittest.TestCase):
+    """Offline receipt/driver/coverage models only; ALL process/native calls blocked.
+
+    No fake executable, Git subprocess, Gradle, KGP, Xcode or simulator runs in
+    this class. Groovy seam checks below are source checks, not compilation.
+    """
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="ordinary-simulator-model-")
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name).resolve()
+        self.root, self.session = self.base / "source", self.base / "ordinary"
+        self.root.mkdir(mode=0o700)
+        self.source = {"commit": "a" * 40, "tree": "b" * 40, "status": "", "diffSha256": GATE.simulator.digest(b"")}
+        self.job, self.reserved, self.uuid = "c" * 32, "d" * 32, "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
+        self.calls, self.report_change, self.after_product = [], None, None
+        self.stack = contextlib.ExitStack()
+        self.addCleanup(self.stack.close)
+        self.stack.enter_context(mock.patch.object(GATE, "ROOT", self.root))
+        self.stack.enter_context(mock.patch.object(GATE, "POLICY", ROOT / "gradle/platform-test-policy.json"))
+        self.stack.enter_context(mock.patch.object(GATE, "source_state", side_effect=lambda: dict(self.source)))
+        self.stack.enter_context(mock.patch.object(GATE.platform, "system", return_value="Darwin"))
+        self.stack.enter_context(mock.patch.object(GATE.platform, "machine", return_value="arm64"))
+        self.stack.enter_context(mock.patch.object(GATE.os, "getppid", return_value=65001))
+        self.stack.enter_context(mock.patch.object(GATE.subprocess, "Popen", side_effect=self.product))
+        self.stack.enter_context(mock.patch.object(GATE.subprocess, "check_output", side_effect=AssertionError("NO_REAL_PROCESS")))
+        self.stack.enter_context(mock.patch.object(GATE.audit_processes.ctypes, "CDLL", side_effect=AssertionError("NO_NATIVE_API")))
+        self.stack.enter_context(mock.patch.object(GATE.os, "killpg", side_effect=AssertionError("NO_NATIVE_SIGNAL")))
+        self.stack.enter_context(mock.patch.object(GATE, "terminate_process", return_value=True))
+        self.stack.enter_context(mock.patch.object(GATE, "stop_gradle", side_effect=lambda: self.calls.append(["--stop"]) or 0))
+        self.stack.enter_context(mock.patch.object(GATE.signal, "signal", return_value=signal.SIG_DFL))
+        self.install_binding()
+
+    def save(self, path, raw):
+        if not isinstance(raw, bytes):
+            raw = GATE.simulator.encoded(raw)
+        parents = []
+        parent = path.parent
+        while not parent.exists():
+            parents.append(parent)
+            parent = parent.parent
+        for parent in reversed(parents):
+            parent.mkdir(mode=0o700)
+        path.write_bytes(raw)
+        path.chmod(0o600)
+        return raw
+
+    def install_binding(self, role="macos-arm64"):
+        sim = GATE.simulator
+        native = sim.HOSTS[role]
+        self.run = {"schema": 1, "scope": "CLOSED_ORDINARY_TEST_CONTROLLER", "profile": "full", "role": role,
+            "kind": "command", "command": ["python3", "scripts/run-platform-tests.py", "full"], "job": "f" * 32,
+            "root": str(self.root), "session": str(self.session), "source": {key: self.source[key] for key in ("commit", "tree")},
+            "jobBudgetSha256": "1" * 64, "primarySimulatorRequired": True, "developerDir": None, "ancestorInvocationIds": []}
+        state = self.session / "state"
+        canonical = {"schema": 1, "id": self.job, "root": str(self.root), "host": role, "gradleHome": str(state / "gradle-home"),
+                     "source": dict(self.source), "preexistingOutputPaths": []}
+        request = {"ownerKind": "audit", "ownerState": str(state), "home": str(state / "gradle-home"), "root": str(self.root),
+                   "source": dict(self.source), "command": self.run["command"],
+                   "owner": {"job": self.job, "productInvocation": self.reserved, "stopInvocation": None}}
+        self.inventory = {"devices": {native["runtime"]: [{"name": "iPhone 17", "udid": self.uuid, "state": "Shutdown",
+            "isAvailable": True, "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"}]}}
+        stdout = {"simulator-macos-version": (native["osMajor"] + ".0\n").encode(),
+                  "simulator-xcode-version": native["xcode"].encode(), "simulator-first-launch": b"",
+                  "simulator-runtimes": sim.encoded({"runtimes": [{"identifier": native["runtime"], "version": native["version"],
+                                                                  "isAvailable": True}]}),
+                  "simulator-devices": sim.encoded(self.inventory)}
+        observations = {label: ({"phase": label, "argv": sim.command(label), "exitCode": 0, "launchAttempted": True,
+            "scopeAttempted": True, "retirement": "KNOWN", "errors": [], "survivors": [], "ownership": {"discoveryErrors": []},
+            "job": self.run["job"], "state": str(self.session), "home": str(self.session / "control-home"),
+            "jobBudgetSha256": self.run["jobBudgetSha256"], "developerDir": None}, stdout[label], b"") for label in sim.PREPARE}
+        run_raw = self.save(self.session / "run-context.json", self.run)
+        canonical_raw = self.save(state / "context.json", canonical)
+        request_raw = self.save(self.session / "evidence/custody/request.json", request)
+        admission = sim.admission_record(run_raw, canonical_raw, observations, None)
+        self.save(self.session / "evidence/simulator/admission.json", admission)
+        self.binding = sim.binding_record(run_raw, canonical_raw, request_raw, admission)
+        self.save(self.session / sim.RELATIVE, self.binding)
+        environment = GATE.audit_processes.ownership_environment({}, self.job, "e" * 32, str(state), str(state / "gradle-home"))
+        environment = GATE.audit_processes.ownership_environment(environment, self.job, self.reserved,
+                                                                str(state), str(state / "gradle-home"))
+        self.environment = {**environment, sim.PATH_ENV: str(self.session / sim.RELATIVE), sim.HASH_ENV: sim.digest(self.binding)}
+        start = {"schema": 1, "id": self.reserved, "purpose": "ordinary-full", "kind": "command",
+            "requestedArgv": self.run["command"], "cwd": str(self.root), "wrapper": str(self.root / "gradlew"),
+            "host": role, "jobId": self.job, "gradleHome": str(state / "gradle-home"),
+            "startedUtc": "2026-09-16T00:00:00Z", "controllerPid": 65001, "ancestorInvocationIds": ["e" * 32],
+            "sourceBefore": None, "sourceAfter": None, "productExitCode": None, "stopExitCode": None,
+            "finalExitCode": 125, "sourceUnchanged": False, "ownedSurvivors": [], "errors": [],
+            "evidenceDirectory": str(state / "evidence" / self.reserved)}
+        self.start = self.save(state / "evidence" / self.reserved / "start.json", start)
+        row = {**observations["simulator-devices"][0], "phase": sim.PRELAUNCH, "argv": sim.command(sim.PRELAUNCH),
+               "simulatorBindingSha256": sim.digest(self.binding)}
+        stdout = sim.encoded(self.inventory)
+        for name, value in (("result.json", sim.encoded(row)), ("stdout.log", stdout), ("stderr.log", b"")):
+            self.save(self.session / "evidence/commands" / sim.PRELAUNCH / name, value)
+        self.prelaunch = sim.prelaunch_record(run_raw, self.binding, row, stdout, b"")
+        self.save(self.session / "evidence/simulator/prelaunch.json", self.prelaunch)
+
+    def product(self, command, *, cwd, start_new_session):
+        self.assertEqual(cwd, self.root)
+        self.assertIs(start_new_session, True)
+        self.calls.append(command)
+        token = next(arg.split("=", 1)[1] for arg in command if arg.startswith("-Pp2pkit.testCoverageToken="))
+        report = example_report()
+        report["token"] = token
+        if GATE.simulator.PATH_ENV in os.environ:
+            identity = GATE.simulator.coverage_identity(self.binding, self.start, self.prelaunch)
+            properties = {path: {"device": self.uuid, "type": GATE.simulator.TYPE} for path in GATE.simulator.TASKS}
+            report["ordinarySimulator"] = {**identity, "configured": properties, "inGraph": copy.deepcopy(properties), "unchanged": True}
+        if self.report_change:
+            self.report_change(report)
+        self.save(self.root / "build/reports/platform-tests" / token / "execution.json", report)
+        if self.after_product:
+            self.after_product()
+        return mock.Mock(wait=mock.Mock(return_value=0))
+
+    def invoke(self, profile="full"):
+        with mock.patch.dict(os.environ, self.environment, clear=True), contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            return GATE.run(profile)
+
+    def summary(self):
+        paths = list(self.root.glob("build/reports/platform-tests/*/summary.json"))
+        self.assertEqual(len(paths), 1)
+        return json.loads(paths[0].read_bytes())
+
+    def test_bound_driver_keeps_full_check_and_records_actual_property_model(self):
+        self.assertEqual(self.invoke(), 0)
+        self.assertEqual(self.calls[-1], ["--stop"])
+        self.assertEqual(self.calls[0][1:11], ["check", *GATE.FLAGS])
+        self.assertIn("-Pp2pkit.ordinarySimulatorBinding=" + str(self.session / GATE.simulator.RELATIVE), self.calls[0])
+        self.assertIn("-Pp2pkit.ordinarySimulatorStartSha256=" + GATE.simulator.digest(self.start), self.calls[0])
+        self.assertIn("-Pp2pkit.ordinarySimulatorPrelaunchSha256=" + GATE.simulator.digest(self.prelaunch), self.calls[0])
+        self.assertEqual(self.summary()["ordinarySimulator"], GATE.simulator.coverage_identity(self.binding, self.start, self.prelaunch))
+        self.assertEqual(self.summary()["result"], "PASS")
+
+    def test_standalone_full_stays_unbound_without_changing_its_selector(self):
+        self.environment = {}
+        self.assertEqual(self.invoke(), 0)
+        self.assertEqual(self.calls[0][1:11], ["check", *GATE.FLAGS])
+        self.assertFalse(any("ordinarySimulator" in argument for argument in self.calls[0]))
+        self.assertNotIn("ordinarySimulator", self.summary())
+
+    def test_tag_release_full_stays_standalone_without_changing_its_selector(self):
+        self.environment = {"GITHUB_ACTIONS": "true", "GITHUB_JOB": "verify-release", "GITHUB_EVENT_NAME": "push",
+                            "GITHUB_REF": "refs/tags/v0.8.0-fixture", "GITHUB_REF_TYPE": "tag"}
+        self.assertEqual(self.invoke(), 0)
+        self.assertEqual(self.calls[0][1:11], ["check", *GATE.FLAGS])
+        self.assertFalse(any("ordinarySimulator" in argument for argument in self.calls[0]))
+        self.assertNotIn("ordinarySimulator", self.summary())
+
+    def test_tag_label_cannot_hide_an_ordinary_parent_context(self):
+        self.environment.update(GITHUB_ACTIONS="true", GITHUB_JOB="verify-release",
+                                GITHUB_EVENT_NAME="push", GITHUB_REF="refs/tags/v0.8.0-fixture")
+        self.environment.pop(GATE.simulator.PATH_ENV)
+        self.environment.pop(GATE.simulator.HASH_ENV)
+        with self.assertRaisesRegex(ValueError, "binding path"):
+            self.invoke()
+        self.assertEqual(self.calls, [])
+
+    def test_tag_label_cannot_ignore_either_partial_ordinary_marker(self):
+        for marker in (GATE.simulator.PATH_ENV, GATE.simulator.HASH_ENV):
+            self.environment = {"GITHUB_ACTIONS": "true", "GITHUB_JOB": "verify-release",
+                                "GITHUB_REF": "refs/tags/v0.8.0-fixture", marker: "synthetic-partial-binding"}
+            with self.subTest(marker=marker), self.assertRaisesRegex(ValueError, "canonical simulator context"):
+                self.invoke()
+            self.assertEqual(self.calls, [])
+
+    def test_missing_markers_cannot_fall_back_from_the_canonical_parent_context(self):
+        for name in (GATE.simulator.PATH_ENV, GATE.simulator.HASH_ENV):
+            self.environment.pop(name)
+        with self.assertRaisesRegex(ValueError, "binding path"):
+            self.invoke()
+        self.assertEqual(self.calls, [])
+
+    def test_missing_hash_marker_refuses_before_gradle(self):
+        self.environment.pop(GATE.simulator.HASH_ENV)
+        with self.assertRaisesRegex(ValueError, "source/context/reservation"):
+            self.invoke()
+        self.assertEqual(self.calls, [])
+
+    def test_recognized_ordinary_job_without_a_canonical_context_is_not_standalone(self):
+        self.environment = {"GITHUB_ACTIONS": "true", "GITHUB_JOB": "complete-gate"}
+        with self.assertRaisesRegex(ValueError, "canonical simulator context"):
+            self.invoke()
+        self.assertEqual(self.calls, [])
+
+    def test_simulator_task_option_or_different_profile_cannot_replace_aggregate_check(self):
+        with self.assertRaises(ValueError):
+            self.invoke("ios-arm64")
+        self.assertEqual(self.calls, [])
+        self.assertEqual(GATE.PROFILES["full"], ["check"])
+
+    def test_stale_source_and_different_native_role_refuse_before_gradle(self):
+        self.source["tree"] = "f" * 40
+        with self.assertRaisesRegex(ValueError, "primary canonical invocation"):
+            self.invoke()
+        self.source["tree"] = "b" * 40
+        self.install_binding("macos-x64")
+        with self.assertRaisesRegex(ValueError, "primary canonical invocation"):
+            self.invoke()
+        self.assertEqual(self.calls, [])
+
+    def test_other_reserved_invocation_cannot_reuse_this_device_binding(self):
+        chain = self.environment[GATE.audit_processes.CHAIN_ENV]
+        domains = json.loads(self.environment[GATE.audit_processes.DOMAINS_ENV])
+        domains[-1]["id"] = "0" * 32
+        self.environment[GATE.audit_processes.CHAIN_ENV] = chain.rsplit(":", 1)[0] + ":" + "0" * 32
+        self.environment[GATE.audit_processes.DOMAINS_ENV] = json.dumps(domains)
+        with self.assertRaisesRegex(ValueError, "primary canonical invocation"):
+            self.invoke()
+        self.assertEqual(self.calls, [])
+
+    def test_public_or_linked_receipt_is_not_accepted_as_controller_custody(self):
+        path = self.session / GATE.simulator.RELATIVE
+        path.chmod(0o644)
+        with self.assertRaisesRegex(ValueError, "not private"):
+            self.invoke()
+        path.chmod(0o600)
+        real = path.with_name("binding-original.json")
+        path.rename(real)
+        path.symlink_to(real)
+        with self.assertRaisesRegex(ValueError, "linked"):
+            self.invoke()
+        self.assertEqual(self.calls, [])
+
+    def test_mutated_binding_after_product_cannot_reuse_original_pass(self):
+        def mutate():
+            path = self.session / "evidence/simulator/admission.json"
+            self.save(path, path.read_bytes() + b" ")
+        self.after_product = mutate
+        self.assertNotEqual(self.invoke(), 0)
+        self.assertEqual(self.calls[-1], ["--stop"])
+        self.assertEqual(self.summary()["result"], "FAIL")
+        self.assertIn("source/context/reservation", " ".join(self.summary()["errors"]))
+
+    def test_all_tests_passing_without_property_report_is_still_failed(self):
+        self.report_change = lambda report: report.pop("ordinarySimulator")
+        self.assertNotEqual(self.invoke(), 0)
+        self.assertEqual(self.calls[-1], ["--stop"])
+        self.assertIn("SIMULATOR_COVERAGE_BINDING", " ".join(self.summary()["errors"]))
+
+    def test_wrong_device_property_fails_despite_other_successful_outcomes(self):
+        self.report_change = lambda report: report["ordinarySimulator"]["inGraph"][GATE.simulator.TASKS[0]].update(device="other")
+        self.assertNotEqual(self.invoke(), 0)
+        self.assertEqual(self.summary()["result"], "FAIL")
+        self.assertIn("SIMULATOR_KGP_PROPERTY_CHANGED", " ".join(self.summary()["errors"]))
+
+    def test_changed_typed_property_model_graph_and_receipt_are_rejected(self):
+        identity = GATE.simulator.coverage_identity(self.binding, self.start, self.prelaunch)
+        selected = {path: {"device": self.uuid, "type": GATE.simulator.TYPE} for path in GATE.simulator.TASKS}
+        baseline = example_report()
+        baseline["ordinarySimulator"] = {**identity, "configured": selected, "inGraph": copy.deepcopy(selected), "unchanged": True}
+        for kind in ("missing-task", "extra-task", "wrong-type", "missing-graph", "stale-binding", "mutable"):
+            report = copy.deepcopy(baseline)
+            ordinary = report["ordinarySimulator"]
+            if kind == "missing-task": ordinary["configured"].pop(GATE.simulator.TASKS[0])
+            elif kind == "extra-task": ordinary["configured"][":other:test"] = selected[GATE.simulator.TASKS[0]]
+            elif kind == "wrong-type": ordinary["configured"][GATE.simulator.TASKS[0]]["type"] = "Object"
+            elif kind == "missing-graph": ordinary["inGraph"].pop(GATE.simulator.TASKS[0])
+            elif kind == "stale-binding": ordinary["bindingSha256"] = "f" * 64
+            else: ordinary["unchanged"] = False
+            with self.subTest(kind=kind), self.assertRaises(ValueError):
+                GATE.assess(report, POLICY, "full", "arm64", TOKEN, self.binding, self.start, self.prelaunch)
+
+    def test_absent_actual_start_is_rejected_before_gradle(self):
+        (self.session / "state/evidence" / self.reserved / "start.json").unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.invoke()
+        self.assertEqual(self.calls, [])
+
+    def test_new_outer_ancestor_cannot_be_invented_with_matching_start_and_domains(self):
+        processes = GATE.audit_processes
+        domains = processes.ownership_domains(self.environment[processes.CHAIN_ENV], self.environment[processes.DOMAINS_ENV])
+        domains.insert(0, {**domains[0], "id": "0" * 32})
+        self.environment[processes.CHAIN_ENV] = ":".join(row["id"] for row in domains)
+        self.environment[processes.DOMAINS_ENV] = json.dumps(domains)
+        start = json.loads(self.start)
+        start["ancestorInvocationIds"].insert(0, "0" * 32)
+        self.save(self.session / "state/evidence" / self.reserved / "start.json", start)
+        with self.assertRaisesRegex(ValueError, "primary canonical invocation"):
+            self.invoke()
+        self.assertEqual(self.calls, [])
+
+    def test_foreign_malformed_parent_or_final_receipt_cannot_replace_actual_start(self):
+        path = self.session / "state/evidence" / self.reserved / "start.json"
+        baseline = json.loads(self.start)
+        changes = {"schema": True, "id": "0" * 32, "purpose": "foreign", "kind": "gradle", "requestedArgv": ["help"],
+            "cwd": "/foreign", "wrapper": "/foreign/gradlew", "host": "macos-x64", "jobId": "0" * 32,
+            "gradleHome": "/foreign/home", "controllerPid": 65002, "ancestorInvocationIds": ["0" * 32],
+            "sourceBefore": self.source, "sourceAfter": self.source, "productExitCode": 0, "stopExitCode": 0,
+            "finalExitCode": 0, "sourceUnchanged": True, "ownedSurvivors": [1], "errors": ["failed"],
+            "evidenceDirectory": "/foreign/evidence", "startedUtc": "not-time"}
+        for key, value in changes.items():
+            self.save(path, {**baseline, key: value})
+            with self.subTest(field=key), self.assertRaises(ValueError):
+                self.invoke()
+        for raw in (b"[]", b"{", b'{"schema":1,"schema":1}'):
+            self.save(path, raw)
+            with self.subTest(raw=raw), self.assertRaises(ValueError):
+                self.invoke()
+        self.assertEqual(self.calls, [])
+
+    def test_actual_start_byte_mutation_after_product_fails_with_same_home_stop(self):
+        def mutate():
+            path = self.session / "state/evidence" / self.reserved / "start.json"
+            self.save(path, path.read_bytes() + b" ")
+        self.after_product = mutate
+        self.assertNotEqual(self.invoke(), 0)
+        self.assertEqual(self.calls[-1], ["--stop"])
+        self.assertEqual(self.summary()["result"], "FAIL")
+
+    def test_prelaunch_original_change_refuses_before_gradle(self):
+        path = self.session / "evidence/commands" / GATE.simulator.PRELAUNCH / "stdout.log"
+        value = json.loads(path.read_bytes())
+        value["devices"][GATE.simulator.HOSTS["macos-arm64"]["runtime"]][0]["state"] = "Booted"
+        self.save(path, value)
+        with self.assertRaisesRegex(ValueError, "SIMULATOR_PRELAUNCH_EXTERNAL_STATE_CHANGE"):
+            self.invoke()
+        self.assertEqual(self.calls, [])
+
+    def test_selector_rejects_ambiguous_unavailable_relabelled_or_wrong_runtime_devices(self):
+        runtime = GATE.simulator.HOSTS["macos-arm64"]["runtime"]
+        for kind in ("ambiguous", "booted", "unavailable", "numeric-availability", "wrong-type", "bad-uuid", "wrong-runtime",
+                     "duplicate-uuid"):
+            inventory = copy.deepcopy(self.inventory)
+            row = inventory["devices"][runtime][0]
+            if kind == "ambiguous": inventory["devices"][runtime].append({**row, "udid": "BBBBBBBB-BBBB-CCCC-DDDD-EEEEEEEEEEEE"})
+            elif kind == "booted": row["state"] = "Booted"
+            elif kind == "unavailable": row["isAvailable"] = False
+            elif kind == "numeric-availability": row["isAvailable"] = 1
+            elif kind == "wrong-type": row["deviceTypeIdentifier"] = "com.apple.CoreSimulator.SimDeviceType.iPhone-16"
+            elif kind == "bad-uuid": row["udid"] = "all"
+            elif kind == "wrong-runtime": inventory["devices"] = {"com.apple.CoreSimulator.SimRuntime.iOS-18-2": [row]}
+            else: inventory["devices"]["different-runtime"] = [dict(row)]
+            with self.subTest(kind=kind), self.assertRaises(ValueError):
+                GATE.simulator.original("simulator-devices", "macos-arm64", GATE.simulator.encoded(inventory))
+
+    def test_two_native_combinations_and_closed_commands_never_admit_old_writer_profile(self):
+        for role, major, xcode in (("macos-arm64", "26", "Xcode 26.5\nBuild version 17F42\n"),
+                                  ("macos-x64", "15", "Xcode 26.3\nBuild version 17C529\n")):
+            self.assertEqual(GATE.simulator.original("simulator-macos-version", role, (major + ".0\n").encode()), major + ".0")
+            self.assertEqual(GATE.simulator.original("simulator-xcode-version", role, xcode.encode()), xcode)
+            for label, raw in (("simulator-macos-version", b"14.7\n"),
+                               ("simulator-xcode-version", b"Xcode 16.2\nBuild version 16C5032a\n")):
+                with self.subTest(role=role, label=label), self.assertRaises(ValueError):
+                    GATE.simulator.original(label, role, raw)
+        for name in ("shutdown-all", "arbitrary-command", "simulator-boot"):
+            with self.assertRaises(ValueError):
+                GATE.simulator.command(name)
+        selected = GATE.simulator.parse(self.binding)["selected"]
+        self.assertEqual(GATE.simulator.command(GATE.simulator.SHUTDOWN, selected),
+                         ["/usr/bin/xcrun", "simctl", "shutdown", self.uuid])
+
+    def test_typed_kgp_source_seam_is_preserved_without_claiming_runtime_execution(self):
+        source = (ROOT / "gradle/platform-test-coverage.init.gradle").read_text()
+        for needle in ("plugin.class.classLoader.loadClass(simulatorType)", "Property.isAssignableFrom",
+                       "actualType.getMethod('getDevice')", "task.getDevice().set(binding.selected.device.udid)",
+                       "entry.task.getDevice().disallowChanges()", "simulatorConfigured[path] = deviceRecord(entry)",
+                       "simulatorGraph[task.path] = deviceRecord(selected[task.path])"):
+            self.assertIn(needle, source)
+        self.assertTrue(all(path in source for path in GATE.simulator.TASKS))
+        self.assertNotIn("P2PKIT_WRITER_", source)
+        for name in ("enabled", "standalone", "timeout", "executable", "filter"):
+            self.assertNotRegex(source, r"task\." + name + r"\s*=")
+
+
 FAKE_GRADLE = r'''
 import json, os, pathlib, signal, subprocess, sys, time
 root = pathlib.Path.cwd()
@@ -220,6 +586,35 @@ sys.exit(9 if mode in ("exit-failure", "build-failure") else 0)
 '''
 
 
+def standalone_fixture_environment(mode):
+    """Environment for this synthetic fake-wrapper fixture, never production.
+
+    The fixture is deliberately standalone even when the test runner itself is
+    real ordinary CI. Do not copy its identity, canonical ownership, simulator
+    markers, credentials or Gradle home into an unrelated fake invocation.
+    Explicit OrdinarySimulatorModels above keep the anti-fallback coverage.
+    """
+    names = ("PATH", "HOME", "TMPDIR", "TMP", "TEMP", "SystemRoot", "WINDIR", "COMSPEC")
+    return {**{name: os.environ[name] for name in names if name in os.environ}, "P2PKIT_FAKE_PLATFORM_MODE": mode}
+
+
+class DriverFixtureEnvironmentModels(unittest.TestCase):
+    def test_fixture_environment_is_closed_and_preserves_process_essentials(self):
+        essentials = {"PATH": "/synthetic/bin", "HOME": "/synthetic/home", "TMPDIR": "/synthetic/tmp",
+                      "SystemRoot": "C:\\SyntheticWindows"}
+        other = {"GITHUB_ACTIONS": "true", "GITHUB_JOB": "complete-gate", "GITHUB_TOKEN": "synthetic-not-a-token",
+                 GATE.audit_processes.STATE_ENV: "/synthetic/ordinary-state",
+                 GATE.audit_processes.JOB_ENV: "a" * 32, GATE.audit_processes.CHAIN_ENV: "b" * 32,
+                 GATE.audit_processes.DOMAINS_ENV: "synthetic-domain",
+                 GATE.simulator.PATH_ENV: "/synthetic/simulator-binding", GATE.simulator.HASH_ENV: "c" * 64,
+                 "GRADLE_USER_HOME": "/synthetic/ordinary-home", "P2PKIT_FAKE_PLATFORM_MODE": "foreign"}
+        with mock.patch.dict(os.environ, {**essentials, **other}, clear=True):
+            self.assertEqual(standalone_fixture_environment("pass"), {**essentials, "P2PKIT_FAKE_PLATFORM_MODE": "pass"})
+            self.assertEqual(standalone_fixture_environment("wait"), {**essentials, "P2PKIT_FAKE_PLATFORM_MODE": "wait"})
+            self.assertEqual(os.environ["GITHUB_JOB"], "complete-gate")
+            self.assertEqual(os.environ[GATE.audit_processes.STATE_ENV], "/synthetic/ordinary-state")
+
+
 class DriverLifecycleTest(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="p2pkit-platform-driver-")
@@ -243,7 +638,7 @@ class DriverLifecycleTest(unittest.TestCase):
         mock.patch.object(GATE.platform, "machine", return_value="arm64").start()
 
     def invoke(self, mode):
-        with mock.patch.dict(os.environ, {"P2PKIT_FAKE_PLATFORM_MODE": mode}), \
+        with mock.patch.dict(os.environ, standalone_fixture_environment(mode), clear=True), \
                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             return GATE.run("full")
 
@@ -328,7 +723,7 @@ class DriverLifecycleTest(unittest.TestCase):
             "g.platform.system=lambda:'Darwin'; g.platform.machine=lambda:'arm64'; sys.exit(g.run('full'))"
         )
         process = subprocess.Popen([sys.executable, "-c", bootstrap], cwd=self.root,
-                                   env={**os.environ, "P2PKIT_FAKE_PLATFORM_MODE": "wait"},
+                                   env=standalone_fixture_environment("wait"),
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
         worker = None
         try:

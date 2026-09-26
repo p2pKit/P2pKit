@@ -10,6 +10,10 @@ permissions:
 
 jobs:
   submit:
+    concurrency:
+      group: p2pkit-nonphysical-heavy
+      queue: max
+      cancel-in-progress: false
     runs-on: macos-latest
     steps:
       - name: Check out repository

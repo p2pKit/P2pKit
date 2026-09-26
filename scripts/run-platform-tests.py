@@ -11,10 +11,15 @@ import os
 from pathlib import Path
 import platform
 import signal
+import stat
 import subprocess
 import sys
 import time
 import uuid
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import audit_processes
+import hosted_full_simulator as simulator
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -95,7 +100,7 @@ def required_tasks(policy, profile, arch):
     return {task for task in tasks if not task.endswith(":" + unavailable)}
 
 
-def assess(report, policy, profile, arch, token):
+def assess(report, policy, profile, arch, token, simulator_binding=None, simulator_start=None, simulator_prelaunch=None):
     required = required_tasks(policy, profile, arch)
     require(isinstance(report, dict) and type(report.get("schema")) is int and report["schema"] == 1,
             "Wrong coverage report schema")
@@ -126,6 +131,13 @@ def assess(report, policy, profile, arch, token):
             require(result.get("outcome") == "EXECUTED" and result.get("enabled") is True and
                     result.get("inGraph") is True and result["passed"] > 0 and result["failed"] == 0,
                     f"Expected fresh nonzero successful test execution missing: {name} ({result})")
+    if simulator_binding is not None:
+        require(profile == "full", "Ordinary simulator binding is primary FULL only")
+        require(type(simulator_start) is bytes and type(simulator_prelaunch) is bytes,
+                "Ordinary simulator actual start and prelaunch originals required")
+        simulator.assess_coverage(report, simulator_binding, simulator_start, simulator_prelaunch)
+    else:
+        require(report.get("ordinarySimulator") is None, "Unexpected ordinary simulator evidence in an unbound invocation")
     return required
 
 
@@ -178,6 +190,101 @@ def source_state():
     patch = subprocess.check_output(["git", "diff", "--binary", "HEAD"], cwd=ROOT)
     return {"commit": git("rev-parse", "HEAD"), "tree": git("rev-parse", "HEAD^{tree}"),
             "status": git("status", "--porcelain"), "diffSha256": hashlib.sha256(patch).hexdigest()}
+
+
+def simulator_original(path, *, allow_empty=False):
+    """Bounded no-follow reads of the controller's existing private receipts."""
+    path = Path(path)
+    require(path.is_absolute() and ".." not in path.parts, "Ordinary simulator receipt path is not absolute")
+    for parent in (path, *path.parents):
+        require(not stat.S_ISLNK(parent.lstat().st_mode), "Ordinary simulator receipt path is linked")
+    before = path.lstat()
+    require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and before.st_uid == os.getuid() and
+            not before.st_mode & 0o077 and (before.st_size >= 0 if allow_empty else before.st_size > 0) and
+            before.st_size <= simulator.LIMIT, "Ordinary simulator receipt is not private")
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        stream = os.fdopen(descriptor, "rb")
+    except BaseException:
+        os.close(descriptor)
+        raise
+    with stream:
+        opened = os.fstat(stream.fileno())
+        require(os.path.samestat(before, opened), "Ordinary simulator receipt changed before read")
+        raw = stream.read(simulator.LIMIT + 1)
+        after = os.fstat(stream.fileno())
+    current = path.lstat()
+    require(os.path.samestat(before, after) and os.path.samestat(before, current) and
+            before.st_mtime_ns == after.st_mtime_ns == current.st_mtime_ns and
+            before.st_ctime_ns == after.st_ctime_ns == current.st_ctime_ns and
+            before.st_size == after.st_size == current.st_size == len(raw), "Ordinary simulator receipt changed during read")
+    return raw
+
+
+def ordinary_simulator_binding(profile, arch, source):
+    """Keep standalone profiles unchanged; never silently fall back from ordinary FULL.
+
+    Presence of the real ordinary job, its canonical parent context, OR either
+    marker requires the complete immutable binding. A missing env path/hash is
+    not permission to use the old unbound path. No host command runs here.
+    """
+    environment = os.environ
+    required = (simulator.PATH_ENV in environment or simulator.HASH_ENV in environment or
+                environment.get("GITHUB_ACTIONS") == "true" and environment.get("GITHUB_JOB") == "complete-gate")
+    state_name = environment.get(audit_processes.STATE_ENV)
+    context_path, run_raw = None, None
+    if state_name:
+        state = Path(state_name)
+        require(state.is_absolute() and ".." not in state.parts, "Invalid canonical simulator state path")
+        context_path = state.parent / "run-context.json"
+        if os.path.lexists(context_path):
+            run_raw = simulator_original(context_path)
+            run_context = simulator.parse(run_raw)
+            require(type(run_context) is dict, "Invalid canonical simulator parent context")
+            required |= run_context.get("scope") == "CLOSED_ORDINARY_TEST_CONTROLLER" and run_context.get("profile") == "full"
+    if not required:
+        return None
+    require(profile == "full" and arch in ("arm64", "x64") and state_name and run_raw is not None,
+            "Ordinary FULL requires its canonical simulator context")
+    session = context_path.parent
+    path = session / simulator.RELATIVE
+    require(environment.get(simulator.PATH_ENV) == str(path), "Missing or foreign ordinary simulator binding path")
+    originals = {str(context_path): run_raw}
+    for original in (Path(state_name) / "context.json", session / "evidence/custody/request.json",
+                     session / "evidence/simulator/admission.json", path):
+        originals[str(original)] = simulator_original(original)
+    binding_raw = originals[str(path)]
+    expected = simulator.binding_record(run_raw, originals[str(Path(state_name) / "context.json")],
+        originals[str(session / "evidence/custody/request.json")], originals[str(session / "evidence/simulator/admission.json")])
+    require(binding_raw == expected and environment.get(simulator.HASH_ENV) == simulator.digest(binding_raw),
+            "Ordinary simulator binding differs from its source/context/reservation")
+    binding = simulator.parse(binding_raw)
+    domains = audit_processes.ownership_domains(environment.get(audit_processes.CHAIN_ENV, ""),
+                                                environment.get(audit_processes.DOMAINS_ENV, ""))
+    domain = {"id": binding["productInvocation"], "job": binding["job"], "state": binding["state"], "home": binding["home"]}
+    require(len(domains) >= 2 and domains[-1] == domain and all(domains[-2][key] == domain[key]
+            for key in ("job", "state", "home")) and environment.get(audit_processes.JOB_ENV) == binding["job"] and
+            [item["id"] for item in domains[:-2]] == run_context.get("ancestorInvocationIds") and
+            environment.get(audit_processes.STATE_ENV) == binding["state"] and environment.get("GRADLE_USER_HOME") == binding["home"] and
+            binding["source"] == source and binding["root"] == str(ROOT) and binding["session"] == str(session) and
+            binding["role"] == "macos-" + arch and binding["developerDir"] == environment.get("DEVELOPER_DIR"),
+            "Ordinary simulator binding is not this primary canonical invocation")
+    start_path = Path(binding["state"]) / "evidence" / binding["productInvocation"] / "start.json"
+    start_raw = simulator_original(start_path)
+    simulator.canonical_start(binding_raw, start_raw, [item["id"] for item in domains[:-1]], os.getppid())
+    originals[str(start_path)] = start_raw
+    prelaunch_path = session / "evidence/simulator/prelaunch.json"
+    prelaunch_raw = simulator_original(prelaunch_path)
+    originals[str(prelaunch_path)] = prelaunch_raw
+    phase = session / "evidence/commands" / simulator.PRELAUNCH
+    for name in ("result.json", "stdout.log", "stderr.log"):
+        original = phase / name
+        originals[str(original)] = simulator_original(original, allow_empty=name == "stderr.log")
+    row_raw = originals[str(phase / "result.json")]
+    row = simulator.parse(row_raw)
+    require(row_raw == simulator.encoded(row) and prelaunch_raw == simulator.prelaunch_record(run_raw, binding_raw, row,
+        originals[str(phase / "stdout.log")], originals[str(phase / "stderr.log")]), "Ordinary simulator prelaunch changed")
+    return {"raw": binding_raw, "path": str(path), "originals": originals, "start": start_raw, "prelaunch": prelaunch_raw}
 
 
 def terminate_process(process):
@@ -241,9 +348,16 @@ def run(profile):
     execution = directory / "execution.json"
     source = {**source_state(), "profile": profile, "token": token,
               "startedUtc": datetime.now(timezone.utc).isoformat()}
+    ordinary = ordinary_simulator_binding(profile, arch, {key: source[key] for key in ("commit", "tree", "status", "diffSha256")})
     command = [str(ROOT / "gradlew"), *PROFILES[profile], *FLAGS, "--init-script",
                str(ROOT / "gradle/platform-test-coverage.init.gradle"),
                f"-Pp2pkit.testCoverageRoot={ROOT}", f"-Pp2pkit.testCoverageToken={token}"]
+    if ordinary is not None:
+        source["ordinarySimulator"] = simulator.coverage_identity(ordinary["raw"], ordinary["start"], ordinary["prelaunch"])
+        command.extend(["-Pp2pkit.ordinarySimulatorBinding=" + ordinary["path"],
+                        "-Pp2pkit.ordinarySimulatorSha256=" + simulator.digest(ordinary["raw"]),
+                        "-Pp2pkit.ordinarySimulatorStartSha256=" + simulator.digest(ordinary["start"]),
+                        "-Pp2pkit.ordinarySimulatorPrelaunchSha256=" + simulator.digest(ordinary["prelaunch"])])
     source["command"] = command
     (directory / "invocation.json").write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
     process = None
@@ -277,7 +391,8 @@ def run(profile):
     report = {}
     try:
         report = read_json(execution)
-        assess(report, policy, profile, arch, token)
+        assess(report, policy, profile, arch, token, None if ordinary is None else ordinary["raw"],
+               None if ordinary is None else ordinary["start"], None if ordinary is None else ordinary["prelaunch"])
     except (OSError, ValueError, TypeError, KeyError, RecursionError) as error:
         errors.append(str(error))
     if code:
@@ -291,6 +406,12 @@ def run(profile):
             errors.append("Source state changed during the test invocation")
     except (OSError, ValueError) as error:
         errors.append(str(error))
+    if ordinary is not None:
+        try:
+            require(ordinary_simulator_binding(profile, arch, source_after) == ordinary,
+                    "Ordinary simulator binding changed during the platform invocation")
+        except (OSError, ValueError, TypeError, KeyError, audit_processes.OwnershipError) as error:
+            errors.append(str(error))
     # Do not try to turn malformed/unvalidated input into a successful table.
     try:
         targets = target_rows(report)
@@ -318,7 +439,7 @@ def main():
     arguments = parser.parse_args()
     try:
         return run(arguments.profile)
-    except (OSError, ValueError, RecursionError) as error:
+    except (OSError, ValueError, TypeError, KeyError, RecursionError, audit_processes.OwnershipError) as error:
         print(f"FATAL: {error}", file=sys.stderr)
         return 1
 

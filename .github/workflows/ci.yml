@@ -18,10 +18,30 @@ concurrency:
   cancel-in-progress: ${{ github.event_name != 'schedule' }}
 
 jobs:
+  initial-recipient-gate:
+    # Fail-only preparation interlock. No environment, token, checkout or
+    # acquisition is requested until the real Stage2 gate is reviewed/authorized.
+    # A failed step inside the JVM job would still allow its always() cleanup.
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Hold whole JVM jobs until initial-recipient admission is implemented
+        shell: bash
+        run: |
+          echo 'INITIAL_RECIPIENT_STAGE2=HOLD; WHOLE_JVM_JOB_ADMISSION_REQUIRED' >&2
+          exit 125
+
   jvm-library-checks:
     name: JVM libraries (${{ matrix.os }})
+    needs: initial-recipient-gate
+    concurrency:
+      group: p2pkit-nonphysical-heavy
+      queue: max
+      cancel-in-progress: false
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         include:
           - os: ubuntu-latest
@@ -82,10 +102,17 @@ jobs:
           retention-days: 7
 
   complete-gate:
+    permissions:
+      contents: read
+      actions: read
     needs: jvm-library-checks
     # A skipped required job can otherwise count as successful. Always run
     # the explicit dependency-result guard, including on failure/cancellation.
     if: ${{ always() }}
+    concurrency:
+      group: p2pkit-nonphysical-heavy
+      queue: max
+      cancel-in-progress: false
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
@@ -101,6 +128,27 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Verify participating heavy-job queue policy
+        run: ruby scripts/tests/check-heavy-job-queue-policy-test.rb
+
+      - name: Verify development sample artifact policy
+        run: |
+          ruby scripts/tests/check-sample-app-workflow-policy-test.rb
+          python3 -I -B scripts/tests/package-sample-apps-test.py
+
+      - name: Verify private test-transcript custody controls
+        run: python3 -I -B -S scripts/tests/test-transcript-custody-test.py
+
+      - name: Verify ordinary custody caller policy
+        run: |
+          ruby scripts/tests/check-hosted-test-workflow-policy-test.rb
+          python3 -I -B -S scripts/tests/hosted-test-identity-test.py
+          python3 -I -B -S scripts/tests/check-hosted-test-composition-test.py
+          python3 -I -B -S scripts/tests/hosted-controller-import-test.py
+          python3 -I -B -S scripts/tests/hosted-canonical-python-test.py
+          python3 -I -B -S scripts/tests/hosted-consume-delivery-test.py
+          python3 -I -B -S scripts/tests/hosted-desktop-job-budget-test.py
 
       - name: Classify required-check scope
         id: scope
@@ -142,39 +190,109 @@ jobs:
           scripts/tests/check-repository-layout.sh
           scripts/tests/check-markdown-links.sh
 
-      - name: Configure Java 17
-        if: steps.scope.outputs.full == 'true'
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+      - name: Hold ordinary full acquisition until cache qualification
+        id: ordinary-activation
+        if: ${{ success() && (steps.scope.outputs.full == 'true') }}
+        shell: bash
+        run: |
+          echo 'ORDINARY_TEST_ACTIVATION=HOLD; QUALIFIED_DEPENDENCY_CACHE_REQUIRED' >&2
+          exit 125
+
+      - name: Admit ordinary full source and trusted recipient policy
+        id: ordinary-admission
+        if: ${{ success() && (steps.scope.outputs.full == 'true') }}
+        shell: bash
+        run: |
+          python_bin=python3
+          if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
+          case "$RUNNER_OS/$RUNNER_ARCH" in
+            macOS/ARM64) role=macos-arm64 ;;
+            macOS/X64) role=macos-x64 ;;
+            *) echo 'FATAL: unsupported ordinary native host' >&2; exit 1 ;;
+          esac
+          "$python_bin" -I -B -S scripts/run-hosted-test-admission.py --profile full \
+            --root "$GITHUB_WORKSPACE" \
+            --evidence-directory "$RUNNER_TEMP/p2pkit-test-admission-full-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$role"
+          printf 'session_directory=%s/p2pkit-test-full-%s-%s-%s\n' "$RUNNER_TEMP" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$role" >> "$GITHUB_OUTPUT"
+
+      - name: Bind original ordinary job timing and dependency consume plan
+        id: dependency-stage
+        if: ${{ success() && (steps.scope.outputs.full == 'true') }}
+        shell: bash
+        env:
+          P2PKIT_ACTIONS_READ_TOKEN: ${{ github.token }}
+          DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+        run: |
+          python3 -I -B -S scripts/run-hosted-test-custody.py prepare-consume --profile full
+
+      - name: Restore only the exact ordinary dependency byte cohort
+        id: dependency-restore
+        if: ${{ success() && (steps.scope.outputs.full == 'true') && steps.dependency-stage.outcome == 'success' && steps.dependency-stage.outputs.dependency_seed_ready == 'true' && (steps.dependency-stage.outputs.cache_restore_timeout_minutes == '1' || steps.dependency-stage.outputs.cache_restore_timeout_minutes == '2' || steps.dependency-stage.outputs.cache_restore_timeout_minutes == '3') }}
+        timeout-minutes: ${{ fromJSON(steps.dependency-stage.outputs.cache_restore_timeout_minutes) }}
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ steps.dependency-stage.outputs.cache_path }}
+          key: ${{ steps.dependency-stage.outputs.cache_key }}
+          enableCrossOsArchive: false
+          fail-on-cache-miss: true
+          lookup-only: false
+
+      - name: Validate the original ordinary restore result
+        id: dependency-restore-guard
+        if: ${{ always() && (steps.scope.outputs.full == 'true') && (steps.dependency-stage.outcome == 'success' || steps.dependency-stage.outcome == 'failure' || steps.dependency-stage.outcome == 'cancelled') }}
+        shell: bash
+        env:
+          P2PKIT_HOSTED_PREPARE_OUTCOME: ${{ steps.dependency-stage.outcome }}
+          P2PKIT_HOSTED_PREPARE_SHA256: ${{ steps.dependency-stage.outputs.preparation_sha256 }}
+          P2PKIT_CACHE_RESTORE_OUTCOME: ${{ steps.dependency-restore.outcome }}
+          P2PKIT_CACHE_RESTORE_PRIMARY_KEY: ${{ steps.dependency-restore.outputs.cache-primary-key }}
+          P2PKIT_CACHE_RESTORE_MATCHED_KEY: ${{ steps.dependency-restore.outputs.cache-matched-key }}
+          P2PKIT_CACHE_RESTORE_HIT: ${{ steps.dependency-restore.outputs.cache-hit }}
+        run: |
+          python3 -I -B -S scripts/run-hosted-test-custody.py restore-guard --profile full
+
+      - name: Configure daemon Java 21 and wrapper Java 17
+        id: java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: |
+            21
+            17
+        if: ${{ success() && (steps.scope.outputs.full == 'true') }}
 
-      - name: Validate wrapper and configure Gradle
-        if: steps.scope.outputs.full == 'true'
-        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
-        with:
-          # Kotlin 2.4.10 predates the build-cache deserialization fix. Keep
-          # dependency/wrapper caching, but never persist or restore its local
-          # build-cache metadata across trust boundaries (CVE-2026-53914).
-          gradle-home-cache-excludes: caches/build-cache-1
+      - name: Bind the native ordinary daemon JDK
+        id: ordinary-jdk21
+        if: ${{ success() && (steps.scope.outputs.full == 'true') }}
+        shell: bash
+        run: |
+          case "$RUNNER_ARCH" in X64|ARM64) ;; *) echo 'FATAL: unsupported native Java architecture' >&2; exit 1 ;; esac
+          daemon_variable="JAVA_HOME_21_${RUNNER_ARCH}"
+          daemon_home="${!daemon_variable}"
+          case "$daemon_home" in ''|*$'\n'*|*$'\r'*) echo 'FATAL: missing or invalid daemon JDK path' >&2; exit 1 ;; esac
+          printf 'P2PKIT_AUDIT_JDK21=%s\n' "$daemon_home" >> "$GITHUB_ENV"
 
       - name: Install pinned XcodeGen
-        if: steps.scope.outputs.full == 'true'
+        id: ordinary-xcodegen
+        if: ${{ success() && (steps.scope.outputs.full == 'true') }}
         run: |
           xcodegen_bin_dir="$(scripts/install-xcodegen.sh "$RUNNER_TEMP/p2pkit-xcodegen")"
           echo "$xcodegen_bin_dir" >> "$GITHUB_PATH"
 
       - name: Install Android SDK platforms
-        if: steps.scope.outputs.full == 'true'
+        id: ordinary-sdk
+        if: ${{ success() && (steps.scope.outputs.full == 'true') }}
         run: |
           "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37.0'
+          grep -Fxq 'AndroidVersion.ApiLevel=36' "$ANDROID_HOME/platforms/android-36/source.properties"
+          grep -Fxq 'AndroidVersion.ApiLevel=37.0' "$ANDROID_HOME/platforms/android-37.0/source.properties"
 
       - name: Verify repository entry points
+        id: ordinary-entrypoints
         if: steps.scope.outputs.full == 'true'
         run: |
           scripts/check-gradle-wrapper.sh
           scripts/tests/check-gradle-wrapper-test.sh
-          scripts/tests/check-lock-write-policy-test.sh
           scripts/tests/check-release-tag-test.sh
           scripts/tests/check-release-identity-test.sh
           scripts/check-release-metadata.sh
@@ -182,7 +300,6 @@ jobs:
           scripts/tests/check-maven-namespace-access-test.sh
           scripts/tests/check-maven-central-version-test.sh
           scripts/tests/publish-central-portal-bundle-test.sh
-          scripts/tests/build-central-portal-bundle-test.sh
           scripts/tests/install-xcodegen-test.sh
           scripts/tests/release-workflow-test.sh
           scripts/tests/check-sample-run-profiles.sh
@@ -193,75 +310,114 @@ jobs:
           scripts/tests/resolve-ci-scope-test.sh
           scripts/tests/check-git-whitespace-test.sh
           scripts/tests/check-kotlin-toolchain-policy-test.sh
-          scripts/check-android-abi-guard.sh
-          python3 scripts/tests/ios-project-generation-test.py
-          source scripts/run-ios-app.sh
-          device_json="$(xcrun simctl list -j devices available)"
-          SIM_UDID="$(select_latest_available_simulator_udid "iPhone 17" "$device_json")"
-          export SIM_UDID
-          echo "Selected exact iOS simulator UDID: $SIM_UDID"
-          scripts/run-ios-ui-tests.sh
           scripts/tests/run-ios-app-test.sh
 
-      - name: Upload iOS UI failure evidence
-        if: ${{ failure() && steps.scope.outputs.full == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ios-ui-failure-${{ github.run_attempt }}
-          path: samples/iosApp/build/ios-ui-run.*/DerivedData/Logs/Test/*.xcresult
-          if-no-files-found: ignore
-          retention-days: 7
-
-      - name: Run complete module and platform checks
-        id: platform-tests
-        if: steps.scope.outputs.full == 'true'
-        run: python3 scripts/run-platform-tests.py full
-
-      - name: Stop Gradle after platform tests
-        id: stop-platform-gradle
-        if: ${{ always() && steps.scope.outputs.full == 'true' }}
-        run: ./gradlew --stop
-
-      - name: Upload platform test execution evidence
-        id: platform-reports
-        if: ${{ always() && steps.scope.outputs.full == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: platform-test-execution-${{ github.run_attempt }}
-          path: build/reports/platform-tests/**
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Verify API, documentation, and SBOM
-        if: steps.scope.outputs.full == 'true'
+      - name: Run ordinary full with private custody
+        id: ordinary-run
+        if: ${{ success() && (steps.scope.outputs.full == 'true') && steps.dependency-stage.outcome == 'success' && steps.dependency-stage.outputs.dependency_seed_ready == 'true' && steps.dependency-restore-guard.outcome == 'success' && steps.dependency-restore-guard.outputs.dependency_cache_ready == 'true' }}
+        shell: bash
+        env:
+          P2PKIT_DEPENDENCY_SEED_STAGE_OUTCOME: ${{ steps.dependency-stage.outcome }}
+          P2PKIT_DEPENDENCY_SEED_STAGE_SHA256: ${{ steps.dependency-stage.outputs.dependency_seed_staging_sha256 }}
+          P2PKIT_HOSTED_PREPARE_OUTCOME: ${{ steps.dependency-stage.outcome }}
+          P2PKIT_HOSTED_PREPARE_SHA256: ${{ steps.dependency-stage.outputs.preparation_sha256 }}
+          P2PKIT_CACHE_GUARD_OUTCOME: ${{ steps.dependency-restore-guard.outcome }}
+          P2PKIT_CACHE_RESTORATION_SHA256: ${{ steps.dependency-restore-guard.outputs.restoration_sha256 }}
+          DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
         run: |
-          ./gradlew :p2p-core:checkKotlinAbi :p2p-transport-lan:checkKotlinAbi :p2p-network-provisioning-android:checkKotlinAbi :p2p-network-provisioning-desktop:checkKotlinAbi :p2p-core:checkAndroidAbi :p2p-transport-lan:checkAndroidAbi :p2p-network-provisioning-android:checkAndroidAbi --console=plain
-          ./gradlew :p2p-core:dokkaGeneratePublicationHtml :p2p-transport-lan:dokkaGeneratePublicationHtml :p2p-network-provisioning-android:dokkaGeneratePublicationHtml :p2p-network-provisioning-desktop:dokkaGeneratePublicationHtml --console=plain
-          scripts/check-sbom.sh
+          python3 -I -B -S scripts/run-hosted-test-custody.py run --profile full --consume-dependencies
 
-      - name: Verify local release artifacts and consumers
-        if: steps.scope.outputs.full == 'true'
+      - name: Seal ordinary full evidence after controller return
+        id: ordinary-seal
+        if: ${{ always() && (steps.scope.outputs.full == 'true') && steps.ordinary-run.outcome == 'success' }}
+        timeout-minutes: 2
+        shell: bash
+        env:
+          P2PKIT_HOSTED_TEST_RUN_OUTCOME: ${{ steps.ordinary-run.outcome }}
         run: |
-          scripts/check-publish-artifacts.sh
-          scripts/check-published-consumers.sh
-          ./gradlew :p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance --console=plain
-          scripts/check-xcframework-minimum-os.sh
+          python3 -I -B -S scripts/run-hosted-test-custody.py validate-public --profile full
 
-      - name: Upload SBOM evidence
-        if: ${{ always() && steps.scope.outputs.full == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: cyclonedx-sbom
-          path: build/reports/cyclonedx/bom.*
-          # `check-sbom.sh` is the blocking content/presence gate. A failure in
-          # an earlier step has no SBOM to upload and must not manufacture a
-          # second, misleading failure in this evidence-only step.
-          if-no-files-found: warn
+      - name: Admit the original FULL evidence upload window
+        id: ordinary-upload-before
+        if: ${{ always() && (steps.scope.outputs.full == 'true') && steps.ordinary-run.outcome == 'success' && steps.ordinary-seal.outcome == 'success' && steps.ordinary-seal.outputs.artifacts_ready == 'true' }}
+        shell: bash
+        env:
+          P2PKIT_HOSTED_TEST_RUN_OUTCOME: ${{ steps.ordinary-run.outcome }}
+          P2PKIT_HOSTED_TEST_SEAL_OUTCOME: ${{ steps.ordinary-seal.outcome }}
+        run: |
+          python3 -I -B -S scripts/run-hosted-test-custody.py upload-guard before --profile full
 
-      - name: Upload XCFramework provenance evidence
-        if: ${{ always() && steps.scope.outputs.full == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - name: Upload only sealed ordinary full evidence
+        id: ordinary-evidence
+        if: ${{ always() && (steps.scope.outputs.full == 'true') && steps.ordinary-run.outcome == 'success' && steps.ordinary-seal.outcome == 'success' && steps.ordinary-seal.outputs.artifacts_ready == 'true' && steps.ordinary-upload-before.outcome == 'success' && steps.ordinary-upload-before.outputs.upload_ready == 'true' && steps.ordinary-upload-before.outputs.upload_timeout_minutes == '3' }}
+        timeout-minutes: 3
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: xcframework-provenance
-          path: library/p2p-transport-lan/build/XCFrameworks/release/BUILD_*.txt
-          if-no-files-found: warn
+          name: ordinary-full-evidence-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.ordinary-admission.outputs.session_directory }}/export/evidence.tar.gz.gpg
+            ${{ steps.ordinary-admission.outputs.session_directory }}/export/manifest.json
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          include-hidden-files: false
+          overwrite: false
+
+      - name: Verify FULL upload completed inside its original window
+        id: ordinary-upload-after
+        if: ${{ always() && (steps.scope.outputs.full == 'true') && steps.ordinary-run.outcome == 'success' && steps.ordinary-seal.outcome == 'success' && steps.ordinary-seal.outputs.artifacts_ready == 'true' && steps.ordinary-upload-before.outcome == 'success' && steps.ordinary-upload-before.outputs.upload_ready == 'true' }}
+        shell: bash
+        env:
+          P2PKIT_HOSTED_TEST_RUN_OUTCOME: ${{ steps.ordinary-run.outcome }}
+          P2PKIT_HOSTED_TEST_SEAL_OUTCOME: ${{ steps.ordinary-seal.outcome }}
+          P2PKIT_HOSTED_TEST_UPLOAD_OUTCOME: ${{ steps.ordinary-evidence.outcome }}
+          P2PKIT_HOSTED_TEST_UPLOAD_GUARD_SHA256: ${{ steps.ordinary-upload-before.outputs.upload_guard_sha256 }}
+        run: |
+          python3 -I -B -S scripts/run-hosted-test-custody.py upload-guard after --profile full
+
+      - name: Require the complete ordinary full result
+        id: ordinary-required
+        if: ${{ always() && (steps.scope.outputs.full == 'true') }}
+        shell: bash
+        env:
+          ORDINARY_ACTIVATION: ${{ steps.ordinary-activation.outcome }}
+          ORDINARY_ADMISSION: ${{ steps.ordinary-admission.outcome }}
+          DEPENDENCY_STAGE: ${{ steps.dependency-stage.outcome }}
+          DEPENDENCY_RESTORE: ${{ steps.dependency-restore.outcome }}
+          DEPENDENCY_RESTORE_GUARD: ${{ steps.dependency-restore-guard.outcome }}
+          JAVA: ${{ steps.java.outcome }}
+          ORDINARY_JDK21: ${{ steps.ordinary-jdk21.outcome }}
+          ORDINARY_XCODEGEN: ${{ steps.ordinary-xcodegen.outcome }}
+          ORDINARY_SDK: ${{ steps.ordinary-sdk.outcome }}
+          ORDINARY_ENTRYPOINTS: ${{ steps.ordinary-entrypoints.outcome }}
+          ORDINARY_RUN: ${{ steps.ordinary-run.outcome }}
+          ORDINARY_SEAL: ${{ steps.ordinary-seal.outcome }}
+          ORDINARY_EVIDENCE: ${{ steps.ordinary-evidence.outcome }}
+          ORDINARY_UPLOAD_BEFORE: ${{ steps.ordinary-upload-before.outcome }}
+          ORDINARY_UPLOAD_AFTER: ${{ steps.ordinary-upload-after.outcome }}
+          SEED_READY: ${{ steps.dependency-stage.outputs.dependency_seed_ready }}
+          CACHE_READY: ${{ steps.dependency-restore-guard.outputs.dependency_cache_ready }}
+          ARTIFACTS_READY: ${{ steps.ordinary-seal.outputs.artifacts_ready }}
+          PROFILE_PASSED: ${{ steps.ordinary-seal.outputs.profile_passed }}
+          UPLOAD_COMPLETE: ${{ steps.ordinary-upload-after.outputs.upload_complete }}
+        run: |
+          test "$ORDINARY_ACTIVATION" = success
+          test "$ORDINARY_ADMISSION" = success
+          test "$DEPENDENCY_STAGE" = success
+          test "$DEPENDENCY_RESTORE" = success
+          test "$DEPENDENCY_RESTORE_GUARD" = success
+          test "$JAVA" = success
+          test "$ORDINARY_JDK21" = success
+          test "$ORDINARY_XCODEGEN" = success
+          test "$ORDINARY_SDK" = success
+          test "$ORDINARY_ENTRYPOINTS" = success
+          test "$ORDINARY_RUN" = success
+          test "$ORDINARY_SEAL" = success
+          test "$ORDINARY_EVIDENCE" = success
+          test "$ORDINARY_UPLOAD_BEFORE" = success
+          test "$ORDINARY_UPLOAD_AFTER" = success
+          test "$SEED_READY" = true
+          test "$CACHE_READY" = true
+          test "$ARTIFACTS_READY" = true
+          test "$PROFILE_PASSED" = true
+          test "$UPLOAD_COMPLETE" = true

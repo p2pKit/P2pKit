@@ -3,6 +3,7 @@ require "yaml"
 require "shellwords"
 
 JVM_JOB = "jvm-library-checks"
+INITIAL_JOB = "initial-recipient-gate"
 MATRIX = [
     {"os" => "ubuntu-latest", "wrapper" => "./gradlew"},
     {"os" => "windows-latest", "wrapper" => '.\gradlew.bat'},
@@ -28,6 +29,12 @@ def check_jvm_coverage(workflow)
 
     jobs = workflow.fetch("jobs")
     jvm = jobs.fetch(JVM_JOB)
+    raise "whole JVM job must wait for initial-recipient admission" unless jvm["needs"] == INITIAL_JOB
+    expected_interlock = {"permissions" => {}, "runs-on" => "ubuntu-latest", "timeout-minutes" => 1,
+        "steps" => [{"name" => "Hold whole JVM jobs until initial-recipient admission is implemented",
+                     "shell" => "bash", "run" =>
+            "echo 'INITIAL_RECIPIENT_STAGE2=HOLD; WHOLE_JVM_JOB_ADMISSION_REQUIRED' >&2\nexit 125\n"}]}
+    raise "initial-recipient interlock must fail without setup or authority" unless jobs[INITIAL_JOB] == expected_interlock
     raise "JVM checks must use native runner defaults" if workflow.key?("defaults") || jvm.key?("defaults")
     raise "JVM matrix must run unconditionally" if jvm.key?("if") || jvm.key?("continue-on-error")
     raise "both host results must be retained" unless jvm.fetch("strategy").fetch("fail-fast") == false
@@ -74,6 +81,15 @@ check_jvm_coverage(workflow)
 checks = 1
 mutations = {
     "missing job" => ->(w) { w["jobs"].delete(JVM_JOB) },
+    "missing initial interlock" => ->(w) { w["jobs"].delete(INITIAL_JOB) },
+    "no whole-job initial prerequisite" => ->(w) { w["jobs"][JVM_JOB].delete("needs") },
+    "wrong whole-job initial prerequisite" => ->(w) { w["jobs"][JVM_JOB]["needs"] = "other" },
+    "ignored initial refusal" => ->(w) { w["jobs"][INITIAL_JOB]["continue-on-error"] = true },
+    "conditional initial refusal" => ->(w) { w["jobs"][INITIAL_JOB]["if"] = false },
+    "initial receipt as authority" => ->(w) { w["jobs"][INITIAL_JOB]["steps"][0]["run"] = "echo admitted\n" },
+    "initial setup before refusal" => ->(w) { w["jobs"][INITIAL_JOB]["steps"].unshift({"run" => "./gradlew help"}) },
+    "initial automatic environment creation" => ->(w) { w["jobs"][INITIAL_JOB]["environment"] = "initial-recipient-execution" },
+    "initial heavy-lease acquisition" => ->(w) { w["jobs"][INITIAL_JOB]["concurrency"] = "p2pkit-nonphysical-heavy" },
     "missing Windows" => ->(w) { w["jobs"][JVM_JOB]["strategy"]["matrix"]["include"].pop },
     "missing Linux" => ->(w) { w["jobs"][JVM_JOB]["strategy"]["matrix"]["include"].shift },
     "non-native Windows wrapper" => ->(w) {

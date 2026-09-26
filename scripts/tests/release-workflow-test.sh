@@ -33,6 +33,16 @@ ruby "$ROOT/scripts/check-workflow-checkout-policy.rb"
 ruby "$ROOT/scripts/tests/check-dependency-submission-policy-test.rb"
 ruby "$ROOT/scripts/tests/check-jvm-cross-host-policy-test.rb"
 ruby "$ROOT/scripts/tests/check-ci-scope-policy-test.rb"
+ruby "$ROOT/scripts/tests/check-heavy-job-queue-policy-test.rb"
+ruby "$ROOT/scripts/tests/check-sample-app-workflow-policy-test.rb"
+python3 -I -B -S "$ROOT/scripts/tests/test-transcript-custody-test.py"
+ruby "$ROOT/scripts/tests/check-hosted-test-workflow-policy-test.rb"
+python3 -I -B -S "$ROOT/scripts/tests/hosted-test-identity-test.py"
+python3 -I -B -S "$ROOT/scripts/tests/check-hosted-test-composition-test.py"
+python3 -I -B -S "$ROOT/scripts/tests/hosted-controller-import-test.py"
+python3 -I -B -S "$ROOT/scripts/tests/hosted-canonical-python-test.py"
+python3 -I -B -S "$ROOT/scripts/tests/hosted-consume-delivery-test.py"
+python3 -I -B -S "$ROOT/scripts/tests/hosted-desktop-job-budget-test.py"
 ruby "$ROOT/scripts/tests/check-consumer-gradle-policy-test.rb"
 ruby "$ROOT/scripts/tests/check-platform-test-policy-test.rb"
 python3 "$ROOT/scripts/tests/run-platform-tests-test.py"
@@ -224,8 +234,10 @@ for task in \
     ':p2p-sample-desktop-ui:checkRuntime' \
     ':p2p-sample-desktop-ui:hotRunArgfile' \
     ':p2p-sample-desktop-ui:createDistributable'; do
-    grep -Fq -- "$task" "$DESKTOP_WORKFLOW" || {
-        echo "FATAL: Desktop cross-host workflow is missing $task" >&2
+    # The exact ordinary workflow now calls the pinned, independently mutated
+    # custody composition above; all six selectors still live in that owner.
+    grep -Fq -- "$task" "$ROOT/scripts/run-hosted-test-custody.py" || {
+        echo "FATAL: Desktop custody controller is missing $task" >&2
         exit 1
     }
 done
@@ -261,8 +273,9 @@ if grep -Eq 'org\.jetbrains\.compose\.desktop:desktop-jvm-(linux|macos|windows)|
     exit 1
 fi
 
-ruby - "$CI_WORKFLOW" <<'RUBY'
+ruby - "$CI_WORKFLOW" "$ROOT/scripts/check-hosted-test-workflow-policy.rb" <<'RUBY'
 require "yaml"
+require ARGV.fetch(1)
 
 workflow = YAML.safe_load(File.read(ARGV.fetch(0)), aliases: true)
 complete_gate = workflow.fetch("jobs").fetch("complete-gate")
@@ -290,25 +303,11 @@ raise "CI whitespace check must run for both scopes" if whitespace.key?("if")
 raise "CI whitespace check is not range-bound" unless
   whitespace.fetch("run").include?("scripts/check-git-whitespace.sh \"$BASE_SHA\" \"$HEAD_SHA\"")
 
-ui_evidence = steps.find { |step| step["name"] == "Upload iOS UI failure evidence" }
-raise "CI does not retain failed iOS UI results" unless ui_evidence
-raise "iOS UI evidence must be failure-only" unless ui_evidence.fetch("if").include?("failure()")
-raise "iOS UI evidence action is not pinned" unless ui_evidence.fetch("uses") ==
-  "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
-raise "iOS UI evidence path is not an xcresult" unless
-  ui_evidence.fetch("with").fetch("path").end_with?("*.xcresult")
-
-sbom_evidence = steps.find { |step| step["name"] == "Upload SBOM evidence" }
-raise "CI SBOM evidence step is missing" unless sbom_evidence
-raise "early failures must not create a second missing-SBOM failure" unless
-  sbom_evidence.fetch("with").fetch("if-no-files-found") == "warn"
-
-xc_evidence = steps.find { |step| step["name"] == "Upload XCFramework provenance evidence" }
-raise "CI XCFramework provenance evidence step is missing" unless xc_evidence
-raise "XCFramework provenance evidence must be full-scope only" unless
-  xc_evidence.fetch("if").include?("steps.scope.outputs.full == 'true'")
-raise "XCFramework provenance evidence does not include sidecars" unless
-  xc_evidence.fetch("with").fetch("path").include?("XCFrameworks/release/BUILD_*.txt")
+# The pinned, mutated executable FULL composition above retains xcresult,
+# SBOM and XCFramework originals privately, including failed-gate disposition.
+# The selected caller may deliver only independently sealed ciphertext and its
+# safe manifest after its original upload guards, never the previous raw globs.
+HostedTestWorkflowPolicy.check_full(workflow)
 RUBY
 
 # Tripwire: scripts/install-xcodegen.sh XCODEGEN_VERSION; review the release
@@ -371,7 +370,6 @@ grep -Fq 'scripts/tests/classify-ci-scope-test.sh' "$ROOT/scripts/run-release-ga
 for regression in \
     scripts/tests/resolve-ci-scope-test.sh \
     scripts/tests/check-git-whitespace-test.sh \
-    scripts/tests/ios-project-generation-test.py \
     scripts/tests/check-release-identity-test.sh; do
     grep -Fq "$regression" "$CI_WORKFLOW" || {
         echo "FATAL: CI does not run $regression" >&2
@@ -382,6 +380,12 @@ for regression in \
         exit 1
     }
 done
+# The actual ordinary project-generation supplement remains in the bound
+# executable composition. The standalone release gate retains its direct call.
+grep -Fq 'python3 scripts/tests/ios-project-generation-test.py' "$ROOT/scripts/run-release-gate.sh" || {
+    echo "FATAL: release gate does not run the project-generation regression" >&2
+    exit 1
+}
 grep -Fq 'scripts/check-git-whitespace.sh' "$ROOT/scripts/run-release-gate.sh" || {
     echo "FATAL: release gate does not audit committed, staged, and worktree whitespace" >&2
     exit 1

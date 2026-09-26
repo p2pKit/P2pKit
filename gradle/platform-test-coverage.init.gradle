@@ -1,14 +1,17 @@
 // Invocation-local evidence. Only scripts/run-platform-tests.py supplies the
 // fresh token/output path; included builds must not overwrite the root report.
 import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import org.gradle.api.tasks.testing.AbstractTestTask
 import org.gradle.api.tasks.testing.TestDescriptor
 import org.gradle.api.tasks.testing.TestListener
 import org.gradle.api.tasks.testing.TestResult
+import org.gradle.api.provider.Property
 
 gradle.projectsLoaded {
     def root = gradle.rootProject
@@ -21,8 +24,140 @@ gradle.projectsLoaded {
     def records = new ConcurrentHashMap()
     def counts = new ConcurrentHashMap()
     def graph = Collections.synchronizedSet(new HashSet())
+    def selected = [:]
+    def simulatorConfigured = [:]
+    def simulatorGraph = [:]
+    def simulatorType = 'org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeSimulatorTest'
+    def expectedSimulators = [':p2p-core:iosSimulatorArm64Test', ':p2p-core:iosX64Test',
+                              ':p2p-transport-lan:iosSimulatorArm64Test', ':p2p-transport-lan:iosX64Test'] as Set
+    def sha256 = { byte[] raw -> MessageDigest.getInstance('SHA-256').digest(raw).encodeHex().toString() }
+    def readOriginal = { File file ->
+        def path = file.toPath()
+        for (def parent = path; parent != null; parent = parent.parent) {
+            if (Files.isSymbolicLink(parent)) throw new GradleException('Linked ordinary simulator receipt')
+        }
+        if (!file.isAbsolute() || file.absolutePath != file.canonicalPath || !Files.isRegularFile(path) ||
+            file.length() <= 0 || file.length() > 4 * 1024 * 1024) {
+            throw new GradleException('Missing or invalid ordinary simulator receipt')
+        }
+        def raw = Files.newInputStream(path, java.nio.file.StandardOpenOption.READ,
+            java.nio.file.LinkOption.NOFOLLOW_LINKS).withCloseable { stream -> stream.readNBytes(4 * 1024 * 1024 + 1) }
+        if (raw.length == 0 || raw.length > 4 * 1024 * 1024) {
+            throw new GradleException('Ordinary simulator receipt exceeds its bound')
+        }
+        raw
+    }
+    def bindingPath = properties['p2pkit.ordinarySimulatorBinding']
+    def bindingHash = properties['p2pkit.ordinarySimulatorSha256']
+    def startHash = properties['p2pkit.ordinarySimulatorStartSha256']
+    def prelaunchHash = properties['p2pkit.ordinarySimulatorPrelaunchSha256']
+    def statePath = System.getenv('P2PKIT_AUDIT_STATE_DIR')
+    def parentContext = statePath == null ? null : new File(new File(statePath).parentFile, 'run-context.json')
+    def ordinaryRequired = bindingPath != null || bindingHash != null || startHash != null || prelaunchHash != null ||
+        System.getenv('P2PKIT_ORDINARY_FULL_SIMULATOR') != null ||
+        System.getenv('P2PKIT_ORDINARY_FULL_SIMULATOR_SHA256') != null ||
+        (System.getenv('GITHUB_ACTIONS') == 'true' && System.getenv('GITHUB_JOB') == 'complete-gate')
+    if (parentContext != null && parentContext.exists()) {
+        def context = new JsonSlurper().parse(readOriginal(parentContext))
+        ordinaryRequired |= context.scope == 'CLOSED_ORDINARY_TEST_CONTROLLER' && context.profile == 'full'
+    }
+    def binding = null
+    def originalHashes = [:]
+    if (ordinaryRequired) {
+        if (gradle.startParameter.taskNames != ['check'] || parentContext == null ||
+            bindingPath != new File(parentContext.parentFile, 'evidence/simulator/binding.json').absolutePath ||
+            bindingPath != System.getenv('P2PKIT_ORDINARY_FULL_SIMULATOR') ||
+            !(bindingHash ==~ /[0-9a-f]{64}/) || bindingHash != System.getenv('P2PKIT_ORDINARY_FULL_SIMULATOR_SHA256') ||
+            !(startHash ==~ /[0-9a-f]{64}/) || !(prelaunchHash ==~ /[0-9a-f]{64}/)) {
+            throw new GradleException('Primary ordinary FULL simulator binding required')
+        }
+        def file = new File(bindingPath)
+        def raw = readOriginal(file)
+        if (sha256(raw) != bindingHash) throw new GradleException('Ordinary simulator binding bytes changed')
+        binding = new JsonSlurper().parse(raw)
+        def role = ['arm64', 'aarch64'].contains(System.getProperty('os.arch')) ? 'macos-arm64' :
+            ['amd64', 'x86_64'].contains(System.getProperty('os.arch')) ? 'macos-x64' : 'unsupported'
+        if (binding.schema != 1 || binding.scope != 'RESERVED_PRIMARY_ORDINARY_FULL_SIMULATOR' ||
+            binding.profile != 'full' || binding.root != root.rootDir.canonicalPath || binding.role != role ||
+            !['Mac OS X', 'Darwin'].contains(System.getProperty('os.name')) ||
+            binding.state != statePath || binding.session != parentContext.parentFile.canonicalPath ||
+            binding.home != System.getenv('GRADLE_USER_HOME') || binding.job != System.getenv('P2PKIT_AUDIT_JOB_ID') ||
+            binding.developerDir != System.getenv('DEVELOPER_DIR') || binding.selected.device.state != 'Shutdown' ||
+            !(binding.selected.device.udid ==~ /[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}/)) {
+            throw new GradleException('Ordinary simulator context differs')
+        }
+        def domains = new JsonSlurper().parseText(System.getenv('P2PKIT_AUDIT_OWNERSHIP_DOMAINS') ?: '[]')
+        def controllerContext = new JsonSlurper().parse(readOriginal(parentContext))
+        def expected = [id: binding.productInvocation, job: binding.job, state: binding.state, home: binding.home]
+        if (!(domains instanceof List) || domains.size() < 2 || domains.last() != expected ||
+            domains.collect { it.id }.join(':') != System.getenv('P2PKIT_AUDIT_OWNERSHIP_CHAIN') ||
+            domains.take(domains.size() - 2).collect { it.id } != controllerContext.ancestorInvocationIds ||
+            ['job', 'state', 'home'].any { domains[-2][it] != expected[it] }) {
+            throw new GradleException('Simulator receipt is not this reserved primary invocation')
+        }
+        originalHashes[file] = bindingHash
+        originalHashes[parentContext] = binding.contextSha256
+        originalHashes[new File(statePath, 'context.json')] = binding.canonicalContextSha256
+        originalHashes[new File(parentContext.parentFile, 'evidence/custody/request.json')] = binding.custodyRequestSha256
+        originalHashes[new File(parentContext.parentFile, 'evidence/simulator/admission.json')] = binding.admissionSha256
+        def startFile = new File(statePath, "evidence/${binding.productInvocation}/start.json")
+        def prelaunchFile = new File(parentContext.parentFile, 'evidence/simulator/prelaunch.json')
+        originalHashes[startFile] = startHash
+        originalHashes[prelaunchFile] = prelaunchHash
+        def actualStart = new JsonSlurper().parse(readOriginal(startFile))
+        def expectedStart = [schema: 1, id: binding.productInvocation, purpose: 'ordinary-full', kind: 'command',
+            requestedArgv: ['python3', 'scripts/run-platform-tests.py', 'full'], cwd: binding.root,
+            wrapper: binding.root + '/gradlew', host: binding.role, jobId: binding.job, gradleHome: binding.home,
+            ancestorInvocationIds: domains.take(domains.size() - 1).collect { it.id }, sourceBefore: null, sourceAfter: null,
+            productExitCode: null, stopExitCode: null, finalExitCode: 125, sourceUnchanged: false,
+            ownedSurvivors: [], errors: [], evidenceDirectory: startFile.parentFile.absolutePath]
+        def expectedStartKeys = (expectedStart.keySet() + ['controllerPid', 'startedUtc']) as Set
+        if (!(actualStart instanceof Map) || actualStart.keySet() != expectedStartKeys ||
+            expectedStart.any { key, value -> actualStart[key] != value } ||
+            !(actualStart.controllerPid instanceof Number) || actualStart.controllerPid.longValue() <= 0 ||
+            !(actualStart.controllerPid.toString() ==~ /[1-9][0-9]*/) || !(actualStart.startedUtc instanceof String)) {
+            throw new GradleException('Actual primary canonical start differs')
+        }
+        def before = new JsonSlurper().parse(readOriginal(prelaunchFile))
+        if (before.schema != 1 || before.scope != 'CURRENT_SHUTDOWN_BEFORE_PRIMARY_LAUNCH' ||
+            before.bindingSha256 != bindingHash || before.device != binding.selected.device) {
+            throw new GradleException('Current prelaunch Shutdown observation differs')
+        }
+    }
+    def verifySimulatorOriginals = {
+        originalHashes.each { file, hash ->
+            if (sha256(readOriginal(file)) != hash) throw new GradleException('Original simulator binding changed')
+        }
+    }
+    verifySimulatorOriginals()
+    def deviceRecord = { entry ->
+        def device = entry.task.getDevice().get()
+        if (device != binding.selected.device.udid) throw new GradleException('Simulator device Property changed')
+        [device: device, type: entry.type]
+    }
 
     root.allprojects { project ->
+        if (binding != null) {
+            project.plugins.withId('org.jetbrains.kotlin.multiplatform') { plugin ->
+                // Reuse the real pinned project's typed KGP seam. Do not install
+                // the mutable writer or modify enabled/standalone/filters/timeouts.
+                Class actualType = plugin.class.classLoader.loadClass(simulatorType)
+                if (!Property.isAssignableFrom(actualType.getMethod('getDevice').returnType)) {
+                    throw new GradleException('Pinned simulator getDevice is not a Property')
+                }
+                project.tasks.withType(actualType).configureEach { task ->
+                    task.getDevice().set(binding.selected.device.udid)
+                    selected[task.path] = [task: task, type: actualType.name]
+                }
+                project.afterEvaluate {
+                    project.tasks.withType(actualType).each { task ->
+                        if (task.getDevice().get() != binding.selected.device.udid) {
+                            throw new GradleException('Simulator binding overwritten during evaluation')
+                        }
+                    }
+                }
+            }
+        }
         project.tasks.withType(AbstractTestTask).configureEach { task ->
             def counters = ['SUCCESS', 'FAILURE', 'SKIPPED'].collectEntries { [(it): new AtomicLong()] }
             counts[task.path] = counters
@@ -38,6 +173,14 @@ gradle.projectsLoaded {
     }
 
     gradle.projectsEvaluated {
+        if (binding != null) {
+            verifySimulatorOriginals()
+            if (selected.keySet() != expectedSimulators) throw new GradleException('Review changed simulator task model')
+            selected.each { path, entry ->
+                simulatorConfigured[path] = deviceRecord(entry)
+                entry.task.getDevice().disallowChanges()
+            }
+        }
         root.allprojects { project ->
             def kotlin = project.extensions.findByName('kotlin')
             def targets = [:]
@@ -57,6 +200,12 @@ gradle.projectsLoaded {
     }
     gradle.taskGraph.whenReady { taskGraph ->
         graph.addAll(taskGraph.allTasks.collect { it.path })
+        if (binding != null) {
+            verifySimulatorOriginals()
+            taskGraph.allTasks.each { task ->
+                if (selected.containsKey(task.path)) simulatorGraph[task.path] = deviceRecord(selected[task.path])
+            }
+        }
     }
     gradle.taskGraph.afterTask { task, state ->
         if (!(task instanceof AbstractTestTask)) return
@@ -83,6 +232,16 @@ gradle.projectsLoaded {
                       dryRun: gradle.startParameter.dryRun,
                       host: [os: System.getProperty('os.name'), arch: System.getProperty('os.arch')],
                       model: model, tests: tests]
+        if (binding != null) {
+            verifySimulatorOriginals()
+            selected.values().each { deviceRecord(it) }
+            report.ordinarySimulator = [bindingSha256: bindingHash, admissionSha256: binding.admissionSha256,
+                canonicalContextSha256: binding.canonicalContextSha256, job: binding.job,
+                canonicalStartSha256: startHash, prelaunchSha256: prelaunchHash,
+                productInvocation: binding.productInvocation, device: binding.selected.device.udid,
+                runtime: binding.selected.runtime.identifier, configured: simulatorConfigured,
+                inGraph: simulatorGraph, unchanged: true]
+        }
         output.parentFile.mkdirs()
         def temporary = new File(output.parentFile, 'execution.json.tmp')
         temporary.setText(JsonOutput.prettyPrint(JsonOutput.toJson(report)) + '\n', 'UTF-8')
