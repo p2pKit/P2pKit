@@ -44,8 +44,10 @@ jobs:
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-originals-test.py -v -f
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-cache-bootstrap-origin-test.py -v -f \
             HttpTests IdentityAndFenceTests.test_original_response_order_types_clock_and_http_freshness_are_required
-          # These three suites already set failfast=True; unittest does not
+          # These suites already set failfast=True; unittest does not
           # accept an additional -f when that constructor argument is explicit.
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-use-test.py -v
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-artifact-zip-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-ordinary-qualification-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-ordinary-originals-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-ordinary-identity-test.py -v
@@ -60,7 +62,9 @@ jobs:
           package-manager-cache: false
       - name: Validate original-stream transport with offline service models
         run: |
+          set -euo pipefail
           node scripts/tests/hosted-initial-artifact-transport-test.cjs
+          node scripts/tests/hosted-initial-artifact-reader-test.cjs
           git diff --exit-code
       # No Gradle, SDK setup, provider, application build or publication. This
       # job cannot replace the ordinary FULL/Desktop or protected release gates.
