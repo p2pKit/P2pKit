@@ -112,3 +112,45 @@ old producer clocks, both ordinary HOLDs, exact selectors, credential
 boundaries and original deadlines remain unchanged. Windows900s/576MiB and
 unadmitted bootstrap5400s remain unchanged. C1/C2, owner/environment approval,
 formal PR/release acceptance and physical work are not supplied by this source.
+
+## Later exact-source review and local result — 2026-09-26
+
+The source-freeze status above is historical, not the current review/result
+status. Author commit `b5e4bbd0e8d1b92c8abd8f500d109b9b2f1e221f`, tree
+`d64de95cc7246946e048bbbe44b6c3b457e65abd`, received independent verdict
+**APPROVE_EXACT_B0_SOURCE_AND_AUTHORED_CONTROLS_ONLY**. Its four postimages were
+integrated unchanged into Foundation commit
+`c15b461c344c822aae4eb8109eb61d4c8e0385be` after checking their exact preimages.
+The original source-review report SHA-256 is
+`3acf14bc6491ddc4c5679f70a6b01225b8a1482f83692bb38189d8f2cc7732de`.
+
+One separately reviewed, fixed, stop-on-failure local invocation executed all
+**19/19 controls successfully: 12 pure DATA controls and seven AST assertions**.
+It used a read-only extraction of the author commit, not the subsequent B1
+worktree. No old suite, accepted reader or fixture was repeated. All child,
+RETURN, wrapper and tool exit codes were zero. The unittest interval was
+0.144 seconds; the complete wrapper measured 1.078 wall / 0.863 user / 0.149
+system seconds. Actual UID/GID was 65534, with post-PAM CPU60, address-space
+768MiB, file-size16MiB, FD128, NPROC32 and core0 limits, plus an external
+wall90/kill5 bound. These are local probe limits, not native/Release budgets.
+All 1,460 source hashes and 1,849 metadata rows including the extraction root
+were unchanged; the original process was independently confirmed absent.
+
+The consumed packet is
+`seal-deadline19-b5e4bbd0-offline-20260926.Aga3AD`; its result-manifest SHA-256 is
+`16df81977d67373d07dc0596d4ce9fd605cb917de502672d6dd9ced1642fc130`.
+Independent result verdict:
+**PASS_19_OF_19_LOCAL_OFFLINE_DATA_AND_AST_CONTROLS_ONLY**, report SHA-256
+`d8e3148d11df9d380e385af5d4a1c0042972b670e0bc7bde3f7a684f7ed5ac30`.
+Private original packets remain outside source; this note publishes no raw
+logs or evidence payloads.
+
+The maintained source-control workflow now selects this same 19-method file
+with `-v -f`. That is future source-test wiring, not an execution result.
+The successful source-only hosted run
+[36267041395/1](https://github.com/p2pKit/P2pKit/actions/runs/36267041395)
+used earlier commit `47924e7802d22ad7037c8a57c2c3ea86030f99c2` and does **not**
+cover B0. Neither the local controls nor this wiring execute the actual
+seal/fence/output lifecycle or supply BEFORE, K, provider, custody, native
+timing, C1/C2, owner approval or hosted qualification. All obligations and
+HOLDs listed above remain unchanged.

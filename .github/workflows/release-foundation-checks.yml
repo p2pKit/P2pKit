@@ -36,6 +36,7 @@ jobs:
           set -euo pipefail
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-sealed-data-test.py -v -f
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-tail-inventory-test.py -v -f
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-seal-deadline-test.py -v -f
           # These three suites already set failfast=True; unittest does not
           # accept an additional -f when that constructor argument is explicit.
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-ordinary-qualification-test.py -v
