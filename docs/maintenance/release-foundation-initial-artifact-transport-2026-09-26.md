@@ -1,5 +1,40 @@
 # Initial-recipient artifact transport: source and offline models
 
+## Four-member stored-ZIP byte leaf (later independent increment)
+
+`scripts/hosted_initial_artifact_zip.py` now supplies the deterministic,
+demand-driven four-member byte stream required by the future native caller.
+It does not open files, authenticate a runner, or establish native retirement.
+The complete ZIP, including framing, is bounded by the existing downstream
+512 MiB limit; the backend's 576 MiB ciphertext capacity cannot override it.
+
+Exact reviewed source SHA-256:
+`8b4d4c31bf0d727f8be0a8f816bb747e484f084bb5efdc3bc48d6a6ba0bc9723`.
+The sixteen-control test source SHA-256 is
+`0c103032106192d94a171e9289619afdcf1ae0734759d89656398d65f51bdb71`.
+Independent source review: `APPROVE_EXACT_STORED_ZIP_SOURCE_AND_16_AUTHORED_CONTROLS_ONLY`,
+report SHA-256 `e1f45081771be029180572ccaa61dc67812b714665f38aba281aad5fe899e957`.
+
+On 2026-09-26 at 21:45:39Z, one actual
+`python3 -I -B -S scripts/tests/hosted-initial-artifact-zip-test.py -v`
+invocation passed **16/16**, exit 0. External execution bounds were CPU60s,
+wall120s/kill5s and address space512MiB; the controls used small in-memory
+fixtures, not a full-capacity allocation. Whole-command timing was
+wall0.093s/user0.080s/system0.012s. Source hashes matched before and after.
+Log SHA-256: `e04f5aa7b7dbba948ed9f9adabf5d6199e6d290e8e104d2622e164192b16e971`.
+An earlier launch failed at argument parsing (exit2, **zero tests**) because
+`-f` duplicated the source's fixed `failfast=True`; only that redundant option
+was removed. Its original log is preserved, SHA-256
+`d71ef7d48bd4841d031c30a4604b5babb1dcdd467644f90452eb68e6bac32a0c`.
+
+Independent result: `APPROVE_EXACT_16_LOCAL_BYTE_CONTROLS_RESULT_ONLY`, report
+SHA-256 `b1b6a9298200f69deefeb886630374ca9c2ee867a86a85152f8b011d455037d6`.
+Native K/U/A connection, actual service delivery/retention and hosted
+qualification remain outstanding. No accepted transport/reader/preview suite
+was rerun for this leaf. All original HOLDs and release gates remain.
+
+## Earlier bounded transport increment
+
 Status: **REVIEWED_SOURCE / OFFLINE_MODELS_PASS / NOT_WORKFLOW_WIRED**.
 This is not provider, native-file, custody, retention or hosted qualification.
 No initial-recipient authorization, ordinary HOLD or Release gate is lifted.
