@@ -7876,6 +7876,62 @@ def _tail_seal_record(raw, inputs, authority_raw, first_ns, end_ns):
     return value
 
 
+def _historical_seal_record(raw, raws, *, outcome, expected_sha256):
+    """Decode supplied prior-Step DATA, never restore a seal/owner capability.
+
+    The caller must authenticate actual Step outcomes/hash custody, read these
+    bytes through new owned readers and acquire its own current authority and
+    clocks. This pure check neither observes a host nor registers any return.
+    Pending self-writer/Step flags remain unchanged even with supplied success.
+    """
+    value = fields(canonical(raw), "schema scope kind edge predecessor primary source github policy originalWindow "
+        "firstNs hardEndNs lastNs lastLocal manifestSha256 output authority inputMetadataClose writerReturn originalStepOutcome "
+        "decryption upload testAcceptance productiveAuthority cacheAuthority budgetAcceptance exportSaveAuthority",
+        "HISTORICAL_SEAL_FIELDS")
+    require(type(outcome) is str and outcome == "success" and O.digest(raw) == digest(expected_sha256),
+        "HISTORICAL_SEAL_SUPPLIED_STEP")
+    step, _carrier, context, manifest, collected = _tail_bundle(raws)
+    frame = step["originalWindow"]
+    first, end = O.integer(value["firstNs"]), O.integer(value["hardEndNs"])
+    authority = _tail_authority_record(O.encoded(value["authority"]), frame, first, end)
+    require(type(value["schema"]) is int and value["schema"] == 1 and value["scope"] == _TAIL_SEAL_SCOPE and
+        value["kind"] == step["kind"] and value["edge"] == "SEAL", "HISTORICAL_SEAL_SCOPE")
+    expected = {"predecessor": _tail_predecessor(raws, step), "primary": step["primary"],
+        **{name: manifest[name] for name in ("source", "github", "policy")}, "originalWindow": frame,
+        "manifestSha256": O.digest(raws["manifest"])}
+    # Canonical equality also refuses boolean/integer substitutions in nested
+    # supplied history. Equality of Python mappings alone would not do that.
+    _same({name: value[name] for name in expected}, expected, "HISTORICAL_SEAL_BINDINGS")
+    binding = authority["authority"]
+    # The existing parser compares this nested value to a typed outer integer.
+    # Refuse numeric equality aliases locally, without changing that parser.
+    O.integer(binding["closedNs"])
+    require(binding["expectedMatchSha256"] == binding["freshMatchSha256"] == binding["originalsSha256"]["match"] ==
+        O.digest(raws["original-match"]) and binding["originalsSha256"]["event"] == O.digest(raws["event"]) and
+        binding["originalsSha256"]["candidate_policy_raw"] == O.digest(raws["policy"]),
+        "HISTORICAL_SEAL_AUTHORITY_INPUTS")
+    require(collected["lastNs"] <= first and authority["closedNs"] <= O.integer(value["lastNs"]) < end and
+        local_value(value["lastLocal"]) >= collected["lastLocal"], "HISTORICAL_SEAL_CHRONOLOGY")
+    _collect_pending(value)
+    require(value["decryption"] == value["upload"] == "NOT_PERFORMED", "HISTORICAL_SEAL_NOT_ACCEPTANCE")
+    # This parses historical close DATA; it is not today's metadata owner's
+    # close, and is deliberately never installed in _TAIL_INPUTS or any ledger.
+    _collect_file_close(O.encoded(value["inputMetadataClose"]))
+    output = fields(value["output"], "scope directoryIdentity fileMetadataSha256 artifact", "HISTORICAL_SEAL_OUTPUT_FIELDS")
+    clock = O.wire.clock_identity(frame["clock"])
+    native.directory_identity(output["directoryIdentity"], clock.role)
+    require(output["scope"] == "THIS_SEAL_FILE_OBSERVATION_NOT_HISTORICAL_POSIX_OUTPUT_PIN",
+        "HISTORICAL_SEAL_OUTPUT_SCOPE")
+    original_pin = context["directories"]["export-output"]
+    if original_pin is not None:
+        _same(output["directoryIdentity"], original_pin, "HISTORICAL_SEAL_WINDOWS_OUTPUT_PIN")
+    _same(output["artifact"], manifest["artifact"], "HISTORICAL_SEAL_ARTIFACT")
+    # The seal-observed pin and this hash are declarations only. A later user
+    # still needs a NEW owned exact file/metadata read before upload is possible.
+    digest(output["fileMetadataSha256"])
+    return value
+
+
 def _tail_write(metadata, directory, raw):
     require(type(metadata) is _PrimaryOwner and directory.path.name == "seal", "TAIL_SEAL_FIXED_DIRECTORY")
     canonical(raw)
