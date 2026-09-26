@@ -34,6 +34,7 @@ sys.modules[_spec.name] = N
 _spec.loader.exec_module(N)
 native, O, I, Q, A, C = N.native, N.O, N.I, N.Q, N.acquisition, N.continuity
 import hosted_initial_recipient_evidence as E
+import hosted_initial_recipient_before as B
 
 PRIMARY_OUTCOME = "P2PKIT_INITIAL_PRIMARY_OUTCOME"
 PRIMARY_RESULT = "P2PKIT_INITIAL_PRIMARY_RESULT_SHA256"
@@ -1988,7 +1989,7 @@ class _CustodyOwner(native.Owner):
     """
     def __init__(self, local_end, fence=None, *, first=None, cancelled=lambda: None):
         require(type(self) is _CustodyOwner and id(self) not in _CUSTODY_OWNERS and
-            type(fence) in (Window, _CustodyChildClock, _CollectClock, _TailClock) and first is not None,
+            type(fence) in (Window, _CustodyChildClock, _CollectClock, _TailClock, _BeforeClock) and first is not None,
             "AUTHORITY_OWNER_NEW")
         native.Owner.__init__(self, local_end, fence, first=first, cancelled=cancelled)
         self.initial_sources = {}
@@ -2281,6 +2282,34 @@ class _CustodyOwner(native.Owner):
         require(type(self.fence) is _TailClock and anchor.phase_active and type(old_limits) is tuple and
             old_limits == (None, None) and anchor.phase == (started, work_end, final_end, old_limits),
             "TAIL_OWNER_PHASE_RETURN_CHANGED")
+        self.work_limit = self.final_limit = None
+        anchor.phase_active = False
+        self.check()
+
+
+    def enter_before_phase(self, context_raw, started, work_end, final_end):
+        """Exactly one B-only phase; its seed already capped the FIRST reader."""
+        anchor = self.check()
+        require(type(self.fence) is _BeforeClock and self.fence.side == "parent" and
+            anchor.phase is None and not anchor.closed and not anchor.unknown and anchor.failure is None and
+            not anchor.busy and anchor.frozen is None and self.work_limit is None and self.final_limit is None and
+            type(started) is int and started == self.fence.last, "BEFORE_OWNER_ORIGINAL_PHASE")
+        context = _before_context(context_raw, self.fence.clock)
+        B.phase_caps(context["deadline"], (started, work_end, final_end))
+        _same(context["deadline"], self.fence.seed, "BEFORE_OWNER_SEED")
+        _same(context["originalWindow"], self.fence.frame, "BEFORE_OWNER_WINDOW")
+        require(context["continuationEndNs"] == self.fence.work == self.fence.final,
+            "BEFORE_OWNER_ORIGINAL_END")
+        anchor.phase = (started, work_end, final_end, (None, None))
+        anchor.phase_active = True
+        self.work_limit, self.final_limit = work_end, final_end
+        self.check()
+
+    def leave_before_phase(self, started, work_end, final_end, old_limits):
+        anchor = self.check()
+        require(type(self.fence) is _BeforeClock and anchor.phase_active and type(old_limits) is tuple and
+            old_limits == (None, None) and anchor.phase == (started, work_end, final_end, old_limits),
+            "BEFORE_OWNER_PHASE_RETURN_CHANGED")
         self.work_limit = self.final_limit = None
         anchor.phase_active = False
         self.check()
@@ -8444,16 +8473,1752 @@ def seal_for_before(kind, cancelled):
     return _seal(kind, cancelled, for_before=True)
 
 
+# BEFORE is a new actual same-process authority episode. Neither the old seal
+# JSON nor its already-consumed TailClock registry is an executable capability.
+_BEFORE_NAMES = (*_TAIL_NAMES, B.SEAL_OUTCOME_ENV, *(environment for _name, environment, _flag in B.SEED_FIELDS))
+_BEFORE_CONTEXT_FIELDS = "schema scope edge kind root session job observed originalWindow originalServiceJob " \
+    "predecessor expectedMatch eventSha256 sourceReturnSha256 sourceReturnedNs inheritedContext directoryIdentity " \
+    "parentFirstNs parentFirstLocal continuationEndNs deadline selectedInputs inputMetadata budgetAcceptance exportSaveAuthority"
+_BEFORE_ATTEMPTS, _BEFORE_INPUTS, _BEFORE_CLOCKS, _BEFORE_AUTHORITIES = {}, {}, {}, {}
+_BEFORE_ENTRY = B.EntryLatch(_BEFORE_ATTEMPTS)
+
+
+def _before_begin(name):
+    require(name in ("entry", "authority"), "BEFORE_ATTEMPT_NAME")
+    if name == "entry":
+        return _BEFORE_ENTRY.begin(_BEFORE_ATTEMPTS)
+    previous = _BEFORE_ATTEMPTS.get(name)
+    if previous is not None:
+        if previous["failure"] is None:
+            previous["failure"] = O.OriginError("INITIAL_CUSTODY_BEFORE_ATTEMPT_REUSE")
+        previous["state"] = "FAILED"
+        raise previous["failure"]
+    result = {"state": "STARTED", "failure": None, "return": None}
+    _BEFORE_ATTEMPTS[name] = result
+    return result
+
+
+def _before_entry_current(entry):
+    """The original parent latch and attempt, never a child/context capability."""
+    require(type(entry) is tuple and len(entry) == 2 and type(entry[0]) is B.EntryLatch,
+        "BEFORE_ENTRY_BINDING")
+    original, attempt = entry
+    try:
+        require(original is _BEFORE_ENTRY, "BEFORE_ENTRY_LATCH_REPLACED")
+        original.check(_BEFORE_ATTEMPTS, attempt)
+    except BaseException as error:
+        raise original.fail(error)
+
+
+def _before_actual(expected=None):
+    _tail_actual()
+    actual = tuple(os.environ.get(name) for name in _BEFORE_NAMES)
+    require((expected is None or type(expected) is tuple and actual == expected) and
+        os.environ.get(B.SEAL_OUTCOME_ENV) == "success", "BEFORE_ACTUAL_SEAL_SUCCESS")
+    seed = {name: os.environ.get(environment) for name, environment, _flag in B.SEED_FIELDS}
+    C.seal_deadline_data(seed)
+    return actual, seed
+
+
+def _before_selected(actual):
+    """Only the selected nonsecret Step input strings, not the whole environment."""
+    require(type(actual) is tuple and len(actual) == len(_BEFORE_NAMES), "BEFORE_SELECTED_INPUTS")
+    saved = dict(zip(_BEFORE_NAMES, actual))
+    names = (PRIMARY_OUTCOME, PRIMARY_RESULT, PRIMARY_HANDOFF, _COLLECT_OUTCOME, _COLLECT_STEP_HASH,
+        _COLLECT_EXPORT_HASH, _TAIL_OUTCOME, _TAIL_HASH, _TAIL_EXPORT_HASH, B.SEAL_OUTCOME_ENV,
+        *(environment for _name, environment, _flag in B.SEED_FIELDS))
+    return {name: saved[name] for name in names}
+
+
+def _before_roster(*, created):
+    require(type(created) is bool, "BEFORE_ROOT_STAGE")
+    return tuple(sorted((*_tail_roster("SEALED"), *(("authority-before",) if created else ()))))
+
+
+def _before_metadata(value, role, count):
+    """Validate retained actual metadata DATA, never open/reconstruct a file."""
+    require(type(count) is int and 0 <= count <= native.LIMIT, "BEFORE_METADATA_COUNT")
+    if role == "windows-x64":
+        fields(value, "identity is_directory size links attributes creation_100ns modified_100ns change_100ns owner_sid protected_dacl",
+            "BEFORE_WINDOWS_METADATA_FIELDS")
+        identity = tuple(native.directory_identity(value["identity"], role))
+        require(value["is_directory"] is False and type(value["links"]) is int and value["links"] == 1 and
+            type(value["owner_sid"]) is str and re.fullmatch(r"S-1-[0-9-]{1,180}", value["owner_sid"]) and
+            type(value["protected_dacl"]) is bool, "BEFORE_WINDOWS_PRIVATE_METADATA")
+        for name in ("attributes", "creation_100ns", "modified_100ns", "change_100ns"):
+            O.integer(value[name])
+    else:
+        require(role in O.clocks.DOMAINS, "BEFORE_METADATA_ROLE")
+        fields(value, "device inode size mtime_ns ctime_ns", "BEFORE_POSIX_METADATA_FIELDS")
+        identity = tuple(native.directory_identity([value["device"], value["inode"]], role))
+        O.integer(value["mtime_ns"])
+        O.integer(value["ctime_ns"])
+    require(type(value["size"]) is int and value["size"] == count, "BEFORE_METADATA_SIZE")
+    return identity
+
+
+def _before_read(metadata, directory, name, maximum, *, count=None, checksum=None):
+    """Actual bounded read, EOF, stable native metadata and real reader close.
+
+    Unlike the unchanged legacy _read_private contract, retain the actual
+    reader metadata in canonical bytes before streaming, not only its payload.
+    The maintained owner already pins the returned reader before its own
+    allocation-return callback. This serves all279 originals, eleven inputs
+    and the separate close file; it is not a new native-file backend.
+    """
+    require(type(metadata) is _PrimaryOwner and type(maximum) is int and 0 < maximum <= native.LIMIT,
+        "BEFORE_READER_LIMIT")
+    Q._component(name)
+    end, path = metadata.guard(), directory.path / name
+    if os.name == "nt":
+        reader = metadata.acquire("reader", lambda: directory.open_file(name, max_bytes=maximum, deadline=end))
+        require(type(reader) is native.windows.NativeFile, "BEFORE_READER_TYPE")
+        original = reader.initial_info
+        def verify():
+            require(reader.verify() == original, "BEFORE_READER_METADATA_CHANGED")
+    else:
+        reader = metadata.acquire("reader", lambda: Q._posix_stream(path, os.O_RDONLY | os.O_NOFOLLOW, "rb"))
+        require(type(reader) is io.BufferedReader, "BEFORE_READER_TYPE")
+        original = Q._file_info(path, reader, maximum)
+        def verify():
+            directory.verify()
+            require(Q._file_info(path, reader, maximum) == original, "BEFORE_READER_METADATA_CHANGED")
+    original_raw = O.encoded(original.as_dict())
+    observed_count, ordinal = original.size, len(metadata.rows) - 1
+    require(type(observed_count) is int and 0 <= observed_count <= maximum and
+        (count is None or type(count) is int and observed_count == count), "BEFORE_READER_DECLARED_SIZE")
+    info = canonical(original_raw)
+    _before_metadata(info, metadata.owner.first.clock.role, observed_count)
+    raw = _consume(metadata, reader, observed_count, checksum, verify, retain=True)
+    require(metadata.rows[ordinal][2] is reader and metadata.rows[ordinal][3:] == (True, True) and
+        O.encoded(original.as_dict()) == original_raw, "BEFORE_READER_ORIGINAL_CLOSE")
+    return raw, {"bytes": observed_count, "sha256": O.digest(raw), "metadata": info,
+        "readerOrdinal": ordinal, "retirement": "KNOWN_READER_CLOSE"}
+
+
+def _before_same_read(first, second):
+    _same({name: first[name] for name in ("bytes", "sha256", "metadata", "retirement")},
+        {name: second[name] for name in ("bytes", "sha256", "metadata", "retirement")}, "BEFORE_READBACK_CHANGED")
+
+
+def _before_originals():
+    return (("seal", "seal/seal-pending.json", native.LIMIT),
+        *( (name, ("export-output/" if name == "manifest" else "returned/") + leaf, _TAIL_LIMITS[name])
+            for name, _directory, leaf in _tail_records(None, None)))
+
+
+def _before_input_data(value, role):
+    """Closed retained-input grammar only; the actual registry is separate."""
+    fields(value, "firstNs firstLocal closedNs closedLocal files ownerClose", "BEFORE_INPUT_DATA_FIELDS")
+    require(O.integer(value["firstNs"]) <= O.integer(value["closedNs"]) and
+        local_value(value["firstLocal"]) <= local_value(value["closedLocal"]), "BEFORE_INPUT_DATA_CHRONOLOGY")
+    close = _collect_file_close(O.encoded(value["ownerClose"]))
+    require(type(value["files"]) is list and len(value["files"]) == 11, "BEFORE_ELEVEN_INPUTS")
+    ordinals, identities = set(), set()
+    for row, (key, relative, maximum) in zip(value["files"], _before_originals()):
+        fields(row, "key relative maximum first readback", "BEFORE_INPUT_READ_FIELDS")
+        require((row["key"], row["relative"]) == (key, relative) and type(row["maximum"]) is int and
+            row["maximum"] == maximum, "BEFORE_INPUT_READ_PATH")
+        for read in (row["first"], row["readback"]):
+            fields(read, "bytes sha256 metadata readerOrdinal retirement", "BEFORE_READ_FIELDS")
+            count = O.integer(read["bytes"], 1)
+            digest(read["sha256"])
+            ordinal = O.integer(read["readerOrdinal"])
+            identity = _before_metadata(read["metadata"], role, count)
+            require(count <= maximum and ordinal not in ordinals and ordinal < len(close["resources"]) and
+                close["resources"][ordinal]["label"] == "reader" and read["retirement"] == "KNOWN_READER_CLOSE",
+                "BEFORE_INPUT_READER_CLOSE")
+            ordinals.add(ordinal)
+        _before_same_read(row["first"], row["readback"])
+        require(identity not in identities, "BEFORE_INPUT_FILE_ALIAS")
+        identities.add(identity)
+    require(len(close["resources"]) == 26 and len(ordinals) == 22 and
+        sum(row["label"] == "directory" for row in close["resources"]) == 4, "BEFORE_INPUT_FULL_CLOSE_ROSTER")
+    return value
+
+
+@dataclass(frozen=True, repr=False)
+class _BeforeInput:
+    originals: tuple
+    metadata: bytes
+
+
+def _checked_before_input(result):
+    saved = _BEFORE_INPUTS.get(id(result))
+    require(type(result) is _BeforeInput and type(saved) is tuple and saved[0] is result, "BEFORE_ORIGINAL_INPUT")
+    _, dictionary, originals, raw, metadata, anchor, pins, graph, actual = saved
+    require(result.__dict__ is dictionary and result.originals is originals and result.metadata == raw and
+        metadata._anchor() is anchor, "BEFORE_INPUT_CHANGED")
+    N._check_history(graph)
+    _before_actual(actual)
+    metadata.structural()
+    require(metadata.finished and metadata.failure is None and metadata.owner.closed and not metadata.owner.unknown and
+        metadata.owner.original is None and metadata.errors == [] and all(a and c for _r, _l, _v, a, c in metadata.rows),
+        "BEFORE_INPUT_CLOSE_UNKNOWN")
+    for _name, directory, path, identity in pins:
+        require(directory.path is path and tuple(directory.identity) == identity and
+            _collect_directory_closed(directory, metadata.owner.first.clock.role) is True, "BEFORE_INPUT_PIN_CHANGED")
+    value = _before_input_data(canonical(raw), metadata.owner.first.clock.role)
+    require(tuple((row["key"], row["first"]["sha256"]) for row in value["files"]) ==
+        tuple((name, O.digest(data)) for name, data in originals), "BEFORE_INPUT_HASH_CHANGED")
+    return dict(originals), value, metadata
+
+
+@dataclass(eq=False, repr=False)
+class _BeforeClockAnchor:
+    handle: object
+    binding: tuple
+    graph: tuple
+    last: int
+    local_last: float
+    metadata: object = None
+    frame: object = None
+    frame_graph: tuple = ()
+    bound: object = None
+    bound_graph: tuple = ()
+    operative: object = None
+    file_owners: tuple = ()
+    phase: str = "METADATA"
+    busy: bool = False
+    failure: object = None
+
+
+class _BeforeClock:
+    """New one-shot B clock, capped BEFORE its first owner/read.
+
+    Parent seed gives the original absolute sealEnd, not a new FIRST+allowance.
+    The child additionally inherits native.phase's actual work/final tuple in
+    fixed argv. All original caps/LOCAL pairs remain immutable; no old clock,
+    Date, JSON owner, read failure or cleanup callback can renew them.
+    """
+    __slots__ = ("_binding",)
+
+    def __init__(self, first, local, boot, cancelled, seed, *, side, actual=None, inherited=None, entry=None):
+        require(type(self) is _BeforeClock and id(self) not in _BEFORE_CLOCKS and side in ("parent", "child") and
+            callable(cancelled), "BEFORE_CLOCK_NEW")
+        graph = N._history_graph(first, seed, actual, inherited)
+        local_value(local)
+        work, final = B.first_caps(seed, first, boot, inherited=inherited)
+        require((side == "parent" and inherited is None and type(actual) is tuple) or
+            (side == "child" and type(inherited) is tuple and actual is None and entry is None), "BEFORE_CLOCK_SIDE")
+        if side == "parent":
+            _before_entry_current(entry)
+        local_work = O.wire._directed_deadline(local, (work - first.nanoseconds) / O.NS, work, first.nanoseconds)
+        local_final = O.wire._directed_deadline(local, (final - first.nanoseconds) / O.NS, final, first.nanoseconds)
+        self._binding = (first, local, boot, cancelled, side, seed, actual, inherited,
+            (work, final, local_work, local_final), entry)
+        N._check_history(graph)
+        _BEFORE_CLOCKS[id(self)] = _BeforeClockAnchor(self, self._binding, graph, first.nanoseconds, local)
+        self._view()
+
+    def _anchor(self):
+        anchor = _BEFORE_CLOCKS.get(id(self))
+        require(type(self) is _BeforeClock and type(anchor) is _BeforeClockAnchor and anchor.handle is self,
+            "BEFORE_CLOCK_HANDLE")
+        return anchor
+
+    @staticmethod
+    def _error(anchor, error):
+        if anchor.binding[4] == "parent":
+            error = anchor.binding[9][0].fail(error)
+        if anchor.failure is None:
+            anchor.failure = error
+        return anchor.failure
+
+    def _current(self, anchor):
+        require(_BEFORE_CLOCKS.get(id(self)) is anchor and self._binding is anchor.binding and anchor.handle is self,
+            "BEFORE_CLOCK_BINDING_CHANGED")
+        if anchor.binding[4] == "parent":
+            _before_entry_current(anchor.binding[9])
+        for graph in (anchor.graph, anchor.frame_graph, anchor.bound_graph):
+            N._check_history(graph)
+        if anchor.binding[4] == "parent":
+            _actual, seed = _before_actual(anchor.binding[6])
+            _same(seed, anchor.binding[5], "BEFORE_CLOCK_SEED_CHANGED")
+        require(not native.QUARANTINE and not Q.QUARANTINE and not C.QUARANTINE and
+            not native.diagnostics._QUARANTINE, "BEFORE_CLOCK_UNKNOWN")
+        if anchor.metadata is not None:
+            anchor.metadata.structural()
+            require(anchor.metadata.failure is None and not anchor.metadata.owner.unknown, "BEFORE_METADATA_FAILED")
+        if anchor.bound is not None:
+            if anchor.binding[4] == "parent":
+                _checked_before_input(anchor.bound[0])
+            _custody_match_check(anchor.bound[-1])
+        if anchor.operative is not None:
+            require(type(anchor.operative) is _CustodyOwner and anchor.operative.fence is self,
+                "BEFORE_OPERATIVE_CHANGED")
+            anchor.operative.check()
+            require(anchor.operative.original is None and not anchor.operative.unknown, "BEFORE_OPERATIVE_FAILED")
+        for _name, owner, saved in anchor.file_owners:
+            require(owner._anchor() is saved and owner.owner.fence is self, "BEFORE_FILE_OWNER_CHANGED")
+            owner.structural()
+            require(owner.failure is None and not owner.owner.unknown, "BEFORE_FILE_OWNER_FAILED")
+
+    def _view(self):
+        anchor = self._anchor()
+        try:
+            self._current(anchor)
+            return anchor
+        except BaseException as error:
+            raise self._error(anchor, error)
+
+    reading = property(lambda self: self._view().binding[0])
+    clock = property(lambda self: self.reading.clock)
+    first = property(lambda self: self.reading.nanoseconds)
+    first_local = property(lambda self: self._view().binding[1])
+    cancelled = property(lambda self: self._view().binding[3])
+    side = property(lambda self: self._view().binding[4])
+    seed = property(lambda self: self._view().binding[5])
+    inherited = property(lambda self: self._view().binding[7])
+    work = property(lambda self: self._view().binding[8][0])
+    final = property(lambda self: self._view().binding[8][1])
+    local_end = property(lambda self: self._view().binding[8][3])
+    last = property(lambda self: self._view().last)
+
+    @property
+    def frame(self):
+        anchor = self._view()
+        require(anchor.frame is not None, "BEFORE_WINDOW_NOT_REBOUND")
+        return anchor.frame[2]
+
+    def _begin(self):
+        anchor = self._anchor()
+        if anchor.failure is not None:
+            raise anchor.failure
+        try:
+            self._current(anchor)
+            require(not anchor.busy, "BEFORE_CLOCK_REENTRY")
+            anchor.busy = True
+            return anchor
+        except BaseException as error:
+            raise self._error(anchor, error)
+
+    def _local(self, anchor, final):
+        value = local_value(time.monotonic())
+        require(value >= anchor.local_last, "BEFORE_LOCAL_BACKWARDS")
+        anchor.local_last = value
+        self._current(anchor)
+        require(value < anchor.binding[8][3 if final else 2], "BEFORE_LOCAL_EXPIRED")
+        return value
+
+    def _observe(self, anchor, final, minimum, limit):
+        end = anchor.binding[8][1 if final else 0]
+        if limit is not None:
+            end = min(end, O.integer(limit))
+        frontier = max(anchor.last, O.integer(minimum))
+        for number in range(2):
+            local = self._local(anchor, final)
+            observed = O.clocks.checked_now(anchor.binding[0].clock, minimum_ns=frontier)
+            anchor.last = frontier = O.integer(observed, frontier)
+            self._current(anchor)
+            require(frontier < end and anchor.busy and anchor.failure is None, "BEFORE_RAW_EXPIRED_OR_CHANGED")
+            boot = C.boot_digest(anchor.binding[0].clock.role)
+            self._current(anchor)
+            require(type(boot) is str and boot == anchor.binding[2], "BEFORE_BOOT_CHANGED")
+            if number == 0:
+                anchor.binding[3]()
+                self._current(anchor)
+                require(anchor.last == frontier and anchor.local_last == local and anchor.failure is None and anchor.busy,
+                    "BEFORE_CALLBACK_CHANGED")
+        self._local(anchor, final)
+        self._current(anchor)
+        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")
+        return frontier
+
+    def now(self, *, final=False, minimum=0, limit=None):
+        anchor = self._begin()
+        try:
+            require(type(final) is bool, "BEFORE_FINAL_TYPE")
+            return self._observe(anchor, final, minimum, limit)
+        except BaseException as error:
+            raise self._error(anchor, error)
+        finally:
+            anchor.busy = False
+
+    def deadline(self, maximum, *, final=False, limit=None):
+        anchor = self._begin()
+        try:
+            require(type(final) is bool and type(maximum) in (int, float) and math.isfinite(maximum) and
+                0 < maximum <= 900, "BEFORE_MECHANISM_MAXIMUM")
+            local = self._local(anchor, final)
+            observed = self._observe(anchor, final, 0, limit)
+            end = anchor.binding[8][1 if final else 0]
+            if limit is not None:
+                end = min(end, O.integer(limit))
+            result = min(anchor.binding[8][3 if final else 2],
+                O.wire._directed_deadline(local, maximum, end, observed))
+            self._current(anchor)
+            require(anchor.busy and anchor.failure is None, "BEFORE_DEADLINE_CHANGED")
+            return result
+        except BaseException as error:
+            raise self._error(anchor, error)
+        finally:
+            anchor.busy = False
+
+    def attach_metadata(self, metadata):
+        anchor = self._begin()
+        try:
+            require(anchor.phase == "METADATA" and anchor.metadata is None and type(metadata) is _PrimaryOwner and
+                metadata.owner.fence is self and metadata.owner.first is anchor.binding[0] and
+                not metadata.finished and not metadata.rows, "BEFORE_METADATA_ORIGINAL_OWNER")
+            anchor.metadata = metadata
+            self._current(anchor)
+        except BaseException as error:
+            raise self._error(anchor, error)
+        finally:
+            anchor.busy = False
+
+    def _rebind(self, anchor, raw, value, frame):
+        require(anchor.phase == "METADATA" and anchor.frame is None and anchor.bound is None and
+            anchor.metadata is not None and not anchor.metadata.finished, "BEFORE_WINDOW_REBIND_ONCE")
+        rows = anchor.metadata.rows
+        require(len(rows) == 2 and tuple(row[1] for row in rows) == ("directory", "reader") and
+            rows[0][3:] == (False, False) and rows[1][3:] == (True, True), "BEFORE_FIRST_READER_NOT_CLOSED")
+        frame_clock, _limits = _custody_authority_frame(frame)
+        _sha, end, seed_clock, boot = C.seal_deadline_data(anchor.binding[5])
+        _same(O.clock_value(frame_clock), O.clock_value(seed_clock), "BEFORE_WINDOW_CLOCK")
+        require(frame["sealEndNs"] == end and frame["originalBootDigest"] == boot == anchor.binding[2],
+            "BEFORE_WINDOW_DEADLINE_CHANGED")
+        anchor.frame = (raw, value, frame)
+        anchor.frame_graph = N._history_graph(anchor.frame)
+        anchor.phase = "WINDOW_BOUND"
+        self._current(anchor)
+        self._observe(anchor, False, anchor.last, None)
+
+    def rebind_seal(self, raw):
+        anchor = self._begin()
+        try:
+            require(anchor.binding[4] == "parent" and O.digest(raw) == anchor.binding[5]["initialSealSha256"],
+                "BEFORE_FIRST_SEAL_HASH")
+            value = canonical(raw)
+            require(type(value.get("schema")) is int and value["schema"] == 1 and value.get("scope") == _TAIL_SEAL_SCOPE and
+                value.get("edge") == "SEAL" and O.integer(value.get("lastNs")) <= anchor.binding[0].nanoseconds and
+                local_value(value.get("lastLocal")) <= anchor.binding[1], "BEFORE_FIRST_SEAL_FLOOR")
+            self._rebind(anchor, raw, value, value["originalWindow"])
+        except BaseException as error:
+            raise self._error(anchor, error)
+        finally:
+            anchor.busy = False
+
+    def rebind_context(self, raw):
+        anchor = self._begin()
+        try:
+            require(anchor.binding[4] == "child", "BEFORE_CHILD_SIDE")
+            context = _before_context(raw, anchor.binding[0].clock)
+            _same(context["deadline"], anchor.binding[5], "BEFORE_CHILD_SEED_CHANGED")
+            require(context["parentFirstNs"] <= anchor.binding[0].nanoseconds and
+                context["parentFirstLocal"] <= anchor.binding[1], "BEFORE_CHILD_PARENT_FLOOR")
+            self._rebind(anchor, raw, context, context["originalWindow"])
+        except BaseException as error:
+            raise self._error(anchor, error)
+        finally:
+            anchor.busy = False
+
+    def _bind_begin(self, anchor, side):
+        require(anchor.binding[4] == side and anchor.phase == "WINDOW_BOUND" and anchor.bound is None and
+            anchor.metadata is not None, "BEFORE_BIND_ONCE")
+        anchor.phase = "BINDING"
+        metadata = anchor.metadata
+        metadata.structural()
+        require(metadata.finished and metadata.failure is None and metadata.owner.closed and
+            metadata.owner.original is None and not metadata.owner.unknown and not metadata.errors and
+            all(a and c for _r, _l, _v, a, c in metadata.rows), "BEFORE_METADATA_NOT_CLOSED")
+        self._observe(anchor, False, anchor.last, None)
+
+    def bind_parent(self, result):
+        anchor = self._begin()
+        try:
+            self._bind_begin(anchor, "parent")
+            raws, value, metadata = _checked_before_input(result)
+            require(metadata is anchor.metadata and raws["seal"] == anchor.frame[0], "BEFORE_ORIGINAL_METADATA")
+            prior = {name: raws[name] for name in _TAIL_LIMITS}
+            parsed = _tail_bundle(prior)
+            sealed = _historical_seal_record(raws["seal"], prior, outcome="success",
+                expected_sha256=anchor.binding[5]["initialSealSha256"])
+            _same(sealed, anchor.frame[1], "BEFORE_ORIGINAL_SEAL_CHANGED")
+            require(sealed["lastNs"] <= value["firstNs"] <= value["closedNs"] <= anchor.last and
+                sealed["lastLocal"] <= value["firstLocal"] <= value["closedLocal"] <= anchor.local_last,
+                "BEFORE_METADATA_ORIGINAL_FLOORS")
+            expected = _tail_host(prior, parsed, anchor.binding[0].clock)
+            anchor.bound = (result, raws, parsed, sealed, _custody_match_pin(expected, parsed[0]["kind"]))
+            anchor.bound_graph = N._history_graph(anchor.bound)
+            anchor.phase = "AUTHORITY"
+            self._current(anchor)
+            self._observe(anchor, False, anchor.last, None)
+            return expected
+        except BaseException as error:
+            raise self._error(anchor, error)
+        finally:
+            anchor.busy = False
+
+    def bind_child(self, context_raw, start_raw, event, inherited, minimum):
+        anchor = self._begin()
+        try:
+            self._bind_begin(anchor, "child")
+            context = _before_context(context_raw, anchor.binding[0].clock)
+            require(context_raw == anchor.frame[0], "BEFORE_CHILD_ORIGINAL_CONTEXT")
+            expected = _before_child_host(context, event, anchor.binding[0], anchor.binding[2])
+            start = _before_start_fields(start_raw, context_raw, context, anchor.binding[0].clock)
+            caps = tuple(start[name] for name, _flag in B.PHASE_FIELDS)
+            require(caps == anchor.binding[7] and type(inherited) is dict and set(inherited) == set(Q._CONTEXT) and
+                start["startedNs"] <= O.integer(minimum) <= anchor.binding[0].nanoseconds < start["workEndNs"],
+                "BEFORE_CHILD_INHERITED_CAPS")
+            _same(inherited, start["inheritedContext"], "BEFORE_CHILD_INHERITED_CONTEXT")
+            domain = native.processes.ownership_domains(inherited[native.processes.CHAIN_ENV],
+                inherited[native.processes.DOMAINS_ENV])[-1]
+            _same(domain, {"id": start["invocation"], "job": start["job"], "state": start["state"], "home": start["home"]},
+                "BEFORE_CHILD_NATIVE_DOMAIN")
+            anchor.bound = (None, context_raw, context, start_raw, start, event, inherited,
+                _custody_match_pin(expected, context["kind"]))
+            anchor.bound_graph = N._history_graph(anchor.bound)
+            anchor.phase = "AUTHORITY"
+            self._current(anchor)
+            self._observe(anchor, False, anchor.last, None)
+            return context, start, expected, domain
+        except BaseException as error:
+            raise self._error(anchor, error)
+        finally:
+            anchor.busy = False
+
+    def attach_operative(self, owner):
+        anchor = self._begin()
+        try:
+            require(anchor.phase == "AUTHORITY" and anchor.operative is None and type(owner) is _CustodyOwner and
+                owner.first is anchor.binding[0] and owner.fence is self and not owner.closed and
+                owner.original is None and not owner.unknown and not owner.resources, "BEFORE_ORIGINAL_AUTHORITY_OWNER")
+            anchor.operative = owner
+            self._current(anchor)
+        except BaseException as error:
+            raise self._error(anchor, error)
+        finally:
+            anchor.busy = False
+
+    def attach_file_owner(self, name, owner):
+        anchor = self._begin()
+        try:
+            expected = ("readback", "writer")
+            require(anchor.binding[4] == "parent" and anchor.phase == "AUTHORITY" and anchor.operative is not None and
+                len(anchor.file_owners) < 2 and name == expected[len(anchor.file_owners)] and
+                type(owner) is _PrimaryOwner and owner.owner.fence is self and owner.owner.first is anchor.binding[0] and
+                not owner.finished and not owner.rows, "BEFORE_ORIGINAL_FILE_OWNER")
+            if name == "writer":
+                anchor.operative.known()
+                require(anchor.file_owners[0][1].finished, "BEFORE_READBACK_NOT_CLOSED")
+            else:
+                require(not anchor.operative.closed, "BEFORE_READBACK_AUTHORITY_CLOSED")
+            anchor.file_owners = (*anchor.file_owners, (name, owner, owner._anchor()))
+            self._current(anchor)
+        except BaseException as error:
+            raise self._error(anchor, error)
+        finally:
+            anchor.busy = False
+
+
+def _read_before_input(clock, kind, actual):
+    metadata = _PrimaryOwner(native.Owner(clock.local_end, clock, first=clock.reading, cancelled=clock.cancelled))
+    failure = None
+    try:
+        clock.attach_metadata(metadata)
+        _before_actual(actual)
+        custody = _paths(kind)[2]
+        seal_directory = _private(metadata, custody / "seal")
+        seal_raw, first_read = _before_read(metadata, seal_directory, "seal-pending.json", native.LIMIT)
+        # The seed's original RAW/LOCAL caps preceded the owner/open. This merely
+        # rebinds those same already-enforced caps to the FIRST known-close read.
+        clock.rebind_seal(seal_raw)
+        root = _private(metadata, custody)
+        returned = _private(metadata, custody / "returned")
+        output = _private(metadata, custody / "export-output")
+        pins = tuple((name, directory, directory.path, tuple(directory.identity)) for name, directory in
+            (("seal", seal_directory), (".", root), ("returned", returned), ("export-output", output)))
+        require(len({pin[3] for pin in pins}) == 4 and _tail_directory_names(metadata, root) == _before_roster(created=False) and
+            _tail_directory_names(metadata, seal_directory) == ("seal-pending.json",), "BEFORE_INPUT_SEALED_ROOT")
+        _collect_names(metadata, returned, (_EXPORT_STEP_FILE, _COLLECT_FILE))
+        records = (("seal", seal_directory, "seal-pending.json"), *_tail_records(returned, output))
+        originals, reads = [("seal", seal_raw)], [first_read]
+        for name, directory, leaf in records[1:]:
+            raw, read = _before_read(metadata, directory, leaf, _TAIL_LIMITS[name])
+            originals.append((name, raw))
+            reads.append(read)
+        originals = tuple(originals)
+        raws = dict(originals)
+        prior = {name: raws[name] for name in _TAIL_LIMITS}
+        parsed = _tail_bundle(prior)
+        sealed = _historical_seal_record(seal_raw, prior, outcome="success", expected_sha256=clock.seed["initialSealSha256"])
+        step, _carrier, context, _manifest, _collected = parsed
+        require(step["kind"] == kind and step["primary"]["resultSha256"] == os.environ[PRIMARY_RESULT] and
+            step["primary"]["handoffSha256"] == os.environ[PRIMARY_HANDOFF] and
+            step["cryptoCarrier"]["exporterReturnSha256"] == os.environ[_TAIL_EXPORT_HASH] and
+            O.digest(raws["step"]) == os.environ[_COLLECT_STEP_HASH] and O.digest(raws["collect"]) == os.environ[_TAIL_HASH],
+            "BEFORE_ACTUAL_PREDECESSORS")
+        _same(step["directoryIdentity"], list(pins[2][3]), "BEFORE_ORIGINAL_RETURNED_PIN")
+        if context["directories"]["export-output"] is not None:
+            _same(context["directories"]["export-output"], list(pins[3][3]), "BEFORE_ORIGINAL_WINDOWS_OUTPUT_PIN")
+        _same(sealed["output"]["directoryIdentity"], list(pins[3][3]), "BEFORE_SEAL_OBSERVED_OUTPUT_PIN")
+        _same(sealed["originalWindow"], clock.frame, "BEFORE_ORIGINAL_SEAL_WINDOW")
+        _tail_host(prior, parsed, clock.clock)
+        graph = N._history_graph(originals, reads, parsed, sealed, tuple(pin[2] for pin in pins))
+        readbacks = []
+        for (name, directory, leaf), read in zip(records, reads):
+            raw, second = _before_read(metadata, directory, leaf, native.LIMIT if name == "seal" else _TAIL_LIMITS[name],
+                count=read["bytes"], checksum=read["sha256"])
+            require(raw == raws[name], "BEFORE_ELEVEN_ORIGINAL_READBACK")
+            _before_same_read(read, second)
+            readbacks.append(second)
+        require(_tail_directory_names(metadata, root) == _before_roster(created=False) and
+            _tail_directory_names(metadata, seal_directory) == ("seal-pending.json",), "BEFORE_FINAL_SEALED_ROOT")
+        _collect_names(metadata, returned, (_EXPORT_STEP_FILE, _COLLECT_FILE))
+        _before_actual(actual)
+        N._check_history(graph)
+        close = metadata.finish()
+        closed_ns = clock.now()
+        value = {"firstNs": clock.first, "firstLocal": clock.first_local, "closedNs": closed_ns,
+            "closedLocal": clock._view().local_last, "files": [{"key": key, "relative": relative, "maximum": maximum,
+                "first": first_read, "readback": second} for (key, relative, maximum), first_read, second in
+                zip(_before_originals(), reads, readbacks)], "ownerClose": _collect_file_close(close)}
+        raw = O.encoded(_before_input_data(value, clock.clock.role))
+        result = _BeforeInput(originals, raw)
+        _BEFORE_INPUTS[id(result)] = (result, result.__dict__, originals, raw, metadata, metadata._anchor(), pins,
+            N._history_graph(result.__dict__, metadata.owner.__dict__, tuple(pin[2] for pin in pins)), actual)
+        _checked_before_input(result)
+        return result
+    except BaseException as error:
+        failure = metadata.remember(error)
+    finally:
+        if not metadata.finished and not metadata.owner.unknown:
+            try:
+                metadata.finish()
+            except BaseException as error:
+                if failure is None:
+                    failure = error
+    raise failure
+
+
+def _before_predecessor(raws, step):
+    return {"step": "initial-seal", "outcome": "success", "sealSha256": O.digest(raws["seal"]),
+        "collectSha256": O.digest(raws["collect"]), "cryptoStepSha256": O.digest(raws["step"]),
+        "cryptoCarrierSha256": O.digest(raws["carrier"]),
+        "exporterReturnSha256": step["cryptoCarrier"]["exporterReturnSha256"]}
+
+
+def _before_context(raw, clock):
+    value = fields(canonical(raw), _BEFORE_CONTEXT_FIELDS, "BEFORE_CONTEXT_FIELDS")
+    frame_clock, limits = _custody_authority_frame(value["originalWindow"])
+    seal_sha, end, seed_clock, boot = C.seal_deadline_data(value["deadline"])
+    _same(O.clock_value(frame_clock), O.clock_value(clock), "BEFORE_CONTEXT_ACTUAL_CLOCK")
+    _same(O.clock_value(frame_clock), O.clock_value(seed_clock), "BEFORE_CONTEXT_SEED_CLOCK")
+    require(type(value["schema"]) is int and value["schema"] == 1 and value["scope"] == B.CONTEXT_SCOPE and
+        value["edge"] == "BEFORE" and value["kind"] == limits["kind"] and value["root"] == str(ROOT) and
+        value["session"] == str(_paths(value["kind"])[2] / "authority-before") and
+        value["budgetAcceptance"] == "NOT_ADMITTED" and value["exportSaveAuthority"] is False and
+        value["originalWindow"]["originalBootDigest"] == boot and type(value["continuationEndNs"]) is int and
+        value["continuationEndNs"] == limits["sealEndNs"] == end, "BEFORE_CONTEXT_SCOPE_OR_END")
+    _collect_service_job(value["originalServiceJob"])
+    predecessor = fields(value["predecessor"], "step outcome sealSha256 collectSha256 cryptoStepSha256 cryptoCarrierSha256 "
+        "exporterReturnSha256", "BEFORE_CONTEXT_PREDECESSOR")
+    require(predecessor["step"] == "initial-seal" and predecessor["outcome"] == "success" and
+        predecessor["sealSha256"] == seal_sha, "BEFORE_CONTEXT_SEAL_OUTCOME")
+    for name in ("sealSha256", "collectSha256", "cryptoStepSha256", "cryptoCarrierSha256", "exporterReturnSha256"):
+        digest(predecessor[name])
+    for name in ("eventSha256", "sourceReturnSha256"):
+        digest(value[name])
+    began = O.integer(value["parentFirstNs"], limits["startNs"])
+    local_value(value["parentFirstLocal"])
+    metadata = _before_input_data(value["inputMetadata"], clock.role)
+    require(began == metadata["firstNs"] and type(value["parentFirstLocal"]) is type(metadata["firstLocal"]) and
+        value["parentFirstLocal"] == metadata["firstLocal"] and
+        metadata["closedNs"] <= O.integer(value["sourceReturnedNs"]) < end and
+        type(value["job"]) is str and re.fullmatch(r"[0-9a-f]{32}", value["job"]) and
+        type(value["observed"]) is dict and value["observed"]["kind"] == value["kind"] and
+        value["observed"]["role"] == clock.role, "BEFORE_CONTEXT_TIME_OR_HOST")
+    hashes = {row["key"]: row["first"]["sha256"] for row in metadata["files"]}
+    require(all(predecessor[name] == hashes[key] for name, key in (("sealSha256", "seal"), ("collectSha256", "collect"),
+        ("cryptoStepSha256", "step"), ("cryptoCarrierSha256", "carrier"))) and value["eventSha256"] == hashes["event"],
+        "BEFORE_CONTEXT_INPUT_HASHES")
+    native.directory_identity(value["directoryIdentity"], clock.role)
+    inherited = value["inheritedContext"]
+    require(type(inherited) is dict and all(type(item) is str for item in inherited.values()) and
+        (set(inherited).issubset({"GRADLE_USER_HOME"}) or set(inherited) == set(Q._CONTEXT)), "BEFORE_CONTEXT_PARENT_DOMAIN")
+    expected = value["expectedMatch"]
+    fields(expected, " ".join(E.COMMON_MATCH | ({"stage", "selector", "workerAdmission", "qualificationAcceptance"}
+        if value["kind"] == "gate" else set())), "BEFORE_CONTEXT_EXPECTED_FIELDS")
+    require(type(expected["firstUseAt"]) is int and expected["firstUseAt"] == value["observed"]["firstUseAt"] and
+        expected["source"] == value["observed"]["source"] and O.digest(O.encoded(expected)) == hashes["original-match"],
+        "BEFORE_CONTEXT_EXPECTED_LINK")
+    selected = value["selectedInputs"]
+    names = set(_before_selected(tuple(None for _name in _BEFORE_NAMES)))
+    require(type(selected) is dict and set(selected) == names and all(type(item) is str for item in selected.values()),
+        "BEFORE_CONTEXT_SELECTED_FIELDS")
+    require(all(selected[name] == "success" for name in
+        (PRIMARY_OUTCOME, _COLLECT_OUTCOME, _TAIL_OUTCOME, B.SEAL_OUTCOME_ENV)) and
+        all(selected[environment] == value["deadline"][name] for name, environment, _flag in B.SEED_FIELDS),
+        "BEFORE_CONTEXT_SELECTED_SUCCESS_OR_SEED")
+    for name in (PRIMARY_RESULT, PRIMARY_HANDOFF, _COLLECT_STEP_HASH, _COLLECT_EXPORT_HASH, _TAIL_HASH, _TAIL_EXPORT_HASH):
+        digest(selected[name])
+    require(selected[_COLLECT_STEP_HASH] == hashes["step"] and selected[_TAIL_HASH] == hashes["collect"] and
+        selected[_COLLECT_EXPORT_HASH] == selected[_TAIL_EXPORT_HASH] == predecessor["exporterReturnSha256"],
+        "BEFORE_CONTEXT_SELECTED_HASHES")
+    return value
+
+
+def _before_child_host(context, event, first, boot):
+    graph = N._history_graph(context, first)
+    observed, _primary, actual_event = N.host_context(O.integer(context["observed"]["firstUseAt"], 1))
+    _same(observed, context["observed"], "BEFORE_CHILD_ACTUAL_CONTEXT")
+    require(type(event) is bytes and event == actual_event and O.digest(event) == context["eventSha256"] and
+        context["originalWindow"]["originalBootDigest"] == boot and
+        context["parentFirstNs"] <= first.nanoseconds < context["continuationEndNs"], "BEFORE_CHILD_ACTUAL_HOST")
+    _same(context["originalWindow"]["clock"], O.clock_value(first.clock), "BEFORE_CHILD_ACTUAL_CLOCK")
+    N._check_history(graph)
+    return (A.gate.GateEligibility if context["kind"] == "gate" else A.stages.BootstrapMatch)(O.encoded(context["expectedMatch"]))
+
+
+def _before_start_fields(raw, context_raw, context, clock):
+    start = fields(canonical(raw), " ".join(native.START_FIELDS), "BEFORE_START_FIELDS")
+    graph = N._history_graph(context, start)
+    caps = B.phase_caps(context["deadline"], tuple(start[name] for name, _flag in B.PHASE_FIELDS))
+    path = _paths(context["kind"])[2] / "authority-before"
+    require(type(start["schema"]) is int and start["schema"] == 1 and start["scope"] == native.PHASE_SCOPE and
+        start["contextSha256"] == O.digest(context_raw) and
+        start["argv"] == native.phase_command(context_raw, before_caps=caps) and
+        start["cwd"] == str(ROOT) and start["role"] == clock.role and start["job"] == context["job"] and
+        start["state"] == str(path) and start["home"] == str(path / "control-home") and
+        type(start["invocation"]) is str and re.fullmatch(r"[0-9a-f]{32}", start["invocation"]) and
+        start["exitCode"] is None and start["launchAttempted"] is False and start["scopeAttempted"] is False and
+        start["retirement"] == "UNKNOWN" and caps[0] >= context["sourceReturnedNs"], "BEFORE_START")
+    inherited = native.processes.ownership_environment(context["inheritedContext"], context["job"], start["invocation"],
+        str(path), str(path / "control-home"), allow_new_context=True)
+    _same(start["inheritedContext"], {name: inherited[name] for name in Q._CONTEXT}, "BEFORE_START_INHERITANCE")
+    N._check_history(graph)
+    return start
+
+
+def _before_service_steps(captured, clock):
+    """Read the retained actual response, not a new HTTP request or poll."""
+    context_raw, originals, invocation, _began, _end = captured
+    context, original = canonical(context_raw), dict(originals)
+    github = context["observed"]["github"]
+    path = A.API + "/actions/runs/" + github["runId"] + "/attempts/" + github["runAttempt"]
+    _, attempt, _ = O.response_bytes(original["attempt"], path, invocation, clock)
+    response, jobs, date = O.response_bytes(original["jobs"], path + "/jobs?per_page=100&page=1", invocation, clock)
+    job = A._run(context["observed"], I.parse(attempt, O.wire.BODY_LIMIT), I.parse(jobs, O.wire.BODY_LIMIT), date)
+    identity = [job["id"], job["started_at"], job["runner_name"], job["runner_id"]]
+    _same(identity, context["originalServiceJob"], "BEFORE_FRESH_ORIGINAL_SERVICE_JOB")
+    steps = B.step_rows(job, date)
+    return {"originalServiceJob": identity, "jobsOriginalSha256": O.digest(original["jobs"]),
+        "jobsBodySha256": O.digest(jobs), "serviceDateEpochSeconds": date,
+        "jobsRequestStartedNs": O.integer(response["startedNs"]), "jobsRequestFinishedNs": O.integer(response["finishedNs"]),
+        "steps": {role: row for role, row in steps}}
+
+
+def _before_authority_child(context_hash, minimum, cancelled, seed, caps):
+    token = os.environ.pop(O.wire.TOKEN_ENV, None)
+    metadata = owner = clock = result_raw = None
+    failure = None
+    try:
+        # Seed/caps are already decoded before this function. The FIRST pair
+        # creates a genuine B child clock; no first+45 metadata bootstrap exists.
+        local = local_value(time.monotonic())
+        first = O.clocks.observe()
+        first_graph = N._history_graph(first, seed, caps)
+        O.clocks.validate_reading(first)
+        require(first.nanoseconds >= O.integer(minimum) and native.processes.host_role() == first.clock.role,
+            "BEFORE_CHILD_FIRST_OR_HOST")
+        boot = digest(C.boot_digest(first.clock.role))
+        N._check_history(first_graph)
+        digest(context_hash)
+        require(type(token) is str and re.fullmatch(r"[A-Za-z0-9_.-]{16,4096}", token) and
+            not any(name in os.environ for name in _CREDENTIAL_NAMES) and callable(cancelled), "BEFORE_CHILD_TOKEN")
+        clock = _BeforeClock(first, local, boot, cancelled, seed, side="child", inherited=caps)
+        metadata = _PrimaryOwner(native.Owner(clock.local_end, clock, first=first, cancelled=cancelled))
+        clock.attach_metadata(metadata)
+        kind, _primary = N.location()
+        path = _paths(kind)[2] / "authority-before"
+        private = _private(metadata, path)
+        private_pin = tuple(private.identity)
+        context_raw, context_read = _before_read(metadata, private, "context.json", native.LIMIT)
+        require(O.digest(context_raw) == context_hash, "BEFORE_CHILD_CONTEXT_HASH")
+        clock.rebind_context(context_raw)
+        service = _private(metadata, path / "service")
+        service_pin = tuple(service.identity)
+        start_raw, start_read = _before_read(metadata, service, "start.json", native.LIMIT)
+        context = _before_context(context_raw, first.clock)
+        _same(context["directoryIdentity"], list(private_pin), "BEFORE_CHILD_CONTEXT_PIN")
+        _observed, _root, event = N.host_context(context["observed"]["firstUseAt"])
+        inherited = Q._inherited_context()
+        metadata_graph = N._history_graph(context, inherited, first, context_read, start_read)
+        metadata_reads = []
+        for directory, name, raw, read in ((private, "context.json", context_raw, context_read),
+                (service, "start.json", start_raw, start_read)):
+            same, reread = _before_read(metadata, directory, name, native.LIMIT, count=read["bytes"], checksum=read["sha256"])
+            require(same == raw, "BEFORE_CHILD_METADATA_READBACK")
+            _before_same_read(read, reread)
+            metadata_reads.append({"name": name, "first": read, "readback": reread})
+        metadata_close = metadata.finish()
+        metadata_last = clock.now()
+        N._check_history(metadata_graph)
+        context, start, expected, domain = clock.bind_child(context_raw, start_raw, event, inherited, minimum)
+        expected_pin = _custody_match_pin(expected, kind)
+        owner = _CustodyOwner(clock.local_end, clock, first=first, cancelled=cancelled)
+        clock.attach_operative(owner)
+        private = owner.open(path)
+        service = owner.child(private, "service")
+        require(tuple(private.identity) == private_pin and tuple(service.identity) == service_pin and
+            owner.read(private, "context.json") == context_raw and owner.read(service, "start.json") == start_raw,
+            "BEFORE_CHILD_ORIGINAL_METADATA")
+        supplier = None
+        query_failure = None
+        try:
+            supplier = N.query_owner(owner, clock, path / "acquisition-queries")
+            N._initial_service_query_git(supplier)
+            supplier.native_host_matches_actions()
+            def retain(name, raw, *, failed):
+                require(name in N.ORIGINAL_KEYS and type(raw) is bytes and type(failed) is bool, "BEFORE_CHILD_ORIGINAL_NAME")
+                owner.end(final=failed)
+                supplier._write(supplier.private, name + ".bin", raw)
+                owner.end(final=failed)
+            match, originals = A.acquire_bootstrap(ROOT, kind=kind, query_runner=supplier, invocation=domain["id"],
+                token=token, retain=retain, fence=clock, original_work_end=start["workEndNs"],
+                first_use_at=context["observed"]["firstUseAt"], expected=expected)
+            token = None
+            match_pin = _custody_match_pin(match, kind)
+            original_graph = N._history_graph(match.__dict__, originals)
+            acquired = clock.now(limit=start["workEndNs"])
+            _custody_match_check(match_pin)
+            _custody_match_check(expected_pin)
+            require(type(match) is type(expected) and match.record == expected.record and type(originals) is tuple and
+                tuple(name for name, _raw in originals) == N.ORIGINAL_KEYS and all(type(raw) is bytes for _name, raw in originals) and
+                dict(originals)["event"] == event, "BEFORE_CHILD_FRESH_MATCH")
+        except BaseException as error:
+            query_failure = error
+        finally:
+            token = None
+            _custody_finish_queries(owner, supplier, query_failure)
+        returned = clock.now(limit=start["workEndNs"])
+        N._check_history(original_graph)
+        _custody_match_check(match_pin)
+        queries = owner.open(path / "acquisition-queries")
+        session = N.query_session(owner, queries)
+        require(all(owner.read(queries, name + ".bin") == raw for name, raw in originals), "BEFORE_CHILD_ORIGINAL_READBACK")
+        _collect_query_index(path / "acquisition-queries", session, dict(originals), context["observed"])
+        captured = (context_raw, originals, domain["id"], start["startedNs"], start["workEndNs"])
+        steps = _before_service_steps(captured, first.clock)
+        _custody_match_check(expected_pin)
+        N._check_history(metadata_graph)
+        result_raw = owner.write(service, "child-result.json", {"schema": 1, "scope": B.CHILD_SCOPE,
+            "contextSha256": context_hash, "startSha256": O.digest(start_raw), "invocation": domain["id"],
+            "clock": O.clock_value(first.clock), "bootDigest": boot, "launchMinimumNs": minimum,
+            "phaseCaps": {name: value for (name, _flag), value in zip(B.PHASE_FIELDS, caps)},
+            "deadlineSha256": O.digest(O.encoded(seed)), "beganNs": first.nanoseconds, "metadataLastNs": metadata_last,
+            "acquiredNs": acquired, "queryReturnedNs": returned, "querySessionSha256": O.digest(session),
+            "originalsSha256": {name: O.digest(raw) for name, raw in originals}, "matchSha256": O.digest(match.record),
+            "directoryIdentities": {".": list(private_pin), "service": list(service_pin)}, "serviceSteps": steps,
+            "metadataReads": metadata_reads, "metadataClose": _collect_file_close(metadata_close),
+            "completedNs": clock.now(limit=start["workEndNs"]), "retirement": "PENDING_CHILD_CLOSE", "errors": []})
+        N._check_history(original_graph)
+        _custody_match_check(match_pin)
+        clock.now()
+    except BaseException as error:
+        failure = error
+        if owner is not None:
+            owner.error("before-authority-child", error)
+            failure = owner._anchor().failure
+        elif metadata is not None:
+            failure = metadata.remember(error)
+    finally:
+        token = None
+        if metadata is not None and not metadata.finished and not metadata.owner.unknown:
+            try:
+                metadata.finish()
+            except BaseException as error:
+                if failure is None:
+                    failure = error
+        if owner is not None:
+            if failure is None and owner._anchor().failure is None:
+                try:
+                    owner.freeze()
+                except BaseException as error:
+                    owner.error("before-child-close-roster", error, unknown=True)
+            try:
+                owner.close()
+            except BaseException as error:
+                owner.error("before-child-close", error)
+            if failure is None and owner._anchor().failure is not None:
+                failure = owner._anchor().failure
+    if failure is not None:
+        raise failure
+    require(owner is not None and clock is not None and result_raw is not None, "BEFORE_CHILD_INCOMPLETE")
+    anchor = owner.known()
+    N._check_history(metadata_graph)
+    N._check_history(original_graph)
+    _custody_match_check(expected_pin)
+    _custody_match_check(match_pin)
+    closed = clock.now(limit=start["workEndNs"])
+    owner.known()
+    owner_close = {"schema": 1, "scope": "INITIAL_BEFORE_AUTHORITY_CHILD_KNOWN_CLOSE_V1",
+        "resources": [{"ordinal": index, "label": label, "closeAttempted": attempted, "closed": ended}
+            for index, (_row, label, _resource, attempted, ended) in enumerate(anchor.rows)],
+        "retirement": "KNOWN_RESOURCE_CLOSE_ONLY", "exportSaveAuthority": False}
+    return {"schema": 1, "scope": B.ACK_SCOPE, "invocation": domain["id"], "terminalSha256": O.digest(result_raw),
+        "clock": O.clock_value(first.clock), "closedNs": closed, "ownerClose": owner_close}, clock, start["workEndNs"]
+
+
+def _before_phase_bytes(context_raw, phase, child_raw, clock, private_pin, service_pin):
+    """B-only phase DATA checker. Genuine phase/owner returns are checked too."""
+    require(type(phase) is native.OriginalPhase and phase.context == context_raw and type(phase.records) is tuple,
+        "BEFORE_PHASE_TYPE")
+    context = _before_context(context_raw, clock)
+    records = dict(phase.records)
+    require(len(phase.records) == len(records) and set(records) == native.PHASE_FILES and
+        all(type(raw) is bytes for raw in records.values()), "BEFORE_PHASE_FILES")
+    start = _before_start_fields(records["start.json"], context_raw, context, clock)
+    caps = tuple(start[name] for name, _flag in B.PHASE_FIELDS)
+    row = fields(canonical(records["result.json"]), " ".join(native.TERMINAL_FIELDS), "BEFORE_TERMINAL_FIELDS")
+    birth = fields(canonical(records["native-start.json"]), "ownership leader preparerIdentity observedNs", "BEFORE_BIRTH_FIELDS")
+    changed = {"exitCode", "launchAttempted", "scopeAttempted", "retirement"}
+    _same({name: row[name] for name in start if name not in changed},
+        {name: start[name] for name in start if name not in changed}, "BEFORE_TERMINAL_START")
+    require(type(row["exitCode"]) is int and row["exitCode"] == 0 and row["launchAttempted"] is True and
+        row["scopeAttempted"] is True and row["scopeCloseAttempted"] is True and row["scopeClosed"] is True and
+        row["retirement"] == "KNOWN" and row["survivors"] == [] and row["errors"] == [] and records["stderr.log"] == b"" and
+        row["nativeStartSha256"] == O.digest(records["native-start.json"]) and
+        row["baselineSha256"] == O.digest(records["baseline.json"]) and row["leader"] == birth["leader"], "BEFORE_NATIVE_RETURN")
+    argv = native.phase_command(context_raw, O.integer(row["launchMinimumNs"], start["startedNs"]), before_caps=caps)
+    _same(row["launchArgv"], argv, "BEFORE_NATIVE_COMMAND")
+    native.native_record(row["ownership"], start, row["leader"], argv)
+    native.native_record(birth["ownership"], start, row["leader"], argv, terminal=False)
+    _same(birth["ownership"]["launches"], row["ownership"]["launches"], "BEFORE_NATIVE_BIRTH")
+    preparer = native.closed_lifetime(row["preparerIdentity"], clock.role)
+    _same(preparer, native.closed_lifetime(birth["preparerIdentity"], clock.role), "BEFORE_NATIVE_PREPARER")
+    require(preparer["pid"] != row["leader"]["pid"], "BEFORE_NATIVE_PREPARER_LEADER_ALIAS")
+    baseline = native.baseline_record(records["baseline.json"], clock.role)
+    if baseline["baseline"] is not None:
+        leader = native.lifetime(row["leader"], clock.role)
+        require(list(leader[:4] if clock.role.startswith("macos-") else leader) not in baseline["baseline"],
+            "BEFORE_PREEXISTING_LEADER")
+    _same(row["captureOutcomes"], {name: {key: True for key in
+        ("synced", "verified", "closeAttempted", "closed", "readback")} for name in ("stdout", "stderr")}, "BEFORE_CAPTURE_CLOSE")
+    _same(row["captures"], {name: {"sha256": O.digest(records[name + ".log"]), "bytes": len(records[name + ".log"])}
+        for name in ("stdout", "stderr")}, "BEFORE_CAPTURE_BYTES")
+    child = fields(canonical(child_raw), "schema scope contextSha256 startSha256 invocation clock bootDigest launchMinimumNs "
+        "phaseCaps deadlineSha256 beganNs metadataLastNs acquiredNs queryReturnedNs querySessionSha256 originalsSha256 "
+        "matchSha256 directoryIdentities serviceSteps metadataReads metadataClose completedNs retirement errors", "BEFORE_CHILD_FIELDS")
+    ack = fields(canonical(records["stdout.log"]), "schema scope invocation terminalSha256 clock closedNs ownerClose", "BEFORE_ACK_FIELDS")
+    require(type(child["schema"]) is int and child["schema"] == 1 and child["scope"] == B.CHILD_SCOPE and
+        child["contextSha256"] == O.digest(context_raw) and child["startSha256"] == O.digest(records["start.json"]) and
+        child["invocation"] == start["invocation"] and
+        child["bootDigest"] == context["originalWindow"]["originalBootDigest"] and
+        child["deadlineSha256"] == O.digest(O.encoded(context["deadline"])) and
+        type(child["launchMinimumNs"]) is int and child["launchMinimumNs"] == row["launchMinimumNs"] and
+        child["retirement"] == "PENDING_CHILD_CLOSE" and child["errors"] == [] and
+        type(ack["schema"]) is int and ack["schema"] == 1 and ack["scope"] == B.ACK_SCOPE and
+        ack["invocation"] == start["invocation"] and ack["terminalSha256"] == O.digest(child_raw), "BEFORE_CHILD_ACK")
+    _same(child["clock"], O.clock_value(clock), "BEFORE_CHILD_CLOCK")
+    _same(ack["clock"], O.clock_value(clock), "BEFORE_ACK_CLOCK")
+    _same(child["phaseCaps"], {name: value for (name, _flag), value in zip(B.PHASE_FIELDS, caps)}, "BEFORE_CHILD_CAPS")
+    _same(child["directoryIdentities"], {".": list(private_pin), "service": list(service_pin)}, "BEFORE_CHILD_PINS")
+    metadata = _collect_file_close(O.encoded(child["metadataClose"]))
+    _same(metadata["resources"], [{"ordinal": index, "label": label, "closeAttempted": True, "closed": True}
+        for index, label in enumerate(("directory", "reader", "directory", "reader", "reader", "reader"))],
+        "BEFORE_CHILD_METADATA_ROSTER")
+    require(type(child["metadataReads"]) is list and len(child["metadataReads"]) == 2, "BEFORE_CHILD_METADATA_READS")
+    for value, name, raw, initial, reread in zip(child["metadataReads"], ("context.json", "start.json"),
+            (context_raw, records["start.json"]), (1, 3), (4, 5)):
+        fields(value, "name first readback", "BEFORE_CHILD_METADATA_FIELDS")
+        require(value["name"] == name, "BEFORE_CHILD_METADATA_NAME")
+        for read, ordinal in ((value["first"], initial), (value["readback"], reread)):
+            fields(read, "bytes sha256 metadata readerOrdinal retirement", "BEFORE_CHILD_READ_FIELDS")
+            require(type(read["bytes"]) is int and read["bytes"] == len(raw) and read["sha256"] == O.digest(raw) and
+                type(read["readerOrdinal"]) is int and read["readerOrdinal"] == ordinal and
+                read["retirement"] == "KNOWN_READER_CLOSE", "BEFORE_CHILD_METADATA_BINDING")
+            _before_metadata(read["metadata"], clock.role, len(raw))
+        _before_same_read(value["first"], value["readback"])
+    close = fields(ack["ownerClose"], "schema scope resources retirement exportSaveAuthority", "BEFORE_CHILD_CLOSE_FIELDS")
+    require(type(close["schema"]) is int and close["schema"] == 1 and
+        close["scope"] == "INITIAL_BEFORE_AUTHORITY_CHILD_KNOWN_CLOSE_V1" and
+        close["retirement"] == "KNOWN_RESOURCE_CLOSE_ONLY" and close["exportSaveAuthority"] is False, "BEFORE_CHILD_CLOSE")
+    _collect_close_rows(close["resources"], {"directory", "writer"})
+    fields(child["originalsSha256"], " ".join(N.ORIGINAL_KEYS), "BEFORE_CHILD_ORIGINAL_HASHES")
+    for checksum in (child["querySessionSha256"], child["matchSha256"], *child["originalsSha256"].values()):
+        digest(checksum)
+    ordered = [row["launchMinimumNs"], *(child[name] for name in
+        ("beganNs", "metadataLastNs", "acquiredNs", "queryReturnedNs", "completedNs")), ack["closedNs"], row["completedNs"], row["finalizedNs"]]
+    require(all(type(value) is int and O.integer(value) == value for value in ordered) and ordered == sorted(ordered) and
+        start["startedNs"] <= ordered[0] and ack["closedNs"] < start["workEndNs"] and row["completedNs"] < start["workEndNs"] and
+        row["finalizedNs"] < start["finalEndNs"] and row["launchMinimumNs"] <= O.integer(birth["observedNs"]) <= row["completedNs"],
+        "BEFORE_ORIGINAL_PHASE_CHRONOLOGY")
+    return start, row, birth, child, ack
+
+
+def _before_read_authority(owner, private, before, phase, clock, inputs, expected):
+    before_pin, phase_pin, expected_pin = _collect_source_pin(before), _collect_phase_pin(phase), \
+        _custody_match_pin(expected, clock.frame["kind"])
+    raws, input_metadata, _metadata = _checked_before_input(inputs)
+    prior = {name: raws[name] for name in _TAIL_LIMITS}
+    step, _carrier, old_context, _manifest, _collected = _tail_bundle(prior)
+    context_raw = phase.context
+    context = _before_context(context_raw, clock.clock)
+    graph = N._history_graph(context, raws, input_metadata)
+    require(type(owner) is _CustodyOwner and owner.fence is clock and owner.phase_originals is phase and
+        owner.read(private, "context.json") == context_raw, "BEFORE_CURRENT_OWNER_OR_CONTEXT")
+    for name, expected_value in (("originalWindow", clock.frame), ("originalServiceJob", step["originalServiceJob"]),
+            ("observed", old_context["observed"]), ("predecessor", _before_predecessor(raws, step)),
+            ("inputMetadata", input_metadata), ("deadline", clock.seed),
+            ("selectedInputs", _before_selected(_BEFORE_INPUTS[id(inputs)][-1])),
+            ("directoryIdentity", list(private.identity))):
+        _same(context[name], expected_value, "BEFORE_CURRENT_CONTEXT_BINDING")
+    require(O.encoded(context["expectedMatch"]) == expected.record == raws["original-match"], "BEFORE_CURRENT_EXPECTED")
+    policy = N.source_readback(owner, private.path / "source-before", before)
+    require(context["sourceReturnSha256"] == O.digest(before.raw) and
+        context["sourceReturnedNs"] == canonical(before.raw)["returnedNs"], "BEFORE_CURRENT_SOURCE_RETURN")
+    _collect_query_index(private.path / "source-before", before.session, dict(before.records), context["observed"], source=before)
+    service = owner.child(private, "service")
+    for name, raw in phase.records:
+        maximum = native.ACK_LIMIT if name == "stdout.log" else native.STDERR_LIMIT if name == "stderr.log" else native.LIMIT
+        require(owner.read(service, name, maximum) == raw, "BEFORE_CURRENT_PHASE_BYTES")
+    child_raw = owner.read(service, "child-result.json")
+    start, row, birth, child, ack = _before_phase_bytes(context_raw, phase, child_raw, clock.clock,
+        tuple(private.identity), tuple(service.identity))
+    queries = owner.open(private.path / "acquisition-queries")
+    session = N.query_session(owner, queries)
+    originals = tuple((name, owner.read(queries, name + ".bin")) for name in N.ORIGINAL_KEYS)
+    original = dict(originals)
+    captured = (context_raw, originals, start["invocation"], start["startedNs"], start["workEndNs"])
+    captured_graph = N._history_graph(captured)
+    require(child["querySessionSha256"] == O.digest(session) and child["originalsSha256"] ==
+        {name: O.digest(raw) for name, raw in originals} and child["matchSha256"] == O.digest(original["match"]) and
+        original["event"] == raws["event"] and {name: original[name] for name in N.SOURCE_KEYS} == policy and
+        original["candidate_policy_raw"] == raws["policy"] and original["match"] == expected.record,
+        "BEFORE_CURRENT_ORIGINALS")
+    _collect_query_index(private.path / "acquisition-queries", session, original, context["observed"])
+    match, service_time = N.retained_match(context, original, start["invocation"], clock.clock,
+        start["startedNs"], start["workEndNs"])
+    match_pin = _custody_match_pin(match, context["kind"])
+    steps = _before_service_steps(captured, clock.clock)
+    _same(child["serviceSteps"], steps, "BEFORE_CHILD_FRESH_SERVICE_STEPS")
+    match_graph = N._history_graph(match.__dict__, service_time, steps)
+    require(type(match) is type(expected) and match.record == expected.record, "BEFORE_CURRENT_MATCH")
+    minimum = N._service_chain_minimum(clock.first, context["sourceReturnedNs"], start, row, birth, child, service_time, ack)
+    checked = clock.now(minimum=minimum)
+    _collect_source_current(before_pin)
+    _collect_phase_current(phase_pin)
+    _custody_match_check(expected_pin)
+    _custody_match_check(match_pin)
+    for saved in (graph, captured_graph, match_graph):
+        N._check_history(saved)
+    owner.check()
+    require(owner.phase_originals is phase, "BEFORE_CURRENT_PHASE_OWNER")
+    authority = {"contextSha256": O.digest(context_raw), "sourceBeforeSha256": O.digest(before.raw),
+        "expectedMatchSha256": O.digest(expected.record), "freshMatchSha256": O.digest(match.record),
+        "originalsSha256": {name: O.digest(raw) for name, raw in originals}, "querySessionSha256": O.digest(session),
+        "phaseSha256": {name: O.digest(raw) for name, raw in phase.records}, "childSha256": O.digest(child_raw),
+        "ackSha256": O.digest(dict(phase.records)["stdout.log"]), "invocation": start["invocation"],
+        "startedNs": start["startedNs"], "workEndNs": start["workEndNs"], "finalEndNs": start["finalEndNs"],
+        "acquiredNs": child["acquiredNs"], "checkedNs": checked, "serviceSteps": steps}
+    return match, captured, authority, child_raw, session
+
+
+@dataclass(frozen=True, repr=False)
+class _BeforeAcquired:
+    """Private still-owned acquisition return. Not closed authority/K input."""
+    input: object
+    clock: object
+    owner: object
+    root: object
+    private: object
+    before: object
+    after: object
+    phase: object
+    captured: tuple
+    match: object
+    summary: dict
+
+
+_BEFORE_ACQUIRED = {}
+
+
+def _before_acquire(inputs, clock, expected, token, entry):
+    """Token-bearing acquisition ONLY; exhaustive copy/close runs after return."""
+    attempt = owner = None
+    failure = None
+    source_links, source_pins, graphs, match_pins, directory_bindings = (), (), (), (), ()
+    phase = phase_pin = None
+    try:
+        # Even an already-consumed attempt can raise. Keep that first check
+        # inside the token-clearing finally, not in a retained exception frame.
+        attempt = _before_begin("authority")
+        _before_entry_current(entry)
+        attempt.update(input=inputs, clock=clock, owner=None, entry=entry)
+        require(type(token) is str and re.fullmatch(r"[A-Za-z0-9_.-]{16,4096}", token) and
+            not any(name in os.environ for name in _CREDENTIAL_NAMES) and type(clock) is _BeforeClock and
+            clock.side == "parent" and clock._view().binding[9] is entry, "BEFORE_ACQUISITION_TOKEN_OR_CLOCK")
+        raws, input_metadata, _metadata = _checked_before_input(inputs)
+        parsed = _tail_bundle({name: raws[name] for name in _TAIL_LIMITS})
+        step, _carrier, old_context, _manifest, _collected = parsed
+        match_pins = (_custody_match_pin(expected, step["kind"]),)
+        graphs = (N._history_graph(raws, parsed, input_metadata),)
+        require(expected.record == raws["original-match"], "BEFORE_ACQUISITION_EXPECTED")
+        _same(clock.frame, step["originalWindow"], "BEFORE_ACQUISITION_WINDOW")
+        owner = _CustodyOwner(clock.local_end, clock, first=clock.reading, cancelled=clock.cancelled)
+        attempt["owner"] = owner
+        clock.attach_operative(owner)
+        anchor, dictionary = owner._anchor(), owner.__dict__
+        def current():
+            # This closure deliberately never captures token, retain or a
+            # credential-bearing acquisition frame. It survives for K custody.
+            _before_entry_current(entry)
+            require(_BEFORE_ATTEMPTS.get("authority") is attempt and attempt["input"] is inputs and
+                attempt["clock"] is clock and attempt["owner"] is owner and attempt["state"] in
+                ("STARTED", "ACQUIRED", "CLOSING", "RETURNED") and attempt["failure"] is None and
+                attempt["entry"] is entry and owner.__dict__ is dictionary and owner._anchor() is anchor,
+                "BEFORE_ORIGINAL_ACQUISITION")
+            _checked_before_input(inputs)
+            owner.check()
+            require(owner.original is None and not owner.unknown and owner.errors == [] and
+                set(owner.initial_sources) == {name for name, _source in source_links} and
+                all(owner.initial_sources[name] is source for name, source in source_links) and owner.phase_originals is phase,
+                "BEFORE_ORIGINAL_AUTHORITY_OWNER")
+            for directory, path, identity in directory_bindings:
+                require(directory.path is path and tuple(directory.identity) == identity and
+                    _collect_directory_closed(directory, clock.clock.role) is owner.closed,
+                    "BEFORE_ORIGINAL_DIRECTORY_BINDING")
+            for pin in source_pins:
+                _collect_source_current(pin)
+            if phase_pin is not None:
+                _collect_phase_current(phase_pin)
+            for pin in match_pins:
+                _custody_match_check(pin)
+            for graph in graphs:
+                N._check_history(graph)
+            _before_entry_current(entry)
+        current()
+        custody = _paths(step["kind"])[2]
+        root = owner.open(custody)
+        original_root = _BEFORE_INPUTS[id(inputs)][6][1]
+        require(root.path == original_root[2] and tuple(root.identity) == original_root[3] and
+            native._initializer_names(owner, root) == _before_roster(created=False), "BEFORE_ACQUISITION_SEALED_ROOT")
+        path = custody / "authority-before"
+        private = owner.child(root, "authority-before", create=True)
+        private_pin = tuple(private.identity)
+        directory_bindings = tuple((directory, directory.path, tuple(directory.identity)) for directory in (root, private))
+        owner.child(private, "control-home", create=True)
+        owner.child(private, "temporary", create=True)
+        before = N.source_queries(owner, clock, old_context["observed"], path / "source-before")
+        source_links = ((str(path / "source-before"), before),)
+        source_pins = (_collect_source_pin(before),)
+        current()
+        policy = N.source_readback(owner, path / "source-before", before)
+        require(policy["candidate_policy_raw"] == raws["policy"], "BEFORE_SOURCE_POLICY_CHANGED")
+        _collect_query_index(path / "source-before", before.session, policy, old_context["observed"], source=before)
+        inherited = Q._inherited_context()
+        context = {"schema": 1, "scope": B.CONTEXT_SCOPE, "edge": "BEFORE", "kind": step["kind"],
+            "root": str(ROOT), "session": str(path), "job": uuid.uuid4().hex, "observed": old_context["observed"],
+            "originalWindow": step["originalWindow"], "originalServiceJob": step["originalServiceJob"],
+            "predecessor": _before_predecessor(raws, step), "expectedMatch": canonical(expected.record, A.stages.LIMIT),
+            "eventSha256": O.digest(raws["event"]), "sourceReturnSha256": O.digest(before.raw),
+            "sourceReturnedNs": canonical(before.raw)["returnedNs"], "inheritedContext": inherited,
+            "directoryIdentity": list(private_pin), "parentFirstNs": clock.first, "parentFirstLocal": clock.first_local,
+            "continuationEndNs": clock.work, "deadline": clock.seed,
+            "selectedInputs": _before_selected(_BEFORE_INPUTS[id(inputs)][-1]), "inputMetadata": input_metadata,
+            "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False}
+        graphs = (*graphs, N._history_graph(context, inherited))
+        context_raw = O.encoded(context)
+        _before_context(context_raw, clock.clock)
+        current()
+        require(owner.write(private, "context.json", context_raw) == context_raw, "BEFORE_CONTEXT_WRITE")
+        _directory, returned_phase = N._initial_service_phase(owner, private, context_raw, token, clock, before)
+        phase = returned_phase
+        phase_pin = _collect_phase_pin(phase)
+        token = None
+        current()
+        first_match, first_captured, _chain, _child, _session = _before_read_authority(
+            owner, private, before, phase, clock, inputs, expected)
+        match_pins = (*match_pins, _custody_match_pin(first_match, step["kind"]))
+        graphs = (*graphs, N._history_graph(first_captured))
+        current()
+        after = N.source_queries(owner, clock, old_context["observed"], path / "source-after")
+        source_links = (*source_links, (str(path / "source-after"), after))
+        source_pins = (*source_pins, _collect_source_pin(after))
+        current()
+        require(N.source_readback(owner, path / "source-after", after) == policy, "BEFORE_FINAL_SOURCE_CHANGED")
+        _collect_query_index(path / "source-after", after.session, dict(after.records), old_context["observed"], source=after)
+        match, captured, authority, child_raw, session_raw = _before_read_authority(
+            owner, private, before, phase, clock, inputs, expected)
+        match_pins = (*match_pins, _custody_match_pin(match, step["kind"]))
+        require(captured == first_captured and tuple(private.identity) == private_pin and
+            native._initializer_names(owner, root) == _before_roster(created=True), "BEFORE_ACQUISITION_STABLE")
+        authority["sourceAfterSha256"] = O.digest(after.raw)
+        graphs = (*graphs, N._history_graph(captured, authority))
+        current()
+        clock.now()
+        result = _BeforeAcquired(inputs, clock, owner, root, private, before, after, phase, captured, match, authority)
+        _BEFORE_ACQUIRED[id(result)] = (result, result.__dict__, current,
+            N._history_graph(result.__dict__, root.path, private.path), attempt, child_raw, session_raw, context_raw,
+            owner, anchor, clock, entry)
+        attempt["state"] = "ACQUIRED"
+        _checked_before_acquired(result)
+        return result
+    except BaseException as error:
+        failure = error
+        if owner is not None:
+            owner.error("before-acquisition-parent", error)
+            failure = owner._anchor().failure
+        failure = entry[0].fail(failure)
+        if attempt is not None:
+            if attempt["failure"] is None:
+                attempt["failure"] = failure
+            attempt["state"] = "FAILED"
+    finally:
+        token = None
+        if failure is not None and owner is not None:
+            try:
+                owner.close()
+            except BaseException as error:
+                owner.error("before-acquisition-failed-close", error)
+    raise failure if attempt is None else attempt["failure"]
+
+
+def _checked_before_acquired(result):
+    saved = _BEFORE_ACQUIRED.get(id(result))
+    require(type(result) is _BeforeAcquired and type(saved) is tuple and saved[0] is result,
+        "BEFORE_NOT_ORIGINAL_ACQUISITION")
+    try:
+        _before_entry_current(saved[11])
+        require(saved[4]["failure"] is None and result.__dict__ is saved[1] and result.owner is saved[8] and
+            result.owner._anchor() is saved[9] and result.clock is saved[10], "BEFORE_ACQUISITION_DICTIONARY_CHANGED")
+        N._check_history(saved[3])
+        saved[2]()
+        clock_anchor = result.clock._view()
+        require(clock_anchor.binding[9] is saved[11] and clock_anchor.failure is None and
+            not any(name in os.environ for name in _CREDENTIAL_NAMES),
+            "BEFORE_ACQUISITION_FAILED_OR_CREDENTIAL")
+        _before_entry_current(saved[11])
+        return saved
+    except BaseException as error:
+        error = saved[11][0].fail(error)
+        if saved[4]["failure"] is None:
+            saved[4]["failure"] = error
+        saved[4]["state"] = "FAILED"
+        raise saved[4]["failure"]
+
+
+def _before_currency(result):
+    saved = _checked_before_acquired(result)
+    try:
+        _before_entry_current(saved[11])
+        raws, _input_metadata, _metadata = _checked_before_input(result.input)
+        prior = {name: raws[name] for name in _TAIL_LIMITS}
+        expected = _tail_host(prior, _tail_bundle(prior), result.clock.clock)
+        expected_pin = _custody_match_pin(expected, result.clock.frame["kind"])
+        context_raw, originals, invocation, began, end = result.captured
+        match, _service = N.retained_match(canonical(context_raw), dict(originals), invocation, result.clock.clock, began, end)
+        match_pin = _custody_match_pin(match, result.clock.frame["kind"])
+        require(type(match) is type(expected) is type(result.match) and match.record == expected.record == result.match.record,
+            "BEFORE_CURRENT_GRANT_CHANGED")
+        _same(_before_service_steps(result.captured, result.clock.clock), result.summary["serviceSteps"],
+            "BEFORE_CURRENT_SERVICE_STEPS_CHANGED")
+        result.clock.now()
+        _custody_match_check(expected_pin)
+        _custody_match_check(match_pin)
+        require(_checked_before_acquired(result) is saved, "BEFORE_CURRENT_ACQUISITION_REPLACED")
+        return saved
+    except BaseException as error:
+        raise saved[11][0].fail(error)
+
+
+def _before_index(result):
+    """Compare the actual producer declarations to the independent fixed grammar."""
+    saved = _checked_before_acquired(result)
+    child_raw, session_raw, context_raw = saved[5:8]
+    context, path = _before_context(context_raw, result.clock.clock), result.private.path
+    require(N.SOURCE_KEYS == B.SOURCE_KEYS and N.ORIGINAL_KEYS == B.ORIGINAL_KEYS and
+        native.PHASE_FILES == set(B.PHASE_FILES), "BEFORE_PRODUCER_GRAMMAR_CHANGED")
+    groups = (("source-before", result.before, result.before.session, dict(result.before.records)),
+        ("acquisition-queries", None, session_raw, dict(result.captured[1])),
+        ("source-after", result.after, result.after.session, dict(result.after.records)))
+    rows, directories, identifiers = [], [path, path / "control-home", path / "temporary", path / "service"], []
+    for side, source, session, originals in groups:
+        new_rows, new_directories = _collect_query_index(path / side, session, originals, context["observed"], source=source)
+        rows.extend(new_rows)
+        directories.extend(new_directories)
+        identifiers.append(tuple(row["id"] for row in canonical(session, Q.MAX_RECEIPT_BYTES)["queries"]))
+    required_files, required_directories = B.member_grammar(*identifiers)
+    for name, raw in (("context.json", context_raw), ("service/child-result.json", child_raw),
+            *(("service/" + name, raw) for name, raw in result.phase.records)):
+        maximum = native.ACK_LIMIT if name == "service/stdout.log" else \
+            native.STDERR_LIMIT if name == "service/stderr.log" else native.LIMIT
+        require(type(raw) is bytes and len(raw) <= maximum, "BEFORE_PHASE_ORIGINAL_LIMIT")
+        rows.append((path / name, maximum, len(raw), O.digest(raw)))
+    index = tuple(sorted((str(target.relative_to(path)).replace(os.sep, "/"), maximum, count, checksum)
+        for target, maximum, count, checksum in rows))
+    relative_directories = tuple(sorted(str(target.relative_to(path)).replace(os.sep, "/") for target in directories))
+    require(len(index) == 279 and tuple(row[0] for row in index) == tuple(name for name in required_files if name != "authority-close.json") and
+        relative_directories == required_directories and all(type(maximum) is int and type(count) is int and
+            0 <= count <= maximum <= native.LIMIT for _name, maximum, count, _checksum in index),
+        "BEFORE_EXHAUSTIVE_PRODUCER_ROSTER")
+    require(sum(row[2] for row in index) <= MAX_BYTES, "BEFORE_ORIGINAL_TOTAL_LIMIT")
+    return index, required_files, required_directories
+
+
+def _before_directory_members(metadata, directory, expected):
+    """B-only exact cardinality cap. Old32-entry roster helpers are unchanged."""
+    require(type(metadata) is _PrimaryOwner and type(expected) is tuple and len(expected) <= 42 and
+        len(set(expected)) == len(expected), "BEFORE_DIRECTORY_EXPECTATION")
+    end = metadata.guard()
+    directory.verify()
+    maximum = max(1, len(expected))
+    if metadata.owner.first.clock.role == "windows-x64":
+        names = directory.names(max_names=maximum, deadline=end)
+    else:
+        names = []
+        with os.scandir(directory.path) as entries:
+            for entry in entries:
+                require(len(names) < maximum, "BEFORE_DIRECTORY_LIMIT")
+                names.append(entry.name)
+    require(len(names) == len(set(names)) == len(set(name.casefold() for name in names)) and
+        tuple(sorted(names)) == expected, "BEFORE_DIRECTORY_MEMBERSHIP")
+    directory.verify()
+    metadata.guard()
+
+
+def _before_query_files(result, originals):
+    """Bind each actual query's five copied originals to its actual session."""
+    saved = _checked_before_acquired(result)
+    context = canonical(saved[7])
+    for side, session_raw in (("source-before", result.before.session), ("source-after", result.after.session),
+            ("acquisition-queries", saved[6])):
+        session = canonical(session_raw, Q.MAX_RECEIPT_BYTES)
+        owner = fields(canonical(originals[side + "/owner.json"]),
+            "schema scope job state home root nativeRole git ancestorContext", "BEFORE_QUERY_OWNER_FIELDS")
+        path = result.private.path / side
+        require(type(owner["schema"]) is int and owner["schema"] == 1 and owner["scope"] == "ORDINARY_GIT_QUERIES_ONLY" and
+            owner["job"] == session["job"] and owner["state"] == str(path) and owner["home"] == str(path / "query-home") and
+            owner["root"] == str(ROOT) and owner["nativeRole"] == result.clock.clock.role and
+            owner["git"] == session["queries"][0]["argv"][0], "BEFORE_ORIGINAL_QUERY_OWNER")
+        inherited = (canonical(dict(result.phase.records)["start.json"])["inheritedContext"] if side == "acquisition-queries"
+            else context["inheritedContext"])
+        _same(owner["ancestorContext"], inherited, "BEFORE_QUERY_ORIGINAL_ANCESTORS")
+        for query in session["queries"]:
+            prefix = side + "/query-" + query["id"] + "/"
+            require(originals[prefix + "result.json"] == Q.encoded(query), "BEFORE_QUERY_RESULT_ORIGINAL")
+            start = canonical(originals[prefix + "start.json"])
+            expected = {name: value for name, value in query.items() if name not in ("ownership", "ownedSurvivors")}
+            expected.update(launchAttempted=False, scopeAttempted=False, waitExitCode=None, retirement="UNKNOWN",
+                result="HOLD", errors=[], outputs={})
+            require(set(start) == set(expected) | {"environment"}, "BEFORE_QUERY_START_FIELDS")
+            _same({name: start[name] for name in expected}, expected, "BEFORE_QUERY_START_ORIGINAL")
+            require(type(start["environment"]) is dict and all(type(key) is str and type(value) is str
+                for key, value in start["environment"].items()) and
+                not any(name in start["environment"] for name in _CREDENTIAL_NAMES), "BEFORE_QUERY_START_CREDENTIALS")
+            baseline = fields(canonical(originals[prefix + "baseline.json"]), "nativeRole baseline kernelJob",
+                "BEFORE_QUERY_BASELINE_FIELDS")
+            require(baseline["nativeRole"] == result.clock.clock.role and
+                baseline["kernelJob"] is (result.clock.clock.role == "windows-x64") and
+                (baseline["baseline"] is None if baseline["kernelJob"] else type(baseline["baseline"]) is list),
+                "BEFORE_QUERY_BASELINE")
+            for stream in ("stdout", "stderr"):
+                raw = originals[prefix + stream + ".log"]
+                value = query["outputs"][stream]
+                require(type(value["bytes"]) is int and value["bytes"] == len(raw) and value["sha256"] == O.digest(raw),
+                    "BEFORE_QUERY_STREAM_ORIGINAL")
+
+
+def _before_capture(result, index, required, directories, original_pins):
+    """Read ALL279 actual files and ALL58 exact directories. Not K capture."""
+    clock, path = result.clock, result.private.path
+    metadata = _PrimaryOwner(native.Owner(clock.local_end, clock, first=clock.reading, cancelled=clock.cancelled))
+    failure = None
+    try:
+        clock.attach_file_owner("readback", metadata)
+        _before_currency(result)
+        native_pins = {key: identity for key, _row, _directory, _path, identity in original_pins}
+        require(set(native_pins) == set(B.DIRECTORY_TARGETS), "BEFORE_SEVEN_ORIGINAL_TARGETS")
+        members = dict(B.directory_members(required, directories, closed=False))
+        handles, pins = {}, []
+        for relative in sorted(directories, key=lambda name: (name.count("/"), name != ".", name)):
+            target = path if relative == "." else path.joinpath(*relative.split("/"))
+            directory = _private(metadata, target)
+            pin = tuple(directory.identity)
+            require(not any(pin == previous[3] for previous in pins) and
+                (relative not in native_pins or pin == native_pins[relative]), "BEFORE_DIRECTORY_ORIGINAL_PIN_OR_ALIAS")
+            _before_directory_members(metadata, directory, members[relative])
+            handles[relative] = directory
+            pins.append((relative, directory, directory.path, pin))
+        originals, observed, identities, total = [], [], set(pin[3] for pin in pins), 0
+        for relative, maximum, count, checksum in index:
+            parent, _, name = relative.rpartition("/")
+            raw, observation = _before_read(metadata, handles[parent or "."], name, maximum, count=count, checksum=checksum)
+            pin = _before_metadata(observation["metadata"], clock.clock.role, count)
+            require(pin not in identities, "BEFORE_FILE_OR_DIRECTORY_ALIAS")
+            identities.add(pin)
+            total += len(raw)
+            require(total <= MAX_BYTES, "BEFORE_ACTUAL_TOTAL_LIMIT")
+            originals.append((relative, raw))
+            observed.append({"relative": relative, "maximum": maximum, **observation})
+        originals = tuple(originals)
+        require(len(originals) == 279 and tuple(name for name, _raw in originals) == tuple(row[0] for row in index),
+            "BEFORE_ALL279_READ_REQUIRED")
+        _before_query_files(result, dict(originals))
+        graph = N._history_graph(originals, observed, tuple(pin[2] for pin in pins))
+        for relative, directory in handles.items():
+            _before_directory_members(metadata, directory, members[relative])
+        _before_currency(result)
+        N._check_worker_pins(original_pins, clock.clock.role)
+        N._check_history(graph)
+        close = metadata.finish()
+        closed_ns = clock.now()
+        data = {"files": observed, "directories": [{"relative": relative, "path": str(target),
+            "originalIdentity": list(native_pins[relative]) if relative in native_pins else None,
+            "originalProvenance": "ORIGINAL_AUTHORITY_NATIVE_PIN" if relative in native_pins else "UNPINNED_ORIGINAL_DIRECTORY",
+            "readbackIdentity": list(identity)} for relative, _directory, target, identity in sorted(pins)],
+            "fileCount": 279, "directoryCount": 58, "totalBytes": total, "closedNs": closed_ns,
+            "ownerClose": _collect_file_close(close), "captureScope": "BEFORE_ORIGINAL_READBACK_NOT_K_CAPTURE"}
+        raw = O.encoded(data)
+        canonical(raw)
+        return originals, raw, metadata, tuple(pins)
+    except BaseException as error:
+        failure = metadata.remember(error)
+    finally:
+        if not metadata.finished and not metadata.owner.unknown:
+            try:
+                metadata.finish()
+            except BaseException as error:
+                if failure is None:
+                    failure = error
+    raise failure
+
+
+def _before_file_owner_known(owner, anchor, pins):
+    require(type(owner) is _PrimaryOwner and owner._anchor() is anchor, "BEFORE_CLOSED_FILE_OWNER_CHANGED")
+    owner.structural()
+    require(owner.finished and owner.failure is None and owner.owner.closed is True and owner.owner.unknown is False and
+        owner.owner.original is None and owner.errors == [] and all(a and c for _r, _l, _v, a, c in owner.rows),
+        "BEFORE_FILE_CLOSE_NOT_KNOWN")
+    for _name, directory, path, identity in pins:
+        require(directory.path is path and tuple(directory.identity) == identity and
+            _collect_directory_closed(directory, owner.owner.first.clock.role) is True, "BEFORE_CLOSED_DIRECTORY_CHANGED")
+
+
+def _before_pending_close(result, readback_raw, required, parent_close, preclose, closed):
+    """No self hash/byte total or enclosing writer/Step success is possible here."""
+    _before_currency(result)
+    _raws, input_metadata, _metadata = _checked_before_input(result.input)
+    clock = result.clock
+    readback = canonical(readback_raw)
+    require(readback["fileCount"] == 279 and readback["directoryCount"] == 58 and
+        tuple(row["relative"] for row in readback["files"]) == tuple(name for name in required if name != "authority-close.json") and
+        O.integer(readback["closedNs"]) <= O.integer(preclose) <= O.integer(closed) < clock.frame["sealEndNs"],
+        "BEFORE_PENDING_CLOSE_CHRONOLOGY_OR_ROSTER")
+    raw = O.encoded({"schema": 1, "scope": B.CLOSE_SCOPE, "edge": "BEFORE", "kind": clock.frame["kind"],
+        "originalWindow": clock.frame, "deadline": clock.seed, "inputMetadata": input_metadata,
+        "authority": result.summary, "parentClose": parent_close, "preCloseNs": preclose, "closedNs": closed,
+        "requiredFiles": list(required), "requiredFileCount": 280, "otherFiles": readback["files"],
+        "otherFilesCount": 279, "otherFilesTotalBytes": readback["totalBytes"], "directories": readback["directories"],
+        "directoryCount": 58, "originalReadbackClose": readback["ownerClose"],
+        "self": {"relative": "authority-close.json", "maximum": native.LIMIT,
+            "state": "PENDING_SEPARATE_WRITER_READBACK_AND_CLOSE"},
+        "writerReturn": "PENDING_OWNER_CLOSE", "originalStepOutcome": "NOT_OBSERVED", "liveRecipient": "NOT_CREATED",
+        "capture": "NOT_K_CAPTURE", "upload": "NOT_PERFORMED", "testAcceptance": "NOT_PERFORMED",
+        "productiveAuthority": False, "cacheAuthority": False, "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
+    canonical(raw)
+    return raw
+
+
+def _before_write_close(result, raw, readback_raw, required, directories):
+    """Fresh original capped writer AFTER actual authority/query/native closes."""
+    clock, path = result.clock, result.private.path
+    result.owner.known()
+    metadata = _PrimaryOwner(native.Owner(clock.local_end, clock, first=clock.reading, cancelled=clock.cancelled))
+    failure = None
+    try:
+        clock.attach_file_owner("writer", metadata)
+        _before_currency(result)
+        expected = canonical(readback_raw)
+        observed_pins = {row["relative"]: tuple(row["readbackIdentity"]) for row in expected["directories"]}
+        initial_members = dict(B.directory_members(required, directories, closed=False))
+        final_members = dict(B.directory_members(required, directories, closed=True))
+        custody = _private(metadata, path.parent)
+        original_root = _BEFORE_INPUTS[id(result.input)][6][1]
+        require(custody.path == original_root[2] and tuple(custody.identity) == original_root[3] and
+            _tail_directory_names(metadata, custody) == _before_roster(created=True), "BEFORE_WRITER_CUSTODY_ROOT")
+        handles, pins = {}, [("custody", custody, custody.path, tuple(custody.identity))]
+        for relative in sorted(directories, key=lambda name: (name.count("/"), name != ".", name)):
+            target = path if relative == "." else path.joinpath(*relative.split("/"))
+            directory = _private(metadata, target)
+            identity = tuple(directory.identity)
+            require(identity == observed_pins[relative] and not any(identity == old[3] for old in pins),
+                "BEFORE_WRITER_READBACK_PIN_CHANGED")
+            _before_directory_members(metadata, directory, initial_members[relative])
+            handles[relative] = directory
+            pins.append((relative, directory, directory.path, identity))
+        private = handles["."]
+        canonical(raw)
+        reader = metadata.acquire("embedded-reader", lambda: io.BytesIO(raw))
+        end = metadata.guard()
+        writer = metadata.acquire("writer", lambda: private.create_file("authority-close.json", max_bytes=len(raw), deadline=end))
+        writer_ordinal = len(metadata.rows) - 1
+        def verify():
+            require(type(reader) is io.BytesIO and reader.getvalue() == raw, "BEFORE_CLOSE_WRITER_BYTES")
+        checksum, written_metadata = _consume(metadata, reader, len(raw), O.digest(raw), verify, writer=writer)
+        require(checksum == O.digest(raw) and metadata.rows[writer_ordinal][2] is writer and
+            metadata.rows[writer_ordinal][3:] == (True, True), "BEFORE_CLOSE_WRITER_HASH_OR_CLOSE")
+        write_observation = {"bytes": len(raw), "sha256": checksum, "metadata": canonical(written_metadata),
+            "writerOrdinal": writer_ordinal, "observation": "PRE_CLOSE_WRITE_VERIFY", "retirement": "KNOWN_WRITER_CLOSE"}
+        _before_metadata(write_observation["metadata"], clock.clock.role, len(raw))
+        reread, observation = _before_read(metadata, private, "authority-close.json", native.LIMIT,
+            count=len(raw), checksum=checksum)
+        require(reread == raw, "BEFORE_CLOSE_WRITER_READBACK")
+        # These are different native lifetimes, not interchangeable stamps.
+        # Only Windows modified/change times may finalize across writer close;
+        # the real postclose reader above still requires full lifetime equality.
+        metadata_policy = B.write_close_metadata(clock.clock.role, write_observation["metadata"],
+            observation["metadata"], len(raw))
+        for relative, directory in handles.items():
+            _before_directory_members(metadata, directory, final_members[relative])
+        require(_tail_directory_names(metadata, custody) == _before_roster(created=True), "BEFORE_WRITER_FINAL_ROOT")
+        _before_currency(result)
+        graph = N._history_graph(write_observation, observation, tuple(pin[2] for pin in pins))
+        close = metadata.finish()
+        closed = clock.now()
+        _before_file_owner_known(metadata, metadata._anchor(), pins)
+        N._check_history(graph)
+        writer_return = O.encoded({"schema": 1, "scope": "INITIAL_BEFORE_CLOSE_WRITER_KNOWN_RETURN_V1",
+            "relative": "authority-close.json", "bytes": len(raw), "sha256": O.digest(raw),
+            "preCloseWrite": write_observation, "readback": observation, "metadataPolicy": metadata_policy,
+            "ownerClose": _collect_file_close(close), "closedNs": closed,
+            "originalStepOutcome": "NOT_OBSERVED", "capture": "NOT_K_CAPTURE", "exportSaveAuthority": False})
+        canonical(writer_return)
+        return writer_return, metadata, tuple(pins)
+    except BaseException as error:
+        failure = metadata.remember(error)
+    finally:
+        if not metadata.finished and not metadata.owner.unknown:
+            try:
+                metadata.finish()
+            except BaseException as error:
+                if failure is None:
+                    failure = error
+    raise failure
+
+
+@dataclass(frozen=True, repr=False)
+class _BeforeAuthority:
+    """Genuine same-process280-file return, not a deserializable K capability."""
+    acquired: object
+    raw: bytes
+    originals: tuple
+    readback: bytes
+    writer_close: bytes
+    index: bytes
+
+
+def _close_before_authority(acquired):
+    """Token-free full279 readback, actual authority close, then the280th writer."""
+    saved = _BEFORE_ACQUIRED.get(id(acquired))
+    require(type(saved) is tuple and saved[0] is acquired, "BEFORE_CLOSE_ORIGINAL_ACQUISITION")
+    # Pin the ORIGINAL owner/anchor before the first currency callback; a
+    # changed return dictionary must not redirect or skip failed-entry cleanup.
+    attempt, owner, owner_anchor, clock, entry = saved[4], saved[8], saved[9], saved[10], saved[11]
+    failure = None
+    try:
+        require(_before_currency(acquired) is saved, "BEFORE_CLOSE_ACQUISITION_CHANGED")
+        require(attempt["state"] == "ACQUIRED" and attempt["return"] is None, "BEFORE_CLOSE_ONCE")
+        attempt["state"] = "CLOSING"
+        index, required, directories = _before_index(acquired)
+        targets = {name: acquired.private.path if name == "." else acquired.private.path / name for name in B.DIRECTORY_TARGETS}
+        original_pins = N._worker_pins(owner, clock.clock.role, targets)
+        require(all(label == "directory" or attempted and closed for _row, label, _resource, attempted, closed in owner.check().rows),
+            "BEFORE_ORIGINAL_WRITERS_NOT_CLOSED")
+        originals, readback_raw, readback_owner, readback_pins = _before_capture(acquired, index, required, directories, original_pins)
+        readback_anchor = readback_owner._anchor()
+        _before_file_owner_known(readback_owner, readback_anchor, readback_pins)
+        N._check_worker_pins(original_pins, clock.clock.role)
+        _before_currency(acquired)
+        require(native._initializer_names(owner, acquired.root) == _before_roster(created=True), "BEFORE_PRECLOSE_ROOT")
+        preclose = clock.now()
+        owner.freeze()
+    except BaseException as error:
+        error = entry[0].fail(error)
+        owner.error("before-authority-capture", error)
+        failure = owner_anchor.failure
+    finally:
+        try:
+            owner.close()
+        except BaseException as error:
+            owner.error("before-authority-close", error)
+        if failure is None and owner_anchor.failure is not None:
+            failure = owner_anchor.failure
+    try:
+        if failure is not None:
+            raise failure
+        anchor = owner.known()
+        closed = clock.now(minimum=preclose)
+        N._check_worker_pins(original_pins, clock.clock.role, closed=True)
+        _before_file_owner_known(readback_owner, readback_anchor, readback_pins)
+        _before_currency(acquired)
+        parent_close = {"schema": 1, "scope": "INITIAL_BEFORE_AUTHORITY_PARENT_KNOWN_CLOSE_V1",
+            "resources": [{"ordinal": number, "label": label, "closeAttempted": attempted, "closed": ended}
+                for number, (_row, label, _resource, attempted, ended) in enumerate(anchor.rows)],
+            "retirement": "KNOWN_RESOURCE_CLOSE_ONLY", "exportSaveAuthority": False}
+        raw = _before_pending_close(acquired, readback_raw, required, parent_close, preclose, closed)
+        writer_close, writer_owner, writer_pins = _before_write_close(acquired, raw, readback_raw, required, directories)
+        complete = tuple(sorted((*originals, ("authority-close.json", raw))))
+        require(len(complete) == 280 and tuple(name for name, _raw in complete) == required, "BEFORE_REAL280_REQUIRED")
+        readback, writer_return = canonical(readback_raw), canonical(writer_close)
+        files = sorted((*readback["files"], {"relative": "authority-close.json", "maximum": native.LIMIT,
+            **writer_return["readback"]}), key=lambda row: row["relative"])
+        total = sum(len(data) for _name, data in complete)
+        require(total <= MAX_BYTES, "BEFORE_REAL280_TOTAL_LIMIT")
+        index_raw = O.encoded({"schema": 1, "scope": "INITIAL_BEFORE_ACTUAL_ORIGINALS_CLOSED_RETURN_V1",
+            "requiredFiles": list(required), "files": files, "fileCount": 280, "totalBytes": total,
+            "directories": readback["directories"], "directoryCount": 58,
+            "authorityCloseSha256": O.digest(raw), "closeWriterReturn": writer_return,
+            "originalReadbackClose": readback["ownerClose"], "capture": "NOT_K_CAPTURE",
+            "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "productiveAuthority": False,
+            "cacheAuthority": False, "exportSaveAuthority": False})
+        canonical(index_raw)
+        result = _BeforeAuthority(acquired, raw, complete, readback_raw, writer_close, index_raw)
+        binding = (result, result.__dict__, acquired, raw, complete, readback_raw, writer_close, index_raw, clock,
+            writer_owner, writer_owner._anchor(), writer_pins, readback_owner, readback_anchor, readback_pins,
+            original_pins, N._history_graph(result.__dict__, writer_owner.owner.__dict__, readback_owner.owner.__dict__,
+                owner.__dict__, tuple(pin[2] for pin in (*writer_pins, *readback_pins))), attempt, entry)
+        require(id(result) not in _BEFORE_AUTHORITIES, "BEFORE_RETURN_REUSE")
+        _BEFORE_AUTHORITIES[id(result)] = binding
+        attempt["return"], attempt["state"] = result, "RETURNED"
+        _checked_before_authority(result)
+        clock.now()
+        _checked_before_authority(result)
+        return result
+    except BaseException as error:
+        error = entry[0].fail(error)
+        if attempt["failure"] is None:
+            attempt["failure"] = error
+        attempt["state"] = "FAILED"
+        raise attempt["failure"]
+
+
+def _checked_before_authority(result):
+    """Internal closed-owner check; the enclosing entry may still be STARTED."""
+    saved = _BEFORE_AUTHORITIES.get(id(result))
+    require(type(result) is _BeforeAuthority and type(saved) is tuple and saved[0] is result, "BEFORE_NOT_ORIGINAL_AUTHORITY")
+    _, dictionary, acquired, raw, originals, readback, writer_close, index_raw, clock, writer, writer_anchor, writer_pins, \
+        reader, reader_anchor, reader_pins, original_pins, graph, attempt, entry = saved
+    try:
+        _before_entry_current(entry)
+        require(result.__dict__ is dictionary and result.acquired is acquired and result.raw == raw and
+            result.originals is originals and result.readback == readback and result.writer_close == writer_close and
+            result.index == index_raw and attempt["state"] == "RETURNED" and attempt["return"] is result and
+            attempt["failure"] is None, "BEFORE_AUTHORITY_RETURN_CHANGED")
+        N._check_history(graph)
+        require(_checked_before_acquired(acquired)[11] is entry, "BEFORE_AUTHORITY_ORIGINAL_ENTRY")
+        acquired.owner.known()
+        clock_anchor = clock._view()
+        require(acquired.clock is clock and clock_anchor.binding[9] is entry and clock_anchor.failure is None,
+            "BEFORE_AUTHORITY_CLOCK_CHANGED")
+        _before_file_owner_known(writer, writer_anchor, writer_pins)
+        _before_file_owner_known(reader, reader_anchor, reader_pins)
+        N._check_worker_pins(original_pins, clock.clock.role, closed=True)
+        index = canonical(index_raw)
+        require(type(index["fileCount"]) is int and index["fileCount"] == len(originals) == 280 and
+            index["requiredFiles"] == [name for name, _raw in originals] and len(index["files"]) == 280 and
+            type(index["directoryCount"]) is int and index["directoryCount"] == len(index["directories"]) == 58 and
+            type(index["totalBytes"]) is int and index["totalBytes"] == sum(len(data) for _name, data in originals) <= MAX_BYTES and
+            index["authorityCloseSha256"] == O.digest(raw), "BEFORE_AUTHORITY_EXHAUSTIVE_ROSTER_CHANGED")
+        for (name, data), row in zip(originals, index["files"]):
+            require(row["relative"] == name and type(row["bytes"]) is int and row["bytes"] == len(data) and
+                row["sha256"] == O.digest(data), "BEFORE_AUTHORITY_ORIGINAL_BYTES_CHANGED")
+        require(dict(originals)["authority-close.json"] == raw and
+            index["closeWriterReturn"] == canonical(writer_close) and index["capture"] == "NOT_K_CAPTURE",
+            "BEFORE_AUTHORITY_CLOSE_WRITER_CHANGED")
+        _before_entry_current(entry)
+        return clock, acquired.input, originals, index_raw, acquired.match, acquired.captured
+    except BaseException as error:
+        error = entry[0].fail(error)
+        if attempt["failure"] is None:
+            attempt["failure"] = error
+        attempt["state"] = "FAILED"
+        raise attempt["failure"]
+
+
+def checked_before_authority(result):
+    """Passive original-result check, including actual enclosing entry completion.
+
+    A pending internal result is not accepted here. A future one-use K still
+    needs this same clock/current authority and freshly read originals; this
+    checker itself never copies K, validates a recipient or grants export/upload.
+    """
+    saved = _BEFORE_AUTHORITIES.get(id(result))
+    require(type(result) is _BeforeAuthority and type(saved) is tuple and saved[0] is result,
+        "BEFORE_NOT_ORIGINAL_AUTHORITY")
+    entry = saved[18]
+    try:
+        _before_entry_current(entry)
+        entry[0].returned(_BEFORE_ATTEMPTS, entry[1], result)
+        checked = _checked_before_authority(result)
+        _before_entry_current(entry)
+        entry[0].returned(_BEFORE_ATTEMPTS, entry[1], result)
+        return checked
+    except BaseException as error:
+        raise entry[0].fail(error)
+
+
+def _before_pre_metadata(kind, cancelled, entry):
+    """The ONLY parent token frame; it returns before exhaustive readback/copy."""
+    token = os.environ.pop(O.wire.TOKEN_ENV, None)
+    try:
+        _before_entry_current(entry)
+        actual, seed = _before_actual()
+        local = local_value(time.monotonic())
+        first = O.clocks.observe()
+        graph = N._history_graph(first, seed, actual)
+        O.clocks.validate_reading(first)
+        boot = digest(C.boot_digest(first.clock.role))
+        N._check_history(graph)
+        require(type(token) is str and re.fullmatch(r"[A-Za-z0-9_.-]{16,4096}", token) and callable(cancelled) and
+            native.processes.host_role() == first.clock.role, "BEFORE_TOKEN_OR_HOST")
+        clock = _BeforeClock(first, local, boot, cancelled, seed, side="parent", actual=actual, entry=entry)
+        inputs = _read_before_input(clock, kind, actual)
+        expected = clock.bind_parent(inputs)
+        return _before_acquire(inputs, clock, expected, token, entry)
+    finally:
+        token = None
+
+
+def before_authority(kind, cancelled):
+    """Dormant same-process B entry. No CLI parent output or K/upload success."""
+    original = _BEFORE_ENTRY
+    attempt = _before_begin("entry")
+    entry = (original, attempt)
+    try:
+        _before_entry_current(entry)
+        acquired = _before_pre_metadata(kind, cancelled, entry)
+        # All token-bearing frames are gone before the279-file read/copy. Only
+        # this actual registered owner can produce the separate280th close row.
+        result = _close_before_authority(acquired)
+        _before_entry_current(entry)
+        require(_BEFORE_AUTHORITIES[id(result)][18] is entry, "BEFORE_RETURN_ENTRY_CHANGED")
+        original.complete(_BEFORE_ATTEMPTS, attempt, result)
+        original.returned(_BEFORE_ATTEMPTS, attempt, result)
+        return result
+    except BaseException as error:
+        raise original.fail(error)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     commands = parser.add_subparsers(dest="operation", required=True)
     for name in ("collect-export", "collect-close", "seal", "seal-for-before"):
         entry = commands.add_parser(name, allow_abbrev=False)
         entry.add_argument("--kind", required=True, choices=("gate", "worker"))
-    for name in ("_authority", "_crypto", "_post-export-authority", "_tail-authority"):
+    for name in ("_authority", "_crypto", "_post-export-authority", "_tail-authority", "_before-authority"):
         child = commands.add_parser(name, allow_abbrev=False)
         child.add_argument("--context-sha256", required=True)
         child.add_argument("--minimum-ns", required=True)
+        if name == "_before-authority":
+            for field, _environment, flag in B.SEED_FIELDS:
+                child.add_argument(flag, required=True, dest=field)
+            for field, flag in B.PHASE_FIELDS:
+                child.add_argument(flag, required=True, dest=field)
     args = parser.parse_args()
     try:
         require(sys.flags.isolated == 1 and sys.flags.no_site == 1 and sys.dont_write_bytecode,
@@ -8466,6 +10231,14 @@ def main():
         digest(args.context_sha256)
         require(re.fullmatch(r"0|[1-9][0-9]{0,19}", args.minimum_ns), "LAUNCH_MINIMUM")
         minimum = O.integer(int(args.minimum_ns))
+        if args.operation == "_before-authority":
+            seed = {name: getattr(args, name) for name, _environment, _flag in B.SEED_FIELDS}
+            caps = B.decimal_caps(seed, tuple(getattr(args, name) for name, _flag in B.PHASE_FIELDS))
+            command = native.initial_before_authority_command(args.context_sha256, seed, caps, minimum)
+            require(sys.argv[1:] == command[5:], "BEFORE_EXACT_CHILD_ARGUMENTS")
+            native.guarded(lambda signals: _before_authority_child(args.context_sha256, minimum,
+                lambda: native.cancellation(signals), seed, caps))
+            return 0
         if args.operation == "_authority":
             native.initial_custody_authority_command(args.context_sha256, minimum)
             operation = custody_authority_child
