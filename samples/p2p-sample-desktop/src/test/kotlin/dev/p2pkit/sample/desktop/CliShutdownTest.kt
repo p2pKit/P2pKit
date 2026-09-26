@@ -1,7 +1,11 @@
 package dev.p2pkit.sample.desktop
 
 import java.io.BufferedReader
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.IOException
+import java.io.OutputStream
+import java.io.PrintStream
 import java.io.StringReader
 import java.nio.file.Files
 import java.util.Base64
@@ -13,8 +17,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlin.system.exitProcess
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -33,7 +39,10 @@ class CliShutdownTest {
         val directory = Files.createTempDirectory("p2pkit-cli-shutdown-").toFile()
         val output = File(directory, "child.log")
         var child: Process? = null
+        var failure: Throwable? = null
         try {
+            // Even a failed launch must leave an explicit (possibly empty) original to retain.
+            Files.createFile(output.toPath())
             val executable = if (System.getProperty("os.name").startsWith("Windows")) "java.exe" else "java"
             val builder = ProcessBuilder(
                 File(System.getProperty("java.home"), "bin/$executable").path,
@@ -55,26 +64,218 @@ class CliShutdownTest {
             assertTrue(child.waitFor(15, TimeUnit.SECONDS), output.readText())
             assertEquals(23, child.exitValue(), output.readText())
             assertShutdownTranscript(output.readLines(), inheritedOptions)
+        } catch (error: Throwable) {
+            failure = error
         } finally {
-            if (child?.isAlive == true) {
-                child.destroyForcibly()
-                check(child.waitFor(5, TimeUnit.SECONDS)) { "Owned CLI probe survived forced cleanup" }
-            }
-            try {
-                child?.outputStream?.close()
-            } finally {
-                try {
-                    if (output.isFile) {
-                        // ASCII encoding survives Gradle's text/XML capture without changing raw line endings.
-                        val bytes = output.readBytes()
-                        val encoded = Base64.getEncoder().encodeToString(bytes)
-                        println("CLI_SHUTDOWN_RAW benignOption=$withBenignOption bytes=${bytes.size} base64=$encoded")
-                        check(!System.out.checkError()) { "Could not retain the owned CLI probe transcript" }
+            finishProbe(
+                directory, failure,
+                retire = {
+                    val owned = child
+                    if (owned?.isAlive == true) {
+                        owned.destroyForcibly()
+                        check(owned.waitFor(5, TimeUnit.SECONDS)) { "Owned CLI probe survived forced cleanup" }
                     }
-                } finally {
+                },
+                closeInput = { child?.outputStream?.close() },
+                retain = { retainProbeLog(output, "CLI_SHUTDOWN_RAW benignOption=$withBenignOption") },
+                dispose = {
                     check(directory.deleteRecursively()) { "Could not remove owned CLI probe directory" }
                 }
+            )
+        }
+    }
+
+    private fun retainProbeLog(
+        output: File,
+        prefix: String,
+        stream: PrintStream = System.out,
+        read: (File) -> ByteArray = { it.readBytes() }
+    ) {
+        // ASCII encoding survives Gradle's text/XML capture without changing raw line endings.
+        val bytes = read(output)
+        val encoded = Base64.getEncoder().encodeToString(bytes)
+        stream.println("$prefix bytes=${bytes.size} base64=$encoded")
+        check(!stream.checkError()) { "Could not retain the owned CLI probe transcript" }
+    }
+
+    private fun finishProbe(
+        directory: File,
+        primaryFailure: Throwable?,
+        retire: () -> Unit,
+        closeInput: () -> Unit,
+        retain: () -> Unit,
+        dispose: () -> Unit
+    ) {
+        val failures = ProbeFailures(primaryFailure)
+        // Do not short-circuit: a retirement/input error must not prevent the retention attempt.
+        val retired = failures.attempt(retire)
+        val inputClosed = failures.attempt(closeInput)
+        val retained = failures.attempt(retain)
+        val disposed = retired && inputClosed && retained && failures.attempt(dispose)
+        if (!disposed) failures.attempt {
+            error("PROBE_EVIDENCE_HOLD: preserve ${directory.absolutePath} before outer cleanup")
+        }
+        failures.rethrow()
+    }
+
+    @Test
+    fun probeFinalizerRetainsOriginalBytesBeforeDisposal() = withControlLog { directory, output ->
+        val calls = mutableListOf<String>()
+        val captured = ByteArrayOutputStream()
+        PrintStream(captured).use { stream ->
+            finishProbe(
+                directory, null,
+                retire = { calls += "retire" },
+                closeInput = { calls += "close" },
+                retain = { retainProbeLog(output, "CONTROL", stream); calls += "retain" },
+                dispose = {
+                    assertEquals(listOf("retire", "close", "retain"), calls)
+                    assertEquals(
+                        "CONTROL bytes=7 base64=cmF3DQoA/w==" + System.lineSeparator(), captured.toString("US-ASCII")
+                    )
+                    check(directory.deleteRecursively())
+                    calls += "dispose"
+                }
+            )
+        }
+        assertEquals(listOf("retire", "close", "retain", "dispose"), calls)
+        assertFalse(directory.exists())
+    }
+
+    @Test
+    fun probeFinalizerHoldsOriginalsWhenReadExportOrPrintStreamFails() {
+        for (stage in listOf("read", "export", "stream")) withControlLog { directory, output ->
+            val original = output.readBytes()
+            val injected = IOException("synthetic $stage failure")
+            val stream = when (stage) {
+                "export" -> object : PrintStream(ByteArrayOutputStream()) {
+                    override fun println(value: String?) = throw injected
+                }
+                "stream" -> PrintStream(object : OutputStream() {
+                    override fun write(value: Int) = throw injected
+                })
+                else -> PrintStream(ByteArrayOutputStream())
             }
+            val calls = mutableListOf<String>()
+            stream.use {
+                val failure = assertFailsWith<Exception> {
+                    finishProbe(
+                        directory, null,
+                        retire = { calls += "retire" },
+                        closeInput = { calls += "close" },
+                        retain = {
+                            calls += "retain"
+                            retainProbeLog(output, "CONTROL", stream) { file ->
+                                if (stage == "read") throw injected
+                                file.readBytes()
+                            }
+                        },
+                        dispose = { calls += "dispose"; directory.deleteRecursively() }
+                    )
+                }
+                if (stage == "stream") {
+                    assertTrue(stream.checkError()) // Real PrintStream error state, not a mocked return value.
+                    assertEquals("Could not retain the owned CLI probe transcript", failure.message)
+                } else assertSame(injected, failure)
+                assertTrue(failure.suppressed.single().message!!.startsWith("PROBE_EVIDENCE_HOLD:"))
+            }
+            assertEquals(listOf("retire", "close", "retain"), calls)
+            assertContentEquals(original, output.readBytes())
+        }
+    }
+
+    @Test
+    fun probeFinalizerPreservesPrimaryFailureAndAttemptsEveryFinalizer() {
+        val primary = AssertionError("synthetic body failure")
+        val retirement = IOException("synthetic retirement failure")
+        val input = IOException("synthetic input closure failure")
+        val retention = IOException("synthetic retention failure")
+        val calls = mutableListOf<String>()
+        val actual = assertFailsWith<AssertionError> {
+            finishProbe(
+                File("synthetic-not-created"), primary,
+                retire = { calls += "retire"; throw retirement },
+                closeInput = { calls += "close"; throw input },
+                retain = { calls += "retain"; throw retention },
+                dispose = { calls += "dispose" }
+            )
+        }
+        assertSame(primary, actual)
+        assertEquals(listOf(retirement, input, retention), actual.suppressed.take(3))
+        assertTrue(actual.suppressed.last().message!!.startsWith("PROBE_EVIDENCE_HOLD:"))
+        assertEquals(listOf("retire", "close", "retain"), calls)
+    }
+
+    @Test
+    fun probeFinalizerHoldsOriginalWhenRetirementOrInputClosureFails() {
+        for (stage in listOf("retire", "close")) withControlLog { directory, output ->
+            val original = output.readBytes()
+            val injected = IOException("synthetic $stage failure")
+            val calls = mutableListOf<String>()
+            val captured = ByteArrayOutputStream()
+            PrintStream(captured).use { stream ->
+                val failure = assertFailsWith<IOException> {
+                    finishProbe(
+                        directory, null,
+                        retire = { calls += "retire"; if (stage == "retire") throw injected },
+                        closeInput = { calls += "close"; if (stage == "close") throw injected },
+                        retain = { retainProbeLog(output, "CONTROL", stream); calls += "retain" },
+                        dispose = { calls += "dispose"; directory.deleteRecursively() }
+                    )
+                }
+                assertSame(injected, failure)
+                assertTrue(failure.suppressed.single().message!!.startsWith("PROBE_EVIDENCE_HOLD:"))
+            }
+            assertEquals(listOf("retire", "close", "retain"), calls)
+            assertEquals("CONTROL bytes=7 base64=cmF3DQoA/w==" + System.lineSeparator(), captured.toString("US-ASCII"))
+            assertContentEquals(original, output.readBytes())
+        }
+    }
+
+    @Test
+    fun probeFinalizerDoesNotReplaceBodyFailureWhenDisposalFails() {
+        val primary = AssertionError("synthetic body failure")
+        val disposal = IOException("synthetic disposal failure")
+        val failure = assertFailsWith<AssertionError> {
+            finishProbe(File("synthetic-not-created"), primary, {}, {}, {}, { throw disposal })
+        }
+        assertSame(primary, failure)
+        assertSame(disposal, failure.suppressed.first())
+        assertEquals(2, failure.suppressed.size)
+        assertTrue(failure.suppressed.last().message!!.startsWith("PROBE_EVIDENCE_HOLD:"))
+    }
+
+    private fun withControlLog(action: (File, File) -> Unit) {
+        val directory = Files.createTempDirectory("p2pkit-cli-finalizer-control-").toFile()
+        val failures = ProbeFailures(null)
+        try {
+            val output = File(directory, "child.log").apply {
+                writeBytes("raw\r\n".toByteArray(Charsets.US_ASCII) + byteArrayOf(0, -1))
+            }
+            action(directory, output)
+        } catch (error: Throwable) {
+            failures.attempt { throw error }
+        } finally {
+            // Only this deterministic control's source-defined bytes; never a child-process original.
+            failures.attempt { check(directory.deleteRecursively()) { "Could not remove control directory" } }
+            failures.rethrow()
+        }
+    }
+
+    private class ProbeFailures(primaryFailure: Throwable?) {
+        private var first = primaryFailure
+
+        fun attempt(action: () -> Unit): Boolean = try {
+            action()
+            true
+        } catch (error: Throwable) {
+            val primary = first
+            if (primary == null) first = error else if (primary !== error) primary.addSuppressed(error)
+            false
+        }
+
+        fun rethrow() {
+            first?.let { throw it }
         }
     }
 
