@@ -6,6 +6,10 @@ on:
 
 permissions:
   contents: read
+  actions: read
+  checks: read
+  pull-requests: read
+  deployments: read
 
 concurrency:
   group: maven-central-${{ github.ref }}
@@ -16,7 +20,35 @@ defaults:
     shell: bash
 
 jobs:
+  freeze-applications:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      sha256: ${{ steps.freeze.outputs.sha256 }}
+      artifact_id: ${{ steps.frozen.outputs.artifact-id }}
+    steps:
+      - name: Check out exact tagged source for secret-free readiness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Freeze the exact qualified main application and evidence set
+        id: freeze
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I -B -S scripts/release_application_set.py freeze
+      - name: Retain the immutable public application-set record
+        id: frozen
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-application-set-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/p2pkit-release-application-set/release-application-set.json
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false
+
   verify-release:
+    needs: freeze-applications
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -74,7 +106,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: maven-central-verification-${{ github.ref_name }}
+          name: maven-central-verification-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             build/reports/release/**
             build/reports/platform-tests/**
@@ -84,9 +116,11 @@ jobs:
             library/p2p-network-provisioning-desktop/api/**
             library/p2p-transport-lan/build/XCFrameworks/release/BUILD_*.txt
           if-no-files-found: warn
+          retention-days: 14
+          overwrite: false
 
   publish-release:
-    needs: verify-release
+    needs: [freeze-applications, verify-release]
     runs-on: macos-15
     timeout-minutes: 90
     environment:
@@ -113,6 +147,13 @@ jobs:
       - name: Install Android SDK platforms
         run: |
           "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37.0'
+
+      - name: Revalidate frozen applications and exact owner approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FROZEN_ARTIFACT: ${{ needs.freeze-applications.outputs.artifact_id }}
+          FROZEN_SHA256: ${{ needs.freeze-applications.outputs.sha256 }}
+        run: python3 -I -B -S scripts/release_application_set.py revalidate --artifact "$FROZEN_ARTIFACT" --sha256 "$FROZEN_SHA256"
 
       - name: Revalidate approved release and credentials
         env:
@@ -152,6 +193,13 @@ jobs:
             --dependency-verification strict --max-workers=2 --no-parallel --console=plain cyclonedxBom
           scripts/check-sbom.sh build/reports/cyclonedx/bom.json build/reports/cyclonedx/bom.xml
 
+      - name: Revalidate original readiness immediately before irreversible upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FROZEN_ARTIFACT: ${{ needs.freeze-applications.outputs.artifact_id }}
+          FROZEN_SHA256: ${{ needs.freeze-applications.outputs.sha256 }}
+        run: python3 -I -B -S scripts/release_application_set.py revalidate --artifact "$FROZEN_ARTIFACT" --sha256 "$FROZEN_SHA256"
+
       - name: Upload once and wait for publication
         env:
           MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
@@ -174,7 +222,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: maven-central-publication-${{ github.ref_name }}
+          name: maven-central-publication-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             build/central/*.zip
             build/central/*.sha256
@@ -183,3 +231,5 @@ jobs:
             build/reports/cyclonedx/bom.xml
             build/reports/maven-central/**
           if-no-files-found: warn
+          retention-days: 14
+          overwrite: false

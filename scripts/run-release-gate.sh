@@ -30,6 +30,9 @@ python3 -I -B scripts/tests/application-release-version-test.py
 bash scripts/tests/check-application-release-version.sh
 python3 -I -B scripts/tests/sample-artifact-identity-test.py
 python3 -I -B scripts/tests/package-sample-apps-test.py
+python3 -I -B scripts/tests/publish-sample-release-test.py
+python3 -I -B scripts/tests/release-application-set-test.py
+ruby scripts/tests/release-foundation-workflow-test.rb
 scripts/check-release-metadata.sh
 scripts/check-git-whitespace.sh
 python3 scripts/tests/ios-project-generation-test.py

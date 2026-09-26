@@ -26,15 +26,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Compare independent Java and Python version implementations
+      - name: Validate release policies and package handoff on the hosted process environment
         run: |
-          python3 -I -B scripts/tests/application-release-version-test.py
+          bash scripts/tests/release-workflow-test.sh
           bash scripts/tests/check-application-release-version.sh
-          git diff --exit-code
-      - name: Verify package identity controls without building or mounting applications
-        run: |
-          python3 -I -B scripts/tests/sample-artifact-identity-test.py
-          python3 -I -B scripts/tests/package-sample-apps-test.py
           git diff --exit-code
       # No Gradle, SDK setup, provider, application build or publication. This
       # job cannot replace the ordinary FULL/Desktop or protected release gates.

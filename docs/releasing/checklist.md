@@ -28,12 +28,20 @@ existing audit history into `main` is not release qualification.
    isolated consumers, Swift warnings-as-errors, and XCFramework provenance.
 5. Confirm `scripts/check-release-tag.sh v<VERSION_NAME>` and
    `scripts/check-maven-central-version.sh absent` pass.
-6. Obtain explicit owner authorization for the exact tag and commit.
+6. Require the exact same-source/version four-platform application set and
+   original encrypted evidence, then obtain explicit owner authorization for
+   the exact tag and commit. Follow the [exact-source foundation procedure](release-foundation.md).
 7. Push the immutable tag and allow the protected `maven-central` environment
    to perform signing, bundle validation, publication-build SBOM validation,
-   provenance, and publication.
+   provenance, and publication. The new secret-free `freeze-applications` stage
+   must pass first; protected approval must include its exact attempt/set-hash
+   challenge. Readiness is checked again immediately before irreversible upload.
 8. Verify remote bytes, signatures, checksums, metadata, and isolated consumers.
-9. Create a release record, set `LATEST_PUBLISHED_VERSION`, open the next
+9. After successful Maven verification, deliver the exact frozen APK/MSI/ARM64-DMG/DEB
+   through the separately protected sample evidence-approval stage and verify
+   every complete public download against its recorded hash. Do not rebuild or
+   reselect applications after Maven.
+10. Create a release record, set `LATEST_PUBLISHED_VERSION`, open the next
    snapshot line, and create a GitHub prerelease/release entry.
 
 Never move or recreate an existing release tag, weaken a gate, put secrets in

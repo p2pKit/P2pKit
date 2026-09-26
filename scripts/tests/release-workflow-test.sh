@@ -43,6 +43,9 @@ python3 "$ROOT/scripts/tests/check-release-metadata-test.py"
 python3 -I -B "$ROOT/scripts/tests/application-release-version-test.py"
 python3 -I -B "$ROOT/scripts/tests/sample-artifact-identity-test.py"
 python3 -I -B "$ROOT/scripts/tests/package-sample-apps-test.py"
+python3 -I -B "$ROOT/scripts/tests/publish-sample-release-test.py"
+python3 -I -B "$ROOT/scripts/tests/release-application-set-test.py"
+ruby "$ROOT/scripts/tests/release-foundation-workflow-test.rb"
 while IFS= read -r -d '' workflow; do
     ruby -e 'require "yaml"; YAML.safe_load(File.read(ARGV.fetch(0)), aliases: true)' "$workflow"
     while IFS= read -r use; do

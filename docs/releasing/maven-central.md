@@ -5,6 +5,14 @@ P2pKit publishes under the owner-verified namespace
 `.github/workflows/publish-maven-central.yml`; it is tag-triggered and uses the
 `maven-central` GitHub Environment for irreversible publication.
 
+Before the protected publisher can run, the secret-free application preflight
+must freeze the matching four-platform main application/evidence set. Both
+protected approval and the final pre-upload check revalidate its original
+identity and retention. See the [exact-source release procedure](release-foundation.md)
+for owner challenge comments, post-Maven application delivery and partial-failure
+boundaries. That document also records outstanding activation prerequisites;
+new source controls alone do not establish readiness.
+
 Required secrets and variables remain in the GitHub Environment and must never
 be printed or committed. The workflow validates namespace/publisher access,
 the exact tag/commit/version relationship, signing-key fingerprint, credential

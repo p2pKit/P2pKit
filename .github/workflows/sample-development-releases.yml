@@ -1,0 +1,207 @@
+name: Development sample Releases
+
+on:
+  workflow_run:
+    workflows: [Publish Maven Central]
+    types: [completed]
+    # Only verified Maven completion can deliver its already-frozen app set.
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact already-built and reviewed main commit (40 hex characters)
+        type: string
+        required: true
+      maven_run:
+        description: Original successful Maven tag-push run ID (app-only resume)
+        type: string
+        required: true
+      maven_attempt:
+        description: Original successful Maven attempt, never a new build
+        type: string
+        required: true
+      frozen_artifact:
+        description: Original frozen application-set artifact ID
+        type: string
+        required: true
+      frozen_sha256:
+        description: Exact SHA-256 of release-application-set.json
+        type: string
+        required: true
+      operation:
+        description: Verify without publication, or publish the verified development samples
+        type: choice
+        options: [verify, publish]
+        default: verify
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+  checks: read
+  pull-requests: read
+  deployments: read
+
+# This is not a Gradle/build job; it never occupies the shared heavy-job lease
+# while waiting for other gates. Each completion rechecks readiness, without a build.
+concurrency:
+  group: development-samples-${{ github.event.workflow_run.head_sha || inputs.source_sha }}
+  cancel-in-progress: false
+
+jobs:
+  admit:
+    # Manual resume is app-only and must name the same Maven attempt and frozen set.
+    if: ${{ github.repository == 'p2pKit/P2pKit' && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.name == 'Publish Maven Central' && github.event.workflow_run.event == 'push' && startsWith(github.event.workflow_run.head_branch, 'v'))) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      source: ${{ steps.admit.outputs.source }}
+      maven_run: ${{ steps.admit.outputs.maven_run }}
+      maven_attempt: ${{ steps.admit.outputs.maven_attempt }}
+      frozen_artifact: ${{ steps.admit.outputs.frozen_artifact }}
+      frozen_sha256: ${{ steps.admit.outputs.frozen_sha256 }}
+    steps:
+      - name: Check out trusted main publisher code, never producer-supplied code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Require successful Maven and its exact approved frozen application set
+        id: admit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE: ${{ inputs.source_sha }}
+          MAVEN_RUN: ${{ inputs.maven_run }}
+          MAVEN_ATTEMPT: ${{ inputs.maven_attempt }}
+          FROZEN_ARTIFACT: ${{ inputs.frozen_artifact }}
+          FROZEN_SHA256: ${{ inputs.frozen_sha256 }}
+        run: python3 -I -B -S scripts/publish-sample-release.py admit --source "$SOURCE" --maven-run "$MAVEN_RUN" --maven-attempt "$MAVEN_ATTEMPT" --frozen-artifact "$FROZEN_ARTIFACT" --frozen-sha256 "$FROZEN_SHA256"
+
+  verify-only:
+    needs: admit
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'verify' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out trusted main verifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Inspect the exact four ZIPs without any publication permission
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE: ${{ needs.admit.outputs.source }}
+          MAVEN_RUN: ${{ needs.admit.outputs.maven_run }}
+          MAVEN_ATTEMPT: ${{ needs.admit.outputs.maven_attempt }}
+          FROZEN_ARTIFACT: ${{ needs.admit.outputs.frozen_artifact }}
+          FROZEN_SHA256: ${{ needs.admit.outputs.frozen_sha256 }}
+        run: python3 -I -B -S scripts/publish-sample-release.py verify --source "$SOURCE" --maven-run "$MAVEN_RUN" --maven-attempt "$MAVEN_ATTEMPT" --frozen-artifact "$FROZEN_ARTIFACT" --frozen-sha256 "$FROZEN_SHA256"
+      - name: Retain only public provenance, never private test transcripts
+        id: evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sample-release-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/p2pkit-sample-release/receipt.json
+            ${{ runner.temp }}/p2pkit-sample-release/sample-release.json
+            ${{ runner.temp }}/p2pkit-sample-release/SHA256SUMS
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: false
+      - name: Retire only owned temporary metadata after retention
+        if: ${{ always() && steps.evidence.outcome == 'success' }}
+        run: python3 -I -B -S scripts/publish-sample-release.py cleanup
+
+  prepare-review:
+    needs: admit
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.operation == 'publish' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      request_sha256: ${{ steps.prepare.outputs.request_sha256 }}
+      artifact_id: ${{ steps.evidence.outputs.artifact-id }}
+    steps:
+      - name: Check out trusted main review preparation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Inspect the frozen apps and original main evidence for post-Maven owner review
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE: ${{ needs.admit.outputs.source }}
+          MAVEN_RUN: ${{ needs.admit.outputs.maven_run }}
+          MAVEN_ATTEMPT: ${{ needs.admit.outputs.maven_attempt }}
+          FROZEN_ARTIFACT: ${{ needs.admit.outputs.frozen_artifact }}
+          FROZEN_SHA256: ${{ needs.admit.outputs.frozen_sha256 }}
+        run: python3 -I -B -S scripts/publish-sample-release.py prepare-review --source "$SOURCE" --maven-run "$MAVEN_RUN" --maven-attempt "$MAVEN_ATTEMPT" --frozen-artifact "$FROZEN_ARTIFACT" --frozen-sha256 "$FROZEN_SHA256"
+      - name: Retain the immutable public review request, never private evidence
+        id: evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sample-release-review-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/p2pkit-sample-release/receipt.json
+            ${{ runner.temp }}/p2pkit-sample-release/sample-release.json
+            ${{ runner.temp }}/p2pkit-sample-release/SHA256SUMS
+            ${{ runner.temp }}/p2pkit-sample-release/review-request.json
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false
+      - name: Retire only owned temporary metadata after retention
+        if: ${{ always() && steps.evidence.outcome == 'success' }}
+        run: python3 -I -B -S scripts/publish-sample-release.py cleanup
+
+  publish:
+    needs: [admit, prepare-review]
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.operation == 'publish' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Only the owner may approve, after privately reviewing the exact main-run
+    # evidence. Python also binds the approval comment to this run/attempt/hash;
+    # reusing an old environment approval on rerun is not sufficient.
+    environment: sample-development-release
+    permissions:
+      contents: write
+      actions: read
+      checks: read
+      pull-requests: read
+      deployments: read
+    steps:
+      - name: Check out trusted main publisher
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      # No producer code, dependencies, caches, credentials or Gradle are executed.
+      - name: Publish frozen development bytes and verify all anonymous full-download hashes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE: ${{ needs.admit.outputs.source }}
+          MAVEN_RUN: ${{ needs.admit.outputs.maven_run }}
+          MAVEN_ATTEMPT: ${{ needs.admit.outputs.maven_attempt }}
+          FROZEN_ARTIFACT: ${{ needs.admit.outputs.frozen_artifact }}
+          FROZEN_SHA256: ${{ needs.admit.outputs.frozen_sha256 }}
+          REVIEW_ARTIFACT: ${{ needs.prepare-review.outputs.artifact_id }}
+          REVIEW_REQUEST: ${{ needs.prepare-review.outputs.request_sha256 }}
+        run: python3 -I -B -S scripts/publish-sample-release.py publish --source "$SOURCE" --maven-run "$MAVEN_RUN" --maven-attempt "$MAVEN_ATTEMPT" --frozen-artifact "$FROZEN_ARTIFACT" --frozen-sha256 "$FROZEN_SHA256" --review-artifact "$REVIEW_ARTIFACT" --review-request "$REVIEW_REQUEST"
+      - name: Retain only public publication provenance
+        id: evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sample-release-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/p2pkit-sample-release/receipt.json
+            ${{ runner.temp }}/p2pkit-sample-release/sample-release.json
+            ${{ runner.temp }}/p2pkit-sample-release/SHA256SUMS
+            ${{ runner.temp }}/p2pkit-sample-release/review-request.json
+            ${{ runner.temp }}/p2pkit-sample-release/approval-receipt.json
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: false
+      - name: Retire only owned temporary metadata after retention
+        if: ${{ always() && steps.evidence.outcome == 'success' }}
+        run: python3 -I -B -S scripts/publish-sample-release.py cleanup
