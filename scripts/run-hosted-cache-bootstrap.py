@@ -72,6 +72,7 @@ INITIAL_AUTHORITY_ACK_SCOPE = "INITIAL_RECIPIENT_USE_AUTHORITY_POST_CLOSE_ACK_V1
 INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE = "INITIAL_RECIPIENT_CUSTODY_AUTHORITY_CONTEXT_V1"
 INITIAL_CUSTODY_AUTHORITY_ACK_SCOPE = "INITIAL_RECIPIENT_CUSTODY_AUTHORITY_POST_CLOSE_ACK_V1"
 INITIAL_COLLECT_AUTHORITY_CONTEXT_SCOPE = "INITIAL_RECIPIENT_POST_EXPORT_AUTHORITY_CONTEXT_V1"
+INITIAL_TAIL_AUTHORITY_CONTEXT_SCOPE = "INITIAL_RECIPIENT_SEAL_AUTHORITY_CONTEXT_V1"
 INITIAL_RECIPIENT_ACK_SCOPE = "INITIAL_RECIPIENT_VALIDATION_POST_CLOSE_ACK_V1"
 RESULT_SCOPE = "BOOTSTRAP_ORIGINALS_PENDING_CALLER_RETURN_V2"
 HANDOFF_SCOPE = "BOOTSTRAP_PREPARE_POST_CLOSE_HANDOFF_V1"
@@ -724,6 +725,14 @@ def initial_collect_authority_command(context_hash, minimum=None):
     return result
 
 
+def initial_tail_authority_command(context_hash, minimum=None):
+    """Only the new seal-Step HTTP episode; never renew post-export READ."""
+    result = initial_command(context_hash, minimum)
+    result[4] = str(SCRIPTS / "run-hosted-initial-recipient-custody.py")
+    result[5] = "_tail-authority"
+    return result
+
+
 INITIAL_RECEIVING_CONTEXT_SCOPE = "INITIAL_RECIPIENT_RECEIVING_AUTHORITY_CONTEXT_V1"
 INITIAL_RECEIVING_ACK_SCOPE = "INITIAL_RECIPIENT_RECEIVING_AUTHORITY_POST_CLOSE_ACK_V1"
 
@@ -735,7 +744,8 @@ def phase_command(context_raw, minimum=None):
              INITIAL_AUTHORITY_CONTEXT_SCOPE: initial_authority_command,
              INITIAL_RECEIVING_CONTEXT_SCOPE: initial_receiving_command,
              INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE: initial_custody_authority_command,
-             INITIAL_COLLECT_AUTHORITY_CONTEXT_SCOPE: initial_collect_authority_command}.get(scope)
+             INITIAL_COLLECT_AUTHORITY_CONTEXT_SCOPE: initial_collect_authority_command,
+             INITIAL_TAIL_AUTHORITY_CONTEXT_SCOPE: initial_tail_authority_command}.get(scope)
     require(fixed is not None, "BOOTSTRAP_SERVICE_CONTEXT_SCOPE")
     return fixed(origin.digest(context_raw), minimum)
 
@@ -973,7 +983,7 @@ def _initial_service_environment(path, context, installed_git):
     environment = child_environment(path)
     initial = context.get("scope") in (INITIAL_CONTEXT_SCOPE, INITIAL_ENTRY_CONTEXT_SCOPE,
         INITIAL_AUTHORITY_CONTEXT_SCOPE, INITIAL_RECEIVING_CONTEXT_SCOPE, INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE,
-        INITIAL_COLLECT_AUTHORITY_CONTEXT_SCOPE)
+        INITIAL_COLLECT_AUTHORITY_CONTEXT_SCOPE, INITIAL_TAIL_AUTHORITY_CONTEXT_SCOPE)
     if not initial:
         require(installed_git is None, "BOOTSTRAP_INITIAL_GIT_ON_ORDINARY_ROUTE")
         return environment
@@ -994,6 +1004,7 @@ def _initial_service_environment(path, context, installed_git):
 def phase(owner, private, context_raw, token, fence, *, initial_git=None):
     custody_phase = None
     collect_phase = None
+    tail_phase = None
     try:
         context = origin.parse(context_raw)
         started = fence.now()
@@ -1010,6 +1021,9 @@ def phase(owner, private, context_raw, token, fence, *, initial_git=None):
         elif context.get("scope") == INITIAL_COLLECT_AUTHORITY_CONTEXT_SCOPE:
             owner.enter_collect_phase(context_raw, started, work_end, final_end)
             collect_phase = (started, work_end, final_end, old_limits)
+        elif context.get("scope") == INITIAL_TAIL_AUTHORITY_CONTEXT_SCOPE:
+            owner.enter_tail_phase(context_raw, started, work_end, final_end)
+            tail_phase = (started, work_end, final_end, old_limits)
         else:
             owner.work_limit, owner.final_limit = work_end, final_end
         invocation = uuid.uuid4().hex
@@ -1047,6 +1061,12 @@ def phase(owner, private, context_raw, token, fence, *, initial_git=None):
                 owner.leave_collect_phase(*collect_phase)
             except BaseException as restore_error:
                 owner.error("collect-phase-setup-return", restore_error, unknown=True)
+        if tail_phase is not None:
+            owner.error("tail-phase-setup", error)
+            try:
+                owner.leave_tail_phase(*tail_phase)
+            except BaseException as restore_error:
+                owner.error("tail-phase-setup-return", restore_error, unknown=True)
         raise
     try:
         # The capture files remain alive through finalization, but acquisition
@@ -1124,7 +1144,7 @@ def phase(owner, private, context_raw, token, fence, *, initial_git=None):
                 except BaseException as error:
                     owner.error("drain-fence", error)
                     if context.get("scope") not in (INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE,
-                            INITIAL_COLLECT_AUTHORITY_CONTEXT_SCOPE):
+                            INITIAL_COLLECT_AUTHORITY_CONTEXT_SCOPE, INITIAL_TAIL_AUTHORITY_CONTEXT_SCOPE):
                         raise
                     # The custody Window deliberately stays failed. That must
                     # not skip an already-owned child's bounded drain. Use only
@@ -1210,6 +1230,11 @@ def phase(owner, private, context_raw, token, fence, *, initial_git=None):
                 owner.leave_collect_phase(*collect_phase)
             except BaseException as error:
                 owner.error("collect-phase-return", error, unknown=True)
+        elif tail_phase is not None:
+            try:
+                owner.leave_tail_phase(*tail_phase)
+            except BaseException as error:
+                owner.error("tail-phase-return", error, unknown=True)
         else:
             owner.work_limit, owner.final_limit = old_limits
     if owner.original is not None:
