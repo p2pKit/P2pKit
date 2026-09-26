@@ -207,6 +207,20 @@ resource ceilings were unchanged. An additional tool request with a mistyped
 working directory was rejected before process creation; it was not a model run.
 The independent report preserves the failed packets' exact manifest hashes.
 
+## Custody-tail implementation checkpoint
+
+The separate fixed B/K caller, tail evidence codec, carrier and pending handoff
+now have independent source and Foundation-integration approval. Their **119/119**
+new offline controls passed (30 evidence, 22 handoff, 29 carrier, 38 runner), all
+four invocations exit0. Independent result-review SHA-256:
+`bf95899628ed0e73ec21212b85a63a488b2603792c22b8a50759924b75fccb87`.
+Original result-manifest SHA-256:
+`9dc854104decd3d2bd4ce0cda92ae9bfbc1ae4d9e2bcb95fb4484fab27007bc2`.
+The earlier missing-timer launcher failed before candidate entry; its record
+and a correction of two redundant binding labels remain preserved separately.
+No original test was retried. These are DATA/refusal/source-order results,
+not a real B/K copy, encryption, native close, timing or provider pass.
+
 ## Remaining acceptance
 
 Real Readables and local hash/buffer/event utilities were exercised. HTTP,
@@ -215,7 +229,7 @@ models. The result covers wire fields, bounded demand, owned bytes/digests,
 negative responses, no retries/overwrites, exact artifact IDs, cancellation,
 EOF/close and original deadline fences within that scope only.
 
-Current BEFORE authority, the complete custody-tail capture/freeze/encryption,
+Genuine current BEFORE authority and complete custody-tail capture/freeze/encryption,
 owned four-member ZIP acquisition, actual Artifact service transport, AFTER
 observations, native retirement and original retention/digest verification are
 still required. No workflow is wired here. This does not qualify productive

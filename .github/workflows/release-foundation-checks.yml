@@ -36,6 +36,10 @@ jobs:
           set -euo pipefail
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-sealed-data-test.py -v -f
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-tail-inventory-test.py -v -f
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-tail-evidence-test.py -v -f
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-tail-handoff-test.py -v -f
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-tail-carrier-test.py -v -f
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-tail-runner-test.py -v -f
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-seal-deadline-test.py -v -f
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-before-test.py -v -f
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-public-origin-test.py -v -f
