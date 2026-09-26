@@ -97,7 +97,8 @@ def complete_inventory(pages, *, run_id):
     require(type(pages) is tuple and 1 <= len(pages) <= PAGE_COUNT, "PAGES")
     rows, identifiers, total = [], set(), None
     for number, page in enumerate(pages, 1):
-        require(type(page) is tuple and len(page) == 2 and page[0] == inventory_path(run_id, number) and
+        require(type(page) is tuple and len(page) == 2 and type(page[0]) is str and
+                page[0] == inventory_path(run_id, number) and
                 type(page[1]) is bytes, "PAGE_ORIGINAL")
         value = I.parse(page[1], PAGE_LIMIT)
         require(set(value) == {"total_count", "artifacts"} and type(value["total_count"]) is int and
