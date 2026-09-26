@@ -1,5 +1,57 @@
 # Initial-recipient artifact transport: source and offline models
 
+## Native U stream and terminal DATA: R2 source with scoped offline results
+
+The fixed `run-hosted-initial-recipient-upload.py stream` now connects K's
+original retained inputs to four owned readers and the unchanged stored-ZIP
+leaf. FIRST/LOCAL/boot are captured before file acquisition; file, pipe and
+original process return remain separate boundaries. Immutable diagnostic
+snapshots cannot replace the private original clock/latch or pipe owners.
+Every failure remains sticky; partial/unknown cleanup is not a known close.
+The helper and new terminal DATA remain **dormant, not workflow-qualified**.
+
+Exact source SHA-256:
+
+- `hosted_initial_artifact_delivery.py`:
+  `2778640a8221ad4e248527768fb8573ad5b8cd49fb24789554b20a5dd3186cf3`.
+- `run-hosted-initial-recipient-upload.py`:
+  `84ec3a681dba85dbe986263713998bd43311ba907efeda3314f21fb5d59600a5`.
+- Corrected DATA48 controls:
+  `524d39b74612e89a7f59edbd922c2940977a5df00d6d3f16b38109ff98d4869c`.
+- Stream47 controls:
+  `6e8f34f9a84b5fc835e7bbdd27a4dbf8d3b5d498e0b4a204bb98fd64d7b14135`.
+
+Independent R2 source review SHA-256:
+`e1df24f843522a15158eca1b8db77696bcdd7d7e47b07fa42551439202e470d5`.
+The first fail-fast DATA invocation had **14 passes and one failed test**;
+33 DATA methods and stream47 were not reached. The failed negative assigned
+the fixture's existing hash to itself. Production correctly accepted unchanged
+bytes. Independent diagnosis SHA-256:
+`c3cd79a19a6eafce48d1398f721edd902bbe3fe83c35ddfd6a760deed9cfe230`.
+Original failed-result manifest SHA-256:
+`b3f819eaf6dd2f56849c88a3c8f5791fec1648f0088cfe326c098236c9bb0335`.
+
+A separately reviewed **test-only** repair preflights the positive input,
+requires a real field/byte change, rebinds synthetic shallow hashes/sizes, and
+requires the exact predecessor/map semantic rejection. Source-review SHA-256:
+`1075049a63654fe61c4d27ed50b4b5bda43edcb5932c4c7c92b92a5900496d7b`.
+One new invocation passed the corrected method plus the33 unreached DATA
+methods (**34/34**, exit0;0.518s wall/0.464s CPU). The first stream invocation
+passed **47/47**, exit0 (1.599s wall/1.565s CPU). The prior14 were not rerun.
+Result-manifest SHA-256:
+`9119b31d32615d7a94ddfa43c39a1116161aa4d33b63cd2584eacd753c5f1142`.
+Independent result review SHA-256:
+`c68073e9b84c2d9d145a56b53b7621cd34323c0ca4bff231038af623eade925b`.
+
+Thus95 distinct current methods have scoped passes across these packets, not
+a retroactively passing first aggregate. The tests use supplied DATA, clocks,
+descriptors and AST ordering, not native resources or hosted service identity.
+The source-only CI now includes both suites; this edit is not a CI result.
+Finite finish/AFTER, the fixed Node caller, productive final custody and genuine
+hosted/native/provider/timing/retention qualification remain outstanding.
+No accepted1066-reader or earlier transport/ZIP/observer suite was replayed.
+All original time/resource bounds, activation HOLDs and Release gates remain.
+
 ## Public terminal observer: R1 source and local models
 
 The fixed `scripts/hosted-initial-artifact-observer.cjs` acquires one original
@@ -66,9 +118,10 @@ Independent result verdict: `APPROVE_EXACT_33_LOCAL_READER_R2_MODELS_RESULT_ONLY
 report SHA-256 `c8e5397ee518c6ec65d32ee16cb067de3a557f45678310f1b4d1c5e99e01e5c8`.
 
 This is **dormant source, not native or hosted qualification**. The fixed
-`run-hosted-initial-recipient-upload.py` helper is not yet implemented here;
-actual K/U/A ownership, service observations, file retirement and workflow
-integration remain necessary. Original RAW-to-LOCAL mapping, U60/close5,
+`run-hosted-initial-recipient-upload.py` helper was not implemented at that
+reader revision; the later native-stream section above records its bounded
+addition. Complete K/U/A ownership, service observations, file retirement and
+workflow integration remain necessary. Original RAW-to-LOCAL mapping, U60/close5,
 512MiB whole-ZIP bound, all HOLDs and Release gates are unchanged.
 
 ## Four-member stored-ZIP byte leaf (later independent increment)
