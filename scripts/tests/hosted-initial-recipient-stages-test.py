@@ -115,8 +115,10 @@ def stage2(prior):
     for n, name in enumerate(("desktop-linux-x64", "desktop-windows-x64", "desktop-macos-arm64", "full-macos-arm64")):
         observed = observation1(prior, name)
         entries.append({**next(x for x in prior["bootstrap"] if x["selection"] == name), "completedAt": DONE1,
-            "packet": {"artifactId": 1000 + n, **ref(n)}, "inventory": ref(n + 4),
-            "compatibility": ref(n + 8), "review": ref(n + 12)})
+            "packet": {"artifactId": 1000 + n, **ref(n)},
+            "inventory": {"commentId": 9000 + n, **ref(n + 4)},
+            "compatibility": {"commentId": 9100 + n, **ref(n + 8)},
+            "review": {"commentId": 9200 + n, **ref(n + 12)}})
         histories.append(S.BootstrapHistory(I.encoded(authority), I.encoded(observed), b"",
             S.BASE["commit"].encode("ascii") + b"\n", ENTRY, POLICY, DONE1, check1(prior, observed)))
     value["qualifications"] = entries
@@ -372,6 +374,37 @@ class StagedModels(unittest.TestCase):
             self.two["qualifications"][0][name]["sha256"] = "f" * 64
             self.refuse2("CHANGED_BEFORE_RECHECK", expected=expected)
             self.two["qualifications"][0][name]["sha256"] = saved
+
+    def test_metadata_references_require_exact_positive_direct_comment_ids(self):
+        for name in ("inventory", "compatibility", "review"):
+            reference = self.two["qualifications"][0][name]
+            saved = reference.pop("commentId")
+            self.refuse2("COMMENT_REFERENCE_FIELDS")
+            for wrong in (None, True, 0, -1, "9000", 10 ** 20):
+                reference["commentId"] = wrong
+                self.refuse2("POSITIVE_ID")
+            reference["commentId"] = saved
+            reference["url"] = "https://example.invalid/arbitrary"
+            self.refuse2("COMMENT_REFERENCE_FIELDS")
+            del reference["url"]
+
+    def test_changed_metadata_locator_is_a_changed_authorization_even_with_same_digest(self):
+        expected = self.check2()
+        for name in ("inventory", "compatibility", "review"):
+            reference = self.two["qualifications"][0][name]
+            reference["commentId"] += 1
+            self.refuse2("CHANGED_BEFORE_RECHECK", expected=expected)
+            reference["commentId"] -= 1
+
+    def test_packet_locator_cannot_be_a_comment_or_inner_ciphertext_reference(self):
+        reference = self.two["qualifications"][0]["packet"]
+        saved = reference.pop("artifactId")
+        reference["commentId"] = saved
+        self.refuse2("PACKET_FIELDS")
+        del reference["commentId"]
+        reference["artifactId"] = saved
+        reference["member"] = "evidence.tar.gz.gpg"
+        self.refuse2("PACKET_FIELDS")
 
     def test_stage2_rejects_closed_merged_changed_or_automatic_pr(self):
         for name, bad in (("state", "closed"), ("merged", True), ("merge_commit_sha", H2), ("auto_merge", {}), ("number", 998)):

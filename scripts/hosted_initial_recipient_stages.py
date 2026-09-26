@@ -243,6 +243,18 @@ def _reference(value, *, maximum):
     digest(value["sha256"])
 
 
+def comment_reference(value):
+    """Exact public metadata locator; the reference does not accept its contents.
+
+    Size/hash cover the complete original comment BODY encoded as ASCII, not
+    the surrounding mutable REST metadata. A later native supplier must GET
+    this exact ID and separately validate the record's productive provenance.
+    """
+    fields(value, "commentId bytes sha256", "COMMENT_REFERENCE_FIELDS")
+    positive(value["commentId"])
+    _reference({name: value[name] for name in ("bytes", "sha256")}, maximum=4 * 1024 * 1024)
+
+
 def _histories(declaration, pairs, histories, created, prior_ancestry_raw):
     prior = fields(declaration["stage1"], "commentId bodySha256 reviewed", "STAGE1_REFERENCE_FIELDS")
     positive(prior["commentId"])
@@ -267,13 +279,15 @@ def _histories(declaration, pairs, histories, created, prior_ancestry_raw):
         # These bind references, not the contents/truth of an encrypted packet
         # or its independent review. The later reader must inspect all originals
         # and compatibility, not accept a digest/cache-key/save/probe as proof.
+        # Packet size/hash cover the complete downloaded artifact ZIP, never a
+        # contained ciphertext alone. Metadata uses direct issue-comment IDs.
         packet = fields(entry["packet"], "artifactId bytes sha256", "PACKET_FIELDS")
         positive(packet["artifactId"])
         require(packet["artifactId"] not in artifacts, "DUPLICATE_PACKET")
         artifacts.add(packet["artifactId"])
         _reference({name: packet[name] for name in ("bytes", "sha256")}, maximum=512 * 1024 * 1024)
         for name in ("inventory", "compatibility", "review"):
-            _reference(entry[name], maximum=4 * 1024 * 1024)
+            comment_reference(entry[name])
         require(type(history) is BootstrapHistory and type(history.expected) is BootstrapMatch and
                 type(history.expected.record) is bytes, "HISTORICAL_RECORD_TYPE")
         require(type(entry["completedAt"]) is int and type(history.completed_at) is int and
