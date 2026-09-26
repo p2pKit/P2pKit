@@ -35,6 +35,22 @@ class PreparedProvider:
 
 def materialize(owner, prepared_directory, preparation_raw, expected_sha256, original_outcome, *,
                 phase, plan, bundle_raw, node, tool_path, worker_cutoff_ns):
+    """Trusted-main entry; an initial-recipient descriptor is never accepted."""
+    return _materialize("trusted-main", owner, prepared_directory, preparation_raw, expected_sha256,
+        original_outcome, phase=phase, plan=plan, bundle_raw=bundle_raw, node=node, tool_path=tool_path,
+        worker_cutoff_ns=worker_cutoff_ns)
+
+
+def materialize_initial_recipient(owner, prepared_directory, preparation_raw, expected_sha256, original_outcome, *,
+                                 phase, plan, bundle_raw, node, tool_path, worker_cutoff_ns):
+    """Fixed initial counterpart; the caller still owns both NEW public uses."""
+    return _materialize("initial-recipient", owner, prepared_directory, preparation_raw, expected_sha256,
+        original_outcome, phase=phase, plan=plan, bundle_raw=bundle_raw, node=node, tool_path=tool_path,
+        worker_cutoff_ns=worker_cutoff_ns)
+
+
+def _materialize(origin_kind, owner, prepared_directory, preparation_raw, expected_sha256, original_outcome, *,
+                 phase, plan, bundle_raw, node, tool_path, worker_cutoff_ns):
     """Retain verified public bundle bytes and a full native supervisor request.
 
     This is deliberately not another descriptor/admission parser. The original
@@ -43,14 +59,16 @@ def materialize(owner, prepared_directory, preparation_raw, expected_sha256, ori
     These checks join that supplied result to the actual borrowed native roots.
     Their enclosing Owner remains live on return; a successful step is external.
     """
+    L.require(origin_kind in ("trusted-main", "initial-recipient"), "PROVIDER_PREPARE_FIXED_ORIGIN")
+    scope_prefix = "BOOTSTRAP_" if origin_kind == "trusted-main" else "INITIAL_RECIPIENT_BOOTSTRAP_"
     L.require(type(original_outcome) is str and original_outcome == "success" and
         type(expected_sha256) is str and L.re.fullmatch(r"[0-9a-f]{64}", expected_sha256) and
         type(preparation_raw) is bytes and hashlib.sha256(preparation_raw).hexdigest() == expected_sha256,
         "PROVIDER_PREPARE_ORIGINAL_STEP")
     prepared = L.transport._parse(preparation_raw, PREPARATION_LIMIT)
     L.require(phase in ("save", "lookup") and preparation_raw == L.files.encoded(prepared) and
-        prepared.get("scope") == ("BOOTSTRAP_SAVE_PREPARATION_PENDING_ORIGINAL_STEP_RETURN_V1" if phase == "save"
-            else "BOOTSTRAP_PROBE_PREPARATION_PENDING_ORIGINAL_STEP_RETURN_V1") and
+        prepared.get("scope") == scope_prefix + ("SAVE" if phase == "save" else "PROBE") +
+            "_PREPARATION_PENDING_ORIGINAL_STEP_RETURN_V1" and
         prepared.get("writerReturn") == "PENDING_NOT_OBSERVABLE_BY_THIS_FILE" and
         prepared.get("providerExecution") == "NOT_PERFORMED" and prepared.get("exportSaveAuthority") is False,
         "PROVIDER_PREPARE_DESCRIPTOR")

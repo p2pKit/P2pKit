@@ -287,12 +287,27 @@ class _ReadmissionClaim:
 
 def _service_job(captured, clock):
     """Stable job identity from original bytes, not a new Date/budget anchor."""
+    return _service_job_transport(captured, clock, "private")
+
+
+def _public_provider_service_job(captured, clock):
+    """Distinct public original reader; never relabel public bytes as PRIVATE."""
+    return _service_job_transport(captured, clock, "public-provider")
+
+
+def _service_job_transport(captured, clock, transport):
+    require(type(transport) is str and transport in ("private", "public-provider"), "SERVICE_JOB_TRANSPORT")
     context_raw, originals, invocation, _began, _end = captured
     context, raw = O.parse(context_raw), dict(originals)
+    if transport == "public-provider":
+        require(context["scope"] == native.INITIAL_PROVIDER_PUBLIC_CONTEXT_SCOPE and
+            native.initial_use.site_scope(context["site"]) == native.INITIAL_PROVIDER_PUBLIC_CONTEXT_SCOPE,
+            "SERVICE_JOB_PUBLIC_SCOPE")
     github = context["observed"]["github"]
     path = acquisition.API + "/actions/runs/" + github["runId"] + "/attempts/" + github["runAttempt"]
-    _, attempt, _ = O.response_bytes(raw["attempt"], path, invocation, clock)
-    _, jobs, date = O.response_bytes(raw["jobs"], path + "/jobs?per_page=100&page=1", invocation, clock)
+    reader = O.response_bytes if transport == "private" else O.initial_provider_response_bytes
+    _, attempt, _ = reader(raw["attempt"], path, invocation, clock)
+    _, jobs, date = reader(raw["jobs"], path + "/jobs?per_page=100&page=1", invocation, clock)
     job = acquisition._run(context["observed"], I.parse(attempt, O.wire.BODY_LIMIT),
                            I.parse(jobs, O.wire.BODY_LIMIT), date)
     return job["id"], job["started_at"], job["runner_name"], job["runner_id"]
@@ -646,7 +661,8 @@ def _initial_service_phase(owner, private, context_raw, token, fence, before):
         require(context["scope"] in (native.INITIAL_CONTEXT_SCOPE, native.INITIAL_ENTRY_CONTEXT_SCOPE,
             native.INITIAL_AUTHORITY_CONTEXT_SCOPE, native.INITIAL_RECEIVING_CONTEXT_SCOPE,
             native.INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE, native.INITIAL_COLLECT_AUTHORITY_CONTEXT_SCOPE,
-            native.INITIAL_TAIL_AUTHORITY_CONTEXT_SCOPE, native.INITIAL_BEFORE_AUTHORITY_CONTEXT_SCOPE) and
+            native.INITIAL_TAIL_AUTHORITY_CONTEXT_SCOPE, native.INITIAL_BEFORE_AUTHORITY_CONTEXT_SCOPE,
+            native.INITIAL_PRODUCTIVE_USE_CONTEXT_SCOPE, native.INITIAL_PROVIDER_PUBLIC_CONTEXT_SCOPE) and
             context["root"] == str(ROOT) and context["session"] == str(private.path) and
             context["sourceReturnSha256"] == O.digest(before.raw) and
             context["sourceReturnedNs"] == returned["returnedNs"] and
@@ -919,14 +935,31 @@ def service_child(context_hash, minimum, cancelled, *, entry=False, authority=Fa
 
 def _retained_match_inputs(context, raw, invocation, clock, work_start, work_end):
     """Interpret supplied HTTP/source bytes, without a clock or authority acquisition."""
+    return _retained_match_transport(context, raw, invocation, clock, work_start, work_end, "private")
+
+
+def _public_provider_match_inputs(context, raw, invocation, clock, work_start, work_end):
+    """Fixed distinct sibling, including the same original public quota debt."""
+    return _retained_match_transport(context, raw, invocation, clock, work_start, work_end, "public-provider")
+
+
+def _retained_match_transport(context, raw, invocation, clock, work_start, work_end, transport):
+    require(type(transport) is str and transport in ("private", "public-provider"), "RETAINED_MATCH_TRANSPORT")
     observed = context["observed"]
+    if transport == "public-provider":
+        require(context["scope"] == native.INITIAL_PROVIDER_PUBLIC_CONTEXT_SCOPE and observed["kind"] == "worker",
+            "RETAINED_PUBLIC_PROVIDER_SCOPE")
+        debt = native.initial_use.public.request_count(context["site"])
     github = observed["github"]
     base = acquisition.API + "/actions/runs/" + github["runId"]
     attempt_path = base + "/attempts/" + github["runAttempt"]
     bodies, times, dates = {}, [], []
     def body(name, path):
-        response, data, date = O.response_bytes(raw[name], path, invocation, clock)
+        reader = O.response_bytes if transport == "private" else O.initial_provider_response_bytes
+        response, data, date = reader(raw[name], path, invocation, clock)
         _, headers = O.wire.headers(base64.b64decode(response["headersBase64"], validate=True))
+        if transport == "public-provider":
+            native.initial_use.public.remaining_requests(headers, debt - len(bodies) - 1)
         require("link" not in headers and work_start <= response["startedNs"] <= response["finishedNs"] < work_end and
                 (not times or times[-1] <= response["startedNs"]), "HTTP_ORIGINAL_INTERVAL")
         require(not dates or dates[-1] <= date and 0 <= date - dates[0] <=
@@ -988,6 +1021,12 @@ def _retained_match_at(inputs, *, now):
 def retained_match(context, raw, invocation, clock, work_start, work_end):
     """Live callers still sample wall time AFTER interpreting all original records."""
     inputs = _retained_match_inputs(context, raw, invocation, clock, work_start, work_end)
+    return _retained_match_at(inputs, now=int(time.time()))
+
+
+def retained_public_provider_match(context, raw, invocation, clock, work_start, work_end):
+    """Interpret all distinct public originals, then sample current policy time."""
+    inputs = _public_provider_match_inputs(context, raw, invocation, clock, work_start, work_end)
     return _retained_match_at(inputs, now=int(time.time()))
 
 

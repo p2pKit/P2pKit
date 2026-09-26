@@ -3,7 +3,9 @@
 // Dormant fixed Node24 Action connection, NOT prestart/Stage1/provider admission.
 // Trusted workflow/source/tool/runtime-service provenance must exist BEFORE this
 // process starts. Checks here cannot authenticate its earlier Node environment.
-// The native helper still uses trusted-main admission, with no policy fallback.
+// The ordinary helper uses trusted-main admission, with no policy fallback.
+// A SEPARATE fixed initial entry uses its two fresh public authority episodes;
+// no Action API-token input or environment-selected exception route exists.
 // No workflow calls this source; all existing HOLDs and qualifications remain.
 const {spawn, ChildProcess} = require('node:child_process');
 const {createHash} = require('node:crypto');
@@ -303,6 +305,18 @@ function retainSource(directory, raw, end, signal) {
 }
 
 async function run() {
+    return runFixed('trusted-main');
+}
+
+async function runInitialRecipient() {
+    return runFixed('initial-recipient');
+}
+
+async function runFixed(origin) {
+    need(origin === 'trusted-main' || origin === 'initial-recipient', 'PROVIDER_ACTION_FIXED_ORIGIN');
+    const operations = origin === 'trusted-main' ? ['window', 'prepare', 'readback'] :
+        ['initial-window', 'initial-prepare', 'initial-readback'];
+    const scopePrefix = origin === 'trusted-main' ? '' : 'INITIAL_RECIPIENT_';
     need(!used, 'PROVIDER_ACTION_ONE_INVOCATION'); used = true;
     const phase = process.env.INPUT_PHASE, python = process.env.INPUT_PYTHON, toolPath = process.env['INPUT_TOOL-PATH'];
     need(Object.hasOwn(BUNDLES, phase) && /^24\./.test(process.versions.node) && absolute(process.execPath) &&
@@ -332,8 +346,8 @@ async function run() {
     try {
         // Pair LOCAL with the NEW helper RAW observation, never descriptor firstNs.
         const anchor = process.hrtime.bigint();
-        const window = (await native(python, ['window', phase], helperEnv, anchor + 45n * NS, signal)).value;
-        need(window.scope === 'PROVIDER_ORIGINAL_WINDOW_PENDING_HELPER_RETURN_V1' && window.phase === phase &&
+        const window = (await native(python, [operations[0], phase], helperEnv, anchor + 45n * NS, signal)).value;
+        need(window.scope === scopePrefix + 'PROVIDER_ORIGINAL_WINDOW_PENDING_HELPER_RETURN_V1' && window.phase === phase &&
             window.preparationSha256 === preparationHash && window.providerAdmission === 'NOT_ESTABLISHED' &&
             absolute(window.directory), 'PROVIDER_ACTION_ORIGINAL_WINDOW');
         const issued = scalar(window.issuedNs), first = scalar(window.firstNs), end = scalar(window.hardEndNs);
@@ -343,9 +357,9 @@ async function run() {
         check(workEnd, signal);
         const raw = await acquire(window.bundle, phase, workEnd, signal);
         retainSource(window.directory, raw, workEnd, signal);
-        const preparation = (await native(python, ['prepare', phase, '--node', process.execPath, '--tool-path', toolPath],
+        const preparation = (await native(python, [operations[1], phase, '--node', process.execPath, '--tool-path', toolPath],
             helperEnv, workEnd, signal)).value;
-        need(preparation.scope === 'PROVIDER_NATIVE_PREPARATION_PENDING_HELPER_RETURN_V1' && preparation.phase === phase &&
+        need(preparation.scope === scopePrefix + 'PROVIDER_NATIVE_PREPARATION_PENDING_HELPER_RETURN_V1' && preparation.phase === phase &&
             preparation.preparationSha256 === preparationHash && preparation.providerExecution === 'NOT_PERFORMED' &&
             preparation.enclosingActionReturn === 'NOT_OBSERVED' && /^[0-9a-f]{64}$/.test(preparation.preparedSha256),
         'PROVIDER_ACTION_PREPARED_RETURN');
@@ -373,10 +387,10 @@ async function run() {
         const clock = parse(Buffer.from(returned.retainedClockBytes().stdout.toString('ascii').trimEnd(), 'ascii'));
         need(clock.invocationSha256 === returned.summary.invocationSha256 &&
             scalar(clock.observedNs) >= scalar(preparation.observedNs), 'PROVIDER_ACTION_POST_PROVIDER_CLOCK');
-        const result = (await native(python, ['readback', phase, '--prepared-sha256', preparation.preparedSha256,
+        const result = (await native(python, [operations[2], phase, '--prepared-sha256', preparation.preparedSha256,
             '--acknowledgement', acknowledgement.toString('base64'), '--minimum-ns', clock.observedNs],
         helperEnv, localEnd, signal)).value;
-        need(result.scope === 'PROVIDER_NATIVE_READBACK_PENDING_HELPER_RETURN_V1' && result.phase === phase &&
+        need(result.scope === scopePrefix + 'PROVIDER_NATIVE_READBACK_PENDING_HELPER_RETURN_V1' && result.phase === phase &&
             result.providerAcceptance === 'NOT_ESTABLISHED' && /^[0-9a-f]{64}$/.test(result.readbackSha256) &&
             scalar(result.observedNs) >= scalar(clock.observedNs), 'PROVIDER_ACTION_READBACK_RETURN');
         const names = phase === 'save' ? [] : ['cache-primary-key', 'cache-matched-key', 'cache-hit'];
@@ -397,9 +411,17 @@ async function run() {
 }
 
 async function main() {
+    return mainFixed('trusted-main');
+}
+
+async function mainInitialRecipient() {
+    return mainFixed('initial-recipient');
+}
+
+async function mainFixed(origin) {
     process.exitCode = 125; // An unresolved Promise must not silently succeed.
     try {
-        const result = await run();
+        const result = origin === 'trusted-main' ? await run() : await runInitialRecipient();
         const output = process.env.GITHUB_OUTPUT;
         need(absolute(output) && process.hrtime.bigint() < result.localEnd, 'PROVIDER_ACTION_OUTPUT_FENCE');
         // Only bounded output values/hashes, never private helper/provider bytes.
@@ -413,4 +435,4 @@ async function main() {
     }
 }
 
-module.exports = Object.freeze({run, main});
+module.exports = Object.freeze({run, main, runInitialRecipient, mainInitialRecipient});

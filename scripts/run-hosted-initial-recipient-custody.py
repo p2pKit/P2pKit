@@ -35,6 +35,7 @@ _spec.loader.exec_module(N)
 native, O, I, Q, A, C = N.native, N.O, N.I, N.Q, N.acquisition, N.continuity
 import hosted_initial_recipient_evidence as E
 import hosted_initial_recipient_before as B
+import hosted_initial_recipient_use as U
 
 PRIMARY_OUTCOME = "P2PKIT_INITIAL_PRIMARY_OUTCOME"
 PRIMARY_RESULT = "P2PKIT_INITIAL_PRIMARY_RESULT_SHA256"
@@ -49,6 +50,7 @@ AUTHORITY_PINS = ("I/authority", *("I/authority/" + name for name in
 INITIALIZER_DIRECTORIES = ("I", "I/canonical-init", "I/control-home", "I/temporary", "I/state",
     "I/state/gradle-home", "I/state/evidence", "I/state/cancellations")
 _WINDOWS = {}
+_RETIRED_PRODUCTIVE_WINDOWS = {}
 
 
 def require(value, code):
@@ -321,6 +323,7 @@ class _WindowAnchor:
     local_last: float
     busy: bool = False
     failure: object = None
+    retired: object = None
 
 
 class Window:
@@ -358,6 +361,7 @@ class Window:
     def _current(self, anchor):
         require(_WINDOWS.get(id(self)) is anchor and anchor.window is self and self._bound is anchor.binding,
             "WINDOW_ORIGINAL_BINDING")
+        require(anchor.retired is _RETIRED_PRODUCTIVE_WINDOWS.get(id(self)), "WINDOW_RETIREMENT_CHANGED")
         N._check_history(anchor.graph)
 
     @staticmethod
@@ -387,6 +391,7 @@ class Window:
             raise anchor.failure
         try:
             self._current(anchor)
+            require(anchor.retired is None, "WINDOW_TERMINALLY_RETIRED")
             require(not anchor.busy, "WINDOW_REENTRY")
             anchor.busy = True
             return anchor
@@ -1947,7 +1952,7 @@ def checked_primary(result):
         N._check_history(handoff_graph)
         require(canonical(primary.handoff_raw)["directoryIdentity"] == list(handoff_binding[1]), "PRIMARY_HANDOFF_CHANGED")
         _actual_inputs(actual)
-        require(window._view().failure is None, "PRIMARY_WINDOW_FAILED")
+        require(window._view().failure is None and window._view().retired is None, "PRIMARY_WINDOW_FAILED_OR_RETIRED")
         return window, primary, history, copy, originals
     except BaseException as error:
         if attempt["failure"] is None:
@@ -1989,7 +1994,7 @@ class _CustodyOwner(native.Owner):
     """
     def __init__(self, local_end, fence=None, *, first=None, cancelled=lambda: None):
         require(type(self) is _CustodyOwner and id(self) not in _CUSTODY_OWNERS and
-            type(fence) in (Window, _CustodyChildClock, _CollectClock, _TailClock, _BeforeClock) and first is not None,
+            type(fence) in (Window, _CustodyChildClock, _CollectClock, _TailClock, _BeforeClock, U.UseWindow) and first is not None,
             "AUTHORITY_OWNER_NEW")
         native.Owner.__init__(self, local_end, fence, first=first, cancelled=cancelled)
         self.initial_sources = {}
@@ -2310,6 +2315,34 @@ class _CustodyOwner(native.Owner):
         require(type(self.fence) is _BeforeClock and anchor.phase_active and type(old_limits) is tuple and
             old_limits == (None, None) and anchor.phase == (started, work_end, final_end, old_limits),
             "BEFORE_OWNER_PHASE_RETURN_CHANGED")
+        self.work_limit = self.final_limit = None
+        anchor.phase_active = False
+        self.check()
+
+    def enter_productive_phase(self, context_raw, started, work_end, final_end):
+        """One fresh per-use HTTP child, never a revived C prep/custody phase."""
+        anchor = self.check()
+        require(type(self.fence) is U.UseWindow and self.fence.side == "parent" and
+            anchor.phase is None and not anchor.closed and not anchor.unknown and anchor.failure is None and
+            not anchor.busy and anchor.frozen is None and self.work_limit is None and self.final_limit is None and
+            type(started) is int and started == self.fence.last, "PRODUCTIVE_USE_OWNER_ORIGINAL_PHASE")
+        context = canonical(context_raw)
+        require(context["scope"] == U.site_scope(context["site"]) and
+            O.encoded(context["window"]) == self.fence.raw, "PRODUCTIVE_USE_OWNER_CONTEXT")
+        _clock, seed = U.checked_frame(context["window"])
+        U.phase_caps(seed, (started, work_end, final_end))
+        require((work_end, final_end) == (min(self.fence.work, started + 45 * O.NS),
+            min(self.fence.final, work_end + 45 * O.NS)), "PRODUCTIVE_USE_OWNER_PHASE_CAPS")
+        anchor.phase = (started, work_end, final_end, (None, None))
+        anchor.phase_active = True
+        self.work_limit, self.final_limit = work_end, final_end
+        self.check()
+
+    def leave_productive_phase(self, started, work_end, final_end, old_limits):
+        anchor = self.check()
+        require(type(self.fence) is U.UseWindow and anchor.phase_active and type(old_limits) is tuple and
+            old_limits == (None, None) and anchor.phase == (started, work_end, final_end, old_limits),
+            "PRODUCTIVE_USE_OWNER_PHASE_RETURN_CHANGED")
         self.work_limit = self.final_limit = None
         anchor.phase_active = False
         self.check()
@@ -2912,10 +2945,48 @@ def _custody_authority_start_fields(raw, context_raw, context, path, clock):
 
 def _custody_authority_phase_bytes(context_raw, path, clock, records, child_raw, private_pin, service_pin):
     """Maintain the native phase/ACK/close predicates without old-window adoption."""
+    return _initial_authority_phase_bytes(context_raw, path, clock, records, child_raw, private_pin, service_pin,
+        native.INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE)
+
+
+def productive_use_phase_bytes(context_raw, path, clock, records, child_raw, private_pin, service_pin):
+    """Distinct per-use route over the SAME native return/close predicates."""
+    context = canonical(context_raw)
+    scope = U.site_scope(context["site"])
+    require(context["scope"] == scope, "PRODUCTIVE_USE_PHASE_SCOPE")
+    return _initial_authority_phase_bytes(context_raw, path, clock, records, child_raw, private_pin, service_pin, scope)
+
+
+def productive_use_start_fields(raw, context_raw, context, path, clock):
+    start = fields(canonical(raw), " ".join(native.START_FIELDS), "PRODUCTIVE_USE_START_FIELDS")
+    frame_clock, seed = U.checked_frame(context["window"])
+    caps = tuple(start[name] for name in U.PHASE_NAMES)
+    U.phase_caps(seed, caps)
+    require(frame_clock == clock and context["scope"] == U.site_scope(context["site"]) and
+        context["site"] == seed["site"] and type(start["schema"]) is int and start["schema"] == 1 and
+        start["scope"] == native.PHASE_SCOPE and start["contextSha256"] == O.digest(context_raw) and
+        start["argv"] == native.phase_command(context_raw, use_caps=caps) and start["cwd"] == str(ROOT) and
+        start["role"] == clock.role and start["job"] == context["job"] and start["state"] == str(path) and
+        start["home"] == str(path / "control-home") and type(start["invocation"]) is str and
+        re.fullmatch(r"[0-9a-f]{32}", start["invocation"]) and start["exitCode"] is None and
+        start["launchAttempted"] is False and start["scopeAttempted"] is False and start["retirement"] == "UNKNOWN" and
+        seed["firstNs"] <= O.integer(context["sourceReturnedNs"]) <= caps[0], "PRODUCTIVE_USE_START_BINDING")
+    inherited = native.processes.ownership_environment(context["inheritedContext"], context["job"], start["invocation"],
+        str(path), str(path / "control-home"), allow_new_context=True)
+    _same(start["inheritedContext"], {name: inherited[name] for name in Q._CONTEXT}, "PRODUCTIVE_USE_START_INHERITANCE")
+    return start
+
+
+def _initial_authority_phase_bytes(context_raw, path, clock, records, child_raw, private_pin, service_pin, scope):
+    require(scope in (native.INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE, U.PRIVATE_CONTEXT, U.PUBLIC_CONTEXT),
+        "AUTHORITY_PHASE_FIXED_SCOPE")
     require(type(records) is dict and set(records) == native.PHASE_FILES and
         all(type(raw) is bytes for raw in records.values()), "AUTHORITY_PHASE_FILES")
     context = canonical(context_raw)
-    start = _custody_authority_start_fields(records["start.json"], context_raw, context, path, clock)
+    require(context["scope"] == scope, "AUTHORITY_PHASE_CONTEXT_SCOPE")
+    use = scope != native.INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE
+    start = (productive_use_start_fields if use else _custody_authority_start_fields)(
+        records["start.json"], context_raw, context, path, clock)
     row = fields(canonical(records["result.json"]), " ".join(native.TERMINAL_FIELDS), "AUTHORITY_TERMINAL_FIELDS")
     birth = fields(canonical(records["native-start.json"]), "ownership leader preparerIdentity observedNs",
         "AUTHORITY_BIRTH_FIELDS")
@@ -2928,7 +2999,9 @@ def _custody_authority_phase_bytes(context_raw, path, clock, records, child_raw,
         row["nativeStartSha256"] == O.digest(records["native-start.json"]) and
         row["baselineSha256"] == O.digest(records["baseline.json"]) and row["leader"] == birth["leader"],
         "AUTHORITY_NATIVE_RETURN")
-    argv = native.phase_command(context_raw, O.integer(row["launchMinimumNs"], start["startedNs"]))
+    argv = (native.phase_command(context_raw, O.integer(row["launchMinimumNs"], start["startedNs"]),
+        use_caps=tuple(start[name] for name in U.PHASE_NAMES)) if use else
+        native.phase_command(context_raw, O.integer(row["launchMinimumNs"], start["startedNs"])))
     _same(row["launchArgv"], argv, "AUTHORITY_EXECUTED_COMMAND")
     native.native_record(row["ownership"], start, row["leader"], argv)
     native.native_record(birth["ownership"], start, row["leader"], argv, terminal=False)
@@ -2951,13 +3024,15 @@ def _custody_authority_phase_bytes(context_raw, path, clock, records, child_raw,
         "matchSha256 directoryIdentities metadataClose completedNs retirement errors", "AUTHORITY_CHILD_FIELDS")
     ack = fields(canonical(records["stdout.log"]), "schema scope invocation terminalSha256 clock closedNs",
         "AUTHORITY_ACK_FIELDS")
-    require(type(child["schema"]) is int and child["schema"] == 1 and child["scope"] == _AUTHORITY_CHILD_SCOPE and
+    child_scope = U.PUBLIC_CHILD if scope == U.PUBLIC_CONTEXT else U.PRIVATE_CHILD if use else _AUTHORITY_CHILD_SCOPE
+    ack_scope = U.PUBLIC_ACK if scope == U.PUBLIC_CONTEXT else U.PRIVATE_ACK if use else native.INITIAL_CUSTODY_AUTHORITY_ACK_SCOPE
+    require(type(child["schema"]) is int and child["schema"] == 1 and child["scope"] == child_scope and
         child["contextSha256"] == O.digest(context_raw) and child["startSha256"] == O.digest(records["start.json"]) and
         child["invocation"] == start["invocation"] and child["clock"] == O.clock_value(clock) and
         child["bootDigest"] == context["window"]["originalBootDigest"] and
         child["launchMinimumNs"] == row["launchMinimumNs"] and child["retirement"] == "KNOWN" and child["errors"] == [] and
         type(ack["schema"]) is int and ack["schema"] == 1 and
-        ack["scope"] == native.INITIAL_CUSTODY_AUTHORITY_ACK_SCOPE and ack["invocation"] == start["invocation"] and
+        ack["scope"] == ack_scope and ack["invocation"] == start["invocation"] and
         ack["terminalSha256"] == O.digest(child_raw) and ack["clock"] == O.clock_value(clock),
         "AUTHORITY_CHILD_ACK")
     _same(child["directoryIdentities"], {".": list(private_pin), "service": list(service_pin)},
@@ -3292,6 +3367,207 @@ def checked_custody_authority(result, primary_result):
             attempt["failure"] = error
         attempt["state"] = "FAILED"
         raise attempt["failure"]
+
+
+# This one-way exit does not make an Admission or extend the original prep.
+# The productive driver must create NEW parents and acquire NEW authority at
+# each fixed use site. In particular it cannot retain authority-1's current()
+# closure as the cancellation/authority callback of a productive owner.
+_PRODUCTIVE_PREFIX_ATTEMPTS, _PRODUCTIVE_PREFIX_RETURNS = {}, {}
+_PRODUCTIVE_PREFIX_ENTRY = B.EntryLatch(_PRODUCTIVE_PREFIX_ATTEMPTS)
+_PRODUCTIVE_INITIALIZER_NAMES = (
+    "I/receiving-window.json", "I/initializer-context.json", "I/initialization-pending.json",
+    *("I/canonical-init/" + name for name in sorted(native.PHASE_FILES | {"request.json"})),
+    "I/state/context.json", "I/state/gradle-home/gradle.properties",
+)
+
+
+@dataclass(frozen=True, repr=False)
+class RetiredProductivePrefix:
+    """Closed original prefix DATA and same-call provenance, not live authority."""
+    raw: bytes
+    primary: object
+    authority: object
+    identity: object
+    history: bytes
+    proposal: bytes
+    originals: tuple
+    initializer_originals: tuple
+    initializer_directories: tuple
+    initializer: object
+    first: object
+    original_boot: str
+    retired_ns: int
+    retired_local: float
+
+
+def retire_primary_for_productive(primary_result, authority_result):
+    """Read the real initializer inputs, close, then terminally retire C prep.
+
+    This is called only by the fixed productive driver while it honestly holds
+    its API token in the parent stack. Environment/child credential boundaries
+    remain unchanged. No crypto/export is entered here and no token is returned.
+    The twelve original initializer files are read through a NEW bounded
+    file-only owner and compared to the authentic PRIMARY index. They do not
+    reexecute the initializer or the accepted complete-reader fixture.
+    """
+    entry = _PRODUCTIVE_PREFIX_ENTRY
+    attempt = entry.begin(_PRODUCTIVE_PREFIX_ATTEMPTS)
+    wrapper = window = result = None
+    failure = None
+    try:
+        entry.check(_PRODUCTIVE_PREFIX_ATTEMPTS, attempt)
+        window, primary, history_raw, _copy_raw, originals = checked_primary(primary_result)
+        same_window, match, captured, authority_raw, inventory_raw, authority_originals = \
+            checked_custody_authority(authority_result, primary_result)
+        require(primary.kind == "worker" and same_window is window and
+            type(match) is A.stages.BootstrapMatch and not any(name in os.environ for name in _CREDENTIAL_NAMES),
+            "PRODUCTIVE_PREFIX_ORIGINAL_WORKER")
+        primary_saved = _PRIMARY_RETURNS[id(primary_result)]
+        authority_saved = _AUTHORITY_RETURNS[id(authority_result)]
+        anchor = window._view()
+        first, _local, boot, _limits, _ends, _locals, callback = anchor.binding
+        history, historical = canonical(history_raw), dict(originals)
+        identity = N.initial_identity.bind_worker_match(match,
+            event_raw=historical["P/acquisition-queries/event.bin"],
+            policy_raw=historical["P/acquisition-queries/candidate_policy_raw.bin"], now=int(time.time()))
+        proposal = historical["P/worker-allocation-proposal.json"]
+        require(identity.record == historical["P/worker-identity.json"] and
+            match.record == historical["P/acquisition-queries/match.bin"] and
+            captured[0] == dict(authority_originals)["context.json"] and
+            N._service_job(captured, first.clock) == tuple(history["serviceJob"]),
+            "PRODUCTIVE_PREFIX_IDENTITY_OR_CONTINUITY")
+        roots, _handoff, _custody = _paths("worker")
+        initializer = roots["I"]
+        directories = tuple((name, pin, provenance) for name, pin, provenance in primary.directories
+            if name in INITIALIZER_DIRECTORIES)
+        require(len(directories) == 8 and all(pin is not None for _name, pin, _provenance in directories),
+            "PRODUCTIVE_PREFIX_INITIALIZER_PINS")
+        pins = {name: pin for name, pin, _provenance in directories}
+        file_rows = {row[0]: row for row in primary.files}
+        window.now()
+        owner = native.Owner(window.deadline(900, final=True), window, first=first, cancelled=callback)
+        owner.work_limit, owner.final_limit = window.work, window.final
+        wrapper = _PrimaryOwner(owner)
+        opened, read = {}, {}
+        for name in _PRODUCTIVE_INITIALIZER_NAMES:
+            entry.check(_PRODUCTIVE_PREFIX_ATTEMPTS, attempt)
+            require(checked_primary(primary_result)[0] is window and
+                checked_custody_authority(authority_result, primary_result)[0] is window,
+                "PRODUCTIVE_PREFIX_ORIGINAL_CHANGED")
+            parent, leaf = name.rsplit("/", 1)
+            if parent not in opened:
+                path = initializer.joinpath(*parent.split("/")[1:])
+                opened[parent] = _private(wrapper, path)
+                require(tuple(opened[parent].identity) == pins[parent], "PRODUCTIVE_PREFIX_DIRECTORY_CHANGED")
+            require(name in file_rows, "PRODUCTIVE_PREFIX_FILE_NOT_INDEXED")
+            read[name] = _read_private(wrapper, opened[parent], leaf, file_rows[name][1])
+        _indexed_originals(primary, read, _PRODUCTIVE_INITIALIZER_NAMES)
+        context = canonical(read["I/initializer-context.json"])
+        canonical_context = N.native.initialization.producer.parse(read["I/state/context.json"])
+        # The canonical supplier uses its own indented JSON; preserve its exact
+        # bytes and run the maintained initial-origin predicate, not a reencode.
+        N.native.initialization.initial_recipient_context_record(read["I/state/context.json"],
+            worker_raw=identity.record, root=str(ROOT), state=str(initializer / "state"), role=first.clock.role,
+            outer_job=context["job"], homes=tuple(canonical_context["javaHomes"]),
+            policy_raw=read["I/state/gradle-home/gradle.properties"])
+        initializer_originals = tuple((name, read[name]) for name in _PRODUCTIVE_INITIALIZER_NAMES)
+        data_graph = N._history_graph(identity.__dict__, initializer_originals, directories, first,
+            primary_result.__dict__, authority_result.__dict__)
+        close_raw = wrapper.finish()
+        entry.check(_PRODUCTIVE_PREFIX_ATTEMPTS, attempt)
+        require(checked_primary(primary_result)[0] is window and
+            checked_custody_authority(authority_result, primary_result)[0] is window,
+            "PRODUCTIVE_PREFIX_CLOSE_CHANGED")
+        before = window.now()
+        raw = O.encoded({"schema": 1, "scope": "INITIAL_RECIPIENT_PRIMARY_RETIRED_FOR_PRODUCTIVE_V1",
+            "clock": O.clock_value(first.clock), "originalBootDigest": boot,
+            "primaryResultSha256": primary.result_sha256, "primaryCopySha256": O.digest(primary_result.copy),
+            "authoritySha256": O.digest(authority_raw), "authorityInventorySha256": O.digest(inventory_raw),
+            "workerIdentitySha256": O.digest(identity.record), "originalProposalSha256": O.digest(proposal),
+            "initializer": str(initializer), "initializerFilesSha256":
+                {name: O.digest(blob) for name, blob in initializer_originals},
+            "inputOwnerClose": canonical(close_raw), "inputsClosedNs": before,
+            "originalPrepWorkEndNs": window.work, "prepDisposition": "TERMINALLY_RETIRED",
+            "receivingDisposition": "HISTORICAL_NOT_REVIVED", "currentAuthority": "NEW_PER_USE_REQUIRED",
+            "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False})
+        canonical(raw)
+        N._check_history(data_graph)
+        retired = window.now(minimum=before)  # Includes serialization and actual original file close.
+        entry.check(_PRODUCTIVE_PREFIX_ATTEMPTS, attempt)
+        wrapper.structural()
+        require(wrapper.finished and wrapper.failure is None and wrapper.owner.closed and
+            not wrapper.owner.unknown and wrapper.errors == [] and
+            all(attempted and closed for _row, _label, _resource, attempted, closed in wrapper.rows) and
+            anchor.retired is None and anchor.failure is None and not anchor.busy,
+            "PRODUCTIVE_PREFIX_CLOSE_NOT_KNOWN")
+        result = RetiredProductivePrefix(raw, primary_result, authority_result, identity, history_raw,
+            proposal, originals, initializer_originals, directories, initializer, first, boot, retired, anchor.local_last)
+        result_graph = N._history_graph(result.__dict__, identity.__dict__)
+        saved = (result, result_graph, data_graph, primary_saved, authority_saved, window, anchor,
+            wrapper, wrapper._anchor(), close_raw, entry, attempt, retired, anchor.local_last)
+        require(id(result) not in _PRODUCTIVE_PREFIX_RETURNS and id(window) not in _RETIRED_PRODUCTIVE_WINDOWS,
+            "PRODUCTIVE_PREFIX_RETIRE_ONCE")
+        _PRODUCTIVE_PREFIX_RETURNS[id(result)] = saved
+        _RETIRED_PRODUCTIVE_WINDOWS[id(window)] = result
+        anchor.retired = result  # No callback/observation occurs between the two original registry writes.
+        entry.complete(_PRODUCTIVE_PREFIX_ATTEMPTS, attempt, result)
+        checked_retired_primary(result)
+        return result
+    except BaseException as error:
+        failure = entry.fail(error)
+        if window is not None:
+            window._error(window._anchor(), failure)
+        if wrapper is not None and not wrapper.finished:
+            try:
+                wrapper.remember(failure)
+                wrapper.finish()
+            except BaseException:
+                pass  # Original first failure and actual owner cleanup/UNKNOWN remain retained.
+        raise failure
+
+
+def checked_retired_primary(result):
+    """Passive original-close check ONLY; no old current(), RAW or deadline call."""
+    saved = _PRODUCTIVE_PREFIX_RETURNS.get(id(result))
+    require(type(result) is RetiredProductivePrefix and type(saved) is tuple and saved[0] is result,
+        "PRODUCTIVE_PREFIX_NOT_ORIGINAL_RETURN")
+    _, result_graph, data_graph, primary_saved, authority_saved, window, anchor, wrapper, owner_anchor, \
+        close_raw, entry, attempt, retired, local = saved
+    try:
+        entry.returned(_PRODUCTIVE_PREFIX_ATTEMPTS, attempt, result)
+        N._check_history(result_graph)
+        N._check_history(data_graph)
+        require(_PRIMARY_RETURNS.get(id(result.primary)) is primary_saved and
+            _AUTHORITY_RETURNS.get(id(result.authority)) is authority_saved and
+            _WINDOWS.get(id(window)) is anchor and window._bound is anchor.binding and
+            _RETIRED_PRODUCTIVE_WINDOWS.get(id(window)) is result and anchor.retired is result and
+            anchor.failure is None and not anchor.busy and anchor.last == retired and anchor.local_last == local and
+            result.retired_ns == retired and result.retired_local == local, "PRODUCTIVE_PREFIX_RETIRED_BINDING")
+        for original, original_attempt in ((result.primary, primary_saved[12]),
+                (result.authority, authority_saved[13])):
+            require(original_attempt["state"] == "RETURNED" and original_attempt["return"] is original and
+                original_attempt["failure"] is None, "PRODUCTIVE_PREFIX_PREDECESSOR_FAILED")
+        for graph in primary_saved[10]:
+            N._check_history(graph)
+        N._check_history(authority_saved[10])
+        require(wrapper._anchor() is owner_anchor and wrapper.finished and wrapper.failure is None and
+            wrapper.owner.closed and not wrapper.owner.unknown and wrapper.errors == [] and
+            all(attempted and closed for _row, _label, _resource, attempted, closed in wrapper.rows),
+            "PRODUCTIVE_PREFIX_INPUT_CLOSE_CHANGED")
+        wrapper.structural()
+        authority_saved[7].known()
+        for owner, original_anchor in primary_saved[9]:
+            require(owner._anchor() is original_anchor and owner.finished and owner.failure is None and
+                owner.owner.closed and not owner.owner.unknown and owner.errors == [] and
+                all(attempted and closed for _row, _label, _resource, attempted, closed in owner.rows),
+                "PRODUCTIVE_PREFIX_PRIMARY_CLOSE_CHANGED")
+            owner.structural()
+        require(canonical(result.raw)["inputOwnerClose"] == canonical(close_raw), "PRODUCTIVE_PREFIX_CLOSE_RECORD")
+        entry.returned(_PRODUCTIVE_PREFIX_ATTEMPTS, attempt, result)
+        return result
+    except BaseException as error:
+        raise entry.fail(error)
 
 
 def _copy_authority(owner, primary_result, authority_result, destination):

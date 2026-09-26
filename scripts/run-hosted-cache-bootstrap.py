@@ -52,6 +52,7 @@ import hosted_cache_bootstrap_staging as staging
 import hosted_cache_provider_readback as provider_readback
 import hosted_evidence as posix
 import hosted_initial_recipient_before as initial_before
+import hosted_initial_recipient_use as initial_use
 import hosted_test_query as query
 import hosted_windows_evidence as diagnostics
 import hosted_windows_files as windows
@@ -75,6 +76,8 @@ INITIAL_CUSTODY_AUTHORITY_ACK_SCOPE = "INITIAL_RECIPIENT_CUSTODY_AUTHORITY_POST_
 INITIAL_COLLECT_AUTHORITY_CONTEXT_SCOPE = "INITIAL_RECIPIENT_POST_EXPORT_AUTHORITY_CONTEXT_V1"
 INITIAL_TAIL_AUTHORITY_CONTEXT_SCOPE = "INITIAL_RECIPIENT_SEAL_AUTHORITY_CONTEXT_V1"
 INITIAL_BEFORE_AUTHORITY_CONTEXT_SCOPE = initial_before.CONTEXT_SCOPE
+INITIAL_PRODUCTIVE_USE_CONTEXT_SCOPE = initial_use.PRIVATE_CONTEXT
+INITIAL_PROVIDER_PUBLIC_CONTEXT_SCOPE = initial_use.PUBLIC_CONTEXT
 INITIAL_RECIPIENT_ACK_SCOPE = "INITIAL_RECIPIENT_VALIDATION_POST_CLOSE_ACK_V1"
 RESULT_SCOPE = "BOOTSTRAP_ORIGINALS_PENDING_CALLER_RETURN_V2"
 HANDOFF_SCOPE = "BOOTSTRAP_PREPARE_POST_CLOSE_HANDOFF_V1"
@@ -752,9 +755,42 @@ INITIAL_RECEIVING_CONTEXT_SCOPE = "INITIAL_RECIPIENT_RECEIVING_AUTHORITY_CONTEXT
 INITIAL_RECEIVING_ACK_SCOPE = "INITIAL_RECIPIENT_RECEIVING_AUTHORITY_POST_CLOSE_ACK_V1"
 
 
-def phase_command(context_raw, minimum=None, *, before_caps=None):
+def _initial_use_command(context_hash, window, caps, minimum, scope):
+    clock, seed = initial_use.checked_frame(window)
+    initial_use.phase_caps(seed, caps)
+    require(scope in (INITIAL_PRODUCTIVE_USE_CONTEXT_SCOPE, INITIAL_PROVIDER_PUBLIC_CONTEXT_SCOPE) and
+        initial_use.site_scope(seed["site"]) == scope, "BOOTSTRAP_INITIAL_USE_ROUTE")
+    result = initial_command(context_hash, minimum)
+    result[4] = str(SCRIPTS / "run-hosted-initial-recipient-productive.py")
+    result[5] = "_private-use" if scope == INITIAL_PRODUCTIVE_USE_CONTEXT_SCOPE else "_public-use"
+    flags = ("--site", "--parent-first-ns", "--parent-work-end-ns", "--use-first-ns", "--use-work-end-ns",
+        "--use-final-end-ns", "--original-boot-digest")
+    for flag, name in zip(flags, initial_use.SEED_NAMES):
+        result.extend((flag, str(seed[name])))
+    for flag, value in zip(("--phase-start-ns", "--phase-work-end-ns", "--phase-final-end-ns"), caps):
+        result.extend((flag, str(value)))
+    result.extend(("--clock-role", clock.role, "--clock-domain", clock.domain,
+        "--clock-ticks-per-second", str(clock.ticks_per_second)))
+    return result
+
+
+def initial_productive_use_command(context_hash, window, caps, minimum=None):
+    return _initial_use_command(context_hash, window, caps, minimum, INITIAL_PRODUCTIVE_USE_CONTEXT_SCOPE)
+
+
+def initial_provider_public_command(context_hash, window, caps, minimum=None):
+    return _initial_use_command(context_hash, window, caps, minimum, INITIAL_PROVIDER_PUBLIC_CONTEXT_SCOPE)
+
+
+def phase_command(context_raw, minimum=None, *, before_caps=None, use_caps=None):
     context = origin.parse(context_raw)
     scope = context.get("scope")
+    if scope in (INITIAL_PRODUCTIVE_USE_CONTEXT_SCOPE, INITIAL_PROVIDER_PUBLIC_CONTEXT_SCOPE):
+        require(before_caps is None, "BOOTSTRAP_BEFORE_CAPS_ON_USE_ROUTE")
+        fixed = (initial_productive_use_command if scope == INITIAL_PRODUCTIVE_USE_CONTEXT_SCOPE else
+            initial_provider_public_command)
+        return fixed(origin.digest(context_raw), context["window"], use_caps, minimum)
+    require(use_caps is None, "BOOTSTRAP_USE_CAPS_ON_LEGACY_ROUTE")
     if scope == INITIAL_BEFORE_AUTHORITY_CONTEXT_SCOPE:
         return initial_before_authority_command(origin.digest(context_raw), context["deadline"], before_caps, minimum)
     require(before_caps is None, "BOOTSTRAP_BEFORE_CAPS_ON_LEGACY_ROUTE")
@@ -1002,7 +1038,8 @@ def _initial_service_environment(path, context, installed_git):
     environment = child_environment(path)
     initial = context.get("scope") in (INITIAL_CONTEXT_SCOPE, INITIAL_ENTRY_CONTEXT_SCOPE,
         INITIAL_AUTHORITY_CONTEXT_SCOPE, INITIAL_RECEIVING_CONTEXT_SCOPE, INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE,
-        INITIAL_COLLECT_AUTHORITY_CONTEXT_SCOPE, INITIAL_TAIL_AUTHORITY_CONTEXT_SCOPE, INITIAL_BEFORE_AUTHORITY_CONTEXT_SCOPE)
+        INITIAL_COLLECT_AUTHORITY_CONTEXT_SCOPE, INITIAL_TAIL_AUTHORITY_CONTEXT_SCOPE, INITIAL_BEFORE_AUTHORITY_CONTEXT_SCOPE,
+        INITIAL_PRODUCTIVE_USE_CONTEXT_SCOPE, INITIAL_PROVIDER_PUBLIC_CONTEXT_SCOPE)
     if not initial:
         require(installed_git is None, "BOOTSTRAP_INITIAL_GIT_ON_ORDINARY_ROUTE")
         return environment
@@ -1025,8 +1062,13 @@ def phase(owner, private, context_raw, token, fence, *, initial_git=None):
     collect_phase = None
     tail_phase = None
     before_phase = None
+    use_phase = None
     try:
         context = origin.parse(context_raw)
+        if context.get("scope") == INITIAL_PROVIDER_PUBLIC_CONTEXT_SCOPE:
+            require(token is None, "BOOTSTRAP_PUBLIC_USE_TOKEN_FORBIDDEN")
+            initial_use.public.credential_free()
+            require("ACTIONS_CACHE_URL" not in os.environ, "BOOTSTRAP_PUBLIC_USE_CACHE_CREDENTIAL_FORBIDDEN")
         started = fence.now()
         work_end = min(fence.work, started + origin.wire.ACQUIRE_SECONDS * origin.NS)
         final_end = min(fence.final, work_end + 45 * origin.NS)
@@ -1047,10 +1089,14 @@ def phase(owner, private, context_raw, token, fence, *, initial_git=None):
         elif context.get("scope") == INITIAL_BEFORE_AUTHORITY_CONTEXT_SCOPE:
             owner.enter_before_phase(context_raw, started, work_end, final_end)
             before_phase = (started, work_end, final_end, old_limits)
+        elif context.get("scope") in (INITIAL_PRODUCTIVE_USE_CONTEXT_SCOPE, INITIAL_PROVIDER_PUBLIC_CONTEXT_SCOPE):
+            owner.enter_productive_phase(context_raw, started, work_end, final_end)
+            use_phase = (started, work_end, final_end, old_limits)
         else:
             owner.work_limit, owner.final_limit = work_end, final_end
         invocation = uuid.uuid4().hex
-        argv = (phase_command(context_raw, before_caps=before_phase[:3]) if before_phase is not None else
+        argv = (phase_command(context_raw, use_caps=use_phase[:3]) if use_phase is not None else
+            phase_command(context_raw, before_caps=before_phase[:3]) if before_phase is not None else
             phase_command(context_raw))
         env = processes.ownership_environment(_initial_service_environment(private.path, context, initial_git),
             context["job"], invocation,
@@ -1097,6 +1143,12 @@ def phase(owner, private, context_raw, token, fence, *, initial_git=None):
                 owner.leave_before_phase(*before_phase)
             except BaseException as restore_error:
                 owner.error("before-phase-setup-return", restore_error, unknown=True)
+        if use_phase is not None:
+            owner.error("productive-use-phase-setup", error)
+            try:
+                owner.leave_productive_phase(*use_phase)
+            except BaseException as restore_error:
+                owner.error("productive-use-phase-setup-return", restore_error, unknown=True)
         raise
     try:
         # The capture files remain alive through finalization, but acquisition
@@ -1117,10 +1169,17 @@ def phase(owner, private, context_raw, token, fence, *, initial_git=None):
             "baseline": sorted(scope.baseline) if hasattr(scope, "baseline") else None,
             "kernelJob": fence.clock.role == "windows-x64"})
         row["baselineSha256"] = origin.digest(baseline_raw)
-        require(type(token) is str and re.fullmatch(r"[A-Za-z0-9_.-]{16,4096}", token), "BOOTSTRAP_ACTIONS_READ_TOKEN")
-        env[origin.wire.TOKEN_ENV], token = token, None
+        if context.get("scope") == INITIAL_PROVIDER_PUBLIC_CONTEXT_SCOPE:
+            require(token is None and not any(name in env for name in
+                (*initial_use.public.CREDENTIAL_NAMES, "ACTIONS_CACHE_URL")), "BOOTSTRAP_PUBLIC_USE_LAUNCH_CREDENTIAL")
+            initial_use.public.credential_free()
+            require("ACTIONS_CACHE_URL" not in os.environ, "BOOTSTRAP_PUBLIC_USE_CACHE_CREDENTIAL_FORBIDDEN")
+        else:
+            require(type(token) is str and re.fullmatch(r"[A-Za-z0-9_.-]{16,4096}", token), "BOOTSTRAP_ACTIONS_READ_TOKEN")
+            env[origin.wire.TOKEN_ENV], token = token, None
         row["launchMinimumNs"] = fence.now(limit=work_end)
-        argv = (phase_command(context_raw, row["launchMinimumNs"], before_caps=before_phase[:3])
+        argv = (phase_command(context_raw, row["launchMinimumNs"], use_caps=use_phase[:3])
+            if use_phase is not None else phase_command(context_raw, row["launchMinimumNs"], before_caps=before_phase[:3])
             if before_phase is not None else phase_command(context_raw, row["launchMinimumNs"]))
         row["launchArgv"] = argv
         row["launchAttempted"] = True
@@ -1176,7 +1235,8 @@ def phase(owner, private, context_raw, token, fence, *, initial_git=None):
                     owner.error("drain-fence", error)
                     if context.get("scope") not in (INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE,
                             INITIAL_COLLECT_AUTHORITY_CONTEXT_SCOPE, INITIAL_TAIL_AUTHORITY_CONTEXT_SCOPE,
-                            INITIAL_BEFORE_AUTHORITY_CONTEXT_SCOPE):
+                            INITIAL_BEFORE_AUTHORITY_CONTEXT_SCOPE, INITIAL_PRODUCTIVE_USE_CONTEXT_SCOPE,
+                            INITIAL_PROVIDER_PUBLIC_CONTEXT_SCOPE):
                         raise
                     # The custody Window deliberately stays failed. That must
                     # not skip an already-owned child's bounded drain. Use only
@@ -1272,6 +1332,11 @@ def phase(owner, private, context_raw, token, fence, *, initial_git=None):
                 owner.leave_before_phase(*before_phase)
             except BaseException as error:
                 owner.error("before-phase-return", error, unknown=True)
+        elif use_phase is not None:
+            try:
+                owner.leave_productive_phase(*use_phase)
+            except BaseException as error:
+                owner.error("productive-use-phase-return", error, unknown=True)
         else:
             owner.work_limit, owner.final_limit = old_limits
     if owner.original is not None:
@@ -13159,7 +13224,7 @@ def guarded(operation):
     observed = fence.now(final=True, limit=limit)
     if value.get("scope") in (ACK_SCOPE, RECIPIENT_ACK_SCOPE, INITIAL_ACK_SCOPE, INITIAL_ENTRY_ACK_SCOPE,
                              INITIAL_AUTHORITY_ACK_SCOPE, INITIAL_RECIPIENT_ACK_SCOPE, INITIAL_RECEIVING_ACK_SCOPE,
-                             INITIAL_CUSTODY_AUTHORITY_ACK_SCOPE):
+                             INITIAL_CUSTODY_AUTHORITY_ACK_SCOPE, initial_use.PRIVATE_ACK, initial_use.PUBLIC_ACK):
         value["closedNs"] = observed
     raw = origin.encoded(value)
     require(len(raw) <= ACK_LIMIT and sys.stdout.buffer.write(raw) == len(raw), "BOOTSTRAP_ACK_WRITE")
