@@ -1,5 +1,40 @@
 # Initial-recipient artifact transport: source and offline models
 
+## Fixed native-reader bridge: R2 source and local models
+
+`scripts/hosted-initial-artifact-reader.cjs` now owns one fixed, credential-free
+Python child and its original three pipes. It exposes a demand-driven HWM0
+stream only after its caller binds the actual READY/source/deadline data.
+Each original `N` requests one bounded frame; successful stream EOF requires
+the final observed ZIP hash, original zero exit, all pipe EOF/close events,
+stdin finish/end callback and the original child close. Caught reentry remains
+a sticky failure. A complete final frame may join its delayed original write
+callback without accepting truncated or premature EOF.
+
+Reviewed source SHA-256:
+`f7124733949c79978c96d3486dd2445a0df59073df4c97c7706abf128ca8178a`;
+test SHA-256:
+`6587f162f5f1741a3a3fc88ac0aee5f65e151651c6a6518eb944dd87477e3314`.
+Independent R2 source review:
+`APPROVE_EXACT_READER_R2_SOURCE_AND_33_NEW_OFFLINE_MODELS_ONLY`, report SHA-256
+`b53caa88f137ade3427006519de3bfa9aaa9d30fa41b1ac6dd6d273581df743c`.
+
+One invocation on 2026-09-26 at 22:11:46Z passed **33/33**, exit0, using real
+Node streams with synthetic child/clock models. Whole-chain timing was
+wall0.522s/user0.392s/system0.120s; external CPU60s/wall90s+kill5s/AS768MiB.
+All executed source/input hashes matched; the guarded original process was
+observed absent. No earlier reader, ZIP/transport suite, preview or build was
+repeated. Log SHA-256:
+`e495e17e393c40bdae0a364cb91ba2a56050564f8851ec140e010a45b12d4e8c`.
+Independent result verdict: `APPROVE_EXACT_33_LOCAL_READER_R2_MODELS_RESULT_ONLY`,
+report SHA-256 `c8e5397ee518c6ec65d32ee16cb067de3a557f45678310f1b4d1c5e99e01e5c8`.
+
+This is **dormant source, not native or hosted qualification**. The fixed
+`run-hosted-initial-recipient-upload.py` helper is not yet implemented here;
+actual K/U/A ownership, service observations, file retirement and workflow
+integration remain necessary. Original RAW-to-LOCAL mapping, U60/close5,
+512MiB whole-ZIP bound, all HOLDs and Release gates are unchanged.
+
 ## Four-member stored-ZIP byte leaf (later independent increment)
 
 `scripts/hosted_initial_artifact_zip.py` now supplies the deterministic,
