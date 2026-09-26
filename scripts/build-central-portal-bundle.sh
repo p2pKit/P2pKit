@@ -50,8 +50,18 @@ file_size() {
 
 valid_signature_fingerprint() {
     local status="$1"
-    awk '$2 == "VALIDSIG" && fingerprint == "" { fingerprint = toupper($3) }
-         END { if (fingerprint != "") print fingerprint }' <<<"$status"
+    # Consume the full stream (including trailing notation/status records).
+    # VALIDSIG binds a signing subkey to its primary fingerprint in field 12.
+    awk '$1 == "[GNUPG:]" && $2 ~ /^(BADSIG|ERRSIG|NO_PUBKEY|EXPSIG|EXPKEYSIG|REVKEYSIG|KEYEXPIRED|SIGEXPIRED|FAILURE|ERROR|NODATA)$/ { bad = 1 }
+         $1 == "[GNUPG:]" && $2 == "VALIDSIG" {
+             count++
+             signer = toupper($3)
+             fingerprint = NF == 12 ? toupper($12) : signer
+             if ((NF != 11 && NF != 12) || $11 != "00" ||
+                 (length(signer) != 40 && length(signer) != 64) || signer !~ /^[A-F0-9]+$/ ||
+                 (length(fingerprint) != 40 && length(fingerprint) != 64) || fingerprint !~ /^[A-F0-9]+$/) bad = 1
+         }
+         END { if (count == 1 && !bad) print fingerprint }' <<<"$status"
 }
 
 [[ -n "$VERSION" && -n "$GROUP" ]] || fail "GROUP/VERSION_NAME is missing from gradle.properties"
@@ -69,9 +79,14 @@ expected_fingerprint="$(printf '%s' "${MAVEN_SIGNING_KEY_FINGERPRINT:-}" | tr -d
 [[ "$expected_fingerprint" =~ ^[A-F0-9]{40}$|^[A-F0-9]{64}$ ]] ||
     fail "MAVEN_SIGNING_KEY_FINGERPRINT must be a complete 40- or 64-hex fingerprint"
 
-for command in base64 gpg jq openssl unzip zip; do
+for command in base64 git gpg jq openssl unzip zip; do
     command -v "$command" >/dev/null 2>&1 || fail "$command is required"
 done
+
+SOURCE_SHA="$(git -C "$ROOT" rev-parse --verify 'HEAD^{commit}')"
+SOURCE_TREE="$(git -C "$ROOT" rev-parse --verify 'HEAD^{tree}')"
+[[ -z "$(git -C "$ROOT" status --porcelain --untracked-files=all)" ]] ||
+    fail "signed original evidence requires clean committed source"
 
 OUTPUT="${1:-$ROOT/build/central/p2pkit-$VERSION-central-bundle.zip}"
 if [[ "$OUTPUT" != /* ]]; then
@@ -80,8 +95,9 @@ fi
 [[ "$OUTPUT" == *.zip ]] || fail "output must have a .zip extension: $OUTPUT"
 MANIFEST="${OUTPUT%.zip}.manifest.sha256"
 SUMMARY="${OUTPUT%.zip}.summary.json"
-for output_file in "$OUTPUT" "$MANIFEST" "$SUMMARY"; do
-    [[ ! -e "$output_file" ]] || fail "refusing to overwrite existing output: $output_file"
+PUBLIC_KEY="${OUTPUT%.zip}.public.asc"
+for output_file in "$OUTPUT" "$MANIFEST" "$SUMMARY" "$PUBLIC_KEY"; do
+    [[ ! -e "$output_file" && ! -L "$output_file" ]] || fail "refusing to overwrite existing output: $output_file"
 done
 
 REPOSITORY="$(mktemp -d "${P2PKIT_RELEASE_TMPDIR:-/tmp}/p2pkit-central-bundle.XXXXXX")"
@@ -139,6 +155,11 @@ find "$BASE" -type f -name 'maven-metadata*' -delete
 
 gpg --batch --homedir "$GNUPGHOME" --import "$KEY_FILE" >/dev/null 2>&1 ||
     fail "could not import the release key into the isolated verification keyring"
+# Only the public certificate leaves this private, temporary verification home.
+# Never retain the imported key, its private backup, or its passphrase as evidence.
+gpg --batch --homedir "$GNUPGHOME" --armor --export "$expected_fingerprint" \
+    >"$REPOSITORY/public-key.asc" 2>/dev/null || fail "could not export the public signing certificate"
+[[ -s "$REPOSITORY/public-key.asc" ]] || fail "public signing certificate export is empty"
 
 unsigned=0
 invalid_signature=0
@@ -151,12 +172,11 @@ while IFS= read -r -d '' artifact; do
         unsigned=$((unsigned + 1))
         continue
     fi
-    status="$({
-        gpg --batch --homedir "$GNUPGHOME" --status-fd 1 \
-            --verify "$signature" "$artifact" 2>/dev/null
-    } || true)"
+    signature_status=0
+    status="$(gpg --batch --homedir "$GNUPGHOME" --status-fd 1 \
+        --verify "$signature" "$artifact" 2>/dev/null)" || signature_status=$?
     signature_fingerprint="$(valid_signature_fingerprint "$status")"
-    if [[ "$signature_fingerprint" != "$expected_fingerprint" ]]; then
+    if [[ "$signature_status" -ne 0 || "$signature_fingerprint" != "$expected_fingerprint" ]]; then
         echo "FAIL invalid or unexpected signature: ${artifact#"$REPOSITORY/"}" >&2
         invalid_signature=$((invalid_signature + 1))
     fi
@@ -170,7 +190,7 @@ done < <(
         -print0
 )
 
-[[ $checked -gt 0 ]] || fail "no publication files found under $BASE"
+[[ $checked -eq 84 ]] || fail "complete Central publication requires exactly 84 signed files across 15 coordinates"
 [[ $unsigned -eq 0 ]] || fail "$unsigned of $checked publication files lack PGP signatures"
 [[ $invalid_signature -eq 0 ]] ||
     fail "$invalid_signature of $checked publication files have invalid or unexpected signatures"
@@ -209,27 +229,45 @@ unzip -tq "$OUTPUT" >/dev/null
 BUNDLE_SIZE="$(file_size "$OUTPUT")"
 [[ "$BUNDLE_SIZE" -lt 1073741824 ]] || fail "Central bundle exceeds the 1 GiB upload limit"
 BUNDLE_SHA256="$(openssl dgst -sha256 "$OUTPUT" | awk '{print $NF}')"
+MANIFEST_SHA256="$(openssl dgst -sha256 "$MANIFEST" | awk '{print $NF}')"
+cp "$REPOSITORY/public-key.asc" "$PUBLIC_KEY"
+PUBLIC_KEY_SHA256="$(openssl dgst -sha256 "$PUBLIC_KEY" | awk '{print $NF}')"
+[[ "$(git -C "$ROOT" rev-parse --verify 'HEAD^{commit}')" == "$SOURCE_SHA" &&
+   "$(git -C "$ROOT" rev-parse --verify 'HEAD^{tree}')" == "$SOURCE_TREE" &&
+   -z "$(git -C "$ROOT" status --porcelain --untracked-files=all)" ]] ||
+    fail "source changed while producing signed original evidence"
 jq -n \
     --arg group "$GROUP" \
     --arg version "$VERSION" \
     --arg signingKeyFingerprint "$expected_fingerprint" \
     --arg bundleFile "$(basename "$OUTPUT")" \
     --arg bundleSha256 "$BUNDLE_SHA256" \
+    --arg sourceSha "$SOURCE_SHA" \
+    --arg sourceTree "$SOURCE_TREE" \
+    --arg manifestSha256 "$MANIFEST_SHA256" \
+    --arg publicKeyFile "$(basename "$PUBLIC_KEY")" \
+    --arg publicKeySha256 "$PUBLIC_KEY_SHA256" \
     --argjson bundleSizeBytes "$BUNDLE_SIZE" \
     --argjson signedFiles "$checked" \
     '{
-        schemaVersion: 1,
+        schemaVersion: 2,
         group: $group,
         version: $version,
         signingKeyFingerprint: $signingKeyFingerprint,
         bundleFile: $bundleFile,
         bundleSha256: $bundleSha256,
         bundleSizeBytes: $bundleSizeBytes,
-        signedFiles: $signedFiles
+        signedFiles: $signedFiles,
+        sourceSha: $sourceSha,
+        sourceTree: $sourceTree,
+        manifestSha256: $manifestSha256,
+        publicKeyFile: $publicKeyFile,
+        publicKeySha256: $publicKeySha256
     }' >"$SUMMARY"
 
 echo "RESULT: PASS — signed Central Portal bundle created (not uploaded)"
 echo "Bundle: $OUTPUT"
 echo "Manifest: $MANIFEST"
 echo "Summary: $SUMMARY"
+echo "Public signing certificate: $PUBLIC_KEY"
 echo "SHA-256: $BUNDLE_SHA256"

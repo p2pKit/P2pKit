@@ -53,8 +53,13 @@ if [[ "$VERSION" == *-SNAPSHOT ]]; then
         cp "$ROOT/local.properties" "$RELEASE_WORKTREE/local.properties"
     fi
     # Exercise the script under test, including uncommitted development edits,
-    # against an otherwise clean non-SNAPSHOT release fixture.
+    # against an owned, committed non-SNAPSHOT release fixture. This synthetic
+    # commit is never a real release source, tag, approval or publication.
     cp "$ORIGINAL_SCRIPT" "$RELEASE_WORKTREE/scripts/build-central-portal-bundle.sh"
+    git -C "$RELEASE_WORKTREE" add gradle.properties scripts/build-central-portal-bundle.sh
+    git -C "$RELEASE_WORKTREE" -c user.name='P2pKit disposable bundle fixture' \
+        -c user.email='bundle-fixture@example.invalid' \
+        commit --no-gpg-sign -m 'test: commit disposable signed-bundle fixture' >/dev/null
     SCRIPT="$RELEASE_WORKTREE/scripts/build-central-portal-bundle.sh"
 else
     SCRIPT="$ORIGINAL_SCRIPT"
@@ -94,7 +99,7 @@ parser_body="$(
 }
 parser_output="$(
     bash -c "$parser_body
-status=\$(printf '[GNUPG:] VALIDSIG %s 20260812 0 4 0 1 10 00\n' '$PARSER_FINGERPRINT';
+status=\$(printf '[GNUPG:] VALIDSIG %s 20260812 0 0 4 0 1 10 00 %s\n' '$PARSER_FINGERPRINT' '$PARSER_FINGERPRINT';
          awk 'BEGIN { for (i = 0; i < 20000; i++) print \"[GNUPG:] NOTATION_DATA trailing-status\" }')
 valid_signature_fingerprint \"\$status\""
 )"
@@ -161,12 +166,20 @@ fi
 PHASE="bundle verification"
 unzip -tq "$OUTPUT" >/dev/null
 [[ -s "${OUTPUT%.zip}.manifest.sha256" ]] || { echo "FATAL: bundle manifest is missing" >&2; exit 1; }
+[[ -s "${OUTPUT%.zip}.public.asc" ]] || { echo "FATAL: public signing certificate is missing" >&2; exit 1; }
+fixture_root="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
 jq -e \
     --arg fingerprint "$FINGERPRINT" \
     --arg group "$GROUP" \
     --arg version "$VERSION" \
-    '.schemaVersion == 1 and .group == $group and .version == $version and
-     .signingKeyFingerprint == $fingerprint and .signedFiles > 0' \
+    --arg source "$(git -C "$fixture_root" rev-parse 'HEAD^{commit}')" \
+    --arg tree "$(git -C "$fixture_root" rev-parse 'HEAD^{tree}')" \
+    --arg manifest "$(openssl dgst -sha256 "${OUTPUT%.zip}.manifest.sha256" | awk '{print $NF}')" \
+    --arg public "$(openssl dgst -sha256 "${OUTPUT%.zip}.public.asc" | awk '{print $NF}')" \
+    '.schemaVersion == 2 and .group == $group and .version == $version and
+     .signingKeyFingerprint == $fingerprint and .signedFiles == 84 and
+     .sourceSha == $source and .sourceTree == $tree and
+     .manifestSha256 == $manifest and .publicKeySha256 == $public' \
     "${OUTPUT%.zip}.summary.json" >/dev/null
 
 echo "RESULT: PASS — disposable-key signed bundle, signatures, checksums, manifest, and secret safety passed"
