@@ -89,6 +89,33 @@ Original result-manifest SHA-256:
 These are synthetic lifecycle/DATA/source-order controls, not native runs,
 provider storage, cache/resolver qualification or completed final custody.
 
+### Seed composition binding correction
+
+Source CI [36278802366/1](https://github.com/p2pKit/P2pKit/actions/runs/36278802366)
+at `e1638cc5b07767a9fcc407c30a84df47f5cfdd54` failed the stale seed-only
+whole-program AST expectation. The first three unittest suites passed116 methods;
+composition35 failed (six failure records/seven errors), and all downstream
+DATA/Node/Java-helper controls were skipped. It is not a passing aggregate.
+Independent diagnosis SHA-256:
+`9aed1d58144471e34c09835d092ae970ab39d6d3b6518d28bec42fddeeed541f`.
+
+Only the seed's expectation is updated to the independently reviewed initial
+path addition (raw SHA-256
+`e862b5d5f53b741789f17f7a619b85b3fb57ba2ecec9d45457675ef5593ba0a7`).
+The six other pins, complete supplier/INPUTS rosters, production bytes and all
+ordinary path/budget/HOLD rules remain unchanged. Two new AST-only controls
+preflight the positive baseline before seven initial/legacy-path mutations.
+The corrected composition suite passed **37/37** once, followed by the
+standalone composition checker (both exit0). The suite used28.895s wall and
+28.869s CPU; the checker used0.475s wall and0.475s CPU. Original result-manifest
+SHA-256: `677dec5492b3dcf1ba3ea37e49a89fa767d3e601d484244cef858ace944158ff`.
+Independent result review:
+`APPROVE_EXACT_COMPOSITION37_AND_CHECKER_OFFLINE_RESULTS_ONLY`, SHA-256
+`aead21f24145ad921e32de26dfd66e5ddb1e1e3929b4a35c0a6194e37af9aaa1`.
+The hosted failed aggregate remains failed; its downstream suites were not
+rerun locally. Source pinning and these offline controls do not establish
+native, provider or Release qualification.
+
 ## Still required before productive execution and Release
 
 The complete productive final-custody consumer and U/A delivery counterparts

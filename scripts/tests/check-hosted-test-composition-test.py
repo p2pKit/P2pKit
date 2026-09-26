@@ -29,6 +29,33 @@ class CompositionPolicy(unittest.TestCase):
     def test_reviewed_programs_match(self):
         POLICY.check_sources(self.sources)
 
+    def test_initial_seed_route_remains_typed_and_bound_to_original_run_path(self):
+        # A failed positive baseline cannot count as a successful mutation
+        # rejection (the omitted expectation update in 36278802366 did that).
+        POLICY.check_sources(self.sources)
+        path = "scripts/hosted_dependency_seed_files.py"
+        for before, after in (
+            (b'if initial_bootstrap.cache_cohort(admitted_raw) is not None:', b'if True:'),
+            (b'"p2pkit-initial-recipient-" + github["runId"] + "-" + github["runAttempt"]',
+             b'"p2pkit-initial-recipient-" + github["runId"] + "-" + "1"'),
+            (b'"-worker-recipient-initializer"', b'"-unbound-initializer"'),
+            (b'str(path) == str(session) and path.name == expected, "SEED_INITIAL_RECIPIENT_SESSION_PATH"',
+             b'True, "SEED_INITIAL_RECIPIENT_SESSION_PATH"'),
+        ):
+            with self.subTest(before=before):
+                self.mutate(path, before, after)
+
+    def test_trusted_bootstrap_seed_else_keeps_original_parent_and_selection(self):
+        POLICY.check_sources(self.sources)
+        path = "scripts/hosted_dependency_seed_files.py"
+        for before, after in (
+            (b'admitted["selection"] + "-productive"', b'"unbound" + "-productive"'),
+            (b'path.name == "initializer" and parent.name == expected', b'path.name == "initializer"'),
+            (b'            parent = parent.parent\n', b'            parent = parent\n'),
+        ):
+            with self.subTest(before=before):
+                self.mutate(path, before, after)
+
     def test_missing_program_cannot_pass(self):
         for path in self.sources:
             with self.subTest(path=path):
