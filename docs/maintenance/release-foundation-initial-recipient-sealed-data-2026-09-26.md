@@ -1,5 +1,11 @@
 # Release Foundation: historical seal DATA decoder
 
+The original source/model freeze below is preserved as dated evidence. The
+[contemporary review and execution addendum](#contemporary-review-and-execution-addendum)
+records the later, separately authorized result; it grants no runtime authority.
+
+## Original source/model freeze — before review and execution
+
 **Source/model implementation review pending; authored controls unexecuted.**
 This narrow dormant increment starts from
 `fc9264dba3aaf46c8613ef132eab8908d4cfe97b` (tree
@@ -63,6 +69,58 @@ Only bounded source/Git inspection, hashes and `git diff --check` were used.
 Earlier exact seal results retain only their [recorded scope and failed/pass
 accounting](release-foundation-initial-recipient-seal-2026-09-26.md); they do not
 qualify this new source, and no accepted reader or old suite was replayed.
+
+## Contemporary review and execution addendum
+
+On 2026-09-26, independent implementation review first returned **REVISE** for
+frozen tree `0dfa75c347bbbf61c56f6566987d0e8a21b58031`: the reused inline authority
+parser's equality could accept an equal float for nested `authority.closedNs`.
+The new decoder now requires that field to be an integer, with independently
+rehashed float/boolean negative controls. The old parser, producers and accepted
+controls were not changed or replayed. Independent review then approved the
+exact source/model at commit `5ccc1ab5ac81f9b924f490d869fec46a6af227b1`, tree
+`19b320e08bdc34c7f73daafc088f0a514a4c4c28`.
+
+After separate review and launch authorization, **one invocation of the 15 new
+DATA-only methods passed: 15/15, aggregate OK, Python/child/wrapper exits 0**.
+It ran from `2026-09-26T11:51:38.025402321Z` to
+`2026-09-26T11:51:39.484984300Z`; unittest reported 0.154s, the wrapper 1.456s,
+and the actual Python process's terminal self CPU was 1.334442s. There was no
+rerun and no ResourceWarning, traceback or failure in the original log.
+
+The fresh read-only archive used the approved commit. The real process ran as
+UID/GID 65534 with a clean environment; `prlimit` was applied **after**
+runuser/PAM and the final environment, immediately before
+`python3 -I -B -S -W error::ResourceWarning`. A same-process guard verified
+actual UID/GID, `getrlimit`, original `/proc/self/limits` and eight focused source
+hashes before importing the model. Limits were CPU 60s, wall 90s plus kill 5s,
+address space 768MiB, output file 16MiB, 128 FDs, 32 processes and zero core.
+The guard selected exactly the 15 reviewed methods, fail-fast. ENTRY/RETURN
+retained the same actual PID 17924; it was absent after normal return. All
+source-byte, metadata and guard comparisons passed: 1,456 source-file rows and
+1,845 metadata rows were unchanged. Fresh HOME/TMP remained actually empty,
+with a zero-byte fixture inventory.
+
+Independent result review read the complete originals, verified their hashes,
+method count/aggregate/exits, real process limits and timing, compared the
+retained archive inventories with the current frozen sandbox, and directly
+rechecked empty HOME/TMP and PID absence. Its verdict was **PASS as local DATA
+models only**, not native, hosted, provider, custody or integration acceptance.
+The following SHA-256 values identify the exact reviewed scope and originals:
+
+| Item | SHA-256 |
+| --- | --- |
+| Decoder source at `5ccc1ab5` | `4925a0e54b2275e045dc16366e94c50e0dc235d7ed7186dba1da38c2ece9b4be` |
+| New 15-method control file | `5d246e4737678cb02edb768fc57c1bbac4fb2567c5e92dbc646d7072cf9d17a1` |
+| Full original control log | `3e32059e48b3475c3e400ea2d94fb01e184b450cf8c68964c7cedb0cc1c5ca6b` |
+| Original wrapper resources | `0e61035824e46ca8e72c3e138ff1860ad58614c9a022e06408458efc7f291fee` |
+| Original invocation status | `3b50eef895cdb842355ab407e69f7e83953964436541f55daa8c790a1572e8ac` |
+| Author's result inspection | `64d6f50fe1c9a5be093a90e18e050b5494018ad1e6313db96db19570298900e0` |
+
+This is a documentation-only result update; runtime/model source is unchanged.
+It authenticates neither a supplied Step outcome nor historical host-looking
+DATA and mints no live owner, clock, provider/upload permission or productive
+bridge. No accepted reader, old suite or full native/seal composition was rerun.
 
 ## Remaining endpoint and execution HOLDs
 
