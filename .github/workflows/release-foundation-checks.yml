@@ -1,0 +1,35 @@
+name: Release foundation source controls
+
+on:
+  push:
+    branches: [main, 'work/release-foundation-*']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-foundation-source-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-foundation-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out exact source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Configure Java 17 for the dependency-free version helper only
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Compare independent Java and Python version implementations
+        run: |
+          python3 -I -B scripts/tests/application-release-version-test.py
+          bash scripts/tests/check-application-release-version.sh
+          git diff --exit-code
+      # No Gradle, SDK setup, provider, application build or publication. This
+      # job cannot replace the ordinary FULL/Desktop or protected release gates.
