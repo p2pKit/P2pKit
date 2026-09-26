@@ -1,3 +1,6 @@
+import dev.p2pkit.build.ApplicationReleaseVersion
+import dev.p2pkit.build.GenerateSampleReleaseIdentityTask
+import dev.p2pkit.build.GitCommitValueSource
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 
 plugins {
@@ -5,6 +8,16 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.jetbrains.compose)
 }
+
+val applicationReleaseVersion = ApplicationReleaseVersion.parse(project.version.toString())
+val sampleReleaseIdentity = tasks.register<GenerateSampleReleaseIdentityTask>("generateSampleReleaseIdentity") {
+    canonicalVersion.set(applicationReleaseVersion.name)
+    sourceCommit.set(providers.of(GitCommitValueSource::class) {
+        parameters.rootDirectory.set(rootProject.layout.projectDirectory)
+    })
+    outputDirectory.set(layout.buildDirectory.dir("generated/sample-release-resources"))
+}
+tasks.named<ProcessResources>("processResources") { from(sampleReleaseIdentity) }
 
 kotlin {
     jvmToolchain(17)
@@ -121,7 +134,12 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Exe, TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb)
             packageName = "P2pKit Sample"
-            packageVersion = "1.0.0" // installer version; jpackage requires MAJOR > 0
+            packageVersion = applicationReleaseVersion.nativeVersion
+            linux {
+                packageName = "p2pkit-sample"
+                appRelease = "1"
+            }
+            macOS { packageBuildVersion = applicationReleaseVersion.nativeVersion }
             // AUDIT-2026-06 (BUILD-G10-12): derive from the project version
             // (gradle.properties VERSION_NAME) instead of a stale literal.
             description = "P2pKit ${project.version} desktop sample (room broadcast + file transfer)"

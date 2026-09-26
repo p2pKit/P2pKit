@@ -1,3 +1,4 @@
+import dev.p2pkit.build.ApplicationReleaseVersion
 import dev.p2pkit.build.VerifyPublicConstantAbiTask
 import org.gradle.api.publish.PublishingExtension
 import org.gradle.api.publish.maven.MavenPublication
@@ -162,9 +163,15 @@ fun isVersionBelow(requestedVersion: String?, minimumVersion: String): Boolean {
 // :p2p-network-provisioning-desktop). Module names/descriptions live beside
 // each publication; shared repository, license, developer, and SCM metadata
 // comes from buildSrc's P2pPomMetadata helper. Signing is wired centrally below.
+val canonicalReleaseVersion = ApplicationReleaseVersion.fromProperties(
+    providers.fileContents(layout.projectDirectory.file("gradle.properties")).asText.get(),
+    findProperty("VERSION_NAME"),
+).name
+
 allprojects {
     group = (findProperty("GROUP") as String?) ?: "io.github.apdelrahman1911"
-    version = (findProperty("VERSION_NAME") as String?) ?: "0.0.0-SNAPSHOT"
+    check(findProperty("VERSION_NAME") == canonicalReleaseVersion) { "VERSION_NAME override in $path" }
+    version = canonicalReleaseVersion
 
     // REL-SUPPLY-01 (BUILD-06): every resolvable project configuration uses
     // committed lock state. The maintenance task below refreshes all locks in

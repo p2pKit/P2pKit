@@ -1,8 +1,20 @@
+import dev.p2pkit.build.ApplicationReleaseVersion
+import dev.p2pkit.build.GenerateSampleReleaseIdentityTask
+import dev.p2pkit.build.GitCommitValueSource
 import java.time.Duration
 
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+}
+
+val applicationReleaseVersion = ApplicationReleaseVersion.parse(project.version.toString())
+val sampleReleaseIdentity = tasks.register<GenerateSampleReleaseIdentityTask>("generateSampleReleaseIdentity") {
+    canonicalVersion.set(applicationReleaseVersion.name)
+    sourceCommit.set(providers.of(GitCommitValueSource::class) {
+        parameters.rootDirectory.set(rootProject.layout.projectDirectory)
+    })
+    outputDirectory.set(layout.buildDirectory.dir("generated/sample-release-assets"))
 }
 
 android {
@@ -15,11 +27,13 @@ android {
         applicationId = "dev.p2pkit.sample.android"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.sample.targetSdk.get().toInt()
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = applicationReleaseVersion.androidCode
+        versionName = applicationReleaseVersion.name
         // One API37 runtime case, driven explicitly by run-android-art-smoke.py; no third-party test runner.
         testInstrumentationRunner = "dev.p2pkit.sample.android.runtime.LanPermissionRuntimeInstrumentation"
     }
+
+    sourceSets.named("main") { assets.srcDir(sampleReleaseIdentity) }
 
     buildFeatures {
         compose = true
@@ -45,6 +59,8 @@ android {
         abortOnError = true
     }
 }
+
+tasks.named("preBuild") { dependsOn(sampleReleaseIdentity) }
 
 dependencies {
     implementation(project(":p2p-core"))
