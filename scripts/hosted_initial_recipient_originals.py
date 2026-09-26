@@ -166,13 +166,36 @@ def _acquire_bootstrap(context, event_raw, git, invocation, token, retain, fence
     response, selector/comment ID, environment ID or policy-absence override in
     the production interface. An error is retained before propagation; no retry.
     """
+    return _acquire(context, event_raw, git, invocation, token, retain, fence, original_work_end, now, expected,
+                    public_site=None)
+
+
+def _acquire_provider_public(context, event_raw, git, invocation, retain, fence, original_work_end, now, expected,
+                             *, site):
+    """Modelable composition seam; not a native-owner/provider capability."""
+    origin.public_provider.request_count(site)
+    origin.public_provider.credential_free()
+    require(context.get("kind") == "worker" and type(expected) is stages.BootstrapMatch, "PUBLIC_PROVIDER_WORKER")
+    return _acquire(context, event_raw, git, invocation, None, retain, fence, original_work_end, now, expected,
+                    public_site=site)
+
+
+def _acquire(context, event_raw, git, invocation, token, retain, fence, original_work_end, now, expected, *, public_site):
     require(type(invocation) is str and re.fullmatch(r"[0-9a-f]{32}", invocation), "INVOCATION")
-    require(type(token) is str and re.fullmatch(r"[A-Za-z0-9_.-]{16,4096}", token), "READ_TOKEN")
+    if public_site is None:
+        require(type(token) is str and re.fullmatch(r"[A-Za-z0-9_.-]{16,4096}", token), "READ_TOKEN")
+        public_requests = None
+    else:
+        public_requests = origin.public_provider.request_count(public_site)
+        origin.public_provider.credential_free()
+        require(token is None and context.get("kind") == "worker" and type(expected) is stages.BootstrapMatch,
+                "PUBLIC_PROVIDER_WORKER")
     require(callable(retain) and callable(now), "OWNER_CALLBACKS")
     require(fence.clock.role == context["role"], "NATIVE_CLOCK_ROLE")
     start = fence.now(limit=original_work_end)
     end = min(original_work_end, start + origin.wire.ACQUIRE_SECONDS * origin.NS)
     originals, previous_date, first_date = {}, None, None
+    request_number = 0
 
     def keep(label, raw, *, failed=False):
         require(label not in originals and type(raw) is bytes, "ORIGINAL_REUSE")
@@ -198,9 +221,14 @@ def _acquire_bootstrap(context, event_raw, git, invocation, token, retain, fence
         originals[label] = raw
 
     def get(label, path):
-        nonlocal previous_date, first_date
+        nonlocal previous_date, first_date, request_number
         fence.now(limit=end)
-        raw, error = origin._request(path, token, invocation, fence, end)
+        request_number += 1
+        if public_site is None:
+            raw, error = origin._request(path, token, invocation, fence, end)
+        else:
+            require(request_number <= 8, "PUBLIC_PROVIDER_REQUEST_ROSTER")
+            raw, error = origin._request_initial_provider_public(path, invocation, fence, end)
         try:
             keep(label, raw, failed=error is not None)
         except BaseException as secondary:
@@ -209,8 +237,13 @@ def _acquire_bootstrap(context, event_raw, git, invocation, token, retain, fence
             raise error from secondary
         if error is not None:
             raise error
-        response, body, date = origin.response_bytes(raw, path, invocation, fence.clock)
+        if public_site is None:
+            response, body, date = origin.response_bytes(raw, path, invocation, fence.clock)
+        else:
+            response, body, date = origin.initial_provider_response_bytes(raw, path, invocation, fence.clock)
         _, headers = origin.wire.headers(base64.b64decode(response["headersBase64"], validate=True))
+        if public_site is not None:
+            origin.public_provider.remaining_requests(headers, public_requests - request_number)
         # These fixed endpoints must return complete single responses. Jobs and
         # branch-policy counts are also checked; no unbounded pagination follows.
         require("link" not in headers, "INCOMPLETE_RESPONSE")
@@ -268,6 +301,9 @@ def _acquire_bootstrap(context, event_raw, git, invocation, token, retain, fence
             expected=expected, **policy_inputs)
     keep("observation", identity.encoded(observed))
     keep("match", result.record)
+    if public_site is not None:
+        require(request_number == 8, "PUBLIC_PROVIDER_REQUEST_ROSTER")
+        origin.public_provider.credential_free()
     fence.now(limit=end)
     return result, tuple(originals.items())
 
@@ -290,3 +326,26 @@ def acquire_bootstrap(root, *, kind, query_runner, invocation, token, retain, fe
     git = identity.GitView(root, env, query_runner)  # Its closed environment never contains token.
     return _acquire_bootstrap(context, event, git, invocation, token, retain, fence, original_work_end,
                              lambda: int(time.time()), expected)
+
+
+def acquire_provider_public(root, *, site, query_runner, invocation, retain, fence, original_work_end,
+                            first_use_at, expected):
+    """Read actual worker context for a fixed public-provider authority site.
+
+    A future caller MUST own the original HTTP child and native Git domains,
+    authenticate the exact site/order/expected original match and verify actual
+    child/native/owner close. None of those obligations is supplied by these
+    bytes or this entry. There is no workflow/native/provider caller yet.
+    """
+    origin.public_provider.request_count(site)
+    origin.public_provider.credential_free()
+    require(type(expected) is stages.BootstrapMatch, "PUBLIC_PROVIDER_WORKER")
+    env = dict(os.environ)
+    root = Path(root)
+    require(root.is_absolute() and root == root.resolve(strict=True) and
+            env.get("GITHUB_WORKSPACE") == str(root), "WORKSPACE")
+    event = identity.read_regular(Path(env.get("GITHUB_EVENT_PATH", "")), identity.EVENT_LIMIT)
+    context = _context(env, event, "worker", first_use_at)
+    git = identity.GitView(root, env, query_runner)
+    return _acquire_provider_public(context, event, git, invocation, retain, fence, original_work_end,
+                                    lambda: int(time.time()), expected, site=site)

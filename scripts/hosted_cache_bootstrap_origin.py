@@ -1,8 +1,10 @@
-"""Private bootstrap service originals; no productive/job-budget authority.
+"""Bootstrap service originals; no productive/job-budget authority.
 
 Used only by the separate, dormant acquisition controller. The 120/75-second
 prelude is a conservative, UNMEASURED evidence-only source cap, not a service-job
 allocation or execution permission. No ordinary profile is substituted here.
+Private and initial-provider public transports have distinct response scopes;
+neither can serve as a fallback for the other.
 Imports do not acquire clocks, files, native owners, credentials or network.
 """
 from __future__ import annotations
@@ -17,6 +19,7 @@ import time
 import hosted_cache_bootstrap_identity as bootstrap
 import hosted_full_job_budget as wire
 import hosted_job_clock as clocks
+import hosted_initial_recipient_public_origin as public_provider
 
 
 NS = clocks.NS
@@ -164,11 +167,23 @@ def response_bytes(raw, path, invocation, clock):
     Exposing the exact checked body avoids rewriting an original response into
     an invented object. This is transport validation, not caller admission.
     """
+    return _response_bytes(raw, path, invocation, clock, RESPONSE_SCOPE)
+
+
+def initial_provider_response_bytes(raw, path, invocation, clock):
+    """Distinct public envelope; not accepted by the legacy private reader."""
+    public_provider.endpoint(path)
+    return _response_bytes(raw, path, invocation, clock, public_provider.RESPONSE_SCOPE)
+
+
+def _response_bytes(raw, path, invocation, clock, scope):
+    require(type(scope) is str and scope in (RESPONSE_SCOPE, public_provider.RESPONSE_SCOPE),
+            "BOOTSTRAP_SERVICE_TRANSPORT_SCOPE")
     require(type(invocation) is str and re.fullmatch(r"[0-9a-f]{32}", invocation), "BOOTSTRAP_ORIGIN_INVOCATION")
     value = parse(raw)
     require(set(value) == {"schema", "scope", "origin", "method", "path", "invocation", "clock",
             "startedNs", "finishedNs", "status", "headersBase64", "bodyBase64", "complete", "retirement", "error"} and
-            type(value["schema"]) is int and value["schema"] == 1 and value["scope"] == RESPONSE_SCOPE and
+            type(value["schema"]) is int and value["schema"] == 1 and value["scope"] == scope and
             value["origin"] == wire.ORIGIN and value["method"] == "GET" and value["path"] == path and
             value["invocation"] == invocation and value["clock"] == clock_value(clock) and
             value["complete"] is True and value["retirement"] == "KNOWN" and value["error"] is None,
@@ -188,7 +203,7 @@ def response_bytes(raw, path, invocation, clock):
         decoded.append(data)
     status, headers = wire.headers(decoded[0])
     require(type(value["status"]) is int and value["status"] == status == 200, "BOOTSTRAP_SERVICE_STATUS")
-    date = wire.freshness(headers)
+    date = wire.freshness(headers) if scope == RESPONSE_SCOPE else public_provider.freshness(headers)
     if "content-length" in headers:
         require(re.fullmatch(r"[0-9]{1,7}", headers["content-length"]) and
                 int(headers["content-length"]) == len(decoded[1]) and "transfer-encoding" not in headers,
@@ -254,6 +269,24 @@ def service_identity(admitted, originals, invocation, clock, runner_name):
 
 
 def _request(path, token, invocation, fence, end):
+    """Unchanged PRIVATE entry: always sends its original Bearer credential."""
+    return _request_transport(path, token, invocation, fence, end, RESPONSE_SCOPE)
+
+
+def _request_initial_provider_public(path, invocation, fence, end):
+    """Fixed public-provider sibling, never an authenticated fallback/retry."""
+    public_provider.endpoint(path)
+    public_provider.credential_free()
+    return _request_transport(path, None, invocation, fence, end, public_provider.RESPONSE_SCOPE)
+
+
+def _request_transport(path, token, invocation, fence, end, scope):
+    require(type(scope) is str and scope in (RESPONSE_SCOPE, public_provider.RESPONSE_SCOPE),
+            "BOOTSTRAP_SERVICE_TRANSPORT_SCOPE")
+    if scope == public_provider.RESPONSE_SCOPE:
+        public_provider.endpoint(path)
+        public_provider.credential_free()
+        require(token is None, "BOOTSTRAP_PUBLIC_SERVICE_NO_TOKEN")
     start = fence.now(limit=end)
     request_end = min(end, start + wire.REQUEST_SECONDS * NS)
     connection = response = reader = None
@@ -301,17 +334,25 @@ def _request(path, token, invocation, fence, end):
 
         connection.response_class = Response
         fence.now(limit=request_end)
-        connection.request("GET", path, headers={"Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "P2pKit-cache-bootstrap-originals",
-            "Authorization": "Bearer " + token, "Cache-Control": "no-cache, max-age=0",
-            "Pragma": "no-cache", "Accept-Encoding": "identity", "Connection": "close"})
+        headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "P2pKit-cache-bootstrap-originals"}
+        if scope == RESPONSE_SCOPE:
+            headers["Authorization"] = "Bearer " + token
+        else:
+            public_provider.credential_free()
+        headers.update({"Cache-Control": "no-cache, max-age=0", "Pragma": "no-cache",
+            "Accept-Encoding": "identity", "Connection": "close"})
+        connection.request("GET", path, headers=headers)
         fence.now(limit=request_end)
         response = connection.getresponse()
         header = bytes(reader.header)
         reader.in_headers = False
         status, fields = wire.headers(header)
         require(status == response.status == 200, "BOOTSTRAP_SERVICE_STATUS")
-        wire.freshness(fields)
+        if scope == RESPONSE_SCOPE:
+            wire.freshness(fields)
+        else:
+            public_provider.freshness(fields)
         require(not ("content-length" in fields and "transfer-encoding" in fields), "BOOTSTRAP_SERVICE_LENGTH")
         if "content-length" in fields:
             require(re.fullmatch(r"[0-9]{1,7}", fields["content-length"]) and
@@ -354,7 +395,7 @@ def _request(path, token, invocation, fence, end):
     except BaseException as caught:
         finish = None
         error = error or caught
-    result = {"schema": 1, "scope": RESPONSE_SCOPE, "origin": wire.ORIGIN, "method": "GET", "path": path,
+    result = {"schema": 1, "scope": scope, "origin": wire.ORIGIN, "method": "GET", "path": path,
               "invocation": invocation, "clock": clock_value(fence.clock), "startedNs": start, "finishedNs": finish,
               "status": status, "headersBase64": base64.b64encode(header[:wire.HEADER_LIMIT]).decode("ascii"),
               "bodyBase64": base64.b64encode(bytes(body[:wire.BODY_LIMIT])).decode("ascii"),
