@@ -59,6 +59,37 @@ def validate(maven, samples)
   need(step(publish, 'Verify immutable remote bytes and consumers').fetch('run').include?('scripts/check-maven-central-version.sh published') &&
        step(publish, 'Generate and verify publication-build SBOM').fetch('run').include?('scripts/check-sbom.sh'),
        'existing publication/remote/SBOM gate removed')
+  signed = 'Retain reviewed signed bundle before Central upload'
+  receipt = 'Retain original PUBLISHED deployment receipt'
+  need(names.index('Generate and verify publication-build SBOM') < names.index('Validate signed originals before retention') &&
+       names.index('Validate signed originals before retention') + 1 == names.index(signed) &&
+       names.index(signed) < names.index(last) &&
+       names.index('Upload once and wait for publication') + 1 == names.index('Bind original completed Portal publication') &&
+       names.index('Bind original completed Portal publication') + 1 == names.index(receipt) &&
+       names.index(receipt) + 1 == names.index('Verify immutable remote bytes and consumers'),
+       'original bundle/deployment retention must bracket upload and precede fallible remote verification')
+  need(step(publish, 'Validate signed originals before retention')['run'].include?('python3 -I -B -S scripts/central_bundle_evidence.py') &&
+       step(publish, 'Validate signed originals before retention')['run'].include?('--public-key "$BASE.public.asc"') &&
+       step(publish, 'Validate signed originals before retention')['run'].include?('--source-sha "$GITHUB_SHA"'),
+       'missing exact signed quartet verification before irreversible publication')
+  expected_originals = {
+    signed => ['maven-central-signed-bundle-', %w[zip manifest.sha256 summary.json public.asc].map { |suffix|
+      '${{ steps.original-bundle.outputs.base }}.' + suffix }],
+    receipt => ['maven-central-deployment-', %w[deployment-receipt.json portal-events.jsonl status.json
+                                              bundle.sha256 commit-sha.txt deployment-id.txt].map { |f| 'build/reports/maven-central/' + f }],
+  }
+  expected_originals.each do |name, (prefix, paths)|
+    s = step(publish, name)
+    need(!s.key?('if') && s.fetch('with')['name'] == prefix + '${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}' &&
+         s.fetch('with')['path'].lines.map(&:strip).reject(&:empty?) == paths && s.fetch('with')['retention-days'] == 14 &&
+         s.fetch('with')['overwrite'] == false && s.fetch('with')['if-no-files-found'] == 'error',
+         'original publication evidence must be required, immutable, exact-attempt and finite')
+  end
+  need(step(publish, 'Bind original completed Portal publication')['run'] ==
+       'python3 -I -B -S scripts/central_deployment_evidence.py', 'missing original Portal receipt binding')
+  need(step(publish, 'Validate signed originals before retention')['id'] == 'original-bundle' &&
+       step(publish, 'Validate signed originals before retention')['run'].include?('echo "base=$BASE" >> "$GITHUB_OUTPUT"'),
+       'retention paths must come only from the verified original quartet')
 
   need(event(samples).fetch('workflow_run') == {'workflows' => ['Publish Maven Central'], 'types' => ['completed']},
        'apps may be delivered automatically only after Maven completion')
@@ -108,6 +139,11 @@ controls = [
   ->(_, s) { s['jobs']['publish']['environment'] = nil },
   ->(_, s) { s['jobs']['prepare-review']['permissions'] = {'contents' => 'write'} },
   ->(_, s) { s['jobs']['publish']['steps'].last['continue-on-error'] = true },
+  ->(m, _) { step(m['jobs']['publish-release'], 'Retain reviewed signed bundle before Central upload')['with']['overwrite'] = true },
+  ->(m, _) { step(m['jobs']['publish-release'], 'Retain original PUBLISHED deployment receipt')['if'] = 'always()' },
+  ->(m, _) { step(m['jobs']['publish-release'], 'Retain original PUBLISHED deployment receipt')['with']['path'] = 'build/reports/maven-central/status.json' },
+  ->(m, _) { step(m['jobs']['publish-release'], 'Bind original completed Portal publication')['run'] = 'true' },
+  ->(m, _) { step(m['jobs']['publish-release'], 'Validate signed originals before retention')['run'] = 'true' },
 ]
 controls.each_with_index do |change, index|
   copies = Marshal.load(Marshal.dump([maven, samples]))

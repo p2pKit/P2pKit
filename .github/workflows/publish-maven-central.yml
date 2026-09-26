@@ -193,6 +193,30 @@ jobs:
             --dependency-verification strict --max-workers=2 --no-parallel --console=plain cyclonedxBom
           scripts/check-sbom.sh build/reports/cyclonedx/bom.json build/reports/cyclonedx/bom.xml
 
+      - name: Validate signed originals before retention
+        id: original-bundle
+        run: |
+          VERSION="$(sed -n 's/^VERSION_NAME=//p' gradle.properties | tr -d '[:space:]')"
+          BASE="build/central/p2pkit-$VERSION-central-bundle"
+          python3 -I -B -S scripts/central_bundle_evidence.py \
+            --bundle "$BASE.zip" --manifest "$BASE.manifest.sha256" \
+            --summary "$BASE.summary.json" --public-key "$BASE.public.asc" \
+            --source-sha "$GITHUB_SHA" --source-tree "$(git rev-parse 'HEAD^{tree}')" --version "$VERSION"
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+
+      - name: Retain reviewed signed bundle before Central upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: maven-central-signed-bundle-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.original-bundle.outputs.base }}.zip
+            ${{ steps.original-bundle.outputs.base }}.manifest.sha256
+            ${{ steps.original-bundle.outputs.base }}.summary.json
+            ${{ steps.original-bundle.outputs.base }}.public.asc
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false
+
       - name: Revalidate original readiness immediately before irreversible upload
         env:
           GH_TOKEN: ${{ github.token }}
@@ -209,6 +233,24 @@ jobs:
           scripts/publish-central-portal-bundle.sh \
             "build/central/p2pkit-$VERSION-central-bundle.zip" \
             build/reports/maven-central
+
+      - name: Bind original completed Portal publication
+        run: python3 -I -B -S scripts/central_deployment_evidence.py
+
+      - name: Retain original PUBLISHED deployment receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: maven-central-deployment-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/reports/maven-central/deployment-receipt.json
+            build/reports/maven-central/portal-events.jsonl
+            build/reports/maven-central/status.json
+            build/reports/maven-central/bundle.sha256
+            build/reports/maven-central/commit-sha.txt
+            build/reports/maven-central/deployment-id.txt
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false
 
       - name: Verify immutable remote bytes and consumers
         run: |
