@@ -41,6 +41,8 @@ python3 "$ROOT/scripts/tests/check-sbom-test.py"
 python3 "$ROOT/scripts/tests/run-osv-scan-test.py"
 python3 "$ROOT/scripts/tests/check-release-metadata-test.py"
 python3 -I -B "$ROOT/scripts/tests/application-release-version-test.py"
+python3 -I -B "$ROOT/scripts/tests/sample-artifact-identity-test.py"
+python3 -I -B "$ROOT/scripts/tests/package-sample-apps-test.py"
 while IFS= read -r -d '' workflow; do
     ruby -e 'require "yaml"; YAML.safe_load(File.read(ARGV.fetch(0)), aliases: true)' "$workflow"
     while IFS= read -r use; do

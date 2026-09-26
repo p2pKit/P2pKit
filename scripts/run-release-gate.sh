@@ -28,6 +28,8 @@ python3 scripts/tests/run-platform-tests-test.py
 python3 scripts/tests/check-release-metadata-test.py
 python3 -I -B scripts/tests/application-release-version-test.py
 bash scripts/tests/check-application-release-version.sh
+python3 -I -B scripts/tests/sample-artifact-identity-test.py
+python3 -I -B scripts/tests/package-sample-apps-test.py
 scripts/check-release-metadata.sh
 scripts/check-git-whitespace.sh
 python3 scripts/tests/ios-project-generation-test.py
