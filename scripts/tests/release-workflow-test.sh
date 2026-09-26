@@ -34,6 +34,8 @@ ruby "$ROOT/scripts/tests/check-dependency-submission-policy-test.rb"
 ruby "$ROOT/scripts/tests/check-jvm-cross-host-policy-test.rb"
 ruby "$ROOT/scripts/tests/check-ci-scope-policy-test.rb"
 ruby "$ROOT/scripts/tests/check-heavy-job-queue-policy-test.rb"
+ruby "$ROOT/scripts/tests/hosted-dependency-update-workflow-test.rb"
+python3 -I -B -S "$ROOT/scripts/tests/hosted-dependency-update-test.py" -v -f
 ruby "$ROOT/scripts/tests/check-sample-app-workflow-policy-test.rb"
 python3 -I -B -S "$ROOT/scripts/tests/test-transcript-custody-test.py"
 ruby "$ROOT/scripts/tests/check-hosted-test-workflow-policy-test.rb"

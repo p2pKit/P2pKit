@@ -1,0 +1,226 @@
+name: Prepare dependency update candidate
+
+# Source registration is nonexecuting. Only an exact-bound manual request may
+# acquire the existing heavy queue or run the maintained full generator.
+on:
+  push:
+    branches: ['work/release-foundation-*']
+    paths: [.github/workflows/dependency-update-candidate.yml]
+  workflow_dispatch:
+    inputs:
+      controller_sha:
+        description: Exact reviewed controller commit (must equal this workflow ref)
+        required: true
+        type: string
+      controller_tree:
+        description: Exact reviewed controller tree
+        required: true
+        type: string
+      candidate_sha:
+        description: Exact independently reviewed dependency-source candidate commit
+        required: true
+        type: string
+      candidate_tree:
+        description: Exact candidate tree, before supported generation
+        required: true
+        type: string
+      dependency_base_sha:
+        description: Exact ancestor with the candidate's unchanged original locks/checksums
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+  PYTHONUNBUFFERED: '1'
+  DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+
+jobs:
+  generate:
+    if: ${{ github.repository == 'p2pKit/P2pKit' && github.event_name == 'workflow_dispatch' && github.actor == 'Apdelrahman1911' && github.triggering_actor == 'Apdelrahman1911' }}
+    concurrency:
+      group: p2pkit-nonphysical-heavy
+      queue: max
+      cancel-in-progress: false
+    runs-on: macos-26
+    timeout-minutes: 210
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Allocate one new private maintenance operation
+        timeout-minutes: 1
+        shell: python3 {0}
+        env:
+          P2PKIT_MAINTENANCE_REQUEST: ${{ toJSON(inputs) }}
+        run: |
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import tempfile
+          import time
+
+          os.umask(0o077)
+          assert os.environ['RUNNER_ENVIRONMENT'] == 'github-hosted'
+          request = json.loads(os.environ['P2PKIT_MAINTENANCE_REQUEST'])
+          assert set(request) == {'controller_sha', 'controller_tree', 'candidate_sha', 'candidate_tree', 'dependency_base_sha'}
+          assert all(type(value) is str and re.fullmatch(r'[0-9a-f]{40}', value) for value in request.values())
+          assert request['controller_sha'] == os.environ['GITHUB_SHA'] == os.environ['GITHUB_WORKFLOW_SHA']
+          temporary = Path(os.environ['RUNNER_TEMP']).resolve(strict=True)
+          parent = Path(tempfile.mkdtemp(prefix='p2pkit-dependency-update-', dir=temporary))
+          record = {'schema': 1, 'source': os.environ['GITHUB_SHA'],
+                    'runId': os.environ['GITHUB_RUN_ID'], 'runAttempt': os.environ['GITHUB_RUN_ATTEMPT'],
+                    'startedMonotonicNs': time.monotonic_ns(), 'startedEpochNs': time.time_ns()}
+          with (parent / 'allocation.json').open('x', encoding='ascii') as stream:
+              json.dump(record, stream, sort_keys=True, separators=(',', ':'))
+              stream.write('\n')
+              stream.flush()
+              os.fsync(stream.fileno())
+          with Path(os.environ['GITHUB_ENV']).open('a', encoding='utf-8') as stream:
+              stream.write('P2PKIT_DEPENDENCY_OPERATION=' + str(parent) + '\n')
+
+      - name: Check out exact immutable controller without credentials
+        timeout-minutes: 3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: controller
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Check out exact reviewed mutable candidate without credentials
+        timeout-minutes: 3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          path: candidate
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Fetch full source ancestry with heads-only no-tag refspecs
+        timeout-minutes: 3
+        env:
+          GIT_TERMINAL_PROMPT: '0'
+        run: |
+          set -euo pipefail
+          # checkout's depth=0 includes an explicit tags refspec even when
+          # fetch-tags=false. Exact-SHA depth=1 followed by this fetch does not.
+          for source in controller candidate; do
+            test "$(git -C "$source" rev-parse --is-shallow-repository)" = true
+            test -z "$(git -C "$source" for-each-ref --format='%(refname)' refs/tags)"
+            git -C "$source" fetch --no-tags --no-recurse-submodules --unshallow origin '+refs/heads/*:refs/remotes/origin/*'
+            test "$(git -C "$source" rev-parse --is-shallow-repository)" = false
+            test -z "$(git -C "$source" for-each-ref --format='%(refname)' refs/tags)"
+          done
+
+      - name: Configure Java 21 daemon toolchain
+        timeout-minutes: 5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Retain installed daemon toolchain path
+        timeout-minutes: 1
+        run: printf 'P2PKIT_AUDIT_JDK21=%s\n' "$JAVA_HOME" >> "$GITHUB_ENV"
+
+      - name: Configure Java 17 launcher toolchain
+        timeout-minutes: 5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Run supported generator with private originals and public-only recipient
+        id: generate
+        timeout-minutes: 165
+        env:
+          P2PKIT_MAINTENANCE_REQUEST: ${{ toJSON(inputs) }}
+        run: python3 -I -B -S controller/scripts/run-hosted-dependency-update.py generate
+
+      - name: Admit exact objects after successful command and export return
+        timeout-minutes: 1
+        env:
+          P2PKIT_DEPENDENCY_GENERATOR_OUTCOME: ${{ steps.generate.outcome }}
+          P2PKIT_DEPENDENCY_SUCCESS_SHA256: ${{ steps.generate.outputs.successSha256 }}
+        run: python3 -I -B -S controller/scripts/run-hosted-dependency-update.py before-upload
+
+      - name: Retain generated public dependency candidate
+        id: public
+        timeout-minutes: 10
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dependency-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.P2PKIT_DEPENDENCY_OPERATION }}/outputs/public/generated-dependencies.patch
+            ${{ env.P2PKIT_DEPENDENCY_OPERATION }}/outputs/public/generated-dependencies.json
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Retain only encrypted original maintenance evidence
+        id: encrypted
+        timeout-minutes: 10
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dependency-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.P2PKIT_DEPENDENCY_OPERATION }}/outputs/encrypted/evidence.tar.gz.gpg
+            ${{ env.P2PKIT_DEPENDENCY_OPERATION }}/outputs/encrypted/manifest.json
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Verify unchanged original objects and both upload returns
+        timeout-minutes: 1
+        env:
+          P2PKIT_DEPENDENCY_GENERATOR_OUTCOME: ${{ steps.generate.outcome }}
+          P2PKIT_DEPENDENCY_SUCCESS_SHA256: ${{ steps.generate.outputs.successSha256 }}
+          P2PKIT_PUBLIC_OUTCOME: ${{ steps.public.outcome }}
+          P2PKIT_PUBLIC_ARTIFACT_ID: ${{ steps.public.outputs.artifact-id }}
+          P2PKIT_PUBLIC_ARTIFACT_DIGEST: ${{ steps.public.outputs.artifact-digest }}
+          P2PKIT_ENCRYPTED_OUTCOME: ${{ steps.encrypted.outcome }}
+          P2PKIT_ENCRYPTED_ARTIFACT_ID: ${{ steps.encrypted.outputs.artifact-id }}
+          P2PKIT_ENCRYPTED_ARTIFACT_DIGEST: ${{ steps.encrypted.outputs.artifact-digest }}
+        run: python3 -I -B -S controller/scripts/run-hosted-dependency-update.py after-upload
+
+      - name: Admit known-closed failed-product diagnostics only
+        id: failed_guard
+        if: ${{ failure() && !cancelled() && steps.generate.outcome == 'failure' && steps.generate.outputs.failedProductSha256 != '' && steps.generate.outputs.successSha256 == '' }}
+        timeout-minutes: 1
+        env:
+          P2PKIT_DEPENDENCY_GENERATOR_OUTCOME: ${{ steps.generate.outcome }}
+          P2PKIT_DEPENDENCY_SUCCESS_SHA256: ${{ steps.generate.outputs.successSha256 }}
+          P2PKIT_DEPENDENCY_FAILED_SHA256: ${{ steps.generate.outputs.failedProductSha256 }}
+        run: python3 -I -B -S controller/scripts/run-hosted-dependency-update.py before-failed-upload
+
+      - name: Retain only encrypted failed-product originals
+        id: failed_encrypted
+        if: ${{ failure() && !cancelled() && steps.generate.outcome == 'failure' && steps.generate.outputs.failedProductSha256 != '' && steps.generate.outputs.successSha256 == '' && steps.failed_guard.outcome == 'success' }}
+        timeout-minutes: 10
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dependency-failed-product-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.P2PKIT_DEPENDENCY_OPERATION }}/outputs/failed-encrypted/evidence.tar.gz.gpg
+            ${{ env.P2PKIT_DEPENDENCY_OPERATION }}/outputs/failed-encrypted/manifest.json
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Verify original failed-product ciphertext and upload return
+        if: ${{ failure() && !cancelled() && steps.generate.outcome == 'failure' && steps.generate.outputs.failedProductSha256 != '' && steps.generate.outputs.successSha256 == '' && steps.failed_guard.outcome == 'success' && steps.failed_encrypted.outcome == 'success' }}
+        timeout-minutes: 1
+        env:
+          P2PKIT_DEPENDENCY_GENERATOR_OUTCOME: ${{ steps.generate.outcome }}
+          P2PKIT_DEPENDENCY_SUCCESS_SHA256: ${{ steps.generate.outputs.successSha256 }}
+          P2PKIT_DEPENDENCY_FAILED_SHA256: ${{ steps.generate.outputs.failedProductSha256 }}
+          P2PKIT_FAILED_ENCRYPTED_OUTCOME: ${{ steps.failed_encrypted.outcome }}
+          P2PKIT_FAILED_ENCRYPTED_ARTIFACT_ID: ${{ steps.failed_encrypted.outputs.artifact-id }}
+          P2PKIT_FAILED_ENCRYPTED_ARTIFACT_DIGEST: ${{ steps.failed_encrypted.outputs.artifact-digest }}
+        run: python3 -I -B -S controller/scripts/run-hosted-dependency-update.py after-failed-upload

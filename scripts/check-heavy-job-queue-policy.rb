@@ -26,6 +26,7 @@ module HeavyJobQueuePolicy
         "desktop-cross-host.yml" => {"verify" => "${{ matrix.os }}"},
         "ios-x64-tests.yml" => {"ios-x64" => nil},
         "dependency-submission.yml" => {"submit" => nil},
+        "dependency-update-candidate.yml" => {"generate" => nil},
     }.freeze
     # Separate workflow groups prevent a workflow holding the lease its jobs
     # need. Retain ordinary supersession and CI's independent scheduled backstop.
@@ -49,6 +50,7 @@ module HeavyJobQueuePolicy
     }.freeze
     CONDITIONS = {
         ["ci.yml", "complete-gate"] => "${{ always() }}",
+        ["dependency-update-candidate.yml", "generate"] => "${{ github.repository == 'p2pKit/P2pKit' && github.event_name == 'workflow_dispatch' && github.actor == 'Apdelrahman1911' && github.triggering_actor == 'Apdelrahman1911' }}",
     }.freeze
 
     def self.require_policy(condition, message)
@@ -155,5 +157,5 @@ if $PROGRAM_NAME == __FILE__
     rescue HeavyJobQueuePolicy::Error, SystemCallError => error
         abort "FATAL: #{error.message}"
     end
-    puts "RESULT: PASS — five ordinary participating jobs share the bounded non-cancelling queue; no hosted scheduling claim"
+    puts "RESULT: PASS — five ordinary jobs and one manual maintenance job share the bounded non-cancelling queue; no hosted scheduling claim"
 end

@@ -540,6 +540,98 @@ fails quickly instead of spending the Complete Gate discovering missing
 artifacts. Candidate generation is deliberately not automatic: newly downloaded
 checksums are not trusted until the maintainer review succeeds.
 
+### Hosted candidate generation without changing the controller
+
+`Prepare dependency update candidate` (`dependency-update-candidate.yml`) is
+a separate, manual maintainer operation. It is **not ordinary FULL/Desktop,
+cache bootstrap, Release qualification or publication**. Its implementation
+must receive source review and hosted qualification before operational use;
+workflow registration alone does not establish that it can be dispatched from
+a branch. Do not repurpose the historical audit lock writer as a fallback.
+
+The workflow uses five exact lowercase commit/tree inputs: `controller_sha`,
+`controller_tree`, `candidate_sha`, `candidate_tree`, `dependency_base_sha`.
+The controller must equal the genuine workflow source on `main` (or the
+reviewed Release Foundation branch during initial delivery). Both checkouts
+must descend from the fetched main baseline. The base must be an ancestor of
+the candidate with byte-identical original lock/verification files; it may be
+the reviewed Foundation parent, not necessarily current main. Candidate source
+changes, including dependency floors, are reviewed **before** dispatch.
+
+The immutable controller owns the existing canonical executor, bounded Gradle
+home, wrapper stop and native process receipts. The full maintained
+`prepare-dependency-update.sh <dependency_base_sha>` runs in a separate clean
+candidate. Only content changes to its original tracked Gradle locks and
+`gradle/verification-metadata.xml` are admitted afterward; source injection,
+staging, additions/deletions, links and mode changes fail. This does not weaken
+the executor's immutable-source or strict ordinary Gradle admission rules.
+
+One manual macOS ARM64 job shares the existing non-cancelling heavy queue.
+It uses JDK 17/21, Xcode 26.5 and the maintained SDK platform IDs; only missing
+SDK platforms are acquired by an owned command. The full generator has a
+7,200-second product allowance and the original 120-second stop allowance,
+within a 210-minute job including setup, finalization and upload. These are
+maintenance bounds, **not** measurements or new bootstrap/native deadlines.
+There is no automatic whole-generator retry. The maintained provenance
+reviewer's bounded individual download retries/fallbacks remain unchanged.
+
+The actual owner-provided public recipient/policy pins are checked before
+acquisition and through upload, including their finite policy expiry and
+remaining-time headroom. This direct manual exporter does not grant initial
+C1/C2 authority or lift either ordinary activation HOLD. No custodian private
+key, signing/Portal secret, Actions-runtime token or GitHub API token enters
+the dependency process. An unexpected authenticated provenance requirement
+fails rather than forwarding a credential or skipping review.
+
+On successful command, stop, retirement and encrypted-export return, the
+workflow retains these **separate 14-day artifacts**, named by run/attempt:
+
+- `dependency-candidate-<run>-<attempt>`: the complete generated source patch
+  and safe JSON with exact controller/candidate/base/run bindings, hashes and
+  public signer/provenance fields extracted from the closed original log.
+- `dependency-evidence-<run>-<attempt>`: only `evidence.tar.gz.gpg` and its
+  manifest. Raw command/stop/ownership/input/provenance logs remain encrypted.
+  The remote reviewer's temporary artifact/key buffers are removed by its
+  existing cleanup; they are not represented as retained originals.
+
+Before adopting anything, independently inspect the **complete** generated
+diff and attribute every new signer to its actual publisher using trusted
+public publisher material. A signature matching a retrieved key, the safe
+JSON, or an agent's own source test is not that attribution approval. The
+owner retrieves/decrypts any needed private originals through the existing
+private procedure, never through an agent-visible private key. Use the exact
+artifact IDs/digests and recorded patch hash; do not select `latest` output.
+Only after that review should a normal dependency-update PR integrate the
+reviewed source/floor/lock/checksum set and run its required gates. This manual
+operation does not authorize a merge, close the advisory, or qualify any app.
+
+The two source checkouts use exact SHAs at depth 1, followed by an explicit
+heads-only `git fetch --no-tags --unshallow`. Pinned checkout's depth-0 path
+includes a tags refspec even with `fetch-tags: false`; it is not used here.
+Both checkouts must have complete ancestry and no fetched tag refs before the
+controller admits them. This does not alter or recreate any published tag.
+
+Known-closed failed products have a **separate diagnostic path**, never a
+candidate PASS. Only an actual canonical product exit 1–123 with matching
+original receipt, successful same-home stop, unchanged controller, no survivor,
+discovery/cancellation/error and known stream/handle/receipt closure is eligible.
+After caller captures close/fsync and the real same-process exporter returns,
+the failed Step emits a distinct return hash. Exact failure-only guards admit
+`dependency-failed-product-evidence-<run>-<attempt>` containing only ciphertext
+and manifest, with the same 14-day retention and original deadline/policy
+reserves. No public patch or success record is generated, and the generator's
+actual nonzero result and the failed overall job are preserved.
+
+Timeout/reserved/signal-style exits (including 124/125), cancellation, unknown
+ownership/close, source/policy/expiry failures, missing originals or failed
+export/upload remain failures; provisional files cannot authorize custody.
+Their private bytes may remain only on the ephemeral runner and are **not**
+claimed retained. Public logs contain only bounded purpose/reason/status data.
+A diagnosed repair/new invocation needs its own exact source/run identity,
+not an automatic retry or reuse of another attempt's receipts. The unchanged
+210-minute job includes mutually exclusive success/failure tails; failure
+diagnostics do not add another allowance or weaken successful generation.
+
 Toolchain updates must curate foreign-host artifacts as well as the updating machine's resolved graph.
 The pre-build Kotlin policy requires all four Kotlin/Native host archives (Linux x64, macOS arm64/x64,
 Windows x64) and all three AAPT2 classifiers (Linux, macOS `osx`, Windows), with independently pinned
