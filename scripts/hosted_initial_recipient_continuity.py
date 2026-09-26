@@ -1,4 +1,4 @@
-"""Fixed native boot observation and digest-only runner output, not admission.
+"""Fixed boot observation and closed nonsecret runner output, not admission.
 
 Nothing is observed or loaded natively at import. Boot equality is meaningful
 only with the reviewed same-job Steps caller and original execution evidence.
@@ -21,6 +21,9 @@ STEP_SCOPE = "INITIAL_RECIPIENT_STEP_PENDING_GUARDED_OUTPUT_AND_RETURN_V1"
 STEP_HASH_ENV = "P2PKIT_INITIAL_RECIPIENT_STEP_SHA256"
 STEP_FILE = "step-pending.json"
 STEP_LIMIT = 16384
+SEAL_DEADLINE_FIELDS = frozenset(("initialSealSha256", "initialSealEndNs", "initialSealClockRole",
+    "initialSealClockDomain", "initialSealClockTicksPerSecond", "initialSealBootSha256"))
+SEAL_DEADLINE_LIMIT = 512
 QUARANTINE = []
 
 
@@ -115,22 +118,67 @@ def boot_digest(role):
         raise ContinuityError("BOOT_NATIVE_OBSERVATION_FAILED") from None
 
 
+def _seal_decimal(value, maximum):
+    require(type(value) is str and re.fullmatch(r"[1-9][0-9]{0,19}", value), "SEAL_DEADLINE_DECIMAL")
+    number = int(value)
+    require(number <= maximum, "SEAL_DEADLINE_INTEGER")
+    return number
+
+
+def seal_deadline_data(values):
+    """Decode exactly six supplied strings as DATA, never a clock or admission.
+
+    Return hash, original absolute end, declared clock identity and boot digest.
+    Nothing is observed. Only the original seal fence may emit these fields;
+    a future BEFORE caller still needs successful-Step custody, new actual
+    FIRST observations/owned reads and fresh source/service authority.
+    """
+    require(type(values) is dict and len(values) == 6 and all(type(name) is str for name in values) and
+        set(values) == SEAL_DEADLINE_FIELDS and
+        all(type(value) is str and len(value) <= SEAL_DEADLINE_LIMIT for value in values.values()),
+        "SEAL_DEADLINE_FIELDS")
+    require(all(re.fullmatch(r"[0-9a-f]{64}", values[name]) for name in
+        ("initialSealSha256", "initialSealBootSha256")), "SEAL_DEADLINE_DIGEST")
+    end = _seal_decimal(values["initialSealEndNs"], clocks.UINT64)
+    frequency = _seal_decimal(values["initialSealClockTicksPerSecond"], clocks.INT64)
+    identity = clocks.ClockIdentity(values["initialSealClockRole"], values["initialSealClockDomain"], frequency)
+    try:
+        clocks.validate_identity(identity)  # Declared DATA only; no RAW/LOCAL/boot observation.
+    except clocks.ClockError:
+        raise ContinuityError("SEAL_DEADLINE_CLOCK") from None
+    raw = "".join(name + "=" + values[name] + "\n" for name in sorted(values)).encode("ascii")
+    require(len(raw) <= SEAL_DEADLINE_LIMIT, "SEAL_DEADLINE_SIZE")
+    return values["initialSealSha256"], end, identity, values["initialSealBootSha256"]
+
+
+def _output_bytes(values):
+    """Pure closed encoder: old hash sets or the single exact seal handoff."""
+    require(type(values) is dict and 0 < len(values) <= 6 and all(type(name) is str for name in values),
+        "STEP_OUTPUT_FIELDS")
+    if set(values) == SEAL_DEADLINE_FIELDS:
+        seal_deadline_data(values)
+    else:
+        require(set(values) in (
+            {"recipientSenderSha256", "recipientStepSha256"},
+            {"recipientSenderSha256", "recipientStepSha256", "recipientCryptoOriginalsSha256"}, {"initializationSha256"},
+            {"initializationSha256", "workerHandoffSha256"},
+            {"initialOriginalsSha256", "gateHandoffSha256"},
+            {"initialCryptoStepSha256", "initialExporterReturnSha256"},
+            {"initialCustodySha256", "initialExporterReturnSha256"}, {"initialSealSha256"}) and
+            all(type(value) is str and re.fullmatch(r"[0-9a-f]{64}", value) for value in values.values()),
+            "STEP_OUTPUT_FIELDS")
+    return "".join(name + "=" + values[name] + "\n" for name in sorted(values)).encode("ascii")
+
+
 def append_outputs(values, check):
     """Actual runner file command, not evidence storage or a self-signed result.
 
-    Only fixed lowercase hashes leave private custody. A failed/partial append
-    cannot authorize the next step: the fixed caller also requires SUCCESS.
+    Only fixed lowercase hashes and the opt-in six-field original seal deadline
+    leave private custody. A failed/partial append cannot authorize the next
+    step: the fixed caller also requires the actual successful predecessor.
     """
-    require(type(values) is dict and set(values) in (
-        {"recipientSenderSha256", "recipientStepSha256"},
-        {"recipientSenderSha256", "recipientStepSha256", "recipientCryptoOriginalsSha256"}, {"initializationSha256"},
-        {"initializationSha256", "workerHandoffSha256"},
-        {"initialOriginalsSha256", "gateHandoffSha256"},
-        {"initialCryptoStepSha256", "initialExporterReturnSha256"},
-        {"initialCustodySha256", "initialExporterReturnSha256"}, {"initialSealSha256"}) and
-        all(type(value) is str and re.fullmatch(r"[0-9a-f]{64}", value) for value in values.values()) and
-        callable(check) and not QUARANTINE, "STEP_OUTPUT_FIELDS")
-    raw = "".join(name + "=" + values[name] + "\n" for name in sorted(values)).encode("ascii")
+    raw = _output_bytes(values)
+    require(callable(check) and not QUARANTINE, "STEP_OUTPUT_FIELDS")
     check()
     target = Path(os.environ.get("GITHUB_OUTPUT", ""))
     parent = Path(os.environ.get("RUNNER_TEMP", ""))

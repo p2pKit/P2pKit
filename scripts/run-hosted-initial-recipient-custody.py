@@ -8288,19 +8288,46 @@ def _checked_tail_seal(result):
         raise attempt["failure"]
 
 
+def _tail_output_values(result, *, for_before):
+    """Same original live seal, optionally exposing its old absolute deadline.
+
+    This is not BEFORE entry, a new clock, an owner deserializer or a grant.
+    The returned output limit remains the seal's own narrower clock.work.
+    """
+    require(type(for_before) is bool, "TAIL_OUTPUT_MODE")
+    clock, limit, values = _checked_tail_seal(result)
+    if for_before:
+        frame = canonical(result.raw)["originalWindow"]
+        declared, _limits = _custody_authority_frame(frame)
+        require(declared == clock.clock, "TAIL_OUTPUT_ORIGINAL_CLOCK")
+        _same(frame, clock.frame, "TAIL_OUTPUT_ORIGINAL_WINDOW")
+        values = {"initialSealSha256": values["initialSealSha256"],
+            "initialSealEndNs": str(frame["sealEndNs"]),
+            "initialSealClockRole": declared.role, "initialSealClockDomain": declared.domain,
+            "initialSealClockTicksPerSecond": str(declared.ticks_per_second),
+            "initialSealBootSha256": frame["originalBootDigest"]}
+        C.seal_deadline_data(values)
+    return clock, limit, values
+
+
 class _TailOutputFence:
     """One known-closed seal, one append, exactly the two existing late checks."""
     __slots__ = ("_binding",)
 
-    def __init__(self, result):
+    def __init__(self, result, *, for_before=False):
         require(type(self) is _TailOutputFence and id(self) not in _TAIL_OUTPUTS, "TAIL_OUTPUT_NEW")
         returned = _TAIL_SEALS.get(id(result))
         require(type(result) is _TailSeal and type(returned) is tuple and returned[0] is result and
             not any(saved[1][0] is result for saved in _TAIL_OUTPUTS.values()), "TAIL_OUTPUT_ORIGINAL_OR_REUSE")
-        clock, limit, values = _checked_tail_seal(result)
-        value = {"schema": 1, "scope": "INITIAL_SEAL_DIGEST_PENDING_ORIGINAL_STEP_RETURN_V1", **values,
+        clock, limit, values = _tail_output_values(result, for_before=for_before)
+        mode = {"forBefore": for_before}
+        scope = ("INITIAL_SEAL_DEADLINE_PENDING_ORIGINAL_STEP_RETURN_V1" if for_before else
+            "INITIAL_SEAL_DIGEST_PENDING_ORIGINAL_STEP_RETURN_V1")
+        value = {"schema": 1, "scope": scope, **values,
             "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False}
-        self._binding = (result, returned, result.__dict__, clock, limit, values, value, N._history_graph(values, value))
+        # Append the mode pin; all eight legacy binding indices stay unchanged.
+        self._binding = (result, returned, result.__dict__, clock, limit, values, value,
+            N._history_graph(values, value, mode), mode)
         _TAIL_OUTPUTS[id(self)] = (self, self._binding, {"phase": "NEW", "checks": 0, "busy": False, "failure": None})
 
     def _original(self):
@@ -8328,11 +8355,11 @@ class _TailOutputFence:
     def _current(self, saved):
         require(self._original() is saved and self._binding is saved[1] and saved[2]["busy"] and saved[2]["failure"] is None,
             "TAIL_OUTPUT_CHANGED")
-        result, returned, dictionary, clock, limit, values, value, graph = saved[1]
+        result, returned, dictionary, clock, limit, values, value, graph, mode = saved[1]
         require(_TAIL_SEALS.get(id(result)) is returned and result.__dict__ is dictionary and not C.QUARANTINE and
             not native.QUARANTINE and not Q.QUARANTINE and not native.diagnostics._QUARANTINE, "TAIL_OUTPUT_RETURN_CHANGED")
         N._check_history(graph)
-        current = _checked_tail_seal(result)
+        current = _tail_output_values(result, for_before=mode["forBefore"])
         require(current[0] is clock and type(current[1]) is int and current[1] == limit and current[2] == values,
             "TAIL_OUTPUT_ORIGINAL_DIGEST")
         N._check_history(graph)
@@ -8389,13 +8416,14 @@ class _TailOutputFence:
             saved[2]["busy"] = False
 
 
-def seal(kind, cancelled):
+def _seal(kind, cancelled, *, for_before):
+    require(type(for_before) is bool, "TAIL_OUTPUT_MODE")
     attempt = _tail_begin("seal-entry")
     try:
         authority = _tail_pre_metadata(kind, cancelled)
         # This frame never held a token; the new authority owner is CLOSED.
         result = _retain_tail_seal(authority)
-        output = _TailOutputFence(result).append()
+        output = _TailOutputFence(result, for_before=for_before).append()
         require(_TAIL_ATTEMPTS.get("seal-entry") is attempt and attempt["state"] == "STARTED" and
             attempt["failure"] is None, "TAIL_SEAL_ENTRY_CHANGED")
         attempt["state"] = "RETURNED"
@@ -8407,10 +8435,19 @@ def seal(kind, cancelled):
         raise attempt["failure"]
 
 
+def seal(kind, cancelled):
+    return _seal(kind, cancelled, for_before=False)
+
+
+def seal_for_before(kind, cancelled):
+    """Opt-in original seal episode only; no BEFORE acquisition or workflow."""
+    return _seal(kind, cancelled, for_before=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     commands = parser.add_subparsers(dest="operation", required=True)
-    for name in ("collect-export", "collect-close", "seal"):
+    for name in ("collect-export", "collect-close", "seal", "seal-for-before"):
         entry = commands.add_parser(name, allow_abbrev=False)
         entry.add_argument("--kind", required=True, choices=("gate", "worker"))
     for name in ("_authority", "_crypto", "_post-export-authority", "_tail-authority"):
@@ -8421,8 +8458,9 @@ def main():
     try:
         require(sys.flags.isolated == 1 and sys.flags.no_site == 1 and sys.dont_write_bytecode,
             "ISOLATED_INTERPRETER_REQUIRED")
-        if args.operation in ("collect-export", "collect-close", "seal"):
-            operation = {"collect-export": collect_export, "collect-close": collect_close, "seal": seal}[args.operation]
+        if args.operation in ("collect-export", "collect-close", "seal", "seal-for-before"):
+            operation = {"collect-export": collect_export, "collect-close": collect_close,
+                "seal": seal, "seal-for-before": seal_for_before}[args.operation]
             native.guarded(lambda signals: operation(args.kind, lambda: native.cancellation(signals)))
             return 0
         digest(args.context_sha256)
