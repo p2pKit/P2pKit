@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Identity-scoped children for the opt-in audit executor; never a process-name sweep.
 
-Windows uses a kernel Job Object attached atomically before resume. POSIX discovers
-controlled marker-inheriting descendants and signals through pidfds (Linux) or real
-Mach audit tokens (macOS). POSIX markers are not containment of malicious children
-that erase their environment or delegate work to another service. Native API/fixture
-admission is required; unsupported ownership fails closed rather than using PID kill.
+Windows uses a kernel Job Object attached atomically before resume. Linux discovers
+controlled marker-inheriting descendants and signals through pidfds. macOS also
+binds each launch before exec and follows observed immutable original-parent IDs:
+SIP intentionally hides environment markers for restricted system executables.
+Signals use real Mach audit tokens, never a PID/group/name fallback. Unresolved
+ancestry fails closed. Neither POSIX backend contains malicious children or work
+delegated to unrelated services; native API/fixture admission remains required.
 """
 from __future__ import annotations
 
@@ -16,10 +18,12 @@ import os
 from pathlib import Path
 import platform
 import re
+import select
 import shutil
 import signal
 import struct
 import subprocess
+import sys
 import time
 from typing import Any
 
@@ -35,6 +39,10 @@ SIG_KILL = 9
 
 class OwnershipError(RuntimeError):
     """Ownership cannot be established or finalized safely."""
+
+
+class DiscoveryUncertain(OwnershipError):
+    """A live, unclassified lifetime must not be treated as unrelated or retired."""
 
 
 def host_role() -> str:
@@ -224,6 +232,7 @@ class PosixScope:
         for pid in self._pids():
             identity = self._identity(pid)
             if identity is not None:
+                self._remember_identity(identity)
                 self.baseline.add(self._key(identity))
 
     def _admit(self) -> None:
@@ -257,6 +266,15 @@ class PosixScope:
         raise NotImplementedError
 
     def _release(self, handle: Any) -> None:
+        pass
+
+    def _remember_identity(self, identity: dict[str, Any]) -> None:
+        pass
+
+    def _ownership_proof(self, identity: dict[str, Any], environment: dict[bytes, bytes]) -> dict[str, Any] | None:
+        return {"kind": "inherited-domain"} if self._ours(environment) else None
+
+    def _retain_proof(self, identity: dict[str, Any], proof: dict[str, Any]) -> None:
         pass
 
     def _ours(self, environment: dict[bytes, bytes]) -> bool:
@@ -293,10 +311,17 @@ class PosixScope:
         for leader in self.leaders:
             leader.poll()  # Reap our children; a zombie is not a running worker.
         # A missing census entry is not exit evidence for an unresolved lifetime.
+        census = []
         for pid in dict.fromkeys([*self._pids(), *self.pending_discoveries]):
             if pid == os.getpid():
                 continue
             identity = self._identity(pid)
+            if identity is not None:
+                self._remember_identity(identity)
+            census.append((pid, identity))
+        # Remember the entire observed census before interpreting parentage; OS
+        # enumeration order is neither ancestry nor proof of ownership.
+        for pid, identity in census:
             pending = self.pending_discoveries.get(pid)
             if pending is not None and (identity is None or not identity["live"] or
                                         self._key(identity) != self._key(pending["identity"])):
@@ -318,7 +343,12 @@ class PosixScope:
             except ProcessLookupError:
                 self._discovery_resolved(pid, "lifetime-ended")
                 continue
-            if not self._ours(environment):
+            try:
+                proof = self._ownership_proof(identity, environment)
+            except DiscoveryUncertain as error:
+                self._discovery_failed(identity, error)
+                continue
+            if proof is None:
                 self._discovery_resolved(pid, "unmarked", identity)
                 continue
             try:
@@ -331,6 +361,7 @@ class PosixScope:
                 continue
             self.known[key] = identity
             self.handles[key] = handle
+            self._retain_proof(identity, proof)
             self._discovery_resolved(pid, "owned", identity)
         live = []
         for key, previous in list(self.known.items()):
@@ -518,6 +549,8 @@ class DarwinScope(PosixScope):
 
     def _admit(self) -> None:
         self.observation_reconciliations: list[dict[str, Any]] = []
+        self.identity_history: dict[int, dict[str, Any]] = {}
+        self.ownership_proofs: dict[tuple[int, ...], dict[str, Any]] = {}
         if (ctypes.sizeof(DarwinBsdInfo), ctypes.sizeof(DarwinUniqueInfo), ctypes.sizeof(DarwinIdentity),
                 ctypes.sizeof(AuditToken)) != (136, 56, 192, 32):
             raise OwnershipError("Unsupported Darwin process ABI layout")
@@ -555,6 +588,114 @@ class DarwinScope(PosixScope):
         # Token acquisition admission is not proof that signaling controls pass;
         # the native fixture must exercise a real child and stale token.
         self._acquire(identity)
+
+    def _remember_identity(self, identity: dict[str, Any]) -> None:
+        unique = identity["uniqueId"]
+        if unique <= 0 or identity["parentUniqueId"] == unique:
+            raise OwnershipError("Invalid Darwin original-parent identity")
+        previous = self.identity_history.get(unique)
+        if previous is not None and self._key(previous) != self._key(identity):
+            raise OwnershipError("Darwin unique ID changed its bound lifetime")
+        if previous is None and len(self.identity_history) >= MAX_PROCESSES:
+            raise OwnershipError("Darwin lineage history exceeds its bound")
+        self.identity_history[unique] = dict(identity)
+
+    def _retain_proof(self, identity: dict[str, Any], proof: dict[str, Any]) -> None:
+        # Link to startedIdentities without duplicating every full observation.
+        self.ownership_proofs.setdefault(self._key(identity), {"identity": list(self._key(identity)), **proof})
+
+    def _ownership_proof(self, identity: dict[str, Any], environment: dict[bytes, bytes]) -> dict[str, Any] | None:
+        proof = super()._ownership_proof(identity, environment)
+        if proof is not None:
+            return proof
+        # XNU p_puniqueid is set at fork/spawn and survives reparenting. It is NOT
+        # the mutable numeric PPID, a process-group match, or an argv assertion.
+        # A disappeared, never-observed intermediary cannot be reconstructed.
+        current, ancestors, seen = identity, [], {identity["uniqueId"]}
+        for _ in range(256):
+            parent = self.identity_history.get(current["parentUniqueId"])
+            if parent is None:
+                raise DiscoveryUncertain("Darwin original-parent lifetime was not observed")
+            if parent["uniqueId"] in seen:
+                raise OwnershipError("Cyclic Darwin original-parent evidence")
+            seen.add(parent["uniqueId"])
+            ancestors.append(list(self._key(parent)))
+            if self._key(parent) in self.known:
+                return {"kind": "kernel-original-parent", "ancestors": ancestors}
+            if self._key(parent) in self.baseline:
+                return None  # Positive foreign lineage, not missing markers alone.
+            current = parent
+        raise OwnershipError("Darwin original-parent depth exceeds its bound")
+
+    def spawn(self, argv: list[str], cwd: str, env: dict[str, str]) -> PosixProcess:
+        # Validate the inheritance contract before creating any process. Direct
+        # ownership does not authorize fabricated/missing ancestor domains.
+        if not self._ours({os.fsencode(key): os.fsencode(value) for key, value in env.items()}):
+            raise OwnershipError("Darwin launch lacks its bound inherited ownership domain")
+        actual = resolve_executable(argv, cwd, env)
+        launch = {"api": "subprocess.Popen", "requestedArgv": list(argv), "resolvedArgv": actual,
+                  "executable": actual[0], "cwd": cwd, "shell": False, "created": False,
+                  "gateReleased": False}
+        self.launches.append(launch)
+        owner = self._identity(os.getpid(), required=True)
+        if owner is None or not owner["live"]:
+            raise OwnershipError("Cannot bind the Darwin spawning controller")
+        self._remember_identity(owner)
+        ready_read = ready_write = release_read = release_write = -1
+        process = None
+        try:
+            ready_read, ready_write = os.pipe()
+            release_read, release_write = os.pipe()
+            bootstrap = [sys.executable, "-I", "-S", str(Path(__file__).with_name("audit_exec_gate.py")),
+                         str(ready_write), str(release_read), *actual]
+            launch["bootstrapArgv"] = bootstrap
+            process = PosixProcess(subprocess.Popen(bootstrap, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, close_fds=True, bufsize=0,
+                pass_fds=(ready_write, release_read)))
+            launch.update({"created": True, "pid": process.pid})
+            self.leaders.append(process)
+            os.close(ready_write)
+            ready_write = -1
+            os.close(release_read)
+            release_read = -1
+            if not select.select([ready_read], [], [], 10)[0] or os.read(ready_read, 1) != b"R":
+                raise OwnershipError("Darwin exec gate did not establish readiness")
+            # The trusted gate cannot exec/fork the product until the bound
+            # lifetime and a real token have been acquired. No fast-exit race.
+            identity = self._identity(process.pid, required=True)
+            if identity is None or not identity["live"] or identity["parentPid"] != os.getpid() or \
+                    identity["parentUniqueId"] != owner["uniqueId"] or identity["uid"] != os.getuid() or \
+                    identity["realUid"] != os.getuid() or self._key(identity) in self.baseline:
+                raise OwnershipError("Darwin exec gate is not the directly spawned lifetime")
+            self._remember_identity(identity)
+            handle = self._acquire(identity)
+            self.known[self._key(identity)] = identity
+            self.handles[self._key(identity)] = handle
+            self._retain_proof(identity, {"kind": "direct-spawn-gate", "controller": list(self._key(owner))})
+            launch["boundIdentity"] = dict(identity)
+            if os.write(release_write, b"G") != 1:
+                raise OwnershipError("Darwin exec gate was not released")
+            launch["gateReleased"] = True
+            # Return the streams to their owner before further fallible census
+            # work. The leader is already bound; normal waiting discovers children.
+            return process
+        except BaseException:
+            if process is not None and not launch["gateReleased"]:
+                # Closing the private gate produces EOF, not product execution.
+                # No consumer owns these streams on a failed spawn.
+                process.stdout.close()
+                process.stderr.close()
+            raise
+        finally:
+            for descriptor in (ready_read, ready_write, release_read, release_write):
+                if descriptor >= 0:
+                    os.close(descriptor)
+
+    def drain(self, grace: float = 5.0, kill_wait: float = 5.0) -> list[dict[str, Any]]:
+        live = super().drain(grace, kill_wait)
+        if self.pending_discoveries:
+            raise OwnershipError("Unclassified Darwin lifetimes remain; cleanup is not proven")
+        return live
 
     def _pids(self) -> list[int]:
         count = self.proc.proc_listallpids(None, 0)
@@ -614,9 +755,9 @@ class DarwinScope(PosixScope):
 
     def _discovery_failed(self, identity: dict[str, Any], error: Exception) -> str:
         message = super()._discovery_failed(identity, error)
-        # Defer only a reconciler's exhausted observation, never structural errors
-        # or leaked Mach rights. No extra wait or relaxed finalizer is introduced.
-        if isinstance(error, DarwinObservationExhausted):
+        # Defer an exhausted observation or missing original-parent lifetime,
+        # never structural errors or leaked Mach rights. No relaxed finalizer.
+        if isinstance(error, (DarwinObservationExhausted, DiscoveryUncertain)):
             record = self.pending_discoveries.get(identity["pid"])
             if record is None:
                 if len(self.discovery_reconciliations) >= 1024:
@@ -725,7 +866,10 @@ class DarwinScope(PosixScope):
                 raise OwnershipError("Cannot release the owned Darwin task-name port")
 
     def description(self) -> dict[str, Any]:
-        return {**super().description(), "observationReconciliations": self.observation_reconciliations}
+        return {**super().description(), "scope": "controlled-domains-and-observed-original-parent-lifetimes",
+                "ownershipProofs": list(self.ownership_proofs.values()),
+                "unclassifiedLifetimes": list(self.pending_discoveries.values()),
+                "observationReconciliations": self.observation_reconciliations}
 
     def _send(self, identity: dict[str, Any], handle: AuditToken, signum: int) -> None:
         # A real token is reacquired after exec-version changes; never os.kill(pid).
