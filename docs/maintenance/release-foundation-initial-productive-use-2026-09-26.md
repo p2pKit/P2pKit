@@ -293,10 +293,48 @@ No passed test was repeated to replace the missing timing. Independent result
 review accepted only these three source controls with that explicit gap:
 `2a5f861b20e862798730d4df1b9748f78b0aeb2b89e8685c2e59370afbc46641`.
 
-The original failed aggregate remains failed; corrected combined source CI is
-still pending. Neither these three controls nor the012dc723 pass qualifies the
-unreached productive suites or native execution. This adds no productive
-bootstrap workflow or caller of the dormant cache export/save path.
+The original failed aggregate remains failed. Neither these three controls nor
+the012dc723 pass qualifies the unreached productive suites or native execution.
+The subsequent source-CI result and its distinct control correction follow.
+
+### Native phase-wrapper source-CI compatibility
+
+Source run [36298630993/1](https://github.com/p2pKit/P2pKit/actions/runs/36298630993)
+at `5475551ac08b32c86360e77d092cfa76a85a6974` failed, exit1. The complete
+seal-deadline21 suite passed. BEFORE then reported41 methods:40 passed and one
+failed;19 methods and every later DATA/core/Node invocation were unreached.
+Across the original log,27 earlier unittest aggregates were OK (754 reported
+tests); the failed41-method aggregate is not included in that passing total.
+
+The old BEFORE control still inspected `phase` for direct native operations.
+The reviewed core moved those operations into `_phase_owned`. Two other
+unreached controls had the same stale target. All three now inspect the actual
+engine only after requiring the complete exact legacy wrapper, original
+arguments/defaults, return and `finally` token clearing. Every old phase-cap,
+entry/leave, original cleanup ceiling and credential assertion remains.
+Two new AST-only methods reject14+8 mutations using the same assertions;
+these are not22 independent tests or native executions. Production bytes did
+not change. Independent source-review SHA-256:
+`dce9093b05c29f2d3a7592520cbbeba0affb60484972ec1e05e56959df40828d`.
+
+The first focused invocation completed two methods, then stopped exit137
+during the BEFORE mutation method at the external CPU30 probe ceiling:
+CPU30.042s/wall31.013s. That aggregate remains **failed/incomplete**; the
+productive invocation did not start. A reviewed unchanged-source continuation
+selected only the unfinished BEFORE method and the two unreached productive
+methods. Both invocations passed, exit0:1 method at CPU39.054s/wall39.895s,
+then2 methods at CPU23.428s/wall23.463s. Only these local AST probes used the
+larger external CPU90/wall120 ceilings; no production or workflow limit changed.
+
+There are **five unique completed controls across the preserved packets**, not
+a passing original aggregate or full BEFORE/productive suite. The accepted
+1,066-file reader was not rerun. Continuation result-manifest SHA-256:
+`110ba6cf57c7b1f252b7529a07003eb60fcac6308baa886a47d046852fc8fa5f`.
+Independent result-review SHA-256:
+`0244d37e4e93a31b86612d735b06db4134b67cb454c24dc4a9d3c9048b54777e`.
+Corrected combined source CI remains pending. Neither failed hosted aggregate
+qualifies the new custody suites or genuine native/provider execution. This
+increment adds no productive workflow or activation authority.
 
 ## Still required before productive execution and Release
 

@@ -695,6 +695,21 @@ class ProviderChainDataControls(unittest.TestCase):
 
 class IntegrationSourceAssertions(unittest.TestCase):
     """Source-shape assertions only; NOT original child/native/control execution."""
+    def native_phase(self):
+        expected = ast.parse(
+            "def phase(owner, private, context_raw, token, fence, *, initial_git=None):\n"
+            "    try:\n"
+            "        return _phase_owned(owner, private, context_raw, token, fence, initial_git=initial_git)\n"
+            "    finally:\n"
+            "        token = None\n").body[0]
+        self.assertEqual(ast.dump(function("run-hosted-cache-bootstrap.py", "phase")), ast.dump(expected))
+        engine = function("run-hosted-cache-bootstrap.py", "_phase_owned")
+        parameters = ast.parse(
+            "def _phase_owned(owner, private, context_raw, token, fence, *, initial_git=None, final_seed=None): pass"
+        ).body[0].args
+        self.assertEqual(ast.dump(engine.args), ast.dump(parameters))
+        return engine
+
     def test_single_c_n_b_graph_and_fixed_loader_boundaries(self):
         tree = TREES["hosted_initial_recipient_productive.py"]
         self.assertEqual(len(calls(tree, "importlib.util.spec_from_file_location")), 1)
@@ -766,7 +781,7 @@ class IntegrationSourceAssertions(unittest.TestCase):
                 self.assertEqual(ast.literal_eval(selected[0].args[0]), literal)
 
     def test_public_child_has_fixed_no_token_branch_and_private_steps_remain_private(self):
-        phase = function("run-hosted-cache-bootstrap.py", "phase")
+        phase = self.native_phase()
         branches = [node for node in ast.walk(phase) if isinstance(node, ast.If) and
             ast.unparse(node.test) == "context.get('scope') == INITIAL_PROVIDER_PUBLIC_CONTEXT_SCOPE"]
         self.assertEqual(len(branches), 2)  # Setup/inheritance and actual launch credential boundary.
@@ -780,6 +795,43 @@ class IntegrationSourceAssertions(unittest.TestCase):
         self.assertEqual({ast.literal_eval(key) for key in mappings[0].keys},
                          {"prepare-save", "after-save", "prepare-probe", "after-probe"})
         self.assertIn("finally:\n        token = None", ast.unparse(step))
+
+    def test_public_child_refactor_rejects_route_and_credential_mutations(self):
+        self.test_public_child_has_fixed_no_token_branch_and_private_steps_remain_private()
+        cases = ("wrapper-token", "wrapper-seed", "missing-finally", "engine-default",
+            "missing-public-setup", "missing-public-launch", "public-token", "missing-private-inheritance")
+        for case in cases:
+            tree = copy.deepcopy(TREES["run-hosted-cache-bootstrap.py"])
+            with patch.dict(TREES, {"run-hosted-cache-bootstrap.py": tree}):
+                wrapper = function("run-hosted-cache-bootstrap.py", "phase")
+                engine = function("run-hosted-cache-bootstrap.py", "_phase_owned")
+            if case == "wrapper-token":
+                wrapper.body[0].finalbody[0].value = ast.Name(id="token", ctx=ast.Load())
+            elif case == "wrapper-seed":
+                calls(wrapper, "_phase_owned")[0].keywords.append(
+                    ast.keyword(arg="final_seed", value=ast.Constant(value=None)))
+            elif case == "missing-finally":
+                wrapper.body = wrapper.body[0].body
+            elif case == "engine-default":
+                engine.args.kw_defaults[-1] = ast.Constant(value=True)
+            else:
+                branches = [node for node in ast.walk(engine) if isinstance(node, ast.If) and
+                    ast.unparse(node.test) == "context.get('scope') == INITIAL_PROVIDER_PUBLIC_CONTEXT_SCOPE"]
+                launch = next(node for node in branches if "BOOTSTRAP_PUBLIC_USE_LAUNCH_CREDENTIAL" in ast.unparse(node))
+                if case == "missing-public-setup":
+                    next(node for node in branches if node is not launch).test = ast.Constant(value=False)
+                elif case == "missing-public-launch":
+                    launch.test = ast.Constant(value=False)
+                elif case == "public-token":
+                    comparison = next(node for node in ast.walk(launch) if
+                        isinstance(node, ast.Compare) and ast.unparse(node) == "token is None")
+                    comparison.ops = [ast.IsNot()]
+                else:
+                    launch.orelse = [node for node in launch.orelse if not isinstance(node, ast.Assign)]
+            changed = ast.parse(ast.unparse(ast.fix_missing_locations(tree)))
+            with self.subTest(case=case), patch.dict(TREES, {"run-hosted-cache-bootstrap.py": changed}), \
+                    self.assertRaises(AssertionError):
+                self.test_public_child_has_fixed_no_token_branch_and_private_steps_remain_private()
 
     def test_initial_action_fixed_node24_route_has_no_token_or_workflow_activation_input(self):
         self.assertIn("using: node24", YAML)

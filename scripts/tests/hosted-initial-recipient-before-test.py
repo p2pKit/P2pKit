@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Authored B1-successor controls, not native BEFORE or hosted qualification.
 
-Thirty-five DATA controls, eleven real in-memory latch controls and fourteen
+Thirty-five DATA controls, eleven real in-memory latch controls and fifteen
 AST assertions. No old suites/fixtures, operative custody/native imports, fake
 owners, HTTP responses, native clocks, outputs, keys or provider processes run.
 Latch controls use the small production state machine, not an operative B owner.
@@ -519,10 +519,26 @@ class BeforeWriteCloseDataControls(unittest.TestCase):
 
 
 class BeforeSourceShapeControls(unittest.TestCase):
-    """Fourteen AST assertions, NOT native/fence/lifecycle runtime tests."""
+    """Fifteen AST assertions, NOT native/fence/lifecycle runtime tests."""
 
     def source(self, name, owner=None, tree=CUSTODY):
         return ast.unparse(function(tree, name, owner))
+
+    def native_phase(self):
+        # Bind the legacy route before inspecting its shared native engine.
+        expected = ast.parse(
+            "def phase(owner, private, context_raw, token, fence, *, initial_git=None):\n"
+            "    try:\n"
+            "        return _phase_owned(owner, private, context_raw, token, fence, initial_git=initial_git)\n"
+            "    finally:\n"
+            "        token = None\n").body[0]
+        self.assertEqual(ast.dump(function(NATIVE, "phase")), ast.dump(expected))
+        engine = function(NATIVE, "_phase_owned")
+        parameters = ast.parse(
+            "def _phase_owned(owner, private, context_raw, token, fence, *, initial_git=None, final_seed=None): pass"
+        ).body[0].args
+        self.assertEqual(ast.dump(engine.args), ast.dump(parameters))
+        return engine
 
     def test_first_clock_is_capped_before_first_owned_read(self):
         parent = function(CUSTODY, "_before_pre_metadata")
@@ -534,7 +550,7 @@ class BeforeSourceShapeControls(unittest.TestCase):
         self.assertIn("inherited=caps", self.source("_before_authority_child"))
 
     def test_native_commands_bind_original_phase_tuple_twice(self):
-        phase = function(NATIVE, "phase")
+        phase = self.native_phase()
         bounded = [call for call in calls(phase, "phase_command") if any(key.arg == "before_caps" for key in call.keywords)]
         self.assertEqual(len(bounded), 2)
         for call in bounded:
@@ -605,7 +621,7 @@ class BeforeSourceShapeControls(unittest.TestCase):
             ast.Module(body=value.finalbody, type_ignores=[])) and calls(value, "_before_begin") for value in acquire.body))
 
     def test_all_native_phase_leave_and_expired_cleanup_seams(self):
-        node = function(NATIVE, "phase")
+        node = self.native_phase()
         self.assertEqual(len(calls(node, "owner.enter_before_phase")), 1)
         self.assertEqual(len(calls(node, "owner.leave_before_phase")), 2)
         source = ast.unparse(node)
@@ -613,6 +629,55 @@ class BeforeSourceShapeControls(unittest.TestCase):
         self.assertIn("drain_end = min(capture_end, owner.local_end)", source)
         self.assertIn("BOOTSTRAP_CUSTODY_NO_ORIGINAL_CLEANUP_CEILING", source)
         self.assertIn("native.INITIAL_BEFORE_AUTHORITY_CONTEXT_SCOPE", self.source("_initial_service_phase", tree=PRIMARY))
+
+    def test_native_phase_refactor_rejects_route_cap_and_cleanup_mutations(self):
+        def check():
+            self.test_all_native_phase_leave_and_expired_cleanup_seams()
+            self.test_native_commands_bind_original_phase_tuple_twice()
+
+        check()  # The same assertions must first accept the real source.
+        cases = ("wrong-argument", "missing-argument", "extra-argument", "final-seed",
+            "wrong-target", "missing-return", "missing-finally", "uncleared-token", "engine-default",
+            "missing-enter", "missing-first-leave", "missing-second-leave", "wrong-before-caps", "renewed-cleanup-cap")
+        for case in cases:
+            tree = copy.deepcopy(NATIVE)
+            wrapper, engine = (function(tree, name) for name in ("phase", "_phase_owned"))
+            delegated = calls(wrapper, "_phase_owned")[0]
+            if case == "wrong-argument":
+                delegated.args[3] = ast.Name(id="context_raw", ctx=ast.Load())
+            elif case == "missing-argument":
+                delegated.args.pop()
+            elif case == "extra-argument":
+                delegated.args.append(ast.Constant(value=None))
+            elif case == "final-seed":
+                delegated.keywords.append(ast.keyword(arg="final_seed", value=ast.Constant(value=None)))
+            elif case == "wrong-target":
+                delegated.func.id = "other_phase"
+            elif case == "missing-return":
+                wrapper.body[0].body[0] = ast.Expr(value=delegated)
+            elif case == "missing-finally":
+                wrapper.body = wrapper.body[0].body
+            elif case == "uncleared-token":
+                wrapper.body[0].finalbody[0].value = ast.Name(id="token", ctx=ast.Load())
+            elif case == "engine-default":
+                engine.args.kw_defaults[-1] = ast.Constant(value=True)
+            elif case == "missing-enter":
+                calls(engine, "owner.enter_before_phase")[0].func.attr = "unreviewed_enter"
+            elif case in ("missing-first-leave", "missing-second-leave"):
+                index = 0 if case == "missing-first-leave" else 1
+                calls(engine, "owner.leave_before_phase")[index].func.attr = "unreviewed_leave"
+            elif case == "wrong-before-caps":
+                command = next(call for call in calls(engine, "phase_command") if
+                    any(key.arg == "before_caps" for key in call.keywords))
+                next(key.value for key in command.keywords if key.arg == "before_caps").slice.upper = ast.Constant(value=2)
+            else:
+                capped = next(call for call in calls(engine, "min") if
+                    ast.unparse(call) == "min(capture_end, owner.local_end)")
+                capped.args[0] = ast.Constant(value=999.0)
+            # Reparse so changed call locations represent the mutated order.
+            changed = ast.parse(ast.unparse(ast.fix_missing_locations(tree)))
+            with self.subTest(case=case), patch.dict(globals(), {"NATIVE": changed}), self.assertRaises(AssertionError):
+                check()
 
     def test_legacy_caps_and_no_parent_before_output_route(self):
         old = self.source("__init__", "_TailClock")
