@@ -223,7 +223,7 @@ class CodecDataControls(unittest.TestCase):
 
 
 class SourceBindingControls(unittest.TestCase):
-    """Seven AST assertions only; never construct a stand-in native seal."""
+    """Nine AST assertions only; never construct a stand-in native seal."""
 
     def has(self, node, expression):
         expected = shape(ast.parse(expression, mode="eval").body)
@@ -315,7 +315,19 @@ class SourceBindingControls(unittest.TestCase):
         self.assertEqual(flags, ["--kind"])
 
     def test_file_writer_still_one_write_fsync_readback_close(self):
-        writer = function(CONTINUITY, "append_outputs")
+        wrapper = function(CONTINUITY, "append_outputs")
+        expected = ast.parse("def append_outputs(values, check):\n"
+            "    return _append_output_bytes(_output_bytes(values), check)\n").body[0]
+        self.assertEqual(shape(wrapper.args), shape(expected.args))
+        self.assertEqual(wrapper.decorator_list, [])
+        self.assertIsNone(wrapper.returns)
+        body = wrapper.body
+        if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) and \
+                type(body[0].value.value) is str:
+            body = body[1:]
+        self.assertEqual([shape(item) for item in body], [shape(item) for item in expected.body])
+        self.assertEqual(len(calls(wrapper, "_output_bytes")), 1)
+        writer = function(CONTINUITY, "_append_output_bytes")
         order = []
         for name in ("os.open", "os.write", "os.fsync", "os.lseek", "os.read", "os.close"):
             found = calls(writer, name)
@@ -326,7 +338,53 @@ class SourceBindingControls(unittest.TestCase):
         self.has(writer, 'os.write(descriptor, raw) == len(raw)')
         self.has(writer, 'os.read(descriptor, len(raw) + 1) == raw')
         self.assertGreater(calls(writer, "check")[-1].lineno, calls(writer, "os.close")[0].lineno)
-        self.assertEqual(len(calls(writer, "_output_bytes")), 1)
+
+    def test_factored_writer_rejects_changed_legacy_wrapper(self):
+        self.test_file_writer_still_one_write_fsync_readback_close()
+        bodies = (
+            "return _append_output_bytes(values, check)",
+            "return _append_output_bytes(_productive_output_bytes(values), check)",
+            "return _append_output_bytes(_output_bytes(values), lambda: None)",
+            "return other_writer(_output_bytes(values), check)",
+            "_append_output_bytes(_output_bytes(values), check)",
+            "unreviewed_effect()\nreturn _append_output_bytes(_output_bytes(values), check)",
+        )
+        for replacement in bodies:
+            mutant = ast.parse(ast.unparse(CONTINUITY))
+            wrapper = function(mutant, "append_outputs")
+            wrapper.body = ast.parse("def changed(values, check):\n" +
+                "\n".join("    " + line for line in replacement.splitlines())).body[0].body
+            with self.subTest(replacement=replacement), \
+                    patch.dict(globals(), {"CONTINUITY": ast.parse(ast.unparse(mutant))}), \
+                    self.assertRaises(AssertionError):
+                self.test_file_writer_still_one_write_fsync_readback_close()
+
+    def test_factored_writer_rejects_lost_native_calls_order_or_late_check(self):
+        self.test_file_writer_still_one_write_fsync_readback_close()
+        mutations = ("os.open", "os.write", "os.fsync", "os.lseek", "os.read", "os.close",
+            "write-fsync-order", "post-close-check")
+        for mutation in mutations:
+            mutant = ast.parse(ast.unparse(CONTINUITY))
+            writer = function(mutant, "_append_output_bytes")
+            if mutation.startswith("os."):
+                found = calls(writer, mutation)
+                self.assertEqual(len(found), 1)
+                found[0].func = ast.Name(id="omitted_native_call", ctx=ast.Load())
+            elif mutation == "write-fsync-order":
+                blocks = [item for item in writer.body if isinstance(item, ast.Try) and calls(item, "os.write")]
+                self.assertEqual(len(blocks), 1)
+                block = blocks[0]
+                writes = [index for index, item in enumerate(block.body) if calls(item, "os.write")]
+                syncs = [index for index, item in enumerate(block.body) if calls(item, "os.fsync")]
+                self.assertEqual((len(writes), len(syncs)), (1, 1))
+                block.body[writes[0]], block.body[syncs[0]] = block.body[syncs[0]], block.body[writes[0]]
+            else:
+                self.assertEqual(ast.unparse(writer.body[-1]), "check()")
+                writer.body.pop()
+            with self.subTest(mutation=mutation), \
+                    patch.dict(globals(), {"CONTINUITY": ast.parse(ast.unparse(mutant))}), \
+                    self.assertRaises(AssertionError):
+                self.test_file_writer_still_one_write_fsync_readback_close()
 
 
 if __name__ == "__main__":

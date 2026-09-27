@@ -272,10 +272,31 @@ ceremony and historical preview were not repeated.
 
 The source-control workflow adds exactly the nine complete literal suites
 after prefix retention, with the existing5-minute job, action pins, events
-and read-only permissions unchanged. Its changed-source combined regression
-is still pending at this source checkpoint; the012dc723 pass above does not
-qualify these new bytes. This adds no productive bootstrap workflow or caller
-of the dormant cache export/save path.
+and read-only permissions unchanged. Hosted source run
+[36297618229/1](https://github.com/p2pKit/P2pKit/actions/runs/36297618229)
+at `e89c0c2e212c4f4a3109077f8ba5b9d1a035f064` failed, exit1, before these
+nine suites or Node ran. An old seal-deadline AST control still expected native
+file calls inside `append_outputs`; the reviewed implementation delegates to
+the shared `_append_output_bytes` writer. That writer's original body is
+byte-identical, including its final post-close check.
+
+The repaired control keeps every original native call-count/order, empty-file,
+complete-write/readback and post-close assertion on the actual writer, and
+requires the exact legacy wrapper/encoder/guard connection. Two AST mutation
+controls reject changed routing, missing native calls, reordered write/fsync
+and a lost final guard. Independent source-review SHA-256:
+`9a57c3f46fc2fe2fa814b61cf9243c9436ae41c098f7996f7b2e96f2c7979664`.
+Only the repaired and two new controls ran locally: **3/3 PASS, exit0**.
+Unittest reported0.410s; the wrapper's timing file was empty, so exact total
+CPU/wall times are **unavailable**, not inferred from that test-body duration.
+No passed test was repeated to replace the missing timing. Independent result
+review accepted only these three source controls with that explicit gap:
+`2a5f861b20e862798730d4df1b9748f78b0aeb2b89e8685c2e59370afbc46641`.
+
+The original failed aggregate remains failed; corrected combined source CI is
+still pending. Neither these three controls nor the012dc723 pass qualifies the
+unreached productive suites or native execution. This adds no productive
+bootstrap workflow or caller of the dormant cache export/save path.
 
 ## Still required before productive execution and Release
 
