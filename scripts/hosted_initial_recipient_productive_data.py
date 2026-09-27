@@ -37,8 +37,14 @@ INITIAL_CONTEXT_SCOPE = "INITIAL_RECIPIENT_CANONICAL_INITIALIZER_CONTEXT_V1"
 INPUT_SCOPE = "INITIAL_RECIPIENT_PRODUCTIVE_ORIGINAL_INPUT_BINDING_V1"
 STAGING_PARENT_SCOPE = "INITIAL_RECIPIENT_STAGING_PARENT_CLOSED_NO_EXECUTION_V1"
 PARENT_SCOPE = "INITIAL_RECIPIENT_PRODUCTIVE_PARENT_CLOSED_OBSERVATIONS_V1"
-HANDOFF_SCOPE = "INITIAL_RECIPIENT_SAVE_HANDOFF_PENDING_ORIGINAL_STEP_RETURN_V1"
-RETURN_SCOPE = "INITIAL_RECIPIENT_HANDOFF_FUNCTION_RETURN_PENDING_COMMAND_V1"
+HANDOFF_SCOPE = "INITIAL_RECIPIENT_SAVE_HANDOFF_PENDING_ORIGINAL_STEP_RETURN_V2"
+RETURN_SCOPE = "INITIAL_RECIPIENT_HANDOFF_FUNCTION_RETURN_PENDING_COMMAND_V2"
+PREFIX_SCOPE = "INITIAL_RECIPIENT_PRODUCTIVE_PREFIX_PENDING_WRITER_RETURN_V1"
+PREFIX_REFERENCE_SCOPE = "INITIAL_RECIPIENT_PRODUCTIVE_PREFIX_NATIVE_REFERENCE_V1"
+PREFIX_WRITER_CLOSE_SCOPE = "INITIAL_RECIPIENT_PRODUCTIVE_PRIOR_WRITER_CLOSE_V1"
+PREFIX_FILES = ("primary-map.json", "primary-preliminary-close.json", "primary-native-close.json",
+    "authority-return.json", "authority-index.json", "retention-index.json")
+PREFIX_INDEX_LIMIT = 64 * 1024
 OUTPUT_SCOPE = "INITIAL_RECIPIENT_PRODUCER_PENDING_ORIGINAL_STEP_RETURN_V1"
 SAVE_PREPARATION_SCOPE = "INITIAL_RECIPIENT_BOOTSTRAP_SAVE_PREPARATION_PENDING_ORIGINAL_STEP_RETURN_V1"
 PROBE_PREPARATION_SCOPE = "INITIAL_RECIPIENT_BOOTSTRAP_PROBE_PREPARATION_PENDING_ORIGINAL_STEP_RETURN_V1"
@@ -88,15 +94,244 @@ def nonacceptance(value):
         value["exportSaveAuthority"] is False, "NONACCEPTANCE")
 
 
-def handoff_record(raw, blobs, inputs, first, claims, directory, directory_identity):
+def prefix_reference(value, inputs, custody):
+    """Fixed historical DATA reference. A separately opens the derived path."""
+    fields(value, "schema scope directory directoryIdentity directoryBinding custodyDirectoryIdentity "
+        "retiredPrefixSha256 files")
+    require(type(value["schema"]) is int and value["schema"] == 1 and value["scope"] == PREFIX_REFERENCE_SCOPE and
+        value["directory"] == str(custody / "productive-prefix") and
+        value["retiredPrefixSha256"] == O.digest(inputs.closed_raw) and
+        files._file_binding(value["directoryBinding"]) and type(value["files"]) is dict and
+        set(value["files"]) == set(PREFIX_FILES), "PREFIX_REFERENCE")
+    pin = native_identity(value["directoryIdentity"], inputs.role)
+    require(pin == native_identity(value["directoryBinding"]["identity"], inputs.role), "PREFIX_ROOT_BINDING")
+    pins = [pin, native_identity(value["custodyDirectoryIdentity"], inputs.role)]
+    for name in PREFIX_FILES:
+        row = fields(value["files"][name], "bytes sha256 fileBinding")
+        maximum = PREFIX_INDEX_LIMIT if name == "retention-index.json" else LIMIT
+        require(type(row["bytes"]) is int and 0 < row["bytes"] <= maximum and
+            files._file_binding(row["fileBinding"]), "PREFIX_FILE_REFERENCE")
+        sha(row["sha256"])
+        pins.append(native_identity(row["fileBinding"]["identity"], inputs.role))
+    require(len(set(pins)) == 8 and not set(pins).intersection(
+        pin for _name, pin, _provenance in inputs.initializer_directories), "PREFIX_NATIVE_ALIAS")
+    return value
+
+
+def prefix_directory_pins(originals, role):
+    """Original map metadata only, not a filesystem snapshot or C capability."""
+    copied, authority = canonical(originals["primary-map.json"]), canonical(originals["authority-index.json"])
+    source = copied["sourceMetadata"]
+    require(type(source) is list and 0 < len(source) <= 10000 and all(type(row) is list and len(row) == 2 and
+        type(row[0]) is str and type(row[1]) is list and len(row[1]) == 4 for row in source), "PREFIX_SOURCE_METADATA")
+    rows = [[name, *metadata] for name, metadata in source]
+    for name in ("handoffMetadata", "destinationMetadata"):
+        require(type(copied[name]) is list and 0 < len(copied[name]) <= 10000, "PREFIX_COPY_METADATA")
+        rows.extend(copied[name])
+    pins = []
+    for row in rows:
+        require(type(row) is list and len(row) == 5 and type(row[0]) is str and type(row[1]) is bool and
+            type(row[3]) is int and row[3] >= 0 and type(row[4]) is dict, "PREFIX_METADATA_ROW")
+        pin = native_identity(row[2], role)
+        if row[1]:
+            pins.append(pin)
+    for row in authority["directories"]:
+        fields(row, "relative identity provenance")
+        if row["identity"] is not None:
+            pins.append(native_identity(row["identity"], role))
+    return tuple(pins)
+
+
+def _prefix_close(raw):
+    value = fields(canonical(raw), "schema scope resources retirement exportSaveAuthority")
+    require(type(value["schema"]) is int and value["schema"] == 1 and
+        value["scope"] == "INITIAL_CUSTODY_PRIMARY_NATIVE_CLOSE_V1" and
+        value["retirement"] == "KNOWN_RESOURCE_CLOSE_ONLY" and value["exportSaveAuthority"] is False and
+        type(value["resources"]) is list and 0 < len(value["resources"]) <= 10000, "PREFIX_PRIMARY_CLOSE")
+    for ordinal, row in enumerate(value["resources"]):
+        fields(row, "ordinal label closeAttempted closed")
+        require(type(row["ordinal"]) is int and row["ordinal"] == ordinal and
+            row["label"] in ("directory", "reader", "writer", "snapshot", "embedded-reader") and
+            row["closeAttempted"] is True and row["closed"] is True, "PREFIX_PRIMARY_CLOSE_ROW")
+
+
+def prefix_retention_value(originals, inputs, custody, primary_inventory_sha256):
+    """Bind the five supplied ORIGINAL records, never reconstruct native custody.
+
+    Only A's same registered C prefix can supply these bytes to the writer.
+    Readers authenticate this DATA through the handoff/function/Step chain;
+    they do not recreate C owners, reread the changed PRIMARY source tree, or
+    promote the authority index's 281 declarations to 281 native reads.
+    """
+    require(type(originals) is dict and set(originals) == set(PREFIX_FILES[:-1]), "PREFIX_ORIGINAL_ROSTER")
+    hashes = {name: {"bytes": len(raw_bytes(originals[name])), "sha256": O.digest(originals[name])}
+        for name in PREFIX_FILES[:-1]}
+    retired = canonical(inputs.closed_raw)
+    copied = fields(canonical(originals["primary-map.json"]), "schema scope origin members sourceMetadata "
+        "originalDirectories handoffMetadata destination destinationIdentity destinationMetadata memberCount totalBytes "
+        "nextOrdinal freeze remainingOrigins productiveAuthority currentAuthority exportSaveAuthority")
+    require(type(copied["schema"]) is int and copied["schema"] == 1 and
+        copied["scope"] == "INITIAL_RECIPIENT_CUSTODY_PRIMARY_COPY_V1" and copied["origin"] == "PRIMARY" and
+        copied["destination"] == str(custody / "copied-evidence") and
+        copied["freeze"] == "NOT_FINAL_THREE_ORIGIN_FREEZE" and
+        copied["remainingOrigins"] == ["AUTHORITY_PRE_EXPORT", "RECIPIENT_PRE_EXPORT"] and
+        copied["productiveAuthority"] is False and copied["currentAuthority"] == "NOT_ACQUIRED" and
+        copied["exportSaveAuthority"] is False and type(copied["members"]) is list and
+        type(copied["memberCount"]) is type(copied["nextOrdinal"]) is int and
+        copied["memberCount"] == copied["nextOrdinal"] == len(copied["members"]) and
+        hashes["primary-map.json"]["sha256"] == retired["primaryCopySha256"], "PREFIX_PRIMARY_MAP")
+    native_identity(copied["destinationIdentity"], inputs.role)
+    crypto_count = 0
+    for ordinal, row in enumerate(copied["members"]):
+        require(type(row) is dict, "PREFIX_PRIMARY_MEMBER_ROW")
+        fields(row, "member bytes sha256 origin original provenance carrier destinationWriteMetadata" +
+            (" originalMaximum" if row.get("carrier") == "INDEXED_DISK_ORIGINAL" else ""))
+        require(row["member"] == "member-" + str(ordinal).zfill(5) + ".bin" and row["origin"] == "PRIMARY" and
+            type(row["bytes"]) is int and 0 <= row["bytes"] <= 512 * 1024 * 1024 and
+            type(row["original"]) is str and type(row["destinationWriteMetadata"]) is dict, "PREFIX_PRIMARY_MEMBER")
+        sha(row["sha256"])
+        crypto_count += row["provenance"] == "AUTHENTICATED_CRYPTO_DECLARATION"
+    require((crypto_count == 9 if inputs.role == "windows-x64" else 10 <= crypto_count <= 74) and
+        copied["memberCount"] == 1364 + crypto_count and type(copied["totalBytes"]) is int and
+        copied["totalBytes"] == sum(row["bytes"] for row in copied["members"]) <= 512 * 1024 * 1024,
+        "PREFIX_PRIMARY_COUNTS")
+    handoff = copied["members"][-3]
+    require(all(row["carrier"] == "INDEXED_DISK_ORIGINAL" for row in copied["members"][:-3]) and
+        handoff["carrier"] == "HANDOFF" and handoff["original"] == "worker-originals.json" and
+        handoff["provenance"] == "ACTUAL_PRIMARY_HANDOFF_DISK_BYTES" and
+        [row["original"] for row in copied["members"][-2:]] ==
+        ["receiving-authority-return.json", "initialization-history.json"] and
+        all(row["carrier"] == "EMBEDDED_NOT_DISK_ORIGINAL" for row in copied["members"][-2:]), "PREFIX_PRIMARY_CARRIERS")
+    destination = copied["destinationMetadata"]
+    require(type(destination) is list and len(destination) == copied["memberCount"] + 1 and
+        all(type(row) is list and len(row) == 5 for row in destination) and
+        destination[0][:3] == ["", True, copied["destinationIdentity"]] and
+        [row[:2] for row in destination[1:]] == [[row["member"], False] for row in copied["members"]],
+        "PREFIX_AUTHENTIC_COPY_ROOT")
+    for name in ("primary-preliminary-close.json", "primary-native-close.json"):
+        _prefix_close(originals[name])
+    retired_input_close(retired["inputOwnerClose"])
+    authority = fields(canonical(originals["authority-index.json"]), "schema scope origin root clock contextSha256 "
+        "matchSha256 pendingSha256 files directories fileCount directoryCount totalBytes copyState exportSaveAuthority")
+    require(type(authority["schema"]) is int and authority["schema"] == 1 and
+        authority["scope"] == "INITIAL_CUSTODY_AUTHORITY_PRE_EXPORT_INDEX_V1" and
+        authority["origin"] == "AUTHORITY_PRE_EXPORT" and authority["root"] == str(custody / "authority-1") and
+        authority["clock"] == O.clock_value(inputs.clock) and authority["copyState"] == "ORIGINAL_BYTES_NOT_COPIED" and
+        authority["exportSaveAuthority"] is False and type(authority["fileCount"]) is int and authority["fileCount"] == 281 and
+        type(authority["files"]) is list and len(authority["files"]) == 281 and
+        type(authority["directoryCount"]) is int and authority["directoryCount"] == 58 and
+        type(authority["directories"]) is list and len(authority["directories"]) == 58, "PREFIX_AUTHORITY_INDEX")
+    for row in authority["files"]:
+        fields(row, "relative maximum bytes sha256 provenance")
+        require(type(row["relative"]) is str and type(row["maximum"]) is type(row["bytes"]) is int and
+            0 <= row["bytes"] <= row["maximum"] <= LIMIT and row["maximum"] > 0 and
+            row["provenance"] in ("ACTUAL_RETAINED_BYTES", "ORIGINAL_QUERY_DECLARATION"), "PREFIX_AUTHORITY_FILE")
+        sha(row["sha256"])
+    require(len({row["relative"] for row in authority["files"]}) == 281 and
+        sum(row["provenance"] == "ACTUAL_RETAINED_BYTES" for row in authority["files"]) == 38 and
+        type(authority["totalBytes"]) is int and authority["totalBytes"] ==
+        sum(row["bytes"] for row in authority["files"]) <= 512 * 1024 * 1024, "PREFIX_AUTHORITY_DECLARATIONS_NOT_CUSTODY")
+    for row in authority["directories"]:
+        fields(row, "relative identity provenance")
+        require(type(row["relative"]) is str and row["provenance"] ==
+            ("ORIGINAL_NATIVE_PIN" if row["identity"] is not None else "ORIGINAL_QUERY_DECLARATION"),
+            "PREFIX_AUTHORITY_DIRECTORY")
+    require(len({row["relative"] for row in authority["directories"]}) == 58, "PREFIX_AUTHORITY_DIRECTORY_ROSTER")
+    pins = {row["relative"]: row["identity"] for row in authority["directories"] if row["identity"] is not None}
+    require(set(pins) == {".", "control-home", "temporary", "service", "source-before", "source-after", "acquisition-queries"},
+        "PREFIX_AUTHORITY_ORIGINAL_PINS")
+    prefix_directory_pins(originals, inputs.role)
+    closed = fields(canonical(originals["authority-return.json"]), "schema scope windowSha256 primaryResultSha256 "
+        "primaryCopySha256 matchSha256 inventorySha256 pendingSha256 originalChain preCloseNs closedNs resourceCount "
+        "retirement budgetAcceptance exportSaveAuthority")
+    require(type(closed["schema"]) is int and closed["schema"] == 1 and
+        closed["scope"] == "INITIAL_CUSTODY_AUTHORITY_PRE_EXPORT_CLOSED_HISTORY_V1" and
+        closed["primaryResultSha256"] == retired["primaryResultSha256"] and
+        closed["primaryCopySha256"] == retired["primaryCopySha256"] and
+        closed["inventorySha256"] == hashes["authority-index.json"]["sha256"] == retired["authorityInventorySha256"] and
+        hashes["authority-return.json"]["sha256"] == retired["authoritySha256"] and
+        closed["matchSha256"] == authority["matchSha256"] == O.digest(O.encoded(inputs.admission["initialRecipient"])) and
+        closed["pendingSha256"] == authority["pendingSha256"] and
+        closed["retirement"] == "KNOWN_RESOURCE_CLOSE_ONLY" and closed["budgetAcceptance"] == "NOT_ADMITTED" and
+        closed["exportSaveAuthority"] is False and 0 < O.integer(closed["resourceCount"]) <= 10000 and
+        O.integer(closed["preCloseNs"]) <= O.integer(closed["closedNs"]) <= O.integer(retired["inputsClosedNs"]),
+        "PREFIX_AUTHORITY_RETURN")
+    return {"schema": 1, "scope": PREFIX_SCOPE, "retiredPrefixSha256": O.digest(inputs.closed_raw), "files": hashes,
+        "primary": {"step": "canonical-initialization", "outcome": "success",
+            "resultSha256": retired["primaryResultSha256"], "handoffSha256": handoff["sha256"],
+            "inventorySha256": sha(primary_inventory_sha256), "directory": copied["destination"],
+            "directoryIdentity": copied["destinationIdentity"], "memberCount": copied["memberCount"],
+            "totalBytes": copied["totalBytes"]},
+        "authority": {"directory": authority["root"], "directoryIdentity": pins["."],
+            "fileCount": 281, "directoryCount": 58, "retainedOriginalCount": 38,
+            "copyState": "ORIGINAL_BYTES_NOT_COPIED"},
+        "retirement": {"inputOwnerCloseSha256": O.digest(O.encoded(retired["inputOwnerClose"])),
+            "inputsClosedNs": retired["inputsClosedNs"], "retiredNs": inputs.previous_ns,
+            "prepDisposition": "TERMINALLY_RETIRED", "receivingDisposition": "HISTORICAL_NOT_REVIVED",
+            "currentAuthority": "NEW_PER_USE_REQUIRED"},
+        "custodyScope": "RECORD_RETENTION_ONLY_NOT_NATIVE_CUSTODY", "writerReturn": PENDING,
+        "producerStepOutcome": PENDING, "providerExecution": "NOT_PERFORMED", "budgetAcceptance": "NOT_ADMITTED",
+        "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False}
+
+
+def prefix_retention_record(raws, reference, inputs, custody):
+    require(type(raws) is dict and set(raws) == set(PREFIX_FILES), "PREFIX_SIX_ORIGINAL_FILES")
+    prefix_reference(reference, inputs, custody)
+    for name in PREFIX_FILES:
+        raw = raw_bytes(raws[name], PREFIX_INDEX_LIMIT if name == "retention-index.json" else LIMIT)
+        row = reference["files"][name]
+        require(row["bytes"] == len(raw) and row["sha256"] == O.digest(raw), "PREFIX_ACTUAL_BYTES_CHANGED")
+    value = fields(canonical(raws["retention-index.json"], PREFIX_INDEX_LIMIT), "schema scope retiredPrefixSha256 "
+        "files primary authority retirement custodyScope writerReturn producerStepOutcome providerExecution "
+        "budgetAcceptance testAcceptance exportSaveAuthority")
+    fields(value["primary"], "step outcome resultSha256 handoffSha256 inventorySha256 directory directoryIdentity memberCount totalBytes")
+    originals = {name: raws[name] for name in PREFIX_FILES[:-1]}
+    expected = prefix_retention_value(originals, inputs, custody, value["primary"]["inventorySha256"])
+    same(value, expected, "PREFIX_PENDING_INDEX_CHANGED")
+    pins = {native_identity(reference["directoryIdentity"], inputs.role),
+        native_identity(reference["custodyDirectoryIdentity"], inputs.role),
+        *(native_identity(row["fileBinding"]["identity"], inputs.role) for row in reference["files"].values())}
+    require(not pins.intersection(prefix_directory_pins(originals, inputs.role)), "PREFIX_ORIGINAL_DIRECTORY_ALIAS")
+    return value
+
+
+def prefix_writer_close(value, handoff_raw):
+    """Historical observation of the PRIOR first owner, never its replacement."""
+    fields(value, "schema scope phase ownerOrdinal firstNs localStarted hardEndNs handoffSha256 prefixRetentionSha256 "
+        "resourceCount resources retirement observationScope")
+    index = canonical(handoff_raw)
+    require(type(value["schema"]) is int and value["schema"] == 1 and value["scope"] == PREFIX_WRITER_CLOSE_SCOPE and
+        value["phase"] == "producer-owner-return" and type(value["ownerOrdinal"]) is int and value["ownerOrdinal"] == 0 and
+        value["handoffSha256"] == O.digest(handoff_raw) and value["prefixRetentionSha256"] ==
+        O.digest(O.encoded(index["references"]["prefixRetention"])) and value["retirement"] == "KNOWN_RESOURCE_CLOSE_ONLY" and
+        value["observationScope"] == "PRIOR_FIRST_OWNER_ONLY", "PREFIX_PRIOR_WRITER_CLOSE")
+    for name in ("firstNs", "localStarted", "hardEndNs"):
+        same(value[name], index["window"][name], "PREFIX_PRIOR_WRITER_ORIGINAL45")
+    # 118 original rows +26 sidecar rows. Empty original stdout still uses its
+    # actual empty-original-writer; no synthetic row may replace that owner.
+    labels = [*("directory",) * 8, *("reader",) * 12, "directory", "directory",
+        *("writer", "reader", "reader") * 6, *("reader",) * 6, "directory", "directory"]
+    for name in (*BLOB_NAMES, "save-handoff.json"):
+        labels.extend(("empty-original-writer" if name.endswith(".bin") and index["blobs"][name]["bytes"] == 0
+            else "writer", "reader"))
+    labels.extend(("reader",) * 32)
+    require(type(value["resourceCount"]) is int and value["resourceCount"] == len(labels) == 144, "PREFIX_PRIOR_WRITER_ROWS")
+    same(value["resources"], [{"ordinal": number, "label": label, "closeAttempted": True, "closed": True}
+        for number, label in enumerate(labels)], "PREFIX_PRIOR_WRITER_LEDGER")
+    return value
+
+
+def handoff_record(raw, blobs, inputs, first, claims, directory, directory_identity, *, custody):
     value = fields(canonical(raw), "schema scope binding source github selection cacheCohort plan planSha256 directory "
         "directoryIdentity blobs references chain window writerReturn providerExecution nextPhaseAuthority "
         "budgetAcceptance testAcceptance exportSaveAuthority")
-    require(type(value["schema"]) is int and value["schema"] == 1 and value["scope"] == HANDOFF_SCOPE and
+    require(type(value["schema"]) is int and value["schema"] == 2 and value["scope"] == HANDOFF_SCOPE and
         value["writerReturn"] == PENDING and value["providerExecution"] == "NOT_PERFORMED" and
         value["nextPhaseAuthority"] is False and claims["PRODUCER_OUTCOME"] == "success" and
         O.digest(raw) == sha(claims["HANDOFF_SHA256"]), "HANDOFF_SCOPE_OR_CLAIMS")
     nonacceptance(value)
+    fields(value["references"], "initializerFiles staging phaseOriginals prefixRetention")
+    prefix_reference(value["references"]["prefixRetention"], inputs, custody)
     require(type(blobs) is dict and set(blobs) == set(BLOB_NAMES) and len(blobs) == 31 < 32, "HANDOFF_ORIGINAL_BLOBS")
     same(value["blobs"], {name: {"bytes": len(raw_bytes(blob, empty=name.endswith(".bin"))), "sha256": O.digest(blob)}
         for name, blob in blobs.items()}, "HANDOFF_ORIGINAL_BLOBS")
@@ -142,14 +377,16 @@ def handoff_record(raw, blobs, inputs, first, claims, directory, directory_ident
 def producer_return_record(raw, index_raw, inputs, first, expected_hash, directory_identity):
     value = fields(canonical(raw), "schema scope handoffSha256 handoffDirectory handoffDirectoryIdentity initializerIdentity "
         "clock originalBootDigest firstNs hardEndNs handoffReturnedNs handoffReturnedLocal observedAfterReturnNs "
-        "observedAfterReturnLocal observationScope recordWriterReturn producerStepOutcome providerExecution "
+        "observedAfterReturnLocal prefixRetention priorWriterClose observationScope recordWriterReturn producerStepOutcome providerExecution "
         "budgetAcceptance testAcceptance exportSaveAuthority")
     index = canonical(index_raw)
-    require(type(value["schema"]) is int and value["schema"] == 1 and value["scope"] == RETURN_SCOPE and
+    require(type(value["schema"]) is int and value["schema"] == 2 and value["scope"] == RETURN_SCOPE and
         O.digest(raw) == sha(expected_hash) and value["observationScope"] == "HANDOFF_FUNCTION_RETURN_ONLY" and
         value["recordWriterReturn"] == value["producerStepOutcome"] == PENDING and
         value["providerExecution"] == "NOT_PERFORMED", "FUNCTION_RETURN_MARKERS")
     nonacceptance(value)
+    same(value["prefixRetention"], index["references"]["prefixRetention"], "FUNCTION_RETURN_PREFIX_BINDING")
+    prefix_writer_close(value["priorWriterClose"], index_raw)
     require(value["handoffSha256"] == O.digest(index_raw) and value["handoffDirectory"] == index["directory"] and
         native_identity(value["handoffDirectoryIdentity"], inputs.role) == tuple(directory_identity) and
         native_identity(value["initializerIdentity"], inputs.role) == inputs.directories["session"] and

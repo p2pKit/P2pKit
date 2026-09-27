@@ -209,6 +209,7 @@ def _pin_parts(value):
         graph = N._history_graph(value.last_reading)
     elif type(value) is _HandoffState:
         roots = value.pending, value.result
+        graph = N._history_graph(value.prefix_files, value.prefix_reference, value.writer_methods)
     elif type(value) is _Run:
         roots = value.prefix, value.originals, value.terminal
     pins = tuple((row, row.__dict__, tuple(row.__dict__.items())) for row in records)
@@ -1804,13 +1805,156 @@ class _HandoffState:
     initial_identity: tuple
     graph: tuple
     blobs: tuple
+    prefix_files: tuple
+    prefix_reference: bytes
+    writer: object
+    writer_methods: tuple
     complete_attempted: bool = False
     result: object = None
     completed_graph: tuple = ()
     return_raw: object = None
 
 
-def _handoff_blobs(state, inputs):
+def _prefix_raws(prefix):
+    # The ONLY old-prefix proof is passive. In particular, do not call the
+    # retired Window, checked_primary, or checked_custody_authority here.
+    require(C.checked_retired_primary(prefix) is prefix, "PREFIX_ORIGINAL_RETIRED_RETURN")
+    return tuple(zip(D.PREFIX_FILES[:-1], (prefix.primary.copy, prefix.primary.preliminary_close,
+        prefix.primary.native_close, prefix.authority.raw, prefix.authority.inventory)))
+
+
+def _prefix_writer_methods(owner):
+    require(type(owner) is _Owner, "PREFIX_ORIGINAL_WRITER_TYPE")
+    return (type(owner), *(getattr(type(owner), name) for name in
+        ("acquire", "read", "write", "end", "close_one", "close")), _known)
+
+
+def _prefix_writer_methods_current(owner, original):
+    current = _prefix_writer_methods(owner)
+    require(type(current) is tuple and type(original) is tuple and len(current) == len(original) == 8 and
+        all(actual is saved for actual, saved in zip(current, original)), "PREFIX_ORIGINAL_WRITER_METHODS_CHANGED")
+
+
+def _prefix_writer(saved):
+    _pin(saved)
+    state, owner = saved.phase, saved.writer
+    _prefix_writer_methods_current(owner, saved.writer_methods)
+    require(state.owners and state.owners[0] is owner and
+        owner.first is state.first and owner.fence is state.window, "PREFIX_ORIGINAL_WRITER_CHANGED")
+    known = _known(owner)
+    require(known.phase is state, "PREFIX_FOREIGN_WRITER_CLOSE")
+    return known
+
+
+def _prefix_writer_close(saved):
+    known = _prefix_writer(saved)
+    state = known.phase
+    value = {"schema": 1, "scope": D.PREFIX_WRITER_CLOSE_SCOPE, "phase": state.name, "ownerOrdinal": 0,
+        "firstNs": state.first.nanoseconds, "localStarted": state.local, "hardEndNs": state.ends[0],
+        "handoffSha256": O.digest(saved.pending.raw), "prefixRetentionSha256": O.digest(saved.prefix_reference),
+        "resourceCount": len(known.resources), "resources": [{"ordinal": number, "label": pin.label,
+            "closeAttempted": pin.attempted, "closed": pin.closed} for number, pin in enumerate(known.resources)],
+        "retirement": "KNOWN_RESOURCE_CLOSE_ONLY", "observationScope": "PRIOR_FIRST_OWNER_ONLY"}
+    return D.prefix_writer_close(value, saved.pending.raw)
+
+
+def _write_prefix_file(owner, directory, name, raw):
+    """One original writer +auto-read; preserve the supplier's 1MiB write blocks.
+
+    The inherited small-record writer sends one block. These five original
+    records can be up to2MiB, so only this fixed sidecar streams bounded blocks
+    through the SAME actual owner/native writer/sync/close machinery.
+    """
+    require(name in D.PREFIX_FILES, "PREFIX_FIXED_WRITE_NAME")
+    maximum = D.PREFIX_INDEX_LIMIT if name == "retention-index.json" else D.LIMIT
+    D.raw_bytes(raw, maximum)
+    end = owner.end()
+    writer = owner.acquire("writer", lambda: directory.create_file(name, max_bytes=len(raw), deadline=end))
+    try:
+        for offset in range(0, len(raw), F.BLOCK):
+            owner.end()
+            part = raw[offset:offset + F.BLOCK]
+            written = writer.write(part)
+            require(type(written) is int and written == len(part), "PREFIX_SHORT_WRITE")
+            owner.end()
+        writer.sync()
+        require(writer.verify().size == len(raw), "PREFIX_WRITE_CHANGED")
+        owner.end()
+    except BaseException as error:
+        owner.error("prefix-write", error)
+        raise
+    finally:
+        _Reader(owner).close_one(writer)
+    require(owner.read(directory, name, maximum) == raw, "PREFIX_WRITE_READBACK_CHANGED")
+
+
+def _prefix_directory_check(owner, root, directory, reference):
+    custody_path = C._paths("worker")[2]
+    owner.end()
+    require(root.path == custody_path and tuple(root.verify().identity) == tuple(reference["custodyDirectoryIdentity"]) and
+        directory.path == custody_path / "productive-prefix" and reference["directory"] == str(directory.path),
+        "PREFIX_DERIVED_DIRECTORY_CHANGED")
+    D.same(F._info_binding(directory.verify()), reference["directoryBinding"], "PREFIX_ROOT_STAMP_CHANGED")
+    _names(owner, directory, D.PREFIX_FILES)
+    D.same(F._info_binding(directory.verify()), reference["directoryBinding"], "PREFIX_ROOT_STAMP_CHANGED")
+    owner.end()
+
+
+def _reread_prefix(owner, root, directory, originals, reference_raw):
+    reference = D.canonical(reference_raw, D.PREFIX_INDEX_LIMIT)
+    require(tuple(name for name, _raw, _binding in originals) == D.PREFIX_FILES, "PREFIX_READ_ROSTER")
+    _prefix_directory_check(owner, root, directory, reference)
+    for name, raw, binding in originals:
+        maximum = D.PREFIX_INDEX_LIMIT if name == "retention-index.json" else D.LIMIT
+        staging._read(_Reader(owner), directory, name, expected=raw, binding=D.canonical(binding), maximum=maximum)
+    _prefix_directory_check(owner, root, directory, reference)
+
+
+def _retain_prefix(state, prefix, inputs):
+    """Persist exact five C originals plus one pending index, never new custody."""
+    owner = state.owner
+    originals = _prefix_raws(prefix)
+    roots, _handoff, custody_path = C._paths("worker")
+    primary = prefix.primary.primary
+    require(roots["I"] == prefix.initializer == inputs.session and dict(primary.roots) == roots,
+        "PREFIX_ORIGINAL_PATHS")
+    value = D.prefix_retention_value(dict(originals), inputs, custody_path, O.digest(primary.inventory_raw))
+    require(value["primary"]["resultSha256"] == primary.result_sha256 and
+        value["primary"]["handoffSha256"] == O.digest(primary.handoff_raw), "PREFIX_ORIGINAL_PRIMARY_LINEAGE")
+    index_raw = D.raw_bytes(O.encoded(value), D.PREFIX_INDEX_LIMIT)
+    raws = (*originals, ("retention-index.json", index_raw))
+    excluded = {*D.prefix_directory_pins(dict(originals), inputs.role),
+        *(pin for _name, pin, _provenance in inputs.initializer_directories),
+        tuple(inputs.stage["containerIdentity"]), tuple(inputs.stage["sourceIdentity"])}
+    excluded.update(pin for returned in state.run.phases for _key, _path, pin, _name, _raw, _binding
+        in _RETURNS[id(returned)][1].files)
+    root = _directory(owner, custody_path)
+    directory = owner.child(root, "productive-prefix", create=True)
+    root_pin, pin = tuple(root.verify().identity), tuple(directory.verify().identity)
+    require(root_pin != pin and root_pin not in excluded and pin not in excluded, "PREFIX_DIRECTORY_ALIAS")
+    _names(owner, directory, ())
+    retained = []
+    for name, raw in raws:
+        require(_prefix_raws(prefix) == originals, "PREFIX_ORIGINALS_CHANGED")
+        _write_prefix_file(owner, directory, name, raw)
+        _raw, binding = staging._read(_Reader(owner), directory, name, expected=raw,
+            maximum=D.PREFIX_INDEX_LIMIT if name == "retention-index.json" else D.LIMIT)
+        require(tuple(binding["identity"]) not in excluded, "PREFIX_FILE_DIRECTORY_ALIAS")
+        retained.append((name, raw, O.encoded(binding)))
+    retained = tuple(retained)
+    reference = {"schema": 1, "scope": D.PREFIX_REFERENCE_SCOPE, "directory": str(directory.path),
+        "directoryIdentity": list(pin), "directoryBinding": F._info_binding(directory.verify()),
+        "custodyDirectoryIdentity": list(root_pin), "retiredPrefixSha256": O.digest(prefix.raw),
+        "files": {name: {"bytes": len(raw), "sha256": O.digest(raw), "fileBinding": D.canonical(binding)}
+            for name, raw, binding in retained}}
+    D.prefix_retention_record(dict(raws), reference, inputs, custody_path)
+    reference_raw = D.raw_bytes(O.encoded(reference), D.PREFIX_INDEX_LIMIT)
+    _reread_prefix(owner, root, directory, retained, reference_raw)
+    require(_prefix_raws(prefix) == originals, "PREFIX_ORIGINALS_CHANGED")
+    return retained, reference_raw
+
+
+def _handoff_blobs(state, inputs, prefix_reference):
     phases = { _RETURNS[id(row)][1].name: row for row in state.run.phases }
     configured = phases["configuration"].leaf
     blobs = {}
@@ -1849,7 +1993,7 @@ def _handoff_blobs(state, inputs):
         "phaseOriginals": {name: [{"key": key, "directory": directory, "directoryIdentity": list(identity),
             "name": leaf, "bytes": len(raw), "sha256": O.digest(raw), "fileBinding": D.canonical(binding)}
             for key, directory, identity, leaf, raw, binding in _RETURNS[id(row)][1].files]
-            for name, row in phases.items()}}
+            for name, row in phases.items()}, "prefixRetention": D.canonical(prefix_reference, D.PREFIX_INDEX_LIMIT)}
     return tuple((name, blobs[name]) for name in D.BLOB_NAMES), chain, references
 
 
@@ -1873,16 +2017,20 @@ def produce(prefix, token, cancelled):
         before = _leaf_phase(run, "save-set-before", token, exported, inputs)
         state = _new_phase(run, "producer-owner-return", inputs.proposal, before)
         owner = _new_owner(state)
+        writer_methods = _prefix_writer_methods(owner)
         _progress(state, inputs=inputs, graph=N._history_graph(inputs.__dict__, run.initial_files))
         _use(state, "producer-handoff/retention", token)
         _read_initializer(state, inputs)
-        blobs, chain, references = _handoff_blobs(state, inputs)
+        prefix_files, prefix_reference = _retain_prefix(state, prefix, inputs)
+        blobs, chain, references = _handoff_blobs(state, inputs, prefix_reference)
         initial = _directory(owner, inputs.session, inputs.directories["session"])
         directory = owner.child(initial, "dependency-save-handoff", create=True)
         pin = tuple(directory.verify().identity)
         require(pin not in inputs.directories.values() and pin not in
-            (tuple(inputs.stage["containerIdentity"]), tuple(inputs.stage["sourceIdentity"])), "HANDOFF_DIRECTORY_ALIAS")
-        value = {"schema": 1, "scope": D.HANDOFF_SCOPE, "binding": inputs.binding(),
+            (tuple(inputs.stage["containerIdentity"]), tuple(inputs.stage["sourceIdentity"]),
+             tuple(references["prefixRetention"]["directoryIdentity"]),
+             tuple(references["prefixRetention"]["custodyDirectoryIdentity"])), "HANDOFF_DIRECTORY_ALIAS")
+        value = {"schema": 2, "scope": D.HANDOFF_SCOPE, "binding": inputs.binding(),
             **{name: inputs.admission[name] for name in ("source", "github", "selection", "cacheCohort")},
             "plan": inputs.stage_value["plan"], "planSha256": O.digest(O.encoded(inputs.stage_value["plan"])),
             "directory": str(directory.path), "directoryIdentity": list(pin),
@@ -1905,12 +2053,17 @@ def produce(prefix, token, cancelled):
         _names(owner, directory, (*D.BLOB_NAMES, "save-handoff.json"))
         require(tuple(directory.verify().identity) == pin and tuple(initial.verify().identity) == inputs.directories["session"],
                 "HANDOFF_DIRECTORY_CHANGED")
+        _prefix_writer_methods_current(owner, writer_methods)
+        require(_prefix_raws(prefix) ==
+            tuple((name, raw) for name, raw, _binding in prefix_files[:-1]), "PREFIX_WRITER_OR_ORIGINALS_CHANGED")
         owner.close()
         _known(owner)
         state.window.now()
         result = PendingHandoff(raw, state.last, state.local_last)
         saved = _track(_HandoffState(result, state, prefix, directory.path, pin, inputs.directories["session"],
-            N._history_graph(result.__dict__, blobs, chain, references, run.initial_files), blobs))
+            N._history_graph(result.__dict__, blobs, chain, references, run.initial_files), blobs,
+            prefix_files, prefix_reference, owner, writer_methods))
+        _prefix_writer(saved)
         _HANDOFFS[id(result)] = saved
         return result  # Completion must be invoked only after this actual function return.
     except BaseException as error:
@@ -1955,6 +2108,10 @@ def _pending(result, prefix):
         require(type(result) is PendingHandoff, "ORIGINAL_PENDING_KIND_CHANGED")
         _pin(saved)
         require(saved.prefix is prefix and C.checked_retired_primary(prefix) is prefix, "NOT_ORIGINAL_HANDOFF_PREFIX")
+        require(_prefix_raws(prefix) == tuple((name, raw) for name, raw, _binding in saved.prefix_files[:-1]) and
+            D.canonical(result.raw)["references"]["prefixRetention"] == D.canonical(saved.prefix_reference),
+            "ORIGINAL_PREFIX_RETENTION_CHANGED")
+        _prefix_writer(saved)
         _state(state.parent)
         N._check_history(saved.graph)
         for owner in state.owners:
@@ -1972,6 +2129,7 @@ def complete_productive_handoff(pending, prefix):
     try:
         require(not saved.complete_attempted and saved.result is None, "HANDOFF_COMPLETION_REENTRY")
         _progress(saved, complete_attempted=True)
+        prior_close = O.encoded(_prefix_writer_close(saved))
         state.window.now(minimum=pending.checked_ns)
         observed, observed_local = state.last, state.local_last
         owner = _new_owner(state)  # SAME original45, not a new first/LOCAL/end.
@@ -1979,21 +2137,32 @@ def complete_productive_handoff(pending, prefix):
         directory = owner.child(initial, "dependency-save-handoff")
         require(tuple(directory.verify().identity) == saved.identity and
             owner.read(directory, "save-handoff.json") == pending.raw, "HANDOFF_AFTER_RETURN_CHANGED")
-        raw = O.encoded({"schema": 1, "scope": D.RETURN_SCOPE, "handoffSha256": O.digest(pending.raw),
+        reference = D.canonical(saved.prefix_reference)
+        root = _directory(owner, C._paths("worker")[2], reference["custodyDirectoryIdentity"])
+        sidecar = owner.child(root, "productive-prefix")
+        _reread_prefix(owner, root, sidecar, saved.prefix_files, saved.prefix_reference)
+        require(C.checked_retired_primary(prefix) is prefix and O.encoded(_prefix_writer_close(saved)) == prior_close,
+            "PREFIX_PRIOR_CLOSE_CHANGED")
+        raw = O.encoded({"schema": 2, "scope": D.RETURN_SCOPE, "handoffSha256": O.digest(pending.raw),
             "handoffDirectory": str(saved.path), "handoffDirectoryIdentity": list(saved.identity),
             "initializerIdentity": list(saved.initial_identity), "clock": O.clock_value(state.first.clock),
             "originalBootDigest": state.boot, "firstNs": state.first.nanoseconds, "hardEndNs": state.ends[0],
             "handoffReturnedNs": pending.checked_ns, "handoffReturnedLocal": pending.checked_local,
             "observedAfterReturnNs": observed, "observedAfterReturnLocal": observed_local,
+            "prefixRetention": reference, "priorWriterClose": D.canonical(prior_close),
             "observationScope": "HANDOFF_FUNCTION_RETURN_ONLY", "recordWriterReturn": D.PENDING,
             "producerStepOutcome": D.PENDING, "providerExecution": "NOT_PERFORMED",
             "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False})
         owner.write(initial, "producer-function-return.json", raw)
         require(owner.read(initial, "producer-function-return.json") == raw and
             owner.read(directory, "save-handoff.json") == pending.raw, "HANDOFF_RETURN_READBACK_CHANGED")
+        _reread_prefix(owner, root, sidecar, saved.prefix_files, saved.prefix_reference)
+        require(C.checked_retired_primary(prefix) is prefix and O.encoded(_prefix_writer_close(saved)) == prior_close,
+            "PREFIX_PRIOR_CLOSE_CHANGED")
         owner.close()
         _known(owner)
         state.window.now(minimum=observed)
+        _pending(pending, prefix)
         value = B.public_result(D.OUTPUT_SCOPE, "producerReturnSha256", raw)
         value["handoffSha256"] = O.digest(pending.raw)
         result = ProductiveHandoff(value, _OutputFence(), state.ends[0])
@@ -2447,9 +2616,41 @@ def _read_use(reader, row, site, prefix_hash, worker, history_raw):
     return originals
 
 
+def _read_prefix_retention(reader, reference, inputs):
+    custody_path = C._paths("worker")[2]
+    D.prefix_reference(reference, inputs, custody_path)
+    root = _read_root(reader, custody_path, reference["custodyDirectoryIdentity"])
+    path = custody_path / "productive-prefix"
+    directory = _read_root(reader, path, reference["directoryIdentity"])
+    _prefix_directory_check(reader.owner, root, directory, reference)
+    raws = {name: _read_file(reader, path, name,
+        D.PREFIX_INDEX_LIMIT if name == "retention-index.json" else D.LIMIT,
+        binding=reference["files"][name]["fileBinding"]) for name in D.PREFIX_FILES}
+    D.prefix_retention_record(raws, reference, inputs, custody_path)
+    _prefix_directory_check(reader.owner, root, directory, reference)
+
+
+def _prefix_reader_check(reader):
+    """Mandatory six retained native reads/pins, including on EVERY recheck."""
+    reference = D.canonical(reader.handoff.raw)["references"]["prefixRetention"]
+    custody_path = C._paths("worker")[2]
+    path = custody_path / "productive-prefix"
+    require(custody_path in reader.directories and path in reader.directories, "PREFIX_MANDATORY_READ_DIRECTORIES")
+    for name in D.PREFIX_FILES:
+        key = path, name
+        require(key in reader.files, "PREFIX_MANDATORY_READ_FILE")
+        raw, binding, maximum = reader.files[key]
+        row = reference["files"][name]
+        require(maximum == (D.PREFIX_INDEX_LIMIT if name == "retention-index.json" else D.LIMIT) and
+            len(raw) == row["bytes"] and O.digest(raw) == row["sha256"] and binding == row["fileBinding"],
+            "PREFIX_MANDATORY_READ_BINDING")
+    _prefix_directory_check(reader.owner, reader.directories[custody_path][0], reader.directories[path][0], reference)
+
+
 def _read_productive_graph(reader, blobs, inputs):
     index = D.canonical(reader.handoff.raw)
-    refs = D.fields(index["references"], "initializerFiles staging phaseOriginals")
+    refs = D.fields(index["references"], "initializerFiles staging phaseOriginals prefixRetention")
+    _read_prefix_retention(reader, refs["prefixRetention"], inputs)
     require(type(refs["initializerFiles"]) is dict and set(refs["initializerFiles"]) == set(D.INITIALIZER_FILES),
             "INITIAL_ORIGINAL_FILES_REQUIRED")
     for name, raw in inputs.initializer_originals:
@@ -2541,7 +2742,8 @@ def read_productive_handoff(owner, first, claims):
             binding["initializerCheckedNs"], original["initializerCheckedLocal"])
         inputs = D.InitialInputs(dto, D.capture_originals(dto))
         D.same(inputs.binding(), binding, "HANDOFF_INPUTS_CHANGED")
-        D.handoff_record(raw, blobs, inputs, first, claims, directory.path, tuple(directory.identity))
+        D.handoff_record(raw, blobs, inputs, first, claims, directory.path, tuple(directory.identity),
+            custody=C._paths("worker")[2])
         return_raw = _read_file(reader, path, "producer-function-return.json")
         D.producer_return_record(return_raw, raw, inputs, first, claims["PRODUCER_RETURN_SHA256"], tuple(directory.identity))
         result = HandoffInputs(raw, worker, dto.history_raw, dto.proposal_raw, dto.source_records, path,
@@ -2549,6 +2751,7 @@ def read_productive_handoff(owner, first, claims):
         _progress(reader, handoff=result)
         _read_productive_graph(reader, blobs, inputs)
         _names(owner, directory, (*D.BLOB_NAMES, "save-handoff.json"))
+        _prefix_reader_check(reader)
         _progress(reader, graph=N._history_graph(result.__dict__, worker.__dict__, dto.__dict__, reader.claims, reader.first,
             tuple((key, raw, stamp, maximum) for key, (raw, stamp, maximum) in reader.files.items())))
         checked_handoff_inputs(owner, result)
@@ -2724,6 +2927,7 @@ def _recheck_inputs(reader, inputs, graph):
     owner = reader.owner
     _reader_passive(reader, allow_closed=False)
     N._check_history(graph)
+    _prefix_reader_check(reader)
     for (path, name), (raw, binding, maximum) in tuple(reader.files.items()):
         _read_file(reader, path, name, maximum, expected=raw, binding=binding)
     for path, name, count, digest, binding_raw in reader.large:
@@ -2732,6 +2936,7 @@ def _recheck_inputs(reader, inputs, graph):
     require(source == inputs.source_inputs and extra == inputs.inputs.stage_value["bootstrapInputs"], "FINAL_SOURCE_INPUTS_CHANGED")
     for directory, _kind, pin, _row, _label in reader.directories.values():
         require(tuple(directory.verify().identity) == pin, "FINAL_READ_DIRECTORY_CHANGED")
+    _prefix_reader_check(reader)
     owner.end()
     N._check_history(graph)
 

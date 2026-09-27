@@ -139,6 +139,59 @@ rewrites its result nor executes the subsequently added finite U/A/Node Action
 or their joint controls. It does not replace ordinary FULL/Desktop,
 `complete-gate`, `review`, `scan / osv-scan`, or `osv-scanner` acceptance.
 
+## Prefix record retention: reviewed source and first focused result
+
+The productive handoff now retains the exact five historical C originals plus
+one pending index in a separate, fixed six-file `productive-prefix` sidecar.
+The original 31 handoff blobs plus their index remain unchanged in number.
+Strict V2 handoff/function-return schemas require this reference; the shared
+private-Step/public-provider reader and every recheck require all six actual
+file reads and native bindings. Retired C provenance stays historical; the
+sidecar does not recreate live authority or claim 281 actual native reads from
+38 originals plus declarations.
+
+Independent source verdict:
+`APPROVE_EXACT_PREFIX_RETENTION_R2_IMPLEMENTATION_SOURCE_ONLY`, SHA-256
+`95c819e532f0116aac010e1234e73eb3c8e42f07a869dca8d362de7da4a9774d`.
+The first review found two issues **before execution**: original writer methods
+needed per-slot identity rather than tuple equality, and the multiblock fixture
+had to exceed the maintained 1MiB block, not a claimed 64KiB block. Both were
+corrected and independently reviewed before the first invocation. R1 was never
+executed; these were not failed test results or changed supplier limits.
+
+Only the new prefix suite ran locally, once and fail-fast, on
+2026-09-27 at 01:18:06–01:18:32 UTC:
+
+```bash
+python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-prefix-retention-test.py -v -f
+```
+
+**42/42 PASS, exit0**: 11 DATA, 25 memory/native-substitution models and six
+source attachment controls. Bash whole-wrapper wall/user/system were
+26.944/26.739/0.170 seconds (CPU26.909); unittest body25.683s. All34 integrated
+source/supplier hashes, protected instructions and the tracked delta matched
+before/after. Original log SHA-256:
+`8f520e86f99414d5a535908dee8223c639817b8da5a67ec14aa6b2337a822817`.
+Original result-manifest SHA-256:
+`d3650b9afb34f925f329bd2d9e4d92f6c083109558ff8dd19cbbbab424b4ca0c`.
+Independent result verdict:
+`APPROVE_EXACT_PREFIX42_FOUNDATION_OFFLINE_SOURCE_MODEL_RESULTS_ONLY`, SHA-256
+`c9221b776cb653084aaabf79aa86eea8dd780c7486cb9c8eed0c308e585501c5`.
+
+The positive model checks first144/second21 original owner rows, the same
+original45-second frame, exact `[1MiB,4096]` writes, prior-only known close and
+mandatory sidecar rereads. The C proof and native resources remain explicitly
+modeled; these counts are **not measured native fit or productive execution**.
+External CPU60/wall120+kill5/AS768MiB/core0 were probe ceilings only. An earlier
+read-only preflight stopped on a mistyped review digest before any source copy
+or candidate execution; that error remains preserved separately.
+
+The existing source-CI workflow adds one complete prefix invocation after the
+adapter controls. Its combined regression is planned, not yet an observed
+result for this increment. No old local suite, accepted 1,066-file reader,
+preview or application build was rerun. Final productive custody/backend and
+productive downstream receivers remain separate implementation prerequisites.
+
 ## Still required before productive execution and Release
 
 The complete productive final-custody consumer still needs connected

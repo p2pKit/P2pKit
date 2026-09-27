@@ -22,8 +22,9 @@ Current production SHA-256:
 The production entry is `.github/actions/initial-recipient-upload/action.yml`;
 no production workflow invokes it in this increment. The source-check workflow
 adds the complete finite DATA29/native-model31, Node DATA32/owner22/controller24,
-and joint Python/Node contract7 suites. That integration is a planned combined
-source regression, **not an observed hosted result**.
+and joint Python/Node contract7 suites. The subsequently accepted combined
+source-CI result at `458459e0` is recorded below; it is still source/model
+coverage, not a native/provider run or workflow activation.
 
 ### Exact local results and preserved failed aggregates (2026-09-27)
 
@@ -67,11 +68,37 @@ source regression, **not an observed hosted result**.
   `3fbcb775a747ddcbaea6ab0294c97229a966e8af862fcde3139f5cb159e3327d`.
 
 No successful local reader, preview or prior model suite was replayed for this
-increment. Productive prefix/final custody/backend, downstream seal/B/K and
+increment. Productive final custody/backend, downstream seal/B/K and
 production workflow integration remain separate prerequisites. Actual service
 visibility, retention/digest, native retirement, runner continuity and timing
 still require genuine hosted qualification. All existing HOLDs, source/owner
 authorizations, deadlines and Release gates remain; **NOT_READY**.
+
+### Accepted combined source-CI result at 458459e0
+
+Hosted run [36283986082/1](https://github.com/p2pKit/P2pKit/actions/runs/36283986082),
+job `108521115083`, passed at exact
+`458459e00c20f8b88c9d59c4df258d70923cc8f6`, tree
+`a0f8713b0985db3d2e2e5299e790b48457e50f16`. All11 listed steps succeeded;
+the job lasted78 seconds (00:56:05–00:57:23 UTC, 2026-09-27), within its
+unchanged five-minute source-control budget.
+
+Original logs record **43 unittest invocations / 1,241 reported tests**, all43
+aggregates OK; **228 Node models** (78/33/39/32/22/24); and **14 dependency-free
+Java version controls**, run on the hosted runner only. This includes current
+complete DATA29, native-model31, corrected Node owner22 and joint contract7
+passes. Those are source/model tests, not actual native, HTTP or custody work.
+They do not convert the earlier failed local aggregates into local full-suite
+passes; the local coverage statements above retain their then-observed scope.
+
+Original result-manifest SHA-256:
+`19d07cc9496415dc256451dcb3b5739fffaf773c50ee6b63aa557c093f0e2ffb`.
+Independent verdict: `APPROVE_EXACT_458459E0_HOSTED_SOURCE_CONTROL_RESULTS_ONLY`;
+review SHA-256:
+`6141b920605a3186819aab27a6550741172e3e7f81b30ea38d8e7fcf8101a925`.
+All18 source postimages matched the independently reviewed integration.
+No accepted reader or preview build ran. This source job is none of the four
+required main checks and lifts no ordinary, Stage2, C1/C2 or Release HOLD.
 
 The sections below retain the exact earlier source/result scopes. Their hashes
 and then-outstanding implementation statements are historical, not current

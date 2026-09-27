@@ -52,6 +52,7 @@ jobs:
           # accept an additional -f when that constructor argument is explicit.
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-use-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-adapter-test.py -v -f
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-prefix-retention-test.py -v -f
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-artifact-zip-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-artifact-delivery-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-artifact-native-stream-test.py -v -f
