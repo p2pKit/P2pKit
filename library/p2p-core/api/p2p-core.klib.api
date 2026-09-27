@@ -181,6 +181,18 @@ final enum class dev.p2pkit.core/LocalIdentityRecovery : kotlin/Enum<dev.p2pkit.
     final fun values(): kotlin/Array<dev.p2pkit.core/LocalIdentityRecovery> // dev.p2pkit.core/LocalIdentityRecovery.values|values#static(){}[0]
 }
 
+final enum class dev.p2pkit.core/PeerAdmission : kotlin/Enum<dev.p2pkit.core/PeerAdmission> { // dev.p2pkit.core/PeerAdmission|null[0]
+    enum entry EnrollmentOnly // dev.p2pkit.core/PeerAdmission.EnrollmentOnly|null[0]
+    enum entry Rejected // dev.p2pkit.core/PeerAdmission.Rejected|null[0]
+    enum entry Trusted // dev.p2pkit.core/PeerAdmission.Trusted|null[0]
+
+    final val entries // dev.p2pkit.core/PeerAdmission.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<dev.p2pkit.core/PeerAdmission> // dev.p2pkit.core/PeerAdmission.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): dev.p2pkit.core/PeerAdmission // dev.p2pkit.core/PeerAdmission.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<dev.p2pkit.core/PeerAdmission> // dev.p2pkit.core/PeerAdmission.values|values#static(){}[0]
+}
+
 final enum class dev.p2pkit.core/Platform : kotlin/Enum<dev.p2pkit.core/Platform> { // dev.p2pkit.core/Platform|null[0]
     enum entry ANDROID // dev.p2pkit.core/Platform.ANDROID|null[0]
     enum entry IOS // dev.p2pkit.core/Platform.IOS|null[0]
@@ -210,6 +222,21 @@ final enum class dev.p2pkit.core/Retryability : kotlin/Enum<dev.p2pkit.core/Retr
     final fun values(): kotlin/Array<dev.p2pkit.core/Retryability> // dev.p2pkit.core/Retryability.values|values#static(){}[0]
 }
 
+final enum class dev.p2pkit.core/SessionFailureKind : kotlin/Enum<dev.p2pkit.core/SessionFailureKind> { // dev.p2pkit.core/SessionFailureKind|null[0]
+    enum entry Authentication // dev.p2pkit.core/SessionFailureKind.Authentication|null[0]
+    enum entry Authorization // dev.p2pkit.core/SessionFailureKind.Authorization|null[0]
+    enum entry Capacity // dev.p2pkit.core/SessionFailureKind.Capacity|null[0]
+    enum entry Protocol // dev.p2pkit.core/SessionFailureKind.Protocol|null[0]
+    enum entry ReconnectExhausted // dev.p2pkit.core/SessionFailureKind.ReconnectExhausted|null[0]
+    enum entry Transport // dev.p2pkit.core/SessionFailureKind.Transport|null[0]
+
+    final val entries // dev.p2pkit.core/SessionFailureKind.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<dev.p2pkit.core/SessionFailureKind> // dev.p2pkit.core/SessionFailureKind.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): dev.p2pkit.core/SessionFailureKind // dev.p2pkit.core/SessionFailureKind.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<dev.p2pkit.core/SessionFailureKind> // dev.p2pkit.core/SessionFailureKind.values|values#static(){}[0]
+}
+
 final enum class dev.p2pkit.core/TransportKind : kotlin/Enum<dev.p2pkit.core/TransportKind> { // dev.p2pkit.core/TransportKind|null[0]
     enum entry BLE // dev.p2pkit.core/TransportKind.BLE|null[0]
     enum entry LAN // dev.p2pkit.core/TransportKind.LAN|null[0]
@@ -222,6 +249,10 @@ final enum class dev.p2pkit.core/TransportKind : kotlin/Enum<dev.p2pkit.core/Tra
 
     final fun valueOf(kotlin/String): dev.p2pkit.core/TransportKind // dev.p2pkit.core/TransportKind.valueOf|valueOf#static(kotlin.String){}[0]
     final fun values(): kotlin/Array<dev.p2pkit.core/TransportKind> // dev.p2pkit.core/TransportKind.values|values#static(){}[0]
+}
+
+abstract fun interface dev.p2pkit.core/PeerAdmissionController { // dev.p2pkit.core/PeerAdmissionController|null[0]
+    abstract fun admission(dev.p2pkit.core/PeerIdentity): dev.p2pkit.core/PeerAdmission // dev.p2pkit.core/PeerAdmissionController.admission|admission(dev.p2pkit.core.PeerIdentity){}[0]
 }
 
 abstract interface dev.p2pkit.core.permission/P2pPermissionManager { // dev.p2pkit.core.permission/P2pPermissionManager|null[0]
@@ -449,6 +480,10 @@ abstract interface dev.p2pkit.core/P2pSession { // dev.p2pkit.core/P2pSession|nu
         abstract fun <get-peer>(): dev.p2pkit.core/Peer // dev.p2pkit.core/P2pSession.peer.<get-peer>|<get-peer>(){}[0]
     abstract val state // dev.p2pkit.core/P2pSession.state|{}state[0]
         abstract fun <get-state>(): kotlinx.coroutines.flow/StateFlow<dev.p2pkit.core/ConnectionState> // dev.p2pkit.core/P2pSession.state.<get-state>|<get-state>(){}[0]
+    open val admission // dev.p2pkit.core/P2pSession.admission|{}admission[0]
+        open fun <get-admission>(): dev.p2pkit.core/PeerAdmission // dev.p2pkit.core/P2pSession.admission.<get-admission>|<get-admission>(){}[0]
+    open val connectionInfo // dev.p2pkit.core/P2pSession.connectionInfo|{}connectionInfo[0]
+        open fun <get-connectionInfo>(): kotlinx.coroutines.flow/StateFlow<dev.p2pkit.core/SessionConnectionInfo> // dev.p2pkit.core/P2pSession.connectionInfo.<get-connectionInfo>|<get-connectionInfo>(){}[0]
     open val peerIdentity // dev.p2pkit.core/P2pSession.peerIdentity|{}peerIdentity[0]
         open fun <get-peerIdentity>(): dev.p2pkit.core/PeerIdentity // dev.p2pkit.core/P2pSession.peerIdentity.<get-peerIdentity>|<get-peerIdentity>(){}[0]
     open val pendingFileOffers // dev.p2pkit.core/P2pSession.pendingFileOffers|{}pendingFileOffers[0]
@@ -457,6 +492,7 @@ abstract interface dev.p2pkit.core/P2pSession { // dev.p2pkit.core/P2pSession|nu
     abstract suspend fun close() // dev.p2pkit.core/P2pSession.close|close(){}[0]
     abstract suspend fun send(dev.p2pkit.core/P2pMessage) // dev.p2pkit.core/P2pSession.send|send(dev.p2pkit.core.P2pMessage){}[0]
     abstract suspend fun sendFile(kotlin/String, kotlin/Long, kotlin/String?, kotlinx.io/RawSource): dev.p2pkit.core.transfer/P2pFileTransfer // dev.p2pkit.core/P2pSession.sendFile|sendFile(kotlin.String;kotlin.Long;kotlin.String?;kotlinx.io.RawSource){}[0]
+    open suspend fun sendAtGeneration(dev.p2pkit.core/P2pMessage, kotlin/Long) // dev.p2pkit.core/P2pSession.sendAtGeneration|sendAtGeneration(dev.p2pkit.core.P2pMessage;kotlin.Long){}[0]
     open suspend fun sendFile(kotlin/String, kotlin/String?, dev.p2pkit.core.transfer/PreparedFileSource): dev.p2pkit.core.transfer/P2pFileTransfer // dev.p2pkit.core/P2pSession.sendFile|sendFile(kotlin.String;kotlin.String?;dev.p2pkit.core.transfer.PreparedFileSource){}[0]
 }
 
@@ -584,6 +620,9 @@ final class dev.p2pkit.core.dsl/P2pKitBuilder { // dev.p2pkit.core.dsl/P2pKitBui
     final var permissionManager // dev.p2pkit.core.dsl/P2pKitBuilder.permissionManager|{}permissionManager[0]
         final fun <get-permissionManager>(): dev.p2pkit.core.permission/P2pPermissionManager? // dev.p2pkit.core.dsl/P2pKitBuilder.permissionManager.<get-permissionManager>|<get-permissionManager>(){}[0]
         final fun <set-permissionManager>(dev.p2pkit.core.permission/P2pPermissionManager?) // dev.p2pkit.core.dsl/P2pKitBuilder.permissionManager.<set-permissionManager>|<set-permissionManager>(dev.p2pkit.core.permission.P2pPermissionManager?){}[0]
+    final var sessionProfile // dev.p2pkit.core.dsl/P2pKitBuilder.sessionProfile|{}sessionProfile[0]
+        final fun <get-sessionProfile>(): dev.p2pkit.core/P2pSessionProfile? // dev.p2pkit.core.dsl/P2pKitBuilder.sessionProfile.<get-sessionProfile>|<get-sessionProfile>(){}[0]
+        final fun <set-sessionProfile>(dev.p2pkit.core/P2pSessionProfile?) // dev.p2pkit.core.dsl/P2pKitBuilder.sessionProfile.<set-sessionProfile>|<set-sessionProfile>(dev.p2pkit.core.P2pSessionProfile?){}[0]
 
     final fun fileTransfer(kotlin/Function1<dev.p2pkit.core.dsl/FileTransferConfigBuilder, kotlin/Unit>) // dev.p2pkit.core.dsl/P2pKitBuilder.fileTransfer|fileTransfer(kotlin.Function1<dev.p2pkit.core.dsl.FileTransferConfigBuilder,kotlin.Unit>){}[0]
     final fun keepAlive(kotlin/Function1<dev.p2pkit.core.dsl/KeepAliveConfigBuilder, kotlin/Unit>) // dev.p2pkit.core.dsl/P2pKitBuilder.keepAlive|keepAlive(kotlin.Function1<dev.p2pkit.core.dsl.KeepAliveConfigBuilder,kotlin.Unit>){}[0]
@@ -928,6 +967,17 @@ final class dev.p2pkit.core.transport/TransportPair { // dev.p2pkit.core.transpo
     final fun toString(): kotlin/String // dev.p2pkit.core.transport/TransportPair.toString|toString(){}[0]
 }
 
+final class dev.p2pkit.core/BoundedReconnect { // dev.p2pkit.core/BoundedReconnect|null[0]
+    constructor <init>(kotlin/Long = ..., kotlin/Long = ..., kotlin/Long = ...) // dev.p2pkit.core/BoundedReconnect.<init>|<init>(kotlin.Long;kotlin.Long;kotlin.Long){}[0]
+
+    final val initialDelayMillis // dev.p2pkit.core/BoundedReconnect.initialDelayMillis|{}initialDelayMillis[0]
+        final fun <get-initialDelayMillis>(): kotlin/Long // dev.p2pkit.core/BoundedReconnect.initialDelayMillis.<get-initialDelayMillis>|<get-initialDelayMillis>(){}[0]
+    final val maximumDelayMillis // dev.p2pkit.core/BoundedReconnect.maximumDelayMillis|{}maximumDelayMillis[0]
+        final fun <get-maximumDelayMillis>(): kotlin/Long // dev.p2pkit.core/BoundedReconnect.maximumDelayMillis.<get-maximumDelayMillis>|<get-maximumDelayMillis>(){}[0]
+    final val windowMillis // dev.p2pkit.core/BoundedReconnect.windowMillis|{}windowMillis[0]
+        final fun <get-windowMillis>(): kotlin/Long // dev.p2pkit.core/BoundedReconnect.windowMillis.<get-windowMillis>|<get-windowMillis>(){}[0]
+}
+
 final class dev.p2pkit.core/KeepAliveConfig { // dev.p2pkit.core/KeepAliveConfig|null[0]
     constructor <init>(kotlin/Long = ..., kotlin/Long = ...) // dev.p2pkit.core/KeepAliveConfig.<init>|<init>(kotlin.Long;kotlin.Long){}[0]
 
@@ -942,6 +992,48 @@ final class dev.p2pkit.core/KeepAliveConfig { // dev.p2pkit.core/KeepAliveConfig
     final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core/KeepAliveConfig.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // dev.p2pkit.core/KeepAliveConfig.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // dev.p2pkit.core/KeepAliveConfig.toString|toString(){}[0]
+}
+
+final class dev.p2pkit.core/P2pSessionProfile { // dev.p2pkit.core/P2pSessionProfile|null[0]
+    constructor <init>(dev.p2pkit.core/PeerAdmissionController, dev.p2pkit.core/PayloadBudget, kotlin/Int, kotlin/Int = ..., kotlin/Int = ..., kotlin/Int = ..., kotlin/Int = ..., kotlin/Long = ..., dev.p2pkit.core/BoundedReconnect = ...) // dev.p2pkit.core/P2pSessionProfile.<init>|<init>(dev.p2pkit.core.PeerAdmissionController;dev.p2pkit.core.PayloadBudget;kotlin.Int;kotlin.Int;kotlin.Int;kotlin.Int;kotlin.Int;kotlin.Long;dev.p2pkit.core.BoundedReconnect){}[0]
+
+    final val admission // dev.p2pkit.core/P2pSessionProfile.admission|{}admission[0]
+        final fun <get-admission>(): dev.p2pkit.core/PeerAdmissionController // dev.p2pkit.core/P2pSessionProfile.admission.<get-admission>|<get-admission>(){}[0]
+    final val maxApplicationBytes // dev.p2pkit.core/P2pSessionProfile.maxApplicationBytes|{}maxApplicationBytes[0]
+        final fun <get-maxApplicationBytes>(): kotlin/Int // dev.p2pkit.core/P2pSessionProfile.maxApplicationBytes.<get-maxApplicationBytes>|<get-maxApplicationBytes>(){}[0]
+    final val maxEnrollmentSessions // dev.p2pkit.core/P2pSessionProfile.maxEnrollmentSessions|{}maxEnrollmentSessions[0]
+        final fun <get-maxEnrollmentSessions>(): kotlin/Int // dev.p2pkit.core/P2pSessionProfile.maxEnrollmentSessions.<get-maxEnrollmentSessions>|<get-maxEnrollmentSessions>(){}[0]
+    final val maxInboundHandshakes // dev.p2pkit.core/P2pSessionProfile.maxInboundHandshakes|{}maxInboundHandshakes[0]
+        final fun <get-maxInboundHandshakes>(): kotlin/Int // dev.p2pkit.core/P2pSessionProfile.maxInboundHandshakes.<get-maxInboundHandshakes>|<get-maxInboundHandshakes>(){}[0]
+    final val maxQueuedBytesPerSession // dev.p2pkit.core/P2pSessionProfile.maxQueuedBytesPerSession|{}maxQueuedBytesPerSession[0]
+        final fun <get-maxQueuedBytesPerSession>(): kotlin/Long // dev.p2pkit.core/P2pSessionProfile.maxQueuedBytesPerSession.<get-maxQueuedBytesPerSession>|<get-maxQueuedBytesPerSession>(){}[0]
+    final val maxQueuedMessagesPerSession // dev.p2pkit.core/P2pSessionProfile.maxQueuedMessagesPerSession|{}maxQueuedMessagesPerSession[0]
+        final fun <get-maxQueuedMessagesPerSession>(): kotlin/Int // dev.p2pkit.core/P2pSessionProfile.maxQueuedMessagesPerSession.<get-maxQueuedMessagesPerSession>|<get-maxQueuedMessagesPerSession>(){}[0]
+    final val maxTrustedSessions // dev.p2pkit.core/P2pSessionProfile.maxTrustedSessions|{}maxTrustedSessions[0]
+        final fun <get-maxTrustedSessions>(): kotlin/Int // dev.p2pkit.core/P2pSessionProfile.maxTrustedSessions.<get-maxTrustedSessions>|<get-maxTrustedSessions>(){}[0]
+    final val payloadBudget // dev.p2pkit.core/P2pSessionProfile.payloadBudget|{}payloadBudget[0]
+        final fun <get-payloadBudget>(): dev.p2pkit.core/PayloadBudget // dev.p2pkit.core/P2pSessionProfile.payloadBudget.<get-payloadBudget>|<get-payloadBudget>(){}[0]
+    final val reconnect // dev.p2pkit.core/P2pSessionProfile.reconnect|{}reconnect[0]
+        final fun <get-reconnect>(): dev.p2pkit.core/BoundedReconnect // dev.p2pkit.core/P2pSessionProfile.reconnect.<get-reconnect>|<get-reconnect>(){}[0]
+}
+
+final class dev.p2pkit.core/PayloadBudget { // dev.p2pkit.core/PayloadBudget|null[0]
+    constructor <init>(kotlin/Long) // dev.p2pkit.core/PayloadBudget.<init>|<init>(kotlin.Long){}[0]
+
+    final val capacityBytes // dev.p2pkit.core/PayloadBudget.capacityBytes|{}capacityBytes[0]
+        final fun <get-capacityBytes>(): kotlin/Long // dev.p2pkit.core/PayloadBudget.capacityBytes.<get-capacityBytes>|<get-capacityBytes>(){}[0]
+    final val retainedBytes // dev.p2pkit.core/PayloadBudget.retainedBytes|{}retainedBytes[0]
+        final fun <get-retainedBytes>(): kotlinx.coroutines.flow/StateFlow<kotlin/Long> // dev.p2pkit.core/PayloadBudget.retainedBytes.<get-retainedBytes>|<get-retainedBytes>(){}[0]
+
+    final fun tryReserve(kotlin/Long): dev.p2pkit.core/PayloadLease? // dev.p2pkit.core/PayloadBudget.tryReserve|tryReserve(kotlin.Long){}[0]
+}
+
+final class dev.p2pkit.core/PayloadLease { // dev.p2pkit.core/PayloadLease|null[0]
+    final val bytes // dev.p2pkit.core/PayloadLease.bytes|{}bytes[0]
+        final fun <get-bytes>(): kotlin/Long // dev.p2pkit.core/PayloadLease.bytes.<get-bytes>|<get-bytes>(){}[0]
+
+    final fun release() // dev.p2pkit.core/PayloadLease.release|release(){}[0]
+    final fun shrinkTo(kotlin/Long): kotlin/Boolean // dev.p2pkit.core/PayloadLease.shrinkTo|shrinkTo(kotlin.Long){}[0]
 }
 
 final class dev.p2pkit.core/Peer { // dev.p2pkit.core/Peer|null[0]
@@ -1004,6 +1096,38 @@ final class dev.p2pkit.core/PeerPairingQr { // dev.p2pkit.core/PeerPairingQr|nul
         final fun parse(kotlin/String): dev.p2pkit.core/PeerPairingQr // dev.p2pkit.core/PeerPairingQr.Companion.parse|parse(kotlin.String){}[0]
         final fun parseOrNull(kotlin/String): dev.p2pkit.core/PeerPairingQr? // dev.p2pkit.core/PeerPairingQr.Companion.parseOrNull|parseOrNull(kotlin.String){}[0]
     }
+}
+
+final class dev.p2pkit.core/SessionConnectionInfo { // dev.p2pkit.core/SessionConnectionInfo|null[0]
+    constructor <init>(kotlin/Long, dev.p2pkit.core/SessionFailure? = ...) // dev.p2pkit.core/SessionConnectionInfo.<init>|<init>(kotlin.Long;dev.p2pkit.core.SessionFailure?){}[0]
+
+    final val generation // dev.p2pkit.core/SessionConnectionInfo.generation|{}generation[0]
+        final fun <get-generation>(): kotlin/Long // dev.p2pkit.core/SessionConnectionInfo.generation.<get-generation>|<get-generation>(){}[0]
+    final val lastFailure // dev.p2pkit.core/SessionConnectionInfo.lastFailure|{}lastFailure[0]
+        final fun <get-lastFailure>(): dev.p2pkit.core/SessionFailure? // dev.p2pkit.core/SessionConnectionInfo.lastFailure.<get-lastFailure>|<get-lastFailure>(){}[0]
+
+    final fun component1(): kotlin/Long // dev.p2pkit.core/SessionConnectionInfo.component1|component1(){}[0]
+    final fun component2(): dev.p2pkit.core/SessionFailure? // dev.p2pkit.core/SessionConnectionInfo.component2|component2(){}[0]
+    final fun copy(kotlin/Long = ..., dev.p2pkit.core/SessionFailure? = ...): dev.p2pkit.core/SessionConnectionInfo // dev.p2pkit.core/SessionConnectionInfo.copy|copy(kotlin.Long;dev.p2pkit.core.SessionFailure?){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core/SessionConnectionInfo.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // dev.p2pkit.core/SessionConnectionInfo.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // dev.p2pkit.core/SessionConnectionInfo.toString|toString(){}[0]
+}
+
+final class dev.p2pkit.core/SessionFailure { // dev.p2pkit.core/SessionFailure|null[0]
+    constructor <init>(dev.p2pkit.core/SessionFailureKind, kotlin/Boolean) // dev.p2pkit.core/SessionFailure.<init>|<init>(dev.p2pkit.core.SessionFailureKind;kotlin.Boolean){}[0]
+
+    final val kind // dev.p2pkit.core/SessionFailure.kind|{}kind[0]
+        final fun <get-kind>(): dev.p2pkit.core/SessionFailureKind // dev.p2pkit.core/SessionFailure.kind.<get-kind>|<get-kind>(){}[0]
+    final val retryable // dev.p2pkit.core/SessionFailure.retryable|{}retryable[0]
+        final fun <get-retryable>(): kotlin/Boolean // dev.p2pkit.core/SessionFailure.retryable.<get-retryable>|<get-retryable>(){}[0]
+
+    final fun component1(): dev.p2pkit.core/SessionFailureKind // dev.p2pkit.core/SessionFailure.component1|component1(){}[0]
+    final fun component2(): kotlin/Boolean // dev.p2pkit.core/SessionFailure.component2|component2(){}[0]
+    final fun copy(dev.p2pkit.core/SessionFailureKind = ..., kotlin/Boolean = ...): dev.p2pkit.core/SessionFailure // dev.p2pkit.core/SessionFailure.copy|copy(dev.p2pkit.core.SessionFailureKind;kotlin.Boolean){}[0]
+    final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core/SessionFailure.equals|equals(kotlin.Any?){}[0]
+    final fun hashCode(): kotlin/Int // dev.p2pkit.core/SessionFailure.hashCode|hashCode(){}[0]
+    final fun toString(): kotlin/String // dev.p2pkit.core/SessionFailure.toString|toString(){}[0]
 }
 
 final value class dev.p2pkit.core.provisioning/WifiPassword { // dev.p2pkit.core.provisioning/WifiPassword|null[0]
@@ -1921,6 +2045,8 @@ sealed class dev.p2pkit.core/P2pMessage { // dev.p2pkit.core/P2pMessage|null[0]
             final fun <get-bytes>(): kotlin/ByteArray // dev.p2pkit.core/P2pMessage.Binary.bytes.<get-bytes>|<get-bytes>(){}[0]
         final val metadata // dev.p2pkit.core/P2pMessage.Binary.metadata|{}metadata[0]
             final fun <get-metadata>(): kotlin.collections/Map<kotlin/String, kotlin/String> // dev.p2pkit.core/P2pMessage.Binary.metadata.<get-metadata>|<get-metadata>(){}[0]
+        final val sizeBytes // dev.p2pkit.core/P2pMessage.Binary.sizeBytes|{}sizeBytes[0]
+            final fun <get-sizeBytes>(): kotlin/Int // dev.p2pkit.core/P2pMessage.Binary.sizeBytes.<get-sizeBytes>|<get-sizeBytes>(){}[0]
 
         final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core/P2pMessage.Binary.equals|equals(kotlin.Any?){}[0]
         final fun hashCode(): kotlin/Int // dev.p2pkit.core/P2pMessage.Binary.hashCode|hashCode(){}[0]
@@ -2064,4 +2190,5 @@ final object dev.p2pkit.core/BuildInfo { // dev.p2pkit.core/BuildInfo|null[0]
 
 final fun (dev.p2pkit.core.transport/InternalPeer).dev.p2pkit.core.transport/discoveryLifetime(): dev.p2pkit.core.transport/DiscoveryLifetime // dev.p2pkit.core.transport/discoveryLifetime|discoveryLifetime@dev.p2pkit.core.transport.InternalPeer(){}[0]
 final fun (dev.p2pkit.core.transport/TransportHint).dev.p2pkit.core.transport/withDiscoveryLifetime(dev.p2pkit.core.transport/DiscoveryLifetime): dev.p2pkit.core.transport/TransportHint // dev.p2pkit.core.transport/withDiscoveryLifetime|withDiscoveryLifetime@dev.p2pkit.core.transport.TransportHint(dev.p2pkit.core.transport.DiscoveryLifetime){}[0]
+final fun dev.p2pkit.core.security/payloadSha256(kotlin/ByteArray): kotlin/ByteArray // dev.p2pkit.core.security/payloadSha256|payloadSha256(kotlin.ByteArray){}[0]
 final fun dev.p2pkit.core.security/resetIosSecureIdentity(dev.p2pkit.core/AppId) // dev.p2pkit.core.security/resetIosSecureIdentity|resetIosSecureIdentity(dev.p2pkit.core.AppId){}[0]
