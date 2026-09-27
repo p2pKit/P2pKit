@@ -2,8 +2,10 @@
 
 ## Status and boundaries
 
-**JVM/Android compilation and deterministic tests passed; Apple, real-network,
-security and capacity qualification remain pending.** Unit tests and workflow
+**JVM/Android and scoped ARM simulator tests, strict core/LAN/RPC Dokka, and
+Apple framework/Swift API compilation passed. The full lock/platform gate is
+blocked by unchanged-main JmDNS multicast readiness; real-network, security and
+capacity qualification remain pending.** Unit tests and workflow
 configuration are not platform or capacity evidence. Release Foundation remains
 **NOT_READY**, with all existing HOLDs, validation and release gates intact.
 RPC is not part of the immutable `0.7.0-rc3` publication.
@@ -34,8 +36,9 @@ streaming-JSON checksums passed independent Maven-byte/checksum/signature review
 Native ABI and RPC/sample dependency locks remain pending until the hosted
 generation and independent review succeed: the mandatory complete lock writer
 includes Apple work. Do not accept partial lock candidates,
-fabricate baselines, exclude missing locks or disable any gate. Strict Dokka
-also selects Native/Apple producers, so its full execution remains gated.
+fabricate baselines, exclude missing locks or disable any gate. Scoped strict
+core/LAN/RPC Dokka and framework/Swift compiler checks passed with unchanged
+inputs; they do not repair or replace the failed complete writer.
 
 Fresh main still contained the historical stale `org.jmdns` coordinate. The
 six obsolete lines were independently removed on this feature branch after

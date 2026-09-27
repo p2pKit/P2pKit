@@ -54,9 +54,11 @@ The sample has JVM/Android/iOS source targets. Its static `P2pKitRpcExample`
 framework exposes a thin shared-Kotlin façade for an application-owned Swift UI,
 not a replacement for the maintained P2P `P2pKitShared` sample framework. Keep
 suspend errors/cancellation catchable, install the required LAN/Bonjour usage
-declarations in the final app, and own foreground lifecycle explicitly. A real
-Swift consumer/link/provenance test remains pending. No framework binary is
-checked in or claimed available.
+declarations in the final app, and own foreground lifecycle explicitly. The
+[scoped hosted compiler run](../../docs/rpc/hosted-validation.md) linked all three
+Apple frameworks and typechecked the Swift fixture against their actual public
+interfaces. This is not application/runtime, packaged-XCFramework or full consumer
+qualification. No framework binary is checked in, uploaded or published.
 
 [`RpcSwiftApiCheck.swift`](verification/RpcSwiftApiCheck.swift) is a compile-only
 consumer fixture for pairing/connection, typed reads, unsafe reservations,
@@ -64,6 +66,13 @@ notifications, cleanup and typed error recovery. The feature-only hosted
 `compile-apple` mode links the actual example frameworks and typechecks this
 fixture without invoking it or publishing artifacts. A successful typecheck is
 not a Swift application/lifecycle, physical-device or interoperability test.
+
+The façade uses the application-owned Kotlin coroutine scope; callbacks are not
+implicitly dispatched onto Swift's main actor. Also, cancelling a Swift `Task`
+alone does not establish cancellation of an imported Kotlin suspend operation.
+Own/cancel the shared Kotlin scope or an application cancellation bridge and
+close the client explicitly when its role ends. Neither local nor remote
+cancellation rolls back side effects or makes an uncertain reservation safe to replay.
 
 ## Capacity qualification source
 

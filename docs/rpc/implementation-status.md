@@ -3,9 +3,10 @@
 ## Scope and baseline
 
 The approved [Optional LAN RPC plan](../../RPC_MODULE_PLAN.md) is implemented
-in source. **JVM/Android compilation and deterministic tests passed. The first
-hosted Apple/full-lock run failed; complete Apple, real-network/security and
-capacity qualification remain pending.** This is a
+in source. **JVM/Android tests, scoped ARM simulator tests, strict core/LAN/RPC
+Dokka and Apple framework/Swift API compilation passed. The complete lock/platform
+gate remains blocked by the unchanged-main JmDNS multicast-readiness failure;
+full Apple, real-network/security and capacity qualification remain pending.** This is a
 feature-workstream checkpoint, not approval to merge or release. The plan is
 preserved unchanged as the original planning snapshot.
 
@@ -214,13 +215,15 @@ SBOM JSON/XML and lint reports were snapshotted and hashed in the owned logs.
   candidates from graph inspection were quarantined and original locks restored.
   The OSV coverage guard still correctly fails: 12 requested lock inputs but
   only 10 populated inputs. Embedded-producer lock coverage also needs the
-  complete writer. Do not bypass or narrow it.
+  complete writer. The hosted full writer failed; a focused diagnostic confirmed
+  a genuine multicast-readiness failure, not successful lifecycle execution.
+  A newly admitted supported multicast-capable Mac is needed. Do not bypass or narrow it.
 - **Apple and complete ABI:** the [first hosted follow-up](hosted-validation.md)
   compiled Native/Cinterop and generated genuine core/LAN/RPC ABI candidates.
   Core/RPC/RPC-sample ARM simulator tests passed, but LAN had a Native failure
   and an unchanged-main JVM lifecycle failure. The complete writer failed and
-  no partial candidates were imported. Swift/framework checks, reviewed Native
-  baselines, strict-input gates and matching Intel execution remain outstanding.
+  no partial candidates were imported. Reviewed Native baselines, complete
+  strict-input gates and matching Intel execution remain outstanding.
   A scoped diagnostic confirmed unchanged JmDNS `host_not_announced` with first
   send `NoRouteToHostException` before lifecycle assertions; its cause is unknown.
   Seven later child modes did not run. A new Native test's unavailable libc
@@ -229,13 +232,19 @@ SBOM JSON/XML and lint reports were snapshotted and hashed in the owned logs.
   tests (plus the one pre-existing ignored diagnostic), including all three new
   endpoint-helper regressions, under normal strict resolution with unchanged
   inputs. Fresh counts/XML and cleanup were verified; it did not repeat JmDNS.
-- **Strict Dokka:** inspected task graphs select Native distribution download,
-  commonization and Apple/Cinterop compilation. Full execution remains gated;
-  no task was disabled to obtain a documentation pass. The newly authorized
-  hosted work can exercise that graph; configuration alone is not a result.
-- **Full release/consumer validation:** the actual SBOM and focused Android lint
-  passes above do not establish packaging, published-consumer, Swift or complete
-  cross-platform release-gate success. No publication or shared CI was started.
+  A later strict compiler run linked all three RPC sample Apple frameworks and
+  typechecked the Swift consumer fixture for each matching SDK/iOS-14 target;
+  actual outputs/minimum-OS metadata and cleanup were verified. This is not
+  Swift application/runtime, physical-device or true-Intel execution evidence.
+- **Strict Dokka:** core/LAN/RPC `dokkaGeneratePublicationHtml` passed with normal
+  strict resolution, warnings-as-errors and unchanged inputs in the hosted
+  compiler run. Nonempty outputs were hashed. No task was disabled and no
+  publication occurred; the complete writer/release gate is still outstanding.
+- **Full release/consumer validation:** the actual SBOM, focused Android lint
+  and scoped framework/Swift compiler passes do not establish packaging,
+  published-consumer, Swift application/runtime or complete cross-platform
+  release-gate success. No publication occurred; shared Foundation/release
+  workflows were not dispatched.
 - **Physical/security/capacity qualification:** none has run. Follow the exact
   experiments and evidence rules in [qualification](qualification.md). A failed
   capacity or security contract is a stop-and-review decision, not permission
@@ -250,3 +259,7 @@ Owned command logs, XML snapshots, graph inspections and review receipts remain
 under `.git/rpc-validation-20260927-RkXqJ9/` in the isolated clone, not in source
 control. They include unsuccessful exploratory runs as well as final results;
 only explicitly successful checks above are reported as passed.
+The separately authorized [hosted continuation](hosted-validation.md) retains all
+four run records and verified sanitized artifacts in
+`.git/rpc-hosted-20260927-0k7TY6/`; it ran no local Java/Gradle/Xcode build, accessed
+no other worktree/keys/private evidence, and imported no partial generated inputs.

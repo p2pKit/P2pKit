@@ -21,6 +21,8 @@ found that `actions/checkout` with `fetch-depth: 0` fetches tag refs despite
 `fetch-tags: false`; the workflow now avoids that behavior. Those were read-only
 ephemeral runner refs, not created/pushed repository tags. The isolated working
 clone was already full-history without tags and remains so.
+The corrected full-history/no-tags checks subsequently passed in the compiler run
+recorded below; the driver also checked that condition before execution/collection.
 
 ## Explicit execution, not an automatic retry
 
@@ -171,13 +173,57 @@ Twenty Python-only driver controls also passed. This validates the bounded Nativ
 regression scope, **not actual organization-LAN path enforcement, complete locks,
 all-target compatibility, release or capacity qualification**.
 
-After reviewed inputs are committed, normal strict Native ABI/Dokka and fresh
+## Framework, Swift surface and Dokka verified (scoped pass)
+
+[Run 36337930630](https://github.com/p2pKit/P2pKit/actions/runs/36337930630),
+source `de409d8543df1307c83df7c388bc3a315c1ee856`, passed all five compiler
+commands plus owned cleanup under normal strict verification, warnings-as-errors
+and unchanged committed inputs:
+
+| Check | Observed result |
+| --- | --- |
+| Core/LAN/RPC `dokkaGeneratePublicationHtml` | All three succeeded; nonempty HTML indexes hashed. |
+| RPC example debug frameworks | `iosSimulatorArm64`, `iosArm64`, `iosX64` linked; actual binaries, headers and module maps hashed; each framework's minimum-OS metadata was `14.0`. |
+| Swift consumer fixture | `swiftc -typecheck -warnings-as-errors -swift-version 5` passed against each matching framework/SDK and iOS-14 target triple. |
+| Input and process ownership | Full history/no tags, no tracked-input modifications, no restored caches, all five owned process groups drained, same-home Gradle stop succeeded. |
+| Offline driver controls | All 22 passed, including output/target/input/secret-exclusion controls. |
+
+The ARM64 host/toolchain versions match the Native run above. The verified
+sanitized artifact ZIP digest is
+`d6fb70ed2b433bab62e94e984868e03797b8fc4c22c5eb5d2f4ad9f711a92fca`.
+Framework binaries and raw logs were **not** uploaded; only their bounded
+hash/size receipts were retained in the sanitized run record. No application,
+device, simulator test or JmDNS fixture ran in this compiler-only job.
+
+This establishes compilation/public Swift API use, not Swift application linking,
+execution/cancellation propagation, packaged XCFramework/published-consumer
+qualification, native Intel runtime execution, physical iOS-14 compatibility or
+capacity. No partial lock/checksum/ABI candidate has been imported.
+
+## Remaining admission and gates
+
+The complete writer still needs a newly admitted supported isolated Mac with
+working multicast and simulator prerequisites: Apple Silicon/macOS 26/Xcode 26.5
+or genuine Intel/macOS 15/Xcode 26.3, following the
+[Mac prerequisite handoff](../testing/mac-handoff.md). A different toolchain needs
+reviewed admission, not silent substitution. The unchanged-main JmDNS failure
+must be resolved by genuine admission/evidence, not a different assertion, longer
+deadline, route/privacy override or an unchanged blind hosted retry.
+
+After complete reviewed inputs are committed, normal strict Native ABI and fresh
 platform-evidence checks must run against the exact committed source. Intel
 simulator execution requires its matching hosted architecture; an Apple Silicon
-run does not establish that result. Swift/framework consumers and complete
-release/consumer qualification remain separate until actually executed within
-the authorized scope. Consumer scripts that publish, even locally, are not
-implicitly authorized by this workflow.
+run does not establish that result. The scoped compiler passes above do not replace
+complete release/consumer qualification. Consumer scripts that publish, even
+locally, remain unauthorized by this workflow.
+
+All four hosted run records, metadata and verified sanitized ZIPs are retained
+in this isolated clone under `.git/rpc-hosted-20260927-0k7TY6/run-<run-id>/`,
+with digest/extraction receipts for the diagnostic and compiler runs.
+Failed runs are preserved separately,
+not overwritten or promoted by later scoped passes. No local Java/Gradle/Xcode
+build was started during this hosted continuation. Changes and reports were
+committed/pushed only on the feature branch; Foundation's status/HOLDs are untouched.
 
 No result from hosted compilation or simulators establishes actual LAN path
 enforcement, physical interoperability, foreground/background operation or the
