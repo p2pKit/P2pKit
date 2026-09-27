@@ -131,6 +131,22 @@ class IdentityModels(unittest.TestCase):
         self.refuse("OWNER_STATEMENT_BINDING", match=match)
         value = I.parse(self.bind().record, I.EVENT_LIMIT)
         value["firstPullRequest"]["runs"][3]["runId"] = "403"
+        for entry in value["firstPullRequest"]["jvmRuns"]:
+            entry["runId"] = "403"
+        with self.assertRaisesRegex(I.AdmissionError, "OWNER_STATEMENT_BINDING"):
+            H.cache_cohort(I.encoded(value))
+
+    def test_jvm_reference_type_and_wrapped_bytes_cannot_bind_as_ordinary_identity(self):
+        match = F.check_jvm(self.declaration, F.jvm_observation(self.declaration), self.histories)
+        self.refuse("ORIGINAL_TYPES", match=match)
+        self.refuse("MATCH_FIELDS", match=S.OrdinaryMatch(match.record))
+        value = I.parse(match.record, S.LIMIT)
+        value["scope"] = H.MATCH_SCOPE
+        self.refuse("PROFILE", match=S.OrdinaryMatch(I.encoded(value)))
+
+    def test_jvm_roster_change_cannot_reuse_original_owner_statement_hash(self):
+        value = I.parse(self.bind().record, I.EVENT_LIMIT)
+        value["firstPullRequest"]["jvmRuns"].reverse()
         with self.assertRaisesRegex(I.AdmissionError, "OWNER_STATEMENT_BINDING"):
             H.cache_cohort(I.encoded(value))
 

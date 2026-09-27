@@ -19,6 +19,9 @@ class CompositionPolicy(unittest.TestCase):
         cls.sources = POLICY.read_sources(ROOT)
 
     def mutate(self, path, before, after):
+        # A stale positive baseline must not impersonate the target mutation's
+        # rejection, even when it fails at the same supplier path.
+        POLICY.check_sources(self.sources)
         original = self.sources[path]
         self.assertIn(before, original, "mutation must target real executable source")
         changed = dict(self.sources)
@@ -28,6 +31,45 @@ class CompositionPolicy(unittest.TestCase):
 
     def test_reviewed_programs_match(self):
         POLICY.check_sources(self.sources)
+
+    def test_mutation_helper_requires_valid_unmodified_baseline(self):
+        POLICY.check_sources(self.sources)
+        path = "scripts/run-hosted-test-custody.py"
+        original = self.sources
+        self.sources = dict(original)
+        self.sources[path] += b"\n_UNREVIEWED_COMPOSITION_SENTINEL = True\n"
+        try:
+            with self.assertRaisesRegex(ValueError, "ordinary executable composition changed: " + path):
+                self.mutate(path, b'controller.full.run()', b'pass')
+        finally:
+            self.sources = original
+
+    def test_initial_controller_identity_is_distinct_and_never_sample_intent(self):
+        POLICY.check_sources(self.sources)
+        path = "scripts/run-hosted-test-custody.py"
+        for before, after in (
+            (b'value.get("scope") == "ORDINARY_HOSTED_TEST_CUSTODY_IDENTITY" and\n'
+             b'            initial.identity.cache_cohort(record) is None', b'True'),
+            (b'if context.get("scope") == initial.INITIAL_CONTEXT_SCOPE:', b'if False:'),
+            (b'digest(bound.record) == binding["identitySha256"]', b'True'),
+            (b'return False  # C2 is the first PR, never a main application producer.', b'return True'),
+        ):
+            with self.subTest(before=before):
+                self.assertEqual(self.sources[path].count(before), 1, "initial controller mutation must target one executable site")
+                self.mutate(path, before, after)
+
+    def test_initial_ordinary_seed_keeps_ordinary_layout_and_exact_cohort(self):
+        POLICY.check_sources(self.sources)
+        path = "scripts/hosted_dependency_seed_files.py"
+        for before, after in (
+            (b'ordinary = initial_ordinary.cache_cohort(admitted_raw)', b'ordinary = None'),
+            (b'profile is None and role is None or ordinary == (profile, role)', b'True'),
+            (b'            return None\n        initial = initial_bootstrap.cache_cohort(admitted_raw)',
+             b'            return ordinary\n        initial = initial_bootstrap.cache_cohort(admitted_raw)'),
+        ):
+            with self.subTest(before=before):
+                self.assertEqual(self.sources[path].count(before), 1, "initial ordinary seed mutation must target one executable site")
+                self.mutate(path, before, after)
 
     def test_initial_seed_route_remains_typed_and_bound_to_original_run_path(self):
         # A failed positive baseline cannot count as a successful mutation

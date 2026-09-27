@@ -21,11 +21,20 @@ classification. See the [checklist](checklist.md) and
 The retained initial-recipient exception is a one-time trust transition, not a
 second release path. Its current implementation does not lift these blockers:
 
-1. Register the bootstrap workflow legitimately on the default branch through
-   the normal reviewed GitHub flow. Configure the actual protected execution
-   environment and obtain fresh owner C1 authorization for the exact Foundation
-   base/ref/commit/tree/policy and selected bootstrap attempts. A candidate
-   policy, workflow file or agent review cannot authorize its own recipient.
+1. Verify the existing registered-ID/ref bootstrap carrier against the final
+   reviewed Foundation source and actual GitHub service identity. Initial C1
+   binds the unchanged original main base and successfully observed absent
+   recipient policy; it does not claim the reviewed workflow or policy is
+   already trusted on main. GitHub documents default-branch presence for
+   `workflow_dispatch`: the observed one-time allocation is not a guarantee of
+   future support or qualified execution. Fail closed on refusal or any
+   source/identity change; do not fall back to a different ref or legacy workflow.
+   Confirm the actual protected execution environment and obtain fresh personal
+   owner C1 authorization for the exact Foundation base/ref/commit/tree/policy
+   and selected bootstrap run attempts. Separately reviewed activation, all
+   Stage1 and ordinary HOLDs, and genuine qualification remain mandatory. A
+   candidate policy, workflow file, allocation result or agent review cannot
+   authorize its own recipient.
 2. Complete the genuine bootstrap/provider/retirement/custody/cache/timing
    qualifications and preserve their original H1 records. Configuration-only
    success does not satisfy ordinary ABI, simulator or transcript acceptance.
@@ -34,7 +43,8 @@ second release path. Its current implementation does not lift these blockers:
    protected gate; every initial worker must acquire its own current authority.
    Gate outputs and source-route decisions are not worker capabilities.
 4. Pass the actual ordinary FULL/Desktop and required GitHub gates, then deliver
-   the reviewed recipient policy to `main` by the normal authorized manual PR
+   the full maintained bootstrap workflow and reviewed recipient policy to
+   `main` by the normal qualified, personally authorized manual Foundation PR
    merge. Initial Desktop execution never packages or publishes applications.
    Subsequent ordinary runs use the genuinely trusted original-base policy.
 

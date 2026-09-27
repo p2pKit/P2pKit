@@ -20,12 +20,16 @@ identity, bootstrap = joint.identity, joint.bootstrap
 BASE, SOURCE_REF, POLICY_SHA256 = joint.BASE, joint.SOURCE_REF, joint.POLICY_SHA256
 LIMIT = joint.LIMIT
 STAGE1 = "P2PKIT_INITIAL_RECIPIENT_BOOTSTRAP_STAGE1_V1"
-STAGE2 = "P2PKIT_INITIAL_RECIPIENT_ORDINARY_STAGE2_V1"
+STAGE2 = "P2PKIT_INITIAL_RECIPIENT_ORDINARY_STAGE2_V2"
 COMMANDS = {STAGE1: "/p2pkit authorize-initial-bootstrap ",
             STAGE2: "/p2pkit authorize-initial-ordinary "}
 ENVIRONMENT = "initial-recipient-execution"
 BRANCHES = (SOURCE_REF.removeprefix("refs/heads/"), "refs/pull/*/merge")
 COMMON = "schema scope repository base reviewed sourceRef policySha256 notBefore expiresAt environment"
+JVM_PROFILE = "jvm-library"
+JVM_WORKFLOW, JVM_JOB = ".github/workflows/ci.yml", "jvm-library-checks"
+JVM_ROLES = ("linux-x64", "windows-x64")
+JVM_MATCH_SCOPE = STAGE2 + "_JVM_LIBRARY_MATCH_ONLY_NOT_ADMISSION"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -36,6 +40,13 @@ class BootstrapMatch:
 @dataclasses.dataclass(frozen=True)
 class OrdinaryMatch:
     """Authority/reference binding only; NOT acceptance of referenced evidence."""
+
+    record: bytes
+
+
+@dataclasses.dataclass(frozen=True)
+class JvmLibraryMatch:
+    """Supplied JVM identity/reference binding only; NOT native admission."""
 
     record: bytes
 
@@ -149,7 +160,7 @@ def bootstrap_roster(entries):
 
 
 def ordinary_roster(declaration):
-    first = fields(declaration["firstPullRequest"], "number merge runs", "PR_FIELDS")
+    first = fields(declaration["firstPullRequest"], "number merge runs jvmRuns", "PR_FIELDS")
     joint.number(first["number"])
     merge = joint.source(first["merge"])
     require(merge["commit"] not in (BASE["commit"], declaration["reviewed"]["commit"]) and
@@ -169,6 +180,19 @@ def ordinary_roster(declaration):
     require(len(desktops) == len(fulls) == 1 and len(roles) == 3 and
             {"linux-x64", "windows-x64"} <= roles and len(pairs) == 4, "ORDINARY_ROSTER")
     require(next(iter(desktops))[0] != next(iter(fulls))[0], "DUPLICATE_ORDINARY_RUN")
+    jvm_entries = first["jvmRuns"]
+    require(type(jvm_entries) is list and len(jvm_entries) == 2, "JVM_ROSTER")
+    jvm_roles, full_run = set(), next(iter(fulls))
+    for entry in jvm_entries:
+        fields(entry, "role runId runAttempt", "JVM_RUN_FIELDS")
+        role = entry["role"]
+        require(type(role) is str and role in JVM_ROLES, "JVM_ROLE")
+        require(role not in jvm_roles, "DUPLICATE_JVM")
+        jvm_roles.add(role)
+        require(joint.run(entry) == full_run, "JVM_CI_RUN")
+    require(jvm_roles == set(JVM_ROLES), "JVM_ROSTER")
+    # JVM workers share the FULL CI run, not its workload or H1 cohort. Keep
+    # the four FULL/Desktop pairs unchanged for historical qualification.
     return first, pairs
 
 
@@ -202,7 +226,11 @@ def _policy(declaration, observed, created, base_policy_entry, ancestry_raw,
 
 
 def _result(kind, stage, declaration, authority, observed, policy, expected, **extra):
-    result = kind(identity.encoded({"schema": 1, "scope": stage + "_MATCH_ONLY_NOT_ADMISSION",
+    scope = stage + "_MATCH_ONLY_NOT_ADMISSION"
+    if kind is JvmLibraryMatch:
+        require(stage == STAGE2, "JVM_SCOPE")
+        scope = JVM_MATCH_SCOPE
+    result = kind(identity.encoded({"schema": 1, "scope": scope,
         "authority": authority, "originalBase": BASE, "reviewed": declaration["reviewed"],
         "source": observed["source"], "github": observed["github"], "policy": policy,
         "firstUseAt": observed["firstUseAt"], "notBefore": declaration["notBefore"],
@@ -308,18 +336,9 @@ def _histories(declaration, pairs, histories, created, prior_ancestry_raw):
     return retained
 
 
-def match_ordinary(*, comment_raw, comment_id, body_sha256, observation_raw, base_policy_entry,
-                   ancestry_raw, candidate_policy_entry, candidate_policy_raw, now,
-                   histories, prior_ancestry_raw, expected=None):
-    """Stage 2 match/reference binding, NOT qualification of selected packets.
-
-    Productive integration must separately obtain/validate current originals,
-    full artifact inventory, decryption-independent ciphertext bindings and the
-    retained independent qualification review. Compare relevant H1/H2 dependency
-    inputs, executable validation suppliers, provider path/version/compression/
-    ref compatibility; a matching reusable key or this result is insufficient.
-    This function cannot issue ordinary Admission, restore or execute anything.
-    """
+def _stage2_context(*, comment_raw, comment_id, body_sha256, observation_raw, base_policy_entry,
+                    ancestry_raw, candidate_policy_entry, candidate_policy_raw, now):
+    """Shared supplied authority/source checks, never a workload or Admission."""
     declaration, authority, created = statement(STAGE2, comment_raw, comment_id, body_sha256)
     first, pairs = ordinary_roster(declaration)
     require(type(observation_raw) is bytes, "OBSERVATION_BYTES")
@@ -333,6 +352,26 @@ def match_ordinary(*, comment_raw, comment_id, body_sha256, observation_raw, bas
     joint._current_pr(observed["pullRequest"], declaration, first)
     require(observed["source"] == first["merge"] and observed["mergeParents"] ==
             [BASE["commit"], declaration["reviewed"]["commit"]], "ORDINARY_MERGE")
+    return declaration, authority, created, observed, policy, first, pairs
+
+
+def match_ordinary(*, comment_raw, comment_id, body_sha256, observation_raw, base_policy_entry,
+                   ancestry_raw, candidate_policy_entry, candidate_policy_raw, now,
+                   histories, prior_ancestry_raw, expected=None):
+    """Stage 2 match/reference binding, NOT qualification of selected packets.
+
+    Productive integration must separately obtain/validate current originals,
+    full artifact inventory, decryption-independent ciphertext bindings and the
+    retained independent qualification review. Compare relevant H1/H2 dependency
+    inputs, executable validation suppliers, provider path/version/compression/
+    ref compatibility; a matching reusable key or this result is insufficient.
+    This function cannot issue ordinary Admission, restore or execute anything.
+    """
+    declaration, authority, created, observed, policy, first, pairs = _stage2_context(
+        comment_raw=comment_raw, comment_id=comment_id, body_sha256=body_sha256, observation_raw=observation_raw,
+        base_policy_entry=base_policy_entry, ancestry_raw=ancestry_raw, candidate_policy_entry=candidate_policy_entry,
+        candidate_policy_raw=candidate_policy_raw, now=now)
+    github = observed["github"]
     roles = [role for role, host in joint.ROLES.items() if host == (github["runnerOS"], github["runnerArch"])]
     require(len(roles) == 1 and type(github["profile"]) is str and github["profile"] in identity.PROFILES, "ORDINARY_HOST")
     slot = {"profile": github["profile"], "role": roles[0], "runId": github["runId"], "runAttempt": github["runAttempt"]}
@@ -342,5 +381,34 @@ def match_ordinary(*, comment_raw, comment_id, body_sha256, observation_raw, bas
             ("pull_request", f"refs/pull/{first['number']}/merge", workflow, job, first["merge"]["commit"]), "ORDINARY_EXECUTION")
     retained = _histories(declaration, pairs, histories, created, prior_ancestry_raw)
     return _result(OrdinaryMatch, STAGE2, declaration, authority, observed, policy, expected,
+                   stage1=declaration["stage1"], qualifications=declaration["qualifications"],
+                   historicalRecords=retained, qualificationAcceptance="NOT_ESTABLISHED_BY_REFERENCE_MATCH")
+
+
+def match_jvm_library(*, comment_raw, comment_id, body_sha256, observation_raw, base_policy_entry,
+                      ancestry_raw, candidate_policy_entry, candidate_policy_raw, now,
+                      histories, prior_ancestry_raw, expected=None):
+    """Match only the two explicit C2 V2 JVM slots; NOT native qualification.
+
+    The same CI run/attempt as FULL does not confer FULL or Desktop identity.
+    Native current acquisition, workload/cache-cohort mapping, budgets, provider
+    retirement and custody still require their own integration and qualification.
+    No existing ordinary worker binder accepts this distinct result.
+    """
+    declaration, authority, created, observed, policy, first, pairs = _stage2_context(
+        comment_raw=comment_raw, comment_id=comment_id, body_sha256=body_sha256, observation_raw=observation_raw,
+        base_policy_entry=base_policy_entry, ancestry_raw=ancestry_raw, candidate_policy_entry=candidate_policy_entry,
+        candidate_policy_raw=candidate_policy_raw, now=now)
+    github = observed["github"]
+    require(type(github["profile"]) is str and github["profile"] == JVM_PROFILE, "JVM_PROFILE")
+    roles = [role for role, host in joint.ROLES.items() if host == (github["runnerOS"], github["runnerArch"])]
+    require(len(roles) == 1 and roles[0] in JVM_ROLES, "JVM_HOST")
+    slot = {"role": roles[0], "runId": github["runId"], "runAttempt": github["runAttempt"]}
+    require(slot in first["jvmRuns"], "UNLISTED_JVM")
+    require((github["event"], github["ref"], github["workflow"], github["job"], github["workflowSha"]) ==
+            ("pull_request", f"refs/pull/{first['number']}/merge", JVM_WORKFLOW, JVM_JOB,
+             first["merge"]["commit"]), "JVM_EXECUTION")
+    retained = _histories(declaration, pairs, histories, created, prior_ancestry_raw)
+    return _result(JvmLibraryMatch, STAGE2, declaration, authority, observed, policy, expected,
                    stage1=declaration["stage1"], qualifications=declaration["qualifications"],
                    historicalRecords=retained, qualificationAcceptance="NOT_ESTABLISHED_BY_REFERENCE_MATCH")

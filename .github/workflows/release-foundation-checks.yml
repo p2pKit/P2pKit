@@ -106,7 +106,8 @@ jobs:
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-stages-test.py -v -f \
             StagedModels.test_metadata_references_require_exact_positive_direct_comment_ids \
             StagedModels.test_changed_metadata_locator_is_a_changed_authorization_even_with_same_digest \
-            StagedModels.test_packet_locator_cannot_be_a_comment_or_inner_ciphertext_reference
+            StagedModels.test_packet_locator_cannot_be_a_comment_or_inner_ciphertext_reference \
+            JvmLibraryModels
       - name: Configure Node 24 for offline transport models only
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:

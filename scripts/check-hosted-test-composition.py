@@ -51,13 +51,23 @@ from pathlib import Path
 # The reviewed e1638cc5 initial-only seed path requires this seed-only update.
 # Exact seed bytes e862b5d5f53b7417 were independently checked after source CI
 # 36278802366 failed the stale pin. No ordinary path/roster or HOLD is changed.
+# The 901dab683baa01d1299a8fb3fd34d735ffb91c33 C16 controller/provider and
+# ordinary-layout seed routing received exact source review tvk9_k09, connected
+# review 71xvw2oe and final-tree provenance 4x96jqyz before these two bindings.
+# Reviewed raw SHA-256 (not the normalized AST values below):
+# controller fd05e9fd997c7d842704ba966ac4680ccfa106bcb961e1252ee3c13b6ef51a3d
+# seed       39a28c3fd14f7e6308bee90c60f780bc0e78dac1444f6640ec68764b8e6fd2c8
+# CI 36338023274/1 exposed the stale controller expectation; the seed's changed
+# executable route requires its own binding too. Five other suppliers, the
+# normalization algorithm and all native/provider/custody qualifications and
+# HOLDs remain unchanged. This is reviewed source binding, not runtime proof.
 EXPECTED = {
-    "scripts/run-hosted-test-custody.py": "ec23554ccc212d16f6bf4a1df9801064986f0564be1d2bf3bc1489fcb97a7d03",
+    "scripts/run-hosted-test-custody.py": "9d70fe24f4d7e6a55d82913cc9f1213b4af087b8f74427d49e4d4208a1413995",
     "scripts/hosted_full_supplements.py": "9f5c6a0f410c00ee7531664e95dab233c0febc6740dd6a8b1005e3fc3a64310c",
     "scripts/hosted_primary_abi.py": "ff168e70c31bc23b1c6e545a32d0c4217f9a212f7244a2c34571eee09f761553",
     "scripts/run-platform-tests.py": "1a3e6f093abe3a79bfbc2d3f426f26e71db77c6f72034effeb2e296dc833c271",
     "scripts/run-audit-command.py": "bba4d4137571c32205fbf0bc1ff3d7d4682eff6d0f6ed5a6e92af8d6415cc639",
-    "scripts/hosted_dependency_seed_files.py": "928f4b8e4d882446ff1d9deb566e84e206ea5caf7bca1ed1cee3a1cbf3b217ce",
+    "scripts/hosted_dependency_seed_files.py": "55f5c76c5205480963bbf20ff281f00de48b5fbbcda98736ea6456fd12c6b68e",
     "scripts/hosted_canonical_python.py": "e93b7d0cb32b847d8cca57b074c9a9afae902ef5d0e2e0e5991c599ef772a2b0",
 }
 LIMIT = 1024 * 1024

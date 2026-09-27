@@ -108,7 +108,9 @@ def stage2(prior):
         {"profile": "desktop", "role": "linux-x64", "runId": "401", "runAttempt": "1"},
         {"profile": "desktop", "role": "windows-x64", "runId": "401", "runAttempt": "1"},
         {"profile": "desktop", "role": "macos-arm64", "runId": "401", "runAttempt": "1"},
-        {"profile": "full", "role": "macos-arm64", "runId": "402", "runAttempt": "1"}]}
+        {"profile": "full", "role": "macos-arm64", "runId": "402", "runAttempt": "1"}],
+        "jvmRuns": [{"role": "linux-x64", "runId": "402", "runAttempt": "1"},
+                    {"role": "windows-x64", "runId": "402", "runAttempt": "1"}]}
     authority = comment(prior, 8001, START - 60)
     value["stage1"] = {"commentId": 8001, "bodySha256": body_hash(authority), "reviewed": dict(prior["reviewed"])}
     entries, histories = [], []
@@ -142,6 +144,27 @@ def observation2(value, profile="desktop", role="linux-x64"):
             "base": {"sha": S.BASE["commit"], "ref": "main", "repo": {"full_name": "p2pKit/P2pKit"}},
             "head": {"sha": reviewed["commit"], "ref": S.SOURCE_REF.removeprefix("refs/heads/"),
                      "repo": {"full_name": "p2pKit/P2pKit"}}}}
+
+
+def jvm_observation(value, role="linux-x64"):
+    observed = observation2(value)  # Reuse only synthetic PR/source fields.
+    entry = next(x for x in value["firstPullRequest"]["jvmRuns"] if x["role"] == role)
+    system, arch = {"linux-x64": ("Linux", "X64"), "windows-x64": ("Windows", "X64")}[role]
+    observed["github"] = {"profile": "jvm-library", "event": "pull_request", "ref": "refs/pull/999/merge",
+        "workflow": ".github/workflows/ci.yml", "workflowSha": value["firstPullRequest"]["merge"]["commit"],
+        "job": "jvm-library-checks", "runId": entry["runId"], "runAttempt": entry["runAttempt"],
+        "runnerOS": system, "runnerArch": arch}
+    return observed
+
+
+def check_jvm(value, observed, histories, *, override=None, **options):
+    authority = comment(value, 8002, START + 200, stage=S.STAGE2)
+    authority.update(override or {})
+    kwargs = {"comment_raw": I.encoded(authority), "comment_id": 8002, "body_sha256": body_hash(authority),
+        "observation_raw": I.encoded(observed), "histories": histories, "now": NOW,
+        "prior_ancestry_raw": H1.encode("ascii") + b"\n", **policy_inputs()}
+    kwargs.update(options)
+    return S.match_jvm_library(**kwargs)
 
 
 class StagedModels(unittest.TestCase):
@@ -601,6 +624,241 @@ class StagedModels(unittest.TestCase):
         expected = self.check1()
         self.override = {"reactions": {"total_count": 10}, "user": {**OWNER, "avatar_url": "https://example.invalid/model"}}
         self.assertEqual(self.check1(expected=expected), expected)
+
+
+class JvmLibraryModels(unittest.TestCase):
+    def setUp(self):
+        self.one = stage1()
+        self.two, self.histories = stage2(self.one)
+        self.observed = jvm_observation(self.two)
+        self.override = {}
+
+    def check(self, **options):
+        histories = options.pop("histories", self.histories)
+        return check_jvm(self.two, self.observed, histories, override=self.override, **options)
+
+    def ordinary(self, **options):
+        authority = comment(self.two, 8002, START + 200, stage=S.STAGE2)
+        kwargs = {"comment_raw": I.encoded(authority), "comment_id": 8002, "body_sha256": body_hash(authority),
+            "observation_raw": I.encoded(observation2(self.two)), "histories": self.histories, "now": NOW,
+            "prior_ancestry_raw": H1.encode("ascii") + b"\n", **policy_inputs()}
+        kwargs.update(options)
+        return S.match_ordinary(**kwargs)
+
+    def refuse(self, code=".+", **options):
+        with self.assertRaisesRegex(I.AdmissionError, code):
+            self.check(**options)
+
+    def test_v2_two_actual_jvm_slots_are_distinct_reference_only_results(self):
+        self.assertEqual(S.STAGE2, "P2PKIT_INITIAL_RECIPIENT_ORDINARY_STAGE2_V2")
+        self.assertEqual(S.COMMANDS[S.STAGE2], "/p2pkit authorize-initial-ordinary ")
+        self.assertEqual(set(I.PROFILES), {"desktop", "full"})
+        self.assertEqual(len(self.two["firstPullRequest"]["runs"]), 4)
+        self.assertEqual(len(self.two["qualifications"]), 4)
+        for role, system in (("linux-x64", "Linux"), ("windows-x64", "Windows")):
+            with self.subTest(role=role):
+                self.observed = jvm_observation(self.two, role)
+                result = self.check()
+                value = json.loads(result.record)
+                self.assertIs(type(result), S.JvmLibraryMatch)
+                self.assertNotIsInstance(result, (I.Admission, S.OrdinaryMatch, S.BootstrapMatch))
+                self.assertEqual(value["scope"],
+                    "P2PKIT_INITIAL_RECIPIENT_ORDINARY_STAGE2_V2_JVM_LIBRARY_MATCH_ONLY_NOT_ADMISSION")
+                self.assertEqual(value["github"], {"profile": "jvm-library", "event": "pull_request",
+                    "ref": "refs/pull/999/merge", "workflow": ".github/workflows/ci.yml", "workflowSha": MERGE,
+                    "job": "jvm-library-checks", "runId": "402", "runAttempt": "1",
+                    "runnerOS": system, "runnerArch": "X64"})
+                self.assertEqual(value["source"], {"commit": MERGE, "tree": T2})
+                self.assertEqual(len(value["historicalRecords"]), 4)
+                self.assertEqual(value["qualificationAcceptance"], "NOT_ESTABLISHED_BY_REFERENCE_MATCH")
+
+    def test_v1_c2_rejected_by_both_matchers_even_with_jvm_fields(self):
+        self.two["scope"] = "P2PKIT_INITIAL_RECIPIENT_ORDINARY_STAGE2_V1"
+        self.refuse("STATEMENT_SCOPE")
+        with self.assertRaisesRegex(I.AdmissionError, "STATEMENT_SCOPE"):
+            self.ordinary()
+        del self.two["firstPullRequest"]["jvmRuns"]
+        self.refuse("STATEMENT_SCOPE")
+        with self.assertRaisesRegex(I.AdmissionError, "STATEMENT_SCOPE"):
+            self.ordinary()
+
+    def test_v2_requires_jvm_roster_for_ordinary_and_jvm_matching(self):
+        del self.two["firstPullRequest"]["jvmRuns"]
+        self.refuse("PR_FIELDS")
+        with self.assertRaisesRegex(I.AdmissionError, "PR_FIELDS"):
+            self.ordinary()
+
+    def test_jvm_roster_has_exactly_two_entries(self):
+        original = copy.deepcopy(self.two["firstPullRequest"]["jvmRuns"])
+        for entries in (None, [], original[:1], original + original[:1], {}):
+            with self.subTest(entries=entries):
+                self.two["firstPullRequest"]["jvmRuns"] = entries
+                self.refuse("JVM_ROSTER")
+
+    def test_jvm_entry_fields_and_roles_are_closed(self):
+        entries = self.two["firstPullRequest"]["jvmRuns"]
+        original = copy.deepcopy(entries[0])
+        for field in original:
+            entries[0] = {name: value for name, value in original.items() if name != field}
+            self.refuse("JVM_RUN_FIELDS")
+        for field in ("profile", "workflow", "job", "qualified"):
+            entries[0] = {**original, field: True}
+            self.refuse("JVM_RUN_FIELDS")
+        for role in (None, True, 1, "macos-x64", "macos-arm64", "linux-arm64", "Linux-X64"):
+            entries[0] = {**original, "role": role}
+            self.refuse("JVM_ROLE")
+        entries[0] = copy.deepcopy(entries[1])
+        self.refuse("DUPLICATE_JVM")
+
+    def test_jvm_ids_remain_exact_positive_decimal_strings(self):
+        entry = self.two["firstPullRequest"]["jvmRuns"][0]
+        for field in ("runId", "runAttempt"):
+            saved = entry[field]
+            for bad in (None, True, 1, 1.0, "", "0", "-1", "01", " 1", "1 ", "+1", "1e2", "1" * 21):
+                with self.subTest(field=field, bad=bad):
+                    entry[field] = bad
+                    self.refuse("INITIAL_RECIPIENT_RUN")
+            entry[field] = saved
+
+    def test_both_jvm_slots_must_equal_full_run_and_attempt(self):
+        original = copy.deepcopy(self.two["firstPullRequest"]["jvmRuns"])
+        for indices in ((0,), (1,), (0, 1)):
+            for field, value in (("runId", "401"), ("runId", "999"), ("runAttempt", "2")):
+                self.two["firstPullRequest"]["jvmRuns"] = copy.deepcopy(original)
+                for index in indices:
+                    self.two["firstPullRequest"]["jvmRuns"][index][field] = value
+                self.refuse("JVM_CI_RUN")
+
+    def test_jvm_observation_cannot_choose_other_run_or_attempt(self):
+        for field, value in (("runId", "401"), ("runId", "999"), ("runAttempt", "2")):
+            saved = self.observed["github"][field]
+            self.observed["github"][field] = value
+            self.refuse("UNLISTED_JVM")
+            self.observed["github"][field] = saved
+
+    def test_jvm_host_is_linux_or_windows_x64_only(self):
+        for system, arch in (("Linux", "ARM64"), ("Windows", "ARM64"), ("macOS", "X64"),
+                             ("macOS", "ARM64"), ("linux", "X64"), ("Linux", "x64"), ("Linux", True)):
+            self.observed["github"].update(runnerOS=system, runnerArch=arch)
+            self.refuse("JVM_HOST")
+
+    def test_jvm_workflow_job_profile_have_no_full_desktop_or_gate_alias(self):
+        for field, values, code in (
+                ("profile", ("full", "desktop", "cache-bootstrap", "jvm", "JVM-library", None), "JVM_PROFILE"),
+                ("workflow", (".github/workflows/desktop-cross-host.yml",
+                              ".github/workflows/dependency-cache-bootstrap.yml", "ci.yml"), "JVM_EXECUTION"),
+                ("job", ("complete-gate", "verify", "initial-recipient-gate", "populate",
+                         "JVM libraries (ubuntu-latest)"), "JVM_EXECUTION")):
+            saved = self.observed["github"][field]
+            for value in values:
+                self.observed["github"][field] = value
+                self.refuse(code)
+            self.observed["github"][field] = saved
+
+    def test_jvm_event_ref_and_workflow_sha_are_exact_pr_merge(self):
+        for field, value in (("event", "push"), ("event", "workflow_dispatch"),
+                            ("ref", S.SOURCE_REF), ("ref", "refs/heads/main"),
+                            ("ref", "refs/pull/998/merge"), ("workflowSha", H2), ("workflowSha", H1)):
+            saved = self.observed["github"][field]
+            self.observed["github"][field] = value
+            self.refuse("JVM_EXECUTION")
+            self.observed["github"][field] = saved
+        self.observed["github"]["selection"] = "desktop-linux-x64"
+        self.refuse("ORDINARY_GITHUB_FIELDS")
+
+    def test_jvm_source_current_pr_and_merge_parents_are_not_inferred(self):
+        original = copy.deepcopy(self.observed)
+        for change in (
+                lambda value: value.update(source=dict(self.two["reviewed"])),
+                lambda value: value["base"].update(commit=OTHER),
+                lambda value: value["reviewed"].update(tree=OTHER),
+                lambda value: value.update(mergeParents=[H2, S.BASE["commit"]]),
+                lambda value: value["pullRequest"].update(state="closed"),
+                lambda value: value["pullRequest"].update(merged=True),
+                lambda value: value["pullRequest"].update(auto_merge={}),
+                lambda value: value["pullRequest"]["head"].update(sha=OTHER),
+                lambda value: value["pullRequest"]["head"].update(ref="other"),
+                lambda value: value["pullRequest"]["base"].update(sha=OTHER)):
+            self.observed = copy.deepcopy(original)
+            change(self.observed)
+            self.refuse()
+
+    def test_jvm_owner_policy_and_window_remain_required(self):
+        self.override = {"user": {**OWNER, "id": True}}
+        self.refuse("COMMENT_OWNER")
+        self.override = {"updated_at": utc(START + 201)}
+        self.refuse("COMMENT_EDITED")
+        self.override = {"performed_via_github_app": {"id": 1}}
+        self.refuse("COMMENT_OWNER")
+        self.override = {}
+        self.refuse("COMMENT_DIGEST", body_sha256="f" * 64)
+        self.refuse("POLICY_DIGEST", candidate_policy_raw=POLICY + b"\n")
+        self.refuse("^RECIPIENT_POLICY_VALIDITY$", now=END)
+        self.two["expiresAt"] = END - 1
+        try:
+            self.refuse("^INITIAL_STAGES_VALIDITY_OR_PRIOR_AUTHORITY$", now=END - 1)
+        finally:
+            self.two["expiresAt"] = END
+        self.refuse("BASE_POLICY_NOT_ABSENT", base_policy_entry=ENTRY)
+
+    def test_jvm_still_requires_exact_four_historical_qualifications(self):
+        self.refuse("QUALIFICATION_ROSTER", histories=self.histories[:3])
+        self.refuse("QUALIFICATION_ROSTER", histories=self.histories + self.histories[:1])
+        self.refuse("HISTORICAL_SOURCE_OR_USE", histories=tuple(reversed(self.histories)))
+        entries = self.two["qualifications"]
+        self.two["qualifications"] = entries[:3]
+        self.refuse("QUALIFICATION_ROSTER")
+        self.two["qualifications"] = entries + entries[:1]
+        self.refuse("QUALIFICATION_ROSTER")
+        self.two["qualifications"] = entries
+        self.two["qualifications"][0]["runId"] = "402"
+        self.refuse("QUALIFICATION_COHORT_OR_RUN")
+
+    def test_jvm_histories_keep_original_stage1_clocks_and_sources(self):
+        self.assertGreater(NOW, self.one["expiresAt"])
+        value = json.loads(self.check().record)
+        self.assertEqual(value["stage1"]["reviewed"], {"commit": H1, "tree": T1})
+        self.assertEqual(json.loads(self.histories[0].expected.record)["firstUseAt"], FIRST1)
+        changed = json.loads(self.histories[0].observation_raw)
+        changed["reviewed"] = dict(self.two["reviewed"])
+        self.refuse("CURRENT_SOURCE", histories=(dataclasses.replace(self.histories[0],
+            observation_raw=I.encoded(changed)), *self.histories[1:]))
+        self.two["qualifications"][0]["completedAt"] = START + 180
+        self.refuse("VALIDITY", histories=(dataclasses.replace(self.histories[0],
+            completed_at=START + 180), *self.histories[1:]))
+
+    def test_jvm_cannot_enter_ordinary_matcher_or_cross_type_recheck(self):
+        with self.assertRaisesRegex(I.AdmissionError, "ORDINARY_HOST"):
+            self.ordinary(observation_raw=I.encoded(self.observed))
+        ordinary = self.ordinary()
+        bootstrap = check1(self.one, observation1(self.one))
+        for other in (ordinary, bootstrap, S.OrdinaryMatch(self.check().record)):
+            self.refuse("CHANGED_BEFORE_RECHECK", expected=other)
+
+    def test_jvm_recheck_binds_complete_c2_roster(self):
+        expected = self.check()
+        self.two["firstPullRequest"]["jvmRuns"].reverse()
+        self.refuse("CHANGED_BEFORE_RECHECK", expected=expected)
+        self.two["firstPullRequest"]["jvmRuns"].reverse()
+        self.two["firstPullRequest"]["runs"][3]["runId"] = "403"
+        for entry in self.two["firstPullRequest"]["jvmRuns"]:
+            entry["runId"] = "403"
+        self.observed["github"]["runId"] = "403"
+        self.refuse("CHANGED_BEFORE_RECHECK", expected=expected)
+
+    def test_jvm_result_is_frozen_and_rechecks_reject_nonexact_bytes(self):
+        expected = self.check()
+        self.assertEqual(self.check(expected=expected, now=NOW + 1), expected)
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            expected.record = b"changed"
+        class Forged:
+            def __eq__(self, other):
+                raise AssertionError("Comparison must not run")
+        class Bytes(bytes):
+            def __eq__(self, other):
+                raise AssertionError("Subclass comparison must not run")
+        for raw in (Forged(), Bytes(expected.record), bytearray(expected.record), memoryview(expected.record)):
+            self.refuse("CHANGED_BEFORE_RECHECK", expected=S.JvmLibraryMatch(raw))
 
 
 if __name__ == "__main__":
