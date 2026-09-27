@@ -9,11 +9,11 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Diagnostic checks or the complete generated-input graph
+        description: Scoped tests/compilation or the complete generated-input graph
         type: choice
         required: true
         default: diagnose
-        options: [diagnose, diagnose-native, generate]
+        options: [diagnose, diagnose-native, compile-apple, generate]
 
 permissions:
   contents: read
@@ -24,13 +24,14 @@ concurrency:
 
 jobs:
   apple-feature:
-    name: Feature-only Apple diagnostics or review-only input generation
+    name: Feature-only Apple validation or review-only input generation
     if: >-
       github.repository == 'p2pKit/P2pKit' &&
       github.ref == 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da' &&
       (github.event_name == 'workflow_dispatch' ||
        contains(github.event.head_commit.message, '[rpc-diagnose]') ||
        contains(github.event.head_commit.message, '[rpc-native]') ||
+       contains(github.event.head_commit.message, '[rpc-apple-compile]') ||
        contains(github.event.head_commit.message, '[rpc-generate]'))
     runs-on: macos-26
     timeout-minutes: 180
@@ -42,16 +43,31 @@ jobs:
       PYTHONDONTWRITEBYTECODE: "1"
       RPC_HOSTED_MODE: >-
         ${{ inputs.mode || (contains(github.event.head_commit.message, '[rpc-generate]') && 'generate' ||
-        (contains(github.event.head_commit.message, '[rpc-native]') && 'diagnose-native' || 'diagnose')) }}
+        (contains(github.event.head_commit.message, '[rpc-apple-compile]') && 'compile-apple' ||
+        (contains(github.event.head_commit.message, '[rpc-native]') && 'diagnose-native' || 'diagnose'))) }}
     steps:
       - name: Check out the exact feature commit without credentials or tags
         id: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 0
+          # depth=0 fetches a tags refspec even with fetch-tags=false in checkout.
+          # Fetch full history ourselves below, with no tags or unrelated refs.
+          fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
+
+      - name: Fetch full feature and main history without tags
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          git config remote.origin.tagOpt --no-tags
+          git fetch --no-tags --unshallow origin \
+            refs/heads/main:refs/remotes/origin/main \
+            refs/heads/work/rpc-lan-20260927-054728-8b1b11da:refs/remotes/origin/work/rpc-lan-20260927-054728-8b1b11da
+          test "$(git rev-parse --is-shallow-repository)" = false
+          test -z "$(git for-each-ref --format='%(refname)' refs/tags)"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
       - name: Configure installed daemon prerequisite
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5

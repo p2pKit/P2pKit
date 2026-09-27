@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import plistlib
 import re
 import signal
 import subprocess
@@ -43,6 +44,11 @@ FLAGS = ["--no-daemon", "--no-build-cache", "--no-configuration-cache", "--no-pa
          "-Pkotlin.compiler.execution.strategy=in-process"]
 MAX_FILE = 16 * 1024 * 1024
 MAX_LOG = 256 * 1024 * 1024
+APPLE_TARGETS = {
+    "iosSimulatorArm64": ("iphonesimulator", "arm64-apple-ios14.0-simulator"),
+    "iosArm64": ("iphoneos", "arm64-apple-ios14.0"),
+    "iosX64": ("iphonesimulator", "x86_64-apple-ios14.0-simulator"),
+}
 FIXTURE_MODES = ("control", "failed_recovery", "shared_close", "close_wins", "recovery_wins",
                  "responder_close", "callback_executor", "cleanup_retry")
 FAILURE_TYPES = frozenset(("java.lang.AssertionError", "kotlin.AssertionError", "java.lang.IllegalStateException",
@@ -132,6 +138,9 @@ def paths():
             "Execution is restricted to the RPC feature ref")
     require(ROOT == Path(os.environ["GITHUB_WORKSPACE"]).resolve(), "Unexpected source root")
     require(git("rev-parse", "HEAD").decode().strip() == os.environ["GITHUB_SHA"], "Wrong source commit")
+    require(git("rev-parse", "--is-shallow-repository").strip() == b"false"
+            and not git("for-each-ref", "--format=%(refname)", "refs/tags").strip(),
+            "Hosted checkout requires full history without tags")
     state = Path(os.environ["RPC_HOSTED_STATE"]).resolve(strict=True)
     require(state.is_relative_to(Path(os.environ["RUNNER_TEMP"]).resolve()), "State is not runner-owned")
     require(not state.is_relative_to(ROOT), "State must not be a project input")
@@ -168,6 +177,63 @@ def diagnostic_commands(operation="diagnose"):
     return commands if operation == "diagnose" else commands[1:]
 
 
+def compilation_commands():
+    # Independent normal strict compiler/doc checks, not a narrowed lock writer.
+    return [
+        ("strict-dokka", [f":{name}:dokkaGeneratePublicationHtml" for name in LIBRARIES], 1800),
+        ("rpc-frameworks", [":p2p-sample-rpc:linkDebugFramework" + target[0].upper() + target[1:]
+                            for target in APPLE_TARGETS], 1800),
+        *(("swift-" + target, [], 180) for target in APPLE_TARGETS),
+    ]
+
+
+def framework_path(root, target):
+    require(target in APPLE_TARGETS, "Unknown framework target")
+    return root / f"samples/p2p-sample-rpc/build/bin/{target}/debugFramework/P2pKitRpcExample.framework"
+
+
+def compiled_file_receipt(root, path):
+    require(path.is_file() and not path.is_symlink() and 0 < path.stat().st_size <= 512 * 1024 * 1024,
+            "Missing, empty or oversized compiler output")
+    sha = hashlib.sha256()
+    size = 0
+    with path.open("rb") as stream:
+        while block := stream.read(1024 * 1024):
+            size += len(block)
+            require(size <= 512 * 1024 * 1024, "Compiler output grew beyond its bound")
+            sha.update(block)
+    return {"path": path.relative_to(root).as_posix(), "bytes": size, "sha256": sha.hexdigest()}
+
+
+def compilation_receipt(root, label):
+    if label == "strict-dokka":
+        return {"htmlIndexes": [compiled_file_receipt(root, root / f"library/{name}/build/dokka/html/index.html")
+                                for name in LIBRARIES]}
+    require(label == "rpc-frameworks", "Unknown compiler receipt")
+    frameworks = []
+    for target in APPLE_TARGETS:
+        path = framework_path(root, target)
+        info = plistlib.loads(read_bounded(path / "Info.plist"))
+        require(info.get("MinimumOSVersion") == "14.0", "RPC framework changed its minimum iOS contract")
+        frameworks.append({"target": target, "minimumOsVersion": "14.0", "files": [
+            compiled_file_receipt(root, path / "P2pKitRpcExample"),
+            compiled_file_receipt(root, path / "Headers/P2pKitRpcExample.h"),
+            compiled_file_receipt(root, path / "Modules/module.modulemap"),
+        ]})
+    return {"frameworks": frameworks, "scope": "Cross-compilation, not device or Intel runtime execution"}
+
+
+def swift_command(state, target):
+    sdk, triple = APPLE_TARGETS[target]
+    sdk_path = subprocess.check_output(["xcrun", "--sdk", sdk, "--show-sdk-path"],
+                                       text=True, timeout=45).strip()
+    require(Path(sdk_path).is_dir(), "Missing selected Swift SDK")
+    return ["xcrun", "--sdk", sdk, "swiftc", "-typecheck", "-warnings-as-errors", "-swift-version", "5",
+            "-sdk", sdk_path, "-target", triple, "-module-cache-path", str(state / "swift-module-cache"),
+            "-F", str(framework_path(ROOT, target).parent),
+            str(ROOT / "samples/p2p-sample-rpc/verification/RpcSwiftApiCheck.swift")]
+
+
 def platform_runner():
     spec = importlib.util.spec_from_file_location("rpc_platform_runner", ROOT / "scripts/run-platform-tests.py")
     helper = importlib.util.module_from_spec(spec)
@@ -189,10 +255,12 @@ def safe_diagnostics(path):
                 continue
             line = raw.decode("utf-8", errors="replace").rstrip()
             compiler = re.match(r"^[ew]: (?:file:/{1,3})?[^\r\n]+\.(?:kt|kts|java):[0-9]+", line)
+            swift = re.match(re.escape(str(ROOT)) + r"/samples/p2p-sample-rpc/verification/"
+                             r"RpcSwiftApiCheck\.swift:[0-9]+:[0-9]+: (?:error|warning): ", line)
             task = re.fullmatch(r"> Task :[A-Za-z0-9:_-]+ FAILED", line)
             artifact = re.fullmatch(r"\s*> Could not (?:find|resolve) "
                                     r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+:[A-Za-z0-9_.+-]+\.?", line)
-            if compiler or task or artifact or re.fullmatch(r"BUILD (?:FAILED|SUCCESSFUL) in [0-9hms .]+", line):
+            if compiler or swift or task or artifact or re.fullmatch(r"BUILD (?:FAILED|SUCCESSFUL) in [0-9hms .]+", line):
                 selected.append(line.replace(str(ROOT), "<source>"))
     return selected
 
@@ -368,7 +436,8 @@ def run(state, reports, operation):
     record = {"source": os.environ["GITHUB_SHA"], "tree": git("rev-parse", "HEAD^{tree}").decode().strip(),
               "runId": os.environ["GITHUB_RUN_ID"], "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"],
               "host": platform.machine(), "phase": "candidate-generation" if operation == "generate"
-              else "DIAGNOSTIC_ONLY_NOT_FULL_GENERATION", "commands": [],
+              else ("COMPILE_ONLY_NOT_FULL_QUALIFICATION" if operation == "compile-apple"
+                    else "DIAGNOSTIC_ONLY_NOT_FULL_GENERATION"), "commands": [],
               "complete": False, "stopExitCode": None}
     require(not (state / "run.json").exists(), "Do not overwrite an earlier invocation")
     write_json(state / "run.json", record)
@@ -388,16 +457,24 @@ def run(state, reports, operation):
              f"-Duser.home={state}/home -Djava.io.tmpdir={state}/tmp"]
     try:
         code = 0
-        commands = generator_commands() if operation == "generate" else diagnostic_commands(operation)
+        commands = (generator_commands() if operation == "generate" else
+                    compilation_commands() if operation == "compile-apple" else diagnostic_commands(operation))
+        frameworks_ready = False
         for label, arguments, timeout in commands:
             token = uuid.uuid4().hex
-            if operation != "generate":
+            if operation in ("diagnose", "diagnose-native"):
                 arguments = [*arguments, "--init-script",
                              str(ROOT / "gradle/platform-test-coverage.init.gradle"),
                              f"-Pp2pkit.testCoverageRoot={ROOT}", f"-Pp2pkit.testCoverageToken={token}"]
             print(f"Starting {label}; full output remains private, sanitized diagnostics follow.", flush=True)
-            row = execute(state, label, [str(ROOT / "gradlew"), *arguments, *flags], timeout)
-            if operation != "generate":
+            if label.startswith("swift-") and not frameworks_ready:
+                row = {"label": label, "command": [], "exitCode": 125,
+                       "assessment": "FRAMEWORKS_UNAVAILABLE_NOT_RUN"}
+            else:
+                command = (swift_command(state, label.removeprefix("swift-")) if label.startswith("swift-") else
+                           [str(ROOT / "gradlew"), *arguments, *flags])
+                row = execute(state, label, command, timeout)
+            if operation in ("diagnose", "diagnose-native"):
                 row["gradleExitCode"] = row["exitCode"]
                 try:
                     execution = json.loads(read_bounded(ROOT / f"build/reports/platform-tests/{token}/execution.json"))
@@ -405,13 +482,21 @@ def run(state, reports, operation):
                 except (OSError, ValueError, TypeError, KeyError, HostedValidationError):
                     row["assessment"] = "FAILED_OR_MISSING_EXECUTION_OR_XML"
                     row["exitCode"] = row["exitCode"] or 1
+            if operation == "compile-apple" and label in ("strict-dokka", "rpc-frameworks") and row["exitCode"] == 0:
+                try:
+                    row["assessment"] = compilation_receipt(ROOT, label)
+                    frameworks_ready = frameworks_ready or label == "rpc-frameworks"
+                except (OSError, ValueError, HostedValidationError):
+                    row["assessment"] = "MISSING_OR_INVALID_COMPILER_OUTPUT"
+                    row["exitCode"] = 1
             # Source and task arguments are public; replace ephemeral home paths in shared receipts.
             row["command"] = [part.replace(str(state), "<owned-state>").replace(str(ROOT), "<source>")
                               for part in row["command"]]
             record["commands"].append(row)
             write_json(state / "run.json", record)
-            print(f"{label}: exit {row['exitCode']}, {row['seconds']} seconds", flush=True)
-            print("\n".join(safe_diagnostics(state / f"{label}.log")), flush=True)
+            print(f"{label}: exit {row['exitCode']}, {row.get('seconds', 0)} seconds", flush=True)
+            if (state / f"{label}.log").is_file():
+                print("\n".join(safe_diagnostics(state / f"{label}.log")), flush=True)
             if row["exitCode"] != 0:
                 code = code or row["exitCode"]
                 if operation == "generate":
@@ -440,7 +525,7 @@ def collect(state, reports):
     (reports / "diagnostics.txt").write_text("\n".join(diagnostic) + "\n", encoding="utf-8")
     generated = record.get("phase") == "candidate-generation"
     manifest, patch = collect_candidates(ROOT, generated and record.get("complete") is True)
-    if record.get("phase") == "DIAGNOSTIC_ONLY_NOT_FULL_GENERATION":
+    if record.get("phase") in ("DIAGNOSTIC_ONLY_NOT_FULL_GENERATION", "COMPILE_ONLY_NOT_FULL_QUALIFICATION"):
         manifest["status"] = "DIAGNOSTIC_ONLY_DO_NOT_IMPORT"
     write_json(reports / "candidate-manifest.json", manifest)
     (reports / "candidate.patch").write_bytes(patch)
@@ -451,7 +536,7 @@ def collect(state, reports):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("generate", "diagnose", "diagnose-native", "collect"))
+    parser.add_argument("operation", choices=("generate", "diagnose", "diagnose-native", "compile-apple", "collect"))
     args = parser.parse_args()
     state, reports = paths()
     if args.operation == "collect":

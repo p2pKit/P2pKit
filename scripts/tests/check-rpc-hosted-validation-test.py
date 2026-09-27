@@ -154,11 +154,56 @@ class HostedValidationTest(unittest.TestCase):
         source = (ROOT / ".github/workflows/rpc-feature-validation.yml").read_text()
         for required in (hosted.REF, "github.event_name == 'workflow_dispatch'", "[rpc-native]",
                          "[rpc-diagnose]", "[rpc-generate]", "cancel-in-progress: false",
-                         "persist-credentials: false", "contents: read"):
+                         "persist-credentials: false", "contents: read", "fetch-depth: 1",
+                         "git fetch --no-tags --unshallow origin"):
             self.assertIn(required, source)
         for forbidden in ("pull_request_target:", "secrets.", "environment:", "continue-on-error:",
-                          "cancel-in-progress: true", "secrets: inherit"):
+                          "cancel-in-progress: true", "secrets: inherit", "fetch-depth: 0",
+                          "+refs/tags/*:refs/tags/*"):
             self.assertNotIn(forbidden, source)
+
+    def test_compiler_checks_are_strict_separate_from_tests_locks_and_publication(self):
+        commands = hosted.compilation_commands()
+        self.assertEqual(commands[0][1], [f":{name}:dokkaGeneratePublicationHtml" for name in hosted.LIBRARIES])
+        self.assertEqual(commands[1][1], [":p2p-sample-rpc:linkDebugFrameworkIosSimulatorArm64",
+                                         ":p2p-sample-rpc:linkDebugFrameworkIosArm64",
+                                         ":p2p-sample-rpc:linkDebugFrameworkIosX64"])
+        for forbidden in ("jvmTest", "iosSimulatorArm64Test", "resolveAndLockAll", "--write-", "publish"):
+            self.assertNotIn(forbidden, str(commands))
+        with tempfile.TemporaryDirectory() as directory:
+            for target, (sdk, triple) in hosted.APPLE_TARGETS.items():
+                with patch.object(hosted.subprocess, "check_output", return_value=directory):
+                    command = hosted.swift_command(Path(directory), target)
+                    self.assertIn("-typecheck", command)
+                    self.assertIn("-warnings-as-errors", command)
+                    self.assertEqual(command[command.index("-target") + 1], triple)
+                    self.assertIn("ios14.0", triple)
+                    self.assertEqual(command[2], sdk)
+
+    def test_compilation_requires_nonempty_genuine_outputs_and_preserves_ios_minimum(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in hosted.LIBRARIES:
+                path = root / f"library/{name}/build/dokka/html/index.html"
+                path.parent.mkdir(parents=True)
+                path.write_text("<html>synthetic control</html>")
+            self.assertEqual(len(hosted.compilation_receipt(root, "strict-dokka")["htmlIndexes"]), 3)
+            for target in hosted.APPLE_TARGETS:
+                path = hosted.framework_path(root, target)
+                for name in ("P2pKitRpcExample", "Headers/P2pKitRpcExample.h", "Modules/module.modulemap"):
+                    output = path / name
+                    output.parent.mkdir(parents=True, exist_ok=True)
+                    output.write_bytes(b"synthetic offline control, not a framework")
+                (path / "Info.plist").write_bytes(hosted.plistlib.dumps({"MinimumOSVersion": "14.0"}))
+            result = hosted.compilation_receipt(root, "rpc-frameworks")
+            self.assertEqual(len(result["frameworks"]), 3)
+            (path / "Info.plist").write_bytes(hosted.plistlib.dumps({"MinimumOSVersion": "15.0"}))
+            with self.assertRaisesRegex(hosted.HostedValidationError, "minimum iOS"):
+                hosted.compilation_receipt(root, "rpc-frameworks")
+            (path / "Info.plist").write_bytes(hosted.plistlib.dumps({"MinimumOSVersion": "14.0"}))
+            (path / "P2pKitRpcExample").write_bytes(b"")
+            with self.assertRaisesRegex(hosted.HostedValidationError, "compiler output"):
+                hosted.compilation_receipt(root, "rpc-frameworks")
 
     def diagnostic_fixture(self, root, label):
         helper = hosted.platform_runner()

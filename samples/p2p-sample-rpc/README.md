@@ -1,7 +1,8 @@
 # Shared RPC examples and explicit capacity driver
 
 **JVM/Android example compilation and unit tests passed; no capacity or physical
-application run has occurred. Apple compilation remains pending.** This sample does not
+application run has occurred. Its three ARM simulator tests also passed in the
+first (overall failed) hosted lock run; complete Apple qualification remains pending.** This sample does not
 ship production business logic, protected keys, a trust database, a pairing UI,
 a permissive transport or an always-running mobile service. See the
 [RPC quick start](../../docs/rpc/README.md),
@@ -56,6 +57,13 @@ suspend errors/cancellation catchable, install the required LAN/Bonjour usage
 declarations in the final app, and own foreground lifecycle explicitly. A real
 Swift consumer/link/provenance test remains pending. No framework binary is
 checked in or claimed available.
+
+[`RpcSwiftApiCheck.swift`](verification/RpcSwiftApiCheck.swift) is a compile-only
+consumer fixture for pairing/connection, typed reads, unsafe reservations,
+notifications, cleanup and typed error recovery. The feature-only hosted
+`compile-apple` mode links the actual example frameworks and typechecks this
+fixture without invoking it or publishing artifacts. A successful typecheck is
+not a Swift application/lifecycle, physical-device or interoperability test.
 
 ## Capacity qualification source
 

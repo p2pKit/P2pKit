@@ -14,11 +14,19 @@ token and no signing secrets or environments. Its distinct concurrency group
 does not cancel any run. Existing CI, Foundation and release workflows are not
 modified or dispatched by this workflow.
 
+The checkout is shallow only during initial acquisition; an explicit `--no-tags
+--unshallow` fetch obtains full feature/main history before validation. The driver
+rejects shallow history or any tag refs. Review of the first run's checkout log
+found that `actions/checkout` with `fetch-depth: 0` fetches tag refs despite
+`fetch-tags: false`; the workflow now avoids that behavior. Those were read-only
+ephemeral runner refs, not created/pushed repository tags. The isolated working
+clone was already full-history without tags and remains so.
+
 ## Explicit execution, not an automatic retry
 
 Ordinary feature pushes do not allocate a runner. Use an owner-coordinated
 feature-ref dispatch with a selected mode, or an intentional `[rpc-diagnose]`,
-`[rpc-native]` or `[rpc-generate]` head-commit marker if branch-only workflow
+`[rpc-native]`, `[rpc-apple-compile]` or `[rpc-generate]` head-commit marker if branch-only workflow
 dispatch is unavailable.
 The markers select an already-authorized operation; they grant no new permission.
 This prevents a documentation/checkpoint push from blindly repeating a failed
@@ -42,6 +50,24 @@ committed inputs to remain unchanged. Their manifests are
 `DIAGNOSTIC_ONLY_DO_NOT_IMPORT`. Select `generate` explicitly for the complete
 writer below; diagnostic success is not a replacement for it or whole-repository
 strict-input qualification.
+
+## Independent compiler checks
+
+`compile-apple` selects normal strict core/LAN/RPC Dokka and the example's
+three Apple debug-framework links, then typechecks the public
+[Swift façade fixture](../../samples/p2p-sample-rpc/verification/RpcSwiftApiCheck.swift)
+against each actual framework and matching SDK/target. Warnings remain errors;
+the iOS 14 minimum is checked in framework metadata. Receipts hash nonempty
+compiler/header/module-map/HTML outputs, but no compiled binary is uploaded.
+Swift uses the maintained sample's Swift 5 language compatibility mode. No
+application, physical device, network experiment, JmDNS test or publication is
+selected, and committed inputs may not change. Cross-compiling Intel/device
+slices is not Intel or physical-device runtime evidence.
+
+These checks can expose compiler/API issues independently while the complete
+lock writer awaits a multicast-capable host. They do not turn that failed gate
+green or admit partial dependency/ABI inputs. The driver retains each failure
+and does not run Swift checks if genuine framework generation/output checks fail.
 
 ## First stage: generated inputs for review
 
@@ -94,7 +120,7 @@ The Native failure was
 `AppleOrganizationLanInteropTest.numericComparisonAcceptsEquivalentIpv6ButNeverHostnamesOrAmbiguousIpv4`.
 The original collector did not retain the precise failing assertion. Strict
 numeric spelling checks and both NWEndpoint address representations now have
-source corrections/regressions; their hosted result must be recorded separately.
+source corrections/regressions; their successful subsequent run is recorded below.
 The unchanged-main `JmdnsCloseLifecycleTest.realResourceCloseRegressionsExitNaturally`
 also failed; the original summary is insufficient to attribute its cause. Do not
 conflate it with the separately corrected historical external JmDNS lock entry.
@@ -118,13 +144,32 @@ subsequent diagnostic modes remove that flag and enforce unchanged inputs.
 - Native: main/Cinterop compilation passed, but the new test could not import
   `platform.posix.inet_pton`; **zero Native tests ran**. The corrected fixture now
   populates sockaddr network-order bytes independently of the parser under test.
-  Its subsequent Native-only result must be recorded separately.
+  Its subsequent Native-only result is recorded below.
 
 The full writer remains blocked by genuine multicast readiness, consistent with
 the unchanged main [Mac prerequisite handoff](../testing/mac-handoff.md), not by
 the independently corrected external JmDNS lock entry. It must wait for a newly
 admitted supported Mac with functioning multicast/simulator prerequisites; no
 unchanged full-graph retry, privacy/route override or partial-lock import is allowed.
+
+## Native correction verified (scoped pass)
+
+[Run 36337234887](https://github.com/p2pKit/P2pKit/actions/runs/36337234887),
+source `06a0a5ec6038e081ec46657acac8bc2fbc3b7995`, passed the complete
+`:p2p-transport-lan:iosSimulatorArm64Test` task under normal **strict** dependency
+verification and warnings-as-errors, with fresh execution-token evidence and
+32 matching nonempty XML reports: **194 passed, zero failures/errors, one
+pre-existing ignored diagnostic**. All three `AppleOrganizationLanInteropTest`
+tests passed. There was no JmDNS invocation, checksum/lock writing or tracked-input
+change. Owned process-group drain and same-home Gradle stop passed.
+
+Toolchain: ARM64 macOS 26.6.2 (25G83), Xcode 26.5 (17F42), simulator SDK 26.5,
+Temurin 17.0.20.1+1 and 21.0.12.1+1. The sanitized artifact ZIP digest was checked
+against GitHub metadata before allowlisted extraction:
+`7fee3a42b3e49e48ad85a321a4580537cc3ad45b56d9fe34d3c19c843e44f233`.
+Twenty Python-only driver controls also passed. This validates the bounded Native
+regression scope, **not actual organization-LAN path enforcement, complete locks,
+all-target compatibility, release or capacity qualification**.
 
 After reviewed inputs are committed, normal strict Native ABI/Dokka and fresh
 platform-evidence checks must run against the exact committed source. Intel

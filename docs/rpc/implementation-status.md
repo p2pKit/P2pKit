@@ -225,6 +225,10 @@ SBOM JSON/XML and lint reports were snapshotted and hashed in the owned logs.
   send `NoRouteToHostException` before lifecycle assertions; its cause is unknown.
   Seven later child modes did not run. A new Native test's unavailable libc
   binding was also found and corrected; that run executed no Native tests.
+  The corrected Native-only follow-up passed all 194 enabled LAN ARM simulator
+  tests (plus the one pre-existing ignored diagnostic), including all three new
+  endpoint-helper regressions, under normal strict resolution with unchanged
+  inputs. Fresh counts/XML and cleanup were verified; it did not repeat JmDNS.
 - **Strict Dokka:** inspected task graphs select Native distribution download,
   commonization and Apple/Cinterop compilation. Full execution remains gated;
   no task was disabled to obtain a documentation pass. The newly authorized

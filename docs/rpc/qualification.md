@@ -68,7 +68,8 @@ hosted approval is scoped as described above, not to arbitrary repository jobs.
    Do not turn off required tasks or treat missing/empty XML as a test pass.
 
 Relevant added deterministic suites (common/JVM/Android cases executed;
-Apple cases still unexecuted):
+scoped ARM simulator results are recorded in [hosted validation](hosted-validation.md),
+not a complete all-platform qualification):
 
 | Area | Tests / assertions |
 | --- | --- |
@@ -78,7 +79,7 @@ Apple cases still unexecuted):
 | Pairing/trust | `RpcPairingTrustTest`: identity-bound single use, expiry, concurrent candidates, durable approval failure, immediate revocation and cleanup/storage failure. |
 | Queue ownership | `SessionRpcLinkTest`, `RpcNotificationsTest`: writer priority, generation isolation, entry/byte limits including active work, nullable schemas, slow consumers, worker cancellation and teardown leases. |
 | Generic prerequisites | `SessionProfileTest`, `RestrictedProtocolBudgetTest`, `RestrictedSessionTest` and authenticated-v2 extensions: live admission/quarantine, both-direction capacity, message restrictions, accounting and preserved pin checks. |
-| LAN policy | `OrganizationLanTest`, `JvmOrganizationLanTest`, `AndroidLanNetworkStateTest`, `AppleOrganizationLanInteropTest`: CIDR/numeric rejection, strict selected-interface and multihoming failure, fresh Android route lookup without stale fallback, native numeric equivalence and null-path rejection. Native tests are pending and are not real path-binding evidence. |
+| LAN policy | `OrganizationLanTest`, `JvmOrganizationLanTest`, `AndroidLanNetworkStateTest`, `AppleOrganizationLanInteropTest`: CIDR/numeric rejection, strict selected-interface and multihoming failure, fresh Android route lookup without stale fallback, strict Native numeric spelling, host/sockaddr endpoint normalization and null-path rejection. The Native helper regressions passed on ARM simulator; this is not real path-binding evidence. |
 | Examples/driver | `RpcSampleContractTest`, `RpcCapacityDriverTest`: exact payload/workload constants and bounded reporting; **not** a throughput measurement. |
 
 Runtime coverage must additionally include raw path changes, failed/slow socket
