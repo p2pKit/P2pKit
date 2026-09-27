@@ -922,13 +922,17 @@ class DarwinObservationTests(unittest.TestCase):
         self.scope.pending_discoveries, self.scope.discovery_reconciliations = {}, []
         self.scope.observation_reconciliations = []
         self.scope.identity_history, self.scope.ownership_proofs = {}, {}
+        self.scope.foreign_sessions, self.scope.controller_session = {}, 42
+        self.scope.pipe_fds, self.scope.pipe_marker = (7, 8), (101, 102, 103)
+        self.scope._has_pipe = mock.Mock(return_value=False)
+        self.scope._audit_session = mock.Mock(return_value=self.scope.controller_session)
         self.scope.self_port, self.scope.argmax = 7, 4096
-        self.scope.system, self.scope.proc = mock.Mock(), mock.Mock()
-        self.identity = {"pid": 43210, "uid": 1000, "realUid": 1000, "parentPid": 1, "group": 43210,
-                         "uniqueId": 99, "parentUniqueId": 1, "pidVersion": 3,
+        self.scope.system, self.scope.proc, self.scope.bsm = mock.Mock(), mock.Mock(), mock.Mock()
+        self.identity = {"pid": 43210, "uid": 1000, "realUid": 1000, "parentPid": 4000, "group": 43210,
+                         "uniqueId": 99, "parentUniqueId": 91, "pidVersion": 3, "originalParentPidVersion": 2,
                          "startSeconds": 123, "startMicroseconds": 456,
                          "status": 2, "flags": 4, "live": True}
-        self.parent = {**self.identity, "pid": 1, "uniqueId": 1, "parentUniqueId": 0,
+        self.parent = {**self.identity, "pid": 4000, "uniqueId": 91, "parentUniqueId": 0,
                        "startSeconds": 1, "parentPid": 0}
         self.scope._remember_identity(self.parent)
         self.scope.baseline.add(self.scope._key(self.parent))
@@ -1126,6 +1130,158 @@ class DarwinObservationTests(unittest.TestCase):
         self.assertIsNone(self.scope._ownership_proof(self.identity, {}))
         self.assertFalse(self.scope.known)
 
+    def test_reaper_unique_id_and_original_parent_version_cannot_prove_nonownership(self):
+        reaper = {**self.parent, "pid": 1, "uniqueId": 1}
+        self.scope._remember_identity(reaper)
+        self.scope.baseline.add(self.scope._key(reaper))
+        for version in (self.parent["pidVersion"], reaper["pidVersion"], -1):
+            with self.subTest(version=version):
+                child = {**self.identity, "parentPid": 1, "parentUniqueId": 1,
+                         "originalParentPidVersion": version}
+                with self.assertRaises(processes.DiscoveryUncertain):
+                    self.scope._ownership_proof(child, {})
+        self.assertFalse(self.scope.known)
+        self.assertFalse(self.scope.foreign_sessions)
+        self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_pipe_proof_survives_missing_and_reaper_ancestry(self):
+        self.scope.identity_history.clear()
+        self.scope._has_pipe.return_value = True
+        self.assertEqual(self.scope._ownership_proof(self.identity, {}), {"kind": "inherited-pipe-capability"})
+        self.scope._audit_session.assert_not_called()
+
+    def test_different_audit_session_is_nonownership_not_signal_authority(self):
+        self.scope.identity_history.clear()
+        self.scope._audit_session.return_value = 43
+        self.assertIsNone(self.scope._ownership_proof(self.identity, {}))
+        self.assertEqual(self.scope.description()["foreignAuditSessions"], [{
+            "identity": list(self.scope._key(self.identity)), "kind": "different-kernel-audit-session",
+            "signalAuthority": False}])
+        self.assertFalse(self.scope.known)
+        self.assertFalse(self.scope.handles)
+        self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_same_or_unassigned_audit_session_does_not_prove_ownership_or_nonownership(self):
+        self.scope.identity_history.clear()
+        for controller, observed in ((42, 42), (42, 0), (42, 0xffffffff), (0, 42), (0xffffffff, 42)):
+            with self.subTest(controller=controller, observed=observed):
+                self.scope.controller_session = controller
+                self.scope._audit_session.return_value = observed
+                with self.assertRaises(processes.DiscoveryUncertain):
+                    self.scope._ownership_proof(self.identity, {})
+        self.assertFalse(self.scope.foreign_sessions)
+
+    def test_traced_parent_edge_is_not_ownership_evidence(self):
+        self.scope.known[self.scope._key(self.parent)] = self.parent
+        with self.assertRaisesRegex(processes.DiscoveryUncertain, "traced"):
+            self.scope._ownership_proof({**self.identity, "flags": self.identity["flags"] | 2}, {})
+
+    def test_pipe_native_layout_and_identity_validation(self):
+        self.assertEqual([ctypes.sizeof(kind) for kind in (processes.DarwinFileInfo, processes.DarwinVinfoStat,
+            processes.DarwinPipeInfo, processes.DarwinFdInfo)], [24, 136, 184, 8])
+
+        def observed(pid, fd, flavor, pointer, size):
+            self.assertEqual((pid, fd, flavor, size), (43210, 17, 6, 184))
+            value = ctypes.cast(pointer, ctypes.POINTER(processes.DarwinPipeInfo)).contents
+            value.handle, value.peer, value.stat.ino = self.scope.pipe_marker
+            value.stat.mode = 0o010600
+            return size
+
+        self.scope.proc.proc_pidfdinfo.side_effect = observed
+        self.assertEqual(self.scope._pipe_identity(43210, 17), self.scope.pipe_marker)
+        self.scope.proc.proc_pidfdinfo.side_effect = None
+        self.scope.proc.proc_pidfdinfo.return_value = 183
+        with self.assertRaisesRegex(processes.OwnershipError, "Unsupported"):
+            self.scope._pipe_identity(43210, 17)
+        self.scope.proc.proc_pidfdinfo.return_value = 0
+        for error in (errno.EBADF, errno.ENOENT, errno.EINVAL):
+            ctypes.set_errno(error)
+            self.scope.proc.proc_pidfdinfo.side_effect = lambda *_args, error=error: (ctypes.set_errno(error) or 0)
+            self.assertIsNone(self.scope._pipe_identity(43210, 17))
+        self.scope.proc.proc_pidfdinfo.side_effect = lambda *_args: (ctypes.set_errno(errno.EPERM) or 0)
+        with self.assertRaises(processes.DarwinObservationError):
+            self.scope._pipe_identity(43210, 17)
+
+    def test_descriptor_marker_is_checked_against_held_capability_and_current_lifetime(self):
+        self.scope._has_pipe = processes.DarwinScope._has_pipe.__get__(self.scope)
+
+        def census(pid, flavor, arg, pointer, size):
+            self.assertEqual((pid, flavor, arg), (self.identity["pid"], 1, 0))
+            rows = ctypes.cast(pointer, ctypes.POINTER(processes.DarwinFdInfo))
+            rows[0].fd, rows[0].type = 18, 1  # A nonpipe descriptor is never inspected as a pipe.
+            rows[1].fd, rows[1].type = 19, 6
+            return 16
+
+        self.scope.proc.proc_pidinfo.side_effect = census
+        for marker, expected in ((self.scope.pipe_marker, True), ((901, 902, 903), False), (None, False)):
+            with self.subTest(markerPresent=expected), self.clock(), \
+                    mock.patch.object(self.scope, "_pipe_identity", side_effect=lambda pid, _fd:
+                                      self.scope.pipe_marker if pid == os.getpid() else marker) as inspect:
+                self.assertEqual(self.scope._has_pipe(self.identity), expected)
+                self.assertEqual(inspect.call_args_list, [mock.call(os.getpid(), 8), mock.call(43210, 19)])
+        for lost in (None, (901, 902, 903)):
+            with mock.patch.object(self.scope, "_pipe_identity", return_value=lost), \
+                    self.assertRaisesRegex(processes.OwnershipError, "held pipe capability"):
+                self.scope._has_pipe(self.identity)
+
+    def test_pipe_census_bounds_and_permission_failures_do_not_authorize_signaling(self):
+        self.scope._has_pipe = processes.DarwinScope._has_pipe.__get__(self.scope)
+        with mock.patch.object(self.scope, "_pipe_identity", return_value=self.scope.pipe_marker), self.clock():
+            self.scope.proc.proc_pidinfo.return_value = 7
+            with self.assertRaisesRegex(processes.OwnershipError, "Unsupported Darwin descriptor census"):
+                self.scope._has_pipe(self.identity)
+            self.scope.proc.proc_pidinfo.side_effect = lambda _pid, _flavor, _arg, _ptr, size: size
+            with mock.patch.object(processes, "MAX_PROCESS_FDS", 256), \
+                    self.assertRaisesRegex(processes.OwnershipError, "exceeds its bound"):
+                self.scope._has_pipe(self.identity)
+            self.scope.proc.proc_pidinfo.side_effect = lambda *_args: (ctypes.set_errno(errno.EPERM) or 0)
+            with self.assertRaises(processes.DiscoveryUncertain):
+                self.scope._ownership_proof(self.identity, {})
+        self.assertFalse(self.scope.known)
+        self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_only_verified_inherited_pipe_descriptors_are_passed_not_reused_or_closed_fds(self):
+        ids = ["a" * 32, "b" * 32, "c" * 32]
+        records = [{"id": identifier, "fd": 8 + index, "digest": self.scope._pipe_digest(self.scope.pipe_marker)}
+                   for index, identifier in enumerate(ids)]
+        environment = {processes.CHAIN_ENV: ":".join(ids), processes.PIPE_ENV: json.dumps(records)}
+        with mock.patch.object(self.scope, "_pipe_identity", side_effect=[self.scope.pipe_marker, None, (9, 9, 9)]):
+            self.assertEqual(self.scope._inherited_pipes(environment), records[:1])
+
+    def test_malformed_and_duplicate_pipe_bindings_fail_without_descriptor_access(self):
+        valid = {"id": self.scope.invocation, "fd": 8, "digest": self.scope._pipe_digest(self.scope.pipe_marker)}
+        records = [None, {}, [valid] * 33, [valid, valid], [{**valid, "id": "c" * 32}],
+                   [{**valid, "fd": True}], [{**valid, "fd": 2}], [{**valid, "digest": "x"}]]
+        with mock.patch.object(self.scope, "_pipe_identity") as inspect:
+            for record in records:
+                with self.subTest(record=record), self.assertRaises(processes.OwnershipError):
+                    self.scope._inherited_pipes({processes.CHAIN_ENV: self.scope.invocation,
+                                                 processes.PIPE_ENV: json.dumps(record)})
+            with self.assertRaisesRegex(processes.OwnershipError, "Duplicate"):
+                self.scope._inherited_pipes({processes.PIPE_ENV: '[{"id":"a","id":"b"}]'})
+            inspect.assert_not_called()
+
+    def test_native_audit_session_decoder_must_match_bound_pid_and_credentials(self):
+        self.scope._audit_session = processes.DarwinScope._audit_session.__get__(self.scope)
+        token = processes.AuditToken()
+        self.scope.bsm.audit_token_to_pid.return_value = self.identity["pid"]
+        self.scope.bsm.audit_token_to_euid.return_value = self.identity["uid"]
+        self.scope.bsm.audit_token_to_asid.return_value = 42
+        with mock.patch.object(self.scope, "_acquire", return_value=token):
+            self.assertEqual(self.scope._audit_session(self.identity), 42)
+            self.scope.bsm.audit_token_to_asid.assert_called_once_with(token)
+            self.scope.bsm.audit_token_to_euid.return_value = 0
+            with self.assertRaisesRegex(processes.OwnershipError, "decoder/identity mismatch"):
+                self.scope._audit_session(self.identity)
+        self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_close_releases_only_own_pipe_references_and_is_idempotent(self):
+        with mock.patch.object(processes.os, "close") as close:
+            self.scope.close()
+            self.scope.close()
+            self.assertEqual(close.call_args_list, [mock.call(7), mock.call(8)])
+        self.assertFalse(self.scope.description()["inheritedPipeBound"])
+
     def test_missing_intermediary_blocks_drain_without_signaling_unknown_process(self):
         self.current["parentUniqueId"] = 999
         with mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
@@ -1165,7 +1321,7 @@ class DarwinObservationTests(unittest.TestCase):
             with self.assertRaisesRegex(processes.OwnershipError, "history exceeds"):
                 self.scope._remember_identity({**self.identity, "uniqueId": 100})
         self.scope.baseline.clear()
-        self.scope.identity_history[1]["parentUniqueId"] = self.identity["uniqueId"]
+        self.scope.identity_history[self.parent["uniqueId"]]["parentUniqueId"] = self.identity["uniqueId"]
         with self.assertRaisesRegex(processes.OwnershipError, "Cyclic"):
             self.scope._ownership_proof(self.identity, {})
 
@@ -1288,7 +1444,8 @@ class DarwinObservationTests(unittest.TestCase):
                                           ("startusec", "startMicroseconds")):
                         setattr(value.bsd, native, terminal[field])
                     for native, field in (("uniqueid", "uniqueId"), ("parentuniqueid", "parentUniqueId"),
-                                          ("pidversion", "pidVersion")):
+                                          ("pidversion", "pidVersion"),
+                                          ("parentpidversion", "originalParentPidVersion")):
                         setattr(value.unique, native, terminal[field])
                     return ctypes.sizeof(value)
 
@@ -3055,7 +3212,7 @@ class DarwinNativeTests(PosixNativeTests):
         observed = self.scope._inspect_environment(live[utility_pid])
         if not self.scope._ours(observed):
             self.assertEqual(self.scope.ownership_proofs[self.scope._key(live[utility_pid])]["kind"],
-                             "kernel-original-parent")
+                             "inherited-pipe-capability")
         runner.write_new_json(CASE_EVIDENCE / "system-tools-control.json", {
             "shellIdentity": live[child.pid], "utilityIdentity": live[utility_pid],
             "utilityMarkersObservable": self.scope._ours(observed),
@@ -3077,12 +3234,58 @@ class DarwinNativeTests(PosixNativeTests):
         worker = self.scope._identity(worker_pid, required=True)
         self.assertIsNotNone(worker)
         self.assertNotEqual(worker["parentPid"], child.pid)
-        self.assertEqual(worker["parentUniqueId"], bound["uniqueId"])
         self.assertIn(worker_pid, {row["pid"] for row in self.scope.discover()})
         self.assertEqual(self.scope.drain(grace=.2, kill_wait=5), [])
         self.assertIsNone(sentinel.poll())
         runner.write_new_json(CASE_EVIDENCE / "reparented-system-control.json", {
             "leaderIdentity": bound, "reparentedWorkerIdentity": worker, "sameExecutableSentinelSurvived": True})
+
+    def test_system_utility_exec_after_reparent_is_owned_without_inventing_original_parent(self):
+        sentinel = self.sentinel(["/bin/sleep", "120"])
+        pidfile = self.state / "after-reparent-exec-pid"
+        producer = r'''import os, pathlib, sys, time
+parent = os.getpid()
+worker = os.fork()
+if worker:
+    pathlib.Path(sys.argv[1]).write_text(str(worker))
+    os._exit(0)
+fd = os.open('/dev/null', os.O_RDWR)
+for target in (0, 1, 2): os.dup2(fd, target)
+os.close(fd)
+end = time.monotonic() + 5
+while os.getppid() == parent:
+    if time.monotonic() > end: os._exit(125)
+    time.sleep(.001)
+os.execl('/bin/sleep', 'sleep', '120')
+'''
+        child = self.scope.spawn([PYTHON, "-c", producer, str(pidfile)], str(self.root), self.env)
+        capture = Capture(child)
+        # No census until the real worker has reparented AND executed. This
+        # prevents a lucky early environment observation from satisfying proof.
+        self.assertEqual(child.wait(timeout=5), 0)
+        worker_pid = int(pidfile.read_text())
+        deadline = time.monotonic() + 5
+        while True:
+            worker = self.scope._identity(worker_pid, required=True)
+            self.assertIsNotNone(worker)
+            if worker["parentPid"] == 1 and worker["parentUniqueId"] == 1:
+                break
+            self.assertLess(time.monotonic(), deadline, "Worker did not execute after actual reparenting")
+            time.sleep(.01)
+        self.assertNotIn(self.scope._key(worker), self.scope.known)
+        self.assertTrue(self.scope._has_pipe(worker))
+        observed = self.scope._inspect_environment(worker)
+        self.assertIn(worker_pid, {row["pid"] for row in self.scope.discover()})
+        proof = self.scope.ownership_proofs[self.scope._key(worker)]
+        if not self.scope._ours(observed):
+            self.assertEqual(proof["kind"], "inherited-pipe-capability")
+        self.assertEqual(self.scope.drain(grace=.2, kill_wait=5), [])
+        self.assertEqual(capture.finish(self.scope)[0], 0)
+        self.assertIsNone(sentinel.poll())
+        runner.write_new_json(CASE_EVIDENCE / "reparent-before-exec-control.json", {
+            "leaderIdentity": self.scope.launches[-1]["boundIdentity"], "workerIdentity": worker,
+            "environmentHidden": not self.scope._ours(observed), "ownershipProof": proof,
+            "sameExecutableSentinelSurvived": True})
 
     def test_fast_system_command_has_preexec_binding_and_truthful_launch_trace(self):
         code, out, err, receipt = self.run_leaf(["/usr/bin/true"], kind="command")
@@ -3139,7 +3342,7 @@ class DarwinNativeTests(PosixNativeTests):
     def test_unobserved_double_fork_fails_closed_until_hidden_child_exits(self):
         sentinel = self.sentinel(["/bin/sleep", "120"])
         release, pidfile = self.state / "fork-release", self.state / "unobserved-child"
-        producer = r'''import os, pathlib, sys, time
+        producer = r'''import json, os, pathlib, sys, time
 release, result = map(pathlib.Path, sys.argv[1:])
 deadline = time.monotonic() + 5
 while not release.exists():
@@ -3150,9 +3353,18 @@ read, write = os.pipe()
 middle = os.fork()
 if middle == 0:
     os.close(read)
+    parent = os.getpid()
     if os.fork() == 0:
         os.write(write, str(os.getpid()).encode())
         os.close(write)
+        # Deliberately remove every inherited optional pipe marker as well as
+        # losing the unobserved intermediary. Missing all proof must fail closed.
+        for binding in json.loads(os.environ.get('P2PKIT_AUDIT_DARWIN_PIPES', '[]')):
+            os.close(binding['fd'])
+        end = time.monotonic() + 5
+        while os.getppid() == parent:
+            if time.monotonic() > end: os._exit(125)
+            time.sleep(.001)
         os.execl('/bin/sleep', 'sleep', '3')
     os._exit(0)
 os.close(write)
@@ -3168,9 +3380,16 @@ result.write_bytes(worker)
         # This tests missing evidence, not a synthesized positive ancestry.
         self.assertEqual(child.wait(timeout=5), 0)
         worker_pid = int(pidfile.read_text())
-        worker = self.scope._identity(worker_pid, required=True)
-        self.assertIsNotNone(worker)
-        self.assertNotIn(worker["parentUniqueId"], self.scope.identity_history)
+        deadline = time.monotonic() + 5
+        while True:
+            worker = self.scope._identity(worker_pid, required=True)
+            self.assertIsNotNone(worker)
+            if worker["parentPid"] == 1 and worker["parentUniqueId"] == 1:
+                break
+            self.assertLess(time.monotonic(), deadline, "Unobserved worker did not execute after reparenting")
+            time.sleep(.01)
+        self.assertNotIn(self.scope._key(worker), self.scope.known)
+        self.assertFalse(self.scope._has_pipe(worker))
         observed = self.scope._inspect_environment(worker)
         hidden = not self.scope._ours(observed)
         if hidden:

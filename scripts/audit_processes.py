@@ -2,9 +2,10 @@
 """Identity-scoped children for the opt-in audit executor; never a process-name sweep.
 
 Windows uses a kernel Job Object attached atomically before resume. Linux discovers
-controlled marker-inheriting descendants and signals through pidfds. macOS also
-binds each launch before exec and follows observed immutable original-parent IDs:
-SIP intentionally hides environment markers for restricted system executables.
+controlled marker-inheriting descendants and signals through pidfds. macOS binds
+each launch before exec, adds an inherited anonymous-pipe capability, and follows
+observed non-reaper parent lifetimes. SIP hides restricted executables' environment;
+reparent-then-exec can also replace their parent unique ID with launchd's ID.
 Signals use real Mach audit tokens, never a PID/group/name fallback. Unresolved
 ancestry fails closed. Neither POSIX backend contains malicious children or work
 delegated to unrelated services; native API/fixture admission remains required.
@@ -13,6 +14,7 @@ from __future__ import annotations
 
 import ctypes
 import errno
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -31,8 +33,10 @@ JOB_ENV = "P2PKIT_AUDIT_JOB_ID"
 CHAIN_ENV = "P2PKIT_AUDIT_OWNERSHIP_CHAIN"
 DOMAINS_ENV = "P2PKIT_AUDIT_OWNERSHIP_DOMAINS"
 STATE_ENV = "P2PKIT_AUDIT_STATE_DIR"
+PIPE_ENV = "P2PKIT_AUDIT_DARWIN_PIPES"
 MAX_PROCESS_BYTES = 8 * 1024 * 1024
 MAX_PROCESSES = 65536
+MAX_PROCESS_FDS = 65536
 SIG_TERM = 15
 SIG_KILL = 9
 
@@ -348,6 +352,9 @@ class PosixScope:
             except DiscoveryUncertain as error:
                 self._discovery_failed(identity, error)
                 continue
+            except ProcessLookupError:
+                self._discovery_resolved(pid, "lifetime-ended")
+                continue
             if proof is None:
                 self._discovery_resolved(pid, "unmarked", identity)
                 continue
@@ -536,6 +543,28 @@ class AuditToken(ctypes.Structure):
     _fields_ = [("val", U32 * 8)]
 
 
+class DarwinFileInfo(ctypes.Structure):
+    _fields_ = [("openflags", U32), ("status", U32), ("offset", ctypes.c_int64),
+                ("type", I32), ("guardflags", U32)]
+
+
+class DarwinVinfoStat(ctypes.Structure):
+    _fields_ = [("dev", U32), ("mode", ctypes.c_uint16), ("nlink", ctypes.c_uint16),
+                ("ino", U64), ("uid", U32), ("gid", U32)] + [
+        (name, ctypes.c_int64) for name in ("atime", "atimensec", "mtime", "mtimensec", "ctime", "ctimensec",
+                                           "birthtime", "birthtimensec", "size", "blocks")] + [
+        ("blksize", I32), ("flags", U32), ("gen", U32), ("rdev", U32), ("spare", ctypes.c_int64 * 2)]
+
+
+class DarwinPipeInfo(ctypes.Structure):
+    _fields_ = [("file", DarwinFileInfo), ("stat", DarwinVinfoStat), ("handle", U64), ("peer", U64),
+                ("status", I32), ("reserved", I32)]
+
+
+class DarwinFdInfo(ctypes.Structure):
+    _fields_ = [("fd", I32), ("type", U32)]
+
+
 class DarwinObservationError(OwnershipError):
     """A failed observation, not proof of exit or an unreleased kernel right."""
 
@@ -547,18 +576,40 @@ class DarwinObservationExhausted(OwnershipError):
 class DarwinScope(PosixScope):
     name = "darwin-libproc-audit-token"
 
+    def __init__(self, job: str, invocation: str, state: str, home: str):
+        self.pipe_fds: tuple[int, ...] = ()
+        self.pipe_marker: tuple[int, ...] | None = None
+        try:
+            super().__init__(job, invocation, state, home)
+            # Keep BOTH endpoints alive until close: a kernel pipe handle cannot
+            # be recycled into an unrelated pipe while this reference is held.
+            self.pipe_fds = os.pipe()
+            self.pipe_marker = self._pipe_identity(os.getpid(), self.pipe_fds[1])
+            if self.pipe_marker is None or not self.pipe_marker[1]:
+                raise OwnershipError("Cannot bind the Darwin inherited pipe capability")
+        except BaseException:
+            for descriptor in self.pipe_fds:
+                os.close(descriptor)
+            self.pipe_fds = ()
+            raise
+
     def _admit(self) -> None:
         self.observation_reconciliations: list[dict[str, Any]] = []
         self.identity_history: dict[int, dict[str, Any]] = {}
         self.ownership_proofs: dict[tuple[int, ...], dict[str, Any]] = {}
+        self.foreign_sessions: dict[tuple[int, ...], dict[str, Any]] = {}
         if (ctypes.sizeof(DarwinBsdInfo), ctypes.sizeof(DarwinUniqueInfo), ctypes.sizeof(DarwinIdentity),
-                ctypes.sizeof(AuditToken)) != (136, 56, 192, 32):
+                ctypes.sizeof(AuditToken), ctypes.sizeof(DarwinFileInfo), ctypes.sizeof(DarwinVinfoStat),
+                ctypes.sizeof(DarwinPipeInfo), ctypes.sizeof(DarwinFdInfo)) != (136, 56, 192, 32, 24, 136, 184, 8):
             raise OwnershipError("Unsupported Darwin process ABI layout")
         try:
             self.proc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
             self.system = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+            self.bsm = ctypes.CDLL("/usr/lib/libbsm.dylib", use_errno=True)
             self.proc.proc_pidinfo.argtypes = [I32, I32, U64, PTR, I32]
             self.proc.proc_pidinfo.restype = I32
+            self.proc.proc_pidfdinfo.argtypes = [I32, I32, I32, PTR, I32]
+            self.proc.proc_pidfdinfo.restype = I32
             self.proc.proc_listallpids.argtypes = [PTR, I32]
             self.proc.proc_listallpids.restype = I32
             self.proc.proc_signal_with_audittoken.argtypes = [ctypes.POINTER(AuditToken), I32]
@@ -571,6 +622,12 @@ class DarwinScope(PosixScope):
             self.system.task_info.restype = I32
             self.system.mach_port_deallocate.argtypes = [U32, U32]
             self.system.mach_port_deallocate.restype = I32
+            self.bsm.audit_token_to_asid.argtypes = [AuditToken]
+            self.bsm.audit_token_to_asid.restype = U32
+            self.bsm.audit_token_to_pid.argtypes = [AuditToken]
+            self.bsm.audit_token_to_pid.restype = I32
+            self.bsm.audit_token_to_euid.argtypes = [AuditToken]
+            self.bsm.audit_token_to_euid.restype = U32
             self.self_port = U32.in_dll(self.system, "mach_task_self_").value
         except (AttributeError, OSError, ValueError) as error:
             raise OwnershipError("Required Darwin libproc/Mach API is unavailable") from error
@@ -587,7 +644,94 @@ class DarwinScope(PosixScope):
         self._inspect_environment(identity)
         # Token acquisition admission is not proof that signaling controls pass;
         # the native fixture must exercise a real child and stale token.
-        self._acquire(identity)
+        self.controller_session = self._audit_session(identity)
+
+    def _audit_session(self, identity: dict[str, Any]) -> int:
+        token = self._acquire(identity)
+        # These are libbsm's decoders, not fabricated/interpreted token words.
+        if self.bsm.audit_token_to_pid(token) != identity["pid"] or \
+                self.bsm.audit_token_to_euid(token) != identity["uid"]:
+            raise OwnershipError("Darwin audit token decoder/identity mismatch")
+        return self.bsm.audit_token_to_asid(token)
+
+    def _pipe_identity(self, pid: int, descriptor: int) -> tuple[int, ...] | None:
+        value = DarwinPipeInfo()
+        ctypes.set_errno(0)
+        size = self.proc.proc_pidfdinfo(pid, descriptor, 6, ctypes.byref(value), ctypes.sizeof(value))
+        if size == 0 and ctypes.get_errno() in (errno.EBADF, errno.ENOENT, errno.EINVAL):
+            return None  # The descriptor closed/changed; never a positive match.
+        if size == 0:
+            raise DarwinObservationError(f"Darwin pipe observation failed: errno {ctypes.get_errno()}")
+        if size != ctypes.sizeof(value) or not value.handle or \
+                value.stat.mode & 0o170000 != 0o010000:
+            raise OwnershipError("Unsupported Darwin pipe identity response")
+        # Opaque pipe handles are never emitted in logs, receipts or environment.
+        return value.handle, value.peer, value.stat.ino
+
+    @staticmethod
+    def _pipe_digest(marker: tuple[int, ...]) -> str:
+        return hashlib.sha256(struct.pack("=QQQ", *marker)).hexdigest()
+
+    def _inherited_pipes(self, env: dict[str, str]) -> list[dict[str, Any]]:
+        encoded = env.get(PIPE_ENV, "[]")
+        if len(encoded) > 8192:
+            raise OwnershipError("Darwin inherited pipe bindings exceed their bound")
+        def unique(pairs):
+            value = {}
+            for key, item in pairs:
+                if key in value:
+                    raise OwnershipError("Duplicate Darwin inherited pipe binding field")
+                value[key] = item
+            return value
+        try:
+            records = json.loads(encoded, object_pairs_hook=unique)
+        except (ValueError, TypeError) as error:
+            raise OwnershipError("Invalid Darwin inherited pipe bindings") from error
+        if not isinstance(records, list) or len(records) > 32:
+            raise OwnershipError("Invalid Darwin inherited pipe binding count")
+        chain = env.get(CHAIN_ENV, "").split(":")
+        verified, seen, descriptors = [], set(), set()
+        for record in records:
+            if not isinstance(record, dict) or set(record) != {"id", "fd", "digest"} or \
+                    not isinstance(record["id"], str) or record["id"] not in chain or record["id"] in seen or \
+                    type(record["fd"]) is not int or not 3 <= record["fd"] < MAX_PROCESS_FDS or \
+                    record["fd"] in descriptors or \
+                    not isinstance(record["digest"], str) or not re.fullmatch(r"[0-9a-f]{64}", record["digest"]):
+                raise OwnershipError("Invalid Darwin inherited pipe binding")
+            seen.add(record["id"])
+            descriptors.add(record["fd"])
+        for record in records:
+            marker = self._pipe_identity(os.getpid(), record["fd"])
+            # Some controlled tools close nonstandard FDs when they spawn. A lost
+            # optional marker is not authority, nor proof of nonownership. Retain
+            # environment/ancestry checks; never pass an unrelated reused FD.
+            if marker is not None and self._pipe_digest(marker) == record["digest"]:
+                verified.append(record)
+        return verified
+
+    def _has_pipe(self, identity: dict[str, Any]) -> bool:
+        if self.pipe_marker is None or len(self.pipe_fds) != 2 or \
+                self._pipe_identity(os.getpid(), self.pipe_fds[1]) != self.pipe_marker:
+            raise OwnershipError("Darwin observation lost its held pipe capability")
+        def inspect(current):
+            capacity = 128
+            while capacity <= MAX_PROCESS_FDS:
+                rows = (DarwinFdInfo * capacity)()
+                ctypes.set_errno(0)
+                size = self.proc.proc_pidinfo(current["pid"], 1, 0, rows, ctypes.sizeof(rows))
+                if size < 0 or size > ctypes.sizeof(rows) or size % ctypes.sizeof(DarwinFdInfo):
+                    raise OwnershipError("Unsupported Darwin descriptor census")
+                if size == 0:
+                    if ctypes.get_errno() == 0:
+                        return False
+                    raise DarwinObservationError(f"Darwin descriptor census failed: errno {ctypes.get_errno()}")
+                if size == ctypes.sizeof(rows):
+                    capacity *= 2
+                    continue
+                return any(row.type == 6 and self._pipe_identity(current["pid"], row.fd) == self.pipe_marker
+                           for row in rows[:size // ctypes.sizeof(DarwinFdInfo)])
+            raise OwnershipError("Darwin descriptor census exceeds its bound")
+        return self._observe(identity, "inherited pipe", inspect)
 
     def _remember_identity(self, identity: dict[str, Any]) -> None:
         unique = identity["uniqueId"]
@@ -608,14 +752,41 @@ class DarwinScope(PosixScope):
         proof = super()._ownership_proof(identity, environment)
         if proof is not None:
             return proof
-        # XNU p_puniqueid is set at fork/spawn and survives reparenting. It is NOT
-        # the mutable numeric PPID, a process-group match, or an argv assertion.
-        # A disappeared, never-observed intermediary cannot be reconstructed.
+        try:
+            if self._has_pipe(identity):
+                return {"kind": "inherited-pipe-capability"}
+            try:
+                return self._parent_proof(identity)
+            except DiscoveryUncertain:
+                # Audit sessions are inherited across ordinary fork/exec. An OS
+                # service in a different session is outside this controlled scope;
+                # matching sessions confer NO ownership. Session-changing/delegated
+                # work needs a separate explicit lifecycle owner, not a tree sweep.
+                session = self._audit_session(identity)
+                if self.controller_session not in (0, 0xffffffff) and session not in (0, 0xffffffff) and \
+                        session != self.controller_session:
+                    if self._key(identity) not in self.foreign_sessions and len(self.foreign_sessions) >= MAX_PROCESSES:
+                        raise OwnershipError("Darwin foreign-session history exceeds its bound")
+                    self.foreign_sessions[self._key(identity)] = {
+                        "identity": list(self._key(identity)), "kind": "different-kernel-audit-session",
+                        "signalAuthority": False}
+                    return None
+                raise
+        except DarwinObservationExhausted as error:
+            raise DiscoveryUncertain(str(error)) from error
+
+    def _parent_proof(self, identity: dict[str, Any]) -> dict[str, Any] | None:
+        # p_puniqueid survives ordinary reparenting, but exec can reset it to the
+        # reaper's ID. A launchd edge is NEVER original-parent/nonownership proof.
+        # The retained original-parent VERSION is diagnostic only: it is a lone
+        # wrapping 32-bit number, not an identity we can safely reconstruct.
         current, ancestors, seen = identity, [], {identity["uniqueId"]}
         for _ in range(256):
+            if current["flags"] & 2:  # PROC_FLAG_TRACED: debugger reparenting is not our authority.
+                raise DiscoveryUncertain("Darwin traced parentage is not an ownership proof")
             parent = self.identity_history.get(current["parentUniqueId"])
-            if parent is None:
-                raise DiscoveryUncertain("Darwin original-parent lifetime was not observed")
+            if parent is None or parent["pid"] == 1:
+                raise DiscoveryUncertain("Darwin non-reaper original-parent lifetime was not observed")
             if parent["uniqueId"] in seen:
                 raise OwnershipError("Cyclic Darwin original-parent evidence")
             seen.add(parent["uniqueId"])
@@ -632,6 +803,16 @@ class DarwinScope(PosixScope):
         # ownership does not authorize fabricated/missing ancestor domains.
         if not self._ours({os.fsencode(key): os.fsencode(value) for key, value in env.items()}):
             raise OwnershipError("Darwin launch lacks its bound inherited ownership domain")
+        inherited = self._inherited_pipes(env)
+        if self.pipe_marker is None or len(self.pipe_fds) != 2 or \
+                self._pipe_identity(os.getpid(), self.pipe_fds[1]) != self.pipe_marker:
+            raise OwnershipError("Darwin launch lost its inherited pipe capability")
+        inherited = [record for record in inherited if record["id"] != self.invocation]
+        inherited.append({"id": self.invocation, "fd": self.pipe_fds[1], "digest": self._pipe_digest(self.pipe_marker)})
+        if len(inherited) > 32:
+            raise OwnershipError("Darwin pipe nesting exceeds its bound")
+        child_env = {**env, PIPE_ENV: json.dumps(inherited, separators=(",", ":"))}
+        pass_fds = tuple(sorted({record["fd"] for record in inherited}))
         actual = resolve_executable(argv, cwd, env)
         launch = {"api": "subprocess.Popen", "requestedArgv": list(argv), "resolvedArgv": actual,
                   "executable": actual[0], "cwd": cwd, "shell": False, "created": False,
@@ -649,9 +830,9 @@ class DarwinScope(PosixScope):
             bootstrap = [sys.executable, "-I", "-S", str(Path(__file__).with_name("audit_exec_gate.py")),
                          str(ready_write), str(release_read), *actual]
             launch["bootstrapArgv"] = bootstrap
-            process = PosixProcess(subprocess.Popen(bootstrap, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+            process = PosixProcess(subprocess.Popen(bootstrap, cwd=cwd, env=child_env, stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, close_fds=True, bufsize=0,
-                pass_fds=(ready_write, release_read)))
+                pass_fds=(*pass_fds, ready_write, release_read)))
             launch.update({"created": True, "pid": process.pid})
             self.leaders.append(process)
             os.close(ready_write)
@@ -667,6 +848,8 @@ class DarwinScope(PosixScope):
                     identity["parentUniqueId"] != owner["uniqueId"] or identity["uid"] != os.getuid() or \
                     identity["realUid"] != os.getuid() or self._key(identity) in self.baseline:
                 raise OwnershipError("Darwin exec gate is not the directly spawned lifetime")
+            if not self._has_pipe(identity):
+                raise OwnershipError("Darwin exec gate did not inherit its bound pipe capability")
             self._remember_identity(identity)
             handle = self._acquire(identity)
             self.known[self._key(identity)] = identity
@@ -741,6 +924,7 @@ class DarwinScope(PosixScope):
                 return self._reconcile_identity(previous, failure)
         return {"pid": pid, "uid": value.bsd.uid, "parentPid": value.bsd.ppid, "group": value.bsd.pgid,
                 "uniqueId": value.unique.uniqueid, "parentUniqueId": value.unique.parentuniqueid,
+                "originalParentPidVersion": value.unique.parentpidversion,
                 "pidVersion": value.unique.pidversion, "startSeconds": value.bsd.startsec,
                 "startMicroseconds": value.bsd.startusec, "realUid": value.bsd.ruid,
                 "status": value.bsd.status, "flags": value.bsd.flags, "live": value.bsd.status not in (0, 5)}
@@ -866,10 +1050,21 @@ class DarwinScope(PosixScope):
                 raise OwnershipError("Cannot release the owned Darwin task-name port")
 
     def description(self) -> dict[str, Any]:
-        return {**super().description(), "scope": "controlled-domains-and-observed-original-parent-lifetimes",
+        return {**super().description(), "scope": "controlled-domains-pipes-and-observed-nonreaper-parent-lifetimes",
                 "ownershipProofs": list(self.ownership_proofs.values()),
+                "foreignAuditSessions": list(self.foreign_sessions.values()),
+                "inheritedPipeBound": self.pipe_marker is not None,
                 "unclassifiedLifetimes": list(self.pending_discoveries.values()),
                 "observationReconciliations": self.observation_reconciliations}
+
+    def close(self) -> None:
+        try:
+            super().close()
+        finally:
+            descriptors, self.pipe_fds = self.pipe_fds, ()
+            self.pipe_marker = None
+            for descriptor in descriptors:
+                os.close(descriptor)
 
     def _send(self, identity: dict[str, Any], handle: AuditToken, signum: int) -> None:
         # A real token is reacquired after exec-version changes; never os.kill(pid).
