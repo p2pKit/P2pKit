@@ -705,7 +705,7 @@ class IntegrationSourceAssertions(unittest.TestCase):
         self.assertEqual(ast.dump(function("run-hosted-cache-bootstrap.py", "phase")), ast.dump(expected))
         engine = function("run-hosted-cache-bootstrap.py", "_phase_owned")
         parameters = ast.parse(
-            "def _phase_owned(owner, private, context_raw, token, fence, *, initial_git=None, final_seed=None): pass"
+            "def _phase_owned(owner, private, context_raw, token, fence, *, initial_git=None, final_seed=None, receiver_seed=None): pass"
         ).body[0].args
         self.assertEqual(ast.dump(engine.args), ast.dump(parameters))
         return engine
@@ -798,7 +798,8 @@ class IntegrationSourceAssertions(unittest.TestCase):
 
     def test_public_child_refactor_rejects_route_and_credential_mutations(self):
         self.test_public_child_has_fixed_no_token_branch_and_private_steps_remain_private()
-        cases = ("wrapper-token", "wrapper-seed", "missing-finally", "engine-default",
+        cases = ("wrapper-token", "wrapper-seed", "wrapper-receiver", "missing-finally", "engine-default",
+            "receiver-default", "receiver-required",
             "missing-public-setup", "missing-public-launch", "public-token", "missing-private-inheritance")
         for case in cases:
             tree = copy.deepcopy(TREES["run-hosted-cache-bootstrap.py"])
@@ -810,10 +811,17 @@ class IntegrationSourceAssertions(unittest.TestCase):
             elif case == "wrapper-seed":
                 calls(wrapper, "_phase_owned")[0].keywords.append(
                     ast.keyword(arg="final_seed", value=ast.Constant(value=None)))
+            elif case == "wrapper-receiver":
+                calls(wrapper, "_phase_owned")[0].keywords.append(
+                    ast.keyword(arg="receiver_seed", value=ast.Constant(value=None)))
             elif case == "missing-finally":
                 wrapper.body = wrapper.body[0].body
             elif case == "engine-default":
-                engine.args.kw_defaults[-1] = ast.Constant(value=True)
+                index = [argument.arg for argument in engine.args.kwonlyargs].index("final_seed")
+                engine.args.kw_defaults[index] = ast.Constant(value=True)
+            elif case in ("receiver-default", "receiver-required"):
+                index = [argument.arg for argument in engine.args.kwonlyargs].index("receiver_seed")
+                engine.args.kw_defaults[index] = ast.Constant(value=True) if case == "receiver-default" else None
             else:
                 branches = [node for node in ast.walk(engine) if isinstance(node, ast.If) and
                     ast.unparse(node.test) == "context.get('scope') == INITIAL_PROVIDER_PUBLIC_CONTEXT_SCOPE"]

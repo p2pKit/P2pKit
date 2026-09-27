@@ -535,7 +535,7 @@ class BeforeSourceShapeControls(unittest.TestCase):
         self.assertEqual(ast.dump(function(NATIVE, "phase")), ast.dump(expected))
         engine = function(NATIVE, "_phase_owned")
         parameters = ast.parse(
-            "def _phase_owned(owner, private, context_raw, token, fence, *, initial_git=None, final_seed=None): pass"
+            "def _phase_owned(owner, private, context_raw, token, fence, *, initial_git=None, final_seed=None, receiver_seed=None): pass"
         ).body[0].args
         self.assertEqual(ast.dump(engine.args), ast.dump(parameters))
         return engine
@@ -636,8 +636,9 @@ class BeforeSourceShapeControls(unittest.TestCase):
             self.test_native_commands_bind_original_phase_tuple_twice()
 
         check()  # The same assertions must first accept the real source.
-        cases = ("wrong-argument", "missing-argument", "extra-argument", "final-seed",
+        cases = ("wrong-argument", "missing-argument", "extra-argument", "final-seed", "receiver-seed",
             "wrong-target", "missing-return", "missing-finally", "uncleared-token", "engine-default",
+            "receiver-default", "receiver-required",
             "missing-enter", "missing-first-leave", "missing-second-leave", "wrong-before-caps", "renewed-cleanup-cap")
         for case in cases:
             tree = copy.deepcopy(NATIVE)
@@ -651,6 +652,8 @@ class BeforeSourceShapeControls(unittest.TestCase):
                 delegated.args.append(ast.Constant(value=None))
             elif case == "final-seed":
                 delegated.keywords.append(ast.keyword(arg="final_seed", value=ast.Constant(value=None)))
+            elif case == "receiver-seed":
+                delegated.keywords.append(ast.keyword(arg="receiver_seed", value=ast.Constant(value=None)))
             elif case == "wrong-target":
                 delegated.func.id = "other_phase"
             elif case == "missing-return":
@@ -660,7 +663,11 @@ class BeforeSourceShapeControls(unittest.TestCase):
             elif case == "uncleared-token":
                 wrapper.body[0].finalbody[0].value = ast.Name(id="token", ctx=ast.Load())
             elif case == "engine-default":
-                engine.args.kw_defaults[-1] = ast.Constant(value=True)
+                index = [argument.arg for argument in engine.args.kwonlyargs].index("final_seed")
+                engine.args.kw_defaults[index] = ast.Constant(value=True)
+            elif case in ("receiver-default", "receiver-required"):
+                index = [argument.arg for argument in engine.args.kwonlyargs].index("receiver_seed")
+                engine.args.kw_defaults[index] = ast.Constant(value=True) if case == "receiver-default" else None
             elif case == "missing-enter":
                 calls(engine, "owner.enter_before_phase")[0].func.attr = "unreviewed_enter"
             elif case in ("missing-first-leave", "missing-second-leave"):
