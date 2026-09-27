@@ -1,6 +1,6 @@
 # RPC security and organization-LAN deployment
 
-**Source implementation only; platform/path/security qualification is pending.**
+**JVM/Android deterministic checks passed; platform/path/security qualification is pending.**
 Read the [RPC overview](README.md), [reliability contract](reliability.md) and
 [qualification requirements](qualification.md) before deployment. A private LAN
 is not a trust boundary. Release Foundation remains **NOT_READY** and this

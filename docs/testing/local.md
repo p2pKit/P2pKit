@@ -71,13 +71,15 @@ release-XCFramework provenance.
 
 ## Optional RPC workstream
 
-The new `:p2p-rpc` library and `:p2p-sample-rpc` example are feature source,
-not compiled, executed, published or capacity-qualified. Follow the
-[RPC validation requirements](../rpc/qualification.md) and request separate
-build/dependency/platform execution authorization in restricted workspaces.
-Missing genuine RPC ABI dumps and RPC/sample locks remain hard gate failures,
-not permission to fabricate them or disable checks. The historical main
-`org.jmdns` lock issue remains separate.
+The new `:p2p-rpc` library and `:p2p-sample-rpc` example remain unpublished and
+unqualified for capacity. Authorized isolated JVM/Android compilation and tests
+passed, with genuinely generated JVM/Android ABI inputs; see the
+[validation checkpoint](../rpc/implementation-status.md) for exact scope.
+Follow the [RPC validation requirements](../rpc/qualification.md) and obtain
+the remaining platform/execution authorization before running restricted work.
+Missing Native ABI and complete RPC/sample locks remain hard gate failures,
+not permission to fabricate inputs or disable checks. The independently
+verified historical main `org.jmdns` lock correction remains separate.
 
 ## Kit diagnostic teardown
 
@@ -539,8 +541,19 @@ component's checksum-listed, detached-signed `.module` as a locator. It accepts
 only an unambiguous local file or sibling-version file within the same
 repository, group, and module; metadata is limited to 1 MiB. Both the locator
 and the relocated artifact must independently pass checksum and signature
-verification. Remote URLs, redirects, ambiguous paths, and unsigned locators
-are not supported. This does not expand the unsigned-plugin exception above.
+verification. Remote artifact URLs, ambiguous paths, and unsigned locators
+are not supported.
+
+KMP's logical JAR/KLIB filenames additionally require their exact metadata
+SHA-256 and a local, same-extension filename in the original publication
+directory. A child metadata file referring to a KMP root is not sufficient:
+the reviewer separately authenticates that checksum-listed root from the
+same repository, group and version, then verifies its reciprocal child
+publication and matching variant attributes. Root chains, external URLs,
+cross-module artifact paths and aliasing into another version fail closed.
+Common metadata can use its own authenticated root. This narrowly bounded
+publication relationship does not expand the unsigned-plugin exception above;
+the actual aliased artifact still requires its own detached signature.
 
 Before pushing, inspect the complete lock and metadata diff and run:
 

@@ -10,7 +10,7 @@ permissive; the library's default remains fail-closed authenticated v2.
 | `:p2p-sample-android` | Android sender and receiver | Discovery/session controls, provisioning, file picker, progress, SHA-256, diagnostic viewer/export |
 | `:p2p-sample-desktop` | JVM CLI sender and receiver | REPL commands, pinned manual endpoint (full out-of-band fingerprint required), fault-test arguments, JSONL/evidence export |
 | `:p2p-sample-desktop-ui` | Compose Desktop sender and receiver | Peer/session/file controls, diagnostic viewer, export, headful observation |
-| `:p2p-sample-rpc` | [Optional shared RPC example](../../samples/p2p-sample-rpc/README.md) | Inventory contracts, strict host/client setup and separately authorized capacity driver; uncompiled/unqualified |
+| `:p2p-sample-rpc` | [Optional shared RPC example](../../samples/p2p-sample-rpc/README.md) | Inventory contracts, strict host/client setup and separately authorized capacity driver; JVM/Android tested, Apple/capacity pending |
 | `:sample-kmp-shared` | KMP consumer smoke | Common call-site and Android/JVM runtime consumer coverage |
 | `:iosApp` | Swift iOS sender and receiver | Peer/session/file controls, deterministic files, lifecycle, diagnostics/share export |
 | `:p2p-sample-diagnostics` | Shared JVM diagnostics model | Structured event schema, redaction, rotation, and evidence package support |

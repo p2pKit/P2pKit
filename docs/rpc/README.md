@@ -1,7 +1,8 @@
 # Optional organization-LAN RPC
 
-**Feature-branch implementation; not published, compiled, or platform-qualified yet.**
-The required capacity measurements have not run. See [qualification](qualification.md).
+**Feature-branch implementation; JVM/Android compilation and deterministic tests passed.**
+It is not published or platform/security/capacity-qualified. See the
+[executed-check checkpoint](implementation-status.md) and [qualification](qualification.md).
 The existing Release Foundation remains **NOT_READY**; none of its HOLDs,
 external validation requirements, or release gates are satisfied by this work.
 

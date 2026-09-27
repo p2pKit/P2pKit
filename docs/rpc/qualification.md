@@ -2,14 +2,14 @@
 
 ## Status and boundaries
 
-**Uncompiled feature source; no Kotlin tests, platform runs or capacity
-measurements have been executed for this module.** Added tests and workflow
-configuration are not execution evidence. Release Foundation remains
+**JVM/Android compilation and deterministic tests passed; Apple, real-network,
+security and capacity qualification remain pending.** Unit tests and workflow
+configuration are not platform or capacity evidence. Release Foundation remains
 **NOT_READY**, with all existing HOLDs, validation and release gates intact.
 RPC is not part of the immutable `0.7.0-rc3` publication.
 
 The [implementation checkpoint](implementation-status.md) records source scope,
-offline checks actually run, fixture failures and missing generated inputs.
+checks actually run, resolved local fixture failures and missing generated inputs.
 
 The approved [plan](../../RPC_MODULE_PLAN.md) fixes the contract and capacity
 requirements. No performance or readiness claim follows from these defaults.
@@ -17,27 +17,34 @@ If mobile/path security or capacity cannot meet the approved contract, stop
 for owner review; do not loosen admission, shrink the workload, raise budgets
 blindly, introduce another transport, or broaden firewall policy to get a pass.
 
-## Checks permitted in the implementation workspace
+## Checks authorized in the implementation workspace
 
 Bounded source review, Git/GitHub inspection, whitespace, Markdown links,
 repository-layout checks and inspected offline Python/Ruby/shell policy fixtures
-can run. Record exact commands and results in the workstream report. They do
-not execute Kotlin, prove binary compatibility, or qualify LAN enforcement.
+can run. The owner additionally authorized isolated JVM/Android compilation,
+tests, dependency downloads and genuine ABI/lock/checksum generation. This is
+not authorization for Apple toolchains, real-device/capacity experiments,
+publishing or shared hosted execution. Record exact commands and results;
+local unit tests do not qualify deployed LAN enforcement.
 
-Generated inputs are deliberately not fabricated: genuine Kotlin/Android ABI
-dumps, new-module dependency locks and streaming-JSON verification checksums
-require separately authorized toolchain/dependency execution. The missing RPC
-Android ABI baseline and RPC/sample locks must fail the applicable guards.
-Keep these gates enabled. The historical stale `org.jmdns` dependency-lock
-baseline is a separate main issue; do not count it as an RPC regression or copy
-unfinished Foundation repairs. Current-state inspection, not this old failure
-report, determines any eventual baseline remediation.
+JVM/Android ABI files were genuinely generated and reviewed. The 13 new
+streaming-JSON checksums passed independent Maven-byte/checksum/signature review.
+Native ABI and RPC/sample dependency locks remain pending: the mandatory
+complete lock writer includes Apple work. Do not accept partial lock candidates,
+fabricate baselines, exclude missing locks or disable any gate. Strict Dokka
+also selects Native/Apple producers, so its full execution remains gated.
 
-## Separately authorized automated validation
+Fresh main still contained the historical stale `org.jmdns` coordinate. The
+six obsolete lines were independently removed on this feature branch after
+reproducing the resolver failure and verifying the existing embedded producer.
+This is a separate baseline correction, not an RPC regression or a copied
+unfinished Foundation repair. See the checkpoint for exact scope and results.
+
+## Automated validation and remaining authorization
 
 Authorize the relevant host/toolchain and dependency resolution first. Merely
-running `--dry-run` can configure Gradle and resolve/download inputs. No command
-below is permission to run a local build or shared hosted job.
+running `--dry-run` can configure Gradle and resolve/download inputs. The local
+JVM/Android authorization does not extend to the remaining Apple/shared jobs.
 
 1. Generate genuine lock/checksum/ABI inputs with the repository's reviewed
    [dependency process](../releasing/checklist.md), compare changes, and keep
@@ -56,7 +63,8 @@ below is permission to run a local build or shared hosted job.
    hosts; the RPC and shared sample tasks are included in the broad profiles.
    Do not turn off required tasks or treat missing/empty XML as a test pass.
 
-Relevant added deterministic suites (written, not executed):
+Relevant added deterministic suites (common/JVM/Android cases executed;
+Apple cases still unexecuted):
 
 | Area | Tests / assertions |
 | --- | --- |
@@ -66,7 +74,7 @@ Relevant added deterministic suites (written, not executed):
 | Pairing/trust | `RpcPairingTrustTest`: identity-bound single use, expiry, concurrent candidates, durable approval failure, immediate revocation and cleanup/storage failure. |
 | Queue ownership | `SessionRpcLinkTest`, `RpcNotificationsTest`: writer priority, generation isolation, entry/byte limits including active work, nullable schemas, slow consumers, worker cancellation and teardown leases. |
 | Generic prerequisites | `SessionProfileTest`, `RestrictedProtocolBudgetTest`, `RestrictedSessionTest` and authenticated-v2 extensions: live admission/quarantine, both-direction capacity, message restrictions, accounting and preserved pin checks. |
-| LAN policy | `OrganizationLanTest`, `JvmOrganizationLanTest`, `AppleOrganizationLanInteropTest`: CIDR/numeric rejection, strict selected-interface and multihoming failure, native numeric equivalence and null-path rejection. Native helper tests are not real path-binding evidence. |
+| LAN policy | `OrganizationLanTest`, `JvmOrganizationLanTest`, `AndroidLanNetworkStateTest`, `AppleOrganizationLanInteropTest`: CIDR/numeric rejection, strict selected-interface and multihoming failure, fresh Android route lookup without stale fallback, native numeric equivalence and null-path rejection. Native tests are pending and are not real path-binding evidence. |
 | Examples/driver | `RpcSampleContractTest`, `RpcCapacityDriverTest`: exact payload/workload constants and bounded reporting; **not** a throughput measurement. |
 
 Runtime coverage must additionally include raw path changes, failed/slow socket

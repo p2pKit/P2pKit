@@ -2,10 +2,11 @@
 
 ## Scope and baseline
 
-Source implementation of the approved [Optional LAN RPC plan](../../RPC_MODULE_PLAN.md)
-is present. **It has not been compiled, runtime-tested, security-qualified or
-capacity-qualified.** This is a workstream checkpoint, not release evidence or
-approval to merge. The plan is preserved as the original planning snapshot.
+The approved [Optional LAN RPC plan](../../RPC_MODULE_PLAN.md) is implemented
+in source. **JVM/Android compilation and deterministic tests passed. Apple,
+real-network/security and capacity qualification remain pending.** This is a
+feature-workstream checkpoint, not approval to merge or release. The plan is
+preserved unchanged as the original planning snapshot.
 
 - Isolated clone: `/root/projects/p2pkit-feature-prep-20260927-yiDjCB`.
 - Feature branch: `work/rpc-lan-20260927-054728-8b1b11da`.
@@ -13,8 +14,8 @@ approval to merge. The plan is preserved as the original planning snapshot.
   `3bc76f956f8f47447b51a62474fc878b9c43173c` (no advancement).
 - `AGENTS.md` and `CLAUDE.md` were read completely and remain unchanged.
 - No Foundation/campaign source, keys, worktrees or private evidence were used.
-  Release Foundation remains **NOT_READY**; existing HOLDs and external gates
-  remain intact. Future integration must come from main normally.
+  Release Foundation remains **NOT_READY**; every existing HOLD and external
+  gate remains intact. Future integration must come from main normally.
 
 ## Source delivered
 
@@ -22,8 +23,8 @@ approval to merge. The plan is preserved as the original planning snapshot.
    shared payload leases, binary-only restrictions, retained session failure
    and generation observations, generation-bound sending, bounded reconnect,
    explicit organization-private endpoint/interface policy, dial-only clients
-   and separate restricted JVM/Android I/O dispatch views. Null-profile P2P
-   defaults are retained in source; compatibility still requires execution.
+   and separate restricted JVM/Android I/O dispatch views. Ordinary P2P defaults
+   remain unchanged unless callers select the new profiles.
 2. Optional `p2p-rpc`: explicit typed procedures, bounded JSON/wire protocol,
    HELLO/READY, host-owned concurrent execution, deadlines, cancellation,
    correlation, stable-ID recovery, deduplication/tombstones and retained
@@ -32,75 +33,201 @@ approval to merge. The plan is preserved as the original planning snapshot.
    administrator approval, application-local durable trust, fresh authorized
    connections, live revocation, bounded best-effort updates and sanitized
    connection/diagnostic observations.
-4. Deterministic regression source, an inventory example/shared mobile façade,
-   an explicitly invoked JVM capacity driver, developer documentation and
-   applicable repository/ABI/dependency/platform/publication inventories.
-   No permissive transport, identity store or lab provider is bundled.
+4. Deterministic regressions, an inventory example/shared mobile façade, an
+   explicitly invoked JVM capacity driver, developer documentation and applicable
+   repository/ABI/dependency/platform/publication inventories. No permissive
+   transport, identity store or lab provider is bundled.
 
-The [qualification guide](qualification.md) maps the added test suites and the
-required platform/security experiments. The [sample](../../samples/p2p-sample-rpc/README.md)
-describes the local integration still needed to run the driver. Capacity
+The [qualification guide](qualification.md) maps tests to the required platform
+and security experiments. The [sample](../../samples/p2p-sample-rpc/README.md)
+describes the local integration needed for an authorized driver run. Capacity
 requirements remain **128 authenticated clients, 1,280 calls/second, 1 KiB
 request/reply bodies, 30 minutes on each actual JVM/Android/iOS host**, plus
-physical interoperability and the separate 1 MiB experiment. None has run.
+physical interoperability and a separate 1 MiB experiment. None has run.
 
-## Offline checks actually run
+## Authorized local validation
 
-These commands inspect source or execute synthetic Python/Ruby/shell fixtures,
-not Kotlin, Java, Gradle, Xcode or an application. Results include the preceding
-continuation of this same isolated workstream.
+The owner authorized isolated JVM/Android compilation, tests, dependency
+retrieval and genuine ABI/lock/checksum generation. Apple execution/toolchains,
+shared hosted execution, real-device/network/capacity experiments, publishing,
+merges, tags and repository/environment changes remain separately gated.
+
+Validation used the checked-in Gradle 9.7.0 wrapper with strict dependency
+verification, warning-as-error policy, no daemon persistence, no parallel
+execution and two workers. The installed launcher/toolchain is JDK 17 (the
+repository daemon criteria select installed JDK 21), with Android SDK 36,
+Kotlin 2.4.10 and AGP 9.3.1. SDK/JDK auto-download was disabled. HOME, Gradle,
+Android/Konan state and temporary output were newly owned inside this clone;
+no other session's caches or keys were reused. Each Gradle command recorded
+its result and stopped only this workstream's Gradle home.
+
+### JVM/Android test results
+
+All rows below executed nonempty XML test suites with **zero failures, errors
+or skips in the final run for that row**: 1,923 successful test executions in
+total. Common tests executed on both platforms are counted once per platform,
+not claimed as distinct test designs or as a capacity measurement.
+
+| Task | Tests passed |
+| --- | ---: |
+| `:p2p-core:jvmTest` | 857 |
+| `:p2p-core:testAndroidHostTest` | 82 |
+| `:p2p-transport-lan:jvmTest` | 231 |
+| `:p2p-transport-lan:testAndroidHostTest` | 121 |
+| `:p2p-network-provisioning-desktop:test` | 20 |
+| `:p2p-network-provisioning-android:testAndroidHostTest` | 162 |
+| `:p2p-rpc:jvmTest` | 45 |
+| `:p2p-rpc:testAndroidHostTest` | 45 |
+| `:p2p-sample-rpc:jvmTest` | 5 |
+| `:p2p-sample-rpc:testAndroidHostTest` | 3 |
+| `:sample-kmp-shared:jvmTest` | 5 |
+| `:sample-kmp-shared:testAndroidHostTest` | 1 |
+| `:p2p-sample-android:testDebugUnitTest` | 122 |
+| `:p2p-sample-desktop:test` | 67 |
+| `:p2p-sample-desktop-ui:test` | 39 |
+| `:p2p-sample-diagnostics:test` | 118 |
+
+The core/RPC/RPC-sample final run used `--rerun-tasks --continue --offline`.
+Core filesystem tests ran on a bounded, privately mounted POSIX tmpfs inside
+the clone's temporary directory. This establishes those tests on that
+filesystem, **not persistent-disk crash durability or device qualification**.
+
+Initial core runs on the container's ordinary workspace filesystem failed
+`FileTransferJvmTest.durableDestinationUsesSiblingStagingAndPrivatePosixPermissions`
+and `AndroidDurableFileDestinationAndroidHostTest.stagingPermissionsAreAppliedBeforeOpeningPayloadStream`.
+A small Java probe reproduced different filesystem device IDs for a directory
+and its own staging file, despite correct private permissions; tmpfs preserved
+the same device ID. The entire affected production/test files are unchanged
+from main. Both complete suites subsequently passed on private tmpfs. No
+assertion, timeout or platform requirement was weakened to obtain that result.
+
+The four remaining sample suites also passed complete offline reruns. They
+used private mount/PID/network namespaces, installed font configuration and
+owned temporary/home paths; test JVM flags were supplied explicitly instead
+of inherited launcher-banner variables, preserving exact subprocess-output
+assertions. The first CLI run lacked a non-loopback interface, so its unchanged
+manual-pairing test could not obtain local connection information. A
+namespace-only synthetic veth supplied that prerequisite for the final run,
+with no default route or access to the host network. Setup capabilities were
+dropped before Gradle started. These are synthetic/loopback regression results,
+not real-LAN, Android ART, GUI deployment or physical-network qualification.
+
+Local compiler validation also found and fixed:
+
+- Coroutines 1.11.0 requires `DelicateCoroutinesApi` for `CoroutineStart.ATOMIC`.
+  The local opt-in preserves admitted-record cleanup and cancellation semantics.
+- The new internal Android route option had displaced a trailing lambda.
+  Restoring the lambda-last constructor preserved existing tests; two additional
+  tests verify fresh lookup and rejection of stale-route fallback.
+- Sample framework export calls needed the non-deprecated dependency notation.
+  This does not establish successful Apple framework compilation.
+
+### ABI and dependency evidence
+
+- Genuine core/LAN Android ABI generation and all four Android library ABI
+  comparisons passed, including their compiled public-constant guards.
+- JVM dumps for core/LAN/RPC were extracted with the same pinned built-in Kotlin
+  dumper, JVM inputs, filters and services in an isolated supplemental task.
+  Core/LAN add 101/20 lines respectively on each platform, with no removed
+  signatures. RPC's complete JVM/Android dumps were reviewed. All four JVM
+  public-constant guards passed. **The complete JVM/KLIB compatibility gate is
+  still required; no Native ABI is inferred from this focused extraction.**
+- The Android dumper retains synthetic companion-access bridges for private
+  constructors. The guard now recognizes that exact JVM bridge shape while
+  still rejecting internal classes, ordinary constructors, methods and fields.
+  Existing negative controls and six additional leak controls passed; genuine
+  ABI output was not hand-edited to hide the bridges.
+- Gradle generated 13 new `kotlinx-serialization-json-io:1.11.0` checksum entries.
+  Independent official Maven downloads, SHA-256 sidecars and detached signatures
+  verified all 13. The reviewer supports authenticated reciprocal KMP metadata
+  and exact-hash local filename aliases; 32 locator/curator tests passed.
+  Existing checksum history and trust configuration were preserved unchanged.
+
+Fresh main still contains six obsolete external `org.jmdns:jmdns:3.6.3` lock
+entries. Strict LAN compilation first reproduced the reported baseline failure.
+After verifying main's unchanged private embedded producer and unused external
+catalog alias, only those six obsolete lines were independently removed. No
+Foundation repair was read or copied. Subsequent strict JVM/Android resolution
+and tests passed. This is a **separate baseline correction**, not an RPC regression.
+
+A second independent baseline tripwire still expected a literal
+`publishToMavenLocal` invocation, whereas main's unchanged consumer script now
+selects a fixed `publish_tasks` array. The source-policy check was aligned with
+that actual command, retaining `--no-daemon` and explicitly requiring the
+complete default publication profile. No consumer publication was executed.
+
+The reviewed source checkpoint is `7a8a7960` on the feature branch. Baseline
+lock cleanup (`13172e1a`) and the consumer-policy correction (`57434844`) are
+separate from authenticated dependency review (`2bf61072`) and the RPC/compiler/
+ABI fixes. All 127 changed non-Markdown files were hash-compared against the
+validated working tree and that committed tree; they match exactly. Validation
+logs retain their original HEAD plus dirty-state record, not a fabricated
+post-commit execution claim.
+
+### Source and policy checks
 
 | Command/check | Observed result |
 | --- | --- |
-| `git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main` and ancestry inspection | Main unchanged at the exact base above. |
-| `git diff --check` | Passed. |
-| Added Kotlin-line scan | Passed 120-column and no-wildcard checks; not compilation or ktlint. |
-| Syntax-only inspection of changed scripts/configuration | Six Python ASTs, six `bash -n`, three `ruby -c`, changed TOML and five workflow YAML files passed. |
+| `git fetch --no-tags origin main`, ancestry and instruction hashes | Main unchanged; guidance and approved plan unchanged. |
+| `git diff --check`; added Kotlin-line/import scan; changed Python AST/TOML parsing | Passed; not a substitute for ktlint. |
+| `bash scripts/check-dependency-verification.sh` | Passed strict checksum/trust-policy validation. |
 | `python3 scripts/tests/check-rpc-module-policy-test.py` | Passed, including seven negative controls. |
-| `bash scripts/tests/check-repository-layout.sh` | Passed for 12 projects, including 15 Android-setup negative controls and RPC inventory checks. |
-| `bash scripts/tests/check-markdown-links.sh` | Passed active-document relative-link checks. |
-| `bash scripts/check-release-metadata.sh` | Passed; snapshot/published versions unchanged. |
-| `python3 scripts/tests/check-release-metadata-test.py` | 11 tests passed. |
+| `bash scripts/tests/check-repository-layout.sh` | Passed for 12 projects, including Android/RPC inventory controls. |
+| `bash scripts/tests/check-markdown-links.sh` | Passed active-document relative links. |
+| `bash scripts/check-release-metadata.sh`; `python3 scripts/tests/check-release-metadata-test.py` | Passed; 11 tests, versions unchanged. |
+| `bash scripts/tests/check-dependency-update-policy-test.sh` | Passed, including 7 bounded-reader, 32 locator/curator and 15 temporary-directory tests. |
+| `python3 scripts/tests/run-platform-tests-test.py` | All 23 policy/lifecycle fixtures passed; these are not platform execution. |
+| `bash scripts/tests/check-kotlin-toolchain-policy-test.sh` | Passed, including host-checksum, Android-ABI and version-input negative controls. |
 | `ruby scripts/tests/check-jvm-cross-host-policy-test.rb` | 34 checks passed. |
 | `ruby scripts/tests/check-platform-test-policy-test.rb` | 31 checks passed. |
 | `ruby scripts/tests/check-publication-sbom-policy-test.rb` | Current policy, 27 negative mutations and seven fake-wrapper/real-validator cases passed. |
-| `python3 scripts/tests/check-sbom-test.py` | 23 tests passed, including omission of RPC from both synthetic graphs. |
-| `python3 scripts/tests/check-publish-license-test.py` | 11 license and 67 embedded-JmDNS archive/metadata fixtures passed; no real publication/build. |
+| `python3 scripts/tests/check-sbom-test.py` | 23 tests passed; not an actual publication SBOM. |
+| `cyclonedxBom`, then `bash scripts/check-sbom.sh <generated-json> <generated-xml>` | Passed actual generation and independent validation: 88 components, a connected five-library root, verified embedded JmDNS provenance and no build/sample contamination. No publication occurred. |
+| `:p2p-sample-android:lintDebug`, `:p2p-rpc:lintAnalyzeAndroidHostTest`, `:p2p-sample-rpc:lintAnalyzeAndroidHostTest` | Passed; Android sample report contains zero issues. RPC tasks are host-test analysis, not a substitute for full published-consumer or device checks. |
+| `python3 scripts/tests/check-publish-license-test.py` | 11 license and 67 embedded-JmDNS fixtures passed; no publication. |
+| `JAVA_HOME=<installed JDK 17> bash scripts/tests/check-public-constant-abi.sh` | 26 compiled Java positive/negative controls passed. |
 
-### Failures and intentionally missing inputs
+The temporary-directory and process-lifecycle fixtures initially encountered
+long GPG socket paths and unreaped orphan zombies in the ambient container.
+They passed unchanged in private mount/PID/network namespaces: the source was
+read-only, every temporary file remained backed by a newly owned directory
+inside this clone, and only disposable synthetic keyrings were used. No
+socket limit, cleanup assertion or timeout was relaxed.
 
-- `python3 scripts/tests/run-platform-tests-test.py`: **21/23 passed**.
-  `test_surviving_group_is_drained_even_when_leader_already_exited` and
-  `test_term_resistant_worker_is_killed_after_leader_exits_on_term` failed.
-  Inspection of only these owned fixture processes found dead, unreaped orphan
-  zombies under PID 1, not running workers. AST comparison found both the
-  runner's `terminate_process` and the entire `OwnedProcessGroupTest` unchanged
-  from main. Main was not separately executed to establish a runtime baseline;
-  no assertions/timeouts were relaxed and no unrelated process was touched.
-- `bash scripts/check-android-abi-guard.sh --static-only`: failed on missing
-  genuine `library/p2p-rpc/api/android/p2p-rpc.api`.
-- `bash scripts/tests/check-osv-lockfile-coverage.sh`: failed because the
-  expanded workflow has 12 lock arguments but only 10 existing nonempty lock
-  inputs. Genuine RPC/sample locks are pending, not excluded from the gate.
-- New Kotlin/Android ABI dumps, dependency locks and streaming-JSON verification
-  checksums have **not** been fabricated or copied. Their generation requires
-  separately authorized toolchain/dependency execution.
+The first offline Android lint attempt lacked the pinned AAPT2 artifact in the
+new cache. Fetching that existing, checksum-listed build dependency under the
+authorized strict resolver allowed the complete focused command to pass; no
+SDK installation, checksum bypass or source suppression was needed. Generated
+SBOM JSON/XML and lint reports were snapshotted and hashed in the owned logs.
 
-Fresh source inspection still finds stale `org.jmdns:jmdns:3.6.3` entries in
-main's existing lockfiles. This is the previously reported **separate baseline
-issue**, not an RPC regression or a new CI finding. No lock repair was generated
-or imported from unfinished Foundation work.
+## Unfinished gates and evidence
 
-## Authorization still required
+- **Complete dependency locks:** RPC and sample locks remain absent, not
+  fabricated. The root requires `resolveAndLockAll --write-locks
+  --write-verification-metadata sha256 --no-configure-on-demand`, whose graph
+  includes Apple work and every required check. Partial configuration-time
+  candidates from graph inspection were quarantined and original locks restored.
+  The OSV coverage guard still correctly fails: 12 requested lock inputs but
+  only 10 populated inputs. Embedded-producer lock coverage also needs the
+  complete writer. Do not bypass or narrow it.
+- **Apple and complete ABI:** Native compilation/Cinterop, device/simulator
+  tests, Swift/framework consumer validation and full KLIB ABI checks remain
+  unexecuted. They require an authorized compatible Apple host/toolchain.
+- **Strict Dokka:** inspected task graphs select Native distribution download,
+  commonization and Apple/Cinterop compilation. Full execution remains gated;
+  no task was disabled to obtain a documentation pass.
+- **Full release/consumer validation:** the actual SBOM and focused Android lint
+  passes above do not establish packaging, published-consumer, Swift or complete
+  cross-platform release-gate success. No publication or shared CI was started.
+- **Physical/security/capacity qualification:** none has run. Follow the exact
+  experiments and evidence rules in [qualification](qualification.md). A failed
+  capacity or security contract is a stop-and-review decision, not permission
+  to shrink the workload, enlarge limits blindly or change the architecture.
+- No merge, publication, tag, shared hosted job, cancellation of another run,
+  repository/environment change or readiness promotion occurred. Feature pushes
+  have not been used as a substitute for complete checks or coordination.
 
-No local Java/Gradle/Xcode/application build, SDK/dependency download, hosted
-execution, physical-device experiment or capacity run has been started. No
-merge, publication, release tag or repository/environment change is authorized.
-
-The next validation needs explicit permission for genuine dependency/ABI input
-generation and JVM/Android compilation, tests and compatibility checks in this
-isolated workspace. Apple Cinterop/platform execution needs an authorized Apple
-host; actual-host capacity, network-path and physical interoperability evidence
-need separately coordinated lab runs. See the exact checks and evidence rules
-in [qualification](qualification.md). A failed security/capacity contract is a
-stop-and-review decision, never permission to weaken it.
+Owned command logs, XML snapshots, graph inspections and review receipts remain
+under `.git/rpc-validation-20260927-RkXqJ9/` in the isolated clone, not in source
+control. They include unsuccessful exploratory runs as well as final results;
+only explicitly successful checks above are reported as passed.

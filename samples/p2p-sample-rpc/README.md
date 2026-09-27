@@ -1,6 +1,7 @@
 # Shared RPC examples and explicit capacity driver
 
-**Source examples, not built, executed or qualified.** This sample does not
+**JVM/Android example compilation and unit tests passed; no capacity or physical
+application run has occurred. Apple compilation remains pending.** This sample does not
 ship production business logic, protected keys, a trust database, a pairing UI,
 a permissive transport or an always-running mobile service. See the
 [RPC quick start](../../docs/rpc/README.md),
@@ -126,6 +127,6 @@ performance qualification nor release readiness. Review resource time series,
 post-retention cleanup, each real host platform and physical interoperability
 as required by the [qualification guide](../../docs/rpc/qualification.md).
 
-The tests `RpcSampleContractTest` and `RpcCapacityDriverTest` are source-only
-regressions, not a load-test pass. Release Foundation remains **NOT_READY**;
+The tests `RpcSampleContractTest` and `RpcCapacityDriverTest` are deterministic
+unit regressions, not a load-test pass. Release Foundation remains **NOT_READY**;
 this sample changes none of its HOLDs or existing security/release gates.
