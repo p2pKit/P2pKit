@@ -14,7 +14,17 @@ token and no signing secrets or environments. Its distinct concurrency group
 does not cancel any run. Existing CI, Foundation and release workflows are not
 modified or dispatched by this workflow.
 
-## Diagnostic mode (the default for a feature push)
+## Explicit execution, not an automatic retry
+
+Ordinary feature pushes do not allocate a runner. Use an owner-coordinated
+feature-ref dispatch with a selected mode, or an intentional `[rpc-diagnose]`,
+`[rpc-native]` or `[rpc-generate]` head-commit marker if branch-only workflow
+dispatch is unavailable.
+The markers select an already-authorized operation; they grant no new permission.
+This prevents a documentation/checkpoint push from blindly repeating a failed
+host admission. Never mark an unchanged full-writer rerun as a prerequisite probe.
+
+## Diagnostic mode
 
 Before repeating an expensive failed full graph, `diagnose` executes the unchanged
 JmDNS real-resource JVM regression and the complete LAN ARM simulator test task.
@@ -25,10 +35,13 @@ also requires all eight natural-exit fixture successes without rescue markers.
 The existing fixed test deadlines/assertions and ignored diagnostic-only interop
 test are unchanged. No interface override or network workaround is supplied.
 
-This mode may generate provisional checksum candidates needed for Apple
-resolution, but **never writes locks or qualifies committed dependency inputs**.
-Its candidates are `DIAGNOSTIC_ONLY_DO_NOT_IMPORT`. Select `generate` explicitly
-for the complete writer below; diagnostic success is not a replacement for it.
+`diagnose-native` runs only the LAN ARM simulator task after a Native correction;
+it does not blindly repeat the unchanged JmDNS failure. Current diagnostic modes
+use normal strict resolution, **never write locks/checksums**, and require
+committed inputs to remain unchanged. Their manifests are
+`DIAGNOSTIC_ONLY_DO_NOT_IMPORT`. Select `generate` explicitly for the complete
+writer below; diagnostic success is not a replacement for it or whole-repository
+strict-input qualification.
 
 ## First stage: generated inputs for review
 
@@ -87,6 +100,31 @@ also failed; the original summary is insufficient to attribute its cause. Do not
 conflate it with the separately corrected historical external JmDNS lock entry.
 The skipped `IosLanDiagnosticTest` is the pre-existing explicitly ignored
 physical-observation diagnostic, not a newly skipped regression.
+
+## First diagnostic result (failed; cause not attributed)
+
+[Run 36336684433](https://github.com/p2pKit/P2pKit/actions/runs/36336684433),
+source `bc4ade3b92e2c783559b1d788b5efe097047a6ca`, preserved both failures and
+passed owned cleanup. Its checksum-generation flag produced no input changes;
+subsequent diagnostic modes remove that flag and enforce unchanged inputs.
+
+- JmDNS: one JVM test failed. The `control` child failed `host_not_announced`
+  before `ready`, after two sends and zero successful send returns; first error
+  was `java.net.NoRouteToHostException`. Seven later modes did not run. The
+  captured selected/host/socket interfaces matched. A post-failure scoped route
+  query returned an up route with no reported reject/blackhole/gateway flag.
+  These observations **do not prove the OS/privacy/provider/network cause**.
+  Rescue retained the original failure. No timeout or assertion changed.
+- Native: main/Cinterop compilation passed, but the new test could not import
+  `platform.posix.inet_pton`; **zero Native tests ran**. The corrected fixture now
+  populates sockaddr network-order bytes independently of the parser under test.
+  Its subsequent Native-only result must be recorded separately.
+
+The full writer remains blocked by genuine multicast readiness, consistent with
+the unchanged main [Mac prerequisite handoff](../testing/mac-handoff.md), not by
+the independently corrected external JmDNS lock entry. It must wait for a newly
+admitted supported Mac with functioning multicast/simulator prerequisites; no
+unchanged full-graph retry, privacy/route override or partial-lock import is allowed.
 
 After reviewed inputs are committed, normal strict Native ABI/Dokka and fresh
 platform-evidence checks must run against the exact committed source. Intel

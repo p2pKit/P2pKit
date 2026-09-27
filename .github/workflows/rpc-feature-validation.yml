@@ -1,7 +1,8 @@
 name: Optional RPC feature validation
 
 # Owner-authorized feature work only. This is not a release/physical acceptance gate.
-# A branch-specific push also registers this new workflow without modifying main.
+# A branch-specific push registers this workflow without modifying main. An
+# explicit marker/dispatch is required to allocate a runner, not ordinary pushes.
 on:
   push:
     branches: [work/rpc-lan-20260927-054728-8b1b11da]
@@ -12,7 +13,7 @@ on:
         type: choice
         required: true
         default: diagnose
-        options: [diagnose, generate]
+        options: [diagnose, diagnose-native, generate]
 
 permissions:
   contents: read
@@ -26,7 +27,11 @@ jobs:
     name: Feature-only Apple diagnostics or review-only input generation
     if: >-
       github.repository == 'p2pKit/P2pKit' &&
-      github.ref == 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da'
+      github.ref == 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da' &&
+      (github.event_name == 'workflow_dispatch' ||
+       contains(github.event.head_commit.message, '[rpc-diagnose]') ||
+       contains(github.event.head_commit.message, '[rpc-native]') ||
+       contains(github.event.head_commit.message, '[rpc-generate]'))
     runs-on: macos-26
     timeout-minutes: 180
     defaults:
@@ -35,7 +40,9 @@ jobs:
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
       PYTHONDONTWRITEBYTECODE: "1"
-      RPC_HOSTED_MODE: ${{ inputs.mode || 'diagnose' }}
+      RPC_HOSTED_MODE: >-
+        ${{ inputs.mode || (contains(github.event.head_commit.message, '[rpc-generate]') && 'generate' ||
+        (contains(github.event.head_commit.message, '[rpc-native]') && 'diagnose-native' || 'diagnose')) }}
     steps:
       - name: Check out the exact feature commit without credentials or tags
         id: checkout

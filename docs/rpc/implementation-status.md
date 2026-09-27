@@ -221,6 +221,10 @@ SBOM JSON/XML and lint reports were snapshotted and hashed in the owned logs.
   and an unchanged-main JVM lifecycle failure. The complete writer failed and
   no partial candidates were imported. Swift/framework checks, reviewed Native
   baselines, strict-input gates and matching Intel execution remain outstanding.
+  A scoped diagnostic confirmed unchanged JmDNS `host_not_announced` with first
+  send `NoRouteToHostException` before lifecycle assertions; its cause is unknown.
+  Seven later child modes did not run. A new Native test's unavailable libc
+  binding was also found and corrected; that run executed no Native tests.
 - **Strict Dokka:** inspected task graphs select Native distribution download,
   commonization and Apple/Cinterop compilation. Full execution remains gated;
   no task was disabled to obtain a documentation pass. The newly authorized

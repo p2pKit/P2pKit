@@ -156,14 +156,16 @@ def generator_commands():
     ]
 
 
-def diagnostic_commands():
-    # Provisional checksum candidates permit Apple resolution, never lock writing
-    # or a strict-input qualification claim. The complete writer above is unchanged.
-    return [
+def diagnostic_commands(operation="diagnose"):
+    # Normal strict resolution, never lock/checksum writing. The complete writer
+    # above is unchanged. A Native-only correction must not retry failed JmDNS.
+    require(operation in ("diagnose", "diagnose-native"), "Unknown diagnostic operation")
+    commands = [
         ("diagnostic-jmdns", [":p2p-transport-lan:jvmTest", "--tests",
                               "dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest"], 1200),
         ("diagnostic-ios-lan", [":p2p-transport-lan:iosSimulatorArm64Test"], 1800),
     ]
+    return commands if operation == "diagnose" else commands[1:]
 
 
 def platform_runner():
@@ -386,16 +388,16 @@ def run(state, reports, operation):
              f"-Duser.home={state}/home -Djava.io.tmpdir={state}/tmp"]
     try:
         code = 0
-        commands = generator_commands() if operation == "generate" else diagnostic_commands()
+        commands = generator_commands() if operation == "generate" else diagnostic_commands(operation)
         for label, arguments, timeout in commands:
             token = uuid.uuid4().hex
-            if operation == "diagnose":
-                arguments = [*arguments, "--write-verification-metadata", "sha256", "--init-script",
+            if operation != "generate":
+                arguments = [*arguments, "--init-script",
                              str(ROOT / "gradle/platform-test-coverage.init.gradle"),
                              f"-Pp2pkit.testCoverageRoot={ROOT}", f"-Pp2pkit.testCoverageToken={token}"]
             print(f"Starting {label}; full output remains private, sanitized diagnostics follow.", flush=True)
             row = execute(state, label, [str(ROOT / "gradlew"), *arguments, *flags], timeout)
-            if operation == "diagnose":
+            if operation != "generate":
                 row["gradleExitCode"] = row["exitCode"]
                 try:
                     execution = json.loads(read_bounded(ROOT / f"build/reports/platform-tests/{token}/execution.json"))
@@ -414,6 +416,8 @@ def run(state, reports, operation):
                 code = code or row["exitCode"]
                 if operation == "generate":
                     return code
+        if operation != "generate":
+            require(not git("status", "--porcelain=v1").strip(), "Diagnostic tasks changed committed inputs")
         record["complete"] = code == 0
         return code
     finally:
@@ -447,7 +451,7 @@ def collect(state, reports):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("generate", "diagnose", "collect"))
+    parser.add_argument("operation", choices=("generate", "diagnose", "diagnose-native", "collect"))
     args = parser.parse_args()
     state, reports = paths()
     if args.operation == "collect":

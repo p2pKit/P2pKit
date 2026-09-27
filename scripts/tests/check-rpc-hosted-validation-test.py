@@ -142,6 +142,24 @@ class HostedValidationTest(unittest.TestCase):
         self.assertNotIn("resolveAndLockAll", str(commands))
         self.assertNotIn("publish", str(commands).lower())
 
+    def test_native_correction_does_not_retry_unchanged_jmdns_or_write_inputs(self):
+        commands = hosted.diagnostic_commands("diagnose-native")
+        self.assertEqual(commands, [hosted.diagnostic_commands()[1]])
+        self.assertNotIn("jvmTest", str(commands))
+        self.assertNotIn("--write-", str(commands))
+        with self.assertRaises(hosted.HostedValidationError):
+            hosted.diagnostic_commands("unknown")
+
+    def test_workflow_allocates_only_explicit_feature_work_without_shared_secrets(self):
+        source = (ROOT / ".github/workflows/rpc-feature-validation.yml").read_text()
+        for required in (hosted.REF, "github.event_name == 'workflow_dispatch'", "[rpc-native]",
+                         "[rpc-diagnose]", "[rpc-generate]", "cancel-in-progress: false",
+                         "persist-credentials: false", "contents: read"):
+            self.assertIn(required, source)
+        for forbidden in ("pull_request_target:", "secrets.", "environment:", "continue-on-error:",
+                          "cancel-in-progress: true", "secrets: inherit"):
+            self.assertNotIn(forbidden, source)
+
     def diagnostic_fixture(self, root, label):
         helper = hosted.platform_runner()
         policy = helper.read_json(ROOT / "gradle/platform-test-policy.json")
