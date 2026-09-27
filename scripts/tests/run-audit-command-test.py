@@ -126,6 +126,41 @@ def archive_fixture_tree(source, destination, errors, budget=None):
             errors.append(f"Fixture evidence directory {parent}: {type(error).__name__}: {error}")
     return records
 
+
+def finalize_fixture_scope(scope, completed, label, grace, attempt, *, before_close=None):
+    """Process finalization is separate from repeatable failed evidence disposal.
+
+    Reuse only a positively drained, closed instance with an unchanged launch
+    ledger. Never ask a closed adapter (whose capabilities were released) to
+    rediscover processes. This does not clear independent retention obligations.
+    """
+    launches = runner.digest(runner.json_bytes(scope.launches))
+    previous = completed.get(scope)
+    if previous is not None:
+        runner.require(previous["launchesSha256"] == launches and not scope.discovery_errors,
+                       "Finalized fixture scope changed; previous retirement is not reusable")
+        return {**previous, "reusedVerifiedFinalization": True}
+
+    result = {"id": uuid.uuid4().hex, "launchesSha256": launches, "completedUtc": None,
+              "reusedVerifiedFinalization": False,
+              "survivors": attempt(label + " drain", lambda: scope.drain(grace=grace, kill_wait=5)),
+              "discoveryErrors": attempt(label + " discovery status", lambda: sorted(scope.discovery_errors))}
+    # Windows still needs its process handle to collect an exit status. Preserve
+    # capture-before-close ordering on every backend; repeat disposal need not
+    # poll an already closed process handle or overwrite its completed capture.
+    result["captureComplete"] = before_close is None or attempt(label + " capture", before_close) is not None
+
+    def close():
+        scope.close()
+        return True
+
+    result["closed"] = attempt(label + " close", close) is True
+    if result["survivors"] == [] and result["discoveryErrors"] == [] and result["closed"] and result["captureComplete"]:
+        result["completedUtc"] = runner.utc()
+        completed[scope] = dict(result)
+    return result
+
+
 FIXTURE = r'''import json, os, pathlib, signal, subprocess, sys, time
 state = pathlib.Path(os.environ["P2PKIT_AUDIT_STATE_DIR"])
 arguments = sys.argv[1:]
@@ -314,6 +349,77 @@ def cleanup_metadata(test, *, cached_device=0, full_device=47, child_fields=None
 
 
 class PurePolicyTests(unittest.TestCase):
+    def test_repeat_disposal_uses_only_unchanged_complete_closed_scope_finalization(self):
+        class Scope:
+            launches = [{"pid": 123, "created": True}]
+            discovery_errors = set()
+            closed = False
+
+            def drain(self, **_kwargs):
+                if self.closed:
+                    raise AssertionError("A closed scope cannot perform a fresh drain")
+                return []
+
+            def close(self):
+                self.closed = True
+
+        scope, completed, errors = Scope(), {}, ["independent whole-chain retention remains pending"]
+        calls = []
+
+        def attempt(label, action):
+            calls.append(label)
+            return action()
+
+        first = finalize_fixture_scope(scope, completed, "guard", .1, attempt)
+        self.assertTrue(first["closed"])
+        self.assertIsNotNone(first["completedUtc"])
+        self.assertFalse(first["reusedVerifiedFinalization"])
+        again = finalize_fixture_scope(scope, completed, "guard", .1, attempt)
+        self.assertEqual(again["id"], first["id"])
+        self.assertTrue(again["reusedVerifiedFinalization"])
+        self.assertEqual(calls, ["guard drain", "guard discovery status", "guard close"])
+        self.assertEqual(errors, ["independent whole-chain retention remains pending"])
+        scope.launches = [*scope.launches, {"pid": 124, "created": True}]
+        with self.assertRaisesRegex(runner.AuditError, "previous retirement is not reusable"):
+            finalize_fixture_scope(scope, completed, "guard", .1, attempt)
+
+    def test_failed_or_uncertain_scope_finalization_is_never_cached(self):
+        for failure in ("drain", "discovery", "close"):
+            with self.subTest(failure=failure):
+                scope, completed = mock.Mock(), {}
+                scope.launches = []
+                scope.discovery_errors = {"unresolved"} if failure == "discovery" else set()
+                scope.drain.return_value = None if failure == "drain" else []
+                if failure == "close":
+                    scope.close.side_effect = OSError("injected closure failure")
+
+                def attempt(_label, action):
+                    try:
+                        return action()
+                    except OSError:
+                        return None
+
+                result = finalize_fixture_scope(scope, completed, "guard", .1, attempt)
+                self.assertIsNone(result["completedUtc"])
+                self.assertEqual(completed, {})
+
+    def test_scope_capture_completes_before_handle_close_and_is_not_repeated(self):
+        scope, completed, order = mock.Mock(), {}, []
+        scope.launches, scope.discovery_errors = [], set()
+        scope.drain.side_effect = lambda **_kwargs: (order.append("drain") or [])
+        scope.close.side_effect = lambda: order.append("close")
+
+        def capture():
+            self.assertNotIn("close", order)
+            order.append("capture")
+            return 0, b"", b""
+
+        attempt = lambda _label, action: action()
+        for _ in range(2):
+            result = finalize_fixture_scope(scope, completed, "sentinel", .1, attempt, before_close=capture)
+            self.assertTrue(result["captureComplete"])
+        self.assertEqual(order, ["drain", "capture", "close"])
+
     def test_readonly_retry_is_only_windows_exact_unlink_access_denied(self):
         denied = PermissionError(errno.EACCES, "synthetic original failure")
         denied.winerror = 5
@@ -1599,6 +1705,7 @@ class ExecutorFixtureTests(unittest.TestCase):
         self.root.mkdir()
         self.state = self.base / "state"
         self.sentinel_scopes = []
+        self.fixture_native_finalizations = {}
         self.fixture_retention_errors = []
         self.fixture_archivists = []
         if EVIDENCE_ROOT is not None:
@@ -1664,26 +1771,31 @@ class ExecutorFixtureTests(unittest.TestCase):
                 return None
 
         if hasattr(self, "scope"):
-            record["guardSurvivors"] = attempt("Fixture guard drain", lambda: self.scope.drain(grace=.5, kill_wait=5))
+            finalization = attempt("Fixture guard finalization", lambda: finalize_fixture_scope(
+                self.scope, self.fixture_native_finalizations, "Fixture guard", .5, attempt))
+            record["guardFinalization"] = finalization
+            record["guardSurvivors"] = None if finalization is None else finalization["survivors"]
             if record["guardSurvivors"] is None:
                 errors.append("Fixture guard worker retirement is unproven; retain the generated fixture")
             if record["guardSurvivors"]:
                 errors.append(f"Fixture-owned survivors: {record['guardSurvivors']}")
-            discovery = attempt("Fixture guard discovery status", lambda: sorted(self.scope.discovery_errors))
+            discovery = None if finalization is None else finalization["discoveryErrors"]
             if discovery:
                 errors.append(f"Fixture ownership uncertainty: {discovery}")
-            attempt("Fixture guard close", self.scope.close)
         else:
             errors.append("Fixture ownership guard was not established; retain the unadmitted generated fixture")
         for number, (sentinel_scope, capture) in enumerate(getattr(self, "sentinel_scopes", [])):
-            survivors = attempt(f"Fixture sentinel {number} drain", lambda: sentinel_scope.drain(grace=.2, kill_wait=5))
-            record["sentinels"].append({"index": number, "survivors": survivors})
+            finalization = attempt(f"Fixture sentinel {number} finalization", lambda: finalize_fixture_scope(
+                sentinel_scope, self.fixture_native_finalizations, f"Fixture sentinel {number}", .2, attempt,
+                before_close=lambda: capture.finish(sentinel_scope, timeout=5)))
+            survivors = None if finalization is None else finalization["survivors"]
+            record["sentinels"].append({"index": number, "survivors": survivors, "finalization": finalization})
             if survivors is None:
                 errors.append(f"Separately-owned sentinel {number} retirement is unproven")
             if survivors:
                 errors.append(f"Separately-owned sentinel {number} survived teardown")
-            attempt(f"Fixture sentinel {number} capture", lambda: capture.finish(sentinel_scope, timeout=5))
-            attempt(f"Fixture sentinel {number} close", sentinel_scope.close)
+            if finalization is not None and finalization["discoveryErrors"]:
+                errors.append(f"Separately-owned sentinel {number} discovery remains unresolved")
         for number, archivist in enumerate(getattr(self, "fixture_archivists", [])):
             retained = attempt(f"Dependent fixture evidence {number}", archivist)
             if retained is not None:
@@ -3000,6 +3112,10 @@ class PosixNativeTests(ExecutorFixtureTests):
         self.assertFalse(record["cleanupComplete"])
         self.assertFalse(record["fixtureDataRemoved"])
         self.assertEqual(record["guardSurvivors"], [])
+        self.assertTrue(record["guardFinalization"]["closed"])
+        self.assertIsNotNone(record["guardFinalization"]["completedUtc"])
+        self.assertFalse(record["guardFinalization"]["reusedVerifiedFinalization"])
+        self.assertEqual(self.fixture_native_finalizations[self.scope]["id"], record["guardFinalization"]["id"])
         self.assertTrue(set(primary["retentionReasons"]).issubset(record["errors"]))
         self.assertTrue(self.base.is_dir())
         self.assertTrue(temporary.is_dir())

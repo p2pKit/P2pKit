@@ -101,3 +101,11 @@ Native records distinguish genuine hidden-environment execution from hosts which
 expose the inherited markers; neither path fabricates SIP evidence. Passing these
 controls authorizes no product, supported-Intel, device, security or capacity claim.
 Native requalification of this change is required before further Mac product work.
+
+Recovery fixtures separate native process finalization from evidence/disposal
+attempts. After a scope is positively drained, its discovery errors are empty,
+its required output capture completes and its capabilities close successfully,
+a later disposal attempt can reference that same finalized instance and unchanged
+launch ledger. It must not reuse a closed adapter to invent a new census. Failed
+or incomplete finalizations are never cached, and independent whole-chain
+retention obligations still block disposal until their explicit recovery proof.
