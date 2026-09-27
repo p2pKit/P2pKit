@@ -6,18 +6,19 @@ import dev.p2pkit.transport.lan.interop.p2pkit_lan_endpoint_numeric_equal
 import dev.p2pkit.transport.lan.interop.p2pkit_lan_numeric_equal
 import dev.p2pkit.transport.lan.interop.p2pkit_nw_lan_path_is_allowed
 import dev.p2pkit.transport.lan.interop.p2pkit_nw_restrict_lan_parameters
+import kotlinx.cinterop.UByteVar
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.convert
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
 import kotlinx.cinterop.reinterpret
+import kotlinx.cinterop.set
 import kotlinx.cinterop.sizeOf
 import platform.Network.nw_endpoint_create_address
 import platform.Network.nw_endpoint_create_bonjour_service
 import platform.Network.nw_endpoint_create_host
 import platform.posix.AF_INET
 import platform.posix.AF_INET6
-import platform.posix.inet_pton
 import platform.posix.memset
 import platform.posix.sockaddr_in
 import platform.posix.sockaddr_in6
@@ -50,7 +51,9 @@ class AppleOrganizationLanInteropTest {
         ipv4.sin_len = sizeOf<sockaddr_in>().convert()
         ipv4.sin_family = AF_INET.convert()
         ipv4.sin_port = 0u
-        assertEquals(1, inet_pton(AF_INET, "192.168.20.1", ipv4.sin_addr.ptr))
+        // Populate network-order bytes independently of the parser under test.
+        val bytes4 = ipv4.sin_addr.ptr.reinterpret<UByteVar>()
+        listOf<UByte>(192u, 168u, 20u, 1u).forEachIndexed { index, octet -> bytes4[index] = octet }
         val address4 = nw_endpoint_create_address(ipv4.ptr.reinterpret())
         assertTrue(p2pkit_lan_endpoint_numeric_equal(address4, "192.168.20.1"))
         assertFalse(p2pkit_lan_endpoint_numeric_equal(address4, "192.168.20.2"))
@@ -62,10 +65,18 @@ class AppleOrganizationLanInteropTest {
         ipv6.sin6_port = 0u
         ipv6.sin6_flowinfo = 0u
         ipv6.sin6_scope_id = 0u
-        assertEquals(1, inet_pton(AF_INET6, "fd12:3456::1", ipv6.sin6_addr.ptr))
+        val bytes6 = ipv6.sin6_addr.ptr.reinterpret<UByteVar>()
+        bytes6[0] = 0xfdu
+        bytes6[1] = 0x12u
+        bytes6[2] = 0x34u
+        bytes6[3] = 0x56u
+        bytes6[15] = 1u
         val address6 = nw_endpoint_create_address(ipv6.ptr.reinterpret())
         assertTrue(p2pkit_lan_endpoint_numeric_equal(address6, "fd12:3456:0:0:0:0:0:1"))
-        assertEquals(1, inet_pton(AF_INET6, "fe80::1", ipv6.sin6_addr.ptr))
+        bytes6[0] = 0xfeu
+        bytes6[1] = 0x80u
+        bytes6[2] = 0u
+        bytes6[3] = 0u
         ipv6.sin6_scope_id = 1u
         val scoped = nw_endpoint_create_address(ipv6.ptr.reinterpret())
         assertFalse(p2pkit_lan_endpoint_numeric_equal(scoped, "fe80::1"))
