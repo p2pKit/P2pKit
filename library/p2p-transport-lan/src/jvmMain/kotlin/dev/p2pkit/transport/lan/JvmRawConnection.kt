@@ -2,8 +2,6 @@ package dev.p2pkit.transport.lan
 
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.transport.RawConnection
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -28,6 +26,8 @@ import java.io.IOException
 import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
  * JVM/Android [RawConnection] backed by a [java.net.Socket].
@@ -46,7 +46,9 @@ internal class JvmRawConnection(
      */
     private val writeTimeoutMillis: Long = WRITE_TIMEOUT_MILLIS,
     /** Tests own detached worker completion and failure observation without changing global handlers. */
-    connectionScopeForTest: CoroutineScope? = null
+    connectionScopeForTest: CoroutineScope? = null,
+    private val io: JvmLanIo = JvmLanIo(false),
+    private val pathAllowed: (() -> Boolean)? = null
 ) : RawConnection {
 
     private val _state = MutableStateFlow(ConnectionState.Connected)
@@ -80,6 +82,14 @@ internal class JvmRawConnection(
 
     init {
         JvmLanDiag.log("conn", "opened $label")
+        if (pathAllowed != null) connScope.launch {
+            while (currentCoroutineContext().isActive && !socketClosed.get()) {
+                delay(250)
+                try { withContext(io.setup) { requireAllowedPath() } }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { break } // requireAllowedPath sealed the socket and published Closed.
+            }
+        }
     }
 
     /** The single place the fd is released; idempotent and safe from any thread. */
@@ -91,6 +101,7 @@ internal class JvmRawConnection(
 
     override suspend fun write(bytes: ByteArray) {
         writeLock.withLock {
+            requireAllowedPath()
             // V0.6-WRITE-TIMEOUT (AUDIT-2026-06): java.net.Socket has no
             // write deadline and its OutputStream ignores thread
             // interruption, so a peer that stops draining wedges this write
@@ -123,7 +134,8 @@ internal class JvmRawConnection(
             }
             try {
                 try {
-                    withContext(Dispatchers.IO) {
+                    withContext(io.write) {
+                        requireAllowedPath()
                         JvmLanDiag.frame("write", "$label ${bytes.size}B")
                         val out = socket.getOutputStream()
                         out.write(bytes)
@@ -177,6 +189,7 @@ internal class JvmRawConnection(
             val input = socket.getInputStream()
             val buffer = ByteArray(BUFFER_SIZE)
             while (currentCoroutineContext().isActive) {
+                requireAllowedPath()
                 val n = try {
                     suspendCancellableCoroutine<Int> { continuation ->
                         if (socketClosed.get()) {
@@ -184,7 +197,7 @@ internal class JvmRawConnection(
                             return@suspendCancellableCoroutine
                         }
                         val readJob = connScope.launch(
-                            context = Dispatchers.IO,
+                            context = io.read,
                             start = CoroutineStart.ATOMIC
                         ) {
                             try {
@@ -231,6 +244,7 @@ internal class JvmRawConnection(
                     break
                 }
                 if (n > 0) {
+                    requireAllowedPath()
                     JvmLanDiag.frame("read", "$label ${n}B")
                     emit(buffer.copyOfRange(0, n))
                 }
@@ -264,6 +278,14 @@ internal class JvmRawConnection(
         // close() can no longer be preempted by cancellation.
         closeSocketOnce()
         connScope.cancel()
+    }
+
+    private fun requireAllowedPath() {
+        if (pathAllowed != null && !runCatching(pathAllowed).getOrDefault(false)) {
+            closeSocketOnce()
+            _state.value = ConnectionState.Closed
+            throw IOException("Organization LAN path is unavailable or prohibited")
+        }
     }
 
     private companion object {

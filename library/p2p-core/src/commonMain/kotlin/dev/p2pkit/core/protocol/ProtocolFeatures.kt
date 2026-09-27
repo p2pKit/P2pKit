@@ -13,7 +13,8 @@ internal object ProtocolFeatures {
 internal class ProtocolSessionState(
     val localPeerId: String,
     val secure: Boolean,
-    localFeatures: Set<String> = if (secure) ProtocolFeatures.SECURE_V2 else emptySet()
+    localFeatures: Set<String> = if (secure) ProtocolFeatures.SECURE_V2 else emptySet(),
+    val restrictedApplicationBytes: Int? = null
 ) {
     val localFeatures: Set<String> = localFeatures.toSet()
 

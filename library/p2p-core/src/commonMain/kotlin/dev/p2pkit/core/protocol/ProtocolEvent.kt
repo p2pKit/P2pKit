@@ -1,6 +1,7 @@
 package dev.p2pkit.core.protocol
 
 import dev.p2pkit.core.P2pMessage
+import dev.p2pkit.core.PayloadLease
 
 /**
  * Events emitted by the protocol layer as frames arrive from a peer.
@@ -21,7 +22,11 @@ import dev.p2pkit.core.P2pMessage
  *     without an intermediate copy.
  */
 internal sealed class ProtocolEvent {
-    data class Message(val message: P2pMessage) : ProtocolEvent()
+    data class Message(val message: P2pMessage, val lease: PayloadLease? = null) : ProtocolEvent()
+
+    fun release() {
+        if (this is Message) lease?.release()
+    }
     data class Hello(val payload: HelloPayload) : ProtocolEvent()
     data object Ping : ProtocolEvent()
     data object Pong : ProtocolEvent()

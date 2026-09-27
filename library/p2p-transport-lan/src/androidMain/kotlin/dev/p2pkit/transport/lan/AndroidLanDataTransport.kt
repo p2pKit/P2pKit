@@ -1,7 +1,6 @@
 package dev.p2pkit.transport.lan
 
 import android.net.Network
-import dev.p2pkit.transport.lan.AndroidLanDiag as Log
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.transport.DataTransport
@@ -9,13 +8,13 @@ import dev.p2pkit.core.transport.HasLocalTcpEndpoint
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -24,6 +23,7 @@ import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -37,6 +37,7 @@ import java.net.Socket
 import java.net.SocketTimeoutException
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
+import dev.p2pkit.transport.lan.AndroidLanDiag as Log
 
 /**
  * Android TCP data transport. Identical shape to `JvmLanDataTransport`;
@@ -51,7 +52,9 @@ internal class AndroidLanDataTransport(
     private val serverSocketFactory: () -> ServerSocket = ::ServerSocket,
     private val beforeListenerResourceCheckForTest: (() -> Unit)? = null,
     private val beforeDialOwnershipHandoffForTest: (() -> Unit)? = null,
-    private val afterListenerDetachForTest: (() -> Unit)? = null
+    private val afterListenerDetachForTest: (() -> Unit)? = null,
+    private val policy: OrganizationLan? = null,
+    private val role: LanRole = LanRole.Host
 ) : DataTransport, HasLocalTcpEndpoint {
 
     override val type: TransportKind = TransportKind.LAN
@@ -75,7 +78,8 @@ internal class AndroidLanDataTransport(
     // Failed dial cleanup and accepted-option rollback share the existing stop/retry owner.
     private val retainedSocketCleanup = mutableSetOf<Socket>()
     private val inboundAdmission = PerSourceAdmissionLimiter()
-    @Volatile private var restartPort: Int = 0
+    private val io = AndroidLanIo(policy != null)
+    @Volatile private var restartPort: Int = policy?.listenPort ?: 0
     @Volatile private var hasStarted: Boolean = false
 
     @Volatile
@@ -86,6 +90,16 @@ internal class AndroidLanDataTransport(
             // start() after close() previously reported success on a closed
             // socket (AUDIT-2026-06 fix).
             return Result.failure(IllegalStateException("LAN data transport is closed"))
+        }
+        if (policy != null && networkState?.selectedRoute()?.network == null) {
+            return Result.failure(P2pError.ConnectionFailed("Selected organization LAN network is unavailable"))
+        }
+        if (role == LanRole.DialOnly) {
+            hasStarted = true
+            return Result.success(Unit)
+        }
+        if (policy != null && !policy.androidInboundRouteIsVerifiable()) {
+            return Result.failure(P2pError.ConnectionFailed("Incoming organization LAN route is unverifiable"))
         }
         beforeListenerResourceCheckForTest?.invoke()
         val hasUnreleasedResources = synchronized(listenerStateLock) {
@@ -103,7 +117,7 @@ internal class AndroidLanDataTransport(
         var boundCandidate: ServerSocket? = null
         var bindFailure: Throwable? = null
         try {
-            withContext(Dispatchers.IO + NonCancellable) {
+            withContext(io.setup + NonCancellable) {
                 try {
                     boundCandidate = bindServerSocket(restartPort)
                 } catch (error: Throwable) {
@@ -172,11 +186,11 @@ internal class AndroidLanDataTransport(
     override suspend fun connect(peer: InternalPeer): RawConnection {
         val dialGeneration = lifecycleGeneration.get()
         ensureDialGeneration(dialGeneration)
-        val endpoints = peer.lanEndpoints()
+        val endpoints = peer.lanEndpoints().filter { policy == null || policy.allows(it.host) }
         if (endpoints.isEmpty()) throw P2pError.NoTransportAvailable(peer.publicPeer)
         val pid8 = peer.publicPeer.id.value.take(8)
         val selectedRoute = try {
-            withContext(Dispatchers.IO) { networkState?.selectedRoute() }
+            withContext(io.setup) { networkState?.selectedRoute() }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Throwable) {
@@ -218,7 +232,7 @@ internal class AndroidLanDataTransport(
                     // an explicit Java-interface address with network=null.
                     // Binding that local address before connect is the only
                     // safe way to prevent the kernel from choosing cellular.
-                    if (selectedRoute != null && selectedRoute.network == null) {
+                    if (selectedRoute != null && (selectedRoute.network == null || policy != null)) {
                         candidate.bind(InetSocketAddress(selectedRoute.localAddress, 0))
                     }
                 }
@@ -257,9 +271,16 @@ internal class AndroidLanDataTransport(
             }
             try {
                 ensureDialGeneration(dialGeneration)
-                withContext(Dispatchers.IO) {
-                    socket.connect(InetSocketAddress(endpoint.host, endpoint.port), timeout)
+                withContext(io.setup) {
+                    val destination = if (policy == null) InetSocketAddress(endpoint.host, endpoint.port)
+                    else InetSocketAddress(policy.androidNumeric(endpoint.host), endpoint.port)
+                    socket.connect(destination, timeout)
                     socket.tcpNoDelay = true
+                    if (policy != null &&
+                        !policy.allowsAndroidSocket(socket, networkState?.selectedRoute(), selectedRoute?.network)
+                    ) {
+                        throw P2pError.ConnectionFailed("Organization LAN path validation failed")
+                    }
                 }
                 currentCoroutineContext().ensureActive()
                 ensureDialGeneration(dialGeneration)
@@ -273,7 +294,7 @@ internal class AndroidLanDataTransport(
                     }
                 }
                 if (!handedOff) throw stoppedDialFailure()
-                return AndroidRawConnection(socket)
+                return wrapSocket(socket, selectedRoute?.network)
             } catch (cancelled: CancellationException) {
                 closeSocketRetainingFailure(socket)?.let(cancelled::addSuppressed)
                 Log.d(TAG, "connect CANCELLED peer=$pid8 ${endpoint.host}:${endpoint.port} — socket closed")
@@ -324,7 +345,9 @@ internal class AndroidLanDataTransport(
 
     // The adjacent buffer fuses with callbackFlow. trySend still rejects the newest
     // connection immediately when full; SUSPEND does not park this accept loop.
-    override fun incomingConnections(): Flow<RawConnection> = callbackFlow {
+    override fun incomingConnections(): Flow<RawConnection> = if (role == LanRole.DialOnly) {
+        flow { awaitCancellation() }
+    } else callbackFlow {
         if (hasStarted && serverSocket.get() == null && !closed) {
             start().getOrThrow()
         }
@@ -332,7 +355,7 @@ internal class AndroidLanDataTransport(
         // after a failed first bind still serves this collector (see
         // serverSocketFlow KDoc).
         val sock = serverSocketFlow.filterNotNull().first()
-        val accepterJob: Job = launch(Dispatchers.IO) {
+        val accepterJob: Job = launch(io.accept) {
             try {
                 while (!closed) {
                     val socket = try {
@@ -390,7 +413,7 @@ internal class AndroidLanDataTransport(
                         continue
                     }
                     val raw = AdmissionControlledRawConnection(
-                        AndroidRawConnection(socket),
+                        wrapSocket(socket),
                         admissionLease
                     )
                     val offered = trySend(raw)
@@ -504,7 +527,13 @@ internal class AndroidLanDataTransport(
         val socket = serverSocketFactory()
         return try {
             socket.reuseAddress = true
-            socket.bind(InetSocketAddress(port))
+            val address = if (policy == null) InetSocketAddress(port) else {
+                val selected = networkState?.selectedRoute()
+                    ?: throw P2pError.ConnectionFailed("Selected organization LAN network is unavailable")
+                require(selected.network != null)
+                InetSocketAddress(selected.localAddress, port)
+            }
+            socket.bind(address)
             socket
         } catch (error: Throwable) {
             closeServerSocketRetainingFailure(socket)?.let(error::addSuppressed)
@@ -516,6 +545,12 @@ internal class AndroidLanDataTransport(
         actual: java.net.InetAddress,
         remote: java.net.InetAddress
     ): Boolean {
+        if (policy != null) {
+            val route = networkState?.selectedRoute()
+            return policy.androidInboundRouteIsVerifiable() && route?.network != null &&
+                policy.isLocal(route.localAddress.hostAddress.orEmpty()) &&
+                policy.isLocal(actual.hostAddress.orEmpty()) && policy.allows(remote.hostAddress.orEmpty())
+        }
         // Same-host manual provisioning is safe on loopback: packets from a
         // remote machine cannot be routed to a loopback destination.
         if (actual.isLoopbackAddress && remote.isLoopbackAddress) return true
@@ -523,6 +558,12 @@ internal class AndroidLanDataTransport(
         val selected = runCatching { state.selectedRoute()?.localAddress }.getOrNull() ?: return false
         return selected.hostAddress == actual.hostAddress
     }
+
+    private fun wrapSocket(socket: Socket, boundNetwork: Network? = null): AndroidRawConnection = AndroidRawConnection(
+        socket, io = io, pathAllowed = policy?.let { selected ->
+            { selected.allowsAndroidSocket(socket, networkState?.selectedRoute(), boundNetwork) }
+        }
+    )
 
     internal fun isInboundAddressAllowedForTest(
         actual: java.net.InetAddress,

@@ -3,6 +3,8 @@ package dev.p2pkit.core.protocol
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.P2pMessage
+import dev.p2pkit.core.P2pSessionProfile
+import dev.p2pkit.core.reserveOrThrow
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
@@ -19,7 +21,8 @@ internal class DefaultP2pProtocol(
     private val clock: () -> Long,
     private val random: Random = Random.Default,
     private val logger: P2pLogger = P2pLogger.NoOp,
-    private val version: Byte = ProtocolConstants.LEGACY_VERSION
+    private val version: Byte = ProtocolConstants.LEGACY_VERSION,
+    private val sessionProfile: P2pSessionProfile? = null
 ) : P2pProtocol {
 
     override suspend fun sendMessage(
@@ -27,35 +30,48 @@ internal class DefaultP2pProtocol(
         message: P2pMessage,
         sessionState: ProtocolSessionState
     ) {
-        var envelopeSequence: Long? = null
-        val frames = if (sessionState.supports(ProtocolFeatures.APP_MESSAGE_ENVELOPE_V1)) {
-            val remotePeerId = sessionState.remotePeerId
-                ?: throw P2pError.ProtocolError("Cannot send application envelope before HELLO completes")
-            val messageId = MessageId.random(random)
-            val sequence = sessionState.nextOutboundSequence()
-            val envelope = AppMessageEnvelope.encode(
-                message = message,
-                messageId = messageId,
-                sequence = sequence,
-                senderPeerId = sessionState.localPeerId,
-                recipientPeerId = remotePeerId
-            )
-            envelopeSequence = sequence
-            chunker.chunkEnvelope(envelope, messageId)
-        } else {
-            val hasMetadata = when (message) {
-                is P2pMessage.Text -> message.metadata.isNotEmpty()
-                is P2pMessage.Binary -> message.metadata.isNotEmpty()
-            }
-            if (hasMetadata && sessionState.secure) {
-                throw P2pError.UnsupportedFeature(ProtocolFeatures.APP_MESSAGE_ENVELOPE_V1)
-            }
-            chunker.chunk(message)
+        val limit = sessionState.restrictedApplicationBytes
+        if (limit != null && (message !is P2pMessage.Binary ||
+            message.sizeBytes > limit || message.metadata.isNotEmpty())
+        ) {
+            throw P2pError.ProtocolError("Message is not permitted by the restricted profile")
         }
-        for (frame in frames) {
-            writeFrame(connection, frame)
+        val sendLease = sessionProfile?.payloadBudget?.reserveOrThrow(
+            4L * (message as P2pMessage.Binary).sizeBytes + 16_384
+        )
+        try {
+            var envelopeSequence: Long? = null
+            val frames = if (sessionState.supports(ProtocolFeatures.APP_MESSAGE_ENVELOPE_V1)) {
+                val remotePeerId = sessionState.remotePeerId
+                    ?: throw P2pError.ProtocolError("Cannot send application envelope before HELLO completes")
+                val messageId = MessageId.random(random)
+                val sequence = sessionState.nextOutboundSequence()
+                val envelope = AppMessageEnvelope.encode(
+                    message = message,
+                    messageId = messageId,
+                    sequence = sequence,
+                    senderPeerId = sessionState.localPeerId,
+                    recipientPeerId = remotePeerId
+                )
+                envelopeSequence = sequence
+                chunker.chunkEnvelope(envelope, messageId)
+            } else {
+                val hasMetadata = when (message) {
+                    is P2pMessage.Text -> message.metadata.isNotEmpty()
+                    is P2pMessage.Binary -> message.metadata.isNotEmpty()
+                }
+                if (hasMetadata && sessionState.secure) {
+                    throw P2pError.UnsupportedFeature(ProtocolFeatures.APP_MESSAGE_ENVELOPE_V1)
+                }
+                chunker.chunk(message)
+            }
+            for (frame in frames) {
+                writeFrame(connection, frame)
+            }
+            envelopeSequence?.let(sessionState::commitOutboundSequence)
+        } finally {
+            sendLease?.release()
         }
-        envelopeSequence?.let(sessionState::commitOutboundSequence)
     }
 
     override suspend fun sendHello(connection: RawConnection, hello: HelloPayload) {
@@ -182,24 +198,42 @@ internal class DefaultP2pProtocol(
         connection: RawConnection,
         sessionState: ProtocolSessionState
     ): Flow<ProtocolEvent> = flow {
-        val reader = FrameReader(logger, expectedVersion = version)
-        val reassembler = Reassembler(clock = clock, sessionState = sessionState)
+        val reader = FrameReader(logger, expectedVersion = version, profile = sessionProfile)
+        val reassembler = Reassembler(
+            clock = clock, sessionState = sessionState, payloadBudget = sessionProfile?.payloadBudget
+        )
         val warnings = PeerWarningLimiter(logger)
-        connection.read().collect { bytes ->
-            // Reclaim partial multi-chunk messages that went idle: eviction is
-            // by inactivity (no new chunk within the reassembly timeout), not
-            // by age since the first chunk, so a slow-but-live transfer is
-            // never dropped mid-message (AUDIT-2026-06 fix). evictStale() is
-            // otherwise never driven (it has no timer), so without this call a
-            // stalled transfer would pin its chunks for the life of the
-            // connection. Cheap: no-op while `pending` is empty.
-            reassembler.evictStale()
-            val frames = reader.feed(bytes)
-            for (frame in frames) {
-                FrameTrace.emit { "RX ${frameDesc(frame)}" }
-                val event = decodeEvent(frame, reassembler, warnings, sessionState)
-                if (event != null) emit(event)
+        try {
+            connection.read().collect { bytes ->
+                // Reclaim partial multi-chunk messages that went idle: eviction is
+                // by inactivity (no new chunk within the reassembly timeout), not
+                // by age since the first chunk, so a slow-but-live transfer is
+                // never dropped mid-message (AUDIT-2026-06 fix). evictStale() is
+                // otherwise never driven (it has no timer), so without this call a
+                // stalled transfer would pin its chunks for the life of the
+                // connection. Cheap: no-op while `pending` is empty.
+                reassembler.evictStale()
+                val frames = reader.feed(bytes)
+                try {
+                    for (frame in frames) {
+                        FrameTrace.emit { "RX ${frameDesc(frame)}" }
+                        val event = decodeEvent(frame, reassembler, warnings, sessionState)
+                        if (event != null) {
+                            try {
+                                emit(event)
+                            } catch (failure: Throwable) {
+                                event.release()
+                                throw failure
+                            }
+                        }
+                    }
+                } finally {
+                    frames.forEach(Frame::releasePayload)
+                }
             }
+        } finally {
+            reader.close()
+            reassembler.close()
         }
     }
 
@@ -224,7 +258,7 @@ internal class DefaultP2pProtocol(
                     )
                 }
                 val message = reassembler.accept(frame) ?: return null
-                ProtocolEvent.Message(message)
+                ProtocolEvent.Message(message, reassembler.takeCompletedLease())
             }
             PacketType.HELLO -> {
                 // A malformed HELLO body must not throw a SerializationException

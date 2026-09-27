@@ -4,6 +4,7 @@ import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.internal.security.ReconnectTransportRetirement
 import dev.p2pkit.core.internal.security.SecureTerminalFailureSource
+import dev.p2pkit.core.reserveOrThrow
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -58,11 +59,13 @@ internal class NoiseSecureRawConnection(
                     var offset = 0
                     while (offset < bytes.size) {
                         val end = minOf(offset + SECURE_RECORD_MAX_PLAINTEXT_BYTES, bytes.size)
+                        val recordLease = pump.payloadBudget?.reserveOrThrow(4L * (end - offset) + 128)
                         val plaintext = bytes.copyOfRange(offset, end)
                         try {
                             writeRecord(plaintext)
                         } finally {
                             plaintext.wipe()
+                            recordLease?.release()
                         }
                         offset = end
                     }
@@ -90,14 +93,16 @@ internal class NoiseSecureRawConnection(
                 } finally {
                     header.wipe()
                 }
-                val ciphertext = pump.readExactly(ciphertextLength)
+                val recordLease = pump.payloadBudget?.reserveOrThrow(2L * ciphertextLength + 128)
+                var ciphertext: ByteArray? = null
                 var plaintext: ByteArray? = null
                 var delivered = false
                 try {
+                    val encrypted = pump.readExactly(ciphertextLength).also { ciphertext = it }
                     plaintext = try {
                         receiveMutex.withLock {
                             ensureOpen()
-                            receiveCipher.decryptWithAd(ByteArray(0), ciphertext)
+                            receiveCipher.decryptWithAd(ByteArray(0), encrypted)
                         }
                     } catch (cause: NoiseAuthenticationException) {
                         publishAuthenticationFailure(cause)
@@ -124,8 +129,9 @@ internal class NoiseSecureRawConnection(
                     delivered = true
                     emit(plaintext)
                 } finally {
-                    ciphertext.wipe()
+                    ciphertext?.wipe()
                     if (!delivered) plaintext?.wipe()
+                    recordLease?.release()
                 }
             }
             close()

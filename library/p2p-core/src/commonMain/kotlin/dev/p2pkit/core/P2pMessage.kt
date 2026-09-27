@@ -81,6 +81,9 @@ public sealed class P2pMessage {
          */
         public val bytes: ByteArray get() = content.copyOf()
 
+        /** Payload size without allocating a defensive copy. */
+        public val sizeBytes: Int get() = content.size
+
         internal val payloadSizeBytes: Int get() = content.size
 
         private val metadataSnapshot: Map<String, String> = immutableMapSnapshot(metadata)

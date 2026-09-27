@@ -56,8 +56,15 @@ public fun TransportsBuilder.lan(applicationContext: Context) {
     register(AndroidLanTransportFactory(applicationContext.applicationContext))
 }
 
+/** Explicit organization LAN with no cellular/VPN, hotspot, default-route or DNS fallback. */
+public fun TransportsBuilder.lan(applicationContext: Context, policy: OrganizationLan, role: LanRole) {
+    register(AndroidLanTransportFactory(applicationContext.applicationContext, policy, role))
+}
+
 internal class AndroidLanTransportFactory(
-    private val androidContext: Context
+    private val androidContext: Context,
+    private val policy: OrganizationLan? = null,
+    private val role: LanRole = LanRole.Host
 ) : TransportFactory {
     override val descriptor: TransportDescriptor =
         TransportDescriptor.dataAndDiscovery(TransportKind.LAN)
@@ -65,9 +72,13 @@ internal class AndroidLanTransportFactory(
     override fun build(context: TransportContext): TransportPair {
         val connectivity = androidContext.getSystemService(Context.CONNECTIVITY_SERVICE)
             as ConnectivityManager
-        val networkState = AndroidLanNetworkState {
-            currentAndroidLanBindTarget(connectivity)
-        }
+        val networkState = AndroidLanNetworkState(
+            resolveCurrentTarget = {
+                if (policy == null) currentAndroidLanBindTarget(connectivity)
+                else organizationAndroidTarget(policy, connectivity)
+            },
+            requireFresh = policy != null
+        )
         val registration = LanServiceRegistration(
             appId = context.appId,
             localPeerId = context.localPeerId,
@@ -77,8 +88,8 @@ internal class AndroidLanTransportFactory(
             fingerprint = context.localFingerprint
         )
         return TransportPair(
-            data = AndroidLanDataTransport(registration, networkState),
-            discovery = AndroidLanDiscoveryTransport(androidContext, registration, networkState)
+            data = AndroidLanDataTransport(registration, networkState, policy = policy, role = role),
+            discovery = AndroidLanDiscoveryTransport(androidContext, registration, networkState, policy, role)
         )
     }
 }

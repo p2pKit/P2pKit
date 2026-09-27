@@ -11,15 +11,18 @@ import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.P2pSession
+import dev.p2pkit.core.P2pSessionProfile
 import dev.p2pkit.core.P2pState
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.PeerAuthorizationPolicy
 import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.PeerId
-import dev.p2pkit.core.PeerAuthorizationPolicy
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.core.SecurityMode
 import dev.p2pkit.core.TransportKind
+import dev.p2pkit.core.internal.security.AuthenticatedV2SecurityEngine
+import dev.p2pkit.core.internal.security.noise.SECURE_V2_MAX_APP_ID_UTF8_BYTES
 import dev.p2pkit.core.permission.P2pPermissionManager
 import dev.p2pkit.core.protocol.DefaultP2pProtocol
 import dev.p2pkit.core.protocol.ProtocolConstants
@@ -32,8 +35,6 @@ import dev.p2pkit.core.security.LocalSecureIdentity
 import dev.p2pkit.core.security.PlatformSecurityCryptography
 import dev.p2pkit.core.security.SecureIdentityService
 import dev.p2pkit.core.security.platformSecurityCryptography
-import dev.p2pkit.core.internal.security.AuthenticatedV2SecurityEngine
-import dev.p2pkit.core.internal.security.noise.SECURE_V2_MAX_APP_ID_UTF8_BYTES
 import dev.p2pkit.core.transfer.FileTransferConfig
 import dev.p2pkit.core.transport.DataTransport
 import dev.p2pkit.core.transport.DiscoveryTransport
@@ -113,7 +114,8 @@ internal class P2pKitImpl(
     private val discoveryRefreshTimeoutMillis: Long = DEFAULT_DISCOVERY_REFRESH_TIMEOUT_MS,
     private val featureOperationSettleTimeoutMillis: Long =
         DEFAULT_FEATURE_OPERATION_SETTLE_TIMEOUT_MS,
-    private val beforeTerminalWatcherRemovalForTest: (suspend () -> Unit)? = null
+    private val beforeTerminalWatcherRemovalForTest: (suspend () -> Unit)? = null,
+    private val sessionProfile: P2pSessionProfile? = null
 ) : P2pKit {
 
     private val internalJob = SupervisorJob(parent = parentJob)
@@ -171,6 +173,7 @@ internal class P2pKitImpl(
         // messages indefinitely or evict a live message prematurely.
         clock = monotonicClock,
         logger = logger,
+        sessionProfile = sessionProfile,
         version = when (securityProfile) {
             TransportSecurityProfile.AuthenticatedV2 -> ProtocolConstants.SECURE_VERSION
             TransportSecurityProfile.LegacyPlaintextV1 -> ProtocolConstants.LEGACY_VERSION
@@ -280,6 +283,7 @@ internal class P2pKitImpl(
             scope = scope,
             transportManager = transportManager,
             protocol = protocol,
+            sessionProfile = sessionProfile,
             securityMode = securityMode,
             localSecureIdentity = localSecureIdentity,
             authenticatedSecurity = securityCryptography?.let(::AuthenticatedV2SecurityEngine),
@@ -1658,7 +1662,8 @@ internal fun newP2pKit(
     discoveryRefreshTimeoutMillis: Long = DEFAULT_DISCOVERY_REFRESH_TIMEOUT_MS,
     featureOperationSettleTimeoutMillis: Long = DEFAULT_FEATURE_OPERATION_SETTLE_TIMEOUT_MS,
     beforeTerminalWatcherRemovalForTest: (suspend () -> Unit)? = null,
-    securityCryptographyForTest: PlatformSecurityCryptography? = null
+    securityCryptographyForTest: PlatformSecurityCryptography? = null,
+    sessionProfile: P2pSessionProfile? = null
 ): P2pKit {
     // Establish the failure-isolating boundary before identity storage,
     // platform factories, transport construction, or any coroutine can log.
@@ -1667,6 +1672,9 @@ internal fun newP2pKit(
     // collections before any identity or transport becomes observable so a
     // later mutation cannot silently change which remote keys are admitted.
     val frozenSecurityMode = securityMode.snapshotForKitOwnership()
+    require(sessionProfile == null || frozenSecurityMode is SecurityMode.AuthenticatedV2) {
+        "A restricted session profile requires authenticated protocol v2"
+    }
     val secureIdentityService: SecureIdentityService?
     val secureIdentityUsage: SecureIdentityUsage?
     val secureIdentity: LocalSecureIdentity?
@@ -1744,7 +1752,8 @@ internal fun newP2pKit(
             afterSessionSetupResultForTest = afterSessionSetupResultForTest,
             discoveryRefreshTimeoutMillis = discoveryRefreshTimeoutMillis,
             featureOperationSettleTimeoutMillis = featureOperationSettleTimeoutMillis,
-            beforeTerminalWatcherRemovalForTest = beforeTerminalWatcherRemovalForTest
+            beforeTerminalWatcherRemovalForTest = beforeTerminalWatcherRemovalForTest,
+            sessionProfile = sessionProfile
         )
     } catch (cause: Throwable) {
         releaseIdentityAfterConstructionFailure(cause, secureIdentity, secureIdentityUsage)

@@ -4,6 +4,9 @@ import dev.p2pkit.core.AppId
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.ExplicitSecurityRisk
 import dev.p2pkit.core.P2pError
+import dev.p2pkit.core.P2pSessionProfile
+import dev.p2pkit.core.PayloadBudget
+import dev.p2pkit.core.PeerAdmission
 import dev.p2pkit.core.PeerAuthorizationPolicy
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.internal.security.noise.NoiseProtocolException
@@ -22,6 +25,7 @@ import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
@@ -34,7 +38,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
@@ -479,6 +482,73 @@ class AuthenticatedV2SecurityEngineTest {
         }
     }
 
+    @Test
+    fun liveProfileRejectsEvenAnExactRememberedPinAndReleasesHandshakeAllowance() = runTest {
+        val appId = AppId("engine.live-profile-revocation")
+        val initiatorIdentity = generateIdentity(appId)
+        val responderIdentity = generateIdentity(appId)
+        val pair = FakeConnectionPair()
+        val budget = PayloadBudget(1_048_576)
+        val profile = P2pSessionProfile({ PeerAdmission.Rejected }, budget, maxTrustedSessions = 1)
+        try {
+            supervisorScope {
+                val initiator = async {
+                    establish(
+                        raw = pair.a, role = NoiseRole.Initiator, appId = appId, identity = initiatorIdentity,
+                        authorization = PeerAuthorizationPolicy.RejectUnknown,
+                        expectedFingerprint = responderIdentity.fingerprint, sessionProfile = profile,
+                    )
+                }
+                val responder = async {
+                    establish(
+                        raw = pair.b, role = NoiseRole.Responder, appId = appId, identity = responderIdentity,
+                        authorization = PeerAuthorizationPolicy.RejectUnknown,
+                        expectedFingerprint = initiatorIdentity.fingerprint,
+                    )
+                }
+                assertFailsWith<P2pError.AuthorizationRejected> { initiator.await() }
+                assertFailsWith<P2pError.AuthenticationFailed> { responder.await() }
+            }
+            assertEquals(ConnectionState.Closed, pair.a.state.value)
+            assertEquals(0L, budget.retainedBytes.value)
+        } finally {
+            pair.a.close()
+            pair.b.close()
+            initiatorIdentity.clearPrivate()
+            responderIdentity.clearPrivate()
+        }
+    }
+
+    @Test
+    fun enrollmentProfileStillRequiresAuthenticatedAppBoundProofOfPossession() = runTest {
+        val appId = AppId("engine.enrollment-authentication")
+        val initiatorIdentity = generateIdentity(appId)
+        val responderIdentity = generateIdentity(appId)
+        val pair = FakeConnectionPair()
+        val budget = PayloadBudget(1_048_576)
+        val profile = P2pSessionProfile({ PeerAdmission.EnrollmentOnly }, budget, maxTrustedSessions = 1)
+        val (initiator, responder) = establishAcceptedPair(
+            pair, appId, initiatorIdentity, responderIdentity,
+            PeerAuthorizationPolicy.RejectUnknown, PeerAuthorizationPolicy.RejectUnknown,
+            initiatorExpectedFingerprint = responderIdentity.fingerprint,
+            responderProfile = profile,
+        )
+        try {
+            assertEquals(initiatorIdentity.fingerprint, responder.peerIdentity.fingerprint)
+            assertEquals(initiatorIdentity.peerId, responder.peerIdentity.peerId)
+            assertTrue(budget.retainedBytes.value > 0)
+            val incoming = async { responder.read().first() }
+            initiator.write("encrypted-enrollment-channel".encodeToByteArray())
+            assertContentEquals("encrypted-enrollment-channel".encodeToByteArray(), incoming.await())
+        } finally {
+            initiator.close()
+            responder.close()
+            initiatorIdentity.clearPrivate()
+            responderIdentity.clearPrivate()
+        }
+        assertEquals(0L, budget.retainedBytes.value)
+    }
+
     private suspend fun kotlinx.coroutines.CoroutineScope.assertTargetMismatch(
         appId: AppId = AppId("engine.target-mismatch"),
         expectedPeerId: PeerId? = null,
@@ -535,6 +605,8 @@ class AuthenticatedV2SecurityEngineTest {
         initiatorExpectedFingerprint: dev.p2pkit.core.PeerFingerprint? = null,
         responderExpectedPeerId: PeerId? = null,
         responderExpectedFingerprint: dev.p2pkit.core.PeerFingerprint? = null,
+        initiatorProfile: P2pSessionProfile? = null,
+        responderProfile: P2pSessionProfile? = null,
     ): Pair<SecureConnection, SecureConnection> {
         // Launch into the caller's long-lived test scope. A secure connection's
         // sole-reader pump intentionally remains a child of that owner until
@@ -552,6 +624,7 @@ class AuthenticatedV2SecurityEngineTest {
                 expectedPeerId = initiatorExpectedPeerId,
                 expectedFingerprint = initiatorExpectedFingerprint,
                 parentScope = connectionOwner,
+                sessionProfile = initiatorProfile,
             )
         }
         val responder = async {
@@ -564,6 +637,7 @@ class AuthenticatedV2SecurityEngineTest {
                 expectedPeerId = responderExpectedPeerId,
                 expectedFingerprint = responderExpectedFingerprint,
                 parentScope = connectionOwner,
+                sessionProfile = responderProfile,
             )
         }
         return initiator.await() to responder.await()
@@ -578,6 +652,7 @@ class AuthenticatedV2SecurityEngineTest {
         expectedPeerId: PeerId? = null,
         expectedFingerprint: dev.p2pkit.core.PeerFingerprint? = null,
         parentScope: kotlinx.coroutines.CoroutineScope = this,
+        sessionProfile: P2pSessionProfile? = null,
     ): SecureConnection = engine.establish(
         rawConnection = CopyingRawConnection(raw),
         parentScope = parentScope,
@@ -587,6 +662,7 @@ class AuthenticatedV2SecurityEngineTest {
         authorization = authorization,
         expectedPeerId = expectedPeerId,
         expectedFingerprint = expectedFingerprint,
+        sessionProfile = sessionProfile,
     )
 
     private fun generateIdentity(appId: AppId): LocalSecureIdentity {

@@ -8,13 +8,16 @@ import dev.p2pkit.core.NetworkPathStatus
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.P2pSession
+import dev.p2pkit.core.P2pSessionProfile
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.PeerAdmission
 import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.PeerIdentity
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.core.SecurityMode
+import dev.p2pkit.core.SessionFailureKind
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.internal.security.AuthenticatedV2SecurityEngine
 import dev.p2pkit.core.internal.security.noise.NoiseAuthenticationException
@@ -22,9 +25,9 @@ import dev.p2pkit.core.internal.security.noise.NoiseRole
 import dev.p2pkit.core.protocol.P2pProtocol
 import dev.p2pkit.core.protocol.ProtocolConstants
 import dev.p2pkit.core.protocol.ProtocolEvent
+import dev.p2pkit.core.protocol.ProtocolFeatures
 import dev.p2pkit.core.protocol.ProtocolSessionState
 import dev.p2pkit.core.security.LocalSecureIdentity
-import dev.p2pkit.core.security.SecureConnection
 import dev.p2pkit.core.transfer.FileTransferConfig
 import dev.p2pkit.core.transport.DataTransport
 import dev.p2pkit.core.transport.InboundConnectionAdmission
@@ -43,21 +46,21 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.BufferOverflow
-import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
@@ -163,7 +166,8 @@ internal class SessionManager(
      * knob (enabled by the commonTest `createTestKit` fixture) — so every
      * production construction path still resolves to `false`.
      */
-    private val strictInvariants: Boolean = false
+    private val strictInvariants: Boolean = false,
+    private val sessionProfile: P2pSessionProfile? = null
 ) {
 
     init {
@@ -180,7 +184,7 @@ internal class SessionManager(
      * rationale (replaces the previous "two stores updated by convention"
      * model).
      */
-    private val store = SessionStore(logger, strictInvariants = strictInvariants)
+    private val store = SessionStore(logger, strictInvariants = strictInvariants, profile = sessionProfile)
     val sessions: StateFlow<List<P2pSession>> = store.sessions
 
     /**
@@ -205,7 +209,9 @@ internal class SessionManager(
      * [setupSession]'s `onHandshakeSettled`). Outgoing connects are not
      * gated. See [MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS].
      */
-    private val preHandshakeGate = Semaphore(MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS)
+    private val preHandshakeGate = Semaphore(
+        sessionProfile?.maxInboundHandshakes ?: MAX_CONCURRENT_PRE_HANDSHAKE_SETUPS
+    )
 
     /** A timed-out refresh retains this permit until its actual worker exits. */
     private val discoveryRefreshGate = Semaphore(1)
@@ -793,7 +799,9 @@ internal class SessionManager(
             monotonicClock = monotonicClock,
             logger = logger,
             fileTransferConfig = fileTransferConfig,
-            lookupRegistration = store::registrationOf
+            lookupRegistration = store::registrationOf,
+            sessionProfile = sessionProfile,
+            admittedAs = handshake.admission
         )
 
         // Reconnect handler is wired BEFORE start() so the very first
@@ -984,6 +992,7 @@ internal class SessionManager(
         var selectedConnection: RawConnection? = null
         var eventChannel: Channel<ProtocolEvent>? = null
         var readerJob: Job? = null
+        var transferred = false
 
         try {
             return withTimeout(setupTimeoutMillis) {
@@ -1006,7 +1015,8 @@ internal class SessionManager(
                             localIdentity = identity,
                             authorization = mode.authorization,
                             expectedPeerId = expectedPeer?.id,
-                            expectedFingerprint = expectedFingerprint
+                            expectedFingerprint = expectedFingerprint,
+                            sessionProfile = sessionProfile
                         ).also { secure ->
                             peerIdentityBeforeHello = secure.peerIdentity
                         }
@@ -1020,16 +1030,39 @@ internal class SessionManager(
 
                 // Bounded protocol queue. In secure mode this is the first and
                 // only reader ever created above the raw transport pump.
-                val channel = Channel<ProtocolEvent>(capacity = 256)
+                val channel = Channel<ProtocolEvent>(
+                    capacity = if (sessionProfile == null) 256 else 16,
+                    onUndeliveredElement = ProtocolEvent::release
+                )
                 eventChannel = channel
                 val connection = checkNotNull(selectedConnection)
+                val admission = sessionProfile?.decide(checkNotNull(peerIdentityBeforeHello))
+                    ?: PeerAdmission.Trusted
+                if (admission == PeerAdmission.Rejected) {
+                    throw P2pError.AuthorizationRejected("Authenticated admission was revoked")
+                }
                 val protocolState = ProtocolSessionState(
                     localPeerId = localPeerId.value,
-                    secure = securityMode is SecurityMode.AuthenticatedV2
+                    secure = securityMode is SecurityMode.AuthenticatedV2,
+                    localFeatures = when {
+                        sessionProfile != null -> setOf(ProtocolFeatures.APP_MESSAGE_ENVELOPE_V1)
+                        securityMode is SecurityMode.AuthenticatedV2 -> ProtocolFeatures.SECURE_V2
+                        else -> emptySet()
+                    },
+                    restrictedApplicationBytes = sessionProfile?.let {
+                        if (admission == PeerAdmission.EnrollmentOnly) 4_096 else it.maxApplicationBytes
+                    }
                 )
                 val launchedReader = scope.launch {
                     try {
-                        protocol.events(connection, protocolState).collect { event -> channel.send(event) }
+                        protocol.events(connection, protocolState).collect { event ->
+                            if (sessionProfile == null) {
+                                channel.send(event)
+                            } else if (channel.trySend(event).isFailure) {
+                                event.release()
+                                throw P2pError.ProtocolError("Restricted protocol event queue is full")
+                            }
+                        }
                         channel.close()
                     } catch (e: CancellationException) {
                         channel.close()
@@ -1108,9 +1141,10 @@ internal class SessionManager(
                     readerJob = launchedReader,
                     resolvedPeer = resolvedPeer,
                     peerIdentity = peerIdentity,
-                    protocolState = protocolState
+                    protocolState = protocolState,
+                    admission = admission
                 )
-            }
+            }.also { transferred = true }
         } catch (e: TimeoutCancellationException) {
             // Nested withTimeout calls reuse TimeoutCancellationException for
             // both their own deadline and a cancelled caller's deadline. If
@@ -1160,6 +1194,8 @@ internal class SessionManager(
                     it.underlying = e
                 }
             }
+        } finally {
+            if (!transferred) eventChannel?.cancel()
         }
     }
 
@@ -1246,7 +1282,8 @@ internal class SessionManager(
         val readerJob: Job,
         val resolvedPeer: Peer,
         val peerIdentity: PeerIdentity,
-        val protocolState: ProtocolSessionState
+        val protocolState: ProtocolSessionState,
+        val admission: PeerAdmission = PeerAdmission.Trusted
     )
 
     /**
@@ -1288,8 +1325,12 @@ internal class SessionManager(
         @kotlin.concurrent.Volatile
         private var pathWakeBaseline: Int = pathSatisfiedGeneration.value
 
+        @kotlin.concurrent.Volatile
+        private var recoveryStartedAt: Long = monotonicClock()
+
         override fun onWillReconnect() {
             pathWakeBaseline = pathSatisfiedGeneration.value
+            recoveryStartedAt = monotonicClock()
         }
 
         override suspend fun onConnectionLost(session: P2pSessionImpl) {
@@ -1335,7 +1376,9 @@ internal class SessionManager(
             // already happened is observed immediately (no drop).
             var lastPathGen = pathWakeBaseline
             try {
-                while (attempt < policy.maxAttempts) {
+                val maximumAttempts = if (sessionProfile == null) policy.maxAttempts else minOf(policy.maxAttempts, 5)
+                while (attempt < maximumAttempts) {
+                    if (remainingRecoveryMillis() <= 0) break
                     attempt++
                     try {
                         // Wait either for the retry delay OR for a path-satisfied
@@ -1344,7 +1387,15 @@ internal class SessionManager(
                         // transition wakes parked handlers immediately so the next
                         // dial happens within milliseconds of the network coming
                         // back instead of after the full `retryDelayMillis`.
-                        withTimeoutOrNull(policy.retryDelayMillis) {
+                        val bounded = sessionProfile?.reconnect
+                        val retryDelay = if (bounded == null) policy.retryDelayMillis else {
+                            val cap = minOf(
+                                bounded.maximumDelayMillis,
+                                bounded.initialDelayMillis * (1L shl minOf(attempt - 1, 5))
+                            )
+                            kotlin.random.Random.Default.nextLong(cap + 1)
+                        }
+                        withTimeoutOrNull(minOf(retryDelay, remainingRecoveryMillis())) {
                             pathSatisfiedGeneration.first { it != lastPathGen }
                         }
                         lastPathGen = pathSatisfiedGeneration.value
@@ -1352,6 +1403,7 @@ internal class SessionManager(
                         throw e
                     }
                     if (session.state.value != ConnectionState.Reconnecting) return
+                    if (remainingRecoveryMillis() <= 0) break
 
                     // Fresh per-attempt lookup. No caching between attempts; the
                     // read happens immediately before transport selection so the
@@ -1371,23 +1423,45 @@ internal class SessionManager(
                     )
                     lastResolvedHints = target.transportHints
 
+                    // Retain ownership across prompt cancellation of the enclosing deadline. A
+                    // successful handshake can otherwise be lost between return and caller delivery.
+                    var candidate: HandshakeOutputs? = null
                     val outcome = runCatching {
-                        val transport = transportManager.selectBestTransport(target)
-                        val raw = transport.connect(target)
-                        // Provenance is a property of how the session's dialed
-                        // identity was minted, fixed at connect time — reuse
-                        // the original InternalPeer's origin so a manual
-                        // session's re-handshake keeps the mismatch exemption
-                        // (the remote's HELLO can never equal the synthetic id).
-                        runHandshake(
-                            rawConnection = raw,
-                            expectedPeer = expectedPeer,
-                            // Every reconnect is pinned to the key authenticated
-                            // by the first session, even under AcceptAny.
-                            expectedFingerprint = expectedIdentity.fingerprint,
-                            isManualPeer = originalInternalPeer.origin == PeerOrigin.Manual,
-                            isIncoming = false
-                        )
+                        suspend fun connectAndHandshake(): HandshakeOutputs {
+                            val transport = transportManager.selectBestTransport(target)
+                            val raw = transport.connect(target)
+                            return runHandshake(
+                                rawConnection = raw,
+                                expectedPeer = expectedPeer,
+                                expectedFingerprint = expectedIdentity.fingerprint,
+                                isManualPeer = originalInternalPeer.origin == PeerOrigin.Manual,
+                                isIncoming = false
+                            ).also { candidate = it }
+                        }
+                        if (sessionProfile == null) {
+                            // Ordinary P2P keeps its original timeout/cancellation behavior.
+                            connectAndHandshake()
+                        } else {
+                            withTimeoutOrNull(remainingRecoveryMillis()) { connectAndHandshake() }
+                                ?: throw P2pError.ConnectionFailed("Bounded reconnect window elapsed")
+                        }
+                    }
+                    if (outcome.isFailure) {
+                        candidate?.let { cleanupUnusedReconnectHandshake(it, "reconnect deadline/cancellation") }
+                    }
+                    if (sessionProfile != null) {
+                        val permanent = when (outcome.exceptionOrNull()) {
+                            is P2pError.AuthorizationRejected -> SessionFailureKind.Authorization
+                            is P2pError.AuthenticationFailed, is P2pError.AuthenticatedIdentityMismatch,
+                            is P2pError.SecurityConfigurationInvalid -> SessionFailureKind.Authentication
+                            is P2pError.ProtocolError, is P2pError.VersionMismatch,
+                            is P2pError.HandshakeRejected -> SessionFailureKind.Protocol
+                            else -> null
+                        }
+                        if (permanent != null) {
+                            session.markFailedAfterExhaustion(permanent)
+                            return
+                        }
                     }
 
                     val handshake = outcome.getOrElse { e ->
@@ -1449,6 +1523,10 @@ internal class SessionManager(
                 }
             }
         }
+
+        private fun remainingRecoveryMillis(): Long = sessionProfile?.reconnect?.let {
+            (it.windowMillis - (monotonicClock() - recoveryStartedAt)).coerceAtLeast(0)
+        } ?: Long.MAX_VALUE
 
         /**
          * V0.5-PERIODIC-REFRESH: background coroutine that refires
@@ -1546,6 +1624,7 @@ internal class SessionManager(
         ) {
             withContext(NonCancellable) {
                 handshake.readerJob.cancel()
+                if (sessionProfile != null) handshake.events.cancel()
                 val issues = mutableListOf<CleanupIssue>()
                 captureCleanupIssue(
                     resource = "unused reconnect connection ($reason)",

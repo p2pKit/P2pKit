@@ -92,6 +92,9 @@ internal object AppMessageEnvelope {
                 throw P2pError.ProtocolError("Unsupported application envelope version")
             }
             val type = reader.u8()
+            if (state.restrictedApplicationBytes != null && type != TYPE_BINARY) {
+                throw P2pError.ProtocolError("Restricted profile accepts only binary messages")
+            }
             if (type != TYPE_TEXT && type != TYPE_BINARY) {
                 throw P2pError.ProtocolError("Unsupported application message type $type")
             }
@@ -127,6 +130,9 @@ internal object AppMessageEnvelope {
                 )
             }
             val count = reader.u16()
+            if (state.restrictedApplicationBytes != null && count != 0) {
+                throw P2pError.ProtocolError("Restricted profile does not accept application metadata")
+            }
             if (count > MAX_METADATA_ENTRIES) {
                 throw P2pError.ProtocolError(
                     "Application metadata has $count entries; max $MAX_METADATA_ENTRIES"

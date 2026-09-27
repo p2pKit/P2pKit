@@ -62,6 +62,7 @@ internal suspend fun performHandshake(
     }
 
     if (firstEvent !is ProtocolEvent.Hello) {
+        firstEvent.release()
         sendErrorBestEffort(protocol, connection, "expected HELLO", logger)
         // Event values may contain full peer-controlled payloads, including log controls.
         throw P2pError.HandshakeRejected("Expected HELLO, got ${firstEvent::class.simpleName}")

@@ -3,23 +3,22 @@ package dev.p2pkit.transport.lan
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.transport.DiscoveryTransport
-import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.LocalPeerInfo
 import dev.p2pkit.core.transport.PeerEvent
 import dev.p2pkit.transport.lan.internal.jmdns.JmDNS
 import dev.p2pkit.transport.lan.internal.jmdns.ServiceEvent
 import dev.p2pkit.transport.lan.internal.jmdns.ServiceInfo
 import dev.p2pkit.transport.lan.internal.jmdns.ServiceListener
-import java.io.IOException
-import java.net.Inet4Address
-import java.net.Inet6Address
-import java.net.InetAddress
-import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
+import java.io.IOException
+import java.net.Inet4Address
+import java.net.Inet6Address
+import java.net.InetAddress
+import java.util.concurrent.atomic.AtomicLong
 
 /** One callback generation installed in JmDNS by the lifecycle coordinator. */
 internal class JvmListenerLease(
@@ -256,7 +255,9 @@ internal interface JvmTestDiscoveryBackend {
  */
 internal class JvmLanDiscoveryTransport(
     private val registration: LanServiceRegistration,
-    private val testDiscoveryBackend: JvmTestDiscoveryBackend? = null
+    private val testDiscoveryBackend: JvmTestDiscoveryBackend? = null,
+    private val policy: OrganizationLan? = null,
+    private val role: LanRole = LanRole.Host
 ) : DiscoveryTransport {
 
     private val allowTestLoopbackCandidates: Boolean = testDiscoveryBackend != null
@@ -305,7 +306,7 @@ internal class JvmLanDiscoveryTransport(
             scope = lifecycleScope,
             pollIntervalMillis = NETWORK_WATCH_INTERVAL_MS,
             snapshotContext = Dispatchers.IO,
-            currentTarget = ::currentJvmLanBindTarget,
+            currentTarget = ::currentBindTarget,
             targetChanged = { previous, next, admit ->
                 coordinator.scheduleRebind(
                     reason = "JVM LAN bind target changed: $previous -> $next",
@@ -323,6 +324,7 @@ internal class JvmLanDiscoveryTransport(
     private var testListenerLease: JvmListenerLease? = null
 
     override suspend fun startAdvertising(localPeer: LocalPeerInfo) {
+        check(role == LanRole.Host) { "A dial-only LAN transport cannot advertise" }
         val backend = testDiscoveryBackend
         if (backend == null) {
             coordinator.startAdvertising(localPeer)
@@ -528,7 +530,10 @@ internal class JvmLanDiscoveryTransport(
             // Issue #2: log every advertised address and the ordered, bounded
             // candidates retained for fallback. A peer that only advertises
             // non-routable addresses shows up here as "no routable host".
-            val hosts = selectDiscoveryHosts(
+            val hosts = if (policy != null) {
+                candidates.mapNotNull { it.hostAddress }.filter(policy::allows)
+                    .distinct().take(LanConstants.MAX_DIAL_CANDIDATES)
+            } else selectDiscoveryHosts(
                 candidates = candidates,
                 localAddresses = localJvmLanInterfaceAddresses(),
                 allowTestLoopback = allowTestLoopbackCandidates
@@ -621,7 +626,7 @@ internal class JvmLanDiscoveryTransport(
                 target: JvmLanBindTarget?,
                 forRebind: Boolean
             ): JmdnsHandleBinding<JvmLanBindTarget, JmDNS> {
-                val selected = target ?: currentJvmLanBindTarget()
+                val selected = (if (policy != null) currentBindTarget() else target ?: currentBindTarget())
                     ?: throw IOException(
                         "No up multicast-capable LAN address is available for JmDNS"
                     )
@@ -696,7 +701,7 @@ internal class JvmLanDiscoveryTransport(
                 )
             }
 
-            override fun currentNetwork(): JvmLanBindTarget? = currentJvmLanBindTarget()
+            override fun currentNetwork(): JvmLanBindTarget? = currentBindTarget()
             override fun observedNetwork(): JvmLanBindTarget? = networkWatcher.observedTarget()
             override fun observedDefaultNetwork(): String? = null
             override fun isWatcherActive(): Boolean = networkWatcher.isActive()
@@ -718,6 +723,9 @@ internal class JvmLanDiscoveryTransport(
                 )
             }
         }
+
+    private fun currentBindTarget(): JvmLanBindTarget? =
+        if (policy == null) currentJvmLanBindTarget() else organizationJvmTarget(policy)
 
 }
 

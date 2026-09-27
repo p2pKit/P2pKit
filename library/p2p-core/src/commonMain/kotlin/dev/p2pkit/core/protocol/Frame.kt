@@ -1,5 +1,6 @@
 package dev.p2pkit.core.protocol
 
+import dev.p2pkit.core.PayloadLease
 import kotlin.random.Random
 
 /**
@@ -16,6 +17,14 @@ internal class Frame(
     val payload: ByteArray,
     val version: Byte = ProtocolConstants.LEGACY_VERSION
 ) {
+
+    /** Reader-owned lease; transferred/released by the protocol, never part of wire equality. */
+    internal var payloadLease: PayloadLease? = null
+
+    internal fun releasePayload() {
+        payloadLease?.release()
+        payloadLease = null
+    }
 
     val needsAck: Boolean get() = (flags.toInt() and FrameFlags.NEEDS_ACK) != 0
     val isLastChunk: Boolean get() = (flags.toInt() and FrameFlags.LAST_CHUNK) != 0

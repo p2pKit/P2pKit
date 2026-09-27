@@ -8,14 +8,20 @@ import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pLogger
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.P2pSession
+import dev.p2pkit.core.P2pSessionProfile
+import dev.p2pkit.core.PayloadLease
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.PeerAdmission
 import dev.p2pkit.core.PeerIdentity
 import dev.p2pkit.core.Retryability
+import dev.p2pkit.core.SessionConnectionInfo
+import dev.p2pkit.core.SessionFailure
+import dev.p2pkit.core.SessionFailureKind
+import dev.p2pkit.core.internal.security.ReconnectTransportRetirement
+import dev.p2pkit.core.internal.security.SecureTerminalFailureSource
 import dev.p2pkit.core.protocol.P2pProtocol
 import dev.p2pkit.core.protocol.ProtocolEvent
 import dev.p2pkit.core.protocol.ProtocolSessionState
-import dev.p2pkit.core.internal.security.ReconnectTransportRetirement
-import dev.p2pkit.core.internal.security.SecureTerminalFailureSource
 import dev.p2pkit.core.transfer.FileTransferConfig
 import dev.p2pkit.core.transfer.P2pFileOffer
 import dev.p2pkit.core.transfer.P2pFileTransfer
@@ -31,14 +37,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -51,6 +55,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.io.RawSource
 import kotlin.random.Random
 
@@ -100,7 +106,8 @@ internal data class SessionRegistration(
 
 private data class QueuedApplicationMessage(
     val message: P2pMessage,
-    val retainedBytes: Long
+    val retainedBytes: Long,
+    val lease: PayloadLease? = null
 )
 
 /**
@@ -149,7 +156,9 @@ internal class P2pSessionImpl(
     private val beforeRearmRawCloseForTest: (suspend () -> Unit)? = null,
     private val cleanupClock: () -> Long = ::monotonicTimeMillis,
     private val cleanupOperationDispatcher: CoroutineDispatcher = blockingCleanupDispatcher(),
-    private val cleanupDeadlineDispatcher: CoroutineDispatcher = Dispatchers.Default
+    private val cleanupDeadlineDispatcher: CoroutineDispatcher = Dispatchers.Default,
+    private val sessionProfile: P2pSessionProfile? = null,
+    internal val admittedAs: PeerAdmission = PeerAdmission.Trusted
 ) : P2pSession {
 
     init {
@@ -166,6 +175,31 @@ internal class P2pSessionImpl(
 
     private val _state = MutableStateFlow(ConnectionState.Connected)
     override val state: StateFlow<ConnectionState> = _state.asStateFlow()
+
+    private val _connectionInfo = MutableStateFlow(SessionConnectionInfo(1))
+    override val connectionInfo: StateFlow<SessionConnectionInfo> = _connectionInfo.asStateFlow()
+
+    internal fun recordFailure(kind: SessionFailureKind, retryable: Boolean = false) {
+        while (true) {
+            val previous = _connectionInfo.value
+            if (_connectionInfo.compareAndSet(previous, previous.copy(lastFailure = SessionFailure(kind, retryable)))) {
+                return
+            }
+        }
+    }
+
+    override val admission: PeerAdmission get() = admittedAs
+
+    private fun requireLiveAdmission() {
+        val current = sessionProfile?.decide(peerIdentity) ?: return
+        // Approval may be delivered over the OLD quarantined channel. Its captured admission and
+        // 4 KiB binary-only limit do not change; normal traffic still requires fresh authentication.
+        if (current == PeerAdmission.Rejected ||
+            (admittedAs == PeerAdmission.Trusted && current != PeerAdmission.Trusted)
+        ) {
+            throw P2pError.AuthorizationRejected("Live admission changed; a new authenticated session is required")
+        }
+    }
 
     private val _incoming = MutableSharedFlow<P2pMessage>(replay = 0)
     override val incoming: SharedFlow<P2pMessage> = _incoming.asSharedFlow()
@@ -316,7 +350,10 @@ internal class P2pSessionImpl(
             cause = reason,
             fileFailureKind = kind,
             fileRetryability = Retryability.NOT_RETRYABLE,
-            expectedEpoch = epoch
+            expectedEpoch = epoch,
+            sessionFailure = if (kind == FileTransferFailureKind.AUTHENTICATION) {
+                SessionFailureKind.Authentication
+            } else SessionFailureKind.Protocol
         )
     }
 
@@ -458,25 +495,38 @@ internal class P2pSessionImpl(
         }
 
     override suspend fun send(message: P2pMessage) {
-        val target = connectedProtocolTarget("send")
+        sendOnGeneration(message, expectedGeneration = null)
+    }
+
+    override suspend fun sendAtGeneration(message: P2pMessage, generation: Long) {
+        if (generation <= 0) throw P2pError.ConnectionFailed("An observed positive generation is required")
+        sendOnGeneration(message, generation)
+    }
+
+    private suspend fun sendOnGeneration(message: P2pMessage, expectedGeneration: Long?) {
+        requireLiveAdmission()
+        val target = connectedProtocolTarget("send", expectedGeneration)
         // AUDIT-2026-07 (API-2): see [typedSendBoundary].
         typedSendBoundary("send") {
             sendMutex.withLock {
                 ensureProtocolTargetActive(target, "send")
+                requireLiveAdmission() // A revoked profile may have waited behind another write.
                 protocol.sendMessage(target.connection, message, target.protocolState)
             }
         }
     }
 
-    private suspend fun connectedProtocolTarget(operation: String): ProtocolTarget =
-        connectionLock.withLock {
-            if (_state.value != ConnectionState.Connected || terminalTransitionClaim != null) {
-                throw P2pError.ConnectionFailed(
-                    "Session $id is ${_state.value}; cannot $operation"
-                )
-            }
-            ProtocolTarget(connection, protocolState, epochToken)
+    private suspend fun connectedProtocolTarget(
+        operation: String, expectedGeneration: Long? = null,
+    ): ProtocolTarget = connectionLock.withLock {
+        if (_state.value != ConnectionState.Connected || terminalTransitionClaim != null) {
+            throw P2pError.ConnectionFailed("Session $id is ${_state.value}; cannot $operation")
         }
+        if (expectedGeneration != null && _connectionInfo.value.generation != expectedGeneration) {
+            throw P2pError.ConnectionFailed("Session $id changed connection generation before $operation")
+        }
+        ProtocolTarget(connection, protocolState, epochToken)
+    }
 
     private suspend fun ensureProtocolTargetActive(target: ProtocolTarget, operation: String) {
         connectionLock.withLock {
@@ -524,6 +574,15 @@ internal class P2pSessionImpl(
     }
 
     private suspend fun ensureFileTransferCanStart() {
+        if (sessionProfile != null) {
+            throw P2pError.FileTransferFailed(
+                kind = FileTransferFailureKind.UNSUPPORTED_FEATURE,
+                phase = FileTransferPhase.OFFER,
+                retryability = Retryability.NOT_RETRYABLE,
+                transferId = null,
+                reason = "File transfer is disabled by the restricted session profile"
+            )
+        }
         val unavailable = connectionLock.withLock {
             if (_state.value == ConnectionState.Connected && terminalTransitionClaim == null) {
                 null
@@ -732,6 +791,7 @@ internal class P2pSessionImpl(
         // concurrent adoption fail closed without suspending before this method
         // assumes ownership of the replacement connection and reader.
         if (!rearmLock.tryLock()) {
+            if (sessionProfile != null) newEvents.cancel()
             closeDetachedEpoch(newConnection, newReaderJob, "concurrent reconnect replacement")
             return false
         }
@@ -877,6 +937,7 @@ internal class P2pSessionImpl(
                     // session with no liveness watchdog. Next disconnect goes
                     // undetected (Android stuck in Connected).
                     reconnectWatchdogToCancel = detachReconnectWatchdogLocked()
+                    _connectionInfo.value = SessionConnectionInfo(_connectionInfo.value.generation + 1)
                     _state.value = ConnectionState.Connected
                     startEpoch()
                     true
@@ -887,6 +948,7 @@ internal class P2pSessionImpl(
         } finally {
             if (sendGateAcquired) sendMutex.unlock()
             if (!replacementAccepted) {
+                if (sessionProfile != null) newEvents.cancel()
                 if (replacementSharesCurrentEpoch) {
                     closeDetachedReader(newReaderJob, "invalid reconnect replacement")
                 } else {
@@ -1071,7 +1133,8 @@ internal class P2pSessionImpl(
         allowFromClosing: Boolean = false,
         requiredState: ConnectionState? = null,
         expectedEpoch: ConnectionEpoch? = null,
-        cleanupBudget: SessionCleanupBudget? = null
+        cleanupBudget: SessionCleanupBudget? = null,
+        sessionFailure: SessionFailureKind? = null
     ): List<CleanupIssue> {
         check(target == ConnectionState.Closed || target == ConnectionState.Failed) {
             "transitionToTerminal: target must be Closed or Failed, got $target"
@@ -1127,6 +1190,16 @@ internal class P2pSessionImpl(
                         check(terminalTransitionClaim === claim) {
                             "Terminal transition claim was replaced for session $id"
                         }
+                        if (sessionFailure != null) recordFailure(sessionFailure)
+                        if (target == ConnectionState.Failed && _connectionInfo.value.lastFailure == null) {
+                            recordFailure(
+                                when (fileFailureKind) {
+                                    FileTransferFailureKind.AUTHENTICATION -> SessionFailureKind.Authentication
+                                    FileTransferFailureKind.TRANSFER_PROTOCOL -> SessionFailureKind.Protocol
+                                    else -> SessionFailureKind.Transport
+                                }
+                            )
+                        }
                         _state.value = target
                         terminalTransitionClaim = null
                     }
@@ -1153,6 +1226,7 @@ internal class P2pSessionImpl(
                 // old writers even when file terminalization is still pending.
                 ownedEpoch.runtimeJob?.cancel()
                 ownedEpoch.readerJob?.cancel()
+                if (sessionProfile != null) events.cancel()
                 closeOwnedEpochConnection(ownedEpoch, "session $id raw connection", owner.budget)?.let(issues::add)
                 if (files != null && beginResult !is BoundedOperationResult.Failure) {
                     owner.budget.awaitResult(files.cleanup.completion, SESSION_RESOURCE_CLOSE_TIMEOUT_MS)
@@ -1227,18 +1301,20 @@ internal class P2pSessionImpl(
         return TerminalFileCleanup(began, cleanup)
     }
 
-    private suspend fun enqueueApplicationMessage(message: P2pMessage): Boolean {
+    private suspend fun enqueueApplicationMessage(message: P2pMessage, lease: PayloadLease? = null): Boolean {
         return applicationMessageQueueLock.withLock {
-            if (queuedApplicationMessages >= MAX_QUEUED_APPLICATION_MESSAGES) {
+            val maxMessages = sessionProfile?.maxQueuedMessagesPerSession ?: MAX_QUEUED_APPLICATION_MESSAGES
+            val maxBytes = sessionProfile?.maxQueuedBytesPerSession ?: MAX_QUEUED_APPLICATION_BYTES
+            if (queuedApplicationMessages >= maxMessages) {
                 return@withLock false
             }
             val messageBytes = message.retainedSizeBytes()
-            if (messageBytes > MAX_QUEUED_APPLICATION_BYTES - queuedApplicationBytes) {
+            if (messageBytes > maxBytes - queuedApplicationBytes) {
                 return@withLock false
             }
             queuedApplicationMessages += 1
             queuedApplicationBytes += messageBytes
-            val sent = applicationMessages.trySend(QueuedApplicationMessage(message, messageBytes))
+            val sent = applicationMessages.trySend(QueuedApplicationMessage(message, messageBytes, lease))
             if (sent.isFailure) {
                 queuedApplicationMessages -= 1
                 queuedApplicationBytes -= messageBytes
@@ -1256,6 +1332,7 @@ internal class P2pSessionImpl(
                     _incoming.emit(queued.message)
                 }
             } finally {
+                queued.lease?.release()
                 // The terminal owner cancels this delivery job before it
                 // drains queued messages. Releasing ownership must therefore
                 // survive cancellation even when the accounting mutex is
@@ -1278,6 +1355,7 @@ internal class P2pSessionImpl(
             val queued = applicationMessages.tryReceive().getOrNull() ?: break
             drainedMessages += 1
             drainedBytes += queued.retainedBytes
+            queued.lease?.release()
         }
         if (drainedMessages == 0) return
         applicationMessageQueueLock.withLock {
@@ -1350,23 +1428,28 @@ internal class P2pSessionImpl(
      * footprint is fully torn down before SessionManager's
      * `watchForTerminal` finishes its store cleanup.
      */
-    internal suspend fun markFailedAfterExhaustion() {
+    internal suspend fun markFailedAfterExhaustion(
+        kind: SessionFailureKind = SessionFailureKind.ReconnectExhausted
+    ) {
         // The source-state condition is checked in the same critical section
         // as the terminal claim. A stale exhaustion call must not fail a
         // connection that rearmed between a best-effort state read and claim.
         transitionToTerminal(
             ConnectionState.Failed,
             "reconnect exhausted",
-            requiredState = ConnectionState.Reconnecting
+            requiredState = ConnectionState.Reconnecting,
+            sessionFailure = kind
         )
     }
 
     private suspend fun routeEvents(channel: ReceiveChannel<ProtocolEvent>, epoch: ConnectionEpoch) {
         try {
             for (event in channel) {
+                var messageTransferred = false
                 try {
                     when (event) {
                         is ProtocolEvent.Message -> {
+                            requireLiveAdmission()
                             // Detached-session protection. If we're about to push
                             // a message into the public `incoming` flow but SessionManager
                             // no longer treats us as the registered session for
@@ -1396,7 +1479,7 @@ internal class P2pSessionImpl(
                                     continue
                                 }
                             }
-                            if (!enqueueApplicationMessage(event.message)) {
+                            if (!enqueueApplicationMessage(event.message, event.lease)) {
                                 logger.warn(
                                     "Session $id: application receive backlog exceeded " +
                                         "$MAX_QUEUED_APPLICATION_MESSAGES messages / " +
@@ -1404,10 +1487,13 @@ internal class P2pSessionImpl(
                                 )
                                 transitionToTerminal(
                                     ConnectionState.Failed,
-                                    "application receive backlog exceeded"
+                                    "application receive backlog exceeded",
+                                    expectedEpoch = epoch,
+                                    sessionFailure = SessionFailureKind.Capacity
                                 )
                                 return
                             }
+                            messageTransferred = true
                         }
                         is ProtocolEvent.Ping -> {
                             sendMutex.withLock {
@@ -1434,7 +1520,7 @@ internal class P2pSessionImpl(
                         }
                         is ProtocolEvent.PeerError -> {
                             logger.warn("Session $id: peer error: ${event.reason}")
-                            onConnectionLost("peer error: ${event.reason}")
+                            onConnectionLost("peer error: ${event.reason}", expectedEpoch = epoch)
                             if (_state.value != ConnectionState.Reconnecting) return
                         }
                         is ProtocolEvent.FileOffer -> fileTransferDispatcher.onFileOffer(
@@ -1452,10 +1538,12 @@ internal class P2pSessionImpl(
                         is ProtocolEvent.FileCancel -> fileTransferDispatcher.onFileCancel(event.transferId, event.reason)
                     }
                 } catch (failure: Throwable) {
-                    handleRouteFailure(failure, pongEpoch = epoch.takeIf { event is ProtocolEvent.Ping })
+                    handleRouteFailure(failure, epoch, pongFailure = event is ProtocolEvent.Ping)
                     if (_state.value != ConnectionState.Reconnecting) return
                     // A retryable event-handler failure does not consume the
                     // remaining channel. In particular CLOSE must still win.
+                } finally {
+                    if (!messageTransferred) event.release()
                 }
             }
             // AUDIT-2026-07 (SES-1): the events channel completed without a
@@ -1472,17 +1560,27 @@ internal class P2pSessionImpl(
             // a clean close. (Pre-2026-07 this branch called
             // markCleanlyClosed(), racing [observeRawState] for the terminal
             // outcome on every remote loss.)
-            onConnectionLost("remote hangup without CLOSE frame")
+            onConnectionLost("remote hangup without CLOSE frame", expectedEpoch = epoch)
         } catch (failure: Throwable) {
-            handleRouteFailure(failure)
+            handleRouteFailure(failure, epoch)
+        } finally {
+            if (sessionProfile != null) channel.cancel()
         }
     }
 
-    private suspend fun handleRouteFailure(e: Throwable, pongEpoch: ConnectionEpoch? = null) {
+    private suspend fun handleRouteFailure(e: Throwable, epoch: ConnectionEpoch, pongFailure: Boolean = false) {
+        // Record failures ONLY inside a matching epoch's transition. A retired reader must not
+        // contaminate the new generation's retained failure or terminalize its replacement.
         when (e) {
             is CancellationException -> throw e
+            is P2pError.AuthorizationRejected -> {
+                transitionToTerminal(
+                    ConnectionState.Failed, "Live authorization rejected", expectedEpoch = epoch,
+                    sessionFailure = SessionFailureKind.Authorization
+                )
+            }
             is ClosedReceiveChannelException -> {
-                onConnectionLost("remote hangup without CLOSE frame (receive on closed channel)")
+                onConnectionLost("remote hangup without CLOSE frame (receive on closed channel)", expectedEpoch = epoch)
             }
             is P2pError.FileTransferFailed -> {
                 if (e.kind == FileTransferFailureKind.TRANSFER_PROTOCOL) {
@@ -1491,11 +1589,13 @@ internal class P2pSessionImpl(
                         target = ConnectionState.Failed,
                         cause = e.reason,
                         fileFailureKind = FileTransferFailureKind.TRANSFER_PROTOCOL,
-                        fileRetryability = Retryability.NOT_RETRYABLE
+                        fileRetryability = Retryability.NOT_RETRYABLE,
+                        expectedEpoch = epoch,
+                        sessionFailure = SessionFailureKind.Protocol
                     )
                 } else {
                     logger.warn("Session $id: routeEvents file-transfer failure", e)
-                    onConnectionLost("routeEvents threw: ${e.message ?: e::class.simpleName}")
+                    onConnectionLost("routeEvents threw: ${e.message ?: e::class.simpleName}", expectedEpoch = epoch)
                 }
             }
             is P2pError.ProtocolError -> {
@@ -1504,7 +1604,9 @@ internal class P2pSessionImpl(
                     target = ConnectionState.Failed,
                     cause = e.reason,
                     fileFailureKind = FileTransferFailureKind.TRANSFER_PROTOCOL,
-                    fileRetryability = Retryability.NOT_RETRYABLE
+                    fileRetryability = Retryability.NOT_RETRYABLE,
+                    expectedEpoch = epoch,
+                    sessionFailure = SessionFailureKind.Protocol
                 )
             }
             is P2pError.AuthenticatedIdentityMismatch -> {
@@ -1513,7 +1615,9 @@ internal class P2pSessionImpl(
                     target = ConnectionState.Failed,
                     cause = e.reason,
                     fileFailureKind = FileTransferFailureKind.AUTHENTICATION,
-                    fileRetryability = Retryability.NOT_RETRYABLE
+                    fileRetryability = Retryability.NOT_RETRYABLE,
+                    expectedEpoch = epoch,
+                    sessionFailure = SessionFailureKind.Authentication
                 )
             }
             is P2pError.VersionMismatch -> {
@@ -1522,7 +1626,9 @@ internal class P2pSessionImpl(
                     target = ConnectionState.Failed,
                     cause = e.message ?: "Protocol version mismatch",
                     fileFailureKind = FileTransferFailureKind.TRANSFER_PROTOCOL,
-                    fileRetryability = Retryability.NOT_RETRYABLE
+                    fileRetryability = Retryability.NOT_RETRYABLE,
+                    expectedEpoch = epoch,
+                    sessionFailure = SessionFailureKind.Protocol
                 )
             }
             is P2pError.AuthenticationFailed -> {
@@ -1531,16 +1637,18 @@ internal class P2pSessionImpl(
                     target = ConnectionState.Failed,
                     cause = e.reason,
                     fileFailureKind = FileTransferFailureKind.AUTHENTICATION,
-                    fileRetryability = Retryability.NOT_RETRYABLE
+                    fileRetryability = Retryability.NOT_RETRYABLE,
+                    expectedEpoch = epoch,
+                    sessionFailure = SessionFailureKind.Authentication
                 )
             }
             else -> {
-                if (pongEpoch == null) {
+                if (!pongFailure) {
                     logger.warn("Session $id: routeEvents failed", e)
-                    onConnectionLost("routeEvents threw: ${e.message ?: e::class.simpleName}")
-                } else if (!pongEpoch.epochToken.rawCloseStarted.isCompleted) {
+                    onConnectionLost("routeEvents threw: ${e.message ?: e::class.simpleName}", expectedEpoch = epoch)
+                } else if (!epoch.epochToken.rawCloseStarted.isCompleted) {
                     logger.warn("Session $id: failed to send PONG", e)
-                    onConnectionLost("PONG send failed: ${e.message ?: e::class.simpleName}")
+                    onConnectionLost("PONG send failed: ${e.message ?: e::class.simpleName}", expectedEpoch = epoch)
                 }
                 // Retirement-induced PONG write failure is retryable, but
                 // cannot hide typed terminal failures or abandon queued CLOSE.
@@ -1675,7 +1783,7 @@ internal class P2pSessionImpl(
      * retry coroutine, which itself takes the lock inside [rearmWith], does
      * not deadlock.
      */
-    private suspend fun onConnectionLost(cause: String) {
+    private suspend fun onConnectionLost(cause: String, expectedEpoch: ConnectionEpoch? = null) {
         // Decide under the lock:
         //   - shouldFail = "transition to Failed via transitionToTerminal"
         //   - handler    = "kick off a reconnect attempt"
@@ -1683,10 +1791,13 @@ internal class P2pSessionImpl(
         var shouldFail = false
         var reconnectWatchdogToStart: Job? = null
         val handler: ReconnectHandler? = connectionLock.withLock {
-            if (terminalTransitionClaim != null) {
+            if (terminalTransitionClaim != null || (expectedEpoch != null && epochToken !== expectedEpoch.epochToken)) {
                 null
             } else when (_state.value) {
                 ConnectionState.Connected -> {
+                    if (_connectionInfo.value.lastFailure == null) {
+                        recordFailure(SessionFailureKind.Transport, retryable = true)
+                    }
                     val h = reconnectHandler
                     if (h == null) {
                         shouldFail = true  // hand off to transitionToTerminal below
@@ -1736,7 +1847,7 @@ internal class P2pSessionImpl(
             // Disabled). Centralised terminal path handles state flip,
             // epoch cancel, file-transfer teardown, and raw close in one
             // place.
-            transitionToTerminal(ConnectionState.Failed, cause)
+            transitionToTerminal(ConnectionState.Failed, cause, expectedEpoch = expectedEpoch)
         }
     }
 

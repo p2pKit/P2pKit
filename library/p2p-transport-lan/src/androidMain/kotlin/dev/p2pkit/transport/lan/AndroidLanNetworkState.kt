@@ -16,13 +16,15 @@ internal data class AndroidLanDialRoute(
  * route, so manual LAN peers do not require advertising/discovery to be on.
  */
 internal class AndroidLanNetworkState(
-    private val resolveCurrentTarget: (() -> AndroidLanBindTarget?)? = null
+    private val resolveCurrentTarget: (() -> AndroidLanBindTarget?)? = null,
+    private val requireFresh: Boolean = false
 ) {
     @Volatile
     private var selected: AndroidLanDialRoute? = null
 
     fun selectedRoute(): AndroidLanDialRoute? =
-        selected ?: resolveCurrentTarget?.invoke()?.toDialRoute()
+        if (requireFresh) resolveCurrentTarget?.invoke()?.toDialRoute()
+        else selected ?: resolveCurrentTarget?.invoke()?.toDialRoute()
 
     fun selectedNetwork(): Network? = selected?.network
 

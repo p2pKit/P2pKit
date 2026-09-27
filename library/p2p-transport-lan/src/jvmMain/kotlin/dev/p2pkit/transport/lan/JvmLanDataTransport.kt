@@ -7,13 +7,13 @@ import dev.p2pkit.core.transport.HasLocalTcpEndpoint
 import dev.p2pkit.core.transport.InternalPeer
 import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -44,7 +45,9 @@ internal class JvmLanDataTransport(
     private val selectedLanAddress: (() -> InetAddress?)? = null,
     private val beforeListenerResourceCheckForTest: (() -> Unit)? = null,
     private val beforeDialOwnershipHandoffForTest: (() -> Unit)? = null,
-    private val afterListenerDetachForTest: (() -> Unit)? = null
+    private val afterListenerDetachForTest: (() -> Unit)? = null,
+    private val policy: OrganizationLan? = null,
+    private val role: LanRole = LanRole.Host
 ) : DataTransport, HasLocalTcpEndpoint {
 
     override val type: TransportKind = TransportKind.LAN
@@ -76,8 +79,9 @@ internal class JvmLanDataTransport(
     // Failed dial cleanup and accepted-option rollback share the existing stop/retry owner.
     private val retainedSocketCleanup = mutableSetOf<Socket>()
     private val inboundAdmission = PerSourceAdmissionLimiter()
+    private val io = JvmLanIo(policy != null)
 
-    @Volatile private var restartPort: Int = 0
+    @Volatile private var restartPort: Int = policy?.listenPort ?: 0
     @Volatile private var hasStarted: Boolean = false
 
     @Volatile
@@ -88,6 +92,13 @@ internal class JvmLanDataTransport(
             // start() after close() previously reported success on a closed
             // socket (AUDIT-2026-06 fix).
             return Result.failure(IllegalStateException("LAN data transport is closed"))
+        }
+        if (policy != null && organizationJvmTarget(policy) == null) {
+            return Result.failure(P2pError.ConnectionFailed("Selected organization LAN interface is unavailable"))
+        }
+        if (role == LanRole.DialOnly) {
+            hasStarted = true
+            return Result.success(Unit)
         }
         beforeListenerResourceCheckForTest?.invoke()
         val hasUnreleasedResources = synchronized(listenerStateLock) {
@@ -110,7 +121,7 @@ internal class JvmLanDataTransport(
             // cancellation while recording the candidate before the return
             // hop. If prompt cancellation wins that hop, the catch below can
             // still close the recorded socket instead of losing ownership.
-            withContext(Dispatchers.IO + NonCancellable) {
+            withContext(io.setup + NonCancellable) {
                 try {
                     boundCandidate = bindServerSocket(restartPort)
                 } catch (error: Throwable) {
@@ -182,7 +193,7 @@ internal class JvmLanDataTransport(
     override suspend fun connect(peer: InternalPeer): RawConnection {
         val dialGeneration = lifecycleGeneration.get()
         ensureDialGeneration(dialGeneration)
-        val endpoints = peer.lanEndpoints()
+        val endpoints = peer.lanEndpoints().filter { policy == null || policy.allows(it.host) }
         if (endpoints.isEmpty()) throw P2pError.NoTransportAvailable(peer.publicPeer)
         val pid8 = peer.publicPeer.id.value.take(8)
         val failures = mutableListOf<String>()
@@ -213,9 +224,18 @@ internal class JvmLanDataTransport(
             }
             try {
                 ensureDialGeneration(dialGeneration)
-                withContext(Dispatchers.IO) {
-                    socket.connect(InetSocketAddress(endpoint.host, endpoint.port), timeout)
+                withContext(io.setup) {
+                    val destination = if (policy == null) InetSocketAddress(endpoint.host, endpoint.port) else {
+                        val target = organizationJvmTarget(policy)
+                            ?: throw P2pError.ConnectionFailed("Selected organization LAN route is unavailable")
+                        socket.bind(InetSocketAddress(target.address, 0))
+                        InetSocketAddress(policy.jvmNumeric(endpoint.host), endpoint.port)
+                    }
+                    socket.connect(destination, timeout)
                     socket.tcpNoDelay = true
+                    if (policy != null && !policy.allowsJvmSocket(socket)) {
+                        throw P2pError.ConnectionFailed("Organization LAN path validation failed")
+                    }
                 }
                 currentCoroutineContext().ensureActive()
                 ensureDialGeneration(dialGeneration)
@@ -232,7 +252,7 @@ internal class JvmLanDataTransport(
                     }
                 }
                 if (!handedOff) throw stoppedDialFailure()
-                return JvmRawConnection(socket)
+                return wrapSocket(socket)
             } catch (cancelled: CancellationException) {
                 closeSocketRetainingFailure(socket)?.let(cancelled::addSuppressed)
                 JvmLanDiag.log("dial", "connect CANCELLED peer=$pid8 ${endpoint.host}:${endpoint.port} — socket closed")
@@ -283,7 +303,9 @@ internal class JvmLanDataTransport(
 
     // The adjacent buffer fuses with callbackFlow. trySend still rejects the newest
     // connection immediately when full; SUSPEND does not park this accept loop.
-    override fun incomingConnections(): Flow<RawConnection> = callbackFlow {
+    override fun incomingConnections(): Flow<RawConnection> = if (role == LanRole.DialOnly) {
+        flow { awaitCancellation() }
+    } else callbackFlow {
         if (hasStarted && serverSocket.get() == null && !closed) {
             start().getOrThrow()
         }
@@ -291,7 +313,7 @@ internal class JvmLanDataTransport(
         // after a failed first bind still serves this collector (see
         // serverSocketFlow KDoc).
         val sock = serverSocketFlow.filterNotNull().first()
-        val accepterJob: Job = launch(Dispatchers.IO) {
+        val accepterJob: Job = launch(io.accept) {
             try {
                 while (!closed) {
                     val socket = try {
@@ -351,7 +373,7 @@ internal class JvmLanDataTransport(
                     // dropping leaked the fd while the remote believed it had
                     // connected (AUDIT-2026-06 fix).
                     val raw = AdmissionControlledRawConnection(
-                        JvmRawConnection(socket),
+                        wrapSocket(socket),
                         admissionLease
                     )
                     val offered = trySend(raw)
@@ -464,7 +486,12 @@ internal class JvmLanDataTransport(
         val socket = serverSocketFactory()
         return try {
             socket.reuseAddress = true
-            socket.bind(InetSocketAddress(port))
+            val address = if (policy == null) InetSocketAddress(port) else {
+                val target = organizationJvmTarget(policy)
+                    ?: throw P2pError.ConnectionFailed("Selected organization LAN interface is unavailable")
+                InetSocketAddress(target.address, port)
+            }
+            socket.bind(address)
             socket
         } catch (error: Throwable) {
             closeServerSocketRetainingFailure(socket)?.let(error::addSuppressed)
@@ -473,6 +500,10 @@ internal class JvmLanDataTransport(
     }
 
     private fun isSelectedLanAddress(actual: InetAddress, remote: InetAddress): Boolean {
+        if (policy != null) {
+            return organizationJvmTarget(policy) != null && policy.isLocal(actual.hostAddress.orEmpty()) &&
+                policy.allows(remote.hostAddress.orEmpty())
+        }
         // Same-host manual provisioning and integration use loopback. A
         // remote host cannot route traffic to a loopback destination, so this
         // exception does not reopen the excluded-interface exposure.
@@ -481,6 +512,10 @@ internal class JvmLanDataTransport(
         val selected = runCatching(provider).getOrNull() ?: return false
         return selected.hostAddress == actual.hostAddress
     }
+
+    private fun wrapSocket(socket: Socket): JvmRawConnection = JvmRawConnection(
+        socket, io = io, pathAllowed = policy?.let { selected -> { selected.allowsJvmSocket(socket) } }
+    )
 
     internal fun isInboundAddressAllowedForTest(
         actual: InetAddress,
