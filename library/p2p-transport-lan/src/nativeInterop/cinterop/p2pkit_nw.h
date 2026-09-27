@@ -43,15 +43,97 @@ static inline void p2pkit_nw_release_owned(nw_object_t object) {
 #endif
 }
 
+/* Do not delegate the accepted spelling to libc: Darwin and other hosts need
+ * not reject the same legacy IPv4 forms. Exactly four decimal octets, no leading
+ * zeroes, whitespace, shorthand, DNS or radix aliases are allowed. */
+static inline bool p2pkit_lan_parse_ipv4(const char *text, struct in_addr *output) {
+    if (text == NULL || output == NULL) return false;
+    size_t length = strnlen(text, INET_ADDRSTRLEN);
+    if (length == 0 || length >= INET_ADDRSTRLEN) return false;
+    const char *cursor = text;
+    const char *end = text + length;
+    uint8_t bytes[4];
+    for (size_t index = 0; index < 4; index++) {
+        const char *start = cursor;
+        unsigned int value = 0;
+        while (cursor < end && *cursor >= '0' && *cursor <= '9') {
+            value = value * 10 + (unsigned int)(*cursor++ - '0');
+            if (value > 255 || cursor - start > 3) return false;
+        }
+        if (cursor == start || (cursor - start > 1 && *start == '0')) return false;
+        bytes[index] = (uint8_t)value;
+        if (index < 3) {
+            if (cursor == end || *cursor++ != '.') return false;
+        } else if (cursor != end) {
+            return false;
+        }
+    }
+    memcpy(output, bytes, sizeof(bytes));
+    return true;
+}
+
+static inline bool p2pkit_lan_parse_ipv6(const char *text, struct in6_addr *output) {
+    if (text == NULL || output == NULL) return false;
+    size_t length = strnlen(text, INET6_ADDRSTRLEN);
+    if (length == 0 || length >= INET6_ADDRSTRLEN) return false;
+    const char *last_colon = NULL;
+    bool dotted = false;
+    for (size_t index = 0; index < length; index++) {
+        char c = text[index];
+        if (c == ':') last_colon = &text[index];
+        else if (c == '.') dotted = true;
+        else if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) return false;
+    }
+    if (last_colon == NULL) return false;
+    struct in_addr ipv4;
+    if (dotted && !p2pkit_lan_parse_ipv4(last_colon + 1, &ipv4)) return false;
+    return inet_pton(AF_INET6, text, output) == 1;
+}
+
 /* No DNS: numeric comparison also tolerates equivalent IPv6 spellings. */
 static inline bool p2pkit_lan_numeric_equal(const char *left, const char *right) {
-    if (left == NULL || right == NULL) return false;
-    uint8_t l[16], r[16];
-    if (inet_pton(AF_INET, left, l) == 1 && inet_pton(AF_INET, right, r) == 1) {
-        return memcmp(l, r, 4) == 0;
+    struct in_addr l4, r4;
+    if (p2pkit_lan_parse_ipv4(left, &l4) && p2pkit_lan_parse_ipv4(right, &r4)) {
+        return l4.s_addr == r4.s_addr;
     }
-    return inet_pton(AF_INET6, left, l) == 1 && inet_pton(AF_INET6, right, r) == 1 &&
-        memcmp(l, r, 16) == 0;
+    struct in6_addr l6, r6;
+    return p2pkit_lan_parse_ipv6(left, &l6) && p2pkit_lan_parse_ipv6(right, &r6) &&
+        memcmp(&l6, &r6, sizeof(l6)) == 0;
+}
+
+/* Effective NWPath endpoints may be sockaddr-backed, not hostname-backed.
+ * Normalize only literal IPv4/IPv6 values; never resolve DNS or a Bonjour name.
+ * A scoped address is deliberately not stripped into an apparently unscoped one. */
+static inline bool p2pkit_lan_endpoint_numeric(nw_endpoint_t endpoint, char *output, size_t capacity) {
+    if (endpoint == NULL || output == NULL || capacity < INET6_ADDRSTRLEN) return false;
+    nw_endpoint_type_t type = nw_endpoint_get_type(endpoint);
+    if (type == nw_endpoint_type_address) {
+        const struct sockaddr *address = nw_endpoint_get_address(endpoint);
+        if (address == NULL) return false;
+        if (address->sa_family == AF_INET && address->sa_len >= sizeof(struct sockaddr_in)) {
+            return inet_ntop(AF_INET, &((const struct sockaddr_in *)address)->sin_addr, output, capacity) != NULL;
+        }
+        if (address->sa_family == AF_INET6 && address->sa_len >= sizeof(struct sockaddr_in6)) {
+            const struct sockaddr_in6 *ipv6 = (const struct sockaddr_in6 *)address;
+            return ipv6->sin6_scope_id == 0 && inet_ntop(AF_INET6, &ipv6->sin6_addr, output, capacity) != NULL;
+        }
+        return false;
+    }
+    if (type != nw_endpoint_type_host) return false;
+    const char *host = nw_endpoint_get_hostname(endpoint);
+    if (host == NULL) return false;
+    struct in_addr ipv4;
+    if (p2pkit_lan_parse_ipv4(host, &ipv4)) {
+        return inet_ntop(AF_INET, &ipv4, output, capacity) != NULL;
+    }
+    struct in6_addr ipv6;
+    return p2pkit_lan_parse_ipv6(host, &ipv6) && inet_ntop(AF_INET6, &ipv6, output, capacity) != NULL;
+}
+
+static inline bool p2pkit_lan_endpoint_numeric_equal(nw_endpoint_t endpoint, const char *expected) {
+    char numeric[INET6_ADDRSTRLEN];
+    return p2pkit_lan_endpoint_numeric(endpoint, numeric, sizeof(numeric)) &&
+        p2pkit_lan_numeric_equal(numeric, expected);
 }
 
 static inline bool p2pkit_lan_selected_address_is_live(const char *name, const char *address) {
@@ -127,13 +209,10 @@ static inline bool p2pkit_nw_lan_path_is_allowed(
           nw_path_uses_interface_type(path, nw_interface_type_wired))) goto cleanup;
     source = nw_path_copy_effective_local_endpoint(path);
     destination = nw_path_copy_effective_remote_endpoint(path);
-    if (source == NULL || destination == NULL ||
-        nw_endpoint_get_type(source) != nw_endpoint_type_host ||
-        nw_endpoint_get_type(destination) != nw_endpoint_type_host ||
-        !p2pkit_lan_numeric_equal(nw_endpoint_get_hostname(source), local)) goto cleanup;
+    if (!p2pkit_lan_endpoint_numeric_equal(source, local)) goto cleanup;
     {
-        const char *remote = nw_endpoint_get_hostname(destination);
-        allowed = remote != NULL && remote_allowed(remote);
+        char remote[INET6_ADDRSTRLEN];
+        allowed = p2pkit_lan_endpoint_numeric(destination, remote, sizeof(remote)) && remote_allowed(remote);
     }
 cleanup:
     p2pkit_nw_release_owned(destination);
