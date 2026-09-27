@@ -20,6 +20,7 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 import xml.etree.ElementTree as ET
 
 sys.dont_write_bytecode = True
@@ -42,6 +43,59 @@ FLAGS = ["--no-daemon", "--no-build-cache", "--no-configuration-cache", "--no-pa
          "-Pkotlin.compiler.execution.strategy=in-process"]
 MAX_FILE = 16 * 1024 * 1024
 MAX_LOG = 256 * 1024 * 1024
+FIXTURE_MODES = ("control", "failed_recovery", "shared_close", "close_wins", "recovery_wins",
+                 "responder_close", "callback_executor", "cleanup_retry")
+FAILURE_TYPES = frozenset(("java.lang.AssertionError", "kotlin.AssertionError", "java.lang.IllegalStateException",
+                          "org.opentest4j.AssertionFailedError", "java.net.NoRouteToHostException",
+                          "java.net.SocketException", "java.net.BindException", "java.io.IOException",
+                          "java.lang.InterruptedException", "java.util.concurrent.TimeoutException"))
+FIXTURE_PHASES = (
+    "ready", "original_resources_disposed_without_rescue", "real_failed_recovery_socket_already_closed",
+    "failed_recovery_original_timers_disposed_without_rescue",
+    "joined_waiter_interruption_left_owner_and_other_waiter_pending",
+    "repeat_and_stale_helpers_kept_original_disposed_resources", "close_won_at_actual_prepublication_fence",
+    "published_restart_handed_both_generations_to_close",
+    "responder_autonomous_disposal_and_helper_exit_before_external_barrier",
+    "populated_executor_blocks_external_success_after_both_callback_rejections",
+    "failed_attempt_kept_original_state_timer_and_disposed_independent_resources",
+    "successful_retry_cannot_rewrite_old_joined_failure", "fixture_rescue_begin",
+    "fixture_rescue_finished_original_failure_preserved",
+)
+FIXTURE_CODES = ("jdk17_required", "unknown_fixture_mode", "default_factory_required", "host_not_announced",
+                 "service_not_announced", "fixture_close_caller_retained",
+                 "local_up_multicast_ipv4_required_set_P2PKIT_JMDNS_FIXTURE_IPV4_if_needed")
+
+
+def alternatives(values):
+    return "(?:" + "|".join(re.escape(value) for value in values) + ")"
+
+
+BOOL, KNOWN, NUMBER = r"(?:true|false)", r"(?:true|false|UNKNOWN)", r"[0-9]{1,10}"
+FIXTURE_MARKERS = tuple(re.compile(pattern) for pattern in (
+    r"(?:PASS|FAIL) mode=" + alternatives(FIXTURE_MODES),
+    "phase=" + alternatives(FIXTURE_PHASES) + " mode=" + alternatives(FIXTURE_MODES),
+    "startup elapsedMillis=" + NUMBER + " sendCalls=" + NUMBER + " sendReturns=" + NUMBER
+    + " recoveryCalls=" + NUMBER + " proberCalls=" + NUMBER + " announcerCalls=" + NUMBER,
+    "startup firstSendFailureClass=" + alternatives(FAILURE_TYPES) + " firstSendDestinationIpv4Mdns=" + KNOWN,
+    "startup diagnosticFailureClass=" + alternatives(FAILURE_TYPES),
+    "startup threadRole=(?:general_timer|state_timer) state="
+    + r"(?:NOT_CAPTURED|NEW|RUNNABLE|BLOCKED|WAITING|TIMED_WAITING|TERMINATED) alive=" + BOOL,
+    "startup " + " ".join(key + "=" + BOOL for key in
+                          ("probing", "announcing", "announced", "canceling", "canceled", "closing", "closed")),
+    "startup terminal=" + BOOL + " attempt=" + NUMBER + " mutations=" + NUMBER + " tasks=" + NUMBER
+    + " recoveryMutation=" + BOOL + " socketPublications=" + NUMBER + " originalSocketClosed=" + BOOL
+    + " currentSocketAbsent=" + BOOL + " currentSocketClosed=" + BOOL,
+    "startup interfaceSnapshot=BEFORE_WAIT selectedKnown=" + BOOL + " hostKnown=" + BOOL + " socketKnown="
+    + BOOL + " selectedHostMatch=" + KNOWN + " selectedSocketMatch=" + KNOWN + " hostSocketMatch=" + KNOWN,
+    "startup route queryStarted=false reason=(?:FIRST_SEND_DESTINATION_NOT_MATCHED|SELECTED_INTERFACE_UNKNOWN)",
+    "startup route observation=POST_FAILURE scope=SELECTED_IPV4_MDNS queryStarted=true queryCompleted="
+    + BOOL + " exitZero=" + KNOWN,
+    "startup route (?:outputWithinBound|processReaped)=" + BOOL,
+    "startup route queryFailureClass=" + alternatives(FAILURE_TYPES),
+    "startup route interfaceParsed=" + BOOL + " selectedInterfaceMatch=" + KNOWN + " flagsParsed=" + BOOL,
+    "startup routeFlag=(?:UP|REJECT|BLACKHOLE|GATEWAY|IFSCOPE) present=" + BOOL,
+    "startup explicitAddress=" + BOOL + " linkLocal=" + BOOL + " virtualInterface=" + BOOL + " pointToPoint=" + BOOL,
+))
 
 
 class HostedValidationError(RuntimeError):
@@ -102,6 +156,23 @@ def generator_commands():
     ]
 
 
+def diagnostic_commands():
+    # Provisional checksum candidates permit Apple resolution, never lock writing
+    # or a strict-input qualification claim. The complete writer above is unchanged.
+    return [
+        ("diagnostic-jmdns", [":p2p-transport-lan:jvmTest", "--tests",
+                              "dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest"], 1200),
+        ("diagnostic-ios-lan", [":p2p-transport-lan:iosSimulatorArm64Test"], 1800),
+    ]
+
+
+def platform_runner():
+    spec = importlib.util.spec_from_file_location("rpc_platform_runner", ROOT / "scripts/run-platform-tests.py")
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+    return helper
+
+
 def safe_diagnostics(path):
     """Only compiler/task/dependency diagnostics, never test output/assertion bodies."""
     selected = []
@@ -116,7 +187,7 @@ def safe_diagnostics(path):
                 continue
             line = raw.decode("utf-8", errors="replace").rstrip()
             compiler = re.match(r"^[ew]: (?:file:/{1,3})?[^\r\n]+\.(?:kt|kts|java):[0-9]+", line)
-            task = re.fullmatch(r"> Task :[A-Za-z0-9:_-]+ (?:FAILED|SKIPPED|NO-SOURCE)", line)
+            task = re.fullmatch(r"> Task :[A-Za-z0-9:_-]+ FAILED", line)
             artifact = re.fullmatch(r"\s*> Could not (?:find|resolve) "
                                     r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+:[A-Za-z0-9_.+-]+\.?", line)
             if compiler or task or artifact or re.fullmatch(r"BUILD (?:FAILED|SUCCESSFUL) in [0-9hms .]+", line):
@@ -124,8 +195,59 @@ def safe_diagnostics(path):
     return selected
 
 
+def source_locations(root):
+    """Locations can only refer to public source, never an arbitrary trace path."""
+    result = {}
+    for parent in (root / "library", root / "samples"):
+        for suffix in ("kt", "java"):
+            for path in parent.glob(f"*/src/**/*.{suffix}"):
+                require(len(result) < 10000, "Too many source location entries")
+                result.setdefault(path.name, []).append((path.relative_to(root).as_posix(),
+                                                        len(read_bounded(path).splitlines())))
+    return result
+
+
+def failure_details(failure, sources):
+    result = {"type": failure.attrib.get("type") if failure.attrib.get("type") in FAILURE_TYPES else "OTHER",
+              "locations": []}
+    # Only a source basename and in-range line number survive. No exception
+    # message, frame arguments, private path or arbitrary class/method is emitted.
+    for name, number in re.findall(r"([A-Za-z_][A-Za-z0-9_]*\.(?:kt|java)):([0-9]{1,6})(?![0-9])",
+                                   failure.text or ""):
+        for source, lines in sources.get(name, ()):
+            location = {"source": source, "line": int(number)}
+            if 1 <= int(number) <= lines and location not in result["locations"]:
+                result["locations"].append(location)
+        if len(result["locations"]) >= 8:
+            break
+    return result
+
+
+def fixture_summary(root):
+    """Strict fixed-marker allowlist; never export raw child logs or native errors."""
+    result = []
+    parent = root / "library/p2p-transport-lan/build/reports/jmdns-close"
+    for path in sorted(parent.glob("run-*/*.log")):
+        require(len(result) < 64, "Too many fixture logs")
+        match = re.fullmatch("(" + "|".join(FIXTURE_MODES) + r")-[A-Za-z0-9_-]+\.log", path.name)
+        require(match is not None, "Unrecognized fixture log name")
+        markers = []
+        for line in read_bounded(path, 65536).decode("utf-8", errors="replace").splitlines():
+            if any(pattern.fullmatch(line) for pattern in FIXTURE_MARKERS):
+                markers.append(line)
+            else:
+                code = re.fullmatch(r'(?:Exception in thread "main" )?java.lang.AssertionError: ('
+                                    + "|".join(FIXTURE_CODES) + ")", line)
+                if code:
+                    markers.append("assertionCode=" + code.group(1))
+            require(len(markers) <= 128, "Too many fixture markers")
+        result.append({"mode": match.group(1), "markers": markers})
+    return result
+
+
 def test_summary(root):
     result, total, count = [], 0, 0
+    sources = source_locations(root)
     for parent in (root / "library", root / "samples"):
         for path in sorted(parent.glob("*/build/test-results/**/TEST-*.xml")):
             count += 1
@@ -138,14 +260,63 @@ def test_summary(root):
             require(suite.tag == "testsuite", "Unexpected test report root")
             counts = {name: int(suite.attrib.get(name, "0")) for name in ("tests", "failures", "errors", "skipped")}
             require(all(0 <= value <= 100000 for value in counts.values()), "Invalid test counts")
-            failures = []
+            failures, skipped = [], []
             for case in suite.findall("testcase"):
-                if case.find("failure") is not None or case.find("error") is not None:
-                    # Do not retain message/trace/system-out/system-err, even for synthetic fixtures.
-                    failures.append({key: re.sub(r"[^A-Za-z0-9_.$ ()-]", "?", case.attrib.get(key, ""))[:200]
-                                     for key in ("classname", "name")})
-            result.append({"path": path.relative_to(root).as_posix(), **counts, "failedCases": failures})
+                identity = {key: re.sub(r"[^A-Za-z0-9_.$ ()-]", "?", case.attrib.get(key, ""))[:200]
+                            for key in ("classname", "name")}
+                failure = case.find("failure")
+                if failure is None:
+                    failure = case.find("error")
+                if failure is not None:
+                    failures.append({**identity, **failure_details(failure, sources)})
+                if case.find("skipped") is not None:
+                    skipped.append(identity)
+            result.append({"path": path.relative_to(root).as_posix(), **counts, "failedCases": failures,
+                           "skippedCases": skipped, "caseCount": len(suite.findall("testcase"))})
     return result
+
+
+def assess_diagnostic(root, label, report, token):
+    """A successful Gradle exit alone is insufficient (KMP can defer failures)."""
+    helper = platform_runner()
+    policy = helper.read_json(ROOT / "gradle/platform-test-policy.json")
+    task = diagnostic_commands()[0 if label == "diagnostic-jmdns" else 1][1][0]
+    helper.validate_policy(policy)
+    require(report.get("schema") == 1 and report.get("token") == token and report.get("dryRun") is False
+            and report.get("buildFailed") is False, "Missing, stale, dry-run or failed diagnostic execution")
+    require(report.get("host", {}).get("os") in ("Mac OS X", "Darwin")
+            and helper.architecture(report.get("host", {}).get("arch")) == "arm64", "Wrong diagnostic host")
+    require(report.get("model") == policy["model"], "Diagnostic task model changed")
+    if label == "diagnostic-ios-lan":
+        helper.assess(report, policy, "ios-lan-arm64", "arm64", token)
+    else:
+        require(label == "diagnostic-jmdns", "Unknown diagnostic")
+        expected = {name for entry in policy["model"].values() for name in entry["tests"]}
+        require(set(report.get("tests", {})) == expected, "Incomplete diagnostic task records")
+        require(report["tests"][task] == {"enabled": True, "inGraph": True, "outcome": "EXECUTED",
+                                        "passed": 1, "failed": 0, "skipped": 0},
+                "Expected fresh JmDNS fixture execution is missing or failed")
+    directory = task.rsplit(":", 1)[1]
+    prefix = "library/p2p-transport-lan/build/test-results/" + directory + "/"
+    rows = [row for row in test_summary(root) if row["path"].startswith(prefix)]
+    require(bool(rows) and sum(row["tests"] - row["skipped"] for row in rows) > 0,
+            "Matching nonempty diagnostic XML is missing")
+    require(all(row["failures"] == row["errors"] == 0 and not row["failedCases"]
+                and row["caseCount"] == row["tests"] for row in rows), "Diagnostic XML contains a failure")
+    observed = report["tests"][task]
+    require(sum(row["tests"] - row["skipped"] for row in rows) == observed["passed"]
+            and sum(row["skipped"] for row in rows) == observed["skipped"], "Diagnostic XML/counts mismatch")
+    if label == "diagnostic-jmdns":
+        require(len(rows) == 1 and rows[0]["path"] == prefix
+                + "TEST-dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest.xml", "Wrong JmDNS diagnostic suite")
+        fixtures = fixture_summary(root)
+        require([entry["mode"] for entry in fixtures] == sorted(FIXTURE_MODES)
+                and all(entry["markers"].count("PASS mode=" + entry["mode"]) == 1
+                        and not any(marker.startswith(("FAIL ", "phase=fixture_rescue"))
+                                    for marker in entry["markers"]) for entry in fixtures),
+                "JmDNS diagnostic lacks eight natural child successes")
+    return {"task": task, "outcome": observed["outcome"], "passed": observed["passed"],
+            "failed": observed["failed"], "skipped": observed["skipped"], "xmlReports": len(rows)}
 
 
 def collect_candidates(root, generation_complete):
@@ -169,9 +340,7 @@ def collect_candidates(root, generation_complete):
 
 
 def execute(state, label, argv, timeout):
-    spec = importlib.util.spec_from_file_location("rpc_platform_runner", ROOT / "scripts/run-platform-tests.py")
-    helper = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(helper)
+    helper = platform_runner()
     started = time.monotonic()
     log = state / f"{label}.log"
     process, code, drained = None, 125, False
@@ -191,12 +360,13 @@ def execute(state, label, argv, timeout):
             "processGroupDrained": drained, "seconds": round(time.monotonic() - started, 3)}
 
 
-def generate(state, reports):
+def run(state, reports, operation):
     require(not git("status", "--porcelain=v1").strip(), "Generation requires a clean exact commit")
     require(platform.machine() == "arm64", "Candidate generation requires Apple Silicon")
     record = {"source": os.environ["GITHUB_SHA"], "tree": git("rev-parse", "HEAD^{tree}").decode().strip(),
               "runId": os.environ["GITHUB_RUN_ID"], "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"],
-              "host": platform.machine(), "phase": "candidate-generation", "commands": [],
+              "host": platform.machine(), "phase": "candidate-generation" if operation == "generate"
+              else "DIAGNOSTIC_ONLY_NOT_FULL_GENERATION", "commands": [],
               "complete": False, "stopExitCode": None}
     require(not (state / "run.json").exists(), "Do not overwrite an earlier invocation")
     write_json(state / "run.json", record)
@@ -215,9 +385,24 @@ def generate(state, reports):
              "-XX:ActiveProcessorCount=2 -Dfile.encoding=UTF-8 "
              f"-Duser.home={state}/home -Djava.io.tmpdir={state}/tmp"]
     try:
-        for label, arguments, timeout in generator_commands():
+        code = 0
+        commands = generator_commands() if operation == "generate" else diagnostic_commands()
+        for label, arguments, timeout in commands:
+            token = uuid.uuid4().hex
+            if operation == "diagnose":
+                arguments = [*arguments, "--write-verification-metadata", "sha256", "--init-script",
+                             str(ROOT / "gradle/platform-test-coverage.init.gradle"),
+                             f"-Pp2pkit.testCoverageRoot={ROOT}", f"-Pp2pkit.testCoverageToken={token}"]
             print(f"Starting {label}; full output remains private, sanitized diagnostics follow.", flush=True)
             row = execute(state, label, [str(ROOT / "gradlew"), *arguments, *flags], timeout)
+            if operation == "diagnose":
+                row["gradleExitCode"] = row["exitCode"]
+                try:
+                    execution = json.loads(read_bounded(ROOT / f"build/reports/platform-tests/{token}/execution.json"))
+                    row["assessment"] = assess_diagnostic(ROOT, label, execution, token)
+                except (OSError, ValueError, TypeError, KeyError, HostedValidationError):
+                    row["assessment"] = "FAILED_OR_MISSING_EXECUTION_OR_XML"
+                    row["exitCode"] = row["exitCode"] or 1
             # Source and task arguments are public; replace ephemeral home paths in shared receipts.
             row["command"] = [part.replace(str(state), "<owned-state>").replace(str(ROOT), "<source>")
                               for part in row["command"]]
@@ -226,9 +411,11 @@ def generate(state, reports):
             print(f"{label}: exit {row['exitCode']}, {row['seconds']} seconds", flush=True)
             print("\n".join(safe_diagnostics(state / f"{label}.log")), flush=True)
             if row["exitCode"] != 0:
-                return row["exitCode"]
-        record["complete"] = True
-        return 0
+                code = code or row["exitCode"]
+                if operation == "generate":
+                    return code
+        record["complete"] = code == 0
+        return code
     finally:
         stop = execute(state, "stop-owned-gradle", [str(ROOT / "gradlew"), "--stop", "--console=plain"], 90)
         record["stopExitCode"] = stop["exitCode"]
@@ -242,21 +429,25 @@ def collect(state, reports):
         "source": os.environ["GITHUB_SHA"], "complete": False, "phase": "SETUP_DID_NOT_COMPLETE"}
     write_json(reports / "run.json", record)
     write_json(reports / "test-summary.json", test_summary(ROOT))
+    write_json(reports / "fixture-summary.json", fixture_summary(ROOT))
     diagnostic = []
     for path in sorted(state.glob("*.log")):
         diagnostic.extend([path.name, *safe_diagnostics(path)])
     (reports / "diagnostics.txt").write_text("\n".join(diagnostic) + "\n", encoding="utf-8")
-    manifest, patch = collect_candidates(ROOT, record.get("complete") is True)
+    generated = record.get("phase") == "candidate-generation"
+    manifest, patch = collect_candidates(ROOT, generated and record.get("complete") is True)
+    if record.get("phase") == "DIAGNOSTIC_ONLY_NOT_FULL_GENERATION":
+        manifest["status"] = "DIAGNOSTIC_ONLY_DO_NOT_IMPORT"
     write_json(reports / "candidate-manifest.json", manifest)
     (reports / "candidate.patch").write_bytes(patch)
     print(manifest["status"], flush=True)
-    require(not record.get("complete") or manifest["status"] == "REVIEW_REQUIRED",
+    require(not (generated and record.get("complete")) or manifest["status"] == "REVIEW_REQUIRED",
             "Successful generation did not supply all mandatory lock/ABI inputs")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("generate", "collect"))
+    parser.add_argument("operation", choices=("generate", "diagnose", "collect"))
     args = parser.parse_args()
     state, reports = paths()
     if args.operation == "collect":
@@ -265,7 +456,7 @@ def main():
     def interrupted(signum, frame):
         raise KeyboardInterrupt()
     signal.signal(signal.SIGTERM, interrupted)
-    return generate(state, reports)
+    return run(state, reports, args.operation)
 
 
 if __name__ == "__main__":

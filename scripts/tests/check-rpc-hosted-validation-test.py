@@ -82,9 +82,128 @@ class HostedValidationTest(unittest.TestCase):
                             '<testcase name="pass"/><system-err>private stderr</system-err></testsuite>')
             result = hosted.test_summary(root)
             self.assertEqual(result[0]["tests"], 2)
-            self.assertEqual(result[0]["failedCases"], [{"classname": "example.Test", "name": "failure"}])
+            self.assertEqual(result[0]["failedCases"], [{"classname": "example.Test", "name": "failure",
+                                                       "type": "OTHER", "locations": []}])
             self.assertNotIn("private", json.dumps(result))
             self.assertNotIn("secret", json.dumps(result))
+
+    def test_failure_details_allow_only_known_types_and_public_in_range_locations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "library/example/src/commonTest/kotlin/PublicTest.kt"
+            source.parent.mkdir(parents=True)
+            source.write_text("package example\nclass PublicTest\n// fixture\n")
+            failure = hosted.ET.fromstring(
+                '<failure type="java.lang.AssertionError" message="synthetic-secret">'
+                'private-path/synthetic-secret/PublicTest.kt:2:4\n'
+                'private-path/SecretFile.kt:1\nPublicTest.kt:9999999\n'
+                'PublicTest.kt:0\nPublicTest.kt:4\nprivate message</failure>')
+            details = hosted.failure_details(failure, hosted.source_locations(root))
+            self.assertEqual(details, {"type": "java.lang.AssertionError", "locations": [
+                {"source": source.relative_to(root).as_posix(), "line": 2}]})
+            failure.attrib["type"] = "synthetic.secret.Exception"
+            self.assertEqual(hosted.failure_details(failure, {})["type"], "OTHER")
+            self.assertNotIn("secret", json.dumps(details))
+            self.assertNotIn("private", json.dumps(details))
+
+    def test_fixture_markers_reject_addresses_paths_dynamic_errors_and_extra_fields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "library/p2p-transport-lan/build/reports/jmdns-close/run-fixture/control-123.log"
+            path.parent.mkdir(parents=True)
+            accepted = ["FAIL mode=control", "phase=fixture_rescue_begin mode=control",
+                        "startup firstSendFailureClass=java.net.NoRouteToHostException "
+                        "firstSendDestinationIpv4Mdns=true",
+                        "startup routeFlag=BLACKHOLE present=false",
+                        "startup interfaceSnapshot=BEFORE_WAIT selectedKnown=true hostKnown=true socketKnown=true "
+                        "selectedHostMatch=true selectedSocketMatch=true hostSocketMatch=true"]
+            secret = "synthetic-private-value"
+            rejected = ["FAIL mode=" + secret, "phase=" + secret + " mode=control",
+                        "startup firstSendFailureClass=" + secret + " firstSendDestinationIpv4Mdns=true",
+                        "startup frameRole=send_failure frame=" + secret,
+                        "startup routeFlag=" + secret + " present=false", "path=/private/" + secret,
+                        "startup address=192.168.1.1", "startup selectedInterface=en0",
+                        "Exception in thread \"main\" java.lang.AssertionError: " + secret]
+            path.write_text("\n".join([*accepted, *(line + " " + secret for line in accepted), *rejected,
+                                       'Exception in thread "main" java.lang.AssertionError: host_not_announced']))
+            summary = hosted.fixture_summary(root)
+            self.assertEqual(summary, [{"mode": "control", "markers": [*accepted,
+                                                                         "assertionCode=host_not_announced"]}])
+            for excluded in (secret, "192.168.1.1", "en0", "/private/"):
+                self.assertNotIn(excluded, json.dumps(summary))
+
+    def test_diagnostic_mode_never_substitutes_for_full_writer(self):
+        commands = hosted.diagnostic_commands()
+        self.assertEqual([command[0] for command in commands], ["diagnostic-jmdns", "diagnostic-ios-lan"])
+        self.assertEqual(commands[0][1], [":p2p-transport-lan:jvmTest", "--tests",
+                                         "dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest"])
+        self.assertEqual(commands[1][1], [":p2p-transport-lan:iosSimulatorArm64Test"])
+        self.assertNotIn("--write-locks", str(commands))
+        self.assertNotIn("resolveAndLockAll", str(commands))
+        self.assertNotIn("publish", str(commands).lower())
+
+    def diagnostic_fixture(self, root, label):
+        helper = hosted.platform_runner()
+        policy = helper.read_json(ROOT / "gradle/platform-test-policy.json")
+        task = hosted.diagnostic_commands()[0 if label == "diagnostic-jmdns" else 1][1][0]
+        report = {"schema": 1, "token": "fixture", "dryRun": False, "buildFailed": False,
+                  "host": {"os": "Mac OS X", "arch": "aarch64"}, "model": policy["model"], "tests": {}}
+        for entry in policy["model"].values():
+            for name in entry["tests"]:
+                report["tests"][name] = {"outcome": "NOT_REQUESTED", "enabled": True, "inGraph": False,
+                                         "passed": 0, "failed": 0, "skipped": 0}
+        report["tests"][task].update(outcome="EXECUTED", inGraph=True, passed=1)
+        path = root / ("library/p2p-transport-lan/build/test-results/" + task.rsplit(":", 1)[1]
+                       + "/TEST-dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest.xml")
+        path.parent.mkdir(parents=True)
+        path.write_text('<testsuite tests="1" failures="0" errors="0" skipped="0">'
+                        '<testcase classname="dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest" '
+                        'name="realResourceCloseRegressionsExitNaturally"/></testsuite>')
+        for mode in hosted.FIXTURE_MODES:
+            log = root / f"library/p2p-transport-lan/build/reports/jmdns-close/run-fixture/{mode}-123.log"
+            log.parent.mkdir(parents=True, exist_ok=True)
+            log.write_text("PASS mode=" + mode + "\n")
+        return report, path, task
+
+    def test_diagnostics_require_fresh_matching_task_counts_and_xml(self):
+        for label in ("diagnostic-jmdns", "diagnostic-ios-lan"):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                report, path, task = self.diagnostic_fixture(root, label)
+                self.assertEqual(hosted.assess_diagnostic(root, label, report, "fixture")["passed"], 1)
+                for key, value in (("token", "stale"), ("dryRun", True), ("buildFailed", True)):
+                    with patch.dict(report, {key: value}), self.assertRaises((hosted.HostedValidationError, ValueError)):
+                        hosted.assess_diagnostic(root, label, report, "fixture")
+                for key, value in (("outcome", "UP-TO-DATE"), ("passed", 0), ("failed", 1), ("enabled", False)):
+                    with patch.dict(report["tests"][task], {key: value}):
+                        with self.assertRaises((hosted.HostedValidationError, ValueError)):
+                            hosted.assess_diagnostic(root, label, report, "fixture")
+                path.unlink()
+                with self.assertRaisesRegex(hosted.HostedValidationError, "XML is missing"):
+                    hosted.assess_diagnostic(root, label, report, "fixture")
+
+    def test_zero_gradle_exit_cannot_hide_deferred_native_failures(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report, path, task = self.diagnostic_fixture(root, "diagnostic-ios-lan")
+            for xml in ('<testsuite tests="1" failures="1"><testcase><failure/></testcase></testsuite>',
+                        '<testsuite tests="1" failures="0"><testcase><failure/></testcase></testsuite>',
+                        '<testsuite tests="1" failures="0"/>'):
+                path.write_text(xml)
+                with self.assertRaises(hosted.HostedValidationError):
+                    hosted.assess_diagnostic(root, "diagnostic-ios-lan", report, "fixture")
+
+    def test_jmdns_pass_marker_cannot_hide_failed_or_missing_child(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report, path, task = self.diagnostic_fixture(root, "diagnostic-jmdns")
+            log = root / "library/p2p-transport-lan/build/reports/jmdns-close/run-fixture/control-123.log"
+            log.write_text("PASS mode=control\nphase=fixture_rescue_begin mode=control\n")
+            with self.assertRaisesRegex(hosted.HostedValidationError, "natural child"):
+                hosted.assess_diagnostic(root, "diagnostic-jmdns", report, "fixture")
+            log.unlink()
+            with self.assertRaisesRegex(hosted.HostedValidationError, "natural child"):
+                hosted.assess_diagnostic(root, "diagnostic-jmdns", report, "fixture")
 
     def test_invalid_counts_and_xml_entities_fail_closed(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -14,6 +14,22 @@ token and no signing secrets or environments. Its distinct concurrency group
 does not cancel any run. Existing CI, Foundation and release workflows are not
 modified or dispatched by this workflow.
 
+## Diagnostic mode (the default for a feature push)
+
+Before repeating an expensive failed full graph, `diagnose` executes the unchanged
+JmDNS real-resource JVM regression and the complete LAN ARM simulator test task.
+Both run once, even when the first fails; there is no automatic retry. The driver
+requires fresh invocation-token-bound execution counts and matching nonempty XML,
+not just a zero Gradle exit (Native failures can be deferred to `allTests`). JmDNS
+also requires all eight natural-exit fixture successes without rescue markers.
+The existing fixed test deadlines/assertions and ignored diagnostic-only interop
+test are unchanged. No interface override or network workaround is supplied.
+
+This mode may generate provisional checksum candidates needed for Apple
+resolution, but **never writes locks or qualifies committed dependency inputs**.
+Its candidates are `DIAGNOSTIC_ONLY_DO_NOT_IMPORT`. Select `generate` explicitly
+for the complete writer below; diagnostic success is not a replacement for it.
+
 ## First stage: generated inputs for review
 
 The [driver](../../scripts/run-rpc-hosted-validation.py) first executes genuine
@@ -27,7 +43,12 @@ artifact checksums; review must precede a normal strict verification run.
 
 The job uploads only an allowlisted generated-input patch, its hashes,
 source/toolchain/command outcomes, compiler/task diagnostics and XML test counts
-with failed test names. Raw logs, assertion/trace bodies, test stdout/stderr,
+with failed/skipped test names. Failure details retain only fixed exception types
+and in-range public-source locations. JmDNS summaries allowlist fixed phase,
+startup counter, thread-state and route-observation markers; no address, interface
+name, native error message or arbitrary frame is retained. These post-failure
+observations do not establish packet delivery or a network-policy diagnosis.
+Raw logs, assertion/trace bodies, test stdout/stderr,
 homes, caches, identities, keys and compiled artifacts are not uploaded.
 Publication and consumer-publication commands are not selected.
 
@@ -37,7 +58,35 @@ Publication and consumer-publication commands are not selected.
   inputs exist. Inspect the entire patch, preserve reviewed checksum history,
   independently authenticate every new dependency artifact, and compare ABI for
   unintended removals before committing to the feature branch. This status is
-  not a readiness or release result, even if the Actions job is green.
+not a readiness or release result, even if the Actions job is green.
+
+## Observed first run (failed; no candidates imported)
+
+[Run 36333670930](https://github.com/p2pKit/P2pKit/actions/runs/36333670930),
+source `7f086509b1d3276e323a8bd89d3d8566e60ab460`, ran on ARM64 macOS 26.6.2,
+Xcode 26.5, iOS simulator SDK 26.5 and Temurin 17/21. Genuine Apple compilation
+and core/LAN/RPC ABI generation passed. The complete lock writer failed at
+`:p2p-transport-lan:allTests`; its partial inputs are **INCOMPLETE_DO_NOT_IMPORT**.
+Owned cleanup passed. No complete lock output was produced.
+
+| Observed test row | Tests | Failures | Skips |
+| --- | ---: | ---: | ---: |
+| Core ARM simulator | 792 | 0 | 0 |
+| RPC ARM simulator | 45 | 0 | 0 |
+| RPC sample ARM simulator | 3 | 0 | 0 |
+| LAN ARM simulator | 194 | 1 | 1 |
+| LAN JVM | 231 | 1 | 0 |
+
+The Native failure was
+`AppleOrganizationLanInteropTest.numericComparisonAcceptsEquivalentIpv6ButNeverHostnamesOrAmbiguousIpv4`.
+The original collector did not retain the precise failing assertion. Strict
+numeric spelling checks and both NWEndpoint address representations now have
+source corrections/regressions; their hosted result must be recorded separately.
+The unchanged-main `JmdnsCloseLifecycleTest.realResourceCloseRegressionsExitNaturally`
+also failed; the original summary is insufficient to attribute its cause. Do not
+conflate it with the separately corrected historical external JmDNS lock entry.
+The skipped `IosLanDiagnosticTest` is the pre-existing explicitly ignored
+physical-observation diagnostic, not a newly skipped regression.
 
 After reviewed inputs are committed, normal strict Native ABI/Dokka and fresh
 platform-evidence checks must run against the exact committed source. Intel

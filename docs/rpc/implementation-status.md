@@ -3,8 +3,9 @@
 ## Scope and baseline
 
 The approved [Optional LAN RPC plan](../../RPC_MODULE_PLAN.md) is implemented
-in source. **JVM/Android compilation and deterministic tests passed. Apple,
-real-network/security and capacity qualification remain pending.** This is a
+in source. **JVM/Android compilation and deterministic tests passed. The first
+hosted Apple/full-lock run failed; complete Apple, real-network/security and
+capacity qualification remain pending.** This is a
 feature-workstream checkpoint, not approval to merge or release. The plan is
 preserved unchanged as the original planning snapshot.
 
@@ -214,10 +215,12 @@ SBOM JSON/XML and lint reports were snapshotted and hashed in the owned logs.
   The OSV coverage guard still correctly fails: 12 requested lock inputs but
   only 10 populated inputs. Embedded-producer lock coverage also needs the
   complete writer. Do not bypass or narrow it.
-- **Apple and complete ABI:** Native compilation/Cinterop, device/simulator
-  tests, Swift/framework consumer validation and full KLIB ABI checks remain
-  unexecuted at this checkpoint. Feature-only hosted macOS execution is now
-  authorized; successful evidence and reviewed generated inputs are still required.
+- **Apple and complete ABI:** the [first hosted follow-up](hosted-validation.md)
+  compiled Native/Cinterop and generated genuine core/LAN/RPC ABI candidates.
+  Core/RPC/RPC-sample ARM simulator tests passed, but LAN had a Native failure
+  and an unchanged-main JVM lifecycle failure. The complete writer failed and
+  no partial candidates were imported. Swift/framework checks, reviewed Native
+  baselines, strict-input gates and matching Intel execution remain outstanding.
 - **Strict Dokka:** inspected task graphs select Native distribution download,
   commonization and Apple/Cinterop compilation. Full execution remains gated;
   no task was disabled to obtain a documentation pass. The newly authorized

@@ -6,6 +6,13 @@ on:
   push:
     branches: [work/rpc-lan-20260927-054728-8b1b11da]
   workflow_dispatch:
+    inputs:
+      mode:
+        description: Diagnostic checks or the complete generated-input graph
+        type: choice
+        required: true
+        default: diagnose
+        options: [diagnose, generate]
 
 permissions:
   contents: read
@@ -15,8 +22,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  apple-candidates:
-    name: Generate review-only Apple ABI and complete dependency inputs
+  apple-feature:
+    name: Feature-only Apple diagnostics or review-only input generation
     if: >-
       github.repository == 'p2pKit/P2pKit' &&
       github.ref == 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da'
@@ -28,6 +35,7 @@ jobs:
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
       PYTHONDONTWRITEBYTECODE: "1"
+      RPC_HOSTED_MODE: ${{ inputs.mode || 'diagnose' }}
     steps:
       - name: Check out the exact feature commit without credentials or tags
         id: checkout
@@ -88,10 +96,10 @@ jobs:
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "--sdk_root=$ANDROID_HOME" 'platforms;android-36' 'platforms;android-37.0'
 
-      - name: Run genuine ABI generation and the unmodified complete lock writer
-        id: generate
+      - name: Run bounded diagnostics or the unmodified complete generation graph
+        id: validate
         timeout-minutes: 150
-        run: python3 scripts/run-rpc-hosted-validation.py generate
+        run: python3 scripts/run-rpc-hosted-validation.py "$RPC_HOSTED_MODE"
 
       - name: Retain only sanitized reports and review-only generated inputs
         if: ${{ always() && steps.isolated.outcome == 'success' }}
@@ -102,11 +110,12 @@ jobs:
         if: ${{ always() && steps.isolated.outcome == 'success' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: rpc-apple-candidates-${{ github.sha }}-${{ github.run_attempt }}
+          name: rpc-apple-${{ env.RPC_HOSTED_MODE }}-${{ github.sha }}-${{ github.run_attempt }}
           path: |
             build/reports/rpc-hosted/run.json
             build/reports/rpc-hosted/toolchain.json
             build/reports/rpc-hosted/test-summary.json
+            build/reports/rpc-hosted/fixture-summary.json
             build/reports/rpc-hosted/diagnostics.txt
             build/reports/rpc-hosted/candidate-manifest.json
             build/reports/rpc-hosted/candidate.patch
