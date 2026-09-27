@@ -64,6 +64,7 @@ jobs:
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-windows-evidence-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-output-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-runner-test.py -v
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/audit-process-owned-stdin-test.py
           # Connected bootstrap receiver/tail and compatibility models only;
           # these do not acquire a provider or activate the held workflow.
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-cache-compatibility-test.py -v

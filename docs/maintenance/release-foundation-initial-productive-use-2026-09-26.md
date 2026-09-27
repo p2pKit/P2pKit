@@ -393,10 +393,59 @@ at `2cb196eef2ed59edf9c21ab700c1c598d9c43707` remains failed. Its stale
 12-adapter roster assertion has a separately reviewed exact-19 correction and
 two passing focused controls; a corrected connected hosted run is still needed.
 
+### Connected source-CI receiver-signature correction
+
+Commit `a49fb2acd715af96e666ae8cf8675701be955427` integrates the reviewed
+53-file source; `c759a003ce20e2a2f206f28a7f790845b8e89fe4` registers its
+source controls. Run [36307855454/1](https://github.com/p2pKit/P2pKit/actions/runs/36307855454)
+at `c759a003`, tree `a56c804eef3cf2216a135cfae03103e3fa515998`, failed
+after 92 seconds, not a job timeout. Its 29 earlier Python aggregates were OK
+(815 reported tests); BEFORE then passed 40 methods and failed one, leaving
+20 methods and the later DATA/Node steps unreached. This is **855 passes plus
+one failure**, not a passing aggregate.
+
+The two old structural helpers now require the exact reviewed engine signature,
+including optional `receiver_seed=None`. The complete legacy-wrapper and
+engine-argument AST assertions remain. The original `final_seed` default
+mutation selects that parameter by name; six added receiver mutations reject
+legacy-route injection, a changed default and a required parameter. These are
+six new variants in existing methods, not six new tests. Production is unchanged.
+Independent source-review SHA-256:
+`a3fc9c69a165002e8d15d67b983a90def5ea6f63669a9d4599802d1833338ec6`.
+
+Only the five affected methods ran locally, once and serially: BEFORE **3/3**
+then productive **2/2**, both exit0. Whole-wrapper CPU/wall seconds were
+49.260/50.387 and 31.146/31.185. Each retained external CPU90/wall120+kill5,
+AS768MiB/core0; no production or workflow limit changed. Original result-manifest
+SHA-256: `811d96fd9cff6993828b353efe5e3963058e36340640e5a334f296a245b09841`.
+Independent result-review SHA-256:
+`229eadae62a0764d7fd00b95810ada80d3e315c1c4a20913a30c2f6f89fbcb34`.
+The failed hosted aggregate remains failed; fresh combined source CI is required.
+
+### Bounded owned-input process seam
+
+The optional process-scope input now borrows a captured POSIX read-only regular
+descriptor or the genuine Windows `NativeFile` reader. Windows passes only its
+fresh inheritable duplicate alongside the existing fresh output handles.
+Default DEVNULL/NUL behavior, caller ownership, job-before-resume, original
+retirement and UNKNOWN handling remain. The ordinary controller must still
+connect the actual bounded DATA frame, EOF/reread and final original close.
+
+The new suite passed **20/20**, exit0: nine tiny-POSIX-descriptor/mocked-process
+controls and eleven Windows native-API models. Whole-wrapper CPU0.262s/wall0.279s;
+external CPU60/wall120+kill5/AS768MiB/core0. It spawned no real provider or child
+and is not native Windows or hosted qualification. Original result-manifest
+SHA-256: `4c3c43afaadf1cd70a8de2aed0ed6547fb0ac4d19bd3030da17803f2b90d7f6c`.
+Independent result-review SHA-256:
+`9a7be2b84527d03934780c7e1153f0dc4724e2186bdb503406f059c3aa591cb5`.
+The source workflow adds only this complete suite after productive-runner,
+without changing existing commands, pins, permissions or its five-minute limit.
+No accepted reader, preview, build, native provider or key ceremony was repeated.
+
 ## Still required before productive execution and Release
 
 Complete the native provider/tool/restore supplier, the real current-owning
-ordinary controller and its bounded native input connection, and original
+ordinary controller's connection to the reviewed bounded input API, and original
 provider-output custody/qualification joins. Their parallel source work is not
 included or qualified by the preceding results. Independently review and test
 the actual connected successors before genuine hosted execution. A full per-use
