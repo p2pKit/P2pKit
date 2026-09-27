@@ -43,6 +43,8 @@ reset_fixture() {
         "$FIXTURE/library/p2p-network-provisioning-android/build.gradle.kts"
     cp "$ROOT/library/p2p-network-provisioning-android/api/android/p2p-network-provisioning-android.api" \
         "$FIXTURE/library/p2p-network-provisioning-android/api/android/p2p-network-provisioning-android.api"
+    # Keep original source read-only; mutations belong to this private copy.
+    chmod -R u+w "$FIXTURE"
 }
 
 remove_matching_lines() {

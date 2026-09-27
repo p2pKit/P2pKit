@@ -131,6 +131,8 @@ Dir.mktmpdir("p2pkit-bootstrap-policy-") do |directory|
     %w[initial-recipient-initialize initial-recipient-cache-provider initial-recipient-upload initial-recipient-productive-upload].each do |name|
         FileUtils.cp_r(File.join(ROOT, ".github/actions", name), File.join(directory, ".github/actions", name))
     end
+    # Mutate only these owned copies, even when the original checkout is read-only.
+    FileUtils.chmod_R("u+w", File.join(directory, ".github/actions"))
     P.check_sources(directory)
     checks += 1
     P::ACTIONS.each_key do |name|
