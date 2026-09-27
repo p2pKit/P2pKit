@@ -226,7 +226,16 @@ class SbomTest(unittest.TestCase):
 
     def test_valid_pair(self):
         self.write()
-        self.assertEqual(self.validate(), 11)
+        self.assertEqual(self.validate(), 12)
+
+    def test_rpc_cannot_be_omitted_from_both_source_configuration_graphs(self):
+        self.document['components'] = [entry for entry in self.document['components']
+                                       if entry['name'] != 'p2p-rpc']
+        self.document['dependencies'][0]['dependsOn'].remove('p2p-rpc')
+        self.xml = xml_fixture(self.document)
+        self.write()
+        with self.assertRaisesRegex(VALIDATOR.SbomError, 'required release components are missing'):
+            self.validate()
 
     def test_embedded_claims_must_match_vendor_truth_even_when_both_formats_agree(self):
         mutations = {
@@ -413,12 +422,12 @@ class SbomTest(unittest.TestCase):
             node[:] = list(reversed(node))
         self.xml.set("version", "+01")
         self.write()  # ElementTree uses a namespace prefix, not the generator's default namespace.
-        self.assertEqual(self.validate(), 11)
+        self.assertEqual(self.validate(), 12)
 
     def test_equivalent_hash_case(self):
         component_node(self.xml).find(NS + "hashes/" + NS + "hash").text = "A" * 64
         self.write()
-        self.assertEqual(self.validate(), 11)
+        self.assertEqual(self.validate(), 12)
 
     def test_equivalent_empty_nested_component_containers(self):
         self.document["metadata"]["component"]["components"] = []
@@ -426,7 +435,7 @@ class SbomTest(unittest.TestCase):
         ET.SubElement(root_component(self.xml), NS + "components")
         ET.SubElement(component_node(self.xml), NS + "components")
         self.write()
-        self.assertEqual(self.validate(), 11)
+        self.assertEqual(self.validate(), 12)
 
         ET.SubElement(component_node(self.xml).find(NS + "components"), NS + "component")
         self.write()
@@ -459,7 +468,7 @@ class SbomTest(unittest.TestCase):
                     node.append(addition)
                     self.write()
                     if equivalent:
-                        self.assertEqual(self.validate(), 11)
+                        self.assertEqual(self.validate(), 12)
                     else:
                         with self.assertRaisesRegex(VALIDATOR.SbomError, "XML SBOM content gate failed"):
                             self.validate()
@@ -483,7 +492,7 @@ class SbomTest(unittest.TestCase):
             middle.tail = value[1:]
             node.extend([first, middle, ET.Comment("after")])
             self.write()
-            self.assertEqual(self.validate(), 11)
+            self.assertEqual(self.validate(), 12)
 
             ET.SubElement(node, NS + "unexpected")
             self.write()
@@ -599,7 +608,7 @@ class SbomTest(unittest.TestCase):
                 result = subprocess.run(["bash", str(scripts / "check-sbom.sh"), *arguments],
                                         cwd=self.directory, capture_output=True, text=True, timeout=20)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn("contains 11 release components", result.stdout)
+                self.assertIn("contains 12 release components", result.stdout)
         self.assertEqual((self.directory / "gradle-calls").read_text(), "cyclonedxBom --console=plain\n")
         self.xml.remove(self.xml.find(NS + "components"))
         self.write()

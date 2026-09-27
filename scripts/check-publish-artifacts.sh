@@ -2,14 +2,14 @@
 # P1-29 (BLD-2, 2026-07): executable release gate for the publishing artifact set.
 #
 # Publishes all modules to a throwaway Maven-local repository (never touches
-# ~/.m2) and asserts that every publication of the four library modules carries
+# ~/.m2) and asserts that every publication of the five configured library modules carries
 # the full Maven-Central-required artifact set:
 #   main artifact (.jar / .aar / .klib) + -sources.jar + -javadoc.jar + .pom + .module
 # Native coordinates also require -metadata.jar; LAN's native coordinates
 # additionally require the named -cinterop-p2pkit_nw.klib dependency artifact.
 #
 # Referenced from docs/releasing/checklist.md (local release-shape gate).
-# The six iOS klib publications require a macOS host (iOS targets compile only
+# The nine iOS klib publications require a macOS host (iOS targets compile only
 # there); on other hosts those rows are skipped with a warning.
 #
 # Usage: scripts/check-publish-artifacts.sh [existing-repo-dir]
@@ -201,6 +201,7 @@ check() {
     case "$artifact" in
         p2p-core-*) component_artifact="p2p-core" ;;
         p2p-transport-lan-*) component_artifact="p2p-transport-lan" ;;
+        p2p-rpc-*) component_artifact="p2p-rpc" ;;
         p2p-network-provisioning-android-android)
             component_artifact="p2p-network-provisioning-android"
             ;;
@@ -706,6 +707,9 @@ check p2p-core-android                         .aar
 check p2p-transport-lan                        .jar
 check p2p-transport-lan-jvm                    .jar
 check p2p-transport-lan-android                .aar
+check p2p-rpc                                  .jar
+check p2p-rpc-jvm                              .jar
+check p2p-rpc-android                          .aar
 check p2p-network-provisioning-android         .jar
 check p2p-network-provisioning-android-android .aar
 check p2p-network-provisioning-desktop         .jar
@@ -717,6 +721,8 @@ check_kotlin_module p2p-core-jvm                             jar p2p-core
 check_kotlin_module p2p-core-android                         aar p2p-core
 check_kotlin_module p2p-transport-lan-jvm                    jar p2p-transport-lan
 check_kotlin_module p2p-transport-lan-android                aar p2p-transport-lan
+check_kotlin_module p2p-rpc-jvm                              jar p2p-rpc
+check_kotlin_module p2p-rpc-android                          aar p2p-rpc
 check_kotlin_module p2p-network-provisioning-android-android aar p2p-network-provisioning-android
 check_kotlin_module p2p-network-provisioning-desktop         jar p2p-network-provisioning-desktop
 check_rc2_legacy_jvm_symbols
@@ -727,6 +733,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     for target in iosarm64 iossimulatorarm64 iosx64; do
         check "p2p-core-$target"          .klib
         check "p2p-transport-lan-$target" .klib
+        check "p2p-rpc-$target"           .klib
         case "$target" in
             iosarm64) native_target="ios_arm64" ;;
             iossimulatorarm64) native_target="ios_simulator_arm64" ;;
@@ -734,9 +741,10 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
         esac
         check_klib_identity "p2p-core-$target" p2p-core "$native_target"
         check_klib_identity "p2p-transport-lan-$target" p2p-transport-lan "$native_target"
+        check_klib_identity "p2p-rpc-$target" p2p-rpc "$native_target"
     done
 else
-    echo "WARN non-macOS host: skipped the 6 iOS klib publications"
+    echo "WARN non-macOS host: skipped the 9 iOS klib publications"
 fi
 
 echo

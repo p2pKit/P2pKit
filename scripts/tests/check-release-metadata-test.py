@@ -52,7 +52,7 @@ class ReleaseMetadataTest(unittest.TestCase):
             JAVA: f"public final class P2pPomMetadata {{\n    {DECLARATION}\n}}\n",
         }
         for module in (
-            "p2p-core", "p2p-transport-lan", "p2p-network-provisioning-android",
+            "p2p-core", "p2p-transport-lan", "p2p-rpc", "p2p-network-provisioning-android",
             "p2p-network-provisioning-desktop",
         ):
             files[f"library/{module}/build.gradle.kts"] = "P2pPomMetadata.configure(this)\n"

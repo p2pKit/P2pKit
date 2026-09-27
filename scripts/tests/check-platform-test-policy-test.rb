@@ -38,8 +38,8 @@ def check_job(job, profile, scoped)
     paths = evidence.fetch("with").fetch("path").split
     raise "report exclusions are not allowed" if paths.any? { |path| path.start_with?("!") }
     if profile == "ios-x64"
-        %w[p2p-core p2p-transport-lan].each do |project|
-            raise "missing Intel XML evidence" unless paths.include?("library/#{project}/build/test-results/iosX64Test/**")
+        %w[library/p2p-core library/p2p-transport-lan library/p2p-rpc samples/p2p-sample-rpc].each do |project|
+            raise "missing Intel XML evidence" unless paths.include?("#{project}/build/test-results/iosX64Test/**")
         end
     end
     raise "platform evidence requires bounded retention" unless evidence.fetch("with")["retention-days"] == 7

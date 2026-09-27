@@ -42,6 +42,22 @@
         ":p2p-network-provisioning-desktop:test"
       ]
     },
+    ":p2p-rpc": {
+      "targets": {
+        "android": "androidJvm",
+        "iosArm64": "native",
+        "iosSimulatorArm64": "native",
+        "iosX64": "native",
+        "jvm": "jvm",
+        "metadata": "common"
+      },
+      "tests": [
+        ":p2p-rpc:iosSimulatorArm64Test",
+        ":p2p-rpc:iosX64Test",
+        ":p2p-rpc:jvmTest",
+        ":p2p-rpc:testAndroidHostTest"
+      ]
+    },
     ":p2p-sample-android": {
       "targets": {
         "android": "androidJvm"
@@ -72,6 +88,22 @@
       },
       "tests": [
         ":p2p-sample-diagnostics:test"
+      ]
+    },
+    ":p2p-sample-rpc": {
+      "targets": {
+        "android": "androidJvm",
+        "iosArm64": "native",
+        "iosSimulatorArm64": "native",
+        "iosX64": "native",
+        "jvm": "jvm",
+        "metadata": "common"
+      },
+      "tests": [
+        ":p2p-sample-rpc:iosSimulatorArm64Test",
+        ":p2p-sample-rpc:iosX64Test",
+        ":p2p-sample-rpc:jvmTest",
+        ":p2p-sample-rpc:testAndroidHostTest"
       ]
     },
     ":p2p-transport-lan": {

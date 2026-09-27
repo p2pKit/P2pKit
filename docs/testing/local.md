@@ -50,13 +50,16 @@ scripts/check-publish-artifacts.sh
 scripts/check-published-consumers.sh
 ./gradlew :p2p-core:checkKotlinAbi \
   :p2p-transport-lan:checkKotlinAbi \
+  :p2p-rpc:checkKotlinAbi \
   :p2p-network-provisioning-android:checkKotlinAbi \
   :p2p-network-provisioning-desktop:checkKotlinAbi
 ./gradlew :p2p-core:checkAndroidAbi \
   :p2p-transport-lan:checkAndroidAbi \
+  :p2p-rpc:checkAndroidAbi \
   :p2p-network-provisioning-android:checkAndroidAbi
 ./gradlew :p2p-core:dokkaGeneratePublicationHtml \
   :p2p-transport-lan:dokkaGeneratePublicationHtml \
+  :p2p-rpc:dokkaGeneratePublicationHtml \
   :p2p-network-provisioning-android:dokkaGeneratePublicationHtml \
   :p2p-network-provisioning-desktop:dokkaGeneratePublicationHtml
 ```
@@ -65,6 +68,16 @@ The complete macOS gate is `scripts/run-release-gate.sh`. It includes module
 tests, Android lint/host tests, Apple simulator tests, ABI, strict Dokka,
 publication artifacts, isolated consumers, SBOM, Swift warnings-as-errors, and
 release-XCFramework provenance.
+
+## Optional RPC workstream
+
+The new `:p2p-rpc` library and `:p2p-sample-rpc` example are feature source,
+not compiled, executed, published or capacity-qualified. Follow the
+[RPC validation requirements](../rpc/qualification.md) and request separate
+build/dependency/platform execution authorization in restricted workspaces.
+Missing genuine RPC ABI dumps and RPC/sample locks remain hard gate failures,
+not permission to fabricate them or disable checks. The historical main
+`org.jmdns` lock issue remains separate.
 
 ## Kit diagnostic teardown
 
@@ -119,7 +132,7 @@ physical-device, hostile-network, independent interoperability and cryptographic
 
 ## Android ABI graph verification
 
-`scripts/check-android-abi-guard.sh` runs a strict Gradle dry-run of the three Android modules' `check` tasks and
+`scripts/check-android-abi-guard.sh` runs a strict Gradle dry-run of the four Android library modules' `check` tasks and
 requires their compiler, ABI extraction and comparison tasks in the realized graph. It does not execute those
 tasks or replace a real `check`/ABI comparison. Configure the SDKs below first, and stop Gradle afterward even
 on failure. Full CI and `scripts/run-release-gate.sh` each invoke this unflagged command explicitly once.
@@ -172,6 +185,7 @@ Run the library suites without requesting Apple/Android tasks:
 
 ```bash
 ./gradlew :p2p-core:jvmTest :p2p-transport-lan:jvmTest \
+  :p2p-rpc:jvmTest :p2p-sample-rpc:jvmTest \
   :p2p-network-provisioning-desktop:test --continue --no-build-cache \
   --dependency-verification strict --max-workers=2 --no-parallel --console=plain
 ./gradlew --stop

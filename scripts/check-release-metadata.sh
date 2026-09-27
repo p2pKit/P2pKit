@@ -112,6 +112,7 @@ RUBY
 for publication_build in \
     library/p2p-core/build.gradle.kts \
     library/p2p-transport-lan/build.gradle.kts \
+    library/p2p-rpc/build.gradle.kts \
     library/p2p-network-provisioning-android/build.gradle.kts \
     library/p2p-network-provisioning-desktop/build.gradle.kts; do
     require_text "$publication_build" 'P2pPomMetadata.configure(this)'

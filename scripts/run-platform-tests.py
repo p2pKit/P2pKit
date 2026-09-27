@@ -21,8 +21,10 @@ ROOT = Path(__file__).resolve().parents[1]
 POLICY = ROOT / "gradle/platform-test-policy.json"
 PROFILES = {
     "full": ["check"],
-    "ios-x64": [":p2p-core:iosX64Test", ":p2p-transport-lan:iosX64Test"],
-    "ios-arm64": [":p2p-core:iosSimulatorArm64Test", ":p2p-transport-lan:iosSimulatorArm64Test"],
+    "ios-x64": [":p2p-core:iosX64Test", ":p2p-transport-lan:iosX64Test",
+                  ":p2p-rpc:iosX64Test", ":p2p-sample-rpc:iosX64Test"],
+    "ios-arm64": [":p2p-core:iosSimulatorArm64Test", ":p2p-transport-lan:iosSimulatorArm64Test",
+                  ":p2p-rpc:iosSimulatorArm64Test", ":p2p-sample-rpc:iosSimulatorArm64Test"],
     "ios-lan-arm64": [":p2p-transport-lan:iosSimulatorArm64Test"],
     "ios-lan-x64": [":p2p-transport-lan:iosX64Test"],
 }

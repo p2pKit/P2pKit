@@ -8,6 +8,8 @@ CATALOG="$ROOT/gradle/libs.versions.toml"
 PROPERTIES="$ROOT/gradle.properties"
 CORE_BUILD="$ROOT/library/p2p-core/build.gradle.kts"
 LAN_BUILD="$ROOT/library/p2p-transport-lan/build.gradle.kts"
+RPC_BUILD="$ROOT/library/p2p-rpc/build.gradle.kts"
+RPC_SAMPLE_BUILD="$ROOT/samples/p2p-sample-rpc/build.gradle.kts"
 ANDROID_PROVISIONING_BUILD="$ROOT/library/p2p-network-provisioning-android/build.gradle.kts"
 DESKTOP_PROVISIONING_BUILD="$ROOT/library/p2p-network-provisioning-desktop/build.gradle.kts"
 CONSUMER_GATE="$ROOT/scripts/check-published-consumers.sh"
@@ -71,6 +73,14 @@ done
     fail "p2p-core does not preserve both JVM and Android module names"
 [[ "$(grep -Fc 'compilerOptions.moduleName.set(project.name)' "$LAN_BUILD")" == "2" ]] ||
     fail "p2p-transport-lan does not preserve both JVM and Android module names"
+[[ "$(grep -Fc 'compilerOptions.moduleName.set(project.name)' "$RPC_BUILD")" == "2" ]] ||
+    fail "p2p-rpc does not declare both JVM and Android module names"
+for rpc_build in "$RPC_BUILD" "$RPC_SAMPLE_BUILD"; do
+    grep -Fq 'target.binaries.configureEach {' "$rpc_build" ||
+        fail "$rpc_build does not apply its iOS floor to all binaries, including tests"
+    grep -Fq -- '-Xoverride-konan-properties=minVersion.ios=$minimum' "$rpc_build" ||
+        fail "$rpc_build does not use its configured iOS floor"
+done
 grep -Fq 'compilerOptions.moduleName.set(project.name)' "$ANDROID_PROVISIONING_BUILD" ||
     fail "Android provisioning does not preserve its module name"
 grep -Fq 'compilerOptions.moduleName.set(project.name)' "$DESKTOP_PROVISIONING_BUILD" ||

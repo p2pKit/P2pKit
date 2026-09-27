@@ -25,6 +25,8 @@ jobs:
         --lockfile=gradle.lockfile:./buildscript-gradle.lockfile
         --lockfile=./library/p2p-core/gradle.lockfile
         --lockfile=./library/p2p-transport-lan/gradle.lockfile
+        --lockfile=./library/p2p-rpc/gradle.lockfile
+        --lockfile=./samples/p2p-sample-rpc/gradle.lockfile
         --lockfile=./library/p2p-network-provisioning-android/gradle.lockfile
         --lockfile=./library/p2p-network-provisioning-desktop/gradle.lockfile
         --lockfile=./samples/p2p-sample-android/gradle.lockfile

@@ -15,6 +15,7 @@ remediation records. Start with the repository [README](../README.md).
 - [Error handling and recovery](guides/error-handling.md)
 - [Custom transport providers](guides/custom-transports.md)
 - [Samples](guides/samples.md)
+- [Optional organization-LAN RPC](rpc/README.md) — feature source; not published or qualified
 
 ## Test and release
 

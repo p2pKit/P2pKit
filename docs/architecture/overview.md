@@ -27,10 +27,17 @@ Application
 | `:p2p-transport-lan` | Android/JVM JmDNS, Apple Bonjour, TCP connections, platform path handling |
 | `:p2p-network-provisioning-android` | Optional LocalOnlyHotspot and Wi-Fi join integration |
 | `:p2p-network-provisioning-desktop` | Optional manual-endpoint fallback for JVM/Desktop |
+| `:p2p-rpc` | Optional explicitly selected host/client RPC above core/LAN (unqualified feature source) |
 
 Production modules live under `library/`; runnable diagnostics and consumer
 examples live under `samples/`. Gradle project names and published artifact IDs
 remain independent of physical directory layout.
+
+The optional [RPC profile](../rpc/README.md) owns a dedicated restricted kit,
+explicit organization-LAN policy, procedure dispatch and bounded in-memory
+result recovery. Core/LAN never depend on RPC. Existing P2P defaults and
+historical publications are unchanged; runtime compatibility remains to be
+verified. See the [RPC qualification blockers](../rpc/qualification.md).
 
 ## Security boundary
 

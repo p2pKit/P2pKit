@@ -39,6 +39,17 @@ P2pKit does not provide internet signaling, NAT traversal, relays, accounts,
 rooms, or application-level authorization. Both peers must already be mutually
 reachable on the LAN. Guest/enterprise Wi-Fi may block multicast or peer TCP.
 
+## Optional organization-LAN RPC (feature source)
+
+The new optional [`p2p-rpc`](docs/rpc/README.md) module adds one explicitly
+selected authenticated host, dial-only clients, registered typed procedures,
+bounded recovery, administrator pairing and best-effort notifications. It
+reuses core/LAN rather than changing ordinary P2P defaults.
+
+**Not published, compiled or capacity-qualified yet.** RPC is not in the
+`0.7.0-rc3` artifacts below. The [qualification requirements](docs/rpc/qualification.md)
+and Release Foundation's **NOT_READY** status, HOLDs and gates remain intact.
+
 ## Install
 
 Use `mavenCentral()` and keep all P2pKit modules on the same version.
@@ -242,7 +253,8 @@ The samples' in-memory stores are development-only.
 | `library/p2p-transport-lan` / `:p2p-transport-lan` | JmDNS/Bonjour and TCP transport |
 | `library/p2p-network-provisioning-android` | Optional Android network provisioning |
 | `library/p2p-network-provisioning-desktop` | Optional JVM manual-endpoint provisioning |
-| `samples/` | Android, JVM CLI, Desktop UI, KMP, iOS, and shared diagnostics samples |
+| `library/p2p-rpc` / `:p2p-rpc` | Optional organization-LAN RPC (unqualified feature source) |
+| `samples/` | Android, JVM CLI, Desktop UI, KMP, iOS, diagnostics, and optional RPC examples |
 | `buildSrc/` | Build provenance and canonical publication metadata logic |
 | `scripts/` | Release, security, publication, consumer, and repository gates |
 

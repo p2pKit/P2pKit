@@ -19,6 +19,7 @@ reset_fixture() {
         "$FIXTURE/scripts/tests" \
         "$FIXTURE/library/p2p-core/api/android" \
         "$FIXTURE/library/p2p-transport-lan/api/android" \
+        "$FIXTURE/library/p2p-rpc/api/android" \
         "$FIXTURE/library/p2p-network-provisioning-android/api/android"
     cp "$ROOT/build.gradle.kts" "$FIXTURE/build.gradle.kts"
     cp "$ROOT/.github/workflows/ci.yml" "$FIXTURE/.github/workflows/ci.yml"
@@ -32,6 +33,8 @@ reset_fixture() {
         "$FIXTURE/library/p2p-transport-lan/build.gradle.kts"
     cp "$ROOT/library/p2p-transport-lan/api/android/p2p-transport-lan.api" \
         "$FIXTURE/library/p2p-transport-lan/api/android/p2p-transport-lan.api"
+    cp "$ROOT/library/p2p-rpc/build.gradle.kts" "$FIXTURE/library/p2p-rpc/build.gradle.kts"
+    cp "$ROOT/library/p2p-rpc/api/android/p2p-rpc.api" "$FIXTURE/library/p2p-rpc/api/android/p2p-rpc.api"
     cp "$ROOT/library/p2p-network-provisioning-android/build.gradle.kts" \
         "$FIXTURE/library/p2p-network-provisioning-android/build.gradle.kts"
     cp "$ROOT/library/p2p-network-provisioning-android/api/android/p2p-network-provisioning-android.api" \

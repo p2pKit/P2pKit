@@ -52,10 +52,12 @@ class CoveragePolicyTest(unittest.TestCase):
         arm = self.assess(example_report())
         intel = self.assess(example_report(arch="x64"), arch="x64")
         x64_only = self.assess(example_report("ios-x64", "x64"), "ios-x64", "x64")
-        self.assertEqual(14, len(arm))
-        self.assertEqual(14, len(intel))
-        self.assertEqual({":p2p-core:iosX64Test", ":p2p-transport-lan:iosX64Test"}, x64_only)
-        native_arm = [":p2p-core:iosSimulatorArm64Test", ":p2p-transport-lan:iosSimulatorArm64Test"]
+        self.assertEqual(20, len(arm))
+        self.assertEqual(20, len(intel))
+        self.assertEqual({":p2p-core:iosX64Test", ":p2p-transport-lan:iosX64Test",
+                          ":p2p-rpc:iosX64Test", ":p2p-sample-rpc:iosX64Test"}, x64_only)
+        native_arm = [":p2p-core:iosSimulatorArm64Test", ":p2p-transport-lan:iosSimulatorArm64Test",
+                      ":p2p-rpc:iosSimulatorArm64Test", ":p2p-sample-rpc:iosSimulatorArm64Test"]
         self.assertEqual(native_arm, GATE.PROFILES["ios-arm64"])
         arm_only = example_report("ios-arm64", "arm64")
         self.assertEqual(set(native_arm), self.assess(arm_only, "ios-arm64", "arm64"))

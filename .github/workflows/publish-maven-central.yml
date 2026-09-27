@@ -81,6 +81,7 @@ jobs:
             build/reports/cyclonedx/bom.*
             library/p2p-core/api/**
             library/p2p-transport-lan/api/**
+            library/p2p-rpc/api/**
             library/p2p-network-provisioning-desktop/api/**
             library/p2p-transport-lan/build/XCFrameworks/release/BUILD_*.txt
           if-no-files-found: warn

@@ -56,5 +56,7 @@ jobs:
             build/reports/platform-tests/**
             library/p2p-core/build/test-results/iosX64Test/**
             library/p2p-transport-lan/build/test-results/iosX64Test/**
+            library/p2p-rpc/build/test-results/iosX64Test/**
+            samples/p2p-sample-rpc/build/test-results/iosX64Test/**
           if-no-files-found: warn
           retention-days: 7

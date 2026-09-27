@@ -12,6 +12,8 @@ fail() {
 declare -a mappings=(
     "p2p-core|library/p2p-core"
     "p2p-transport-lan|library/p2p-transport-lan"
+    "p2p-rpc|library/p2p-rpc"
+    "p2p-sample-rpc|samples/p2p-sample-rpc"
     "p2p-network-provisioning-android|library/p2p-network-provisioning-android"
     "p2p-network-provisioning-desktop|library/p2p-network-provisioning-desktop"
     "p2p-sample-diagnostics|samples/p2p-sample-diagnostics"
@@ -45,5 +47,6 @@ grep -Fq 'samples/iosApp/p2pkit-sample.xcodeproj' "$ROOT/scripts/run-release-gat
     fail "release gate does not build the relocated iOS project"
 
 ruby "$ROOT/scripts/tests/check-android-setup-policy-test.rb"
+python3 "$ROOT/scripts/tests/check-rpc-module-policy-test.py"
 
-echo "RESULT: PASS — 10 Gradle projects use the canonical library/ and samples/ layout"
+echo "RESULT: PASS — 12 Gradle projects use the canonical library/ and samples/ layout"

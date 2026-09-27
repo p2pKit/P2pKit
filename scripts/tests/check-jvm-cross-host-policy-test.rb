@@ -7,13 +7,16 @@ MATRIX = [
     {"os" => "ubuntu-latest", "wrapper" => "./gradlew"},
     {"os" => "windows-latest", "wrapper" => '.\gradlew.bat'},
 ].freeze
-TASKS = %w[:p2p-core:jvmTest :p2p-transport-lan:jvmTest :p2p-network-provisioning-desktop:test].freeze
+TASKS = %w[:p2p-core:jvmTest :p2p-transport-lan:jvmTest :p2p-rpc:jvmTest
+           :p2p-sample-rpc:jvmTest :p2p-network-provisioning-desktop:test].freeze
 ARGUMENTS = ["./gradlew", "--no-daemon", *TASKS, "--continue", "--no-build-cache",
              "--dependency-verification", "strict", "--max-workers=2", "--no-parallel", "--console=plain"].freeze
 REPORTS = [
-    ["p2p-core", "jvmTest"], ["p2p-transport-lan", "jvmTest"], ["p2p-network-provisioning-desktop", "test"],
+    ["p2p-core", "jvmTest"], ["p2p-transport-lan", "jvmTest"], ["p2p-rpc", "jvmTest"],
+    ["p2p-sample-rpc", "jvmTest"], ["p2p-network-provisioning-desktop", "test"],
 ].flat_map do |mod, task|
-    ["library/#{mod}/build/test-results/#{task}/**", "library/#{mod}/build/reports/tests/#{task}/**"]
+    folder = mod.start_with?("p2p-sample-") ? "samples" : "library"
+    ["#{folder}/#{mod}/build/test-results/#{task}/**", "#{folder}/#{mod}/build/reports/tests/#{task}/**"]
 end.freeze
 ALWAYS = "${{ always() }}"
 WRAPPER = "${{ matrix.wrapper }}"
