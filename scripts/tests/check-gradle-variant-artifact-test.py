@@ -38,6 +38,30 @@ def document(artifact: str = ARTIFACT) -> dict:
     }
 
 
+ROOT_MODULE = "variant-shared"
+ALIAS = f"{MODULE}-{VERSION}.jar"
+
+
+def kmp_documents(sha: str = SHA) -> tuple[dict, dict]:
+    attributes = {"org.gradle.category": "library", "org.gradle.usage": "kotlin-metadata",
+                  "org.jetbrains.kotlin.platform.type": "native", "org.jetbrains.kotlin.native.target": "ios_arm64"}
+    child = {
+        "formatVersion": "1.1",
+        "component": {"group": GROUP, "module": ROOT_MODULE, "version": VERSION,
+                      "url": f"../../{ROOT_MODULE}/{VERSION}/{ROOT_MODULE}-{VERSION}.module"},
+        "variants": [{"name": "iosArm64MetadataElements", "attributes": attributes.copy(),
+                      "files": [{"name": ARTIFACT, "url": ALIAS, "sha256": sha}]}],
+    }
+    root = {
+        "formatVersion": "1.1",
+        "component": {"group": GROUP, "module": ROOT_MODULE, "version": VERSION},
+        "variants": [{"name": "iosArm64MetadataElements", "attributes": attributes.copy(),
+                      "available-at": {"group": GROUP, "module": MODULE, "version": VERSION,
+                                       "url": f"../../{MODULE}/{VERSION}/{MODULE}-{VERSION}.module"}}],
+    }
+    return child, root
+
+
 class LocatorTest(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="p2pkit-variant-parser.")
@@ -134,6 +158,84 @@ class LocatorTest(unittest.TestCase):
             args[index] = value
             with self.subTest(index=index), self.assertRaisesRegex(ValueError, "invalid"):
                 LOCATOR.artifact_path(args)
+
+
+class KmpLocatorTest(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="p2pkit-kmp-variant.")
+        self.addCleanup(self.temporary.cleanup)
+        self.path = Path(self.temporary.name) / "child.module"
+        self.root = Path(self.temporary.name) / "root.module"
+        self.child, self.value = kmp_documents()
+
+    def locate(self):
+        self.path.write_text(json.dumps(self.child))
+        self.root.write_text(json.dumps(self.value))
+        return LOCATOR.artifact_path([str(self.path), GROUP, MODULE, VERSION, ARTIFACT, SHA, str(self.root)])
+
+    def test_signed_root_mode_binds_child_and_local_alias_without_changing_default(self):
+        self.assertEqual(self.locate(), f"{COMPONENT_PATH}/{VERSION}/{ALIAS}")
+        with self.assertRaisesRegex(ValueError, "redirects are unsupported"):
+            LOCATOR.artifact_path([str(self.path), GROUP, MODULE, VERSION, ARTIFACT, SHA])
+        self.assertEqual(LOCATOR.root_coordinate([str(self.path), GROUP, MODULE, VERSION]), ROOT_MODULE)
+
+    def test_common_metadata_self_root_alias(self):
+        self.child["component"] = {"group": GROUP, "module": MODULE, "version": VERSION}
+        self.child["variants"][0]["attributes"]["org.jetbrains.kotlin.platform.type"] = "common"
+        self.value = self.child
+        self.assertEqual(self.locate(), f"{COMPONENT_PATH}/{VERSION}/{ALIAS}")
+
+    def test_root_identity_redirect_and_reciprocal_publication(self):
+        for target, field, bad in (
+            ("child", "group", "foreign.group"), ("child", "version", "2.0"),
+            ("child", "url", "https://attacker.invalid/root.module"),
+            ("child", "url", f"../../other/{VERSION}/{ROOT_MODULE}-{VERSION}.module"),
+            ("root", "group", "foreign.group"), ("root", "module", "other"),
+            ("root", "version", "2.0"), ("root", "url", "../another.module"),
+        ):
+            with self.subTest(target=target, field=field), self.assertRaises(ValueError):
+                self.child, self.value = kmp_documents()
+                (self.child if target == "child" else self.value)["component"][field] = bad
+                self.locate()
+        for field, bad in (("group", "other"), ("module", "other"), ("version", "2.0"),
+                           ("url", f"../../other/{VERSION}/{MODULE}-{VERSION}.module")):
+            with self.subTest(publication=field), self.assertRaises(ValueError):
+                self.child, self.value = kmp_documents()
+                self.value["variants"][0]["available-at"][field] = bad
+                self.locate()
+
+    def test_alias_requires_exact_hash_bound_attributes_and_same_directory(self):
+        for sha in (None, "b" * 64, "", 0):
+            with self.subTest(sha=sha), self.assertRaises(ValueError):
+                self.child, self.value = kmp_documents()
+                self.child["variants"][0]["files"][0]["sha256"] = sha
+                self.locate()
+        for url in (f"../{VERSION}/{ALIAS}", f"../../other/{ALIAS}", "other.zip", "other.jar?x=1",
+                    "https://attacker.invalid/other.jar", "//attacker.invalid/other.jar", "%61.jar", "../other.jar"):
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                self.child, self.value = kmp_documents()
+                self.child["variants"][0]["files"][0]["url"] = url
+                self.locate()
+        self.child, self.value = kmp_documents()
+        self.child["variants"][0]["files"][0].pop("sha256")
+        with self.assertRaisesRegex(ValueError, "requires its exact SHA-256"):
+            self.locate()
+        self.child, self.value = kmp_documents()
+        self.value["variants"][0]["attributes"]["org.jetbrains.kotlin.native.target"] = "ios_x64"
+        with self.assertRaisesRegex(ValueError, "attributes are not bound"):
+            self.locate()
+
+    def test_root_is_bounded_strict_json_and_aliases_are_unambiguous(self):
+        self.locate()
+        raw = self.root.read_bytes()
+        for invalid in (b"", b"[]", b"[" * 2000, raw + b" " * LOCATOR.MAX_METADATA_BYTES,
+                        raw.replace(b'"formatVersion": "1.1"', b'"formatVersion": "1.1", "formatVersion": "1.1"')):
+            with self.subTest(size=len(invalid)), self.assertRaises((ValueError, RecursionError)):
+                self.root.write_bytes(invalid)
+                LOCATOR.artifact_path([str(self.path), GROUP, MODULE, VERSION, ARTIFACT, SHA, str(self.root)])
+        self.child["variants"][0]["files"].append({"name": ARTIFACT, "url": "other.jar", "sha256": SHA})
+        with self.assertRaisesRegex(ValueError, "ambiguous"):
+            self.locate()
 
 
 class CuratorTest(unittest.TestCase):
@@ -361,6 +463,79 @@ fi
         self.assertIn("evidence=sha256-sidecar+signature", self.curate())
         Path(str(self.jar) + ".sha256").write_text("b" * 64)
         self.curate("repository checksum disagrees")
+
+    def prepare_kmp(self):
+        self.value, self.root_value = kmp_documents(self.jar_sha)
+        self.module.write_text(json.dumps(self.value))
+        self.root_relative = f"{GROUP.replace('.', '/')}/{ROOT_MODULE}/{VERSION}/{ROOT_MODULE}-{VERSION}.module"
+        self.root_module = self.repository / self.root_relative
+        self.root_module.parent.mkdir(parents=True)
+        self.root_module.write_text(json.dumps(self.root_value))
+        Path(str(self.root_module) + ".asc").write_text("synthetic root signature")
+        self.jar_relative = f"{COMPONENT_PATH}/{VERSION}/{ALIAS}"
+        self.jar = self.repository / self.jar_relative
+        self.jar.write_bytes(self.bytes)
+        Path(str(self.jar) + ".asc").write_text("synthetic aliased signature")
+        self.write_kmp_metadata(include_artifact=False)
+        self.git("add", "gradle/verification-metadata.xml")
+        self.git("commit", "-qm", "existing checksum-listed KMP publication pair")
+        self.base = self.git("rev-parse", "HEAD").strip()
+        self.write_kmp_metadata()
+
+    def write_kmp_metadata(self, include_artifact=True, include_root=True):
+        self.write_metadata(include_artifact=include_artifact)
+        if include_root:
+            sha = hashlib.sha256(self.root_module.read_bytes()).hexdigest()
+            entry = (f'      <component group="{GROUP}" name="{ROOT_MODULE}" version="{VERSION}">\n'
+                     f'         <artifact name="{ROOT_MODULE}-{VERSION}.module">\n'
+                     f'            <sha256 value="{sha}"/>\n         </artifact>\n      </component>\n')
+            self.metadata.write_text(self.metadata.read_text().replace("   </components>", entry + "   </components>"))
+
+    def test_kmp_alias_authenticates_reciprocal_root_before_artifact(self):
+        self.prepare_kmp()
+        output = self.curate()
+        self.assertIn("RESULT: PASS — reviewed 1 newly admitted artifacts", output)
+        self.assertIn(f"VERIFIED-KMP-ROOT {GROUP}:{ROOT_MODULE}:{VERSION}", output)
+        trace = self.trace.read_text().splitlines()
+        self.assertLess(trace.index("verify variant.module"), trace.index(f"curl {PREFIX}{self.root_relative}"))
+        self.assertLess(trace.index("verify kmp-root.module"), trace.index(f"curl {PREFIX}{self.jar_relative}"))
+        self.assertLess(trace.index(f"curl {PREFIX}{self.jar_relative}"), trace.index("verify artifact"))
+
+    def test_kmp_alias_requires_checksum_listed_root(self):
+        self.prepare_kmp()
+        self.write_kmp_metadata(include_root=False)
+        self.curate("no unique checksum-listed KMP root metadata", no_variant_fetch=True)
+        self.assertNotIn(self.root_relative, self.trace.read_text())
+
+    def test_kmp_root_hash_signature_and_issuer_are_required_before_alias(self):
+        self.prepare_kmp()
+        original = self.root_module.read_bytes()
+        self.root_module.write_bytes(original + b" ")
+        self.curate("downloaded bytes disagree with metadata", no_variant_fetch=True)
+        self.root_module.write_bytes(original)
+        for key, message in (("MOCK_FAIL_SIGNATURE", "invalid detached signature"),
+                             ("MOCK_WRONG_SIGNER", "signature fingerprint mismatch")):
+            with self.subTest(key=key):
+                self.env[key] = "kmp-root.module"
+                self.curate(message, no_variant_fetch=True)
+                del self.env[key]
+        Path(str(self.root_module) + ".asc").unlink()
+        self.curate("no detached signature for KMP root metadata", no_variant_fetch=True)
+
+    def test_kmp_authenticated_root_cannot_relocate_or_mismatch_child(self):
+        self.prepare_kmp()
+        self.root_value["variants"][0]["available-at"]["url"] = "https://attacker.invalid/child.module"
+        self.root_module.write_text(json.dumps(self.root_value))
+        self.write_kmp_metadata()
+        self.curate("KMP root does not reciprocate", no_variant_fetch=True)
+        self.assertNotIn("curl https://attacker.invalid", self.trace.read_text())
+
+    def test_kmp_root_download_is_bounded_before_signature_or_alias(self):
+        self.prepare_kmp()
+        self.root_module.write_bytes(self.root_module.read_bytes() + b" " * LOCATOR.MAX_METADATA_BYTES)
+        self.write_kmp_metadata()
+        self.curate("no KMP root metadata", no_variant_fetch=True)
+        self.assertNotIn("verify kmp-root.module", self.trace.read_text())
 
 
 if __name__ == "__main__":

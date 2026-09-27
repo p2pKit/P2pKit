@@ -345,9 +345,48 @@ while IFS='|' read -r group module version artifact expected_sha; do
                 fail "no detached signature for variant metadata: $group:$module:$version:$locator_artifact"
             locator_fingerprint="$(verify_detached_signature "$work/variant.module" "$work/variant.module.asc" \
                 "$group:$module:$version:$locator_artifact")" || fail "variant metadata signature review failed"
-            relative="$("$PYTHON3" "$ROOT/scripts/resolve-gradle-variant-artifact.py" \
-                "$work/variant.module" "$group" "$module" "$version" "$artifact" "$expected_sha")" ||
-                fail "variant artifact location review failed"
+            if ! relative="$("$PYTHON3" "$ROOT/scripts/resolve-gradle-variant-artifact.py" \
+                "$work/variant.module" "$group" "$module" "$version" "$artifact" "$expected_sha" \
+                2>"$work/locator.error")"; then
+                # KMP publishes logical filenames and a child->root component link. Do not
+                # trust that link alone: authenticate the exact checksum-listed root on the
+                # SAME repository, then require a reciprocal same-group/version publication
+                # and matching variant attributes before using any local filename alias.
+                kmp_root_module="$("$PYTHON3" "$ROOT/scripts/resolve-gradle-variant-artifact.py" \
+                    --kmp-root "$work/variant.module" "$group" "$module" "$version" 2>/dev/null)" || {
+                    cat "$work/locator.error" >&2
+                    fail "variant artifact location review failed"
+                }
+                kmp_root_data="$work/variant.module"
+                if [[ "$kmp_root_module" != "$module" ]]; then
+                    kmp_root_artifact="$kmp_root_module-$version.module"
+                    kmp_root_sha="$(awk -F'|' -v group="$group" -v module="$kmp_root_module" \
+                        -v version="$version" -v artifact="$kmp_root_artifact" '
+                        $1 == group && $2 == module && $3 == version && $4 == artifact { print $5 }
+                    ' "$work/current.entries")"
+                    [[ "$kmp_root_sha" =~ ^[0-9a-f]{64}$ ]] || fail "no unique checksum-listed KMP root metadata"
+                    kmp_root_relative="${group//.//}/$kmp_root_module/$version/$kmp_root_artifact"
+                    kmp_root_data="$work/kmp-root.module"
+                    curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+                        --connect-timeout 20 --max-time 120 --max-filesize 1048576 \
+                        -o "$kmp_root_data" "$candidate/$kmp_root_relative" || fail "no KMP root metadata"
+                    kmp_root_evidence="$(verify_downloaded_checksum "$kmp_root_data" "$kmp_root_sha" \
+                        "$candidate" "$kmp_root_relative" "$group:$kmp_root_module:$version:$kmp_root_artifact")" ||
+                        fail "KMP root checksum review failed"
+                    curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+                        --connect-timeout 20 --max-time 120 \
+                        -o "$work/kmp-root.module.asc" "$candidate/$kmp_root_relative.asc" ||
+                        fail "no detached signature for KMP root metadata"
+                    kmp_root_fingerprint="$(verify_detached_signature "$kmp_root_data" "$work/kmp-root.module.asc" \
+                        "$group:$kmp_root_module:$version:$kmp_root_artifact")" || fail "KMP root signature review failed"
+                    printf 'VERIFIED-KMP-ROOT %s:%s:%s sha256=%s signer=%s evidence=%s repository=%s\n' \
+                        "$group" "$kmp_root_module" "$version" "$kmp_root_sha" "$kmp_root_fingerprint" \
+                        "$kmp_root_evidence" "$candidate"
+                fi
+                relative="$("$PYTHON3" "$ROOT/scripts/resolve-gradle-variant-artifact.py" \
+                    "$work/variant.module" "$group" "$module" "$version" "$artifact" "$expected_sha" \
+                    "$kmp_root_data")" || fail "KMP artifact location review failed"
+            fi
             # Do not switch repositories or relax provenance for a relocated file.
             curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
                 --connect-timeout 20 --max-time 300 \
