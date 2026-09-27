@@ -369,6 +369,32 @@ class PosixProcess:
         self.process.poll()
 
 
+def _owned_posix_stdin(source: Any) -> int:
+    """Borrow one read-only regular-file descriptor without taking its ownership.
+
+    The caller retains the pinned reader and its byte/identity/lifetime checks.
+    Capturing once also avoids passing a mutable fileno callback to Popen.
+    """
+    import fcntl
+    import stat
+
+    if type(source) is int:
+        descriptor = source
+    else:
+        fileno = getattr(source, "fileno", None)
+        if not callable(fileno):
+            raise OwnershipError("Owned stdin requires a read-only file descriptor")
+        descriptor = fileno()
+    if type(descriptor) is not int or descriptor < 0:
+        raise OwnershipError("Owned stdin requires a nonnegative file descriptor")
+    info = os.fstat(descriptor)
+    if not stat.S_ISREG(info.st_mode) or \
+            fcntl.fcntl(descriptor, fcntl.F_GETFL) & os.O_ACCMODE != os.O_RDONLY or \
+            os.get_inheritable(descriptor) or os.lseek(descriptor, 0, os.SEEK_CUR) != 0:
+        raise OwnershipError("Owned stdin must be a noninheritable read-only regular file at offset zero")
+    return descriptor
+
+
 class PosixScope:
     """Serialized, non-reentrant controller; close is not concurrent cancellation.
 
@@ -536,7 +562,7 @@ class PosixScope:
         return sorted(live, key=lambda item: item["pid"])
 
     def spawn(self, argv: list[str], cwd: str, env: dict[str, str], *,
-              stdout: Any = None, stderr: Any = None) -> PosixProcess:
+              stdout: Any = None, stderr: Any = None, stdin: Any = None) -> PosixProcess:
         self._ensure_open()
         # Optional privately owned sinks avoid an additional pipe/thread owner.
         # The caller retains both sinks until complete scope retirement, bounds
@@ -544,14 +570,17 @@ class PosixScope:
         # The default pipe contract used by existing executor callers is unchanged.
         if (stdout is None) != (stderr is None):
             raise OwnershipError("Both owned output sinks are required")
+        input_descriptor = subprocess.DEVNULL if stdin is None else _owned_posix_stdin(stdin)
         launch = {"api": "subprocess.Popen", "requestedArgv": list(argv),
                   "cwd": cwd, "shell": False, "created": False}
         if stdout is not None:
             launch["outputMode"] = "caller-owned-files"
+        if stdin is not None:
+            launch["inputMode"] = "caller-owned-file"
         self.launches.append(launch)
         actual = resolve_executable(argv, cwd, env)
         launch.update({"resolvedArgv": actual, "executable": actual[0]})
-        process = PosixProcess(subprocess.Popen(actual, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+        process = PosixProcess(subprocess.Popen(actual, cwd=cwd, env=env, stdin=input_descriptor,
                                                stdout=subprocess.PIPE if stdout is None else stdout,
                                                stderr=subprocess.PIPE if stderr is None else stderr,
                                                start_new_session=True, close_fds=True, bufsize=0))
@@ -1490,7 +1519,7 @@ class WindowsScope:
         return sorted(result, key=lambda item: item["pid"])
 
     def spawn(self, argv: list[str], cwd: str, env: dict[str, str], *,
-              stdout: Any = None, stderr: Any = None) -> WindowsProcess:
+              stdout: Any = None, stderr: Any = None, stdin: Any = None) -> WindowsProcess:
         """Spawn with the existing pipe contract or two pinned private NativeFiles.
 
         Supplied sinks remain caller-owned. Only fresh duplicates of their
@@ -1498,14 +1527,24 @@ class WindowsScope:
         a Win32 handle is never treated as a CRT descriptor. The caller must keep
         each original alive without a concurrent close through duplication and
         full child/domain retirement, monitor live size, then verify and sync.
+        Optional stdin likewise borrows a read-only NativeFile at offset zero;
+        its caller retains the original through complete child/domain retirement.
         Job assignment, suspended creation and no-breakaway remain unchanged.
         """
         if (stdout is None) != (stderr is None):
             raise OwnershipError("Both owned output sinks are required")
+        if stdin is not None:
+            # The ordinary controller already owns this source-bound primitive.
+            # Keep this optional dependency out of every legacy/default launch.
+            from hosted_windows_files import NativeFile
+            if type(stdin) is not NativeFile:
+                raise OwnershipError("Owned Windows stdin requires the original NativeFile reader")
         launch = {"api": "CreateProcessW", "requestedArgv": list(argv), "cwd": cwd,
                   "created": False, "resumed": False}
         if stdout is not None:
             launch["outputMode"] = "caller-owned-native-files"
+        if stdin is not None:
+            launch["inputMode"] = "caller-owned-native-file"
         self.launches.append(launch)
         actual = resolve_executable(argv, cwd, env)
         launch["resolvedArgv"] = actual
@@ -1532,6 +1571,9 @@ class WindowsScope:
         # can populate its cell and then raise, or its result check can fail;
         # neither case may hide the acquired duplicate from finalization.
         output_duplicates = (PTR(), PTR()) if stdout is not None else ()
+        # Retain the input output-cell before a native call can populate it and
+        # then fail. The borrowed original never enters temporary finalization.
+        input_duplicate = PTR() if stdin is not None else None
         streams: list[_WindowsPipeReader] = []
         process = ProcessInformation()
         created = False
@@ -1566,10 +1608,29 @@ class WindowsScope:
                     self.api.check(self.api.DuplicateHandle(PTR(-1), handle, PTR(-1), ctypes.byref(duplicate),
                                                             0, 1, 2), "DuplicateHandle owned output")
                     writes.append(duplicate.value)
-            stdin = self.api.CreateFileW("NUL", 0x80000000, 3, ctypes.byref(security), 3, 0x80, None)
-            if stdin in (None, ctypes.c_void_p(-1).value):
-                raise OwnershipError("Cannot create owned Windows NUL stdin")
-            handles.append(stdin)
+            if stdin is None:
+                input_handle = self.api.CreateFileW("NUL", 0x80000000, 3, ctypes.byref(security), 3, 0x80, None)
+                if input_handle in (None, ctypes.c_void_p(-1).value):
+                    raise OwnershipError("Cannot create owned Windows NUL stdin")
+                handles.append(input_handle)
+            else:
+                handle = stdin.native_handle
+                if type(handle) is not int or not 0 < handle < ctypes.c_void_p(-1).value or \
+                        (stdout is not None and handle in borrowed) or \
+                        stdin.readable() is not True or stdin.writable() is not False:
+                    raise OwnershipError("Distinct open read-only native stdin at offset zero is required")
+                position = stdin.tell()
+                if type(position) is not int or position != 0:
+                    raise OwnershipError("Original private input must be at offset zero")
+                flags = U32()
+                self.api.check(self.api.GetHandleInformation(handle, ctypes.byref(flags)), "GetHandleInformation")
+                if flags.value & 1:
+                    raise OwnershipError("Original private input handle must not be inheritable")
+                self.api.check(self.api.DuplicateHandle(PTR(-1), handle, PTR(-1), ctypes.byref(input_duplicate),
+                                                        0, 1, 2), "DuplicateHandle owned input")
+                input_handle = input_duplicate.value
+                if input_handle in (None, 0, ctypes.c_void_p(-1).value):
+                    raise OwnershipError("Cannot duplicate owned Windows stdin")
             size = SIZE()
             self.api.InitializeProcThreadAttributeList(None, 2, 0, ctypes.byref(size))
             if not size.value or size.value > 1024 * 1024:
@@ -1578,7 +1639,7 @@ class WindowsScope:
             self.api.check(self.api.InitializeProcThreadAttributeList(attributes, 2, 0,
                                                                        ctypes.byref(size)), "Initialize attributes")
             initialized = True
-            inherited = (PTR * 3)(stdin, *writes)
+            inherited = (PTR * 3)(input_handle, *writes)
             job_list = (PTR * 1)(self.job)
             self.api.check(self.api.UpdateProcThreadAttribute(attributes, 0, 0x00020002, inherited,
                                                                ctypes.sizeof(inherited), None, None), "HANDLE_LIST")
@@ -1587,7 +1648,7 @@ class WindowsScope:
             startup = StartupInfoEx()
             startup.startup.cb = ctypes.sizeof(startup)
             startup.startup.flags = 0x100  # STARTF_USESTDHANDLES
-            startup.startup.stdin, startup.startup.stdout, startup.startup.stderr = stdin, *writes
+            startup.startup.stdin, startup.startup.stdout, startup.startup.stderr = input_handle, *writes
             startup.attributes = ctypes.cast(attributes, PTR)
             if any("\0" in key or "=" in key or "\0" in value for key, value in env.items()):
                 raise OwnershipError("Invalid Windows environment field")
@@ -1633,7 +1694,8 @@ class WindowsScope:
             adopted = {stream.native_handle for stream in streams if stream.descriptor_adopted}
             # Empty cells represent no acquired resource. Successful file mode
             # keeps its existing duplicate0/duplicate1/stdin cleanup ordering.
-            owned_handles = [cell.value for cell in output_duplicates if cell.value] + handles
+            input_handles = [input_duplicate.value] if input_duplicate is not None and input_duplicate.value else []
+            owned_handles = [cell.value for cell in output_duplicates if cell.value] + input_handles + handles
             actions.extend((f"launch-handle-{index}", lambda value=handle: self.api.close(value))
                            for index, handle in enumerate(owned_handles) if handle not in adopted)
             if process.thread:
