@@ -2,7 +2,11 @@
 """Focused receiving seam models; no complete-reader rerun or initialization.
 
 The accepted full graph reader is replaced by an explicitly supplied immutable
-model. No synthetic1066-file fixture is created. Only the NEW receiving owner,
+model. No synthetic1066-file fixture is created. The enter-only compatibility
+model supplies exact in-memory row/directory shapes, not authenticated history.
+Its222 original directory handles plus session/Step handles need more than a
+nofile128 launcher; all remain bounded fixture resources, not new production caps.
+Only the NEW receiving owner,
 fixed acquisition/child/readback/close composition and tiny private POSIX files
 execute. Git, HTTP transport, native processes/clocks and predecessor transport
 remain models. No canonical initializer/provider/build or hosted result exists.
@@ -27,6 +31,7 @@ F = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = F
 spec.loader.exec_module(F)  # Existing guard is installed BEFORE any project import.
 N, S, O, I, Q = F.N, F.S, F.O, F.I, F.Q
+SEAM_REQUEST = S.canonical.init_request
 
 
 class FirstFailure(RuntimeError):
@@ -67,6 +72,9 @@ class ReceivingControls(unittest.TestCase):
                         row["attempted"] = row["closed"] = True
         for registry in (N._RECEIVING_WINDOWS, N._RECEIVING_CONTINUATIONS, N._AUTHORITY_WINDOWS, N._AUTHORITY_RETURNS):
             registry.clear()
+        if hasattr(self, "_seam_roots"):
+            for registry in (N._WORKER_READER_CAPTURES, N._WORKER_AUTHORITY_CAPTURES, N._WORKER_AUTHORITY_RETURNS):
+                registry.clear()  # Only these enter-local fake-domain captures.
 
     def make_graph_model(self):
         fixture = self.fx.fixture
@@ -108,6 +116,10 @@ class ReceivingControls(unittest.TestCase):
         self.assertLessEqual(owner.fence.state().local_start, owner.first.nanoseconds / O.NS)
         self.assertEqual(owner.fence.work, owner.first.nanoseconds + 120 * O.NS)
         self.read_calls.append((owner, owner.fence, owner.first, directory))
+        for name in getattr(self, "_seam_directories", ()):
+            if name != "S":
+                group, *parts = name.split("/")
+                owner.open(self._seam_roots[group].joinpath(*parts))
         self.fx.fixture.ns += self.reader_delay
         if self.reader_error is not None:
             raise self.reader_error
@@ -167,7 +179,116 @@ class ReceivingControls(unittest.TestCase):
         fx.scopes.append(result)
         return result
 
+    def prepare_seam_model(self):
+        """Enter-only compatibility DATA, never the accepted reader/generator.
+
+        Keep composed InitializationControls/SenderStepControls setup unchanged.
+        This supplies the existing fixed capture grammar and Step/input bytes;
+        no capture/continuity/admission checker is patched to accept them.
+        """
+        if hasattr(self, "_seam_roots"):
+            return
+        old, rows, directories = dict(self.graph), {}, set()
+        recipient = N._recipient_path()
+        preparation = recipient.with_name(recipient.name.removesuffix("-recipient"))
+        roots = {"P": preparation, "E": preparation.with_name(preparation.name + "-entry"),
+            "R": recipient, "S": recipient.with_name(recipient.name + "-output")}
+        stamp, clock = self.fx.fixture.ns, self.clock
+        context = O.parse(old["P/context.json"])
+        context.update(root=str(F.ROOT), session=str(preparation))
+        records = {name: old["P/acquisition-queries/" + name + ".bin"] for name in N.ORIGINAL_KEYS}
+        identity = N.initial_identity.bind_worker_match(N.acquisition.stages.BootstrapMatch(records["match"]),
+            event_raw=records["event"], policy_raw=records["candidate_policy_raw"], now=context["observed"]["firstUseAt"])
+
+        def add(name, raw=None):
+            self.assertNotIn(name, rows)
+            rows[name] = O.encoded({"suppliedSeamDataNotOriginalEvidence": name}) if raw is None else raw
+            directories.add(name.rsplit("/", 1)[0])
+
+        def query(root, acquisition=False):
+            directories.add(root + "/query-home")
+            add(root + "/owner.json")
+            add(root + "/session-result.json")
+            for name in N.ORIGINAL_KEYS if acquisition else N.SOURCE_KEYS:
+                add(root + "/" + name + ".bin", records[name])
+            if not acquisition:
+                add(root + "/source-return.json")
+            for number in range(1, 25 if acquisition else 13):
+                directory = root + "/query-" + f"{number:032x}"
+                for name in ("start.json", "baseline.json", "stdout.log", "stderr.log", "result.json"):
+                    add(directory + "/" + name, b"" if name == "stderr.log" else None)
+
+        # Same fixed shapes as the independent WorkerModel fixture, but only
+        # in-memory old rows and actual empty directory handles. No old body
+        # file, old-byte scan, crypto inventory or canonical initializer runs.
+        for group, names in (("P", ("prelude.json", "context.json", "worker-identity.json", "worker-service-time.json",
+                "worker-allocation-proposal.json", "initial-result.json")),
+                ("E", ("entry-window.json", "context.json", "entry-pending.json")),
+                ("R/authority", ("authority-window.json", "context.json", "authority-pending.json"))):
+            for name in names:
+                add(group + "/" + name)
+            for name in (*sorted(S.PHASE_FILES), "child-result.json"):
+                add(group + "/service/" + name, b"" if name == "stderr.log" else None)
+            directories.update(group + "/" + name for name in ("control-home", "temporary"))
+            for name in ("source-before", "acquisition-queries", "source-after"):
+                query(group + "/" + name, name == "acquisition-queries")
+        for name in (*N.RECIPIENT_FILES, "recipient-context.json", "recipient-pending.json"):
+            add("R/" + name)
+        for name in (*sorted(S.PHASE_FILES), "child-result.json"):
+            add("R/recipient-validation/" + name, b"" if name == "stderr.log" else None)
+        for root in ("R/recipient-validation/source-before", "R/recipient-validation/source-after", "R/source-final"):
+            query(root)
+        for name in ("readmission-return.json", "recipient-return.json", "sender-pending.json"):
+            add("S/" + name)
+        directories.update("R/" + name for name in ("control-home", "temporary", "crypto"))
+        for name in ("worker-identity.json", "worker-service-time.json", "worker-allocation-proposal.json"):
+            rows["P/" + name] = old["P/" + name]
+        rows["P/context.json"], rows["P/service/start.json"] = O.encoded(context), old["P/service/start.json"]
+        rows["R/recipient-context.json"] = O.encoded({"job": "c" * 32, "root": str(F.ROOT), "session": str(recipient)})
+        rows["R/recipient-public.asc"] = identity.public_key
+        rows["S/sender-pending.json"] = O.encoded({"readWindow": {"retainedNs": stamp, "previousLocal": stamp / O.NS,
+            "clock": O.clock_value(clock), "readEndNs": stamp + 30 * O.NS, "readLocalCeiling": stamp / O.NS + 30}})
+        self.assertEqual(len(rows), 1066)
+        self.assertEqual({group: sum(name.split("/", 1)[0] == group for name in rows) for group in roots},
+            {"P": 284, "E": 281, "R": 498, "S": 3})
+        self.assertEqual(len(directories), 222)
+        for name in sorted(directories, key=lambda value: (value.count("/"), value)):
+            group, *parts = name.split("/")
+            roots[group].joinpath(*parts).mkdir(parents=True, mode=0o700, exist_ok=True)
+        self._seam_roots, self._seam_directories = roots, tuple(sorted(directories))
+        self.graph = tuple(sorted(rows.items()))
+        self.sender_hash = O.digest(rows["S/sender-pending.json"])
+        os.environ[N.RECEIVING_HASH_ENV] = self.sender_hash
+        start = O.parse(rows["P/service/start.json"])
+        captured = (rows["P/context.json"], tuple(records.items()), start["invocation"], start["startedNs"], start["workEndNs"])
+        path = N._step_path()
+        directory = Q._new_private_directory(path)
+        directory_identity = S.directory_identity(list(directory.identity), clock.role)
+        directory.close()
+        step = O.encoded({"schema": 1, "scope": N.continuity.STEP_SCOPE, "directory": str(path),
+            "directoryIdentity": directory_identity, "senderSha256": self.sender_hash, "observed": context["observed"],
+            "serviceJob": list(N._service_job(captured, clock)), "workerIdentitySha256": O.digest(identity.record),
+            "originalProposalSha256": O.digest(rows["P/worker-allocation-proposal.json"]), "clock": O.clock_value(clock),
+            "bootSha256": self.fx.gate_boot, "lowerNs": stamp, "lowerLocal": stamp / O.NS,
+            "readEndNs": stamp + 30 * O.NS, "readLocalCeiling": stamp / O.NS + 30,
+            "sample": "AFTER_SENDER_FUNCTION_BEFORE_GUARDED_OUTPUT_AND_STEP_RETURN", "writerReturn": "PENDING_OWNER_CLOSE",
+            "originalStepOutcome": "NOT_OBSERVED", "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
+        (path / N.continuity.STEP_FILE).write_bytes(step)
+        (path / N.continuity.STEP_FILE).chmod(0o600)
+        os.environ[N.continuity.STEP_HASH_ENV] = O.digest(step)
+        self.fx.complete_worker_queries = True
+        self.fx.stack.enter_context(patch.object(S.canonical, "init_request", side_effect=SEAM_REQUEST))
+        for name in ("JAVA_HOME", "P2PKIT_AUDIT_JDK21"):
+            home = self.fx.base / name
+            (home / "bin").mkdir(parents=True, mode=0o700)
+            for binary in ("java", "javac"):
+                target = home / "bin" / binary
+                target.write_bytes(b"NONFUNCTIONAL_SYNTHETIC_JDK_NEVER_EXECUTE\n")
+                target.chmod(0o700)
+            os.environ[name] = str(home)
+
     def enter(self):
+        self.prepare_seam_model()
         return N._receive_initialization(self.fx.cancelled)
 
     def assert_receiver_closed(self):
@@ -209,6 +330,31 @@ class ReceivingControls(unittest.TestCase):
                 self.fail("late reader must not yield")
         self.assertEqual(self.fx.queries, [])
         self.assertEqual(self.fx.fixture.requests, [])
+        self.assert_receiver_closed()
+
+    def test_missing_step_cannot_admit_job_from_supplied_sender_graph(self):
+        self.prepare_seam_model()
+        del os.environ[N.continuity.STEP_HASH_ENV]
+        with self.assertRaisesRegex(I.AdmissionError, "RECEIVING_CONTINUITY_REQUIRED"):
+            with self.enter():
+                self.fail("supplied graph alone must not admit a worker job")
+        self.assertEqual(self.fx.queries, [])
+        self.assertEqual(self.fx.scopes, [])
+        self.assertFalse(N._AUTHORITY_RETURNS)
+        self.assert_receiver_closed()
+
+    def test_changed_step_bytes_refuse_before_current_source_or_native_acquisition(self):
+        self.prepare_seam_model()
+        path = N._step_path() / N.continuity.STEP_FILE
+        step = O.parse(path.read_bytes())
+        step["bootSha256"] = "b" * 64
+        path.write_bytes(O.encoded(step))
+        with self.assertRaisesRegex(I.AdmissionError, "RECEIVING_CONTINUITY_BYTES"):
+            with self.enter():
+                self.fail("changed Step must not admit a worker job")
+        self.assertEqual(self.fx.queries, [])
+        self.assertEqual(self.fx.scopes, [])
+        self.assertFalse(N._AUTHORITY_RETURNS)
         self.assert_receiver_closed()
 
     def test_acquisition_close_uses_remaining_init_work_not_final_or_new_time(self):

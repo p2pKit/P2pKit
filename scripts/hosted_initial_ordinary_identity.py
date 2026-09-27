@@ -3,7 +3,7 @@
 This does not turn a supplied OrdinaryMatch or successful gate into productive
 qualification. The actual native caller must separately prove current original
 acquisition, known return, recipient validation and all four genuine compatible
-bootstrap packets. This increment has no native/workflow/controller caller.
+bootstrap packets. Retained records alone confer no native/controller authority.
 No trusted-base fallback, Stage1/bootstrap cast or publication intent exists.
 """
 from __future__ import annotations
@@ -18,6 +18,8 @@ import hosted_initial_recipient_stages as stages
 I = stages.identity
 SCOPE = "ORDINARY_INITIAL_RECIPIENT_IDENTITY_V1"
 MATCH_SCOPE = stages.STAGE2 + "_MATCH_ONLY_NOT_ADMISSION"
+JVM_SCOPE = "JVM_LIBRARY_INITIAL_RECIPIENT_IDENTITY_V1"
+JVM_MATCH_SCOPE = stages.JVM_MATCH_SCOPE
 FIELDS = {"schema", "scope", "profile", "suites", "source", "github", "policy", "initialRecipient", "firstPullRequest"}
 MATCH_FIELDS = {"schema", "scope", "authority", "originalBase", "reviewed", "source", "github", "policy",
     "firstUseAt", "notBefore", "expiresAt", "environment", "stage1", "qualifications", "historicalRecords",
@@ -27,6 +29,18 @@ MATCH_FIELDS = {"schema", "scope", "authority", "originalBase", "reviewed", "sou
 @dataclass(frozen=True)
 class InitialOrdinaryIdentity:
     """Serializable binding only. Native/live ownership is NOT reconstructible."""
+    record: bytes = field(repr=False)
+    original_event: bytes = field(repr=False)
+    original_policy: bytes = field(repr=False)
+    public_key: bytes = field(repr=False)
+    fingerprint: str
+    key_sha256: str
+    expires_at: int
+
+
+@dataclass(frozen=True)
+class InitialJvmLibraryIdentity:
+    """Distinct JVM worker DATA, never OrdinaryMatch, Admission or live current."""
     record: bytes = field(repr=False)
     original_event: bytes = field(repr=False)
     original_policy: bytes = field(repr=False)
@@ -50,8 +64,13 @@ def _declaration(match, first):
 
 def _match(value, first):
     """Closed retained-record checks, not current authority or packet acceptance."""
+    return _worker_match(value, first, jvm=False)
+
+
+def _worker_match(value, first, *, jvm):
+    require(type(jvm) is bool, "MATCH_WORKER_KIND")
     require(type(value) is dict and set(value) == MATCH_FIELDS and type(value["schema"]) is int and
-            value["schema"] == 1 and value["scope"] == MATCH_SCOPE and
+            value["schema"] == 1 and value["scope"] == (JVM_MATCH_SCOPE if jvm else MATCH_SCOPE) and
             value["qualificationAcceptance"] == "NOT_ESTABLISHED_BY_REFERENCE_MATCH", "MATCH_FIELDS")
     require(value["originalBase"] == stages.BASE, "ORIGINAL_BASE")
     reviewed, source = stages.joint.source(value["reviewed"]), stages.joint.source(value["source"])
@@ -73,14 +92,18 @@ def _match(value, first):
     github = stages.fields(value["github"], "profile event ref workflow workflowSha job runId runAttempt "
                            "runnerOS runnerArch", "GITHUB_FIELDS")
     stages.joint.run(github)
-    require(type(github["profile"]) is str and github["profile"] in I.PROFILES, "PROFILE")
+    require(type(github["profile"]) is str and
+            (github["profile"] == I.JVM_PROFILE if jvm else github["profile"] in I.PROFILES), "PROFILE")
     profile = github["profile"]
     roles = [role for role, host in stages.joint.ROLES.items() if host == (github["runnerOS"], github["runnerArch"])]
     require(len(roles) == 1, "HOST")
     role = roles[0]
-    require({"profile": profile, "role": role, "runId": github["runId"], "runAttempt": github["runAttempt"]}
-            in first["runs"], "WORKER_SLOT")
-    workflow, job, _ = I.PROFILES[profile]
+    slot = {"role": role, "runId": github["runId"], "runAttempt": github["runAttempt"]}
+    if not jvm:
+        slot["profile"] = profile
+    require(slot in first["jvmRuns" if jvm else "runs"], "WORKER_SLOT")
+    I.worker_host(profile, (github["runnerOS"], github["runnerArch"]))
+    workflow, job, _ = I.worker_contract(profile)
     require((github["event"], github["ref"], github["workflow"], github["workflowSha"], github["job"]) ==
             ("pull_request", f"refs/pull/{first['number']}/merge", workflow, source["commit"], job), "WORKER_ONLY")
     policy = stages.fields(value["policy"], "origin commit blob path sha256", "POLICY_FIELDS")
@@ -120,9 +143,16 @@ def _match(value, first):
 
 
 def _record(match, first, event_sha256, policy):
+    return _worker_record(match, first, event_sha256, policy, jvm=False)
+
+
+def _worker_record(match, first, event_sha256, policy, *, jvm):
+    require(type(jvm) is bool and (match["github"]["profile"] == I.JVM_PROFILE if jvm else
+            match["github"]["profile"] in I.PROFILES), "RECORD_WORKER_KIND")
     profile = match["github"]["profile"]
     github = {name: value for name, value in match["github"].items() if name != "profile"}
-    value = {"schema": 1, "scope": SCOPE, "profile": profile, "suites": list(I.PROFILES[profile][2]),
+    value = {"schema": 1, "scope": JVM_SCOPE if jvm else SCOPE, "profile": profile,
+        "suites": list(I.worker_contract(profile)[2]),
         "source": match["source"], "github": {**github, "repository": I.REPOSITORY, "eventSha256": event_sha256,
             "eventBinding": {"number": first["number"], "base": stages.BASE["commit"],
                 "head": match["reviewed"]["commit"], "headRepository": I.REPOSITORY,
@@ -130,6 +160,9 @@ def _record(match, first, event_sha256, policy):
         "policy": policy, "initialRecipient": match, "firstPullRequest": first}
     if profile == "desktop":
         value["samplePackagingRequired"] = False  # First PR is never main publication.
+    if jvm:
+        value["cacheCohort"] = {"profile": "desktop", "role":
+            I.worker_host(profile, (github["runnerOS"], github["runnerArch"]))}
     return value
 
 
@@ -140,14 +173,25 @@ def bind_worker_match(match, *, comment_raw, event_raw, policy_raw, now):
     contain the complete first-PR run roster. Native callers cannot skip the
     original comment, current approval/environment or full historical checks.
     """
-    require(type(match) is stages.OrdinaryMatch and type(match.record) is bytes and
+    return _bind_worker_match(match, comment_raw=comment_raw, event_raw=event_raw, policy_raw=policy_raw, now=now,
+                              jvm=False)
+
+
+def bind_jvm_worker_match(match, *, comment_raw, event_raw, policy_raw, now):
+    return _bind_worker_match(match, comment_raw=comment_raw, event_raw=event_raw, policy_raw=policy_raw, now=now,
+                              jvm=True)
+
+
+def _bind_worker_match(match, *, comment_raw, event_raw, policy_raw, now, jvm):
+    require(type(jvm) is bool and type(match) is (stages.JvmLibraryMatch if jvm else stages.OrdinaryMatch) and
+            type(match.record) is bytes and
             type(comment_raw) is bytes and type(event_raw) is bytes and type(policy_raw) is bytes, "ORIGINAL_TYPES")
     value = I.parse(match.record, stages.LIMIT)
     require(set(value) == MATCH_FIELDS and match.record == I.encoded(value), "MATCH_ENCODING")
     authority = stages.fields(value["authority"], "id url bodySha256 owner ownerId createdAt", "AUTHORITY_FIELDS")
     declaration, original_authority, _ = stages.statement(stages.STAGE2, comment_raw, authority["id"], authority["bodySha256"])
     first = declaration["firstPullRequest"]
-    _match(value, first)
+    _worker_match(value, first, jvm=jvm)
     require(declaration == _declaration(value, first) and original_authority == authority, "ORIGINAL_STATEMENT")
     policy, key = I._policy(policy_raw, now)
     require(type(now) is int and policy["notBefore"] <= value["notBefore"] <= value["firstUseAt"] <= now <
@@ -164,9 +208,9 @@ def bind_worker_match(match, *, comment_raw, event_raw, policy_raw, now):
     recipient = policy["recipient"]
     declared = {**value["policy"], "fingerprint": recipient["fingerprint"], "keySha256": recipient["sha256"],
                 "expiresAt": policy["expiresAt"], "retentionDays": 14}
-    raw = I.encoded(_record(value, first, hashlib.sha256(event_raw).hexdigest(), declared))
-    return InitialOrdinaryIdentity(raw, event_raw, policy_raw, key, recipient["fingerprint"],
-                                   recipient["sha256"], policy["expiresAt"])
+    raw = I.encoded(_worker_record(value, first, hashlib.sha256(event_raw).hexdigest(), declared, jvm=jvm))
+    kind = InitialJvmLibraryIdentity if jvm else InitialOrdinaryIdentity
+    return kind(raw, event_raw, policy_raw, key, recipient["fingerprint"], recipient["sha256"], policy["expiresAt"])
 
 
 def cache_cohort(raw):
@@ -178,22 +222,38 @@ def cache_cohort(raw):
     checking this tuple, not feed it to the productive/initializer layout.
     Partial/relabelled Stage2 markers refuse rather than fall through.
     """
-    require(type(raw) is bytes, "RECORD_BYTES")
+    return _cache_cohort(raw, jvm=False)
+
+
+def jvm_cache_cohort(raw):
+    """Initial JVM bytes only; no ordinary-admission or bootstrap fallback."""
+    return _cache_cohort(raw, jvm=True)
+
+
+def _cache_cohort(raw, *, jvm):
+    require(type(jvm) is bool and type(raw) is bytes, "RECORD_BYTES")
     value = I.parse(raw, I.EVENT_LIMIT)
     github, policy, initial = (value.get(name) for name in ("github", "policy", "initialRecipient"))
     binding = github.get("eventBinding") if type(github) is dict else None
     shared_markers = (type(policy) is dict and "origin" in policy or
                       type(binding) is dict and bool({"originalMain", "policyHead"}.intersection(binding)))
-    selected = (value.get("scope") == SCOPE or "firstPullRequest" in value or
-                type(initial) is dict and initial.get("scope") == MATCH_SCOPE or
-                value.get("profile") in ("desktop", "full") and shared_markers)
+    if jvm:
+        selected = (value.get("scope") == JVM_SCOPE or
+                    type(initial) is dict and initial.get("scope") == JVM_MATCH_SCOPE or
+                    value.get("profile") == I.JVM_PROFILE and
+                    (shared_markers or "firstPullRequest" in value or "initialRecipient" in value))
+    else:
+        selected = (value.get("scope") == SCOPE or "firstPullRequest" in value or
+                    type(initial) is dict and initial.get("scope") == MATCH_SCOPE or
+                    value.get("profile") in ("desktop", "full") and shared_markers)
     if not selected:
         return None
     profile = value.get("profile")
-    require(type(profile) is str and profile in I.PROFILES and
-            set(value) == FIELDS | ({"samplePackagingRequired"} if profile == "desktop" else set()) and
-            type(value["schema"]) is int and value["schema"] == 1 and value["scope"] == SCOPE, "RECORD_FIELDS")
-    cohort = _match(initial, value["firstPullRequest"])
+    extra = {"cacheCohort"} if jvm else ({"samplePackagingRequired"} if profile == "desktop" else set())
+    require(type(profile) is str and (profile == I.JVM_PROFILE if jvm else profile in I.PROFILES) and
+            set(value) == FIELDS | extra and type(value["schema"]) is int and value["schema"] == 1 and
+            value["scope"] == (JVM_SCOPE if jvm else SCOPE), "RECORD_FIELDS")
+    execution, role = _worker_match(initial, value["firstPullRequest"], jvm=jvm)
     require(type(policy) is dict and set(policy) == {"origin", "commit", "blob", "path", "sha256", "fingerprint",
             "keySha256", "expiresAt", "retentionDays"} and type(policy["retentionDays"]) is int and
             policy["retentionDays"] == 14 and type(policy["expiresAt"]) is int and
@@ -206,9 +266,15 @@ def cache_cohort(raw):
     # Compare encoded reconstruction as well as the parsed contract: Python's
     # bool/int equality must not let 0 impersonate samplePackagingRequired=False
     # or let a boolean replace a numeric binding in a nested record.
-    require(raw == I.encoded(_record(initial, value["firstPullRequest"], github["eventSha256"], policy)),
+    require(raw == I.encoded(_worker_record(initial, value["firstPullRequest"], github["eventSha256"], policy, jvm=jvm)),
             "RECORD_BINDINGS")
-    return cohort
+    return "desktop" if jvm else execution, role
+
+
+def worker_cohort(raw):
+    """Closed dispatch between distinct retained initial worker identities."""
+    selected = jvm_cache_cohort(raw)
+    return selected if selected is not None else cache_cohort(raw)
 
 
 def retained_identity(record_raw, event_raw, policy_raw, public_key, *, now):
@@ -218,9 +284,22 @@ def retained_identity(record_raw, event_raw, policy_raw, public_key, *, now):
     native owner, token, registry or permission to execute. Its caller must
     separately establish real local source and, at acceptance, genuine current.
     """
-    require(all(type(raw) is bytes for raw in (record_raw, event_raw, policy_raw, public_key)),
+    return _retained_identity(record_raw, event_raw, policy_raw, public_key, now=now, jvm=False)
+
+
+def retained_jvm_identity(record_raw, event_raw, policy_raw, public_key, *, now):
+    return _retained_identity(record_raw, event_raw, policy_raw, public_key, now=now, jvm=True)
+
+
+def retained_worker_identity(record_raw, event_raw, policy_raw, public_key, *, now):
+    selected = jvm_cache_cohort(record_raw)
+    return _retained_identity(record_raw, event_raw, policy_raw, public_key, now=now, jvm=selected is not None)
+
+
+def _retained_identity(record_raw, event_raw, policy_raw, public_key, *, now, jvm):
+    require(type(jvm) is bool and all(type(raw) is bytes for raw in (record_raw, event_raw, policy_raw, public_key)),
             "RETAINED_ORIGINAL_TYPES")
-    require(cache_cohort(record_raw) is not None, "RETAINED_STAGE2_REQUIRED")
+    require(_cache_cohort(record_raw, jvm=jvm) is not None, "RETAINED_STAGE2_REQUIRED")
     value = I.parse(record_raw, I.EVENT_LIMIT)
     match, first = value["initialRecipient"], value["firstPullRequest"]
     policy, key = I._policy(policy_raw, now)
@@ -243,10 +322,11 @@ def retained_identity(record_raw, event_raw, policy_raw, public_key, *, now):
             type(event.get("number")) is int and event["number"] == first["number"] and
             event.get("action") in ("opened", "reopened", "synchronize"), "RETAINED_EVENT")
     stages.joint._current_pr(event.get("pull_request"), _declaration(match, first), first)
-    require(record_raw == I.encoded(_record(match, first, hashlib.sha256(event_raw).hexdigest(), declared)),
+    require(record_raw == I.encoded(_worker_record(match, first, hashlib.sha256(event_raw).hexdigest(), declared, jvm=jvm)),
             "RETAINED_IDENTITY_BINDING")
-    return InitialOrdinaryIdentity(record_raw, event_raw, policy_raw, public_key, recipient["fingerprint"],
-                                   recipient["sha256"], policy["expiresAt"])
+    kind = InitialJvmLibraryIdentity if jvm else InitialOrdinaryIdentity
+    return kind(record_raw, event_raw, policy_raw, public_key, recipient["fingerprint"], recipient["sha256"],
+                policy["expiresAt"])
 
 
 def retained_current(raw, bound, role):
@@ -256,10 +336,25 @@ def retained_current(raw, bound, role):
     Native/current ownership and currency must still be proved by their actual
     callers; hashes here neither perform those checks nor grant execution.
     """
-    require(type(raw) is bytes and type(bound) is InitialOrdinaryIdentity,
+    return _retained_current(raw, bound, role, jvm=False)
+
+
+def retained_jvm_current(raw, bound, role):
+    return _retained_current(raw, bound, role, jvm=True)
+
+
+def retained_worker_current(raw, bound, role):
+    require(type(bound) in (InitialOrdinaryIdentity, InitialJvmLibraryIdentity), "CURRENT_WORKER_TYPE")
+    return _retained_current(raw, bound, role, jvm=type(bound) is InitialJvmLibraryIdentity)
+
+
+def _retained_current(raw, bound, role, *, jvm):
+    require(type(jvm) is bool and type(raw) is bytes and
+            type(bound) is (InitialJvmLibraryIdentity if jvm else InitialOrdinaryIdentity),
             "CURRENT_DATA_TYPES")
     record = I.parse(bound.record, 4 * 1024 * 1024)
-    require(cache_cohort(bound.record) == (record["profile"], role), "CURRENT_DATA_COHORT")
+    require(_cache_cohort(bound.record, jvm=jvm) == ("desktop" if jvm else record["profile"], role),
+            "CURRENT_DATA_COHORT")
     value = I.parse(raw, 4 * 1024 * 1024)
     keys = {"schema", "scope", "contextSha256", "source", "reviewed", "kind", "profile", "role",
         "matchSha256", "identitySha256", "qualifications", "ownerCloseSha256", "nativeReturnSha256", "pendingSha256",

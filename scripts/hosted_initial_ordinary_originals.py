@@ -70,17 +70,21 @@ def _context(env, event_raw, kind, first_use_at):
     # invented REST response. Trees are obtained from native Git, never events.
     stages.joint._current_pr(pr, {"reviewed": {"commit": head}},
                              {"number": number, "merge": {"commit": merge}})
-    profiles = [name for name, (workflow, _, _) in I.PROFILES.items() if env.get("GITHUB_WORKFLOW_REF") ==
-                I.REPOSITORY + "/" + workflow + "@" + ref]
+    candidates = tuple(I.PROFILES) if kind == "gate" else (*I.PROFILES, I.JVM_PROFILE)
+    profiles = [name for name in candidates if env.get("GITHUB_WORKFLOW_REF") ==
+                I.REPOSITORY + "/" + I.worker_contract(name)[0] + "@" + ref and
+                env.get("GITHUB_JOB") == (gate.JOB if kind == "gate" else I.worker_contract(name)[1])]
     require(len(profiles) == 1 and env.get("GITHUB_WORKFLOW_SHA") == merge, "WORKFLOW")
     profile = profiles[0]
-    workflow, worker, _ = I.PROFILES[profile]
+    workflow, worker, _ = I.worker_contract(profile)
     stages.joint.run({"runId": env.get("GITHUB_RUN_ID"), "runAttempt": env.get("GITHUB_RUN_ATTEMPT")})
     host = env.get("RUNNER_OS"), env.get("RUNNER_ARCH")
     roles = [role for role, labels in stages.joint.ROLES.items() if labels == host]
     require(len(roles) == 1 and env.get("GITHUB_JOB") == (gate.JOB if kind == "gate" else worker) and
             (host == ("Linux", "X64") if kind == "gate" else profile != "full" or host[0] == "macOS"),
             "ACTUAL_JOB_HOST")
+    if kind == "worker":
+        require(I.worker_host(profile, host) == roles[0], "WORKER_HOST")
     runner = env.get("RUNNER_NAME")
     require(type(runner) is str and 0 < len(runner) <= 256 and
             not any(ord(char) < 32 or ord(char) == 127 for char in runner), "RUNNER_NAME")
@@ -174,7 +178,8 @@ def _run(context, attempt, jobs, service_date):
     require(len(set(ids)) == len(ids), "DUPLICATE_JOB")
     selector = (GATE_SELECTOR if context["kind"] == "gate" else "macos-latest" if context["profile"] == "full"
                 else origin.wire.DESKTOP_HOSTS[(github["runnerOS"], github["runnerArch"])][1])
-    name = gate.JOB if context["kind"] == "gate" else "complete-gate" if context["profile"] == "full" else selector
+    name = (gate.JOB if context["kind"] == "gate" else "complete-gate" if context["profile"] == "full" else
+            "JVM libraries (" + selector + ")" if context["profile"] == I.JVM_PROFILE else selector)
     selected = [row for row in rows if row.get("name") == name]
     require(len(selected) == 1, "EXACT_JOB")
     job = selected[0]
@@ -333,7 +338,8 @@ def _acquire_ordinary(context, event_raw, git, invocation, token, retain, fence,
             now=now(), histories=histories, prior_ancestry_raw=prior, expected=expected, **policy_inputs)
     else:
         observed["github"]["profile"] = context["profile"]
-        result = stages.match_ordinary(comment_raw=comment_raw, comment_id=selector["commentId"],
+        matcher = stages.match_jvm_library if context["profile"] == I.JVM_PROFILE else stages.match_ordinary
+        result = matcher(comment_raw=comment_raw, comment_id=selector["commentId"],
             body_sha256=selector["bodySha256"], observation_raw=I.encoded(observed), now=now(),
             histories=histories, prior_ancestry_raw=prior, expected=expected, **policy_inputs)
     keep("observation", I.encoded(observed))
@@ -389,10 +395,12 @@ def check_local_worker(root, retained, *, query_runner, check):
     return. Native queries and their retirement still belong to the caller.
     """
     import hosted_initial_ordinary_identity as worker_identity
-    require(type(retained) is worker_identity.InitialOrdinaryIdentity and callable(check),
+    require(type(retained) in (worker_identity.InitialOrdinaryIdentity, worker_identity.InitialJvmLibraryIdentity) and
+            callable(check),
             "LOCAL_WORKER_DATA")
-    checked = worker_identity.retained_identity(retained.record, retained.original_event,
+    checked = worker_identity.retained_worker_identity(retained.record, retained.original_event,
         retained.original_policy, retained.public_key, now=int(time.time()))
+    require(type(checked) is type(retained), "LOCAL_WORKER_TYPE_CHANGED")
     value = I.parse(checked.record, stages.LIMIT)
     root = Path(root)
     env = dict(os.environ)

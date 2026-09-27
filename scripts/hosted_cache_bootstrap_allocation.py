@@ -102,7 +102,10 @@ def fence_arithmetic(job_start_basis_ns):
     total = integer(fixed["allocatedSeconds"])
     require(0 < total < PROPOSED_JOB_SECONDS and len(dict(PHASES)) == len(PHASES),
             "BOOTSTRAP_ALLOCATION_ACCOUNTING")
-    end = integer(job_start + PROPOSED_JOB_SECONDS * NS)
+    require(PROPOSED_JOB_SECONDS == service_time.SOURCE_JOB_SECONDS, "BOOTSTRAP_ALLOCATION_JOB_POLICY")
+    # Keep this proposal helper's original typed overflow refusal.
+    require(job_start <= origin.clocks.UINT64 - PROPOSED_JOB_SECONDS * NS, "BOOTSTRAP_ALLOCATION_INTEGER")
+    end = service_time.job_end_arithmetic(job_start)
     start = integer(end - total * NS)
     cursor, fences = start, {}
     for name, seconds in PHASES:

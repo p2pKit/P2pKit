@@ -12,6 +12,10 @@ import hosted_cache_bootstrap_origin as origin
 
 
 SCOPE = "BOOTSTRAP_SERVICE_TIME_BASIS_V1"
+# Exact populate JOB ceiling in the reviewed bootstrap workflow. This is not
+# a native/Step/initializer/provider cap and does not qualify scheduling fit.
+# Only a genuine current source/native return can admit its original job.
+SOURCE_JOB_SECONDS = 5400
 
 
 class ServiceTimeError(ValueError):
@@ -53,6 +57,16 @@ def basis_arithmetic(jobs_start_ns, job_epoch, service_date):
     return {"jobsRequestStartedNs": jobs_start, "jobStartedEpochSeconds": job_epoch,
             "serviceAgeSeconds": age, "chargedAgeNs": charged_ns,
             "jobStartBasisNs": integer(jobs_start - charged_ns)}
+
+
+def job_end_arithmetic(original_job_basis_ns):
+    """Fixed original-job algebra ONLY; supplied integers grant no admission.
+
+    There is deliberately no duration, now, response-finish or new-Date input.
+    The actual caller must bind this end to its original service job and its
+    current registered source/native return. All smaller caps still apply.
+    """
+    return integer(integer(original_job_basis_ns) + SOURCE_JOB_SECONDS * origin.NS)
 
 
 def derive(admitted, originals, invocation, clock, runner_name):

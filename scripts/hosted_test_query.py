@@ -699,7 +699,7 @@ def admit_hosted(profile, root, directory, *, expected=None):
     entrypoint owns signal handlers only for its finite admission interval.
     """
     require(threading.current_thread() is threading.main_thread(), "QUERY_SIGNAL_OWNER_THREAD")
-    require(profile in identity.PROFILES, "QUERY_PROFILE")
+    identity.worker_contract(profile)
     cancelled, handlers = [], {}
     cancellation = None
 

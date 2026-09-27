@@ -46,7 +46,7 @@ def before(D):
     window = {"schema": 1, "scope": "INITIAL_RECIPIENT_CUSTODY_ABSOLUTE_WINDOW_V1",
         "clock": {"role": "linux-x64", "domain": seed()["initialSealClockDomain"], "ticksPerSecond": NS},
         "originalBootDigest": "a" * 64, "kind": "worker", "originalJobBasisNs": 0,
-        "jobEndNs": 1200 * NS, "startNs": NS, "workEndNs": 241 * NS,
+        "jobEndNs": 5400 * NS, "startNs": NS, "workEndNs": 241 * NS,
         "nativeFinalEndNs": 286 * NS, "readEndNs": 316 * NS,
         "sealEndNs": 346 * NS, "uploadEndNs": 406 * NS, "afterEndNs": 421 * NS}
     return {"schema": 1, "scope": "INITIAL_RECIPIENT_BEFORE_UPLOAD_PENDING_V1", "kind": "worker",

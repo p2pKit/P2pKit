@@ -1112,6 +1112,7 @@ class _Acquired:
     summary_raw: bytes
     pins: tuple
     graphs: tuple
+    job_admission: tuple
 
 
 def _acquired_passive(result):
@@ -1131,6 +1132,13 @@ def _acquired_passive(result):
     C._custody_match_check(result.pins[3])
     for graph in result.graphs:
         N._check_history(graph)
+    final = result.state.final[1]
+    job = N._job_admission(result.job_admission, result.seed, O.encoded(final["originalProposal"]),
+        O.encoded(final["workerIdentity"]), result.state.clock.first.clock)
+    require(job.values[3] == result.state.clock.boot and job.values[4] == tuple(final["history"]["serviceJob"]) and
+        job.values[5] == final["history"]["originalJobBasisNs"] and
+        result.state.clock.last < job.end_ns and result.state.clock.final <= job.end_ns,
+        "ORIGINAL_JOB_ADMISSION")
     return result
 
 
@@ -1244,8 +1252,17 @@ def _acquire(state, token):
         pins = (C._collect_source_pin(before), C._collect_source_pin(after), C._collect_phase_pin(phase),
             C._custody_match_pin(match, "worker"))
         graphs = (N._history_graph(context), N._history_graph(captured), N._history_graph(summary))
+        identity = N.initial_identity.bind_worker_match(match, event_raw=state.event_raw,
+            policy_raw=state.policy_raw, now=int(time.time()))
+        require(identity.record == O.encoded(final["workerIdentity"]), "ORIGINAL_JOB_WORKER")
+        values = N._job_envelope_values(O.encoded(final["originalProposal"]), identity, state.clock.first.clock,
+            N._service_job(captured, state.clock.first.clock), state.clock.boot)
+        require(values[4] == tuple(final["history"]["serviceJob"]) and
+            values[5] == final["history"]["originalJobBasisNs"] and state.fence.now() < values[-1],
+            "ORIGINAL_SERVICE_JOB_END")
+        job_admission = N._OriginalServiceJobAdmission(seed, values), values
         result = _track(_Acquired(state, owner, seed, private, context_raw, before, after, phase, match, captured,
-            child_raw, session_raw, O.encoded(summary), pins, graphs))
+            child_raw, session_raw, O.encoded(summary), pins, graphs, job_admission))
         _update(state, authority=result)
         _acquired_passive(result)
         return result

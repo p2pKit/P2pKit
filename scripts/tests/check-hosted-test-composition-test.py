@@ -49,7 +49,7 @@ class CompositionPolicy(unittest.TestCase):
         path = "scripts/run-hosted-test-custody.py"
         for before, after in (
             (b'value.get("scope") == "ORDINARY_HOSTED_TEST_CUSTODY_IDENTITY" and\n'
-             b'            initial.identity.cache_cohort(record) is None', b'True'),
+             b'            initial.identity.worker_cohort(record) is None', b'True'),
             (b'if context.get("scope") == initial.INITIAL_CONTEXT_SCOPE:', b'if False:'),
             (b'digest(bound.record) == binding["identitySha256"]', b'True'),
             (b'return False  # C2 is the first PR, never a main application producer.', b'return True'),
@@ -62,10 +62,10 @@ class CompositionPolicy(unittest.TestCase):
         POLICY.check_sources(self.sources)
         path = "scripts/hosted_dependency_seed_files.py"
         for before, after in (
-            (b'ordinary = initial_ordinary.cache_cohort(admitted_raw)', b'ordinary = None'),
+            (b'ordinary = initial_ordinary.worker_cohort(admitted_raw)', b'ordinary = None'),
             (b'profile is None and role is None or ordinary == (profile, role)', b'True'),
-            (b'            return None\n        initial = initial_bootstrap.cache_cohort(admitted_raw)',
-             b'            return ordinary\n        initial = initial_bootstrap.cache_cohort(admitted_raw)'),
+            (b'            return None\n        producer = _selected_bootstrap_cohort(admitted_raw)',
+             b'            return ordinary\n        producer = _selected_bootstrap_cohort(admitted_raw)'),
         ):
             with self.subTest(before=before):
                 self.assertEqual(self.sources[path].count(before), 1, "initial ordinary seed mutation must target one executable site")
@@ -378,8 +378,107 @@ class CompositionPolicy(unittest.TestCase):
             "scripts/run-hosted-test-custody.py", "scripts/hosted_full_supplements.py",
             "scripts/hosted_primary_abi.py", "scripts/run-platform-tests.py",
             "scripts/run-audit-command.py", "scripts/hosted_dependency_seed_files.py",
-            "scripts/hosted_canonical_python.py",
+            "scripts/hosted_canonical_python.py", "scripts/hosted_jvm_library_custody.py",
         })
+
+    def test_jvm_execution_never_aliases_its_desktop_byte_cohort(self):
+        POLICY.check_sources(self.sources)
+        self.assertEqual(len(POLICY.EXPECTED), 8)
+        self.mutate("scripts/run-hosted-test-custody.py", b'return jvm.command(role)',
+                    b'return "gradle", [":p2p-sample-desktop:check"]')
+        self.mutate("scripts/hosted_dependency_seed_files.py", b'selected == ("desktop", role)',
+                    b'selected[0] == "desktop"')
+        self.mutate("scripts/run-hosted-test-custody.py",
+                    b'profile=seed.byte_cohort(admitted.record, prepared["profile"], prepared["role"])[0]',
+                    b'profile=prepared["profile"]')
+
+    def test_jvm_closed_three_tasks_six_roots_and_one_reserved_id_are_required(self):
+        POLICY.check_sources(self.sources)
+        path = "scripts/hosted_jvm_library_custody.py"
+        for before, after in (
+            (b'":p2p-core:jvmTest"', b'":p2p-core:compileKotlinJvm"'),
+            (b'":p2p-transport-lan:jvmTest"', b'"help"'),
+            (b'":p2p-network-provisioning-desktop:test"', b'"tasks"'),
+            (b'"library/p2p-core/build/reports/tests/jvmTest/"', b'"library/foreign/build/reports/"'),
+            (b'value["reportRoots"] == list(ROOTS)', b'True'),
+            (b'controller.request is None', b'True'),
+            (b'api["seed_names"](controller, evidence.path, end) == []', b'True'),
+            (b'value["ownerKind"] == "audit"', b'True'),
+        ):
+            with self.subTest(before=before):
+                self.mutate(path, before, after)
+
+    def test_jvm_original_report_manifest_hashes_and_complete_copies_are_required(self):
+        POLICY.check_sources(self.sources)
+        path = "scripts/hosted_jvm_library_custody.py"
+        for before, after in (
+            (b'identity.encoded(manifest["records"]) == identity.encoded(receipt.get("reports"))', b'True'),
+            (b'observed.get(retained) ==', b'True or observed.get(retained) =='),
+            (b'set(observed) == expected', b'True'),
+            (b'originals.get(name) ==', b'True or originals.get(name) =='),
+            (b'name.casefold() not in names', b'True'),
+            (b'hashed = api["hash_stream"](stream, size, end)', b'hashed = "0" * 64'),
+            (b'manifest_raw=owner.read(original, "report-manifest.json", end)', b'manifest_raw=b"{}"'),
+        ):
+            with self.subTest(before=before):
+                self.mutate(path, before, after)
+
+    def test_jvm_native_original_stop_source_and_birth_checks_cannot_be_removed(self):
+        POLICY.check_sources(self.sources)
+        path = "scripts/hosted_jvm_library_custody.py"
+        for before, after in (
+            (b'receipt["finalExitCode"] == receipt["productExitCode"]', b'True'),
+            (b'receipt["stopExitCode"] == 0', b'True'),
+            (b'receipt["productExitCode"] != 125', b'True'),
+            (b'receipt.get("sourceBefore") == receipt.get("sourceAfter") == request["source"]', b'True'),
+            (b'_birth(ownership, receipt["productPid"], request["role"])', b'pass'),
+            (b'phase.get("survivors") == []', b'True'),
+            (b'phase.get("retirement") == "KNOWN"', b'True'),
+            (b'phase.get("childAncestorInvocationIds") == start.get("ancestorInvocationIds") ==',
+             b'start.get("ancestorInvocationIds") =='),
+            (b'phase["completedRawNs"] < phase["startedRawNs"] + 825 * 10**9', b'True'),
+        ):
+            with self.subTest(before=before):
+                self.mutate(path, before, after)
+
+    def test_jvm_file_only_first_error_close_and_failed_report_disposition_remain_exact(self):
+        POLICY.check_sources(self.sources)
+        path = "scripts/hosted_jvm_library_custody.py"
+        for before, after in (
+            (b'FILE_ONLY = "FILE_ONLY_NOT_NATIVE_PHASE"', b'FILE_ONLY = "CLAIMED_NATIVE_PHASE"'),
+            (b'owner.error("jvm-original-read", error)', b'pass'),
+            (b'owner.close_one(stream)', b'pass'),
+            (b'not owner.unknown, "ORIGINAL_READER_CLOSE_UNKNOWN"', b'True, "ORIGINAL_READER_CLOSE_UNKNOWN"'),
+            (b'owner.close_one(snapshot)', b'pass'),
+            (b'all(row["classification"] == "changed-since-admission" for row in original_manifest["records"])', b'True'),
+            (b'result="RETAINED" if receipt["finalExitCode"] == 0 and not missing and', b'result="RETAINED" if'),
+            (b'files == [], "NOT_STARTED_HAS_NO_CANONICAL_ORIGINALS"', b'True, "NOT_STARTED_HAS_NO_CANONICAL_ORIGINALS"'),
+        ):
+            with self.subTest(before=before):
+                self.mutate(path, before, after)
+        self.mutate("scripts/run-hosted-test-custody.py", b'self.custody = jvm.collect(self, globals())',
+                    b'self.custody = {"result": "RETAINED"}')
+
+    def test_jvm_frozen_originals_are_mandatory_at_crypto_return_and_separate_seal(self):
+        POLICY.check_sources(self.sources)
+        path = "scripts/hosted_jvm_library_custody.py"
+        for before, after in (
+            (b'set(mapping) == {prefix + row["path"] for row in value["retainedFiles"]}', b'True'),
+            (b'actual == {"path": row["member"], "size": item["size"], "sha256": item["sha256"]}', b'True'),
+            (b'copied("canonical-audit/" + row["member"], item, REPORT_LIMIT)', b'pass'),
+            (b'value == result["custody"]', b'True'),
+        ):
+            with self.subTest(before=before):
+                self.mutate(path, before, after)
+        caller = "scripts/run-hosted-test-custody.py"
+        for before, after in (
+            (b'(profile == jvm.PROFILE) == ("jvmLibraryFrozen" in returned)', b'True'),
+            (b'jvm_frozen == returned["jvmLibraryFrozen"]', b'True'),
+            (b'jvm.frozen_binding(owner, globals(), private, end, check_crypto) == jvm_frozen', b'True'),
+            (b'jvm.frozen_binding(owner, globals(), private, end, check_seal) == jvm_frozen', b'True'),
+        ):
+            with self.subTest(before=before):
+                self.mutate(caller, before, after)
 
     def test_shared_argv_and_isolated_two_supplier_loader_cannot_change(self):
         path = "scripts/hosted_canonical_python.py"

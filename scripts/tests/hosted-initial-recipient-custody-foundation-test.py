@@ -325,7 +325,8 @@ class PrimaryGrammarControls(OfflineFoundation):
 class ScheduleControls(OfflineFoundation):
     def test_exact_gate_worker_tail_offsets_and_residual_boundaries(self):
         for kind, offset, work_offset, job_offset in (("gate", 0, 180, 360), ("gate", 179, 180, 360),
-                ("worker", 0, 240, 1200), ("worker", 780, 1020, 1200), ("worker", 1019, 1020, 1200)):
+                ("worker", 0, 240, 5400), ("worker", 780, 1020, 5400), ("worker", 1019, 1259, 5400),
+                ("worker", 1200, 1440, 5400), ("worker", 4980, 5220, 5400), ("worker", 5219, 5220, 5400)):
             result = D.schedule(kind, BASIS, BASIS + offset * NS)
             expected_work = BASIS + work_offset * NS
             self.assertEqual(result["workEndNs"], expected_work)
@@ -333,16 +334,29 @@ class ScheduleControls(OfflineFoundation):
             self.assertEqual(tuple(result[name] - expected_work for name in D.WINDOW_NAMES),
                              tuple(value * NS for value in (0, 45, 75, 105, 165, 180)))
             self.assertLessEqual(result["afterEndNs"], result["jobEndNs"])
+            self.assertLessEqual(result["workEndNs"] - (BASIS + offset * NS), 240 * NS)
 
     def test_no_work_at_exact_residual_boundary_and_invalid_clock_types_refuse(self):
-        for kind, offset in (("gate", 180), ("gate", 181), ("worker", 1020), ("worker", 1200)):
+        for kind, offset in (("gate", 180), ("gate", 181), ("worker", 5220), ("worker", 5400)):
             with self.assertRaisesRegex(ValueError, "WINDOW_NO_WORK"):
                 D.schedule(kind, BASIS, BASIS + offset * NS)
         for kind, basis, start in (("ordinary", BASIS, START), ("gate", True, START),
                                   ("gate", BASIS, float(START)), ("gate", BASIS, BASIS - 1),
-                                  ("gate", D.O.clocks.UINT64, D.O.clocks.UINT64)):
+                                  ("gate", D.O.clocks.UINT64, D.O.clocks.UINT64),
+                                  ("worker", D.O.clocks.UINT64, D.O.clocks.UINT64)):
             with self.assertRaises(ValueError):
                 D.schedule(kind, basis, start)
+
+    def test_worker_later_entry_never_renews_original_job_or_fixed_tail(self):
+        first = D.schedule("worker", BASIS, BASIS)
+        later = D.schedule("worker", BASIS, BASIS + 5100 * NS)
+        self.assertEqual(first["jobEndNs"], later["jobEndNs"])
+        self.assertEqual(later["jobEndNs"], BASIS + 5400 * NS)
+        self.assertEqual(later["workEndNs"], BASIS + 5220 * NS)
+        self.assertEqual(later["afterEndNs"], later["jobEndNs"])
+        for name in ("now", "job_seconds", "duration", "service_date"):
+            with self.subTest(name=name), self.assertRaises(TypeError):
+                D.schedule("worker", BASIS, BASIS, **{name: 0})
 
 
 class FalseyFailure(RuntimeError):

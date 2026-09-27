@@ -382,10 +382,12 @@ def proposal_deadline(proposal, deadline):
         all(type(basis[name]) is int and basis[name] == item for name, item in arithmetic.items()) and
         basis["jobStartBasisNs"] == deadline["originalJobBasisNs"], "ORIGINAL_SERVICE_ARITHMETIC")
     fences = allocation.fence_arithmetic(basis["jobStartBasisNs"])
+    job_end = allocation.service_time.job_end_arithmetic(basis["jobStartBasisNs"])
     require(encoded(proposal["policy"]) == encoded(allocation.policy()) and
+        proposal["proposedJobEndNs"] == job_end and
         all(encoded(proposal[name]) == encoded(item) for name, item in fences.items()), "ORIGINAL_PHASE_ARITHMETIC")
     require(deadline["sealFirstNs"] < deadline["sealEndNs"] <= min(deadline["sealFirstNs"] + 120 * NS,
-        proposal["phaseFencesNs"]["separate-seal"], proposal["proposedJobEndNs"]) and
+        proposal["phaseFencesNs"]["separate-seal"], job_end) and
         all(deadline[name] == proposal["phaseFencesNs"][phase] for name, phase in (
             ("uploadStartByNs", "upload-transition"), ("uploadEndNs", "evidence-upload"),
             ("afterEndNs", "upload-after-guard"), ("returnEndNs", "delivery-return"))), "ORIGINAL_PHASE_ENDS")

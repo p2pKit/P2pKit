@@ -147,6 +147,17 @@ class ModelCase(unittest.TestCase):
 
 
 class EntryAndFenceModels(ModelCase):
+    def test_job_slot_or_unregistered_acquisition_cannot_supply_receiver_authority(self):
+        data = (b"supplied-proposal", b"supplied-worker", self.clock, self.boot,
+            (1, "supplied-start", "supplied-runner", 2), 0, 5400 * NS)
+        admission = R.N._OriginalServiceJobAdmission(object(), data)
+        unregistered = R._Acquired(**{field.name: None for field in dataclasses.fields(R._Acquired)})
+        for value in (admission, (admission, data), unregistered):
+            with self.subTest(kind=type(value).__name__):
+                self.refuses(R._acquired_passive, value)
+        self.assertEqual(R._NATIVE_SEEDS, {})
+        self.assertEqual(self.observed, [])
+
     def test_actual_same_first_and_two_raw_observations_per_guard(self):
         state = self.state()
         self.assertIs(state.clock.first, self.observed[0])

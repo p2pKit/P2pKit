@@ -41,7 +41,8 @@ def initial_ordinary_admission(profile, root):
                                        original_final_end_ns=first.nanoseconds + 120 * budget.NS)
         value = hosted_test_identity.parse(session.identity.record, 4 * 1024 * 1024)
         hosted_test_identity.require(value["profile"] == profile and
-            initial.identity.cache_cohort(session.identity.record) == (profile, first.clock.role),
+            initial.identity.worker_cohort(session.identity.record) ==
+                ("desktop" if profile == hosted_test_identity.JVM_PROFILE else profile, first.clock.role),
             "INITIAL_ADMISSION_PROFILE_CHANGED")
         current = session.claim("worker")
         result = {"schema": 1, "scope": "INITIAL_ORDINARY_SOURCE_INSPECTION_ONLY",
@@ -68,7 +69,7 @@ def initial_ordinary_admission(profile, root):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", choices=("full", "desktop"), required=True)
+    parser.add_argument("--profile", choices=("full", "desktop", "jvm-library"), required=True)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--evidence-directory", type=Path)
     parser.add_argument("--initial-ordinary", action="store_true")

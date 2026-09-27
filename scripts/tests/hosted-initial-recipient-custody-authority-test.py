@@ -1148,6 +1148,19 @@ class ParentCallerControls(unittest.TestCase):
                 self.assertEqual(receipt["retirement"], "KNOWN_RESOURCE_CLOSE_ONLY")
                 self.assertEqual(receipt["budgetAcceptance"], "NOT_ADMITTED")
                 self.assertIs(receipt["exportSaveAuthority"], False)
+                slot = D._AUTHORITY_RETURNS[id(result)][14]
+                if kind == "gate":
+                    self.assertIsNone(slot)
+                else:
+                    admission, values = slot
+                    self.assertIs(type(admission), D.N._OriginalServiceJobAdmission)
+                    self.assertIs(admission.original, result)
+                    self.assertIs(admission.values, values)
+                    self.assertEqual(values[0], rig.fixture.raw["P/worker-allocation-proposal.json"])
+                    self.assertEqual(values[1], rig.fixture.raw["P/worker-identity.json"])
+                    self.assertEqual(values[3:6], (BOOT, tuple(rig.history["serviceJob"]), rig.history["originalJobBasisNs"]))
+                    self.assertEqual(admission.end_ns, rig.history["originalJobBasisNs"] + 5400 * NS)
+                    self.assertEqual(json.loads(values[0])["budgetAcceptance"], "NOT_ADMITTED")
                 parents = [resource for _row, label, resource, _a, _c in owner._anchor().rows
                     if label == "directory" and resource.path == rig.custody]
                 self.assertEqual(len(parents), 1)
@@ -1160,6 +1173,35 @@ class ParentCallerControls(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "AUTHORITY_REUSE"):
                     rig.run_parent()
                 self.assertEqual(rig.acquisitions, 1)
+
+    def test_worker_original_job_slot_field_mutation_refuses_closed_return(self):
+        for change in ("equal-values", "extended-end", "copied-original"):
+            with self.subTest(change=change), CallerRig("worker") as rig:
+                result = rig.run_parent()
+                admission, values = D._AUTHORITY_RETURNS[id(result)][14]
+                if change == "copied-original":
+                    copied = D.CustodyAuthority(result.primary, result.raw, result.inventory, result.originals)
+                    object.__setattr__(admission, "original", copied)
+                else:
+                    changed = tuple(list(values)) if change == "equal-values" else (*values[:-1], values[-1] + NS)
+                    self.assertIsNot(changed, values)
+                    object.__setattr__(admission, "values", changed)
+                with self.assertRaisesRegex(ValueError, "SERVICE_JOB_ADMISSION_CHANGED") as failure:
+                    D.checked_custody_authority(result, rig.primary_result)
+                self.assertIs(D._AUTHORITY_ATTEMPTS["fixed"]["failure"], failure.exception)
+                self.assertEqual(D._AUTHORITY_ATTEMPTS["fixed"]["state"], "FAILED")
+                self.assertEqual(rig.acquisitions, 1)
+
+    def test_worker_missing_original_job_slot_refuses_without_new_acquisition(self):
+        with CallerRig("worker") as rig:
+            result = rig.run_parent()
+            saved = D._AUTHORITY_RETURNS[id(result)]
+            D._AUTHORITY_RETURNS[id(result)] = (*saved[:-1], None)  # Explicit model registry corruption only.
+            with self.assertRaisesRegex(ValueError, "SERVICE_JOB_ADMISSION_REQUIRED") as failure:
+                D.checked_custody_authority(result, rig.primary_result)
+            self.assertIs(D._AUTHORITY_ATTEMPTS["fixed"]["failure"], failure.exception)
+            self.assertEqual(D._AUTHORITY_ATTEMPTS["fixed"]["state"], "FAILED")
+            self.assertEqual(rig.acquisitions, 1)
 
     def test_post_registration_custody_parent_root_loss_stops_before_native_or_http(self):
         with CallerRig() as rig:

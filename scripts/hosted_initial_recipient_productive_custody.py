@@ -1373,6 +1373,7 @@ class _Authority:
     originals: tuple
     pins: tuple
     graphs: tuple
+    job_admission: tuple
 
 
 _AUTHORITIES = {}
@@ -1803,8 +1804,16 @@ def _acquire_authority(state, token, *, post):
             "retirement": "KNOWN_RESOURCE_CLOSE_ONLY", "writerReturn": CD.PENDING,
             "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
         CD.canonical(raw)
+        values = N._job_envelope_values(state.handoff.proposal, identity, basis.first.clock,
+            N._service_job(captured, basis.first.clock), basis.boot)
+        require(values[4] == tuple(history["serviceJob"]) and values[5] == history["originalJobBasisNs"] and
+            state.clock.now(minimum=closed) < values[-1], "AUTHORITY_ORIGINAL_SERVICE_JOB")
+        # The seed is this original registered native source episode, not a
+        # supplied final-input record. No admission is exported in the carrier.
+        job_admission = N._OriginalServiceJobAdmission(seed, values), values
         result = _track(_Authority(state.handle, post, seed, owner, close, before, after, phase, identity, match, captured,
-            O.encoded(chain), raw, index_raw, originals, (before_pin, after_pin, phase_pin, match_pin, directory_pins), graphs))
+            O.encoded(chain), raw, index_raw, originals, (before_pin, after_pin, phase_pin, match_pin, directory_pins), graphs,
+            job_admission))
         _AUTHORITIES[id(result)] = result, state.handle
         _update(state, authority=result)
         _checked_authority(result, state)
@@ -1834,6 +1843,11 @@ def _checked_authority(result, state, *, retired=False):
     for graph in result.graphs:
         N._check_history(graph)
     N._check_worker_pins(directories, _clock(state.clock).first.clock.role, closed=True)
+    basis = _clock(state.clock)
+    job = N._job_admission(result.job_admission, result.seed, state.handoff.proposal,
+        result.identity.record, basis.first.clock)
+    require(job.values[3] == basis.boot and basis.last < job.end_ns and max(basis.ends) <= job.end_ns,
+        "AUTHORITY_ORIGINAL_JOB_ADMISSION")
     if not retired:
         _environment(state)
         context = CD.canonical(result.captured[0])

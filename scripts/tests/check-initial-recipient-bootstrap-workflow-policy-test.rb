@@ -22,6 +22,19 @@ end
 P.check(WORKFLOW)
 P.check_sources(ROOT)
 checks = 2
+# JOB90/produce56 are outer kill ceilings, not native fit or activation claims.
+worker_steps = WORKFLOW.fetch("jobs").fetch("populate").fetch("steps")
+{"initial-recipient-gate" => 6, "populate" => 90}.each do |job, expected|
+    actual = WORKFLOW.fetch("jobs").fetch(job).fetch("timeout-minutes")
+    raise "wrong integer JOB ceiling #{job}" unless actual.instance_of?(Integer) && actual == expected
+    checks += 1
+end
+{"canonical-initialization" => 12, "produce" => 56}.each do |id, expected|
+    matches = worker_steps.select { |step| step["id"] == id }
+    raise "changed integer Step ceiling #{id}" unless matches.size == 1 &&
+        matches[0]["timeout-minutes"].instance_of?(Integer) && matches[0]["timeout-minutes"] == expected
+    checks += 1
+end
 mutations = {
     "extra event" => ->(w) { w.fetch(true)["push"] = {} },
     "optional source" => ->(w) { w[true]["workflow_dispatch"]["inputs"]["expected_sha"]["required"] = false },
@@ -43,6 +56,14 @@ mutations = {
     "gate branch substitution" => ->(w) { w["jobs"]["initial-recipient-gate"]["if"] = "${{ success() }}" },
     "gate takes heavy lease" => ->(w) { w["jobs"]["initial-recipient-gate"]["concurrency"] = copy(HeavyJobQueuePolicy::QUEUE) },
 }
+[20, 89, 91, "90", 90.0, true, nil].each do |cap|
+    mutations["worker JOB cap #{cap.inspect}"] = ->(w) { w["jobs"]["populate"]["timeout-minutes"] = cap }
+end
+[20, 55, 57, "56", 56.0, true, nil].each do |cap|
+    mutations["produce execution ceiling #{cap.inspect}"] = ->(w) {
+        w["jobs"]["populate"]["steps"].find { |step| step["id"] == "produce" }["timeout-minutes"] = cap
+    }
+end
 %w[initial-recipient-gate populate].each do |job|
     mutations["#{job} no first HOLD"] = ->(w) { w["jobs"][job]["steps"].shift }
     mutations["#{job} moved HOLD"] = ->(w) { steps = w["jobs"][job]["steps"]; steps[0], steps[1] = steps[1], steps[0] }
@@ -55,6 +76,11 @@ mutations = {
     mutations["#{job} source fetch tags"] = ->(w) { w["jobs"][job]["steps"][2]["run"].sub!("--no-tags", "--tags") }
     mutations["#{job} old campaign"] = ->(w) { w["jobs"][job]["steps"][2]["run"].gsub!(P::REF, "refs/heads/work/nonphysical-integration-20260915-022112") }
     WORKFLOW["jobs"][job]["steps"].each_with_index do |step, index|
+        if step.key?("timeout-minutes")
+            mutations["#{job}#{index} JOB90 does not extend Step cap"] = ->(w) {
+                w["jobs"][job]["steps"][index]["timeout-minutes"] += 1
+            }
+        end
         next unless step["id"]
         mutations["#{job}#{index} wrong Step name"] = ->(w) { w["jobs"][job]["steps"][index]["name"] += " altered" }
         mutations["#{job}#{index} omitted Step"] = ->(w) { w["jobs"][job]["steps"].delete_at(index) }
@@ -76,7 +102,7 @@ end
 mutations.each do |name, mutate|
     changed = copy(WORKFLOW)
     mutate.call(changed)
-    raise "ineffective mutation #{name}" if changed == WORKFLOW
+    raise "ineffective mutation #{name}" if Marshal.dump(changed) == Marshal.dump(WORKFLOW)
     checks += refuse(name) { P.check(changed) }
 end
 {

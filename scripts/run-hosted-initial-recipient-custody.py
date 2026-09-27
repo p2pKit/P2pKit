@@ -301,10 +301,11 @@ def primary_record(kind, role, roots, path, identity, raw, *, outcome, result_sh
 
 
 def schedule(kind, original_job_basis, start):
-    """Unchanged finite arithmetic; supplied integers do not admit job timing."""
+    """Fixed job envelope; all component caps unchanged, no supplied admission."""
     require(kind in ("gate", "worker"), "WINDOW_KIND")
     basis, start = O.integer(original_job_basis), O.integer(start)
-    job_end = O.integer(basis + (360 if kind == "gate" else 1200) * O.NS)
+    job_end = (O.integer(basis + 360 * O.NS) if kind == "gate" else
+        native.service_time.job_end_arithmetic(basis))
     require(start >= basis and job_end >= 180 * O.NS, "WINDOW_JOB_START")
     work = min(O.integer(start + 240 * O.NS), job_end - 180 * O.NS)
     ends = (work, work + 45 * O.NS, work + 75 * O.NS, work + 105 * O.NS,
@@ -3406,8 +3407,19 @@ def custody_authority(primary_result, token):
         all_originals = (*originals, ("authority-pending.json", pending))
         result = CustodyAuthority(primary_result, raw, inventory_raw, all_originals)
         return_graph = N._history_graph(result.__dict__, all_originals)
+        job_admission = None
+        if primary.kind == "worker":
+            identity = N.initial_identity.bind_worker_match(match,
+                event_raw=source_files["P/acquisition-queries/event.bin"],
+                policy_raw=source_files["P/acquisition-queries/candidate_policy_raw.bin"], now=int(time.time()))
+            require(identity.record == source_files["P/worker-identity.json"], "AUTHORITY_ORIGINAL_JOB_WORKER")
+            values = N._job_envelope_values(source_files["P/worker-allocation-proposal.json"], identity, window.clock,
+                N._service_job(captured, window.clock), history["originalBootDigest"])
+            require(values[5] == history["originalJobBasisNs"] and values[4] == tuple(history["serviceJob"]) and
+                window.now(minimum=closed) < values[-1], "AUTHORITY_ORIGINAL_JOB_END")
+            job_admission = N._OriginalServiceJobAdmission(result, values), values
         saved = (result, primary_result, raw, inventory_raw, all_originals, window, current,
-            owner, owner_anchor, owner.__dict__, return_graph, match_pin, captured, attempt)
+            owner, owner_anchor, owner.__dict__, return_graph, match_pin, captured, attempt, job_admission)
         require(id(result) not in _AUTHORITY_RETURNS, "AUTHORITY_RETURN_REUSE")
         _AUTHORITY_RETURNS[id(result)] = saved
         attempt["return"], attempt["state"] = result, "RETURNED"
@@ -3423,9 +3435,10 @@ def custody_authority(primary_result, token):
 def checked_custody_authority(result, primary_result):
     """Authenticate this same-process return only; do not renew remote authority."""
     saved = _AUTHORITY_RETURNS.get(id(result))
-    require(type(result) is CustodyAuthority and type(saved) is tuple and saved[0] is result and
+    require(type(result) is CustodyAuthority and type(saved) is tuple and len(saved) == 15 and saved[0] is result and
         saved[1] is primary_result and result.primary is primary_result, "AUTHORITY_NOT_ORIGINAL_RETURN")
-    _, _primary, raw, inventory, originals, window, current, owner, anchor, dictionary, graph, match_pin, captured, attempt = saved
+    _, _primary, raw, inventory, originals, window, current, owner, anchor, dictionary, graph, match_pin, captured, attempt, \
+        job_admission = saved
     try:
         require(attempt["state"] == "RETURNED" and attempt["return"] is result and result.raw == raw and
             result.inventory == inventory and result.originals is originals, "AUTHORITY_RETURN_CHANGED")
@@ -3435,6 +3448,16 @@ def checked_custody_authority(result, primary_result):
         owner.known()
         match = _custody_match_check(match_pin)
         require(window._view().failure is None, "AUTHORITY_RETURN_FAILED_WINDOW")
+        if type(match) is A.stages.BootstrapMatch:
+            _same_window, primary, history_raw, _copy_raw, historical = checked_primary(primary_result)
+            history, original = canonical(history_raw), dict(historical)
+            job = N._job_admission(job_admission, result, original["P/worker-allocation-proposal.json"],
+                original["P/worker-identity.json"], window.clock)
+            require(job.values[3] == history["originalBootDigest"] and job.values[4] == tuple(history["serviceJob"]) and
+                job.values[5] == history["originalJobBasisNs"] and window.last < job.end_ns,
+                "AUTHORITY_ORIGINAL_JOB_ADMISSION")
+        else:
+            require(job_admission is None, "GATE_CANNOT_ADMIT_WORKER_JOB")
         return window, match, captured, raw, inventory, originals
     except BaseException as error:
         if attempt["failure"] is None:
@@ -3625,6 +3648,9 @@ def checked_retired_primary(result):
         for graph in primary_saved[10]:
             N._check_history(graph)
         N._check_history(authority_saved[10])
+        job = N._job_admission(authority_saved[14], result.authority, result.proposal, result.identity.record, result.first.clock)
+        require(job.values[3] == result.original_boot and retired < job.end_ns,
+            "PRODUCTIVE_PREFIX_ORIGINAL_JOB_ADMISSION")
         require(wrapper._anchor() is owner_anchor and wrapper.finished and wrapper.failure is None and
             wrapper.owner.closed and not wrapper.owner.unknown and wrapper.errors == [] and
             all(attempted and closed for _row, _label, _resource, attempted, closed in wrapper.rows),

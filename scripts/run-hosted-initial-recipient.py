@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Dormant Stage1 native original acquisition; no Admission or execution grant.
+"""Dormant Stage1 native original acquisition; no ordinary Admission/activation.
 
 The gate and populate worker use their actual identities. This fixed parent
 owns the HTTP child and its nested read-only Git queries, reuses the maintained
 native phase/finalization, and retains originals before returning a provisional
-digest. The prepared bootstrap workflow connects only the nonproductive gate;
-its productive job remains held. A successful command is not provider, recipient
-crypto, budget, export or Stage2 qualification; original step outcome is still
-required by any future caller. Both ordinary HOLDs remain separate.
+digest. Both prepared workflow jobs remain held. Distinct source-owned job
+admissions bind original service time; the original records stay NOT_ADMITTED.
+A successful command is not provider, recipient crypto, scheduling-fit, export
+or Stage2 qualification; original Step outcome is still required by any future
+caller. Both ordinary HOLDs remain separate.
 """
 from __future__ import annotations
 
@@ -134,6 +135,21 @@ class _OriginalPreparation:
 
 
 @dataclass(frozen=True, repr=False)
+class _OriginalServiceJobAdmission:
+    """Distinct same-call JOB admission, usable only in its source registry.
+
+    Constructing/copying this object or its values is not authority. Each real
+    source caller saves an independent slot only after its genuine C1/native
+    return, and checks that slot together with that original return. It is
+    never serialized, reconstructed by a reader, or an ordinary Admission.
+    """
+    original: object
+    values: tuple
+
+    end_ns = property(lambda self: self.values[-1])
+
+
+@dataclass(frozen=True, repr=False)
 class _PreparationBinding:
     """Independently retained values, not a comparison of the mutable graph to itself.
 
@@ -156,6 +172,7 @@ class _PreparationBinding:
     worker_originals: object
     service_time_raw: object
     proposal_raw: object
+    job_admission: object = None
 
 
 def _worker_fields(value):
@@ -202,6 +219,7 @@ def _worker_binding_value(original, binding):
             original.service_time_raw == binding.service_time_raw and original.proposal_raw == binding.proposal_raw and
             pending["serviceTimeBasisSha256"] == O.digest(binding.service_time_raw) and
             pending["allocationProposalSha256"] == O.digest(binding.proposal_raw), "ORIGINAL_TIME_BINDING_CHANGED")
+    _job_admission(binding.job_admission, original, binding.proposal_raw, value.record, binding.fence.clock)
     _original_limits(binding.owner, binding.fence, binding.prelude_raw, binding.local_end, binding.cancel_check)
     O.integer(binding.fence.last, binding.last_ns)
     return value
@@ -218,7 +236,11 @@ def _checked_worker_identity(original):
     require(_worker_time_records(value, binding.worker_originals, binding.fence.clock) ==
             (binding.service_time_raw, binding.proposal_raw), "WORKER_TIME_RECORDS_CHANGED")
     try:
-        binding.fence.now(final=True, minimum=binding.last_ns)
+        job = _job_admission(binding.job_admission, original, binding.proposal_raw, value.record, binding.fence.clock)
+        boot = continuity.boot_digest(binding.fence.clock.role)
+        # Fallible boot work spends this SAME original RAW/LOCAL envelope.
+        observed = binding.fence.now(final=True, minimum=binding.last_ns)
+        require(boot == job.values[3] and observed < job.end_ns, "ORIGINAL_SERVICE_JOB_CHANGED_OR_EXPIRED")
     finally:
         # Fence.now retains a validated observation even on expiry. A later
         # field mutation must not erase that high-water or renew a failed end.
@@ -1139,6 +1161,57 @@ def _worker_time_values(identity, service, clock, invocation):
     return basis_raw, O.encoded(proposal)
 
 
+def _job_envelope_values(proposal_raw, identity, clock, service_job, original_boot):
+    """Pure fixed values, NOT an issuer or proof of the supplied originals.
+
+    Only actual current-return callsites below/within the fixed controllers put
+    these values in a distinct _OriginalServiceJobAdmission registry slot. The
+    ORIGINAL proposal supplies time; fresh service supplies stable job identity
+    only. No fresh Date, caller duration, renewed firstUseAt or now+5400 exists.
+    """
+    _worker_fields(identity)
+    O.clocks.validate_identity(clock)
+    require(type(proposal_raw) is bytes and type(original_boot) is str and re.fullmatch(r"[0-9a-f]{64}", original_boot) and
+        type(service_job) is tuple and len(service_job) == 4 and type(service_job[0]) is int and service_job[0] > 0 and
+        type(service_job[1]) is str and type(service_job[2]) is str and
+        type(service_job[3]) is int and service_job[3] > 0, "SERVICE_JOB_ORIGINAL_BINDING")
+    proposal = O.parse(proposal_raw)
+    basis = proposal["serviceTimeBasis"]
+    _basis_raw, expected = _worker_time_values(identity, basis["service"], clock, basis["invocation"])
+    require(proposal_raw == expected and
+        proposal["github"]["workflow"] == acquisition.stages.bootstrap.WORKFLOW and
+        proposal["github"]["job"] == acquisition.stages.bootstrap.JOB and
+        proposal["github"]["workflowSha"] == proposal["source"]["commit"] and
+        service_job[:3] == (basis["service"]["numericJobId"], basis["service"]["jobStartedAt"],
+            basis["service"]["runnerName"]), "SERVICE_JOB_ORIGINAL_PROPOSAL")
+    start = O.integer(basis["jobStartBasisNs"])
+    end = native.service_time.job_end_arithmetic(start)
+    require(proposal["proposedJobEndNs"] == end and proposal["budgetAcceptance"] == "NOT_ADMITTED",
+            "SERVICE_JOB_ORIGINAL_END")
+    return proposal_raw, identity.record, clock, original_boot, service_job, start, end
+
+
+def _job_admission(binding, original, proposal_raw, worker_raw, clock):
+    """Check a source registry's saved slot; this helper grants no provenance.
+
+    The caller MUST first check its genuine original-return/native registry.
+    No public consumer accepts this tuple, object, a boolean or a record as an
+    admission. Mutable object fields cannot replace the independently saved
+    immutable values in that existing source-owned registry.
+    """
+    require(type(binding) is tuple and len(binding) == 2, "SERVICE_JOB_ADMISSION_REQUIRED")
+    admission, values = binding
+    require(type(admission) is _OriginalServiceJobAdmission and admission.original is original and
+        type(values) is tuple and len(values) == 7 and admission.values is values and
+        type(values[0]) is bytes and type(values[1]) is bytes and type(values[2]) is O.clocks.ClockIdentity and
+        values[0] == proposal_raw and values[1] == worker_raw and values[2] == clock and
+        type(values[3]) is str and re.fullmatch(r"[0-9a-f]{64}", values[3]) and
+        type(values[4]) is tuple and len(values[4]) == 4 and
+        type(values[5]) is int and type(values[6]) is int and
+        values[6] == native.service_time.job_end_arithmetic(values[5]), "SERVICE_JOB_ADMISSION_CHANGED")
+    return admission
+
+
 def read_phase(owner, private, context_raw, source, phase, fence):
     require(type(phase) is native.OriginalPhase and owner.phase_originals is phase and phase.context == context_raw and
             owner.fence is fence and any(x["owner"] is private and not x["attempted"] for x in owner.resources),
@@ -1706,6 +1779,7 @@ def _prepare_with_token(cancelled, token):
     """Borrow only the outer parent's stack reference; never reinstall ambient credentials."""
     owner = None
     private = result_raw = worker_identity = worker_originals = service_time_raw = proposal_raw = gate_anchor = gate_boot = None
+    worker_boot = None
     try:
         first = O.clocks.validate_reading(O.clocks.observe())
         cancel_check = lambda: native.cancellation(cancelled)
@@ -1719,8 +1793,12 @@ def _prepare_with_token(cancelled, token):
         require(observed["role"] == first.clock.role, "ACTUAL_NATIVE_ROLE")
         if observed["kind"] == "gate":
             # Capture before original source/HTTP work in this SAME process.
-            # Worker preparation and shared context/reader schemas are unchanged.
+            # Shared context/reader schemas stay unchanged for both kinds.
             gate_boot = _gate_boot_observe(fence, local_end, cancelled)
+        else:
+            require(observed["kind"] == "worker", "SERVICE_JOB_WORKER_ONLY")
+            worker_boot = continuity.boot_digest(first.clock.role)
+            owner.end()
         inherited = Q._inherited_context()
         native.child_environment(path)  # Reject ambient execution overrides before allocation.
         private = owner.new(path)
@@ -1797,9 +1875,20 @@ def _prepare_with_token(cancelled, token):
     native.posix._deadline(local_end)
     native.cancellation(cancelled)
     original = _OriginalPreparation(result_raw, worker_identity, service_time_raw, proposal_raw, owner, fence, cancelled, match)
+    job_admission = None
+    if worker_identity is not None:
+        # Actual native phase/source-before/source-after and known owner close
+        # above, not _worker_time_values or copied files, issue this one slot.
+        require(continuity.boot_digest(fence.clock.role) == worker_boot, "SERVICE_JOB_ORIGINAL_BOOT_CHANGED")
+        values = _job_envelope_values(proposal_raw, worker_identity, fence.clock,
+            _service_job(worker_originals, fence.clock), worker_boot)
+        require(fence.now(final=True) < values[-1], "SERVICE_JOB_EXPIRED_BEFORE_ADMISSION")
+        native.posix._deadline(local_end)
+        native.cancellation(cancelled)
+        job_admission = _OriginalServiceJobAdmission(original, values), values
     _PREPARED_RETURNS[id(original)] = _PreparationBinding(original, result_raw, worker_identity,
         None if worker_identity is None else _worker_fields(worker_identity), match, match.record, owner, fence,
-        prelude_raw, local_end, cancelled, cancel_check, fence.last, worker_originals, service_time_raw, proposal_raw)
+        prelude_raw, local_end, cancelled, cancel_check, fence.last, worker_originals, service_time_raw, proposal_raw, job_admission)
     if worker_identity is None:
         _register_gate_return(original, gate_anchor, closed_ns)
     return original
@@ -1949,7 +2038,10 @@ def _readmit_worker(claim, token):
         first = O.clocks.validate_reading(O.clocks.observe())
         O.clocks.elapsed_ns(O.clocks.Reading(original.fence.clock, original.last_ns), first)
         proposal = O.parse(original.proposal_raw)
-        work, final = _entry_limits(first.nanoseconds, proposal["phaseFencesNs"]["productive-entry"], proposal["proposedJobEndNs"])
+        job = _job_admission(original.job_admission, claim.original, original.proposal_raw,
+            original.identity_fields[0], first.clock)
+        require(continuity.boot_digest(first.clock.role) == job.values[3], "ENTRY_ORIGINAL_JOB_BOOT_CHANGED")
+        work, final = _entry_limits(first.nanoseconds, proposal["phaseFencesNs"]["productive-entry"], job.end_ns)
         raw = O.encoded({"schema": 1, "scope": ENTRY_WINDOW_SCOPE, "clock": O.clock_value(first.clock),
             "firstNs": first.nanoseconds, "previousNs": original.last_ns, "workEndNs": work, "finalEndNs": final,
             "firstUseAt": O.parse(original.match_raw)["firstUseAt"],
@@ -2079,7 +2171,7 @@ def _recipient_host(first_use_at):
 def _history_graph(*roots):
     """Finite pins of the closed Stage1 records, not a live reader or object codec."""
     records = (_ReadmissionReturn, _ReadmissionBinding, _ReadmissionClaim, _PreparationBinding,
-        _OriginalPreparation, _EntryWindowBinding, _ReadmissionWindow, SourceReturn, native.Owner,
+        _OriginalPreparation, _OriginalServiceJobAdmission, _EntryWindowBinding, _ReadmissionWindow, SourceReturn, native.Owner,
         native.OriginalPhase, O.Fence, O.clocks.Reading, O.clocks.ClockIdentity,
         initial_identity.InitialBootstrapIdentity, acquisition.stages.BootstrapMatch,
         _AuthorityReturn, _AuthorityState, _RecipientRoster, _RecipientNativeReturn, _RecipientValidationReturn,
@@ -3465,13 +3557,23 @@ class _AuthorityReturn:
 
 def _authority_return(value, episode):
     saved = _AUTHORITY_RETURNS.get(id(value))
-    require(type(value) is _AuthorityReturn and type(saved) is tuple and len(saved) == 6 and
+    require(type(value) is _AuthorityReturn and type(saved) is tuple and len(saved) == 7 and
             saved[0] is value and value.raw == saved[1] and saved[2] is episode, "NOT_ORIGINAL_AUTHORITY_RETURN")
     _check_history(saved[4])
     state = saved[3].checked()
     require(state.terminal and not state.failed and not state.busy and state.limits == (None, None) and
             state.roster.owner.original is None and state.roster.owner.errors == [], "AUTHORITY_RETURN_CHANGED")
     state.roster.known()
+    slot = saved[6]
+    require(type(slot) is tuple and len(slot) == 2 and type(slot[1]) is tuple and len(slot[1]) == 7,
+            "SERVICE_JOB_ADMISSION_REQUIRED")
+    values = slot[1]
+    job = _job_admission(slot, value, values[0], values[1], state.clock)
+    frame = _authority_frame(state.raw)[0]
+    require(O.digest(values[0]) == frame["originalProposalSha256"] and
+        O.digest(values[1]) == frame["workerIdentitySha256"] and
+        job.end_ns == frame["originalProposedJobEndNs"] and state.last < job.end_ns,
+        "AUTHORITY_ORIGINAL_JOB_ADMISSION")
     return saved[5]
 
 
@@ -3569,6 +3671,12 @@ def _recipient_authority(episode, token):
     require(_worker_fields(current) == original.identity_fields, "AUTHORITY_FINAL_POLICY_CHANGED")
     closed = window.now(final=True, minimum=preclose)
     episode.now(minimum=closed)  # Outer WORK, not outer FINAL45, includes the actual owner return.
+    original_job = _job_admission(original.job_admission, binding.claim.original, original.proposal_raw,
+        original.identity_fields[0], window.clock)
+    require(continuity.boot_digest(window.clock.role) == original_job.values[3], "AUTHORITY_ORIGINAL_JOB_BOOT")
+    values = _job_envelope_values(original.proposal_raw, current, window.clock,
+        _service_job(captured, window.clock), original_job.values[3])
+    require(episode.now() < values[-1], "AUTHORITY_ORIGINAL_JOB_EXPIRED")
     _check_history(graph)
     require(owner.phase_originals is phase, "AUTHORITY_ORIGINAL_RETURN_CHANGED")
     state = window.checked()
@@ -3582,7 +3690,8 @@ def _recipient_authority(episode, token):
         "retirement": "KNOWN_RESOURCE_CLOSE_ONLY", "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False})
     result = _AuthorityReturn(raw)
     nodes = _history_graph(result, _AUTHORITY_WINDOWS[id(window)], evidence)
-    _AUTHORITY_RETURNS[id(result)] = (result, raw, episode, window, nodes, evidence[0])
+    job_admission = _OriginalServiceJobAdmission(result, values), values
+    _AUTHORITY_RETURNS[id(result)] = (result, raw, episode, window, nodes, evidence[0], job_admission)
     _authority_return(result, episode)
     return result
 
@@ -3599,6 +3708,10 @@ def _receiving_authority(episode, token):
     owner = window = evidence = worker_anchor = None
     try:
         observed, _recipient, event = _receiving_current(episode)
+        # A copied sender frame cannot supply a same-boot job admission. The
+        # existing actual Step transport is mandatory; do not replay its1066
+        # reader or resurrect an old preparation/recipient registry here.
+        _receiving_step_current(episode)
         window = _RecipientAuthorityWindow.for_receiving(episode)
         state = window.checked()
         first = outer.first_reading
@@ -3685,6 +3798,11 @@ def _receiving_authority(episode, token):
     closed = window.now(final=True, minimum=preclose)
     episode.now(minimum=closed)  # No native FINAL165/READ195 and no fresh120.
     _receiving_current(episode)
+    _receiving_step_current(episode)
+    original_boot = episode.state().continuity[0].boot
+    values = _job_envelope_values(outer.proposal_raw, current, window.clock,
+        _service_job(captured, window.clock), original_boot)
+    require(episode.now() < values[-1], "RECEIVING_ORIGINAL_JOB_EXPIRED")
     _check_history(graph)
     state = window.checked()
     _AUTHORITY_WINDOWS[id(window)] = replace(state, terminal=True)
@@ -3700,7 +3818,8 @@ def _receiving_authority(episode, token):
             "WORKER_AUTHORITY_RETURN_REUSE")
     owner._worker_authority_original_return = (result, raw)
     nodes = _history_graph(result, _AUTHORITY_WINDOWS[id(window)], evidence)
-    _AUTHORITY_RETURNS[id(result)] = (result, raw, episode, window, nodes, originals)
+    job_admission = _OriginalServiceJobAdmission(result, values), values
+    _AUTHORITY_RETURNS[id(result)] = (result, raw, episode, window, nodes, originals, job_admission)
     _authority_return(result, episode)
     _register_worker_authority(result, episode, worker_anchor)
     return result
@@ -5552,7 +5671,7 @@ def _register_worker_authority(result, episode, anchor):
     capture = _check_worker_authority(anchor, closed=True)
     saved, terminal = _AUTHORITY_RETURNS.get(id(result)), _AUTHORITY_WINDOWS[id(capture.window)]
     require(type(result) is _AuthorityReturn and type(result.raw) is bytes and 0 < len(result.raw) <= native.LIMIT and
-        type(saved) is tuple and len(saved) == 6 and saved[0] is result and saved[1] == result.raw and
+        type(saved) is tuple and len(saved) == 7 and saved[0] is result and saved[1] == result.raw and
         saved[2] is episode is capture.episode and saved[3] is capture.window and saved[5] is capture.evidence[0] and
         _authority_return(result, episode) is capture.evidence[0], "WORKER_AUTHORITY_ORIGINAL_RETURN")
     value = O.parse(result.raw)

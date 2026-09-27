@@ -19,6 +19,7 @@ module HostedTestWorkflowPolicy
         ordinary-desktop-after ordinary-android-before ordinary-android-apps ordinary-android-after ordinary-delivery].freeze
     FULL = "steps.scope.outputs.full == 'true'"
     DESKTOP = "github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'"
+    JVM = "#{DESKTOP} || github.event_name == 'schedule'"
     SAMPLE_INTENT = "steps.ordinary-admission.outcome == 'success' && steps.ordinary-admission.outputs.sample_packaging_required == 'true'"
     CONTROL_NAME = "Verify ordinary custody caller policy"
     CONTROL_COMMANDS = ["ruby scripts/tests/check-hosted-test-workflow-policy-test.rb",
@@ -28,7 +29,9 @@ module HostedTestWorkflowPolicy
                         "python3 -I -B -S scripts/tests/hosted-canonical-python-test.py",
                         "python3 -I -B -S scripts/tests/hosted-consume-delivery-test.py",
                         "python3 -I -B -S scripts/tests/hosted-desktop-job-budget-test.py",
-                        "python3 -I -B -S scripts/tests/hosted-recipient-routing-test.py"].freeze
+                        "python3 -I -B -S scripts/tests/hosted-recipient-routing-test.py",
+                        "python3 -I -B -S scripts/tests/hosted-jvm-library-test.py",
+                        "node scripts/tests/hosted-ordinary-cache-provider-action-test.cjs"].freeze
     HOLD = <<~'SH'
         echo 'ORDINARY_TEST_ACTIVATION=HOLD; QUALIFIED_DEPENDENCY_CACHE_REQUIRED' >&2
         exit 125
@@ -72,6 +75,7 @@ module HostedTestWorkflowPolicy
     end
 
     def self.condition(profile)
+        return JVM if profile == "jvm-library"
         profile == "full" ? FULL : DESKTOP
     end
 
@@ -105,6 +109,17 @@ module HostedTestWorkflowPolicy
     end
 
     def self.session_path(profile)
+        if profile == "jvm-library"
+            return {"name" => "Locate the fixed native custody session", "id" => "session-path",
+             "if" => when_profile(profile), "shell" => "bash", "run" => <<~'SH'}
+                case "$RUNNER_OS/$RUNNER_ARCH" in
+                  Linux/X64) role=linux-x64 ;;
+                  Windows/X64) role=windows-x64 ;;
+                  *) echo 'FATAL: unsupported JVM native host' >&2; exit 1 ;;
+                esac
+                printf 'session_directory=%s/p2pkit-test-jvm-library-%s-%s-%s\n' "$RUNNER_TEMP" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$role" >> "$GITHUB_OUTPUT"
+            SH
+        end
         roles = profile == "full" ? "" : "  Linux/X64) role=linux-x64 ;;\n  Windows/X64) role=windows-x64 ;;\n"
         {"name" => "Locate the fixed native custody session", "id" => "session-path",
          "if" => when_profile(profile), "shell" => "bash", "run" => <<~SH}
@@ -118,6 +133,22 @@ module HostedTestWorkflowPolicy
     end
 
     def self.admission(profile)
+        if profile == "jvm-library"
+            return {"name" => "Admit ordinary jvm-library source and trusted recipient policy", "id" => "ordinary-admission",
+             "if" => when_profile(profile, "#{origin_condition('ordinary')} && steps.session-path.outcome == 'success'"),
+             "shell" => "bash", "run" => <<~'SH'}
+                python_bin=python3
+                if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
+                case "$RUNNER_OS/$RUNNER_ARCH" in
+                  Linux/X64) role=linux-x64 ;;
+                  Windows/X64) role=windows-x64 ;;
+                  *) echo 'FATAL: unsupported JVM native host' >&2; exit 1 ;;
+                esac
+                "$python_bin" -I -B -S scripts/run-hosted-test-admission.py --profile jvm-library \
+                  --root "$GITHUB_WORKSPACE" \
+                  --evidence-directory "$RUNNER_TEMP/p2pkit-test-admission-jvm-library-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$role"
+            SH
+        end
         roles = profile == "full" ? "" : "  Linux/X64) role=linux-x64 ;;\n  Windows/X64) role=windows-x64 ;;\n"
         body = <<~SH
             python_bin=python3
@@ -277,7 +308,7 @@ module HostedTestWorkflowPolicy
 
     def self.terminal(profile, origin = "ordinary")
         id = provider_id(origin)
-        outcomes = %w[ordinary-activation session-path dependency-ready]
+        outcomes = profile == "jvm-library" ? %w[session-path dependency-ready] : %w[ordinary-activation session-path dependency-ready]
         outcomes += %w[ordinary-admission] if origin == "ordinary"
         outcomes += [id, "java", "ordinary-jdk21"]
         outcomes += profile == "full" ? %w[ordinary-xcodegen ordinary-sdk ordinary-entrypoints] : %w[ordinary-wrapper]
@@ -451,6 +482,7 @@ module HostedTestWorkflowPolicy
         need(jobs.keys.sort == [*HeavyJobQueuePolicy::ROUTING_NEEDS, "jvm-library-checks", "complete-gate"].sort &&
              jvm["needs"] == HeavyJobQueuePolicy::ROUTING_NEEDS && jvm["if"] == HeavyJobQueuePolicy::JVM_CONDITION &&
              !jvm.key?("continue-on-error"), "whole JVM job including always-cleanup must wait for exact recipient routing")
+        check_jvm(workflow)
         job = workflow.fetch("jobs").fetch("complete-gate")
         need(job.keys.sort == %w[concurrency if needs permissions runs-on steps timeout-minutes] &&
              job["permissions"] == {"contents" => "read", "actions" => "read"} &&
@@ -466,6 +498,36 @@ module HostedTestWorkflowPolicy
              "ordinary FULL must keep literal HOLD, admission, private run, separate seal, bounded upload and terminal guards")
         token_steps = actual.select { |step| JSON.generate(step).include?("github.token") || JSON.generate(step).include?("P2PKIT_ACTIONS_READ_TOKEN") }
         need(token_steps == credential_steps("full"), "actions-read token belongs only to fixed native preparation and initial-current consumers")
+    end
+
+    def self.jvm_steps
+        profile = "jvm-library"
+        [{"name" => "Check out exact JVM event source", "uses" => HeavyJobQueuePolicy::CHECKOUT,
+          "with" => {"ref" => "${{ github.sha }}", "fetch-depth" => 0, "persist-credentials" => false}},
+         HeavyJobQueuePolicy.routing_guard,
+         {"name" => "Validate the checked-in Gradle wrapper without execution", "id" => "ordinary-wrapper",
+          "shell" => "bash", "run" => "scripts/check-gradle-wrapper.sh"},
+         session_path(profile), admission(profile), stage(profile), stage(profile, "initial"), provider_guard(profile),
+         java(profile), daemon(profile), run(profile), run(profile, "initial"), seal(profile), seal(profile, "initial"),
+         before(profile), upload(profile), after(profile), before(profile, "initial"), upload(profile, "initial"),
+         after(profile, "initial"), terminal(profile), terminal(profile, "initial"), result_guard(profile)]
+    end
+
+    def self.check_jvm(workflow)
+        job = workflow.fetch("jobs").fetch("jvm-library-checks")
+        need(job.keys.sort == %w[concurrency if name needs permissions runs-on steps strategy timeout-minutes] &&
+             job["name"] == "JVM libraries (${{ matrix.os }})" &&
+             job["permissions"] == {"contents" => "read", "actions" => "read"} &&
+             job["needs"] == HeavyJobQueuePolicy::ROUTING_NEEDS && job["if"] == HeavyJobQueuePolicy::JVM_CONDITION &&
+             job["concurrency"] == HeavyJobQueuePolicy::QUEUE && job["runs-on"] == "${{ matrix.os }}" &&
+             job["strategy"] == {"fail-fast" => false, "max-parallel" => 1,
+                "matrix" => {"include" => [{"os" => "ubuntu-latest", "wrapper" => "./gradlew"},
+                                         {"os" => "windows-latest", "wrapper" => '.\gradlew.bat'}]}} &&
+             job["timeout-minutes"] == 30, "JVM keeps actual job, two hosts, interlock, queue, original30min and read-only permission")
+        actual = job.fetch("steps")
+        need(actual == jvm_steps, "JVM requires exact native provider/current, file-only report custody, separate seal and encrypted14day delivery")
+        token_steps = actual.select { |step| JSON.generate(step).include?("github.token") || JSON.generate(step).include?("P2PKIT_ACTIONS_READ_TOKEN") }
+        need(token_steps == credential_steps("jvm-library"), "JVM credentials belong only to fixed provider and initial-current steps")
     end
 
     def self.credential_steps(profile)
@@ -486,6 +548,14 @@ module HostedTestWorkflowPolicy
             need(workflow_test.lines.map(&:strip).count("#{interpreter} \"$ROOT/#{script}\"") == 1,
                  "workflow controls must run each ordinary control exactly once")
         end
+        need(release.lines.map(&:strip).select { |line| CONTROL_COMMANDS.include?(line) } == CONTROL_COMMANDS,
+             "release gate must preserve reviewed ordinary-control order")
+        rooted = CONTROL_COMMANDS.map do |command|
+            interpreter, _, script = command.rpartition(" ")
+            "#{interpreter} \"$ROOT/#{script}\""
+        end
+        need(workflow_test.lines.map(&:strip).select { |line| rooted.include?(line) } == rooted,
+             "workflow tests must preserve reviewed ordinary-control order")
     end
 end
 

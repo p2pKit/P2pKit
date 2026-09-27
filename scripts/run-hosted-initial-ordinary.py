@@ -936,7 +936,9 @@ def _child(kind, invocation, context_sha256, minimum_ns, window, boot, cancelled
         require(I.encoded(_source_inputs(owner)) == I.encoded(current_inputs), "INPUTS_CHANGED_DURING_ACQUISITION")
         histories = tuple(item.history for item in qualifications)
         expected = None if context["expectedMatch"] is None else (
-            acquisition.gate.GateEligibility if kind == "gate" else S.OrdinaryMatch)(I.encoded(context["expectedMatch"]))
+            acquisition.gate.GateEligibility if kind == "gate" else
+            S.JvmLibraryMatch if context["observed"]["profile"] == I.JVM_PROFILE else
+            S.OrdinaryMatch)(I.encoded(context["expectedMatch"]))
         match, last_raws, last_session = _query_pass(owner, private, context["observed"], token, invocation,
             first=False, histories=histories, expected=expected)
         token = None
@@ -1575,12 +1577,15 @@ def _history(current):
         I.parse(state.child_raw, SMALL_LIMIT)["firstSessionSha256"] == digest(state.first_session_raw) and
         I.parse(state.native.stdout_raw, 16384)["terminalSha256"] == digest(state.child_raw), "CURRENT_BOUND_ORIGINALS")
     require(type(state.match) is (acquisition.gate.GateEligibility if context["observed"]["kind"] == "gate" else
+            S.JvmLibraryMatch if context["observed"]["profile"] == I.JVM_PROFILE else
             S.OrdinaryMatch), "CURRENT_MATCH_TYPE")
     if context["observed"]["kind"] == "worker":
-        require(type(state.identity) is identity.InitialOrdinaryIdentity and
+        jvm = context["observed"]["profile"] == I.JVM_PROFILE
+        require(type(state.identity) is (identity.InitialJvmLibraryIdentity if jvm else identity.InitialOrdinaryIdentity) and
             digest(state.identity.record) == value["identitySha256"] and
-            identity.cache_cohort(state.identity.record) ==
-                (context["observed"]["profile"], context["observed"]["role"]), "CURRENT_IDENTITY_ONLY")
+            identity.worker_cohort(state.identity.record) ==
+                ("desktop" if jvm else context["observed"]["profile"], context["observed"]["role"]),
+                "CURRENT_IDENTITY_ONLY")
     else:
         require(state.identity is None and value["identitySha256"] is None, "GATE_HAS_NO_WORKER_IDENTITY")
     if state.previous is not None:
@@ -1710,7 +1715,7 @@ def _retained_packet_data(data, expected_sha256):
             ("originalContextSha256", "context.json"), ("originalCloseSha256", "owner-close.json"),
             ("originalNativeReturnSha256", "native-return.json")):
         require(history[name] == digest(data[filename]), "RETAINED_ORIGINAL_HASH")
-    bound = identity.retained_identity(data["identity.json"], data["original-event.json"],
+    bound = identity.retained_worker_identity(data["identity.json"], data["original-event.json"],
         data["original-policy.json"], data["recipient-public.asc"], now=int(time.time()))
     value, match = I.parse(bound.record, SMALL_LIMIT), qualification.canonical(data["match.json"], SMALL_LIMIT)
     context = qualification.canonical(data["context.json"], SMALL_LIMIT)
@@ -1735,7 +1740,7 @@ def _retained_packet_data(data, expected_sha256):
         origins.append((invocation, I.encoded(window)))
         archives.append(tuple(data["archive-" + str(number) + "-" + name + ".json"]
                               for name in ("acquisition", "redirect", "download")))
-    current = identity.retained_current(data["current.json"], bound, context["observed"]["role"])
+    current = identity.retained_worker_current(data["current.json"], bound, context["observed"]["role"])
     require(type(current["schema"]) is int and current["schema"] == 1 and current["scope"] == RETURN_SCOPE and
             current["contextSha256"] == history["originalContextSha256"] and current["source"] == value["source"] and
             current["reviewed"] == match["reviewed"] and current["kind"] == "worker" and
@@ -1910,7 +1915,8 @@ def _new_current(kind, cancelled, original_work_end_ns, original_final_end_ns, *
         args = {"comment_raw": bodies["comment"], "observation_raw": last_raws["observation"],
             "now": int(time.time()), "histories": tuple(item.history for item in results),
             "prior_ancestry_raw": last_raws["prior_ancestry_raw"],
-            "expected": (S.OrdinaryMatch(retained["match.json"]) if retained is not None else
+            "expected": ((S.JvmLibraryMatch if observed["profile"] == I.JVM_PROFILE else
+                          S.OrdinaryMatch)(retained["match.json"]) if retained is not None else
                          None if older is None else older.match),
             **{name: last_raws[name] for name in ("base_policy_entry", "ancestry_raw", "candidate_policy_entry", "candidate_policy_raw")}}
         if kind == "gate":
@@ -1920,8 +1926,10 @@ def _new_current(kind, cancelled, original_work_end_ns, original_final_end_ns, *
         else:
             selection = I.parse(acquisition.gate.select(stage="stage2", run_id=observed["github"]["runId"],
                 attempt=observed["github"]["runAttempt"], approvals_raw=bodies["approvals"]).record, SMALL_LIMIT)
-            match = S.match_ordinary(comment_id=selection["commentId"], body_sha256=selection["bodySha256"], **args)
-            bound = identity.bind_worker_match(match, comment_raw=bodies["comment"], event_raw=event,
+            matcher = S.match_jvm_library if observed["profile"] == I.JVM_PROFILE else S.match_ordinary
+            binder = identity.bind_jvm_worker_match if observed["profile"] == I.JVM_PROFILE else identity.bind_worker_match
+            match = matcher(comment_id=selection["commentId"], body_sha256=selection["bodySha256"], **args)
+            bound = binder(match, comment_raw=bodies["comment"], event_raw=event,
                 policy_raw=last_raws["candidate_policy_raw"], now=int(time.time()))
         require(match.record == last_raws["match"] and digest(match.record) == child["matchSha256"], "ORIGINAL_CURRENT_MATCH")
         require(retained_identity is None or bound.record == retained_identity.record, "RETAINED_CURRENT_IDENTITY_CHANGED")

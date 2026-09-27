@@ -99,10 +99,18 @@ function environment() {
     Object.assign(env, {PATH: toolPath, CI: 'true', GIT_TERMINAL_PROMPT: '0', PYTHONDONTWRITEBYTECODE: '1', PYTHONUNBUFFERED: '1'});
     return env;
 }
+function jvmWorker(profile, role, expected) {
+    if (profile !== 'jvm-library') return;
+    need(['linux-x64', 'windows-x64'].includes(role) && expected.GITHUB_JOB === 'jvm-library-checks' &&
+        expected.RUNNER_OS === (role === 'linux-x64' ? 'Linux' : 'Windows') && expected.RUNNER_ARCH === 'X64' &&
+        /^[0-9a-f]{40}$/.test(expected.GITHUB_SHA) && expected.GITHUB_WORKFLOW_SHA === expected.GITHUB_SHA &&
+        expected.GITHUB_WORKFLOW_REF === 'p2pKit/P2pKit/.github/workflows/ci.yml@' + expected.GITHUB_REF);
+}
 function resultData(raw, origin, profile, role, childPid, expected) {
-    need((origin === 'ordinary' || origin === 'initial') && (profile === 'full' || profile === 'desktop') &&
+    need((origin === 'ordinary' || origin === 'initial') && ['full', 'desktop', 'jvm-library'].includes(profile) &&
         ['linux-x64', 'windows-x64', 'macos-x64', 'macos-arm64'].includes(role) &&
         (profile !== 'full' || role.startsWith('macos-')));
+    jvmWorker(profile, role, expected);
     need(Buffer.isBuffer(raw) && raw.length > 0 && raw.length <= LIMIT && raw.every(byte => byte < 128));
     const value = JSON.parse(raw.toString('ascii'));
     need(Buffer.from(asciiCanonical(value), 'ascii').equals(raw));
@@ -119,7 +127,7 @@ function resultData(raw, origin, profile, role, childPid, expected) {
         workflowSha: 'GITHUB_WORKFLOW_SHA', job: 'GITHUB_JOB', runId: 'GITHUB_RUN_ID', runAttempt: 'GITHUB_RUN_ATTEMPT'};
     keys(value.github, [...Object.keys(fields), 'workflow']);
     for (const [field, name] of Object.entries(fields)) need(value.github[field] === expected[name]);
-    need(value.github.workflow === (profile === 'full' ? '.github/workflows/ci.yml' : '.github/workflows/desktop-cross-host.yml') &&
+    need(value.github.workflow === (profile === 'desktop' ? '.github/workflows/desktop-cross-host.yml' : '.github/workflows/ci.yml') &&
         expected.GITHUB_WORKFLOW_REF === value.github.repository + '/' + value.github.workflow + '@' + value.github.ref &&
         (origin !== 'initial' || value.github.event === 'pull_request'));
     const names = [...OUTPUTS, ...(origin === 'initial' ? ['initial_current_history_sha256'] : [])];
@@ -129,10 +137,12 @@ function resultData(raw, origin, profile, role, childPid, expected) {
         if (name.endsWith('_sha256')) need(/^[0-9a-f]{64}$/.test(item));
         if (name.endsWith('_ready')) need(item === 'true');
     }
-    const home = path.join(expected.RUNNER_TEMP, 'p2pkit-dependency-seed-' + profile + '-' + role, 'restore-home');
+    // Desktop dependency bytes are not Desktop execution/test identity.
+    const byteProfile = profile === 'jvm-library' ? 'desktop' : profile;
+    const home = path.join(expected.RUNNER_TEMP, 'p2pkit-dependency-seed-' + byteProfile + '-' + role, 'restore-home');
     need(absolute(home) && value.outputs.dependency_seed_home === home &&
         value.outputs.cache_path === path.join(home, 'caches', 'modules-2', 'files-2.1') &&
-        new RegExp('^p2pkit-dependency-files-v1-' + profile + '-' + role + '-[0-9a-f]{64}-[0-9a-f]{64}$').test(value.outputs.cache_key));
+        new RegExp('^p2pkit-dependency-files-v1-' + byteProfile + '-' + role + '-[0-9a-f]{64}-[0-9a-f]{64}$').test(value.outputs.cache_key));
     return names.map(name => name + '=' + value.outputs[name] + '\n').join('');
 }
 function transport(python, argv, env, end) {
@@ -229,10 +239,11 @@ async function run(origin) {
         need(!used && (origin === 'ordinary' || origin === 'initial')); used = true;
         const profile = process.env.INPUT_PROFILE, output = process.env.GITHUB_OUTPUT;
         const role = ({linux: 'linux-', darwin: 'macos-', win32: 'windows-'})[process.platform] + process.arch;
-        need((profile === 'full' || profile === 'desktop') && ['linux-x64', 'windows-x64', 'macos-x64', 'macos-arm64'].includes(role) &&
+        need(['full', 'desktop', 'jvm-library'].includes(profile) && ['linux-x64', 'windows-x64', 'macos-x64', 'macos-arm64'].includes(role) &&
             (profile !== 'full' || role.startsWith('macos-')) && process.env.GITHUB_ACTIONS === 'true' &&
             process.env.GITHUB_REPOSITORY === 'p2pKit/P2pKit' && process.env.RUNNER_ENVIRONMENT === 'github-hosted' &&
             process.env.GITHUB_WORKSPACE === root && fs.realpathSync.native(root) === root && fs.statSync(helper).isFile());
+        jvmWorker(profile, role, process.env);
         const end = process.hrtime.bigint() + BigInt(profile === 'full' ? 8400 : 1500) * NS;
         // Existing controller ceiling only; service-derived job/stage fences
         // are stricter and remain enforced by the real Python owner.

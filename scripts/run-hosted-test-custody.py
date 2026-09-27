@@ -36,6 +36,7 @@ import hosted_full_job_budget as job_time
 import hosted_full_simulator as simulator
 import hosted_full_supplements as supplements
 import hosted_initial_ordinary_adapter as initial
+import hosted_jvm_library_custody as jvm
 import hosted_evidence as posix
 import hosted_primary_abi as abi
 import hosted_test_evidence as ordinary
@@ -69,9 +70,9 @@ SAMPLE_INSTALLER_INSPECTION = "Native version metadata and byte hashes; not inst
 # This is deliberately NOT the old whole-job 30-minute allowance. A Windows
 # NativeFile's original lifetime cannot exceed 900s. Keep the product + canonical
 # stop + outer retirement/receipt envelope below it; a timeout remains a failure.
-PRODUCT_SECONDS = {"full": 7200, "desktop": 600}
-OUTER_SECONDS = {"full": 7530, "desktop": 825}
-TOTAL_SECONDS = {"full": 8400, "desktop": 1500}
+PRODUCT_SECONDS = {"full": 7200, "desktop": 600, "jvm-library": 600}
+OUTER_SECONDS = {"full": 7530, "desktop": 825, "jvm-library": 825}
+TOTAL_SECONDS = {"full": 8400, "desktop": 1500, "jvm-library": 1500}
 FULL_STAGE = {"recipient-validation": "productive", "audit-init": "productive",
               "custody-prepare": "productive", "product": "product-return", "custody-collect": "collect",
               "custody-uninstall": "uninstall", "export": "export",
@@ -87,6 +88,7 @@ FULL_PREPARATION = ("job-time", "recipient-validation", "audit-init", *simulator
 FULL_ORDER = (*FULL_PREPARATION, "custody-collect", "custody-uninstall", *simulator.RETIRE, *supplements.ORDER, "export")
 DESKTOP_ORDER = ("job-time", "recipient-validation", "audit-init", "custody-prepare", "product",
                  "custody-collect", "custody-uninstall", "sample-packaging", "export")
+JVM_ORDER = ("job-time", "recipient-validation", "audit-init", "product", "export")
 IDENTITY_ENV = (
     "GITHUB_ACTIONS", "GITHUB_REPOSITORY", "GITHUB_SHA", "GITHUB_REF", "GITHUB_RUN_ID",
     "GITHUB_RUN_ATTEMPT", "GITHUB_EVENT_NAME", "GITHUB_WORKFLOW_REF", "GITHUB_WORKFLOW_SHA",
@@ -261,6 +263,9 @@ def canonical_python(executable, bindings, *args):
 def profile_command(profile, role, *, package_samples=False):
     require(profile in PRODUCT_SECONDS and role in INSTALLERS and type(package_samples) is bool,
             "CONTROLLER_PROFILE")
+    if profile == jvm.PROFILE:
+        require(not package_samples, "JVM_CANNOT_PACKAGE_SAMPLES")
+        return jvm.command(role)
     if profile == "full":
         require(role.startswith("macos-") and not package_samples, "FULL_REQUIRES_NATIVE_MAC")
         return "command", ["python3", "scripts/run-platform-tests.py", "full"]
@@ -274,6 +279,7 @@ def profile_command(profile, role, *, package_samples=False):
 
 def session_path(profile, role):
     require(profile in PRODUCT_SECONDS and role in INSTALLERS, "CONTROLLER_PROFILE")
+    require(profile != jvm.PROFILE or role in jvm.BACKENDS, "JVM_SESSION_HOST")
     run, attempt = os.environ.get("GITHUB_RUN_ID"), os.environ.get("GITHUB_RUN_ATTEMPT")
     require(type(run) is str and identity.ID.fullmatch(run) and type(attempt) is str and
             identity.ID.fullmatch(attempt), "CONTROLLER_RUN_ID")
@@ -448,7 +454,7 @@ def load_admission(owner, directory, end):
     key = owner.read(directory, "recipient-public.asc", end)
     value = parse(record)
     require(value.get("scope") == "ORDINARY_HOSTED_TEST_CUSTODY_IDENTITY" and
-            initial.identity.cache_cohort(record) is None, "ORDINARY_ADMISSION_ONLY")
+            initial.identity.worker_cohort(record) is None, "ORDINARY_ADMISSION_ONLY")
     require(digest(event) == value["github"]["eventSha256"] and digest(policy) == value["policy"]["sha256"] and
             digest(key) == value["policy"]["keySha256"], "ORIGINAL_ADMISSION_BYTES_CHANGED")
     return identity.Admission(record, event, policy, key, value["policy"]["fingerprint"],
@@ -468,8 +474,8 @@ def context_identity(owner, directory, context, end):
 
 
 def sample_intent(admitted):
-    if type(admitted) is initial.identity.InitialOrdinaryIdentity:
-        require(initial.identity.cache_cohort(admitted.record) is not None, "INITIAL_SAMPLE_IDENTITY")
+    if type(admitted) in (initial.identity.InitialOrdinaryIdentity, initial.identity.InitialJvmLibraryIdentity):
+        require(initial.identity.worker_cohort(admitted.record) is not None, "INITIAL_SAMPLE_IDENTITY")
         return False  # C2 is the first PR, never a main application producer.
     require(type(admitted) is identity.Admission, "SAMPLE_ORDINARY_ADMISSION")
     return identity.sample_packaging_required(admitted)
@@ -1104,7 +1110,8 @@ def dependency_seed_intent(owner, private, admitted, context_raw, end, check):
     staging = parse(staging_raw)
     seed.validate_retained_stage(staging, admitted.record, context, inputs)
     require(staging_raw == seed.encoded(staging) and intent == seed.seed_intent(admitted.record,
-            context["profile"], context["role"], seed.stage_path(private.path, context["profile"], context["role"]),
+            context["profile"], context["role"], seed.stage_path(private.path, context["profile"], context["role"],
+                                                             admitted_raw=admitted.record),
             staging_raw, inputs), "SEED_ORIGINAL_INTENT_CHANGED")
     check()
     return directory, staging_raw, compiled
@@ -1209,7 +1216,7 @@ def frozen_consume_packet(owner, private, end, check):
     context = parse(context_raw)
     evidence = owner.child(private, "evidence", end)
     admitted = context_identity(owner, owner.child(evidence, "admission", end), context, end)
-    is_initial = type(admitted) is initial.identity.InitialOrdinaryIdentity
+    is_initial = type(admitted) in (initial.identity.InitialOrdinaryIdentity, initial.identity.InitialJvmLibraryIdentity)
     budget = load_job_budget(owner, private, admitted, context, end)
     bound = consume_binding(owner, private, admitted, budget, end)
     require(bound == context.get("dependencyCache"), "CACHE_FROZEN_CONTEXT_CHANGED")
@@ -1679,6 +1686,7 @@ class Controller(PrivateOwner):
         require(all(type(value) is bool for value in (seed_dependencies, consume_dependencies, preflight)),
                 "SEED_OPTION_MUST_BE_BOOLEAN")
         require(not preflight or not (seed_dependencies or consume_dependencies), "PREFLIGHT_EXECUTION_SCOPE")
+        require(profile != jvm.PROFILE or preflight or consume_dependencies, "JVM_REQUIRES_NATIVE_CONSUME")
         self.consume_requested, self.preflight = consume_dependencies, preflight
         self.sample_required = False  # Derive only after original source admission.
         self.sample_result = {"required": True, "status": "NOT_ATTEMPTED", "manifestSha256": None}
@@ -1775,6 +1783,7 @@ class Controller(PrivateOwner):
               supplement=None, helper=False):
         """Actual fixed-caller composition around make_scope, not a new backend."""
         self.check(finalizing)
+        require(self.profile != jvm.PROFILE or label in JVM_ORDER, "JVM_CLOSED_NATIVE_PHASE")
         packaging = label == "sample-packaging"
         if packaging:
             require(self.sample_required and finalizing and not product and not acquire_time and
@@ -2139,6 +2148,10 @@ class Controller(PrivateOwner):
             self.full.bind_owners()
         if self.seed_requested:
             self.seed_dependencies()  # File-only; does not add a process phase or a new time allowance.
+        if self.profile == jvm.PROFILE:
+            self.request_raw = jvm.reserve(self, globals())
+            self.request = jvm.request_data(self.request_raw, self.run_context_raw, self.canonical_context_raw)
+            return  # No CLI/diagnostics loader or custody subprocess exists for JVM.
         row = self.phase("custody-prepare", self.python(SCRIPTS / "test-transcript-custody.py", "prepare",
             "--root", ROOT, "--directory", self.evidence.path / "custody", "--home", self.state_path / "gradle-home",
             "--owner-state", self.state_path, "--owner-kind", "audit", "--scope",
@@ -2161,7 +2174,7 @@ class Controller(PrivateOwner):
                 "SEED_ORIGINAL_STAGE_DID_NOT_SUCCEED")
         end = self.window("productive", 90)
         check = lambda: (self.check(), self.check_window("productive", end))
-        path = seed.stage_path(self.path, self.profile, self.role)
+        path = seed.stage_path(self.path, self.profile, self.role, admitted_raw=self.admitted.record)
         owners, original = seed._Owners(self), None
         try:
             container = owners.acquire("stage-container", lambda: seed.private_root(path))
@@ -2248,7 +2261,7 @@ class Controller(PrivateOwner):
 
     def acquire_job_time(self):
         require(self.budget is None, "JOB_TIME_ALREADY_ADMITTED")
-        if self.profile == "desktop":
+        if self.profile in ("desktop", jvm.PROFILE):
             reading = job_time.current_reading(self.profile)
             require(reading.clock.role == self.role and reading.nanoseconds >= self.last_raw,
                     "JOB_TIME_NATIVE_CLOCK_CHANGED")
@@ -2441,6 +2454,17 @@ class Controller(PrivateOwner):
     def collect(self):
         if self.request is None or self.unknown:
             return
+        if self.profile == jvm.PROFILE:
+            if not self.collect_attempted:
+                self.collect_attempted = True
+                try:
+                    self.custody = jvm.collect(self, globals())
+                except BaseException as error:
+                    # Missing launched originals/stop/close cannot become normal
+                    # upload-ready evidence by omitting the failed collection.
+                    self.error("jvm-library-original-custody", error, unknown=True)
+                    raise
+            return
         directory = self.evidence.path / "custody"
         receipt = self.state_path / "evidence" / self.request["owner"]["productInvocation"] / "receipt.json"
         if not self.collect_attempted:
@@ -2610,6 +2634,11 @@ class Controller(PrivateOwner):
             require(self.export_return["result"].get("dependencyCacheFrozen") ==
                     frozen_consume_packet(self, self.private, end, lambda: self.check_window("export-verify", end)),
                     "CACHE_ORIGINAL_EXPORT_RETURN_DIFFERS")
+        if self.profile == jvm.PROFILE:
+            require(self.export_return["result"].get("jvmLibraryFrozen") ==
+                    jvm.frozen_binding(self, globals(), self.private, end,
+                                       lambda: self.check_window("export-verify", end)),
+                    "JVM_ORIGINAL_EXPORT_RETURN_DIFFERS")
         if self.sample_required and self.sample_result["status"] == "PASS":
             require(self.export_return["result"].get("samplePackagingFrozen") ==
                     frozen_package_packet(self, self.private, end, lambda: self.check_window("export-verify", end)),
@@ -2691,7 +2720,8 @@ class Controller(PrivateOwner):
 
 def initial_budget_originals(owner, private, admitted, end):
     """Recompute DATA from first-source originals, never a fake job-time phase."""
-    require(type(admitted) is initial.identity.InitialOrdinaryIdentity, "INITIAL_BUDGET_IDENTITY")
+    require(type(admitted) in (initial.identity.InitialOrdinaryIdentity, initial.identity.InitialJvmLibraryIdentity),
+            "INITIAL_BUDGET_IDENTITY")
     evidence = owner.child(private, "evidence", end)
     directory = owner.child(evidence, "job-time", end)
     history = owner.child(directory, "initial-current", end)
@@ -2782,8 +2812,8 @@ class InitialController(Controller):
             require(job_time.TOKEN_ENV not in os.environ and self.actions_token is None,
                     "INITIAL_TOKEN_MUST_BE_OWNED_BEFORE_CONTROLLER")
             bound = parse(session.identity.record)
-            require(bound["profile"] == profile and initial.identity.cache_cohort(session.identity.record) ==
-                    (profile, self.role), "INITIAL_CONTROLLER_PROFILE")
+            require(bound["profile"] == profile and initial.identity.worker_cohort(session.identity.record) ==
+                    ("desktop" if profile == jvm.PROFILE else profile, self.role), "INITIAL_CONTROLLER_PROFILE")
         except BaseException as error:
             session.fail(error)
             raise
@@ -2821,7 +2851,7 @@ class InitialController(Controller):
         raise ControllerError("INITIAL_MUST_NOT_EXECUTE_ORDINARY_JOB_TIME")
 
     def recheck_identity(self, destination, check, end, *, purpose, stage="productive"):
-        require(type(self.admitted) is initial.identity.InitialOrdinaryIdentity and
+        require(type(self.admitted) in (initial.identity.InitialOrdinaryIdentity, initial.identity.InitialJvmLibraryIdentity) and
                 self.current_session.identity.record == self.admitted.record, "INITIAL_SOURCE_IDENTITY_CHANGED")
         check()
         initial.claim_within(self.current_session, purpose, self.budget, stage, end)
@@ -2949,7 +2979,20 @@ def profile_passed(value):
     rows = value["phases"]
     labels = ["recipient-validation", "audit-init", "custody-prepare", "product", "custody-collect",
               "custody-uninstall"]
-    if value.get("profile") == "desktop" and "jobBudget" in value:
+    if value.get("profile") == jvm.PROFILE:
+        if not (value.get("role") in jvm.BACKENDS and "samplePackaging" not in value and
+                "jobBudget" in value and type(value.get("dependencyCache")) is dict and
+                value["dependencyCache"].get("scope") == ("INITIAL_ORDINARY_NATIVE_CONSUME_ORIGINALS" if is_initial else
+                                                         "ORDINARY_NATIVE_CONSUME_ORIGINALS") and
+                type(value.get("dependencySeed")) is dict and
+                type(value["dependencySeed"].get("admittedCount")) is int and
+                value["dependencySeed"]["admittedCount"] > 0 and
+                type(value["dependencySeed"].get("admittedBytes")) is int and
+                value["dependencySeed"]["admittedBytes"] > 0 and
+                jvm.profile_passed(value)):
+            return False
+        labels = ["recipient-validation", "audit-init", "product"]
+    if value.get("profile") in ("desktop", jvm.PROFILE) and "jobBudget" in value:
         if not is_initial:
             labels.insert(0, "job-time")
         budget = value["jobBudget"]
@@ -3669,10 +3712,10 @@ def read_native_provider_originals(owner, directory, declarations, end, check):
 
 
 def native_origin(admitted):
-    if type(admitted) is initial.identity.InitialOrdinaryIdentity:
-        require(initial.identity.cache_cohort(admitted.record) is not None, "INITIAL_NATIVE_IDENTITY")
+    if type(admitted) in (initial.identity.InitialOrdinaryIdentity, initial.identity.InitialJvmLibraryIdentity):
+        require(initial.identity.worker_cohort(admitted.record) is not None, "INITIAL_NATIVE_IDENTITY")
         return 1
-    require(type(admitted) is identity.Admission and initial.identity.cache_cohort(admitted.record) is None,
+    require(type(admitted) is identity.Admission and initial.identity.worker_cohort(admitted.record) is None,
             "ORDINARY_NATIVE_IDENTITY")
     return 0
 
@@ -3769,6 +3812,7 @@ def read_preparation(owner, private, admitted, budget, end):
     if value.get("scope") in NATIVE_PREPARATION_SCOPES:
         return read_native_preparation(owner, private, admitted, budget, raw, end)
     require(native_origin(admitted) == 0, "INITIAL_REQUIRES_NATIVE_PREPARATION")
+    require(record["profile"] != jvm.PROFILE, "JVM_REQUIRES_NATIVE_PREPARATION")
     require(set(value) == PREPARATION_KEYS and type(value["schema"]) is int and value["schema"] == 1 and
             value["scope"] == PREPARATION_SCOPE and value["profile"] == budget.profile == record["profile"] and
             value["source"] == record["source"] and value["github"] == record["github"] and
@@ -3877,7 +3921,8 @@ def native_consume_binding(owner, private, admitted, budget, prepared_raw, end, 
         inputs, compiled = seed.source_inputs(owner, ROOT, end, lambda: posix._deadline(end))
     require(staging_raw is None or staging_raw == original_stage, "NATIVE_RESTORE_STAGE_CHANGED")
     cache.validate_plan(plan, admitted.record, original_stage, compiled, inputs, session=private.path,
-        profile=prepared["profile"], role=prepared["role"], mode="consume")
+        profile=seed.byte_cohort(admitted.record, prepared["profile"], prepared["role"])[0],
+        role=prepared["role"], mode="consume")
     require(set(provider) == set("schema scope preparationSha256 planSha256 jobBudgetSha256 source github request frame "
             "serviceReturn python bindings clockBindings nativeReturn preparationClose serviceClose readbackClose originals "
             "classification observedRawNs readbackRawNs toolsSha256 currentBefore".split()) and
@@ -3938,7 +3983,7 @@ def native_consume_binding(owner, private, admitted, budget, prepared_raw, end, 
                 "NATIVE_RESTORE_CURRENT_JOIN_CHANGED")
         for text in (provider["currentBefore"], restored["currentAfter"]):
             require(type(text) is str and text.isascii(), "NATIVE_RESTORE_CURRENT_DATA")
-            current = initial.identity.retained_current(text.encode("ascii"), admitted, prepared["role"])
+            current = initial.identity.retained_worker_current(text.encode("ascii"), admitted, prepared["role"])
             require(current["qualifications"] == join["qualificationsSha256"],
                     "NATIVE_RESTORE_CURRENT_DATA_CHANGED")
     else:
@@ -4073,7 +4118,7 @@ def native_prepare_restore(profile, controller_type, *, cancelled):
             controller.acquire_job_time()
         end = controller.window("productive", 120)
         check = lambda: (controller.check(), controller.check_window("productive", end))
-        path = seed.stage_path(controller.path, profile, controller.role)
+        path = seed.stage_path(controller.path, profile, controller.role, admitted_raw=controller.admitted.record)
         stage = controller.acquire("native-cache-stage", lambda: seed.private_root(path, create=True))
         source = controller.acquire("native-cache-restore-home", lambda: stage.create_directory("restore-home", deadline=end))
         inputs, compiled = seed.source_inputs(controller, ROOT, end, check)
@@ -4086,7 +4131,8 @@ def native_prepare_restore(profile, controller_type, *, cancelled):
         controller.write(stage, "staging.json", staging_raw, end)
         directory = controller.child(controller.evidence, "dependency-cache", end, create=True)
         plan = cache.make_plan(controller.admitted.record, staging_raw, compiled, inputs, session=controller.path,
-                               profile=profile, role=controller.role, mode="consume")
+                               profile=seed.byte_cohort(controller.admitted.record, profile, controller.role)[0],
+                               role=controller.role, mode="consume")
         plan_raw = encoded(plan)
         controller.write(directory, "plan.json", plan_raw, end)
         controller.write(directory, "staging.json", staging_raw, end)
@@ -4272,6 +4318,7 @@ def native_prepare_restore(profile, controller_type, *, cancelled):
 
 def prepare_consume(profile, *, cancelled=None):
     """Native, source-bound pre-tool acquisition. No Gradle, restore or cache save."""
+    require(profile != jvm.PROFILE, "JVM_REQUIRES_NATIVE_PROVIDER_ENTRY")
     controller, error, outputs = None, None, None
     try:
         controller = Controller(profile, preflight=True)
@@ -4344,6 +4391,7 @@ def prepare_consume(profile, *, cancelled=None):
 
 def restore_guard(profile, *, cancelled=None):
     """Original action outcome + exact key; a miss never becomes a cold product."""
+    require(profile != jvm.PROFILE, "JVM_REQUIRES_NATIVE_PROVIDER_ENTRY")
     require(os.environ.get("P2PKIT_HOSTED_PREPARE_OUTCOME") == "success" and job_time.TOKEN_ENV not in os.environ,
             "CACHE_PREPARATION_NOT_SUCCESSFUL")
     owner, error, outputs, clock, fence = PrivateOwner(), None, None, None, None
@@ -4412,7 +4460,7 @@ def restore_guard(profile, *, cancelled=None):
 
 def derive_job_budget(owner, private, admitted, end):
     """Recompute from ORIGINAL API bytes + original native phase/child return."""
-    if type(admitted) is initial.identity.InitialOrdinaryIdentity:
+    if type(admitted) in (initial.identity.InitialOrdinaryIdentity, initial.identity.InitialJvmLibraryIdentity):
         return initial_budget_originals(owner, private, admitted, end)[0]
     require(type(admitted) is identity.Admission, "ORDINARY_BUDGET_ADMISSION_ONLY")
     evidence = owner.child(private, "evidence", end)
@@ -4424,7 +4472,7 @@ def derive_job_budget(owner, private, admitted, end):
     returned_raw = owner.read(runtime, "job-time-result.json", end)
     start, row, returned = parse(start_raw), parse(phase_raw), parse(returned_raw)
     profile = parse(admitted.record)["profile"]
-    clock = job_time.clock_identity(row.get("clock")) if profile == "desktop" else None
+    clock = job_time.clock_identity(row.get("clock")) if profile in ("desktop", jvm.PROFILE) else None
     require((clock is None and "clock" not in start and "clock" not in row) or
             start.get("clock") == row.get("clock"), "JOB_TIME_PHASE_CLOCK_CHANGED")
     expected = [str(Path(sys.executable).resolve(strict=True)), "-I", "-B", "-S", str(Path(__file__)), "_job-time",
@@ -4470,7 +4518,7 @@ def derive_job_budget(owner, private, admitted, end):
 
 
 def load_job_budget(owner, private, admitted, context, end):
-    if type(admitted) is initial.identity.InitialOrdinaryIdentity:
+    if type(admitted) in (initial.identity.InitialOrdinaryIdentity, initial.identity.InitialJvmLibraryIdentity):
         binding = initial.initial_context(context)
         budget, _history, history_sha, disposition = initial_budget_originals(owner, private, admitted, end)
         require(budget.sha256 == context["jobBudgetSha256"] == binding["sourceBudgetSha256"] and
@@ -4521,7 +4569,7 @@ def job_time_phase(profile, admission_hash):
     error, returned, terminal = None, None, False
     try:
         require(profile in PRODUCT_SECONDS, "JOB_TIME_PROFILE")
-        if profile == "desktop":
+        if profile in ("desktop", jvm.PROFILE):
             reading = job_time.current_reading(profile)
             clock, last = reading.clock, reading.nanoseconds
             began = last
@@ -4696,6 +4744,7 @@ def _crypto_phase(operation, profile, context_hash, *, initial_kind):
             before = parse(owner.read(evidence, "profile-result-before-export.json", end))
             package_frozen = (frozen_package_packet(owner, private, end, check_crypto)
                               if before.get("samplePackaging", {}).get("status") == "PASS" else None)
+            jvm_frozen = jvm.frozen_binding(owner, globals(), private, end, check_crypto) if profile == jvm.PROFILE else None
             supplier, original_error = None, None
             try:
                 supplier = query.NativeGitQueries(ROOT, runtime.path / "export-manifest-admission",
@@ -4739,6 +4788,10 @@ def _crypto_phase(operation, profile, context_hash, *, initial_kind):
                     require(frozen_package_packet(owner, private, end, check_crypto) == package_frozen,
                             "SAMPLE_CHANGED_DURING_ORIGINAL_EXPORT")
                     exported["samplePackagingFrozen"] = package_frozen
+                if jvm_frozen is not None:
+                    require(jvm.frozen_binding(owner, globals(), private, end, check_crypto) == jvm_frozen,
+                            "JVM_CHANGED_DURING_ORIGINAL_EXPORT")
+                    exported["jvmLibraryFrozen"] = jvm_frozen
                 require(owner.read(output, posix.MANIFEST, end, 65536) == encoded(manifest) and
                         artifact_metadata(owner, output, end) == manifest["artifact"], "ORIGINAL_EXPORT_DIFFERS")
             except BaseException as caught:
@@ -4918,6 +4971,7 @@ def verify_phase_bindings(owner, private, result, context, end, budget=None):
     commands = owner.child(evidence, "commands", end)
     request = None
     full = result["profile"] == "full"
+    is_jvm = result["profile"] == jvm.PROFILE
     is_initial = context.get("scope") == initial.INITIAL_CONTEXT_SCOPE
     if is_initial:
         binding = initial.initial_context(context)
@@ -4932,8 +4986,13 @@ def verify_phase_bindings(owner, private, result, context, end, budget=None):
                 result.get("scope") == "ORDINARY_PROFILE_CUSTODY_ONLY" and "initialOrdinary" not in result and
                 "currentBudget" not in result and (budget is None or budget.value["schema"] in (1, 2)),
                 "ORDINARY_PHASE_ORIGINAL_CONTEXT")
-    order = FULL_ORDER if full else DESKTOP_ORDER
-    preparatory = FULL_PREPARATION if full else DESKTOP_ORDER[:5]
+    order = FULL_ORDER if full else JVM_ORDER if is_jvm else DESKTOP_ORDER
+    preparatory = FULL_PREPARATION if full else JVM_ORDER[:4] if is_jvm else DESKTOP_ORDER[:5]
+    if is_jvm:
+        require(budget is not None and budget.profile == jvm.PROFILE and result["role"] in jvm.BACKENDS and
+                "samplePackagingRequired" not in context and "samplePackaging" not in result and
+                result.get("cancelled") is False and type(result.get("dependencyCache")) is dict,
+                "JVM_REQUIRED_ORIGINAL_CONTEXT")
     if is_initial:
         order = tuple(label for label in order if label not in ("job-time", "sample-packaging"))
         preparatory = tuple(label for label in preparatory if label != "job-time")
@@ -5021,7 +5080,15 @@ def verify_phase_bindings(owner, private, result, context, end, budget=None):
         if is_initial and label in ("recipient-validation", "export"):
             initial_crypto_binding(owner, private, result, context, budget, end,
                                    "validate" if label == "recipient-validation" else "export")
-    if result["custody"] is not None:
+    if is_jvm:
+        original, _, request_raw, _ = jvm.verify(owner, globals(), private, encoded(context), result, end,
+                                                lambda: posix._deadline(end))
+        reservation = parse(request_raw)["operation"]
+        require(budget.value["responseFinishedRawNs"] <= reservation["startedRawNs"] <=
+                reservation["finishedRawNs"] < budget.fence("productive"), "JVM_RESERVATION_ORIGINAL_WINDOW")
+        require(reservation["finishedRawNs"] <= original["operation"]["startedRawNs"] <=
+                original["operation"]["finishedRawNs"] < budget.fence("collect"), "JVM_COLLECTION_ORIGINAL_WINDOW")
+    elif result["custody"] is not None:
         custody = owner.child(evidence, "custody", end)
         request_raw = owner.read(custody, "request.json", end)
         request = parse(request_raw)
@@ -5389,7 +5456,8 @@ def verify_simulator_bindings(owner, private, result, context, end):
 
 def desktop_delivery_end(budget, result):
     """One original controller-terminal +600 cap, not a fresh tail per process."""
-    require(budget.profile == result.get("profile") == "desktop", "DESKTOP_DELIVERY_SCOPE")
+    require(budget.profile == result.get("profile") and budget.profile in ("desktop", jvm.PROFILE),
+            "SHORT_JOB_DELIVERY_SCOPE")
     terminal = result.get("jobBudget", {}).get("terminalRawNs")
     require(type(terminal) is int and budget.value["responseFinishedRawNs"] <= terminal <
             budget.fence("controller-return"), "DESKTOP_ORIGINAL_TERMINAL_REQUIRED")
@@ -5428,7 +5496,7 @@ def initial_operation_source_data(value, context):
 def initial_seal_data(value, context):
     keys = {"schema", "scope", "controllerResultSha256", "manifestSha256", "artifact", "profilePassed", "source",
         "retirement", "decryption", "jobBudgetSha256", "clockDomain", "sealedAtRawNs", "upload", "initialOrdinary"}
-    if context["profile"] == "desktop":
+    if context["profile"] in ("desktop", jvm.PROFILE):
         keys.add("deliveryEndRawNs")
     require(type(value) is dict and set(value) == keys and type(value["schema"]) is int and value["schema"] == 1 and
             value["scope"] == "INITIAL_ORDINARY_POST_RETURN_SEAL_V1" and value["decryption"] == "NOT_PERFORMED",
@@ -5491,7 +5559,7 @@ def _validate_public(profile, *, initial_kind, cancelled):
             budget_clock = original_clock(budget, result["jobBudget"]["terminalRawNs"])
             budget_clock.check("seal-start")
             end = min(end, budget_clock.deadline("seal", 120))
-            if profile == "desktop":
+            if profile in ("desktop", jvm.PROFILE):
                 delivery_end = desktop_delivery_end(budget, result)
                 end = min(end, original_deadline(budget_clock, "seal", delivery_end, 120))
         # A replay cannot overwrite the previous post-return receipt.
@@ -5518,6 +5586,7 @@ def _validate_public(profile, *, initial_kind, cancelled):
                 ("dependencySeedFrozen" in returned), "SEED_SEALED_REQUIRED_DISPOSITION_MISSING")
         require(("dependencyCache" in context) == ("dependencyCache" in result) ==
                 ("dependencyCacheFrozen" in returned), "CACHE_SEALED_REQUIRED_DISPOSITION_MISSING")
+        require((profile == jvm.PROFILE) == ("jvmLibraryFrozen" in returned), "JVM_FROZEN_BINDING_REQUIRED")
         sample_required = sample_intent(checked)
         require(context.get("samplePackagingRequired", False) is sample_required and
                 (not sample_required or type(context.get("dependencyCache")) is dict) and
@@ -5559,6 +5628,10 @@ def _validate_public(profile, *, initial_kind, cancelled):
             require(package_frozen == returned["samplePackagingFrozen"] and
                     package_frozen["manifestSha256"] == result["samplePackaging"]["manifestSha256"],
                     "SAMPLE_SEALED_EXPORT_RETURN_CHANGED")
+        jvm_frozen = None
+        if profile == jvm.PROFILE:
+            jvm_frozen = jvm.frozen_binding(owner, globals(), private, end, check_seal)
+            require(jvm_frozen == returned["jvmLibraryFrozen"], "JVM_SEALED_EXPORT_RETURN_CHANGED")
         if profile == "full":
             supplements.verify(owner, globals(), private, result, context, end)
             before = parse(supplements.read_path(owner, globals(),
@@ -5593,6 +5666,9 @@ def _validate_public(profile, *, initial_kind, cancelled):
         if package_frozen is not None:
             require(frozen_package_packet(owner, private, end, check_seal) == package_frozen,
                     "SAMPLE_POST_RETURN_INPUT_CHANGED")
+        if jvm_frozen is not None:
+            require(jvm.frozen_binding(owner, globals(), private, end, check_seal) == jvm_frozen,
+                    "JVM_POST_RETURN_INPUT_CHANGED")
     except BaseException as caught:
         error = caught
         owner.error("post-return-seal", caught)
@@ -5772,18 +5848,19 @@ def _full_upload_guard(phase, *, initial_kind, cancelled):
           phase.upper() + "; NO_UPLOAD_PERFORMED")
 
 
-def delivery_inputs(owner, end, *, initial_kind=False):
+def delivery_inputs(owner, end, *, initial_kind=False, profile="desktop"):
     """Read a separately sealed Desktop result; do not create new time authority."""
     require((initial_kind or job_time.TOKEN_ENV not in os.environ) and
             all(os.environ.get("P2PKIT_HOSTED_TEST_" + key + "_OUTCOME") == "success" for key in ("RUN", "SEAL")),
             "DELIVERY_REQUIRES_ORIGINAL_SUCCESS")
     if initial_kind:
         initial.forbid_service_environment()
+    require(profile in ("desktop", jvm.PROFILE), "DELIVERY_CLOSED_PROFILE")
     role = processes.host_role()
-    private = owner.open(session_path("desktop", role))
+    private = owner.open(session_path(profile, role))
     context_raw, result_raw = (owner.read(private, name, end) for name in ("run-context.json", "controller-result.json"))
     context, result = parse(context_raw), parse(result_raw)
-    require(context.get("profile") == result.get("profile") == "desktop" and context.get("role") == result.get("role") == role and
+    require(context.get("profile") == result.get("profile") == profile and context.get("role") == result.get("role") == role and
             context.get("root") == str(ROOT) and context.get("session") == str(private.path) and
             context.get("canonicalSources") == canonical_bindings() and
             type(context.get("dependencyCache")) is dict and result.get("contextSha256") == digest(context_raw) and
@@ -5797,10 +5874,11 @@ def delivery_inputs(owner, end, *, initial_kind=False):
     require(digest(admitted.record) == context["admissionSha256"] and
             parse(admitted.record)["source"] == context["source"] == result["source"], "DELIVERY_ORIGINAL_SOURCE_CHANGED")
     sample_required = sample_intent(admitted)
-    require(context.get("samplePackagingRequired") is sample_required and
+    require((context.get("samplePackagingRequired") is sample_required if profile == "desktop" else
+             "samplePackagingRequired" not in context and sample_required is False) and
             sample_required == ("samplePackaging" in result) and
             (context.get("kind"), context.get("command")) ==
-            profile_command("desktop", role, package_samples=sample_required), "DELIVERY_SAMPLE_INTENT_CHANGED")
+            profile_command(profile, role, package_samples=sample_required), "DELIVERY_SAMPLE_INTENT_CHANGED")
     budget = load_job_budget(owner, private, admitted, context, end)
     fence = desktop_delivery_end(budget, result)
     sealed = owner.child(private, "post-return-validation", end)
@@ -5842,11 +5920,14 @@ def delivery_check(data, stage, end, cancelled, *, fence=None):
 
 
 def desktop_upload_scope(data):
+    profile = data["context"].get("profile")
+    require(profile in ("desktop", jvm.PROFILE), "UPLOAD_CLOSED_WORKER")
+    label = "JVM_LIBRARY" if profile == jvm.PROFILE else "DESKTOP"
     if data["context"].get("scope") == initial.INITIAL_CONTEXT_SCOPE:
         initial.initial_context(data["context"])
-        return "CLOSED_INITIAL_ORDINARY_DESKTOP_UPLOAD_SCHEDULING_CAP"
+        return "CLOSED_INITIAL_ORDINARY_" + label + "_UPLOAD_SCHEDULING_CAP"
     require(data["context"].get("scope") == "CLOSED_ORDINARY_TEST_CONTROLLER", "UPLOAD_CONTEXT_ORIGIN")
-    return "CLOSED_DESKTOP_UPLOAD_SCHEDULING_CAP"
+    return "CLOSED_" + label + "_UPLOAD_SCHEDULING_CAP"
 
 
 def desktop_upload_before(data, raw):
@@ -5902,7 +5983,7 @@ def initial_upload_guard(phase, profile, *, cancelled=None):
 
 
 def _desktop_upload_guard(phase, profile, *, initial_kind, cancelled):
-    require(profile == "desktop" and phase in ("before", "after"), "UPLOAD_CLOSED_PROFILE")
+    require(profile in ("desktop", jvm.PROFILE) and phase in ("before", "after"), "UPLOAD_CLOSED_PROFILE")
     if phase == "after":
         require(os.environ.get("P2PKIT_HOSTED_TEST_UPLOAD_OUTCOME") == "success", "UPLOAD_ORIGINAL_ACTION_FAILED")
     owner, error, outputs, data, fence = PrivateOwner(), None, None, None, None
@@ -5912,7 +5993,7 @@ def _desktop_upload_guard(phase, profile, *, initial_kind, cancelled):
         return delivery_check(data, "upload", end, cancelled, fence=fence)
     try:
         check_cancelled(cancelled)
-        data = delivery_inputs(owner, end, initial_kind=initial_kind)
+        data = delivery_inputs(owner, end, initial_kind=initial_kind, profile=profile)
         private = data["private"]
         before_raw = owner.read(private, "upload-before.json", end) if phase == "after" else None
         if before_raw is not None:
@@ -5937,7 +6018,7 @@ def _desktop_upload_guard(phase, profile, *, initial_kind, cancelled):
                     "INITIAL_UPLOAD_FRESH_SOURCE_REQUIRED")
             check()
         else:
-            admission(owner, "desktop", private.path / ("upload-" + phase + "-admission"), check, expected=data["admitted"])
+            admission(owner, profile, private.path / ("upload-" + phase + "-admission"), check, expected=data["admitted"])
         output = owner.child(private, "export", end)
         manifest_raw = owner.read(output, posix.MANIFEST, end, 65536)
         require(digest(manifest_raw) == data["seal"]["manifestSha256"] and
@@ -5975,7 +6056,7 @@ def _desktop_upload_guard(phase, profile, *, initial_kind, cancelled):
         raise error
     require(outputs is not None and not owner.unknown, "UPLOAD_GUARD_NOT_RETURNED")
     append_outputs(outputs, check)
-    print(("INITIAL_ORDINARY_DESKTOP_UPLOAD_GUARD=" if initial_kind else "ORDINARY_DESKTOP_UPLOAD_GUARD=") +
+    print(("INITIAL_ORDINARY_" if initial_kind else "ORDINARY_") + profile.upper().replace("-", "_") + "_UPLOAD_GUARD=" +
           phase.upper() + "; NO_UPLOAD_PERFORMED")
 
 
@@ -6227,6 +6308,7 @@ def stage_dependencies(profile):
     and pass that outcome as P2PKIT_DEPENDENCY_SEED_STAGE_OUTCOME. A provisional
     receipt/output cannot authorize run --seed-dependencies after late failure.
     """
+    require(profile != jvm.PROFILE, "JVM_REQUIRES_NATIVE_PROVIDER_ENTRY")
     owner, error, raw = PrivateOwner(), None, None
     end = time.monotonic() + 120
     def check():

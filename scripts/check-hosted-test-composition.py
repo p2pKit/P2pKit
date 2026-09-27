@@ -61,14 +61,19 @@ from pathlib import Path
 # executable route requires its own binding too. Five other suppliers, the
 # normalization algorithm and all native/provider/custody qualifications and
 # HOLDs remain unchanged. This is reviewed source binding, not runtime proof.
+# The distinct JVM worker/report leaf and J1 bootstrap-preserving seed dispatch
+# received independent exact-source review before these two updates and the
+# eighth supplier. Five existing suppliers and normalization stay unchanged.
+# These bindings do not qualify JVM/native/cache/custody execution or lift HOLDs.
 EXPECTED = {
-    "scripts/run-hosted-test-custody.py": "9d70fe24f4d7e6a55d82913cc9f1213b4af087b8f74427d49e4d4208a1413995",
+    "scripts/run-hosted-test-custody.py": "96453c2d323b34719c20e237190047f976d849df42c329f740b16a5aeb5aba28",
     "scripts/hosted_full_supplements.py": "9f5c6a0f410c00ee7531664e95dab233c0febc6740dd6a8b1005e3fc3a64310c",
     "scripts/hosted_primary_abi.py": "ff168e70c31bc23b1c6e545a32d0c4217f9a212f7244a2c34571eee09f761553",
     "scripts/run-platform-tests.py": "1a3e6f093abe3a79bfbc2d3f426f26e71db77c6f72034effeb2e296dc833c271",
     "scripts/run-audit-command.py": "bba4d4137571c32205fbf0bc1ff3d7d4682eff6d0f6ed5a6e92af8d6415cc639",
-    "scripts/hosted_dependency_seed_files.py": "55f5c76c5205480963bbf20ff281f00de48b5fbbcda98736ea6456fd12c6b68e",
+    "scripts/hosted_dependency_seed_files.py": "fee9ce3d0fa5bf6a6aafda5dba14cf63e40ad0a9053606168845e30ec6999b43",
     "scripts/hosted_canonical_python.py": "e93b7d0cb32b847d8cca57b074c9a9afae902ef5d0e2e0e5991c599ef772a2b0",
+    "scripts/hosted_jvm_library_custody.py": "90732c691620c97832fd89315666f9e35dd1269399b87790f1145603251af921",
 }
 LIMIT = 1024 * 1024
 

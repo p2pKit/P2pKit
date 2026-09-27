@@ -26,7 +26,8 @@ reset_fixture() {
     for policy_input in \
         check-heavy-job-queue-policy.rb check-hosted-test-workflow-policy.rb check-hosted-test-composition.py \
         run-hosted-test-custody.py hosted_full_supplements.py hosted_primary_abi.py \
-        run-platform-tests.py run-audit-command.py hosted_dependency_seed_files.py hosted_canonical_python.py; do
+        run-platform-tests.py run-audit-command.py hosted_dependency_seed_files.py hosted_canonical_python.py \
+        hosted_jvm_library_custody.py; do
         cp "$ROOT/scripts/$policy_input" "$FIXTURE/scripts/$policy_input"
     done
     cp "$ROOT/scripts/tests/check-kotlin-toolchain-policy-test.sh" \

@@ -99,56 +99,581 @@ jobs:
             wrapper: .\gradlew.bat
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
     steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: "Check out exact JVM event source"
+        uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
         with:
+          ref: "${{ github.sha }}"
+          fetch-depth: 0
           persist-credentials: false
 
-      - name: Configure Java 17
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+      - name: "Require the exact recipient route and predecessor result"
+        id: "recipient-required"
+        shell: "bash"
+        env:
+          INTERLOCK_RESULT: "${{ needs.initial-recipient-interlock.result }}"
+          ROUTE_RESULT: "${{ needs.recipient-route.result }}"
+          RECIPIENT_ORIGIN: "${{ needs.recipient-route.outputs.origin }}"
+          ROUTE_SHA256: "${{ needs.recipient-route.outputs.route_sha256 }}"
+          INITIAL_GATE_RESULT: "${{ needs.initial-recipient-gate.result }}"
+          INITIAL_GATE_READY: "${{ needs.initial-recipient-gate.outputs.initial_gate_ready }}"
+          INITIAL_GATE_SHA256: "${{ needs.initial-recipient-gate.outputs.initial_gate_sha256 }}"
+        run: |
+          test "$INTERLOCK_RESULT" = success
+          test "$ROUTE_RESULT" = success
+          [[ "$ROUTE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          case "$RECIPIENT_ORIGIN" in
+            ordinary)
+              test "$INITIAL_GATE_RESULT" = skipped
+              test -z "$INITIAL_GATE_READY"
+              test -z "$INITIAL_GATE_SHA256"
+              ;;
+            initial)
+              test "$INITIAL_GATE_RESULT" = success
+              test "$INITIAL_GATE_READY" = true
+              [[ "$INITIAL_GATE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+              ;;
+            *) exit 1 ;;
+          esac
+
+      - name: "Validate the checked-in Gradle wrapper without execution"
+        id: "ordinary-wrapper"
+        shell: "bash"
+        run: "scripts/check-gradle-wrapper.sh"
+
+      - name: "Locate the fixed native custody session"
+        id: "session-path"
+        if: "${{ success() && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') }}"
+        shell: "bash"
+        run: |
+          case "$RUNNER_OS/$RUNNER_ARCH" in
+            Linux/X64) role=linux-x64 ;;
+            Windows/X64) role=windows-x64 ;;
+            *) echo 'FATAL: unsupported JVM native host' >&2; exit 1 ;;
+          esac
+          printf 'session_directory=%s/p2pkit-test-jvm-library-%s-%s-%s\n' "$RUNNER_TEMP" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$role" >> "$GITHUB_OUTPUT"
+
+      - name: "Admit ordinary jvm-library source and trusted recipient policy"
+        id: "ordinary-admission"
+        if: "${{ success() && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && needs.recipient-route.outputs.origin == 'ordinary' && steps.session-path.outcome == 'success' }}"
+        shell: "bash"
+        run: |
+          python_bin=python3
+          if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
+          case "$RUNNER_OS/$RUNNER_ARCH" in
+            Linux/X64) role=linux-x64 ;;
+            Windows/X64) role=windows-x64 ;;
+            *) echo 'FATAL: unsupported JVM native host' >&2; exit 1 ;;
+          esac
+          "$python_bin" -I -B -S scripts/run-hosted-test-admission.py --profile jvm-library \
+            --root "$GITHUB_WORKSPACE" \
+            --evidence-directory "$RUNNER_TEMP/p2pkit-test-admission-jvm-library-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$role"
+
+      - name: "Restore the exact ordinary dependency cohort through its native owner"
+        id: "dependency-stage"
+        if: "${{ success() && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && needs.recipient-route.outputs.origin == 'ordinary' && steps.session-path.outcome == 'success' && steps.ordinary-admission.outcome == 'success' }}"
+        uses: "./.github/actions/ordinary-cache-provider"
         with:
-          distribution: temurin
-          java-version: "17"
+          profile: "jvm-library"
+        env:
+          P2PKIT_ACTIONS_READ_TOKEN: "${{ github.token }}"
 
-      - name: Validate wrapper and configure Gradle
-        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+      - name: "Restore the exact initial dependency cohort through its native owner"
+        id: "initial-dependency-stage"
+        if: "${{ success() && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && needs.recipient-route.outputs.origin == 'initial' && steps.session-path.outcome == 'success' && steps.ordinary-admission.outcome == 'skipped' && steps.dependency-stage.outcome == 'skipped' }}"
+        uses: "./.github/actions/initial-ordinary-cache-provider"
         with:
-          gradle-home-cache-excludes: caches/build-cache-1
+          profile: "jvm-library"
+        env:
+          P2PKIT_ACTIONS_READ_TOKEN: "${{ github.token }}"
 
-      - name: Run library JVM tests on the host
-        id: library-tests
-        # Native runner defaults: Bash on Ubuntu, PowerShell on Windows.
-        run: >-
-          ${{ matrix.wrapper }} --no-daemon
-          :p2p-core:jvmTest
-          :p2p-transport-lan:jvmTest
-          :p2p-network-provisioning-desktop:test
-          --continue --no-build-cache --dependency-verification strict
-          --max-workers=2 --no-parallel --console=plain
+      - name: "Require the selected native dependency provider"
+        id: "dependency-ready"
+        if: "${{ always() && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') }}"
+        shell: "bash"
+        env:
+          RECIPIENT_ORIGIN: "${{ needs.recipient-route.outputs.origin }}"
+          ORDINARY_PROVIDER: "${{ steps.dependency-stage.outcome }}"
+          ORDINARY_DEPENDENCY_SEED_READY: "${{ steps.dependency-stage.outputs.dependency_seed_ready }}"
+          ORDINARY_DEPENDENCY_CACHE_READY: "${{ steps.dependency-stage.outputs.dependency_cache_ready }}"
+          ORDINARY_NATIVE_PROVIDER_READY: "${{ steps.dependency-stage.outputs.native_provider_ready }}"
+          ORDINARY_DEPENDENCY_SEED_HOME: "${{ steps.dependency-stage.outputs.dependency_seed_home }}"
+          ORDINARY_DEPENDENCY_SEED_STAGING_SHA256: "${{ steps.dependency-stage.outputs.dependency_seed_staging_sha256 }}"
+          ORDINARY_PREPARATION_SHA256: "${{ steps.dependency-stage.outputs.preparation_sha256 }}"
+          ORDINARY_RESTORATION_SHA256: "${{ steps.dependency-stage.outputs.restoration_sha256 }}"
+          ORDINARY_CACHE_KEY: "${{ steps.dependency-stage.outputs.cache_key }}"
+          ORDINARY_CACHE_PATH: "${{ steps.dependency-stage.outputs.cache_path }}"
+          INITIAL_PROVIDER: "${{ steps.initial-dependency-stage.outcome }}"
+          INITIAL_DEPENDENCY_SEED_READY: "${{ steps.initial-dependency-stage.outputs.dependency_seed_ready }}"
+          INITIAL_DEPENDENCY_CACHE_READY: "${{ steps.initial-dependency-stage.outputs.dependency_cache_ready }}"
+          INITIAL_NATIVE_PROVIDER_READY: "${{ steps.initial-dependency-stage.outputs.native_provider_ready }}"
+          INITIAL_DEPENDENCY_SEED_HOME: "${{ steps.initial-dependency-stage.outputs.dependency_seed_home }}"
+          INITIAL_DEPENDENCY_SEED_STAGING_SHA256: "${{ steps.initial-dependency-stage.outputs.dependency_seed_staging_sha256 }}"
+          INITIAL_PREPARATION_SHA256: "${{ steps.initial-dependency-stage.outputs.preparation_sha256 }}"
+          INITIAL_RESTORATION_SHA256: "${{ steps.initial-dependency-stage.outputs.restoration_sha256 }}"
+          INITIAL_CACHE_KEY: "${{ steps.initial-dependency-stage.outputs.cache_key }}"
+          INITIAL_CACHE_PATH: "${{ steps.initial-dependency-stage.outputs.cache_path }}"
+          INITIAL_INITIAL_CURRENT_HISTORY_SHA256: "${{ steps.initial-dependency-stage.outputs.initial_current_history_sha256 }}"
+        run: |
+          case "$RECIPIENT_ORIGIN" in
+            ordinary)
+              test "$ORDINARY_PROVIDER" = success
+              test "$INITIAL_PROVIDER" = skipped
+              test "$ORDINARY_DEPENDENCY_SEED_READY" = true
+              test "$ORDINARY_DEPENDENCY_CACHE_READY" = true
+              test "$ORDINARY_NATIVE_PROVIDER_READY" = true
+              [[ "$ORDINARY_DEPENDENCY_SEED_STAGING_SHA256" =~ ^[0-9a-f]{64}$ ]]
+              [[ "$ORDINARY_PREPARATION_SHA256" =~ ^[0-9a-f]{64}$ ]]
+              [[ "$ORDINARY_RESTORATION_SHA256" =~ ^[0-9a-f]{64}$ ]]
+              test -n "$ORDINARY_DEPENDENCY_SEED_HOME"
+              test -n "$ORDINARY_CACHE_KEY"
+              test -n "$ORDINARY_CACHE_PATH"
+              test -z "$INITIAL_DEPENDENCY_SEED_READY"
+              test -z "$INITIAL_DEPENDENCY_CACHE_READY"
+              test -z "$INITIAL_NATIVE_PROVIDER_READY"
+              test -z "$INITIAL_DEPENDENCY_SEED_HOME"
+              test -z "$INITIAL_DEPENDENCY_SEED_STAGING_SHA256"
+              test -z "$INITIAL_PREPARATION_SHA256"
+              test -z "$INITIAL_RESTORATION_SHA256"
+              test -z "$INITIAL_CACHE_KEY"
+              test -z "$INITIAL_CACHE_PATH"
+              test -z "$INITIAL_INITIAL_CURRENT_HISTORY_SHA256"
+              ;;
+            initial)
+              test "$INITIAL_PROVIDER" = success
+              test "$ORDINARY_PROVIDER" = skipped
+              test "$INITIAL_DEPENDENCY_SEED_READY" = true
+              test "$INITIAL_DEPENDENCY_CACHE_READY" = true
+              test "$INITIAL_NATIVE_PROVIDER_READY" = true
+              [[ "$INITIAL_DEPENDENCY_SEED_STAGING_SHA256" =~ ^[0-9a-f]{64}$ ]]
+              [[ "$INITIAL_PREPARATION_SHA256" =~ ^[0-9a-f]{64}$ ]]
+              [[ "$INITIAL_RESTORATION_SHA256" =~ ^[0-9a-f]{64}$ ]]
+              test -n "$INITIAL_DEPENDENCY_SEED_HOME"
+              test -n "$INITIAL_CACHE_KEY"
+              test -n "$INITIAL_CACHE_PATH"
+              [[ "$INITIAL_INITIAL_CURRENT_HISTORY_SHA256" =~ ^[0-9a-f]{64}$ ]]
+              test -z "$ORDINARY_DEPENDENCY_SEED_READY"
+              test -z "$ORDINARY_DEPENDENCY_CACHE_READY"
+              test -z "$ORDINARY_NATIVE_PROVIDER_READY"
+              test -z "$ORDINARY_DEPENDENCY_SEED_HOME"
+              test -z "$ORDINARY_DEPENDENCY_SEED_STAGING_SHA256"
+              test -z "$ORDINARY_PREPARATION_SHA256"
+              test -z "$ORDINARY_RESTORATION_SHA256"
+              test -z "$ORDINARY_CACHE_KEY"
+              test -z "$ORDINARY_CACHE_PATH"
+              ;;
+            *) exit 1 ;;
+          esac
 
-      - name: Stop Gradle after tests
-        id: stop-gradle
-        if: ${{ always() }}
-        run: ${{ matrix.wrapper }} --stop
-
-      - name: Upload library JVM test evidence
-        id: library-reports
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - name: "Configure daemon Java 21 and wrapper Java 17"
+        id: "java"
+        uses: "actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961"
         with:
-          name: jvm-library-tests-${{ matrix.os }}-${{ github.run_attempt }}
+          distribution: "temurin"
+          java-version: |
+            21
+            17
+        if: "${{ success() && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && steps.dependency-ready.outcome == 'success' }}"
+
+      - name: "Bind the native ordinary daemon JDK"
+        id: "ordinary-jdk21"
+        if: "${{ success() && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && steps.dependency-ready.outcome == 'success' }}"
+        shell: "bash"
+        run: |
+          case "$RUNNER_ARCH" in X64|ARM64) ;; *) echo 'FATAL: unsupported native Java architecture' >&2; exit 1 ;; esac
+          daemon_variable="JAVA_HOME_21_${RUNNER_ARCH}"
+          daemon_home="${!daemon_variable}"
+          case "$daemon_home" in ''|*$'\n'*|*$'\r'*) echo 'FATAL: missing or invalid daemon JDK path' >&2; exit 1 ;; esac
+          printf 'P2PKIT_AUDIT_JDK21=%s\n' "$daemon_home" >> "$GITHUB_ENV"
+
+      - name: "Run ordinary jvm-library with private custody"
+        id: "ordinary-run"
+        if: "${{ success() && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && needs.recipient-route.outputs.origin == 'ordinary' && steps.dependency-ready.outcome == 'success' && steps.dependency-stage.outcome == 'success' && steps.dependency-stage.outputs.dependency_seed_ready == 'true' && steps.dependency-stage.outputs.dependency_cache_ready == 'true' && steps.dependency-stage.outputs.native_provider_ready == 'true' }}"
+        shell: "bash"
+        env:
+          P2PKIT_DEPENDENCY_SEED_STAGE_OUTCOME: "${{ steps.dependency-stage.outcome }}"
+          P2PKIT_DEPENDENCY_SEED_STAGE_SHA256: "${{ steps.dependency-stage.outputs.dependency_seed_staging_sha256 }}"
+          P2PKIT_HOSTED_PREPARE_OUTCOME: "${{ steps.dependency-stage.outcome }}"
+          P2PKIT_HOSTED_PREPARE_SHA256: "${{ steps.dependency-stage.outputs.preparation_sha256 }}"
+          P2PKIT_CACHE_GUARD_OUTCOME: "${{ steps.dependency-stage.outcome }}"
+          P2PKIT_CACHE_RESTORATION_SHA256: "${{ steps.dependency-stage.outputs.restoration_sha256 }}"
+          P2PKIT_NATIVE_PROVIDER_OUTCOME: "${{ steps.dependency-stage.outcome }}"
+        run: |
+          python_bin=python3
+          if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
+          "$python_bin" -I -B -S scripts/run-hosted-test-custody.py run --profile jvm-library --consume-dependencies
+
+      - name: "Run initial jvm-library with private custody"
+        id: "initial-run"
+        if: "${{ success() && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && needs.recipient-route.outputs.origin == 'initial' && steps.dependency-ready.outcome == 'success' && steps.initial-dependency-stage.outcome == 'success' && steps.initial-dependency-stage.outputs.dependency_seed_ready == 'true' && steps.initial-dependency-stage.outputs.dependency_cache_ready == 'true' && steps.initial-dependency-stage.outputs.native_provider_ready == 'true' }}"
+        shell: "bash"
+        env:
+          P2PKIT_DEPENDENCY_SEED_STAGE_OUTCOME: "${{ steps.initial-dependency-stage.outcome }}"
+          P2PKIT_DEPENDENCY_SEED_STAGE_SHA256: "${{ steps.initial-dependency-stage.outputs.dependency_seed_staging_sha256 }}"
+          P2PKIT_HOSTED_PREPARE_OUTCOME: "${{ steps.initial-dependency-stage.outcome }}"
+          P2PKIT_HOSTED_PREPARE_SHA256: "${{ steps.initial-dependency-stage.outputs.preparation_sha256 }}"
+          P2PKIT_CACHE_GUARD_OUTCOME: "${{ steps.initial-dependency-stage.outcome }}"
+          P2PKIT_CACHE_RESTORATION_SHA256: "${{ steps.initial-dependency-stage.outputs.restoration_sha256 }}"
+          P2PKIT_NATIVE_PROVIDER_OUTCOME: "${{ steps.initial-dependency-stage.outcome }}"
+          P2PKIT_ACTIONS_READ_TOKEN: "${{ github.token }}"
+          P2PKIT_INITIAL_CURRENT_HISTORY_SHA256: "${{ steps.initial-dependency-stage.outputs.initial_current_history_sha256 }}"
+        run: |
+          python_bin=python3
+          if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
+          "$python_bin" -I -B -S scripts/run-hosted-test-custody.py initial-run --profile jvm-library
+
+      - name: "Seal ordinary jvm-library evidence after controller return"
+        id: "ordinary-seal"
+        if: "${{ always() && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && needs.recipient-route.outputs.origin == 'ordinary' && steps.ordinary-run.outcome == 'success' }}"
+        timeout-minutes: 2
+        shell: "bash"
+        env:
+          P2PKIT_HOSTED_TEST_RUN_OUTCOME: "${{ steps.ordinary-run.outcome }}"
+        run: |
+          python_bin=python3
+          if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
+          "$python_bin" -I -B -S scripts/run-hosted-test-custody.py validate-public --profile jvm-library
+
+      - name: "Seal initial jvm-library evidence after controller return"
+        id: "initial-seal"
+        if: "${{ always() && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && needs.recipient-route.outputs.origin == 'initial' && steps.initial-run.outcome == 'success' }}"
+        timeout-minutes: 2
+        shell: "bash"
+        env:
+          P2PKIT_HOSTED_TEST_RUN_OUTCOME: "${{ steps.initial-run.outcome }}"
+          P2PKIT_ACTIONS_READ_TOKEN: "${{ github.token }}"
+        run: |
+          python_bin=python3
+          if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
+          "$python_bin" -I -B -S scripts/run-hosted-test-custody.py initial-validate-public --profile jvm-library
+
+      - name: "Admit the original ordinary JVM-LIBRARY evidence upload window"
+        id: "ordinary-upload-before"
+        if: "${{ always() && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && needs.recipient-route.outputs.origin == 'ordinary' && steps.ordinary-run.outcome == 'success' && steps.ordinary-seal.outcome == 'success' && steps.ordinary-seal.outputs.artifacts_ready == 'true' }}"
+        shell: "bash"
+        env:
+          P2PKIT_HOSTED_TEST_RUN_OUTCOME: "${{ steps.ordinary-run.outcome }}"
+          P2PKIT_HOSTED_TEST_SEAL_OUTCOME: "${{ steps.ordinary-seal.outcome }}"
+        run: |
+          python_bin=python3
+          if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
+          "$python_bin" -I -B -S scripts/run-hosted-test-custody.py upload-guard before --profile jvm-library
+
+      - name: "Upload only sealed ordinary jvm-library evidence"
+        id: "ordinary-evidence"
+        if: "${{ always() && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && needs.recipient-route.outputs.origin == 'ordinary' && steps.ordinary-run.outcome == 'success' && steps.ordinary-seal.outcome == 'success' && steps.ordinary-seal.outputs.artifacts_ready == 'true' && steps.ordinary-upload-before.outcome == 'success' && steps.ordinary-upload-before.outputs.upload_ready == 'true' && (steps.ordinary-upload-before.outputs.upload_timeout_minutes == '1' || steps.ordinary-upload-before.outputs.upload_timeout_minutes == '2' || steps.ordinary-upload-before.outputs.upload_timeout_minutes == '3') }}"
+        timeout-minutes: "${{ fromJSON(steps.ordinary-upload-before.outputs.upload_timeout_minutes) }}"
+        uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+        with:
+          name: "ordinary-jvm-library-evidence-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}"
           path: |
-            library/p2p-core/build/test-results/jvmTest/**
-            library/p2p-core/build/reports/tests/jvmTest/**
-            library/p2p-transport-lan/build/test-results/jvmTest/**
-            library/p2p-transport-lan/build/reports/tests/jvmTest/**
-            library/p2p-network-provisioning-desktop/build/test-results/test/**
-            library/p2p-network-provisioning-desktop/build/reports/tests/test/**
-          # Compilation/setup failure can precede report creation; the test
-          # step is blocking even when there is no report to upload.
-          if-no-files-found: warn
-          retention-days: 7
+            ${{ steps.session-path.outputs.session_directory }}/export/evidence.tar.gz.gpg
+            ${{ steps.session-path.outputs.session_directory }}/export/manifest.json
+          if-no-files-found: "error"
+          retention-days: 14
+          compression-level: 0
+          include-hidden-files: false
+          overwrite: false
+
+      - name: "Verify ordinary JVM-LIBRARY upload completed inside its original window"
+        id: "ordinary-upload-after"
+        if: "${{ always() && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && needs.recipient-route.outputs.origin == 'ordinary' && steps.ordinary-run.outcome == 'success' && steps.ordinary-seal.outcome == 'success' && steps.ordinary-seal.outputs.artifacts_ready == 'true' && steps.ordinary-upload-before.outcome == 'success' && steps.ordinary-upload-before.outputs.upload_ready == 'true' }}"
+        shell: "bash"
+        env:
+          P2PKIT_HOSTED_TEST_RUN_OUTCOME: "${{ steps.ordinary-run.outcome }}"
+          P2PKIT_HOSTED_TEST_SEAL_OUTCOME: "${{ steps.ordinary-seal.outcome }}"
+          P2PKIT_HOSTED_TEST_UPLOAD_OUTCOME: "${{ steps.ordinary-evidence.outcome }}"
+          P2PKIT_HOSTED_TEST_UPLOAD_GUARD_SHA256: "${{ steps.ordinary-upload-before.outputs.upload_guard_sha256 }}"
+        run: |
+          python_bin=python3
+          if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
+          "$python_bin" -I -B -S scripts/run-hosted-test-custody.py upload-guard after --profile jvm-library
+
+      - name: "Admit the original initial JVM-LIBRARY evidence upload window"
+        id: "initial-upload-before"
+        if: "${{ always() && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && needs.recipient-route.outputs.origin == 'initial' && steps.initial-run.outcome == 'success' && steps.initial-seal.outcome == 'success' && steps.initial-seal.outputs.artifacts_ready == 'true' }}"
+        shell: "bash"
+        env:
+          P2PKIT_HOSTED_TEST_RUN_OUTCOME: "${{ steps.initial-run.outcome }}"
+          P2PKIT_HOSTED_TEST_SEAL_OUTCOME: "${{ steps.initial-seal.outcome }}"
+          P2PKIT_ACTIONS_READ_TOKEN: "${{ github.token }}"
+        run: |
+          python_bin=python3
+          if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
+          "$python_bin" -I -B -S scripts/run-hosted-test-custody.py initial-upload-guard before --profile jvm-library
+
+      - name: "Upload only sealed initial jvm-library evidence"
+        id: "initial-evidence"
+        if: "${{ always() && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && needs.recipient-route.outputs.origin == 'initial' && steps.initial-run.outcome == 'success' && steps.initial-seal.outcome == 'success' && steps.initial-seal.outputs.artifacts_ready == 'true' && steps.initial-upload-before.outcome == 'success' && steps.initial-upload-before.outputs.upload_ready == 'true' && (steps.initial-upload-before.outputs.upload_timeout_minutes == '1' || steps.initial-upload-before.outputs.upload_timeout_minutes == '2' || steps.initial-upload-before.outputs.upload_timeout_minutes == '3') }}"
+        timeout-minutes: "${{ fromJSON(steps.initial-upload-before.outputs.upload_timeout_minutes) }}"
+        uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+        with:
+          name: "initial-ordinary-jvm-library-evidence-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}"
+          path: |
+            ${{ steps.session-path.outputs.session_directory }}/export/evidence.tar.gz.gpg
+            ${{ steps.session-path.outputs.session_directory }}/export/manifest.json
+          if-no-files-found: "error"
+          retention-days: 14
+          compression-level: 0
+          include-hidden-files: false
+          overwrite: false
+
+      - name: "Verify initial JVM-LIBRARY upload completed inside its original window"
+        id: "initial-upload-after"
+        if: "${{ always() && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && needs.recipient-route.outputs.origin == 'initial' && steps.initial-run.outcome == 'success' && steps.initial-seal.outcome == 'success' && steps.initial-seal.outputs.artifacts_ready == 'true' && steps.initial-upload-before.outcome == 'success' && steps.initial-upload-before.outputs.upload_ready == 'true' }}"
+        shell: "bash"
+        env:
+          P2PKIT_HOSTED_TEST_RUN_OUTCOME: "${{ steps.initial-run.outcome }}"
+          P2PKIT_HOSTED_TEST_SEAL_OUTCOME: "${{ steps.initial-seal.outcome }}"
+          P2PKIT_HOSTED_TEST_UPLOAD_OUTCOME: "${{ steps.initial-evidence.outcome }}"
+          P2PKIT_HOSTED_TEST_UPLOAD_GUARD_SHA256: "${{ steps.initial-upload-before.outputs.upload_guard_sha256 }}"
+          P2PKIT_ACTIONS_READ_TOKEN: "${{ github.token }}"
+        run: |
+          python_bin=python3
+          if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
+          "$python_bin" -I -B -S scripts/run-hosted-test-custody.py initial-upload-guard after --profile jvm-library
+
+      - name: "Require the complete ordinary jvm-library result"
+        id: "ordinary-required"
+        if: "${{ always() && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && needs.recipient-route.outputs.origin == 'ordinary' }}"
+        shell: "bash"
+        env:
+          SESSION_PATH: "${{ steps.session-path.outcome }}"
+          DEPENDENCY_READY: "${{ steps.dependency-ready.outcome }}"
+          ORDINARY_ADMISSION: "${{ steps.ordinary-admission.outcome }}"
+          DEPENDENCY_STAGE: "${{ steps.dependency-stage.outcome }}"
+          JAVA: "${{ steps.java.outcome }}"
+          ORDINARY_JDK21: "${{ steps.ordinary-jdk21.outcome }}"
+          ORDINARY_WRAPPER: "${{ steps.ordinary-wrapper.outcome }}"
+          ORDINARY_RUN: "${{ steps.ordinary-run.outcome }}"
+          ORDINARY_SEAL: "${{ steps.ordinary-seal.outcome }}"
+          ORDINARY_EVIDENCE: "${{ steps.ordinary-evidence.outcome }}"
+          ORDINARY_UPLOAD_BEFORE: "${{ steps.ordinary-upload-before.outcome }}"
+          ORDINARY_UPLOAD_AFTER: "${{ steps.ordinary-upload-after.outcome }}"
+          SEED_READY: "${{ steps.dependency-stage.outputs.dependency_seed_ready }}"
+          CACHE_READY: "${{ steps.dependency-stage.outputs.dependency_cache_ready }}"
+          NATIVE_READY: "${{ steps.dependency-stage.outputs.native_provider_ready }}"
+          ARTIFACTS_READY: "${{ steps.ordinary-seal.outputs.artifacts_ready }}"
+          PROFILE_PASSED: "${{ steps.ordinary-seal.outputs.profile_passed }}"
+          UPLOAD_COMPLETE: "${{ steps.ordinary-upload-after.outputs.upload_complete }}"
+        run: |
+          test "$SESSION_PATH" = success
+          test "$DEPENDENCY_READY" = success
+          test "$ORDINARY_ADMISSION" = success
+          test "$DEPENDENCY_STAGE" = success
+          test "$JAVA" = success
+          test "$ORDINARY_JDK21" = success
+          test "$ORDINARY_WRAPPER" = success
+          test "$ORDINARY_RUN" = success
+          test "$ORDINARY_SEAL" = success
+          test "$ORDINARY_EVIDENCE" = success
+          test "$ORDINARY_UPLOAD_BEFORE" = success
+          test "$ORDINARY_UPLOAD_AFTER" = success
+          test "$SEED_READY" = true
+          test "$CACHE_READY" = true
+          test "$NATIVE_READY" = true
+          test "$ARTIFACTS_READY" = true
+          test "$PROFILE_PASSED" = true
+          test "$UPLOAD_COMPLETE" = true
+
+      - name: "Require the complete initial jvm-library result"
+        id: "initial-required"
+        if: "${{ always() && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && needs.recipient-route.outputs.origin == 'initial' }}"
+        shell: "bash"
+        env:
+          SESSION_PATH: "${{ steps.session-path.outcome }}"
+          DEPENDENCY_READY: "${{ steps.dependency-ready.outcome }}"
+          INITIAL_DEPENDENCY_STAGE: "${{ steps.initial-dependency-stage.outcome }}"
+          JAVA: "${{ steps.java.outcome }}"
+          ORDINARY_JDK21: "${{ steps.ordinary-jdk21.outcome }}"
+          ORDINARY_WRAPPER: "${{ steps.ordinary-wrapper.outcome }}"
+          INITIAL_RUN: "${{ steps.initial-run.outcome }}"
+          INITIAL_SEAL: "${{ steps.initial-seal.outcome }}"
+          INITIAL_EVIDENCE: "${{ steps.initial-evidence.outcome }}"
+          INITIAL_UPLOAD_BEFORE: "${{ steps.initial-upload-before.outcome }}"
+          INITIAL_UPLOAD_AFTER: "${{ steps.initial-upload-after.outcome }}"
+          SEED_READY: "${{ steps.initial-dependency-stage.outputs.dependency_seed_ready }}"
+          CACHE_READY: "${{ steps.initial-dependency-stage.outputs.dependency_cache_ready }}"
+          NATIVE_READY: "${{ steps.initial-dependency-stage.outputs.native_provider_ready }}"
+          ARTIFACTS_READY: "${{ steps.initial-seal.outputs.artifacts_ready }}"
+          PROFILE_PASSED: "${{ steps.initial-seal.outputs.profile_passed }}"
+          UPLOAD_COMPLETE: "${{ steps.initial-upload-after.outputs.upload_complete }}"
+        run: |
+          test "$SESSION_PATH" = success
+          test "$DEPENDENCY_READY" = success
+          test "$INITIAL_DEPENDENCY_STAGE" = success
+          test "$JAVA" = success
+          test "$ORDINARY_JDK21" = success
+          test "$ORDINARY_WRAPPER" = success
+          test "$INITIAL_RUN" = success
+          test "$INITIAL_SEAL" = success
+          test "$INITIAL_EVIDENCE" = success
+          test "$INITIAL_UPLOAD_BEFORE" = success
+          test "$INITIAL_UPLOAD_AFTER" = success
+          test "$SEED_READY" = true
+          test "$CACHE_READY" = true
+          test "$NATIVE_READY" = true
+          test "$ARTIFACTS_READY" = true
+          test "$PROFILE_PASSED" = true
+          test "$UPLOAD_COMPLETE" = true
+
+      - name: "Require one complete recipient-origin result"
+        id: "recipient-result"
+        if: "${{ always() && (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') }}"
+        shell: "bash"
+        env:
+          RECIPIENT_ORIGIN: "${{ needs.recipient-route.outputs.origin }}"
+          ORDINARY_PROVIDER: "${{ steps.dependency-stage.outcome }}"
+          ORDINARY_DEPENDENCY_SEED_READY: "${{ steps.dependency-stage.outputs.dependency_seed_ready }}"
+          ORDINARY_DEPENDENCY_CACHE_READY: "${{ steps.dependency-stage.outputs.dependency_cache_ready }}"
+          ORDINARY_NATIVE_PROVIDER_READY: "${{ steps.dependency-stage.outputs.native_provider_ready }}"
+          ORDINARY_DEPENDENCY_SEED_HOME: "${{ steps.dependency-stage.outputs.dependency_seed_home }}"
+          ORDINARY_DEPENDENCY_SEED_STAGING_SHA256: "${{ steps.dependency-stage.outputs.dependency_seed_staging_sha256 }}"
+          ORDINARY_PREPARATION_SHA256: "${{ steps.dependency-stage.outputs.preparation_sha256 }}"
+          ORDINARY_RESTORATION_SHA256: "${{ steps.dependency-stage.outputs.restoration_sha256 }}"
+          ORDINARY_CACHE_KEY: "${{ steps.dependency-stage.outputs.cache_key }}"
+          ORDINARY_CACHE_PATH: "${{ steps.dependency-stage.outputs.cache_path }}"
+          INITIAL_PROVIDER: "${{ steps.initial-dependency-stage.outcome }}"
+          INITIAL_DEPENDENCY_SEED_READY: "${{ steps.initial-dependency-stage.outputs.dependency_seed_ready }}"
+          INITIAL_DEPENDENCY_CACHE_READY: "${{ steps.initial-dependency-stage.outputs.dependency_cache_ready }}"
+          INITIAL_NATIVE_PROVIDER_READY: "${{ steps.initial-dependency-stage.outputs.native_provider_ready }}"
+          INITIAL_DEPENDENCY_SEED_HOME: "${{ steps.initial-dependency-stage.outputs.dependency_seed_home }}"
+          INITIAL_DEPENDENCY_SEED_STAGING_SHA256: "${{ steps.initial-dependency-stage.outputs.dependency_seed_staging_sha256 }}"
+          INITIAL_PREPARATION_SHA256: "${{ steps.initial-dependency-stage.outputs.preparation_sha256 }}"
+          INITIAL_RESTORATION_SHA256: "${{ steps.initial-dependency-stage.outputs.restoration_sha256 }}"
+          INITIAL_CACHE_KEY: "${{ steps.initial-dependency-stage.outputs.cache_key }}"
+          INITIAL_CACHE_PATH: "${{ steps.initial-dependency-stage.outputs.cache_path }}"
+          INITIAL_INITIAL_CURRENT_HISTORY_SHA256: "${{ steps.initial-dependency-stage.outputs.initial_current_history_sha256 }}"
+          RECIPIENT_REQUIRED: "${{ steps.recipient-required.outcome }}"
+          ORDINARY_ADMISSION: "${{ steps.ordinary-admission.outcome }}"
+          ORDINARY_RUN: "${{ steps.ordinary-run.outcome }}"
+          ORDINARY_SEAL: "${{ steps.ordinary-seal.outcome }}"
+          ORDINARY_EVIDENCE: "${{ steps.ordinary-evidence.outcome }}"
+          ORDINARY_UPLOAD_BEFORE: "${{ steps.ordinary-upload-before.outcome }}"
+          ORDINARY_UPLOAD_AFTER: "${{ steps.ordinary-upload-after.outcome }}"
+          ORDINARY_REQUIRED: "${{ steps.ordinary-required.outcome }}"
+          ORDINARY_SEAL_ARTIFACTS_READY: "${{ steps.ordinary-seal.outputs.artifacts_ready }}"
+          ORDINARY_SEAL_PROFILE_PASSED: "${{ steps.ordinary-seal.outputs.profile_passed }}"
+          ORDINARY_UPLOAD_BEFORE_UPLOAD_READY: "${{ steps.ordinary-upload-before.outputs.upload_ready }}"
+          ORDINARY_UPLOAD_BEFORE_UPLOAD_GUARD_SHA256: "${{ steps.ordinary-upload-before.outputs.upload_guard_sha256 }}"
+          ORDINARY_UPLOAD_BEFORE_UPLOAD_TIMEOUT_MINUTES: "${{ steps.ordinary-upload-before.outputs.upload_timeout_minutes }}"
+          ORDINARY_UPLOAD_AFTER_UPLOAD_COMPLETE: "${{ steps.ordinary-upload-after.outputs.upload_complete }}"
+          INITIAL_RUN: "${{ steps.initial-run.outcome }}"
+          INITIAL_SEAL: "${{ steps.initial-seal.outcome }}"
+          INITIAL_EVIDENCE: "${{ steps.initial-evidence.outcome }}"
+          INITIAL_UPLOAD_BEFORE: "${{ steps.initial-upload-before.outcome }}"
+          INITIAL_UPLOAD_AFTER: "${{ steps.initial-upload-after.outcome }}"
+          INITIAL_REQUIRED: "${{ steps.initial-required.outcome }}"
+          INITIAL_SEAL_ARTIFACTS_READY: "${{ steps.initial-seal.outputs.artifacts_ready }}"
+          INITIAL_SEAL_PROFILE_PASSED: "${{ steps.initial-seal.outputs.profile_passed }}"
+          INITIAL_UPLOAD_BEFORE_UPLOAD_READY: "${{ steps.initial-upload-before.outputs.upload_ready }}"
+          INITIAL_UPLOAD_BEFORE_UPLOAD_GUARD_SHA256: "${{ steps.initial-upload-before.outputs.upload_guard_sha256 }}"
+          INITIAL_UPLOAD_BEFORE_UPLOAD_TIMEOUT_MINUTES: "${{ steps.initial-upload-before.outputs.upload_timeout_minutes }}"
+          INITIAL_UPLOAD_AFTER_UPLOAD_COMPLETE: "${{ steps.initial-upload-after.outputs.upload_complete }}"
+        run: |
+          test "$RECIPIENT_REQUIRED" = success
+          case "$RECIPIENT_ORIGIN" in
+            ordinary)
+              test "$ORDINARY_PROVIDER" = success
+              test "$INITIAL_PROVIDER" = skipped
+              test "$ORDINARY_DEPENDENCY_SEED_READY" = true
+              test "$ORDINARY_DEPENDENCY_CACHE_READY" = true
+              test "$ORDINARY_NATIVE_PROVIDER_READY" = true
+              [[ "$ORDINARY_DEPENDENCY_SEED_STAGING_SHA256" =~ ^[0-9a-f]{64}$ ]]
+              [[ "$ORDINARY_PREPARATION_SHA256" =~ ^[0-9a-f]{64}$ ]]
+              [[ "$ORDINARY_RESTORATION_SHA256" =~ ^[0-9a-f]{64}$ ]]
+              test -n "$ORDINARY_DEPENDENCY_SEED_HOME"
+              test -n "$ORDINARY_CACHE_KEY"
+              test -n "$ORDINARY_CACHE_PATH"
+              test -z "$INITIAL_DEPENDENCY_SEED_READY"
+              test -z "$INITIAL_DEPENDENCY_CACHE_READY"
+              test -z "$INITIAL_NATIVE_PROVIDER_READY"
+              test -z "$INITIAL_DEPENDENCY_SEED_HOME"
+              test -z "$INITIAL_DEPENDENCY_SEED_STAGING_SHA256"
+              test -z "$INITIAL_PREPARATION_SHA256"
+              test -z "$INITIAL_RESTORATION_SHA256"
+              test -z "$INITIAL_CACHE_KEY"
+              test -z "$INITIAL_CACHE_PATH"
+              test -z "$INITIAL_INITIAL_CURRENT_HISTORY_SHA256"
+              test "$ORDINARY_RUN" = success
+              test "$ORDINARY_SEAL" = success
+              test "$ORDINARY_EVIDENCE" = success
+              test "$ORDINARY_UPLOAD_BEFORE" = success
+              test "$ORDINARY_UPLOAD_AFTER" = success
+              test "$ORDINARY_REQUIRED" = success
+              test "$ORDINARY_SEAL_ARTIFACTS_READY" = true
+              test "$ORDINARY_SEAL_PROFILE_PASSED" = true
+              test "$ORDINARY_UPLOAD_BEFORE_UPLOAD_READY" = true
+              test "$ORDINARY_UPLOAD_AFTER_UPLOAD_COMPLETE" = true
+              [[ "$ORDINARY_UPLOAD_BEFORE_UPLOAD_GUARD_SHA256" =~ ^[0-9a-f]{64}$ ]]
+              case "$ORDINARY_UPLOAD_BEFORE_UPLOAD_TIMEOUT_MINUTES" in 1|2|3) ;; *) exit 1 ;; esac
+              test "$INITIAL_RUN" = skipped
+              test "$INITIAL_SEAL" = skipped
+              test "$INITIAL_EVIDENCE" = skipped
+              test "$INITIAL_UPLOAD_BEFORE" = skipped
+              test "$INITIAL_UPLOAD_AFTER" = skipped
+              test "$INITIAL_REQUIRED" = skipped
+              test -z "$INITIAL_SEAL_ARTIFACTS_READY"
+              test -z "$INITIAL_SEAL_PROFILE_PASSED"
+              test -z "$INITIAL_UPLOAD_BEFORE_UPLOAD_READY"
+              test -z "$INITIAL_UPLOAD_BEFORE_UPLOAD_GUARD_SHA256"
+              test -z "$INITIAL_UPLOAD_BEFORE_UPLOAD_TIMEOUT_MINUTES"
+              test -z "$INITIAL_UPLOAD_AFTER_UPLOAD_COMPLETE"
+              test "$ORDINARY_ADMISSION" = success
+              ;;
+            initial)
+              test "$INITIAL_PROVIDER" = success
+              test "$ORDINARY_PROVIDER" = skipped
+              test "$INITIAL_DEPENDENCY_SEED_READY" = true
+              test "$INITIAL_DEPENDENCY_CACHE_READY" = true
+              test "$INITIAL_NATIVE_PROVIDER_READY" = true
+              [[ "$INITIAL_DEPENDENCY_SEED_STAGING_SHA256" =~ ^[0-9a-f]{64}$ ]]
+              [[ "$INITIAL_PREPARATION_SHA256" =~ ^[0-9a-f]{64}$ ]]
+              [[ "$INITIAL_RESTORATION_SHA256" =~ ^[0-9a-f]{64}$ ]]
+              test -n "$INITIAL_DEPENDENCY_SEED_HOME"
+              test -n "$INITIAL_CACHE_KEY"
+              test -n "$INITIAL_CACHE_PATH"
+              [[ "$INITIAL_INITIAL_CURRENT_HISTORY_SHA256" =~ ^[0-9a-f]{64}$ ]]
+              test -z "$ORDINARY_DEPENDENCY_SEED_READY"
+              test -z "$ORDINARY_DEPENDENCY_CACHE_READY"
+              test -z "$ORDINARY_NATIVE_PROVIDER_READY"
+              test -z "$ORDINARY_DEPENDENCY_SEED_HOME"
+              test -z "$ORDINARY_DEPENDENCY_SEED_STAGING_SHA256"
+              test -z "$ORDINARY_PREPARATION_SHA256"
+              test -z "$ORDINARY_RESTORATION_SHA256"
+              test -z "$ORDINARY_CACHE_KEY"
+              test -z "$ORDINARY_CACHE_PATH"
+              test "$INITIAL_RUN" = success
+              test "$INITIAL_SEAL" = success
+              test "$INITIAL_EVIDENCE" = success
+              test "$INITIAL_UPLOAD_BEFORE" = success
+              test "$INITIAL_UPLOAD_AFTER" = success
+              test "$INITIAL_REQUIRED" = success
+              test "$INITIAL_SEAL_ARTIFACTS_READY" = true
+              test "$INITIAL_SEAL_PROFILE_PASSED" = true
+              test "$INITIAL_UPLOAD_BEFORE_UPLOAD_READY" = true
+              test "$INITIAL_UPLOAD_AFTER_UPLOAD_COMPLETE" = true
+              [[ "$INITIAL_UPLOAD_BEFORE_UPLOAD_GUARD_SHA256" =~ ^[0-9a-f]{64}$ ]]
+              case "$INITIAL_UPLOAD_BEFORE_UPLOAD_TIMEOUT_MINUTES" in 1|2|3) ;; *) exit 1 ;; esac
+              test "$ORDINARY_RUN" = skipped
+              test "$ORDINARY_SEAL" = skipped
+              test "$ORDINARY_EVIDENCE" = skipped
+              test "$ORDINARY_UPLOAD_BEFORE" = skipped
+              test "$ORDINARY_UPLOAD_AFTER" = skipped
+              test "$ORDINARY_REQUIRED" = skipped
+              test -z "$ORDINARY_SEAL_ARTIFACTS_READY"
+              test -z "$ORDINARY_SEAL_PROFILE_PASSED"
+              test -z "$ORDINARY_UPLOAD_BEFORE_UPLOAD_READY"
+              test -z "$ORDINARY_UPLOAD_BEFORE_UPLOAD_GUARD_SHA256"
+              test -z "$ORDINARY_UPLOAD_BEFORE_UPLOAD_TIMEOUT_MINUTES"
+              test -z "$ORDINARY_UPLOAD_AFTER_UPLOAD_COMPLETE"
+              test "$ORDINARY_ADMISSION" = skipped
+              ;;
+            *) exit 1 ;;
+          esac
 
   complete-gate:
     permissions:
@@ -228,6 +753,8 @@ jobs:
           python3 -I -B -S scripts/tests/hosted-consume-delivery-test.py
           python3 -I -B -S scripts/tests/hosted-desktop-job-budget-test.py
           python3 -I -B -S scripts/tests/hosted-recipient-routing-test.py
+          python3 -I -B -S scripts/tests/hosted-jvm-library-test.py
+          node scripts/tests/hosted-ordinary-cache-provider-action-test.cjs
 
       - name: Classify required-check scope
         id: scope

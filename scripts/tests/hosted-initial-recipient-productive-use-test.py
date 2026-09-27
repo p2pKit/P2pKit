@@ -48,7 +48,8 @@ ERRORS = (O.OriginError, O.wire.BudgetError, O.clocks.ClockError, P.I.AdmissionE
 SOURCE_NAMES = ("hosted_initial_recipient_productive.py", "hosted_cache_provider_native.py",
     "run-hosted-cache-bootstrap.py", "run-hosted-initial-recipient.py", "run-hosted-initial-recipient-custody.py",
     "hosted_cache_provider_prepare.py", "hosted_cache_provider_readback.py",
-    "run-hosted-initial-recipient-productive.py")
+    "run-hosted-initial-recipient-productive.py", "hosted_initial_recipient_productive_custody.py",
+    "hosted_initial_recipient_productive_receiver.py")
 TEXT = {name: (ROOT / "scripts" / name).read_text(encoding="utf-8") for name in SOURCE_NAMES}
 TREES = {name: ast.parse(raw) for name, raw in TEXT.items()}
 ACTION = (ROOT / "scripts/hosted-cache-provider-action.cjs").read_text(encoding="utf-8")
@@ -728,6 +729,52 @@ class IntegrationSourceAssertions(unittest.TestCase):
         self.assertLess(source[1].lineno, calls(node, "owner.freeze")[0].lineno)
         self.assertLess(close[0].lineno, calls(node, "owner.known")[0].lineno)
         self.assertLess(calls(node, "owner.known")[0].lineno, calls(node, "InitialUse")[0].lineno)
+
+    def test_job_values_are_pure_and_current_use_issues_only_after_known_close(self):
+        # Source assertions only; no source/native return or job fit is modeled here.
+        helper = function("run-hosted-initial-recipient.py", "_job_envelope_values")
+        for name in ("_OriginalServiceJobAdmission", "O.clocks.observe", "O.clocks.checked_now",
+                     "continuity.boot_digest", "time.time", "_service_job"):
+            self.assertEqual(calls(helper, name), [])
+        node = function("hosted_initial_recipient_productive.py", "_acquire")
+        values, issuer = calls(node, "N._job_envelope_values"), calls(node, "N._OriginalServiceJobAdmission")
+        self.assertEqual((len(values), len(issuer)), (1, 1))
+        self.assertLess(calls(node, "owner.known")[0].lineno, values[0].lineno)
+        self.assertLess(values[0].lineno, issuer[0].lineno)
+        self.assertEqual([ast.unparse(arg) for arg in values[0].args],
+            ["binding.proposal", "identity", "window.clock", "service_job", "binding.original_boot"])
+        checked = function("hosted_initial_recipient_productive.py", "_checked_use")
+        self.assertEqual(len(calls(checked, "N._job_admission")), 1)
+        self.assertLess(calls(checked, "owner.known")[0].lineno, calls(checked, "N._job_admission")[0].lineno)
+
+    def test_final_and_receiver_job_slots_are_owned_by_original_native_seeds(self):
+        final = function("hosted_initial_recipient_productive_custody.py", "_acquire_authority")
+        receiver = function("hosted_initial_recipient_productive_receiver.py", "_acquire")
+        for node in (final, receiver):
+            values, issuer = calls(node, "N._job_envelope_values"), calls(node, "N._OriginalServiceJobAdmission")
+            self.assertEqual((len(values), len(issuer)), (1, 1))
+            self.assertLess(calls(node, "_authority_read")[-1].lineno, values[0].lineno)
+            self.assertLess(values[0].lineno, issuer[0].lineno)
+            self.assertEqual([ast.unparse(arg) for arg in issuer[0].args], ["seed", "values"])
+        self.assertLess(calls(final, "_close_owner")[0].lineno, calls(final, "N._job_envelope_values")[0].lineno)
+        # The receiver's native phase has returned; its existing owner remains
+        # live inside the same bounded seal120. Do not claim an earlier close.
+        self.assertEqual(calls(receiver, "_close_owner"), [])
+        for filename, name in (("hosted_initial_recipient_productive_custody.py", "_checked_authority"),
+                ("hosted_initial_recipient_productive_receiver.py", "_acquired_passive")):
+            node = function(filename, name)
+            self.assertEqual(len(calls(node, "N._job_admission")), 1)
+            self.assertLess(calls(node, "_pin")[0].lineno, calls(node, "N._job_admission")[0].lineno)
+
+    def test_receiving_authority_requires_real_step_checks_before_and_after_native_call(self):
+        node = function("run-hosted-initial-recipient.py", "_receiving_authority")
+        steps, child, issuer = calls(node, "_receiving_step_current"), calls(node, "_initial_service_phase"), \
+            calls(node, "_OriginalServiceJobAdmission")
+        self.assertEqual((len(steps), len(child), len(issuer)), (2, 1, 1))
+        self.assertLess(steps[0].lineno, child[0].lineno)
+        self.assertLess(child[0].lineno, steps[1].lineno)
+        self.assertLess(steps[1].lineno, issuer[0].lineno)
+        self.assertEqual(calls(node, "_read_initial_recipient_originals"), [])
 
     def test_consumed_result_never_reenters_old_parent_clock_or_current_time(self):
         node = function("hosted_initial_recipient_productive.py", "_checked_use")

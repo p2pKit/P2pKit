@@ -57,7 +57,7 @@ def fixture(role="linux-x64", kind="worker"):
     actual_role = "linux-x64" if kind == "gate" else role
     clock = {"role": actual_role, "domain": DOMAINS[actual_role],
         "ticksPerSecond": 7_000_003 if actual_role == "windows-x64" else NS}
-    work, job_end = ((180 * NS, 360 * NS) if kind == "gate" else (241 * NS, 1200 * NS))
+    work, job_end = ((180 * NS, 360 * NS) if kind == "gate" else (241 * NS, 5400 * NS))
     window = {"schema": 1, "scope": "INITIAL_RECIPIENT_CUSTODY_ABSOLUTE_WINDOW_V1", "clock": clock,
         "originalBootDigest": "a" * 64, "kind": kind, "originalJobBasisNs": 0, "jobEndNs": job_end, "startNs": NS,
         "workEndNs": work, "nativeFinalEndNs": work + 45 * NS, "readEndNs": work + 75 * NS,
@@ -187,6 +187,20 @@ class PendingDataControls(unittest.TestCase):
             value["originalWindow"][name] += 1
             value["predecessors"]["originalWindowSha256"] = hashed(value["originalWindow"])
             self.reject(value)
+
+    def test_worker_job5400_does_not_renew_work_tail_or_admit_carrier_data(self):
+        value = fixture()
+        window = value["originalWindow"]
+        self.assertEqual(window["jobEndNs"], window["originalJobBasisNs"] + 5400 * NS)
+        self.assertEqual(window["workEndNs"], window["startNs"] + 240 * NS)
+        self.assertEqual(tuple(window[name] - window["workEndNs"] for name in H.WINDOW_ENDS),
+                         tuple(seconds * NS for seconds in (0, 45, 75, 105, 165, 180)))
+        self.assertEqual(guarded(H.parse_pending, wire(value))["budgetAcceptance"], "NOT_ADMITTED")
+        for end in (1200 * NS, 5400 * NS + window["startNs"]):
+            changed = fixture()
+            changed["originalWindow"]["jobEndNs"] = end
+            changed["predecessors"]["originalWindowSha256"] = hashed(changed["originalWindow"])
+            self.reject(changed)
 
     def test_boolean_nan_and_clock_frequency_are_not_integer_times(self):
         for target, name, bad in (("originalWindow", "workEndNs", True), ("times", "beforeClosedNs", 2.0),

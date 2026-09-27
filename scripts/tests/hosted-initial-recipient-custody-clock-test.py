@@ -289,7 +289,7 @@ def namespace(rig):
     native._RecipientWindow.now, native._RecipientWindow.deadline = forbidden_now, forbidden_deadline
     graph_bindings = {name: type("Unused" + name, (), {}) for name in
         ("_ReadmissionReturn", "_ReadmissionBinding", "_ReadmissionClaim", "_PreparationBinding",
-         "_OriginalPreparation", "_EntryWindowBinding", "_ReadmissionWindow", "SourceReturn",
+         "_OriginalPreparation", "_OriginalServiceJobAdmission", "_EntryWindowBinding", "_ReadmissionWindow", "SourceReturn",
          "_AuthorityReturn", "_AuthorityState", "_RecipientNativeReturn", "_RecipientValidationReturn",
          "_RecipientState", "_RecipientCryptoOriginals")}
     graph_bindings.update(I=identity, O=origin, native=native, ROOT=ROOT, acquisition=rig.A,

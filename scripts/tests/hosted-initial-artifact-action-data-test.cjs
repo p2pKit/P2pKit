@@ -280,6 +280,114 @@ test('whole F and pending file each retain their independent16KiB limit', () => 
     assert.throws(() => D.outputs(changed));
 });
 
+// Synthetic worker DATA only. Keep the shared gate fixture and every original
+// control unchanged. Explicit work values below are expectations, not a copy of
+// the production min() calculation or any original/native admission facility.
+function workerDataFixture({basis = 100n * NS, start = 1000n * NS, work = 1240n * NS} = {}) {
+    const gate = fixture(), environment = copy(gate.environment), ready = copy(gate.ready), after = copy(gate.afterReady);
+    environment.GITHUB_JOB = 'populate';
+    ready.kind = 'worker'; ready.github.job = 'populate';
+    ready.originalWindow = {...ready.originalWindow, kind: 'worker', originalJobBasisNs: basis,
+        jobEndNs: basis + 5400n * NS, startNs: start, workEndNs: work, nativeFinalEndNs: work + 45n * NS,
+        readEndNs: work + 75n * NS, sealEndNs: work + 105n * NS, uploadEndNs: work + 165n * NS,
+        afterEndNs: work + 180n * NS};
+    ready.deadline.initialSealEndNs = String(work + 105n * NS);
+    environment.P2PKIT_INITIAL_SEAL_END_NS = ready.deadline.initialSealEndNs;
+    ready.firstRawNs = String(work + 104n * NS);
+    ready.closeEndNs = String(work + 164n * NS); ready.workEndNs = String(work + 159n * NS);
+    Object.assign(after, {kind: 'worker', github: copy(ready.github), originalWindow: copy(ready.originalWindow),
+        deadline: copy(ready.deadline), firstRawNs: String(work + 162n * NS), endNs: String(work + 177n * NS)});
+    return {environment, ready, readyRaw: D.encode(ready), after, afterRaw: D.encode(after)};
+}
+
+test('worker JOB5400 READY preserves its original basis,240 work and complete tail', () => {
+    const f = workerDataFixture(), value = D.ready(f.readyRaw, f.environment, NOW), w = value.originalWindow;
+    assert.equal(value.kind, 'worker'); assert.equal(value.github.job, 'populate');
+    assert.equal(BigInt(w.jobEndNs), 5500n * NS);
+    assert.equal(BigInt(w.jobEndNs) - BigInt(w.originalJobBasisNs), 5400n * NS);
+    assert.equal(BigInt(w.workEndNs) - BigInt(w.startNs), 240n * NS);
+    assert.deepEqual(['workEndNs', 'nativeFinalEndNs', 'readEndNs', 'sealEndNs', 'uploadEndNs', 'afterEndNs']
+        .map(name => BigInt(w[name])), [1240n, 1285n, 1315n, 1345n, 1405n, 1420n].map(seconds => seconds * NS));
+});
+test('worker JOB5400 AFTER retains one15s and the original upload cutoff', () => {
+    const f = workerDataFixture(), validate = value => D.afterReady(D.encode(value), f.environment, NOW);
+    const value = validate(f.after);
+    assert.equal(BigInt(value.endNs) - BigInt(value.firstRawNs), 15n * NS);
+    assert.equal(D.afterBounds(value, 200n * NS).endNs, 215n * NS);
+    rejectsChanged(f.after, row => { row.endNs = String(BigInt(row.endNs) + 1n); }, validate);
+    rejectsChanged(f.after, row => { row.firstRawNs = String(row.originalWindow.uploadEndNs); }, validate);
+});
+test('worker JOB5400 parity does not widen the independent gate360', () => {
+    const f = fixture(), validate = value => D.ready(D.encode(value), f.environment, NOW), value = validate(f.ready);
+    assert.equal(BigInt(value.originalWindow.jobEndNs) - BigInt(value.originalWindow.originalJobBasisNs), 360n * NS);
+    rejectsChanged(f.ready, row => { row.originalWindow.jobEndNs = row.originalWindow.originalJobBasisNs + 5400n * NS; }, validate);
+});
+test('worker old1200 expanded job or rebased values cannot replace the original window', () => {
+    const f = workerDataFixture(), validate = value => D.ready(D.encode(value), f.environment, NOW);
+    for (const seconds of [1200n, 5399n, 5401n]) rejectsChanged(f.ready,
+        row => { row.originalWindow.jobEndNs = row.originalWindow.originalJobBasisNs + seconds * NS; }, validate);
+    rejectsChanged(f.ready, row => { row.originalWindow.originalJobBasisNs += NS; }, validate);
+    rejectsChanged(f.ready, row => { row.originalWindow.startNs = row.originalWindow.originalJobBasisNs - 1n; }, validate);
+});
+test('late worker original residual clips work before its180s tail with strict equality refusal', () => {
+    const f = workerDataFixture({start: 5320n * NS - 1n, work: 5320n * NS});
+    const validate = value => D.ready(D.encode(value), f.environment, NOW), value = validate(f.ready), w = value.originalWindow;
+    assert.equal(BigInt(w.workEndNs) - BigInt(w.startNs), 1n);
+    assert.equal(BigInt(w.afterEndNs), BigInt(w.jobEndNs));
+    for (const late of [5320n * NS, 5320n * NS + 1n]) rejectsChanged(f.ready,
+        row => { row.originalWindow.startNs = late; }, validate);
+});
+test('worker JOB5400 exact uint64 endpoint is valid but one-nanosecond overflow is not', () => {
+    const maximum = (1n << 64n) - 1n, basis = maximum - 5400n * NS;
+    const f = workerDataFixture({basis, start: basis + 900n * NS, work: basis + 1140n * NS});
+    assert.equal(BigInt(D.ready(f.readyRaw, f.environment, NOW).originalWindow.jobEndNs), maximum);
+    const overflow = workerDataFixture({basis: basis + 1n, start: basis + 900n * NS, work: basis + 1140n * NS});
+    assert.throws(() => D.ready(overflow.readyRaw, overflow.environment, NOW));
+});
+test('worker original window fields remain strict unsigned integers without lexical float aliases', () => {
+    const f = workerDataFixture(), validate = value => D.ready(D.encode(value), f.environment, NOW);
+    for (const name of ['originalJobBasisNs', 'jobEndNs', 'startNs', 'workEndNs', 'nativeFinalEndNs',
+        'readEndNs', 'sealEndNs', 'uploadEndNs', 'afterEndNs']) {
+        for (const bad of [true, -1n, String(f.ready.originalWindow[name]), 1.5, -0, (1n << 64n)])
+            rejectsChanged(f.ready, row => { row.originalWindow[name] = bad; }, validate);
+    }
+    const raw = f.readyRaw.toString('ascii'), token = '"originalJobBasisNs":' + f.ready.originalWindow.originalJobBasisNs;
+    const floating = raw.replace(token + ',', token + '.0,');
+    assert.notEqual(floating, raw);
+    assert.throws(() => D.ready(Buffer.from(floating, 'ascii'), f.environment, NOW));
+});
+test('worker JOB5400 preserves exact240 and each45/75/105/165/180 tail offset', () => {
+    for (const work of [1240n * NS - 1n, 1240n * NS + 1n]) {
+        const changed = workerDataFixture({work});
+        assert.throws(() => D.ready(changed.readyRaw, changed.environment, NOW));
+    }
+    const f = workerDataFixture(), validate = value => D.ready(D.encode(value), f.environment, NOW);
+    for (const name of ['nativeFinalEndNs', 'readEndNs', 'sealEndNs', 'uploadEndNs', 'afterEndNs'])
+        rejectsChanged(f.ready, row => { row.originalWindow[name]++; }, validate);
+});
+test('worker JOB5400 does not restart or enlarge the original60s upload and5s close', () => {
+    const f = workerDataFixture(), validate = value => D.ready(D.encode(value), f.environment, NOW);
+    const bounds = D.localBounds(validate(f.ready), 100n * NS);
+    assert.deepEqual(bounds, {preSpawnLocalNs: 100n * NS, startByNs: 101n * NS, workEndNs: 155n * NS, closeEndNs: 160n * NS});
+    rejectsChanged(f.ready, row => {
+        row.closeEndNs = String(BigInt(row.firstRawNs) + 61n * NS);
+        row.workEndNs = String(BigInt(row.closeEndNs) - 5n * NS);
+    }, validate);
+    rejectsChanged(f.ready, row => { row.workEndNs = String(BigInt(row.closeEndNs) - 4n * NS); }, validate);
+    rejectsChanged(f.ready, row => { row.firstRawNs = row.deadline.initialSealEndNs; }, validate);
+});
+test('worker arithmetic stays unqualified DATA with original seed and context bindings', () => {
+    const f = workerDataFixture(), validate = value => D.ready(D.encode(value), f.environment, NOW), value = validate(f.ready);
+    assert.equal(value.qualification, 'NOT_ESTABLISHED'); assert.equal(value.originalStepOutcome, 'NOT_OBSERVED');
+    assert.equal(value.nativeFileRetirement, 'PENDING_ORIGINAL_READERS');
+    for (const [name, bad] of [['qualification', 'PASS'], ['originalStepOutcome', 'success'],
+        ['nativeFileRetirement', 'KNOWN_NATIVE_CLOSE'], ['jobAdmission', 'SELF_ASSERTED_NOT_AUTHORITY']])
+        rejectsChanged(f.ready, row => { row[name] = bad; }, validate);
+    for (const name of ['GITHUB_JOB', 'RUNNER_ENVIRONMENT', 'P2PKIT_INITIAL_SEAL_END_NS', 'P2PKIT_INITIAL_SEAL_CLOCK_ROLE',
+        'P2PKIT_INITIAL_SEAL_CLOCK_DOMAIN', 'P2PKIT_INITIAL_SEAL_CLOCK_TICKS_PER_SECOND', 'P2PKIT_INITIAL_SEAL_BOOT_SHA256'])
+        rejectsChanged(f.environment, env => { env[name] += 'changed'; }, env => D.ready(f.readyRaw, env, NOW));
+});
+
 let passed = 0;
 for (const {name, body} of cases) {
     try { body(); passed++; }

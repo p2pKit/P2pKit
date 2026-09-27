@@ -465,11 +465,11 @@ class ProductiveDataControls(unittest.TestCase):
         with self.assertRaisesRegex(I.AdmissionError, "COMPATIBILITY_H1_SOURCE"):
             Q.compatibility(compatible, inventory, final, f.declaration, f.inputs)
 
-    def test_shared_closed134_inventory_refuses_old_subset_and_extra_path(self):
+    def test_shared_closed135_inventory_refuses_old_subset_and_extra_path(self):
         f = MetadataFixture()
         self.assertIs(Q.PROVIDER_INPUTS, Q.source_compatibility.PROVIDER_INPUTS)
-        self.assertEqual(len(Q.PROVIDER_INPUTS), 122)
-        self.assertEqual(Q.PROVIDER_INPUTS[-1], "scripts/hosted_evidence_primitives.py")
+        self.assertEqual(len(Q.PROVIDER_INPUTS), 123)
+        self.assertEqual(Q.PROVIDER_INPUTS[-1], "scripts/hosted_jvm_library_custody.py")
         for change in (lambda value: value["provider"].pop(Q.PROVIDER_INPUTS[-1]),
                 lambda value: value["provider"].pop("scripts/run-hosted-recipient-routing.py"),
                 lambda value: value["provider"].update({"scripts/extra.py": "a" * 64}),

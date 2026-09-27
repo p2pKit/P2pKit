@@ -559,11 +559,18 @@ def _acquire(parent, site, token):
         all_originals = (*originals, ("use-pending.json", pending))
         result = InitialUse(parent, site, identity, raw, inventory, all_originals, path)
         graph = N._history_graph(result.__dict__, identity.__dict__, all_originals)
+        # This slot exists only after actual source12/native24/source12 and
+        # known close. The old proposal remains DATA, never the admission.
+        service_job = (N._public_provider_service_job if site in U.public.SITES else N._service_job)(captured, window.clock)
+        values = N._job_envelope_values(binding.proposal, identity, window.clock, service_job, binding.original_boot)
+        require(values[4] == tuple(history["serviceJob"]) and values[5] == history["originalJobBasisNs"],
+            "USE_ORIGINAL_SERVICE_JOB")
+        job_admission = N._OriginalServiceJobAdmission(result, values), values
         # Include serialization and the actual closed return preparation in
         # the same bounded WORK. No JSON timestamp grants a later use.
-        window.now(minimum=closed)
+        require(window.now(minimum=closed) < values[-1], "USE_ORIGINAL_JOB_EXPIRED")
         _USE_RETURNS[id(result)] = (result, parent, site, binding, entry, attempts, attempt, state, owner, owner_anchor,
-            window, graph, tuple(links), pins, registration)
+            window, graph, tuple(links), pins, registration, job_admission)
         state["return"] = result
         entry.complete(attempts, attempt, result)
         checked_use(result, parent, site)
@@ -575,10 +582,10 @@ def _acquire(parent, site, token):
 def _checked_use(result, parent, site, *, consumed):
     """Shared immutable original/closed checks, with two fixed lifecycle views."""
     saved = _USE_RETURNS.get(id(result))
-    require(type(result) is InitialUse and type(saved) is tuple and saved[0] is result and saved[1] is parent and
+    require(type(result) is InitialUse and type(saved) is tuple and len(saved) == 16 and saved[0] is result and saved[1] is parent and
         saved[2] == site, "USE_NOT_ORIGINAL_RETURN")
     _, _parent_value, _site, binding, entry, attempts, attempt, state, owner, owner_anchor, window, graph, links, pins, \
-        registration = saved
+        registration, job_admission = saved
     try:
         entry.returned(attempts, attempt, result)
         require(type(consumed) is bool and _USE_ATTEMPTS.get((id(parent), site)) is registration and
@@ -600,6 +607,9 @@ def _checked_use(result, parent, site, *, consumed):
             N._check_history(item)
         owner.known()
         N._check_worker_pins(pins, window.clock.role, closed=True)
+        job = N._job_admission(job_admission, result, binding.proposal, result.identity.record, window.clock)
+        require(job.values[3] == binding.original_boot and window.last < job.end_ns and
+            binding.work_end_ns <= job.end_ns, "USE_ORIGINAL_JOB_ADMISSION")
         if not consumed:
             value = C.canonical(result.identity.record)
             require(value["initialRecipient"]["notBefore"] <= int(time.time()) < value["initialRecipient"]["expiresAt"],

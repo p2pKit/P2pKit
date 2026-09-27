@@ -63,7 +63,7 @@ function frame(value) {
 
 function fixture(origin = 'ordinary', profile = 'desktop', role = 'linux-x64', temp) {
     const windows = role === 'windows-x64', path = windows ? paths.win32 : paths.posix;
-    const workflow = profile === 'full' ? '.github/workflows/ci.yml' : '.github/workflows/desktop-cross-host.yml';
+    const workflow = profile === 'desktop' ? '.github/workflows/desktop-cross-host.yml' : '.github/workflows/ci.yml';
     const expected = {
         GITHUB_SHA: '1'.repeat(40), GITHUB_REPOSITORY: 'p2pKit/P2pKit',
         GITHUB_EVENT_NAME: origin === 'initial' ? 'pull_request' : 'push',
@@ -71,13 +71,16 @@ function fixture(origin = 'ordinary', profile = 'desktop', role = 'linux-x64', t
         GITHUB_WORKFLOW_SHA: '2'.repeat(40), GITHUB_JOB: 'model_job', GITHUB_RUN_ID: '42', GITHUB_RUN_ATTEMPT: '3',
         RUNNER_TEMP: temp === undefined ? (windows ? 'C:\\model\\runner-temp' : '/model/runner-temp') : temp,
     };
+    if (profile === 'jvm-library') Object.assign(expected, {GITHUB_WORKFLOW_SHA: expected.GITHUB_SHA,
+        GITHUB_JOB: 'jvm-library-checks', RUNNER_OS: windows ? 'Windows' : 'Linux', RUNNER_ARCH: 'X64'});
     expected.GITHUB_WORKFLOW_REF = expected.GITHUB_REPOSITORY + '/' + workflow + '@' + expected.GITHUB_REF;
-    const home = path.join(expected.RUNNER_TEMP, 'p2pkit-dependency-seed-' + profile + '-' + role, 'restore-home');
+    const byteProfile = profile === 'jvm-library' ? 'desktop' : profile;
+    const home = path.join(expected.RUNNER_TEMP, 'p2pkit-dependency-seed-' + byteProfile + '-' + role, 'restore-home');
     const outputs = {
         dependency_seed_ready: 'true', dependency_cache_ready: 'true', native_provider_ready: 'true',
         dependency_seed_home: home, dependency_seed_staging_sha256: '4'.repeat(64),
         preparation_sha256: '5'.repeat(64), restoration_sha256: '6'.repeat(64),
-        cache_key: 'p2pkit-dependency-files-v1-' + profile + '-' + role + '-' + '7'.repeat(64) + '-' + '8'.repeat(64),
+        cache_key: 'p2pkit-dependency-files-v1-' + byteProfile + '-' + role + '-' + '7'.repeat(64) + '-' + '8'.repeat(64),
         cache_path: path.join(home, 'caches', 'modules-2', 'files-2.1'),
     };
     if (origin === 'initial') outputs.initial_current_history_sha256 = '9'.repeat(64);
@@ -412,6 +415,64 @@ test('cache key keeps exact namespace, profile, role and both lowercase full dig
         key.replace('-linux-x64-', '-macos-x64-'), key.replace('7'.repeat(64), 'a'.repeat(63)),
         key.replace('8'.repeat(64), 'B'.repeat(64)), key + '-extra', 'prefix-' + key])
         changed(f, next => { next.value.outputs.cache_key = value; });
+});
+
+test('JVM DATA retains actual CI worker identity and Desktop byte cohort on both hosts and origins', () => {
+    for (const origin of ['ordinary', 'initial']) for (const role of ['linux-x64', 'windows-x64']) {
+        const f = fixture(origin, 'jvm-library', role);
+        accepts(f);
+        assert.equal(f.value.profile, 'jvm-library');
+        assert.equal(f.value.github.job, 'jvm-library-checks');
+        assert.equal(f.value.github.workflow, '.github/workflows/ci.yml');
+        assert.equal(f.value.github.workflowSha, f.value.source.commit);
+        assert(f.value.outputs.dependency_seed_home.includes('p2pkit-dependency-seed-desktop-' + role));
+        assert(f.value.outputs.cache_key.startsWith('p2pkit-dependency-files-v1-desktop-' + role + '-'));
+    }
+});
+test('JVM DATA rejects Desktop/FULL job aliases and unsupported hosts', () => {
+    for (const origin of ['ordinary', 'initial']) for (const role of ['linux-x64', 'windows-x64']) {
+        const f = fixture(origin, 'jvm-library', role);
+        for (const job of ['verify', 'complete-gate', 'model_job']) changed(f, next => {
+            next.expected.GITHUB_JOB = next.value.github.job = job;
+        });
+        changed(f, next => { next.expected.RUNNER_OS = 'macOS'; });
+        changed(f, next => { next.expected.RUNNER_ARCH = 'ARM64'; });
+        changed(f, next => { next.expected.GITHUB_WORKFLOW_REF = next.expected.GITHUB_WORKFLOW_REF.replace(
+            '/ci.yml@', '/desktop-cross-host.yml@'); next.value.github.workflow = '.github/workflows/desktop-cross-host.yml'; });
+        for (const profile of ['full', 'desktop']) changed(f, next => { next.value.profile = profile; });
+    }
+    for (const role of ['macos-x64', 'macos-arm64', 'linux-arm64', 'windows-arm64']) {
+        const f = fixture('ordinary', 'jvm-library', role);
+        holds(() => model(f).read(frame(f.value), f));
+    }
+});
+test('JVM DATA refuses mismatched byte profile role path key or source/attempt', () => {
+    for (const origin of ['ordinary', 'initial']) for (const role of ['linux-x64', 'windows-x64']) {
+        const f = fixture(origin, 'jvm-library', role);
+        for (const field of ['dependency_seed_home', 'cache_path', 'cache_key'])
+            for (const alias of ['jvm-library', 'full', 'bootstrap-desktop'])
+                changed(f, next => { next.value.outputs[field] = next.value.outputs[field].replace('-desktop-', '-' + alias + '-'); });
+        changed(f, next => { next.value.outputs.cache_key = next.value.outputs.cache_key.replace(role,
+            role === 'linux-x64' ? 'windows-x64' : 'linux-x64'); });
+        changed(f, next => { next.expected.RUNNER_TEMP += '-another'; });
+        changed(f, next => { next.value.source.commit = 'a'.repeat(40); });
+        changed(f, next => { next.expected.GITHUB_WORKFLOW_SHA = next.value.github.workflowSha = 'b'.repeat(40); });
+        changed(f, next => { next.value.github.runAttempt = '4'; });
+        changed(f, next => { next.expected.GITHUB_RUN_ID = '43'; });
+    }
+});
+test('JVM DATA keeps exact original output roster and cannot claim resolver or enclosing Action acceptance', () => {
+    for (const origin of ['ordinary', 'initial']) for (const role of ['linux-x64', 'windows-x64']) {
+        const f = fixture(origin, 'jvm-library', role);
+        for (const name of namesFor(origin)) changed(f, next => { delete next.value.outputs[name]; });
+        for (const name of ['profile_passed', 'artifacts_ready', 'resolver_passed', 'sample_packaging_required'])
+            changed(f, next => { next.value.outputs[name] = 'true'; });
+        for (const field of ['resolverAcceptance', 'enclosingActionReturn'])
+            changed(f, next => { next.value[field] = 'PASS'; });
+        changed(f, next => { next.value.retirement = 'UNKNOWN'; });
+        changed(f, next => { next.value.errors = ['MODEL_FAILURE']; });
+        changed(f, next => { next.origin = origin === 'ordinary' ? 'initial' : 'ordinary'; });
+    }
 });
 
 function main() {

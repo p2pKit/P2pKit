@@ -363,7 +363,7 @@ class NativeModels(unittest.TestCase):
         self.assertEqual((self.path / "acquisition-queries/base_policy_entry.bin").read_bytes(), b"")
         self.assertTrue(all(TOKEN.encode() not in p.read_bytes() for p in self.path.rglob("*") if p.is_file()))
 
-    def test_worker_keeps_its_actual_populate_identity_and_still_has_no_admission(self):
+    def test_worker_keeps_actual_populate_identity_without_ordinary_admission(self):
         self.choose("worker", "desktop-linux-x64")
         self.prepare()
         match = json.loads((self.path / "acquisition-queries/match.bin").read_bytes())
@@ -436,6 +436,139 @@ class NativeModels(unittest.TestCase):
             self.assertIs(value["exportSaveAuthority"], False)
             self.assertNotIn("admissionSha256", value)
         self.assertEqual(proposal["productiveOwner"], "NOT_CREATED")
+        self.assertEqual(len(self.fixture.requests), 8)
+
+    def test_original_worker_job_slot_is_distinct_from_not_admitted_records(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        bound = N._PREPARED_RETURNS[id(original)]
+        admission, values = bound.job_admission
+        self.assertIs(type(admission), N._OriginalServiceJobAdmission)
+        self.assertIsNot(type(admission), I.Admission)
+        self.assertIs(admission.original, original)
+        self.assertIs(admission.values, values)
+        self.assertEqual(values[:4], (original.proposal_raw, original.identity.record, original._fence.clock, self.gate_boot))
+        self.assertEqual(values[4], N._service_job(bound.worker_originals, original._fence.clock))
+        self.assertEqual(values[5], O.parse(original.service_time_raw)["jobStartBasisNs"])
+        self.assertEqual(admission.end_ns, values[5] + 5400 * O.NS)
+        for raw in (original.raw, original.service_time_raw, original.proposal_raw):
+            self.assertEqual(O.parse(raw)["budgetAcceptance"], "NOT_ADMITTED")
+            self.assertNotIn("jobAdmission", O.parse(raw))
+        self.assertEqual(O.parse(original.raw)["workerAdmission"], "NOT_PERFORMED")
+        self.assertIs(N.original_worker_identity(original), original.identity)
+        self.assertEqual(len(self.fixture.requests), 8)
+        self.assertTrue(all(query.closed for query in self.queries))
+
+    def test_job_slot_constructor_copies_and_values_are_not_original_returns(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        slot = N._PREPARED_RETURNS[id(original)].job_admission
+        admission, values = slot
+        prior = self.fixture.ns
+        for value in (dataclasses.replace(original), dataclasses.replace(admission),
+                N._OriginalServiceJobAdmission(original, values), values, slot, True):
+            with self.subTest(kind=type(value).__name__), self.assertRaisesRegex(I.AdmissionError,
+                    "NOT_ORIGINAL_PREPARATION_RETURN"):
+                N.original_worker_identity(value)
+        self.assertEqual(self.fixture.ns, prior)
+        self.assertEqual(len(self.fixture.requests), 8)
+        self.assertIs(N.original_worker_identity(original), original.identity)
+
+    def test_job_slot_mutation_cannot_replace_independently_saved_values(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        bound = N._PREPARED_RETURNS[id(original)]
+        admission, values = bound.job_admission
+        equal_values = tuple(list(values))
+        self.assertEqual(equal_values, values)
+        self.assertIsNot(equal_values, values)
+        for name, changed in (("values", equal_values), ("values", (*values[:-1], values[-1] + O.NS)),
+                ("values", True), ("original", dataclasses.replace(original))):
+            before = getattr(admission, name)
+            try:
+                object.__setattr__(admission, name, changed)
+                with self.subTest(field=name), self.assertRaisesRegex(I.AdmissionError, "SERVICE_JOB_ADMISSION_CHANGED"):
+                    N.original_worker_identity(original)
+                self.assertIs(bound.job_admission[1], values)
+            finally:
+                object.__setattr__(admission, name, before)
+        self.assertIs(N.original_worker_identity(original), original.identity)
+
+    def test_missing_or_malformed_worker_job_slot_is_refused(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        bound = N._PREPARED_RETURNS[id(original)]
+        admission, values = bound.job_admission
+        # Explicit registry-corruption negatives, not synthetic successful issuers.
+        for slot in (None, True, admission, values, (admission,), (object(), values)):
+            changed = dataclasses.replace(bound, job_admission=slot)
+            with self.subTest(kind=type(slot).__name__), patch.dict(N._PREPARED_RETURNS, {id(original): changed}), \
+                    self.assertRaisesRegex(I.AdmissionError, "SERVICE_JOB_ADMISSION_(REQUIRED|CHANGED)"):
+                N.original_worker_identity(original)
+        self.assertEqual(len(self.fixture.requests), 8)
+
+    def test_changed_worker_boot_refuses_original_without_reacquiring_service(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        bound = N._PREPARED_RETURNS[id(original)]
+        self.gate_boot = "b" * 64
+        with self.assertRaisesRegex(I.AdmissionError, "ORIGINAL_SERVICE_JOB_CHANGED_OR_EXPIRED"):
+            N.original_worker_identity(original)
+        current = N._PREPARED_RETURNS[id(original)]
+        self.assertIs(current.job_admission, bound.job_admission)
+        self.assertEqual(current.last_ns, original._fence.last)
+        self.assertGreater(current.last_ns, bound.last_ns)
+        self.assertEqual(len(self.fixture.requests), 8)
+
+    def test_boot_delay_spends_original_prelude_and_retains_failed_raw_frontier(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        bound = N._PREPARED_RETURNS[id(original)]
+        def late_boot(role):
+            self.assertEqual(role, original._fence.clock.role)
+            self.fixture.ns = original._fence.final
+            return self.gate_boot
+        with patch.object(N.continuity, "boot_digest", side_effect=late_boot), \
+                self.assertRaisesRegex(O.OriginError, "FENCE_EXPIRED"):
+            N.original_worker_identity(original)
+        current = N._PREPARED_RETURNS[id(original)]
+        self.assertIs(current.job_admission, bound.job_admission)
+        self.assertEqual(current.last_ns, original._fence.last)
+        self.assertGreaterEqual(current.last_ns, original._fence.final)
+        self.assertEqual(len(self.fixture.requests), 8)
+
+    def test_job_envelope_helper_neither_observes_clock_nor_issues_admission(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        bound = N._PREPARED_RETURNS[id(original)]
+        values = bound.job_admission[1]
+        prior, registries = self.fixture.ns, dict(N._PREPARED_RETURNS)
+        with ExitStack() as stack:
+            for module, name in ((O.clocks, "observe"), (N.continuity, "boot_digest"),
+                    (N.time, "time"), (N, "_OriginalServiceJobAdmission")):
+                stack.enter_context(patch.object(module, name, side_effect=AssertionError("PURE_JOB_DATA_ONLY")))
+            data = N._job_envelope_values(original.proposal_raw, original.identity, original._fence.clock,
+                values[4], values[3])
+        self.assertEqual(data, values)
+        self.assertEqual(self.fixture.ns, prior)
+        self.assertEqual(set(N._PREPARED_RETURNS), set(registries))
+        self.assertTrue(all(N._PREPARED_RETURNS[key] is saved for key, saved in registries.items()))
+        with self.assertRaisesRegex(I.AdmissionError, "NOT_ORIGINAL_PREPARATION_RETURN"):
+            N.original_worker_identity(data)
+
+    def test_job_envelope_refuses_changed_original_job_keys_or_proposal_type(self):
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        values = N._PREPARED_RETURNS[id(original)].job_admission[1]
+        for index, changed in ((0, values[4][0] + 1), (1, "1970-01-01T00:00:00Z"), (2, "another-runner"), (3, True)):
+            service_job = list(values[4]); service_job[index] = changed
+            with self.subTest(index=index), self.assertRaises(I.AdmissionError):
+                N._job_envelope_values(original.proposal_raw, original.identity, original._fence.clock,
+                    tuple(service_job), values[3])
+        for raw in (bytearray(original.proposal_raw), memoryview(original.proposal_raw), True):
+            with self.subTest(kind=type(raw).__name__), self.assertRaisesRegex(I.AdmissionError,
+                    "SERVICE_JOB_ORIGINAL_BINDING"):
+                N._job_envelope_values(raw, original.identity, original._fence.clock, values[4], values[3])
         self.assertEqual(len(self.fixture.requests), 8)
 
     def test_gate_never_produces_a_worker_service_basis_or_proposal(self):

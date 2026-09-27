@@ -2,7 +2,7 @@ name: Native initial-ordinary dependency-cache restore
 description: Fixed initial-current controller/provider restore; C2, HOLDs and ordinary qualification remain mandatory
 inputs:
   profile:
-    description: Exact full or desktop first-PR job profile
+    description: Exact full, desktop or jvm-library first-PR job profile; JVM uses Desktop dependency bytes only
     required: true
 outputs:
   dependency_seed_ready:

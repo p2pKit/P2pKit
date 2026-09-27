@@ -521,6 +521,45 @@ def source_inputs(parent, root, end, check):
     return bound, compiled
 
 
+def _selected_bootstrap_cohort(admitted_raw):
+    """Exact-scope DATA route, not admission or a partial-marker fallback."""
+    value = bootstrap.ordinary.parse(admitted_raw, bootstrap.ordinary.EVENT_LIMIT)
+    if value.get("scope") not in (bootstrap.SCOPE, initial_bootstrap.SCOPE):
+        return None
+    # Even the legacy scope must retain the initial-marker firewall. Only an
+    # actual None, never a validation failure, permits the legacy reader.
+    selected = initial_bootstrap.cache_cohort(admitted_raw)
+    return selected if selected is not None else bootstrap.cache_cohort(admitted_raw)
+
+
+def byte_cohort(admitted_raw, profile, role):
+    """Exact worker-to-bytes mapping, never a relabelled execution identity.
+
+    Cache callers already holding a Desktop byte profile may pass it unchanged.
+    Both JVM routes still validate the actual record. Exact bootstrap scopes
+    retain their own closed readers; partial initial markers cannot downgrade
+    to an ordinary policy or productive bootstrap cohort.
+    """
+    import hosted_initial_ordinary_identity as initial_ordinary
+    import hosted_test_identity as ordinary_identity
+    try:
+        selected = initial_ordinary.jvm_cache_cohort(admitted_raw)
+        if selected is None:
+            producer = _selected_bootstrap_cohort(admitted_raw)
+            if producer is not None:
+                require(producer == (profile, role), "SEED_BOOTSTRAP_COHORT_CHANGED")
+                return producer
+            selected = ordinary_identity.jvm_library_cohort(admitted_raw)
+        if selected is not None:
+            require(profile in (ordinary_identity.JVM_PROFILE, "desktop") and selected == ("desktop", role),
+                    "SEED_JVM_EXECUTION_OR_COHORT_CHANGED")
+            return selected
+        require(profile in ("full", "desktop"), "SEED_EXECUTION_PROFILE")
+        return profile, role
+    except bootstrap.ordinary.AdmissionError:
+        raise SeedError("SEED_BOOTSTRAP_IDENTITY_CHANGED") from None
+
+
 def stage_path(session, profile, role, *, admitted_raw=None):
     """One literal provider target per runner-temp/cohort, not run provenance.
 
@@ -529,6 +568,8 @@ def stage_path(session, profile, role, *, admitted_raw=None):
     the original session/run binding must still agree before that adjustment.
     This pure path calculation does not authenticate a runner-temp root.
     """
+    if admitted_raw is not None:
+        profile, role = byte_cohort(admitted_raw, profile, role)
     require(profile in ("desktop", "full") and role in
             ("macos-arm64", "macos-x64", "linux-x64", "windows-x64") and
             (profile != "full" or role.startswith("macos-")), "SEED_PROFILE_ROLE")
@@ -563,10 +604,20 @@ def _bootstrap_cohort(admitted_raw, *, profile=None, role=None):
         # parent. Its strict leaf runs first: partial/relabelled Stage2 markers
         # must refuse, not fall through to ordinary or initial-bootstrap.
         import hosted_initial_ordinary_identity as initial_ordinary
-        ordinary = initial_ordinary.cache_cohort(admitted_raw)
+        ordinary = initial_ordinary.worker_cohort(admitted_raw)
         if ordinary is not None:
             require(profile is None and role is None or ordinary == (profile, role),
                     "SEED_INITIAL_ORDINARY_COHORT_CHANGED")
+            return None
+        producer = _selected_bootstrap_cohort(admitted_raw)
+        if producer is not None:
+            require(profile is None and role is None or producer == (profile, role),
+                    "SEED_BOOTSTRAP_COHORT_CHANGED")
+            return producer
+        import hosted_test_identity as ordinary_identity
+        jvm = ordinary_identity.jvm_library_cohort(admitted_raw)
+        if jvm is not None:
+            require(profile is None and role is None or jvm == (profile, role), "SEED_JVM_COHORT_CHANGED")
             return None
         initial = initial_bootstrap.cache_cohort(admitted_raw)
         if initial is not None:
@@ -578,6 +629,7 @@ def _bootstrap_cohort(admitted_raw, *, profile=None, role=None):
 
 def validate_cohort(admitted_raw, profile, role):
     """Pre-budget byte routing only; no native/staging/producer authority."""
+    profile, role = byte_cohort(admitted_raw, profile, role)
     selected = _bootstrap_cohort(admitted_raw, profile=profile, role=role)
     require(selected is None or selected == (profile, role), "SEED_BOOTSTRAP_COHORT_CHANGED")
     return selected
@@ -590,6 +642,7 @@ def require_connected_execution(admitted_raw):
 
 
 def stage_record(admitted_raw, profile, role, path, root_info, source_info, inputs):
+    profile, role = byte_cohort(admitted_raw, profile, role)
     validate_cohort(admitted_raw, profile, role)
     admitted = record(admitted_raw)
     return {"schema": 1, "scope": "DEPENDENCY_SEED_STAGING_V1", "profile": profile, "role": role,
@@ -606,6 +659,7 @@ def validate_stage(stage, admitted_raw, profile, role, path, root_info, source_i
 
 
 def seed_intent(admitted_raw, profile, role, path, staging_raw, inputs):
+    profile, role = byte_cohort(admitted_raw, profile, role)
     validate_cohort(admitted_raw, profile, role)
     return {"schema": 1, "policy": POLICY, "profile": profile, "role": role,
             "admissionSha256": digest(admitted_raw), "stagingSha256": digest(staging_raw),
@@ -614,14 +668,15 @@ def seed_intent(admitted_raw, profile, role, path, staging_raw, inputs):
 
 def validate_retained_stage(stage, admitted_raw, context, inputs):
     """Validate original receipt grammar, NOT the post-product S/cache contents."""
-    validate_cohort(admitted_raw, context["profile"], context["role"])
+    profile, role = byte_cohort(admitted_raw, context["profile"], context["role"])
+    validate_cohort(admitted_raw, profile, role)
     require(type(stage) is dict and _identity(stage.get("containerIdentity")) and
             _identity(stage.get("sourceIdentity")) and stage["containerIdentity"] != stage["sourceIdentity"],
             "SEED_STAGING_IDENTITY_GRAMMAR")
     path = stage_path(context["session"], context["profile"], context["role"], admitted_raw=admitted_raw)
     admitted = record(admitted_raw)
-    expected = {"schema": 1, "scope": "DEPENDENCY_SEED_STAGING_V1", "profile": context["profile"],
-                "role": context["role"], "source": admitted["source"], "github": admitted["github"],
+    expected = {"schema": 1, "scope": "DEPENDENCY_SEED_STAGING_V1", "profile": profile,
+                "role": role, "source": admitted["source"], "github": admitted["github"],
                 "admissionSha256": digest(admitted_raw), "container": str(path),
                 "restoreHome": str(path / "restore-home"), "containerIdentity": stage["containerIdentity"],
                 "sourceIdentity": stage["sourceIdentity"], "inputs": inputs,
@@ -1009,7 +1064,8 @@ def validate_receipt(value, intent, staging_raw, context_raw, canonical_raw, adm
     expected_intent = seed_intent(admitted_raw, context["profile"], context["role"],
                                  Path(intent["container"]), staging_raw, intent["inputs"])
     require(intent == expected_intent and context.get("dependencySeed") == intent and
-            intent["container"] == str(stage_path(Path(context["session"]), context["profile"], context["role"])),
+            intent["container"] == str(stage_path(Path(context["session"]), context["profile"], context["role"],
+                                                  admitted_raw=admitted_raw)),
             "SEED_INTENT_CHANGED")
     require(type(intent["inputs"]) is dict and set(intent["inputs"]) ==
             {"files", "allowlistSha256", "artifacts", "components", "policy"} and

@@ -103,6 +103,8 @@ class CurrentSession:
         native = current_module()
         native.checked_initial_ordinary(current)
         self.current, self.identity, self.cancelled = current, native.initial_ordinary_identity(current), cancelled
+        require(type(self.identity) in (identity.InitialOrdinaryIdentity, identity.InitialJvmLibraryIdentity),
+                "SESSION_WORKER_IDENTITY")
         self.pid, self.thread = os.getpid(), threading.get_ident()
         self.failed, self.original, self.claimed = False, None, False
         self.source_uses = []
@@ -213,7 +215,7 @@ def budget_originals(data):
 
 def load_identity(owner, directory, end):
     """Explicit initial-only DATA reader; the ordinary Admission loader stays strict."""
-    return identity.retained_identity(owner.read(directory, "admission.json", end),
+    return identity.retained_worker_identity(owner.read(directory, "admission.json", end),
         owner.read(directory, "original-event.json", end), owner.read(directory, "original-policy.json", end),
         owner.read(directory, "recipient-public.asc", end), now=int(time.time()))
 
@@ -230,7 +232,7 @@ def retain_identity(session, owner, directory, end):
 
 def check_local(owner, bound, destination, check, *, end):
     """Fixed credential-free crypto/native Git supplier; no current reconstruction."""
-    require(type(bound) is identity.InitialOrdinaryIdentity, "LOCAL_INITIAL_IDENTITY")
+    require(type(bound) in (identity.InitialOrdinaryIdentity, identity.InitialJvmLibraryIdentity), "LOCAL_INITIAL_IDENTITY")
     supplier, failure, checked = None, None, None
     try:
         check()
@@ -373,7 +375,7 @@ def current_budget_disposition(budget, history_sha256):
 class CryptoRequest:
     """Closed fixed-child DATA. This is not a live current or Admission."""
     raw: bytes = field(repr=False)
-    bound: identity.InitialOrdinaryIdentity = field(repr=False)
+    bound: identity.InitialOrdinaryIdentity | identity.InitialJvmLibraryIdentity = field(repr=False)
 
 
 def crypto_request_data(raw, bound, context_raw, budget, started, operation):
@@ -383,7 +385,8 @@ def crypto_request_data(raw, bound, context_raw, budget, started, operation):
     must additionally call crypto_request against its inherited native domain.
     A seal must not synthesize that domain from the record it is inspecting.
     """
-    require(type(bound) is identity.InitialOrdinaryIdentity and type(budget) is job_time.Budget and
+    require(type(bound) in (identity.InitialOrdinaryIdentity, identity.InitialJvmLibraryIdentity) and
+            type(budget) is job_time.Budget and
             operation in ("validate", "export"), "CRYPTO_REQUEST_TYPES")
     value, context, record = (I.parse(item, 4 * 1024 * 1024) for item in (raw, context_raw, bound.record))
     binding = initial_context(context)
@@ -399,7 +402,7 @@ def crypto_request_data(raw, bound, context_raw, budget, started, operation):
             budget.value["schema"] == 3 and budget.value["identitySha256"] == digest(bound.record) and
             type(value["current"]) is str and value["current"].isascii(), "CRYPTO_REQUEST_BINDING")
     current_raw = value["current"].encode("ascii")
-    identity.retained_current(current_raw, bound, context["role"])
+    identity.retained_worker_current(current_raw, bound, context["role"])
     require(digest(current_raw) == value["currentSha256"], "CRYPTO_REQUEST_CURRENT_DATA")
     native = value["native"]
     require(type(native) is dict and set(native) == {"job", "invocation", "state", "home", "cwd", "phase"} and
@@ -440,7 +443,8 @@ def crypto_request(raw, bound, context_raw, budget, started, inherited, operatio
 
 def manifest_data(request):
     """Exact public schema5 fields, not proof of current/crypto/owner inspection."""
-    require(type(request) is CryptoRequest and type(request.bound) is identity.InitialOrdinaryIdentity,
+    require(type(request) is CryptoRequest and
+            type(request.bound) in (identity.InitialOrdinaryIdentity, identity.InitialJvmLibraryIdentity),
             "MANIFEST_FIXED_REQUEST")
     value = I.parse(request.raw, 4 * 1024 * 1024)
     record = I.parse(request.bound.record, 4 * 1024 * 1024)

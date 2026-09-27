@@ -225,7 +225,7 @@ module InitialRecipientBootstrapPolicy
             tools_step,
             {"name" => "Initialize the exact Stage1 source within existing component windows", "id" => "canonical-initialization",
                 "if" => success("tools"), "timeout-minutes" => 12, "uses" => "./.github/actions/initial-recipient-initialize"},
-            command("Produce the original configuration-only dependency cohort", "produce", "canonical-initialization", productive, "produce", primary, 20),
+            command("Produce the original configuration-only dependency cohort", "produce", "canonical-initialization", productive, "produce", primary, 56),
             command("Prepare original initial cache save", "prepare-save", "produce", productive, "prepare-save", base),
             action("Save the exact original initial dependency cohort", "provider-save", "prepare-save", "initial-recipient-cache-provider", "save", prepared),
             command("Observe original initial cache save and known retirement", "after-save", "provider-save", productive, "after-save", saved, 6),
@@ -265,14 +265,19 @@ module InitialRecipientBootstrapPolicy
             "permissions" => {"contents" => "read", "actions" => "read"}, "runs-on" => "ubuntu-24.04", "timeout-minutes" => 6,
             "environment" => "initial-recipient-execution", "steps" => gate_steps}
         worker = {"needs" => "initial-recipient-gate", "permissions" => {"contents" => "read", "actions" => "read"},
-            "runs-on" => RUNNERS, "timeout-minutes" => 20, "concurrency" => HeavyJobQueuePolicy::QUEUE, "steps" => worker_steps}
+            "runs-on" => RUNNERS, "timeout-minutes" => 90, "concurrency" => HeavyJobQueuePolicy::QUEUE, "steps" => worker_steps}
         {"initial-recipient-gate" => gate, "populate" => worker}.each do |id, expected|
             actual = jobs[id]
             need(actual.is_a?(Hash) && actual.keys.sort == expected.keys.sort, "#{id}: closed job fields")
+            need(actual["timeout-minutes"].instance_of?(Integer), "#{id}: integer job ceiling")
             need(actual.reject { |key, _| key == "steps" } == expected.reject { |key, _| key == "steps" }, "#{id}: exact source/environment/runner/queue/needs")
             steps = actual["steps"]
             need(steps.is_a?(Array) && steps.size == expected["steps"].size, "#{id}: exact Step chain")
             expected["steps"].each_with_index do |step, index|
+                if step["id"] == "produce"
+                    need(steps[index].is_a?(Hash) && steps[index]["timeout-minutes"].instance_of?(Integer),
+                        "#{id}: integer produce execution ceiling")
+                end
                 need(steps[index] == step, "#{id}: exact Step #{index + 1} #{step['name']}")
             end
         end

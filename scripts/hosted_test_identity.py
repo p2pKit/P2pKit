@@ -31,6 +31,11 @@ PROFILES = {
     "desktop": (".github/workflows/desktop-cross-host.yml", "verify", ("cli",)),
     "full": (".github/workflows/ci.yml", "complete-gate", ("cli", "diagnostics")),
 }
+# Gate routing deliberately remains one profile per workflow. The JVM worker is
+# another actual CI job, not a FULL/Desktop alias or a third gate workflow.
+JVM_PROFILE = "jvm-library"
+JVM_WORKER = (".github/workflows/ci.yml", "jvm-library-checks", ("jvm-library",))
+JVM_HOSTS = {("Linux", "X64"): "linux-x64", ("Windows", "X64"): "windows-x64"}
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 ID = re.compile(r"[1-9][0-9]{0,19}\Z")
 
@@ -75,6 +80,80 @@ def sha(value):
 def mapping(value):
     require(type(value) is dict, "IDENTITY_EVENT_SHAPE")
     return value
+
+
+def worker_contract(profile):
+    require(type(profile) is str and profile in (*PROFILES, JVM_PROFILE), "IDENTITY_PROFILE")
+    return JVM_WORKER if profile == JVM_PROFILE else PROFILES[profile]
+
+
+def worker_host(profile, host):
+    worker_contract(profile)
+    hosts = {("Linux", "X64"): "linux-x64", ("Windows", "X64"): "windows-x64",
+             ("macOS", "ARM64"): "macos-arm64", ("macOS", "X64"): "macos-x64"}
+    require(host in hosts and (profile != "full" or host[0] == "macOS") and
+            (profile != JVM_PROFILE or host in JVM_HOSTS), "IDENTITY_HOST_LABELS")
+    return hosts[host]
+
+
+def jvm_library_cohort(raw):
+    """Closed ordinary JVM byte routing DATA; never admission or bootstrap.
+
+    Initial JVM originals must use their distinct reader before this ordinary
+    reader. A partial JVM marker must fail, not fall through as Desktop bytes.
+    """
+    value = parse(raw, EVENT_LIMIT)
+    if value.get("profile") != JVM_PROFILE and "cacheCohort" not in value:
+        return None
+    require(set(value) == {"schema", "scope", "profile", "suites", "source", "github", "policy", "cacheCohort"} and
+            type(value["schema"]) is int and value["schema"] == 1 and
+            value["scope"] == "ORDINARY_HOSTED_TEST_CUSTODY_IDENTITY" and value["profile"] == JVM_PROFILE and
+            value["suites"] == list(JVM_WORKER[2]) and raw == encoded(value), "IDENTITY_JVM_RECORD")
+    github, source, policy = (mapping(value[name]) for name in ("github", "source", "policy"))
+    require(set(source) == {"commit", "tree"}, "IDENTITY_JVM_SOURCE")
+    for item in source.values():
+        sha(item)
+    require(set(github) == {"repository", "event", "ref", "workflow", "workflowSha", "job", "runId", "runAttempt",
+            "eventSha256", "eventBinding", "runnerOS", "runnerArch"} and
+            github["repository"] == REPOSITORY and (github["workflow"], github["job"]) == JVM_WORKER[:2] and
+            github["workflowSha"] == source["commit"] and
+            github["event"] in ("push", "pull_request", "schedule", "workflow_dispatch"), "IDENTITY_JVM_GITHUB")
+    for name in ("runId", "runAttempt"):
+        require(type(github[name]) is str and ID.fullmatch(github[name]), "IDENTITY_RUN")
+    require(type(github["eventSha256"]) is str and re.fullmatch(r"[0-9a-f]{64}", github["eventSha256"]),
+            "IDENTITY_JVM_EVENT_DIGEST")
+    require(set(policy) == {"commit", "blob", "path", "sha256", "fingerprint", "keySha256", "expiresAt", "retentionDays"}
+            and policy["path"] == POLICY_PATH and type(policy["retentionDays"]) is int and
+            policy["retentionDays"] == 14 and type(policy["expiresAt"]) is int and policy["expiresAt"] > 0 and
+            type(policy["fingerprint"]) is str and re.fullmatch(r"[0-9A-F]{40}", policy["fingerprint"]),
+            "IDENTITY_JVM_ORDINARY_ORIGIN")
+    for name in ("commit", "blob"):
+        sha(policy[name])
+    for name in ("sha256", "keySha256"):
+        require(type(policy[name]) is str and re.fullmatch(r"[0-9a-f]{64}", policy[name]), "IDENTITY_JVM_POLICY_DIGEST")
+    detail, event, ref = mapping(github["eventBinding"]), github["event"], github["ref"]
+    if event == "pull_request":
+        require(set(detail) == {"number", "base", "head", "headRepository"} and
+                type(detail["number"]) is int and 0 < detail["number"] <= 10**10 and
+                ref == f"refs/pull/{detail['number']}/merge" and policy["commit"] == sha(detail["base"]) and
+                type(detail["headRepository"]) is str and
+                re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", detail["headRepository"]), "IDENTITY_JVM_PR_BINDING")
+        sha(detail["head"])
+    elif event == "push":
+        require(set(detail) == {"before"} and ref == "refs/heads/main" and policy["commit"] == source["commit"],
+                "IDENTITY_JVM_PUSH_BINDING")
+        sha(detail["before"])
+    elif event == "schedule":
+        require(detail == {"schedule": "17 4 * * 1"} and ref == "refs/heads/main" and
+                policy["commit"] == source["commit"], "IDENTITY_JVM_SCHEDULE_BINDING")
+    else:
+        require(set(detail) == {"policyMain"} and type(ref) is str and 0 < len(ref) <= 256 and
+                ref.startswith("refs/heads/") and ref != "refs/heads/audit/complete-2026-09-04" and
+                not any(ord(char) < 32 or ord(char) == 127 for char in ref) and
+                policy["commit"] == sha(detail["policyMain"]), "IDENTITY_JVM_MANUAL_BINDING")
+    role = worker_host(JVM_PROFILE, (github["runnerOS"], github["runnerArch"]))
+    require(value["cacheCohort"] == {"profile": "desktop", "role": role}, "IDENTITY_JVM_BYTE_COHORT")
+    return "desktop", role
 
 
 def read_regular(path, limit):
@@ -249,16 +328,14 @@ def _policy(raw, now):
 
 def _admit(profile, env, event_raw, git, now):
     """Pure decision seam; tests supply synthetic events and a modeled Git view."""
-    require(profile in PROFILES, "IDENTITY_PROFILE")
-    workflow, job, scopes = PROFILES[profile]
+    workflow, job, scopes = worker_contract(profile)
     require(env.get("GITHUB_ACTIONS") == "true" and env.get("GITHUB_REPOSITORY") == REPOSITORY and
             env.get("GITHUB_SERVER_URL") == "https://github.com" and
             env.get("GITHUB_API_URL") == "https://api.github.com" and
             env.get("RUNNER_ENVIRONMENT") == "github-hosted" and env.get("GITHUB_JOB") == job,
             "IDENTITY_HOSTED_CALLER")
     host = (env.get("RUNNER_OS"), env.get("RUNNER_ARCH"))
-    require(host in {("Linux", "X64"), ("Windows", "X64"), ("macOS", "ARM64"), ("macOS", "X64")} and
-            (profile != "full" or host[0] == "macOS"), "IDENTITY_HOST_LABELS")
+    role = worker_host(profile, host)
     for name in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"):
         require(type(env.get(name)) is str and ID.fullmatch(env[name]), "IDENTITY_RUN")
     event_name, ref = env.get("GITHUB_EVENT_NAME"), env.get("GITHUB_REF")
@@ -306,7 +383,7 @@ def _admit(profile, env, event_raw, git, now):
             detail.update(releaseMessageSha256=hashlib.sha256(message).hexdigest(), releaseParents=parents)
         policy_commit = source
     elif event_name == "schedule":
-        require(profile == "full" and ref == "refs/heads/main" and event.get("schedule") == "17 4 * * 1",
+        require(profile in ("full", JVM_PROFILE) and ref == "refs/heads/main" and event.get("schedule") == "17 4 * * 1",
                 "IDENTITY_SCHEDULE")
         policy_commit = source
         detail = {"schedule": event["schedule"]}
@@ -340,6 +417,8 @@ def _admit(profile, env, event_raw, git, now):
     }
     if profile == "desktop":
         record["samplePackagingRequired"] = sample_required
+    if profile == JVM_PROFILE:
+        record["cacheCohort"] = {"profile": "desktop", "role": role}
     return Admission(encoded(record), event_raw, policy_raw, key, recipient["fingerprint"],
                      recipient["sha256"], policy["expiresAt"])
 
@@ -352,9 +431,11 @@ def sample_packaging_required(admitted):
     """
     require(type(admitted) is Admission, "IDENTITY_ADMISSION_REQUIRED")
     record = parse(admitted.record, EVENT_LIMIT)
-    require(record.get("profile") in PROFILES, "IDENTITY_PROFILE")
-    if record["profile"] == "full":
+    worker_contract(record.get("profile"))
+    if record["profile"] != "desktop":
         require("samplePackagingRequired" not in record, "IDENTITY_SAMPLE_INTENT")
+        if record["profile"] == JVM_PROFILE:
+            require(jvm_library_cohort(admitted.record) is not None, "IDENTITY_JVM_BYTE_COHORT")
         return False
     required = record.get("samplePackagingRequired")
     require(type(required) is bool, "IDENTITY_SAMPLE_INTENT")

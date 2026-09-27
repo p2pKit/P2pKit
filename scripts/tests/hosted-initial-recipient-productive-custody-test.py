@@ -106,6 +106,17 @@ class ModelCase(unittest.TestCase):
 
 
 class CurrencyClockModels(ModelCase):
+    def test_job_slot_or_unregistered_authority_constructor_is_not_source_currency(self):
+        state = self.state()
+        data = (b"supplied-proposal", b"supplied-worker", self.observations[0].clock,
+            self.boot, (1, "supplied-start", "supplied-runner", 2), 0, 5400 * NS)
+        admission = PC.N._OriginalServiceJobAdmission(object(), data)
+        unregistered = PC._Authority(**{field.name: None for field in dataclasses.fields(PC._Authority)})
+        for value in (admission, (admission, data), unregistered):
+            with self.subTest(kind=type(value).__name__):
+                self.refuses(PC._checked_authority, value, state)
+        self.assertEqual(PC._AUTHORITIES, {})
+
     def test_exact_public_field_shapes_and_empty_handles(self):
         expected = {PC.ValidationView: "child role work public_key_raw policy_raw original_match_raw source caps",
             PC.ArchiveView: "child archive recipient role payload output payload_root partitions index lineage caps public_inputs",

@@ -75,7 +75,7 @@ def fixture(role="linux-x64", kind="worker"):
     actual = "linux-x64" if kind == "gate" else role
     clock = {"role": actual, "domain": DOMAINS[actual],
         "ticksPerSecond": 7_000_003 if actual == "windows-x64" else NS}
-    work, job_end = (180 * NS, 360 * NS) if kind == "gate" else (241 * NS, 1200 * NS)
+    work, job_end = (180 * NS, 360 * NS) if kind == "gate" else (241 * NS, 5400 * NS)
     window = {"schema": 1, "scope": "INITIAL_RECIPIENT_CUSTODY_ABSOLUTE_WINDOW_V1", "clock": clock,
         "originalBootDigest": "a" * 64, "kind": kind, "originalJobBasisNs": 0, "jobEndNs": job_end, "startNs": NS,
         "workEndNs": work, "nativeFinalEndNs": work + 45 * NS, "readEndNs": work + 75 * NS,

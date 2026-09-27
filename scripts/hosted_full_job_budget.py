@@ -87,6 +87,11 @@ DESKTOP_CONTROLLER_STAGES = (
     "export-freeze", "export", "export-final", "export-read", "export-open", "export-verify", "controller-return",
 )
 DESKTOP_DELIVERY_STAGES = ("seal-start", "seal", "upload-start", "upload", "package", "samples", "delivery")
+JVM_CONTROLLER_STAGES = (
+    "collect", "collect-read", "export-freeze", "export", "export-final", "export-read", "export-open",
+    "export-verify", "controller-return",
+)
+JVM_DELIVERY_STAGES = ("seal-start", "seal", "upload-start", "upload", "delivery")
 
 
 class BudgetError(ValueError):
@@ -125,13 +130,15 @@ def clock_identity(value):
 
 
 def _profile_clock(profile, clock, github=None):
-    require(profile in ("full", "desktop"), "JOB_TIME_PROFILE")
+    require(profile in ("full", "desktop", identity.JVM_PROFILE), "JOB_TIME_PROFILE")
     if clock is None:
         require(profile == "full", "JOB_TIME_DESKTOP_CLOCK_REQUIRED")
         return
     _clocks().validate_identity(clock)
     require(profile != "full" or clock.role.startswith("macos-") and clock.domain == RAW_CLOCK_DOMAIN,
             "JOB_TIME_FULL_CLOCK_REQUIRED")
+    require(profile != identity.JVM_PROFILE or clock.role in identity.JVM_HOSTS.values(),
+            "JOB_TIME_JVM_CLOCK_REQUIRED")
     if github is not None:
         selected = DESKTOP_HOSTS.get((github.get("runnerOS"), github.get("runnerArch")))
         require(selected is not None and clock.role == selected[0], "JOB_TIME_CLOCK_HOST_CHANGED")
@@ -139,7 +146,7 @@ def _profile_clock(profile, clock, github=None):
 
 def current_reading(profile):
     """Keep the real first observation as well as its identity; no fallback."""
-    require(profile in ("full", "desktop"), "JOB_TIME_PROFILE")
+    require(profile in ("full", "desktop", identity.JVM_PROFILE), "JOB_TIME_PROFILE")
     observed = _clocks().validate_reading(_clocks().observe())
     _profile_clock(profile, observed.clock)
     return observed
@@ -195,8 +202,8 @@ def http_epoch(value):
 
 def policy(profile="full", *, clock=None):
     _profile_clock(profile, clock)
-    if profile == "desktop":
-        return {"schema": 2, "profile": profile, "jobSeconds": DESKTOP_JOB_SECONDS, "clock": clock_value(clock),
+    if profile in ("desktop", identity.JVM_PROFILE):
+        value = {"schema": 2, "profile": profile, "jobSeconds": DESKTOP_JOB_SECONDS, "clock": clock_value(clock),
                 "clockDomain": clock.domain, "dateQuantizationSeconds": 1,
                 "maximumServiceCacheSeconds": CACHE_SECONDS, "clockMarginSeconds": CLOCK_MARGIN_SECONDS,
                 "controllerSeconds": DESKTOP_CONTROLLER_SECONDS, "productSeconds": DESKTOP_PRODUCT_SECONDS,
@@ -208,6 +215,10 @@ def policy(profile="full", *, clock=None):
                 "acquisitionSeconds": ACQUIRE_SECONDS, "requestSeconds": REQUEST_SECONDS,
                 "socketSeconds": SOCKET_SECONDS, "bodyLimit": BODY_LIMIT, "headerLimit": HEADER_LIMIT,
                 "requests": 2, "retries": 0, "redirects": False, "ambientProxy": False}
+        if profile == identity.JVM_PROFILE:
+            del value["packageSeconds"]
+            value["scope"] = "JVM_LIBRARY_SHARED_ENVELOPES_NOT_DURATION_FIT_OR_DELIVERY_GUARANTEES"
+        return value
     value = {"schema": 1, "jobSeconds": JOB_SECONDS, "clockDomain": RAW_CLOCK_DOMAIN,
             "dateQuantizationSeconds": 1, "maximumServiceCacheSeconds": CACHE_SECONDS,
             "clockMarginSeconds": CLOCK_MARGIN_SECONDS, "controllerTail": [list(row) for row in CONTROLLER_TAIL],
@@ -228,8 +239,10 @@ def admitted_identity(admitted):
     github = value.get("github", {})
     source = value.get("source", {})
     profile = value.get("profile")
-    require(profile in identity.PROFILES and github.get("repository") == identity.REPOSITORY and
-            github.get("workflow") == identity.PROFILES[profile][0] and github.get("job") == identity.PROFILES[profile][1] and
+    workflow, job, _ = identity.worker_contract(profile)
+    identity.worker_host(profile, (github.get("runnerOS"), github.get("runnerArch")))
+    require(github.get("repository") == identity.REPOSITORY and
+            github.get("workflow") == workflow and github.get("job") == job and
             github.get("workflowSha") == source.get("commit") and
             (github.get("runnerOS"), github.get("runnerArch")) in DESKTOP_HOSTS and
             (profile != "full" or github.get("runnerOS") == "macOS"), "JOB_TIME_ADMISSION_IDENTITY")
@@ -378,7 +391,8 @@ def response_identity(admitted, attempt, jobs, runner_name):
     require(len(set(ids)) == len(ids), "JOB_TIME_DUPLICATE_JOB")
     selector = ("macos-latest" if record["profile"] == "full" else
                 DESKTOP_HOSTS[(github["runnerOS"], github["runnerArch"])][1])
-    job_name = "complete-gate" if record["profile"] == "full" else selector
+    job_name = ("complete-gate" if record["profile"] == "full" else
+                "JVM libraries (" + selector + ")" if record["profile"] == identity.JVM_PROFILE else selector)
     selected = [row for row in rows if row.get("name") == job_name]
     require(len(selected) == 1, "JOB_TIME_EXACT_JOB_REQUIRED")
     job = selected[0]
@@ -403,7 +417,7 @@ def response_identity(admitted, attempt, jobs, runner_name):
 
 
 def _fences(job_end, profile):
-    if profile == "desktop":
+    if profile in ("desktop", identity.JVM_PROFILE):
         controller_end = integer(job_end - DESKTOP_DELIVERY_SECONDS * NS)
         cutoff = integer(controller_end - (DESKTOP_PRODUCT_RETURN_SECONDS + DESKTOP_PRODUCT_FINAL_SECONDS) * NS)
         # Only native product stop/outer-final receives its pre-existing225+45s
@@ -413,8 +427,10 @@ def _fences(job_end, profile):
         return {"productive": cutoff, "preparation-final": cutoff + 45 * NS,
                 "product-return": cutoff + DESKTOP_PRODUCT_RETURN_SECONDS * NS,
                 "product-final": controller_end,
-                **{label: controller_end for label in DESKTOP_CONTROLLER_STAGES},
-                **{label: job_end for label in DESKTOP_DELIVERY_STAGES}}
+                **{label: controller_end for label in
+                   (JVM_CONTROLLER_STAGES if profile == identity.JVM_PROFILE else DESKTOP_CONTROLLER_STAGES)},
+                **{label: job_end for label in
+                   (JVM_DELIVERY_STAGES if profile == identity.JVM_PROFILE else DESKTOP_DELIVERY_STAGES)}}
     require(profile == "full", "JOB_TIME_PROFILE")
     cutoff = integer(job_end - RESERVE_SECONDS * NS)
     fences, cursor = {"productive": cutoff, "preparation-final": cutoff + 45 * NS}, cutoff
@@ -501,17 +517,17 @@ def derive_initial_retained(bound, data, controller_job):
     import hosted_cache_bootstrap_origin as origin
     import hosted_initial_ordinary_identity as initial
     import hosted_initial_ordinary_originals as acquired
-    require(type(bound) is initial.InitialOrdinaryIdentity and type(data) is dict and
+    require(type(bound) in (initial.InitialOrdinaryIdentity, initial.InitialJvmLibraryIdentity) and type(data) is dict and
             set(data) == set(INITIAL_ORIGINAL_NAMES) and all(type(raw) is bytes and len(raw) <= 4 * 1024 * 1024
                 for raw in data.values()) and type(controller_job) is str and
             re.fullmatch(r"[0-9a-f]{32}", controller_job), "JOB_TIME_INITIAL_ORIGINALS")
-    require(initial.cache_cohort(bound.record) is not None and bound.record == data["identity_raw"],
+    require(initial.worker_cohort(bound.record) is not None and bound.record == data["identity_raw"],
             "JOB_TIME_INITIAL_IDENTITY")
     record = identity.parse(bound.record, 4 * 1024 * 1024)
     context = identity.parse(data["context_raw"], 4 * 1024 * 1024)
     observed, profile = context["observed"], record["profile"]
     clock = clock_identity(context["window"]["clock"])
-    current = initial.retained_current(data["current_raw"], bound, clock.role)
+    current = initial.retained_worker_current(data["current_raw"], bound, clock.role)
     _profile_clock(profile, clock, record["github"])
     require(context["scope"] == "INITIAL_ORDINARY_NATIVE_ACQUISITION_CONTEXT_V1" and context["previous"] is None and
             context["expectedMatch"] is None and observed["kind"] == "worker" and observed["profile"] == profile and
@@ -628,8 +644,8 @@ class Budget:
                     re.fullmatch(r"[0-9a-f]{32}", value["provenance"]["controllerJob"]), "JOB_TIME_INITIAL_CONTROLLER")
             github = value["github"]
             require(type(github) is dict and github.get("repository") == identity.REPOSITORY and
-                    github.get("event") == "pull_request" and github.get("workflow") == identity.PROFILES[profile][0] and
-                    github.get("job") == identity.PROFILES[profile][1] and github.get("workflowSha") == value["source"]["commit"] and
+                    github.get("event") == "pull_request" and github.get("workflow") == identity.worker_contract(profile)[0] and
+                    github.get("job") == identity.worker_contract(profile)[1] and github.get("workflowSha") == value["source"]["commit"] and
                     type(github.get("eventBinding")) is dict and "originalMain" in github["eventBinding"] and
                     "policyHead" in github["eventBinding"], "JOB_TIME_INITIAL_GITHUB")
             for name in ("commit", "tree"):
@@ -654,6 +670,12 @@ class Budget:
                     value.get("clockDomain") == clock.domain and
                     encoded(value.get("policy")) == encoded(policy(profile, clock=clock)),
                     "JOB_TIME_BUDGET_CLOCK_CHANGED")
+            if profile == identity.JVM_PROFILE:
+                github = value.get("github", {})
+                require(github.get("workflow") == identity.JVM_WORKER[0] and
+                        github.get("job") == identity.JVM_WORKER[1] and
+                        github.get("workflowSha") == value.get("source", {}).get("commit"),
+                        "JOB_TIME_JVM_SELECTOR_CHANGED")
             # A serialized stage/policy may not replace a fence from the service
             # observations with a new process's local epoch or a fresh allowance.
             job_seconds = JOB_SECONDS if profile == "full" else DESKTOP_JOB_SECONDS

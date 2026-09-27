@@ -1,7 +1,8 @@
 # Source-only composition: BOTH first steps fail before acquisition or execution.
 # Removing either interlock requires separately reviewed source activation, fresh
 # exact commit/tree/policy C1 and real environment approval. Ordinary HOLDs remain.
-# Job timeouts do not expand init120, native caps or the unadmitted bootstrap budget.
+# Populate90 is an outer job ceiling, not measured fit or a phase/Step increase.
+# Original-service job admission is separate; proposals and all HOLDs remain.
 name: "Dependency cache bootstrap (productive stage held)"
 on:
   workflow_dispatch:
@@ -281,7 +282,7 @@ jobs:
       contents: "read"
       actions: "read"
     runs-on: "${{ fromJSON('{\"desktop-linux-x64\":\"ubuntu-latest\",\"desktop-windows-x64\":\"windows-latest\",\"desktop-macos-arm64\":\"macos-26\",\"desktop-macos-x64\":\"macos-15-intel\",\"full-macos-arm64\":\"macos-26\",\"full-macos-x64\":\"macos-15-intel\"}')[inputs.selection] }}"
-    timeout-minutes: 20
+    timeout-minutes: 90
     concurrency:
       group: "p2pkit-nonphysical-heavy"
       queue: "max"
@@ -388,7 +389,8 @@ jobs:
         name: "Produce the original configuration-only dependency cohort"
         id: "produce"
         if: "${{ success() && steps.canonical-initialization.outcome == 'success' }}"
-        timeout-minutes: 20
+        # Outer kill ceiling only; original job-basis+3360 output and native fences still apply.
+        timeout-minutes: 56
         shell: "bash"
         env:
           P2PKIT_PYTHON: "${{ steps.tools.outputs.python }}"

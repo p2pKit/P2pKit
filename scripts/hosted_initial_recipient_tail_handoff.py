@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 
+import hosted_cache_bootstrap_service_time as service_time
 import hosted_initial_recipient_before as B
 import hosted_initial_recipient_tail_evidence as T
 
@@ -71,7 +72,7 @@ def _window(value, kind, role, seed):
     for name in ("originalJobBasisNs", "jobEndNs", "startNs", *WINDOW_ENDS):
         _integer(value[name], 0, B.clocks.UINT64)
     basis, start = value["originalJobBasisNs"], value["startNs"]
-    job_end = basis + (360 if kind == "gate" else 1200) * B.wire.NS
+    job_end = basis + 360 * B.wire.NS if kind == "gate" else service_time.job_end_arithmetic(basis)
     work = min(start + 240 * B.wire.NS, job_end - 180 * B.wire.NS)
     expected = (work, work + 45 * B.wire.NS, work + 75 * B.wire.NS, work + 105 * B.wire.NS,
         work + 165 * B.wire.NS, work + 180 * B.wire.NS)

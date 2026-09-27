@@ -139,6 +139,7 @@ PROVIDER_INPUTS = (
     "scripts/initial-recipient-runner-tools.py",
     "scripts/check-initial-recipient-bootstrap-workflow-policy.rb",
     "scripts/hosted_evidence_primitives.py",
+    "scripts/hosted_jvm_library_custody.py",
 )
 
 
@@ -182,7 +183,7 @@ def checked_inputs(value):
                           ("components", files.authority.MAX_COMPONENTS)):
         require(type(seed[name]) is int and 0 < seed[name] <= maximum, "ALLOWLIST_COUNTS")
     require(encoded(seed["policy"]) == encoded(files.policy()), "SEED_POLICY")
-    require(len(PROVIDER_INPUTS) == len(set(PROVIDER_INPUTS)) == 122 and len(files.INPUTS) == 12 and
+    require(len(PROVIDER_INPUTS) == len(set(PROVIDER_INPUTS)) == 123 and len(files.INPUTS) == 12 and
             not set(PROVIDER_INPUTS).intersection(files.INPUTS), "FIXED_ROSTERS")
     encoded(value)
     return value
@@ -209,7 +210,7 @@ def envelope_digest(value):
 
 
 def source_read_labels():
-    """Exact DATA projection of one seed12 + provider122 original read pass."""
+    """Exact DATA projection of one seed12 + provider123 original read pass."""
     import hosted_dependency_seed_files as files
     labels = []
     for roster in (files.INPUTS, PROVIDER_INPUTS):
@@ -223,7 +224,7 @@ def source_read_labels():
                     opened.add(prefix)
                     labels.append("dependency-seed-source-parent")
             labels.append("dependency-seed-input")
-    require(len(labels) == 151, "FIXED_SOURCE_READ_SEQUENCE")
+    require(len(labels) == 152, "FIXED_SOURCE_READ_SEQUENCE")
     return tuple(labels)
 
 
@@ -291,7 +292,7 @@ def borrowed_sources(parent, check):
 
 
 def read_provider(borrowed, root, end, check):
-    """Read only the constant122 paths using original descriptor-relative opens."""
+    """Read only the constant123 paths using original descriptor-relative opens."""
     import hosted_dependency_seed_files as files
     require(type(borrowed) is _BorrowedSources, "BORROWED_SOURCE_READER")
     # Seed and provider roots are intentionally separate original acquisitions.
@@ -333,7 +334,7 @@ def read_provider(borrowed, root, end, check):
 
 
 def read_inputs(parent, root, end, check):
-    """One fresh151-acquisition pass, same original owner/end, no source cache."""
+    """One fresh152-acquisition pass, same original owner/end, no source cache."""
     import hosted_dependency_seed_files as files
     borrowed = borrowed_sources(parent, check)
     seed, _compiled = files.source_inputs(borrowed, root, end, check)

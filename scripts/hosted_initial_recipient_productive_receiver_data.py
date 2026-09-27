@@ -303,6 +303,7 @@ def _proposal(proposal, history):
     basis = CD.integer(history["originalJobBasisNs"])
     expected = D.allocation.fence_arithmetic(basis)
     require(proposal["serviceTimeBasis"]["jobStartBasisNs"] == basis and
+        proposal["proposedJobEndNs"] == D.allocation.service_time.job_end_arithmetic(basis) and
         proposal["policy"] == D.allocation.policy() and all(proposal[key] == item for key, item in expected.items()),
         "ORIGINAL_PROPOSAL_ARITHMETIC")
     return expected["phaseFencesNs"]

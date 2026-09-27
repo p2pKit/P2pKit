@@ -12,7 +12,7 @@ desktop = workflows.fetch("desktop-cross-host.yml")
 checks = 0
 
 def ordinary_job(workflow, profile)
-    workflow.fetch("jobs").fetch(profile == "full" ? "complete-gate" : "verify")
+    workflow.fetch("jobs").fetch(profile == "jvm-library" ? "jvm-library-checks" : profile == "full" ? "complete-gate" : "verify")
 end
 
 def ordinary_step(workflow, profile, id)
@@ -434,6 +434,111 @@ end
     end
 end
 
+# JVM is a distinct CI worker, not a FULL/Desktop alias. Expected steps are
+# enumerated independently by the policy, never learned from these YAML bytes.
+profile = "jvm-library"
+P.check_full(ci)
+checks += 1
+mutations = {
+    "missing whole-job interlock" => ->(v) { ordinary_job(v, profile)["needs"].delete("initial-recipient-interlock") },
+    "unconditional job" => ->(v) { ordinary_job(v, profile)["if"] = "${{ always() }}" },
+    "changed service selector" => ->(v) { ordinary_job(v, profile)["name"] = "JVM tests" },
+    "extra host" => ->(v) { ordinary_job(v, profile)["strategy"]["matrix"]["include"] << {"os" => "macos-15"} },
+    "concurrent matrix" => ->(v) { ordinary_job(v, profile)["strategy"]["max-parallel"] = 2 },
+    "cancel matrix" => ->(v) { ordinary_job(v, profile)["strategy"]["fail-fast"] = true },
+    "unshared queue" => ->(v) { ordinary_job(v, profile)["concurrency"]["group"] = "jvm-only" },
+    "longer job" => ->(v) { ordinary_job(v, profile)["timeout-minutes"] = 31 },
+    "write permission" => ->(v) { ordinary_job(v, profile)["permissions"]["contents"] = "write" },
+    "missing actions read" => ->(v) { ordinary_job(v, profile)["permissions"].delete("actions") },
+    "floating checkout" => ->(v) { ordinary_job(v, profile)["steps"].first["with"]["ref"] = "main" },
+    "shallow checkout" => ->(v) { ordinary_job(v, profile)["steps"].first["with"]["fetch-depth"] = 1 },
+    "persist checkout credential" => ->(v) { ordinary_job(v, profile)["steps"].first["with"]["persist-credentials"] = true },
+    "setup before provider" => ->(v) {
+        steps = ordinary_job(v, profile)["steps"]
+        steps.insert(2, steps.delete(ordinary_step(v, profile, "java")))
+    },
+    "automatic Gradle cache" => ->(v) { ordinary_job(v, profile)["steps"].insert(2, {"uses" => "gradle/actions/setup-gradle@main"}) },
+    "bare product" => ->(v) { ordinary_step(v, profile, "ordinary-run")["run"] = "./gradlew :p2p-core:jvmTest" },
+    "unowned stop" => ->(v) { ordinary_job(v, profile)["steps"] << {"if" => "${{ always() }}", "run" => "./gradlew --stop"} },
+    "missing JDK21" => ->(v) { ordinary_step(v, profile, "java")["with"]["java-version"] = "17" },
+    "missing JDK17" => ->(v) { ordinary_step(v, profile, "java")["with"]["java-version"] = "21" },
+    "SDK writer" => ->(v) { ordinary_job(v, profile)["steps"] << {"run" => "sdkmanager platforms"} },
+    "package writer" => ->(v) { ordinary_job(v, profile)["steps"] << {"run" => "./gradlew packageMsi"} },
+    "wrong admission type" => ->(v) { ordinary_step(v, profile, "ordinary-admission")["run"].sub!("--profile jvm-library", "--profile desktop") },
+    "provider before admission" => ->(v) { ordinary_step(v, profile, "dependency-stage")["if"] = "${{ always() }}" },
+    "provider guard ignores opposite output" => ->(v) { ordinary_step(v, profile, "dependency-ready")["run"].sub!('test -z "$ORDINARY_PREPARATION_SHA256"', "true") },
+    "initial history omitted" => ->(v) { ordinary_step(v, profile, "initial-run")["env"].delete("P2PKIT_INITIAL_CURRENT_HISTORY_SHA256") },
+    "missing native consume" => ->(v) { ordinary_step(v, profile, "ordinary-run")["run"].sub!(" --consume-dependencies", "") },
+    "result trusts run boolean" => ->(v) { ordinary_step(v, profile, "ordinary-required")["env"]["PROFILE_PASSED"] = "${{ steps.ordinary-run.outputs.profile_passed }}" },
+    "result trusts opposite source" => ->(v) { ordinary_step(v, profile, "recipient-result")["env"]["ORDINARY_SEAL_PROFILE_PASSED"] = "${{ steps.initial-seal.outputs.profile_passed }}" },
+    "result ignores opposite skipped" => ->(v) { ordinary_step(v, profile, "recipient-result")["run"].sub!('test "$INITIAL_REQUIRED" = skipped', "true") },
+    "result ignores upload" => ->(v) { ordinary_step(v, profile, "recipient-result")["run"].sub!('test "$ORDINARY_EVIDENCE" = success', "true") },
+}
+%w[recipient-required ordinary-wrapper session-path ordinary-admission dependency-stage initial-dependency-stage
+   dependency-ready java ordinary-jdk21 ordinary-run initial-run ordinary-seal initial-seal ordinary-upload-before
+   initial-upload-before ordinary-evidence initial-evidence ordinary-upload-after initial-upload-after
+   ordinary-required initial-required recipient-result].each do |id|
+    mutations["missing #{id}"] = ->(v) { ordinary_job(v, profile)["steps"].delete(ordinary_step(v, profile, id)) }
+    mutations["ignored #{id} failure"] = ->(v) { ordinary_step(v, profile, id)["continue-on-error"] = true }
+end
+%w[ordinary initial].each do |origin|
+    %w[run seal upload-before upload-after required].each do |suffix|
+        id = "#{origin}-#{suffix}"
+        mutations["#{id} success-only"] = ->(v) { ordinary_step(v, profile, id)["if"] = "${{ success() }}" }
+        mutations["#{id} claims success"] = ->(v) { ordinary_step(v, profile, id)["run"] = "true\n" }
+        mutations["#{id} service credentials"] = ->(v) { ordinary_step(v, profile, id)["env"]["ACTIONS_RUNTIME_TOKEN"] = "${{ github.token }}" }
+    end
+    id = "#{origin}-evidence"
+    {"path" => "${{ runner.temp }}/**", "name" => "latest", "retention-days" => 7,
+     "if-no-files-found" => "warn", "overwrite" => true, "include-hidden-files" => true}.each do |key, value|
+        mutations["#{id} unsafe #{key}"] = ->(v) { ordinary_step(v, profile, id)["with"][key] = value }
+    end
+    mutations["#{id} renewed timeout"] = ->(v) { ordinary_step(v, profile, id)["timeout-minutes"] = 3 }
+    mutations["#{origin} after no guard hash"] = ->(v) { ordinary_step(v, profile, "#{origin}-upload-after")["env"].delete("P2PKIT_HOSTED_TEST_UPLOAD_GUARD_SHA256") }
+end
+mutations.each do |name, mutate|
+    changed = Marshal.load(Marshal.dump(ci))
+    mutate.call(changed)
+    raise "JVM mutation had no effect: #{name}" if changed == ci
+    begin
+        P.check_full(changed)
+    rescue P::Error
+        checks += 1
+        next
+    end
+    raise "unsafe JVM caller accepted: #{name}"
+end
+%w[ordinary initial].each do |origin|
+    [["dependency-ready", provider_model(origin)], ["recipient-result", result_model(origin, profile)]].each do |id, environment|
+        step = ordinary_step(ci, profile, id)
+        raise "JVM model field drift" unless environment.keys.sort == step.fetch("env").keys.sort
+        raise "complete JVM #{origin}/#{id} rejected" unless shell_result(step.fetch("run"), environment) == [0, ""]
+        checks += 1
+        environment.each do |name, value|
+            denied_values(value).each do |bad|
+                raise "JVM accepted partial #{origin}/#{id}/#{name}" if shell_result(step.fetch("run"), environment.merge(name => bad)).first == 0
+                checks += 1
+            end
+        end
+    end
+    final = ordinary_step(ci, profile, "recipient-result")
+    %w[1 2 3].each do |minutes|
+        environment = result_model(origin, profile).merge("#{origin.upcase}_UPLOAD_BEFORE_UPLOAD_TIMEOUT_MINUTES" => minutes)
+        raise "JVM short-job original upload allowance rejected" unless shell_result(final.fetch("run"), environment) == [0, ""]
+        checks += 1
+    end
+    step = ordinary_step(ci, profile, "#{origin}-required")
+    environment = step.fetch("env").to_h { |key, value| [key, value.end_with?(".outcome }}") ? "success" : "true"] }
+    raise "complete JVM terminal rejected" unless shell_result(step.fetch("run"), environment) == [0, ""]
+    checks += 1
+    environment.each do |name, value|
+        denied_values(value).each do |bad|
+            raise "JVM terminal accepted #{name}" if shell_result(step.fetch("run"), environment.merge(name => bad)).first == 0
+            checks += 1
+        end
+    end
+end
+
 release = File.read(File.join(P::ROOT, "scripts/run-release-gate.sh"))
 workflow_test = File.read(File.join(P::ROOT, "scripts/tests/release-workflow-test.sh"))
 P.entrypoints(ci, release, workflow_test)
@@ -452,5 +557,22 @@ P::CONTROL_COMMANDS.each do |command|
         end
         raise "ordinary entrypoint bypass accepted"
     end
+end
+commands = P::CONTROL_COMMANDS
+first, last = commands.first, commands.last
+rooted_first, rooted_last = [first, last].map do |command|
+    interpreter, _, script = command.rpartition(" ")
+    "#{interpreter} \"$ROOT/#{script}\""
+end
+swapped_release = release.lines.map { |line| line.strip == first ? "#{last}\n" : line.strip == last ? "#{first}\n" : line }.join
+swapped_workflow = workflow_test.lines.map { |line| line.strip == rooted_first ? "#{rooted_last}\n" : line.strip == rooted_last ? "#{rooted_first}\n" : line }.join
+[[ci, swapped_release, workflow_test], [ci, release, swapped_workflow]].each do |inputs|
+    begin
+        P.entrypoints(*inputs)
+    rescue P::Error
+        checks += 1
+        next
+    end
+    raise "reordered ordinary control registration accepted"
 end
 puts "RESULT: PASS — ordinary caller (#{checks} offline policy/synthetic-shell controls; ACTIVATION=HOLD, no runtime/cache qualification)"

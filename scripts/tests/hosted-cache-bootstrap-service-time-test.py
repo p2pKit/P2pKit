@@ -55,6 +55,26 @@ class ArithmeticTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(TypeError):
                 T.basis_arithmetic(start, 0, 0, **{name: 0})
 
+    def test_job_end_is_exact_original_basis_plus_fixed_5400_not_admission(self):
+        self.assertEqual(T.SOURCE_JOB_SECONDS, 5400)
+        for basis in (0, 926 * O.NS, (1 << 60) + 1, O.clocks.UINT64 - 5400 * O.NS):
+            with self.subTest(basis=basis):
+                end = T.job_end_arithmetic(basis)
+                self.assertIs(type(end), int)
+                self.assertEqual(end, basis + 5400 * O.NS)
+        self.assertEqual(T.job_end_arithmetic(O.clocks.UINT64 - 5400 * O.NS), O.clocks.UINT64)
+
+    def test_job_end_refuses_boolean_negative_noninteger_and_overflow(self):
+        for basis in (True, False, -1, 1.0, "1", None, O.clocks.UINT64 - 5400 * O.NS + 1,
+                      O.clocks.UINT64, O.clocks.UINT64 + 1):
+            with self.subTest(basis=basis), self.assertRaises(T.ServiceTimeError):
+                T.job_end_arithmetic(basis)
+
+    def test_job_end_has_no_new_clock_date_duration_or_authority_input(self):
+        for name in ("now", "clock", "job_seconds", "duration", "service_date", "response_finished_ns", "admitted"):
+            with self.subTest(name=name), self.assertRaises(TypeError):
+                T.job_end_arithmetic(926 * O.NS, **{name: 0})
+
 
 class BasisTests(M.OfflineCase):
     def originals(self, admitted=None, clock=None, *, jobs_start=1_002_000_000_000):
