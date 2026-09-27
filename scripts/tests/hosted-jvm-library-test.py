@@ -1414,13 +1414,35 @@ class JvmReportCustodyControls(unittest.TestCase):
         self.assertEqual(model.collection()["result"], "FAILED_TEST_OR_REPORTS")
 
     def test_report_manifest_records_and_every_retained_copy_must_match_originals(self):
-        for change in (lambda rows: rows.pop(), lambda rows: rows.append(dict(rows[-1])),
-                       lambda rows: rows[-1].update(sha256="f" * 64), lambda rows: rows[-1].update(size=1)):
-            model = ReportFixture()
-            model.originals()
-            files = copy.deepcopy(model.inputs["files"])
-            change(files)
-            with self.assertRaises(JVM.JvmCustodyError): model.collection(files=files)
+        report_path = "reports/" + JVM.ROOTS[0] + "synthetic.txt"
+        for label, target, field, replacement, reason in (
+                ("missing-original", "stop.stdout.log", None, None, "COMPLETE_ORIGINAL_FILE_ROSTER"),
+                ("duplicate-original", "stop.stdout.log", None, None, "ORIGINAL_FILE_METADATA"),
+                ("report-hash", report_path, "sha256", "f" * 64, "RETAINED_REPORT_BYTES"),
+                ("report-size", report_path, "size", 1, "RETAINED_REPORT_BYTES")):
+            with self.subTest(boundary="collection", mutation=label):
+                model = ReportFixture()
+                model.originals()
+                files = copy.deepcopy(model.inputs["files"])
+                selected = [row for row in files if row["path"] == target]
+                self.assertEqual(len(selected), 1)
+                row = selected[0]
+                if label == "missing-original":
+                    files.remove(row)
+                elif label == "duplicate-original":
+                    files.append(dict(row))
+                else:
+                    records = [item for item in decoded(model.inputs["manifest_raw"])["records"]
+                               if item.get("retained") == target]
+                    self.assertEqual(len(records), 1)
+                    self.assertEqual(records[0]["classification"], "changed-since-admission")
+                    self.assertEqual(row, {"path": target, "size": records[0]["bytes"],
+                                           "sha256": records[0]["sha256"]})
+                    self.assertNotEqual(row[field], replacement)
+                    row[field] = replacement
+                self.assertNotEqual(files, model.inputs["files"])
+                with self.assertRaisesRegex(JVM.JvmCustodyError, "^JVM_LIBRARY_" + reason + "$"):
+                    model.collection(files=files)
         model = ReportFixture()
         model.originals()
         model.change_original("report-manifest.json", lambda value: value["records"].pop())
@@ -1430,6 +1452,39 @@ class JvmReportCustodyControls(unittest.TestCase):
         for key in ("start_raw", "receipt_raw", "manifest_raw"):
             with self.assertRaisesRegex(JVM.JvmCustodyError, "ORIGINAL_JSON_CHANGED"):
                 model.collection(**{key: model.inputs[key] + b"\n"})
+        # Fixed-log metadata has no independent digest in the DATA-only parser.
+        # Verify must reread the actual originals even if stored and outer claims agree.
+        for field, replacement in (("sha256", "f" * 64), ("size", 1)):
+            with self.subTest(boundary="verify-originals", field=field):
+                model = ReportFixture()
+                model.originals()
+                custody = JVM.collect(model, model.api)
+                original_directory = model.state_path / "evidence" / model.request["owner"]["productInvocation"]
+                log_path = original_directory / "stop.stdout.log"
+                original_log = model.files[log_path]
+                changed = copy.deepcopy(custody)
+                selected = [row for row in changed["retainedFiles"] if row["path"] == "stop.stdout.log"]
+                self.assertEqual(len(selected), 1)
+                row = selected[0]
+                self.assertEqual(row, {"path": "stop.stdout.log", "size": len(original_log),
+                                       "sha256": H.digest(original_log)})
+                self.assertNotEqual(row[field], replacement)
+                row[field] = replacement
+                self.assertNotEqual(changed, custody)
+                result_path = model.evidence.path / JVM.PROFILE / "result.json"
+                model.put(result_path, changed)
+                outer = model.result(changed)
+                self.assertEqual(model.files[result_path], I.encoded(outer["custody"]))
+                before_snapshots, before_resources = len(model.snapshots), len(model.resources)
+                with self.assertRaisesRegex(JVM.JvmCustodyError, "^JVM_LIBRARY_COLLECTION_RESULT_CHANGED$"):
+                    JVM.verify(model, model.api, model.private, model.run_context_raw, outer, model.end, lambda: None)
+                self.assertEqual(model.files[log_path], original_log)
+                self.assertEqual(model.snapshots[before_snapshots:], [original_directory])
+                acquired = model.resources[before_resources:]
+                self.assertEqual([item["label"] for item in acquired],
+                    ["jvm-original-snapshot"] + ["jvm-original-reader"] * len(custody["retainedFiles"]))
+                self.assertTrue(all(item["attempted"] and item["closed"] for item in model.resources))
+                self.assertFalse(model.unknown)
 
     def test_wrong_tasks_effective_flags_source_context_home_or_invocation_fails(self):
         for change in (lambda r: r["requestedArgv"].append("help"),
