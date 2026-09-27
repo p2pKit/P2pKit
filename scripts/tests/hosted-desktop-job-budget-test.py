@@ -129,12 +129,16 @@ class DesktopBudgetModels(unittest.TestCase):
 
     def test_admitted_job_workflow_event_and_native_host_cannot_change(self):
         original = admission()
-        for changes in ({"job": "windows-latest"}, {"job": "complete-gate"},
-                        {"workflow": I.PROFILES["full"][0]}, {"event": "schedule"},
-                        {"runnerOS": "Windows", "runnerArch": "ARM64"}, {"workflowSha": "0" * 40}):
+        for changes, error, reason in (
+                ({"job": "windows-latest"}, J.BudgetError, "JOB_TIME_ADMISSION_IDENTITY"),
+                ({"job": "complete-gate"}, J.BudgetError, "JOB_TIME_ADMISSION_IDENTITY"),
+                ({"workflow": I.PROFILES["full"][0]}, J.BudgetError, "JOB_TIME_ADMISSION_IDENTITY"),
+                ({"event": "schedule"}, J.BudgetError, "JOB_TIME_EVENT"),
+                ({"runnerOS": "Windows", "runnerArch": "ARM64"}, I.AdmissionError, "IDENTITY_HOST_LABELS"),
+                ({"workflowSha": "0" * 40}, J.BudgetError, "JOB_TIME_ADMISSION_IDENTITY")):
             value = J.parse(original.record)
             value["github"].update(changes)
-            with self.subTest(changes=changes), self.assertRaises(J.BudgetError):
+            with self.subTest(changes=changes), self.assertRaisesRegex(error, "^" + reason + "$"):
                 J.admitted_identity(replace(original, record=I.encoded(value)))
         with self.assertRaisesRegex(J.BudgetError, "JOB_TIME_CLOCK_HOST_CHANGED"):
             J.derive(original, originals(original, clock("windows-x64")), F.provenance(), clock=clock("linux-x64"))
