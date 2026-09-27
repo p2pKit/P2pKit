@@ -26,6 +26,7 @@ if __name__ == "__main__":
     sys.path.insert(0, str(SCRIPTS))
 
 import hosted_initial_ordinary_adapter as initial
+import hosted_initial_recipient_gate as gate
 import hosted_initial_recipient_stages as stages
 import hosted_job_clock as clocks
 import hosted_test_identity as I
@@ -330,7 +331,7 @@ def source_mode(profile):
 def _gate_binding(native, current, profile, environment):
     require(native.checked_initial_ordinary(current) is current, "CHECKED_CURRENT_REQUIRED")
     eligible = native.initial_ordinary_eligibility(current)
-    require(type(eligible) is initial.originals.gate.GateEligibility, "ACTUAL_GATE_ELIGIBILITY")
+    require(type(eligible) is gate.GateEligibility, "ACTUAL_GATE_ELIGIBILITY")
     value = I.parse(eligible.record, I.EVENT_LIMIT)
     raw = native.initial_ordinary_record(current)
     record = I.parse(raw, I.EVENT_LIMIT)

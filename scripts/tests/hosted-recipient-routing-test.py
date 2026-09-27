@@ -413,7 +413,7 @@ class CallerModel:
         self.step("current.eligibility")
         if current is not self.current:
             raise ModelViolation("REPLAYED_CURRENT_MODEL")
-        return R.initial.originals.gate.GateEligibility(encoded(self.eligible))
+        return R.gate.GateEligibility(encoded(self.eligible))
 
     def record(self, current):
         self.step("current.record")

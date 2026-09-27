@@ -25,7 +25,6 @@ import audit_processes as processes
 import hosted_cache_provider_environment as provider_environment
 import hosted_full_job_budget as job_time
 import hosted_initial_ordinary_identity as identity
-import hosted_initial_ordinary_originals as originals
 import hosted_test_query as query
 
 
@@ -237,6 +236,8 @@ def check_local(owner, bound, destination, check, *, end):
         check()
         supplier = query.NativeGitQueries(ROOT, destination, check_cancel=check, owner_deadlines=(end, end))
         supplier.native_host_matches_actions()
+        # The source/clock graph belongs to this owned runtime use, not import.
+        import hosted_initial_ordinary_originals as originals
         checked = originals.check_local_worker(ROOT, bound, query_runner=supplier, check=check)
         check()
     except BaseException as error:

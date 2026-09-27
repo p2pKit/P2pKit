@@ -64,7 +64,8 @@ def _bound_initial_ordinary_manifest(recipient, *, root, request, query_runner, 
     import hosted_initial_ordinary_adapter as initial
     if type(request) is not initial.CryptoRequest:
         raise hosted_evidence.EvidenceError("Initial ordinary export requires its fixed original crypto request")
-    checked = initial.originals.check_local_worker(root, request.bound, query_runner=query_runner, check=check)
+    import hosted_initial_ordinary_originals as originals
+    checked = originals.check_local_worker(root, request.bound, query_runner=query_runner, check=check)
     if recipient.fingerprint != checked.fingerprint or recipient.key_sha256 != checked.key_sha256:
         raise hosted_evidence.EvidenceError("Initial ordinary recipient differs from the reviewed source policy")
     if recipient.expires_at and checked.expires_at > recipient.expires_at:

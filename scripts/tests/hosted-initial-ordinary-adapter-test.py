@@ -8,6 +8,7 @@ network and native-loader audit events are forbidden. Nothing is dispatched.
 from __future__ import annotations
 
 from contextlib import ExitStack, contextmanager
+import builtins
 import copy
 import ctypes  # Stdlib setup before the native-loader audit guard.
 import hashlib
@@ -19,7 +20,7 @@ from pathlib import Path, PureWindowsPath
 import sys
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 def offline(event, _args):
@@ -828,6 +829,154 @@ class PublicBundleControls(unittest.TestCase):
                 H.acquire_provider_bundle(episode, {})
             self.assertIs(caught.exception, failure)
             self.assertEqual((state.closes, state.stream.close_calls), (1, 1))
+
+
+@contextmanager
+def local_source_model(bound, *, checker_error=None, close_error=None, unknown_close=False):
+    """Only the fixed runtime dispatch/retirement seam; no native owner is made."""
+    trace, owner = [], ModelEpisode()
+    supplier = SimpleNamespace(closed=False, unknown=False)
+    check = Mock(side_effect=lambda: trace.append("check"))
+    supplier.native_host_matches_actions = Mock(side_effect=lambda: trace.append("host"))
+
+    def finalize(_original):
+        trace.append("close")
+        supplier.unknown = unknown_close or close_error is not None
+        supplier.closed = not supplier.unknown
+        if close_error is not None:
+            raise close_error
+
+    def checked(_root, _bound, *, query_runner, check):
+        trace.append("checker")
+        if checker_error is not None:
+            raise checker_error
+        return bound
+
+    supplier._finalize = Mock(side_effect=finalize)
+    with patch.object(H.query, "NativeGitQueries", return_value=supplier) as factory, \
+            patch.object(M.A, "check_local_worker", side_effect=checked) as checker:
+        yield SimpleNamespace(owner=owner, supplier=supplier, factory=factory, checker=checker, check=check,
+            trace=trace, destination=Path("/model/local-source"), end=1000.0)
+
+
+def bound_manifest_fixture(values):
+    """Reuse DATA builders, never earlier tests or a crypto/current entrypoint."""
+    bound = values["bound"]
+    budget = B.derive_initial_retained(bound, originals(values), "a" * 32)
+    raw, context, start = crypto_fixture(values, budget)
+    request = H.crypto_request_data(I.encoded(raw), bound, context, budget, start, "export")
+    recipient = SimpleNamespace(fingerprint=bound.fingerprint, key_sha256=bound.key_sha256,
+                                expires_at=bound.expires_at)
+    return request, recipient
+
+
+class LazyImportBoundaryControls(unittest.TestCase):
+    def test_local_source_calls_original_checker_and_closes_once(self):
+        with fixture() as values, local_source_model(values["bound"]) as model:
+            self.assertNotIn("originals", vars(H))
+            returned = H.check_local(model.owner, values["bound"], model.destination, model.check, end=model.end)
+            self.assertIs(returned, values["bound"])
+            model.factory.assert_called_once_with(H.ROOT, model.destination, check_cancel=model.check,
+                                                 owner_deadlines=(model.end, model.end))
+            model.supplier.native_host_matches_actions.assert_called_once_with()
+            model.checker.assert_called_once_with(H.ROOT, values["bound"], query_runner=model.supplier, check=model.check)
+            model.supplier._finalize.assert_called_once_with(None)
+            self.assertEqual(model.trace, ["check", "host", "checker", "check", "close", "check"])
+            self.assertTrue(model.supplier.closed)
+            self.assertFalse(model.supplier.unknown or model.owner.unknown)
+            self.assertEqual(model.owner.errors, [])
+            self.assertNotIn("originals", vars(H))
+
+    def test_lazy_import_failure_keeps_original_error_and_retires_supplier(self):
+        with fixture() as values:
+            for close_fails in (False, True):
+                first, second = ImportError("MODEL_FIXED_IMPORT_REFUSED"), RuntimeError("MODEL_FINALIZER_REFUSED")
+                with self.subTest(close_fails=close_fails), local_source_model(values["bound"],
+                        close_error=second if close_fails else None) as model:
+                    real_import, imports = builtins.__import__, []
+
+                    def refused(name, globals=None, locals=None, fromlist=(), level=0):
+                        if name == "hosted_initial_ordinary_originals":
+                            imports.append(name)
+                            model.trace.append("import-refused")
+                            raise first
+                        return real_import(name, globals, locals, fromlist, level)
+
+                    with patch.object(builtins, "__import__", refused), self.assertRaises(ImportError) as caught:
+                        H.check_local(model.owner, values["bound"], model.destination, model.check, end=model.end)
+                    self.assertIs(caught.exception, first)
+                    self.assertEqual(imports, ["hosted_initial_ordinary_originals"])
+                    model.supplier.native_host_matches_actions.assert_called_once_with()
+                    model.checker.assert_not_called()
+                    model.supplier._finalize.assert_called_once_with(first)
+                    self.assertEqual(model.trace, ["check", "host", "import-refused", "close"])
+                    self.assertEqual(model.owner.unknown, close_fails)
+                    self.assertEqual(model.supplier.closed, not close_fails)
+                    self.assertEqual(model.owner.errors, [("initial-local-source-close", first)] if close_fails else [])
+
+    def test_local_checker_failure_remains_failure_after_close(self):
+        with fixture() as values:
+            for unknown_close in (False, True):
+                failure = RuntimeError("MODEL_LOCAL_SOURCE_REFUSED")
+                with self.subTest(unknown_close=unknown_close), local_source_model(values["bound"],
+                        checker_error=failure, unknown_close=unknown_close) as model:
+                    with self.assertRaises(RuntimeError) as caught:
+                        H.check_local(model.owner, values["bound"], model.destination, model.check, end=model.end)
+                    self.assertIs(caught.exception, failure)
+                    model.checker.assert_called_once_with(H.ROOT, values["bound"], query_runner=model.supplier,
+                                                         check=model.check)
+                    model.supplier._finalize.assert_called_once_with(failure)
+                    self.assertEqual(model.trace, ["check", "host", "checker", "close"])
+                    self.assertEqual(model.owner.unknown, unknown_close)
+                    self.assertEqual(model.supplier.closed, not unknown_close)
+                    self.assertEqual(model.owner.errors,
+                        [("initial-local-source-close", failure)] if unknown_close else [])
+
+    def test_manifest_uses_direct_original_checker_and_preserves_binding(self):
+        with fixture() as values:
+            request, recipient = bound_manifest_fixture(values)
+            query_runner, check = object(), Mock()
+            expected = H.manifest_data(request)
+            self.assertNotIn("originals", vars(H))
+            with patch.object(M.A, "check_local_worker", return_value=values["bound"]) as checker, \
+                    patch.object(H, "manifest_data", wraps=H.manifest_data) as manifest:
+                result = C.ordinary._bound_initial_ordinary_manifest(recipient, root=ROOT, request=request,
+                    query_runner=query_runner, check=check)
+            checker.assert_called_once_with(ROOT, values["bound"], query_runner=query_runner, check=check)
+            check.assert_called_once_with()
+            manifest.assert_called_once_with(request)
+            self.assertEqual(result, expected)
+            self.assertEqual(result["schema"], 5)
+            self.assertEqual(result["initialOrdinary"]["identitySha256"], H.digest(values["bound"].record))
+            self.assertIs(result["initialOrdinary"]["samplePackagingRequired"], False)
+            self.assertEqual(result["initialOrdinary"]["privateOwnerInspection"], "NOT_PERFORMED_BY_WORKFLOW")
+
+    def test_manifest_checker_refusal_and_recipient_mismatch_fail_closed(self):
+        with fixture() as values:
+            request, recipient = bound_manifest_fixture(values)
+            query_runner, check = object(), Mock()
+            original = RuntimeError("MODEL_MANIFEST_SOURCE_REFUSED")
+            with patch.object(M.A, "check_local_worker", side_effect=original) as checker, \
+                    patch.object(H, "manifest_data", wraps=H.manifest_data) as manifest:
+                with self.assertRaises(RuntimeError) as caught:
+                    C.ordinary._bound_initial_ordinary_manifest(recipient, root=ROOT, request=request,
+                        query_runner=query_runner, check=check)
+            self.assertIs(caught.exception, original)
+            checker.assert_called_once_with(ROOT, values["bound"], query_runner=query_runner, check=check)
+            manifest.assert_not_called()
+            check.assert_not_called()
+            for changes in ({"fingerprint": "F" * 40}, {"key_sha256": "f" * 64},
+                    {"expires_at": recipient.expires_at - 1}):
+                changed = SimpleNamespace(**{**vars(recipient), **changes})
+                with self.subTest(changes=changes), \
+                        patch.object(M.A, "check_local_worker", return_value=values["bound"]) as checker, \
+                        patch.object(H, "manifest_data", wraps=H.manifest_data) as manifest:
+                    with self.assertRaises(C.ordinary.hosted_evidence.EvidenceError):
+                        C.ordinary._bound_initial_ordinary_manifest(changed, root=ROOT, request=request,
+                            query_runner=query_runner, check=check)
+                checker.assert_called_once_with(ROOT, values["bound"], query_runner=query_runner, check=check)
+                manifest.assert_not_called()
+                check.assert_not_called()
 
 
 if __name__ == "__main__":
