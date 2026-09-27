@@ -4,11 +4,17 @@
 
 The approved [Optional LAN RPC plan](../../RPC_MODULE_PLAN.md) is implemented
 in source. **JVM/Android tests, scoped ARM simulator tests, strict core/LAN/RPC
-Dokka and Apple framework/Swift API compilation passed. The complete lock/platform
-gate remains blocked by the unchanged-main JmDNS multicast-readiness failure;
-full Apple, real-network/security and capacity qualification remain pending.** This is a
+Dokka and Apple framework/Swift API compilation passed. Supplemental Mac VPS work
+also passed all eight direct-source JmDNS modes and generated/reviewed Native ABI
+baselines. The complete lock/platform gate remains blocked by a Native runtime
+stall and failed fresh executor admission on that VPS; full Apple,
+real-network/security and capacity qualification remain pending.** This is a
 feature-workstream checkpoint, not approval to merge or release. The plan is
 preserved unchanged as the original planning snapshot.
+
+The [Mac VPS continuation](mac-vps-validation.md) records the latest successful
+and failed attempts. Earlier hosted multicast failures below remain historical
+failures, not the current VPS diagnosis or a new RPC regression.
 
 - Isolated clone: `/root/projects/p2pkit-feature-prep-20260927-yiDjCB`.
 - Feature branch: `work/rpc-lan-20260927-054728-8b1b11da`.
@@ -47,7 +53,7 @@ requirements remain **128 authenticated clients, 1,280 calls/second, 1 KiB
 request/reply bodies, 30 minutes on each actual JVM/Android/iOS host**, plus
 physical interoperability and a separate 1 MiB experiment. None has run.
 
-## Authorized local validation
+## Earlier authorized local validation
 
 The owner authorized isolated JVM/Android compilation, tests, dependency
 retrieval and genuine ABI/lock/checksum generation. The owner subsequently
@@ -215,15 +221,19 @@ SBOM JSON/XML and lint reports were snapshotted and hashed in the owned logs.
   candidates from graph inspection were quarantined and original locks restored.
   The OSV coverage guard still correctly fails: 12 requested lock inputs but
   only 10 populated inputs. Embedded-producer lock coverage also needs the
-  complete writer. The hosted full writer failed; a focused diagnostic confirmed
-  a genuine multicast-readiness failure, not successful lifecycle execution.
-  A newly admitted supported multicast-capable Mac is needed. Do not bypass or narrow it.
+  complete writer. The hosted writer failed at multicast readiness. All eight
+  direct-source lifecycle modes later passed on the supplemental VPS, but its
+  complete writer stalled at core Intel simulator execution and was cancelled;
+  fresh executor admission then failed. No partial locks/checksums were imported.
+  See the [current Mac evidence and next steps](mac-vps-validation.md).
 - **Apple and complete ABI:** the [first hosted follow-up](hosted-validation.md)
   compiled Native/Cinterop and generated genuine core/LAN/RPC ABI candidates.
   Core/RPC/RPC-sample ARM simulator tests passed, but LAN had a Native failure
   and an unchanged-main JVM lifecycle failure. The complete writer failed and
-  no partial candidates were imported. Reviewed Native baselines, complete
-  strict-input gates and matching Intel execution remain outstanding.
+  no partial candidates from that failed run were imported. A later successful
+  maintained ABI-generation run on the VPS supplied the reviewed Native baselines
+  committed in `1b2bc035`; complete strict-input gates and matching supported
+  Intel execution remain outstanding.
   A scoped diagnostic confirmed unchanged JmDNS `host_not_announced` with first
   send `NoRouteToHostException` before lifecycle assertions; its cause is unknown.
   Seven later child modes did not run. A new Native test's unavailable libc

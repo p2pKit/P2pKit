@@ -3,15 +3,19 @@
 ## Status and boundaries
 
 **JVM/Android and scoped ARM simulator tests, strict core/LAN/RPC Dokka, and
-Apple framework/Swift API compilation passed. The full lock/platform gate is
-blocked by unchanged-main JmDNS multicast readiness; real-network, security and
-capacity qualification remain pending.** Unit tests and workflow
+Apple framework/Swift API compilation passed. Supplemental VPS work passed all
+eight direct-source JmDNS modes and generated/reviewed Native ABI baselines.
+The full lock/platform gate is blocked by a Native runtime stall and failed
+fresh executor admission on that VPS; real-network, security and capacity
+qualification remain pending.** Unit tests and workflow
 configuration are not platform or capacity evidence. Release Foundation remains
 **NOT_READY**, with all existing HOLDs, validation and release gates intact.
 RPC is not part of the immutable `0.7.0-rc3` publication.
 
 The [implementation checkpoint](implementation-status.md) records source scope,
 checks actually run, resolved local fixture failures and missing generated inputs.
+The [Mac VPS continuation](mac-vps-validation.md) records the latest admission
+failure and the supported-host prerequisites for resuming safely.
 
 The approved [plan](../../RPC_MODULE_PLAN.md) fixes the contract and capacity
 requirements. No performance or readiness claim follows from these defaults.
@@ -23,18 +27,26 @@ blindly, introduce another transport, or broaden firewall policy to get a pass.
 
 Bounded source review, Git/GitHub inspection, whitespace, Markdown links,
 repository-layout checks and inspected offline Python/Ruby/shell policy fixtures
-can run. The owner additionally authorized isolated JVM/Android compilation,
-tests, dependency downloads and genuine ABI/lock/checksum generation. A later
-owner approval separately authorizes [feature-only GitHub-hosted macOS work](hosted-validation.md),
+can run. Earlier owner-authorized isolated JVM/Android compilation, tests,
+dependency downloads and ABI/checksum generation completed as recorded in the
+checkpoint. A later owner approval separately authorizes
+[feature-only GitHub-hosted macOS work](hosted-validation.md),
 including required hosted SDK/dependency downloads and sanitized artifacts.
 It does not authorize real-device/capacity experiments, publication or execution
 of Foundation/release workflows. Record exact commands and results; local unit
 tests and hosted simulators do not qualify deployed LAN enforcement.
 
+The latest continuation is separately authorized on the owner's Mac VPS. It
+does not start new local Java/Gradle/Xcode/application builds or local
+SDK/dependency downloads. New shared hosted execution still requires owner
+coordination; failed executor admission blocks further product testing.
+
 JVM/Android ABI files were genuinely generated and reviewed. The 13 new
 streaming-JSON checksums passed independent Maven-byte/checksum/signature review.
-Native ABI and RPC/sample dependency locks remain pending until the hosted
-generation and independent review succeed: the mandatory complete lock writer
+The maintained Native ABI generation and independent source comparison later
+completed on the supplemental VPS; the reviewed baselines are committed, not
+inferred from a failed writer. Complete strict Native compatibility and
+RPC/sample dependency locks remain pending: the mandatory complete lock writer
 includes Apple work. Do not accept partial lock candidates,
 fabricate baselines, exclude missing locks or disable any gate. Scoped strict
 core/LAN/RPC Dokka and framework/Swift compiler checks passed with unchanged

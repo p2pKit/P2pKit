@@ -5,6 +5,12 @@ SDK/dependency downloads and sanitized artifacts for the RPC feature branch.
 This is not authorization to publish, merge, tag, use release secrets or run
 physical/security/capacity experiments. Release Foundation remains **NOT_READY**.
 
+This page retains the hosted run history. The later, separately authorized
+[Mac VPS continuation](mac-vps-validation.md) passed the eight direct-source
+JmDNS modes and generated/reviewed Native ABI, but failed the complete writer
+and fresh executor admission. Those results do not promote any hosted failure
+or establish full qualification.
+
 The [optional workflow](../../.github/workflows/rpc-feature-validation.yml) is
 restricted to `work/rpc-lan-20260927-054728-8b1b11da`. Its branch-specific push
 trigger registers the workflow without modifying main. It uses a disposable
@@ -148,10 +154,11 @@ subsequent diagnostic modes remove that flag and enforce unchanged inputs.
   populates sockaddr network-order bytes independently of the parser under test.
   Its subsequent Native-only result is recorded below.
 
-The full writer remains blocked by genuine multicast readiness, consistent with
-the unchanged main [Mac prerequisite handoff](../testing/mac-handoff.md), not by
-the independently corrected external JmDNS lock entry. It must wait for a newly
-admitted supported Mac with functioning multicast/simulator prerequisites; no
+At this hosted checkpoint, the full writer was blocked by genuine multicast
+readiness, consistent with the unchanged main
+[Mac prerequisite handoff](../testing/mac-handoff.md), not by the independently
+corrected external JmDNS lock entry. Further execution required a newly admitted
+supported Mac with functioning multicast/simulator prerequisites; no
 unchanged full-graph retry, privacy/route override or partial-lock import is allowed.
 
 ## Native correction verified (scoped pass)
@@ -198,16 +205,23 @@ device, simulator test or JmDNS fixture ran in this compiler-only job.
 This establishes compilation/public Swift API use, not Swift application linking,
 execution/cancellation propagation, packaged XCFramework/published-consumer
 qualification, native Intel runtime execution, physical iOS-14 compatibility or
-capacity. No partial lock/checksum/ABI candidate has been imported.
+capacity. No partial lock/checksum/ABI candidate from this hosted run was imported.
 
 ## Remaining admission and gates
+
+The [later supplemental VPS results](mac-vps-validation.md) establish eight
+direct-source JmDNS lifecycle passes, not a successful complete writer. That
+writer stalled at Intel Native runtime execution; the fresh executor recheck
+then failed at script startup and wrapper teardown. The historical hosted
+multicast failure is not the current VPS diagnosis, nor has its cause been
+established or its failed record replaced.
 
 The complete writer still needs a newly admitted supported isolated Mac with
 working multicast and simulator prerequisites: Apple Silicon/macOS 26/Xcode 26.5
 or genuine Intel/macOS 15/Xcode 26.3, following the
 [Mac prerequisite handoff](../testing/mac-handoff.md). A different toolchain needs
-reviewed admission, not silent substitution. The unchanged-main JmDNS failure
-must be resolved by genuine admission/evidence, not a different assertion, longer
+reviewed admission, not silent substitution. Working prerequisites must be
+established by genuine admission/evidence, not a different assertion, longer
 deadline, route/privacy override or an unchanged blind hosted retry.
 
 After complete reviewed inputs are committed, normal strict Native ABI and fresh
