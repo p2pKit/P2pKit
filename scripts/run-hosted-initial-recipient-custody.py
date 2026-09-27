@@ -2086,9 +2086,13 @@ class _CustodyOwner(native.Owner):
             raise anchor.failure
 
     def acquire(self, label, factory, *, final=False):
-        anchor = self.check()
         require(type(label) is str and label in ("directory", "writer", "stdout", "stderr", "native-scope") and
             type(final) is bool, "AUTHORITY_OWNER_RESOURCE_LABEL")
+        return self._acquire_owned(label, factory, final=final)
+
+    def _acquire_owned(self, label, factory, *, final=False):
+        """One original allocation mechanism; public owners validate labels first."""
+        anchor = self.check()
         if anchor.busy:
             self.error("custody-owner-reentry", O.OriginError("INITIAL_CUSTODY_AUTHORITY_OWNER_REENTRY"))
             raise anchor.failure
@@ -2343,6 +2347,76 @@ class _CustodyOwner(native.Owner):
         require(type(self.fence) is U.UseWindow and anchor.phase_active and type(old_limits) is tuple and
             old_limits == (None, None) and anchor.phase == (started, work_end, final_end, old_limits),
             "PRODUCTIVE_USE_OWNER_PHASE_RETURN_CHANGED")
+        self.work_limit = self.final_limit = None
+        anchor.phase_active = False
+        self.check()
+
+
+_PRODUCTIVE_NATIVE_OWNERS = {}
+
+
+class _ProductiveNativeOwner(_CustodyOwner):
+    """Separate PC-only owner, reusing actual original allocation/close mechanics.
+
+    Old _CustodyOwner constructors/scopes remain strict. No arbitrary fence or
+    caller-created seed can select this route, including the shared reader.
+    """
+    def __init__(self, seed):
+        import hosted_initial_recipient_productive_custody as PC
+        fence, first, cancelled, end = PC._checked_native_owner_seed(seed)
+        require(PC.C is sys.modules[__name__] and PC.B is native and type(self) is _ProductiveNativeOwner and
+            id(self) not in _PRODUCTIVE_NATIVE_OWNERS, "PRODUCTIVE_NATIVE_OWNER_GRAPH")
+        native.Owner.__init__(self, end, fence, first=first, cancelled=cancelled)
+        self.initial_sources = {}
+        binding = (self.first, self.fence, self.cancelled, self.local_end, self.resources,
+            self.errors, self.initial_sources, self.admissions, self.early_last,
+            self.entry_original, self.entry_close_attempted, self.entry_close_original, self.entry_close_snapshot)
+        anchor = _CustodyOwnerAnchor(self, self.__dict__, binding,
+            N._history_graph(first), error_graph=N._history_graph(self.errors))
+        _PRODUCTIVE_NATIVE_OWNERS[id(self)] = self, seed, anchor
+        PC._attach_native_owner(seed, self)
+        self.check()
+
+    def _anchor(self):
+        saved = _PRODUCTIVE_NATIVE_OWNERS.get(id(self))
+        require(type(self) is _ProductiveNativeOwner and type(saved) is tuple and saved[0] is self and
+            type(saved[2]) is _CustodyOwnerAnchor and saved[2].owner is self, "PRODUCTIVE_NATIVE_OWNER_ORIGINAL")
+        return saved[2]
+
+    def end(self, *, final=False):
+        import hosted_initial_recipient_productive_custody as PC
+        try:
+            PC._native_boundary(self)
+            result = _CustodyOwner.end(self, final=final)
+            PC._native_boundary(self)
+            return result
+        except BaseException as error:
+            self.error("productive-native-boundary", error)
+            raise self._anchor().failure
+
+    def acquire(self, label, factory, *, final=False):
+        require(type(label) is str and label in ("directory", "writer", "stdout", "stderr", "native-scope", "reader",
+            "initial-handoff-reader-directory", "initial-capture-original-reader", "bootstrap-source",
+            "bootstrap-source-parent", "dependency-seed-source-root", "dependency-seed-source-parent",
+            "dependency-seed-input") and type(final) is bool, "PRODUCTIVE_NATIVE_RESOURCE_LABEL")
+        return self._acquire_owned(label, factory, final=final)
+
+    def enter_final_productive_phase(self, seed, context_raw, started, work_end, final_end):
+        import hosted_initial_recipient_productive_custody as PC
+        PC._check_native_phase_entry(seed, self, context_raw, started, work_end, final_end)
+        anchor = self.check()
+        require(anchor.phase is None and not anchor.closed and not anchor.unknown and anchor.failure is None and
+            not anchor.busy and anchor.frozen is None and self.work_limit is self.final_limit is None,
+            "PRODUCTIVE_NATIVE_PHASE_ONCE")
+        anchor.phase = (started, work_end, final_end, (None, None))
+        anchor.phase_active = True
+        self.work_limit, self.final_limit = work_end, final_end
+        self.check()
+
+    def leave_final_productive_phase(self, started, work_end, final_end, old_limits):
+        anchor = self.check()
+        require(type(old_limits) is tuple and old_limits == (None, None) and anchor.phase_active and
+            anchor.phase == (started, work_end, final_end, old_limits), "PRODUCTIVE_NATIVE_PHASE_RETURN")
         self.work_limit = self.final_limit = None
         anchor.phase_active = False
         self.check()
@@ -3933,11 +4007,29 @@ def _custody_crypto_native(owner, private, context_raw, window, check):
         private.path == _paths(context["kind"])[2] / "returned" and
         tuple(private.identity) == tuple(context["directories"]["returned"]) and
         not any(name in os.environ for name in _CREDENTIAL_NAMES), "CRYPTO_NATIVE_CONTEXT")
+    return _crypto_native_owned(owner, private, context_raw, window, check)
+
+
+def productive_crypto_native(seed):
+    """Separate fixed PC route to the SAME native210/capture/close mechanism."""
+    import hosted_initial_recipient_productive_custody as PC
+    owner, private, context_raw, window, check = PC._native_crypto_binding(seed)
+    require(PC.C is sys.modules[__name__] and PC.B is native and type(owner) is _ProductiveNativeOwner,
+        "PRODUCTIVE_CRYPTO_CANONICAL_GRAPH")
+    return _crypto_native_owned(owner, private, context_raw, window, check, final_seed=seed)
+
+
+def _crypto_native_owned(owner, private, context_raw, window, check, *, final_seed=None):
+    context = canonical(context_raw, 65536)
     check()
     started = window.now()
     work_end = min(window.work, started + 210 * O.NS)
     final_end = min(window.final, work_end + 45 * O.NS)
-    owner.enter_crypto_phase(context_raw, started, work_end, final_end)
+    if final_seed is None:
+        owner.enter_crypto_phase(context_raw, started, work_end, final_end)
+    else:
+        import hosted_initial_recipient_productive_custody as PC
+        owner.enter_final_productive_phase(final_seed, context_raw, started, work_end, final_end)
     # Setup has already spent the owner's original ceiling. This only clips it.
     capture_end = min(owner.local_end, window.deadline(255, final=True, limit=final_end))
     invocation = uuid.uuid4().hex
@@ -3945,13 +4037,18 @@ def _custody_crypto_native(owner, private, context_raw, window, check):
         context["job"], invocation, str(private.path), str(private.path / "control-home"), allow_new_context=True)
     require(not any(name in environment for name in _CREDENTIAL_NAMES), "CRYPTO_NATIVE_TOKEN_FREE")
     start = {"schema": 1, "scope": _CRYPTO_START_SCOPE, "contextSha256": O.digest(context_raw),
-        "argv": _custody_crypto_command(O.digest(context_raw)), "cwd": str(ROOT), "role": window.clock.role,
+        "argv": (_custody_crypto_command(O.digest(context_raw)) if final_seed is None else
+            PC._native_argv(final_seed, context_raw, (started, work_end, final_end))),
+        "cwd": str(ROOT), "role": window.clock.role,
         "job": context["job"], "invocation": invocation, "state": str(private.path),
         "home": str(private.path / "control-home"),
         "inheritedContext": {name: environment[name] for name in Q._CONTEXT}, "startedNs": started,
         "workEndNs": work_end, "finalEndNs": final_end, "exitCode": None,
         "launchAttempted": False, "scopeAttempted": False, "retirement": "UNKNOWN"}
-    _crypto_start_fields(context_raw, context, start, window.clock)
+    if final_seed is None:
+        _crypto_start_fields(context_raw, context, start, window.clock)
+    else:
+        PC._checked_crypto_start(final_seed, context_raw, start)
     directory = owner.child(private, "crypto-service")
     require(tuple(directory.identity) == tuple(context["directories"]["crypto-service"]), "CRYPTO_SERVICE_PIN")
     start_raw = owner.write(directory, "start.json", start)
@@ -3978,9 +4075,12 @@ def _custody_crypto_native(owner, private, context_raw, window, check):
         row["baselineSha256"] = O.digest(baseline_raw)
         check()
         row["launchMinimumNs"] = window.now(limit=work_end)
-        argv = _custody_crypto_command(O.digest(context_raw), row["launchMinimumNs"])
+        argv = (_custody_crypto_command(O.digest(context_raw), row["launchMinimumNs"]) if final_seed is None else
+            PC._native_argv(final_seed, context_raw, (started, work_end, final_end), row["launchMinimumNs"]))
         row["launchArgv"], row["launchAttempted"] = argv, True
         child = scope.spawn(argv, str(ROOT), environment, stdout=out, stderr=err)
+        if final_seed is not None:
+            PC._native_crypto_child_return(final_seed, scope, child)
         require(child.stdout is None and child.stderr is None, "CRYPTO_PRIVATE_SINKS")
         birth = scope.description()
         leaders = [value for value in birth.get("startedIdentities", []) if value.get("pid") == child.pid]
@@ -4011,6 +4111,10 @@ def _custody_crypto_native(owner, private, context_raw, window, check):
                 break
             scope.discover()
             native.time.sleep(.025)
+        if final_seed is not None:
+            # Only real code0 + the preceding original empty discovery may
+            # enter productive final cleanup. Never from the failure finally.
+            PC._native_crypto_final(final_seed, scope, child, code, row["completedNs"])
     except BaseException as error:
         owner.error("custody-crypto-native", error)
     finally:
@@ -4100,7 +4204,10 @@ def _custody_crypto_native(owner, private, context_raw, window, check):
     original = (returned, owner, window, owner.__dict__, anchor, scope, out, err, child, capture_end,
         returned.records, child_raw, returned.phase, returned.__dict__)
     _CRYPTO_NATIVE_RETURNS[id(returned)] = (original, N._history_graph(returned.__dict__, returned.records))
-    owner.leave_crypto_phase(started, work_end, final_end)
+    if final_seed is None:
+        owner.leave_crypto_phase(started, work_end, final_end)
+    else:
+        owner.leave_final_productive_phase(started, work_end, final_end, (None, None))
     return returned
 
 

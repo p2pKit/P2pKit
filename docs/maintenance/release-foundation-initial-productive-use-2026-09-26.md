@@ -1,7 +1,8 @@
 # Initial productive authority and provider bridge
 
-**Status: independently reviewed source; 52 local controls passed. Dormant,
-not workflow-wired and not native/provider/hosted qualified.**
+**Status: independently reviewed source with focused model coverage. The
+productive execution route remains dormant, not workflow-wired and not
+native/provider/hosted qualified.**
 
 This increment connects the exact initial-recipient source-use sites through
 one custody/initializer/bootstrap module graph. Each actual use requires new
@@ -186,18 +187,104 @@ External CPU60/wall120+kill5/AS768MiB/core0 were probe ceilings only. An earlier
 read-only preflight stopped on a mistyped review digest before any source copy
 or candidate execution; that error remains preserved separately.
 
-The existing source-CI workflow adds one complete prefix invocation after the
-adapter controls. Its combined regression is planned, not yet an observed
-result for this increment. No old local suite, accepted 1,066-file reader,
-preview or application build was rerun. Final productive custody/backend and
-productive downstream receivers remain separate implementation prerequisites.
+### Accepted combined source-CI result at 012dc723
+
+Hosted source run [36285642582/1](https://github.com/p2pKit/P2pKit/actions/runs/36285642582),
+job `108525789986`, passed at exact
+`012dc723f59f40cfc2bcc19459db764ecf4676eb`, tree
+`1c79f53f9b3c4aa62a89b849756948e0ab2d8994`. All11 listed steps succeeded:
+**44 Python invocations / 1,283 reported tests**, all44 aggregates OK;
+**228 Node models** and **14 hosted dependency-free Java controls**.
+The job took116 seconds within the unchanged5-minute source-control budget.
+
+Original result-manifest SHA-256:
+`abaafc13262be338ed60a71d39ad438e5c925facb8543d2cd7eb878b2b9f034e`.
+Independent verdict: `APPROVE_EXACT_012DC723_HOSTED_SOURCE_CONTROL_RESULTS_ONLY`;
+review SHA-256:
+`ba04513356825268f79d79688b666f6f8cf831870717562960cc35854d4e9121`.
+This includes the complete prefix42 source-model invocation; its native
+retirement and custody suppliers remain modeled. This historical pass covers
+only012dc723, not later productive-core or receiver changes. No old local
+suite, accepted1,066-file reader, preview or application build was rerun to
+recreate it. Actual productive custody/backend and downstream receiver
+qualification remain separate prerequisites.
+
+## Productive final-custody core: source and split local coverage
+
+The thirteen connected core suppliers now implement the separate PRE/POST
+authority phases, original native owner/close histories, exact final input
+reader, productive POSIX/Windows validation/export adapters and bounded final
+runner-output fence. They retain one canonical module graph and distinguish
+live original authority from historical known-close evidence. The ordinary
+paths, seven composition pins, credential boundaries and activation HOLDs
+remain unchanged. These are source connections, not genuine native acceptance.
+
+The final22-file source/control manifest SHA-256 is
+`9e671d26f722ae03f790effbb63f28accd7bfd9224457aea28fcf830db376d55`.
+The original combined-core review SHA-256 is
+`0f4f190da0cbf09528674fd68bf29c3fd27c1c04c99359c4092adc129f71da04`;
+the later exact Windows R7 implementation review is
+`62beb8d2e23b45d759016a6c7b61ff371110d333cf0ef0d7bfed9ec953715f68`.
+The reviewed Windows corrections select only the matching live child scope
+while retaining all original row checks, and admit only the stdlib's legitimate
+cold TarInfo slot cache before the first callback. Warm cache identity/content,
+original namespace/constructor checks, sticky failures and actual close
+requirements remain pinned; there is no broad supplier mutation exemption.
+
+The nine focused control suites now have **303 unique completed passes across
+preserved, independently reviewed local packets**:
+
+| Suite | Completed source/model controls |
+| --- | ---: |
+| Custody DATA | 24 |
+| Custody lifecycle | 28 |
+| Final input reader | 34 |
+| Final bridge and owner histories | 69 |
+| Evidence facade | 20 |
+| POSIX evidence | 32 |
+| Windows evidence | 74, split41+33 |
+| Final runner output | 14 |
+| Final command routing | 8 |
+
+The earlier POSIX fixture and Windows validation/export failures remain failed
+original aggregates. The repaired POSIX suite passed32/32. The R7 Windows run
+then recorded41 explicit passes, including the original full archive model,
+before the external cumulative CPU60 probe ceiling stopped it: exit137,
+CPU59.996s/wall61.187s. That invocation remains **failed/incomplete**; the
+interrupted case had no completed result.
+
+An independently reviewed unchanged-source continuation selected only the33
+pending Windows methods, then output14 and runner8. All three invocations
+exited0: Windows CPU45.368s/wall46.395s; output CPU1.424s/wall1.494s; runner
+CPU1.588s/wall1.590s. No completed41 Windows or earlier207 cases were replayed
+locally. Only the Windows continuation's external aggregate probe ceilings
+became CPU120/wall180; the other two retained CPU60/wall120. No production,
+native-operation, close, keyring or workflow deadline changed.
+
+Original continuation result-manifest SHA-256:
+`3a9c35cb0f15b5066b95280a941a70cd7ec6da44c386b3ed05b483bdfc9e2a63`.
+Independent result-review SHA-256:
+`187bbb098d0633ed352744ef1085fa58143c30b1de79c6f369fb00fd44fbbb74`.
+This is split-invocation control coverage, not a successful original74-case
+aggregate, native Windows/GPG execution, fixed30/full-corpus capacity or a
+canonical-init120 timing measurement. The accepted1,066-file reader, key
+ceremony and historical preview were not repeated.
+
+The source-control workflow adds exactly the nine complete literal suites
+after prefix retention, with the existing5-minute job, action pins, events
+and read-only permissions unchanged. Its changed-source combined regression
+is still pending at this source checkpoint; the012dc723 pass above does not
+qualify these new bytes. This adds no productive bootstrap workflow or caller
+of the dormant cache export/save path.
 
 ## Still required before productive execution and Release
 
-The complete productive final-custody consumer still needs connected
-implementation/review/integration. The reviewed finite U/A delivery counterparts
-remain dormant and need production workflow/native integration. K has a
-separate source-only checkpoint; none of these controls provides a live pass.
+The integrated final-custody core still needs genuine connected execution.
+The separate seal/BEFORE receiver, native adapter, K tail and finite U/A delivery
+counterparts need their final connected integration and production workflow
+wiring; Stage2 provider-input/provenance closure remains separate. K has a
+source-only checkpoint with reviewed repair work in progress; none of these
+controls provides a live pass.
 In particular, a full per-use readback has
 281 files, not only its 38 retained blobs; query stdout limits must come from
 original session order, not sorted random query identifiers. Local models are

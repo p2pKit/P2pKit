@@ -249,11 +249,7 @@ def _gpg(recipient: Recipient, arguments: list[str], end: float, *, output: Path
     operation = Path(tempfile.mkdtemp(prefix="gpg-", dir=recipient.work_dir))
     stdout_path = output if output is not None else operation / "stdout"
     stderr_path, status_path = operation / "stderr", operation / "status"
-    command = [str(recipient.executable), "--no-options", "--homedir", str(recipient.home),
-               "--batch", "--no-tty", "--no-autostart", "--no-auto-key-retrieve",
-               "--no-auto-key-import", "--auto-key-locate", "clear", "--disable-dirmngr",
-               "--pinentry-mode", "error", "--no-random-seed-file", "--no-default-keyring",
-               "--keyring", str(recipient.work_dir / "recipient.gpg")]
+    command = _gpg_command(recipient)
     process = None
     code = None
     problem = None
@@ -261,9 +257,7 @@ def _gpg(recipient: Recipient, arguments: list[str], end: float, *, output: Path
         if status:
             command += ["--status-fd", str(status_file.fileno())]
         try:
-            process = subprocess.Popen(command + arguments, stdin=subprocess.DEVNULL, stdout=out, stderr=err,
-                                       cwd=recipient.work_dir, env=environment, close_fds=True,
-                                       pass_fds=(status_file.fileno(),) if status else ())
+            process = _spawn_gpg(command + arguments, recipient, environment, out, err, status_file, status)
             while process.poll() is None:
                 _deadline(end)
                 if stderr_path.stat().st_size > MAX_DIAGNOSTIC_BYTES or \
@@ -298,6 +292,23 @@ def _gpg(recipient: Recipient, arguments: list[str], end: float, *, output: Path
             stdout_path.stat().st_size > (MAX_CIPHERTEXT_BYTES if output else MAX_DIAGNOSTIC_BYTES):
         _fail("GPG exceeded the evidence output bound")
     return (b"" if output is not None else stdout_path.read_bytes(), status_path.read_bytes())
+
+
+def _gpg_command(recipient):
+    """One maintained, public-only/no-agent/no-network GPG command prefix."""
+    return [str(recipient.executable), "--no-options", "--homedir", str(recipient.home),
+            "--batch", "--no-tty", "--no-autostart", "--no-auto-key-retrieve",
+            "--no-auto-key-import", "--auto-key-locate", "clear", "--disable-dirmngr",
+            "--pinentry-mode", "error", "--no-random-seed-file", "--no-default-keyring",
+            "--keyring", str(recipient.work_dir / "recipient.gpg")]
+
+
+def _spawn_gpg(command, recipient, environment, out, err, status_file, status):
+    # Return the ACTUAL child immediately. The old wrapper preserves its byte
+    # interface; productive custody retains this object before any next callback.
+    return subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=out, stderr=err,
+        cwd=recipient.work_dir, env=environment, close_fds=True,
+        pass_fds=(status_file.fileno(),) if status else ())
 
 
 def _key_identity(listing: bytes, expected: str) -> tuple[str, int]:
@@ -730,6 +741,1496 @@ def _export_bound_manifest(evidence_dir: str | Path, output_dir: str | Path, rec
             if path.is_file() and not path.is_symlink():
                 path.unlink()
         private.rmdir()
+
+
+# Separate productive APIs retain native originals rather than manufacturing a
+# receipt around the old dictionary/byte return. Legacy public APIs above keep
+# their original argument, scope, timeout, cleanup and return contracts.
+_PRODUCTIVE_SESSIONS, _PRODUCTIVE_ATTEMPTS = {}, {}
+_PRODUCTIVE_RESOURCES, _PRODUCTIVE_CLOSES, _PRODUCTIVE_FINISHES, _PRODUCTIVE_RESULTS = {}, {}, {}, {}
+_PRODUCTIVE_OBSERVATIONS, _PRODUCTIVE_STREAMS, _PRODUCTIVE_RECIPIENTS = {}, {}, {}
+_PRODUCTIVE_QUARANTINE = []
+
+
+@dataclasses.dataclass(frozen=True, repr=False)
+class _ProductiveSession:
+    binding: object
+
+
+@dataclasses.dataclass(frozen=True, repr=False)
+class _ProductiveResource:
+    owner: object
+    kind: str
+    label: str
+    original_type: object
+    methods: tuple
+
+
+@dataclasses.dataclass(frozen=True, repr=False)
+class _ProductiveClose:
+    session: object
+    resource: object
+    operation: str
+    returned: object
+    completion: object
+
+
+@dataclasses.dataclass(frozen=True, repr=False)
+class _ProductiveKnownClose:
+    session: object
+    resources: tuple
+    observations: tuple
+    completion: object
+
+
+@dataclasses.dataclass(frozen=True, repr=False)
+class _ProductiveValidationReturn:
+    binding: object
+    session: object
+    recipient: object
+    observations: object
+    known_close: object
+
+
+@dataclasses.dataclass(frozen=True, repr=False)
+class _ProductiveExportReturn:
+    binding: object
+    session: object
+    manifest_raw: bytes
+    artifact: object
+    observations: object
+    known_close: object
+
+
+@dataclasses.dataclass(frozen=True, repr=False)
+class _ProductiveArtifact:
+    name: str
+    sha256: str
+    size: int
+    native: tuple
+
+
+def _pg_require(condition, code):
+    if not condition:
+        raise EvidenceError("PRODUCTIVE_POSIX_" + code)
+
+
+def _pg_pin(value):
+    return value, type(value), value.__dict__, tuple(value.__dict__.items())
+
+
+def _pg_pin_current(pin):
+    value, kind, dictionary, items = pin
+    _pg_require(type(value) is kind and value.__dict__ is dictionary and set(dictionary) == {key for key, _ in items} and
+        all(dictionary[key] is original for key, original in items), "OBJECT_CHANGED")
+
+
+def _pg_methods(owner, names):
+    dictionary = getattr(owner, "__dict__", None)
+    _pg_require(dictionary is None or type(dictionary) is dict, "METHOD_INSTANCE_DICTIONARY")
+    methods = []
+    for name in names:
+        bound = getattr(owner, name)
+        present = dictionary is not None and name in dictionary
+        methods.append((name, getattr(type(owner), name, None), bound, type(owner), type(bound),
+            getattr(bound, "__func__", None), getattr(bound, "__name__", None), dictionary, present,
+            dictionary[name] if present else None))
+    return tuple(methods)
+
+
+def _pg_methods_current(owner, methods, code):
+    for name, descriptor, bound, owner_type, bound_type, function, method_name, dictionary, present, slot in methods:
+        current_dictionary = getattr(owner, "__dict__", None)
+        _pg_require(type(owner) is owner_type and current_dictionary is dictionary and
+            (dictionary is not None and name in dictionary) is present and
+            (not present or dictionary[name] is slot), code)
+        current = getattr(owner, name)
+        # FileIO/scandir/hashlib builtin methods have no __func__. Pin their
+        # callable kind/name too; same-owner readall is not the original read.
+        # A new instance alias is never adopted, even for the same operation.
+        _pg_require(getattr(type(owner), name, None) is descriptor and type(current) is bound_type and
+            getattr(current, "__self__", None) is owner and getattr(bound, "__self__", None) is owner and
+            getattr(current, "__func__", None) is function and
+            type(getattr(current, "__name__", None)) is str and type(method_name) is str and
+            current.__name__ == method_name, code)
+
+
+def _pg_resource_current(resource):
+    row = _PRODUCTIVE_RESOURCES.get(id(resource))
+    _pg_require(type(row) is dict and row["resource"] is resource, "RESOURCE_NOT_ORIGINAL")
+    state = _PRODUCTIVE_SESSIONS.get(id(row["session"]))
+    _pg_require(type(state) is dict and state["session"] is row["session"] and
+        type(row["index"]) is int and 0 <= row["index"] < len(state["resources"]) and
+        state["resources"][row["index"]] is resource, "RESOURCE_LEDGER_CHANGED")
+    _pg_pin_current(row["pin"])
+    _pg_require(type(resource.owner) is resource.original_type, "RESOURCE_TYPE_CHANGED")
+    for owner, name, original in row["links"]:
+        current = getattr(owner, name)
+        # GzipFile's original close clears fileobj BEFORE its trailer writes.
+        # The original sink is separately retained, and may not be replaced.
+        cleared_gzip = resource.kind == "gzip" and name == "fileobj" and row["attempted"] and current is None
+        _pg_require(current is original or cleared_gzip, "RESOURCE_OWNER_LINK_CHANGED")
+    _pg_methods_current(resource.owner, resource.methods, "RESOURCE_METHOD_CHANGED")
+    if resource.kind in ("format-writer", "tar-stream") and not row["attempted"]:
+        # These two original methods short-circuit on a mutable closed flag.
+        # Each separately owned object must remain live until its OWN direct
+        # close begins; a parent's close cannot authorize this transition.
+        _pg_require(resource.owner.closed is False, "LIVE_FORMAT_ALREADY_CLOSED")
+    if row["close"] is not None:
+        if resource.kind in ("file", "format-writer", "tar-stream"):
+            _pg_require(resource.owner.closed is True, "CLOSED_OWNER_CHANGED")
+        elif resource.kind == "gzip":
+            _pg_require(resource.owner.fileobj is None, "CLOSED_GZIP_CHANGED")
+        elif resource.kind == "process":
+            _pg_require(type(resource.owner.returncode) is int and
+                resource.owner.returncode is row["close"].returned, "CLOSED_PROCESS_CHANGED")
+    return row
+
+
+def _pg_fail(state, error, *, unknown=False):
+    if state["failure"] is None:
+        state["failure"] = error
+    if unknown:
+        state["unknown"] = True
+    return state["failure"]
+
+
+def _pg_state(session):
+    state = _PRODUCTIVE_SESSIONS.get(id(session))
+    _pg_require(type(session) is _ProductiveSession and type(state) is dict and state["session"] is session and
+        _PRODUCTIVE_ATTEMPTS.get(id(session.binding)) is state, "SESSION_NOT_ORIGINAL")
+    return state
+
+
+def _pg_passive(state, *, whole=False):
+    session = state["session"]
+    _pg_require(_pg_state(session) is state and state["pid"] == os.getpid() and
+        state["failure"] is None and not state["unknown"] and not _PRODUCTIVE_QUARANTINE, "FAILED_OR_FOREIGN_SESSION")
+    _pg_pin_current(state["session_pin"])
+    for pin in state["binding_pins"]:
+        _pg_pin_current(pin)
+    _pg_require(all(getattr(owner, name, None) is original for owner, name, original in state["functions"]),
+        "SUPPLIER_CHANGED")
+    _pg_require(state["resources"] is state["resource_list"] and type(state["resources"]) is list and
+        len(state["resources"]) == state["resource_count"] and state["observations"] is state["observation_list"] and
+        len(state["observations"]) == state["observation_count"], "SESSION_LEDGER_CHANGED")
+    _pg_require(not state["pending_owners"], "UNREGISTERED_NATIVE_RETURN")
+    for resource in state["formats"]:
+        _pg_resource_current(resource)
+    # At most two recipients/three commands. Keep these selected suppliers
+    # current around every effect without traversing the complete input corpus.
+    for recipient, pin, paths in state["recipients"]:
+        _pg_pin_current(pin)
+        for path, kind, original in paths:
+            _pg_require(type(path) is kind and str(path) == original, "RECIPIENT_PATH_CHANGED")
+    for environment, items in state["environments"]:
+        _pg_require(type(environment) is dict and set(environment) == {name for name, _ in items} and
+            all(environment[name] is original for name, original in items), "GPG_ENVIRONMENT_CHANGED")
+    for command, arguments, environment, items in state["commands"]:
+        _pg_require(type(command) is list and len(command) == len(arguments) and
+            all(value is original for value, original in zip(command, arguments)) and
+            type(environment) is dict and set(environment) == {name for name, _ in items} and
+            all(environment[name] is original for name, original in items), "GPG_COMMAND_CHANGED")
+    if whole:
+        for entries, dictionary, items in state["snapshots"]:
+            _pg_require(entries is dictionary and type(entries) is dict and len(entries) == len(items) and
+                all(entries.get(name) is stamp for name, stamp in items), "SNAPSHOT_DATA_CHANGED")
+        for index, resource in enumerate(state["resources"]):
+            row = _pg_resource_current(resource)
+            _pg_require(row["session"] is session and row["index"] == index, "RESOURCE_SESSION_CHANGED")
+            if row["close"] is not None:
+                close = row["close"]
+                original = _PRODUCTIVE_CLOSES.get(id(close))
+                _pg_require(type(original) is tuple and original[0] is close and original[1] is row,
+                    "CLOSE_NOT_ORIGINAL")
+                _pg_pin_current(original[2])
+                _pg_require(close.resource is resource and close.session is session and row["attempted"] and
+                    close.completion is row["completion"] and close.returned is row["return_fact"][1], "CLOSE_CHANGED")
+        for index, observation in enumerate(state["observations"]):
+            original = _PRODUCTIVE_OBSERVATIONS.get(id(observation))
+            _pg_require(type(original) is tuple and original[0] is observation and original[1] is session and
+                original[2] == index, "OBSERVATION_NOT_ORIGINAL")
+        for stream in state["streams"]:
+            _pg_stream_current(stream)
+
+
+def _pg_guard(session, *, keyring=None):
+    state = _pg_state(session)
+    if state["failure"] is not None:
+        raise state["failure"]
+    try:
+        _pg_require(not state["busy"] and state["phase"] == "WORK", "REENTRY_OR_PHASE")
+        state["busy"] = True
+        _pg_passive(state)
+        E = state["E"]
+        returned = (E._productive_work_guard(session.binding) if keyring is None else
+            E._productive_keyring_guard(session.binding, keyring))
+        _pg_require(returned is (state["caps"] if keyring is None else keyring), "ORIGINAL_GUARD_RETURN")
+        local = time.monotonic()
+        _pg_require(type(local) is float and state["local"] <= local <
+            (state["caps"].workEndLocal if keyring is None else keyring.workEndLocal), "WORK_DEADLINE")
+        state["local"] = local
+        _pg_passive(state)
+        return returned, local  # Actual E guard return, NOT a newly invented RAW Reading.
+    except BaseException as error:
+        raise _pg_fail(state, error)
+    finally:
+        state["busy"] = False
+
+
+def _pg_note(session, label, *actual):
+    state = _pg_state(session)
+    row = (label, *actual)
+    _PRODUCTIVE_OBSERVATIONS[id(row)] = (row, session, state["observation_count"])
+    state["observations"].append(row)
+    state["observation_count"] += 1
+    return row
+
+
+def _pg_new(binding, mode):
+    import hosted_initial_recipient_evidence as E
+    previous = _PRODUCTIVE_ATTEMPTS.get(id(binding))
+    if previous is not None:
+        raise _pg_fail(previous, EvidenceError("PRODUCTIVE_POSIX_REENTRY"))
+    session = _ProductiveSession(binding)
+    resources, observations = [], []
+    state = {"session": session, "session_pin": _pg_pin(session), "E": E, "mode": mode, "pid": os.getpid(),
+        "busy": False, "phase": "STARTED", "failure": None, "unknown": False, "resources": resources,
+        "resource_list": resources, "resource_count": 0, "observations": observations,
+        "observation_list": observations, "observation_count": 0, "transients": [], "result": None,
+        "finish": None, "finish_attempted": False, "pending_process": None, "pending_owners": [],
+        "active_keyring": None, "formats": [], "streams": [], "recipients": [], "snapshots": [], "commands": [],
+        "environments": [], "written": {}, "output": None, "private": None, "removal_attempts": set()}
+    _PRODUCTIVE_SESSIONS[id(session)], _PRODUCTIVE_ATTEMPTS[id(binding)] = state, state
+    try:
+        _pg_require(os.name == "posix" and hasattr(os, "O_NOFOLLOW"), "NATIVE_POSIX_REQUIRED")
+        _pg_require(mode in ("validation", "export"), "SESSION_MODE")
+        state["functions"] = tuple((owner, name, getattr(owner, name)) for owner, names in (
+            (E, ("_ProductiveValidationBinding", "_ProductiveExportBinding", "_checked_productive_validation_binding",
+                "_checked_productive_export_binding", "_productive_work_guard", "_productive_whole_guard",
+                "_productive_node_guard", "_productive_expected_node", "_productive_check_snapshot", "_productive_manifest",
+                "_productive_keyring_begin", "_productive_keyring_guard", "_productive_keyring_complete")),
+            (os, ("open", "close", "fdopen", "fstat", "scandir", "fsync", "getuid", "getpid", "access", "unlink", "rmdir", "mkdir")),
+            (os.path, ("lexists",)),
+            (subprocess, ("Popen",)), (subprocess.Popen, ("__init__", "poll", "wait", "terminate", "kill")),
+            (time, ("monotonic", "sleep")), (tempfile, ("mkdtemp",)), (dataclasses, ("replace",)),
+            (gzip, ("GzipFile",)), (gzip.GzipFile, ("__init__", "close", "write", "flush")),
+            (tarfile, ("open", "TarInfo", "TarFile", "_Stream")),
+            (tarfile.TarInfo, ("__init__", "tobuf")),
+            (tarfile.TarFile, ("__init__", "close", "addfile")),
+            (tarfile._Stream, ("__init__", "close", "write")), (hashlib, ("sha256",)),
+            (Path, ("lstat", "resolve", "is_file", "mkdir", "rmdir", "unlink")), (shutil, ("which",)),
+            (sys.modules[__name__], ("_gpg_command", "_spawn_gpg", "_gpg_environment", "_public_armor", "_key_identity",
+                "_stamp", "_path", "_private_directory", "_disjoint", "_pg_require", "_pg_state", "_pg_methods",
+                "_pg_methods_current", "_pg_fail",
+                "_ciphertext_stream", "Recipient", "_ProductiveSession", "_ProductiveResource", "_ProductiveClose",
+                "_ProductiveKnownClose", "_ProductiveValidationReturn", "_ProductiveExportReturn", "_ProductiveArtifact",
+                "_ProductiveTarReader", "_ProductiveArchiveWriter", "_ProductiveCipherReader",
+                "_pg_guard", "_pg_close", "_pg_passive", "_pg_keep", "_pg_resource_current", "_pg_stream_current",
+                "_pg_pin", "_pg_pin_current", "_pg_note", "_pg_closed", "_pg_register_result", "_pg_checked_result",
+                "_pg_stream_register", "_pg_stream_begin", "_pg_stream_failed", "_pg_tar_block", "_pg_retain_recipient",
+                "_pg_open", "_pg_read", "_pg_write", "_pg_snapshot", "_pg_member", "_pg_archive", "_pg_gpg",
+                "_pg_directory", "_pg_ciphertext", "_pg_publish", "_pg_output_roster", "_pg_cleanup", "_pg_abort", "_pg_abort_files",
+                "_finish_initial_productive", "_checked_productive_validation_return", "_checked_productive_export_return")),
+            (_ProductiveTarReader, ("__init__", "read", "finish")),
+            (_ProductiveArchiveWriter, ("__init__", "write", "flush")),
+            (_ProductiveCipherReader, ("__init__", "read", "seek", "tell", "_current")),
+        ) for name in names)
+        view = (E._checked_productive_validation_binding(binding) if mode == "validation" else
+            E._checked_productive_export_binding(binding))
+        _pg_require(state["failure"] is None and all(getattr(owner, name, None) is original
+            for owner, name, original in state["functions"]), "ADMISSION_CALLBACK_CHANGED")
+        state["view"], state["caps"], state["local"] = view, view.caps, view.caps.firstLocal
+        state["binding_pins"] = tuple(_pg_pin(value) for value in
+            (binding, view, view.caps, view.caps.first, view.caps.clock))
+        state["phase"] = "WORK"
+        _pg_guard(session)
+        return session
+    except BaseException as error:
+        raise _pg_fail(state, error)
+
+
+def _pg_keep(session, owner, kind, label, methods=()):
+    # Called FIRST after a native constructor returns, before another guard.
+    state = _pg_state(session)
+    state["pending_owners"].append(owner)  # Preserve the native return even if binding fails.
+    try:
+        resource = _ProductiveResource(owner, kind, label, type(owner), _pg_methods(owner, methods))
+        row = {"session": session, "resource": resource, "pin": _pg_pin(resource), "attempted": False,
+            "close": None, "transferred": None, "transfer_attempted": False, "parent": None, "children": (), "links": (),
+            "index": state["resource_count"], "keyring": state["active_keyring"], "return_fact": None,
+            "completion": None}
+        _PRODUCTIVE_RESOURCES[id(resource)] = row
+        state["resources"].append(resource)
+        state["resource_count"] += 1
+        _pg_require(state["pending_owners"].pop() is owner, "NATIVE_RETURN_REPLACED")
+        return resource
+    except BaseException as error:
+        _PRODUCTIVE_QUARANTINE.append(owner)
+        raise _pg_fail(state, error, unknown=True)
+
+
+def _pg_closed(session, resource, operation, returned, completion):
+    row = _pg_resource_current(resource)
+    _pg_require(row["session"] is session and row["attempted"] and row["close"] is None, "CLOSE_ONCE")
+    close = _ProductiveClose(session, resource, operation, returned, completion)
+    _PRODUCTIVE_CLOSES[id(close)] = (close, row, _pg_pin(close))
+    row["close"], row["completion"] = close, completion
+    if row["return_fact"] is None:
+        row["return_fact"] = (operation, returned)
+    _pg_require(row["return_fact"][1] is returned, "ACTUAL_RETURN_CHANGED")
+    return close
+
+
+def _pg_close(session, resource, *, keyring=None):
+    state, row = _pg_state(session), _pg_resource_current(resource)
+    _pg_require(row["session"] is session and not row["attempted"] and row["transferred"] is None,
+        "RESOURCE_CLOSE_ONCE")
+    _pg_require(keyring is row["keyring"], "RESOURCE_ORIGINAL_SUBCAP")
+    _pg_guard(session, keyring=keyring)
+    _pg_resource_current(resource)
+    if resource.kind == "file":
+        row["last_stat"] = os.fstat(resource.owner.fileno())
+        _pg_note(session, "file-before-known-close", resource, row["last_stat"])
+        _pg_guard(session, keyring=keyring)
+        _pg_resource_current(resource)
+    row["attempted"] = True
+    try:
+        if resource.kind == "descriptor":
+            returned = os.close(resource.owner)
+        else:
+            method = next(item[2] for item in resource.methods if item[0] == "close")
+            returned = method()
+        # A close flag set before the call is NOT a known close. Retain its
+        # original normal return and then the actual in-window observation.
+        row["return_fact"] = ("DIRECT_CLOSE_RETURN", returned)
+        _pg_note(session, "actual-close-return", resource, returned)
+        completion = _pg_guard(session, keyring=keyring)
+        close = _pg_closed(session, resource, "DIRECT_CLOSE_RETURN", returned, completion)
+        parent = row["parent"]
+        if parent is not None:
+            parent_row = _pg_resource_current(parent)
+            _pg_require(parent_row["transferred"] is resource and not parent_row["attempted"], "DESCRIPTOR_TRANSFER")
+            parent_row["attempted"] = True
+            _pg_closed(session, parent, "TRANSITIVE_FDOPEN_OWNER_CLOSE", close, completion)
+        for child in row["children"]:
+            child_row = _pg_resource_current(child)
+            _pg_require(child_row["transferred"] is resource and not child_row["attempted"], "NESTED_OWNER_TRANSFER")
+            child_row["attempted"] = True
+            _pg_closed(session, child, "TRANSITIVE_ORIGINAL_AGGREGATE_RETURN", close, completion)
+        return close
+    except BaseException as error:
+        _PRODUCTIVE_QUARANTINE.append(resource)
+        raise _pg_fail(state, error, unknown=True)
+
+
+def _pg_open(session, path, *, write=False, maximum=MAX_CIPHERTEXT_BYTES, keyring=None):
+    _pg_guard(session, keyring=keyring)
+    before = None if write else path.lstat()
+    if before is not None:
+        _pg_note(session, "input-lstat", path, before)
+        _pg_require(stat.S_ISREG(before.st_mode) and before.st_uid == os.getuid() and before.st_nlink == 1 and
+            not before.st_mode & 0o022 and 0 <= before.st_size <= maximum, "INPUT_OWNERSHIP_OR_BOUND")
+    _pg_guard(session, keyring=keyring)
+    flags = os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0) | (os.O_WRONLY | os.O_CREAT | os.O_EXCL if write else os.O_RDONLY)
+    fd = os.open(path, flags, 0o600)
+    descriptor = _pg_keep(session, fd, "descriptor", "open:" + path.name)
+    _pg_guard(session, keyring=keyring)
+    _pg_resource_current(descriptor)
+    _PRODUCTIVE_RESOURCES[id(descriptor)]["transfer_attempted"] = True
+    handle = os.fdopen(fd, "wb" if write else "rb", buffering=0)
+    resource = _pg_keep(session, handle, "file", "file:" + path.name,
+        ("close", "read", "write", "seek", "tell", "fileno", "flush"))
+    _PRODUCTIVE_RESOURCES[id(descriptor)]["transferred"] = resource
+    _PRODUCTIVE_RESOURCES[id(resource)]["parent"] = descriptor
+    _pg_resource_current(resource)
+    actual = os.fstat(fd)
+    _pg_note(session, "opened-fstat", resource, actual)
+    _pg_require(stat.S_ISREG(actual.st_mode) and actual.st_uid == os.getuid() and actual.st_nlink == 1 and
+        not actual.st_mode & 0o022 and (actual.st_size == 0 if write else _stamp(actual) == _stamp(before)),
+        "OPENED_INPUT_CHANGED")
+    if write:
+        state = _pg_state(session)
+        _pg_require(str(path) not in state["written"], "EXCLUSIVE_PATH_REUSED")
+        state["written"][str(path)] = (path, actual, resource)
+    _pg_guard(session, keyring=keyring)
+    _pg_resource_current(resource)
+    return resource, actual
+
+
+def _pg_read(session, path, maximum, *, keyring=None):
+    resource, before = _pg_open(session, path, maximum=maximum, keyring=keyring)
+    result, count = [], 0
+    while True:
+        _pg_guard(session, keyring=keyring)
+        _pg_resource_current(resource)
+        block = resource.owner.read(min(1024 * 1024, maximum - count + 1))
+        _pg_guard(session, keyring=keyring)
+        _pg_resource_current(resource)
+        _pg_require(type(block) is bytes, "READ_BYTES")
+        count += len(block)
+        _pg_require(count <= maximum, "READ_BOUND")
+        if not block:
+            break
+        result.append(block)
+    after = os.fstat(resource.owner.fileno())
+    _pg_note(session, "readback-fstat", resource, after)
+    _pg_require(count == before.st_size and _stamp(after) == _stamp(before) and _stamp(path.lstat()) == _stamp(before),
+        "READBACK_CHANGED")
+    raw = b"".join(result)
+    _pg_note(session, "complete-readback", resource, count, hashlib.sha256(raw).hexdigest())
+    _pg_close(session, resource, keyring=keyring)
+    return raw, ("posix", *_stamp(after))
+
+
+def _pg_write(session, path, data, maximum, *, keyring=None):
+    _pg_require(type(data) is bytes and len(data) <= maximum, "WRITE_BOUND")
+    resource, _before = _pg_open(session, path, write=True, maximum=maximum, keyring=keyring)
+    for start in range(0, len(data), 1024 * 1024):
+        _pg_guard(session, keyring=keyring)
+        _pg_resource_current(resource)
+        block = data[start:start + 1024 * 1024]
+        _pg_require(resource.owner.write(block) == len(block), "SHORT_WRITE")
+        _pg_guard(session, keyring=keyring)
+        _pg_resource_current(resource)
+    _pg_guard(session, keyring=keyring)
+    _pg_resource_current(resource)
+    resource.owner.flush()
+    _pg_guard(session, keyring=keyring)
+    _pg_resource_current(resource)
+    os.fsync(resource.owner.fileno())
+    _pg_guard(session, keyring=keyring)
+    _pg_resource_current(resource)
+    written = os.fstat(resource.owner.fileno())
+    _pg_resource_current(resource)
+    _pg_note(session, "synced-write", resource, written)
+    _pg_require(written.st_size == len(data), "WRITE_SIZE")
+    _pg_close(session, resource, keyring=keyring)
+    return ("posix", *_stamp(written))
+
+
+def _pg_snapshot(session, root):
+    """Own actual snapshot descriptors/iterators; declarations are not handles."""
+    entries, total = {}, 0
+
+    def visit(resource, relative, depth):
+        nonlocal total
+        _pg_guard(session)
+        _pg_require(depth <= 64, "SNAPSHOT_DEPTH")
+        _pg_resource_current(resource)
+        before = os.fstat(resource.owner)
+        _pg_note(session, "directory-before", resource, before)
+        _pg_resource_current(resource)
+        stream = os.scandir(resource.owner)
+        iterator = _pg_keep(session, stream, "scandir", "snapshot-directory", ("close", "__next__", "__iter__"))
+        while True:
+            _pg_guard(session)
+            _pg_resource_current(iterator)
+            try:
+                entry = next(stream)
+            except StopIteration:
+                break
+            _pg_resource_current(iterator)
+            _pg_note(session, "scandir-entry", iterator, entry)
+            _pg_require(len(entries) < MAX_MEMBERS and "\\" not in entry.name and
+                not any(ord(char) < 32 or ord(char) == 127 for char in entry.name), "SNAPSHOT_NAME_OR_COUNT")
+            name = relative + "/" + entry.name if relative else entry.name
+            _pg_require(len(name.encode("utf-8")) <= 1024, "SNAPSHOT_NAME_BOUND")
+            info = entry.stat(follow_symlinks=False)
+            _pg_note(session, "entry-stat", entry, info)
+            _pg_require(info.st_uid == os.getuid() and not info.st_mode & 0o022 and
+                (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)), "SNAPSHOT_OWNERSHIP_OR_KIND")
+            if stat.S_ISREG(info.st_mode):
+                _pg_require(info.st_nlink == 1, "SNAPSHOT_HARDLINK")
+                total += info.st_size
+                _pg_require(total <= MAX_BYTES, "SNAPSHOT_BYTES")
+            entries[name] = _stamp(info)
+            _pg_guard(session)
+            if stat.S_ISDIR(info.st_mode):
+                _pg_resource_current(resource)
+                child_fd = os.open(entry.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=resource.owner)
+                child = _pg_keep(session, child_fd, "descriptor", "snapshot-child")
+                _pg_resource_current(child)
+                actual = os.fstat(child_fd)
+                _pg_note(session, "child-fstat", child, actual)
+                _pg_require(_stamp(actual) == _stamp(info), "SNAPSHOT_DIRECTORY_CHANGED")
+                visit(child, name, depth + 1)
+                _pg_close(session, child)
+        _pg_close(session, iterator)
+        _pg_resource_current(resource)
+        after = os.fstat(resource.owner)
+        _pg_note(session, "directory-after", resource, after)
+        _pg_require(_stamp(after) == _stamp(before), "SNAPSHOT_DIRECTORY_CHANGED")
+        _pg_guard(session)
+
+    _pg_guard(session)
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    opened = _pg_keep(session, fd, "descriptor", "snapshot-root")
+    _pg_resource_current(opened)
+    original = os.fstat(fd)
+    _pg_note(session, "root-fstat", opened, original)
+    entries[""] = _stamp(original)
+    visit(opened, "", 0)
+    _pg_close(session, opened)
+    _pg_note(session, "actual-snapshot-return", entries, tuple(entries.items()))
+    _pg_state(session)["snapshots"].append((entries, entries, tuple(entries.items())))
+    return entries
+
+
+def _pg_member(session, root, name, snapshot):
+    _pg_guard(session)
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    parent = _pg_keep(session, fd, "descriptor", "member-root")
+    _pg_require(_stamp(os.fstat(fd)) == snapshot[""], "MEMBER_ROOT_CHANGED")
+    prefix = ""
+    parts = name.split("/")
+    for part in parts[:-1]:
+        _pg_guard(session)
+        _pg_resource_current(parent)
+        child_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent.owner)
+        child = _pg_keep(session, child_fd, "descriptor", "member-parent")
+        _pg_close(session, parent)
+        parent = child
+        _pg_resource_current(parent)
+        prefix = prefix + "/" + part if prefix else part
+        _pg_require(_stamp(os.fstat(parent.owner)) == snapshot[prefix], "MEMBER_PARENT_CHANGED")
+    _pg_guard(session)
+    _pg_resource_current(parent)
+    leaf = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent.owner)
+    descriptor = _pg_keep(session, leaf, "descriptor", "member-leaf")
+    _pg_guard(session)
+    _pg_resource_current(descriptor)
+    _PRODUCTIVE_RESOURCES[id(descriptor)]["transfer_attempted"] = True
+    handle = os.fdopen(leaf, "rb", buffering=0)
+    resource = _pg_keep(session, handle, "file", "member-reader", ("close", "read", "fileno", "tell", "seek"))
+    _PRODUCTIVE_RESOURCES[id(descriptor)]["transferred"] = resource
+    _PRODUCTIVE_RESOURCES[id(resource)]["parent"] = descriptor
+    actual = os.fstat(leaf)
+    _pg_note(session, "member-fstat", resource, actual)
+    _pg_require(_stamp(actual) == snapshot[name], "MEMBER_CHANGED")
+    _pg_close(session, parent)
+    _pg_resource_current(resource)
+    return resource
+
+
+def _pg_stream_register(stream, static, methods):
+    state = _pg_state(stream.session)
+    _pg_require(id(stream) not in _PRODUCTIVE_STREAMS, "STREAM_ALREADY_REGISTERED")
+    row = {"stream": stream, "kind": type(stream), "dictionary": stream.__dict__,
+        "fields": tuple(stream.__dict__), "static": tuple((name, getattr(stream, name)) for name in static),
+        "session": stream.session, "resource": stream.resource, "methods": _pg_methods(stream, methods),
+        "count": stream.count, "complete": False, "busy": False, "failure": None,
+        "digest": getattr(stream, "digest", None), "hex": None}
+    if row["digest"] is not None:
+        row["digest_methods"] = _pg_methods(row["digest"], ("update", "hexdigest"))
+        row["hex"] = row["digest"].hexdigest()
+    _PRODUCTIVE_STREAMS[id(stream)] = row
+    state["streams"].append(stream)
+    _pg_stream_current(stream)
+
+
+def _pg_stream_current(stream):
+    row = _PRODUCTIVE_STREAMS.get(id(stream))
+    _pg_require(type(row) is dict and row["stream"] is stream and row["failure"] is None and
+        type(stream) is row["kind"] and stream.__dict__ is row["dictionary"] and
+        tuple(stream.__dict__) == row["fields"] and all(getattr(stream, name) is original
+            for name, original in row["static"]) and type(stream.count) is int and stream.count == row["count"] and
+        stream.complete is row["complete"], "STREAM_CHANGED")
+    for owner, methods in ((stream, row["methods"]), (row["digest"], row.get("digest_methods", ()))):
+        _pg_methods_current(owner, methods, "STREAM_METHOD_CHANGED")
+    if row["digest"] is not None:
+        _pg_require(row["digest"].hexdigest() == row["hex"], "STREAM_DIGEST_CHANGED")
+    _pg_resource_current(row["resource"])
+    return row
+
+
+def _pg_stream_begin(stream):
+    row = _PRODUCTIVE_STREAMS.get(id(stream))
+    _pg_require(type(row) is dict and row["stream"] is stream, "STREAM_NOT_ORIGINAL")
+    state = _pg_state(row["session"])
+    try:
+        _pg_require(not row["busy"] and not row["complete"], "STREAM_REENTRY_OR_CLOSED")
+        row["busy"] = True
+        _pg_stream_current(stream)
+        _pg_guard(row["session"])
+        _pg_stream_current(stream)
+        return row
+    except BaseException as error:
+        row["failure"] = row["failure"] or error
+        raise _pg_fail(state, error)
+
+
+def _pg_stream_failed(row, error):
+    row["failure"] = row["failure"] or error
+    return _pg_fail(_pg_state(row["session"]), error)
+
+
+def _pg_tar_block(stream, row, count):
+    session, resource, node, stamp = row["session"], row["resource"], stream.node, stream.stamp
+    state = _pg_state(session)
+    _pg_require(type(count) is int and 0 <= count <= MAX_BYTES, "TAR_READ_REQUEST")
+    _pg_require(state["E"]._productive_node_guard(session.binding, node) is node, "TAR_ORIGINAL_NODE")
+    _pg_guard(session)
+    _pg_stream_current(stream)
+    _pg_require(_stamp(os.fstat(resource.owner.fileno())) == stamp, "TAR_METADATA_BEFORE")
+    block = resource.owner.read(count)
+    _pg_stream_current(stream)
+    _pg_require(type(block) is bytes and len(block) <= count and row["count"] + len(block) <= node.bytes,
+        "TAR_READ_BYTES")
+    row["digest"].update(block)
+    row["hex"] = row["digest"].hexdigest()
+    row["count"] += len(block)
+    stream.count = row["count"]
+    _pg_require(_stamp(os.fstat(resource.owner.fileno())) == stamp, "TAR_METADATA_AFTER")
+    _pg_require(state["E"]._productive_node_guard(session.binding, node) is node, "TAR_ORIGINAL_NODE")
+    _pg_guard(session)
+    _pg_stream_current(stream)
+    return block
+
+
+class _ProductiveTarReader:
+    """Hash exactly the bytes delivered to tar, including map/index streams."""
+    def __init__(self, session, resource, node, stamp):
+        self.session, self.resource, self.node, self.stamp = session, resource, node, stamp
+        self.count, self.digest, self.complete = 0, hashlib.sha256(), False
+        _pg_stream_register(self, ("session", "resource", "node", "stamp", "digest"), ("read", "finish"))
+
+    def read(self, count):
+        row = _pg_stream_begin(self)
+        try:
+            return _pg_tar_block(self, row, count)
+        except BaseException as error:
+            raise _pg_stream_failed(row, error)
+        finally:
+            row["busy"] = False
+
+    def finish(self):
+        row = _pg_stream_begin(self)
+        try:
+            _pg_require(_pg_tar_block(self, row, 1) == b"" and row["count"] == self.node.bytes and
+                row["hex"] == self.node.sha256, "TAR_ACTUAL_BYTES_OR_EOF")
+            _pg_note(row["session"], "tar-input-complete", self, row["resource"], self.node, row["count"], row["hex"])
+            _pg_close(row["session"], row["resource"])
+            _pg_stream_current(self)
+            self.complete = row["complete"] = True
+        except BaseException as error:
+            raise _pg_stream_failed(row, error)
+        finally:
+            row["busy"] = False
+
+
+class _ProductiveArchiveWriter:
+    def __init__(self, session, resource):
+        self.session, self.resource, self.count, self.complete = session, resource, 0, False
+        _pg_stream_register(self, ("session", "resource"), ("write", "flush"))
+
+    def write(self, data):
+        row = _pg_stream_begin(self)
+        try:
+            _pg_require(type(data) is bytes and row["count"] + len(data) <= MAX_ARCHIVE_BYTES, "ARCHIVE_OUTPUT_BOUND")
+            returned = row["resource"].owner.write(data)
+            _pg_stream_current(self)
+            _pg_require(type(returned) is int and returned == len(data), "ARCHIVE_SHORT_WRITE")
+            row["count"] += returned
+            self.count = row["count"]
+            _pg_guard(row["session"])
+            _pg_stream_current(self)
+            return returned
+        except BaseException as error:
+            raise _pg_stream_failed(row, error)
+        finally:
+            row["busy"] = False
+
+    def flush(self):
+        row = _pg_stream_begin(self)
+        try:
+            row["resource"].owner.flush()
+            _pg_guard(row["session"])
+            _pg_stream_current(self)
+        except BaseException as error:
+            raise _pg_stream_failed(row, error)
+        finally:
+            row["busy"] = False
+
+
+def _pg_archive(session, root, destination, snapshot):
+    state = _pg_state(session)
+    _pg_require(state["E"]._productive_whole_guard(session.binding) is state["caps"], "ARCHIVE_WHOLE_GUARD")
+    raw, _info = _pg_open(session, destination, write=True)
+    sink = _ProductiveArchiveWriter(session, raw)
+    _pg_stream_current(sink)
+    compressed = gzip.GzipFile(fileobj=sink, mode="wb", filename="", mtime=0)
+    compressed_owner = _pg_keep(session, compressed, "gzip", "gzip", ("close", "write", "flush"))
+    _PRODUCTIVE_RESOURCES[id(compressed_owner)]["links"] = ((compressed, "fileobj", sink), (compressed, "myfileobj", None))
+    state["formats"].append(compressed_owner)
+    _pg_guard(session)
+    _pg_resource_current(compressed_owner)
+    archive = tarfile.open(fileobj=compressed, mode="w|", format=tarfile.PAX_FORMAT)
+    # Retain the actual aggregate and nested return BEFORE any fallible
+    # adoption/pinning. Keep the public factory's original format/buffering;
+    # private _Stream constructor signatures differ between Python versions.
+    state["pending_owners"].append(archive)
+    native_stream = archive.fileobj
+    state["pending_owners"].append(native_stream)
+    _pg_require(type(archive) is tarfile.TarFile and type(native_stream) is tarfile._Stream and
+        archive.fileobj is native_stream and native_stream.fileobj is compressed and
+        archive.mode == native_stream.mode == "w" and native_stream.comptype == "tar" and
+        archive.format == tarfile.PAX_FORMAT and archive._extfileobj is False and
+        native_stream._extfileobj is True and archive.closed is False and native_stream.closed is False,
+        "ORIGINAL_TAR_STREAM_OWNERSHIP")
+    original_ownership = (archive._extfileobj, native_stream._extfileobj)
+    archive._extfileobj = True  # One source-owned transfer, before any next callback.
+    archive_owner = _pg_keep(session, archive, "format-writer", "tar", ("close", "addfile"))
+    stream_owner = _pg_keep(session, native_stream, "tar-stream", "tar-stream", ("close", "write"))
+    # Both owners now owe distinct original direct closes. In particular,
+    # a TarFile.close padding callback cannot credit an early stream flag.
+    _PRODUCTIVE_RESOURCES[id(stream_owner)]["links"] = tuple((native_stream, name, getattr(native_stream, name))
+        for name in ("fileobj", "mode", "comptype", "bufsize", "_extfileobj"))
+    _PRODUCTIVE_RESOURCES[id(archive_owner)]["links"] = tuple((archive, name, getattr(archive, name))
+        for name in ("fileobj", "mode", "format", "_extfileobj"))
+    state["formats"].extend((archive_owner, stream_owner))
+    _pg_require(len(state["pending_owners"]) == 2 and state["pending_owners"][0] is archive and
+        state["pending_owners"][1] is native_stream, "ORIGINAL_TAR_RETURNS_CHANGED")
+    state["pending_owners"].clear()
+    _pg_note(session, "original-tar-stream-direct-ownership-transfer", archive_owner, stream_owner, original_ownership)
+    _pg_guard(session)
+    for name, stamp in sorted(snapshot.items()):
+        node = state["E"]._productive_expected_node(session.binding, name)
+        _pg_require(state["E"]._productive_node_guard(session.binding, node) is node, "ARCHIVE_ORIGINAL_NODE")
+        info = tarfile.TarInfo("evidence/" + name if name else "evidence")
+        info.uid, info.gid, info.uname, info.gname, info.mtime = 0, 0, "", "", 0
+        _pg_guard(session)
+        _pg_resource_current(archive_owner)
+        if stat.S_ISDIR(stamp[2]):
+            info.type, info.mode = tarfile.DIRTYPE, 0o700
+            archive.addfile(info)
+        else:
+            info.mode, info.size = 0o600, stamp[5]
+            resource = _pg_member(session, root, name, snapshot)
+            reader = _ProductiveTarReader(session, resource, node, stamp)
+            _pg_note(session, "tar-input-owner", reader, resource, node, info)
+            _pg_guard(session)
+            _pg_resource_current(archive_owner)
+            _pg_stream_current(reader)
+            archive.addfile(info, reader)
+            _pg_resource_current(archive_owner)
+            reader.finish()
+        _pg_guard(session)
+        _pg_resource_current(archive_owner)
+    # Tar padding and gzip trailers are guarded ordinary work, not cleanup
+    # borrowing a receipt/finish allowance after the input reads have ended.
+    _pg_close(session, archive_owner)
+    _pg_close(session, stream_owner)
+    _pg_close(session, compressed_owner)
+    _pg_guard(session)
+    _pg_resource_current(raw)
+    raw.owner.flush()
+    _pg_guard(session)
+    _pg_resource_current(raw)
+    os.fsync(raw.owner.fileno())
+    _pg_guard(session)
+    _pg_resource_current(raw)
+    actual = os.fstat(raw.owner.fileno())
+    _pg_note(session, "archive-fstat", raw, actual)
+    _pg_require(actual.st_size == sink.count, "ARCHIVE_WRITTEN_SIZE")
+    _pg_close(session, raw)
+    row = _pg_stream_current(sink)
+    sink.complete = row["complete"] = True
+    _pg_require(state["E"]._productive_whole_guard(session.binding) is state["caps"], "ARCHIVE_RETURN_GUARD")
+
+
+def _pg_gpg(session, recipient, arguments, *, output=None, status=False, keyring=None):
+    """The maintained command/spawn, retaining its actual process before return.
+
+    A direct-child wait is NOT native scope retirement; the enclosing original
+    child/parent domain must still prove baseline/quiet/ACK/known-close custody.
+    """
+    state = _pg_state(session)
+    _pg_guard(session, keyring=keyring)
+    environment = _gpg_environment(recipient)
+    _pg_require(type(environment) is dict and all(type(name) is str and type(value) is str
+        for name, value in environment.items()), "GPG_ENVIRONMENT_FIELDS")
+    state["environments"].append((environment, tuple(environment.items())))
+    _pg_require(environment.get(audit_processes.JOB_ENV) == state["validation_view"].source.job_id,
+        "GPG_ENCLOSING_JOB_REQUIRED")
+    _pg_guard(session, keyring=keyring)
+    operation = Path(tempfile.mkdtemp(prefix="gpg-", dir=recipient.work_dir))
+    _pg_note(session, "gpg-operation-created", operation, operation.lstat())
+    _pg_directory(session, operation, empty=True, keyring=keyring)
+    stdout_path = output if output is not None else operation / "stdout"
+    stderr_path, status_path = operation / "stderr", operation / "status"
+    out, _ = _pg_open(session, stdout_path, write=True, keyring=keyring)
+    err, _ = _pg_open(session, stderr_path, write=True, keyring=keyring)
+    status_file, _ = _pg_open(session, status_path, write=True, keyring=keyring)
+    command = _gpg_command(recipient)
+    if status:
+        _pg_resource_current(status_file)
+        command += ["--status-fd", str(status_file.owner.fileno())]
+        _pg_resource_current(status_file)
+    command += arguments
+    _pg_require(type(command) is list and all(type(value) is str for value in command) and
+        type(environment) is dict and all(type(name) is str and type(value) is str
+            for name, value in environment.items()), "GPG_COMMAND_FIELDS")
+    state["commands"].append((command, tuple(command), environment, tuple(environment.items())))
+    _pg_guard(session, keyring=keyring)
+    for item in (out, err, status_file):
+        _pg_resource_current(item)
+    process = _spawn_gpg(command, recipient, environment, out.owner, err.owner, status_file.owner, status)
+    resource = _pg_keep(session, process, "process", "gpg", ("poll", "wait", "terminate", "kill"))
+    state["pending_process"] = resource
+    _pg_require(process.args is command and type(process.pid) is int and process.pid > 0, "GPG_ACTUAL_PROCESS")
+    _PRODUCTIVE_RESOURCES[id(resource)]["links"] = ((process, "args", command), (process, "pid", process.pid))
+    _pg_note(session, "actual-spawn-return", resource, command, process.pid)
+    while True:
+        _pg_guard(session, keyring=keyring)
+        _pg_resource_current(resource)
+        code = process.poll()
+        _pg_note(session, "actual-process-poll", resource, code)
+        _pg_require(code is None or type(code) is int, "GPG_POLL_RETURN")
+        _pg_resource_current(resource)
+        sizes = []
+        for item in (out, err, status_file):
+            _pg_resource_current(item)
+            sizes.append(os.fstat(item.owner.fileno()).st_size)
+            _pg_resource_current(item)
+        _pg_require(sizes[0] <= (MAX_CIPHERTEXT_BYTES if output is not None else MAX_DIAGNOSTIC_BYTES) and
+            sizes[1] <= MAX_DIAGNOSTIC_BYTES and sizes[2] <= MAX_DIAGNOSTIC_BYTES, "GPG_OUTPUT_BOUND")
+        _pg_guard(session, keyring=keyring)
+        if code is not None:
+            break
+        time.sleep(0.025)
+    row = _pg_resource_current(resource)
+    row["attempted"] = True
+    returned = process.wait()
+    row["return_fact"] = ("DIRECT_CHILD_WAIT_RETURN", returned)
+    _pg_note(session, "actual-direct-child-wait-return", resource, returned)
+    _pg_require(type(returned) is int and returned == code == 0, "GPG_NATURAL_EXIT")
+    completion = _pg_guard(session, keyring=keyring)
+    _pg_closed(session, resource, "DIRECT_CHILD_WAIT_ONLY_PARENT_OWNS_DOMAIN", returned, completion)
+    state["pending_process"] = None
+    for item in (out, err, status_file):
+        _pg_guard(session, keyring=keyring)
+        _pg_resource_current(item)
+        item.owner.flush()
+        _pg_guard(session, keyring=keyring)
+        _pg_resource_current(item)
+        os.fsync(item.owner.fileno())
+        _pg_close(session, item, keyring=keyring)
+    record = (json.dumps({"schema": 1, "waitExitCode": returned, "retired": True, "interruption": None},
+        sort_keys=True) + "\n").encode("ascii")
+    _pg_write(session, operation / "process.json", record, MAX_DIAGNOSTIC_BYTES, keyring=keyring)
+    readback, _ = _pg_read(session, operation / "process.json", MAX_DIAGNOSTIC_BYTES, keyring=keyring)
+    _pg_require(readback == record, "GPG_PROCESS_RECORD_READBACK")
+    # The original stderr remains private even on successful completion.
+    _pg_read(session, stderr_path, MAX_DIAGNOSTIC_BYTES, keyring=keyring)
+    stdout = b"" if output is not None else _pg_read(session, stdout_path, MAX_DIAGNOSTIC_BYTES, keyring=keyring)[0]
+    status_raw, _ = _pg_read(session, status_path, MAX_DIAGNOSTIC_BYTES, keyring=keyring)
+    _pg_guard(session, keyring=keyring)
+    return stdout, status_raw
+
+
+def _pg_directory(session, path, *, empty=False, identity=None, keyring=None):
+    """Own the actual verification descriptor and optional enumeration handle."""
+    _pg_guard(session, keyring=keyring)
+    checked = _private_directory(path)
+    _pg_require(str(checked) == str(path), "DIRECTORY_PATH_CHANGED")
+    _pg_guard(session, keyring=keyring)
+    before = path.lstat()
+    _pg_note(session, "directory-path-stat", path, before)
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    resource = _pg_keep(session, fd, "descriptor", "verified-directory")
+    actual = os.fstat(fd)
+    _pg_note(session, "verified-directory-fstat", resource, actual)
+    _pg_require(_stamp(actual) == _stamp(before) and
+        (identity is None or (actual.st_dev, actual.st_ino) == identity), "DIRECTORY_IDENTITY_CHANGED")
+    _pg_guard(session, keyring=keyring)
+    if empty:
+        _pg_resource_current(resource)
+        iterator = os.scandir(fd)
+        enumeration = _pg_keep(session, iterator, "scandir", "new-empty-directory", ("close", "__next__", "__iter__"))
+        _pg_resource_current(enumeration)
+        try:
+            entry = next(iterator)
+        except StopIteration:
+            entry = None
+        _pg_note(session, "new-directory-enumeration", enumeration, entry)
+        _pg_require(entry is None, "DIRECTORY_NOT_EMPTY")
+        _pg_close(session, enumeration, keyring=keyring)
+    _pg_resource_current(resource)
+    _pg_require(_stamp(os.fstat(fd)) == _stamp(before) and _stamp(path.lstat()) == _stamp(before),
+        "DIRECTORY_VERIFICATION_CHANGED")
+    _pg_close(session, resource, keyring=keyring)
+    return actual
+
+
+def _pg_retain_recipient(session, recipient):
+    state = _pg_state(session)
+    _pg_require(type(recipient) is Recipient, "RECIPIENT_TYPE")
+    paths = tuple((path, type(path), str(path)) for path in
+        (recipient.work_dir, recipient.home, recipient.executable))
+    state["recipients"].append((recipient, _pg_pin(recipient), paths))
+
+
+def _validate_initial_productive(binding):
+    """One registered child validation using the maintained public-only backend."""
+    session = _pg_new(binding, "validation")
+    state, view = _pg_state(session), binding.view
+    state["validation_view"] = view
+    try:
+        work = view.work  # SAME borrowed concrete PosixPath, not a reconstructed owner.
+        identity = _pg_directory(session, work, empty=True)
+        _pg_guard(session)
+        policy = json.loads(view.policy_raw)  # E has already authenticated these SAME original bytes.
+        fingerprint = policy["recipient"]["fingerprint"]
+        _pg_require(type(fingerprint) is str and re.fullmatch(r"[0-9A-F]{40}", fingerprint), "POLICY_FINGERPRINT")
+        packets = _public_armor(view.public_key_raw)
+        _pg_guard(session)
+        installed = shutil.which("gpg")
+        _pg_require(installed is not None, "INSTALLED_GPG_REQUIRED")
+        executable = Path(installed).resolve(strict=True)
+        _pg_require(executable.is_file() and os.access(executable, os.X_OK), "INSTALLED_GPG_UNAVAILABLE")
+        _pg_guard(session)
+        home = work / "gnupg"
+        for directory in (home, work / "tmp"):
+            _pg_guard(session)
+            returned = directory.mkdir(mode=0o700)
+            _pg_note(session, "actual-mkdir-return", directory, returned)
+            _pg_directory(session, directory, empty=True)
+        for name, raw in (("recipient.asc", view.public_key_raw), ("recipient.gpg", packets)):
+            native = _pg_write(session, work / name, raw, MAX_KEY_BYTES)
+            actual, read_native = _pg_read(session, work / name, MAX_KEY_BYTES)
+            _pg_require(actual == raw and read_native == native, "PUBLIC_KEY_COPY_READBACK")
+        provisional = Recipient(work, home, executable, fingerprint, "", 0,
+            hashlib.sha256(view.public_key_raw).hexdigest(), (identity.st_dev, identity.st_ino))
+        _pg_retain_recipient(session, provisional)
+        common = ["--with-colons", "--with-fingerprint", "--with-subkey-fingerprint"]
+        shown, _ = _pg_gpg(session, provisional, common + ["--import-options", "show-only", "--import",
+            str(work / "recipient.asc")])
+        encryption_fingerprint, expires_at = _key_identity(shown, fingerprint)
+        _pg_guard(session)
+        selected, _ = _pg_gpg(session, provisional, common + ["--list-keys"])
+        _pg_require(_key_identity(selected, fingerprint) == (encryption_fingerprint, expires_at),
+            "PUBLIC_KEY_SELECTION_CHANGED")
+        recipient = dataclasses.replace(provisional, encryption_fingerprint=encryption_fingerprint, expires_at=expires_at)
+        _pg_retain_recipient(session, recipient)
+        _pg_directory(session, work, identity=provisional.work_identity)
+        known = _finish_initial_productive(session, binding)
+        result = _ProductiveValidationReturn(binding, session, recipient, known.observations, known)
+        _pg_register_result(session, result)
+        _PRODUCTIVE_RECIPIENTS[id(recipient)] = result
+        return _checked_productive_validation_return(result, binding)
+    except BaseException as error:
+        _pg_abort(session, error)
+        raise state["failure"]
+
+
+class _ProductiveCipherReader:
+    """The pathless maintained packet parser receives a guarded original stream."""
+    def __init__(self, session, resource, stamp):
+        self.session, self.resource, self.stamp = session, resource, stamp
+        self.size, self.count, self.complete = stamp[5], 0, False
+        _pg_stream_register(self, ("session", "resource", "stamp", "size"), ("read", "seek", "tell"))
+
+    def _current(self, row):
+        _pg_stream_current(self)
+        _pg_require(_stamp(os.fstat(row["resource"].owner.fileno())) == self.stamp and
+            row["resource"].owner.tell() == row["count"], "CIPHERTEXT_NATIVE_CHANGED")
+
+    def read(self, count):
+        row = _pg_stream_begin(self)
+        try:
+            _pg_require(type(count) is int and 0 <= count <= MAX_CIPHERTEXT_BYTES, "CIPHERTEXT_READ_BOUND")
+            self._current(row)
+            raw = row["resource"].owner.read(count)
+            _pg_stream_current(self)
+            _pg_require(type(raw) is bytes and len(raw) <= count and row["count"] + len(raw) <= self.size,
+                "CIPHERTEXT_READ_CHANGED")
+            row["count"] += len(raw)
+            self.count = row["count"]
+            _pg_guard(row["session"])
+            self._current(row)
+            return raw
+        except BaseException as error:
+            raise _pg_stream_failed(row, error)
+        finally:
+            row["busy"] = False
+
+    def seek(self, offset, whence=os.SEEK_SET):
+        row = _pg_stream_begin(self)
+        try:
+            _pg_require(type(offset) is int and type(whence) is int and whence in (os.SEEK_SET, os.SEEK_CUR),
+                "CIPHERTEXT_SEEK")
+            self._current(row)
+            expected = offset if whence == os.SEEK_SET else row["count"] + offset
+            _pg_require(0 <= expected <= self.size, "CIPHERTEXT_SEEK_BOUND")
+            returned = row["resource"].owner.seek(offset, whence)
+            _pg_stream_current(self)
+            _pg_require(type(returned) is int and returned == expected, "CIPHERTEXT_SEEK_RETURN")
+            self.count = row["count"] = returned
+            _pg_guard(row["session"])
+            self._current(row)
+            return returned
+        except BaseException as error:
+            raise _pg_stream_failed(row, error)
+        finally:
+            row["busy"] = False
+
+    def tell(self):
+        row = _pg_stream_begin(self)
+        try:
+            self._current(row)
+            _pg_guard(row["session"])
+            self._current(row)
+            return row["count"]
+        except BaseException as error:
+            raise _pg_stream_failed(row, error)
+        finally:
+            row["busy"] = False
+
+
+def _pg_ciphertext(session, path, recipient, *, expected=None):
+    resource, original = _pg_open(session, path)
+    native = ("posix", *_stamp(original))
+    _pg_require(expected is None or native == expected, "CIPHERTEXT_SOURCE_CHANGED")
+    reader = _ProductiveCipherReader(session, resource, _stamp(original))
+    _pg_note(session, "ciphertext-reader", reader, resource, original)
+    _ciphertext_stream(reader, original.st_size, recipient.encryption_fingerprint)
+    reader.seek(0)
+    digest, count = hashlib.sha256(), 0
+    while True:
+        raw = reader.read(1024 * 1024)
+        if not raw:
+            break
+        count += len(raw)
+        digest.update(raw)
+    _pg_require(count == original.st_size and _stamp(path.lstat()) == _stamp(original), "CIPHERTEXT_COMPLETE_READBACK")
+    _pg_note(session, "ciphertext-shape-hash-return", reader, resource, digest.hexdigest(), count, native)
+    _pg_close(session, resource)
+    row = _pg_stream_current(reader)
+    reader.complete = row["complete"] = True
+    return digest.hexdigest(), count, native
+
+
+def _pg_publish(session, ciphertext, recipient, manifest_raw, digest, size, native):
+    state, view = _pg_state(session), session.binding.view
+    _pg_require(state["E"]._productive_whole_guard(session.binding) is state["caps"], "PUBLICATION_WHOLE_GUARD")
+    _pg_guard(session)
+    _path(view.output)
+    _pg_directory(session, view.output.parent)
+    _pg_require(not os.path.lexists(view.output), "EXISTING_OUTPUT")
+    _pg_guard(session)
+    returned = view.output.mkdir(mode=0o700)
+    # Retain the exclusive reservation immediately. A failed later check is
+    # NOT permission to delete some other invocation's directory or evidence.
+    created = view.output.lstat()
+    state["output"] = (view.output, created)
+    _pg_note(session, "actual-output-mkdir-return", view.output, returned, created)
+    _pg_directory(session, view.output, empty=True, identity=(created.st_dev, created.st_ino))
+    source, original = _pg_open(session, ciphertext)
+    _pg_require(("posix", *_stamp(original)) == native, "PUBLICATION_PRIVATE_NATIVE_CHANGED")
+    target, _ = _pg_open(session, view.output / ARTIFACT, write=True)
+    reader = _ProductiveCipherReader(session, source, _stamp(original))
+    joined, count = hashlib.sha256(), 0
+    while True:
+        block = reader.read(1024 * 1024)
+        if not block:
+            break
+        _pg_guard(session)
+        _pg_resource_current(target)
+        returned = target.owner.write(block)
+        _pg_require(type(returned) is int and returned == len(block), "PUBLICATION_SHORT_WRITE")
+        _pg_guard(session)
+        _pg_resource_current(target)
+        joined.update(block)
+        count += len(block)
+    _pg_require(count == size and joined.hexdigest() == digest, "PUBLICATION_SOURCE_STREAM_CHANGED")
+    _pg_note(session, "publication-actual-copy-return", source, target, count, joined.hexdigest())
+    _pg_guard(session)
+    _pg_resource_current(target)
+    target.owner.flush()
+    _pg_guard(session)
+    _pg_resource_current(target)
+    os.fsync(target.owner.fileno())
+    _pg_guard(session)
+    _pg_close(session, target)
+    _pg_close(session, source)
+    row = _pg_stream_current(reader)
+    reader.complete = row["complete"] = True
+    _pg_write(session, view.output / MANIFEST, manifest_raw, 64 * 1024)
+    actual_digest, actual_size, actual_native = _pg_ciphertext(session, view.output / ARTIFACT, recipient)
+    actual_manifest, manifest_native = _pg_read(session, view.output / MANIFEST, 64 * 1024)
+    _pg_require(actual_digest == digest and actual_size == size and actual_manifest == manifest_raw,
+        "PUBLICATION_INDEPENDENT_READBACK_CHANGED")
+    _pg_output_roster(session, actual_native, manifest_native)
+    state["public_native"] = (actual_native, manifest_native)
+    _pg_directory(session, view.output, identity=(created.st_dev, created.st_ino))
+    return _ProductiveArtifact(ARTIFACT, actual_digest, actual_size, actual_native)
+
+
+def _pg_output_roster(session, artifact_native, manifest_native):
+    # The public ciphertext has its existing576MiB cap, NOT the512MiB
+    # plaintext-snapshot cap. This separate EXACT two-file roster does not
+    # widen or repurpose the input snapshot or its10,000-member bound.
+    state = _pg_state(session)
+    output, created = state["output"]
+    _pg_guard(session)
+    fd = os.open(output, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    directory = _pg_keep(session, fd, "descriptor", "public-roster-root")
+    before = os.fstat(fd)
+    _pg_require((before.st_dev, before.st_ino) == (created.st_dev, created.st_ino) and
+        stat.S_ISDIR(before.st_mode) and before.st_uid == os.getuid() and not before.st_mode & 0o077,
+        "PUBLIC_OUTPUT_ROOT_CHANGED")
+    _pg_guard(session)
+    _pg_resource_current(directory)
+    iterator = os.scandir(fd)
+    enumeration = _pg_keep(session, iterator, "scandir", "public-roster", ("close", "__next__", "__iter__"))
+    found, expected = {}, {ARTIFACT: artifact_native, MANIFEST: manifest_native}
+    while True:
+        _pg_guard(session)
+        _pg_resource_current(enumeration)
+        try:
+            entry = next(iterator)
+        except StopIteration:
+            break
+        _pg_require(entry.name in expected and entry.name not in found, "PUBLIC_OUTPUT_ROSTER")
+        info = entry.stat(follow_symlinks=False)
+        native = ("posix", *_stamp(info))
+        _pg_note(session, "public-output-entry", entry, info)
+        _pg_require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and info.st_nlink == 1 and
+            not info.st_mode & 0o077 and native == expected[entry.name], "PUBLIC_OUTPUT_NATIVE_CHANGED")
+        found[entry.name] = native
+    _pg_resource_current(directory)
+    _pg_require(set(found) == set(expected) and _stamp(os.fstat(fd)) == _stamp(before) and
+        _stamp(output.lstat()) == _stamp(before), "PUBLIC_OUTPUT_FINAL_ROSTER")
+    _pg_close(session, enumeration)
+    _pg_close(session, directory)
+    _pg_note(session, "public-output-roster-return", tuple(found.items()), before)
+
+
+def _export_initial_productive(binding):
+    """Only a genuine E/PC child archive, never paths or an ordinary-CI fallback."""
+    session = _pg_new(binding, "export")
+    state, view = _pg_state(session), binding.view
+    try:
+        recipient = view.recipient
+        validation = _PRODUCTIVE_RECIPIENTS.get(id(recipient))
+        _pg_require(type(validation) is _ProductiveValidationReturn and validation.recipient is recipient and
+            validation.binding.view.child is view.child, "ORIGINAL_RECIPIENT_RETURN_REQUIRED")
+        _pg_require(_checked_productive_validation_return(validation, validation.binding) is validation,
+            "ORIGINAL_RECIPIENT_RETURN_CHANGED")
+        state["validation_result"], state["validation_view"] = validation, validation.binding.view
+        _pg_retain_recipient(session, recipient)
+        _pg_directory(session, view.payload)
+        _pg_directory(session, recipient.work_dir, identity=recipient.work_identity)
+        _pg_directory(session, recipient.home)
+        _disjoint(view.payload, recipient.work_dir, view.output)
+        key, _ = _pg_read(session, recipient.work_dir / "recipient.asc", MAX_KEY_BYTES)
+        ring, _ = _pg_read(session, recipient.work_dir / "recipient.gpg", MAX_KEY_BYTES)
+        _pg_require(hashlib.sha256(key).hexdigest() == recipient.key_sha256 and _public_armor(key) == ring,
+            "RECIPIENT_ORIGINAL_BYTES_CHANGED")
+        first_resource = state["resource_count"]
+        cap = state["E"]._productive_keyring_begin(binding)
+        state["active_keyring"] = cap
+        listing, _ = _pg_gpg(session, recipient, ["--with-colons", "--with-fingerprint", "--with-subkey-fingerprint",
+            "--list-keys"], keyring=cap)
+        _pg_require(_key_identity(listing, recipient.fingerprint) ==
+            (recipient.encryption_fingerprint, recipient.expires_at), "RECIPIENT_KEYRING_CHANGED")
+        _pg_guard(session, keyring=cap)
+        for resource in state["resources"][first_resource:]:
+            row = _pg_resource_current(resource)
+            _pg_require(row["keyring"] is cap and row["close"] is not None and
+                row["close"].completion[0] is cap, "KEYRING_ORIGINAL_RESOURCE_CLOSE")
+        _pg_require(state["E"]._productive_keyring_complete(binding, cap) is cap, "KEYRING_COMPLETION_CHANGED")
+        state["active_keyring"] = None
+        _pg_guard(session)
+        snapshot = _pg_snapshot(session, view.payload)
+        state["E"]._productive_check_snapshot(binding, snapshot)
+        _pg_guard(session)
+        private = Path(tempfile.mkdtemp(prefix="export-", dir=recipient.work_dir))
+        created = private.lstat()
+        state["private"] = (private, created)
+        _pg_note(session, "actual-private-directory", private, created)
+        _pg_directory(session, private, empty=True)
+        plaintext, ciphertext = private / "evidence.tar.gz", private / ARTIFACT
+        _pg_archive(session, view.payload, plaintext, snapshot)
+        after = _pg_snapshot(session, view.payload)
+        state["E"]._productive_check_snapshot(binding, after)
+        _pg_require(after == snapshot, "ARCHIVE_SNAPSHOT_CHANGED")
+        _, status = _pg_gpg(session, recipient, ["--cipher-algo", "AES256", "--compress-algo", "none",
+            "--trust-model", "always", "--no-encrypt-to", "--recipient", recipient.encryption_fingerprint + "!",
+            "--output", "-", "--encrypt", str(plaintext)], output=ciphertext, status=True)
+        lines = status.splitlines()
+        _pg_require(sum(line.startswith(b"[GNUPG:] BEGIN_ENCRYPTION ") for line in lines) == 1 and
+            lines.count(b"[GNUPG:] END_ENCRYPTION") == 1 and not any(line.startswith(
+                (b"[GNUPG:] FAILURE", b"[GNUPG:] ERROR")) for line in lines), "GPG_ENCRYPTION_NOT_COMPLETE")
+        digest, size, native = _pg_ciphertext(session, ciphertext, recipient)
+        manifest_raw = state["E"]._productive_manifest(binding, digest, size)
+        _pg_require(type(manifest_raw) is bytes and 0 < len(manifest_raw) <= 64 * 1024, "MANIFEST_BYTES")
+        artifact = _pg_publish(session, ciphertext, recipient, manifest_raw, digest, size, native)
+        state["artifact_pin"] = _pg_pin(artifact)
+        final = _pg_snapshot(session, view.payload)
+        state["E"]._productive_check_snapshot(binding, final)
+        _pg_require(final == snapshot, "FINAL_SNAPSHOT_CHANGED")
+        _pg_require(state["E"]._productive_whole_guard(binding) is state["caps"], "EXPORT_FINAL_WHOLE_GUARD")
+        known = _finish_initial_productive(session, binding)
+        result = _ProductiveExportReturn(binding, session, manifest_raw, artifact, known.observations, known)
+        _pg_register_result(session, result)
+        return _checked_productive_export_return(result, binding)
+    except BaseException as error:
+        _pg_abort(session, error)
+        raise state["failure"]
+
+
+def _pg_cleanup(session):
+    state = _pg_state(session)
+    _pg_require(state["mode"] == "export" and state["private"] is not None and
+        not state.get("cleanup_attempted", False), "TRANSIENT_CLEANUP_ONCE")
+    state["cleanup_attempted"] = True
+    private, created = state["private"]
+    _pg_directory(session, private, identity=(created.st_dev, created.st_ino))
+    for name in ("evidence.tar.gz", ARTIFACT):
+        written = state["written"].get(str(private / name))
+        _pg_require(type(written) is tuple, "TRANSIENT_NOT_OWNED")
+        path, _initial, resource = written
+        row = _pg_resource_current(resource)
+        _pg_require(row["close"] is not None and resource.owner.closed is True and "last_stat" in row,
+            "TRANSIENT_WRITER_NOT_CLOSED")
+        _pg_guard(session)
+        current = path.lstat()
+        _pg_note(session, "transient-before-unlink", path, current)
+        _pg_require(_stamp(current) == _stamp(row["last_stat"]) and stat.S_ISREG(current.st_mode) and
+            current.st_uid == os.getuid() and current.st_nlink == 1, "TRANSIENT_IDENTITY_CHANGED")
+        _pg_guard(session)
+        _pg_require(str(path) not in state["removal_attempts"], "TRANSIENT_UNLINK_ONCE")
+        state["removal_attempts"].add(str(path))
+        returned = os.unlink(path)
+        _pg_note(session, "actual-transient-unlink-return", path, returned)
+        _pg_guard(session)
+        _pg_require(not os.path.lexists(path), "TRANSIENT_UNLINK_NOT_OBSERVED")
+    _pg_directory(session, private, empty=True, identity=(created.st_dev, created.st_ino))
+    _pg_guard(session)
+    _pg_require(str(private) not in state["removal_attempts"], "TRANSIENT_RMDIR_ONCE")
+    state["removal_attempts"].add(str(private))
+    returned = os.rmdir(private)
+    observation = _pg_note(session, "actual-transient-rmdir-return", private, returned)
+    _pg_guard(session)
+    _pg_require(not os.path.lexists(private), "TRANSIENT_RMDIR_NOT_OBSERVED")
+    state["cleanup_return"] = observation
+
+
+def _pg_abort_files(session):
+    """Preserve normal exclusive transient/output cleanup after KNOWN closure.
+
+    No cleanup of caller inputs, diagnostics, keys, a replaced inode, an
+    attempted removal, or material potentially used by an unretired child.
+    This failure-only cleanup cannot register successful custody.
+    """
+    state = _pg_state(session)
+    if state["unknown"] or state["pending_process"] is not None or state["pending_owners"]:
+        return
+    for saved, names in ((state["output"], (MANIFEST, ARTIFACT)),
+            (state["private"], ("evidence.tar.gz", ARTIFACT))):
+        if saved is None:
+            continue
+        directory, created = saved
+        if str(directory) in state["removal_attempts"]:
+            continue
+        _pg_require(time.monotonic() < state["caps"].operationFinishEndLocal, "FAILED_CLEANUP_EXPIRED")
+        info = directory.lstat()
+        _pg_require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and not info.st_mode & 0o077 and
+            (info.st_dev, info.st_ino) == (created.st_dev, created.st_ino), "FAILED_CLEANUP_DIRECTORY_CHANGED")
+        for name in names:
+            path = directory / name
+            if str(path) in state["removal_attempts"]:
+                continue
+            written = state["written"].get(str(path))
+            if written is None:
+                continue  # No declaration can authorize unlink of an unowned file.
+            _path(path)
+            row = _pg_resource_current(written[2])
+            _pg_require(row["attempted"] and row["return_fact"] is not None and
+                row["resource"].owner.closed is True and "last_stat" in row, "FAILED_CLEANUP_WRITER_NOT_CLOSED")
+            current = path.lstat()
+            _pg_require(_stamp(current) == _stamp(row["last_stat"]) and stat.S_ISREG(current.st_mode) and
+                current.st_uid == os.getuid() and current.st_nlink == 1, "FAILED_CLEANUP_FILE_CHANGED")
+            _pg_require(time.monotonic() < state["caps"].operationFinishEndLocal, "FAILED_CLEANUP_EXPIRED")
+            state["removal_attempts"].add(str(path))
+            returned = os.unlink(path)
+            _pg_note(session, "failure-only-unlink-return", path, returned)
+        current = directory.lstat()
+        _pg_require((current.st_dev, current.st_ino) == (created.st_dev, created.st_ino) and
+            stat.S_ISDIR(current.st_mode) and time.monotonic() < state["caps"].operationFinishEndLocal,
+            "FAILED_CLEANUP_DIRECTORY_CHANGED")
+        state["removal_attempts"].add(str(directory))
+        returned = os.rmdir(directory)  # Also refuses extra/unowned members, with no recursive deletion.
+        _pg_note(session, "failure-only-rmdir-return", directory, returned)
+
+
+def _pg_abort(session, original_error):
+    """Failure-only owned cleanup: no trailers, new receipt, publication or retry.
+
+    Unknown/attempted closes stay quarantined. The original enclosing native
+    owner still owes full process-tree retirement; a Popen wait is not that
+    proof. Failure cleanup can never create a successful registered result.
+    """
+    state = _pg_state(session)
+    _pg_fail(state, original_error)
+    if state.get("abort_attempted", False):
+        return
+    state["abort_attempted"], state["phase"] = True, "FAILED"
+    if not all(getattr(owner, name, None) is original for owner, name, original in state["functions"]):
+        state["unknown"] = True
+        _PRODUCTIVE_QUARANTINE.append(session)
+        return
+    pending = state["pending_process"]
+    if pending is not None:
+        try:
+            row = _pg_resource_current(pending)
+            if row["attempted"]:
+                # The original wait already ran. Retain its actual return or
+                # uncertainty; never call it a second time to manufacture proof.
+                if row["return_fact"] is None:
+                    state["unknown"] = True
+            else:
+                process = pending.owner
+                methods = {item[0]: item[2] for item in pending.methods}
+                code = methods["poll"]()
+                _pg_resource_current(pending)
+                _pg_note(session, "failure-only-poll-return", pending, code)
+                if code is None:
+                    methods["terminate"]()
+                    _pg_resource_current(pending)
+                    methods["kill"]()
+                _pg_resource_current(pending)
+                # A single cleanup wait, clipped to the ORIGINAL absolute end
+                # and the existing direct-child five-second bound. No new cap.
+                remaining = max(0.0, min(5.0, state["caps"].operationFinishEndLocal - time.monotonic()))
+                row["attempted"] = True
+                returned = methods["wait"](timeout=remaining)
+                row["return_fact"] = ("FAILED_OPERATION_DIRECT_CHILD_WAIT_RETURN", returned)
+                _pg_note(session, "failure-only-direct-wait-return", pending, returned)
+        except BaseException:
+            state["unknown"] = True
+    for resource in reversed(state["resources"]):
+        try:
+            row = _pg_resource_current(resource)
+            if row["attempted"] or row["transferred"] is not None:
+                if row["attempted"] and row["return_fact"] is None:
+                    state["unknown"] = True
+                continue
+            if resource.kind not in ("descriptor", "file", "scandir") or row["transfer_attempted"]:
+                # Closing tar/gzip after expiry writes padding/trailers. Keep
+                # those actual objects alive, close only owned underlying I/O.
+                _PRODUCTIVE_QUARANTINE.append(resource)
+                if row["transfer_attempted"]:
+                    state["unknown"] = True
+                continue
+            if resource.kind == "file":
+                row["last_stat"] = os.fstat(resource.owner.fileno())
+            row["attempted"] = True
+            if resource.kind == "descriptor":
+                returned = os.close(resource.owner)
+            else:
+                returned = next(item[2] for item in resource.methods if item[0] == "close")()
+            row["return_fact"] = ("FAILURE_ONLY_CLOSE_RETURN", returned)
+            _pg_note(session, "failure-only-close-return", resource, returned)
+        except BaseException:
+            state["unknown"] = True
+            _PRODUCTIVE_QUARANTINE.append(resource)
+    try:
+        _pg_abort_files(session)
+    except BaseException:
+        state["unknown"] = True
+    _PRODUCTIVE_QUARANTINE.append(session)
+
+
+def _finish_initial_productive(session, binding):
+    state = _pg_state(session)
+    try:
+        _pg_require(session.binding is binding and state["phase"] == "WORK" and
+            not state["finish_attempted"] and state["finish"] is None, "FINISH_ONCE")
+        state["finish_attempted"] = True  # Before callbacks/reentry, not a known close.
+        _pg_guard(session)
+        if state["mode"] == "export":
+            _pg_cleanup(session)
+            _pg_output_roster(session, *state["public_native"])
+        _pg_passive(state, whole=True)
+        _pg_require(state["pending_process"] is None and state["active_keyring"] is None, "UNFINISHED_PROCESS_OR_KEYRING")
+        for resource in state["resources"]:
+            row = _pg_resource_current(resource)
+            _pg_require(row["attempted"] and row["close"] is not None and row["return_fact"] is not None,
+                "NATIVE_CLOSE_NOT_KNOWN")
+            if resource.kind in ("file", "format-writer", "tar-stream"):
+                _pg_require(resource.owner.closed is True, "NATIVE_RESOURCE_NOT_CLOSED")
+            if resource.kind == "gzip":
+                _pg_require(resource.owner.fileobj is None, "GZIP_NOT_CLOSED")
+            if resource.kind == "process":
+                _pg_require(type(resource.owner.returncode) is int and resource.owner.returncode == row["close"].returned == 0,
+                    "PROCESS_WAIT_CHANGED")
+        _pg_require(all(_pg_stream_current(stream)["complete"] for stream in state["streams"]), "STREAM_NOT_COMPLETE")
+        completion = _pg_guard(session)
+        known = _ProductiveKnownClose(session, tuple(state["resources"]), tuple(state["observations"]), completion)
+        rows = tuple((row, tuple(row.items())) for resource in state["resources"]
+            for row in (_PRODUCTIVE_RESOURCES[id(resource)],))
+        _PRODUCTIVE_FINISHES[id(known)] = (known, state, _pg_pin(known), rows)
+        state["finish"], state["phase"] = known, "CLOSED"
+        return known
+    except BaseException as error:
+        raise _pg_fail(state, error)
+
+
+def _pg_register_result(session, result):
+    state = _pg_state(session)
+    _pg_require(state["phase"] == "CLOSED" and state["result"] is None and result.session is session and
+        result.binding is session.binding and result.known_close is state["finish"] and
+        result.observations is state["finish"].observations, "RESULT_ORIGINAL_CLOSE_REQUIRED")
+    state["result"] = result
+    _PRODUCTIVE_RESULTS[id(result)] = (result, state, _pg_pin(result))
+
+
+def _pg_checked_result(result, binding, mode):
+    """Strictly passive original-return check. No clock, root reopen or E call."""
+    registration = _PRODUCTIVE_RESULTS.get(id(result))
+    kind = _ProductiveValidationReturn if mode == "validation" else _ProductiveExportReturn
+    _pg_require(type(result) is kind and type(registration) is tuple and registration[0] is result,
+        "RESULT_NOT_ORIGINAL")
+    state = registration[1]
+    try:
+        _pg_require(state["mode"] == mode and state["result"] is result and result.binding is binding and
+            result.session is state["session"] and state["session"].binding is binding and state["phase"] == "CLOSED",
+            "RESULT_BINDING_CHANGED")
+        _pg_passive(state, whole=True)
+        _pg_pin_current(registration[2])
+        known = state["finish"]
+        original = _PRODUCTIVE_FINISHES.get(id(known))
+        _pg_require(type(original) is tuple and original[0] is known and original[1] is state and
+            result.known_close is known and known.session is result.session and result.observations is known.observations and
+            len(known.resources) == len(state["resources"]) and
+            all(left is right for left, right in zip(known.resources, state["resources"])) and
+            len(known.observations) == len(state["observations"]) and
+            all(left is right for left, right in zip(known.observations, state["observations"])), "KNOWN_CLOSE_CHANGED")
+        _pg_pin_current(original[2])
+        for row, fields in original[3]:
+            _pg_require(set(row) == {name for name, _ in fields} and all(row[name] is value for name, value in fields),
+                "ORIGINAL_RESOURCE_CLOSE_CHANGED")
+        if mode == "validation":
+            _pg_require(any(recipient is result.recipient for recipient, _pin, _paths in state["recipients"]),
+                "VALIDATED_RECIPIENT_CHANGED")
+        else:
+            _pg_pin_current(state["artifact_pin"])
+            _pg_require(result.artifact is state["artifact_pin"][0] and state.get("cleanup_return") is not None and
+                result.artifact.native is state["public_native"][0], "EXPORTED_ARTIFACT_CHANGED")
+        return result
+    except BaseException as error:
+        raise _pg_fail(state, error)
+
+
+def _checked_productive_validation_return(result, binding):
+    return _pg_checked_result(result, binding, "validation")
+
+
+def _checked_productive_export_return(result, binding):
+    return _pg_checked_result(result, binding, "export")
 
 
 def main() -> int:

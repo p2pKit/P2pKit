@@ -13,15 +13,56 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hosted_initial_recipient_productive as P
 
 
+def _final_child(argv):
+    """Closed canonical new argv only; old private/public routes are unchanged."""
+    PC, CD = P._final_modules()
+    operations = {
+        "_final-authority-pre": PC.productive_authority_pre_child,
+        "_final-authority-post": PC.productive_authority_post_child,
+        "_final-crypto": PC.productive_crypto_child,
+    }
+    P.require(type(argv) is list and argv and argv[0] in operations, "FINAL_CHILD_ROUTE")
+    flags = CD.FINAL_CRYPTO_CAP_FLAGS if argv[0] == "_final-crypto" else CD.FINAL_AUTHORITY_CAP_FLAGS
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    parser.add_argument("operation", choices=tuple(operations))
+    ordered = ("--context-sha256", "--minimum-ns", *flags, "--original-boot-digest",
+        "--clock-role", "--clock-domain", "--clock-ticks-per-second")
+    for flag in ordered:
+        parser.add_argument(flag, required=True)
+    args = parser.parse_args(argv)
+    expected = [args.operation]
+    for flag in ordered:
+        expected.extend((flag, getattr(args, flag[2:].replace("-", "_"))))
+    P.require(argv == expected, "FINAL_CHILD_CANONICAL_ARGV")
+
+    def number(flag):
+        value = getattr(args, flag[2:].replace("-", "_"))
+        P.require(type(value) is str and re.fullmatch(r"0|[1-9][0-9]{0,19}", value), "FINAL_CHILD_INTEGER")
+        return P.O.integer(int(value))
+
+    P.C.digest(args.context_sha256)
+    P.C.digest(args.original_boot_digest)
+    caps = tuple(number(flag) for flag in flags)
+    minimum = number("--minimum-ns")
+    clock = P.O.clocks.ClockIdentity(args.clock_role, args.clock_domain, number("--clock-ticks-per-second"))
+    P.O.clocks.validate_identity(clock)  # Declared DATA; child observes its actual clock.
+    operation = operations[args.operation]
+    return P.B.guarded(lambda signals: operation(args.context_sha256, minimum, caps, clock,
+        args.original_boot_digest, lambda: P.B.cancellation(signals)))
+
+
 def main():
     try:
         P.require(sys.flags.isolated and sys.flags.no_site and sys.flags.dont_write_bytecode and
             os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted" and
             os.environ.get("GITHUB_REPOSITORY") == P.I.REPOSITORY, "ACTUAL_HOSTED_CALLER")
+        if len(sys.argv) > 1 and sys.argv[1] in ("_final-authority-pre", "_final-authority-post", "_final-crypto"):
+            _final_child(sys.argv[1:])
+            return 0
         parser = argparse.ArgumentParser(description=__doc__)
         commands = parser.add_subparsers(dest="operation", required=True)
         commands.add_parser("produce")
-        for name in ("prepare-save", "after-save", "prepare-probe", "after-probe"):
+        for name in ("prepare-save", "after-save", "prepare-probe", "after-probe", "custody-export", "custody-collect"):
             commands.add_parser(name)
         flags = ("context-sha256", "minimum-ns", "site", "parent-first-ns", "parent-work-end-ns", "use-first-ns",
             "use-work-end-ns", "use-final-end-ns", "original-boot-digest", "phase-start-ns", "phase-work-end-ns",
@@ -33,6 +74,10 @@ def main():
         args = parser.parse_args()
         if args.operation == "produce":
             P.B.guarded(lambda signals: P.productive(lambda: P.B.cancellation(signals)))
+        elif args.operation == "custody-export":
+            P.B.guarded(lambda signals: P.custody_export(lambda: P.B.cancellation(signals)))
+        elif args.operation == "custody-collect":
+            P.B.guarded(lambda signals: P.custody_collect(lambda: P.B.cancellation(signals)))
         elif args.operation in ("prepare-save", "after-save", "prepare-probe", "after-probe"):
             P.B.guarded(lambda signals: P.step(args.operation, lambda: P.B.cancellation(signals)))
         else:

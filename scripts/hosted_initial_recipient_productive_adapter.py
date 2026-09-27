@@ -2220,10 +2220,13 @@ class _ReadState:
     handoff: object = None
     graph: tuple = ()
     failure: object = None
+    use_rows: tuple = ()
+    use_pins: tuple = ()
 
 
 def _reader_state(owner, first, claims):
-    require(type(owner) in (_Owner, B.Owner) and owner.first is first and owner.fence is not None and
+    final_owner = _final_reader_owner(owner, first, claims)
+    require((type(owner) in (_Owner, B.Owner) or final_owner) and owner.first is first and owner.fence is not None and
         type(claims) is dict and set(_BASE_CLAIMS).issubset(claims), "ORIGINAL_READER_OWNER")
     O.clocks.validate_reading(first)
     require(owner.original is None and owner.unknown is owner.closed is False, "READER_OWNER_NOT_LIVE")
@@ -2238,14 +2241,18 @@ def _reader_passive(reader, *, allow_closed=True):
     _pin(reader)
     owner = reader.owner
     dictionary, ledger, errors, fence, callback, local, work, final = reader.binding
-    require(type(owner) in (_Owner, B.Owner) and owner.__dict__ is dictionary and owner.resources is ledger and
+    final_owner = _final_reader_owner(owner, reader.first, reader.claims, retired=owner.closed)
+    require((type(owner) in (_Owner, B.Owner) or final_owner) and owner.__dict__ is dictionary and owner.resources is ledger and
         owner.errors is errors and owner.first is reader.first and owner.fence is fence and owner.cancelled is callback and
         owner.local_end == local and owner.work_limit == work and owner.final_limit == final and
         owner.original is None and not owner.unknown and errors == [] and reader.failure is None,
         "ORIGINAL_READ_OWNER_CHANGED")
     if owner.closed:
-        require(allow_closed and type(owner) is _Owner, "READER_CLOSED")
-        _known(owner)
+        require(allow_closed and (type(owner) is _Owner or final_owner), "READER_CLOSED")
+        if final_owner:
+            owner.known()
+        else:
+            _known(owner)
     elif type(owner) is _Owner:
         _owner_state(owner)
     for path, (directory, kind, pin, row, label) in reader.directories.items():
@@ -2254,6 +2261,9 @@ def _reader_passive(reader, *, allow_closed=True):
             row.get("attempted") is owner.closed and row.get("closed") is owner.closed,
             "ORIGINAL_READ_DIRECTORY_PIN_CHANGED")
     N._check_history(reader.graph)
+    require(len(reader.use_rows) == len(reader.use_pins) <= 21, "ORIGINAL_USE_PARTITIONS")
+    for row, graph in zip(reader.use_rows, reader.use_pins):
+        N._check_history(graph)
     return reader
 
 
@@ -2613,6 +2623,11 @@ def _read_use(reader, row, site, prefix_hash, worker, history_raw):
         minimum <= O.integer(after["returnedNs"]) <= O.integer(returned["originalChain"]["checkedNs"]) <=
         O.integer(pending["retainedNs"]) <= returned["preCloseNs"], "HISTORICAL_USE_CHAIN_TIME")
     reader.owner.end()
+    prior = next((old for old in reader.use_rows if old["site"] == site), None)
+    if prior is None:
+        _progress(reader, use_rows=(*reader.use_rows, row), use_pins=(*reader.use_pins, N._history_graph(row)))
+    else:
+        D.same(prior, row, "ORIGINAL_USE_PARTITION_CHANGED")
     return originals
 
 
@@ -2717,6 +2732,9 @@ def read_productive_handoff(owner, first, claims):
             # Denial only. Later exact original source/service rederivation
             # MUST match these bytes; they cannot grant or extend this first.
             _shorten(state, D.canonical(proposal_raw))
+        elif type(owner) is C._ProductiveNativeOwner:
+            import hosted_initial_recipient_productive_custody as PC
+            PC._bind_final_reader_proposal(owner, proposal_raw)
         blobs = {name: _read_file(reader, directory.path, name) for name in D.BLOB_NAMES}
         history = D.canonical(blobs["history.json"])
         observed, _primary, event = N.host_context(history["firstUseAt"])
@@ -3433,3 +3451,210 @@ def after_probe(token, cancelled):
         raise _abort(state, error) if state is not None else _fail(run, error)
     finally:
         token = None
+
+
+# Separately registered final-input reader. Old Step/provider fresh-begin
+# authorization remains unchanged; a final authority is never a new U site.
+_FINAL_PEEKS, _FINAL_INPUTS, _FINAL_FAILURES = {}, {}, {}
+
+
+@dataclass(frozen=True, repr=False)
+class FinalInputs:
+    parent: object
+    handoff: object
+    derived: object
+    authority: object
+    claims_raw: bytes
+    probe_raw: bytes
+    use_rows: tuple
+
+
+def _final_reader_owner(owner, first, claims, *, retired=False):
+    if type(owner) is not C._ProductiveNativeOwner:
+        return False
+    import hosted_initial_recipient_productive_custody as PC
+    PC._checked_final_reader_owner(owner, first, claims, retired=retired)
+    return True
+
+
+def _final_reader_failed(parent, error):
+    original = _FINAL_FAILURES.setdefault(id(parent), (parent, error))
+    require(original[0] is parent, "FINAL_FAILURE_ORIGINAL_PARENT")
+    return original[1]
+
+
+def _final_reader_current(parent):
+    original = _FINAL_FAILURES.get(id(parent))
+    if original is not None:
+        require(original[0] is parent, "FINAL_FAILURE_PARENT_ALIAS")
+        raise original[1]
+
+
+def _peek_final_productive_inputs(parent):
+    """Actual historical reads only; this returns NO operative FinalInputs."""
+    import hosted_initial_recipient_productive_custody as PC
+    try:
+        _final_reader_current(parent)
+        require(id(parent) not in _FINAL_PEEKS, "FINAL_PEEK_ONCE")
+        _FINAL_PEEKS[id(parent)] = parent, None, None, None
+        owner, first, claims = PC._final_reader_binding(parent)
+        _final_reader_current(parent)
+        _FINAL_PEEKS[id(parent)] = parent, owner, first, None
+        result = read_productive_handoff(owner, first, claims)
+        _final_reader_current(parent)
+        _FINAL_PEEKS[id(parent)] = parent, owner, first, result
+        return result
+    except BaseException as error:
+        raise _final_reader_failed(parent, error)
+
+
+def _final_action_originals(reader, handoff, derived, claims, preparation_raw, point, outputs):
+    """Own new reads of old provider DATA; never manufacture its former Reading."""
+    import hosted_cache_provider_readback as readback
+    require(type(point) is D._HistoricalDataPoint and point.clock is reader.first.clock and
+        point.nanoseconds <= reader.first.nanoseconds, "FINAL_ACTION_HISTORICAL_POINT")
+    path = _step_path("prepare-probe")
+    original = {name: _read_file(reader, path, name, 16384) for name in readback.ACTION_FILES}
+    native_path = path / "native-preparation"
+    native = {name: _read_file(reader, native_path, name) for name in readback.INITIAL_USE_FILES}
+    chain = D.final_action_records(original, preparation_raw, claims, point, outputs, native)
+    require(chain["handoffSha256"] == O.digest(handoff.raw) and
+        chain["producerReturnSha256"] == O.digest(handoff.producer_return_raw) and
+        chain["workerIdentitySha256"] == O.digest(handoff.identity.record) and
+        chain["originalBootDigest"] == derived.inputs.history["originalBootDigest"] and
+        O.integer(chain["checkedNs"]) <= O.integer(D.canonical(original["provider-readback.json"])["checkedNs"]),
+        "FINAL_ACTION_ORIGINAL_INITIAL_CHAIN")
+    _read_root(reader, native_path, D.native_identity(chain["directoryIdentity"], point.clock.role))
+    _names(reader.owner, _read_root(reader, native_path), readback.INITIAL_USE_FILES)
+    for use, edge in zip(chain["uses"], ("begin", "final")):
+        returned, inventory = (D.canonical(native[edge + name]) for name in ("-use.json", "-use-index.json"))
+        row = {**use, "return": returned, "inventory": inventory,
+            "originalsSha256": {entry["relative"]: entry["sha256"] for entry in inventory["files"]
+                if entry["provenance"] == "ACTUAL_RETAINED_BYTES"}}
+        _read_use(reader, row, "provider-probe/native-prepare/" + edge, O.digest(handoff.raw), handoff.identity, handoff.history)
+    reader.owner.end()
+    return original, native
+
+
+def _final_probe_history(reader, handoff, derived, claims):
+    import hosted_initial_recipient_productive_custody_data as CD
+    path = _step_path("after-probe")
+    directory = _read_root(reader, path)
+    raw = _read_file(reader, path, "probe-result.json")
+    value = D.fields(D.canonical(raw), "schema scope source github selection cacheCohort directory directoryIdentity "
+        "originalClaims planSha256 afterSaveSha256 firstPostProviderNs firstPostProviderLocal providerEndNs "
+        "providerTimeScope privateUseChainSha256 readmissionCloseSha256 files window reportedExactHit "
+        "cacheContentsVerified resolverVerified clock originalBootDigest providerStorage providerDeadlineEnforcement "
+        "providerRetirement writerReturn budgetAcceptance testAcceptance exportSaveAuthority")
+    require(claims["AFTER_PROBE_OUTCOME"] == "success" and O.digest(raw) == D.sha(claims["PROBE_SHA256"]) and
+        type(value["schema"]) is int and value["schema"] == 1 and value["scope"] == D.PROBE_RESULT_SCOPE and
+        value["directory"] == str(path) and D.native_identity(value["directoryIdentity"], reader.first.clock.role) ==
+        tuple(directory.identity) and value["reportedExactHit"] is True and value["cacheContentsVerified"] is False and
+        value["resolverVerified"] is False and value["afterSaveSha256"] == claims["AFTER_SAVE_SHA256"] and
+        value["providerTimeScope"] == "POST_ACTION_UPPER_BOUND_ONLY_REQUIRES_TRUSTED_SEQUENTIAL_ORIGINAL_OUTCOME",
+        "FINAL_ORIGINAL_PROBE")
+    old_claims = {name: claims[name] for name in _AFTER_PROBE_CLAIMS}
+    D._provider_nonacceptance(value, O.clock_value(reader.first.clock), derived.inputs.history["originalBootDigest"], old_claims)
+    for name in ("source", "github", "selection", "cacheCohort"):
+        D.same(value[name], derived.inputs.admission[name], "FINAL_PROBE_IDENTITY")
+    require(value["planSha256"] == O.digest(O.encoded(derived.plan)), "FINAL_PROBE_PLAN")
+    names = ("probe-preparation.json", "provider-probe.json", "readmission-close.json",
+        "provider-prepared.json", "provider-readback.json")
+    retained = {name: _read_file(reader, path, name, 16384 if name in
+        ("provider-prepared.json", "provider-readback.json") else D.LIMIT) for name in names}
+    D.same(value["files"], {name: O.digest(blob) for name, blob in retained.items()}, "FINAL_PROBE_RETAINED_FILES")
+    readmission = D.step_close_record(retained["readmission-close.json"], derived.inputs, "custody-readmission")
+    observation = D.step_window_record(value["window"], derived.inputs, "provider-observation")
+    require(value["readmissionCloseSha256"] == O.digest(retained["readmission-close.json"]) and
+        value["firstPostProviderNs"] == readmission["window"]["firstNs"] and
+        type(value["firstPostProviderLocal"]) is float and
+        value["firstPostProviderLocal"] == readmission["window"]["localStarted"] and
+        readmission["closedNs"] <= observation["firstNs"] < reader.first.nanoseconds and
+        readmission["closedLocal"] <= observation["localStarted"] and
+        readmission["predecessorSha256"] == O.digest(retained["probe-preparation.json"]), "FINAL_PROBE_CHRONOLOGY")
+    originals, chain = _private_chain_files(reader, path, handoff, derived, "after-probe",
+        readmission["window"]["firstNs"], readmission["window"]["hardEndNs"])
+    require(O.digest(originals["private-use-chain.json"]) == value["privateUseChainSha256"] ==
+        readmission["privateUseChainSha256"] and chain["checkedNs"] <= readmission["closedNs"], "FINAL_PROBE_CHAIN")
+    historical = D._HistoricalDataPoint(reader.first.clock, O.integer(value["firstPostProviderNs"]))
+    preparation_raw, prepared = _read_preparation(reader, handoff, derived, "lookup", old_claims, historical)
+    provider = D.canonical(retained["provider-probe.json"])
+    expected = staging.cache.provider_observation(derived.plan, "lookup", original_outcome=claims["PROBE_OUTCOME"],
+        outputs=provider["outputs"])
+    require(provider == expected and provider["status"] == "REPORTED_EXACT_HIT" and
+        retained["probe-preparation.json"] == preparation_raw and
+        value["providerEndNs"] == prepared["providerWindow"]["hardEndNs"] > historical.nanoseconds,
+        "FINAL_PROBE_ORIGINAL_PROVIDER")
+    action, _native = _final_action_originals(reader, handoff, derived, old_claims, preparation_raw,
+        historical, provider["outputs"])
+    require(all(retained[name] == blob for name, blob in action.items()), "FINAL_PROBE_ACTION_BYTES")
+    _names(reader.owner, directory, (*D.STEP_USE_FILES, *names, "probe-result.json"))
+    require(tuple(sorted(row["site"] for row in reader.use_rows)) == tuple(sorted(CD.USE_SITES)), "FINAL_ALL21_USES")
+    return raw
+
+
+def read_final_productive_inputs(final_parent):
+    """Only this PC parent's actual current authority can rederive final inputs."""
+    import hosted_initial_recipient_productive_custody as PC
+    reader = None
+    try:
+        _final_reader_current(final_parent)
+        require(id(final_parent) not in _FINAL_INPUTS, "FINAL_INPUT_ATTEMPT_ONCE")
+        _FINAL_INPUTS[id(final_parent)] = final_parent, None, None, None, None
+        owner, first, claims = PC._final_reader_binding(final_parent)
+        identity, authority = PC._final_reader_authority(final_parent)
+        _final_reader_current(final_parent)
+        saved = _FINAL_PEEKS.get(id(final_parent))
+        require(type(saved) is tuple and saved[0] is final_parent and saved[1] is owner and saved[2] is first and
+            type(saved[3]) is HandoffInputs, "FINAL_ORIGINAL_PEEK")
+        handoff = saved[3]
+        reader = _checked_handoff(handoff)
+        require(reader.owner is owner and id(handoff) not in _DERIVES and id(handoff) not in _INPUTS, "FINAL_REDERIVE_ONCE")
+        _FINAL_INPUTS[id(final_parent)] = final_parent, None, reader, authority, None
+        _DERIVES[id(handoff)] = handoff, owner, identity
+        # This is a separate fixed PC admission, NOT a call to old _fresh_begin.
+        PC._final_reader_authority(final_parent)
+        derived = _rederive_inputs(reader, identity)
+        # The authentic mirror is not this actual request carrier. Retain its
+        # own original native read/binding for the fixed114 selection.
+        _read_file(reader, handoff.initializer / "configuration-custody", "request.json",
+            expected=dict(handoff.blobs)["custody-request.json"])
+        probe_raw = _final_probe_history(reader, handoff, derived, claims)
+        result = FinalInputs(final_parent, handoff, derived, authority, O.encoded(claims), probe_raw, reader.use_rows)
+        pins = (result, result.__dict__, tuple(result.__dict__.items()), _data_pins(derived))
+        _FINAL_INPUTS[id(final_parent)] = final_parent, result, reader, authority, pins
+        checked_final_productive_inputs(result)
+        return result
+    except BaseException as error:
+        first = _final_reader_failed(final_parent, error)
+        raise _reader_failure(reader, "final-inputs", first) if reader is not None else first
+
+
+def checked_final_productive_inputs(result):
+    import hosted_initial_recipient_productive_custody as PC
+    saved = next((entry for entry in _FINAL_INPUTS.values() if type(entry) is tuple and entry[1] is result), None)
+    require(type(saved) is tuple and saved[1] is result, "FINAL_ORIGINAL_INPUTS")
+    parent = saved[0]
+    try:
+        _final_reader_current(parent)
+        require(type(result) is FinalInputs and result.parent is parent and saved[3] is result.authority and type(saved[4]) is tuple,
+            "FINAL_ORIGINAL_INPUT_BINDING")
+        pins = saved[4]
+        require(result.__dict__ is pins[1] and tuple(result.__dict__) == tuple(name for name, _ in pins[2]) and
+            all(result.__dict__[name] is value for name, value in pins[2]), "FINAL_INPUT_SUBSTITUTION")
+        _check_data_pins(pins[3])
+        owner, first, claims = PC._final_reader_binding(parent)
+        identity, authority = PC._final_reader_authority(parent)
+        require(saved[2].owner is owner and saved[2].first is first and authority is result.authority and
+            O.encoded(claims) == result.claims_raw and result.handoff is saved[2].handoff and
+            D.worker_values(identity) == D.worker_values(result.handoff.identity), "FINAL_INPUT_PARENT_CHANGED")
+        recheck_provider_inputs(owner, result.derived)
+        for graph in saved[2].use_pins:
+            N._check_history(graph)
+        _check_data_pins(pins[3])
+        _final_reader_current(parent)
+        require(result.__dict__ is pins[1] and all(result.__dict__.get(name) is value for name, value in pins[2]) and
+            len(result.__dict__) == len(pins[2]), "FINAL_INPUT_CHANGED_DURING_CALLBACK")
+        return result
+    except BaseException as error:
+        raise _final_reader_failed(parent, error)

@@ -668,3 +668,227 @@ def step(command, cancelled):
         return operations[command](token, cancelled)
     finally:
         token = None
+
+
+_FINAL_OUTPUTS, _FINAL_OUTPUT_RESULTS = {}, {}
+
+
+def _final_modules():
+    # Ordinary imports share this process's ONE C/N/native-B/O registry graph.
+    import hosted_initial_recipient_productive_custody as PC
+    import hosted_initial_recipient_productive_custody_data as CD
+    require(PC.P is sys.modules[__name__] and PC.C is C and PC.N is N and PC.B is B and PC.O is O,
+        "FINAL_CANONICAL_GRAPH")
+    return PC, CD
+
+
+def _prepare_custody_export(cancelled):
+    """This credential-bearing helper must actually return before encryption."""
+    token = os.environ.pop(O.wire.TOKEN_ENV, None)
+    try:
+        _credential_free()
+        require(type(token) is str and re.fullmatch(r"[A-Za-z0-9_.-]{16,4096}", token) and callable(cancelled),
+            "FINAL_EXPORT_READ_TOKEN")
+        PC, _CD = _final_modules()
+        return PC.prepare_final_export(token, cancelled)
+    finally:
+        token = None
+
+
+def _prepare_custody_collect(cancelled):
+    """Post-export authority has its own fresh, separately retired token frame."""
+    token = os.environ.pop(O.wire.TOKEN_ENV, None)
+    try:
+        _credential_free()
+        require(type(token) is str and re.fullmatch(r"[A-Za-z0-9_.-]{16,4096}", token) and callable(cancelled),
+            "FINAL_COLLECT_READ_TOKEN")
+        PC, _CD = _final_modules()
+        return PC.prepare_final_collect(token, cancelled)
+    finally:
+        token = None
+
+
+class _ProductiveOutputFence:
+    """One real PC return, one original append, and exactly two late stdout checks.
+
+    This is a distinct fence, not an old seal/tail facade. The pending public
+    record cannot attest its own command/Step return. PC owns all original
+    resources and the unrenewable phase end; no live authority is decoded here.
+    """
+    __slots__ = ("_binding",)
+
+    def __init__(self, result, operation):
+        require(type(self) is _ProductiveOutputFence and id(self) not in _FINAL_OUTPUTS, "FINAL_OUTPUT_NEW")
+        state = {"phase": "NEW", "checks": 0, "busy": True, "failure": None, "last": 0}
+        self._binding = None
+        saved = (self, state)
+        _FINAL_OUTPUTS[id(self)] = saved  # Before a supplier/callback can reenter.
+        previous = _FINAL_OUTPUT_RESULTS.get(id(result))
+        if previous is not None:
+            error = O.OriginError("INITIAL_PRODUCTIVE_FINAL_OUTPUT_RESULT_REUSED")
+            previous[0]._poison(previous[1], error)
+            raise self._poison(saved, error)
+        _FINAL_OUTPUT_RESULTS[id(result)] = (self, saved, result)
+        try:
+            PC, CD = _final_modules()
+            require(type(operation) is str and operation in ("custody-export", "custody-collect"), "FINAL_OUTPUT_ROUTE")
+            result_type = PC.ParentReturnedCrypto if operation == "custody-export" else PC.CollectReturn
+            checker_name = "checked_final_export_return" if operation == "custody-export" else "checked_final_collect_return"
+            names = CD.EXPORT_OUTPUT_FIELDS if operation == "custody-export" else CD.COLLECT_OUTPUT_FIELDS
+            scope = CD.EXPORT_OUTPUT_SCOPE if operation == "custody-export" else CD.COLLECT_OUTPUT_SCOPE
+            require(type(result) is result_type and type(result.__dict__) is dict and
+                set(result.__dict__) == {"output_values", "fence", "hard_end_ns"}, "FINAL_OUTPUT_RESULT_TYPE")
+            values, fence, end = result.output_values, result.fence, result.hard_end_ns
+            require(type(values) is tuple and len(values) == 2 and type(names) is tuple and len(names) == 2,
+                "FINAL_OUTPUT_VALUES")
+            for row, name in zip(values, names):
+                require(type(row) is tuple and len(row) == 2 and type(row[0]) is str and row[0] == name and
+                    type(row[1]) is str and re.fullmatch(r"[0-9a-f]{64}", row[1]), "FINAL_OUTPUT_VALUE")
+            O.integer(end)
+            require(end > 0, "FINAL_OUTPUT_END")
+            fence_type = type(fence)
+            fence_method = getattr(fence_type, "now", None)
+            require(callable(fence_method) and getattr(fence.now, "__self__", None) is fence and
+                getattr(fence.now, "__func__", None) is fence_method, "FINAL_OUTPUT_FENCE_METHOD")
+            emitted = {name: digest for name, digest in values}  # New DATA only.
+            public = {"schema": 1, "scope": scope, "operation": operation, **emitted,
+                "originalStepOutcome": "NOT_OBSERVED", "testAcceptance": "NOT_PERFORMED",
+                "productiveAuthority": False, "cacheAuthority": False,
+                "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False}
+            pins = tuple((owner, name, getattr(owner, name)) for owner, names_to_pin in (
+                (PC, ("P", "C", "N", "B", "O", "ParentReturnedCrypto", "CollectReturn",
+                      "checked_final_export_return", "checked_final_collect_return")),
+                (CD, ("EXPORT_OUTPUT_FIELDS", "COLLECT_OUTPUT_FIELDS", "EXPORT_OUTPUT_SCOPE", "COLLECT_OUTPUT_SCOPE")),
+                (C.C, ("append_productive_outputs", "_productive_output_bytes", "_append_output_bytes")),
+                (_ProductiveOutputFence, ("_begin", "_current", "_append_guard", "append", "now", "_poison")),
+            ) for name in names_to_pin)
+            self._binding = (PC, CD, operation, result, result_type, result.__dict__, values,
+                tuple(row for row in values), fence, fence_type, fence_method, end, emitted, public,
+                N._history_graph(emitted, public), pins, checker_name)
+            state["binding"] = self._binding
+            self._current(saved)
+        except BaseException as error:
+            raise self._poison(saved, error)
+        finally:
+            state["busy"] = False
+
+    @staticmethod
+    def _poison(saved, error):
+        state = saved[1]
+        if state["failure"] is None:
+            state["failure"] = error
+        return state["failure"]
+
+    def _begin(self):
+        saved = _FINAL_OUTPUTS.get(id(self))
+        require(type(self) is _ProductiveOutputFence and type(saved) is tuple and saved[0] is self,
+            "FINAL_OUTPUT_ORIGINAL")
+        state = saved[1]
+        if state["failure"] is not None:
+            raise state["failure"]
+        try:
+            require(not state["busy"] and self._binding is state["binding"], "FINAL_OUTPUT_REENTRY_OR_BINDING")
+            state["busy"] = True
+            return saved
+        except BaseException as error:
+            raise self._poison(saved, error)
+
+    def _current(self, saved):
+        state = saved[1]
+        require(_FINAL_OUTPUTS.get(id(self)) is saved and state["busy"] and state["failure"] is None and
+            self._binding is state["binding"], "FINAL_OUTPUT_STATE_CHANGED")
+        (PC, CD, operation, result, result_type, dictionary, values, rows, fence, fence_type, fence_method,
+            end, emitted, public, graph, pins, checker_name) = self._binding
+
+        def passive():
+            registration = _FINAL_OUTPUT_RESULTS.get(id(result))
+            require(_FINAL_OUTPUTS.get(id(self)) is saved and self._binding is state["binding"] and
+                state["busy"] and state["failure"] is None and
+                type(registration) is tuple and len(registration) == 3 and registration[0] is self and
+                registration[1] is saved and registration[2] is result, "FINAL_OUTPUT_REGISTRY_CHANGED")
+            require(sys.modules.get(PC.__name__) is PC and sys.modules.get(CD.__name__) is CD and
+                all(getattr(owner, name, None) is original for owner, name, original in pins),
+                "FINAL_OUTPUT_SUPPLIER_CHANGED")
+            require(type(result) is result_type and result.__dict__ is dictionary and
+                set(dictionary) == {"output_values", "fence", "hard_end_ns"} and result.output_values is values and
+                result.fence is fence and type(result.hard_end_ns) is int and result.hard_end_ns is end,
+                "FINAL_OUTPUT_RESULT_CHANGED")
+            require(type(values) is tuple and len(values) == 2 and all(actual is original for actual, original in
+                zip(values, rows)) and type(fence) is fence_type and getattr(fence_type, "now", None) is fence_method and
+                getattr(fence.now, "__self__", None) is fence and getattr(fence.now, "__func__", None) is fence_method,
+                "FINAL_OUTPUT_NESTED_CHANGED")
+            _credential_free()
+            N._check_history(graph)
+
+        passive()
+        require(getattr(PC, checker_name)(result) is result, "FINAL_OUTPUT_PC_RETURN")
+        passive()
+        return fence, end, emitted, public
+
+    def _append_guard(self):
+        saved = self._begin()
+        try:
+            require(saved[1]["phase"] == "APPENDING" and saved[1]["checks"] == 0, "FINAL_OUTPUT_APPEND_PHASE")
+            fence, end, _emitted, _public = self._current(saved)
+            observed = fence.now(final=True, minimum=0, limit=end)
+            require(type(observed) is int and saved[1]["last"] <= observed < end, "FINAL_OUTPUT_CLOCK")
+            saved[1]["last"] = observed
+            self._current(saved)
+        except BaseException as error:
+            raise self._poison(saved, error)
+        finally:
+            saved[1]["busy"] = False
+
+    def append(self):
+        saved = self._begin()
+        try:
+            require(saved[1]["phase"] == "NEW" and saved[1]["checks"] == 0, "FINAL_OUTPUT_APPEND_ONCE")
+            _fence, end, emitted, public = self._current(saved)
+            saved[1]["phase"] = "APPENDING"
+        except BaseException as error:
+            raise self._poison(saved, error)
+        finally:
+            saved[1]["busy"] = False
+        try:
+            C.C.append_productive_outputs(emitted, self._append_guard)
+            self._append_guard()
+            require(_FINAL_OUTPUTS.get(id(self)) is saved and saved[1]["phase"] == "APPENDING" and
+                saved[1]["failure"] is None, "FINAL_OUTPUT_APPEND_RETURN")
+            saved[1]["phase"] = "OUTPUT"
+            return public, self, end
+        except BaseException as error:
+            raise self._poison(saved, error)
+
+    def now(self, *, final=False, minimum=0, limit=None):
+        saved = self._begin()
+        try:
+            require(saved[1]["phase"] == "OUTPUT" and final is True and type(minimum) is int and minimum == 0 and
+                type(limit) is int and limit == self._binding[11] and type(saved[1]["checks"]) is int and
+                0 <= saved[1]["checks"] < 2, "FINAL_OUTPUT_EXACT_LATE_CHECK")
+            saved[1]["checks"] += 1
+            fence, end, _emitted, _public = self._current(saved)
+            observed = fence.now(final=True, minimum=0, limit=end)
+            require(type(observed) is int and saved[1]["last"] <= observed < end, "FINAL_OUTPUT_CLOCK")
+            saved[1]["last"] = observed
+            self._current(saved)
+            return observed
+        except BaseException as error:
+            raise self._poison(saved, error)
+        finally:
+            saved[1]["busy"] = False
+
+
+def custody_export(cancelled):
+    parent = _prepare_custody_export(cancelled)
+    _credential_free()  # The token-consuming helper has ACTUALLY returned.
+    PC, _CD = _final_modules()
+    result = PC.export_prepared_final(parent)
+    return _ProductiveOutputFence(result, "custody-export").append()
+
+
+def custody_collect(cancelled):
+    prepared = _prepare_custody_collect(cancelled)
+    _credential_free()
+    PC, _CD = _final_modules()
+    result = PC.finish_final_collect(prepared)
+    return _ProductiveOutputFence(result, "custody-collect").append()

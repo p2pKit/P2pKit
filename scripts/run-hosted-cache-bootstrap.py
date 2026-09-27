@@ -1043,6 +1043,11 @@ def _initial_service_environment(path, context, installed_git):
     if not initial:
         require(installed_git is None, "BOOTSTRAP_INITIAL_GIT_ON_ORDINARY_ROUTE")
         return environment
+    return _installed_git_environment(environment, installed_git)
+
+
+def _installed_git_environment(environment, installed_git):
+    """Shared actual executable checks; context routing remains in each caller."""
     require(type(installed_git) is str and 0 < len(installed_git) <= 4096 and
         not any(ord(char) < 32 or ord(char) == 127 for char in installed_git), "BOOTSTRAP_INITIAL_GIT_REQUIRED")
     executable = Path(installed_git)
@@ -1058,11 +1063,37 @@ def _initial_service_environment(path, context, installed_git):
 
 
 def phase(owner, private, context_raw, token, fence, *, initial_git=None):
+    try:
+        return _phase_owned(owner, private, context_raw, token, fence, initial_git=initial_git)
+    finally:
+        token = None
+
+
+def productive_pre_authority_phase(seed, owner, private, context_raw, token, fence, *, initial_git):
+    try:
+        import hosted_initial_recipient_productive_custody as PC
+        PC._checked_native_authority_bridge(seed, owner, private, context_raw, fence, post=False)
+        return _phase_owned(owner, private, context_raw, token, fence, initial_git=initial_git, final_seed=seed)
+    finally:
+        token = None
+
+
+def productive_post_authority_phase(seed, owner, private, context_raw, token, fence, *, initial_git):
+    try:
+        import hosted_initial_recipient_productive_custody as PC
+        PC._checked_native_authority_bridge(seed, owner, private, context_raw, fence, post=True)
+        return _phase_owned(owner, private, context_raw, token, fence, initial_git=initial_git, final_seed=seed)
+    finally:
+        token = None
+
+
+def _phase_owned(owner, private, context_raw, token, fence, *, initial_git=None, final_seed=None):
     custody_phase = None
     collect_phase = None
     tail_phase = None
     before_phase = None
     use_phase = None
+    final_productive_phase = None
     try:
         context = origin.parse(context_raw)
         if context.get("scope") == INITIAL_PROVIDER_PUBLIC_CONTEXT_SCOPE:
@@ -1075,7 +1106,11 @@ def phase(owner, private, context_raw, token, fence, *, initial_git=None):
         old_limits = owner.work_limit, owner.final_limit
         managed = context.get("scope") in (INITIAL_ENTRY_CONTEXT_SCOPE, INITIAL_AUTHORITY_CONTEXT_SCOPE,
                                            INITIAL_RECEIVING_CONTEXT_SCOPE)
-        if managed:
+        if final_seed is not None:
+            import hosted_initial_recipient_productive_custody as PC
+            owner.enter_final_productive_phase(final_seed, context_raw, started, work_end, final_end)
+            final_productive_phase = (started, work_end, final_end, old_limits)
+        elif managed:
             require(fence.enter_phase(owner, started) == (work_end, final_end), "BOOTSTRAP_INITIAL_ENTRY_PHASE")
         elif context.get("scope") == INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE:
             owner.enter_custody_phase(started, work_end, final_end)
@@ -1095,10 +1130,13 @@ def phase(owner, private, context_raw, token, fence, *, initial_git=None):
         else:
             owner.work_limit, owner.final_limit = work_end, final_end
         invocation = uuid.uuid4().hex
-        argv = (phase_command(context_raw, use_caps=use_phase[:3]) if use_phase is not None else
+        argv = (PC._native_argv(final_seed, context_raw, final_productive_phase[:3]) if final_productive_phase is not None else
+            phase_command(context_raw, use_caps=use_phase[:3]) if use_phase is not None else
             phase_command(context_raw, before_caps=before_phase[:3]) if before_phase is not None else
             phase_command(context_raw))
-        env = processes.ownership_environment(_initial_service_environment(private.path, context, initial_git),
+        environment = (_installed_git_environment(child_environment(private.path), initial_git)
+            if final_productive_phase is not None else _initial_service_environment(private.path, context, initial_git))
+        env = processes.ownership_environment(environment,
             context["job"], invocation,
             str(private.path), str(private.path / "control-home"), allow_new_context=True)
         inherited = {name: env[name] for name in query._CONTEXT}
@@ -1119,6 +1157,12 @@ def phase(owner, private, context_raw, token, fence, *, initial_git=None):
         resource_start = len(owner.resources)
     except BaseException as error:
         token = None  # Includes refused prelaunch setup, before a child environment carries it.
+        if final_productive_phase is not None:
+            owner.error("productive-final-phase-setup", error)
+            try:
+                owner.leave_final_productive_phase(*final_productive_phase)
+            except BaseException as restore_error:
+                owner.error("productive-final-phase-setup-return", restore_error, unknown=True)
         if custody_phase is not None:
             owner.error("custody-phase-setup", error)
             try:
@@ -1178,7 +1222,8 @@ def phase(owner, private, context_raw, token, fence, *, initial_git=None):
             require(type(token) is str and re.fullmatch(r"[A-Za-z0-9_.-]{16,4096}", token), "BOOTSTRAP_ACTIONS_READ_TOKEN")
             env[origin.wire.TOKEN_ENV], token = token, None
         row["launchMinimumNs"] = fence.now(limit=work_end)
-        argv = (phase_command(context_raw, row["launchMinimumNs"], use_caps=use_phase[:3])
+        argv = (PC._native_argv(final_seed, context_raw, final_productive_phase[:3], row["launchMinimumNs"])
+            if final_productive_phase is not None else phase_command(context_raw, row["launchMinimumNs"], use_caps=use_phase[:3])
             if use_phase is not None else phase_command(context_raw, row["launchMinimumNs"], before_caps=before_phase[:3])
             if before_phase is not None else phase_command(context_raw, row["launchMinimumNs"]))
         row["launchArgv"] = argv
@@ -1233,7 +1278,7 @@ def phase(owner, private, context_raw, token, fence, *, initial_git=None):
                     remaining = max(0, drain_end - time.monotonic())
                 except BaseException as error:
                     owner.error("drain-fence", error)
-                    if context.get("scope") not in (INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE,
+                    if final_productive_phase is None and context.get("scope") not in (INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE,
                             INITIAL_COLLECT_AUTHORITY_CONTEXT_SCOPE, INITIAL_TAIL_AUTHORITY_CONTEXT_SCOPE,
                             INITIAL_BEFORE_AUTHORITY_CONTEXT_SCOPE, INITIAL_PRODUCTIVE_USE_CONTEXT_SCOPE,
                             INITIAL_PROVIDER_PUBLIC_CONTEXT_SCOPE):
@@ -1307,7 +1352,12 @@ def phase(owner, private, context_raw, token, fence, *, initial_git=None):
             fence.now(final=True, limit=final_end)
         except BaseException as error:
             owner.error("service-receipt", error)
-        if managed:
+        if final_productive_phase is not None:
+            try:
+                owner.leave_final_productive_phase(*final_productive_phase)
+            except BaseException as error:
+                owner.error("productive-final-phase-return", error, unknown=True)
+        elif managed:
             try:
                 fence.leave_phase(owner)
             except BaseException as error:
@@ -13224,7 +13274,10 @@ def guarded(operation):
     observed = fence.now(final=True, limit=limit)
     if value.get("scope") in (ACK_SCOPE, RECIPIENT_ACK_SCOPE, INITIAL_ACK_SCOPE, INITIAL_ENTRY_ACK_SCOPE,
                              INITIAL_AUTHORITY_ACK_SCOPE, INITIAL_RECIPIENT_ACK_SCOPE, INITIAL_RECEIVING_ACK_SCOPE,
-                             INITIAL_CUSTODY_AUTHORITY_ACK_SCOPE, initial_use.PRIVATE_ACK, initial_use.PUBLIC_ACK):
+                             INITIAL_CUSTODY_AUTHORITY_ACK_SCOPE, initial_use.PRIVATE_ACK, initial_use.PUBLIC_ACK,
+                             "INITIAL_RECIPIENT_PRODUCTIVE_PRE_EXPORT_AUTHORITY_POST_CLOSE_ACK_V1",
+                             "INITIAL_RECIPIENT_PRODUCTIVE_POST_EXPORT_AUTHORITY_POST_CLOSE_ACK_V1",
+                             "INITIAL_RECIPIENT_PRODUCTIVE_CRYPTO_POST_CLOSE_ACK_V1"):
         value["closedNs"] = observed
     raw = origin.encoded(value)
     require(len(raw) <= ACK_LIMIT and sys.stdout.buffer.write(raw) == len(raw), "BOOTSTRAP_ACK_WRITE")

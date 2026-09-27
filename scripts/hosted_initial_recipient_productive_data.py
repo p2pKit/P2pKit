@@ -80,7 +80,10 @@ INITIAL_SOURCE_INPUTS = tuple("scripts/" + name for name in (
     "run-hosted-initial-recipient.py", "run-hosted-initial-recipient-custody.py",
     "hosted_initial_recipient_before.py", "hosted_initial_recipient_continuity.py",
     "hosted_initial_recipient_public_origin.py", "hosted_cache_provider_native.py",
-    "hosted_cache_provider_prepare.py", "hosted_cache_provider_readback.py"))
+    "hosted_cache_provider_prepare.py", "hosted_cache_provider_readback.py",
+    "hosted_initial_recipient_productive_custody.py", "hosted_initial_recipient_productive_custody_data.py",
+    "hosted_initial_recipient_evidence.py", "hosted_evidence.py", "hosted_windows_evidence.py",
+    "run-hosted-initial-recipient-productive.py", "run-hosted-cache-bootstrap.py"))
 PRODUCTIVE_PHASES = ("dependency-stage", "empty-seed", "custody-prepare", "configuration", "custody-collect",
                     "custody-uninstall", "dependency-export", "save-set-before")
 PREPARATION_FIELDS = "schema scope source github selection cacheCohort directory directoryIdentity handoffSha256 " \
@@ -401,6 +404,139 @@ def producer_return_record(raw, index_raw, inputs, first, expected_hash, directo
         local_first <= local(value["handoffReturnedLocal"]) <= local(value["observedAfterReturnLocal"]) <
         O.wire._directed_deadline(local_first, 45, hard, began), "FUNCTION_RETURN_LOCAL45_HISTORY")
     return value
+
+
+@dataclass(frozen=True, repr=False)
+class _HistoricalDataPoint:
+    """A hash-joined old timestamp for DATA arithmetic, NEVER an actual Reading."""
+    clock: object
+    nanoseconds: int
+
+
+def final_action_records(originals, preparation_raw, claims, point, outputs, use_originals):
+    """Final-reader-only historical lookup DATA; no earlier Reading is rebuilt.
+
+    The old maintained provider validator still requires its actual earliest
+    post-Action Reading. This separate parser checks the same closed records
+    at the timestamp authenticated by the original probe-result/readmission
+    bytes. It neither invokes that old live entry nor admits a current owner.
+    The caller separately reads all original episodes under its new reader.
+    """
+    import hosted_cache_provider_readback as R
+    require(type(point) is _HistoricalDataPoint, "FINAL_ACTION_HISTORICAL_DATA_POINT")
+    clock, first_ns = O.clocks.validate_identity(point.clock), O.integer(point.nanoseconds)
+    fields(claims, " ".join((*R.BASE_CLAIMS, *R.LOOKUP_CLAIMS, "PROBE_OUTCOME", "PROBE_READBACK_SHA256")))
+    for name, value in claims.items():
+        require(type(value) is str and (value == "success" if name.endswith("OUTCOME") else sha(value)),
+            "FINAL_ACTION_ORIGINAL_CLAIMS")
+    fields(originals, " ".join(R.ACTION_FILES))
+    prepared_raw, raw = (originals[name] for name in R.ACTION_FILES)
+    require(type(raw) is bytes and type(prepared_raw) is bytes and max(len(raw), len(prepared_raw)) <= 16384,
+        "FINAL_ACTION_ORIGINAL_BOUND")
+    prepared, value, descriptor = canonical(prepared_raw), canonical(raw), canonical(preparation_raw)
+    fields(value, "scope phase preparedSha256 preparationSha256 acknowledgement acknowledgementSha256 python "
+        "workerRequestSha256 outputs checkedNs originalClaims enclosingActionReturn providerAcceptance initialUseChainSha256")
+    fields(prepared, "scope phase preparationSha256 request bindings clockBindings firstNs originalClaims "
+        "providerExecution enclosingActionReturn initialUseChainSha256")
+    require(value["scope"] == "INITIAL_RECIPIENT_PROVIDER_NATIVE_READBACK_PENDING_HELPER_RETURN_V1" and
+        prepared["scope"] == "INITIAL_RECIPIENT_PROVIDER_NATIVE_PREPARATION_PENDING_HELPER_RETURN_V1" and
+        value["phase"] == prepared["phase"] == "lookup" and
+        value["enclosingActionReturn"] == prepared["enclosingActionReturn"] == "NOT_OBSERVED" and
+        value["providerAcceptance"] == "NOT_ESTABLISHED" and prepared["providerExecution"] == "NOT_PERFORMED" and
+        value["preparedSha256"] == O.digest(prepared_raw) and O.digest(raw) == claims["PROBE_READBACK_SHA256"] and
+        value["preparationSha256"] == prepared["preparationSha256"] == O.digest(preparation_raw) ==
+        claims["PROBE_PREPARATION_SHA256"] and sha(prepared["initialUseChainSha256"]) == value["initialUseChainSha256"],
+        "FINAL_ACTION_PENDING_HASHES")
+    old_claims = {name: claims[name] for name in (*R.BASE_CLAIMS, *R.LOOKUP_CLAIMS)}
+    same(prepared["originalClaims"], old_claims, "FINAL_ACTION_PREPARED_CLAIMS")
+    same(value["originalClaims"], old_claims, "FINAL_ACTION_RETURNED_CLAIMS")
+    require(type(prepared["request"]) is str and prepared["request"].isascii() and
+        type(value["acknowledgement"]) is str and value["acknowledgement"].isascii(), "FINAL_ACTION_ASCII_BYTES")
+    request, acknowledgement = prepared["request"].encode("ascii"), value["acknowledgement"].encode("ascii")
+    context, _request = R.outer._context(request)
+    ack = R.outer.read_ack(acknowledgement, request, 0)
+    require(ack.kind == ack.provider_kind == "success" and ack.worker_exit_code == 0 and
+        value["acknowledgementSha256"] == O.digest(acknowledgement) and
+        value["workerRequestSha256"] == ack.worker_request_sha256 and context["role"] == clock.role and
+        context["frequency"] == clock.ticks_per_second, "FINAL_ACTION_ACK_CLOCK_DATA")
+    directory = R.launch._path(descriptor["directory"], clock.role)
+    R.launch._identity(descriptor["directoryIdentity"], clock.role)
+    R.launch._path(value["python"], clock.role)
+    require(descriptor["scope"] == PROBE_PREPARATION_SCOPE and descriptor["clock"] == O.clock_value(clock) and
+        context["phase"] == "lookup" and context["directory"] == str(directory / "provider") and
+        context["home"] == str(directory / "provider-home") and prepared["firstNs"] == context["firstNs"] and
+        descriptor["planSha256"] == O.digest(O.encoded(context["plan"])), "FINAL_ACTION_DESCRIPTOR")
+    same(context["plan"], descriptor["plan"], "FINAL_ACTION_PLAN")
+    window = fields(descriptor["providerWindow"], "issuedNs hardEndNs actualProviderStart")
+    require(window["actualProviderStart"] == "NOT_OBSERVED" and
+        O.integer(window["issuedNs"]) == R.launch._ns(context["issuedNs"]) and
+        O.integer(window["hardEndNs"]) == R.launch._ns(context["hardEndNs"]) and
+        R.launch._ns(context["firstNs"]) <= ack.observed_ns <= R.launch._ns(value["checkedNs"]) <= first_ns <
+        window["hardEndNs"], "FINAL_ACTION_ORIGINAL_PROVIDER_END")
+    for name, names in (("bindings", R.launch.worker_source.outer_names(clock.role)),
+            ("clockBindings", R.clock_source.roster(clock.role))):
+        fields(prepared[name], " ".join(names))
+        for digest in prepared[name].values():
+            sha(digest)
+    require(all(prepared["bindings"].get(name, digest) == digest for name, digest in prepared["clockBindings"].items()),
+        "FINAL_ACTION_SOURCE_BINDINGS")
+    fields(outputs, "cache-primary-key cache-matched-key cache-hit")
+    require(all(type(item) is str and len(item) <= 512 and all(32 <= ord(char) < 127 for char in item)
+        for item in outputs.values()), "FINAL_ACTION_OUTPUT_DATA")
+    same(value["outputs"], outputs, "FINAL_ACTION_ORIGINAL_OUTPUTS")
+    fields(use_originals, " ".join(R.INITIAL_USE_FILES))
+    chain = fields(canonical(use_originals["initial-use-chain.json"]), "schema scope phase clock originalBootDigest "
+        "helperFirstNs helperWorkEndNs providerIssuedNs providerHardEndNs handoffSha256 producerReturnSha256 "
+        "preparationSha256 workerIdentitySha256 directory directoryIdentity source github materializedNs uses checkedNs "
+        "helperOwnerClose providerExecution exportSaveAuthority")
+    require(type(chain["schema"]) is int and chain["schema"] == 1 and
+        chain["scope"] == "INITIAL_RECIPIENT_PROVIDER_ORIGINAL_USE_CHAIN_V1" and chain["phase"] == "lookup" and
+        chain["helperOwnerClose"] == PENDING and chain["providerExecution"] == "NOT_PERFORMED" and
+        chain["exportSaveAuthority"] is False and chain["clock"] == descriptor["clock"] and
+        O.digest(use_originals["initial-use-chain.json"]) == prepared["initialUseChainSha256"], "FINAL_ACTION_USE_CHAIN")
+    for name in ("originalBootDigest", "handoffSha256", "producerReturnSha256", "preparationSha256", "workerIdentitySha256"):
+        sha(chain[name])
+    R.launch._identity(chain["directoryIdentity"], clock.role)
+    require(directory.name.endswith("-probe") and chain["directory"] == str(directory / "native-preparation") and
+        chain["handoffSha256"] == old_claims["HANDOFF_SHA256"] and
+        chain["producerReturnSha256"] == old_claims["PRODUCER_RETURN_SHA256"] and
+        chain["preparationSha256"] == prepared["preparationSha256"] and
+        all(chain[name] == descriptor["plan"][name] for name in ("source", "github")), "FINAL_ACTION_USE_BINDING")
+    root = directory.with_name(directory.name.removesuffix("-probe"))
+    began, work, issued, end, materialized, checked = (O.integer(chain[name]) for name in
+        ("helperFirstNs", "helperWorkEndNs", "providerIssuedNs", "providerHardEndNs", "materializedNs", "checkedNs"))
+    require(began == R.launch._ns(prepared["firstNs"]) and issued == window["issuedNs"] and end == window["hardEndNs"] and
+        issued <= began <= materialized <= checked < work == min(began + 45 * O.NS, end - 45 * O.NS) and
+        issued + 45 * O.NS < end <= issued + 180 * O.NS and type(chain["uses"]) is list and len(chain["uses"]) == 2,
+        "FINAL_ACTION_ORIGINAL_HELPER45")
+    previous = began
+    for number, edge in enumerate(("begin", "final")):
+        use = fields(chain["uses"][number], "site root window returnSha256 inventorySha256")
+        site = "provider-probe/native-prepare/" + edge
+        require(use["site"] == site and use["root"] == str(root.with_name(root.name + "-" + R.initial_use.site_leaf(site))) and
+            use["returnSha256"] == O.digest(use_originals[edge + "-use.json"]) and
+            use["inventorySha256"] == O.digest(use_originals[edge + "-use-index.json"]), "FINAL_ACTION_ORIGINAL_EPISODE")
+        actual_clock, frame = R.initial_use.checked_frame(use["window"])
+        require(actual_clock == clock and frame["site"] == site and frame["parentFirstNs"] == began and
+            frame["parentWorkEndNs"] == work and frame["originalBootDigest"] == chain["originalBootDigest"],
+            "FINAL_ACTION_ORIGINAL_USE_PARENT")
+        returned = fields(canonical(use_originals[edge + "-use.json"]), "schema scope site windowSha256 workerIdentitySha256 "
+            "inventorySha256 pendingSha256 originalChain preCloseNs closedNs resourceCount retirement budgetAcceptance exportSaveAuthority")
+        require(type(returned["schema"]) is int and returned["schema"] == 1 and returned["scope"] == R.initial_use.RETURN_SCOPE and
+            returned["site"] == site and returned["windowSha256"] == O.digest(O.encoded(use["window"])) and
+            returned["workerIdentitySha256"] == chain["workerIdentitySha256"] and
+            returned["inventorySha256"] == use["inventorySha256"] and returned["retirement"] == "KNOWN_RESOURCE_CLOSE_ONLY" and
+            type(returned["resourceCount"]) is int and returned["resourceCount"] > 0, "FINAL_ACTION_ORIGINAL_USE_RETURN")
+        require(returned["budgetAcceptance"] == "NOT_ADMITTED" and returned["exportSaveAuthority"] is False,
+            "FINAL_ACTION_USE_NONACCEPTANCE")
+        index = canonical(use_originals[edge + "-use-index.json"])
+        R._initial_use_index(index, R.launch._path(use["root"], clock.role), site, use["window"], returned)
+        read, preclose, closed = (O.integer(item) for item in
+            (returned["originalChain"]["checkedNs"], returned["preCloseNs"], returned["closedNs"]))
+        require(previous <= frame["firstNs"] <= read <= preclose <= closed < frame["workEndNs"] and
+            closed <= (materialized if number == 0 else checked), "FINAL_ACTION_USE_ORDER")
+        previous = materialized
+    return chain
 
 
 def preparation_record(raw, inputs, handoff_raw, return_raw, first, phase, expected_hash, directory, directory_identity,

@@ -177,7 +177,28 @@ def append_outputs(values, check):
     leave private custody. A failed/partial append cannot authorize the next
     step: the fixed caller also requires the actual successful predecessor.
     """
-    raw = _output_bytes(values)
+    return _append_output_bytes(_output_bytes(values), check)
+
+
+def _productive_output_bytes(values):
+    """The separate productive two-hash grammar; old output admission is unchanged."""
+    require(type(values) is dict and len(values) == 2 and all(type(name) is str for name in values) and
+        set(values) in (
+            {"initialProductiveExportTransferSha256", "initialProductiveManifestSha256"},
+            {"initialProductiveCollectCloseSha256", "initialProductiveManifestSha256"}) and
+        all(type(value) is str and re.fullmatch(r"[0-9a-f]{64}", value) for value in values.values()),
+        "PRODUCTIVE_OUTPUT_FIELDS")
+    return "".join(name + "=" + values[name] + "\n" for name in sorted(values)).encode("ascii")
+
+
+def append_productive_outputs(values, check):
+    """Append only a genuine caller's productive hashes, never future Step success."""
+    return _append_output_bytes(_productive_output_bytes(values), check)
+
+
+def _append_output_bytes(raw, check):
+    # ONE original native writer for both separately closed encoders. Do not
+    # relax its empty-target, path, readback, parent or known-close contract.
     require(callable(check) and not QUARANTINE, "STEP_OUTPUT_FIELDS")
     check()
     target = Path(os.environ.get("GITHUB_OUTPUT", ""))

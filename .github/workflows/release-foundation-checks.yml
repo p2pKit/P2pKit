@@ -53,6 +53,17 @@ jobs:
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-use-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-adapter-test.py -v -f
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-prefix-retention-test.py -v -f
+          # Productive custody source models and tiny POSIX file/tar mechanics;
+          # Windows models are not native/provider/hosted qualification.
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-custody-data-test.py -v
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-custody-test.py -v
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-final-inputs-test.py -v
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-final-bridge-test.py -v
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-evidence-test.py -v
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-posix-evidence-test.py -v
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-windows-evidence-test.py -v
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-output-test.py -v
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-runner-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-artifact-zip-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-artifact-delivery-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-artifact-native-stream-test.py -v -f

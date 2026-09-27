@@ -650,6 +650,39 @@ def _initial_service_phase(owner, private, context_raw, token, fence, before):
     is discovered from PATH here and no original capability is reconstructed.
     """
     try:
+        context = O.parse(context_raw)
+        require(context.get("scope") in (native.INITIAL_CONTEXT_SCOPE, native.INITIAL_ENTRY_CONTEXT_SCOPE,
+            native.INITIAL_AUTHORITY_CONTEXT_SCOPE, native.INITIAL_RECEIVING_CONTEXT_SCOPE,
+            native.INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE, native.INITIAL_COLLECT_AUTHORITY_CONTEXT_SCOPE,
+            native.INITIAL_TAIL_AUTHORITY_CONTEXT_SCOPE, native.INITIAL_BEFORE_AUTHORITY_CONTEXT_SCOPE,
+            native.INITIAL_PRODUCTIVE_USE_CONTEXT_SCOPE, native.INITIAL_PROVIDER_PUBLIC_CONTEXT_SCOPE),
+            "SERVICE_GIT_OLD_ROUTE")
+        return _service_phase_owned(owner, private, context_raw, token, fence, before)
+    finally:
+        token = None
+
+
+def _productive_authority_pre_phase(seed, owner, private, context_raw, token, fence, before):
+    try:
+        import hosted_initial_recipient_productive_custody as PC
+        PC._checked_authority_phase(seed, owner, private, context_raw, fence, before, post=False)
+        return _service_phase_owned(owner, private, context_raw, token, fence, before, final_seed=seed)
+    finally:
+        token = None
+
+
+def _productive_authority_post_phase(seed, owner, private, context_raw, token, fence, before):
+    try:
+        import hosted_initial_recipient_productive_custody as PC
+        PC._checked_authority_phase(seed, owner, private, context_raw, fence, before, post=True)
+        return _service_phase_owned(owner, private, context_raw, token, fence, before, final_seed=seed)
+    finally:
+        token = None
+
+
+def _service_phase_owned(owner, private, context_raw, token, fence, before, *, final_seed=None):
+    """One source12 proof and original executable selection for separate routes."""
+    try:
         owner.end()
         path = private.path / "source-before"
         require(type(before) is SourceReturn and owner.initial_sources.get(str(path)) is before and
@@ -658,11 +691,12 @@ def _initial_service_phase(owner, private, context_raw, token, fence, before):
             all(type(name) is str and type(raw) is bytes for name, raw in before.records), "SERVICE_GIT_ORIGINAL")
         pin = before.records, before.session, before.raw
         context, returned, session = O.parse(context_raw), O.parse(before.raw), O.parse(before.session)
-        require(context["scope"] in (native.INITIAL_CONTEXT_SCOPE, native.INITIAL_ENTRY_CONTEXT_SCOPE,
+        require((context["scope"] in (native.INITIAL_CONTEXT_SCOPE, native.INITIAL_ENTRY_CONTEXT_SCOPE,
             native.INITIAL_AUTHORITY_CONTEXT_SCOPE, native.INITIAL_RECEIVING_CONTEXT_SCOPE,
             native.INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE, native.INITIAL_COLLECT_AUTHORITY_CONTEXT_SCOPE,
             native.INITIAL_TAIL_AUTHORITY_CONTEXT_SCOPE, native.INITIAL_BEFORE_AUTHORITY_CONTEXT_SCOPE,
-            native.INITIAL_PRODUCTIVE_USE_CONTEXT_SCOPE, native.INITIAL_PROVIDER_PUBLIC_CONTEXT_SCOPE) and
+            native.INITIAL_PRODUCTIVE_USE_CONTEXT_SCOPE, native.INITIAL_PROVIDER_PUBLIC_CONTEXT_SCOPE) or
+            final_seed is not None) and
             context["root"] == str(ROOT) and context["session"] == str(private.path) and
             context["sourceReturnSha256"] == O.digest(before.raw) and
             context["sourceReturnedNs"] == returned["returnedNs"] and
@@ -710,6 +744,11 @@ def _initial_service_phase(owner, private, context_raw, token, fence, before):
         owner.end()
         require(owner.initial_sources.get(str(path)) is before and
             (before.records, before.session, before.raw) == pin, "SERVICE_GIT_ORIGINAL_CHANGED")
+        if final_seed is not None:
+            import hosted_initial_recipient_productive_custody as PC
+            post = PC._checked_authority_phase_seed(final_seed, owner, private, context_raw, fence, before)
+            call = native.productive_post_authority_phase if post else native.productive_pre_authority_phase
+            return call(final_seed, owner, private, context_raw, token, fence, initial_git=selected)
         return native.phase(owner, private, context_raw, token, fence, initial_git=selected)
     finally:
         token = None  # Also clear this stack reference on prelaunch refusal.
