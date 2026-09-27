@@ -1,0 +1,382 @@
+public final class dev/p2pkit/rpc/RpcCallContext {
+	public final fun getPeer ()Ldev/p2pkit/core/PeerIdentity;
+	public final fun getRemainingMillis ()J
+	public final fun getRequestId ()Ldev/p2pkit/rpc/RpcRequestId;
+}
+
+public final class dev/p2pkit/rpc/RpcClient {
+	public static final field Companion Ldev/p2pkit/rpc/RpcClient$Companion;
+	public final fun call-1Y68eR8 (Ldev/p2pkit/rpc/RpcProcedure;Ljava/lang/Object;JLdev/p2pkit/rpc/RpcRetry;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun call-1Y68eR8$default (Ldev/p2pkit/rpc/RpcClient;Ldev/p2pkit/rpc/RpcProcedure;Ljava/lang/Object;JLdev/p2pkit/rpc/RpcRetry;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun connect (Ldev/p2pkit/rpc/RpcSelectedHost;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getDiagnostics ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun getDiscoveredPeers ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun getFingerprint-WOhdib4 ()Ljava/lang/String;
+	public final fun getPermissions ()Ldev/p2pkit/core/permission/P2pPermissionManager;
+	public final fun getState ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun getTrust ()Ldev/p2pkit/rpc/RpcTrust;
+	public final fun notifications (Ldev/p2pkit/rpc/RpcNotification;)Lkotlinx/coroutines/flow/Flow;
+	public final fun pair-8Mi8wO0 (Ldev/p2pkit/rpc/RpcInvitation;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun pair-8Mi8wO0$default (Ldev/p2pkit/rpc/RpcClient;Ldev/p2pkit/rpc/RpcInvitation;JLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun startDiscovery (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun stopDiscovery (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class dev/p2pkit/rpc/RpcClient$Companion {
+	public final fun create (Ldev/p2pkit/rpc/RpcPlatform;Lkotlinx/coroutines/CoroutineScope;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class dev/p2pkit/rpc/RpcClientConfiguration : dev/p2pkit/rpc/RpcConfiguration {
+}
+
+public class dev/p2pkit/rpc/RpcConfiguration {
+	public final fun getAppId-5LUHY74 ()Ljava/lang/String;
+	public final fun getLan ()Ldev/p2pkit/transport/lan/OrganizationLan;
+	public final fun getLimits ()Ldev/p2pkit/rpc/RpcLimits;
+	public final fun getTrustStore ()Ldev/p2pkit/rpc/RpcTrustStore;
+	public final fun notification (Ldev/p2pkit/rpc/RpcNotification;)V
+	public final fun setAppId-6QwJUv8 (Ljava/lang/String;)V
+	public final fun setLan (Ldev/p2pkit/transport/lan/OrganizationLan;)V
+	public final fun setLimits (Ldev/p2pkit/rpc/RpcLimits;)V
+	public final fun setTrustStore (Ldev/p2pkit/rpc/RpcTrustStore;)V
+}
+
+public final class dev/p2pkit/rpc/RpcConnectionState : java/lang/Enum {
+	public static final field Closed Ldev/p2pkit/rpc/RpcConnectionState;
+	public static final field Connecting Ldev/p2pkit/rpc/RpcConnectionState;
+	public static final field Disconnected Ldev/p2pkit/rpc/RpcConnectionState;
+	public static final field Failed Ldev/p2pkit/rpc/RpcConnectionState;
+	public static final field Negotiating Ldev/p2pkit/rpc/RpcConnectionState;
+	public static final field Pairing Ldev/p2pkit/rpc/RpcConnectionState;
+	public static final field Ready Ldev/p2pkit/rpc/RpcConnectionState;
+	public static final field Reconnecting Ldev/p2pkit/rpc/RpcConnectionState;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/p2pkit/rpc/RpcConnectionState;
+	public static fun values ()[Ldev/p2pkit/rpc/RpcConnectionState;
+}
+
+public final class dev/p2pkit/rpc/RpcDiagnostics {
+	public fun <init> ()V
+	public fun <init> (JJJJJJJIIIJ)V
+	public synthetic fun <init> (JJJJJJJIIIJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component10 ()I
+	public final fun component11 ()J
+	public final fun component2 ()J
+	public final fun component3 ()J
+	public final fun component4 ()J
+	public final fun component5 ()J
+	public final fun component6 ()J
+	public final fun component7 ()J
+	public final fun component8 ()I
+	public final fun component9 ()I
+	public final fun copy (JJJJJJJIIIJ)Ldev/p2pkit/rpc/RpcDiagnostics;
+	public static synthetic fun copy$default (Ldev/p2pkit/rpc/RpcDiagnostics;JJJJJJJIIIJILjava/lang/Object;)Ldev/p2pkit/rpc/RpcDiagnostics;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAcceptedCalls ()J
+	public final fun getCompletedCalls ()J
+	public final fun getConnectionFailures ()J
+	public final fun getDroppedNotifications ()J
+	public final fun getDuplicateRequests ()J
+	public final fun getProtocolFailures ()J
+	public final fun getQueuedCalls ()I
+	public final fun getRefusedCalls ()J
+	public final fun getRetainedPayloadBytes ()J
+	public final fun getRetainedRecords ()I
+	public final fun getRunningCalls ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/rpc/RpcEndpoint {
+	public fun <init> (Ljava/lang/String;I)V
+	public final fun getAddress ()Ljava/lang/String;
+	public final fun getPort ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/rpc/RpcExecutionEvidence : java/lang/Enum {
+	public static final field HandlerFinished Ldev/p2pkit/rpc/RpcExecutionEvidence;
+	public static final field MayHaveExecuted Ldev/p2pkit/rpc/RpcExecutionEvidence;
+	public static final field NotSent Ldev/p2pkit/rpc/RpcExecutionEvidence;
+	public static final field RejectedBeforeExecution Ldev/p2pkit/rpc/RpcExecutionEvidence;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/p2pkit/rpc/RpcExecutionEvidence;
+	public static fun values ()[Ldev/p2pkit/rpc/RpcExecutionEvidence;
+}
+
+public final class dev/p2pkit/rpc/RpcFailure : java/lang/Exception {
+	public fun <init> (Ldev/p2pkit/rpc/RpcFailureKind;Ldev/p2pkit/rpc/RpcFailurePhase;Ldev/p2pkit/rpc/RpcRequestId;Ldev/p2pkit/rpc/RpcExecutionEvidence;Ldev/p2pkit/rpc/RpcRetryAdvice;)V
+	public synthetic fun <init> (Ldev/p2pkit/rpc/RpcFailureKind;Ldev/p2pkit/rpc/RpcFailurePhase;Ldev/p2pkit/rpc/RpcRequestId;Ldev/p2pkit/rpc/RpcExecutionEvidence;Ldev/p2pkit/rpc/RpcRetryAdvice;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getExecutionEvidence ()Ldev/p2pkit/rpc/RpcExecutionEvidence;
+	public final fun getKind ()Ldev/p2pkit/rpc/RpcFailureKind;
+	public final fun getPhase ()Ldev/p2pkit/rpc/RpcFailurePhase;
+	public final fun getRequestId ()Ldev/p2pkit/rpc/RpcRequestId;
+	public final fun getRetryAdvice ()Ldev/p2pkit/rpc/RpcRetryAdvice;
+}
+
+public final class dev/p2pkit/rpc/RpcFailureKind : java/lang/Enum {
+	public static final field Authentication Ldev/p2pkit/rpc/RpcFailureKind;
+	public static final field Closed Ldev/p2pkit/rpc/RpcFailureKind;
+	public static final field DeadlineExceeded Ldev/p2pkit/rpc/RpcFailureKind;
+	public static final field HandlerFailed Ldev/p2pkit/rpc/RpcFailureKind;
+	public static final field HostRestarted Ldev/p2pkit/rpc/RpcFailureKind;
+	public static final field IncompatibleVersion Ldev/p2pkit/rpc/RpcFailureKind;
+	public static final field InvalidPayload Ldev/p2pkit/rpc/RpcFailureKind;
+	public static final field NotConnected Ldev/p2pkit/rpc/RpcFailureKind;
+	public static final field Overloaded Ldev/p2pkit/rpc/RpcFailureKind;
+	public static final field PermissionMissing Ldev/p2pkit/rpc/RpcFailureKind;
+	public static final field Protocol Ldev/p2pkit/rpc/RpcFailureKind;
+	public static final field RemoteCancelled Ldev/p2pkit/rpc/RpcFailureKind;
+	public static final field ResultUnavailable Ldev/p2pkit/rpc/RpcFailureKind;
+	public static final field TrustStorage Ldev/p2pkit/rpc/RpcFailureKind;
+	public static final field Unauthorized Ldev/p2pkit/rpc/RpcFailureKind;
+	public static final field UnknownOutcome Ldev/p2pkit/rpc/RpcFailureKind;
+	public static final field UnknownProcedure Ldev/p2pkit/rpc/RpcFailureKind;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/p2pkit/rpc/RpcFailureKind;
+	public static fun values ()[Ldev/p2pkit/rpc/RpcFailureKind;
+}
+
+public final class dev/p2pkit/rpc/RpcFailurePhase : java/lang/Enum {
+	public static final field Admission Ldev/p2pkit/rpc/RpcFailurePhase;
+	public static final field AwaitingResponse Ldev/p2pkit/rpc/RpcFailurePhase;
+	public static final field Decoding Ldev/p2pkit/rpc/RpcFailurePhase;
+	public static final field Encoding Ldev/p2pkit/rpc/RpcFailurePhase;
+	public static final field Negotiation Ldev/p2pkit/rpc/RpcFailurePhase;
+	public static final field Sending Ldev/p2pkit/rpc/RpcFailurePhase;
+	public static final field Trust Ldev/p2pkit/rpc/RpcFailurePhase;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/p2pkit/rpc/RpcFailurePhase;
+	public static fun values ()[Ldev/p2pkit/rpc/RpcFailurePhase;
+}
+
+public final class dev/p2pkit/rpc/RpcHost {
+	public static final field Companion Ldev/p2pkit/rpc/RpcHost$Companion;
+	public final fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun endpoint (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getConnections ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun getDiagnostics ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun getFingerprint-WOhdib4 ()Ljava/lang/String;
+	public final fun getPairing ()Ldev/p2pkit/rpc/RpcPairing;
+	public final fun getPermissions ()Ldev/p2pkit/core/permission/P2pPermissionManager;
+	public final fun getState ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun getTrust ()Ldev/p2pkit/rpc/RpcTrust;
+	public final fun start (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun tryNotify-ALQvzA0 (Ljava/lang/String;Ldev/p2pkit/rpc/RpcNotification;Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class dev/p2pkit/rpc/RpcHost$Companion {
+	public final fun create (Ldev/p2pkit/rpc/RpcPlatform;Lkotlinx/coroutines/CoroutineScope;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class dev/p2pkit/rpc/RpcHostConfiguration : dev/p2pkit/rpc/RpcConfiguration {
+	public final fun getAdvertise ()Z
+	public final fun register (Ldev/p2pkit/rpc/RpcProcedure;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;)V
+	public static synthetic fun register$default (Ldev/p2pkit/rpc/RpcHostConfiguration;Ldev/p2pkit/rpc/RpcProcedure;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;ILjava/lang/Object;)V
+	public final fun setAdvertise (Z)V
+}
+
+public final class dev/p2pkit/rpc/RpcHostState : java/lang/Enum {
+	public static final field Closed Ldev/p2pkit/rpc/RpcHostState;
+	public static final field Failed Ldev/p2pkit/rpc/RpcHostState;
+	public static final field Idle Ldev/p2pkit/rpc/RpcHostState;
+	public static final field Running Ldev/p2pkit/rpc/RpcHostState;
+	public static final field Starting Ldev/p2pkit/rpc/RpcHostState;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/p2pkit/rpc/RpcHostState;
+	public static fun values ()[Ldev/p2pkit/rpc/RpcHostState;
+}
+
+public final class dev/p2pkit/rpc/RpcInvitation {
+	public static final field Companion Ldev/p2pkit/rpc/RpcInvitation$Companion;
+	public final fun clear ()V
+	public final fun getEndpoint ()Ldev/p2pkit/rpc/RpcEndpoint;
+	public final fun getQr ()Ljava/lang/String;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/rpc/RpcInvitation$Companion {
+	public final fun parse (Ljava/lang/String;)Ldev/p2pkit/rpc/RpcInvitation;
+}
+
+public final class dev/p2pkit/rpc/RpcLimits {
+	public static final field Companion Ldev/p2pkit/rpc/RpcLimits$Companion;
+	public fun <init> ()V
+	public fun <init> (IIIIJJII)V
+	public synthetic fun <init> (IIIIJJIIILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getCallsPerClient ()I
+	public final fun getPayloadBytes ()J
+	public final fun getQueuedCalls ()I
+	public final fun getRecordsPerClient ()I
+	public final fun getResultCacheBytes ()J
+	public final fun getRunningCalls ()I
+	public final fun getTotalRecords ()I
+	public final fun getTrustedClients ()I
+}
+
+public final class dev/p2pkit/rpc/RpcLimits$Companion {
+	public final fun host128 ()Ldev/p2pkit/rpc/RpcLimits;
+}
+
+public final class dev/p2pkit/rpc/RpcNotification {
+	public fun <init> (Ljava/lang/String;ILkotlinx/serialization/KSerializer;I)V
+	public synthetic fun <init> (Ljava/lang/String;ILkotlinx/serialization/KSerializer;IILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getLimitBytes ()I
+	public final fun getName ()Ljava/lang/String;
+	public final fun getPayload ()Lkotlinx/serialization/KSerializer;
+	public final fun getVersion ()I
+}
+
+public final class dev/p2pkit/rpc/RpcNotifyResult : java/lang/Enum {
+	public static final field DroppedAtCapacity Ldev/p2pkit/rpc/RpcNotifyResult;
+	public static final field Enqueued Ldev/p2pkit/rpc/RpcNotifyResult;
+	public static final field NotAuthorized Ldev/p2pkit/rpc/RpcNotifyResult;
+	public static final field NotConnected Ldev/p2pkit/rpc/RpcNotifyResult;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/p2pkit/rpc/RpcNotifyResult;
+	public static fun values ()[Ldev/p2pkit/rpc/RpcNotifyResult;
+}
+
+public final class dev/p2pkit/rpc/RpcPairing {
+	public final fun approve (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun createInvitation-VtjQ1oo (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun createInvitation-VtjQ1oo$default (Ldev/p2pkit/rpc/RpcPairing;JLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun getPending ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun reject (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class dev/p2pkit/rpc/RpcPairingRequest {
+	public final fun getId ()Ljava/lang/String;
+	public final fun getPeer ()Ldev/p2pkit/core/PeerIdentity;
+	public final fun getRemainingMillis ()J
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/rpc/RpcPeerConnection {
+	public final fun getAdmission ()Ldev/p2pkit/core/PeerAdmission;
+	public final fun getGeneration ()J
+	public final fun getPeer ()Ldev/p2pkit/core/PeerIdentity;
+	public final fun getState ()Ldev/p2pkit/core/ConnectionState;
+}
+
+public final class dev/p2pkit/rpc/RpcPlatform {
+	public static final field Companion Ldev/p2pkit/rpc/RpcPlatform$Companion;
+}
+
+public final class dev/p2pkit/rpc/RpcPlatform$Companion {
+}
+
+public final class dev/p2pkit/rpc/RpcPlatformJvmKt {
+	public static final fun jvm (Ldev/p2pkit/rpc/RpcPlatform$Companion;Ldev/p2pkit/core/security/JvmSecureIdentityStore;)Ldev/p2pkit/rpc/RpcPlatform;
+}
+
+public final class dev/p2pkit/rpc/RpcProcedure {
+	public fun <init> (Ljava/lang/String;ILkotlinx/serialization/KSerializer;Lkotlinx/serialization/KSerializer;Lkotlinx/serialization/KSerializer;Ldev/p2pkit/rpc/RpcRetrySafety;III)V
+	public synthetic fun <init> (Ljava/lang/String;ILkotlinx/serialization/KSerializer;Lkotlinx/serialization/KSerializer;Lkotlinx/serialization/KSerializer;Ldev/p2pkit/rpc/RpcRetrySafety;IIIILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getApplicationError ()Lkotlinx/serialization/KSerializer;
+	public final fun getErrorLimitBytes ()I
+	public final fun getName ()Ljava/lang/String;
+	public final fun getRequest ()Lkotlinx/serialization/KSerializer;
+	public final fun getRequestLimitBytes ()I
+	public final fun getResponse ()Lkotlinx/serialization/KSerializer;
+	public final fun getResponseLimitBytes ()I
+	public final fun getRetrySafety ()Ldev/p2pkit/rpc/RpcRetrySafety;
+	public final fun getVersion ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract class dev/p2pkit/rpc/RpcReply {
+}
+
+public final class dev/p2pkit/rpc/RpcReply$ApplicationError : dev/p2pkit/rpc/RpcReply {
+	public fun <init> (Ljava/lang/Object;)V
+	public final fun component1 ()Ljava/lang/Object;
+	public final fun copy (Ljava/lang/Object;)Ldev/p2pkit/rpc/RpcReply$ApplicationError;
+	public static synthetic fun copy$default (Ldev/p2pkit/rpc/RpcReply$ApplicationError;Ljava/lang/Object;ILjava/lang/Object;)Ldev/p2pkit/rpc/RpcReply$ApplicationError;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getError ()Ljava/lang/Object;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/rpc/RpcReply$Success : dev/p2pkit/rpc/RpcReply {
+	public fun <init> (Ljava/lang/Object;)V
+	public final fun component1 ()Ljava/lang/Object;
+	public final fun copy (Ljava/lang/Object;)Ldev/p2pkit/rpc/RpcReply$Success;
+	public static synthetic fun copy$default (Ldev/p2pkit/rpc/RpcReply$Success;Ljava/lang/Object;ILjava/lang/Object;)Ldev/p2pkit/rpc/RpcReply$Success;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getValue ()Ljava/lang/Object;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/rpc/RpcRequestId {
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getValue ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract class dev/p2pkit/rpc/RpcRetry {
+	public synthetic fun <init> (ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getMaxAttempts ()I
+}
+
+public final class dev/p2pkit/rpc/RpcRetry$Idempotent : dev/p2pkit/rpc/RpcRetry {
+	public fun <init> ()V
+	public fun <init> (I)V
+	public synthetic fun <init> (IILkotlin/jvm/internal/DefaultConstructorMarker;)V
+}
+
+public final class dev/p2pkit/rpc/RpcRetry$RecoverOnly : dev/p2pkit/rpc/RpcRetry {
+	public fun <init> ()V
+	public fun <init> (I)V
+	public synthetic fun <init> (IILkotlin/jvm/internal/DefaultConstructorMarker;)V
+}
+
+public final class dev/p2pkit/rpc/RpcRetryAdvice : java/lang/Enum {
+	public static final field ApplicationIdempotencyRequired Ldev/p2pkit/rpc/RpcRetryAdvice;
+	public static final field Never Ldev/p2pkit/rpc/RpcRetryAdvice;
+	public static final field RecoverStatus Ldev/p2pkit/rpc/RpcRetryAdvice;
+	public static final field SafeBeforeExecution Ldev/p2pkit/rpc/RpcRetryAdvice;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/p2pkit/rpc/RpcRetryAdvice;
+	public static fun values ()[Ldev/p2pkit/rpc/RpcRetryAdvice;
+}
+
+public final class dev/p2pkit/rpc/RpcRetrySafety : java/lang/Enum {
+	public static final field Idempotent Ldev/p2pkit/rpc/RpcRetrySafety;
+	public static final field NeverReinvoke Ldev/p2pkit/rpc/RpcRetrySafety;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/p2pkit/rpc/RpcRetrySafety;
+	public static fun values ()[Ldev/p2pkit/rpc/RpcRetrySafety;
+}
+
+public final class dev/p2pkit/rpc/RpcSelectedHost {
+	public synthetic fun <init> (Ljava/lang/String;Ldev/p2pkit/rpc/RpcEndpoint;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getEndpoint ()Ldev/p2pkit/rpc/RpcEndpoint;
+	public final fun getFingerprint-WOhdib4 ()Ljava/lang/String;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/rpc/RpcTrust {
+	public final fun fingerprints ()Ljava/util/List;
+	public final fun isTrusted-63GxmIA (Ljava/lang/String;)Z
+	public final fun revoke-nPo3Aeo (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class dev/p2pkit/rpc/RpcTrustPurpose : java/lang/Enum {
+	public static final field HostClients Ldev/p2pkit/rpc/RpcTrustPurpose;
+	public static final field SelectedHosts Ldev/p2pkit/rpc/RpcTrustPurpose;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/p2pkit/rpc/RpcTrustPurpose;
+	public static fun values ()[Ldev/p2pkit/rpc/RpcTrustPurpose;
+}
+
+public abstract interface class dev/p2pkit/rpc/RpcTrustStore {
+	public abstract fun load-xeAe7hE (Ljava/lang/String;Ldev/p2pkit/rpc/RpcTrustPurpose;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun replace-JZaMZmA (Ljava/lang/String;Ldev/p2pkit/rpc/RpcTrustPurpose;Ljava/util/Set;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+

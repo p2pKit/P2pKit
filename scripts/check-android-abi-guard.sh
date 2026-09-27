@@ -156,15 +156,27 @@ done
 
 # Metadata-aware extraction intentionally omits Kotlin-internal implementation
 # classes even though their JVM bytecode is present in the compiler output.
+# A private constructor called by its companion has a synthetic JVM accessor,
+# which the dumper retains even when its descriptor references internal types.
+# Keep that genuine bridge in the baseline; it does not export those classes.
+# Non-synthetic constructors, methods, fields and class declarations still fail.
+has_internal_api() {
+    local signature="$1"
+    shift
+    awk -v signature="$signature" '
+        index($0, signature) == 0 { next }
+        /^[[:space:]]+public synthetic fun <init> [(].*Lkotlin\/jvm\/internal\/DefaultConstructorMarker;[)]V$/ { next }
+        { found = 1 }
+        END { exit !found }
+    ' "$@"
+}
+
 for internal_signature in \
     'dev/p2pkit/core/AndroidNetworkPathListener' \
     'dev/p2pkit/transport/lan/AndroidLanDataTransport' \
     'dev/p2pkit/rpc/internal/RpcHostEngine' \
     'dev/p2pkit/provisioning/android/WifiManagerWrapper'; do
-    if grep -Fq "$internal_signature" "$CORE_API" ||
-        grep -Fq "$internal_signature" "$LAN_API" ||
-        grep -Fq "$internal_signature" "$RPC_API" ||
-        grep -Fq "$internal_signature" "$PROVISIONING_API"; then
+    if has_internal_api "$internal_signature" "$CORE_API" "$LAN_API" "$RPC_API" "$PROVISIONING_API"; then
         fail "Android ABI baselines incorrectly freeze internal symbol $internal_signature"
     fi
 done

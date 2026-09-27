@@ -12,12 +12,13 @@ internal data class AndroidLanDialRoute(
 
 /**
  * Shared route ownership between Android LAN discovery and TCP dialing.
- * [resolveCurrentTarget] is used only when discovery has not yet published a
+ * By default, [resolveCurrentTarget] is used when discovery has not published a
  * route, so manual LAN peers do not require advertising/discovery to be on.
+ * The organization profile requires a fresh resolution for every route lookup.
  */
 internal class AndroidLanNetworkState(
-    private val resolveCurrentTarget: (() -> AndroidLanBindTarget?)? = null,
-    private val requireFresh: Boolean = false
+    private val requireFresh: Boolean = false,
+    private val resolveCurrentTarget: (() -> AndroidLanBindTarget?)? = null
 ) {
     @Volatile
     private var selected: AndroidLanDialRoute? = null

@@ -21,9 +21,9 @@ kotlin {
         target.binaries.framework {
             baseName = "P2pKitRpcExample"
             isStatic = true
-            export(project(":p2p-rpc"))
-            export(project(":p2p-core"))
-            export(project(":p2p-transport-lan"))
+            export(project.dependencies.project(":p2p-rpc"))
+            export(project.dependencies.project(":p2p-core"))
+            export(project.dependencies.project(":p2p-transport-lan"))
         }
         target.binaries.configureEach {
             freeCompilerArgs += "-Xoverride-konan-properties=minVersion.ios=$minimum"

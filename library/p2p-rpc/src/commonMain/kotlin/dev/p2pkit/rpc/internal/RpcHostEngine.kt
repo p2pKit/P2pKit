@@ -17,7 +17,7 @@ import dev.p2pkit.rpc.RpcRetrySafety
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
@@ -325,8 +325,10 @@ internal class RpcHostEngine(
             code = WireFailure.ResultUnavailable.code)
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
+    @OptIn(DelicateCoroutinesApi::class)
     private fun launchRecord(record: Record) {
+        // Admission already owns a dedup record and leases. ATOMIC guarantees their finally cleanup
+        // even when cancellation wins before dispatch; ensureActive prevents a cancelled handler start.
         val job = scope.launch(start = CoroutineStart.ATOMIC) {
             var terminal: WireMessage? = null
             var encoded: EncodedReply? = null

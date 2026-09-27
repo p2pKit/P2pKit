@@ -39,6 +39,15 @@ public final class dev/p2pkit/core/BackgroundPolicy$KeepRunning : dev/p2pkit/cor
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class dev/p2pkit/core/BoundedReconnect {
+	public fun <init> ()V
+	public fun <init> (JJJ)V
+	public synthetic fun <init> (JJJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getInitialDelayMillis ()J
+	public final fun getMaximumDelayMillis ()J
+	public final fun getWindowMillis ()J
+}
+
 public final class dev/p2pkit/core/BuildInfo {
 	public static final field BRANCH Ljava/lang/String;
 	public static final field BUILD_TIME Ljava/lang/String;
@@ -584,6 +593,7 @@ public final class dev/p2pkit/core/P2pMessage$Binary : dev/p2pkit/core/P2pMessag
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getBytes ()[B
 	public final fun getMetadata ()Ljava/util/Map;
+	public final fun getSizeBytes ()I
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
@@ -604,6 +614,8 @@ public final class dev/p2pkit/core/P2pMessage$Text : dev/p2pkit/core/P2pMessage 
 
 public abstract interface class dev/p2pkit/core/P2pSession {
 	public abstract fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun getAdmission ()Ldev/p2pkit/core/PeerAdmission;
+	public fun getConnectionInfo ()Lkotlinx/coroutines/flow/StateFlow;
 	public abstract fun getId ()Ljava/lang/String;
 	public abstract fun getIncoming ()Lkotlinx/coroutines/flow/SharedFlow;
 	public abstract fun getIncomingFiles ()Lkotlinx/coroutines/flow/SharedFlow;
@@ -612,14 +624,32 @@ public abstract interface class dev/p2pkit/core/P2pSession {
 	public fun getPendingFileOffers ()Lkotlinx/coroutines/flow/StateFlow;
 	public abstract fun getState ()Lkotlinx/coroutines/flow/StateFlow;
 	public abstract fun send (Ldev/p2pkit/core/P2pMessage;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun sendAtGeneration (Ldev/p2pkit/core/P2pMessage;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun sendFile (Ljava/lang/String;JLjava/lang/String;Lkotlinx/io/RawSource;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun sendFile (Ljava/lang/String;Ljava/lang/String;Ldev/p2pkit/core/transfer/PreparedFileSource;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class dev/p2pkit/core/P2pSession$DefaultImpls {
+	public static fun getAdmission (Ldev/p2pkit/core/P2pSession;)Ldev/p2pkit/core/PeerAdmission;
+	public static fun getConnectionInfo (Ldev/p2pkit/core/P2pSession;)Lkotlinx/coroutines/flow/StateFlow;
 	public static fun getPeerIdentity (Ldev/p2pkit/core/P2pSession;)Ldev/p2pkit/core/PeerIdentity;
 	public static fun getPendingFileOffers (Ldev/p2pkit/core/P2pSession;)Lkotlinx/coroutines/flow/StateFlow;
+	public static fun sendAtGeneration (Ldev/p2pkit/core/P2pSession;Ldev/p2pkit/core/P2pMessage;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static fun sendFile (Ldev/p2pkit/core/P2pSession;Ljava/lang/String;Ljava/lang/String;Ldev/p2pkit/core/transfer/PreparedFileSource;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class dev/p2pkit/core/P2pSessionProfile {
+	public fun <init> (Ldev/p2pkit/core/PeerAdmissionController;Ldev/p2pkit/core/PayloadBudget;IIIIIJLdev/p2pkit/core/BoundedReconnect;)V
+	public synthetic fun <init> (Ldev/p2pkit/core/PeerAdmissionController;Ldev/p2pkit/core/PayloadBudget;IIIIIJLdev/p2pkit/core/BoundedReconnect;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getAdmission ()Ldev/p2pkit/core/PeerAdmissionController;
+	public final fun getMaxApplicationBytes ()I
+	public final fun getMaxEnrollmentSessions ()I
+	public final fun getMaxInboundHandshakes ()I
+	public final fun getMaxQueuedBytesPerSession ()J
+	public final fun getMaxQueuedMessagesPerSession ()I
+	public final fun getMaxTrustedSessions ()I
+	public final fun getPayloadBudget ()Ldev/p2pkit/core/PayloadBudget;
+	public final fun getReconnect ()Ldev/p2pkit/core/BoundedReconnect;
 }
 
 public abstract class dev/p2pkit/core/P2pState {
@@ -671,6 +701,19 @@ public final class dev/p2pkit/core/P2pState$Stopping : dev/p2pkit/core/P2pState 
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class dev/p2pkit/core/PayloadBudget {
+	public fun <init> (J)V
+	public final fun getCapacityBytes ()J
+	public final fun getRetainedBytes ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun tryReserve (J)Ldev/p2pkit/core/PayloadLease;
+}
+
+public final class dev/p2pkit/core/PayloadLease {
+	public final fun getBytes ()J
+	public final fun release ()V
+	public final fun shrinkTo (J)Z
+}
+
 public final class dev/p2pkit/core/Peer {
 	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ldev/p2pkit/core/Platform;Ljava/util/Set;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1-F_t_xv8 ()Ljava/lang/String;
@@ -686,6 +729,19 @@ public final class dev/p2pkit/core/Peer {
 	public final fun getSupportedTransports ()Ljava/util/Set;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/core/PeerAdmission : java/lang/Enum {
+	public static final field EnrollmentOnly Ldev/p2pkit/core/PeerAdmission;
+	public static final field Rejected Ldev/p2pkit/core/PeerAdmission;
+	public static final field Trusted Ldev/p2pkit/core/PeerAdmission;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/p2pkit/core/PeerAdmission;
+	public static fun values ()[Ldev/p2pkit/core/PeerAdmission;
+}
+
+public abstract interface class dev/p2pkit/core/PeerAdmissionController {
+	public abstract fun admission (Ldev/p2pkit/core/PeerIdentity;)Ldev/p2pkit/core/PeerAdmission;
 }
 
 public abstract interface class dev/p2pkit/core/PeerAuthorizationPolicy {
@@ -854,6 +910,45 @@ public final class dev/p2pkit/core/SecurityMode$NoneForMvp : dev/p2pkit/core/Sec
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class dev/p2pkit/core/SessionConnectionInfo {
+	public fun <init> (JLdev/p2pkit/core/SessionFailure;)V
+	public synthetic fun <init> (JLdev/p2pkit/core/SessionFailure;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2 ()Ldev/p2pkit/core/SessionFailure;
+	public final fun copy (JLdev/p2pkit/core/SessionFailure;)Ldev/p2pkit/core/SessionConnectionInfo;
+	public static synthetic fun copy$default (Ldev/p2pkit/core/SessionConnectionInfo;JLdev/p2pkit/core/SessionFailure;ILjava/lang/Object;)Ldev/p2pkit/core/SessionConnectionInfo;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getGeneration ()J
+	public final fun getLastFailure ()Ldev/p2pkit/core/SessionFailure;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/core/SessionFailure {
+	public fun <init> (Ldev/p2pkit/core/SessionFailureKind;Z)V
+	public final fun component1 ()Ldev/p2pkit/core/SessionFailureKind;
+	public final fun component2 ()Z
+	public final fun copy (Ldev/p2pkit/core/SessionFailureKind;Z)Ldev/p2pkit/core/SessionFailure;
+	public static synthetic fun copy$default (Ldev/p2pkit/core/SessionFailure;Ldev/p2pkit/core/SessionFailureKind;ZILjava/lang/Object;)Ldev/p2pkit/core/SessionFailure;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getKind ()Ldev/p2pkit/core/SessionFailureKind;
+	public final fun getRetryable ()Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/core/SessionFailureKind : java/lang/Enum {
+	public static final field Authentication Ldev/p2pkit/core/SessionFailureKind;
+	public static final field Authorization Ldev/p2pkit/core/SessionFailureKind;
+	public static final field Capacity Ldev/p2pkit/core/SessionFailureKind;
+	public static final field Protocol Ldev/p2pkit/core/SessionFailureKind;
+	public static final field ReconnectExhausted Ldev/p2pkit/core/SessionFailureKind;
+	public static final field Transport Ldev/p2pkit/core/SessionFailureKind;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/p2pkit/core/SessionFailureKind;
+	public static fun values ()[Ldev/p2pkit/core/SessionFailureKind;
+}
+
 public final class dev/p2pkit/core/TransportKind : java/lang/Enum {
 	public static final field BLE Ldev/p2pkit/core/TransportKind;
 	public static final field LAN Ldev/p2pkit/core/TransportKind;
@@ -914,6 +1009,7 @@ public final class dev/p2pkit/core/dsl/P2pKitBuilder {
 	public final fun getDeviceName ()Ljava/lang/String;
 	public final fun getLogger ()Ldev/p2pkit/core/P2pLogger;
 	public final fun getPermissionManager ()Ldev/p2pkit/core/permission/P2pPermissionManager;
+	public final fun getSessionProfile ()Ldev/p2pkit/core/P2pSessionProfile;
 	public final fun keepAlive (Lkotlin/jvm/functions/Function1;)V
 	public final fun lifecycle (Lkotlin/jvm/functions/Function1;)V
 	public final fun networkProvisioning (Lkotlin/jvm/functions/Function1;)V
@@ -922,6 +1018,7 @@ public final class dev/p2pkit/core/dsl/P2pKitBuilder {
 	public final fun setDeviceName (Ljava/lang/String;)V
 	public final fun setLogger (Ldev/p2pkit/core/P2pLogger;)V
 	public final fun setPermissionManager (Ldev/p2pkit/core/permission/P2pPermissionManager;)V
+	public final fun setSessionProfile (Ldev/p2pkit/core/P2pSessionProfile;)V
 	public final fun transports (Lkotlin/jvm/functions/Function1;)V
 }
 
@@ -1433,6 +1530,10 @@ public abstract interface class dev/p2pkit/core/security/JvmSecureIdentityStore 
 public final class dev/p2pkit/core/security/NoOpSecurityManager : dev/p2pkit/core/security/SecurityManager {
 	public fun <init> ()V
 	public fun performHandshake (Ldev/p2pkit/core/transport/RawConnection;Ldev/p2pkit/core/Peer;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class dev/p2pkit/core/security/PayloadHashKt {
+	public static final fun payloadSha256 ([B)[B
 }
 
 public abstract interface class dev/p2pkit/core/security/SecureConnection : dev/p2pkit/core/transport/RawConnection {
