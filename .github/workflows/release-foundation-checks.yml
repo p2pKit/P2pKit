@@ -55,6 +55,8 @@ jobs:
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-artifact-zip-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-artifact-delivery-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-artifact-native-stream-test.py -v -f
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-artifact-finite-data-test.py -v
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-artifact-finite-native-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-ordinary-qualification-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-ordinary-originals-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-ordinary-identity-test.py -v
@@ -73,6 +75,10 @@ jobs:
           node scripts/tests/hosted-initial-artifact-transport-test.cjs
           node scripts/tests/hosted-initial-artifact-reader-test.cjs
           node scripts/tests/hosted-initial-artifact-observer-test.cjs
+          node scripts/tests/hosted-initial-artifact-action-data-test.cjs
+          node scripts/tests/hosted-initial-artifact-action-owner-test.cjs
+          node scripts/tests/hosted-initial-artifact-action-controller-test.cjs
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-artifact-finite-contract-test.py -v
           git diff --exit-code
       # No Gradle, SDK setup, provider, application build or publication. This
       # job cannot replace the ordinary FULL/Desktop or protected release gates.

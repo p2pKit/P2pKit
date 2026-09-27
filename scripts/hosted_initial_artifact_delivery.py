@@ -8,6 +8,8 @@ performed by this module.
 """
 from __future__ import annotations
 
+import base64
+from datetime import datetime, timezone
 import hashlib
 import json
 import re
@@ -406,3 +408,559 @@ def artifact_name(pending):
 def decimal(value):
     require(type(value) is str and re.fullmatch(r"0|[1-9][0-9]{0,19}", value), "DECIMAL")
     return integer(int(value))
+
+# Fixed finite-mode records. These predicates bind supplied original bytes;
+# the native/Node owners, not a dictionary or digest, prove actual custody.
+INPUT_BYTES = 2 * 1024 * 1024 - 5  # The five-byte I header is charged separately.
+FINISH_INPUT_SCOPE = "INITIAL_ARTIFACT_FINISH_ORIGINALS_INPUT_V1"
+AFTER_INPUT_SCOPE = "INITIAL_ARTIFACT_AFTER_ORIGINALS_INPUT_V1"
+AFTER_READY_SCOPE = "INITIAL_ARTIFACT_AFTER_READY_PENDING_PUBLIC_OBSERVATION_V1"
+FINISH_CLOSED_SCOPE = "INITIAL_ARTIFACT_FINISH_CLOSED_PENDING_PROCESS_V1"
+AFTER_CLOSED_SCOPE = "INITIAL_ARTIFACT_AFTER_CLOSED_PENDING_PROCESS_V1"
+UPLOAD_DIRECTORY_ENV = "P2PKIT_INITIAL_UPLOAD_DIRECTORY_SHA256"
+UPLOAD_METADATA_ENV = "P2PKIT_INITIAL_UPLOAD_FILE_METADATA_SHA256"
+UPLOAD_CLOSE_ENV = "P2PKIT_INITIAL_UPLOAD_OWNER_CLOSE_SHA256"
+UTC_FIELDS = ("policyNotBefore", "policyExpiresAt", "authorityNotBefore", "authorityExpiresAt")
+READY_FIELDS = {"schema", "scope", "kind", "selection", "source", "github", "beforeSha256",
+    "carrierCloseSha256", "firstRawNs", "deadline", "originalWindow", "workEndNs", "closeEndNs", "members",
+    "zipBytes", "originals", "jobOriginal", *UTC_FIELDS, "observedAt", "nativeFileRetirement",
+    "originalStepOutcome", "qualification"}
+STREAM_FIELDS = {"schema", "scope", "beforeSha256", "readySha256", "zipBytes", "zipSha256",
+    "nativeCloseSha256", "closedNs", "nativeFileRetirement", "originalReaderOutcome", "qualification"}
+READER_FLAGS = ("originalChildCloseObserved", "originalExitZeroObserved", "stdinFinishObserved",
+    "stdinEndCallbackObserved", "stdoutEndObserved", "stderrEndObserved")
+READER_FIELDS = {"scope", "transport", "code", "preSpawnLocalNs", "returnedLocalNs", *READER_FLAGS,
+    "originalPipeCloses", "stderrBytes", "readySha256", "finalSha256", "zipBytes", "zipSha256",
+    "nativeFileRetirement", "originalStepOutcome", "qualification"}
+OBSERVER_FLAGS = ("requestFinishObserved", "requestEndCallbackObserved", "tlsSecureConnectObserved",
+    "tlsAuthorizedObserved", "responseEndObserved", "requestCloseObserved", "responseCloseObserved",
+    "socketCloseObserved")
+OBSERVER_ROW_FIELDS = {"kind", "id", "startedNs", "endNs", "closedNs", "status", "bodyBytes", "bodySha256",
+    "rawHeaderVectorSha256", "date", "dateEpochSeconds", *OBSERVER_FLAGS}
+OBSERVER_FIELDS = {"scope", "stage", "transport", "code", "requestSha256", "jobId", "artifactId", "enteredNs",
+    "lastObservationNs", "agentDestroyReturned", "originalResourceCount", "requests", "originalStepOutcome",
+    "qualification"}
+TRANSPORT_FLAGS = ("requestFinished", "requestEndCallback", "responseEndObserved", "requestCloseObserved",
+    "responseCloseObserved", "socketCloseObserved")
+TRANSPORT_ROW_FIELDS = {"kind", "startNs", "status", "bodyBytes", "responseBytes", *TRANSPORT_FLAGS}
+TRANSPORT_FIELDS = {"scope", "transport", "code", "requestSha256", "artifactName", "inputBytes", "sentBytes",
+    "observedZipSha256", "submittedFinalizeHash", "artifactId", "createInvokedAt", "requestedExpiresAt",
+    "requestedRetentionDays", "enteredNs", "returnedObservationNs", "inputEndObserved", "inputCloseObserved",
+    "requests", "serviceDigest", "actualServiceExpiry", "nativeFileRetirement", "originalRunnerOutcome",
+    "qualification"}
+PENDING_COMMON = {"schema", "scope", "kind", "selection", "source", "github", "beforeSha256", "readySha256",
+    "originalWindow", "deadline", "originals", "members", *UTC_FIELDS, "observedAt", "artifact", "times",
+    "observations", "writerReturn", "originalHelperOutcome", "originalStepOutcome", "qualification",
+    "privateOriginals"}
+ARTIFACT_FIELDS = {"id", "name", "zipBytes", "zipSha256", "createInvokedAt", "requestedExpiresAt",
+    "requestedRetentionDays"}
+UPLOAD_TIMES = {"firstRawNs", "streamClosedNs", "finishFirstRawNs", "pendingPreparedNs", "workEndNs", "closeEndNs",
+    "readerPreSpawnLocalNs", "readerReturnedLocalNs", "beforeEnteredLocalNs", "beforeReturnedLocalNs",
+    "transportEnteredLocalNs", "transportReturnedLocalNs"}
+UPLOAD_HASHES = {"streamFinalSha256", "readerClosedSha256", "transportClosedSha256", "beforeClosedSha256",
+    "beforeBodySha256", "beforeHeaderVectorSha256"}
+UPLOAD_OBSERVATIONS = UPLOAD_HASHES | {"beforeServiceEpoch", "beforeStepNumber", "uploadStepNumber",
+    "transportRequestCount"}
+AFTER_TIMES = {"firstRawNs", "endNs", "pendingPreparedNs", "observerEnteredLocalNs", "observerReturnedLocalNs"}
+AFTER_HASHES = {"afterClosedSha256", "jobBodySha256", "jobHeaderVectorSha256", "artifactBodySha256",
+    "artifactHeaderVectorSha256"}
+AFTER_OBSERVATIONS = AFTER_HASHES | {"jobServiceEpoch", "artifactServiceEpoch", "beforeStepNumber",
+    "uploadStepNumber", "afterStepNumber", "observerRequestCount"}
+CARRIER_FIELDS = {"directoryIdentitySha256", "fileMetadataSha256", "fileOwnerCloseSha256"}
+AFTER_READY_FIELDS = {"schema", "scope", "kind", "selection", "source", "github", "beforeSha256", "uploadSha256",
+    "deadline", "originalWindow", "firstRawNs", "endNs", "artifactId", *UTC_FIELDS, "observedAt",
+    "originalStepOutcome", "qualification"}
+FINITE_FIELDS = {"schema", "scope", "kind", "selection", "source", "github", "beforeSha256", "readySha256",
+    "inputSha256", "pending", "pendingSha256", *CARRIER_FIELDS, "closedNs", "artifactId",
+    "originalHelperOutcome", "originalStepOutcome", "qualification"}
+
+
+def _same(left, right, code):
+    require(O.encoded(left) == O.encoded(right), code)
+
+
+def _flags(value, names):
+    require(all(value[name] is True for name in names), "ORIGINAL_CLOSED_FLAGS")
+
+
+def _id(value):
+    number = decimal(value)
+    integer(number, 1, (1 << 63) - 1)
+    return value
+
+
+def _hash_fields(value, names):
+    for name in names:
+        digest(value[name])
+
+
+def _millis(value):
+    require(type(value) is str and re.fullmatch(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z", value), "UTC_MILLISECONDS")
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+        seconds = B.wire.utc_epoch(value[:19] + "Z")
+    except ValueError:
+        raise DeliveryError("INITIAL_ARTIFACT_DELIVERY_UTC_MILLISECONDS") from None
+    require(parsed.strftime("%Y-%m-%dT%H:%M:%S.") + str(parsed.microsecond // 1000).zfill(3) + "Z" == value,
+        "UTC_MILLISECONDS")
+    return integer(seconds * 1000 + parsed.microsecond // 1000, 1, 253402300799999)
+
+
+def _validity(value, now=None):
+    start, end, authority_start, authority_end = (integer(value[name], 1, 253402300799) for name in UTC_FIELDS)
+    observed = integer(value["observedAt"], 1, 253402300799)
+    require(start <= authority_start <= observed < authority_end <= end and
+        authority_end - authority_start <= 14 * 86400, "PENDING_VALIDITY")
+    if now is not None:
+        integer(now, observed, 253402300799)
+        require(authority_start <= now < authority_end, "PENDING_CURRENT_VALIDITY")
+
+
+def _identity(value):
+    require(type(value["kind"]) is str and value["kind"] in ("gate", "worker"), "PENDING_KIND")
+    _cohort, selected, _system, _arch = S.bootstrap.selection(value["selection"])
+    role = "linux-x64" if value["kind"] == "gate" else selected
+    S.joint.source(value["source"])
+    github = value["github"]
+    fields(github, {"repository", "runId", "runAttempt", "job", "jobId", "role"})
+    S.joint.run(github)
+    integer(github["jobId"], 1, (1 << 63) - 1)
+    require(github["repository"] == I.REPOSITORY and github["role"] == role and
+        github["job"] == (E.G.JOB if value["kind"] == "gate" else S.bootstrap.JOB), "PENDING_JOB")
+    H._window(value["originalWindow"], value["kind"], role, value["deadline"])
+    digest(value["beforeSha256"])
+
+
+def _original_members(value, zip_bytes):
+    fields(value["originals"], H.ORIGINAL_FIELDS)
+    _hash_fields(value["originals"], H.ORIGINAL_FIELDS)
+    require(value["originals"]["policySha256"] == S.POLICY_SHA256, "PENDING_POLICY_PIN")
+    _total, expected = H.carrier_bytes(value["members"])
+    require(integer(zip_bytes, 1, H.MAX_ZIP_BYTES) == expected, "PENDING_ZIP_BYTES")
+
+
+def stream_ready(raw):
+    value = canonical(raw)
+    fields(value, READY_FIELDS)
+    require(type(value["schema"]) is int and value["schema"] == 1 and value["scope"] == READY_SCOPE,
+        "READY_SCOPE")
+    _identity(value)
+    _original_members(value, value["zipBytes"])
+    _validity(value)
+    digest(value["carrierCloseSha256"])
+    first, work, close = (decimal(value[name]) for name in ("firstRawNs", "workEndNs", "closeEndNs"))
+    _seal, expected_work, expected_close = upload_caps(value["deadline"], first)
+    require((work, close) == (expected_work, expected_close), "READY_ORIGINAL_CAPS")
+    job = value["jobOriginal"]
+    require(type(job) is list and len(job) == 4 and type(job[0]) is int and job[0] == value["github"]["jobId"] and
+        type(job[2]) is str and 0 < len(job[2]) <= 256 and not any(ord(c) < 32 or ord(c) == 127 for c in job[2]),
+        "READY_PRIVATE_JOB")
+    B.wire.utc_epoch(job[1])
+    integer(job[3], 1, (1 << 63) - 1)
+    require(value["nativeFileRetirement"] == "PENDING_ORIGINAL_READERS" and
+        value["originalStepOutcome"] == "NOT_OBSERVED" and value["qualification"] == "NOT_ESTABLISHED",
+        "READY_NOT_ACCEPTANCE")
+    return value
+
+
+def stream_closed(raw, ready_raw):
+    original, value = stream_ready(ready_raw), canonical(raw)
+    fields(value, STREAM_FIELDS)
+    require(type(value["schema"]) is int and value["schema"] == 1 and value["scope"] == FINAL_SCOPE and
+        value["beforeSha256"] == original["beforeSha256"] and value["readySha256"] == sha(ready_raw) and
+        type(value["zipBytes"]) is int and value["zipBytes"] == original["zipBytes"] and
+        value["nativeFileRetirement"] == "KNOWN_NATIVE_CLOSE" and
+        value["originalReaderOutcome"] == "PENDING_ENCLOSING_PROCESS_CLOSE" and
+        value["qualification"] == "NOT_ESTABLISHED", "STREAM_CLOSE_BINDING")
+    _hash_fields(value, ("zipSha256", "nativeCloseSha256"))
+    integer(decimal(value["closedNs"]), decimal(original["firstRawNs"]), decimal(original["workEndNs"]) - 1)
+    return value
+
+
+def _base64_shape(value, maximum):
+    require(type(value) is str and 0 < len(value) <= 4 * ((maximum + 2) // 3) and len(value) % 4 == 0 and
+        re.fullmatch(r"[A-Za-z0-9+/]*={0,2}", value), "BASE64_BOUND_OR_SHAPE")
+    require(0 < len(value) // 4 * 3 - (len(value) - len(value.rstrip("="))) <= maximum, "BASE64_DECODED_BOUND")
+
+
+def _base64(value, maximum):
+    _base64_shape(value, maximum)
+    raw = base64.b64decode(value, validate=True)
+    require(0 < len(raw) <= maximum and base64.b64encode(raw).decode("ascii") == value, "BASE64_CANONICAL")
+    return raw
+
+
+def control_input(raw, mode):
+    """All encoded-size/roster checks precede decoding either original body."""
+    require(mode in ("finish", "after"), "FINITE_MODE")
+    value = canonical(raw, INPUT_BYTES)
+    names = {"schema", "scope", "readerReadyBase64", "readerFinalBase64", "readerClosed", "transportClosed",
+        "beforeClosed", "beforeOriginals"} if mode == "finish" else {"schema", "scope", "afterClosed", "afterOriginals"}
+    fields(value, names)
+    require(type(value["schema"]) is int and value["schema"] == 1 and value["scope"] ==
+        (FINISH_INPUT_SCOPE if mode == "finish" else AFTER_INPUT_SCOPE), "CONTROL_SCOPE")
+    if mode == "finish":
+        _base64_shape(value["readerReadyBase64"], LIMIT)
+        _base64_shape(value["readerFinalBase64"], LIMIT)
+        fields(value["readerClosed"], READER_FIELDS)
+        fields(value["transportClosed"], TRANSPORT_FIELDS)
+    observer = value["beforeClosed" if mode == "finish" else "afterClosed"]
+    fields(observer, OBSERVER_FIELDS)
+    rows = value["beforeOriginals" if mode == "finish" else "afterOriginals"]
+    kinds = ("job",) if mode == "finish" else ("job", "artifact")
+    require(type(rows) is list and len(rows) == len(kinds), "CONTROL_ORIGINAL_ROSTER")
+    for kind, row in zip(kinds, rows):
+        fields(row, {"kind", "id", "bodyBase64", "rawHeaderVector"})
+        require(row["kind"] == kind, "CONTROL_ORIGINAL_ORDER")
+        _id(row["id"])
+        _base64_shape(row["bodyBase64"], HTTP_LIMIT)
+        public_headers(row["rawHeaderVector"])
+    originals = [{"kind": row["kind"], "id": row["id"], "body": _base64(row["bodyBase64"], HTTP_LIMIT),
+        "rawHeaderVector": row["rawHeaderVector"]} for row in rows]
+    ready_raw = _base64(value["readerReadyBase64"], LIMIT) if mode == "finish" else None
+    final_raw = _base64(value["readerFinalBase64"], LIMIT) if mode == "finish" else None
+    return value, originals, ready_raw, final_raw
+
+
+def _local_bounds(ready_value, pre):
+    first = decimal(ready_value["firstRawNs"])
+    window = ready_value["originalWindow"]
+    start = integer(pre + window["sealEndNs"] - first)
+    close = min(integer(pre + 60 * NS), integer(pre + window["uploadEndNs"] - first))
+    work = close - 5 * NS
+    require(pre < start < work < close, "ORIGINAL_LOCAL_MAPPING")
+    return start, work, close
+
+
+def _reader_closed(value, ready_raw, final_raw, ready_value, final):
+    fields(value, READER_FIELDS)
+    _flags(value, READER_FLAGS)
+    fields(value["originalPipeCloses"], {"stdin", "stdout", "stderr"})
+    _flags(value["originalPipeCloses"], ("stdin", "stdout", "stderr"))
+    require(value["scope"] == "INITIAL_ARTIFACT_FIXED_READER_TRANSPORT_ONLY" and
+        value["transport"] == "closed" and value["code"] is None and type(value["stderrBytes"]) is int and
+        value["stderrBytes"] == 0 and value["readySha256"] == sha(ready_raw) and
+        value["finalSha256"] == sha(final_raw) and type(value["zipBytes"]) is int and
+        value["zipBytes"] == ready_value["zipBytes"] and value["zipSha256"] == final["zipSha256"] and
+        value["nativeFileRetirement"] == "FIXED_HELPER_RETURN_REQUIRES_CALLER_VALIDATION" and
+        value["originalStepOutcome"] == "NOT_OBSERVED" and value["qualification"] == "NOT_ESTABLISHED",
+        "READER_COMPLETE_CLOSE")
+    pre, returned = decimal(value["preSpawnLocalNs"]), decimal(value["returnedLocalNs"])
+    bounds = _local_bounds(ready_value, pre)
+    require(pre <= returned < bounds[1], "READER_ORIGINAL_LOCAL_RETURN")
+    return bounds
+
+
+def _observer_closed(value, originals, ready_value, *, stage, request_sha256, phase_end, now):
+    fields(value, OBSERVER_FIELDS)
+    count = 1 if stage == "before" else 2
+    artifact_id = None if stage == "before" else ready_value["artifactId"]
+    require(value["scope"] == "INITIAL_ARTIFACT_PUBLIC_TERMINAL_TRANSPORT_ONLY_V1" and value["stage"] == stage and
+        value["transport"] == "closed" and value["code"] is None and value["requestSha256"] == request_sha256 and
+        value["jobId"] == str(ready_value["github"]["jobId"]) and value["artifactId"] == artifact_id and
+        value["agentDestroyReturned"] is True and type(value["originalResourceCount"]) is int and
+        value["originalResourceCount"] == 3 * count and value["originalStepOutcome"] == "NOT_OBSERVED" and
+        value["qualification"] == "NOT_ESTABLISHED", "OBSERVER_COMPLETE_CLOSE")
+    require(type(originals) is list and len(originals) == count and type(value["requests"]) is list and
+        len(value["requests"]) == count, "OBSERVER_COMPLETE_ROSTER")
+    entered, returned = decimal(value["enteredNs"]), decimal(value["lastObservationNs"])
+    if phase_end is None:
+        # AFTER's actual pre-spawn LOCAL is owned by Node, not present in this
+        # projection. Both rows must still share the same <=15s absolute end.
+        fields(value["requests"][0], OBSERVER_ROW_FIELDS)
+        phase_end = decimal(value["requests"][0]["endNs"])
+        require(entered < phase_end <= integer(entered + 15 * NS), "AFTER_OBSERVER_SHARED_CAP")
+    require(entered <= returned < phase_end, "OBSERVER_LOCAL_RETURN")
+    previous = entered
+    for index, (row, original) in enumerate(zip(value["requests"], originals)):
+        fields(row, OBSERVER_ROW_FIELDS)
+        kind, identifier = ("job", value["jobId"]) if index == 0 else ("artifact", artifact_id)
+        require(original["kind"] == kind and original["id"] == identifier and row["kind"] == kind and
+            row["id"] == identifier and type(row["status"]) is int and row["status"] == 200, "OBSERVER_ORIGINAL_ID")
+        body, vector = original["body"], original["rawHeaderVector"]
+        headers, epoch, header_hash = public_headers(vector)
+        require(epoch <= now <= epoch + B.wire.CACHE_SECONDS and
+            ("content-length" not in headers or re.fullmatch(r"[0-9]{1,7}", headers["content-length"]) and
+             int(headers["content-length"]) == len(body)), "OBSERVER_CURRENT_HTTP")
+        require(type(row["bodyBytes"]) is int and row["bodyBytes"] == len(body) and
+            row["bodySha256"] == sha(body) and row["rawHeaderVectorSha256"] == header_hash and
+            row["date"] == headers["date"] and type(row["dateEpochSeconds"]) is int and
+            row["dateEpochSeconds"] == epoch, "OBSERVER_ORIGINAL_BYTES")
+        _flags(row, OBSERVER_FLAGS)
+        start, end, closed = (decimal(row[name]) for name in ("startedNs", "endNs", "closedNs"))
+        require(previous <= start <= closed <= returned and closed < end == min(phase_end, integer(start + 15 * NS)),
+            "OBSERVER_REQUEST_CHRONOLOGY")
+        previous = closed
+    return value
+
+
+def _transport_closed(value, ready_value, ready_raw, final, reader, before, bounds, now):
+    fields(value, TRANSPORT_FIELDS)
+    size, name = ready_value["zipBytes"], "initial-recipient-custody-" + ready_value["github"]["runId"] + "-" + \
+        ready_value["github"]["runAttempt"] + "-" + ready_value["kind"] + "-" + ready_value["selection"]
+    require(value["scope"] == "INITIAL_ARTIFACT_STREAM_TRANSPORT_ONLY" and value["transport"] == "closed" and
+        value["code"] is None and value["requestSha256"] == sha(ready_raw) and value["artifactName"] == name and
+        type(value["inputBytes"]) is int and value["inputBytes"] == size and type(value["sentBytes"]) is int and
+        value["sentBytes"] == size and value["observedZipSha256"] == final["zipSha256"] and
+        value["submittedFinalizeHash"] == "sha256:" + final["zipSha256"] and
+        type(value["requestedRetentionDays"]) is int and value["requestedRetentionDays"] == 14 and
+        value["inputEndObserved"] is True and value["inputCloseObserved"] is True and
+        value["serviceDigest"] == value["actualServiceExpiry"] == value["originalRunnerOutcome"] == "NOT_OBSERVED" and
+        value["nativeFileRetirement"] == value["qualification"] == "NOT_ESTABLISHED", "TRANSPORT_COMPLETE_CLOSE")
+    _id(value["artifactId"])
+    create, expiry = _millis(value["createInvokedAt"]), _millis(value["requestedExpiresAt"])
+    require(create // 1000 <= now and expiry - create == 14 * 86400000, "TRANSPORT_ORIGINAL_REQUEST_EXPIRY")
+    entered, returned = decimal(value["enteredNs"]), decimal(value["returnedObservationNs"])
+    require(decimal(before["lastObservationNs"]) <= entered < bounds[0] and
+        entered <= decimal(reader["returnedLocalNs"]) <= returned < bounds[2], "TRANSPORT_ORIGINAL_RETURN")
+    blocks = (size + 8 * 1024 * 1024 - 1) // (8 * 1024 * 1024)
+    rows = value["requests"]
+    require(type(rows) is list and len(rows) == blocks + 3 <= 67, "TRANSPORT_EXACT_REQUEST_COUNT")
+    # Byte-count formulas only. Empty backend fields plus72 account for two
+    # original36-byte GUIDs; this is NOT a reconstructed request/evidence.
+    backend = {"workflow_run_backend_id": "", "workflow_job_run_backend_id": "", "name": name}
+    create_bytes = len(json.dumps({**backend, "version": 7, "mime_type": "application/zip",
+        "expires_at": value["requestedExpiresAt"]}, separators=(",", ":")).encode("ascii")) + 72
+    finalize_bytes = len(json.dumps({**backend, "size": str(size), "hash": value["submittedFinalizeHash"]},
+        separators=(",", ":")).encode("ascii")) + 72
+    blocklist_bytes = len('<?xml version="1.0" encoding="utf-8"?><BlockList></BlockList>') + \
+        blocks * (len("<Uncommitted></Uncommitted>") + 8)
+    previous = entered
+    for index, row in enumerate(rows):
+        fields(row, TRANSPORT_ROW_FIELDS)
+        kind = "create" if index == 0 else "block" if index <= blocks else "blocklist" if index == blocks + 1 else "finalize"
+        service = kind in ("create", "finalize")
+        body_bytes = create_bytes if kind == "create" else finalize_bytes if kind == "finalize" else \
+            blocklist_bytes if kind == "blocklist" else min(8 * 1024 * 1024, size - (index - 1) * 8 * 1024 * 1024)
+        require(row["kind"] == kind and type(row["status"]) is int and row["status"] == (200 if service else 201) and
+            type(row["bodyBytes"]) is int and row["bodyBytes"] == body_bytes, "TRANSPORT_REQUEST_IDENTITY")
+        integer(row["responseBytes"], 1 if service else 0, 65536 if service else 0)
+        _flags(row, TRANSPORT_FLAGS)
+        start = decimal(row["startNs"])
+        require(previous <= start <= returned and start < bounds[1] and (index != 0 or start < bounds[0]),
+            "TRANSPORT_REQUEST_CHRONOLOGY")
+        previous = start
+    return value
+
+
+def finish_observations(control, *, now):
+    value, originals, ready_raw, final_raw = control
+    original, final = stream_ready(ready_raw), stream_closed(final_raw, ready_raw)
+    _validity(original, now)
+    reader, before, transport = (value[name] for name in ("readerClosed", "beforeClosed", "transportClosed"))
+    bounds = _reader_closed(reader, ready_raw, final_raw, original, final)
+    _observer_closed(before, originals, original, stage="before", request_sha256=sha(ready_raw),
+        phase_end=bounds[0], now=now)
+    require(decimal(reader["preSpawnLocalNs"]) <= decimal(before["enteredNs"]), "BEFORE_ORIGINAL_READER_BASIS")
+    _transport_closed(transport, original, ready_raw, final, reader, before, bounds, now)
+    context = {"originalServiceJob": original["jobOriginal"], "observed": {"runnerName": original["jobOriginal"][2]}}
+    job = service_job(original, context, originals[0]["body"], originals[0]["rawHeaderVector"], stage="upload", now=now)
+    return original, final, reader, before, transport, job
+
+
+def _artifact_record(value, binding, *, after):
+    fields(value, ARTIFACT_FIELDS | ({"createdAt", "expiresAt", "serviceDigest"} if after else set()))
+    _id(value["id"])
+    digest(value["zipSha256"])
+    _original_members(binding, value["zipBytes"])
+    expected_name = "initial-recipient-custody-" + binding["github"]["runId"] + "-" + \
+        binding["github"]["runAttempt"] + "-" + binding["kind"] + "-" + binding["selection"]
+    require(value["name"] == expected_name and type(value["requestedRetentionDays"]) is int and
+        value["requestedRetentionDays"] == 14, "PENDING_ARTIFACT_IDENTITY")
+    create, expiry = _millis(value["createInvokedAt"]), _millis(value["requestedExpiresAt"])
+    require(create // 1000 <= binding["observedAt"] and expiry - create == 14 * 86400000,
+        "PENDING_ORIGINAL_REQUEST_EXPIRY")
+    if after:
+        created, expires = B.wire.utc_epoch(value["createdAt"]), B.wire.utc_epoch(value["expiresAt"])
+        require(create // 1000 <= created <= binding["observedAt"] < expires <= created + 14 * 86400 and
+            expires * 1000 <= expiry and value["serviceDigest"] == "sha256:" + value["zipSha256"],
+            "ARTIFACT_ORIGINAL_SERVICE_EXPIRY_OR_DIGEST")
+
+
+def pending_value(value, mode):
+    require(mode in ("finish", "after"), "PENDING_MODE")
+    after = mode == "after"
+    fields(value, PENDING_COMMON | ({"uploadSha256", "uploadCarrier"} if after else {"carrierCloseSha256"}))
+    E._graph(value)
+    require(type(value["schema"]) is int and value["schema"] == 1 and
+        value["scope"] == (AFTER_SCOPE if after else UPLOAD_SCOPE), "PENDING_SCOPE")
+    _identity(value)
+    _validity(value)
+    digest(value["readySha256"])
+    digest(value["uploadSha256"] if after else value["carrierCloseSha256"])
+    require(value["writerReturn"] == "PENDING_OWNER_CLOSE" and
+        value["originalHelperOutcome"] == "PENDING_ENCLOSING_PROCESS_CLOSE" and
+        value["originalStepOutcome"] == "NOT_OBSERVED" and value["qualification"] == "NOT_ESTABLISHED" and
+        value["privateOriginals"] == "TERMINAL_SELF_TAIL_NOT_DELIVERED", "PENDING_NOT_SELF_ACCEPTANCE")
+    _artifact_record(value["artifact"], value, after=after)
+    times, observations = value["times"], value["observations"]
+    fields(times, AFTER_TIMES if after else UPLOAD_TIMES)
+    parsed = {name: decimal(raw) for name, raw in times.items()}
+    fields(observations, AFTER_OBSERVATIONS if after else UPLOAD_OBSERVATIONS)
+    _hash_fields(observations, AFTER_HASHES if after else UPLOAD_HASHES)
+    before_number = integer(observations["beforeStepNumber"], 1, 2147483647)
+    require(integer(observations["uploadStepNumber"], 1, 2147483647) == before_number + 1, "PENDING_U_ADJACENCY")
+    for field in (("jobServiceEpoch", "artifactServiceEpoch") if after else ("beforeServiceEpoch",)):
+        epoch = integer(observations[field], 1, 253402300799)
+        require(epoch <= value["observedAt"] <= epoch + B.wire.CACHE_SECONDS, "PENDING_SERVICE_FRESHNESS")
+    if after:
+        fields(value["uploadCarrier"], CARRIER_FIELDS)
+        _hash_fields(value["uploadCarrier"], CARRIER_FIELDS)
+        _upload, end = after_caps(value["deadline"], parsed["firstRawNs"])
+        require(parsed["endNs"] == end and parsed["firstRawNs"] <= parsed["pendingPreparedNs"] < end and
+            parsed["observerEnteredLocalNs"] <= parsed["observerReturnedLocalNs"] <
+                parsed["observerEnteredLocalNs"] + 15 * NS and
+            integer(observations["afterStepNumber"], 1, 2147483647) == before_number + 2 and
+            type(observations["observerRequestCount"]) is int and observations["observerRequestCount"] == 2,
+            "PENDING_A_ORIGINAL_TIMES_OR_ROSTER")
+    else:
+        seal, work, close = upload_caps(value["deadline"], parsed["firstRawNs"])
+        require((parsed["workEndNs"], parsed["closeEndNs"]) == (work, close) and
+            parsed["firstRawNs"] <= parsed["streamClosedNs"] <= parsed["finishFirstRawNs"] <=
+            parsed["pendingPreparedNs"] < work, "PENDING_U_ORIGINAL_TIMES")
+        pre = parsed["readerPreSpawnLocalNs"]
+        start_local = integer(pre + seal - parsed["firstRawNs"])
+        work_local, close_local = (integer(pre + end - parsed["firstRawNs"]) for end in (work, close))
+        require(pre <= parsed["beforeEnteredLocalNs"] <= parsed["beforeReturnedLocalNs"] <=
+            parsed["transportEnteredLocalNs"] <= parsed["readerReturnedLocalNs"] <= parsed["transportReturnedLocalNs"] and
+            parsed["beforeReturnedLocalNs"] < start_local and parsed["readerReturnedLocalNs"] < work_local and
+            parsed["transportReturnedLocalNs"] < close_local and type(observations["transportRequestCount"]) is int and
+            observations["transportRequestCount"] == 3 + (value["artifact"]["zipBytes"] + 8 * 1024 * 1024 - 1) //
+                (8 * 1024 * 1024), "PENDING_U_ORIGINAL_LOCAL_OR_REQUESTS")
+    return value
+
+
+def parse_delivery(raw, mode):
+    return pending_value(canonical(raw), mode)
+
+
+def _pending_base(pending, policy, match, *, ready_sha256, before_sha256, scope, now):
+    H.pending_value(pending)
+    return {"schema": 1, "scope": scope, **{name: E._copy(pending[name]) for name in
+        ("kind", "selection", "source", "github", "originalWindow", "deadline", "originals", "members")},
+        "beforeSha256": digest(before_sha256), "readySha256": digest(ready_sha256),
+        "policyNotBefore": policy["notBefore"], "policyExpiresAt": policy["expiresAt"],
+        "authorityNotBefore": match["notBefore"], "authorityExpiresAt": match["expiresAt"], "observedAt": now,
+        "writerReturn": "PENDING_OWNER_CLOSE", "originalHelperOutcome": "PENDING_ENCLOSING_PROCESS_CLOSE",
+        "originalStepOutcome": "NOT_OBSERVED", "qualification": "NOT_ESTABLISHED",
+        "privateOriginals": "TERMINAL_SELF_TAIL_NOT_DELIVERED"}
+
+
+def upload_pending(pending, context, *, policy, match, control, observed, finish_first, prepared, now):
+    value, _originals, ready_raw, final_raw = control
+    original, final, reader, before, transport, job = observed
+    expected_ready = ready(pending, context, policy=policy, match=match,
+        first_raw=decimal(original["firstRawNs"]), before_sha256=original["beforeSha256"],
+        carrier_sha256=original["carrierCloseSha256"], now=original["observedAt"])
+    require(expected_ready == ready_raw, "FINISH_CURRENT_K_READY")
+    _validity(original, now)
+    result = _pending_base(pending, policy, match, ready_sha256=sha(ready_raw),
+        before_sha256=original["beforeSha256"], scope=UPLOAD_SCOPE, now=now)
+    result.update(carrierCloseSha256=original["carrierCloseSha256"], artifact={"id": transport["artifactId"],
+        "name": transport["artifactName"], "zipBytes": transport["inputBytes"],
+        "zipSha256": transport["observedZipSha256"], "createInvokedAt": transport["createInvokedAt"],
+        "requestedExpiresAt": transport["requestedExpiresAt"], "requestedRetentionDays": 14},
+        times={"firstRawNs": original["firstRawNs"], "streamClosedNs": final["closedNs"],
+            "finishFirstRawNs": str(integer(finish_first)), "pendingPreparedNs": str(integer(prepared)),
+            "workEndNs": original["workEndNs"], "closeEndNs": original["closeEndNs"],
+            "readerPreSpawnLocalNs": reader["preSpawnLocalNs"], "readerReturnedLocalNs": reader["returnedLocalNs"],
+            "beforeEnteredLocalNs": before["enteredNs"], "beforeReturnedLocalNs": before["lastObservationNs"],
+            "transportEnteredLocalNs": transport["enteredNs"], "transportReturnedLocalNs": transport["returnedObservationNs"]},
+        observations={"streamFinalSha256": sha(final_raw), "readerClosedSha256": sha(O.encoded(reader)),
+            "transportClosedSha256": sha(O.encoded(transport)), "beforeClosedSha256": sha(O.encoded(before)),
+            "beforeBodySha256": job["bodySha256"], "beforeHeaderVectorSha256": job["rawHeaderVectorSha256"],
+            "beforeServiceEpoch": job["serviceEpoch"], "beforeStepNumber": job["steps"]["before"]["number"],
+            "uploadStepNumber": job["steps"]["upload"]["number"], "transportRequestCount": len(transport["requests"])})
+    return encoded(pending_value(result, "finish"))
+
+
+def after_ready(pending, upload_raw, *, policy, match, first, before_sha256, now):
+    H.pending_value(pending)
+    upload = parse_delivery(upload_raw, "finish")
+    for name in ("kind", "selection", "source", "github", "originalWindow", "deadline", "originals", "members"):
+        _same(upload[name], pending[name], "AFTER_ORIGINAL_K_LINK")
+    require(upload["beforeSha256"] == before_sha256, "AFTER_BEFORE_LINK")
+    _validity(upload, now)
+    _upload, end = after_caps(pending["deadline"], first)
+    result = {"schema": 1, "scope": AFTER_READY_SCOPE, **{name: E._copy(pending[name]) for name in
+        ("kind", "selection", "source", "github", "deadline", "originalWindow")},
+        "beforeSha256": before_sha256, "uploadSha256": sha(upload_raw), "firstRawNs": str(first), "endNs": str(end),
+        "artifactId": upload["artifact"]["id"], "policyNotBefore": policy["notBefore"],
+        "policyExpiresAt": policy["expiresAt"], "authorityNotBefore": match["notBefore"],
+        "authorityExpiresAt": match["expiresAt"], "observedAt": now,
+        "originalStepOutcome": "NOT_OBSERVED", "qualification": "NOT_ESTABLISHED"}
+    _validity(result, now)
+    for name in UTC_FIELDS:
+        require(result[name] == upload[name] and type(result[name]) is int, "AFTER_ORIGINAL_VALIDITY")
+    return encoded(result)
+
+
+def _service_artifact(upload, original, *, now):
+    raw, headers = original["body"], original["rawHeaderVector"]
+    values, epoch, header_hash = public_headers(headers)
+    require(epoch <= now <= epoch + B.wire.CACHE_SECONDS, "ARTIFACT_SERVICE_DATE")
+    value = I.parse(raw, HTTP_LIMIT)
+    require(type(value) is dict, "ARTIFACT_SERVICE_OBJECT")
+    artifact, github, source = upload["artifact"], upload["github"], upload["source"]
+    url = B.wire.ORIGIN + "/repos/" + I.REPOSITORY + "/actions/artifacts/" + artifact["id"]
+    require(type(value.get("id")) is int and value["id"] == int(artifact["id"]) and
+        value.get("name") == artifact["name"] and type(value.get("size_in_bytes")) is int and
+        value["size_in_bytes"] == artifact["zipBytes"] and value.get("digest") == "sha256:" + artifact["zipSha256"] and
+        value.get("expired") is False and value.get("url") == url and value.get("archive_download_url") == url + "/zip",
+        "ARTIFACT_EXACT_SERVICE_IDENTITY")
+    run = value.get("workflow_run")
+    require(type(run) is dict and type(run.get("id")) is int and run["id"] == int(github["runId"]) and
+        run.get("head_sha") == source["commit"] and run.get("head_branch") == S.SOURCE_REF.removeprefix("refs/heads/"),
+        "ARTIFACT_ORIGINAL_RUN_SOURCE")
+    result = {**E._copy(artifact), "createdAt": value.get("created_at"), "expiresAt": value.get("expires_at"),
+        "serviceDigest": value.get("digest")}
+    _artifact_record(result, {**upload, "observedAt": now}, after=True)
+    return result, {"bodySha256": sha(raw), "rawHeaderVectorSha256": header_hash, "serviceEpoch": epoch}
+
+
+def delivery_pending(pending, context, upload_raw, ready_raw, *, policy, match, control, carrier, prepared, now):
+    value, originals, _unused_ready, _unused_final = control
+    original = canonical(ready_raw)
+    fields(original, AFTER_READY_FIELDS)
+    upload = parse_delivery(upload_raw, "finish")
+    first = decimal(original["firstRawNs"])
+    require(after_ready(pending, upload_raw, policy=policy, match=match, first=first,
+        before_sha256=original["beforeSha256"], now=original["observedAt"]) == ready_raw, "AFTER_CURRENT_READY")
+    _validity(original, now)
+    after = _observer_closed(value["afterClosed"], originals, original, stage="after", request_sha256=sha(ready_raw),
+        phase_end=None, now=now)
+    job = service_job(pending, context, originals[0]["body"], originals[0]["rawHeaderVector"], stage="after", now=now)
+    artifact, service = _service_artifact(upload, originals[1], now=now)
+    fields(carrier, CARRIER_FIELDS)
+    _hash_fields(carrier, CARRIER_FIELDS)
+    result = _pending_base(pending, policy, match, ready_sha256=sha(ready_raw), before_sha256=original["beforeSha256"],
+        scope=AFTER_SCOPE, now=now)
+    result.update(uploadSha256=sha(upload_raw), uploadCarrier=E._copy(carrier), artifact=artifact,
+        times={"firstRawNs": original["firstRawNs"], "endNs": original["endNs"],
+            "pendingPreparedNs": str(integer(prepared)), "observerEnteredLocalNs": after["enteredNs"],
+            "observerReturnedLocalNs": after["lastObservationNs"]},
+        observations={"afterClosedSha256": sha(O.encoded(after)), "jobBodySha256": job["bodySha256"],
+            "jobHeaderVectorSha256": job["rawHeaderVectorSha256"], "artifactBodySha256": service["bodySha256"],
+            "artifactHeaderVectorSha256": service["rawHeaderVectorSha256"], "jobServiceEpoch": job["serviceEpoch"],
+            "artifactServiceEpoch": service["serviceEpoch"], "beforeStepNumber": job["steps"]["before"]["number"],
+            "uploadStepNumber": job["steps"]["upload"]["number"], "afterStepNumber": job["steps"]["after"]["number"],
+            "observerRequestCount": len(after["requests"])})
+    return encoded(pending_value(result, "after"))
+
+
+def finite_result(mode, pending_raw, *, ready_raw, input_raw, directory_identity_raw, file_metadata_raw,
+        file_owner_close_raw, closed_ns):
+    value = parse_delivery(pending_raw, mode)
+    integer(closed_ns, decimal(value["times"]["pendingPreparedNs"]),
+        decimal(value["times"]["workEndNs" if mode == "finish" else "endNs"]) - 1)
+    result = {"schema": 1, "scope": FINISH_CLOSED_SCOPE if mode == "finish" else AFTER_CLOSED_SCOPE,
+        **{name: E._copy(value[name]) for name in ("kind", "selection", "source", "github", "beforeSha256")},
+        "readySha256": sha(ready_raw), "inputSha256": sha(input_raw), "pending": value,
+        "pendingSha256": sha(pending_raw), "directoryIdentitySha256": sha(directory_identity_raw),
+        "fileMetadataSha256": sha(file_metadata_raw), "fileOwnerCloseSha256": sha(file_owner_close_raw),
+        "closedNs": str(closed_ns), "artifactId": value["artifact"]["id"],
+        "originalHelperOutcome": "PENDING_ENCLOSING_PROCESS_CLOSE", "originalStepOutcome": "NOT_OBSERVED",
+        "qualification": "NOT_ESTABLISHED"}
+    require(result["readySha256"] == value["readySha256"], "FINITE_ORIGINAL_READY_LINK")
+    return encoded(result)

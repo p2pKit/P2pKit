@@ -1,0 +1,28 @@
+name: Bounded initial-recipient custody delivery
+description: Fixed initial-only encrypted evidence upload and after-upload custody; HOLDs remain
+inputs:
+  mode:
+    description: Exact upload or after mode from the original adjacent terminal Steps
+    required: true
+  python:
+    description: Original admitted absolute Python executable spelling
+    required: true
+  tool-path:
+    description: Original admitted absolute tool PATH
+    required: true
+outputs:
+  artifact-id:
+    description: Actual original finalized artifact ID, not Release or delivery qualification
+  receipt-base64:
+    description: Canonical safe pending receipt, not private originals or enclosing Step success
+  receipt-sha256:
+    description: SHA-256 of the original independently reread pending receipt
+  directory-identity-sha256:
+    description: Hash of the actual retained upload-returned directory identity only
+  file-metadata-sha256:
+    description: Hash of the actual full closed-reader pending-file metadata
+  file-owner-close-sha256:
+    description: Hash of the actual new file-owner close record, not a historical close substitution
+runs:
+  using: node24
+  main: index.cjs

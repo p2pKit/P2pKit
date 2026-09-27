@@ -116,11 +116,35 @@ The hosted failed aggregate remains failed; its downstream suites were not
 rerun locally. Source pinning and these offline controls do not establish
 native, provider or Release qualification.
 
+### Accepted combined source-CI result at 4508cf01
+
+Hosted source run [36280932283/1](https://github.com/p2pKit/P2pKit/actions/runs/36280932283),
+job `108512464879`, passed at exact
+`4508cf01600964e10b76da8c897cfb09a5a4d579`, tree
+`4dc19da067feb8bbb7e8cb946dde16e2134893fb`. All11 listed job steps succeeded.
+The independently inspected original log records **40 unittest invocations /
+1,174 reported tests**, all40 aggregates OK; **150 Node models** (78/33/39);
+and **14 dependency-free Java version controls** on the hosted runner.
+Shell/Ruby policy aggregates have their own counts and are not added as
+distinct native tests. The job lasted95 seconds within its unchanged5-minute
+source-control budget; this is not a measured provider/bootstrap budget.
+
+Original result-manifest SHA-256:
+`5971e2cf125ead420a288bf0bc3b5a59b5056392523742aa17a9a9cf6186a940`.
+Independent verdict: `APPROVE_EXACT_4508CF01_HOSTED_SOURCE_CONTROL_RESULTS_ONLY`;
+review SHA-256:
+`970fb77fbd390d0c50eba205414b1af139e859a8f6db562085fa2970461a952d`.
+The failed36278802366 predecessor remains failed. This later success neither
+rewrites its result nor executes the subsequently added finite U/A/Node Action
+or their joint controls. It does not replace ordinary FULL/Desktop,
+`complete-gate`, `review`, `scan / osv-scan`, or `osv-scanner` acceptance.
+
 ## Still required before productive execution and Release
 
-The complete productive final-custody consumer and U/A delivery counterparts
-still need connected implementation/review/integration. K has a separate
-source-only checkpoint; neither it nor these controls provides a live pass.
+The complete productive final-custody consumer still needs connected
+implementation/review/integration. The reviewed finite U/A delivery counterparts
+remain dormant and need production workflow/native integration. K has a
+separate source-only checkpoint; none of these controls provides a live pass.
 In particular, a full per-use readback has
 281 files, not only its 38 retained blobs; query stdout limits must come from
 original session order, not sorted random query identifiers. Local models are

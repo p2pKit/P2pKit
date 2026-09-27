@@ -1,6 +1,83 @@
 # Initial-recipient artifact transport: source and offline models
 
-## Native U stream and terminal DATA: R2 source with scoped offline results
+## Current finite U/A and fixed Action: reviewed source, scoped offline passes
+
+The finite Python helper now joins original K/U inputs, complete observer
+responses, transport/retention data and original close/clock observations into
+closed READY/input/pending/final schemas. The fixed Node Action connects the
+reader, transport, observer and finite helper; it checks the actual retained
+carrier and source bindings rather than trusting a projected result alone.
+The separate post-upload observation does not renew U's original deadline.
+This is **dormant source, not workflow-wired or native/provider qualified**.
+
+Current production SHA-256:
+
+| File | SHA-256 |
+| --- | --- |
+| `scripts/hosted_initial_artifact_delivery.py` | `866846bd846142cb47d72929cfc679124f7101558b3c349266aec2d15020a37a` |
+| `scripts/run-hosted-initial-recipient-upload.py` | `f901d05e64e84b2ddba891fedc607c1b4b1f19a16d116ba6aba693b1f7f237c4` |
+| `scripts/hosted-initial-artifact-action-data.cjs` | `670d4610bf3ac084fa0dc598236c14c048cd519e7b821e53a06d9e6954c7837b` |
+| `scripts/hosted-initial-artifact-action.cjs` | `ca8436b630a48928221268d9ece1a234db78e81b178d116d698cb95ee0219ecc` |
+
+The production entry is `.github/actions/initial-recipient-upload/action.yml`;
+no production workflow invokes it in this increment. The source-check workflow
+adds the complete finite DATA29/native-model31, Node DATA32/owner22/controller24,
+and joint Python/Node contract7 suites. That integration is a planned combined
+source regression, **not an observed hosted result**.
+
+### Exact local results and preserved failed aggregates (2026-09-27)
+
+- The first finite DATA invocation remains **FAILED, exit1**: 22 named passes,
+  then case23's exception-taxonomy mismatch; six later methods and native31
+  were not reached. The maintained lower validator correctly raised
+  `EvidenceError`, not the test's expected `ValueError`. The reviewed repair
+  changes only cases23/24 to require exact exception types and full messages;
+  production, earlier22 methods, shared fixture and guards are unchanged.
+  Failed-original manifest SHA-256:
+  `a400b241e49bf1be4e83aa2069fb77a864d1089a1a2d2906e715a7fd80d5259f`.
+- The corrected suffix **7/7** and first native-model **31/31** passed once,
+  both exit0. Whole-command wall/user/system seconds were
+  0.537/0.439/0.049 and 1.859/1.775/0.080 respectively. The31 comprise8
+  clock/latch,10 fake-FD pipe,7 finite-caller models over fake native/K seams,
+  and6 AST assertions, not native qualification. The earlier22 plus corrected7
+  cover29 distinct DATA methods, **not a current29/29 invocation**.
+  Original manifest SHA-256:
+  `272f8bb7a431b86bdf7ce539c9f309a585e0943f3e068638ba69e7bf8567d251`.
+  Independent result-review SHA-256:
+  `4ef7562a79af8b4b8f16ecb640f3d282aa09a4fe88c08124371ad7d0f01e47c1`.
+- Node DATA32 passed; the original owner invocation then failed at case17
+  after16 preceding completions. Its test sentinel mistook a legitimate static
+  refusal code for a private diagnostic. A reviewed test-only correction
+  requires the exact refusal and byte count while excluding complete private
+  markers. The corrected owner suffix **6/6** and first controller **24/24**
+  both passed, exit0. Their wrapper remains **FAILED98** because its expected
+  terminal wording was wrong; independent review accepted the actual complete
+  source-defined outputs, without changing that failed aggregate. The shared
+  helper changed: the earlier16 do **not** establish corrected22/22 coverage.
+  No current full78/78 Node aggregate is claimed. R2 original manifest SHA-256:
+  `cf820ab21e47f0bcf09ce0c259a3d4c6272426697e6716542efdd31c9cfc454d`.
+- The first joint contract invocation passed **7/7**, exit0,
+  0.600s wall/0.502s user/0.098s system. Actual Python/Node DATA APIs exchanged
+  bounded credential-free bytes through one fixed peer. Original input/carrier
+  bindings, complete AFTER responses, changed-preimage refusal and exact
+  large-integer/Unicode/float rules were checked. This is not an HTTP or native
+  delivery test. Original manifest SHA-256:
+  `39bfcdca35f34959d80075284e557fba2cbdd38b81582b4ac7a6408fc78fd918`.
+  Independent result-review SHA-256:
+  `3fbcb775a747ddcbaea6ab0294c97229a966e8af862fcde3139f5cb159e3327d`.
+
+No successful local reader, preview or prior model suite was replayed for this
+increment. Productive prefix/final custody/backend, downstream seal/B/K and
+production workflow integration remain separate prerequisites. Actual service
+visibility, retention/digest, native retirement, runner continuity and timing
+still require genuine hosted qualification. All existing HOLDs, source/owner
+authorizations, deadlines and Release gates remain; **NOT_READY**.
+
+The sections below retain the exact earlier source/result scopes. Their hashes
+and then-outstanding implementation statements are historical, not current
+finite-source hashes or a claim that the new Action ran in an earlier job.
+
+## Earlier native U stream and terminal DATA: R2 source with scoped offline results
 
 The fixed `run-hosted-initial-recipient-upload.py stream` now connects K's
 original retained inputs to four owned readers and the unchanged stored-ZIP

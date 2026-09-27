@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Fixed initial-custody native stream; NOT yet a complete U/A Action.
+"""Fixed initial-custody stream and finite upload/AFTER pending-file owners.
 
-Only the owned four-member stream is implemented here. This source is dormant
-until its connected caller, finish/AFTER receipts and focused/native reviews
-exist. No key, token, network operation or restored B/K capability is permitted.
+This source remains dormant until its connected caller and genuine native/
+hosted qualification exist. No key, token, network operation or restored B/K
+capability is permitted. A pending record cannot attest its enclosing Step.
 All stdout bytes belong to the original private Node pipe, never Actions logs.
 """
 from __future__ import annotations
@@ -75,26 +75,40 @@ class _ClockAnchor:
     owner: object = None
     content: object = None
     returns: tuple = ()
+    tightening: object = None
 
 
 class _Clock:
-    """New file-only U clock, capped before paths/owners/metadata are read."""
+    """File-only clock; finite modes cannot restart the original allowance."""
     __slots__ = ("_binding",)
 
     def __init__(self, first, local, boot, cancelled, environment, seed, entry,
-            *, first_graph, latch, attempts):
+            *, first_graph, latch, attempts, mode="stream"):
         require(type(self) is _Clock and id(self) not in _CLOCKS and callable(cancelled), "CLOCK_ONCE")
         N._check_history(first_graph)
         O.clocks.validate_reading(first)
         C.local_value(local)
         _digest, seal, expected, original_boot = K.continuity.seal_deadline_data(seed)
         require(first.clock == expected and boot == original_boot, "CLOCK_BOOT_OR_DOMAIN")
-        start, work, close = D.upload_caps(seed, first.nanoseconds)
-        require(start == seal, "CLOCK_ORIGINAL_START")
-        local_work = O.wire._directed_deadline(local, 60, work, first.nanoseconds)
-        local_close = O.wire._directed_deadline(local, 60, close, first.nanoseconds)
+        require(type(mode) is str and mode in ("stream", "finish", "after"), "CLOCK_FIXED_MODE")
+        if mode == "stream":
+            start, work, close = D.upload_caps(seed, first.nanoseconds)
+            require(start == seal, "CLOCK_ORIGINAL_START")
+            maximum = 60
+        elif mode == "finish":
+            # Only the inherited absolute uploadEnd is available before I.
+            # There is deliberately NO finish-FIRST+60 allowance. Before any
+            # file owner, tighten_finish binds the actual stream R/F caps.
+            start, work, close = seal, D.integer(seal + 60 * NS), D.integer(seal + 60 * NS)
+            require(first.nanoseconds < close, "FINISH_ORIGINAL_UPLOAD_END")
+            maximum = 900  # Existing native ceiling, clipped by original end.
+        else:
+            start, close = D.after_caps(seed, first.nanoseconds)
+            work, maximum = close, 15
+        local_work = O.wire._directed_deadline(local, maximum, work, first.nanoseconds)
+        local_close = O.wire._directed_deadline(local, maximum, close, first.nanoseconds)
         self._binding = (first, local, boot, cancelled, environment, seed, entry,
-            (start, work, close, local_work, local_close))
+            (start, work, close, local_work, local_close), mode)
         _CLOCKS[id(self)] = _ClockAnchor(self, self._binding,
             (first_graph, N._history_graph(environment, seed)), latch, attempts, entry,
             first.nanoseconds, local)
@@ -123,6 +137,9 @@ class _Clock:
                 _ATTEMPTS is anchor.attempts and anchor.binding[6] is anchor.entry, "CLOCK_BINDING")
             for graph in (*anchor.graph, *anchor.returns):
                 N._check_history(graph)
+            if anchor.tightening is not None:
+                require(anchor.binding[8] == "finish", "FINITE_TIGHTENING_MODE")
+                N._check_history(anchor.tightening[3])
             anchor.latch.check(anchor.attempts, anchor.entry)
             require(dict(os.environ) == anchor.binding[4], "ENVIRONMENT_CHANGED")
             require(not native.QUARANTINE and not Q.QUARANTINE and not C.C.QUARANTINE and
@@ -148,8 +165,9 @@ class _Clock:
         # Callers cannot replace a graph, erase failure or adopt a new latch
         # through a returned status object. Internal users retain _anchor().
         anchor = self._checked_anchor()
+        caps = self._caps(anchor)
         return MappingProxyType({"first": anchor.binding[0].nanoseconds, "last": anchor.last,
-            "localLast": anchor.local_last, "work": anchor.binding[7][1], "final": anchor.binding[7][2],
+            "localLast": anchor.local_last, "work": caps[1], "final": caps[2],
             "busy": anchor.busy, "ownerAttached": anchor.owner is not None,
             "contentBound": anchor.content is not None, "retainedReturns": len(anchor.returns)})
 
@@ -157,9 +175,38 @@ class _Clock:
     clock = property(lambda self: self.reading.clock)
     first = property(lambda self: self.reading.nanoseconds)
     seed = property(lambda self: self._checked_anchor().binding[5])
-    work = property(lambda self: self._checked_anchor().binding[7][1])
-    final = property(lambda self: self._checked_anchor().binding[7][2])
-    local_end = property(lambda self: self._checked_anchor().binding[7][4])
+    mode = property(lambda self: self._checked_anchor().binding[8])
+    work = property(lambda self: self._caps(self._checked_anchor())[1])
+    final = property(lambda self: self._caps(self._checked_anchor())[2])
+    local_end = property(lambda self: self._caps(self._checked_anchor())[4])
+
+    @staticmethod
+    def _caps(anchor):
+        return anchor.binding[7] if anchor.tightening is None else anchor.tightening[2]
+
+    def tighten_finish(self, ready_raw, final_raw):
+        anchor = self._begin()
+        try:
+            require(anchor.binding[8] == "finish" and anchor.tightening is None and
+                anchor.owner is None and anchor.content is None, "FINISH_TIGHTEN_ONCE_BEFORE_FILES")
+            original, final = D.stream_ready(ready_raw), D.stream_closed(final_raw, ready_raw)
+            graph = N._history_graph(ready_raw, final_raw, original, final)
+            require(D.O.encoded(original["deadline"]) == D.O.encoded(anchor.binding[5]) and
+                D.decimal(final["closedNs"]) <= anchor.binding[0].nanoseconds <
+                D.decimal(original["workEndNs"]) < D.decimal(original["closeEndNs"]) <= anchor.binding[7][2],
+                "FINISH_ORIGINAL_STREAM_CAPS")
+            work, close = D.decimal(original["workEndNs"]), D.decimal(original["closeEndNs"])
+            first, local = anchor.binding[0].nanoseconds, anchor.binding[1]
+            caps = (anchor.binding[7][0], work, close,
+                min(anchor.binding[7][3], O.wire._directed_deadline(local, 900, work, first)),
+                min(anchor.binding[7][4], O.wire._directed_deadline(local, 900, close, first)))
+            anchor.tightening = (ready_raw, final_raw, caps, graph)
+            self.current()
+            self._observe(anchor, False, 0, None)
+        except BaseException as error:
+            raise self.fail(error)
+        finally:
+            anchor.busy = False
 
     def _begin(self):
         anchor = self._anchor()
@@ -175,13 +222,14 @@ class _Clock:
 
     def _observe(self, anchor, final, minimum, limit):
         require(type(final) is bool, "FINAL_TYPE")
-        end = anchor.binding[7][2 if final else 1]
+        caps = self._caps(anchor)
+        end = caps[2 if final else 1]
         if limit is not None:
             end = min(end, D.integer(limit))
         frontier = max(anchor.last, D.integer(minimum))
         for index in range(2):
             local = C.local_value(time.monotonic())
-            require(anchor.local_last <= local < anchor.binding[7][4 if final else 3], "LOCAL_EXPIRED_OR_BACKWARDS")
+            require(anchor.local_last <= local < caps[4 if final else 3], "LOCAL_EXPIRED_OR_BACKWARDS")
             anchor.local_last = local
             self.current()
             observed = O.clocks.checked_now(anchor.binding[0].clock, minimum_ns=frontier)
@@ -197,7 +245,7 @@ class _Clock:
                 require(anchor.last == frontier and anchor.local_last == local and
                     anchor.failure is None and anchor.busy, "CALLBACK_CHANGED")
         local = C.local_value(time.monotonic())
-        require(anchor.local_last <= local < anchor.binding[7][4 if final else 3], "LOCAL_RETURN_EXPIRED")
+        require(anchor.local_last <= local < caps[4 if final else 3], "LOCAL_RETURN_EXPIRED")
         anchor.local_last = local
         self.current()
         require(anchor.last == frontier and anchor.failure is None and anchor.busy, "CLOCK_RETURN_CHANGED")
@@ -219,10 +267,11 @@ class _Clock:
                 "OPERATION_MAXIMUM")
             local = C.local_value(time.monotonic())
             observed = self._observe(anchor, final, 0, limit)
-            end = anchor.binding[7][2 if final else 1]
+            caps = self._caps(anchor)
+            end = caps[2 if final else 1]
             if limit is not None:
                 end = min(end, D.integer(limit))
-            result = min(anchor.binding[7][4 if final else 3],
+            result = min(caps[4 if final else 3],
                 O.wire._directed_deadline(local, maximum, end, observed))
             self.current()
             return result
@@ -234,7 +283,8 @@ class _Clock:
     def attach(self, owner):
         anchor = self._anchor()
         try:
-            require(anchor.owner is None and type(owner) is C._PrimaryOwner, "ATTACH_NEW_OWNER")
+            require(anchor.owner is None and type(owner) is C._PrimaryOwner and
+                (anchor.binding[8] != "finish" or anchor.tightening is not None), "ATTACH_NEW_OWNER")
             anchor.owner = (owner, owner._anchor())  # Retain before any owner callback.
             self.current()
             require(owner.owner.fence is self and owner.owner.first is anchor.binding[0] and not owner.rows,
@@ -291,14 +341,17 @@ class _Pipes:
     """
     __slots__ = ()
 
-    def __init__(self, clock):
+    def __init__(self, clock, *, mode="stream"):
         require(type(self) is _Pipes and id(self) not in _PIPES, "PIPE_OWNER_ONCE")
+        require(type(mode) is str and mode in ("stream", "finish", "after") and clock.mode == mode,
+            "PIPE_FIXED_MODE")
         # Registration only. Caller assignment must complete BEFORE configure
         # can fail. Indexed originals survive even an incomplete pin operation.
         originals = (sys.stdin, sys.stdout, sys.stderr)
         state = {"owner": self, "clock": clock, "originals": originals, "pins": (None, None, None),
             "closed": set(), "attempted": set(), "unknown": set(), "failure": None, "eof": False,
-            "configuring": False, "configured": False, "close_started": False, "closing": False}
+            "configuring": False, "configured": False, "close_started": False, "closing": False,
+            "mode": mode, "input_started": False, "input_done": False, "output_phase": "NEW"}
         _PIPES[id(self)] = state
 
     def configure(self):
@@ -340,7 +393,9 @@ class _Pipes:
             "closed": frozenset(state["closed"]), "attempted": frozenset(state["attempted"]),
             "unknown": frozenset(state["unknown"]), "failure": state["failure"] is not None,
             "eof": state["eof"], "configured": state["configured"], "configuring": state["configuring"],
-            "close_started": state["close_started"], "closing": state["closing"]})
+            "close_started": state["close_started"], "closing": state["closing"], "mode": state["mode"],
+            "input_started": state["input_started"], "input_done": state["input_done"],
+            "output_phase": state["output_phase"]})
 
     def state(self):
         return self._snapshot(self._anchor())
@@ -363,6 +418,7 @@ class _Pipes:
                 for original, visible in zip(state["originals"], (sys.stdin, sys.stdout, sys.stderr))) and
                 type(state["pins"]) is tuple and len(state["pins"]) == 3, "PIPE_FAILED_OR_REPLACED")
             state["clock"].current()
+            require(state["clock"].mode == state["mode"], "PIPE_ORIGINAL_MODE")
             for expected, pin in enumerate(state["pins"]):
                 stream, buffer, raw, number, metadata, handle = pin
                 require(number == expected and stream is state["originals"][number], "PIPE_ORIGINAL_SLOT")
@@ -385,7 +441,9 @@ class _Pipes:
         state = self._anchor()
         try:
             self._checked_anchor()
-            require(not state["close_started"] and not state["eof"], "PIPE_WAIT_STATE")
+            require(not state["close_started"] and (not state["eof"] or
+                state["mode"] != "stream" and state["input_done"] and state["output_phase"] == "FINAL_WRITING"),
+                "PIPE_WAIT_STATE")
             deadline = state["clock"].deadline(0.005)
             remaining = deadline - time.monotonic()
             require(remaining > 0, "PIPE_WAIT_EXPIRED")
@@ -400,7 +458,8 @@ class _Pipes:
         try:
             self._checked_anchor()
             require(type(eof) is bool and not state["eof"] and not state["close_started"] and
-                0 not in state["closed"], "DEMAND_STATE")
+                0 not in state["closed"] and (state["mode"] == "stream" or
+                    eof and state["input_started"] and not state["input_done"]), "DEMAND_STATE")
             while True:
                 state["clock"].now()
                 self._checked_anchor()
@@ -422,7 +481,17 @@ class _Pipes:
         state = self._anchor()
         try:
             self._checked_anchor()
-            require(not state["close_started"] and not state["eof"] and 1 not in state["closed"], "FRAME_STATE")
+            require(not state["close_started"] and 1 not in state["closed"], "FRAME_STATE")
+            if state["mode"] == "stream":
+                require(not state["eof"], "FRAME_STATE")
+            elif kind == b"R":
+                require(state["mode"] == "after" and not state["eof"] and not state["input_started"] and
+                    state["output_phase"] == "NEW", "FINITE_READY_ORDER")
+                state["output_phase"] = "READY_WRITING"
+            else:
+                require(kind == b"F" and state["eof"] and state["input_done"] and
+                    state["output_phase"] == ("NEW" if state["mode"] == "finish" else "READY"), "FINITE_FINAL_ORDER")
+                state["output_phase"] = "FINAL_WRITING"
             require(type(kind) is bytes and kind in (b"R", b"D", b"F") and type(raw) is bytes and
                 0 < len(raw) <= (Z.CHUNK_BYTES if kind == b"D" else D.LIMIT), "FRAME_BOUND")
             packet, offset = kind + len(raw).to_bytes(4, "big") + raw, 0
@@ -438,6 +507,49 @@ class _Pipes:
                 offset += written
                 state["clock"].now()
                 self._checked_anchor()
+            if state["mode"] != "stream":
+                state["output_phase"] = "READY" if kind == b"R" else "FINAL"
+        except BaseException as error:
+            raise self._remember(state, error)
+
+    def control(self):
+        """One complete bounded I, then original EOF; no N or trailing byte."""
+        state = self._anchor()
+        try:
+            self._checked_anchor()
+            require(state["mode"] in ("finish", "after") and not state["input_started"] and
+                not state["eof"] and not state["close_started"] and state["output_phase"] ==
+                ("NEW" if state["mode"] == "finish" else "READY"), "FINITE_INPUT_ONCE")
+            state["input_started"] = True
+
+            def read_exact(count):
+                # Header is validated before allocation/read of its payload.
+                require(type(count) is int and 0 < count <= D.INPUT_BYTES, "FINITE_READ_BOUND")
+                parts, total = [], 0
+                while total < count:
+                    state["clock"].now()
+                    self._checked_anchor()
+                    wanted = min(65536, count - total)
+                    try:
+                        raw = os.read(0, wanted)
+                    except BlockingIOError:
+                        self.pause()
+                        continue
+                    require(type(raw) is bytes and 0 < len(raw) <= wanted, "FINITE_TRUNCATED_INPUT")
+                    parts.append(raw)
+                    total += len(raw)
+                    state["clock"].now()
+                    self._checked_anchor()
+                return b"".join(parts)
+
+            header = read_exact(5)
+            size = int.from_bytes(header[1:], "big")
+            require(header[:1] == b"I" and 0 < size <= D.INPUT_BYTES, "FINITE_INPUT_HEADER")
+            raw = read_exact(size)
+            self.demand(eof=True)
+            state["input_done"] = True
+            self._checked_anchor()
+            return raw
         except BaseException as error:
             raise self._remember(state, error)
 
@@ -472,7 +584,8 @@ class _Pipes:
                     self._remember(state, error)
             if state["failure"] is not None:
                 raise state["failure"]
-            require(state["eof"] and state["closed"] == {0, 1, 2}, "ORIGINAL_PIPE_CLOSE_REQUIRED")
+            require(state["eof"] and state["closed"] == {0, 1, 2} and (state["mode"] == "stream" or
+                state["input_done"] and state["output_phase"] == "FINAL"), "ORIGINAL_PIPE_CLOSE_REQUIRED")
         except BaseException as error:
             raise self._remember(state, error)
         finally:
@@ -639,9 +752,181 @@ def stream(kind, cancelled):
                     pass
 
 
+def _upload_carrier(environment):
+    require(environment.get(D.UPLOAD_OUTCOME_ENV) == "success", "ORIGINAL_UPLOAD_STEP_RETURN")
+    return {"directoryIdentitySha256": D.digest(environment.get(D.UPLOAD_DIRECTORY_ENV)),
+        "fileMetadataSha256": D.digest(environment.get(D.UPLOAD_METADATA_ENV)),
+        "fileOwnerCloseSha256": D.digest(environment.get(D.UPLOAD_CLOSE_ENV))}
+
+
+def _returned_directory(owner, clock, root, *, create):
+    require(type(create) is bool, "RETURNED_DIRECTORY_MODE")
+    expected = (*K._custody_names(tail_output=True, upload=True), *(("upload-returned",) if not create else ()))
+    K._names(owner, root, expected)
+    path = root.path / "upload-returned"
+    if create:
+        end = owner.guard()
+        directory = owner.acquire("directory", lambda: root.create_directory("upload-returned", deadline=end))
+    else:
+        directory = C._private(owner, path)
+    require(type(directory) is (native.windows.PrivateDirectory if os.name == "nt" else Q._PosixDirectory),
+        "RETURNED_DIRECTORY_TYPE")
+    identity = native.directory_identity(list(directory.identity), clock.clock.role)
+    identity_raw = O.encoded(identity)  # Actual identity only; no mutable directory timestamps.
+    clock.retain(path, directory.path, identity, identity_raw)
+    require(directory.path == path and tuple(directory.identity) == tuple(identity) and
+        tuple(directory.identity) != tuple(root.identity), "RETURNED_ORIGINAL_DIRECTORY")
+    directory.verify()
+    K._names(owner, directory, () if create else (D.UPLOAD_FILE,))
+    owner.guard()
+    return directory, identity_raw
+
+
+def _read_pending(owner, clock, directory, name, checksum):
+    require(name in (D.UPLOAD_FILE, D.AFTER_FILE), "FIXED_PENDING_FILE")
+    file = K._open_file(owner, directory, name, D.LIMIT)
+    raw = K._stream(file, checksum, retain=True, close=True)
+    clock.retain(raw, file.raw)  # Capture original read return before another callback.
+    K._file_current(file, closed=True)
+    return raw, file.raw
+
+
+def _final_inputs(owner, clock, root, private, output, observations, pending, carrier):
+    """Small originals/metadata only; never reopen either ciphertext here."""
+    for name, metadata, expected in observations:
+        file = K._open_file(owner, private, name, D.INPUT_LIMITS[name])
+        require(file.raw == metadata and K._stream(file, D.sha(expected), retain=True, close=True) == expected,
+            "FINITE_K_READBACK_CHANGED")
+        K._file_current(file, closed=True)
+    for index in (1, 3):
+        file = K._open_file(owner, output, Z.MEMBERS[index], Z.MANIFEST_BYTES)
+        require(file.raw == O.encoded(carrier["files"][index]["readback"]["metadata"]),
+            "FINITE_MANIFEST_METADATA_CHANGED")
+        K._stream(file, pending["members"][index]["sha256"], retain=True, close=True)
+        K._file_current(file, closed=True)
+    K._names(owner, private, K.PRIVATE_CLOSED_NAMES)
+    K._names(owner, output, Z.MEMBERS)
+    K._names(owner, root, (*K._custody_names(tail_output=True, upload=True), "upload-returned"))
+    root.verify()
+    clock.now()
+
+
+def finite(kind, cancelled, mode):
+    """Fixed finish/A, sharing original RAW and LOCAL caps through return."""
+    latch, attempts = _ENTRY, _ATTEMPTS
+    entry = latch.begin(attempts)
+    clock = owner = pipes = None
+    failure = None
+    try:
+        require(type(mode) is str and mode in ("finish", "after"), "FINITE_FIXED_MODE")
+        local = C.local_value(time.monotonic())
+        first = O.clocks.observe()
+        first_graph = N._history_graph(first)
+        boot = K.continuity.boot_digest(first.clock.role)
+        N._check_history(first_graph)
+        environment, seed = _environment()
+        N._check_history(first_graph)
+        clock = _Clock(first, local, boot, cancelled, environment, seed, entry,
+            first_graph=first_graph, latch=latch, attempts=attempts, mode=mode)
+        pipes = _Pipes(clock, mode=mode)
+        pipes.configure()
+        if mode == "finish":
+            input_raw = pipes.control()
+            clock.retain(input_raw)
+            control = D.control_input(input_raw, mode)
+            clock.retain(control)
+            ready_raw = control[2]
+            clock.tighten_finish(ready_raw, control[3])  # Before ANY file owner/path read.
+            observed = D.finish_observations(control, now=int(time.time()))
+            clock.retain(observed)
+        else:
+            upload_carrier = _upload_carrier(environment)
+            upload_hash = D.digest(environment.get(D.UPLOAD_HASH_ENV))
+            clock.retain(upload_carrier, upload_hash)
+        owner = C._PrimaryOwner(native.Owner(clock.local_end, clock, first=first, cancelled=cancelled))
+        clock.attach(owner)
+        root, private, output, raws, observations, parsed = _inputs(owner, clock, kind)
+        pending, carrier, context, _observed, policy, match = parsed
+        if mode == "finish":
+            require(observed[0]["beforeSha256"] == environment[H.HASH_ENV] and
+                observed[0]["carrierCloseSha256"] == D.sha(raws[H.PRIVATE_CARRIER_CLOSE]),
+                "FINISH_ACTUAL_K_HASHES")
+        directory, directory_raw = _returned_directory(owner, clock, root, create=mode == "finish")
+        if mode == "after":
+            require(D.sha(directory_raw) == upload_carrier["directoryIdentitySha256"], "UPLOAD_DIRECTORY_OUTPUT")
+            upload_raw, upload_metadata = _read_pending(owner, clock, directory, D.UPLOAD_FILE, upload_hash)
+            require(D.sha(upload_metadata) == upload_carrier["fileMetadataSha256"] and
+                D.parse_delivery(upload_raw, "finish")["carrierCloseSha256"] == D.sha(raws[H.PRIVATE_CARRIER_CLOSE]),
+                "UPLOAD_ORIGINAL_METADATA_OR_CARRIER")
+            ready_raw = D.after_ready(pending, upload_raw, policy=policy, match=match,
+                first=first.nanoseconds, before_sha256=environment[H.HASH_ENV], now=int(time.time()))
+            clock.retain(ready_raw)
+            pipes.frame(b"R", ready_raw)
+            input_raw = pipes.control()
+            clock.retain(input_raw)
+            control = D.control_input(input_raw, mode)
+            clock.retain(control)
+        prepared, now = clock.now(), int(time.time())
+        if mode == "finish":
+            pending_raw = D.upload_pending(pending, context, policy=policy, match=match, control=control,
+                observed=observed, finish_first=first.nanoseconds, prepared=prepared, now=now)
+            name = D.UPLOAD_FILE
+        else:
+            pending_raw = D.delivery_pending(pending, context, upload_raw, ready_raw, policy=policy, match=match,
+                control=control, carrier=upload_carrier, prepared=prepared, now=now)
+            name = D.AFTER_FILE
+        clock.retain(pending_raw)
+        written = K._write_bytes(owner, directory, name, pending_raw)
+        clock.retain(written)  # Original returned readback metadata, before other callbacks.
+        file_raw = O.encoded(written["postCloseReadback"])
+        _final_inputs(owner, clock, root, private, output, observations, pending, carrier)
+        if mode == "after":
+            repeated, metadata = _read_pending(owner, clock, directory, D.UPLOAD_FILE, upload_hash)
+            require(repeated == upload_raw and metadata == upload_metadata, "UPLOAD_CHANGED_AFTER_OBSERVATIONS")
+        actual, metadata = _read_pending(owner, clock, directory, name, D.sha(pending_raw))
+        require(actual == pending_raw and metadata == file_raw, "PENDING_ORIGINAL_READBACK")
+        D.parse_delivery(actual, mode)
+        K._names(owner, directory, (D.UPLOAD_FILE,) if mode == "finish" else (D.UPLOAD_FILE, D.AFTER_FILE))
+        require(O.encoded(native.directory_identity(list(directory.identity), clock.clock.role)) == directory_raw,
+            "PENDING_DIRECTORY_CHANGED")
+        directory.verify()
+        owner.guard()
+        close_raw = owner.finish()
+        clock.retain(close_raw)
+        K._closed_files(owner)
+        closed = clock.now()
+        final_raw = D.finite_result(mode, actual, ready_raw=ready_raw, input_raw=input_raw,
+            directory_identity_raw=directory_raw, file_metadata_raw=file_raw,
+            file_owner_close_raw=close_raw, closed_ns=closed)
+        clock.retain(final_raw)
+        pipes.frame(b"F", final_raw)  # Finite modes only: original I+EOF already complete.
+        clock.now()
+        pipes.close()
+        clock.now()
+        latch.complete(attempts, entry, final_raw)
+        latch.returned(attempts, entry, final_raw)
+        return clock
+    except BaseException as error:
+        failure = latch.fail(error)
+        raise failure
+    finally:
+        if failure is not None:
+            if owner is not None and not owner.finished:
+                owner.remember(failure)
+                try:
+                    owner.finish()
+                except BaseException:
+                    pass
+            if pipes is not None:
+                try:
+                    pipes.close(failure)
+                except BaseException:
+                    pass
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    parser.add_argument("operation", choices=("stream",))
+    parser.add_argument("operation", choices=("stream", "finish", "after"))
     parser.add_argument("--kind", choices=("gate", "worker"), required=True)
     args = parser.parse_args()
     handlers, cancelled, clock, failure = {}, [], None, None
@@ -649,7 +934,8 @@ def main():
         for number in (signal.SIGINT, signal.SIGTERM, *([signal.SIGBREAK] if hasattr(signal, "SIGBREAK") else [])):
             handlers[number] = signal.getsignal(number)
             signal.signal(number, lambda signum, _frame: cancelled.append(signum))
-        clock = stream(args.kind, lambda: native.cancellation(cancelled))
+        cancel = lambda: native.cancellation(cancelled)
+        clock = stream(args.kind, cancel) if args.operation == "stream" else finite(args.kind, cancel, args.operation)
     except BaseException as error:
         failure = error
     finally:
