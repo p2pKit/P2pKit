@@ -13,6 +13,7 @@ import re
 
 import hosted_cache_bootstrap_allocation as allocation
 import hosted_cache_bootstrap_initialization as initialization
+import hosted_cache_compatibility as compatibility
 import hosted_dependency_seed_files as files
 import hosted_initial_recipient_bootstrap_identity as identity
 
@@ -35,6 +36,7 @@ HISTORY_FIELDS = "schema scope kind observed clock originalBootDigest originalPr
 RETIRED_SCOPE = "INITIAL_RECIPIENT_PRIMARY_RETIRED_FOR_PRODUCTIVE_V1"
 INITIAL_CONTEXT_SCOPE = "INITIAL_RECIPIENT_CANONICAL_INITIALIZER_CONTEXT_V1"
 INPUT_SCOPE = "INITIAL_RECIPIENT_PRODUCTIVE_ORIGINAL_INPUT_BINDING_V1"
+OUTER_INPUT_SCOPE = "INITIAL_RECIPIENT_PRODUCTIVE_ORIGINAL_INPUTS_WITH_COMPATIBILITY_V2"
 STAGING_PARENT_SCOPE = "INITIAL_RECIPIENT_STAGING_PARENT_CLOSED_NO_EXECUTION_V1"
 PARENT_SCOPE = "INITIAL_RECIPIENT_PRODUCTIVE_PARENT_CLOSED_OBSERVATIONS_V1"
 HANDOFF_SCOPE = "INITIAL_RECIPIENT_SAVE_HANDOFF_PENDING_ORIGINAL_STEP_RETURN_V2"
@@ -310,17 +312,22 @@ def prefix_writer_close(value, handoff_raw):
         value["observationScope"] == "PRIOR_FIRST_OWNER_ONLY", "PREFIX_PRIOR_WRITER_CLOSE")
     for name in ("firstNs", "localStarted", "hardEndNs"):
         same(value[name], index["window"][name], "PREFIX_PRIOR_WRITER_ORIGINAL45")
-    # 118 original rows +26 sidecar rows. Empty original stdout still uses its
-    # actual empty-original-writer; no synthetic row may replace that owner.
+    # Preserve every original144 allocation, inserting149 real source reads
+    # after its first46 and149 after its last. This is an exact ledger grammar,
+    # NOT permission to fabricate rows or enlarge the original owner's limits.
+    source_labels = compatibility.source_read_labels()
     labels = [*("directory",) * 8, *("reader",) * 12, "directory", "directory",
-        *("writer", "reader", "reader") * 6, *("reader",) * 6, "directory", "directory"]
+        *("writer", "reader", "reader") * 6, *("reader",) * 6,
+        *source_labels, "directory", "directory"]
     for name in (*BLOB_NAMES, "save-handoff.json"):
         labels.extend(("empty-original-writer" if name.endswith(".bin") and index["blobs"][name]["bytes"] == 0
             else "writer", "reader"))
     labels.extend(("reader",) * 32)
-    require(type(value["resourceCount"]) is int and value["resourceCount"] == len(labels) == 144, "PREFIX_PRIOR_WRITER_ROWS")
+    labels.extend(source_labels)
+    require(type(value["resourceCount"]) is int and value["resourceCount"] == len(labels) == 442, "PREFIX_PRIOR_WRITER_ROWS")
     same(value["resources"], [{"ordinal": number, "label": label, "closeAttempted": True, "closed": True}
         for number, label in enumerate(labels)], "PREFIX_PRIOR_WRITER_LEDGER")
+    raw_bytes(O.encoded(value))
     return value
 
 
@@ -339,6 +346,9 @@ def handoff_record(raw, blobs, inputs, first, claims, directory, directory_ident
     same(value["blobs"], {name: {"bytes": len(raw_bytes(blob, empty=name.endswith(".bin"))), "sha256": O.digest(blob)}
         for name, blob in blobs.items()}, "HANDOFF_ORIGINAL_BLOBS")
     same(value["binding"], inputs.binding(), "HANDOFF_INITIAL_BINDING")
+    original = initial_inputs_record(blobs["initial-inputs.json"], inputs.admission["source"])
+    same(original["binding"], inputs.binding(), "HANDOFF_OUTER_INITIAL_BINDING")
+    same(original["initializerCheckedLocal"], inputs.previous_local, "HANDOFF_OUTER_INITIAL_LOCAL")
     for name in ("source", "github", "selection", "cacheCohort"):
         same(value[name], inputs.admission[name], "HANDOFF_IDENTITY")
     require(value["directory"] == str(directory) and native_identity(value["directoryIdentity"], inputs.role) ==
@@ -787,6 +797,17 @@ def canonical(raw, maximum=LIMIT):
 
 def fields(value, names):
     require(type(value) is dict and set(value) == set(names.split()), "FIELDS")
+    return value
+
+
+def initial_inputs_record(raw, source):
+    """Mandatory outer2 DATA; the original inner InitialInputs binding is unchanged."""
+    value = fields(canonical(raw), "schema scope binding initializerCheckedLocal compatibilityInputs")
+    require(type(value["schema"]) is int and value["schema"] == 2 and value["scope"] == OUTER_INPUT_SCOPE and
+            type(value["binding"]) is dict and value["binding"].get("scope") == INPUT_SCOPE, "INITIAL_INPUT_RECORD")
+    local(value["initializerCheckedLocal"])
+    nested = compatibility.checked_envelope(value["compatibilityInputs"])
+    same(nested["source"], source, "INITIAL_COMPATIBILITY_SOURCE")
     return value
 
 

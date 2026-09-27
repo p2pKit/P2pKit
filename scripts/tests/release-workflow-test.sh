@@ -26,6 +26,26 @@ is_local_workflow_reference() {
         git -C "$root" ls-files --error-unmatch -- "${use#./}" >/dev/null 2>&1
 }
 
+is_local_action_reference() {
+    local root="$1" use="$2" relative directory file
+    local files=(action.yml)
+    case "$use" in
+        ./.github/actions/initial-recipient-initialize) ;;
+        ./.github/actions/initial-recipient-cache-provider|./.github/actions/initial-recipient-upload|./.github/actions/initial-recipient-productive-upload)
+            files+=(index.cjs) ;;
+        *) return 1 ;;
+    esac
+    relative="${use#./}"
+    for directory in "$root/.github" "$root/.github/actions" "$root/$relative"; do
+        [[ -d "$directory" && ! -L "$directory" ]] || return 1
+        [[ "$(cd -- "$directory" && pwd -P)" == "$directory" ]] || return 1
+    done
+    for file in "${files[@]}"; do
+        [[ -f "$root/$relative/$file" && ! -L "$root/$relative/$file" ]] || return 1
+        git -C "$root" ls-files --error-unmatch -- "$relative/$file" >/dev/null 2>&1 || return 1
+    done
+}
+
 [[ -f "$WORKFLOW" ]] || { echo "FATAL: Maven Central workflow is missing" >&2; exit 1; }
 [[ -f "$DESKTOP_WORKFLOW" ]] || { echo "FATAL: Desktop cross-host workflow is missing" >&2; exit 1; }
 ruby "$ROOT/scripts/tests/check-workflow-checkout-policy-test.rb"
@@ -34,6 +54,9 @@ ruby "$ROOT/scripts/tests/check-dependency-submission-policy-test.rb"
 ruby "$ROOT/scripts/tests/check-jvm-cross-host-policy-test.rb"
 ruby "$ROOT/scripts/tests/check-ci-scope-policy-test.rb"
 ruby "$ROOT/scripts/tests/check-heavy-job-queue-policy-test.rb"
+ruby "$ROOT/scripts/tests/check-initial-recipient-bootstrap-workflow-policy-test.rb"
+python3 -I -B -S "$ROOT/scripts/tests/initial-recipient-runner-tools-test.py" -v
+python3 -I -B -S "$ROOT/scripts/tests/hosted-initial-recipient-productive-step-output-test.py" -v
 ruby "$ROOT/scripts/tests/hosted-dependency-update-workflow-test.rb"
 python3 -I -B -S "$ROOT/scripts/tests/hosted-dependency-update-test.py" -v -f
 ruby "$ROOT/scripts/tests/check-sample-app-workflow-policy-test.rb"
@@ -64,11 +87,11 @@ ruby "$ROOT/scripts/tests/release-foundation-workflow-test.rb"
 while IFS= read -r -d '' workflow; do
     ruby -e 'require "yaml"; YAML.safe_load(File.read(ARGV.fetch(0)), aliases: true)' "$workflow"
     while IFS= read -r use; do
-        # Local reusable workflows execute from the caller's exact commit.
-        # Admit no traversal, symlink, missing path or mutable remote reference.
+        # Local reusable workflows and four fixed local Actions execute only
+        # from the caller's exact tracked source. No generic local allowlist.
         if [[ "$use" == .* || "$use" == /* ]]; then
-            is_local_workflow_reference "$ROOT" "$use" || {
-                echo "FATAL: invalid local workflow reference ($workflow): $use" >&2
+            is_local_workflow_reference "$ROOT" "$use" || is_local_action_reference "$ROOT" "$use" || {
+                echo "FATAL: invalid local workflow/Action reference ($workflow): $use" >&2
                 exit 1
             }
             continue

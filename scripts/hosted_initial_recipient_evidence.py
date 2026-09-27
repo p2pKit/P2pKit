@@ -133,6 +133,10 @@ _CAP_FIELDS = tuple("clock first firstLocal workEndNs workEndLocal operationFini
 _NODE_FIELDS = ("relative", "kind", "bytes", "sha256", "native", "provenance")
 _SOURCE_FIELDS = ("job_id", "observed_raw", "event_sha256", "context_sha256", "start_sha256")
 _PARTITION_FIELDS = ("ordinal", "group", "root", "members", "map")
+_TAIL_ARCHIVE_VIEW_FIELDS = tuple("child archive recipient role payload output payload_root members map lineage caps public_inputs".split())
+_TAIL_GROUPS = ("final-late-returned", "post-export-authority", "final-copy-references", "final-export-diagnostics",
+    "final-public-home-late", "seal-authority", "seal-record", "before-authority", "before-return-originals",
+    "tail-recipient-validation")
 
 
 @dataclass(frozen=True, repr=False)
@@ -142,6 +146,16 @@ class _ProductiveValidationBinding:
 
 @dataclass(frozen=True, repr=False)
 class _ProductiveExportBinding:
+    view: object
+
+
+@dataclass(frozen=True, repr=False)
+class _ProductiveTailValidationBinding:
+    view: object
+
+
+@dataclass(frozen=True, repr=False)
+class _ProductiveTailExportBinding:
     view: object
 
 
@@ -181,6 +195,16 @@ def _productive_modules():
     return P, PC, CD
 
 
+def _productive_tail_modules():
+    # Literal lazy route: final/legacy callers do not import or acquire K.
+    import hosted_initial_recipient_productive as P
+    import hosted_initial_recipient_productive_tail as K
+    import hosted_initial_recipient_productive_tail_data as TD
+    require(K.P is P and K.R.P is P and K.C is P.C and K.N is P.N and K.B is P.B and K.O is P.O and
+        K.TD is TD and K.CD is TD.CD, "PRODUCTIVE_TAIL_MODULE_GRAPH")
+    return P, K, TD
+
+
 def _productive_pin(value, kind, names):
     require(type(value) is kind and type(value.__dict__) is dict and set(value.__dict__) == set(names),
         "PRODUCTIVE_OBJECT_FIELDS")
@@ -202,12 +226,14 @@ def _productive_fail(state, error):
     return state["failure"]
 
 
-def _productive_start(child, mode):
+def _productive_start(child, mode, *, family="final"):
+    require(type(family) is str and family in ("final", "tail") and mode in ("validation", "export"),
+        "PRODUCTIVE_ENTRY_FAMILY")
     key = (mode, id(child))
     previous = _PRODUCTIVE_ATTEMPTS.get(key)
     if previous is not None:
         raise _productive_fail(previous, posix.EvidenceError("INITIAL_EVIDENCE_PRODUCTIVE_REENTRY"))
-    state = {"child": child, "mode": mode, "key": key, "pid": os.getpid(), "busy": True,
+    state = {"child": child, "mode": mode, "family": family, "key": key, "pid": os.getpid(), "busy": True,
         "failure": None, "status": "STARTED", "binding": None, "backend_result": None,
         "result": None, "keyring": None, "keyring_complete": None, "completion": None}
     _PRODUCTIVE_ATTEMPTS[key] = state
@@ -237,6 +263,15 @@ def _productive_enter(binding):
 
 def _productive_refs(state, *, whole=False):
     binding, P, PC, CD = state["binding"], state["P"], state["PC"], state["CD"]
+    tail = state["family"] == "tail"
+    kinds = ((_ProductiveTailValidationBinding, _ProductiveTailExportBinding) if tail else
+        (_ProductiveValidationBinding, _ProductiveExportBinding))
+    require(type(state["family"]) is str and state["family"] in ("final", "tail") and
+        state["mode"] in ("validation", "export") and type(binding) is kinds[state["mode"] == "export"] and
+        PC.__name__ == ("hosted_initial_recipient_productive_tail" if tail else
+            "hosted_initial_recipient_productive_custody") and
+        CD.__name__ == ("hosted_initial_recipient_productive_tail_data" if tail else
+            "hosted_initial_recipient_productive_custody_data"), "PRODUCTIVE_FAMILY_CHANGED")
     require(state["pid"] == os.getpid() and state["failure"] is None and state["busy"] and
         _PRODUCTIVE_ATTEMPTS.get(state["key"]) is state and _PRODUCTIVE_BINDINGS.get(id(binding)) is state,
         "PRODUCTIVE_REGISTRY_CHANGED")
@@ -244,6 +279,11 @@ def _productive_refs(state, *, whole=False):
         sys.modules.get(CD.__name__) is CD and PC.P is P and PC.C is P.C and PC.N is P.N and
         PC.B is P.B and PC.O is P.O and all(getattr(owner, name, None) is original
             for owner, name, original in state["methods"]), "PRODUCTIVE_SUPPLIER_CHANGED")
+    if tail:
+        require(sys.modules.get(PC.R.__name__) is PC.R and PC.R.P is P and PC.TD is CD and PC.CD is CD.CD,
+            "PRODUCTIVE_TAIL_SUPPLIER_CHANGED")
+        for pin in state["data_graphs"]:
+            _graph_current(pin)
     for pin in state["pins"]:
         _productive_pin_current(pin)
     require(all(os.environ.get(name) == original for name, original in state["environment"]),
@@ -255,12 +295,18 @@ def _productive_refs(state, *, whole=False):
         _paths_current(state["recipient_paths"])
     if state["mode"] == "export":
         _graph_current(state["public_pin"])
-        view, partitions = binding.view, state["partitions"]
-        require(view.partitions is partitions and type(partitions) is tuple and len(partitions) == 30 and
-            all(partitions[index] is row[0] for index, row in enumerate(state["partition_pins"])),
-            "PRODUCTIVE_PARTITIONS_CHANGED")
+        view = binding.view
+        if tail:
+            require(view.members is state["members"] and type(view.members) is tuple and
+                len(view.members) + 2 == len(state["node_rows"]) and all(node is row[0]
+                    for node, row in zip(view.members, state["node_rows"][1:-1])), "PRODUCTIVE_TAIL_MEMBERS_CHANGED")
+        else:
+            partitions = state["partitions"]
+            require(view.partitions is partitions and type(partitions) is tuple and len(partitions) == 30 and
+                all(partitions[index] is row[0] for index, row in enumerate(state["partition_pins"])),
+                "PRODUCTIVE_PARTITIONS_CHANGED")
         if whole:
-            for pin in state["partition_pins"]:
+            for pin in (() if tail else state["partition_pins"]):
                 _productive_pin_current(pin)
             require(len(state["nodes"]) == len(state["node_rows"]), "PRODUCTIVE_NODE_ROSTER_CHANGED")
             for node, pin, _partition in state["node_rows"]:
@@ -346,13 +392,13 @@ def _productive_guard(binding, *, finish=False, whole=False):
 
 
 def _checked_productive_validation_binding(binding):
-    require(type(binding) is _ProductiveValidationBinding, "PRODUCTIVE_VALIDATION_BINDING")
+    require(type(binding) in (_ProductiveValidationBinding, _ProductiveTailValidationBinding), "PRODUCTIVE_VALIDATION_BINDING")
     _productive_finish_guard(binding)
     return binding.view
 
 
 def _checked_productive_export_binding(binding):
-    require(type(binding) is _ProductiveExportBinding, "PRODUCTIVE_EXPORT_BINDING")
+    require(type(binding) in (_ProductiveExportBinding, _ProductiveTailExportBinding), "PRODUCTIVE_EXPORT_BINDING")
     _productive_finish_guard(binding)
     return binding.view
 
@@ -543,7 +589,39 @@ def _productive_native_shape(native, role, kind):
     return native[6]
 
 
+def _productive_tail_nodes(state):
+    K, view = state["PC"], state["binding"].view
+    require(type(view.members) is tuple and 0 < len(view.members) <= posix.MAX_MEMBERS - 2,
+        "PRODUCTIVE_TAIL_MEMBER_ROSTER")
+    rows, by_name, by_node, native_ids = [], {}, {}, set()
+    expected = ((view.payload_root, "", "directory"),
+        *((node, "member-" + str(index).zfill(5) + ".bin", "file") for index, node in enumerate(view.members)),
+        (view.map, "custody-tail-map.json", "file"))
+    require(len(expected) <= posix.MAX_MEMBERS, "PRODUCTIVE_CORPUS_LIMIT")
+    for node, relative, kind in expected:
+        pin = _productive_pin(node, K.ExpectedNode, _NODE_FIELDS)
+        require(type(node.relative) is str and node.relative == relative and type(node.kind) is str and
+            node.kind == kind and relative not in by_name and id(node) not in by_node, "PRODUCTIVE_NODE_PATH_KIND")
+        size = _productive_native_shape(node.native, view.role, kind)
+        identity = node.native[:3]
+        require(identity not in native_ids, "PRODUCTIVE_NATIVE_ALIAS")
+        native_ids.add(identity)
+        if kind == "directory":
+            require(node.bytes is None and node.sha256 is None, "PRODUCTIVE_DIRECTORY_SENTINELS")
+        else:
+            require(type(node.bytes) is int and 0 <= node.bytes <= posix.MAX_BYTES and node.bytes == size,
+                "PRODUCTIVE_FILE_SIZE")
+            _sha(node.sha256)
+        by_name[relative], by_node[id(node)] = node, (pin, None)
+        rows.append((node, pin, None))
+    require(sum(node.bytes for node, _pin, _partition in rows if node.kind == "file") <= posix.MAX_BYTES,
+        "PRODUCTIVE_CORPUS_LIMIT")
+    state.update(members=view.members, node_rows=tuple(rows), nodes=by_name, node_pins=by_node)
+
+
 def _productive_nodes(state):
+    if state["family"] == "tail":
+        return _productive_tail_nodes(state)
     PC, CD, view = state["PC"], state["CD"], state["binding"].view
     require(type(view.partitions) is tuple and len(view.partitions) == 30 and type(CD.GROUPS) is tuple and
         len(CD.GROUPS) == len(set(CD.GROUPS)) == 30, "PRODUCTIVE_PARTITION_ROSTER")
@@ -588,19 +666,65 @@ def _productive_nodes(state):
         nodes=by_name, node_pins=by_node)
 
 
+def _productive_tail_public_counts(state, value):
+    view, cut = state["binding"].view, value["cut"]
+    _fields(cut, set("mapName mapSha256 mapBytes memberCount totalBytes groups".split()))
+    _fields(cut["groups"], set(_TAIL_GROUPS))
+    require(cut["mapName"] == view.map.relative == "custody-tail-map.json" and
+        type(cut["mapBytes"]) is int and 0 < cut["mapBytes"] == view.map.bytes <= 2 * 1024 * 1024 and
+        cut["mapSha256"] == view.map.sha256, "PRODUCTIVE_TAIL_PUBLIC_MAP")
+    native_windows = view.role == "windows-x64"
+    expected_counts = (11, 279, 2, 4 if native_windows else 7, None, 280, 1, 280, 5, None)
+    offset, total = 0, view.map.bytes
+    for index, (name, expected) in enumerate(zip(_TAIL_GROUPS, expected_counts)):
+        row = cut["groups"][name]
+        _fields(row, {"memberCount", "totalBytes"})
+        count, size = row["memberCount"], row["totalBytes"]
+        require(type(count) is int and type(size) is int and 0 <= count <= posix.MAX_MEMBERS and
+            0 <= size <= posix.MAX_BYTES, "PRODUCTIVE_TAIL_PUBLIC_GROUP")
+        if expected is not None:
+            require(count == expected and size > 0, "PRODUCTIVE_TAIL_PUBLIC_GROUP_COUNT")
+        elif index == 4:
+            require((count == 0 if native_windows else count <= 64) and (count == 0) is (size == 0) and
+                size <= count * 2 * 1024 * 1024, "PRODUCTIVE_TAIL_PUBLIC_OPTIONAL_GROUP")
+        else:
+            require(index == 9 and (count == 12 if native_windows else 13 <= count <= 77) and size > 0,
+                "PRODUCTIVE_TAIL_PUBLIC_VALIDATION_GROUP")
+        members = view.members[offset:offset + count]
+        require(len(members) == count and sum(node.bytes for node in members) == size,
+            "PRODUCTIVE_TAIL_PUBLIC_GROUP_BYTES")
+        offset += count
+        total += size
+    require(offset == len(view.members) and type(cut["memberCount"]) is int and
+        cut["memberCount"] == offset + 1 and type(cut["totalBytes"]) is int and cut["totalBytes"] == total and
+        len(state["node_rows"]) == offset + 2, "PRODUCTIVE_TAIL_PUBLIC_COUNTS")
+    final = value["final"]  # Strict TD parser checks the full original-reference DATA shape.
+    require(final["archiveNativeNodes"] + len(state["node_rows"]) <= posix.MAX_MEMBERS and
+        final["plaintextBytes"] + total <= posix.MAX_BYTES, "PRODUCTIVE_TAIL_COMBINED_CORPUS_LIMIT")
+    require(value["transport"] == {"artifactMember": "custody-tail.tar.gz.gpg", "manifestMember": "custody-tail-manifest.json",
+        "backendArtifact": posix.ARTIFACT, "backendManifest": posix.MANIFEST} and
+        value["finalPrivateOriginals"] == {"disposition": "NOT_DELIVERED", "coverage": "EXCLUDED_FROM_K_AND_R",
+            "requiredEvidence": "NOT_USED_AS_QUALIFICATION_ORIGINALS"}, "PRODUCTIVE_TAIL_TRANSPORT")
+
+
 def _productive_public_inputs(state):
     view, match, policy = state["binding"].view, state["match"], state["policy"]
     raw = view.public_inputs
     require(type(raw) is bytes and 0 < len(raw) <= MANIFEST_LIMIT, "PRODUCTIVE_PUBLIC_BYTES")
-    value = I.parse(raw, MANIFEST_LIMIT)
-    _fields(value, set("schema scope kind selection source github policy initialRecipient productive copy".split()))
+    tail = state["family"] == "tail"
+    value = state["CD"].public_inputs(raw) if tail else I.parse(raw, MANIFEST_LIMIT)
+    _fields(value, set(("schema scope kind selection source github policy initialRecipient productive " +
+        ("final predecessors cut transport finalPrivateOriginals" if tail else "copy")).split()))
     require(_canonical(value) == raw and type(value["schema"]) is int and value["schema"] == 1 and
-        value["scope"] == "INITIAL_RECIPIENT_PRODUCTIVE_MANIFEST_INPUTS_V1" and value["kind"] == "worker" and
+        value["scope"] == ("INITIAL_RECIPIENT_PRODUCTIVE_TAIL_MANIFEST_INPUTS_V1" if tail else
+            "INITIAL_RECIPIENT_PRODUCTIVE_MANIFEST_INPUTS_V1") and value["kind"] == "worker" and
         value["selection"] == match["github"]["selection"] and value["source"] == match["source"],
         "PRODUCTIVE_PUBLIC_IDENTITY")
     github = value["github"]
     _fields(github, set(match["github"]) | {"repository", "eventSha256"})
     _sha(github["eventSha256"])
+    if tail:
+        require(github["eventSha256"] == state["validation_view"].source.event_sha256, "PRODUCTIVE_TAIL_PUBLIC_EVENT")
     require(github == {**match["github"], "repository": I.REPOSITORY, "eventSha256": github["eventSha256"]},
         "PRODUCTIVE_PUBLIC_GITHUB")
     require(value["policy"] == {**match["policy"], "fingerprint": policy["recipient"]["fingerprint"],
@@ -615,12 +739,16 @@ def _productive_public_inputs(state):
     for name in ("matchSha256", "preExportReturnSha256", "preExportIndexSha256"):
         _sha(initial[name])
     productive = value["productive"]
-    _fields(productive, set("originalProposalSha256 producerHandoffSha256 producerReturnSha256 producerStepOutcome afterSaveSha256 afterSaveStepOutcome probeSha256 afterProbeStepOutcome prefixRetentionSha256".split()))
+    _fields(productive, set("originalProposalSha256 producerHandoffSha256 producerReturnSha256 producerStepOutcome afterSaveSha256 afterSaveStepOutcome probeSha256 afterProbeStepOutcome prefixRetentionSha256 compatibilityInputsSha256".split()))
     for name, item in productive.items():
         if name.endswith("StepOutcome"):
             require(type(item) is str and item == "success", "PRODUCTIVE_PUBLIC_PREDECESSOR")
         else:
             _sha(item)
+    if tail:
+        _productive_tail_public_counts(state, value)
+        state["public"], state["public_pin"] = value, _graph(value)
+        return
     copied = value["copy"]
     _fields(copied, set("scope groups index dataFiles mapFiles indexFiles archiveFiles archiveNativeNodes plaintextBytes".split()))
     require(copied["scope"] == "INITIAL_RECIPIENT_PRODUCTIVE_FIXED30_ARCHIVE_BINDING_V1" and
@@ -660,12 +788,15 @@ def _productive_manifest(binding, digest, size):
         _productive_time(state)
         recipient = state["recipient"]
         result = _copy(state["public"])
-        result.update(scope="ENCRYPTED_PRIVATE_INITIAL_RECIPIENT_PRODUCTIVE_EVIDENCE_V1",
+        result.update(scope=("ENCRYPTED_PRIVATE_INITIAL_RECIPIENT_PRODUCTIVE_CUSTODY_TAIL_V1" if state["family"] == "tail" else
+            "ENCRYPTED_PRIVATE_INITIAL_RECIPIENT_PRODUCTIVE_EVIDENCE_V1"),
             recipient={"fingerprint": recipient.fingerprint, "encryptionFingerprint": recipient.encryption_fingerprint,
                 "keySha256": recipient.key_sha256, "expiresAt": recipient.expires_at},
             artifact={"name": posix.ARTIFACT, "sha256": digest, "size": size}, testAcceptance="NOT_PERFORMED",
             productiveAuthority=False, cacheAuthority=False, exportSaveAuthority=False, budgetAcceptance="NOT_ADMITTED")
         raw = _canonical(result)
+        if state["family"] == "tail":
+            require(state["CD"].public_manifest(raw) == result, "PRODUCTIVE_TAIL_MANIFEST_SCHEMA")
         _productive_passive(state, whole=True)
         return raw  # Formatting only; backend still owes native publication/readback/known close.
     except BaseException as error:
@@ -675,16 +806,30 @@ def _productive_manifest(binding, digest, size):
 
 
 def _productive_admit(state, archive=None, recipient=None):
-    P, PC, CD = _productive_modules()
-    # Pin suppliers BEFORE the first fallible PC/checker/parser callback. A
+    family = state["family"]
+    require(type(family) is str and family in ("final", "tail"), "PRODUCTIVE_ENTRY_FAMILY")
+    tail = family == "tail"
+    P, PC, CD = _productive_tail_modules() if tail else _productive_modules()
+    controller_names = (("R", "TD", "CD", "P", "C", "N", "B", "O", "TailChild", "TailArchiveBinding",
+        "TailValidationView", "TailArchiveView", "TailValidationCaps", "TailArchiveCaps", "TailChildSourceBinding",
+        "ExpectedNode", "checked_child_validation", "check_child_validation", "checked_child_archive", "check_child_archive",
+        "archive_liveness", "checked_retired_child_validation", "check_retired_child_archive") if tail else
+        ("P", "C", "N", "B", "O", "ValidationView", "ArchiveView", "ValidationCaps", "ArchiveCaps",
+        "ChildSourceBinding", "PartitionView", "ExpectedNode", "checked_child_validation", "check_child_validation",
+        "checked_child_archive", "check_child_archive", "archive_liveness", "checked_retired_child_validation",
+        "check_retired_child_archive"))
+    data_names = (("CD", "RD", "O", "S", "GROUPS", "FIXED_COUNTS", "LIMIT", "PUBLIC_LIMIT", "MAP_NAME",
+        "INPUT_SCOPE", "SCOPE", "TRANSPORT", "EXCLUDED", "public_inputs", "public_manifest", "cut", "manifest_inputs",
+        "join_manifests", "canonical", "encoded", "fields", "integer", "hashes", "_artifact", "_final", "_common")
+        if tail else ("GROUPS",))
+    data_graphs = tuple(_graph(getattr(CD, name)) for name in ("FIXED_COUNTS", "TRANSPORT", "EXCLUDED")) if tail else ()
+    if tail:
+        require(type(CD.GROUPS) is tuple and CD.GROUPS == _TAIL_GROUPS, "PRODUCTIVE_TAIL_GROUP_ROSTER")
+    # Pin suppliers BEFORE the first fallible controller/checker/parser callback. A
     # callback cannot replace a method and have its replacement adopted later.
     backend = windows if os.name == "nt" else posix
     methods = tuple((owner, name, getattr(owner, name)) for owner, names in (
-        (PC, ("P", "C", "N", "B", "O", "ValidationView", "ArchiveView", "ValidationCaps", "ArchiveCaps",
-            "ChildSourceBinding", "PartitionView", "ExpectedNode", "checked_child_validation", "check_child_validation",
-            "checked_child_archive", "check_child_archive", "archive_liveness", "checked_retired_child_validation",
-            "check_retired_child_archive")),
-        (CD, ("GROUPS",)), (P, ("_credential_free",)), (P.O, ("integer", "NS", "clocks", "wire")),
+        (PC, controller_names), (CD, data_names), (P, ("_credential_free",)), (P.O, ("integer", "NS", "clocks", "wire")),
         (P.O.clocks, ("Reading", "ClockIdentity", "observe", "validate_reading", "validate_identity")),
         (P.O.wire, ("_directed_deadline",)), (P.N.initial_identity, ("_match",)),
         (backend, ("Recipient", "_ProductiveValidationReturn", "_ProductiveExportReturn", "_ProductiveArtifact",
@@ -693,51 +838,72 @@ def _productive_admit(state, archive=None, recipient=None):
         (time, ("time", "monotonic")), (I, ("_policy", "parse", "encoded")),
         (S, ("POLICY_SHA256", "joint")), (S.joint, ("OWNER_LOGIN",)),
         (sys.modules[__name__], ("MappingProxyType", "_ProductiveValidationBinding", "_ProductiveExportBinding", "_ProductiveKeyringCap",
+            "_ProductiveTailValidationBinding", "_ProductiveTailExportBinding", "_TAIL_ARCHIVE_VIEW_FIELDS", "_TAIL_GROUPS",
+            "_productive_modules", "_productive_tail_modules", "_productive_tail_nodes", "_productive_tail_public_counts",
             "ProductiveValidationReturn", "ProductiveBackendReturn", "_productive_pin", "_productive_pin_current",
             "_productive_start", "_productive_original", "_productive_enter", "_productive_admit", "_productive_fail",
             "_productive_refs", "_productive_passive", "_productive_current", "_productive_time",
             "_productive_guard", "_productive_observation_pin", "_productive_recipient", "_productive_native_shape", "_productive_nodes",
             "_productive_public_inputs", "_productive_finish_return", "_checked_productive_return",
+            "validate_initial_productive_recipient", "export_initial_productive_encrypted",
+            "checked_productive_validation_return", "checked_productive_backend_return",
+            "checked_retired_productive_validation_return", "checked_retired_productive_backend_return",
+            "validate_initial_productive_tail_recipient", "export_initial_productive_tail_encrypted",
+            "checked_productive_tail_validation_return", "checked_productive_tail_backend_return",
+            "checked_retired_productive_tail_validation_return", "checked_retired_productive_tail_backend_return",
             "_checked_productive_validation_binding", "_checked_productive_export_binding",
             "_productive_work_guard", "_productive_finish_guard", "_productive_whole_guard",
             "_productive_expected_node", "_productive_node_guard", "_productive_native", "_productive_check_snapshot",
             "_productive_keyring_begin", "_productive_keyring_guard", "_productive_keyring_complete",
             "_productive_manifest", "_graph", "_graph_current", "_canonical", "_paths_pin", "_paths_current")),
     ) for name in names)
+    if tail:
+        methods += ((PC.R, "P", P),)
     environment = tuple((name, os.environ.get(name)) for name in ("GITHUB_ACTIONS", "GITHUB_REPOSITORY",
         "GITHUB_SERVER_URL", "GITHUB_API_URL", "RUNNER_ENVIRONMENT", "GITHUB_EVENT_NAME", "GITHUB_REF",
         "GITHUB_SHA", "GITHUB_WORKFLOW_SHA", "GITHUB_WORKFLOW_REF", "GITHUB_JOB", "GITHUB_RUN_ID",
         "GITHUB_RUN_ATTEMPT", "RUNNER_OS", "RUNNER_ARCH", "RUNNER_NAME", "GITHUB_WORKSPACE", "GITHUB_EVENT_PATH"))
-    state.update(P=P, PC=PC, CD=CD, backend=backend, methods=methods, environment=environment)
+    state.update(P=P, PC=PC, CD=CD, backend=backend, methods=methods, environment=environment, data_graphs=data_graphs)
 
     def original_suppliers():
         require(state["failure"] is None and state["busy"] and state["status"] == "STARTED" and
+            type(state["family"]) is str and state["family"] == family and
             all(getattr(owner, name, None) is original for owner, name, original in methods) and
             all(os.environ.get(name) == original for name, original in environment), "PRODUCTIVE_ADMISSION_CHANGED")
+        for pin in data_graphs:
+            _graph_current(pin)
 
     mode, child = state["mode"], state["child"]
+    child_pins = (_productive_pin(child, PC.TailChild, ()),) if tail else ()
     if mode == "validation":
         view = PC.checked_child_validation(child)
         original_suppliers()
-        view_pin = _productive_pin(view, PC.ValidationView, _VALIDATION_VIEW_FIELDS)
+        view_pin = _productive_pin(view, PC.TailValidationView if tail else PC.ValidationView, _VALIDATION_VIEW_FIELDS)
         validation = view
-        binding = _ProductiveValidationBinding(view)
+        binding = _ProductiveTailValidationBinding(view) if tail else _ProductiveValidationBinding(view)
     else:
         prior = _PRODUCTIVE_ATTEMPTS.get(("validation", id(child)))
         require(type(prior) is dict and prior["child"] is child and prior["status"] == "RETURNED" and
-            prior["recipient"] is recipient, "PRODUCTIVE_ORIGINAL_VALIDATION_REQUIRED")
-        checked_productive_validation_return(prior["result"], child)
+            prior["recipient"] is recipient and prior["family"] == family, "PRODUCTIVE_ORIGINAL_VALIDATION_REQUIRED")
+        if tail:
+            checked_productive_tail_validation_return(prior["result"], child)
+            child_pins += (_productive_pin(archive, PC.TailArchiveBinding, ()),)
+        else:
+            checked_productive_validation_return(prior["result"], child)
         original_suppliers()
         validation = prior["binding"].view
         view = PC.checked_child_archive(child, archive, recipient)
         original_suppliers()
-        view_pin = _productive_pin(view, PC.ArchiveView, _ARCHIVE_VIEW_FIELDS)
+        view_pin = _productive_pin(view, PC.TailArchiveView if tail else PC.ArchiveView,
+            _TAIL_ARCHIVE_VIEW_FIELDS if tail else _ARCHIVE_VIEW_FIELDS)
         require(view.archive is archive and view.recipient is recipient, "PRODUCTIVE_ORIGINAL_ARCHIVE")
-        binding = _ProductiveExportBinding(view)
+        binding = _ProductiveTailExportBinding(view) if tail else _ProductiveExportBinding(view)
     require(state["failure"] is None and state["busy"] and state["status"] == "STARTED" and view.child is child,
         "PRODUCTIVE_ADMISSION_REENTRY")
     caps = view.caps
-    caps_pin = _productive_pin(caps, PC.ValidationCaps if mode == "validation" else PC.ArchiveCaps, _CAP_FIELDS)
+    caps_kind = ((PC.TailValidationCaps if mode == "validation" else PC.TailArchiveCaps) if tail else
+        (PC.ValidationCaps if mode == "validation" else PC.ArchiveCaps))
+    caps_pin = _productive_pin(caps, caps_kind, _CAP_FIELDS)
     P.O.clocks.validate_reading(caps.first)
     require(caps.clock is caps.first.clock and caps.clock.role == view.role and
         view.role in P.O.clocks.DOMAINS and (os.name == "nt") is (view.role == "windows-x64"), "PRODUCTIVE_CAP_CLOCK")
@@ -765,7 +931,7 @@ def _productive_admit(state, archive=None, recipient=None):
     original_suppliers()
     blob = hashlib.sha1(b"blob " + str(len(validation.policy_raw)).encode("ascii") + b"\0" + validation.policy_raw).hexdigest()
     require(role == view.role and match["policy"]["blob"] == blob, "PRODUCTIVE_MATCH_POLICY")
-    source_pin = _productive_pin(validation.source, PC.ChildSourceBinding, _SOURCE_FIELDS)
+    source_pin = _productive_pin(validation.source, PC.TailChildSourceBinding if tail else PC.ChildSourceBinding, _SOURCE_FIELDS)
     require(type(validation.source.job_id) is str and re.fullmatch(r"[0-9a-f]{32}", validation.source.job_id),
         "PRODUCTIVE_SOURCE_JOB")
     native_windows = view.role == "windows-x64"
@@ -780,7 +946,7 @@ def _productive_admit(state, archive=None, recipient=None):
             require(type(view.payload) is PosixPath and type(view.output) is PosixPath and
                 view.payload.is_absolute() and view.output.is_absolute(), "PRODUCTIVE_ARCHIVE_ROOT_TYPE")
     state.update(binding=binding, backend=backend, validation_view=validation, methods=methods,
-        pins=(_productive_pin(binding, type(binding), ("view",)), view_pin, caps_pin, source_pin,
+        pins=(*child_pins, _productive_pin(binding, type(binding), ("view",)), view_pin, caps_pin, source_pin,
             _productive_pin(caps.first, P.O.clocks.Reading, ("clock", "nanoseconds")),
             _productive_pin(caps.clock, P.O.clocks.ClockIdentity, ("role", "domain", "ticks_per_second"))),
         policy=policy, policy_pin=_graph(policy), match=match, match_pin=_graph(match),
@@ -790,6 +956,7 @@ def _productive_admit(state, archive=None, recipient=None):
         _productive_recipient(state, recipient)
         _productive_nodes(state)
         _productive_public_inputs(state)
+    original_suppliers()
     _productive_current(state, whole=True)
     _productive_time(state)
     state["status"], state["busy"] = "RUNNING", False
@@ -825,10 +992,12 @@ def _productive_finish_return(state, backend_result):
             _sha(artifact.sha256)
             raw = backend_result.manifest_raw
             require(type(raw) is bytes and 0 < len(raw) <= MANIFEST_LIMIT, "PRODUCTIVE_RETURN_MANIFEST")
-            manifest = I.parse(raw, MANIFEST_LIMIT)
+            tail = state["family"] == "tail"
+            manifest = state["CD"].public_manifest(raw) if tail else I.parse(raw, MANIFEST_LIMIT)
             expected = _copy(state["public"])
             recipient = state["recipient"]
-            expected.update(scope="ENCRYPTED_PRIVATE_INITIAL_RECIPIENT_PRODUCTIVE_EVIDENCE_V1",
+            expected.update(scope=("ENCRYPTED_PRIVATE_INITIAL_RECIPIENT_PRODUCTIVE_CUSTODY_TAIL_V1" if tail else
+                "ENCRYPTED_PRIVATE_INITIAL_RECIPIENT_PRODUCTIVE_EVIDENCE_V1"),
                 recipient={"fingerprint": recipient.fingerprint, "encryptionFingerprint": recipient.encryption_fingerprint,
                     "keySha256": recipient.key_sha256, "expiresAt": recipient.expires_at},
                 artifact={"name": artifact.name, "sha256": artifact.sha256, "size": artifact.size},
@@ -855,10 +1024,14 @@ def _productive_finish_return(state, backend_result):
         state["busy"] = False
 
 
-def _checked_productive_return(result, target, *, validation, retired):
+def _checked_productive_return(result, target, *, validation, retired, family="final"):
     state = _PRODUCTIVE_RETURNS.get(id(result))
     kind = ProductiveValidationReturn if validation else ProductiveBackendReturn
+    binding_kind = ((_ProductiveTailValidationBinding if validation else _ProductiveTailExportBinding)
+        if family == "tail" else (_ProductiveValidationBinding if validation else _ProductiveExportBinding))
     require(type(result) is kind and type(state) is dict and state["result"] is result and
+        type(family) is str and family in ("final", "tail") and state["family"] == family and
+        type(state["binding"]) is binding_kind and state["mode"] == ("validation" if validation else "export") and
         (result.view.child is target if validation else result.view is target), "PRODUCTIVE_RESULT_NOT_ORIGINAL")
     binding = state["binding"]
     _productive_enter(binding)
@@ -872,7 +1045,7 @@ def _checked_productive_return(result, target, *, validation, retired):
         checker = backend._checked_productive_validation_return if validation else backend._checked_productive_export_return
         require(checker(state["backend_result"], binding) is state["backend_result"], "PRODUCTIVE_BACKEND_RETURN_CHANGED")
         # Completed suboperations retain their actual in-window observations.
-        # Only CURRENT enclosing PC authority is checked here, never a restarted
+        # Only CURRENT same-family outer authority is checked here, never a restarted
         # or already-spent validation/keyring/export cap. Retired checks are passive.
         _productive_current(state, whole=True, retired=retired)
         _productive_pin_current(state["result_pin"])
@@ -921,6 +1094,46 @@ def checked_retired_productive_validation_return(result, child):
 
 def checked_retired_productive_backend_return(result, view):
     return _checked_productive_return(result, view, validation=False, retired=True)
+
+
+def validate_initial_productive_tail_recipient(child):
+    state = _productive_start(child, "validation", family="tail")
+    try:
+        binding = _productive_admit(state)
+        returned = state["backend"]._validate_initial_productive(binding)
+        state["backend_result"] = returned
+        result = _productive_finish_return(state, returned)
+        return checked_productive_tail_validation_return(result, child)
+    except BaseException as error:
+        raise _productive_fail(state, error)
+
+
+def export_initial_productive_tail_encrypted(child, archive, recipient):
+    state = _productive_start(child, "export", family="tail")
+    try:
+        binding = _productive_admit(state, archive, recipient)
+        returned = state["backend"]._export_initial_productive(binding)
+        state["backend_result"] = returned
+        result = _productive_finish_return(state, returned)
+        return checked_productive_tail_backend_return(result, binding.view)
+    except BaseException as error:
+        raise _productive_fail(state, error)
+
+
+def checked_productive_tail_validation_return(result, child):
+    return _checked_productive_return(result, child, validation=True, retired=False, family="tail")
+
+
+def checked_productive_tail_backend_return(result, view):
+    return _checked_productive_return(result, view, validation=False, retired=False, family="tail")
+
+
+def checked_retired_productive_tail_validation_return(result, child):
+    return _checked_productive_return(result, child, validation=True, retired=True, family="tail")
+
+
+def checked_retired_productive_tail_backend_return(result, view):
+    return _checked_productive_return(result, view, validation=False, retired=True, family="tail")
 
 
 def _match_pin(value, kind):

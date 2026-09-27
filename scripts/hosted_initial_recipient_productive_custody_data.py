@@ -509,7 +509,7 @@ def map_record(raw, ordinal):
 
 FINAL_INPUT_FIELDS = (
     "schema scope kind observed history originalProposal claims workerIdentity originalMatchSha256 freshMatchSha256 "
-    "producerHandoffSha256 producerReturnSha256 afterSaveSha256 probeSha256 prefixRetentionSha256 "
+    "producerHandoffSha256 producerReturnSha256 afterSaveSha256 probeSha256 prefixRetentionSha256 compatibilityInputsSha256 "
     "preExportReturnSha256 preExportIndexSha256 preExportCopyIndexSha256 sourceRecordsSha256 "
     "inputProvenance budgetAcceptance exportSaveAuthority"
 )
@@ -710,7 +710,8 @@ def public_manifest(raw):
         integer(initial[name])
     require(initial["notBefore"] <= initial["firstUseAt"] < initial["expiresAt"], "MANIFEST_POLICY_WINDOW")
     productive = fields(value["productive"], "originalProposalSha256 producerHandoffSha256 producerReturnSha256 "
-        "producerStepOutcome afterSaveSha256 afterSaveStepOutcome probeSha256 afterProbeStepOutcome prefixRetentionSha256")
+        "producerStepOutcome afterSaveSha256 afterSaveStepOutcome probeSha256 afterProbeStepOutcome prefixRetentionSha256 "
+        "compatibilityInputsSha256")
     for name, item in productive.items():
         if name.endswith("StepOutcome"):
             require(type(item) is str and item == "success", "MANIFEST_PRIOR_STEP")

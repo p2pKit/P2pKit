@@ -13,7 +13,7 @@ const {setTimeout, clearTimeout} = require('node:timers');
 const NS = 1000000000n, FRAME = 64 * 1024, RECORD = 16 * 1024, ZIP_LIMIT = 512 * 1024 * 1024;
 const path = process.platform === 'win32' ? paths.win32 : paths.posix;
 const workspace = path.dirname(__dirname);
-const helper = path.join(__dirname, 'run-hosted-initial-recipient-upload.py');
+
 const aborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'aborted').get;
 const addAbort = EventTarget.prototype.addEventListener, removeAbort = EventTarget.prototype.removeEventListener;
 const IDENTITY = ['GITHUB_ACTIONS', 'GITHUB_REPOSITORY', 'GITHUB_SHA', 'GITHUB_REF', 'GITHUB_RUN_ID',
@@ -24,6 +24,16 @@ const SEED = ['P2PKIT_INITIAL_SEAL_SHA256', 'P2PKIT_INITIAL_SEAL_END_NS', 'P2PKI
     'P2PKIT_INITIAL_SEAL_CLOCK_DOMAIN', 'P2PKIT_INITIAL_SEAL_CLOCK_TICKS_PER_SECOND',
     'P2PKIT_INITIAL_SEAL_BOOT_SHA256', 'P2PKIT_INITIAL_SEAL_OUTCOME',
     'P2PKIT_INITIAL_BEFORE_SHA256', 'P2PKIT_INITIAL_BEFORE_OUTCOME'];
+const LEGACY_ROUTE = Object.freeze({helper: path.join(__dirname, 'run-hosted-initial-recipient-upload.py'),
+    seed: Object.freeze([...SEED]), productive: false, startField: 'sealEndNs',
+    closedScope: 'INITIAL_ARTIFACT_FIXED_READER_TRANSPORT_ONLY',
+    finalScope: 'INITIAL_ARTIFACT_NATIVE_STREAM_CLOSED_FILES_PENDING_PROCESS_V1'});
+const PRODUCTIVE_ROUTE = Object.freeze({helper: path.join(__dirname, 'run-hosted-initial-recipient-productive-upload.py'),
+    seed: Object.freeze(['P2PKIT_INITIAL_PRODUCTIVE_BEFORE_SHA256', 'P2PKIT_INITIAL_PRODUCTIVE_BEFORE_OUTCOME',
+        'P2PKIT_INITIAL_PRODUCTIVE_DEADLINE_SHA256', 'P2PKIT_INITIAL_PRODUCTIVE_DEADLINE_BASE64',
+        'P2PKIT_INITIAL_PRODUCTIVE_SEAL_OUTCOME']), productive: true, startField: 'uploadStartByNs',
+    closedScope: 'INITIAL_PRODUCTIVE_ARTIFACT_FIXED_READER_TRANSPORT_ONLY',
+    finalScope: 'INITIAL_PRODUCTIVE_ARTIFACT_NATIVE_STREAM_CLOSED_FILES_PENDING_PROCESS_V1'});
 const ANCESTORS = ['P2PKIT_AUDIT_JOB_ID', 'P2PKIT_AUDIT_OWNERSHIP_CHAIN', 'P2PKIT_AUDIT_OWNERSHIP_DOMAINS',
     'P2PKIT_AUDIT_STATE_DIR', 'GRADLE_USER_HOME'];
 let used = false, reentered = false, originalFailure = null;
@@ -51,17 +61,17 @@ function digest(value) { return typeof value === 'string' && /^[0-9a-f]{64}$/.te
 function uint64(value) {
     return typeof value === 'bigint' && value >= 0n && value <= 18446744073709551615n;
 }
-function environment(supplied) {
+function environment(supplied, route) {
     need(supplied !== null && Object.getPrototypeOf(supplied) === Object.prototype, 'ENVIRONMENT');
     const allowed = ['PATH', 'LANG', 'LC_ALL', 'HOME', 'USERPROFILE', 'TMPDIR', 'TMP', 'TEMP',
         'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT', 'PYTHONDONTWRITEBYTECODE', 'PYTHONUNBUFFERED',
-        ...IDENTITY, ...SEED, ...ANCESTORS];
+        ...IDENTITY, ...route.seed, ...ANCESTORS];
     const names = Reflect.ownKeys(supplied);
     need(names.every(name => typeof name === 'string' && allowed.includes(name)), 'TOKEN_FREE_ENVIRONMENT');
     const env = data(supplied, names);
     need(Object.values(env).every(value => typeof value === 'string' && value.length > 0 &&
         value.length <= 16 * 1024 && !/[\x00\r\n]/.test(value)) &&
-        [...IDENTITY, ...SEED, 'PATH', 'LANG', 'LC_ALL', 'PYTHONDONTWRITEBYTECODE', 'PYTHONUNBUFFERED']
+        [...IDENTITY, ...route.seed, 'PATH', 'LANG', 'LC_ALL', 'PYTHONDONTWRITEBYTECODE', 'PYTHONUNBUFFERED']
             .every(name => Object.hasOwn(env, name)), 'ENVIRONMENT_FIELDS');
     const inherited = ANCESTORS.filter(name => Object.hasOwn(env, name));
     need(inherited.length === 0 || inherited.length === 1 && inherited[0] === 'GRADLE_USER_HOME' ||
@@ -73,7 +83,7 @@ function environment(supplied) {
     return Object.assign({}, env);
 }
 
-function openReader(supplied) {
+function openFixedReader(supplied, route) {
     let options, env, preSpawnNs;
     try {
         if (used) {
@@ -85,11 +95,11 @@ function openReader(supplied) {
         used = true;
         options = data(supplied, ['python', 'kind', 'environment', 'signal']);
         need(/^24\./.test(process.versions.node), 'NODE24_REQUIRED');
-        need(options.kind === 'gate' || options.kind === 'worker', 'KIND');
+        need(options.kind === 'worker' || !route.productive && options.kind === 'gate', 'KIND');
         need(absolute(options.python) && /^python(?:3(?:\.\d+)?)?(?:\.exe)?$/.test(path.basename(options.python)),
             'FIXED_PYTHON');
         need(!Reflect.apply(aborted, options.signal, []), 'CANCELLED');
-        env = environment(options.environment);
+        env = environment(options.environment, route);
         preSpawnNs = process.hrtime.bigint();
         need(!reentered, 'ONE_INVOCATION');
         need(uint64(preSpawnNs), 'LOCAL_CLOCK');
@@ -123,7 +133,7 @@ function openReader(supplied) {
         return childClosed && pipes !== null && Object.values(pipeClosed).every(value => value);
     }
     function summary(success) {
-        return Object.freeze({scope: 'INITIAL_ARTIFACT_FIXED_READER_TRANSPORT_ONLY',
+        return Object.freeze({scope: route.closedScope,
             transport: success ? 'closed' : 'incomplete', code: failed,
             preSpawnLocalNs: preSpawnNs.toString(), returnedLocalNs: lastNs.toString(),
             originalChildCloseObserved: childClosed, originalExitZeroObserved: exited,
@@ -189,7 +199,7 @@ function openReader(supplied) {
         const row = data(value, names);
         const canonical = JSON.stringify(Object.fromEntries([...names].sort().map(name => [name, row[name]]))) + '\n';
         need(Buffer.from(canonical, 'ascii').equals(raw), 'FINAL_CANONICAL');
-        need(row.schema === 1 && row.scope === 'INITIAL_ARTIFACT_NATIVE_STREAM_CLOSED_FILES_PENDING_PROCESS_V1' &&
+        need(row.schema === 1 && row.scope === route.finalScope &&
             row.beforeSha256 === bounds.beforeSha256 && row.readySha256 === sha(readyRaw) &&
             Number.isSafeInteger(row.zipBytes) && row.zipBytes === bounds.zipBytes && receivedBytes === row.zipBytes &&
             digest(row.zipSha256) && digest(row.nativeCloseSha256) &&
@@ -299,7 +309,7 @@ function openReader(supplied) {
     armTimer();
     try {
         observe();
-        child = spawn(options.python, ['-I', '-B', '-S', helper, 'stream', '--kind', options.kind],
+        child = spawn(options.python, ['-I', '-B', '-S', route.helper, 'stream', '--kind', options.kind],
             {cwd: workspace, env, shell: false, detached: false, windowsHide: false, stdio: ['pipe', 'pipe', 'pipe']});
         retained.child = child; // Original returned handle precedes callbacks.
         child.on('error', fail);
@@ -359,13 +369,13 @@ function openReader(supplied) {
             observe();
             need(!released && readyRaw !== null && finalRaw === null && pending === null &&
                 stream.readableLength === 0 && !stream.readableDidRead && !stream.destroyed, 'BIND_ONCE_BEFORE_DEMAND');
-            const row = data(suppliedBounds, ['readySha256', 'beforeSha256', 'firstRawNs', 'sealEndNs',
+            const row = data(suppliedBounds, ['readySha256', 'beforeSha256', 'firstRawNs', route.startField,
                 'uploadEndNs', 'zipBytes']);
             need(row.readySha256 === sha(readyRaw) && digest(row.beforeSha256) &&
-                [row.firstRawNs, row.sealEndNs, row.uploadEndNs].every(uint64) &&
-                row.firstRawNs < row.sealEndNs && row.sealEndNs < row.uploadEndNs &&
+                [row.firstRawNs, row[route.startField], row.uploadEndNs].every(uint64) &&
+                row.firstRawNs < row[route.startField] && row[route.startField] < row.uploadEndNs &&
                 Number.isSafeInteger(row.zipBytes) && row.zipBytes > 0 && row.zipBytes <= ZIP_LIMIT, 'BIND_FIELDS');
-            const startByNs = preSpawnNs + row.sealEndNs - row.firstRawNs;
+            const startByNs = preSpawnNs + row[route.startField] - row.firstRawNs;
             const mappedEnd = preSpawnNs + row.uploadEndNs - row.firstRawNs;
             closeEndNs = mappedEnd < closeEndNs ? mappedEnd : closeEndNs;
             workEndNs = closeEndNs - 5n * NS;
@@ -387,4 +397,7 @@ function openReader(supplied) {
         }});
 }
 
-module.exports = Object.freeze({openReader});
+// Both literal routes share the ORIGINAL global one-shot/failure/quarantine.
+function openReader(supplied) { return openFixedReader(supplied, LEGACY_ROUTE); }
+function openProductiveReader(supplied) { return openFixedReader(supplied, PRODUCTIVE_ROUTE); }
+module.exports = Object.freeze({openReader, openProductiveReader});

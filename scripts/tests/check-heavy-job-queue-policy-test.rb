@@ -70,6 +70,15 @@ mutations["initial interlock forged success"] = ["whole-JVM interlock", ->(w) {
 mutations["JVM loses initial interlock dependency"] = ["acyclic job dependencies", ->(w) {
     w["ci.yml"]["jobs"]["jvm-library-checks"].delete("needs")
 }]
+mutations["bootstrap worker loses genuine gate dependency"] = ["acyclic job dependencies", ->(w) {
+    w["dependency-cache-bootstrap.yml"]["jobs"]["populate"].delete("needs")
+}]
+mutations["bootstrap gate incorrectly acquires heavy lease"] = ["reserved participating-job group", ->(w) {
+    w["dependency-cache-bootstrap.yml"]["jobs"][POLICY::INITIAL_JOB]["concurrency"] = copy(POLICY::QUEUE)
+}]
+mutations["bootstrap loses separate gate"] = ["participating job IDs", ->(w) {
+    w["dependency-cache-bootstrap.yml"]["jobs"].delete(POLICY::INITIAL_JOB)
+}]
 POLICY::JOBS.each do |path, jobs|
     mutations["missing #{path}"] = ["missing participating workflow", ->(w) { w.delete(path) }]
     mutations["extra #{path} job"] = ["participating job IDs", ->(w) { w[path]["jobs"]["extra"] = {} }]

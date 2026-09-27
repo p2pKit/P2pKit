@@ -249,3 +249,64 @@ def _append_output_bytes(raw, check):
     if failure is not None:
         raise failure
     check()  # Actual fsync/readback/close return remains inside the original cap.
+
+
+def _receiver_output_bridge():
+    # Retain C's load-time originals in closures, not a replaceable global read
+    # at append entry. RD is deliberately absent until the fixed late import.
+    module, runtime, modules, clock, need, writer, name = (
+        sys.modules[__name__], sys, sys.modules, clocks, require, _append_output_bytes, __name__)
+
+    def current(codec=None):
+        """Passive source checks only; no receiver owner, observation or cap."""
+        need(_RECEIVER_OUTPUT_SOURCE is source and sys is runtime and sys.modules is modules and
+            __name__ is name and modules.get(name) is module and clocks is clock and require is need and
+            _append_output_bytes is writer and _receiver_output_current is current and
+            append_productive_receiver_outputs is append, "RECEIVER_OUTPUT_SOURCE_CHANGED")
+        if codec is not None:
+            data, encode, validate, fields, before, custody, origin = codec
+            need(type(data) is type(module) and
+                modules.get("hosted_initial_recipient_productive_receiver_data") is data and
+                data.encode_output_values is encode and data.output_values is validate and data.OUTPUT_FIELDS is fields and
+                data.B is before and before.continuity is module and data.CD is custody and
+                custody.O is origin and data.O is origin and origin.clocks is clock,
+                "RECEIVER_OUTPUT_CODEC_CHANGED")
+
+    def append(values, check):
+        """Write the separate exact receiver tuple6 under its original guard.
+
+        The receiver owns registration, once-only append and two late checks.
+        This DATA bridge cannot establish earlier source/native custody or a
+        Step result. RD bindings cover this append, not earlier R acquisitions.
+        """
+        current()
+        need(callable(check) and not QUARANTINE, "STEP_OUTPUT_FIELDS")
+        quarantine = QUARANTINE
+        # BEFORE imports C before defining PHASE_FILES, which RD uses at import.
+        # A literal late DATA import avoids that cycle and creates no new R graph.
+        import hosted_initial_recipient_productive_receiver_data as data
+        codec = (data, data.encode_output_values, data.output_values, data.OUTPUT_FIELDS, data.B, data.CD, data.O)
+        current(codec)  # Pin before the first supplied guard callback.
+        raw = codec[1](values)  # Real maintained ordered tuple6 grammar, not a dict.
+        current(codec)
+
+        def guarded():
+            current(codec)
+            need(QUARANTINE is quarantine and not quarantine, "STEP_OUTPUT_FIELDS")
+            check()
+            current(codec)
+            need(QUARANTINE is quarantine and not quarantine, "STEP_OUTPUT_FIELDS")
+
+        result = writer(raw, guarded)  # One unchanged original native writer.
+        current(codec)
+        need(QUARANTINE is quarantine and not quarantine, "STEP_OUTPUT_FIELDS")
+        return result
+
+    source = (module, runtime, modules, clock, need, writer, current, append)
+    return current, append, source
+
+
+# Fixed public signature remains exactly (values, check). Discard the factory:
+# append entry never rebaselines the C-load-owned originals into new suppliers.
+_receiver_output_current, append_productive_receiver_outputs, _RECEIVER_OUTPUT_SOURCE = _receiver_output_bridge()
+del _receiver_output_bridge

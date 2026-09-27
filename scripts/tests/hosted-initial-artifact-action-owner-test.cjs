@@ -3,12 +3,14 @@
 // New finite-owner models only. Actual Node Readable/Writable, fake child and
 // clocks; never Python/HTTP/native/key execution or replay of accepted suites.
 // The private function is exposed ONLY inside this test's isolated wrapper;
-// the checked-in Action exports solely main and accepts no injectable backend.
+// the checked-in Action exports only fixed named entries and accepts no
+// injectable backend.
 const assert = require('node:assert/strict');
 const {EventEmitter} = require('node:events');
 const {Readable, Writable} = require('node:stream');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 const D = require('../hosted-initial-artifact-action-data.cjs');
+const ProductiveData = require('../hosted-initial-artifact-productive-action-data.cjs');
 const {NS} = require('./hosted-initial-artifact-action-fixtures.cjs');
 const source = fs.readFileSync(path.join(__dirname, '../hosted-initial-artifact-action.cjs'), 'utf8');
 const cases = [], test = (name, body) => cases.push({name, body});
@@ -53,12 +55,14 @@ function model(config = {}) {
     'node:path': path, 'node:timers': {setTimeout(callback, ms) {
         const id = ++timerId; timers.set(id, {callback, ms}); return id;
     }, clearTimeout(id) { timers.delete(id); }}, './hosted-initial-artifact-action-data.cjs': D,
+    './hosted-initial-artifact-productive-action-data.cjs': ProductiveData,
     './hosted-initial-artifact-reader.cjs': {}, './hosted-initial-artifact-observer.cjs': {},
     './hosted-initial-artifact-transport.cjs': {}};
     // Same realm preserves exact descriptor/prototype DATA checks. Every
     // authority-bearing import is replaced by this closed OFFLINE model.
     const factory = vm.runInThisContext('(function(require,module,__dirname,process){\n' + source +
-        '\nmodule.exports = Object.freeze({openFinite});\n})', {filename: 'offline-new-finite-owner.cjs', timeout: 1000});
+        '\nmodule.exports = Object.freeze({openFinite: options => openFinite(options, LEGACY_ROUTE)});\n})',
+        {filename: 'offline-new-finite-owner.cjs', timeout: 1000});
     factory(name => { assert(Object.hasOwn(imports, name)); return imports[name]; }, module, '/model/p2pkit/scripts',
         {platform: config.windows ? 'win32' : 'linux', hrtime: {bigint: () => now}});
     const options = {mode: config.after ? 'after' : 'finish', python: config.windows ? 'C:\\model\\python.exe' : '/usr/bin/python3',

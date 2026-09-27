@@ -1,0 +1,732 @@
+# Source-only composition: BOTH first steps fail before acquisition or execution.
+# Removing either interlock requires separately reviewed source activation, fresh
+# exact commit/tree/policy C1 and real environment approval. Ordinary HOLDs remain.
+# Job timeouts do not expand init120, native caps or the unadmitted bootstrap budget.
+name: "Dependency cache bootstrap (productive stage held)"
+on:
+  workflow_dispatch:
+    inputs:
+      selection:
+        description: "Exact dependency cohort; not ordinary test acceptance"
+        type: "choice"
+        required: true
+        options:
+          - "desktop-linux-x64"
+          - "desktop-windows-x64"
+          - "desktop-macos-arm64"
+          - "desktop-macos-x64"
+          - "full-macos-arm64"
+          - "full-macos-x64"
+      expected_sha:
+        description: "Full independently reviewed source commit"
+        type: "string"
+        required: true
+      expected_tree:
+        description: "Full independently reviewed source tree"
+        type: "string"
+        required: true
+permissions: {}
+concurrency:
+  group: "p2pkit-initial-recipient-bootstrap"
+  queue: "max"
+  cancel-in-progress: false
+jobs:
+  initial-recipient-gate:
+    if: "${{ github.repository == 'p2pKit/P2pKit' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/work/release-foundation-20260926-1WzHcOIr' && github.sha == inputs.expected_sha }}"
+    permissions:
+      contents: "read"
+      actions: "read"
+    runs-on: "ubuntu-24.04"
+    timeout-minutes: 6
+    environment: "initial-recipient-execution"
+    steps:
+      -
+        name: "Hold all Stage1 execution until exact-source activation is approved"
+        shell: "bash"
+        run: |
+          echo 'INITIAL_RECIPIENT_STAGE1=HOLD; SOURCE_ACTIVATION_AND_QUALIFICATION_REQUIRED' >&2
+          exit 125
+      -
+        name: "Check out the actual reviewed event source without persisted credentials"
+        timeout-minutes: 2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: "core.autocrlf"
+          GIT_CONFIG_VALUE_0: "false"
+        with:
+          ref: "${{ github.sha }}"
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+      -
+        name: "Fetch full no-tag history and verify source before repository Python"
+        timeout-minutes: 1
+        shell: "bash"
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+          P2PKIT_EXPECTED_SHA: "${{ inputs.expected_sha }}"
+          P2PKIT_EXPECTED_TREE: "${{ inputs.expected_tree }}"
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = p2pKit/P2pKit
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/work/release-foundation-20260926-1WzHcOIr
+          [[ "$P2PKIT_EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$P2PKIT_EXPECTED_TREE" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$P2PKIT_EXPECTED_SHA"
+          git -c credential.helper= -c http.extraheader= fetch --no-tags --unshallow https://github.com/p2pKit/P2pKit.git \
+            refs/heads/main:refs/remotes/origin/main \
+            refs/heads/work/release-foundation-20260926-1WzHcOIr:refs/remotes/origin/work/release-foundation-20260926-1WzHcOIr
+          test "$(git rev-parse --is-shallow-repository)" = false
+          test "$(git rev-parse HEAD)" = "$P2PKIT_EXPECTED_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$P2PKIT_EXPECTED_TREE"
+          test "$(git rev-parse refs/remotes/origin/main)" = 3bc76f956f8f47447b51a62474fc878b9c43173c
+          test "$(git rev-parse 'refs/remotes/origin/main^{tree}')" = 2a1105fde1d1ac299448489501e29d7a0d4a407a
+          test "$(git rev-parse refs/remotes/origin/work/release-foundation-20260926-1WzHcOIr)" = "$P2PKIT_EXPECTED_SHA"
+          git merge-base --is-ancestor 3bc76f956f8f47447b51a62474fc878b9c43173c "$P2PKIT_EXPECTED_SHA"
+          source_status="$(git status --porcelain=v1 --untracked-files=all)"
+          test -z "$source_status"
+          repository_root="$(git rev-parse --show-toplevel)"
+          workspace="$GITHUB_WORKSPACE"
+          case "$RUNNER_OS" in
+            Windows) repository_root="$(cygpath -u -- "$repository_root")"; workspace="$(cygpath -u -- "$workspace")" ;;
+            Linux|macOS) ;;
+            *) exit 125 ;;
+          esac
+          current_root="$(pwd -P)"
+          repository_root="$(cd -- "$repository_root" && pwd -P)"
+          workspace="$(cd -- "$workspace" && pwd -P)"
+          test "$current_root" = "$repository_root"
+          test "$current_root" = "$workspace"
+      -
+        name: "Observe original native Python and tool PATH"
+        id: "tools"
+        timeout-minutes: 1
+        shell: "bash"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Windows) exec python -I -B -S "$(cygpath -w -- "$GITHUB_WORKSPACE/scripts/initial-recipient-runner-tools.py")" ;;
+            Linux|macOS) exec python3 -I -B -S "$GITHUB_WORKSPACE/scripts/initial-recipient-runner-tools.py" ;;
+            *) exit 125 ;;
+          esac
+      -
+        name: "Acquire original nonproductive Stage1 eligibility"
+        id: "initial-originals"
+        if: "${{ success() && steps.tools.outcome == 'success' }}"
+        timeout-minutes: 3
+        shell: "bash"
+        env:
+          P2PKIT_PYTHON: "${{ steps.tools.outputs.python }}"
+          P2PKIT_ACTIONS_READ_TOKEN: "${{ github.token }}"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Windows) script="$(cygpath -w -- "$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient.py")" ;;
+            Linux|macOS) script="$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient.py" ;;
+            *) exit 125 ;;
+          esac
+          exec "$P2PKIT_PYTHON" -I -B -S "$script" prepare-originals
+      -
+        name: "P2pKit initial custody export"
+        id: "initial-custody-export"
+        if: "${{ success() && steps.initial-originals.outcome == 'success' }}"
+        timeout-minutes: 6
+        shell: "bash"
+        env:
+          P2PKIT_PYTHON: "${{ steps.tools.outputs.python }}"
+          P2PKIT_ACTIONS_READ_TOKEN: "${{ github.token }}"
+          P2PKIT_INITIAL_PRIMARY_OUTCOME: "${{ steps.initial-originals.outcome }}"
+          P2PKIT_INITIAL_PRIMARY_RESULT_SHA256: "${{ steps.initial-originals.outputs.initialOriginalsSha256 }}"
+          P2PKIT_INITIAL_PRIMARY_HANDOFF_SHA256: "${{ steps.initial-originals.outputs.gateHandoffSha256 }}"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Windows) script="$(cygpath -w -- "$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-custody.py")" ;;
+            Linux|macOS) script="$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-custody.py" ;;
+            *) exit 125 ;;
+          esac
+          exec "$P2PKIT_PYTHON" -I -B -S "$script" collect-export --kind gate
+      -
+        name: "P2pKit initial post-export custody"
+        id: "initial-custody"
+        if: "${{ success() && steps.initial-custody-export.outcome == 'success' }}"
+        timeout-minutes: 1
+        shell: "bash"
+        env:
+          P2PKIT_PYTHON: "${{ steps.tools.outputs.python }}"
+          P2PKIT_ACTIONS_READ_TOKEN: "${{ github.token }}"
+          P2PKIT_INITIAL_PRIMARY_OUTCOME: "${{ steps.initial-originals.outcome }}"
+          P2PKIT_INITIAL_PRIMARY_RESULT_SHA256: "${{ steps.initial-originals.outputs.initialOriginalsSha256 }}"
+          P2PKIT_INITIAL_PRIMARY_HANDOFF_SHA256: "${{ steps.initial-originals.outputs.gateHandoffSha256 }}"
+          P2PKIT_INITIAL_CRYPTO_OUTCOME: "${{ steps.initial-custody-export.outcome }}"
+          P2PKIT_INITIAL_CRYPTO_STEP_SHA256: "${{ steps.initial-custody-export.outputs.initialCryptoStepSha256 }}"
+          P2PKIT_INITIAL_EXPORTER_RETURN_SHA256: "${{ steps.initial-custody-export.outputs.initialExporterReturnSha256 }}"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Windows) script="$(cygpath -w -- "$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-custody.py")" ;;
+            Linux|macOS) script="$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-custody.py" ;;
+            *) exit 125 ;;
+          esac
+          exec "$P2PKIT_PYTHON" -I -B -S "$script" collect-close --kind gate
+      -
+        name: "P2pKit initial custody seal"
+        id: "initial-seal"
+        if: "${{ success() && steps.initial-custody.outcome == 'success' }}"
+        timeout-minutes: 1
+        shell: "bash"
+        env:
+          P2PKIT_PYTHON: "${{ steps.tools.outputs.python }}"
+          P2PKIT_ACTIONS_READ_TOKEN: "${{ github.token }}"
+          P2PKIT_INITIAL_PRIMARY_OUTCOME: "${{ steps.initial-originals.outcome }}"
+          P2PKIT_INITIAL_PRIMARY_RESULT_SHA256: "${{ steps.initial-originals.outputs.initialOriginalsSha256 }}"
+          P2PKIT_INITIAL_PRIMARY_HANDOFF_SHA256: "${{ steps.initial-originals.outputs.gateHandoffSha256 }}"
+          P2PKIT_INITIAL_CRYPTO_OUTCOME: "${{ steps.initial-custody-export.outcome }}"
+          P2PKIT_INITIAL_CRYPTO_STEP_SHA256: "${{ steps.initial-custody-export.outputs.initialCryptoStepSha256 }}"
+          P2PKIT_INITIAL_EXPORTER_RETURN_SHA256: "${{ steps.initial-custody-export.outputs.initialExporterReturnSha256 }}"
+          P2PKIT_INITIAL_CUSTODY_OUTCOME: "${{ steps.initial-custody.outcome }}"
+          P2PKIT_INITIAL_CUSTODY_SHA256: "${{ steps.initial-custody.outputs.initialCustodySha256 }}"
+          P2PKIT_INITIAL_CUSTODY_EXPORTER_RETURN_SHA256: "${{ steps.initial-custody.outputs.initialExporterReturnSha256 }}"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Windows) script="$(cygpath -w -- "$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-custody.py")" ;;
+            Linux|macOS) script="$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-custody.py" ;;
+            *) exit 125 ;;
+          esac
+          exec "$P2PKIT_PYTHON" -I -B -S "$script" seal-for-before --kind gate
+      -
+        name: "P2pKit initial before-upload custody"
+        id: "initial-before"
+        if: "${{ success() && steps.initial-seal.outcome == 'success' }}"
+        timeout-minutes: 1
+        shell: "bash"
+        env:
+          P2PKIT_PYTHON: "${{ steps.tools.outputs.python }}"
+          P2PKIT_ACTIONS_READ_TOKEN: "${{ github.token }}"
+          P2PKIT_INITIAL_PRIMARY_OUTCOME: "${{ steps.initial-originals.outcome }}"
+          P2PKIT_INITIAL_PRIMARY_RESULT_SHA256: "${{ steps.initial-originals.outputs.initialOriginalsSha256 }}"
+          P2PKIT_INITIAL_PRIMARY_HANDOFF_SHA256: "${{ steps.initial-originals.outputs.gateHandoffSha256 }}"
+          P2PKIT_INITIAL_CRYPTO_OUTCOME: "${{ steps.initial-custody-export.outcome }}"
+          P2PKIT_INITIAL_CRYPTO_STEP_SHA256: "${{ steps.initial-custody-export.outputs.initialCryptoStepSha256 }}"
+          P2PKIT_INITIAL_EXPORTER_RETURN_SHA256: "${{ steps.initial-custody-export.outputs.initialExporterReturnSha256 }}"
+          P2PKIT_INITIAL_CUSTODY_OUTCOME: "${{ steps.initial-custody.outcome }}"
+          P2PKIT_INITIAL_CUSTODY_SHA256: "${{ steps.initial-custody.outputs.initialCustodySha256 }}"
+          P2PKIT_INITIAL_CUSTODY_EXPORTER_RETURN_SHA256: "${{ steps.initial-custody.outputs.initialExporterReturnSha256 }}"
+          P2PKIT_INITIAL_SEAL_SHA256: "${{ steps.initial-seal.outputs.initialSealSha256 }}"
+          P2PKIT_INITIAL_SEAL_END_NS: "${{ steps.initial-seal.outputs.initialSealEndNs }}"
+          P2PKIT_INITIAL_SEAL_CLOCK_ROLE: "${{ steps.initial-seal.outputs.initialSealClockRole }}"
+          P2PKIT_INITIAL_SEAL_CLOCK_DOMAIN: "${{ steps.initial-seal.outputs.initialSealClockDomain }}"
+          P2PKIT_INITIAL_SEAL_CLOCK_TICKS_PER_SECOND: "${{ steps.initial-seal.outputs.initialSealClockTicksPerSecond }}"
+          P2PKIT_INITIAL_SEAL_BOOT_SHA256: "${{ steps.initial-seal.outputs.initialSealBootSha256 }}"
+          P2PKIT_INITIAL_SEAL_OUTCOME: "${{ steps.initial-seal.outcome }}"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Windows) script="$(cygpath -w -- "$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-tail.py")" ;;
+            Linux|macOS) script="$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-tail.py" ;;
+            *) exit 125 ;;
+          esac
+          exec "$P2PKIT_PYTHON" -I -B -S "$script" before-and-tail --kind gate
+      -
+        name: "P2pKit initial custody upload"
+        id: "initial-upload"
+        if: "${{ success() && steps.initial-before.outcome == 'success' }}"
+        timeout-minutes: 1
+        uses: ./.github/actions/initial-recipient-upload
+        with:
+          mode: "upload"
+          python: "${{ steps.tools.outputs.python }}"
+          tool-path: "${{ steps.tools.outputs.tool-path }}"
+        env:
+          P2PKIT_INITIAL_SEAL_SHA256: "${{ steps.initial-before.outputs.initialSealSha256 }}"
+          P2PKIT_INITIAL_SEAL_END_NS: "${{ steps.initial-before.outputs.initialSealEndNs }}"
+          P2PKIT_INITIAL_SEAL_CLOCK_ROLE: "${{ steps.initial-before.outputs.initialSealClockRole }}"
+          P2PKIT_INITIAL_SEAL_CLOCK_DOMAIN: "${{ steps.initial-before.outputs.initialSealClockDomain }}"
+          P2PKIT_INITIAL_SEAL_CLOCK_TICKS_PER_SECOND: "${{ steps.initial-before.outputs.initialSealClockTicksPerSecond }}"
+          P2PKIT_INITIAL_SEAL_BOOT_SHA256: "${{ steps.initial-before.outputs.initialSealBootSha256 }}"
+          P2PKIT_INITIAL_SEAL_OUTCOME: "${{ steps.initial-seal.outcome }}"
+          P2PKIT_INITIAL_BEFORE_SHA256: "${{ steps.initial-before.outputs.initialBeforeSha256 }}"
+          P2PKIT_INITIAL_BEFORE_OUTCOME: "${{ steps.initial-before.outcome }}"
+      -
+        name: "P2pKit initial after-upload custody"
+        id: "initial-after"
+        if: "${{ success() && steps.initial-upload.outcome == 'success' }}"
+        timeout-minutes: 1
+        uses: ./.github/actions/initial-recipient-upload
+        with:
+          mode: "after"
+          python: "${{ steps.tools.outputs.python }}"
+          tool-path: "${{ steps.tools.outputs.tool-path }}"
+        env:
+          P2PKIT_INITIAL_SEAL_SHA256: "${{ steps.initial-before.outputs.initialSealSha256 }}"
+          P2PKIT_INITIAL_SEAL_END_NS: "${{ steps.initial-before.outputs.initialSealEndNs }}"
+          P2PKIT_INITIAL_SEAL_CLOCK_ROLE: "${{ steps.initial-before.outputs.initialSealClockRole }}"
+          P2PKIT_INITIAL_SEAL_CLOCK_DOMAIN: "${{ steps.initial-before.outputs.initialSealClockDomain }}"
+          P2PKIT_INITIAL_SEAL_CLOCK_TICKS_PER_SECOND: "${{ steps.initial-before.outputs.initialSealClockTicksPerSecond }}"
+          P2PKIT_INITIAL_SEAL_BOOT_SHA256: "${{ steps.initial-before.outputs.initialSealBootSha256 }}"
+          P2PKIT_INITIAL_SEAL_OUTCOME: "${{ steps.initial-seal.outcome }}"
+          P2PKIT_INITIAL_BEFORE_SHA256: "${{ steps.initial-before.outputs.initialBeforeSha256 }}"
+          P2PKIT_INITIAL_BEFORE_OUTCOME: "${{ steps.initial-before.outcome }}"
+          P2PKIT_INITIAL_UPLOAD_SHA256: "${{ steps.initial-upload.outputs.receipt-sha256 }}"
+          P2PKIT_INITIAL_UPLOAD_DIRECTORY_SHA256: "${{ steps.initial-upload.outputs.directory-identity-sha256 }}"
+          P2PKIT_INITIAL_UPLOAD_FILE_METADATA_SHA256: "${{ steps.initial-upload.outputs.file-metadata-sha256 }}"
+          P2PKIT_INITIAL_UPLOAD_OWNER_CLOSE_SHA256: "${{ steps.initial-upload.outputs.file-owner-close-sha256 }}"
+          P2PKIT_INITIAL_UPLOAD_OUTCOME: "${{ steps.initial-upload.outcome }}"
+  populate:
+    needs: "initial-recipient-gate"
+    permissions:
+      contents: "read"
+      actions: "read"
+    runs-on: "${{ fromJSON('{\"desktop-linux-x64\":\"ubuntu-latest\",\"desktop-windows-x64\":\"windows-latest\",\"desktop-macos-arm64\":\"macos-26\",\"desktop-macos-x64\":\"macos-15-intel\",\"full-macos-arm64\":\"macos-26\",\"full-macos-x64\":\"macos-15-intel\"}')[inputs.selection] }}"
+    timeout-minutes: 20
+    concurrency:
+      group: "p2pkit-nonphysical-heavy"
+      queue: "max"
+      cancel-in-progress: false
+    steps:
+      -
+        name: "Hold all Stage1 execution until exact-source activation is approved"
+        shell: "bash"
+        run: |
+          echo 'INITIAL_RECIPIENT_STAGE1=HOLD; SOURCE_ACTIVATION_AND_QUALIFICATION_REQUIRED' >&2
+          exit 125
+      -
+        name: "Check out the actual reviewed event source without persisted credentials"
+        timeout-minutes: 2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: "core.autocrlf"
+          GIT_CONFIG_VALUE_0: "false"
+        with:
+          ref: "${{ github.sha }}"
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+      -
+        name: "Fetch full no-tag history and verify source before repository Python"
+        timeout-minutes: 1
+        shell: "bash"
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+          P2PKIT_EXPECTED_SHA: "${{ inputs.expected_sha }}"
+          P2PKIT_EXPECTED_TREE: "${{ inputs.expected_tree }}"
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = p2pKit/P2pKit
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/work/release-foundation-20260926-1WzHcOIr
+          [[ "$P2PKIT_EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$P2PKIT_EXPECTED_TREE" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$P2PKIT_EXPECTED_SHA"
+          git -c credential.helper= -c http.extraheader= fetch --no-tags --unshallow https://github.com/p2pKit/P2pKit.git \
+            refs/heads/main:refs/remotes/origin/main \
+            refs/heads/work/release-foundation-20260926-1WzHcOIr:refs/remotes/origin/work/release-foundation-20260926-1WzHcOIr
+          test "$(git rev-parse --is-shallow-repository)" = false
+          test "$(git rev-parse HEAD)" = "$P2PKIT_EXPECTED_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$P2PKIT_EXPECTED_TREE"
+          test "$(git rev-parse refs/remotes/origin/main)" = 3bc76f956f8f47447b51a62474fc878b9c43173c
+          test "$(git rev-parse 'refs/remotes/origin/main^{tree}')" = 2a1105fde1d1ac299448489501e29d7a0d4a407a
+          test "$(git rev-parse refs/remotes/origin/work/release-foundation-20260926-1WzHcOIr)" = "$P2PKIT_EXPECTED_SHA"
+          git merge-base --is-ancestor 3bc76f956f8f47447b51a62474fc878b9c43173c "$P2PKIT_EXPECTED_SHA"
+          source_status="$(git status --porcelain=v1 --untracked-files=all)"
+          test -z "$source_status"
+          repository_root="$(git rev-parse --show-toplevel)"
+          workspace="$GITHUB_WORKSPACE"
+          case "$RUNNER_OS" in
+            Windows) repository_root="$(cygpath -u -- "$repository_root")"; workspace="$(cygpath -u -- "$workspace")" ;;
+            Linux|macOS) ;;
+            *) exit 125 ;;
+          esac
+          current_root="$(pwd -P)"
+          repository_root="$(cd -- "$repository_root" && pwd -P)"
+          workspace="$(cd -- "$workspace" && pwd -P)"
+          test "$current_root" = "$repository_root"
+          test "$current_root" = "$workspace"
+      -
+        name: "Configure native daemon Java 21 and wrapper Java 17"
+        timeout-minutes: 3
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: "temurin"
+          java-version: |
+            21
+            17
+      -
+        name: "Bind the native Stage1 daemon JDK"
+        timeout-minutes: 1
+        shell: "bash"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_ARCH" in X64|ARM64) ;; *) exit 125 ;; esac
+          daemon_variable="JAVA_HOME_21_${RUNNER_ARCH}"
+          daemon_home="${!daemon_variable}"
+          case "$daemon_home" in ''|*$'\n'*|*$'\r'*) exit 125 ;; esac
+          printf 'P2PKIT_AUDIT_JDK21=%s\n' "$daemon_home" >> "$GITHUB_ENV"
+      -
+        name: "Observe original native Python and tool PATH"
+        id: "tools"
+        timeout-minutes: 1
+        shell: "bash"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Windows) exec python -I -B -S "$(cygpath -w -- "$GITHUB_WORKSPACE/scripts/initial-recipient-runner-tools.py")" ;;
+            Linux|macOS) exec python3 -I -B -S "$GITHUB_WORKSPACE/scripts/initial-recipient-runner-tools.py" ;;
+            *) exit 125 ;;
+          esac
+      -
+        name: "Initialize the exact Stage1 source within existing component windows"
+        id: "canonical-initialization"
+        if: "${{ success() && steps.tools.outcome == 'success' }}"
+        timeout-minutes: 12
+        uses: ./.github/actions/initial-recipient-initialize
+      -
+        name: "Produce the original configuration-only dependency cohort"
+        id: "produce"
+        if: "${{ success() && steps.canonical-initialization.outcome == 'success' }}"
+        timeout-minutes: 20
+        shell: "bash"
+        env:
+          P2PKIT_PYTHON: "${{ steps.tools.outputs.python }}"
+          P2PKIT_ACTIONS_READ_TOKEN: "${{ github.token }}"
+          P2PKIT_INITIAL_PRIMARY_OUTCOME: "${{ steps.canonical-initialization.outcome }}"
+          P2PKIT_INITIAL_PRIMARY_RESULT_SHA256: "${{ steps.canonical-initialization.outputs.initialization-sha256 }}"
+          P2PKIT_INITIAL_PRIMARY_HANDOFF_SHA256: "${{ steps.canonical-initialization.outputs.worker-handoff-sha256 }}"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Windows) script="$(cygpath -w -- "$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-productive.py")" ;;
+            Linux|macOS) script="$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-productive.py" ;;
+            *) exit 125 ;;
+          esac
+          exec "$P2PKIT_PYTHON" -I -B -S "$script" produce
+      -
+        name: "Prepare original initial cache save"
+        id: "prepare-save"
+        if: "${{ success() && steps.produce.outcome == 'success' }}"
+        timeout-minutes: 3
+        shell: "bash"
+        env:
+          P2PKIT_PYTHON: "${{ steps.tools.outputs.python }}"
+          P2PKIT_ACTIONS_READ_TOKEN: "${{ github.token }}"
+          P2PKIT_BOOTSTRAP_PRODUCER_OUTCOME: "${{ steps.produce.outcome }}"
+          P2PKIT_BOOTSTRAP_HANDOFF_SHA256: "${{ steps.produce.outputs.handoffSha256 }}"
+          P2PKIT_BOOTSTRAP_PRODUCER_RETURN_SHA256: "${{ steps.produce.outputs.producerReturnSha256 }}"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Windows) script="$(cygpath -w -- "$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-productive.py")" ;;
+            Linux|macOS) script="$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-productive.py" ;;
+            *) exit 125 ;;
+          esac
+          exec "$P2PKIT_PYTHON" -I -B -S "$script" prepare-save
+      -
+        name: "Save the exact original initial dependency cohort"
+        id: "provider-save"
+        if: "${{ success() && steps.prepare-save.outcome == 'success' }}"
+        timeout-minutes: 3
+        uses: ./.github/actions/initial-recipient-cache-provider
+        with:
+          phase: "save"
+          python: "${{ steps.tools.outputs.python }}"
+          tool-path: "${{ steps.tools.outputs.tool-path }}"
+        env:
+          P2PKIT_BOOTSTRAP_PRODUCER_OUTCOME: "${{ steps.produce.outcome }}"
+          P2PKIT_BOOTSTRAP_HANDOFF_SHA256: "${{ steps.produce.outputs.handoffSha256 }}"
+          P2PKIT_BOOTSTRAP_PRODUCER_RETURN_SHA256: "${{ steps.produce.outputs.producerReturnSha256 }}"
+          P2PKIT_BOOTSTRAP_SAVE_PREPARE_OUTCOME: "${{ steps.prepare-save.outcome }}"
+          P2PKIT_BOOTSTRAP_SAVE_PREPARATION_SHA256: "${{ steps.prepare-save.outputs.savePreparationSha256 }}"
+      -
+        name: "Observe original initial cache save and known retirement"
+        id: "after-save"
+        if: "${{ success() && steps.provider-save.outcome == 'success' }}"
+        timeout-minutes: 6
+        shell: "bash"
+        env:
+          P2PKIT_PYTHON: "${{ steps.tools.outputs.python }}"
+          P2PKIT_ACTIONS_READ_TOKEN: "${{ github.token }}"
+          P2PKIT_BOOTSTRAP_PRODUCER_OUTCOME: "${{ steps.produce.outcome }}"
+          P2PKIT_BOOTSTRAP_HANDOFF_SHA256: "${{ steps.produce.outputs.handoffSha256 }}"
+          P2PKIT_BOOTSTRAP_PRODUCER_RETURN_SHA256: "${{ steps.produce.outputs.producerReturnSha256 }}"
+          P2PKIT_BOOTSTRAP_SAVE_PREPARE_OUTCOME: "${{ steps.prepare-save.outcome }}"
+          P2PKIT_BOOTSTRAP_SAVE_PREPARATION_SHA256: "${{ steps.prepare-save.outputs.savePreparationSha256 }}"
+          P2PKIT_BOOTSTRAP_SAVE_OUTCOME: "${{ steps.provider-save.outcome }}"
+          P2PKIT_BOOTSTRAP_SAVE_READBACK_SHA256: "${{ steps.provider-save.outputs.readback-sha256 }}"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Windows) script="$(cygpath -w -- "$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-productive.py")" ;;
+            Linux|macOS) script="$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-productive.py" ;;
+            *) exit 125 ;;
+          esac
+          exec "$P2PKIT_PYTHON" -I -B -S "$script" after-save
+      -
+        name: "Prepare original initial cache lookup"
+        id: "prepare-probe"
+        if: "${{ success() && steps.after-save.outcome == 'success' }}"
+        timeout-minutes: 3
+        shell: "bash"
+        env:
+          P2PKIT_PYTHON: "${{ steps.tools.outputs.python }}"
+          P2PKIT_ACTIONS_READ_TOKEN: "${{ github.token }}"
+          P2PKIT_BOOTSTRAP_PRODUCER_OUTCOME: "${{ steps.produce.outcome }}"
+          P2PKIT_BOOTSTRAP_HANDOFF_SHA256: "${{ steps.produce.outputs.handoffSha256 }}"
+          P2PKIT_BOOTSTRAP_PRODUCER_RETURN_SHA256: "${{ steps.produce.outputs.producerReturnSha256 }}"
+          P2PKIT_BOOTSTRAP_SAVE_PREPARE_OUTCOME: "${{ steps.prepare-save.outcome }}"
+          P2PKIT_BOOTSTRAP_SAVE_PREPARATION_SHA256: "${{ steps.prepare-save.outputs.savePreparationSha256 }}"
+          P2PKIT_BOOTSTRAP_SAVE_OUTCOME: "${{ steps.provider-save.outcome }}"
+          P2PKIT_BOOTSTRAP_SAVE_READBACK_SHA256: "${{ steps.provider-save.outputs.readback-sha256 }}"
+          P2PKIT_BOOTSTRAP_AFTER_SAVE_OUTCOME: "${{ steps.after-save.outcome }}"
+          P2PKIT_BOOTSTRAP_AFTER_SAVE_SHA256: "${{ steps.after-save.outputs.afterSaveSha256 }}"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Windows) script="$(cygpath -w -- "$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-productive.py")" ;;
+            Linux|macOS) script="$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-productive.py" ;;
+            *) exit 125 ;;
+          esac
+          exec "$P2PKIT_PYTHON" -I -B -S "$script" prepare-probe
+      -
+        name: "Look up the exact saved initial dependency cohort"
+        id: "provider-probe"
+        if: "${{ success() && steps.prepare-probe.outcome == 'success' }}"
+        timeout-minutes: 3
+        uses: ./.github/actions/initial-recipient-cache-provider
+        with:
+          phase: "lookup"
+          python: "${{ steps.tools.outputs.python }}"
+          tool-path: "${{ steps.tools.outputs.tool-path }}"
+        env:
+          P2PKIT_BOOTSTRAP_PRODUCER_OUTCOME: "${{ steps.produce.outcome }}"
+          P2PKIT_BOOTSTRAP_HANDOFF_SHA256: "${{ steps.produce.outputs.handoffSha256 }}"
+          P2PKIT_BOOTSTRAP_PRODUCER_RETURN_SHA256: "${{ steps.produce.outputs.producerReturnSha256 }}"
+          P2PKIT_BOOTSTRAP_SAVE_PREPARE_OUTCOME: "${{ steps.prepare-save.outcome }}"
+          P2PKIT_BOOTSTRAP_SAVE_PREPARATION_SHA256: "${{ steps.prepare-save.outputs.savePreparationSha256 }}"
+          P2PKIT_BOOTSTRAP_SAVE_OUTCOME: "${{ steps.provider-save.outcome }}"
+          P2PKIT_BOOTSTRAP_SAVE_READBACK_SHA256: "${{ steps.provider-save.outputs.readback-sha256 }}"
+          P2PKIT_BOOTSTRAP_AFTER_SAVE_OUTCOME: "${{ steps.after-save.outcome }}"
+          P2PKIT_BOOTSTRAP_AFTER_SAVE_SHA256: "${{ steps.after-save.outputs.afterSaveSha256 }}"
+          P2PKIT_BOOTSTRAP_PROBE_PREPARE_OUTCOME: "${{ steps.prepare-probe.outcome }}"
+          P2PKIT_BOOTSTRAP_PROBE_PREPARATION_SHA256: "${{ steps.prepare-probe.outputs.probePreparationSha256 }}"
+      -
+        name: "Observe original initial cache lookup and known retirement"
+        id: "after-probe"
+        if: "${{ success() && steps.provider-probe.outcome == 'success' }}"
+        timeout-minutes: 3
+        shell: "bash"
+        env:
+          P2PKIT_PYTHON: "${{ steps.tools.outputs.python }}"
+          P2PKIT_ACTIONS_READ_TOKEN: "${{ github.token }}"
+          P2PKIT_BOOTSTRAP_PRODUCER_OUTCOME: "${{ steps.produce.outcome }}"
+          P2PKIT_BOOTSTRAP_HANDOFF_SHA256: "${{ steps.produce.outputs.handoffSha256 }}"
+          P2PKIT_BOOTSTRAP_PRODUCER_RETURN_SHA256: "${{ steps.produce.outputs.producerReturnSha256 }}"
+          P2PKIT_BOOTSTRAP_SAVE_PREPARE_OUTCOME: "${{ steps.prepare-save.outcome }}"
+          P2PKIT_BOOTSTRAP_SAVE_PREPARATION_SHA256: "${{ steps.prepare-save.outputs.savePreparationSha256 }}"
+          P2PKIT_BOOTSTRAP_SAVE_OUTCOME: "${{ steps.provider-save.outcome }}"
+          P2PKIT_BOOTSTRAP_SAVE_READBACK_SHA256: "${{ steps.provider-save.outputs.readback-sha256 }}"
+          P2PKIT_BOOTSTRAP_AFTER_SAVE_OUTCOME: "${{ steps.after-save.outcome }}"
+          P2PKIT_BOOTSTRAP_AFTER_SAVE_SHA256: "${{ steps.after-save.outputs.afterSaveSha256 }}"
+          P2PKIT_BOOTSTRAP_PROBE_PREPARE_OUTCOME: "${{ steps.prepare-probe.outcome }}"
+          P2PKIT_BOOTSTRAP_PROBE_PREPARATION_SHA256: "${{ steps.prepare-probe.outputs.probePreparationSha256 }}"
+          P2PKIT_BOOTSTRAP_PROBE_OUTCOME: "${{ steps.provider-probe.outcome }}"
+          P2PKIT_BOOTSTRAP_PROBE_READBACK_SHA256: "${{ steps.provider-probe.outputs.readback-sha256 }}"
+          P2PKIT_BOOTSTRAP_PROBE_PRIMARY_KEY: "${{ steps.provider-probe.outputs.cache-primary-key }}"
+          P2PKIT_BOOTSTRAP_PROBE_MATCHED_KEY: "${{ steps.provider-probe.outputs.cache-matched-key }}"
+          P2PKIT_BOOTSTRAP_PROBE_HIT: "${{ steps.provider-probe.outputs.cache-hit }}"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Windows) script="$(cygpath -w -- "$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-productive.py")" ;;
+            Linux|macOS) script="$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-productive.py" ;;
+            *) exit 125 ;;
+          esac
+          exec "$P2PKIT_PYTHON" -I -B -S "$script" after-probe
+      -
+        name: "P2pKit initial productive custody export"
+        id: "productive-export"
+        if: "${{ success() && steps.after-probe.outcome == 'success' }}"
+        timeout-minutes: 6
+        shell: "bash"
+        env:
+          P2PKIT_PYTHON: "${{ steps.tools.outputs.python }}"
+          P2PKIT_ACTIONS_READ_TOKEN: "${{ github.token }}"
+          P2PKIT_BOOTSTRAP_PRODUCER_OUTCOME: "${{ steps.produce.outcome }}"
+          P2PKIT_BOOTSTRAP_HANDOFF_SHA256: "${{ steps.produce.outputs.handoffSha256 }}"
+          P2PKIT_BOOTSTRAP_PRODUCER_RETURN_SHA256: "${{ steps.produce.outputs.producerReturnSha256 }}"
+          P2PKIT_BOOTSTRAP_SAVE_PREPARE_OUTCOME: "${{ steps.prepare-save.outcome }}"
+          P2PKIT_BOOTSTRAP_SAVE_PREPARATION_SHA256: "${{ steps.prepare-save.outputs.savePreparationSha256 }}"
+          P2PKIT_BOOTSTRAP_SAVE_OUTCOME: "${{ steps.provider-save.outcome }}"
+          P2PKIT_BOOTSTRAP_SAVE_READBACK_SHA256: "${{ steps.provider-save.outputs.readback-sha256 }}"
+          P2PKIT_BOOTSTRAP_AFTER_SAVE_OUTCOME: "${{ steps.after-save.outcome }}"
+          P2PKIT_BOOTSTRAP_AFTER_SAVE_SHA256: "${{ steps.after-save.outputs.afterSaveSha256 }}"
+          P2PKIT_BOOTSTRAP_PROBE_PREPARE_OUTCOME: "${{ steps.prepare-probe.outcome }}"
+          P2PKIT_BOOTSTRAP_PROBE_PREPARATION_SHA256: "${{ steps.prepare-probe.outputs.probePreparationSha256 }}"
+          P2PKIT_BOOTSTRAP_PROBE_OUTCOME: "${{ steps.provider-probe.outcome }}"
+          P2PKIT_BOOTSTRAP_PROBE_READBACK_SHA256: "${{ steps.provider-probe.outputs.readback-sha256 }}"
+          P2PKIT_BOOTSTRAP_AFTER_PROBE_OUTCOME: "${{ steps.after-probe.outcome }}"
+          P2PKIT_BOOTSTRAP_PROBE_SHA256: "${{ steps.after-probe.outputs.probeSha256 }}"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Windows) script="$(cygpath -w -- "$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-productive.py")" ;;
+            Linux|macOS) script="$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-productive.py" ;;
+            *) exit 125 ;;
+          esac
+          exec "$P2PKIT_PYTHON" -I -B -S "$script" custody-export
+      -
+        name: "P2pKit initial productive post-export custody"
+        id: "productive-collect"
+        if: "${{ success() && steps.productive-export.outcome == 'success' }}"
+        timeout-minutes: 3
+        shell: "bash"
+        env:
+          P2PKIT_PYTHON: "${{ steps.tools.outputs.python }}"
+          P2PKIT_ACTIONS_READ_TOKEN: "${{ github.token }}"
+          P2PKIT_BOOTSTRAP_PRODUCER_OUTCOME: "${{ steps.produce.outcome }}"
+          P2PKIT_BOOTSTRAP_HANDOFF_SHA256: "${{ steps.produce.outputs.handoffSha256 }}"
+          P2PKIT_BOOTSTRAP_PRODUCER_RETURN_SHA256: "${{ steps.produce.outputs.producerReturnSha256 }}"
+          P2PKIT_BOOTSTRAP_SAVE_PREPARE_OUTCOME: "${{ steps.prepare-save.outcome }}"
+          P2PKIT_BOOTSTRAP_SAVE_PREPARATION_SHA256: "${{ steps.prepare-save.outputs.savePreparationSha256 }}"
+          P2PKIT_BOOTSTRAP_SAVE_OUTCOME: "${{ steps.provider-save.outcome }}"
+          P2PKIT_BOOTSTRAP_SAVE_READBACK_SHA256: "${{ steps.provider-save.outputs.readback-sha256 }}"
+          P2PKIT_BOOTSTRAP_AFTER_SAVE_OUTCOME: "${{ steps.after-save.outcome }}"
+          P2PKIT_BOOTSTRAP_AFTER_SAVE_SHA256: "${{ steps.after-save.outputs.afterSaveSha256 }}"
+          P2PKIT_BOOTSTRAP_PROBE_PREPARE_OUTCOME: "${{ steps.prepare-probe.outcome }}"
+          P2PKIT_BOOTSTRAP_PROBE_PREPARATION_SHA256: "${{ steps.prepare-probe.outputs.probePreparationSha256 }}"
+          P2PKIT_BOOTSTRAP_PROBE_OUTCOME: "${{ steps.provider-probe.outcome }}"
+          P2PKIT_BOOTSTRAP_PROBE_READBACK_SHA256: "${{ steps.provider-probe.outputs.readback-sha256 }}"
+          P2PKIT_BOOTSTRAP_AFTER_PROBE_OUTCOME: "${{ steps.after-probe.outcome }}"
+          P2PKIT_BOOTSTRAP_PROBE_SHA256: "${{ steps.after-probe.outputs.probeSha256 }}"
+          P2PKIT_INITIAL_PRODUCTIVE_EXPORT_OUTCOME: "${{ steps.productive-export.outcome }}"
+          P2PKIT_INITIAL_PRODUCTIVE_EXPORT_TRANSFER_SHA256: "${{ steps.productive-export.outputs.initialProductiveExportTransferSha256 }}"
+          P2PKIT_INITIAL_PRODUCTIVE_MANIFEST_SHA256: "${{ steps.productive-export.outputs.initialProductiveManifestSha256 }}"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Windows) script="$(cygpath -w -- "$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-productive.py")" ;;
+            Linux|macOS) script="$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-productive.py" ;;
+            *) exit 125 ;;
+          esac
+          exec "$P2PKIT_PYTHON" -I -B -S "$script" custody-collect
+      -
+        name: "P2pKit initial productive custody seal"
+        id: "productive-seal"
+        if: "${{ success() && steps.productive-collect.outcome == 'success' }}"
+        timeout-minutes: 3
+        shell: "bash"
+        env:
+          P2PKIT_PYTHON: "${{ steps.tools.outputs.python }}"
+          P2PKIT_ACTIONS_READ_TOKEN: "${{ github.token }}"
+          P2PKIT_BOOTSTRAP_PRODUCER_OUTCOME: "${{ steps.produce.outcome }}"
+          P2PKIT_BOOTSTRAP_HANDOFF_SHA256: "${{ steps.produce.outputs.handoffSha256 }}"
+          P2PKIT_BOOTSTRAP_PRODUCER_RETURN_SHA256: "${{ steps.produce.outputs.producerReturnSha256 }}"
+          P2PKIT_BOOTSTRAP_SAVE_PREPARE_OUTCOME: "${{ steps.prepare-save.outcome }}"
+          P2PKIT_BOOTSTRAP_SAVE_PREPARATION_SHA256: "${{ steps.prepare-save.outputs.savePreparationSha256 }}"
+          P2PKIT_BOOTSTRAP_SAVE_OUTCOME: "${{ steps.provider-save.outcome }}"
+          P2PKIT_BOOTSTRAP_SAVE_READBACK_SHA256: "${{ steps.provider-save.outputs.readback-sha256 }}"
+          P2PKIT_BOOTSTRAP_AFTER_SAVE_OUTCOME: "${{ steps.after-save.outcome }}"
+          P2PKIT_BOOTSTRAP_AFTER_SAVE_SHA256: "${{ steps.after-save.outputs.afterSaveSha256 }}"
+          P2PKIT_BOOTSTRAP_PROBE_PREPARE_OUTCOME: "${{ steps.prepare-probe.outcome }}"
+          P2PKIT_BOOTSTRAP_PROBE_PREPARATION_SHA256: "${{ steps.prepare-probe.outputs.probePreparationSha256 }}"
+          P2PKIT_BOOTSTRAP_PROBE_OUTCOME: "${{ steps.provider-probe.outcome }}"
+          P2PKIT_BOOTSTRAP_PROBE_READBACK_SHA256: "${{ steps.provider-probe.outputs.readback-sha256 }}"
+          P2PKIT_BOOTSTRAP_AFTER_PROBE_OUTCOME: "${{ steps.after-probe.outcome }}"
+          P2PKIT_BOOTSTRAP_PROBE_SHA256: "${{ steps.after-probe.outputs.probeSha256 }}"
+          P2PKIT_INITIAL_PRODUCTIVE_EXPORT_OUTCOME: "${{ steps.productive-export.outcome }}"
+          P2PKIT_INITIAL_PRODUCTIVE_EXPORT_TRANSFER_SHA256: "${{ steps.productive-export.outputs.initialProductiveExportTransferSha256 }}"
+          P2PKIT_INITIAL_PRODUCTIVE_MANIFEST_SHA256: "${{ steps.productive-export.outputs.initialProductiveManifestSha256 }}"
+          P2PKIT_INITIAL_PRODUCTIVE_COLLECT_OUTCOME: "${{ steps.productive-collect.outcome }}"
+          P2PKIT_INITIAL_PRODUCTIVE_COLLECT_CLOSE_SHA256: "${{ steps.productive-collect.outputs.initialProductiveCollectCloseSha256 }}"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Windows) script="$(cygpath -w -- "$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-productive-receiver.py")" ;;
+            Linux|macOS) script="$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-productive-receiver.py" ;;
+            *) exit 125 ;;
+          esac
+          exec "$P2PKIT_PYTHON" -I -B -S "$script" seal
+      -
+        name: "P2pKit initial productive before-upload custody"
+        id: "productive-before"
+        if: "${{ success() && steps.productive-seal.outcome == 'success' }}"
+        timeout-minutes: 3
+        shell: "bash"
+        env:
+          P2PKIT_PYTHON: "${{ steps.tools.outputs.python }}"
+          P2PKIT_ACTIONS_READ_TOKEN: "${{ github.token }}"
+          P2PKIT_BOOTSTRAP_PRODUCER_OUTCOME: "${{ steps.produce.outcome }}"
+          P2PKIT_BOOTSTRAP_HANDOFF_SHA256: "${{ steps.produce.outputs.handoffSha256 }}"
+          P2PKIT_BOOTSTRAP_PRODUCER_RETURN_SHA256: "${{ steps.produce.outputs.producerReturnSha256 }}"
+          P2PKIT_BOOTSTRAP_SAVE_PREPARE_OUTCOME: "${{ steps.prepare-save.outcome }}"
+          P2PKIT_BOOTSTRAP_SAVE_PREPARATION_SHA256: "${{ steps.prepare-save.outputs.savePreparationSha256 }}"
+          P2PKIT_BOOTSTRAP_SAVE_OUTCOME: "${{ steps.provider-save.outcome }}"
+          P2PKIT_BOOTSTRAP_SAVE_READBACK_SHA256: "${{ steps.provider-save.outputs.readback-sha256 }}"
+          P2PKIT_BOOTSTRAP_AFTER_SAVE_OUTCOME: "${{ steps.after-save.outcome }}"
+          P2PKIT_BOOTSTRAP_AFTER_SAVE_SHA256: "${{ steps.after-save.outputs.afterSaveSha256 }}"
+          P2PKIT_BOOTSTRAP_PROBE_PREPARE_OUTCOME: "${{ steps.prepare-probe.outcome }}"
+          P2PKIT_BOOTSTRAP_PROBE_PREPARATION_SHA256: "${{ steps.prepare-probe.outputs.probePreparationSha256 }}"
+          P2PKIT_BOOTSTRAP_PROBE_OUTCOME: "${{ steps.provider-probe.outcome }}"
+          P2PKIT_BOOTSTRAP_PROBE_READBACK_SHA256: "${{ steps.provider-probe.outputs.readback-sha256 }}"
+          P2PKIT_BOOTSTRAP_AFTER_PROBE_OUTCOME: "${{ steps.after-probe.outcome }}"
+          P2PKIT_BOOTSTRAP_PROBE_SHA256: "${{ steps.after-probe.outputs.probeSha256 }}"
+          P2PKIT_INITIAL_PRODUCTIVE_EXPORT_OUTCOME: "${{ steps.productive-export.outcome }}"
+          P2PKIT_INITIAL_PRODUCTIVE_EXPORT_TRANSFER_SHA256: "${{ steps.productive-export.outputs.initialProductiveExportTransferSha256 }}"
+          P2PKIT_INITIAL_PRODUCTIVE_MANIFEST_SHA256: "${{ steps.productive-export.outputs.initialProductiveManifestSha256 }}"
+          P2PKIT_INITIAL_PRODUCTIVE_COLLECT_OUTCOME: "${{ steps.productive-collect.outcome }}"
+          P2PKIT_INITIAL_PRODUCTIVE_COLLECT_CLOSE_SHA256: "${{ steps.productive-collect.outputs.initialProductiveCollectCloseSha256 }}"
+          P2PKIT_INITIAL_PRODUCTIVE_SEAL_SHA256: "${{ steps.productive-seal.outputs.initialProductiveSealSha256 }}"
+          P2PKIT_INITIAL_PRODUCTIVE_SEAL_END_NS: "${{ steps.productive-seal.outputs.initialProductiveSealEndNs }}"
+          P2PKIT_INITIAL_PRODUCTIVE_SEAL_CLOCK_ROLE: "${{ steps.productive-seal.outputs.initialProductiveSealClockRole }}"
+          P2PKIT_INITIAL_PRODUCTIVE_SEAL_CLOCK_DOMAIN: "${{ steps.productive-seal.outputs.initialProductiveSealClockDomain }}"
+          P2PKIT_INITIAL_PRODUCTIVE_SEAL_CLOCK_TICKS_PER_SECOND: "${{ steps.productive-seal.outputs.initialProductiveSealClockTicksPerSecond }}"
+          P2PKIT_INITIAL_PRODUCTIVE_SEAL_BOOT_SHA256: "${{ steps.productive-seal.outputs.initialProductiveSealBootSha256 }}"
+          P2PKIT_INITIAL_PRODUCTIVE_SEAL_OUTCOME: "${{ steps.productive-seal.outcome }}"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Windows) script="$(cygpath -w -- "$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-productive-tail.py")" ;;
+            Linux|macOS) script="$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-productive-tail.py" ;;
+            *) exit 125 ;;
+          esac
+          exec "$P2PKIT_PYTHON" -I -B -S "$script" before
+      -
+        name: "P2pKit initial productive custody upload"
+        id: "productive-upload"
+        if: "${{ success() && steps.productive-before.outcome == 'success' }}"
+        timeout-minutes: 3
+        uses: ./.github/actions/initial-recipient-productive-upload
+        with:
+          mode: "upload"
+          python: "${{ steps.tools.outputs.python }}"
+          tool-path: "${{ steps.tools.outputs.tool-path }}"
+        env:
+          P2PKIT_INITIAL_PRODUCTIVE_BEFORE_SHA256: "${{ steps.productive-before.outputs.initialProductiveBeforeSha256 }}"
+          P2PKIT_INITIAL_PRODUCTIVE_BEFORE_OUTCOME: "${{ steps.productive-before.outcome }}"
+          P2PKIT_INITIAL_PRODUCTIVE_DEADLINE_SHA256: "${{ steps.productive-before.outputs.initialProductiveDeadlineSha256 }}"
+          P2PKIT_INITIAL_PRODUCTIVE_DEADLINE_BASE64: "${{ steps.productive-before.outputs.initialProductiveDeadlineBase64 }}"
+          P2PKIT_INITIAL_PRODUCTIVE_SEAL_OUTCOME: "${{ steps.productive-seal.outcome }}"
+      -
+        name: "P2pKit initial productive after-upload custody"
+        id: "productive-after"
+        if: "${{ success() && steps.productive-upload.outcome == 'success' }}"
+        timeout-minutes: 3
+        uses: ./.github/actions/initial-recipient-productive-upload
+        with:
+          mode: "after"
+          python: "${{ steps.tools.outputs.python }}"
+          tool-path: "${{ steps.tools.outputs.tool-path }}"
+        env:
+          P2PKIT_INITIAL_PRODUCTIVE_BEFORE_SHA256: "${{ steps.productive-before.outputs.initialProductiveBeforeSha256 }}"
+          P2PKIT_INITIAL_PRODUCTIVE_BEFORE_OUTCOME: "${{ steps.productive-before.outcome }}"
+          P2PKIT_INITIAL_PRODUCTIVE_DEADLINE_SHA256: "${{ steps.productive-before.outputs.initialProductiveDeadlineSha256 }}"
+          P2PKIT_INITIAL_PRODUCTIVE_DEADLINE_BASE64: "${{ steps.productive-before.outputs.initialProductiveDeadlineBase64 }}"
+          P2PKIT_INITIAL_PRODUCTIVE_SEAL_OUTCOME: "${{ steps.productive-seal.outcome }}"
+          P2PKIT_INITIAL_PRODUCTIVE_UPLOAD_SHA256: "${{ steps.productive-upload.outputs.receipt-sha256 }}"
+          P2PKIT_INITIAL_PRODUCTIVE_UPLOAD_DIRECTORY_SHA256: "${{ steps.productive-upload.outputs.directory-identity-sha256 }}"
+          P2PKIT_INITIAL_PRODUCTIVE_UPLOAD_FILE_METADATA_SHA256: "${{ steps.productive-upload.outputs.file-metadata-sha256 }}"
+          P2PKIT_INITIAL_PRODUCTIVE_UPLOAD_OWNER_CLOSE_SHA256: "${{ steps.productive-upload.outputs.file-owner-close-sha256 }}"
+          P2PKIT_INITIAL_PRODUCTIVE_UPLOAD_OUTCOME: "${{ steps.productive-upload.outcome }}"

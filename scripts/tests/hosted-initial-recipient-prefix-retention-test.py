@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Prefix-only controls, AUTHORED FOR REVIEW; not executed as source evidence.
 
-No historical control is imported or selected. DATA fixtures are deliberately
-synthetic; they are not authenticated C prefixes, complete native custody, or
-successful Steps. The isolated owner/reader models run the actual A machinery
-against memory resources and synthetic clocks, with C's passive proof boundary
-explicitly substituted. They do not execute produce/productive9, a native
-backend, a policy query, a key operation, provider, archive, build or workflow.
+Only the new compatibility fixture builders are imported; no test methods are
+selected. DATA fixtures are deliberately synthetic; they are not authenticated C
+prefixes, complete native custody, or successful Steps. The isolated owner/reader
+models run the actual A machinery against memory resources and synthetic clocks,
+with C's passive proof boundary explicitly substituted. They do not execute
+produce/productive9, a native backend, a policy query, a key operation, provider,
+archive, build or workflow.
 38 original records +281 declarations remain distinct from281 native reads.
 """
 from __future__ import annotations
@@ -15,6 +16,7 @@ from contextlib import ExitStack
 import copy
 import ctypes  # Initialize before denying native loads, as in the existing model harness.
 from dataclasses import dataclass
+import importlib.util
 from pathlib import Path
 import sys
 import time
@@ -39,6 +41,12 @@ sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 import hosted_initial_recipient_productive_adapter as A
+
+COMPAT_SPEC = importlib.util.spec_from_file_location("prefix_compatibility_fixtures",
+    Path(__file__).with_name("hosted-cache-compatibility-test.py"))
+COMPAT = importlib.util.module_from_spec(COMPAT_SPEC)
+sys.modules[COMPAT_SPEC.name] = COMPAT
+COMPAT_SPEC.loader.exec_module(COMPAT)
 
 D, C, N, B, O, F = A.D, A.C, A.N, A.B, A.O, A.F
 NS, BOOT = O.NS, "b" * 64
@@ -81,7 +89,18 @@ def close_data(labels):
 
 
 def data_fixture():
-    """Shape-only DATA. No identity fixture, source/query helper, or native call."""
+    """Shape-only DATA and MODEL source bytes, never a native or source-query call."""
+    source_tree = COMPAT.ModelTree()
+    # Separate MODEL public-source volume; original private pins stay unchanged.
+    source_tree.identities = {name: (8, pin[1]) for name, pin in source_tree.identities.items()}
+    compiled = F.authority.parse_allowlist(source_tree.raw[F.INPUTS[0]])
+    seed = {"files": {name: O.digest(source_tree.raw[name]) for name in F.INPUTS},
+        "allowlistSha256": compiled.authority_sha256, "artifacts": len(compiled.artifacts),
+        "components": compiled.component_count, "policy": F.policy()}
+    selected = {"seed": seed, "provider": {name: O.digest(source_tree.raw[name]) for name in
+        A.compatibility.PROVIDER_INPUTS}}
+    source = dict(COMPAT.SOURCE)
+    compatibility_raw = A.compatibility.encoded(A.compatibility.envelope(source, selected))
     session, custody = Path("/model/initial"), Path("/model/primary-custody")
     initializer = tuple((name, (7, 10 + number), "ORIGINAL_INITIALIZER_NATIVE_PIN")
         for number, name in enumerate(D.INITIALIZER_DIRECTORIES))
@@ -163,13 +182,15 @@ def data_fixture():
         "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False}
     inputs = SimpleNamespace(role="linux-x64", clock=clock(), session=session, initializer_directories=initializer,
         initializer_originals=initial_raws, closed_raw=O.encoded(retired), previous_ns=95 * NS,
-        history={"originalBootDigest": BOOT}, admission={"initialRecipient": match, "source": {}, "github": {},
+        previous_local=995.0, root=Path("/model/source"),
+        history={"originalBootDigest": BOOT}, admission={"initialRecipient": match, "source": source, "github": {},
             "selection": "model", "cacheCohort": "model"},
         directories={name: dict((key, pin) for key, pin, _provenance in initializer)[key]
             for name, key in zip(D.DIRECTORY_NAMES, D.DIRECTORY_KEYS)},
-        stage={"containerIdentity": [7, 4000], "sourceIdentity": [7, 4001]}, stage_value={"bootstrapInputs": {}},
+        stage={"containerIdentity": [7, 4000], "sourceIdentity": [7, 4001]},
+        stage_value={"inputs": seed, "bootstrapInputs": {}},
         proposal={"phaseFencesNs": {"producer-owner-return": 200 * NS}, "proposedJobEndNs": 200 * NS},
-        binding=lambda: {"model": "closed-input-binding"})
+        binding=lambda: {"scope": D.INPUT_SCOPE, "model": "closed-input-binding"})
     index = D.prefix_retention_value(original, inputs, custody, O.digest(primary_inventory))
     raws = {name: original[name] for name in D.PREFIX_FILES[:-1]}
     raws["retention-index.json"] = O.encoded(index)
@@ -180,12 +201,15 @@ def data_fixture():
             for number, name in enumerate(D.PREFIX_FILES)}}
     return SimpleNamespace(inputs=inputs, original=original, raws=raws, reference=reference, index=index, custody=custody,
         primary_handoff=primary_handoff, primary_inventory=primary_inventory,
-        roots={"P": Path("/model/primary"), "I": session})
+        roots={"P": Path("/model/primary"), "I": session}, source_tree=source_tree, compatibility_raw=compatibility_raw)
 
 
 def handoff_fixture(data, reference=None, directory_identity=(7, 22000)):
     inputs = data.inputs
     blobs = {name: b"" if name == "ancestry_raw.bin" else O.encoded({"model": name}) for name in D.BLOB_NAMES}
+    blobs["initial-inputs.json"] = O.encoded({"schema": 2, "scope": D.OUTER_INPUT_SCOPE,
+        "binding": inputs.binding(), "initializerCheckedLocal": inputs.previous_local,
+        "compatibilityInputs": D.canonical(data.compatibility_raw)})
     returns = {}
     for phase, label in zip(D.PRODUCTIVE_PHASES, ("stage", "seed", "custody", "producer", "collection", "no-loader", "export", "before")):
         leaf_name = "producer-observation.json" if phase == "configuration" else label + "-leaf.json"
@@ -562,6 +586,10 @@ class PrefixMemoryControls(unittest.TestCase):
         self.stack.enter_context(patch.object(C, "_paths", lambda _kind: (self.data.roots,
             self.data.inputs.session.with_name("initial-handoff"), self.data.custody)))
         self.stack.enter_context(patch.object(F, "private_root", self.fs.private_root))
+        self.stack.enter_context(patch.object(F, "PosixFile", COMPAT.ModelFile))
+        self.stack.enter_context(patch.object(F, "PosixSourceDirectory", COMPAT.ModelDirectory))
+        self.stack.enter_context(patch.object(F, "public_root", side_effect=lambda _root:
+            COMPAT.ModelDirectory(self.data.source_tree, ())))
         for name, identity, _provenance in self.data.inputs.initializer_directories:
             self.fs.add(self.data.inputs.session.joinpath(*name.split("/")[1:]), directory=True, identity=identity)
         for number, (name, raw) in enumerate(self.data.inputs.initializer_originals):
@@ -596,6 +624,9 @@ class PrefixMemoryControls(unittest.TestCase):
         methods = A._prefix_writer_methods(owner)
         A._read_initializer(self.state, self.data.inputs)
         retained, reference_raw = A._retain_prefix(self.state, self.prefix, self.data.inputs)
+        compatibility_raw = A._capture_compatibility(owner, self.data.inputs)
+        if compatibility_raw != self.data.compatibility_raw:
+            raise AssertionError("MODEL_ORIGINAL_SOURCE_INVENTORY")
         initial = A._directory(owner, self.data.inputs.session, self.data.inputs.directories["session"])
         directory = owner.child(initial, "dependency-save-handoff", create=True)
         value, blobs = handoff_fixture(self.data, D.canonical(reference_raw), tuple(directory.identity))
@@ -606,7 +637,15 @@ class PrefixMemoryControls(unittest.TestCase):
         for name, blob in (*blobs.items(), ("save-handoff.json", raw)):
             if owner.read(directory, name) != blob:
                 raise AssertionError("MODEL_ORIGINAL_HANDOFF_READBACK")
+        A._names(owner, directory, (*D.BLOB_NAMES, "save-handoff.json"))
+        if (tuple(directory.verify().identity) != tuple(value["directoryIdentity"]) or
+                tuple(initial.verify().identity) != self.data.inputs.directories["session"]):
+            raise AssertionError("MODEL_ORIGINAL_HANDOFF_DIRECTORIES")
+        if A._capture_compatibility(owner, self.data.inputs) != compatibility_raw:
+            raise AssertionError("MODEL_ORIGINAL_SOURCE_CHANGED")
         A._prefix_writer_methods_current(owner, methods)
+        if A._prefix_raws(self.prefix) != tuple((name, raw) for name, raw, _binding in retained[:-1]):
+            raise AssertionError("MODEL_ORIGINAL_PREFIX_CHANGED")
         owner.close()
         A._known(owner)
         self.state.window.now()
@@ -627,12 +666,25 @@ class PrefixMemoryControls(unittest.TestCase):
             self.data.inputs.directories["session"], b"{}", saved.blobs, None)
         A._progress(reader, handoff=handoff)
         A._read_prefix_retention(reader, D.canonical(saved.prefix_reference), self.data.inputs)
-        inputs = SimpleNamespace(inputs=self.data.inputs, source_inputs={})
+        inputs = SimpleNamespace(inputs=self.data.inputs, source_inputs=self.data.inputs.stage_value["inputs"],
+            compatibility_raw=self.data.compatibility_raw)
         return reader, inputs
 
-    def test_original_first144_second21_same45_and_prior_close_only(self):
+    def test_original_first442_preserves_private144_second21_same45_and_prior_close_only(self):
         pending, saved = guarded(self.pending)
-        self.assertEqual(len(guarded(A._known, saved.writer).resources), 144)
+        resources = guarded(A._known, saved.writer).resources
+        self.assertEqual(len(resources), 442)
+        private = (*resources[:46], *resources[195:293])
+        # These are the original private objects, not fabricated ledger rows;
+        # compare before completion adds its separate21 private handles.
+        self.assertEqual((len(private), len(self.fs.handles)), (144, 144))
+        self.assertTrue(all(pin.value is handle for pin, handle in zip(private, self.fs.handles)))
+        labels = list(A.compatibility.source_read_labels())
+        self.assertEqual([pin.label for pin in resources[46:195]], labels)
+        self.assertEqual([pin.label for pin in resources[293:442]], labels)
+        self.assertTrue(all(pin.value.close_calls == 1 for pin in (*resources[46:195], *resources[293:442])))
+        self.assertFalse(any(first.value is second.value for first in resources[46:195] for second in resources[293:442]))
+        self.assertEqual(self.data.source_tree.opened, [*F.INPUTS, *A.compatibility.PROVIDER_INPUTS] * 2)
         self.assertGreater(len(self.data.original["primary-map.json"]), F.BLOCK)
         self.assertLessEqual(len(self.data.original["primary-map.json"]), D.LIMIT)
         self.assertEqual(len(self.data.original["primary-map.json"]), F.BLOCK + 4096)
@@ -651,7 +703,7 @@ class PrefixMemoryControls(unittest.TestCase):
         self.assertEqual(result.hard_end_ns, frame[2][0])
         returned = guarded(D.producer_return_record, saved.return_raw, pending.raw, self.data.inputs,
             O.clocks.Reading(clock(), 150 * NS), O.digest(saved.return_raw), saved.identity)
-        self.assertEqual(returned["priorWriterClose"]["resourceCount"], 144)
+        self.assertEqual(returned["priorWriterClose"]["resourceCount"], 442)
         self.assertEqual(returned["priorWriterClose"]["observationScope"], "PRIOR_FIRST_OWNER_ONLY")
         self.assertEqual(returned["recordWriterReturn"], D.PENDING)
         self.assertEqual(returned["producerStepOutcome"], D.PENDING)
@@ -676,7 +728,7 @@ class PrefixMemoryControls(unittest.TestCase):
                 guarded(D.producer_return_record, raw, pending.raw, self.data.inputs,
                     O.clocks.Reading(clock(), 150 * NS), O.digest(raw), saved.identity)
 
-    def test_current_second21_close_cannot_replace_the_prior_first144_close(self):
+    def test_current_second21_close_cannot_replace_the_prior_first442_close(self):
         pending, saved = guarded(self.pending)
         guarded(A.complete_productive_handoff, pending, self.prefix)
         second = guarded(A._known, self.state.owners[1])
@@ -920,7 +972,9 @@ class PrefixMemoryControls(unittest.TestCase):
         self.assertEqual(set(reader.files), {(path, name) for name in D.PREFIX_FILES})
         self.assertEqual(set(reader.directories), {self.data.custody, path})
         before = len(self.fs.reads)
-        with patch.object(A.staging, "_sources", return_value=({}, {}, {})):
+        # Deliberate prefix-only source DATA seam, not source/native acceptance.
+        with patch.object(A, "_current_source_inputs", return_value=(inputs.source_inputs, {},
+                inputs.inputs.stage_value["bootstrapInputs"], inputs.compatibility_raw)):
             guarded(A._recheck_inputs, reader, inputs, ())
             guarded(A._recheck_inputs, reader, inputs, ())
         self.assertEqual([target.name for target, _maximum in self.fs.reads[before:]], list(D.PREFIX_FILES) * 2)
@@ -933,19 +987,22 @@ class PrefixMemoryControls(unittest.TestCase):
         omitted = dict(reader.files)
         omitted.pop((path, "primary-map.json"))
         guarded(A._progress, reader, files=omitted)
-        with patch.object(A.staging, "_sources", return_value=({}, {}, {})), self.assertRaises(REFUSALS):
+        with patch.object(A, "_current_source_inputs", return_value=(inputs.source_inputs, {},
+                inputs.inputs.stage_value["bootstrapInputs"], inputs.compatibility_raw)), self.assertRaises(REFUSALS):
             guarded(A._recheck_inputs, reader, inputs, ())
 
     def test_same_bytes_with_a_new_native_file_binding_fail_recheck(self):
         reader, inputs = guarded(self.reader)
         self.fs.replace_file(self.data.custody / "productive-prefix" / "primary-map.json", preserve_parent_stamp=True)
-        with patch.object(A.staging, "_sources", return_value=({}, {}, {})), self.assertRaises(REFUSALS):
+        with patch.object(A, "_current_source_inputs", return_value=(inputs.source_inputs, {},
+                inputs.inputs.stage_value["bootstrapInputs"], inputs.compatibility_raw)), self.assertRaises(REFUSALS):
             guarded(A._recheck_inputs, reader, inputs, ())
 
     def test_same_identity_with_changed_sidecar_root_stamp_fails_recheck(self):
         reader, inputs = guarded(self.reader)
         self.fs.nodes[self.data.custody / "productive-prefix"].generation += 1
-        with patch.object(A.staging, "_sources", return_value=({}, {}, {})), self.assertRaises(REFUSALS):
+        with patch.object(A, "_current_source_inputs", return_value=(inputs.source_inputs, {},
+                inputs.inputs.stage_value["bootstrapInputs"], inputs.compatibility_raw)), self.assertRaises(REFUSALS):
             guarded(A._recheck_inputs, reader, inputs, ())
 
 
@@ -982,9 +1039,14 @@ class PrefixSourceControls(unittest.TestCase):
         self.ordered(body, '_new_phase(run, "producer-owner-return",', "owner = _new_owner(state)",
             "writer_methods = _prefix_writer_methods(owner)", '_use(state, "producer-handoff/retention", token)',
             "_read_initializer(state, inputs)", "_retain_prefix(state, prefix, inputs)",
-            "_handoff_blobs(state, inputs, prefix_reference)", "_prefix_writer_methods_current(owner, writer_methods)",
+            "compatibility_raw = _capture_compatibility(owner, inputs)",
+            "_handoff_blobs(state, inputs, prefix_reference, compatibility_raw)",
+            '"HANDOFF_ORIGINAL_READBACK_CHANGED"', '"HANDOFF_DIRECTORY_CHANGED"',
+            "require(_capture_compatibility(owner, inputs) == compatibility_raw",
+            "_prefix_writer_methods_current(owner, writer_methods)",
             "owner.close()", "_known(owner)",
             "result = PendingHandoff(", "_prefix_writer(saved)", "return result")
+        self.assertEqual(body.count("_capture_compatibility("), 2)
         writer = self.adapter("def _prefix_writer_methods_current(", "def _prefix_writer_close(")
         self.assertIn("type(current) is tuple and type(original) is tuple", writer)
         self.assertIn("len(current) == len(original) == 8", writer)

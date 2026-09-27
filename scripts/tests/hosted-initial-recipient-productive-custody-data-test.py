@@ -178,6 +178,18 @@ class CustodyDataModels(unittest.TestCase):
         self.refuses(CD.canonical, bytearray(b"{}\n"))
         self.refuses(CD.canonical, b"{}\n", 2)
 
+    def test_final_inputs_require_the_original_compatibility_digest(self):
+        value = final_inputs()
+        raw = O.encoded(value)
+        self.assertEqual(self.check(CD.final_inputs, raw)["compatibilityInputsSha256"], H)
+        self.assertLess(len(raw), CD.LIMIT)
+        without = copy.deepcopy(value); del without["compatibilityInputsSha256"]
+        self.assertEqual(len(raw) - len(O.encoded(without)), 95)
+        self.refuses(CD.final_inputs, O.encoded(without))
+        for wrong in (True, "", H[:-1], "A" * 64, {"sha256": H}):
+            changed = copy.deepcopy(value); changed["compatibilityInputsSha256"] = wrong
+            self.refuses(CD.final_inputs, O.encoded(changed))
+
     def test_non_bool_integer_and_digest_grammar(self):
         for value in (True, -1, 1.0, 1 << 64):
             self.refuses(CD.integer, value)

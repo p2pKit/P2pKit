@@ -18,6 +18,7 @@ import uuid
 
 import hosted_initial_recipient_productive as P
 import hosted_initial_recipient_productive_data as D
+import hosted_cache_compatibility as compatibility
 import hosted_cache_bootstrap_staging as staging
 import hosted_cache_bootstrap_custody as custody
 import hosted_cache_bootstrap_producer as producer
@@ -727,6 +728,10 @@ class _Reader:
     """Small bound-file engine adapter; this is NOT owner/phase authority."""
     def __init__(self, owner):
         self.owner = owner
+
+    @property
+    def unknown(self):
+        return self.owner.unknown
 
     def end(self, *, new=False):
         if new and type(self.owner) is _Owner:
@@ -1954,7 +1959,15 @@ def _retain_prefix(state, prefix, inputs):
     return retained, reference_raw
 
 
-def _handoff_blobs(state, inputs, prefix_reference):
+def _capture_compatibility(owner, inputs):
+    """Fresh original seed12/provider120 reads on the SAME producer owner45."""
+    reader = _Reader(owner)
+    selected = compatibility.read_inputs(reader, inputs.root, reader.end(new=True), reader.check)
+    require(selected["seed"] == inputs.stage_value["inputs"], "HANDOFF_COMPATIBILITY_SEED_CHANGED")
+    return compatibility.encoded(compatibility.envelope(inputs.admission["source"], selected))
+
+
+def _handoff_blobs(state, inputs, prefix_reference, compatibility_raw):
     phases = { _RETURNS[id(row)][1].name: row for row in state.run.phases }
     configured = phases["configuration"].leaf
     blobs = {}
@@ -1970,13 +1983,14 @@ def _handoff_blobs(state, inputs, prefix_reference):
         "retired-prefix.json": inputs.closed_raw, "worker-identity.json": inputs.admitted.record,
         "history.json": inputs.history_raw, "allocation-proposal.json": inputs.proposal_raw,
         **{name + ".bin": raw for name, raw in inputs.source_records},
-        "initial-inputs.json": O.encoded({"schema": 1, "scope": D.INPUT_SCOPE, "binding": inputs.binding(),
-            "initializerCheckedLocal": inputs.previous_local}),
+        "initial-inputs.json": O.encoded({"schema": 2, "scope": D.OUTER_INPUT_SCOPE, "binding": inputs.binding(),
+            "initializerCheckedLocal": inputs.previous_local, "compatibilityInputs": D.canonical(compatibility_raw)}),
         "productive-use-index.json": O.encoded({"schema": 1, "scope": "INITIAL_RECIPIENT_PRODUCTIVE_ORIGINAL_USE_INDEX_V1",
             "sites": [_use_data(use) for old in (*state.run.phases, None) for use in
                 (state.uses if old is None else _RETURNS[id(old)][1].uses)],
             "inputProvenance": "HISTORICAL_CONSUMED_RETURNS_NOT_CURRENT_AUTHORITY", "exportSaveAuthority": False})})
     require(set(blobs) == set(D.BLOB_NAMES) and len(blobs) == 31 < 32, "HANDOFF_FIXED_BLOB_ROSTER")
+    D.initial_inputs_record(blobs["initial-inputs.json"], inputs.admission["source"])
     for name, raw in blobs.items():
         D.raw_bytes(raw, empty=name.endswith(".bin"))
     chain = {"scope": "INITIAL_RECIPIENT_ORIGINAL_PRODUCTIVE_CLOSED_CHAIN_V1",
@@ -2022,7 +2036,8 @@ def produce(prefix, token, cancelled):
         _use(state, "producer-handoff/retention", token)
         _read_initializer(state, inputs)
         prefix_files, prefix_reference = _retain_prefix(state, prefix, inputs)
-        blobs, chain, references = _handoff_blobs(state, inputs, prefix_reference)
+        compatibility_raw = _capture_compatibility(owner, inputs)
+        blobs, chain, references = _handoff_blobs(state, inputs, prefix_reference, compatibility_raw)
         initial = _directory(owner, inputs.session, inputs.directories["session"])
         directory = owner.child(initial, "dependency-save-handoff", create=True)
         pin = tuple(directory.verify().identity)
@@ -2053,6 +2068,7 @@ def produce(prefix, token, cancelled):
         _names(owner, directory, (*D.BLOB_NAMES, "save-handoff.json"))
         require(tuple(directory.verify().identity) == pin and tuple(initial.verify().identity) == inputs.directories["session"],
                 "HANDOFF_DIRECTORY_CHANGED")
+        require(_capture_compatibility(owner, inputs) == compatibility_raw, "HANDOFF_COMPATIBILITY_SOURCE_CHANGED")
         _prefix_writer_methods_current(owner, writer_methods)
         require(_prefix_raws(prefix) ==
             tuple((name, raw) for name, raw, _binding in prefix_files[:-1]), "PREFIX_WRITER_OR_ORIGINALS_CHANGED")
@@ -2743,9 +2759,7 @@ def read_productive_handoff(owner, first, claims):
         worker = N.initial_identity.bind_worker_match(N.acquisition.stages.BootstrapMatch(O.encoded(worker_value["initialRecipient"])),
             event_raw=event, policy_raw=blobs["candidate_policy_raw.bin"], now=history["firstUseAt"])
         require(worker.record == blobs["worker-identity.json"], "HANDOFF_INITIAL_IDENTITY_CHANGED")
-        original = D.fields(D.canonical(blobs["initial-inputs.json"]), "schema scope binding initializerCheckedLocal")
-        require(type(original["schema"]) is int and original["schema"] == 1 and original["scope"] == D.INPUT_SCOPE,
-                "HANDOFF_INITIAL_INPUTS")
+        original = D.initial_inputs_record(blobs["initial-inputs.json"], D.checked_worker(worker)["source"])
         binding = original["binding"]
         pins = binding["allInitializerDirectories"]
         require(type(pins) is dict and set(pins) == set(D.INITIALIZER_DIRECTORIES), "HANDOFF_INITIAL_DIRECTORIES")
@@ -2806,6 +2820,7 @@ class ProviderInputs:
     handoff: object
     source_inputs: dict
     staging_raw: bytes
+    compatibility_raw: bytes
 
 
 def _historical_inputs(handoff, staging_raw):
@@ -2873,6 +2888,17 @@ def _fresh_begin(reader, fresh_identity):
     require(D.worker_values(fresh_identity) == D.worker_values(handoff.identity), "FRESH_INITIAL_IDENTITY_CHANGED")
 
 
+def _current_source_inputs(owner, inputs):
+    """Preserve the old staging reads and add the closed120 on that same owner."""
+    reader = _Reader(owner)
+    borrowed = compatibility.borrowed_sources(reader, reader.check)
+    sources, compiled, extra = staging._sources(borrowed, inputs)
+    provider = compatibility.read_provider(borrowed, inputs.root, borrowed.end(new=True), borrowed.check)
+    raw = compatibility.encoded(compatibility.envelope(inputs.admission["source"],
+        {"seed": sources, "provider": provider}))
+    return sources, compiled, extra, raw
+
+
 def _rederive_inputs(reader, fresh_identity):
     owner, handoff = reader.owner, reader.handoff
     require(D.worker_values(fresh_identity) == D.worker_values(handoff.identity), "FRESH_INITIAL_IDENTITY_CHANGED")
@@ -2887,8 +2913,11 @@ def _rederive_inputs(reader, fresh_identity):
     require(type(reference["bytes"]) is int and reference["bytes"] == len(staging_raw) and
             reference["sha256"] == O.digest(staging_raw), "ORIGINAL_STAGING_CHANGED")
     inputs = _historical_inputs(handoff, staging_raw)
-    sources, compiled, extra = staging._sources(_Reader(owner), inputs)
+    sources, compiled, extra, compatibility_raw = _current_source_inputs(owner, inputs)
     require(sources == inputs.stage_value["inputs"] and extra == inputs.stage_value["bootstrapInputs"], "ORIGINAL_SOURCE_INPUTS_CHANGED")
+    original = D.initial_inputs_record(blobs["initial-inputs.json"], inputs.admission["source"])
+    require(compatibility_raw == compatibility.encoded(original["compatibilityInputs"]),
+            "ORIGINAL_COMPATIBILITY_INPUTS_CHANGED")
     restore = _read_root(reader, inputs.restore, inputs.stage["sourceIdentity"])
     F.validate_stage(inputs.stage, inputs.admitted.record, inputs.profile, inputs.role, inputs.container,
         container.verify(), restore.verify(), sources)
@@ -2920,7 +2949,7 @@ def _rederive_inputs(reader, fresh_identity):
     B.native_record(native["birth"], native["start"], native["leader"], native["start"]["argv"], terminal=False)
     B.native_record(native["terminal"], native["start"], native["leader"], native["start"]["argv"])
     B.baseline_record(O.encoded(native["baseline"]), inputs.role)
-    result = ProviderInputs(plan, inputs, handoff, sources, staging_raw)
+    result = ProviderInputs(plan, inputs, handoff, sources, staging_raw, compatibility_raw)
     graph = N._history_graph(result.__dict__, inputs.__dict__, inputs.staged.__dict__, fresh_identity.__dict__)
     _INPUTS[id(handoff)] = result, reader, graph, fresh_identity, _data_pins(result)
     recheck_provider_inputs(owner, result)
@@ -2950,8 +2979,9 @@ def _recheck_inputs(reader, inputs, graph):
         _read_file(reader, path, name, maximum, expected=raw, binding=binding)
     for path, name, count, digest, binding_raw in reader.large:
         _read_capture_original(reader, path, name, count, digest, binding_raw)
-    source, _compiled, extra = staging._sources(_Reader(owner), inputs.inputs)
+    source, _compiled, extra, compatibility_raw = _current_source_inputs(owner, inputs.inputs)
     require(source == inputs.source_inputs and extra == inputs.inputs.stage_value["bootstrapInputs"], "FINAL_SOURCE_INPUTS_CHANGED")
+    require(compatibility_raw == inputs.compatibility_raw, "FINAL_COMPATIBILITY_INPUTS_CHANGED")
     for directory, _kind, pin, _row, _label in reader.directories.values():
         require(tuple(directory.verify().identity) == pin, "FINAL_READ_DIRECTORY_CHANGED")
     _prefix_reader_check(reader)

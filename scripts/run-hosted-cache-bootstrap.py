@@ -1087,14 +1087,34 @@ def productive_post_authority_phase(seed, owner, private, context_raw, token, fe
         token = None
 
 
-def _phase_owned(owner, private, context_raw, token, fence, *, initial_git=None, final_seed=None):
+def productive_seal_authority_phase(seed, owner, private, context_raw, token, fence, *, initial_git):
+    try:
+        import hosted_initial_recipient_productive_receiver as R
+        R._checked_native_authority_bridge(seed, owner, private, context_raw, fence, edge="seal")
+        return _phase_owned(owner, private, context_raw, token, fence, initial_git=initial_git, receiver_seed=seed)
+    finally:
+        token = None
+
+
+def productive_before_authority_phase(seed, owner, private, context_raw, token, fence, *, initial_git):
+    try:
+        import hosted_initial_recipient_productive_receiver as R
+        R._checked_native_authority_bridge(seed, owner, private, context_raw, fence, edge="before")
+        return _phase_owned(owner, private, context_raw, token, fence, initial_git=initial_git, receiver_seed=seed)
+    finally:
+        token = None
+
+
+def _phase_owned(owner, private, context_raw, token, fence, *, initial_git=None, final_seed=None, receiver_seed=None):
     custody_phase = None
     collect_phase = None
     tail_phase = None
     before_phase = None
     use_phase = None
     final_productive_phase = None
+    receiver_phase = None
     try:
+        require(final_seed is None or receiver_seed is None, "BOOTSTRAP_EXCLUSIVE_SEED_ROUTE")
         context = origin.parse(context_raw)
         if context.get("scope") == INITIAL_PROVIDER_PUBLIC_CONTEXT_SCOPE:
             require(token is None, "BOOTSTRAP_PUBLIC_USE_TOKEN_FORBIDDEN")
@@ -1110,6 +1130,10 @@ def _phase_owned(owner, private, context_raw, token, fence, *, initial_git=None,
             import hosted_initial_recipient_productive_custody as PC
             owner.enter_final_productive_phase(final_seed, context_raw, started, work_end, final_end)
             final_productive_phase = (started, work_end, final_end, old_limits)
+        elif receiver_seed is not None:
+            import hosted_initial_recipient_productive_receiver as R
+            owner.enter_receiver_phase(receiver_seed, context_raw, started, work_end, final_end)
+            receiver_phase = (started, work_end, final_end, old_limits)
         elif managed:
             require(fence.enter_phase(owner, started) == (work_end, final_end), "BOOTSTRAP_INITIAL_ENTRY_PHASE")
         elif context.get("scope") == INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE:
@@ -1131,11 +1155,13 @@ def _phase_owned(owner, private, context_raw, token, fence, *, initial_git=None,
             owner.work_limit, owner.final_limit = work_end, final_end
         invocation = uuid.uuid4().hex
         argv = (PC._native_argv(final_seed, context_raw, final_productive_phase[:3]) if final_productive_phase is not None else
+            R._native_argv(receiver_seed, context_raw, receiver_phase[:3]) if receiver_phase is not None else
             phase_command(context_raw, use_caps=use_phase[:3]) if use_phase is not None else
             phase_command(context_raw, before_caps=before_phase[:3]) if before_phase is not None else
             phase_command(context_raw))
         environment = (_installed_git_environment(child_environment(private.path), initial_git)
-            if final_productive_phase is not None else _initial_service_environment(private.path, context, initial_git))
+            if final_productive_phase is not None or receiver_phase is not None else
+            _initial_service_environment(private.path, context, initial_git))
         env = processes.ownership_environment(environment,
             context["job"], invocation,
             str(private.path), str(private.path / "control-home"), allow_new_context=True)
@@ -1163,6 +1189,12 @@ def _phase_owned(owner, private, context_raw, token, fence, *, initial_git=None,
                 owner.leave_final_productive_phase(*final_productive_phase)
             except BaseException as restore_error:
                 owner.error("productive-final-phase-setup-return", restore_error, unknown=True)
+        if receiver_phase is not None:
+            owner.error("productive-receiver-phase-setup", error)
+            try:
+                owner.leave_receiver_phase(*receiver_phase)
+            except BaseException as restore_error:
+                owner.error("productive-receiver-phase-setup-return", restore_error, unknown=True)
         if custody_phase is not None:
             owner.error("custody-phase-setup", error)
             try:
@@ -1223,7 +1255,9 @@ def _phase_owned(owner, private, context_raw, token, fence, *, initial_git=None,
             env[origin.wire.TOKEN_ENV], token = token, None
         row["launchMinimumNs"] = fence.now(limit=work_end)
         argv = (PC._native_argv(final_seed, context_raw, final_productive_phase[:3], row["launchMinimumNs"])
-            if final_productive_phase is not None else phase_command(context_raw, row["launchMinimumNs"], use_caps=use_phase[:3])
+            if final_productive_phase is not None else
+            R._native_argv(receiver_seed, context_raw, receiver_phase[:3], row["launchMinimumNs"])
+            if receiver_phase is not None else phase_command(context_raw, row["launchMinimumNs"], use_caps=use_phase[:3])
             if use_phase is not None else phase_command(context_raw, row["launchMinimumNs"], before_caps=before_phase[:3])
             if before_phase is not None else phase_command(context_raw, row["launchMinimumNs"]))
         row["launchArgv"] = argv
@@ -1278,7 +1312,7 @@ def _phase_owned(owner, private, context_raw, token, fence, *, initial_git=None,
                     remaining = max(0, drain_end - time.monotonic())
                 except BaseException as error:
                     owner.error("drain-fence", error)
-                    if final_productive_phase is None and context.get("scope") not in (INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE,
+                    if final_productive_phase is None and receiver_phase is None and context.get("scope") not in (INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE,
                             INITIAL_COLLECT_AUTHORITY_CONTEXT_SCOPE, INITIAL_TAIL_AUTHORITY_CONTEXT_SCOPE,
                             INITIAL_BEFORE_AUTHORITY_CONTEXT_SCOPE, INITIAL_PRODUCTIVE_USE_CONTEXT_SCOPE,
                             INITIAL_PROVIDER_PUBLIC_CONTEXT_SCOPE):
@@ -1357,6 +1391,11 @@ def _phase_owned(owner, private, context_raw, token, fence, *, initial_git=None,
                 owner.leave_final_productive_phase(*final_productive_phase)
             except BaseException as error:
                 owner.error("productive-final-phase-return", error, unknown=True)
+        elif receiver_phase is not None:
+            try:
+                owner.leave_receiver_phase(*receiver_phase)
+            except BaseException as error:
+                owner.error("productive-receiver-phase-return", error, unknown=True)
         elif managed:
             try:
                 fence.leave_phase(owner)
@@ -13277,7 +13316,10 @@ def guarded(operation):
                              INITIAL_CUSTODY_AUTHORITY_ACK_SCOPE, initial_use.PRIVATE_ACK, initial_use.PUBLIC_ACK,
                              "INITIAL_RECIPIENT_PRODUCTIVE_PRE_EXPORT_AUTHORITY_POST_CLOSE_ACK_V1",
                              "INITIAL_RECIPIENT_PRODUCTIVE_POST_EXPORT_AUTHORITY_POST_CLOSE_ACK_V1",
-                             "INITIAL_RECIPIENT_PRODUCTIVE_CRYPTO_POST_CLOSE_ACK_V1"):
+                             "INITIAL_RECIPIENT_PRODUCTIVE_CRYPTO_POST_CLOSE_ACK_V1",
+                             "INITIAL_RECIPIENT_PRODUCTIVE_SEAL_AUTHORITY_POST_CLOSE_ACK_V1",
+                             "INITIAL_RECIPIENT_PRODUCTIVE_BEFORE_AUTHORITY_POST_CLOSE_ACK_V1",
+                             "INITIAL_RECIPIENT_PRODUCTIVE_TAIL_POST_OWNER_CLOSE_ACK_V1"):
         value["closedNs"] = observed
     raw = origin.encoded(value)
     require(len(raw) <= ACK_LIMIT and sys.stdout.buffer.write(raw) == len(raw), "BOOTSTRAP_ACK_WRITE")

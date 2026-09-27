@@ -9,6 +9,7 @@ const fs = require('node:fs');
 const paths = require('node:path');
 const {setTimeout, clearTimeout} = require('node:timers');
 const D = require('./hosted-initial-artifact-action-data.cjs');
+const ProductiveData = require('./hosted-initial-artifact-productive-action-data.cjs');
 const Reader = require('./hosted-initial-artifact-reader.cjs');
 const Observer = require('./hosted-initial-artifact-observer.cjs');
 const Transport = require('./hosted-initial-artifact-transport.cjs');
@@ -28,6 +29,17 @@ const SEED = Object.freeze(['P2PKIT_INITIAL_SEAL_SHA256', 'P2PKIT_INITIAL_SEAL_E
     'P2PKIT_INITIAL_BEFORE_SHA256', 'P2PKIT_INITIAL_BEFORE_OUTCOME']);
 const UPLOAD = Object.freeze(['P2PKIT_INITIAL_UPLOAD_SHA256', 'P2PKIT_INITIAL_UPLOAD_DIRECTORY_SHA256',
     'P2PKIT_INITIAL_UPLOAD_FILE_METADATA_SHA256', 'P2PKIT_INITIAL_UPLOAD_OWNER_CLOSE_SHA256', 'P2PKIT_INITIAL_UPLOAD_OUTCOME']);
+const LEGACY_ROUTE = Object.freeze({data: D, helper, productive: false, seed: SEED, upload: UPLOAD,
+    openReader: Reader.openReader, startField: 'sealEndNs', boundsField: 'originalWindow'});
+const PRODUCTIVE_ROUTE = Object.freeze({data: ProductiveData,
+    helper: path.join(__dirname, 'run-hosted-initial-recipient-productive-upload.py'), productive: true,
+    seed: Object.freeze(['P2PKIT_INITIAL_PRODUCTIVE_BEFORE_SHA256', 'P2PKIT_INITIAL_PRODUCTIVE_BEFORE_OUTCOME',
+        'P2PKIT_INITIAL_PRODUCTIVE_DEADLINE_SHA256', 'P2PKIT_INITIAL_PRODUCTIVE_DEADLINE_BASE64',
+        'P2PKIT_INITIAL_PRODUCTIVE_SEAL_OUTCOME']),
+    upload: Object.freeze(['P2PKIT_INITIAL_PRODUCTIVE_UPLOAD_SHA256','P2PKIT_INITIAL_PRODUCTIVE_UPLOAD_DIRECTORY_SHA256',
+        'P2PKIT_INITIAL_PRODUCTIVE_UPLOAD_FILE_METADATA_SHA256','P2PKIT_INITIAL_PRODUCTIVE_UPLOAD_OWNER_CLOSE_SHA256',
+        'P2PKIT_INITIAL_PRODUCTIVE_UPLOAD_OUTCOME']), openReader: Reader.openProductiveReader,
+    startField: 'uploadStartByNs', boundsField: 'deadline'});
 const ANCESTORS = Object.freeze(['P2PKIT_AUDIT_JOB_ID', 'P2PKIT_AUDIT_OWNERSHIP_CHAIN', 'P2PKIT_AUDIT_OWNERSHIP_DOMAINS',
     'P2PKIT_AUDIT_STATE_DIR', 'GRADLE_USER_HOME']);
 const NATIVE = Object.freeze(['SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT']);
@@ -53,7 +65,8 @@ function frame(kind, raw) {
     return Buffer.concat([header, raw]);
 }
 
-function openFinite({mode, python, kind, environment, signal, originalEndNs, checkpoint, poison}) {
+function openFinite({mode, python, kind, environment, signal, originalEndNs, checkpoint, poison}, route) {
+    const D = route.data, helper = route.helper;
     // Private fixed finish/after process owner. The public Action exports no
     // handle factory; these arguments come only from its one original chain.
     need(mode === 'finish' || mode === 'after', 'FINITE_MODE');
@@ -261,7 +274,8 @@ function openFinite({mode, python, kind, environment, signal, originalEndNs, che
         }});
 }
 
-async function main() {
+async function mainFixed(route) {
+    const D = route.data, SEED = route.seed, UPLOAD = route.upload;
     process.exitCode = 125; // A pending/rejected chain never silently succeeds.
     if (used) {
         reentered = true;
@@ -357,7 +371,7 @@ async function main() {
             absolute(output), 'FIXED_TOOLS_AND_OUTPUT');
         const kind = process.env.GITHUB_JOB === 'initial-recipient-gate' ? 'gate' :
             process.env.GITHUB_JOB === 'populate' ? 'worker' : null;
-        need(kind !== null && process.env.GITHUB_WORKSPACE === workspace, 'ORIGINAL_JOB_WORKSPACE');
+        need(kind !== null && (!route.productive || kind === 'worker') && process.env.GITHUB_WORKSPACE === workspace, 'ORIGINAL_JOB_WORKSPACE');
         const names = [...IDENTITY, ...SEED, ...ANCESTORS, ...NATIVE, ...(mode === 'after' ? UPLOAD : []),
             'INPUT_MODE', 'INPUT_PYTHON', 'INPUT_TOOL-PATH', 'GITHUB_OUTPUT', 'GITHUB_RETENTION_DAYS',
             ...(mode === 'upload' ? ['ACTIONS_RUNTIME_TOKEN', 'ACTIONS_RESULTS_URL'] : [])];
@@ -385,7 +399,7 @@ async function main() {
             const service = Object.freeze({ACTIONS_RUNTIME_TOKEN: originalEnvironment.ACTIONS_RUNTIME_TOKEN,
                 ACTIONS_RESULTS_URL: originalEnvironment.ACTIONS_RESULTS_URL});
             need(Object.values(service).every(safeString), 'ORIGINAL_RESULTS_CREDENTIALS');
-            retained.reader = Reader.openReader({python, kind, environment: env, signal});
+            retained.reader = route.openReader({python, kind, environment: env, signal});
             const reader = retained.reader;
             pinHandle(reader, ['ready', 'stream', 'bind', 'completion', 'cancel', 'finalFrame']);
             completions.push(reader.completion);
@@ -396,8 +410,8 @@ async function main() {
             bounds = D.localBounds(readyValue, readyReturn.preSpawnLocalNs);
             endNs = bounds.closeEndNs; arm(); checkpoint(bounds.startByNs);
             const bound = pin(reader.bind({readySha256: D.sha(readyRaw), beforeSha256: readyValue.beforeSha256,
-                firstRawNs: D.decimal(readyValue.firstRawNs), sealEndNs: D.integer(readyValue.originalWindow.sealEndNs),
-                uploadEndNs: D.integer(readyValue.originalWindow.uploadEndNs), zipBytes: readyValue.zipBytes}));
+                firstRawNs: D.decimal(readyValue.firstRawNs), [route.startField]: D.integer(readyValue[route.boundsField][route.startField]),
+                uploadEndNs: D.integer(readyValue[route.boundsField].uploadEndNs), zipBytes: readyValue.zipBytes}));
             D.fields(bound, ['startByNs', 'workEndNs', 'closeEndNs']);
             need(bound.startByNs === bounds.startByNs && bound.workEndNs === bounds.workEndNs &&
                 bound.closeEndNs === bounds.closeEndNs, 'ORIGINAL_READER_MAPPING');
@@ -422,10 +436,10 @@ async function main() {
             expectedArtifactId = transportValue.artifactId;
             checkpoint(bounds.workEndNs);
             retained.finite = openFinite({mode: 'finish', python, kind, environment: env, signal,
-                originalEndNs: bounds.closeEndNs, checkpoint, poison: fail});
+                originalEndNs: bounds.closeEndNs, checkpoint, poison: fail}, route);
         } else {
             retained.finite = openFinite({mode: 'after', python, kind, environment: env, signal,
-                originalEndNs: null, checkpoint, poison: fail});
+                originalEndNs: null, checkpoint, poison: fail}, route);
             const finite = retained.finite;
             completions.push(finite.completion);
             endNs = finite.preSpawnLocalNs + 15n * NS; arm();
@@ -471,4 +485,7 @@ async function main() {
     }
 }
 
-module.exports = Object.freeze({main});
+// Named entries only. Switching names cannot retry a failed original owner.
+async function main() { return mainFixed(LEGACY_ROUTE); }
+async function mainProductive() { return mainFixed(PRODUCTIVE_ROUTE); }
+module.exports = Object.freeze({main, mainProductive});

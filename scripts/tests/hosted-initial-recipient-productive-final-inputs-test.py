@@ -91,7 +91,7 @@ class FinalInputModels(ModelCase):
             (), ROOT / "model-initializer", (7, 8), b"model-producer-return",
             (("custody-request.json", b"model-actual-request"),), object())
         self.derived = A.ProviderInputs({"source": {"model": "not-admitted"}}, object(), self.handoff,
-            {"model": H}, b"model-staging")
+            {"model": H}, b"model-staging", b"model-original-compatibility")
         self.rows = tuple({"site": site, "model": True} for site in CD.USE_SITES)
         self.reader = SimpleNamespace(owner=self.owner, first=self.first, handoff=self.handoff,
             use_rows=self.rows, use_pins=(PC.N._history_graph(self.rows),))
@@ -292,6 +292,14 @@ class FinalInputModels(ModelCase):
         object.__setattr__(self.derived, "__dict__", dict(dictionary))
         first = self.refuses(A.checked_final_productive_inputs, result)
         object.__setattr__(self.derived, "__dict__", dictionary)
+        self.assertIs(self.refuses(A.checked_final_productive_inputs, result), first)
+
+    def test_original_compatibility_bytes_are_pinned_with_the_registered_derived_inputs(self):
+        result = self.result()
+        original = self.derived.compatibility_raw
+        object.__setattr__(self.derived, "compatibility_raw", b"model-substituted-compatibility")
+        first = self.refuses(A.checked_final_productive_inputs, result)
+        object.__setattr__(self.derived, "compatibility_raw", original)
         self.assertIs(self.refuses(A.checked_final_productive_inputs, result), first)
 
     def test_nested_derived_mutation_during_callback_is_rechecked(self):

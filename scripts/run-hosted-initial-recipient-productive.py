@@ -73,13 +73,13 @@ def main():
                 command.add_argument("--" + flag, required=True)
         args = parser.parse_args()
         if args.operation == "produce":
-            P.B.guarded(lambda signals: P.productive(lambda: P.B.cancellation(signals)))
+            P.B.guarded(lambda signals: P.productive_outputs(lambda: P.B.cancellation(signals)))
         elif args.operation == "custody-export":
             P.B.guarded(lambda signals: P.custody_export(lambda: P.B.cancellation(signals)))
         elif args.operation == "custody-collect":
             P.B.guarded(lambda signals: P.custody_collect(lambda: P.B.cancellation(signals)))
         elif args.operation in ("prepare-save", "after-save", "prepare-probe", "after-probe"):
-            P.B.guarded(lambda signals: P.step(args.operation, lambda: P.B.cancellation(signals)))
+            P.B.guarded(lambda signals: P.step_outputs(args.operation, lambda: P.B.cancellation(signals)))
         else:
             def integer(name):
                 value = getattr(args, name)

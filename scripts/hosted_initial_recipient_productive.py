@@ -892,3 +892,340 @@ def custody_collect(cancelled):
     PC, _CD = _final_modules()
     result = PC.finish_final_collect(prepared)
     return _ProductiveOutputFence(result, "custody-collect").append()
+
+
+# Separate five-route output bridge. The original productive/token helpers,
+# adapter, final crypto fence and both continuity encoders above are unchanged.
+_STEP_OUTPUTS, _STEP_OUTPUT_CALLS, _STEP_OUTPUT_RESULTS = {}, {}, {}
+_STEP_OUTPUT_ADAPTER = []
+_STEP_OUTPUT_ROUTES = (
+    ("produce", "OUTPUT_SCOPE", ("handoffSha256", "producerReturnSha256")),
+    ("prepare-save", "SAVE_PREPARATION_SCOPE", ("savePreparationSha256",)),
+    ("after-save", "AFTER_SAVE_SCOPE", ("afterSaveSha256",)),
+    ("prepare-probe", "PROBE_PREPARATION_SCOPE", ("probePreparationSha256",)),
+    ("after-probe", "PROBE_RESULT_SCOPE", ("probeSha256",)),
+)
+
+
+def _step_output_bytes(operation, values):
+    """Closed DATA only; cannot emit a legacy/final/receiver output or outcome."""
+    require(type(operation) is str and type(values) is dict, "STEP_OUTPUT_ENCODING")
+    names = next((fields for route, _scope, fields in _STEP_OUTPUT_ROUTES if route == operation), None)
+    require(names is not None and set(values) == set(names) and all(type(name) is str for name in values) and
+        all(type(value) is str and re.fullmatch(r"[0-9a-f]{64}", value) for value in values.values()),
+        "STEP_OUTPUT_ENCODING")
+    return "".join(name + "=" + values[name] + "\n" for name in sorted(values)).encode("ascii")
+
+
+def _step_output_static(_error=O.OriginError):
+    # The guard cannot use a replaced P.require to approve that replacement.
+    if not all(getattr(owner, name, None) is original for owner, name, original in _STEP_OUTPUT_LOAD):
+        raise _error("INITIAL_PRODUCTIVE_STEP_OUTPUT_LOAD_CHANGED")
+
+
+def _step_output_modules():
+    # Adapter imports P. Delay this ordinary import until P is fully loaded,
+    # but take all static anchors BEFORE any productive call/callback.
+    _step_output_static()
+    import hosted_initial_recipient_productive_adapter as adapter
+    import hosted_initial_recipient_productive_data as data
+    _step_output_static()
+    require(adapter.P is sys.modules[__name__] and adapter.C is C and adapter.N is N and adapter.B is B and
+        adapter.O is O and adapter.D is data and C.N is N and N.native is B and C.native is B and
+        N.continuity is C.C and sys.modules.get(adapter.__name__) is adapter and
+        sys.modules.get(data.__name__) is data and
+        Path(adapter.__file__).resolve() == SCRIPTS / "hosted_initial_recipient_productive_adapter.py" and
+        Path(data.__file__).resolve() == SCRIPTS / "hosted_initial_recipient_productive_data.py",
+        "STEP_OUTPUT_CANONICAL_GRAPH")
+    if not _STEP_OUTPUT_ADAPTER:
+        pins = tuple((owner, name, getattr(owner, name)) for owner, names in (
+            (adapter, ("P", "C", "N", "B", "O", "D", "ProductiveHandoff", "_StepReturn", "_OutputFence",
+                "_ParentState", "_Run", "_Window", "_OUTPUTS", "_HANDOFFS", "_RUNS", "_PARENTS", "_PINS", "_WINDOWS",
+                "_RUN_LATCHES", "_FAILURES", "_OWNERS", "_RETURNS", "_OWNER_RETURNS", "_SEQUENCES", "_PHASES",
+                "_state", "_original", "_pin", "_pin_parts", "_data_pins", "_check_data_pins", "_progress", "_poison",
+                "_current", "_environment", "_run_claims", "_owner_state", "_known", "_pending", "_fail", "produce",
+                "complete_productive_handoff", "checked_productive_handoff", "prepare_save", "after_save",
+                "prepare_probe", "after_probe", "_step_output", "_register_output")),
+            (adapter._OutputFence, ("_checked", "now", "clock", "hard_end")),
+            (adapter._Window, ("_state", "_sample", "now")),
+            (data, tuple(scope for _operation, scope, _names in _STEP_OUTPUT_ROUTES)),
+        ) for name in names)
+        _STEP_OUTPUT_ADAPTER.append((adapter, data, pins, N._history_graph(adapter._SEQUENCES, adapter._PHASES)))
+    require(len(_STEP_OUTPUT_ADAPTER) == 1, "STEP_OUTPUT_ADAPTER_ONCE")
+    original = _STEP_OUTPUT_ADAPTER[0]
+    require(original[0] is adapter and original[1] is data and
+        all(getattr(owner, name, None) is value for owner, name, value in original[2]),
+        "STEP_OUTPUT_ADAPTER_CHANGED")
+    N._check_history(original[3])
+    return original
+
+
+class _StepOutputFence:
+    """Precall anchors, original returned tuple, one append, two late checks.
+
+    No clocks/windows/owners are constructed here. Only the adapter's registered
+    terminal result and its original RAW/LOCAL fence may service these checks.
+    """
+    __slots__ = ("_binding",)
+
+    def __init__(self, operation, cancelled):
+        _step_output_static()
+        require(type(self) is _StepOutputFence and type(operation) is str and
+            operation in tuple(row[0] for row in _STEP_OUTPUT_ROUTES) and callable(cancelled), "STEP_OUTPUT_ENTRY")
+        state = {"phase": "NEW", "failure": None, "busy": True, "cancelling": False,
+            "checks": 0, "last": 0, "helper_returned": False, "binding": None}
+        saved = (self, state)
+        require(id(self) not in _STEP_OUTPUTS, "STEP_OUTPUT_NEW")
+        _STEP_OUTPUTS[id(self)] = saved
+        self._binding = None
+        previous = _STEP_OUTPUT_CALLS.get(operation)
+        if previous is not None:
+            error = O.OriginError("INITIAL_PRODUCTIVE_STEP_OUTPUT_CALL_REUSED")
+            self._poison(previous, error)
+            raise self._poison(saved, error)
+        _STEP_OUTPUT_CALLS[operation] = saved
+        try:
+            modules = _step_output_modules()
+            self._binding = (operation, cancelled, modules)
+            state["binding"] = self._binding
+            self._static(saved)
+        except BaseException as error:
+            raise self._poison(saved, error)
+        finally:
+            state["busy"] = False
+
+    @staticmethod
+    def _poison(saved, error):
+        if saved[1]["failure"] is None:
+            saved[1]["failure"] = error
+        return saved[1]["failure"]
+
+    def _static(self, saved):
+        _step_output_static()
+        state = saved[1]
+        require(type(self) is _StepOutputFence and _STEP_OUTPUTS.get(id(self)) is saved and
+            saved[0] is self and self._binding is state["binding"] and self._binding is not None and
+            _STEP_OUTPUT_CALLS.get(self._binding[0]) is saved, "STEP_OUTPUT_REGISTRY_CHANGED")
+        if state["failure"] is not None:
+            raise state["failure"]
+        require(_step_output_modules() is self._binding[2], "STEP_OUTPUT_PRECALL_ANCHOR_CHANGED")
+
+    def _begin(self):
+        saved = _STEP_OUTPUTS.get(id(self))
+        require(type(saved) is tuple and saved[0] is self, "STEP_OUTPUT_ORIGINAL")
+        try:
+            _step_output_static()
+            self._static(saved)
+            require(not saved[1]["busy"], "STEP_OUTPUT_REENTRY")
+            saved[1]["busy"] = True
+            return saved
+        except BaseException as error:
+            raise self._poison(saved, error)
+
+    def _cancelled(self):
+        # The unchanged adapter can consult cancellation during its call AND
+        # later during the original output window. This is not a new signal.
+        saved = _STEP_OUTPUTS.get(id(self))
+        require(type(saved) is tuple and saved[0] is self, "STEP_OUTPUT_ORIGINAL")
+        try:
+            self._static(saved)
+            require(not saved[1]["cancelling"], "STEP_OUTPUT_CANCEL_REENTRY")
+            saved[1]["cancelling"] = True
+            result = self._binding[1]()
+            _step_output_static()
+            self._static(saved)
+            return result
+        except BaseException as error:
+            raise self._poison(saved, error)
+        finally:
+            saved[1]["cancelling"] = False
+
+    def run(self):
+        saved = self._begin()
+        try:
+            require(saved[1]["phase"] == "NEW", "STEP_OUTPUT_CALL_ONCE")
+            saved[1]["phase"] = "CALLING"
+        except BaseException as error:
+            raise self._poison(saved, error)
+        finally:
+            saved[1]["busy"] = False
+        try:
+            self._static(saved)
+            operation = self._binding[0]
+            returned = productive(self._cancelled) if operation == "produce" else step(operation, self._cancelled)
+            # Both genuine token-consuming frames have ACTUALLY returned.
+            _step_output_static()
+            self._static(saved)
+            _credential_free()
+            saved[1]["helper_returned"] = True
+            self._adopt(returned)
+            return self.append()
+        except BaseException as error:
+            raise self._poison(saved, error)
+
+    def _adopt(self, returned):
+        saved = self._begin()
+        state = saved[1]
+        try:
+            require(state["phase"] == "CALLING" and state["helper_returned"] is True,
+                "STEP_OUTPUT_HELPER_NOT_RETURNED")
+            require(type(returned) is tuple and len(returned) == 3, "STEP_OUTPUT_RETURN_TUPLE")
+            public, fence, end = returned
+            operation, cancelled, modules = self._binding
+            adapter, data = modules[:2]
+            require(type(fence) is adapter._OutputFence and type(public) is dict and type(end) is int and end > 0,
+                "STEP_OUTPUT_RETURN_KIND")
+            O.integer(end)
+            registration = adapter._OUTPUTS.get(id(fence))
+            require(type(registration) is tuple and len(registration) == 5 and registration[0] is fence,
+                "STEP_OUTPUT_ORIGINAL_ADAPTER_RETURN")
+            self._static(saved)
+            result, original_state = fence._checked()
+            self._static(saved)
+            require(adapter._OUTPUTS.get(id(fence)) is registration and registration[1] is result and
+                registration[2] is original_state and type(result) is
+                    (adapter.ProductiveHandoff if operation == "produce" else adapter._StepReturn) and
+                type(result.__dict__) is dict and set(result.__dict__) == {"public_result", "fence", "hard_end_ns"} and
+                result.public_result is public and result.fence is fence and result.hard_end_ns is end and
+                type(original_state) is adapter._ParentState and type(original_state.run) is adapter._Run and
+                original_state.run.operation == operation and original_state.run.terminal is result and
+                original_state.run.current is original_state and original_state.returned is None and
+                original_state.name == adapter._SEQUENCES[operation][-1] and original_state.ends[0] == end,
+                "STEP_OUTPUT_ORIGINAL_TERMINAL")
+            _route, scope_name, names = next(row for row in _STEP_OUTPUT_ROUTES if row[0] == operation)
+            require(set(public) == {"scope", "budgetAcceptance", "testAcceptance", "exportSaveAuthority", *names} and
+                public["scope"] == getattr(data, scope_name) and public["budgetAcceptance"] == "NOT_ADMITTED" and
+                public["testAcceptance"] == "NOT_PERFORMED" and public["exportSaveAuthority"] is False,
+                "STEP_OUTPUT_PUBLIC_FIELDS")
+            emitted = {name: public[name] for name in names}
+            _step_output_bytes(operation, emitted)
+            previous = _STEP_OUTPUT_RESULTS.get(id(result))
+            if previous is not None:
+                error = O.OriginError("INITIAL_PRODUCTIVE_STEP_OUTPUT_RESULT_REUSED")
+                self._poison(previous[0], error)
+                raise error
+            _STEP_OUTPUT_RESULTS[id(result)] = (saved, result)
+            self._binding = (operation, cancelled, modules, returned, public, fence, end, result, result.__dict__,
+                original_state, original_state.run, registration, emitted,
+                N._history_graph(returned, result.__dict__, public, emitted), tuple(public.items()), tuple(emitted.items()))
+            state["binding"] = self._binding
+            self._current(saved)
+            state["phase"] = "READY"
+        except BaseException as error:
+            raise self._poison(saved, error)
+        finally:
+            state["busy"] = False
+
+    def _current(self, saved):
+        self._static(saved)
+        require(saved[1]["busy"] and saved[1]["helper_returned"] is True and len(self._binding) == 16,
+            "STEP_OUTPUT_RECEIVED_BINDING")
+        (operation, _cancelled, modules, returned, public, fence, end, result, dictionary,
+            original_state, original_run, registration, emitted, graph, public_items, emitted_items) = self._binding
+        adapter = modules[0]
+
+        def passive():
+            _step_output_static()
+            self._static(saved)
+            result_binding = _STEP_OUTPUT_RESULTS.get(id(result))
+            require(type(fence) is adapter._OutputFence and type(result) is
+                    (adapter.ProductiveHandoff if operation == "produce" else adapter._StepReturn) and
+                type(original_state) is adapter._ParentState and type(original_run) is adapter._Run and
+                type(result_binding) is tuple and result_binding[0] is saved and result_binding[1] is result and
+                type(returned) is tuple and len(returned) == 3 and returned[0] is public and returned[1] is fence and
+                returned[2] is end and result.__dict__ is dictionary and result.public_result is public and
+                result.fence is fence and result.hard_end_ns is end and type(end) is int and
+                adapter._OUTPUTS.get(id(fence)) is registration and registration[0] is fence and
+                registration[1] is result and registration[2] is original_state and
+                original_state.run is original_run and original_run.operation == operation and
+                original_run.current is original_state and original_run.terminal is result and
+                original_state.returned is None and original_state.ends[0] == end,
+                "STEP_OUTPUT_ORIGINAL_CHANGED")
+            require(type(public) is dict and type(emitted) is dict and len(public) == len(public_items) and
+                len(emitted) == len(emitted_items) and all(name is old_name and value is old_value
+                    for (name, value), (old_name, old_value) in zip(public.items(), public_items)) and
+                all(name is old_name and value is old_value
+                    for (name, value), (old_name, old_value) in zip(emitted.items(), emitted_items)),
+                "STEP_OUTPUT_ORIGINAL_DATA_CHANGED")
+            _credential_free()
+            N._check_history(graph)
+
+        passive()
+        checked, state = fence._checked()
+        require(checked is result and state is original_state, "STEP_OUTPUT_ADAPTER_CHECK_CHANGED")
+        passive()
+        return fence, end, public, emitted
+
+    def _append_guard(self):
+        saved = self._begin()
+        try:
+            require(saved[1]["phase"] == "APPENDING" and saved[1]["checks"] == 0, "STEP_OUTPUT_APPEND_PHASE")
+            fence, end, _public, _emitted = self._current(saved)
+            observed = fence.now(final=True, minimum=0, limit=end)
+            require(type(observed) is int and saved[1]["last"] <= observed < end, "STEP_OUTPUT_ORIGINAL_CLOCK")
+            saved[1]["last"] = observed
+            self._current(saved)
+        except BaseException as error:
+            raise self._poison(saved, error)
+        finally:
+            saved[1]["busy"] = False
+
+    def append(self):
+        saved = self._begin()
+        try:
+            require(saved[1]["phase"] == "READY" and saved[1]["checks"] == 0, "STEP_OUTPUT_APPEND_ONCE")
+            _fence, end, public, emitted = self._current(saved)
+            raw = _step_output_bytes(self._binding[0], emitted)
+            saved[1]["phase"] = "APPENDING"
+        except BaseException as error:
+            raise self._poison(saved, error)
+        finally:
+            saved[1]["busy"] = False
+        try:
+            C.C._append_output_bytes(raw, self._append_guard)
+            self._append_guard()
+            self._static(saved)
+            require(saved[1]["phase"] == "APPENDING" and saved[1]["checks"] == 0, "STEP_OUTPUT_APPEND_RETURN")
+            saved[1]["phase"] = "OUTPUT"
+            return public, self, end
+        except BaseException as error:
+            raise self._poison(saved, error)
+
+    def now(self, *, final=False, minimum=0, limit=None):
+        saved = self._begin()
+        try:
+            require(saved[1]["phase"] == "OUTPUT" and final is True and type(minimum) is int and minimum == 0 and
+                type(limit) is int and limit == self._binding[6] and type(saved[1]["checks"]) is int and
+                0 <= saved[1]["checks"] < 2, "STEP_OUTPUT_EXACT_LATE_CHECK")
+            saved[1]["checks"] += 1
+            fence, end, _public, _emitted = self._current(saved)
+            observed = fence.now(final=True, minimum=0, limit=end)
+            require(type(observed) is int and saved[1]["last"] <= observed < end, "STEP_OUTPUT_ORIGINAL_CLOCK")
+            saved[1]["last"] = observed
+            self._current(saved)
+            return observed
+        except BaseException as error:
+            raise self._poison(saved, error)
+        finally:
+            saved[1]["busy"] = False
+
+
+def productive_outputs(cancelled):
+    return _StepOutputFence("produce", cancelled).run()
+
+
+def step_outputs(command, cancelled):
+    return _StepOutputFence(command, cancelled).run()
+
+
+# Capture source-owned P/writer identities at module load, not after a callback.
+_STEP_OUTPUT_LOAD = tuple((owner, name, getattr(owner, name)) for owner, names in (
+    (sys.modules[__name__], ("C", "N", "B", "O", "require", "productive", "step", "_credential_free",
+        "_STEP_OUTPUTS", "_STEP_OUTPUT_CALLS", "_STEP_OUTPUT_RESULTS", "_STEP_OUTPUT_ADAPTER", "_STEP_OUTPUT_ROUTES",
+        "_StepOutputFence", "_step_output_static", "_step_output_modules", "_step_output_bytes")),
+    (C, ("N", "native", "C", "copy_primary", "custody_authority", "retire_primary_for_productive")),
+    (C.C, ("_append_output_bytes", "_output_bytes", "_productive_output_bytes")),
+    (N, ("native", "continuity", "_history_graph", "_check_history")),
+    (_StepOutputFence, ("_static", "_begin", "_poison", "_cancelled", "run", "_adopt", "_current",
+        "_append_guard", "append", "now")),
+) for name in names)

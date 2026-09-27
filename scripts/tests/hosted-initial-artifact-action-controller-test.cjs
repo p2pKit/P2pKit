@@ -8,6 +8,7 @@ const {EventEmitter} = require('node:events');
 const {Readable, Writable} = require('node:stream');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 const D = require('../hosted-initial-artifact-action-data.cjs');
+const ProductiveData = require('../hosted-initial-artifact-productive-action-data.cjs');
 const {finiteFixture, headers, sha, NS, NOW} = require('./hosted-initial-artifact-action-fixtures.cjs');
 const source = fs.readFileSync(path.join(__dirname, '../hosted-initial-artifact-action.cjs'), 'utf8');
 const cases = [], test = (name, body) => cases.push({name, body});
@@ -124,6 +125,7 @@ function model(mode = 'upload', config = {}) {
     }}, 'node:timers': {setTimeout(callback, ms) {
         const id = ++timerId; timers.set(id, {callback, end: now + BigInt(ms) * 1000000n}); return id;
     }, clearTimeout(id) { timers.delete(id); }}, './hosted-initial-artifact-action-data.cjs': D,
+    './hosted-initial-artifact-productive-action-data.cjs': ProductiveData,
     './hosted-initial-artifact-reader.cjs': {openReader(supplied) {
         calls.push('reader-open'); options.reader = supplied;
         supplied.signal.addEventListener('abort', settleReader, {once: true}); return reader;

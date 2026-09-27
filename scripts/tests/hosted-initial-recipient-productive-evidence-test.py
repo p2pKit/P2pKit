@@ -219,7 +219,8 @@ class ProductiveFacadeModels(unittest.TestCase):
                 "matchSha256": sha(self.match_raw), "preExportReturnSha256": "a" * 64, "preExportIndexSha256": "b" * 64},
             "productive": {key: "success" if key.endswith("StepOutcome") else "c" * 64 for key in
                 ("originalProposalSha256", "producerHandoffSha256", "producerReturnSha256", "producerStepOutcome",
-                 "afterSaveSha256", "afterSaveStepOutcome", "probeSha256", "afterProbeStepOutcome", "prefixRetentionSha256")}}
+                 "afterSaveSha256", "afterSaveStepOutcome", "probeSha256", "afterProbeStepOutcome", "prefixRetentionSha256",
+                 "compatibilityInputsSha256")}}
         inputs["copy"] = {"scope": "INITIAL_RECIPIENT_PRODUCTIVE_FIXED30_ARCHIVE_BINDING_V1",
             "groups": [{"ordinal": part.ordinal, "group": part.group, "map": {"name": part.map.relative,
                 "bytes": part.map.bytes, "sha256": part.map.sha256}, "dataFiles": 1, "dataBytes": 9} for part in parts],
@@ -250,6 +251,8 @@ class ProductiveFacadeModels(unittest.TestCase):
         self.assertEqual(manifest["copy"]["archiveNativeNodes"], 92)
         self.assertEqual(manifest["testAcceptance"], "NOT_PERFORMED")
         self.assertEqual(manifest["budgetAcceptance"], "NOT_ADMITTED")
+        self.assertEqual(manifest["productive"]["compatibilityInputsSha256"], "c" * 64)
+        self.assertLess(len(result.manifest_raw), CD.PUBLIC_LIMIT)
         self.assertIs(manifest["exportSaveAuthority"], False)
         self.assertEqual(self.backend_calls, ["validation", "export"])
 
@@ -355,6 +358,16 @@ class ProductiveFacadeModels(unittest.TestCase):
         object.__setattr__(self.view, "public_inputs", canonical(value))
         with self.assertRaises(Exception):
             self.export()
+
+    def test_actual_crypto_facade_rejects_missing_compatibility_digest_before_export(self):
+        self.validate()
+        self.archive_view()
+        value = json.loads(self.view.public_inputs)
+        del value["productive"]["compatibilityInputsSha256"]
+        object.__setattr__(self.view, "public_inputs", canonical(value))
+        with self.assertRaises(Exception):
+            self.export()
+        self.assertEqual(self.backend_calls, ["validation"])
 
     def test_duplicate_keyring_begin_poison_is_sticky(self):
         self.validate()

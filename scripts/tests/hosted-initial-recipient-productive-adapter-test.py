@@ -59,6 +59,7 @@ def fixture_module(name, filename):
 
 STAGE = fixture_module("initial_adapter_stage_fixtures", "hosted-initial-recipient-stages-test.py")
 LEGACY = fixture_module("initial_adapter_producer_fixtures", "hosted-cache-bootstrap-producer-test.py")
+COMPAT = fixture_module("initial_adapter_compatibility_fixtures", "hosted-cache-compatibility-test.py")
 SOURCE_NAMES = ("hosted_initial_recipient_productive_adapter.py", "hosted_initial_recipient_productive_data.py",
     "hosted_initial_recipient_productive.py", "hosted_cache_bootstrap_staging.py", "hosted_cache_bootstrap_custody.py",
     "hosted_cache_bootstrap_producer.py", "hosted_cache_bootstrap_producer_command.py",
@@ -376,8 +377,41 @@ class ClosedWrapperControls(unittest.TestCase):
         old, initial = object.__new__(C._Inputs), object.__new__(C._InitialInputs)
         self.assertEqual(S._bootstrap_sources(old), S.BOOTSTRAP_INPUTS)
         self.assertEqual(S._bootstrap_sources(initial), S.BOOTSTRAP_INPUTS + D.INITIAL_SOURCE_INPUTS)
-        self.assertEqual(len(D.INITIAL_SOURCE_INPUTS), 12)
+        # Original twelve plus the reviewed seven custody/evidence sources;
+        # neither ordinary provenance nor this exact ordered roster may drift.
+        self.assertEqual(D.INITIAL_SOURCE_INPUTS, (
+            "scripts/hosted_initial_recipient_productive.py",
+            "scripts/hosted_initial_recipient_use.py",
+            "scripts/hosted_initial_recipient_productive_adapter.py",
+            "scripts/hosted_initial_recipient_productive_data.py",
+            "scripts/run-hosted-initial-recipient.py",
+            "scripts/run-hosted-initial-recipient-custody.py",
+            "scripts/hosted_initial_recipient_before.py",
+            "scripts/hosted_initial_recipient_continuity.py",
+            "scripts/hosted_initial_recipient_public_origin.py",
+            "scripts/hosted_cache_provider_native.py",
+            "scripts/hosted_cache_provider_prepare.py",
+            "scripts/hosted_cache_provider_readback.py",
+            "scripts/hosted_initial_recipient_productive_custody.py",
+            "scripts/hosted_initial_recipient_productive_custody_data.py",
+            "scripts/hosted_initial_recipient_evidence.py",
+            "scripts/hosted_evidence.py",
+            "scripts/hosted_windows_evidence.py",
+            "scripts/run-hosted-initial-recipient-productive.py",
+            "scripts/run-hosted-cache-bootstrap.py"))
         self.assertEqual((F.FILE_LIMIT, F.TOTAL_LIMIT, F.MEMBER_LIMIT), (512 * 1024**2, 2 * 1024**3, 10000))
+
+    def test_initial_source_roster_rejects_declared_membership_and_order_changes(self):
+        self.test_source_hash_rosters_and_two_gib_engine_bounds_are_not_extended()
+        original = D.INITIAL_SOURCE_INPUTS
+        for case, changed in (
+                ("missing", original[:-1]),
+                ("extra", (*original, "scripts/not-an-admitted-source.py")),
+                ("reordered", (original[1], original[0], *original[2:])),
+                ("wrong-path", ("scripts/not-an-admitted-source.py", *original[1:]))):
+            with self.subTest(case=case), patch.object(D, "INITIAL_SOURCE_INPUTS", changed), \
+                    self.assertRaises(AssertionError):
+                self.test_source_hash_rosters_and_two_gib_engine_bounds_are_not_extended()
 
     def test_initializer_retired_local_keeps_exact_float_type(self):
         # capture_originals is only a DATA snapshot; these bytes deliberately
@@ -811,7 +845,7 @@ class AdapterMemoryModels(unittest.TestCase):
     def test_preparation_entry_latches_original_registered_input_mutation(self):
         owner = self.owner()
         reader, handoff = self.handoff(owner)
-        inputs = A.ProviderInputs({}, object(), handoff, {}, b"{}")
+        inputs = A.ProviderInputs({}, object(), handoff, {}, b"{}", b"MODEL_COMPATIBILITY")
         A._INPUTS[id(handoff)] = (inputs, reader, N._history_graph(inputs.__dict__), handoff.identity, A._data_pins(inputs))
         A._DERIVES[id(handoff)] = handoff, owner, handoff.identity
         original = inputs.__dict__
@@ -827,7 +861,7 @@ class AdapterMemoryModels(unittest.TestCase):
     def test_registered_input_class_mismatch_is_sticky_before_semantic_read(self):
         owner = self.owner()
         reader, handoff = self.handoff(owner)
-        inputs = A.ProviderInputs({}, object(), handoff, {}, b"{}")
+        inputs = A.ProviderInputs({}, object(), handoff, {}, b"{}", b"MODEL_COMPATIBILITY")
         A._INPUTS[id(handoff)] = (inputs, reader, N._history_graph(inputs.__dict__), handoff.identity, A._data_pins(inputs))
         class ForeignInputs:
             pass
@@ -1124,6 +1158,65 @@ class ConnectedSourceControls(unittest.TestCase):
             self.assertIn(required, fresh)
         derive = section("hosted_initial_recipient_productive_adapter.py", "def rederive_provider_inputs(", "def _reader_failure(")
         self.assertLess(derive.index("_DERIVES[id(handoff)] ="), derive.index("_fresh_begin("))
+
+
+class CompatibilitySourceControls(unittest.TestCase):
+    """Only the new source-reader seam; no old1066 reader/authority is invoked."""
+
+    def setUp(self):
+        self.tree, self.owner, stack = COMPAT.ModelTree(), COMPAT.ModelOwner(), ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(patch.object(F, "PosixFile", COMPAT.ModelFile))
+        stack.enter_context(patch.object(F, "PosixSourceDirectory", COMPAT.ModelDirectory))
+        stack.enter_context(patch.object(F, "public_root", side_effect=lambda _root: COMPAT.ModelDirectory(self.tree, ())))
+        compiled = F.authority.parse_allowlist(self.tree.raw[F.INPUTS[0]])
+        seed = {"files": {name: O.digest(self.tree.raw[name]) for name in F.INPUTS},
+            "allowlistSha256": compiled.authority_sha256, "artifacts": len(compiled.artifacts),
+            "components": compiled.component_count, "policy": F.policy()}
+        self.inputs = SimpleNamespace(root="/model/source", stage_value={"inputs": seed},
+            admission={"source": dict(COMPAT.SOURCE)})
+
+    def test_capture_and_fresh_recheck_retain_same_owner_and_exact298_new_resources(self):
+        first = guarded(A._capture_compatibility, self.owner, self.inputs)
+        self.assertEqual(guarded(A._capture_compatibility, self.owner, self.inputs), first)
+        self.assertEqual([row[0] for row in self.owner.resources], list(A.compatibility.source_read_labels()) * 2)
+        self.assertTrue(all(row[3] and row[1].close_calls == 1 for row in self.owner.resources))
+        self.assertEqual(D.canonical(first)["source"], COMPAT.SOURCE)
+
+    def test_capture_refuses_seed_change_and_observes_actual_provider_change(self):
+        first = guarded(A._capture_compatibility, self.owner, self.inputs)
+        self.tree.raw[A.compatibility.PROVIDER_INPUTS[0]] += b" MODEL_CHANGED"
+        self.assertNotEqual(guarded(A._capture_compatibility, self.owner, self.inputs), first)
+        self.tree.raw[F.INPUTS[1]] += b" MODEL_CHANGED"
+        with self.assertRaisesRegex(O.OriginError, "COMPATIBILITY_SEED_CHANGED"):
+            guarded(A._capture_compatibility, self.owner, self.inputs)
+
+    def test_reader_forwards_actual_unknown_and_retains_falsey_original_error(self):
+        reader = A._Reader(self.owner)
+        self.assertIs(reader.unknown, False)
+        self.owner.unknown = True
+        self.assertIs(reader.unknown, True)
+        class FalseyError(RuntimeError):
+            def __bool__(self): return False
+        original = FalseyError("MODEL_FIRST_ERROR")
+        self.owner.original = original
+        self.owner.close_one = lambda _resource: None
+        with self.assertRaises(FalseyError) as caught:
+            reader.close_one(object())
+        self.assertIs(caught.exception, original)
+
+    def test_capture_recheck_sites_and_existing_rereads_precede_actual_writer_close(self):
+        source = section("hosted_initial_recipient_productive_adapter.py", "def produce(", "def _names(")
+        ordered = ('prefix_files, prefix_reference = _retain_prefix(',
+            'compatibility_raw = _capture_compatibility(', 'blobs, chain, references = _handoff_blobs(',
+            'for name, blob in (*blobs, ("save-handoff.json", raw)):',
+            '"HANDOFF_ORIGINAL_READBACK_CHANGED"', '"HANDOFF_DIRECTORY_CHANGED"',
+            'require(_capture_compatibility(owner, inputs) == compatibility_raw',
+            '_prefix_writer_methods_current(', 'owner.close()', '_known(owner)')
+        positions = [source.index(item) for item in ordered]
+        self.assertEqual(positions, sorted(positions))
+        self.assertEqual(source.count("_capture_compatibility("), 2)
+        self.assertIn('"HANDOFF_COMPATIBILITY_SOURCE_CHANGED"', source)
 
 
 if __name__ == "__main__":

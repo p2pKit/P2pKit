@@ -680,9 +680,31 @@ def _productive_authority_post_phase(seed, owner, private, context_raw, token, f
         token = None
 
 
-def _service_phase_owned(owner, private, context_raw, token, fence, before, *, final_seed=None):
+def _productive_seal_authority_phase(seed, owner, private, context_raw, token, fence, before):
+    try:
+        import hosted_initial_recipient_productive_receiver as R
+        R._checked_authority_phase(seed, owner, private, context_raw, fence, before, edge="seal")
+        return _service_phase_owned(owner, private, context_raw, token, fence, before, receiver_seed=seed)
+    finally:
+        token = None
+
+
+def _productive_before_authority_phase(seed, owner, private, context_raw, token, fence, before):
+    try:
+        import hosted_initial_recipient_productive_receiver as R
+        R._checked_authority_phase(seed, owner, private, context_raw, fence, before, edge="before")
+        return _service_phase_owned(owner, private, context_raw, token, fence, before, receiver_seed=seed)
+    finally:
+        token = None
+
+
+def _service_phase_owned(owner, private, context_raw, token, fence, before, *, final_seed=None, receiver_seed=None):
     """One source12 proof and original executable selection for separate routes."""
     try:
+        require(final_seed is None or receiver_seed is None, "SERVICE_GIT_EXCLUSIVE_SEED_ROUTE")
+        if receiver_seed is not None:
+            import hosted_initial_recipient_productive_receiver as R
+            R._checked_authority_phase_seed(receiver_seed, owner, private, context_raw, fence, before)
         owner.end()
         path = private.path / "source-before"
         require(type(before) is SourceReturn and owner.initial_sources.get(str(path)) is before and
@@ -696,7 +718,7 @@ def _service_phase_owned(owner, private, context_raw, token, fence, before, *, f
             native.INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE, native.INITIAL_COLLECT_AUTHORITY_CONTEXT_SCOPE,
             native.INITIAL_TAIL_AUTHORITY_CONTEXT_SCOPE, native.INITIAL_BEFORE_AUTHORITY_CONTEXT_SCOPE,
             native.INITIAL_PRODUCTIVE_USE_CONTEXT_SCOPE, native.INITIAL_PROVIDER_PUBLIC_CONTEXT_SCOPE) or
-            final_seed is not None) and
+            final_seed is not None or receiver_seed is not None) and
             context["root"] == str(ROOT) and context["session"] == str(private.path) and
             context["sourceReturnSha256"] == O.digest(before.raw) and
             context["sourceReturnedNs"] == returned["returnedNs"] and
@@ -744,6 +766,11 @@ def _service_phase_owned(owner, private, context_raw, token, fence, before, *, f
         owner.end()
         require(owner.initial_sources.get(str(path)) is before and
             (before.records, before.session, before.raw) == pin, "SERVICE_GIT_ORIGINAL_CHANGED")
+        if receiver_seed is not None:
+            edge = R._checked_authority_phase_seed(receiver_seed, owner, private, context_raw, fence, before)
+            require(type(edge) is str and edge in ("seal", "before"), "SERVICE_GIT_RECEIVER_EDGE")
+            call = native.productive_seal_authority_phase if edge == "seal" else native.productive_before_authority_phase
+            return call(receiver_seed, owner, private, context_raw, token, fence, initial_git=selected)
         if final_seed is not None:
             import hosted_initial_recipient_productive_custody as PC
             post = PC._checked_authority_phase_seed(final_seed, owner, private, context_raw, fence, before)

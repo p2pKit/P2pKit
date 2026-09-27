@@ -20,6 +20,7 @@ import uuid
 import hosted_initial_recipient_productive as P
 import hosted_initial_recipient_productive_custody_data as CD
 import hosted_initial_recipient_productive_adapter as A
+import hosted_cache_compatibility as compatibility
 
 
 C, N, B, O = P.C, P.N, P.B, P.O
@@ -2849,6 +2850,11 @@ def _final_inputs_closed(state):
 
 def _parent_transport(state):
     _final_inputs_closed(state)
+    initial = D.initial_inputs_record(dict(state.handoff.blobs)["initial-inputs.json"],
+        D.checked_worker(state.handoff.identity)["source"])
+    require(compatibility.encoded(initial["compatibilityInputs"]) == state.inputs.derived.compatibility_raw,
+        "FINAL_CLOSED_COMPATIBILITY_ORIGINAL")
+    compatibility_digest = compatibility.envelope_digest(initial["compatibilityInputs"])
     authority = _checked_authority(state.authority, state)
     prior = _predecessor(state, post=False)
     groups = [_group_reference(partition) for partition in state.partitions]
@@ -2867,6 +2873,7 @@ def _parent_transport(state):
         "freshMatchSha256": O.digest(authority.match.record), "producerHandoffSha256": prior["producerHandoffSha256"],
         "producerReturnSha256": prior["producerReturnSha256"], "afterSaveSha256": prior["afterSaveSha256"],
         "probeSha256": prior["probeSha256"], "prefixRetentionSha256": prior["prefixRetentionSha256"],
+        "compatibilityInputsSha256": compatibility_digest,
         "preExportReturnSha256": O.digest(authority.raw), "preExportIndexSha256": O.digest(authority.index_raw),
         "preExportCopyIndexSha256": O.digest(pre_raw),
         "sourceRecordsSha256": {name: O.digest(raw) for name, raw in state.handoff.source_records},
@@ -3289,7 +3296,7 @@ def _public_projection(raws, groups, index):
     initial.update(matchSha256=O.digest(raws["original-match.json"]), preExportReturnSha256=final["preExportReturnSha256"],
         preExportIndexSha256=final["preExportIndexSha256"])
     productive = {name: final[name] for name in ("producerHandoffSha256", "producerReturnSha256", "afterSaveSha256",
-        "probeSha256", "prefixRetentionSha256")}
+        "probeSha256", "prefixRetentionSha256", "compatibilityInputsSha256")}
     productive.update(originalProposalSha256=O.digest(O.encoded(final["originalProposal"])),
         producerStepOutcome=final["claims"]["PRODUCER_OUTCOME"], afterSaveStepOutcome=final["claims"]["AFTER_SAVE_OUTCOME"],
         afterProbeStepOutcome=final["claims"]["AFTER_PROBE_OUTCOME"])

@@ -27,6 +27,7 @@ module HeavyJobQueuePolicy
         "ios-x64-tests.yml" => {"ios-x64" => nil},
         "dependency-submission.yml" => {"submit" => nil},
         "dependency-update-candidate.yml" => {"generate" => nil},
+        "dependency-cache-bootstrap.yml" => {"populate" => nil},
     }.freeze
     # Separate workflow groups prevent a workflow holding the lease its jobs
     # need. Retain ordinary supersession and CI's independent scheduled backstop.
@@ -40,6 +41,9 @@ module HeavyJobQueuePolicy
             "cancel-in-progress" => true,
         },
         "ios-x64-tests.yml" => {"group" => "ios-x64-tests-${{ github.ref }}", "cancel-in-progress" => false},
+        "dependency-cache-bootstrap.yml" => {
+            "group" => "p2pkit-initial-recipient-bootstrap", "queue" => "max", "cancel-in-progress" => false,
+        },
     }.freeze
     MATRICES = {
         ["ci.yml", "jvm-library-checks"] => {"include" => [
@@ -94,7 +98,7 @@ module HeavyJobQueuePolicy
             require_policy(expected_concurrency ? workflow["concurrency"] == expected_concurrency :
                 !workflow.key?("concurrency"), "#{path}: preserve separate workflow concurrency/supersession")
             jobs = workflow["jobs"]
-            has_initial_gate = path == "ci.yml"
+            has_initial_gate = %w[ci.yml dependency-cache-bootstrap.yml].include?(path)
             expected_ids = expected_jobs.keys + (has_initial_gate ? [INITIAL_JOB] : [])
             require_policy(jobs.is_a?(Hash) && jobs.keys.sort == expected_ids.sort,
                            "#{path}: participating job IDs changed; review queue coverage")
@@ -111,6 +115,8 @@ module HeavyJobQueuePolicy
                 prerequisite = case path
                 when "ci.yml"
                     {"jvm-library-checks" => INITIAL_JOB, "complete-gate" => "jvm-library-checks"}[id]
+                when "dependency-cache-bootstrap.yml"
+                    INITIAL_JOB
                 end
                 require_policy(prerequisite ? job["needs"] == prerequisite : !job.key?("needs"),
                                "#{label}: preserve acyclic job dependencies")
@@ -157,5 +163,5 @@ if $PROGRAM_NAME == __FILE__
     rescue HeavyJobQueuePolicy::Error, SystemCallError => error
         abort "FATAL: #{error.message}"
     end
-    puts "RESULT: PASS — five ordinary jobs and one manual maintenance job share the bounded non-cancelling queue; no hosted scheduling claim"
+    puts "RESULT: PASS — ordinary, manual maintenance and initial bootstrap workers share the bounded queue; gates hold no lease; no hosted scheduling claim"
 end
